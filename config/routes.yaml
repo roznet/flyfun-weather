@@ -1,0 +1,22 @@
+routes:
+  egtk_lsgs:
+    name: "Oxford to Sion"
+    origin:
+      icao: EGTK
+      name: "Oxford Kidlington"
+      lat: 51.8361
+      lon: -1.3200
+    midpoint:
+      icao: LFPB
+      name: "Paris Le Bourget"
+      lat: 48.9694
+      lon: 2.4414
+    destination:
+      icao: LSGS
+      name: "Sion"
+      lat: 46.2192
+      lon: 7.3267
+    cruise_altitude_ft: 8000
+    cruise_pressure_hpa: 750
+    track_deg: 155
+    estimated_eet_hours: 4.5

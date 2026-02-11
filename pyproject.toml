@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weatherbrief"
+version = "0.1.0"
+description = "Medium-range weather assessment for cross-country GA flights in Europe"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+skewt = ["metpy>=1.5", "numpy>=1.24", "matplotlib>=3.7"]
+llm = ["anthropic>=0.40"]
+dev = ["pytest>=7.0", "pytest-mock>=3.0", "responses>=0.25"]
+
+[project.scripts]
+weatherbrief = "weatherbrief.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
