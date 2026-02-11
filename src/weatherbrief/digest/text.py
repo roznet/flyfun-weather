@@ -15,7 +15,11 @@ from weatherbrief.models import (
 SEPARATOR = "=" * 60
 
 
-def format_digest(snapshot: ForecastSnapshot, target_time: datetime) -> str:
+def format_digest(
+    snapshot: ForecastSnapshot,
+    target_time: datetime,
+    output_paths: list[str] | None = None,
+) -> str:
     """Format a plain-text weather digest from a forecast snapshot."""
     lines: list[str] = []
 
@@ -52,6 +56,13 @@ def format_digest(snapshot: ForecastSnapshot, target_time: datetime) -> str:
 
     # Model agreement summary
     lines.extend(_format_model_agreement(snapshot))
+
+    # Output paths footer
+    if output_paths:
+        lines.append("")
+        lines.append("--- Output Files ---")
+        for p in output_paths:
+            lines.append(f"  {p}")
 
     lines.append(SEPARATOR)
     return "\n".join(lines)

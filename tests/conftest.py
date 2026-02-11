@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from weatherbrief.models import (
@@ -12,7 +14,6 @@ from weatherbrief.models import (
     Waypoint,
     WaypointForecast,
 )
-from datetime import datetime, timezone
 
 
 @pytest.fixture
@@ -24,13 +25,13 @@ def sample_waypoint():
 def sample_route():
     return RouteConfig(
         name="Oxford to Sion",
-        origin=Waypoint(icao="EGTK", name="Oxford Kidlington", lat=51.8361, lon=-1.32),
-        midpoint=Waypoint(icao="LFPB", name="Paris Le Bourget", lat=48.9694, lon=2.4414),
-        destination=Waypoint(icao="LSGS", name="Sion", lat=46.2192, lon=7.3267),
+        waypoints=[
+            Waypoint(icao="EGTK", name="Oxford Kidlington", lat=51.8361, lon=-1.32),
+            Waypoint(icao="LFPB", name="Paris Le Bourget", lat=48.9694, lon=2.4414),
+            Waypoint(icao="LSGS", name="Sion", lat=46.2192, lon=7.3267),
+        ],
         cruise_altitude_ft=8000,
-        cruise_pressure_hpa=750,
-        track_deg=155,
-        estimated_eet_hours=4.5,
+        flight_duration_hours=4.5,
     )
 
 

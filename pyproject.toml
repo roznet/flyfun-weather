@@ -11,10 +11,13 @@ dependencies = [
     "requests>=2.31",
     "pyyaml>=6.0",
     "pydantic>=2.0",
+    "euro-aip @ file:///Users/brice/Developer/public/rzflight/euro_aip",
+    "metpy>=1.5",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
 ]
 
 [project.optional-dependencies]
-skewt = ["metpy>=1.5", "numpy>=1.24", "matplotlib>=3.7"]
 llm = ["anthropic>=0.40"]
 dev = ["pytest>=7.0", "pytest-mock>=3.0", "responses>=0.25"]
 

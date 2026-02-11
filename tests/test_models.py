@@ -7,7 +7,11 @@ from weatherbrief.models import (
     HourlyForecast,
     ModelSource,
     PressureLevelData,
+    RouteConfig,
+    Waypoint,
     WaypointForecast,
+    bearing_between,
+    altitude_to_pressure_hpa,
 )
 
 
@@ -20,19 +24,85 @@ def test_route_waypoints(sample_route):
     assert wps[2].icao == "LSGS"
 
 
-def test_route_waypoints_no_midpoint(sample_waypoint):
-    """Route without midpoint returns only origin and destination."""
-    from weatherbrief.models import RouteConfig, Waypoint
+def test_route_origin_destination(sample_route):
+    """Origin and destination are first/last waypoints."""
+    assert sample_route.origin.icao == "EGTK"
+    assert sample_route.destination.icao == "LSGS"
 
+
+def test_route_two_waypoints(sample_waypoint):
+    """Route with only two waypoints works."""
     route = RouteConfig(
         name="Test",
-        origin=sample_waypoint,
-        destination=Waypoint(icao="LSGS", name="Sion", lat=46.2, lon=7.3),
+        waypoints=[
+            sample_waypoint,
+            Waypoint(icao="LSGS", name="Sion", lat=46.2, lon=7.3),
+        ],
         cruise_altitude_ft=8000,
-        cruise_pressure_hpa=750,
-        track_deg=155,
     )
     assert len(route.waypoints) == 2
+    assert route.origin.icao == "EGTK"
+    assert route.destination.icao == "LSGS"
+
+
+def test_cruise_pressure_from_altitude():
+    """cruise_pressure_hpa derives from altitude via standard atmosphere."""
+    route = RouteConfig(
+        name="Test",
+        waypoints=[
+            Waypoint(icao="EGTK", name="Oxford", lat=51.8, lon=-1.3),
+            Waypoint(icao="LSGS", name="Sion", lat=46.2, lon=7.3),
+        ],
+        cruise_altitude_ft=8000,
+    )
+    # 8000ft ≈ 752 hPa in standard atmosphere
+    assert 745 <= route.cruise_pressure_hpa <= 760
+
+
+def test_bearing_between_east():
+    """Bearing from a point east should be ~90 degrees."""
+    wp_a = Waypoint(icao="A", name="A", lat=50.0, lon=0.0)
+    wp_b = Waypoint(icao="B", name="B", lat=50.0, lon=5.0)
+    brg = bearing_between(wp_a, wp_b)
+    assert 85 < brg < 95
+
+
+def test_bearing_between_south():
+    """Bearing going south should be ~180 degrees."""
+    wp_a = Waypoint(icao="A", name="A", lat=52.0, lon=0.0)
+    wp_b = Waypoint(icao="B", name="B", lat=48.0, lon=0.0)
+    brg = bearing_between(wp_a, wp_b)
+    assert 175 < brg < 185
+
+
+def test_waypoint_track_middle(sample_route):
+    """Middle waypoint track is average of incoming and outgoing leg bearings."""
+    track = sample_route.waypoint_track("LFPB")
+    # EGTK->LFPB is roughly SE, LFPB->LSGS is roughly SE, so track ~130-160
+    assert 100 < track < 200
+
+
+def test_waypoint_track_origin(sample_route):
+    """Origin waypoint track is the first leg bearing."""
+    track = sample_route.waypoint_track("EGTK")
+    leg_bearing = sample_route.leg_bearing(0)
+    assert abs(track - leg_bearing) < 0.01
+
+
+def test_waypoint_track_destination(sample_route):
+    """Destination waypoint track is the last leg bearing."""
+    track = sample_route.waypoint_track("LSGS")
+    leg_bearing = sample_route.leg_bearing(len(sample_route.waypoints) - 2)
+    assert abs(track - leg_bearing) < 0.01
+
+
+def test_altitude_to_pressure():
+    """Standard atmosphere conversion for known values."""
+    # Sea level
+    assert altitude_to_pressure_hpa(0) == 1013
+    # ~18000 ft ≈ 500 hPa
+    p = altitude_to_pressure_hpa(18000)
+    assert 490 < p < 510
 
 
 def test_hourly_level_at():

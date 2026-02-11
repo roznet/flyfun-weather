@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Waypoint(BaseModel):
@@ -18,26 +19,93 @@ class Waypoint(BaseModel):
     lon: float
 
 
+def bearing_between(wp_a: Waypoint, wp_b: Waypoint) -> float:
+    """Compute great-circle initial bearing from wp_a to wp_b in degrees [0, 360)."""
+    lat1 = math.radians(wp_a.lat)
+    lat2 = math.radians(wp_b.lat)
+    dlon = math.radians(wp_b.lon - wp_a.lon)
+
+    x = math.sin(dlon) * math.cos(lat2)
+    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+    return math.degrees(math.atan2(x, y)) % 360
+
+
+def altitude_to_pressure_hpa(altitude_ft: int) -> int:
+    """Convert altitude in feet to pressure in hPa using standard atmosphere.
+
+    Uses the barometric formula for the troposphere (valid up to ~36,000 ft).
+    """
+    altitude_m = altitude_ft * 0.3048
+    # Standard atmosphere constants
+    P0 = 1013.25  # sea level pressure hPa
+    T0 = 288.15  # sea level temperature K
+    L = 0.0065  # lapse rate K/m
+    g = 9.80665  # gravity m/s^2
+    M = 0.0289644  # molar mass of air kg/mol
+    R = 8.31447  # gas constant J/(mol·K)
+
+    pressure = P0 * (1 - L * altitude_m / T0) ** (g * M / (R * L))
+    return round(pressure)
+
+
 class RouteConfig(BaseModel):
     """A flight route definition loaded from config."""
 
     name: str
-    origin: Waypoint
-    midpoint: Optional[Waypoint] = None
-    destination: Waypoint
-    cruise_altitude_ft: int
-    cruise_pressure_hpa: int
-    track_deg: float
-    estimated_eet_hours: float = 0.0
+    waypoints: list[Waypoint] = Field(min_length=2)
+    cruise_altitude_ft: int = 8000
+    flight_duration_hours: float = 0.0
+
+    @model_validator(mode="after")
+    def _validate_waypoints(self) -> RouteConfig:
+        if len(self.waypoints) < 2:
+            raise ValueError("Route must have at least 2 waypoints")
+        return self
 
     @property
-    def waypoints(self) -> list[Waypoint]:
-        """All waypoints in route order."""
-        pts = [self.origin]
-        if self.midpoint:
-            pts.append(self.midpoint)
-        pts.append(self.destination)
-        return pts
+    def origin(self) -> Waypoint:
+        """First waypoint (departure)."""
+        return self.waypoints[0]
+
+    @property
+    def destination(self) -> Waypoint:
+        """Last waypoint (arrival)."""
+        return self.waypoints[-1]
+
+    @property
+    def cruise_pressure_hpa(self) -> int:
+        """Cruise pressure derived from altitude via standard atmosphere."""
+        return altitude_to_pressure_hpa(self.cruise_altitude_ft)
+
+    def leg_bearing(self, leg_index: int) -> float:
+        """Bearing for leg N (from waypoint[N] to waypoint[N+1])."""
+        return bearing_between(self.waypoints[leg_index], self.waypoints[leg_index + 1])
+
+    def waypoint_track(self, waypoint_icao: str) -> float:
+        """Representative track for a waypoint: average of incoming/outgoing leg bearings."""
+        idx = next(
+            (i for i, wp in enumerate(self.waypoints) if wp.icao == waypoint_icao),
+            None,
+        )
+        if idx is None:
+            raise ValueError(f"Waypoint {waypoint_icao} not in route")
+
+        bearings = []
+        if idx > 0:
+            bearings.append(self.leg_bearing(idx - 1))
+        if idx < len(self.waypoints) - 1:
+            bearings.append(self.leg_bearing(idx))
+
+        if not bearings:
+            return 0.0
+        if len(bearings) == 1:
+            return bearings[0]
+
+        # Circular mean of two bearings
+        rads = [math.radians(b) for b in bearings]
+        x = sum(math.cos(r) for r in rads)
+        y = sum(math.sin(r) for r in rads)
+        return math.degrees(math.atan2(y, x)) % 360
 
 
 class ModelSource(str, Enum):
