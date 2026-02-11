@@ -8,10 +8,11 @@ function init(): void {
 
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
-    if (state.flights !== prev.flights || state.latestPacks !== prev.latestPacks) {
+    if (state.flights !== prev.flights || state.latestPacks !== prev.latestPacks || state.routes !== prev.routes) {
       ui.renderFlightList(
         state.flights,
         state.latestPacks,
+        state.routes,
         (id) => navigateToBriefing(id),
         (id) => store.getState().deleteFlight(id),
       );

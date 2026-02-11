@@ -164,7 +164,7 @@
         return "badge-none";
     }
   }
-  function renderFlightList(flights, latestPacks, onView, onDelete) {
+  function renderFlightList(flights, latestPacks, routes, onView, onDelete) {
     const container = $("flight-list");
     if (!container) return;
     if (flights.length === 0) {
@@ -175,9 +175,11 @@
     `;
       return;
     }
+    const routeMap = new Map(routes.map((r) => [r.name, r]));
     container.innerHTML = flights.map((f) => {
       const pack = latestPacks[f.id];
-      const waypoints = f.route_name.replace(/_/g, " ").toUpperCase();
+      const route = routeMap.get(f.route_name);
+      const waypoints = route ? route.waypoints.join(" \u2192 ") : f.route_name.replace(/_/g, " ").toUpperCase();
       const packInfo = pack ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC)</span>
          <span class="badge ${assessmentClass(pack.assessment)}">${pack.assessment || "\u2014"}</span>` : '<span class="pack-info">No briefings yet</span>';
       return `
@@ -248,10 +250,11 @@
   function init() {
     const store = flightsStore;
     store.subscribe((state, prev) => {
-      if (state.flights !== prev.flights || state.latestPacks !== prev.latestPacks) {
+      if (state.flights !== prev.flights || state.latestPacks !== prev.latestPacks || state.routes !== prev.routes) {
         renderFlightList(
           state.flights,
           state.latestPacks,
+          state.routes,
           (id) => navigateToBriefing(id),
           (id) => store.getState().deleteFlight(id)
         );

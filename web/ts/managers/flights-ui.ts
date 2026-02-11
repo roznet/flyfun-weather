@@ -42,6 +42,7 @@ function assessmentClass(assessment: string | null): string {
 export function renderFlightList(
   flights: FlightResponse[],
   latestPacks: Record<string, PackMeta | null>,
+  routes: RouteInfo[],
   onView: (id: string) => void,
   onDelete: (id: string) => void,
 ): void {
@@ -57,9 +58,14 @@ export function renderFlightList(
     return;
   }
 
+  const routeMap = new Map(routes.map((r) => [r.name, r]));
+
   container.innerHTML = flights.map((f) => {
     const pack = latestPacks[f.id];
-    const waypoints = f.route_name.replace(/_/g, ' ').toUpperCase();
+    const route = routeMap.get(f.route_name);
+    const waypoints = route
+      ? route.waypoints.join(' → ')
+      : f.route_name.replace(/_/g, ' ').toUpperCase();
     const packInfo = pack
       ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
          <span class="badge ${assessmentClass(pack.assessment)}">${pack.assessment || '—'}</span>`

@@ -161,10 +161,15 @@
   function $(id) {
     return document.getElementById(id);
   }
-  function renderHeader(flight) {
+  function renderHeader(flight, snapshot) {
     const el = $("briefing-header");
     if (!el || !flight) return;
-    const route = flight.route_name.replace(/_/g, " \u2192 ").toUpperCase();
+    let routeStr;
+    if (snapshot?.route?.waypoints) {
+      routeStr = snapshot.route.waypoints.map((w) => w.icao).join(" \u2192 ");
+    } else {
+      routeStr = flight.route_name.replace(/_/g, " \u2192 ").toUpperCase();
+    }
     const date = /* @__PURE__ */ new Date(flight.target_date + "T00:00:00Z");
     const dateStr = date.toLocaleDateString("en-GB", {
       weekday: "short",
@@ -176,7 +181,7 @@
     const timeStr = `${flight.target_time_utc.toString().padStart(2, "0")}00Z`;
     const alt = flight.cruise_altitude_ft >= 1e4 ? `FL${Math.round(flight.cruise_altitude_ft / 100)}` : `${flight.cruise_altitude_ft}ft`;
     el.innerHTML = `
-    <span class="route-summary">${route}</span>
+    <span class="route-summary">${routeStr}</span>
     <span class="date-summary">${dateStr} ${timeStr}</span>
     <span class="alt-summary">${alt}</span>
   `;
@@ -372,8 +377,8 @@
       return;
     }
     store.subscribe((state, prev) => {
-      if (state.flight !== prev.flight) {
-        renderHeader(state.flight);
+      if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
+        renderHeader(state.flight, state.snapshot);
       }
       if (state.packs !== prev.packs || state.currentPack !== prev.currentPack) {
         renderHistoryDropdown(

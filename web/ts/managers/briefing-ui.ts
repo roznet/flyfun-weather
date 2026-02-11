@@ -13,11 +13,21 @@ function $(id: string): HTMLElement {
 
 // --- Header ---
 
-export function renderHeader(flight: FlightResponse | null): void {
+export function renderHeader(
+  flight: FlightResponse | null,
+  snapshot: ForecastSnapshot | null,
+): void {
   const el = $('briefing-header');
   if (!el || !flight) return;
 
-  const route = flight.route_name.replace(/_/g, ' → ').toUpperCase();
+  // Use snapshot waypoints if available, otherwise derive from route name
+  let routeStr: string;
+  if (snapshot?.route?.waypoints) {
+    routeStr = snapshot.route.waypoints.map((w) => w.icao).join(' → ');
+  } else {
+    routeStr = flight.route_name.replace(/_/g, ' → ').toUpperCase();
+  }
+
   const date = new Date(flight.target_date + 'T00:00:00Z');
   const dateStr = date.toLocaleDateString('en-GB', {
     weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
@@ -29,7 +39,7 @@ export function renderHeader(flight: FlightResponse | null): void {
     : `${flight.cruise_altitude_ft}ft`;
 
   el.innerHTML = `
-    <span class="route-summary">${route}</span>
+    <span class="route-summary">${routeStr}</span>
     <span class="date-summary">${dateStr} ${timeStr}</span>
     <span class="alt-summary">${alt}</span>
   `;

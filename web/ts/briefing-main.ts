@@ -16,8 +16,8 @@ function init(): void {
 
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
-    if (state.flight !== prev.flight) {
-      ui.renderHeader(state.flight);
+    if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
+      ui.renderHeader(state.flight, state.snapshot);
     }
     if (state.packs !== prev.packs || state.currentPack !== prev.currentPack) {
       ui.renderHistoryDropdown(
