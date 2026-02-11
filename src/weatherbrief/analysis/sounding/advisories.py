@@ -60,6 +60,11 @@ def compute_altitude_advisories(
     )
 
 
+def _round_alt(ft: float, step: int = 1000) -> float:
+    """Round altitude to the nearest step (default 1000ft)."""
+    return round(ft / step) * step
+
+
 def _compute_regimes(
     analysis: SoundingAnalysis, ceiling_ft: int
 ) -> list[VerticalRegime]:
@@ -69,19 +74,20 @@ def _compute_regimes(
     2. Classify each pair by checking midpoint against cloud/icing data
     3. Merge adjacent regimes with identical conditions
     """
-    # Collect all transition altitudes
+    # Collect all transition altitudes, rounded to nearest 1000ft
+    # to avoid tiny slivers from slightly different model boundaries
     transitions: set[float] = {0.0, float(ceiling_ft)}
 
     for cl in analysis.cloud_layers:
-        transitions.add(cl.base_ft)
-        transitions.add(cl.top_ft)
+        transitions.add(_round_alt(cl.base_ft))
+        transitions.add(_round_alt(cl.top_ft))
 
     for zone in analysis.icing_zones:
-        transitions.add(zone.base_ft)
-        transitions.add(zone.top_ft)
+        transitions.add(_round_alt(zone.base_ft))
+        transitions.add(_round_alt(zone.top_ft))
 
     if analysis.indices and analysis.indices.freezing_level_ft is not None:
-        transitions.add(analysis.indices.freezing_level_ft)
+        transitions.add(_round_alt(analysis.indices.freezing_level_ft))
 
     # Clamp to [0, ceiling_ft] and sort
     sorted_alts = sorted(t for t in transitions if 0 <= t <= ceiling_ft)
