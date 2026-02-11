@@ -22,8 +22,8 @@ Key exports: `OpenMeteoClient`, `fetch_dwd_text_forecasts`, `AutorouterGramet`
 → Full doc: fetch.md
 
 ### analysis
-Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, clouds, icing, convective), altitude band comparison, model divergence scoring.
-Key exports: `compute_wind_components`, `analyze_sounding`, `summarize_by_bands`, `compare_models`
+Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, clouds, icing, convective), altitude advisories, model divergence scoring.
+Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`
 → Full doc: analysis.md
 
 ### digest

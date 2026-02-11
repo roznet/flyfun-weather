@@ -23,7 +23,7 @@ _analyze_waypoint()  (per waypoint)
 │   ├→ detect_cloud_layers()
 │   ├→ assess_icing_zones()
 │   └→ assess_convective()
-├→ summarize_by_bands()  (cross-model altitude bands)
+├→ compute_altitude_advisories()  (vertical regimes + advisories)
 └→ compare_models()  (14 metrics)
     ↓
 ForecastSnapshot  (root object, saved as JSON)
@@ -62,7 +62,7 @@ src/weatherbrief/
 │       ├── clouds.py       # Cloud layers from dewpoint depression
 │       ├── icing.py        # Icing zones from wet-bulb temperature
 │       ├── convective.py   # Convective risk from indices
-│       └── bands.py        # Altitude band grouping for cross-model comparison
+│       └── advisories.py   # Dynamic vertical regimes + altitude advisories
 ├── digest/
 │   ├── text.py        # Plain-text digest formatter
 │   ├── skewt.py       # Skew-T diagram generation

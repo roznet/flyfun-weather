@@ -40,6 +40,7 @@ function init(): void {
       const targetDate = (document.getElementById('input-date') as HTMLInputElement).value;
       const targetTime = parseInt((document.getElementById('input-time') as HTMLInputElement).value || '9', 10);
       const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value || '8000', 10);
+      const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value || '18000', 10);
       const duration = parseFloat((document.getElementById('input-duration') as HTMLInputElement).value || '0');
 
       const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map((w) => w.toUpperCase());
@@ -53,6 +54,7 @@ function init(): void {
           routeName,
           targetTimeUtc: targetTime,
           cruiseAltitudeFt: altitude,
+          flightCeilingFt: ceiling,
           flightDurationHours: duration,
         });
         // Navigate to briefing page for the new flight

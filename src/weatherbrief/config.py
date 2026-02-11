@@ -39,6 +39,7 @@ def load_route(name: str, db_path: str, config_dir: Path | None = None) -> Route
         name=r["name"],
         waypoints=waypoints,
         cruise_altitude_ft=r.get("cruise_altitude_ft", 8000),
+        flight_ceiling_ft=r.get("flight_ceiling_ft", 18000),
         flight_duration_hours=r.get("flight_duration_hours", 0.0),
     )
 

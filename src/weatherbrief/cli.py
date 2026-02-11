@@ -36,11 +36,16 @@ def _build_route(args: argparse.Namespace) -> RouteConfig:
 
     if args.route:
         route = load_route(args.route, db_path)
-        # Override altitude/duration from CLI if given
+        # Override altitude/duration/ceiling from CLI if given
+        overrides: dict = {}
         if args.alt != 8000:
-            route = route.model_copy(update={"cruise_altitude_ft": args.alt})
+            overrides["cruise_altitude_ft"] = args.alt
+        if args.ceiling != 18000:
+            overrides["flight_ceiling_ft"] = args.ceiling
         if args.duration and route.flight_duration_hours == 0.0:
-            route = route.model_copy(update={"flight_duration_hours": args.duration})
+            overrides["flight_duration_hours"] = args.duration
+        if overrides:
+            route = route.model_copy(update=overrides)
         return route
 
     # Inline ICAO codes
@@ -55,6 +60,7 @@ def _build_route(args: argparse.Namespace) -> RouteConfig:
         name=name,
         waypoints=waypoints,
         cruise_altitude_ft=args.alt,
+        flight_ceiling_ft=args.ceiling,
         flight_duration_hours=args.duration or 0.0,
     )
 
@@ -146,6 +152,9 @@ def main() -> None:
     )
     fetch_parser.add_argument(
         "--alt", type=int, default=8000, help="Cruise altitude in feet (default: 8000)"
+    )
+    fetch_parser.add_argument(
+        "--ceiling", type=int, default=18000, help="Flight ceiling in feet (default: 18000)"
     )
     fetch_parser.add_argument(
         "--date", required=True, help="Target date (YYYY-MM-DD)"

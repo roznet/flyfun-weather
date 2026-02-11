@@ -109,6 +109,7 @@
           target_date: targetDate,
           target_time_utc: opts?.targetTimeUtc,
           cruise_altitude_ft: opts?.cruiseAltitudeFt,
+          flight_ceiling_ft: opts?.flightCeilingFt,
           flight_duration_hours: opts?.flightDurationHours
         });
         await get().loadFlights();
@@ -240,9 +241,11 @@
       if (!route) return;
       const wpInput = $("input-waypoints");
       const altInput = $("input-altitude");
+      const ceilInput = $("input-ceiling");
       const durInput = $("input-duration");
       if (wpInput) wpInput.value = route.waypoints.join(" ");
       if (altInput) altInput.value = String(route.cruise_altitude_ft);
+      if (ceilInput) ceilInput.value = String(route.flight_ceiling_ft);
       if (durInput) durInput.value = String(route.flight_duration_hours);
     });
   }
@@ -280,6 +283,7 @@
         const targetDate = document.getElementById("input-date").value;
         const targetTime = parseInt(document.getElementById("input-time").value || "9", 10);
         const altitude = parseInt(document.getElementById("input-altitude").value || "8000", 10);
+        const ceiling = parseInt(document.getElementById("input-ceiling").value || "18000", 10);
         const duration = parseFloat(document.getElementById("input-duration").value || "0");
         const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map((w) => w.toUpperCase());
         if (waypoints.length < 2 || !targetDate) {
@@ -291,6 +295,7 @@
             routeName,
             targetTimeUtc: targetTime,
             cruiseAltitudeFt: altitude,
+            flightCeilingFt: ceiling,
             flightDurationHours: duration
           });
           navigateToBriefing(flight.id);

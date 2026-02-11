@@ -410,7 +410,7 @@
         ${renderAltitudeMarkers(a.sounding)}
         ${renderIcingZones(a.sounding)}
         ${renderEnhancedClouds(a.sounding)}
-        ${renderBandComparisons(a.band_comparisons)}
+        ${renderAltitudeAdvisories(a.altitude_advisories)}
       </div>
     `;
     }).join("");
@@ -470,52 +470,64 @@
     if (rows.length === 0) return "";
     return `<div class="enhanced-clouds"><h5>Cloud Layers</h5>${rows.join("")}</div>`;
   }
-  function renderBandComparisons(bands) {
-    if (!bands || bands.length === 0) return "";
-    const activeBands = bands.filter(
-      (bc) => Object.values(bc.models).some(
-        (s) => s.worst_icing_risk !== "none" || s.cloud_coverage != null
-      )
-    );
-    if (activeBands.length === 0) return "";
-    return activeBands.map((bc) => {
-      const models = Object.keys(bc.models);
+  function renderAltitudeAdvisories(adv) {
+    if (!adv) return "";
+    const parts = [];
+    if (adv.cruise_in_icing) {
+      parts.push(
+        `<div class="cruise-icing-banner ${riskClass(adv.cruise_icing_risk)}">Cruise in icing: ${adv.cruise_icing_risk.toUpperCase()}</div>`
+      );
+    }
+    const models = Object.keys(adv.regimes);
+    if (models.length > 0) {
       const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join("");
-      const agreeIcons = [];
-      if (!bc.icing_agreement) agreeIcons.push('<span class="agree-poor" title="Icing disagree">&#10007; Ice</span>');
-      if (!bc.cloud_agreement) agreeIcons.push('<span class="agree-poor" title="Cloud disagree">&#10007; Cloud</span>');
-      const agreeStr = agreeIcons.length > 0 ? ` ${agreeIcons.join(" ")}` : "";
-      const icingRow = models.map((m) => {
-        const s = bc.models[m];
-        if (s.worst_icing_risk === "none") return "<td>\u2014</td>";
-        const sld = s.sld_risk ? ' <span class="sld-badge">SLD</span>' : "";
-        return `<td class="${riskClass(s.worst_icing_risk)}">${s.worst_icing_risk}/${s.worst_icing_type}${sld}</td>`;
-      }).join("");
-      const cloudRow = models.map((m) => {
-        const s = bc.models[m];
-        return s.cloud_coverage ? `<td>${s.cloud_coverage.toUpperCase()}</td>` : "<td>\u2014</td>";
-      }).join("");
-      const tempRow = models.map((m) => {
-        const s = bc.models[m];
-        if (s.temperature_min_c != null && s.temperature_max_c != null) {
-          return `<td>${s.temperature_min_c.toFixed(0)}/${s.temperature_max_c.toFixed(0)}\xB0C</td>`;
+      const allAlts = /* @__PURE__ */ new Set();
+      for (const regimes of Object.values(adv.regimes)) {
+        for (const r of regimes) {
+          allAlts.add(r.floor_ft);
+          allAlts.add(r.ceiling_ft);
         }
-        return "<td>\u2014</td>";
+      }
+      const sortedAlts = [...allAlts].sort((a, b) => b - a);
+      const rows = sortedAlts.slice(0, -1).map((alt, i) => {
+        const nextAlt = sortedAlts[i + 1];
+        const midpoint = (alt + nextAlt) / 2;
+        const cells = models.map((m) => {
+          const regime = adv.regimes[m].find(
+            (r) => r.floor_ft <= midpoint && r.ceiling_ft >= midpoint
+          );
+          if (!regime) return "<td>\u2014</td>";
+          const cls = regime.icing_risk !== "none" ? riskClass(regime.icing_risk) : "";
+          return `<td class="${cls}">${escapeHtml(regime.label)}</td>`;
+        }).join("");
+        return `<tr><td class="var-name">${nextAlt.toFixed(0)}-${alt.toFixed(0)}ft</td>${cells}</tr>`;
       }).join("");
-      return `
-      <details class="band-details">
-        <summary>${bc.band.name}${agreeStr}</summary>
+      parts.push(`
+      <div class="regime-table-wrap">
+        <h5>Vertical Profile</h5>
         <table class="band-table">
-          <thead><tr><th></th>${headerCells}</tr></thead>
-          <tbody>
-            <tr><td class="var-name">Icing</td>${icingRow}</tr>
-            <tr><td class="var-name">Cloud</td>${cloudRow}</tr>
-            <tr><td class="var-name">Temp</td>${tempRow}</tr>
-          </tbody>
+          <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
+          <tbody>${rows}</tbody>
         </table>
-      </details>
-    `;
-    }).join("");
+      </div>
+    `);
+    }
+    if (adv.advisories.length > 0) {
+      const advisoryHtml = adv.advisories.map((a) => {
+        const feasibleCls = a.feasible ? "" : " advisory-infeasible";
+        const altStr = a.altitude_ft != null ? `${a.altitude_ft.toFixed(0)}ft` : "";
+        const modelParts = Object.entries(a.per_model_ft).map(([m, v]) => `${m}: ${v != null ? v.toFixed(0) + "ft" : "N/A"}`).join(", ");
+        return `
+        <div class="advisory-item${feasibleCls}">
+          <strong>${escapeHtml(a.reason)}</strong>
+          ${!a.feasible ? ' <span class="advisory-badge">INFEASIBLE</span>' : ""}
+          <div class="advisory-models">${escapeHtml(modelParts)}</div>
+        </div>
+      `;
+      }).join("");
+      parts.push(`<div class="advisories-section"><h5>Advisories</h5>${advisoryHtml}</div>`);
+    }
+    return parts.join("");
   }
   function renderSkewTs(flight, pack, snapshot, selectedModel) {
     const el = $("skewt-section");

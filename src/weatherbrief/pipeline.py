@@ -13,7 +13,7 @@ from pathlib import Path
 
 from weatherbrief.analysis.comparison import compare_models
 from weatherbrief.analysis.sounding import analyze_sounding
-from weatherbrief.analysis.sounding.bands import summarize_by_bands
+from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
 from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.fetch.open_meteo import OpenMeteoClient
 from weatherbrief.models import (
@@ -108,7 +108,11 @@ def execute_briefing(
             f for f in all_forecasts if f.waypoint.icao == waypoint.icao
         ]
         track_deg = route.waypoint_track(waypoint.icao)
-        analysis = analyze_waypoint(wp_forecasts, target_dt, track_deg)
+        analysis = analyze_waypoint(
+            wp_forecasts, target_dt, track_deg,
+            cruise_altitude_ft=route.cruise_altitude_ft,
+            flight_ceiling_ft=route.flight_ceiling_ft,
+        )
         analyses.append(analysis)
 
     # --- Build & save snapshot ---
@@ -169,6 +173,8 @@ def analyze_waypoint(
     forecasts: list[WaypointForecast],
     target_time: datetime,
     track_deg: float,
+    cruise_altitude_ft: int = 8000,
+    flight_ceiling_ft: int = 18000,
 ) -> WaypointAnalysis:
     """Run all analysis on forecasts for a single waypoint."""
     if not forecasts:
@@ -253,9 +259,11 @@ def analyze_waypoint(
         if hourly.freezing_level_m is not None:
             model_freezing[model_key] = hourly.freezing_level_m
 
-    # Band comparisons across models
+    # Altitude advisories across models
     if analysis.sounding:
-        analysis.band_comparisons = summarize_by_bands(analysis.sounding)
+        analysis.altitude_advisories = compute_altitude_advisories(
+            analysis.sounding, cruise_altitude_ft, flight_ceiling_ft
+        )
 
     # Model comparison (need at least 2 models)
     comparisons = {

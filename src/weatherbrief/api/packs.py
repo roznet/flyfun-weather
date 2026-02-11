@@ -212,6 +212,7 @@ def refresh_briefing(flight_id: str, request: Request):
             name=flight.route_name or " → ".join(flight.waypoints),
             waypoints=waypoint_objs,
             cruise_altitude_ft=flight.cruise_altitude_ft,
+            flight_ceiling_ft=flight.flight_ceiling_ft,
             flight_duration_hours=flight.flight_duration_hours,
         )
 

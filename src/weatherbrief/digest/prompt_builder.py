@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from weatherbrief.models import (
     AgreementLevel,
+    AltitudeAdvisories,
     ConvectiveRisk,
     ForecastSnapshot,
     IcingRisk,
@@ -132,33 +133,11 @@ def build_digest_context(
         if wp_analysis.sounding:
             quant_lines.extend(_format_sounding_context(wp_analysis.sounding))
 
-        # Band comparisons
-        if wp_analysis.band_comparisons:
-            quant_lines.append("  Altitude band comparison:")
-            for bc in wp_analysis.band_comparisons:
-                active = any(
-                    s.worst_icing_risk != IcingRisk.NONE or s.cloud_coverage is not None
-                    for s in bc.models.values()
-                )
-                if not active:
-                    continue
-                agree_notes = []
-                if not bc.icing_agreement:
-                    agree_notes.append("icing disagree")
-                if not bc.cloud_agreement:
-                    agree_notes.append("cloud disagree")
-                agree_str = f" [{', '.join(agree_notes)}]" if agree_notes else ""
-                quant_lines.append(f"    {bc.band.name}{agree_str}:")
-                for mk, ms in bc.models.items():
-                    parts = []
-                    if ms.worst_icing_risk != IcingRisk.NONE:
-                        parts.append(f"icing={ms.worst_icing_risk.value}/{ms.worst_icing_type.value}")
-                        if ms.sld_risk:
-                            parts.append("SLD!")
-                    if ms.cloud_coverage is not None:
-                        parts.append(f"cloud={ms.cloud_coverage.value}")
-                    if parts:
-                        quant_lines.append(f"      [{mk}] {', '.join(parts)}")
+        # Altitude advisories
+        if wp_analysis.altitude_advisories:
+            quant_lines.extend(
+                _format_advisories_context(wp_analysis.altitude_advisories)
+            )
 
     sections.append("\n".join(quant_lines))
 
@@ -250,5 +229,34 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                 f"  Cloud [{model}]: {cl.coverage.value.upper()} "
                 f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft{t_str}"
             )
+
+    return lines
+
+
+def _format_advisories_context(adv: AltitudeAdvisories) -> list[str]:
+    """Format altitude advisories for LLM context."""
+    lines: list[str] = []
+
+    if adv.cruise_in_icing:
+        lines.append(f"  CRUISE IN ICING: {adv.cruise_icing_risk.value}")
+
+    for model, regimes in adv.regimes.items():
+        non_clear = [r for r in regimes if r.label != "Clear"]
+        if non_clear:
+            regime_strs = [
+                f"{r.floor_ft:.0f}-{r.ceiling_ft:.0f}ft:{r.label}" for r in regimes
+            ]
+            lines.append(f"  Vertical [{model}]: {' | '.join(regime_strs)}")
+
+    for advisory in adv.advisories:
+        feasible = "" if advisory.feasible else " INFEASIBLE"
+        model_strs = [
+            f"{m}={alt:.0f}ft" if alt is not None else f"{m}=N/A"
+            for m, alt in advisory.per_model_ft.items()
+        ]
+        lines.append(
+            f"  Advisory ({advisory.advisory_type}): {advisory.reason}{feasible}"
+            f" [{', '.join(model_strs)}]"
+        )
 
     return lines
