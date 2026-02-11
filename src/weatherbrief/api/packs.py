@@ -118,6 +118,16 @@ def get_digest(flight_id: str, timestamp: str):
     return FileResponse(digest_path, media_type="text/markdown")
 
 
+@router.get("/{timestamp}/digest/json")
+def get_digest_json(flight_id: str, timestamp: str):
+    """Get the structured LLM digest as JSON."""
+    pack_dir = _get_pack_dir(flight_id, timestamp)
+    json_path = pack_dir / "digest.json"
+    if not json_path.exists():
+        raise HTTPException(status_code=404, detail="Structured digest not available")
+    return FileResponse(json_path, media_type="application/json")
+
+
 @router.post("/refresh", response_model=PackMetaResponse, status_code=201)
 def refresh_briefing(flight_id: str, request: Request):
     """Trigger a new briefing fetch for a flight.

@@ -4,7 +4,7 @@
  * model comparison, and Skew-T route view.
  */
 
-import type { FlightResponse, ForecastSnapshot, PackMeta } from '../store/types';
+import type { FlightResponse, ForecastSnapshot, PackMeta, WeatherDigest } from '../store/types';
 import * as api from '../adapters/api-adapter';
 
 function $(id: string): HTMLElement {
@@ -23,9 +23,11 @@ export function renderHeader(
   // Use snapshot waypoints if available, otherwise derive from route name
   let routeStr: string;
   if (snapshot?.route?.waypoints) {
-    routeStr = snapshot.route.waypoints.map((w) => w.icao).join(' → ');
+    routeStr = snapshot.route.waypoints.map((w) => w.icao).join(' \u2192 ');
+  } else if (flight.waypoints?.length) {
+    routeStr = flight.waypoints.join(' \u2192 ');
   } else {
-    routeStr = flight.route_name.replace(/_/g, ' → ').toUpperCase();
+    routeStr = flight.route_name.replace(/_/g, ' \u2192 ').toUpperCase();
   }
 
   const date = new Date(flight.target_date + 'T00:00:00Z');
@@ -87,16 +89,28 @@ export function renderAssessment(pack: PackMeta | null): void {
   const level = pack.assessment.toUpperCase();
   el.className = `assessment-banner assessment-${level.toLowerCase()}`;
   el.innerHTML = `
-    <strong>${level}</strong>${pack.assessment_reason ? ` — ${pack.assessment_reason}` : ''}
+    <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${pack.assessment_reason}` : ''}
   `;
 }
 
-// --- Synopsis ---
+// --- Synopsis (structured digest) ---
+
+const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; label: string; icon: string }> = [
+  { key: 'synoptic', label: 'Synoptic', icon: '\uD83C\uDF0D' },
+  { key: 'winds', label: 'Winds', icon: '\uD83D\uDCA8' },
+  { key: 'cloud_visibility', label: 'Cloud & Visibility', icon: '\u2601\uFE0F' },
+  { key: 'precipitation_convection', label: 'Precipitation & Convection', icon: '\uD83C\uDF27\uFE0F' },
+  { key: 'icing', label: 'Icing', icon: '\u2744\uFE0F' },
+  { key: 'specific_concerns', label: 'Specific Concerns', icon: '\u26A0\uFE0F' },
+  { key: 'model_agreement', label: 'Model Agreement', icon: '\uD83D\uDCCA' },
+  { key: 'trend', label: 'Trend', icon: '\uD83D\uDCC8' },
+  { key: 'watch_items', label: 'Watch Items', icon: '\uD83D\uDC41\uFE0F' },
+];
 
 export function renderSynopsis(
   flight: FlightResponse | null,
   pack: PackMeta | null,
-  digestText: string | null,
+  digest: WeatherDigest | null,
 ): void {
   const el = $('synopsis-section');
   if (!el) return;
@@ -106,51 +120,58 @@ export function renderSynopsis(
     return;
   }
 
-  if (digestText) {
-    // Render markdown-ish digest as HTML (basic conversion)
-    el.innerHTML = renderDigestMarkdown(digestText);
+  if (digest) {
+    el.innerHTML = DIGEST_SECTIONS.map(({ key, label, icon }) => {
+      const text = digest[key];
+      if (!text) return '';
+      return `
+        <div class="digest-section">
+          <h4>${icon} ${label}</h4>
+          <p>${escapeHtml(text as string)}</p>
+        </div>
+      `;
+    }).join('');
     return;
   }
 
   if (pack.has_digest) {
-    // Fetch digest content
     el.innerHTML = '<p class="muted">Loading digest...</p>';
-    fetchAndRenderDigest(flight.id, pack.fetch_timestamp, el);
+    fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el);
     return;
   }
 
   el.innerHTML = '<p class="muted">Synopsis not available. Trigger a refresh to generate.</p>';
 }
 
-async function fetchAndRenderDigest(
+async function fetchAndRenderDigestJson(
   flightId: string, timestamp: string, el: HTMLElement,
 ): Promise<void> {
   try {
-    const url = api.digestUrl(flightId, timestamp);
+    const url = api.digestJsonUrl(flightId, timestamp);
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`${resp.status}`);
-    const text = await resp.text();
-    el.innerHTML = renderDigestMarkdown(text);
+    const digest: WeatherDigest = await resp.json();
+
+    el.innerHTML = DIGEST_SECTIONS.map(({ key, label, icon }) => {
+      const text = digest[key];
+      if (!text) return '';
+      return `
+        <div class="digest-section">
+          <h4>${icon} ${label}</h4>
+          <p>${escapeHtml(text as string)}</p>
+        </div>
+      `;
+    }).join('');
   } catch {
     el.innerHTML = '<p class="muted">Failed to load digest.</p>';
   }
 }
 
-/** Simple markdown-to-HTML for digest content (headers, bold, paragraphs). */
-function renderDigestMarkdown(md: string): string {
-  return md
-    .split('\n\n')
-    .map((block) => {
-      const trimmed = block.trim();
-      if (!trimmed) return '';
-      if (trimmed.startsWith('### ')) return `<h4>${trimmed.slice(4)}</h4>`;
-      if (trimmed.startsWith('## ')) return `<h3>${trimmed.slice(3)}</h3>`;
-      if (trimmed.startsWith('# ')) return `<h2>${trimmed.slice(2)}</h2>`;
-      // Bold
-      const html = trimmed.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      return `<p>${html}</p>`;
-    })
-    .join('\n');
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // --- GRAMET ---
@@ -194,7 +215,7 @@ export function renderModelComparison(snapshot: ForecastSnapshot | null): void {
     const rows = a.model_divergence.map((d) => {
       const valueCells = models.map((m) => {
         const val = d.model_values[m];
-        return `<td>${val !== undefined ? val.toFixed(1) : '—'}</td>`;
+        return `<td>${val !== undefined ? val.toFixed(1) : '\u2014'}</td>`;
       }).join('');
       const agreeIcon = d.agreement === 'good' ? '&#10003;'
         : d.agreement === 'moderate' ? '&#9888;' : '&#10007;';
@@ -211,7 +232,7 @@ export function renderModelComparison(snapshot: ForecastSnapshot | null): void {
 
     return `
       <div class="comparison-waypoint">
-        <h4>${a.waypoint.icao} — ${a.waypoint.name}</h4>
+        <h4>${a.waypoint.icao} \u2014 ${a.waypoint.name}</h4>
         <table class="comparison-table">
           <thead>
             <tr>
@@ -230,9 +251,9 @@ export function renderModelComparison(snapshot: ForecastSnapshot | null): void {
 
 function formatVarName(name: string): string {
   const labels: Record<string, string> = {
-    'temperature_c': 'Temp (°C)',
+    'temperature_c': 'Temp (\u00B0C)',
     'wind_speed_kt': 'Wind (kt)',
-    'wind_direction_deg': 'Wind dir (°)',
+    'wind_direction_deg': 'Wind dir (\u00B0)',
     'cloud_cover_pct': 'Cloud (%)',
     'precipitation_mm': 'Precip (mm)',
     'freezing_level_m': 'Freezing (m)',

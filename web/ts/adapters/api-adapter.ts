@@ -112,3 +112,7 @@ export function skewtUrl(
 export function digestUrl(flightId: string, timestamp: string): string {
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest`;
 }
+
+export function digestJsonUrl(flightId: string, timestamp: string): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest/json`;
+}

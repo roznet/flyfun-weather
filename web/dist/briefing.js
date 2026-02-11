@@ -72,8 +72,8 @@
   function skewtUrl(flightId, timestamp, icao, model) {
     return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/skewt/${encodeURIComponent(icao)}/${encodeURIComponent(model)}`;
   }
-  function digestUrl(flightId, timestamp) {
-    return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest`;
+  function digestJsonUrl(flightId, timestamp) {
+    return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest/json`;
   }
 
   // ts/store/briefing-store.ts
@@ -82,7 +82,7 @@
     packs: [],
     currentPack: null,
     snapshot: null,
-    digestText: null,
+    digest: null,
     selectedModel: "gfs",
     loading: false,
     refreshing: false,
@@ -115,20 +115,20 @@
       try {
         const pack = await fetchPack(flight.id, timestamp);
         let snapshot = null;
-        let digestText = null;
+        let digest = null;
         try {
           snapshot = await fetchSnapshot(flight.id, timestamp);
         } catch {
         }
         if (pack.has_digest) {
           try {
-            const url = digestUrl(flight.id, timestamp);
+            const url = digestJsonUrl(flight.id, timestamp);
             const resp = await fetch(url);
-            if (resp.ok) digestText = await resp.text();
+            if (resp.ok) digest = await resp.json();
           } catch {
           }
         }
-        set({ currentPack: pack, snapshot, digestText, loading: false });
+        set({ currentPack: pack, snapshot, digest, loading: false });
       } catch (err) {
         set({ loading: false, error: `Failed to load pack: ${err}` });
       }
@@ -167,6 +167,8 @@
     let routeStr;
     if (snapshot?.route?.waypoints) {
       routeStr = snapshot.route.waypoints.map((w) => w.icao).join(" \u2192 ");
+    } else if (flight.waypoints?.length) {
+      routeStr = flight.waypoints.join(" \u2192 ");
     } else {
       routeStr = flight.route_name.replace(/_/g, " \u2192 ").toUpperCase();
     }
@@ -215,45 +217,66 @@
     <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${pack.assessment_reason}` : ""}
   `;
   }
-  function renderSynopsis(flight, pack, digestText) {
+  var DIGEST_SECTIONS = [
+    { key: "synoptic", label: "Synoptic", icon: "\u{1F30D}" },
+    { key: "winds", label: "Winds", icon: "\u{1F4A8}" },
+    { key: "cloud_visibility", label: "Cloud & Visibility", icon: "\u2601\uFE0F" },
+    { key: "precipitation_convection", label: "Precipitation & Convection", icon: "\u{1F327}\uFE0F" },
+    { key: "icing", label: "Icing", icon: "\u2744\uFE0F" },
+    { key: "specific_concerns", label: "Specific Concerns", icon: "\u26A0\uFE0F" },
+    { key: "model_agreement", label: "Model Agreement", icon: "\u{1F4CA}" },
+    { key: "trend", label: "Trend", icon: "\u{1F4C8}" },
+    { key: "watch_items", label: "Watch Items", icon: "\u{1F441}\uFE0F" }
+  ];
+  function renderSynopsis(flight, pack, digest) {
     const el = $("synopsis-section");
     if (!el) return;
     if (!flight || !pack) {
       el.innerHTML = '<p class="muted">No briefing loaded.</p>';
       return;
     }
-    if (digestText) {
-      el.innerHTML = renderDigestMarkdown(digestText);
+    if (digest) {
+      el.innerHTML = DIGEST_SECTIONS.map(({ key, label, icon }) => {
+        const text = digest[key];
+        if (!text) return "";
+        return `
+        <div class="digest-section">
+          <h4>${icon} ${label}</h4>
+          <p>${escapeHtml(text)}</p>
+        </div>
+      `;
+      }).join("");
       return;
     }
     if (pack.has_digest) {
       el.innerHTML = '<p class="muted">Loading digest...</p>';
-      fetchAndRenderDigest(flight.id, pack.fetch_timestamp, el);
+      fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el);
       return;
     }
     el.innerHTML = '<p class="muted">Synopsis not available. Trigger a refresh to generate.</p>';
   }
-  async function fetchAndRenderDigest(flightId, timestamp, el) {
+  async function fetchAndRenderDigestJson(flightId, timestamp, el) {
     try {
-      const url = digestUrl(flightId, timestamp);
+      const url = digestJsonUrl(flightId, timestamp);
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`${resp.status}`);
-      const text = await resp.text();
-      el.innerHTML = renderDigestMarkdown(text);
+      const digest = await resp.json();
+      el.innerHTML = DIGEST_SECTIONS.map(({ key, label, icon }) => {
+        const text = digest[key];
+        if (!text) return "";
+        return `
+        <div class="digest-section">
+          <h4>${icon} ${label}</h4>
+          <p>${escapeHtml(text)}</p>
+        </div>
+      `;
+      }).join("");
     } catch {
       el.innerHTML = '<p class="muted">Failed to load digest.</p>';
     }
   }
-  function renderDigestMarkdown(md) {
-    return md.split("\n\n").map((block) => {
-      const trimmed = block.trim();
-      if (!trimmed) return "";
-      if (trimmed.startsWith("### ")) return `<h4>${trimmed.slice(4)}</h4>`;
-      if (trimmed.startsWith("## ")) return `<h3>${trimmed.slice(3)}</h3>`;
-      if (trimmed.startsWith("# ")) return `<h2>${trimmed.slice(2)}</h2>`;
-      const html = trimmed.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-      return `<p>${html}</p>`;
-    }).join("\n");
+  function escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   function renderGramet(flight, pack) {
     const el = $("gramet-section");
@@ -387,9 +410,9 @@
           (ts) => store.getState().selectPack(ts)
         );
       }
-      if (state.currentPack !== prev.currentPack || state.snapshot !== prev.snapshot || state.digestText !== prev.digestText) {
+      if (state.currentPack !== prev.currentPack || state.snapshot !== prev.snapshot || state.digest !== prev.digest) {
         renderAssessment(state.currentPack);
-        renderSynopsis(state.flight, state.currentPack, state.digestText);
+        renderSynopsis(state.flight, state.currentPack, state.digest);
         renderGramet(state.flight, state.currentPack);
         renderModelComparison(state.snapshot);
         renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel);
@@ -445,7 +468,7 @@
       renderHeader(s.flight, s.snapshot);
       renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
       renderAssessment(s.currentPack);
-      renderSynopsis(s.flight, s.currentPack, s.digestText);
+      renderSynopsis(s.flight, s.currentPack, s.digest);
       renderGramet(s.flight, s.currentPack);
       renderModelComparison(s.snapshot);
       renderSkewTs(s.flight, s.currentPack, s.snapshot, s.selectedModel);

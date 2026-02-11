@@ -52,6 +52,20 @@ export interface WaypointAnalysis {
   model_divergence: ModelDivergence[];
 }
 
+export interface WeatherDigest {
+  assessment: 'GREEN' | 'AMBER' | 'RED';
+  assessment_reason: string;
+  synoptic: string;
+  winds: string;
+  cloud_visibility: string;
+  precipitation_convection: string;
+  icing: string;
+  specific_concerns: string;
+  model_agreement: string;
+  trend: string;
+  watch_items: string;
+}
+
 export interface ForecastSnapshot {
   route: {
     name: string;

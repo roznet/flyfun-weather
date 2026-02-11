@@ -29,10 +29,10 @@ function init(): void {
     if (
       state.currentPack !== prev.currentPack ||
       state.snapshot !== prev.snapshot ||
-      state.digestText !== prev.digestText
+      state.digest !== prev.digest
     ) {
       ui.renderAssessment(state.currentPack);
-      ui.renderSynopsis(state.flight, state.currentPack, state.digestText);
+      ui.renderSynopsis(state.flight, state.currentPack, state.digest);
       ui.renderGramet(state.flight, state.currentPack);
       ui.renderModelComparison(state.snapshot);
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel);
@@ -98,7 +98,7 @@ function init(): void {
     ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack);
-    ui.renderSynopsis(s.flight, s.currentPack, s.digestText);
+    ui.renderSynopsis(s.flight, s.currentPack, s.digest);
     ui.renderGramet(s.flight, s.currentPack);
     ui.renderModelComparison(s.snapshot);
     ui.renderSkewTs(s.flight, s.currentPack, s.snapshot, s.selectedModel);

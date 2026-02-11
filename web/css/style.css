@@ -254,6 +254,34 @@ label {
 
 .muted { color: var(--text-muted); font-style: italic; }
 
+/* --- Digest sections --- */
+
+.digest-section {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.digest-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.digest-section h4 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+}
+
+.digest-section p {
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
 /* --- GRAMET --- */
 
 .gramet-img {

@@ -350,19 +350,24 @@ def _run_llm_digest(
             result.errors.append(f"LLM digest: {digest_result['error']}")
             return
 
-        result.digest = digest_result.get("digest")
+        digest_obj = digest_result.get("digest")
+        result.digest = digest_obj
 
-        # Save markdown digest
+        # Save markdown + structured JSON digest
         if output_dir:
-            out_path = output_dir / "digest.md"
+            md_path = output_dir / "digest.md"
+            json_path = output_dir / "digest.json"
         else:
             out_dir = data_dir / "digests" / target_date / f"d-{days_out}_{fetch_date}"
             out_dir.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir / "digest.md"
-        out_path.write_text(digest_result["digest_text"])
-        result.digest_path = out_path
+            md_path = out_dir / "digest.md"
+            json_path = out_dir / "digest.json"
+        md_path.write_text(digest_result["digest_text"])
+        if digest_obj is not None:
+            json_path.write_text(digest_obj.model_dump_json(indent=2))
+        result.digest_path = md_path
         result.digest_text = digest_result["digest_text"]
-        logger.info("LLM digest saved: %s", out_path)
+        logger.info("LLM digest saved: %s", md_path)
 
     except Exception as exc:
         logger.warning("LLM digest generation failed: %s", exc, exc_info=True)
