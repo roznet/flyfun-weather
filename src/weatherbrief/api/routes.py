@@ -20,6 +20,7 @@ class RouteInfo(BaseModel):
     display_name: str
     waypoints: list[str]
     cruise_altitude_ft: int = 8000
+    flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
 
 
@@ -43,6 +44,7 @@ def list_routes():
             display_name=r.get("name", key),
             waypoints=r.get("waypoints", []),
             cruise_altitude_ft=r.get("cruise_altitude_ft", 8000),
+            flight_ceiling_ft=r.get("flight_ceiling_ft", 18000),
             flight_duration_hours=r.get("flight_duration_hours", 0.0),
         ))
     return result
@@ -60,5 +62,6 @@ def get_route(name: str):
         display_name=r.get("name", name),
         waypoints=r.get("waypoints", []),
         cruise_altitude_ft=r.get("cruise_altitude_ft", 8000),
+        flight_ceiling_ft=r.get("flight_ceiling_ft", 18000),
         flight_duration_hours=r.get("flight_duration_hours", 0.0),
     )

@@ -6,6 +6,7 @@ from datetime import datetime
 
 from weatherbrief.models import (
     AgreementLevel,
+    AltitudeAdvisories,
     ConvectiveRisk,
     ForecastSnapshot,
     IcingRisk,
@@ -154,34 +155,38 @@ def _format_waypoint_analysis(analysis: WaypointAnalysis) -> list[str]:
     else:
         lines.append("  No sounding data available")
 
-    # Band comparisons
-    if analysis.band_comparisons:
-        lines.append("  Altitude bands:")
-        for bc in analysis.band_comparisons:
-            active_models = [
-                m for m, s in bc.models.items()
-                if s.worst_icing_risk != IcingRisk.NONE or s.cloud_coverage is not None
-            ]
-            if not active_models:
-                continue
-            agree_str = ""
-            if not bc.icing_agreement:
-                agree_str += " [icing disagree]"
-            if not bc.cloud_agreement:
-                agree_str += " [cloud disagree]"
-            lines.append(f"    {bc.band.name}{agree_str}:")
-            for model_key, summary in bc.models.items():
-                parts = []
-                if summary.worst_icing_risk != IcingRisk.NONE:
-                    parts.append(f"icing={summary.worst_icing_risk.value}/{summary.worst_icing_type.value}")
-                    if summary.sld_risk:
-                        parts.append("SLD!")
-                if summary.cloud_coverage is not None:
-                    parts.append(f"cloud={summary.cloud_coverage.value}")
-                if summary.temperature_min_c is not None and summary.temperature_max_c is not None:
-                    parts.append(f"T={summary.temperature_min_c:.0f}/{summary.temperature_max_c:.0f}C")
-                if parts:
-                    lines.append(f"      [{model_key}] {', '.join(parts)}")
+    # Altitude advisories
+    if analysis.altitude_advisories:
+        lines.extend(_format_altitude_advisories(analysis.altitude_advisories))
+
+    return lines
+
+
+def _format_altitude_advisories(adv: AltitudeAdvisories) -> list[str]:
+    """Format altitude regimes and advisories."""
+    lines: list[str] = []
+
+    # Cruise icing status
+    if adv.cruise_in_icing:
+        lines.append(f"  ** CRUISE IN ICING ({adv.cruise_icing_risk.value.upper()}) **")
+
+    # Per-model regimes
+    for model, regimes in adv.regimes.items():
+        non_clear = [r for r in regimes if r.label != "Clear"]
+        if non_clear:
+            lines.append(f"  Vertical profile [{model}]:")
+            for r in regimes:
+                lines.append(f"    {r.floor_ft:.0f}-{r.ceiling_ft:.0f}ft: {r.label}")
+
+    # Advisories
+    for advisory in adv.advisories:
+        feasible_str = "" if advisory.feasible else " [INFEASIBLE]"
+        lines.append(f"  Advisory: {advisory.reason}{feasible_str}")
+        if advisory.per_model_ft:
+            model_parts = []
+            for m, alt in advisory.per_model_ft.items():
+                model_parts.append(f"{m}={alt:.0f}ft" if alt is not None else f"{m}=N/A")
+            lines.append(f"    Per model: {', '.join(model_parts)}")
 
     return lines
 

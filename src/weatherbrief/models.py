@@ -54,6 +54,7 @@ class RouteConfig(BaseModel):
     name: str
     waypoints: list[Waypoint] = Field(min_length=2)
     cruise_altitude_ft: int = 8000
+    flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
 
     @model_validator(mode="after")
@@ -323,32 +324,34 @@ class SoundingAnalysis(BaseModel):
     convective: Optional[ConvectiveAssessment] = None
 
 
-class AltitudeBand(BaseModel):
-    """Altitude band definition for grouped comparison."""
+class VerticalRegime(BaseModel):
+    """A vertical slice with uniform conditions, derived from weather data."""
 
-    name: str
     floor_ft: float
     ceiling_ft: float
+    in_cloud: bool
+    icing_risk: IcingRisk = IcingRisk.NONE
+    icing_type: IcingType = IcingType.NONE
+    label: str  # e.g. "Clear", "In cloud", "In cloud, icing MOD (mixed)"
 
 
-class BandModelSummary(BaseModel):
-    """Per-model summary within an altitude band."""
+class AltitudeAdvisory(BaseModel):
+    """An actionable altitude recommendation, aggregated across models."""
 
-    worst_icing_risk: IcingRisk = IcingRisk.NONE
-    worst_icing_type: IcingType = IcingType.NONE
-    sld_risk: bool = False
-    cloud_coverage: Optional[CloudCoverage] = None
-    temperature_min_c: Optional[float] = None
-    temperature_max_c: Optional[float] = None
+    advisory_type: str  # "descend_below_icing", "climb_above_icing", etc.
+    altitude_ft: Optional[float] = None  # worst-case across models
+    feasible: bool = True  # achievable within constraints
+    reason: str = ""  # human-readable explanation
+    per_model_ft: dict[str, Optional[float]] = Field(default_factory=dict)
 
 
-class AltitudeBandComparison(BaseModel):
-    """Cross-model comparison within an altitude band."""
+class AltitudeAdvisories(BaseModel):
+    """Complete altitude picture for a waypoint."""
 
-    band: AltitudeBand
-    models: dict[str, BandModelSummary] = Field(default_factory=dict)
-    icing_agreement: bool = True
-    cloud_agreement: bool = True
+    regimes: dict[str, list[VerticalRegime]] = Field(default_factory=dict)
+    advisories: list[AltitudeAdvisory] = Field(default_factory=list)
+    cruise_in_icing: bool = False
+    cruise_icing_risk: IcingRisk = IcingRisk.NONE
 
 
 class AgreementLevel(str, Enum):
@@ -376,7 +379,7 @@ class WaypointAnalysis(BaseModel):
     target_time: datetime
     wind_components: dict[str, WindComponent] = Field(default_factory=dict)
     sounding: dict[str, SoundingAnalysis] = Field(default_factory=dict)
-    band_comparisons: list[AltitudeBandComparison] = Field(default_factory=list)
+    altitude_advisories: Optional[AltitudeAdvisories] = None
     model_divergence: list[ModelDivergence] = Field(default_factory=list)
 
 
@@ -403,6 +406,7 @@ class Flight(BaseModel):
     target_date: str  # YYYY-MM-DD
     target_time_utc: int = 9  # departure hour
     cruise_altitude_ft: int = 8000
+    flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
     created_at: datetime
 

@@ -5,6 +5,7 @@ export interface RouteInfo {
   display_name: string;
   waypoints: string[];
   cruise_altitude_ft: number;
+  flight_ceiling_ft: number;
   flight_duration_hours: number;
 }
 
@@ -15,6 +16,7 @@ export interface FlightResponse {
   target_date: string;
   target_time_utc: number;
   cruise_altitude_ft: number;
+  flight_ceiling_ft: number;
   flight_duration_hours: number;
   created_at: string;
 }
@@ -25,6 +27,7 @@ export interface CreateFlightRequest {
   target_date: string;
   target_time_utc?: number;
   cruise_altitude_ft?: number;
+  flight_ceiling_ft?: number;
   flight_duration_hours?: number;
 }
 
@@ -109,26 +112,34 @@ export interface SoundingAnalysis {
   convective: ConvectiveAssessment | null;
 }
 
-export interface BandModelSummary {
-  worst_icing_risk: IcingRisk;
-  worst_icing_type: IcingType;
-  sld_risk: boolean;
-  cloud_coverage: CloudCoverage | null;
-  temperature_min_c: number | null;
-  temperature_max_c: number | null;
+export interface VerticalRegime {
+  floor_ft: number;
+  ceiling_ft: number;
+  in_cloud: boolean;
+  icing_risk: IcingRisk;
+  icing_type: IcingType;
+  label: string;
 }
 
-export interface AltitudeBandComparison {
-  band: { name: string; floor_ft: number; ceiling_ft: number };
-  models: Record<string, BandModelSummary>;
-  icing_agreement: boolean;
-  cloud_agreement: boolean;
+export interface AltitudeAdvisory {
+  advisory_type: string;
+  altitude_ft: number | null;
+  feasible: boolean;
+  reason: string;
+  per_model_ft: Record<string, number | null>;
+}
+
+export interface AltitudeAdvisories {
+  regimes: Record<string, VerticalRegime[]>;
+  advisories: AltitudeAdvisory[];
+  cruise_in_icing: boolean;
+  cruise_icing_risk: IcingRisk;
 }
 
 export interface WaypointAnalysis {
   waypoint: { icao: string; name: string };
   sounding: Record<string, SoundingAnalysis>;
-  band_comparisons: AltitudeBandComparison[];
+  altitude_advisories: AltitudeAdvisories | null;
   model_divergence: ModelDivergence[];
 }
 

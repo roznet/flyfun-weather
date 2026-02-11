@@ -112,18 +112,29 @@ Pure threshold logic from `ThermodynamicIndices` — no MetPy dependency.
 - CIN < -200 J/kg suppresses risk by one level
 - Severe modifiers: bulk shear >40kt (supercell), >25kt (multicell), high freezing level + CAPE >1000 (hail), K-index >35, Total Totals >55, LI < -6
 
-### Bands (`sounding/bands.py`)
+### Altitude Advisories (`sounding/advisories.py`)
 
-Altitude band grouping for cross-model comparison.
+Dynamic altitude advisories replacing static altitude bands. Two layers:
+
+1. **Vertical regimes** — per-model slices derived from actual weather boundaries
+2. **Altitude advisories** — actionable highlights aggregated across models
 
 ```python
-from weatherbrief.analysis.sounding.bands import summarize_by_bands
-comparisons = summarize_by_bands(analysis.sounding)  # dict[str, SoundingAnalysis]
+from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
+adv = compute_altitude_advisories(soundings, cruise_altitude_ft=8000, flight_ceiling_ft=18000)
+# Returns AltitudeAdvisories with regimes, advisories, cruise icing status
 ```
 
-**Default bands:** SFC-6000ft, 6000-12000ft, 12000-18000ft, 18000-25000ft, 25000ft+
+**Regime computation** per model:
+1. Collect transition altitudes: `{0, ceiling_ft}` + cloud base/top + icing zone base/top + freezing level
+2. Classify each segment by checking midpoint against cloud layers and icing zones
+3. Merge adjacent regimes with identical conditions (in_cloud + icing_risk + icing_type)
+4. Generate label: "Clear" / "In cloud" / "In cloud, icing MOD (mixed)"
 
-Per band per model: worst icing risk/type, SLD flag, cloud coverage, temperature range → `BandModelSummary`. Cross-model: icing agreement (spread ≤ 1 category), cloud agreement → `AltitudeBandComparison`.
+**Advisory types:**
+- `descend_below_icing`: Per model, escape = min(freezing level, lowest icing-overlapping cloud base) - 500ft. Aggregate: min() across models.
+- `climb_above_icing`: Per model, max(highest icing top, highest cloud top in icing temps) + 500ft. Aggregate: max() across models. `feasible` if ≤ flight_ceiling_ft.
+- Cruise icing status: any model showing icing at cruise altitude → `cruise_in_icing=True`, worst risk across models.
 
 ## Model Comparison (`analysis/comparison.py`)
 
@@ -161,7 +172,7 @@ In `pipeline.analyze_waypoint()`, for each waypoint:
 1. Find closest pressure level to cruise altitude for wind analysis
 2. Run `analyze_sounding()` per model → store in `analysis.sounding[model_key]`
 3. Extract indices for cross-model comparison (8 sounding-derived metrics)
-4. After all models: `summarize_by_bands()` → `analysis.band_comparisons`
+4. After all models: `compute_altitude_advisories()` → `analysis.altitude_advisories`
 5. Compute cross-model divergence for all 14 metrics
 
 ## Gotchas

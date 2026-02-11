@@ -69,20 +69,20 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list |
 | `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, icing_zones, convective |
 
-### Altitude Band Comparison
+### Altitude Advisories
 
 | Model | Purpose | Key fields |
 |-------|---------|------------|
-| `AltitudeBand` | Band definition | name, floor_ft, ceiling_ft |
-| `BandModelSummary` | Per-model within a band | worst icing risk/type, sld_risk, cloud_coverage, temperature range |
-| `AltitudeBandComparison` | Cross-model per band | band, models dict, icing_agreement, cloud_agreement |
+| `VerticalRegime` | A vertical slice with uniform conditions | floor_ft, ceiling_ft, in_cloud, icing_risk, icing_type, label |
+| `AltitudeAdvisory` | Actionable altitude recommendation | advisory_type, altitude_ft, feasible, reason, per_model_ft |
+| `AltitudeAdvisories` | Complete altitude picture for a waypoint | regimes (per-model), advisories, cruise_in_icing, cruise_icing_risk |
 
 ### WaypointAnalysis
 
 All analysis for one waypoint. Contains:
 - `wind_components: dict[str, WindComponent]` — model → wind decomposition
 - `sounding: dict[str, SoundingAnalysis]` — model → full sounding analysis
-- `band_comparisons: list[AltitudeBandComparison]` — cross-model altitude band comparison
+- `altitude_advisories: AltitudeAdvisories | None` — dynamic vertical regimes and altitude advisories
 - `model_divergence: list[ModelDivergence]` — 14 metrics compared across models
 
 ## API / Web Models

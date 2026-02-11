@@ -138,9 +138,11 @@ export function onRouteSelected(routes: RouteInfo[]): void {
 
     const wpInput = $('input-waypoints') as HTMLInputElement;
     const altInput = $('input-altitude') as HTMLInputElement;
+    const ceilInput = $('input-ceiling') as HTMLInputElement;
     const durInput = $('input-duration') as HTMLInputElement;
     if (wpInput) wpInput.value = route.waypoints.join(' ');
     if (altInput) altInput.value = String(route.cruise_altitude_ft);
+    if (ceilInput) ceilInput.value = String(route.flight_ceiling_ft);
     if (durInput) durInput.value = String(route.flight_duration_hours);
   });
 }

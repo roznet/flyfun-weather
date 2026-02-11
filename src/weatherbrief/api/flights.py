@@ -26,6 +26,7 @@ class CreateFlightRequest(BaseModel):
     target_date: str  # YYYY-MM-DD
     target_time_utc: int = 9
     cruise_altitude_ft: int = 8000
+    flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
 
 
@@ -38,6 +39,7 @@ class FlightResponse(BaseModel):
     target_date: str
     target_time_utc: int
     cruise_altitude_ft: int
+    flight_ceiling_ft: int
     flight_duration_hours: float
     created_at: str
 
@@ -50,6 +52,7 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
         target_date=flight.target_date,
         target_time_utc=flight.target_time_utc,
         cruise_altitude_ft=flight.cruise_altitude_ft,
+        flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
         created_at=flight.created_at.isoformat(),
     )
@@ -93,6 +96,7 @@ def create_flight(req: CreateFlightRequest):
         target_date=req.target_date,
         target_time_utc=req.target_time_utc,
         cruise_altitude_ft=req.cruise_altitude_ft,
+        flight_ceiling_ft=req.flight_ceiling_ft,
         flight_duration_hours=req.flight_duration_hours,
         created_at=datetime.now(tz=timezone.utc),
     )
