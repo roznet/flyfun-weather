@@ -57,6 +57,42 @@ Root object for one fetch run: `(route, target_date, fetch_date, days_out, forec
 | `ModelDivergence` | Cross-model comparison | `variable`, `spread`, `agreement` (GOOD/MODERATE/POOR) |
 | `WaypointAnalysis` | All analysis for one waypoint | dicts of model→WindComponent, model→IcingBands, model→CloudLayers, plus divergence list |
 
+## API / Web Models
+
+### Flight
+
+A saved briefing target — route + date/time specifics. ID is `{route_name}-{target_date}` (one flight per route per day, by design).
+
+```python
+Flight(
+    id="egtk_lsgs-2026-02-21",
+    route_name="egtk_lsgs",
+    waypoints=["EGTK", "LFPB", "LSGS"],  # ICAO codes
+    target_date="2026-02-21",
+    target_time_utc=9,
+    cruise_altitude_ft=8000,
+    flight_duration_hours=4.5,
+    created_at=datetime(...),
+)
+```
+
+### BriefingPackMeta
+
+Lightweight metadata for one fetch — used for history listing without loading full snapshot.
+
+```python
+BriefingPackMeta(
+    flight_id="egtk_lsgs-2026-02-21",
+    fetch_timestamp="2026-02-19T18:00:00+00:00",
+    days_out=2,
+    has_gramet=True, has_skewt=True, has_digest=True,
+    assessment="GREEN",
+    assessment_reason="Conditions favorable",
+)
+```
+
+Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` are denormalized from the digest for quick display.
+
 ## Enums
 
 - `ModelSource`: `BEST_MATCH`, `GFS`, `ECMWF`, `ICON`, `UKMO`, `METEOFRANCE`
@@ -82,3 +118,5 @@ Root object for one fetch run: `(route, target_date, fetch_date, days_out, forec
 - Route loading: `config.py`, `airports.py`
 - Analysis consumers: [analysis.md](./analysis.md)
 - Snapshot persistence: `storage/snapshots.py`
+- Flight/pack storage: `storage/flights.py`
+- API response models: `api/flights.py`, `api/packs.py`

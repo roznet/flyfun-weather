@@ -1,15 +1,15 @@
 # Architecture
 
-> System overview, data pipeline, CLI, storage layout, and phase roadmap
+> System overview, data pipeline, API, web app, storage layout, and phase roadmap
 
 ## Intent
 
-WeatherBrief produces daily aviation weather assessments for a planned European GA cross-country flight, tracking conditions from D-7 through D-0. It fetches quantitative data from multiple NWP models, performs aviation-specific analysis, and generates both human-readable text digests and LLM-powered briefings.
+WeatherBrief produces daily aviation weather assessments for a planned European GA cross-country flight, tracking conditions from D-7 through D-0. It fetches quantitative data from multiple NWP models, performs aviation-specific analysis, and generates both human-readable text digests and LLM-powered briefings. A web UI and API serve the briefings with history, PDF reports, and email delivery.
 
-## Pipeline
+## Pipeline (`pipeline.py`)
 
 ```
-CLI args → RouteConfig (from YAML or inline ICAOs)
+RouteConfig + target_date + options
     ↓
 OpenMeteoClient.fetch_all_models()  (per waypoint, per model)
     ↓
@@ -26,19 +26,22 @@ ForecastSnapshot  (root object, saved as JSON)
 Optional outputs:
 ├→ GRAMET cross-section (Autorouter API → PNG)
 ├→ Skew-T plots (MetPy → PNG per waypoint/model)
-├→ LLM digest (LangGraph: DWD text + quant → WeatherDigest → Markdown)
-    ↓
-format_digest() → plain-text console output
+├→ LLM digest (LangGraph: DWD text + quant → WeatherDigest → Markdown + JSON)
 ```
+
+**Entry point:** `execute_briefing(route, target_date, target_hour, options)` — shared by CLI and API. Returns `BriefingResult` with all paths and structured results. Never prints or exits.
+
+`BriefingOptions` controls what gets generated (models, gramet, skewt, llm_digest, output_dir). `BriefingResult` carries snapshot, paths, digest object, and error list.
 
 ## Package Layout
 
 ```
 src/weatherbrief/
-├── models.py          # All Pydantic v2 data models
+├── models.py          # All Pydantic v2 data models (incl Flight, BriefingPackMeta)
 ├── config.py          # Route YAML loading
 ├── airports.py        # ICAO → lat/lon via euro_aip
-├── cli.py             # Entry point, pipeline orchestration
+├── cli.py             # CLI entry point (delegates to pipeline)
+├── pipeline.py        # Core pipeline: fetch → analyze → outputs
 ├── fetch/
 │   ├── variables.py   # Model endpoints, API parameters
 │   ├── open_meteo.py  # Open-Meteo client
@@ -55,52 +58,93 @@ src/weatherbrief/
 │   ├── llm_config.py  # LLM config schema + factory
 │   ├── llm_digest.py  # LangGraph digest pipeline
 │   └── prompt_builder.py  # Context assembly for LLM
-└── storage/
-    └── snapshots.py   # JSON save/load/list
+├── storage/
+│   ├── snapshots.py   # Legacy JSON save/load/list
+│   └── flights.py     # Flight + BriefingPack CRUD, registry
+├── api/
+│   ├── app.py         # FastAPI factory, static files, CORS
+│   ├── routes.py      # GET /api/routes (from YAML)
+│   ├── flights.py     # CRUD /api/flights
+│   └── packs.py       # Packs: history, artifacts, refresh, report, email
+├── report/
+│   ├── render.py      # render_html(), render_pdf() via Jinja2 + WeasyPrint
+│   └── templates/     # Jinja2 template for self-contained HTML report
+└── notify/
+    └── email.py       # SMTP email with HTML body + PDF attachment
+```
+
+## Web Frontend (`web/`)
+
+Vanilla TypeScript + Zustand (no React), bundled by esbuild.
+
+```
+web/
+├── index.html         # Flights list page
+├── briefing.html      # Briefing report page
+├── css/style.css      # Shared styles
+├── ts/
+│   ├── store/         # Zustand vanilla stores + shared types
+│   ├── managers/      # DOM rendering functions
+│   ├── adapters/      # API communication layer
+│   ├── flights-main.ts    # Flights page entry
+│   └── briefing-main.ts   # Briefing page entry
+└── dist/              # esbuild output (committed)
 ```
 
 ## Storage Layout
 
 ```
 data/
-├── forecasts/{target_date}/d-{N}_{fetch_date}/snapshot.json
-├── gramet/{target_date}/d-{N}_{fetch_date}/gramet.png
-├── skewt/{target_date}/d-{N}_{fetch_date}/{ICAO}_{model}.png
-└── digests/{target_date}/d-{N}_{fetch_date}/digest.md
-
-config/routes.yaml                          # Named route definitions
-configs/weather_digest/                     # LLM digest configs
-├── default.json                            # Anthropic config
-├── openai.json                             # OpenAI variant
-└── prompts/briefer_v1.md                   # System prompt
+├── flights.json                    # Flight registry (lightweight index)
+└── flights/
+    └── {flight_id}/
+        ├── flight.json             # Flight config
+        └── packs/
+            └── {safe_timestamp}/   # ISO timestamp (: → -, + → p)
+                ├── pack.json       # BriefingPackMeta
+                ├── snapshot.json   # ForecastSnapshot
+                ├── gramet.png
+                ├── skewt/
+                │   ├── EGTK_gfs.png
+                │   ├── EGTK_ecmwf.png
+                │   └── ...
+                ├── digest.md       # Formatted LLM digest
+                └── digest.json     # Structured WeatherDigest
 ```
 
-## CLI
+Legacy CLI storage (`data/forecasts/`, `data/gramet/`, etc.) still works for CLI-only usage.
 
-```bash
-# Fetch with analysis + text digest
-python -m weatherbrief fetch EGTK LFPB LSGS --db $DB --date 2026-02-17
+## API
 
-# Named route with all outputs
-python -m weatherbrief fetch --route egtk_lsgs --db $DB --date 2026-02-17 \
-  --gramet --skewt --llm-digest
+FastAPI app at `api/app.py`, served by uvicorn.
 
-# Config switching
-python -m weatherbrief fetch ... --llm-digest --digest-config openai
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/routes` | GET | List named routes from YAML |
+| `/api/flights` | GET/POST | List/create flights |
+| `/api/flights/{id}` | GET/DELETE | Get/delete flight |
+| `/api/flights/{id}/packs` | GET | List pack history |
+| `/api/flights/{id}/packs/refresh` | POST | Trigger new briefing fetch |
+| `/api/flights/{id}/packs/{ts}/snapshot` | GET | Raw forecast JSON |
+| `/api/flights/{id}/packs/{ts}/gramet` | GET | GRAMET PNG |
+| `/api/flights/{id}/packs/{ts}/skewt/{icao}/{model}` | GET | Skew-T PNG |
+| `/api/flights/{id}/packs/{ts}/digest/json` | GET | Structured digest |
+| `/api/flights/{id}/packs/{ts}/report.html` | GET | Self-contained HTML report |
+| `/api/flights/{id}/packs/{ts}/report.pdf` | GET | PDF download |
+| `/api/flights/{id}/packs/{ts}/email` | POST | Send email with PDF |
 
-# List available routes
-python -m weatherbrief routes
-```
-
-Key flags: `--alt` (cruise ft), `--time` (target hour UTC), `--duration` (hours), `--models` (csv), `--gramet`, `--skewt`, `--llm-digest`, `--digest-config`.
+Static files served from `web/` at root.
 
 ## Key Choices
 
 - **Pydantic v2 throughout** — validation, serialization, JSON round-trip all free.
-- **Graceful degradation** — GRAMET/Skew-T/LLM/DWD failures logged but don't halt pipeline. Missing model data doesn't block other models.
-- **Per-waypoint track** — wind components use circular mean of incoming/outgoing leg bearings, not a single route heading.
-- **LangChain `init_chat_model`** — single factory for any provider (Anthropic, OpenAI). No custom registry.
-- **`python-dotenv`** — `.env` loaded in CLI entry point for API keys.
+- **Graceful degradation** — GRAMET/Skew-T/LLM/DWD failures logged but don't halt pipeline.
+- **Pipeline extracted from CLI** — `pipeline.py` is the single entry point for both CLI and API.
+- **File-based storage** — no database; flights and packs are directories with JSON metadata.
+- **Flight ID = route + date** — one flight per route per day, by design.
+- **Naive datetimes in pipeline** — matches Open-Meteo's naive UTC timestamps.
+- **Vanilla TS + Zustand** — no framework; esbuild for fast bundling.
+- **ECMWF-only Skew-T in PDF/email** — PDF is concise; web UI allows model toggling.
 
 ## Dependencies
 
@@ -109,10 +153,12 @@ Key flags: `--alt` (cruise ft), `--time` (target hour UTC), `--duration` (hours)
 | `pydantic>=2.0` | Data models |
 | `requests` | HTTP API calls |
 | `pyyaml` | Route config |
+| `fastapi`, `uvicorn` | API server |
 | `metpy`, `matplotlib`, `numpy` | Skew-T plots |
 | `langchain`, `langgraph` | LLM digest orchestration |
 | `langchain-anthropic`, `langchain-openai` | LLM providers |
 | `python-dotenv` | Environment loading |
+| `jinja2`, `weasyprint` | PDF/HTML report rendering |
 | `euro-aip` (local) | Airport DB, Autorouter credentials |
 
 ## Phase Roadmap
@@ -123,7 +169,7 @@ Key flags: `--alt` (cruise ft), `--time` (target hour UTC), `--duration` (hours)
 | 2 | Done | Route rework (YAML, per-waypoint track), GRAMET, Skew-T plots |
 | 3 | Done | DWD text forecasts, LLM digest (LangGraph + structured output) |
 | 4 | Planned | Ensemble & model comparison refinement |
-| 5 | Planned | Polish, Autorouter METAR/TAF, MCP server, notifications |
+| 5 | Done | Web UI, API, PDF report, email delivery |
 
 ## References
 
@@ -132,3 +178,4 @@ Key flags: `--alt` (cruise ft), `--time` (target hour UTC), `--duration` (hours)
 - Fetch: [fetch.md](./fetch.md)
 - Analysis: [analysis.md](./analysis.md)
 - Digest: [digest.md](./digest.md)
+- API & web plan: [plan-briefing-architecture.md](./plan-briefing-architecture.md)
