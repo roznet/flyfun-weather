@@ -755,6 +755,26 @@ Frontend (in `web/package.json`):
 
 ---
 
+## Design Decisions
+
+### Flight ID = route + date (intentional)
+
+The flight ID is `{route_name}-{target_date}`, meaning one flight per route per day. This is deliberate — a GA pilot plans one trip on a given date. If needed later, the ID scheme can incorporate departure time, but for now the simplicity of one-flight-per-route-per-day matches the use case and avoids clutter.
+
+### Naive datetimes in pipeline (intentional)
+
+`target_dt` in `pipeline.py` is a naive datetime (no tzinfo). This is deliberate because Open-Meteo returns naive UTC timestamps, and `WaypointForecast.at_time()` compares target vs forecast times. Mixing aware and naive datetimes would cause `TypeError`. All times are UTC by convention throughout the pipeline.
+
+### PDF/email reports use ECMWF Skew-T only (intentional)
+
+The PDF report and email attachment include only ECMWF Skew-T plots, not all models. This keeps the PDF concise and focused — ECMWF is the preferred model for European GA. The web UI still allows toggling between models interactively.
+
+### CORS wildcard (acceptable for now)
+
+`allow_origins=["*"]` is used because this is a single-user local app with no authentication. No credentials (cookies, auth headers) are sent by the frontend. When/if auth is added, CORS origins should be restricted to specific hosts.
+
+---
+
 ## References
 
 - Current architecture: [architecture.md](./architecture.md)

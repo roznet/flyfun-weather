@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import os
+import re
 import smtplib
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -31,18 +33,22 @@ class SmtpConfig(BaseModel):
     def from_env(cls) -> SmtpConfig:
         """Load from environment variables. Raises ValueError if not configured."""
         host = os.environ.get("WEATHERBRIEF_SMTP_HOST")
-        if not host:
+        user = os.environ.get("WEATHERBRIEF_SMTP_USER")
+        password = os.environ.get("WEATHERBRIEF_SMTP_PASSWORD")
+        from_address = os.environ.get("WEATHERBRIEF_FROM_EMAIL")
+
+        if not all([host, user, password, from_address]):
             raise ValueError(
-                "SMTP not configured. Set WEATHERBRIEF_SMTP_HOST, "
+                "SMTP not fully configured. Set WEATHERBRIEF_SMTP_HOST, "
                 "WEATHERBRIEF_SMTP_USER, WEATHERBRIEF_SMTP_PASSWORD, "
                 "and WEATHERBRIEF_FROM_EMAIL."
             )
         return cls(
             host=host,
             port=int(os.environ.get("WEATHERBRIEF_SMTP_PORT", "587")),
-            user=os.environ.get("WEATHERBRIEF_SMTP_USER", ""),
-            password=os.environ.get("WEATHERBRIEF_SMTP_PASSWORD", ""),
-            from_address=os.environ.get("WEATHERBRIEF_FROM_EMAIL", ""),
+            user=user,
+            password=password,
+            from_address=from_address,
             use_tls=os.environ.get("WEATHERBRIEF_SMTP_TLS", "true").lower() != "false",
         )
 
@@ -81,21 +87,22 @@ def _build_html_body(
     reason = pack.assessment_reason or (digest.get("assessment_reason") if digest else None)
     if assessment:
         bg, fg = colors.get(assessment.upper(), ("#f0f0f0", "#333"))
+        esc_reason = html.escape(reason) if reason else ""
         assessment_html = (
             f'<div style="background:{bg};color:{fg};padding:8px 12px;'
             f'border-radius:4px;font-weight:600;margin-bottom:12px;">'
-            f'{assessment}{f" &mdash; {reason}" if reason else ""}</div>'
+            f'{html.escape(assessment)}{f" &mdash; {esc_reason}" if reason else ""}</div>'
         )
 
-    # Synopsis excerpt
+    # Synopsis excerpt — escape digest content to prevent XSS
     synopsis_html = ""
     if digest:
         synoptic = digest.get("synoptic", "")
         if synoptic:
-            synopsis_html = f"<p><strong>Synoptic:</strong> {synoptic}</p>"
+            synopsis_html = f"<p><strong>Synoptic:</strong> {html.escape(synoptic)}</p>"
         watch = digest.get("watch_items", "")
         if watch:
-            synopsis_html += f"<p><strong>Watch Items:</strong> {watch}</p>"
+            synopsis_html += f"<p><strong>Watch Items:</strong> {html.escape(watch)}</p>"
 
     return f"""\
 <html>
@@ -194,7 +201,7 @@ def send_briefing_email(
     from weatherbrief.report.render import render_pdf
 
     pdf_bytes = render_pdf(pack_dir, flight, pack)
-    route_slug = flight.route_name or "-".join(flight.waypoints)
+    route_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", flight.route_name or "-".join(flight.waypoints))
     filename = f"briefing_{route_slug}_{flight.target_date}_d{pack.days_out}.pdf"
 
     pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")

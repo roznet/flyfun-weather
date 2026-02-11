@@ -102,7 +102,16 @@ class TestSmtpConfig:
 
     def test_from_env_missing_raises(self, monkeypatch):
         monkeypatch.delenv("WEATHERBRIEF_SMTP_HOST", raising=False)
-        with pytest.raises(ValueError, match="SMTP not configured"):
+        with pytest.raises(ValueError, match="SMTP not fully configured"):
+            SmtpConfig.from_env()
+
+    def test_from_env_partial_raises(self, monkeypatch):
+        """Missing any one required var should raise."""
+        monkeypatch.setenv("WEATHERBRIEF_SMTP_HOST", "mail.test.com")
+        monkeypatch.delenv("WEATHERBRIEF_SMTP_USER", raising=False)
+        monkeypatch.delenv("WEATHERBRIEF_SMTP_PASSWORD", raising=False)
+        monkeypatch.delenv("WEATHERBRIEF_FROM_EMAIL", raising=False)
+        with pytest.raises(ValueError, match="SMTP not fully configured"):
             SmtpConfig.from_env()
 
 

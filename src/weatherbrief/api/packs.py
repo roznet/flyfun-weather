@@ -150,9 +150,11 @@ def get_report_pdf(flight_id: str, timestamp: str):
 
     from weatherbrief.report.render import render_pdf
 
+    import re
+
     pdf_bytes = render_pdf(pack_dir, flight, meta)
-    route = flight.route_name or "-".join(flight.waypoints)
-    filename = f"briefing_{route}_{flight.target_date}_d{meta.days_out}.pdf"
+    route_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", flight.route_name or "-".join(flight.waypoints))
+    filename = f"briefing_{route_slug}_{flight.target_date}_d{meta.days_out}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

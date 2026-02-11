@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from weatherbrief.models import BriefingPackMeta, Flight
@@ -132,8 +133,8 @@ def pack_dir_for(
 ) -> Path:
     """Get the directory path for a specific pack. Useful for saving artifacts."""
     data_dir = data_dir or DEFAULT_DATA_DIR
-    # Sanitize timestamp for use as directory name (replace : with -)
-    safe_ts = fetch_timestamp.replace(":", "-")
+    # Sanitize timestamp for use as directory name
+    safe_ts = fetch_timestamp.replace(":", "-").replace("+", "p")
     return _packs_dir(flight_id, data_dir) / safe_ts
 
 
@@ -180,9 +181,5 @@ def _save_registry(registry: list[dict], data_dir: Path) -> None:
 
 def _rmtree(path: Path) -> None:
     """Recursively remove a directory tree."""
-    if path.is_file():
-        path.unlink()
-    elif path.is_dir():
-        for child in path.iterdir():
-            _rmtree(child)
-        path.rmdir()
+    if path.exists():
+        shutil.rmtree(path)
