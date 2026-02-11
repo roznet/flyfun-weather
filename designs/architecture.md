@@ -17,9 +17,14 @@ list[WaypointForecast]
     ↓
 _analyze_waypoint()  (per waypoint)
 ├→ compute_wind_components()
-├→ assess_icing_profile()
-├→ estimate_cloud_layers()
-└→ compare_models()
+├→ analyze_sounding()  (per model → SoundingAnalysis)
+│   ├→ prepare_profile()
+│   ├→ compute_indices() + compute_derived_levels()
+│   ├→ detect_cloud_layers()
+│   ├→ assess_icing_zones()
+│   └→ assess_convective()
+├→ summarize_by_bands()  (cross-model altitude bands)
+└→ compare_models()  (14 metrics)
     ↓
 ForecastSnapshot  (root object, saved as JSON)
     ↓
@@ -49,9 +54,15 @@ src/weatherbrief/
 │   └── gramet.py      # Autorouter GRAMET
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
-│   ├── icing.py       # Icing risk by pressure level
-│   ├── clouds.py      # Cloud layer estimation from RH
-│   └── comparison.py  # Multi-model divergence scoring
+│   ├── comparison.py  # Multi-model divergence scoring (14 thresholds)
+│   └── sounding/      # MetPy-based sounding analysis subpackage
+│       ├── __init__.py     # analyze_sounding() entry point
+│       ├── prepare.py      # Pint boundary: PressureLevelData → PreparedProfile
+│       ├── thermodynamics.py  # MetPy indices + derived levels
+│       ├── clouds.py       # Cloud layers from dewpoint depression
+│       ├── icing.py        # Icing zones from wet-bulb temperature
+│       ├── convective.py   # Convective risk from indices
+│       └── bands.py        # Altitude band grouping for cross-model comparison
 ├── digest/
 │   ├── text.py        # Plain-text digest formatter
 │   ├── skewt.py       # Skew-T diagram generation
@@ -154,7 +165,7 @@ Static files served from `web/` at root.
 | `requests` | HTTP API calls |
 | `pyyaml` | Route config |
 | `fastapi`, `uvicorn` | API server |
-| `metpy`, `matplotlib`, `numpy` | Skew-T plots |
+| `metpy`, `matplotlib`, `numpy` | Sounding analysis + Skew-T plots |
 | `langchain`, `langgraph` | LLM digest orchestration |
 | `langchain-anthropic`, `langchain-openai` | LLM providers |
 | `python-dotenv` | Environment loading |
@@ -168,7 +179,8 @@ Static files served from `web/` at root.
 | 1 | Done | Open-Meteo fetch, wind/icing/cloud analysis, JSON snapshots, text digest |
 | 2 | Done | Route rework (YAML, per-waypoint track), GRAMET, Skew-T plots |
 | 3 | Done | DWD text forecasts, LLM digest (LangGraph + structured output) |
-| 4 | Planned | Ensemble & model comparison refinement |
+| 4a | Done | MetPy sounding analysis: thermodynamic indices, enhanced clouds/icing/convective, altitude band comparison |
+| 4b | Planned | Ensemble & remaining model comparison refinement |
 | 5 | Done | Web UI, API, PDF report, email delivery |
 
 ## References
@@ -179,3 +191,4 @@ Static files served from `web/` at root.
 - Analysis: [analysis.md](./analysis.md)
 - Digest: [digest.md](./digest.md)
 - API & web plan: [plan-briefing-architecture.md](./plan-briefing-architecture.md)
+- Sounding analysis plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)

@@ -13,7 +13,7 @@ Key exports: `execute_briefing`, `create_app`
 
 ### data-models
 Pydantic v2 models for routes, forecasts, analysis, snapshots, flights, and briefing packs.
-Key exports: `ForecastSnapshot`, `RouteConfig`, `WaypointForecast`, `Flight`, `BriefingPackMeta`
+Key exports: `ForecastSnapshot`, `RouteConfig`, `WaypointForecast`, `SoundingAnalysis`, `Flight`, `BriefingPackMeta`
 → Full doc: data-models.md
 
 ### fetch
@@ -22,8 +22,8 @@ Key exports: `OpenMeteoClient`, `fetch_dwd_text_forecasts`, `AutorouterGramet`
 → Full doc: fetch.md
 
 ### analysis
-Aviation-specific analysis: wind components, icing assessment, cloud estimation, model comparison.
-Key exports: `compute_wind_components`, `assess_icing_profile`, `estimate_cloud_layers`, `compare_models`
+Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, clouds, icing, convective), altitude band comparison, model divergence scoring.
+Key exports: `compute_wind_components`, `analyze_sounding`, `summarize_by_bands`, `compare_models`
 → Full doc: analysis.md
 
 ### digest
@@ -38,3 +38,7 @@ Original requirements specification with phase roadmap, data source descriptions
 ### plan-briefing-architecture
 Detailed implementation plan for the API-first architecture, web UI, PDF reports, and email delivery (Steps 1-10).
 → Full doc: plan-briefing-architecture.md
+
+### sounding_analysis_plan
+Implementation plan for Phase 4a: MetPy sounding analysis pipeline replacing simple T+RH heuristics with thermodynamic indices, enhanced cloud/icing/convective assessment, and altitude band comparison.
+→ Full doc: sounding_analysis_plan.md
