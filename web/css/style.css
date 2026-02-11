@@ -80,6 +80,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
 }
 .btn-secondary:hover { background: var(--bg); }
+.btn-secondary:disabled { color: var(--text-muted); border-color: var(--border); cursor: not-allowed; }
 
 /* --- Forms --- */
 

@@ -1,6 +1,7 @@
 /** Briefing page entry point — wires store, UI manager, and event handlers. */
 
 import { briefingStore } from './store/briefing-store';
+import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 
 function init(): void {
@@ -46,6 +47,9 @@ function init(): void {
     if (state.refreshing !== prev.refreshing) {
       ui.renderRefreshing(state.refreshing);
     }
+    if (state.emailing !== prev.emailing) {
+      ui.renderEmailing(state.emailing);
+    }
     if (state.error !== prev.error) {
       ui.renderError(state.error);
     }
@@ -56,6 +60,28 @@ function init(): void {
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => {
       store.getState().refresh();
+    });
+  }
+
+  // --- Wire PDF download button ---
+  const pdfBtn = document.getElementById('pdf-btn') as HTMLButtonElement;
+  if (pdfBtn) {
+    pdfBtn.addEventListener('click', () => {
+      const { flight, currentPack } = store.getState();
+      if (flight && currentPack) {
+        window.open(
+          api.reportPdfUrl(flight.id, currentPack.fetch_timestamp),
+          '_blank',
+        );
+      }
+    });
+  }
+
+  // --- Wire email button ---
+  const emailBtn = document.getElementById('email-btn') as HTMLButtonElement;
+  if (emailBtn) {
+    emailBtn.addEventListener('click', () => {
+      store.getState().sendEmail();
     });
   }
 

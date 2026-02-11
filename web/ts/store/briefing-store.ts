@@ -16,6 +16,7 @@ export interface BriefingState {
   selectedModel: string;
   loading: boolean;
   refreshing: boolean;
+  emailing: boolean;
   error: string | null;
 
   // Actions
@@ -25,6 +26,7 @@ export interface BriefingState {
   selectLatest: () => Promise<void>;
   refresh: () => Promise<void>;
   setSelectedModel: (model: string) => void;
+  sendEmail: () => Promise<void>;
 }
 
 export const briefingStore = createStore<BriefingState>((set, get) => ({
@@ -33,9 +35,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   currentPack: null,
   snapshot: null,
   digest: null,
-  selectedModel: 'gfs',
+  selectedModel: 'ecmwf',
   loading: false,
   refreshing: false,
+  emailing: false,
   error: null,
 
   loadFlight: async (id: string) => {
@@ -112,5 +115,17 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setSelectedModel: (model: string) => {
     set({ selectedModel: model });
+  },
+
+  sendEmail: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    set({ emailing: true, error: null });
+    try {
+      await api.sendEmail(flight.id, currentPack.fetch_timestamp);
+      set({ emailing: false });
+    } catch (err) {
+      set({ emailing: false, error: `Email failed: ${err}` });
+    }
   },
 }));

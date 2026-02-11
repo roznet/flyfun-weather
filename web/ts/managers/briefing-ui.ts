@@ -311,6 +311,14 @@ export function renderRefreshing(refreshing: boolean): void {
   }
 }
 
+export function renderEmailing(emailing: boolean): void {
+  const btn = $('email-btn') as HTMLButtonElement;
+  if (btn) {
+    btn.disabled = emailing;
+    btn.textContent = emailing ? 'Sending...' : 'Send Email';
+  }
+}
+
 export function renderError(error: string | null): void {
   const el = $('error-message');
   if (el) {

@@ -13,6 +13,8 @@
       <button id="back-btn" class="btn btn-secondary">&larr; Flights</button>
       <div id="briefing-header"></div>
       <button id="refresh-btn" class="btn btn-primary">Refresh</button>
+      <button id="pdf-btn" class="btn btn-secondary">Download PDF</button>
+      <button id="email-btn" class="btn btn-secondary">Send Email</button>
       <select id="history-select">
         <option>Loading...</option>
       </select>
@@ -41,14 +43,6 @@
       </div>
     </div>
 
-    <!-- Model Comparison -->
-    <div class="section">
-      <h3>Model Comparison</h3>
-      <div id="comparison-section">
-        <p class="muted">Loading...</p>
-      </div>
-    </div>
-
     <!-- Skew-T -->
     <div class="section">
       <h3>Skew-T Soundings</h3>
@@ -56,11 +50,19 @@
         <label for="model-select">Model:</label>
         <select id="model-select">
           <option value="gfs">GFS</option>
-          <option value="ecmwf">ECMWF</option>
+          <option value="ecmwf" selected>ECMWF</option>
           <option value="icon">ICON</option>
         </select>
       </div>
       <div id="skewt-section">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <!-- Model Comparison -->
+    <div class="section">
+      <h3>Model Comparison</h3>
+      <div id="comparison-section">
         <p class="muted">Loading...</p>
       </div>
     </div>

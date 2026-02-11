@@ -116,3 +116,18 @@ export function digestUrl(flightId: string, timestamp: string): string {
 export function digestJsonUrl(flightId: string, timestamp: string): string {
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest/json`;
 }
+
+// --- Report ---
+
+export function reportPdfUrl(flightId: string, timestamp: string): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/report.pdf`;
+}
+
+// --- Email ---
+
+export async function sendEmail(flightId: string, timestamp: string): Promise<void> {
+  return apiFetch<void>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/email`,
+    { method: 'POST' }
+  );
+}

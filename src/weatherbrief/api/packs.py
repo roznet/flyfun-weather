@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 from weatherbrief.models import BriefingPackMeta
@@ -128,6 +128,63 @@ def get_digest_json(flight_id: str, timestamp: str):
     return FileResponse(json_path, media_type="application/json")
 
 
+@router.get("/{timestamp}/report.html")
+def get_report_html(flight_id: str, timestamp: str):
+    """View a self-contained HTML briefing report."""
+    flight = _load_flight_or_404(flight_id)
+    pack_dir = _get_pack_dir(flight_id, timestamp)
+    meta = _load_pack_meta_or_404(flight_id, timestamp)
+
+    from weatherbrief.report.render import render_html
+
+    html = render_html(pack_dir, flight, meta)
+    return HTMLResponse(content=html)
+
+
+@router.get("/{timestamp}/report.pdf")
+def get_report_pdf(flight_id: str, timestamp: str):
+    """Download a PDF briefing report."""
+    flight = _load_flight_or_404(flight_id)
+    pack_dir = _get_pack_dir(flight_id, timestamp)
+    meta = _load_pack_meta_or_404(flight_id, timestamp)
+
+    from weatherbrief.report.render import render_pdf
+
+    pdf_bytes = render_pdf(pack_dir, flight, meta)
+    route = flight.route_name or "-".join(flight.waypoints)
+    filename = f"briefing_{route}_{flight.target_date}_d{meta.days_out}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{timestamp}/email")
+def send_email(flight_id: str, timestamp: str):
+    """Send briefing email to configured recipients."""
+    flight = _load_flight_or_404(flight_id)
+    pack_dir = _get_pack_dir(flight_id, timestamp)
+    meta = _load_pack_meta_or_404(flight_id, timestamp)
+
+    from weatherbrief.notify.email import SmtpConfig, get_recipients, send_briefing_email
+
+    try:
+        recipients = get_recipients()
+        if not recipients:
+            raise HTTPException(
+                status_code=400,
+                detail="No recipients configured. Set WEATHERBRIEF_EMAIL_RECIPIENTS.",
+            )
+        send_briefing_email(recipients, flight, meta, pack_dir)
+        return {"status": "sent", "recipients": recipients}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("Email send failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Email send failed: {exc}")
+
+
 @router.post("/refresh", response_model=PackMetaResponse, status_code=201)
 def refresh_briefing(flight_id: str, request: Request):
     """Trigger a new briefing fetch for a flight.
@@ -220,6 +277,14 @@ def _load_flight_or_404(flight_id: str):
 
 def _ensure_flight_exists(flight_id: str) -> None:
     _load_flight_or_404(flight_id)
+
+
+def _load_pack_meta_or_404(flight_id: str, timestamp: str) -> BriefingPackMeta:
+    """Load pack metadata or raise 404."""
+    try:
+        return load_pack_meta(flight_id, timestamp)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Pack not found")
 
 
 def _get_pack_dir(flight_id: str, timestamp: str):

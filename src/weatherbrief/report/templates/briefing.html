@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WeatherBrief — {{ route_str }} — {{ flight.target_date }}</title>
+  <style>
+    /* Print-optimised, self-contained styles */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      font-size: 11pt;
+      line-height: 1.5;
+      color: #1a1a2e;
+      padding: 1cm;
+    }
+    h1 { font-size: 16pt; margin-bottom: 0.3em; }
+    h2 { font-size: 13pt; margin: 1em 0 0.4em; border-bottom: 1px solid #ccc; padding-bottom: 0.2em; }
+    h3 { font-size: 11pt; margin: 0.8em 0 0.3em; color: #555; }
+    p { margin-bottom: 0.5em; }
+
+    .header { margin-bottom: 1em; }
+    .header-meta { color: #555; font-size: 10pt; }
+
+    /* Assessment banner */
+    .assessment {
+      padding: 0.5em 0.8em;
+      border-radius: 4px;
+      margin-bottom: 1em;
+      font-weight: 600;
+    }
+    .assessment-green { background: #d1e7dd; color: #0f5132; border: 1px solid #198754; }
+    .assessment-amber { background: #fff3cd; color: #664d03; border: 1px solid #cc8800; }
+    .assessment-red   { background: #f8d7da; color: #842029; border: 1px solid #dc3545; }
+
+    /* Digest sections */
+    .digest-section { margin-bottom: 0.6em; }
+    .digest-section h3 { font-size: 10pt; text-transform: uppercase; letter-spacing: 0.03em; color: #666; margin-bottom: 0.15em; }
+    .digest-section p { font-size: 10.5pt; }
+
+    /* Images */
+    .gramet-img { width: 100%; max-width: 100%; margin: 0.5em 0; }
+    .skewt-gallery { display: flex; flex-wrap: wrap; gap: 0.8em; margin: 0.5em 0; }
+    .skewt-card { width: 45%; text-align: center; }
+    .skewt-card h4 { font-family: monospace; font-size: 10pt; margin-bottom: 0.2em; }
+    .skewt-card img { width: 100%; }
+
+    /* Model comparison table */
+    table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin-bottom: 0.8em; }
+    th, td { padding: 0.25em 0.4em; border-bottom: 1px solid #ddd; text-align: center; }
+    th { background: #f0f0f0; font-weight: 600; text-transform: uppercase; font-size: 8.5pt; }
+    td.var-name { text-align: left; font-weight: 500; }
+    .agree-good { color: #198754; }
+    .agree-moderate { color: #cc8800; }
+    .agree-poor { color: #dc3545; }
+    .wp-heading { font-size: 10.5pt; margin: 0.6em 0 0.2em; }
+
+    .muted { color: #888; font-style: italic; }
+
+    /* Print helpers */
+    @media print {
+      body { padding: 0; }
+      .page-break { page-break-before: always; }
+    }
+    .page-break { page-break-before: always; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <h1>{{ route_str }}</h1>
+    <div class="header-meta">
+      {{ flight.target_date }} &mdash; Departure {{ "%02d"|format(flight.target_time_utc) }}00Z &mdash; {{ alt_str }}
+      &mdash; D-{{ pack.days_out }}
+      &mdash; Fetched {{ pack.fetch_timestamp[:16] }}Z
+    </div>
+  </div>
+
+  <!-- Assessment -->
+  {% if digest and digest.assessment %}
+  <div class="assessment assessment-{{ digest.assessment|lower }}">
+    {{ digest.assessment }} &mdash; {{ digest.assessment_reason }}
+  </div>
+  {% elif pack.assessment %}
+  <div class="assessment assessment-{{ pack.assessment|lower }}">
+    {{ pack.assessment }}{% if pack.assessment_reason %} &mdash; {{ pack.assessment_reason }}{% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Synopsis -->
+  {% if digest %}
+  <h2>Synopsis</h2>
+  {% set sections = [
+    ('Synoptic', digest.synoptic),
+    ('Winds', digest.winds),
+    ('Cloud &amp; Visibility', digest.cloud_visibility),
+    ('Precipitation &amp; Convection', digest.precipitation_convection),
+    ('Icing', digest.icing),
+    ('Specific Concerns', digest.specific_concerns),
+    ('Model Agreement', digest.model_agreement),
+    ('Trend', digest.trend),
+    ('Watch Items', digest.watch_items),
+  ] %}
+  {% for label, text in sections %}
+  {% if text %}
+  <div class="digest-section">
+    <h3>{{ label }}</h3>
+    <p>{{ text }}</p>
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+
+  <!-- GRAMET -->
+  {% if gramet_uri %}
+  <h2>GRAMET Cross-Section</h2>
+  <img src="{{ gramet_uri }}" alt="GRAMET" class="gramet-img">
+  {% endif %}
+
+  <!-- Skew-T (ECMWF only) -->
+  {% if skewt_images %}
+  <div class="page-break"></div>
+  <h2>Skew-T Soundings (ECMWF)</h2>
+  <div class="skewt-gallery">
+    {% for sk in skewt_images %}
+    {% if sk.uri %}
+    <div class="skewt-card">
+      <h4>{{ sk.icao }}</h4>
+      <img src="{{ sk.uri }}" alt="Skew-T {{ sk.icao }}">
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- Model Comparison -->
+  {% if comparison_waypoints %}
+  <div class="page-break"></div>
+  <h2>Model Comparison</h2>
+  {% for wp in comparison_waypoints %}
+  <div class="wp-heading">{{ wp.icao }} &mdash; {{ wp.name }}</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Variable</th>
+        {% for m in wp.models %}<th>{{ m|upper }}</th>{% endfor %}
+        <th>Spread</th>
+        <th>Agree</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in wp.divergences %}
+      <tr>
+        <td class="var-name">{{ d.variable }}</td>
+        {% for m in wp.models %}
+        <td>{% if d.model_values[m] is not none %}{{ "%.1f"|format(d.model_values[m]) }}{% else %}&mdash;{% endif %}</td>
+        {% endfor %}
+        <td>{{ "%.1f"|format(d.spread) }}</td>
+        <td class="agree-{{ d.agreement }}">
+          {% if d.agreement == 'good' %}&#10003;{% elif d.agreement == 'moderate' %}&#9888;{% else %}&#10007;{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endfor %}
+  {% endif %}
+
+</body>
+</html>

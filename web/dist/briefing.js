@@ -75,6 +75,15 @@
   function digestJsonUrl(flightId, timestamp) {
     return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest/json`;
   }
+  function reportPdfUrl(flightId, timestamp) {
+    return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/report.pdf`;
+  }
+  async function sendEmail(flightId, timestamp) {
+    return apiFetch(
+      `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/email`,
+      { method: "POST" }
+    );
+  }
 
   // ts/store/briefing-store.ts
   var briefingStore = createStore((set, get) => ({
@@ -83,9 +92,10 @@
     currentPack: null,
     snapshot: null,
     digest: null,
-    selectedModel: "gfs",
+    selectedModel: "ecmwf",
     loading: false,
     refreshing: false,
+    emailing: false,
     error: null,
     loadFlight: async (id) => {
       set({ loading: true, error: null });
@@ -154,6 +164,17 @@
     },
     setSelectedModel: (model) => {
       set({ selectedModel: model });
+    },
+    sendEmail: async () => {
+      const { flight, currentPack } = get();
+      if (!flight || !currentPack) return;
+      set({ emailing: true, error: null });
+      try {
+        await sendEmail(flight.id, currentPack.fetch_timestamp);
+        set({ emailing: false });
+      } catch (err) {
+        set({ emailing: false, error: `Email failed: ${err}` });
+      }
     }
   }));
 
@@ -382,6 +403,13 @@
       btn.textContent = refreshing ? "Refreshing..." : "Refresh";
     }
   }
+  function renderEmailing(emailing) {
+    const btn = $("email-btn");
+    if (btn) {
+      btn.disabled = emailing;
+      btn.textContent = emailing ? "Sending..." : "Send Email";
+    }
+  }
   function renderError(error) {
     const el = $("error-message");
     if (el) {
@@ -426,6 +454,9 @@
       if (state.refreshing !== prev.refreshing) {
         renderRefreshing(state.refreshing);
       }
+      if (state.emailing !== prev.emailing) {
+        renderEmailing(state.emailing);
+      }
       if (state.error !== prev.error) {
         renderError(state.error);
       }
@@ -434,6 +465,24 @@
     if (refreshBtn) {
       refreshBtn.addEventListener("click", () => {
         store.getState().refresh();
+      });
+    }
+    const pdfBtn = document.getElementById("pdf-btn");
+    if (pdfBtn) {
+      pdfBtn.addEventListener("click", () => {
+        const { flight, currentPack } = store.getState();
+        if (flight && currentPack) {
+          window.open(
+            reportPdfUrl(flight.id, currentPack.fetch_timestamp),
+            "_blank"
+          );
+        }
+      });
+    }
+    const emailBtn = document.getElementById("email-btn");
+    if (emailBtn) {
+      emailBtn.addEventListener("click", () => {
+        store.getState().sendEmail();
       });
     }
     const modelSelect = document.getElementById("model-select");
