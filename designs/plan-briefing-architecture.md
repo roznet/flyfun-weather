@@ -418,6 +418,118 @@ The briefing page is the core user experience. It displays the complete weather 
 
 ---
 
+## Email Briefing & PDF Report
+
+### The problem
+
+A pilot checking email the morning of a flight wants a quick, self-contained briefing they can glance at, save to their iPad, or print. The briefing needs to work offline, render reliably everywhere, and include all the visual artifacts (GRAMET, Skew-Ts).
+
+### Delivery format options considered
+
+| Format | Pros | Cons |
+|--------|------|------|
+| **PDF attachment** | Self-contained, printable, offline, consistent rendering, archivable | Requires PDF generation library |
+| **HTML email + embedded images (CID)** | Rich formatting in-email | Gmail/Outlook handle CID inconsistently, breaks in many clients |
+| **HTML email + web-hosted images** | Small email size | Requires public server, images blocked by default in most clients, breaks offline |
+| **HTML email + base64 data URIs** | Self-contained | Many email clients strip data URIs, large email size |
+
+### Recommendation: PDF attachment + short HTML email body
+
+The email has two parts:
+
+1. **HTML body** (quick glance, no images):
+   - Assessment banner: `GREEN — Ridge established, models converging`
+   - Route + date + altitude one-liner
+   - Synopsis summary (2-3 sentences from `WeatherDigest.synoptic`)
+   - Watch items
+   - Link to web app for interactive view (when server is available)
+
+2. **PDF attachment** (full briefing, self-contained):
+   - Mirrors the briefing page layout: assessment, full synopsis, GRAMET image, model comparison table, Skew-T diagrams for all waypoints (one model, or one page per model)
+   - All images embedded in the PDF — works offline, printable
+   - Filename: `briefing_{route}_{target_date}_d{N}.pdf`
+
+This gives the pilot a quick assessment in the email preview without opening anything, and the full picture in the attached PDF.
+
+### PDF generation approach
+
+**WeasyPrint** (HTML/CSS → PDF) is the recommended approach:
+
+- We define an HTML template for the briefing report (Jinja2).
+- The template is shared conceptually with the web app's briefing page — same sections, same layout logic.
+- Images (GRAMET PNG, Skew-T PNGs) are embedded as base64 data URIs in the HTML before conversion. Base64 works reliably in WeasyPrint even though it doesn't in email clients.
+- WeasyPrint renders to a multi-page PDF with proper pagination.
+
+Alternative considered: Composing pages directly with `reportlab` or `matplotlib.backends.backend_pdf`. These work but require building the layout in code rather than CSS — more effort, less maintainable, harder to match the web look.
+
+### Architecture
+
+```
+BriefingPack (on disk)
+    │
+    ├─── report/
+    │    ├── render_html()     # Jinja2 template → HTML string
+    │    ├── render_pdf()      # HTML string → PDF bytes (via WeasyPrint)
+    │    └── templates/
+    │         └── briefing.html  # shared report template
+    │
+    └─── notify/
+         ├── send_email()      # compose + send via SMTP
+         └── email_config      # SMTP settings (from .env or config)
+```
+
+**`render_html(pack) → str`**: Takes a BriefingPack, loads all artifact files (GRAMET, Skew-Ts), encodes images as base64, renders the Jinja2 template. This HTML is also useful as a standalone static report (save to file, open in browser).
+
+**`render_pdf(pack) → bytes`**: Calls `render_html()`, then `weasyprint.HTML(string=html).write_pdf()`. Returns PDF bytes — can be saved to disk or attached to email.
+
+**`send_email(pack, recipients)`**: Composes a `multipart/mixed` email:
+- `multipart/alternative` body with plain-text fallback + HTML summary
+- PDF attachment
+
+### API endpoints for report/email
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/flights/{id}/packs/{timestamp}/report.pdf` | Download PDF report |
+| `GET` | `/api/flights/{id}/packs/{timestamp}/report.html` | View HTML report (standalone) |
+| `POST` | `/api/flights/{id}/packs/{timestamp}/email` | Send email briefing to configured recipients |
+
+The PDF/HTML endpoints are useful beyond email — the web app could offer a "Download PDF" button, and the HTML report is a printable view.
+
+### Email triggering
+
+Email can be sent:
+1. **Manually** — via the web app ("Email this briefing" button) or API call.
+2. **On every refresh** — configurable per flight: `"email_on_refresh": true` with recipient list.
+3. **Via cron** — a scheduled job calls `POST /api/flights/{id}/refresh` then `POST .../email`. This is the "daily email brief" workflow.
+
+### Email configuration
+
+```python
+class EmailConfig(BaseModel):
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_user: str
+    smtp_password: str           # from env: WEATHERBRIEF_SMTP_PASSWORD
+    from_address: str
+    use_tls: bool = True
+
+class FlightEmailSettings(BaseModel):
+    recipients: list[str]        # email addresses
+    email_on_refresh: bool = False
+```
+
+SMTP settings from `.env` or a config file. Per-flight recipient list stored in the Flight config.
+
+### Implementation steps (added to main plan)
+
+These slot in after the web app steps:
+
+- **Step 9: PDF report generation** — Jinja2 HTML template, `render_html()`, `render_pdf()` via WeasyPrint, API endpoints for PDF/HTML download.
+- **Step 10: Email delivery** — `send_email()` with SMTP, email config model, API endpoint, per-flight recipient settings, `email_on_refresh` option.
+
+---
+
 ## Flights Page Design
 
 Simple list/create page for managing flights:
@@ -501,6 +613,23 @@ Simple list/create page for managing flights:
 - Production build: FastAPI serves React static build.
 - Verify full flow: create flight → refresh → view briefing → switch history → toggle models.
 
+### Step 9: PDF report generation
+
+- Create `report/` module with Jinja2 HTML template mirroring the briefing page.
+- Implement `render_html(pack)` — loads artifacts, encodes images as base64, renders template.
+- Implement `render_pdf(pack)` — WeasyPrint HTML→PDF conversion.
+- Add API endpoints: `GET .../report.pdf`, `GET .../report.html`.
+- Add "Download PDF" button to the web briefing page.
+
+### Step 10: Email delivery
+
+- Implement `notify/send_email()` — SMTP email with HTML body + PDF attachment.
+- Add `EmailConfig` and `FlightEmailSettings` models.
+- Add API endpoint: `POST .../email`.
+- Add per-flight email settings (recipients, email_on_refresh).
+- Add "Email this briefing" button to web UI.
+- Document cron-based daily email workflow.
+
 ---
 
 ## Alternatives Considered
@@ -541,6 +670,8 @@ Currently routes live in `routes.yaml`. Options:
 | `fastapi>=0.115` | API framework |
 | `uvicorn[standard]>=0.30` | ASGI server |
 | `python-multipart` | File upload support (future) |
+| `weasyprint>=60` | HTML→PDF report generation |
+| `jinja2>=3.1` | HTML report templates |
 
 Frontend (in `web/package.json`):
 | Package | Purpose |
