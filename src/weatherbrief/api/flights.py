@@ -21,7 +21,8 @@ router = APIRouter(prefix="/flights", tags=["flights"])
 class CreateFlightRequest(BaseModel):
     """Request body for creating a new flight."""
 
-    route_name: str
+    route_name: str = ""  # optional preset name
+    waypoints: list[str] = []  # ICAO codes (e.g. ["EGTK", "LFPB", "LSGS"])
     target_date: str  # YYYY-MM-DD
     target_time_utc: int = 9
     cruise_altitude_ft: int = 8000
@@ -33,6 +34,7 @@ class FlightResponse(BaseModel):
 
     id: str
     route_name: str
+    waypoints: list[str] = []
     target_date: str
     target_time_utc: int
     cruise_altitude_ft: int
@@ -44,6 +46,7 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
     return FlightResponse(
         id=flight.id,
         route_name=flight.route_name,
+        waypoints=flight.waypoints,
         target_date=flight.target_date,
         target_time_utc=flight.target_time_utc,
         cruise_altitude_ft=flight.cruise_altitude_ft,
@@ -62,7 +65,16 @@ def list_all_flights():
 @router.post("", response_model=FlightResponse, status_code=201)
 def create_flight(req: CreateFlightRequest):
     """Create a new flight."""
-    flight_id = f"{req.route_name}-{req.target_date}"
+    if not req.waypoints and not req.route_name:
+        raise HTTPException(
+            status_code=422, detail="Either waypoints or route_name is required"
+        )
+
+    # Derive route_name from waypoints if not provided
+    route_name = req.route_name or "_".join(w.lower() for w in req.waypoints)
+    waypoints = [w.upper().strip() for w in req.waypoints] if req.waypoints else []
+
+    flight_id = f"{route_name}-{req.target_date}"
 
     # Check if already exists
     try:
@@ -76,7 +88,8 @@ def create_flight(req: CreateFlightRequest):
 
     flight = Flight(
         id=flight_id,
-        route_name=req.route_name,
+        route_name=route_name,
+        waypoints=waypoints,
         target_date=req.target_date,
         target_time_utc=req.target_time_utc,
         cruise_altitude_ft=req.cruise_altitude_ft,

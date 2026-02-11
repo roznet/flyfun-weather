@@ -17,7 +17,8 @@ export interface FlightsState {
   // Actions
   loadRoutes: () => Promise<void>;
   loadFlights: () => Promise<void>;
-  createFlight: (routeName: string, targetDate: string, opts?: {
+  createFlight: (waypoints: string[], targetDate: string, opts?: {
+    routeName?: string;
     targetTimeUtc?: number;
     cruiseAltitudeFt?: number;
     flightDurationHours?: number;
@@ -64,11 +65,12 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
     }
   },
 
-  createFlight: async (routeName, targetDate, opts) => {
+  createFlight: async (waypoints, targetDate, opts) => {
     set({ loading: true, error: null });
     try {
       const flight = await api.createFlight({
-        route_name: routeName,
+        waypoints,
+        route_name: opts?.routeName,
         target_date: targetDate,
         target_time_utc: opts?.targetTimeUtc,
         cruise_altitude_ft: opts?.cruiseAltitudeFt,

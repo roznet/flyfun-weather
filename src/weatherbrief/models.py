@@ -270,7 +270,8 @@ class Flight(BaseModel):
     """A saved briefing target — route + date/time specifics."""
 
     id: str  # slug: "{route_name}-{target_date}"
-    route_name: str  # key in routes.yaml or data/routes.json
+    route_name: str  # key in routes.yaml, or derived from waypoints
+    waypoints: list[str] = Field(default_factory=list)  # ICAO codes
     target_date: str  # YYYY-MM-DD
     target_time_utc: int = 9  # departure hour
     cruise_altitude_ft: int = 8000

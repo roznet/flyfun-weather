@@ -58,14 +58,11 @@ export function renderFlightList(
     return;
   }
 
-  const routeMap = new Map(routes.map((r) => [r.name, r]));
-
   container.innerHTML = flights.map((f) => {
     const pack = latestPacks[f.id];
-    const route = routeMap.get(f.route_name);
-    const waypoints = route
-      ? route.waypoints.join(' → ')
-      : f.route_name.replace(/_/g, ' ').toUpperCase();
+    const waypoints = f.waypoints.length > 0
+      ? f.waypoints.join(' → ')
+      : f.route_name.replace(/_/g, ' → ').toUpperCase();
     const packInfo = pack
       ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
          <span class="badge ${assessmentClass(pack.assessment)}">${pack.assessment || '—'}</span>`
@@ -109,7 +106,7 @@ export function renderRouteOptions(routes: RouteInfo[]): void {
   const select = $('route-select') as HTMLSelectElement;
   if (!select) return;
 
-  select.innerHTML = '<option value="">Select a route...</option>' +
+  select.innerHTML = '<option value="">—</option>' +
     routes.map((r) =>
       `<option value="${r.name}" data-alt="${r.cruise_altitude_ft}" data-dur="${r.flight_duration_hours}">${r.display_name} (${r.waypoints.join(' → ')})</option>`
     ).join('');
@@ -130,7 +127,7 @@ export function renderError(error: string | null): void {
   }
 }
 
-/** Fill in route defaults when a route is selected. */
+/** Fill in route defaults when a preset is selected. */
 export function onRouteSelected(routes: RouteInfo[]): void {
   const select = $('route-select') as HTMLSelectElement;
   if (!select) return;
@@ -139,8 +136,10 @@ export function onRouteSelected(routes: RouteInfo[]): void {
     const route = routes.find((r) => r.name === select.value);
     if (!route) return;
 
+    const wpInput = $('input-waypoints') as HTMLInputElement;
     const altInput = $('input-altitude') as HTMLInputElement;
     const durInput = $('input-duration') as HTMLInputElement;
+    if (wpInput) wpInput.value = route.waypoints.join(' ');
     if (altInput) altInput.value = String(route.cruise_altitude_ft);
     if (durInput) durInput.value = String(route.flight_duration_hours);
   });

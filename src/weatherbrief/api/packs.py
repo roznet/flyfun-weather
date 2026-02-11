@@ -131,11 +131,20 @@ def refresh_briefing(flight_id: str, request: Request):
         raise HTTPException(status_code=503, detail="WEATHERBRIEF_DB or AIRPORTS_DB not configured")
 
     try:
-        from weatherbrief.config import load_route
+        from weatherbrief.airports import resolve_waypoints
+        from weatherbrief.models import RouteConfig
         from weatherbrief.pipeline import BriefingOptions, execute_briefing
 
-        # Resolve the route (requires airport database)
-        route = load_route(flight.route_name, db_path=db_path)
+        # Resolve waypoints from flight definition
+        if not flight.waypoints:
+            raise ValueError("Flight has no waypoints defined")
+        waypoint_objs = resolve_waypoints(flight.waypoints, db_path)
+        route = RouteConfig(
+            name=flight.route_name or " → ".join(flight.waypoints),
+            waypoints=waypoint_objs,
+            cruise_altitude_ft=flight.cruise_altitude_ft,
+            flight_duration_hours=flight.flight_duration_hours,
+        )
 
         # Determine pack directory up front so pipeline writes directly there
         fetch_ts = datetime.now(tz=timezone.utc).isoformat()
@@ -145,6 +154,7 @@ def refresh_briefing(flight_id: str, request: Request):
         options = BriefingOptions(
             fetch_gramet=True,
             generate_skewt=True,
+            generate_llm_digest=True,
             output_dir=pack_dir,
         )
 

@@ -100,11 +100,12 @@
         set({ loading: false, error: `Failed to load flights: ${err}` });
       }
     },
-    createFlight: async (routeName, targetDate, opts) => {
+    createFlight: async (waypoints, targetDate, opts) => {
       set({ loading: true, error: null });
       try {
         const flight = await createFlight({
-          route_name: routeName,
+          waypoints,
+          route_name: opts?.routeName,
           target_date: targetDate,
           target_time_utc: opts?.targetTimeUtc,
           cruise_altitude_ft: opts?.cruiseAltitudeFt,
@@ -175,11 +176,9 @@
     `;
       return;
     }
-    const routeMap = new Map(routes.map((r) => [r.name, r]));
     container.innerHTML = flights.map((f) => {
       const pack = latestPacks[f.id];
-      const route = routeMap.get(f.route_name);
-      const waypoints = route ? route.waypoints.join(" \u2192 ") : f.route_name.replace(/_/g, " ").toUpperCase();
+      const waypoints = f.waypoints.length > 0 ? f.waypoints.join(" \u2192 ") : f.route_name.replace(/_/g, " \u2192 ").toUpperCase();
       const packInfo = pack ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC)</span>
          <span class="badge ${assessmentClass(pack.assessment)}">${pack.assessment || "\u2014"}</span>` : '<span class="pack-info">No briefings yet</span>';
       return `
@@ -216,7 +215,7 @@
   function renderRouteOptions(routes) {
     const select = $("route-select");
     if (!select) return;
-    select.innerHTML = '<option value="">Select a route...</option>' + routes.map(
+    select.innerHTML = '<option value="">\u2014</option>' + routes.map(
       (r) => `<option value="${r.name}" data-alt="${r.cruise_altitude_ft}" data-dur="${r.flight_duration_hours}">${r.display_name} (${r.waypoints.join(" \u2192 ")})</option>`
     ).join("");
   }
@@ -239,8 +238,10 @@
     select.addEventListener("change", () => {
       const route = routes.find((r) => r.name === select.value);
       if (!route) return;
+      const wpInput = $("input-waypoints");
       const altInput = $("input-altitude");
       const durInput = $("input-duration");
+      if (wpInput) wpInput.value = route.waypoints.join(" ");
       if (altInput) altInput.value = String(route.cruise_altitude_ft);
       if (durInput) durInput.value = String(route.flight_duration_hours);
     });
@@ -274,17 +275,20 @@
     if (form) {
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const routeName = document.getElementById("route-select").value;
+        const wpRaw = document.getElementById("input-waypoints").value.trim();
+        const routeName = document.getElementById("route-select").value || void 0;
         const targetDate = document.getElementById("input-date").value;
         const targetTime = parseInt(document.getElementById("input-time").value || "9", 10);
         const altitude = parseInt(document.getElementById("input-altitude").value || "8000", 10);
         const duration = parseFloat(document.getElementById("input-duration").value || "0");
-        if (!routeName || !targetDate) {
-          renderError("Please select a route and date.");
+        const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map((w) => w.toUpperCase());
+        if (waypoints.length < 2 || !targetDate) {
+          renderError("Enter at least 2 waypoints and a date.");
           return;
         }
         try {
-          const flight = await store.getState().createFlight(routeName, targetDate, {
+          const flight = await store.getState().createFlight(waypoints, targetDate, {
+            routeName,
             targetTimeUtc: targetTime,
             cruiseAltitudeFt: altitude,
             flightDurationHours: duration

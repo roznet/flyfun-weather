@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from weatherbrief.analysis.clouds import estimate_cloud_layers
@@ -76,7 +76,10 @@ def execute_briefing(
     data_dir = options.data_dir or DEFAULT_DATA_DIR
 
     today = date.today().isoformat()
-    target_dt = datetime.fromisoformat(f"{target_date}T{target_hour:02d}:00:00")
+    # Naive datetime — UTC by convention, matching Open-Meteo's naive timestamps
+    target_dt = datetime(
+        *map(int, target_date.split("-")), target_hour
+    )
     days_out = (date.fromisoformat(target_date) - date.today()).days
 
     if days_out < 0:
@@ -256,8 +259,9 @@ def _run_gramet(
     try:
         from weatherbrief.fetch.gramet import AutorouterGramet
 
-        departure_time = datetime.fromisoformat(
-            f"{target_date}T{target_hour:02d}:00:00"
+        # UTC-aware for correct Unix timestamp in GRAMET API call
+        departure_time = datetime(
+            *map(int, target_date.split("-")), target_hour, tzinfo=timezone.utc
         )
         icao_codes = [wp.icao for wp in route.waypoints]
         duration_hours = route.flight_duration_hours or 2.0

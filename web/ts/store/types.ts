@@ -11,6 +11,7 @@ export interface RouteInfo {
 export interface FlightResponse {
   id: string;
   route_name: string;
+  waypoints: string[];
   target_date: string;
   target_time_utc: number;
   cruise_altitude_ft: number;
@@ -19,7 +20,8 @@ export interface FlightResponse {
 }
 
 export interface CreateFlightRequest {
-  route_name: string;
+  route_name?: string;
+  waypoints: string[];
   target_date: string;
   target_time_utc?: number;
   cruise_altitude_ft?: number;

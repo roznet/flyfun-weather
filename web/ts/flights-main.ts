@@ -35,19 +35,22 @@ function init(): void {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
 
-      const routeName = (document.getElementById('route-select') as HTMLSelectElement).value;
+      const wpRaw = (document.getElementById('input-waypoints') as HTMLInputElement).value.trim();
+      const routeName = (document.getElementById('route-select') as HTMLSelectElement).value || undefined;
       const targetDate = (document.getElementById('input-date') as HTMLInputElement).value;
       const targetTime = parseInt((document.getElementById('input-time') as HTMLInputElement).value || '9', 10);
       const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value || '8000', 10);
       const duration = parseFloat((document.getElementById('input-duration') as HTMLInputElement).value || '0');
 
-      if (!routeName || !targetDate) {
-        ui.renderError('Please select a route and date.');
+      const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map((w) => w.toUpperCase());
+      if (waypoints.length < 2 || !targetDate) {
+        ui.renderError('Enter at least 2 waypoints and a date.');
         return;
       }
 
       try {
-        const flight = await store.getState().createFlight(routeName, targetDate, {
+        const flight = await store.getState().createFlight(waypoints, targetDate, {
+          routeName,
           targetTimeUtc: targetTime,
           cruiseAltitudeFt: altitude,
           flightDurationHours: duration,

@@ -61,6 +61,7 @@ def sample_flight(tmp_data_dir):
     flight = Flight(
         id="egtk_lsgs-2026-02-21",
         route_name="egtk_lsgs",
+        waypoints=["EGTK", "LFPB", "LSGS"],
         target_date="2026-02-21",
         target_time_utc=9,
         cruise_altitude_ft=8000,
@@ -143,6 +144,7 @@ class TestFlightsAPI:
 
     def test_create_flight(self, client):
         resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
             "target_date": "2026-02-21",
             "target_time_utc": 9,
@@ -153,21 +155,24 @@ class TestFlightsAPI:
         data = resp.json()
         assert data["id"] == "egtk_lsgs-2026-02-21"
         assert data["route_name"] == "egtk_lsgs"
+        assert data["waypoints"] == ["EGTK", "LFPB", "LSGS"]
         assert data["target_date"] == "2026-02-21"
 
     def test_create_flight_defaults(self, client):
         resp = client.post("/api/flights", json={
-            "route_name": "egtk_lsgs",
+            "waypoints": ["EGTK", "LSGS"],
             "target_date": "2026-03-01",
         })
         assert resp.status_code == 201
         data = resp.json()
+        assert data["route_name"] == "egtk_lsgs"
         assert data["target_time_utc"] == 9
         assert data["cruise_altitude_ft"] == 8000
         assert data["flight_duration_hours"] == 0.0
 
     def test_create_flight_duplicate(self, client, sample_flight):
         resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
             "target_date": "2026-02-21",
         })
