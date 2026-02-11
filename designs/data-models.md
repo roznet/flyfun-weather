@@ -49,13 +49,41 @@ Root object for one fetch run: `(route, target_date, fetch_date, days_out, forec
 
 ## Analysis Models
 
+### Wind & Comparison
+
 | Model | Purpose | Key fields |
 |-------|---------|------------|
 | `WindComponent` | Headwind/crosswind decomposition | `headwind_kt` (+HW/-TW), `crosswind_kt` (+right/-left) |
-| `IcingBand` | Icing at one pressure level | `risk` (NONE/LIGHT/MODERATE/SEVERE), `altitude_ft`, `temperature_c` |
-| `CloudLayer` | Estimated cloud layer | `base_ft`, `top_ft` |
 | `ModelDivergence` | Cross-model comparison | `variable`, `spread`, `agreement` (GOOD/MODERATE/POOR) |
-| `WaypointAnalysis` | All analysis for one waypoint | dicts of model→WindComponent, model→IcingBands, model→CloudLayers, plus divergence list |
+
+### Sounding Analysis Models
+
+Full MetPy-based atmospheric analysis, computed per model per waypoint.
+
+| Model | Purpose | Key fields |
+|-------|---------|------------|
+| `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km |
+| `DerivedLevel` | Per-pressure-level derived values | wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct |
+| `EnhancedCloudLayer` | Cloud layer from dewpoint depression | base/top (ft + hPa), thickness, mean_temperature_c, coverage (SCT/BKN/OVC) |
+| `IcingZone` | Grouped icing zone from wet-bulb | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_wet_bulb_c |
+| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list |
+| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, icing_zones, convective |
+
+### Altitude Band Comparison
+
+| Model | Purpose | Key fields |
+|-------|---------|------------|
+| `AltitudeBand` | Band definition | name, floor_ft, ceiling_ft |
+| `BandModelSummary` | Per-model within a band | worst icing risk/type, sld_risk, cloud_coverage, temperature range |
+| `AltitudeBandComparison` | Cross-model per band | band, models dict, icing_agreement, cloud_agreement |
+
+### WaypointAnalysis
+
+All analysis for one waypoint. Contains:
+- `wind_components: dict[str, WindComponent]` — model → wind decomposition
+- `sounding: dict[str, SoundingAnalysis]` — model → full sounding analysis
+- `band_comparisons: list[AltitudeBandComparison]` — cross-model altitude band comparison
+- `model_divergence: list[ModelDivergence]` — 14 metrics compared across models
 
 ## API / Web Models
 
@@ -97,14 +125,18 @@ Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` 
 
 - `ModelSource`: `BEST_MATCH`, `GFS`, `ECMWF`, `ICON`, `UKMO`, `METEOFRANCE`
 - `IcingRisk`: `NONE`, `LIGHT`, `MODERATE`, `SEVERE`
+- `IcingType`: `NONE`, `RIME`, `MIXED`, `CLEAR`
+- `CloudCoverage`: `SCT`, `BKN`, `OVC`
+- `ConvectiveRisk`: `NONE`, `LOW`, `MODERATE`, `HIGH`, `EXTREME`
 - `AgreementLevel`: `GOOD`, `MODERATE`, `POOR`
 
 ## Patterns
 
 - All Optional fields default to `None` — weather APIs have variable coverage per model
-- Analysis results keyed by model name string (e.g., `wind_components["gfs"]`)
+- Analysis results keyed by model name string (e.g., `sounding["gfs"]`)
 - `Field(default_factory=list)` for all collection fields
 - `bearing_between()` is a module-level function (not on Waypoint) since it takes two waypoints
+- Sounding models use `Optional[float]` throughout — MetPy computations may fail for individual fields
 
 ## Gotchas
 
@@ -112,6 +144,7 @@ Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` 
 - `crosswind_kt` positive = from right, negative = from left
 - Pressure level data ordered surface→altitude (1000→300 hPa) but not guaranteed by API
 - `at_time()` returns closest hour by absolute time difference — no interpolation
+- Pint units must not leak beyond `analysis/sounding/` subpackage — causes Pydantic serialization issues
 
 ## References
 

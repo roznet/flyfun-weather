@@ -18,6 +18,13 @@ text = format_digest(snapshot, target_time, output_paths=["data/..."])
 
 Sections: header (route/date/alt), per-waypoint forecasts + analysis, model agreement summary, output files footer. Handles missing data gracefully throughout.
 
+**Sounding analysis formatting** — for each waypoint with sounding data:
+- Thermodynamic indices: freezing level, CAPE, LCL, K-index, total totals, precipitable water, lifted index, bulk shear
+- Convective risk banner with severe modifiers
+- Icing zones with type (RIME/MIXED/CLEAR), SLD flag, and altitude range
+- Cloud layers with coverage category (SCT/BKN/OVC)
+- Band comparisons: per-band worst-case icing/cloud across models with agreement indicators
+
 ## Skew-T Plots (`digest/skewt.py`)
 
 MetPy-based Skew-T log-P diagrams per waypoint/model combination.
@@ -28,8 +35,9 @@ paths = generate_all_skewts(snapshot, target_time, output_dir)
 
 - Plots: temperature (red), dewpoint (green), wind barbs, parcel profile, LCL marker
 - Icing zone (0 to -20°C) shaded light blue
-- Requires ≥ 3 pressure levels with temperature; dewpoint and wind optional
-- Output: PNG at 150 DPI, 9×9 inches
+- Requires >= 3 pressure levels with temperature; dewpoint and wind optional
+- Output: PNG at 150 DPI, 9x9 inches
+- Uses `matplotlib.use("agg")` — required for worker thread compatibility (macOS backend crashes on non-main threads)
 
 ## LLM Digest
 
@@ -59,10 +67,12 @@ context = build_digest_context(
 
 Builds structured text with sections:
 1. `ROUTE / DATE / ALTITUDE` — route metadata
-2. `=== QUANTITATIVE DATA ===` — per-waypoint surface, cruise-level, wind components, icing, clouds
-3. `=== MODEL COMPARISON ===` — divergence per variable
-4. `=== TEXT FORECASTS ===` — DWD German text (if available)
-5. `=== PREVIOUS DIGEST ===` — prior assessment for trend (if available)
+2. `=== QUANTITATIVE DATA ===` — per-waypoint surface, cruise-level, wind components
+3. `=== SOUNDING ANALYSIS ===` — per-waypoint thermodynamic indices, icing zones (type/SLD/risk), cloud layers (coverage), convective risk with severe modifiers
+4. `=== ALTITUDE BAND COMPARISON ===` — per-band cross-model icing/cloud agreement
+5. `=== MODEL COMPARISON ===` — divergence per variable (14 metrics)
+6. `=== TEXT FORECASTS ===` — DWD German text (if available)
+7. `=== PREVIOUS DIGEST ===` — prior assessment for trend (if available)
 
 ### LangGraph Pipeline (`digest/llm_digest.py`)
 
@@ -113,7 +123,7 @@ Structured output with 11 fields:
 
 - **LangGraph over plain function** — provides structured state management, easy node-level testing, and future extensibility (e.g., parallel text fetch + quant assembly)
 - **Structured output via `with_structured_output()`** — Pydantic model enforced by the LLM provider, no manual JSON parsing
-- **Config files, not code** — switching providers (Anthropic ↔ OpenAI) is a JSON change
+- **Config files, not code** — switching providers (Anthropic <-> OpenAI) is a JSON change
 - **Versioned prompts** — `briefer_v1.md` allows prompt iteration without code changes
 
 ## Gotchas
@@ -122,6 +132,7 @@ Structured output with 11 fields:
 - DWD text is in German — prompt instructs LLM to translate during synthesis
 - `with_structured_output()` behavior varies by provider (tool-calling vs JSON mode)
 - `DigestState` uses `total=False` TypedDict — all keys optional, access via `.get()`
+- `matplotlib.use("agg")` must be called before `import matplotlib.pyplot` in skewt.py
 
 ## References
 
