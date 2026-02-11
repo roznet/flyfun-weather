@@ -82,6 +82,7 @@
     packs: [],
     currentPack: null,
     snapshot: null,
+    digestText: null,
     selectedModel: "gfs",
     loading: false,
     refreshing: false,
@@ -114,11 +115,20 @@
       try {
         const pack = await fetchPack(flight.id, timestamp);
         let snapshot = null;
+        let digestText = null;
         try {
           snapshot = await fetchSnapshot(flight.id, timestamp);
         } catch {
         }
-        set({ currentPack: pack, snapshot, loading: false });
+        if (pack.has_digest) {
+          try {
+            const url = digestUrl(flight.id, timestamp);
+            const resp = await fetch(url);
+            if (resp.ok) digestText = await resp.text();
+          } catch {
+          }
+        }
+        set({ currentPack: pack, snapshot, digestText, loading: false });
       } catch (err) {
         set({ loading: false, error: `Failed to load pack: ${err}` });
       }
@@ -200,15 +210,45 @@
     <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${pack.assessment_reason}` : ""}
   `;
   }
-  function renderSynopsis(flight, pack) {
+  function renderSynopsis(flight, pack, digestText) {
     const el = $("synopsis-section");
     if (!el) return;
-    if (!flight || !pack || !pack.has_digest) {
-      el.innerHTML = '<p class="muted">Synopsis not available. Trigger a refresh to generate.</p>';
+    if (!flight || !pack) {
+      el.innerHTML = '<p class="muted">No briefing loaded.</p>';
       return;
     }
-    el.innerHTML = '<p class="muted">Loading digest...</p>';
-    digestUrl(flight.id, pack.fetch_timestamp);
+    if (digestText) {
+      el.innerHTML = renderDigestMarkdown(digestText);
+      return;
+    }
+    if (pack.has_digest) {
+      el.innerHTML = '<p class="muted">Loading digest...</p>';
+      fetchAndRenderDigest(flight.id, pack.fetch_timestamp, el);
+      return;
+    }
+    el.innerHTML = '<p class="muted">Synopsis not available. Trigger a refresh to generate.</p>';
+  }
+  async function fetchAndRenderDigest(flightId, timestamp, el) {
+    try {
+      const url = digestUrl(flightId, timestamp);
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`${resp.status}`);
+      const text = await resp.text();
+      el.innerHTML = renderDigestMarkdown(text);
+    } catch {
+      el.innerHTML = '<p class="muted">Failed to load digest.</p>';
+    }
+  }
+  function renderDigestMarkdown(md) {
+    return md.split("\n\n").map((block) => {
+      const trimmed = block.trim();
+      if (!trimmed) return "";
+      if (trimmed.startsWith("### ")) return `<h4>${trimmed.slice(4)}</h4>`;
+      if (trimmed.startsWith("## ")) return `<h3>${trimmed.slice(3)}</h3>`;
+      if (trimmed.startsWith("# ")) return `<h2>${trimmed.slice(2)}</h2>`;
+      const html = trimmed.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      return `<p>${html}</p>`;
+    }).join("\n");
   }
   function renderGramet(flight, pack) {
     const el = $("gramet-section");
@@ -342,9 +382,9 @@
           (ts) => store.getState().selectPack(ts)
         );
       }
-      if (state.currentPack !== prev.currentPack || state.snapshot !== prev.snapshot) {
+      if (state.currentPack !== prev.currentPack || state.snapshot !== prev.snapshot || state.digestText !== prev.digestText) {
         renderAssessment(state.currentPack);
-        renderSynopsis(state.flight, state.currentPack);
+        renderSynopsis(state.flight, state.currentPack, state.digestText);
         renderGramet(state.flight, state.currentPack);
         renderModelComparison(state.snapshot);
         renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel);
@@ -378,6 +418,21 @@
     if (backBtn) {
       backBtn.addEventListener("click", () => {
         window.location.href = "/";
+      });
+    }
+    const lightbox = document.getElementById("lightbox");
+    const lightboxImg = document.getElementById("lightbox-img");
+    if (lightbox && lightboxImg) {
+      document.addEventListener("click", (e) => {
+        const target = e.target;
+        if (target.classList.contains("gramet-img") || target.classList.contains("skewt-img")) {
+          lightboxImg.src = target.src;
+          lightbox.classList.add("active");
+        }
+      });
+      lightbox.addEventListener("click", () => {
+        lightbox.classList.remove("active");
+        lightboxImg.src = "";
       });
     }
     store.getState().loadFlight(flightId);

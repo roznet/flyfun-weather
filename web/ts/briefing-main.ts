@@ -26,9 +26,13 @@ function init(): void {
         (ts) => store.getState().selectPack(ts),
       );
     }
-    if (state.currentPack !== prev.currentPack || state.snapshot !== prev.snapshot) {
+    if (
+      state.currentPack !== prev.currentPack ||
+      state.snapshot !== prev.snapshot ||
+      state.digestText !== prev.digestText
+    ) {
       ui.renderAssessment(state.currentPack);
-      ui.renderSynopsis(state.flight, state.currentPack);
+      ui.renderSynopsis(state.flight, state.currentPack, state.digestText);
       ui.renderGramet(state.flight, state.currentPack);
       ui.renderModelComparison(state.snapshot);
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel);
@@ -68,6 +72,23 @@ function init(): void {
   if (backBtn) {
     backBtn.addEventListener('click', () => {
       window.location.href = '/';
+    });
+  }
+
+  // --- Wire image lightbox ---
+  const lightbox = document.getElementById('lightbox');
+  const lightboxImg = document.getElementById('lightbox-img') as HTMLImageElement;
+  if (lightbox && lightboxImg) {
+    document.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains('gramet-img') || target.classList.contains('skewt-img')) {
+        lightboxImg.src = (target as HTMLImageElement).src;
+        lightbox.classList.add('active');
+      }
+    });
+    lightbox.addEventListener('click', () => {
+      lightbox.classList.remove('active');
+      lightboxImg.src = '';
     });
   }
 

@@ -86,19 +86,61 @@ export function renderAssessment(pack: PackMeta | null): void {
 export function renderSynopsis(
   flight: FlightResponse | null,
   pack: PackMeta | null,
+  digestText: string | null,
 ): void {
   const el = $('synopsis-section');
   if (!el) return;
 
-  if (!flight || !pack || !pack.has_digest) {
-    el.innerHTML = '<p class="muted">Synopsis not available. Trigger a refresh to generate.</p>';
+  if (!flight || !pack) {
+    el.innerHTML = '<p class="muted">No briefing loaded.</p>';
     return;
   }
 
-  // Digest content will be fetched and rendered when available
-  el.innerHTML = '<p class="muted">Loading digest...</p>';
-  api.digestUrl(flight.id, pack.fetch_timestamp);
-  // Actual digest rendering will be added in Step 5
+  if (digestText) {
+    // Render markdown-ish digest as HTML (basic conversion)
+    el.innerHTML = renderDigestMarkdown(digestText);
+    return;
+  }
+
+  if (pack.has_digest) {
+    // Fetch digest content
+    el.innerHTML = '<p class="muted">Loading digest...</p>';
+    fetchAndRenderDigest(flight.id, pack.fetch_timestamp, el);
+    return;
+  }
+
+  el.innerHTML = '<p class="muted">Synopsis not available. Trigger a refresh to generate.</p>';
+}
+
+async function fetchAndRenderDigest(
+  flightId: string, timestamp: string, el: HTMLElement,
+): Promise<void> {
+  try {
+    const url = api.digestUrl(flightId, timestamp);
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`${resp.status}`);
+    const text = await resp.text();
+    el.innerHTML = renderDigestMarkdown(text);
+  } catch {
+    el.innerHTML = '<p class="muted">Failed to load digest.</p>';
+  }
+}
+
+/** Simple markdown-to-HTML for digest content (headers, bold, paragraphs). */
+function renderDigestMarkdown(md: string): string {
+  return md
+    .split('\n\n')
+    .map((block) => {
+      const trimmed = block.trim();
+      if (!trimmed) return '';
+      if (trimmed.startsWith('### ')) return `<h4>${trimmed.slice(4)}</h4>`;
+      if (trimmed.startsWith('## ')) return `<h3>${trimmed.slice(3)}</h3>`;
+      if (trimmed.startsWith('# ')) return `<h2>${trimmed.slice(2)}</h2>`;
+      // Bold
+      const html = trimmed.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      return `<p>${html}</p>`;
+    })
+    .join('\n');
 }
 
 // --- GRAMET ---

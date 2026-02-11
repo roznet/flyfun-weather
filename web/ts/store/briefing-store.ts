@@ -10,6 +10,7 @@ export interface BriefingState {
   packs: PackMeta[];
   currentPack: PackMeta | null;
   snapshot: ForecastSnapshot | null;
+  digestText: string | null;
 
   // UI state
   selectedModel: string;
@@ -31,6 +32,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   packs: [],
   currentPack: null,
   snapshot: null,
+  digestText: null,
   selectedModel: 'gfs',
   loading: false,
   refreshing: false,
@@ -66,12 +68,22 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     try {
       const pack = await api.fetchPack(flight.id, timestamp);
       let snapshot: ForecastSnapshot | null = null;
+      let digestText: string | null = null;
       try {
         snapshot = await api.fetchSnapshot(flight.id, timestamp);
       } catch {
         // Snapshot may not be available
       }
-      set({ currentPack: pack, snapshot, loading: false });
+      if (pack.has_digest) {
+        try {
+          const url = api.digestUrl(flight.id, timestamp);
+          const resp = await fetch(url);
+          if (resp.ok) digestText = await resp.text();
+        } catch {
+          // Digest fetch is non-critical
+        }
+      }
+      set({ currentPack: pack, snapshot, digestText, loading: false });
     } catch (err) {
       set({ loading: false, error: `Failed to load pack: ${err}` });
     }
