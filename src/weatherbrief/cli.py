@@ -1,4 +1,4 @@
-"""CLI entry point and pipeline orchestration."""
+"""CLI entry point — thin wrapper around the pipeline."""
 
 from __future__ import annotations
 
@@ -6,31 +6,16 @@ import argparse
 import logging
 import os
 import sys
-from datetime import date, datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from weatherbrief.analysis.clouds import estimate_cloud_layers
-from weatherbrief.analysis.comparison import compare_models
-from weatherbrief.analysis.icing import assess_icing_profile
-from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.airports import resolve_waypoints
 from weatherbrief.config import list_routes, load_route
-from weatherbrief.digest.text import format_digest
-from weatherbrief.fetch.open_meteo import OpenMeteoClient
-from weatherbrief.models import (
-    ForecastSnapshot,
-    ModelSource,
-    RouteConfig,
-    WaypointAnalysis,
-    WaypointForecast,
-)
-from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_snapshot
+from weatherbrief.models import ModelSource, RouteConfig
+from weatherbrief.pipeline import BriefingOptions, execute_briefing
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODELS = [ModelSource.GFS, ModelSource.ECMWF, ModelSource.ICON]
 
 
 def _resolve_db_path(args_db: str | None) -> str:
@@ -84,256 +69,51 @@ def run_fetch(
     generate_llm_digest: bool = False,
     digest_config_name: str | None = None,
 ) -> None:
-    """Full pipeline: fetch -> analyze -> snapshot -> digest."""
-    models = models or DEFAULT_MODELS
-    today = date.today().isoformat()
-    target_dt = datetime.fromisoformat(f"{target_date}T{target_hour:02d}:00:00")
-    days_out = (date.fromisoformat(target_date) - date.today()).days
+    """Full pipeline: fetch -> analyze -> snapshot -> digest.
 
-    if days_out < 0:
-        print(f"Target date {target_date} is in the past.")
-        sys.exit(1)
-
-    print(f"Route: {route.name}")
-    print(f"Target: {target_date} ({days_out} days out)")
-    print(f"Models: {', '.join(m.value for m in models)}")
-    print()
-
-    # Fetch forecasts for all waypoints from all models
-    client = OpenMeteoClient()
-    all_forecasts: list[WaypointForecast] = []
-
-    for waypoint in route.waypoints:
-        forecasts = client.fetch_all_models(waypoint, models, days_out=days_out)
-        all_forecasts.extend(forecasts)
-        print(f"  Fetched {len(forecasts)} models for {waypoint.icao}")
-
-    # Run analysis at each waypoint using per-waypoint track
-    analyses: list[WaypointAnalysis] = []
-
-    for waypoint in route.waypoints:
-        wp_forecasts = [f for f in all_forecasts if f.waypoint.icao == waypoint.icao]
-        track_deg = route.waypoint_track(waypoint.icao)
-        analysis = _analyze_waypoint(wp_forecasts, target_dt, track_deg)
-        analyses.append(analysis)
-
-    # Build snapshot
-    snapshot = ForecastSnapshot(
-        route=route,
-        target_date=target_date,
-        fetch_date=today,
-        days_out=days_out,
-        forecasts=all_forecasts,
-        analyses=analyses,
+    CLI wrapper that prints results to console.
+    """
+    options = BriefingOptions(
+        models=models or BriefingOptions().models,
+        fetch_gramet=fetch_gramet,
+        generate_skewt=generate_skewt,
+        generate_llm_digest=generate_llm_digest,
+        digest_config_name=digest_config_name,
     )
 
-    # Save
-    path = save_snapshot(snapshot)
-    print(f"\nSnapshot saved: {path}")
+    print(f"Route: {route.name}")
+    print(f"Target: {target_date}")
+    print(f"Models: {', '.join(m.value for m in options.models)}")
+    print()
 
-    output_paths: list[str] = [str(path)]
+    try:
+        result = execute_briefing(route, target_date, target_hour, options)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
 
-    # Optional: GRAMET
-    if fetch_gramet:
-        _run_gramet(route, target_date, target_hour, days_out, today, output_paths)
+    print(f"\nSnapshot saved: {result.snapshot_path}")
 
-    # Optional: Skew-T
-    if generate_skewt:
-        _run_skewt(snapshot, target_dt, target_date, days_out, today, output_paths)
+    if result.gramet_path:
+        print(f"  GRAMET saved: {result.gramet_path}")
 
-    # Optional: LLM digest
-    if generate_llm_digest:
-        _run_llm_digest(
-            snapshot, target_dt, target_date, days_out, today, output_paths,
-            digest_config_name,
-        )
+    for p in result.skewt_paths:
+        print(f"  Skew-T saved: {p}")
+
+    if result.digest_path:
+        print(f"  LLM digest saved: {result.digest_path}")
+
+    if result.digest_text:
+        print()
+        print(result.digest_text)
+
+    for err in result.errors:
+        print(f"  Warning: {err}")
 
     # Print text digest
-    print()
-    digest = format_digest(snapshot, target_dt, output_paths=output_paths)
-    print(digest)
-
-
-def _run_gramet(
-    route: RouteConfig,
-    target_date: str,
-    target_hour: int,
-    days_out: int,
-    fetch_date: str,
-    output_paths: list[str],
-) -> None:
-    """Fetch GRAMET cross-section if available."""
-    try:
-        from weatherbrief.fetch.gramet import AutorouterGramet
-
-        departure_time = datetime.fromisoformat(f"{target_date}T{target_hour:02d}:00:00")
-        icao_codes = [wp.icao for wp in route.waypoints]
-        duration_hours = route.flight_duration_hours or 2.0
-
-        gramet_client = AutorouterGramet()
-        data = gramet_client.fetch_gramet(
-            icao_codes=icao_codes,
-            altitude_ft=route.cruise_altitude_ft,
-            departure_time=departure_time,
-            duration_hours=duration_hours,
-        )
-
-        # Save to data/gramet/
-        from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR
-        out_dir = DEFAULT_DATA_DIR / "gramet" / target_date / f"d-{days_out}_{fetch_date}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "gramet.png"
-        out_path.write_bytes(data)
-        print(f"  GRAMET saved: {out_path}")
-        output_paths.append(str(out_path))
-
-    except ImportError:
-        logger.warning("GRAMET fetch requires euro_aip with autorouter credentials")
-    except Exception:
-        logger.warning("GRAMET fetch failed", exc_info=True)
-
-
-def _run_skewt(
-    snapshot: ForecastSnapshot,
-    target_time: datetime,
-    target_date: str,
-    days_out: int,
-    fetch_date: str,
-    output_paths: list[str],
-) -> None:
-    """Generate Skew-T plots for all waypoints."""
-    try:
-        from weatherbrief.digest.skewt import generate_all_skewts
-        from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR
-
-        out_dir = DEFAULT_DATA_DIR / "skewt" / target_date / f"d-{days_out}_{fetch_date}"
-        paths = generate_all_skewts(snapshot, target_time, out_dir)
-        for p in paths:
-            print(f"  Skew-T saved: {p}")
-            output_paths.append(str(p))
-
-    except ImportError:
-        logger.warning("Skew-T generation requires metpy, numpy, matplotlib")
-    except Exception:
-        logger.warning("Skew-T generation failed", exc_info=True)
-
-
-def _run_llm_digest(
-    snapshot: ForecastSnapshot,
-    target_time: datetime,
-    target_date: str,
-    days_out: int,
-    fetch_date: str,
-    output_paths: list[str],
-    digest_config_name: str | None,
-) -> None:
-    """Generate LLM-powered weather digest."""
-    try:
-        from weatherbrief.digest.llm_config import load_digest_config
-        from weatherbrief.digest.llm_digest import run_digest
-
-        config = load_digest_config(digest_config_name)
-        print(f"\n  LLM digest: {config.llm.provider}/{config.llm.model}")
-
-        result = run_digest(snapshot, target_time, config)
-
-        if result.get("error"):
-            print(f"  LLM digest failed: {result['error']}")
-            return
-
-        # Save markdown digest
-        out_dir = DEFAULT_DATA_DIR / "digests" / target_date / f"d-{days_out}_{fetch_date}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "digest.md"
-        out_path.write_text(result["digest_text"])
-        print(f"  LLM digest saved: {out_path}")
-        output_paths.append(str(out_path))
-
-        # Print the digest
+    if result.text_digest:
         print()
-        print(result["digest_text"])
-
-    except Exception:
-        logger.warning("LLM digest generation failed", exc_info=True)
-
-
-def _analyze_waypoint(
-    forecasts: list[WaypointForecast],
-    target_time: datetime,
-    track_deg: float,
-) -> WaypointAnalysis:
-    """Run all analysis on forecasts for a single waypoint."""
-    if not forecasts:
-        raise ValueError("No forecasts to analyze")
-
-    waypoint = forecasts[0].waypoint
-    analysis = WaypointAnalysis(waypoint=waypoint, target_time=target_time)
-
-    # Collect model values for comparison
-    model_temps: dict[str, float] = {}
-    model_winds: dict[str, float] = {}
-    model_wind_dirs: dict[str, float] = {}
-    model_cloud: dict[str, float] = {}
-    model_precip: dict[str, float] = {}
-    model_freezing: dict[str, float] = {}
-
-    for wf in forecasts:
-        hourly = wf.at_time(target_time)
-        if not hourly:
-            continue
-
-        model_key = wf.model.value
-
-        # Try to find cruise-altitude wind (closest level to cruise pressure)
-        cruise_wind = None
-        for level in hourly.pressure_levels:
-            if level.wind_speed_kt is not None and level.wind_direction_deg is not None:
-                if cruise_wind is None or abs(level.pressure_hpa - 750) < abs(
-                    cruise_wind.pressure_hpa - 750
-                ):
-                    cruise_wind = level
-
-        if cruise_wind and cruise_wind.wind_speed_kt is not None:
-            wc = compute_wind_components(
-                cruise_wind.wind_speed_kt, cruise_wind.wind_direction_deg, track_deg
-            )
-            analysis.wind_components[model_key] = wc
-            model_winds[model_key] = cruise_wind.wind_speed_kt
-            model_wind_dirs[model_key] = cruise_wind.wind_direction_deg
-
-        # Icing profile
-        icing = assess_icing_profile(hourly.pressure_levels)
-        analysis.icing_bands[model_key] = icing
-
-        # Cloud layers
-        clouds = estimate_cloud_layers(hourly.pressure_levels)
-        analysis.cloud_layers[model_key] = clouds
-
-        # Collect comparison values
-        if hourly.temperature_2m_c is not None:
-            model_temps[model_key] = hourly.temperature_2m_c
-        if hourly.cloud_cover_pct is not None:
-            model_cloud[model_key] = hourly.cloud_cover_pct
-        if hourly.precipitation_mm is not None:
-            model_precip[model_key] = hourly.precipitation_mm
-        if hourly.freezing_level_m is not None:
-            model_freezing[model_key] = hourly.freezing_level_m
-
-    # Model comparison (need at least 2 models)
-    comparisons = {
-        "temperature_c": model_temps,
-        "wind_speed_kt": model_winds,
-        "wind_direction_deg": model_wind_dirs,
-        "cloud_cover_pct": model_cloud,
-        "precipitation_mm": model_precip,
-        "freezing_level_m": model_freezing,
-    }
-
-    for var_name, values in comparisons.items():
-        if len(values) >= 2:
-            analysis.model_divergence.append(compare_models(var_name, values))
-
-    return analysis
+        print(result.text_digest)
 
 
 def main() -> None:

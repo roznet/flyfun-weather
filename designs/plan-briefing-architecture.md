@@ -1,0 +1,783 @@
+# Plan: Briefing Page & API Architecture
+
+> API-first multi-client architecture for flight briefing configuration, retrieval, history, and a web-based briefing report page.
+
+## Intent
+
+WeatherBrief currently operates as a CLI tool. This plan introduces:
+
+1. **A "Flight" concept** — a saved, refreshable briefing target (route + date + time + duration).
+2. **Bundled briefing packs** — each fetch produces a pack containing snapshot, GRAMET, Skew-Ts, and LLM digest, stored together for full history.
+3. **An API layer** — so any client (web app, iOS app, CLI-to-email, cron automation) can trigger fetches, retrieve history, and access all artifacts.
+4. **A web app** — starting with a briefing report page: refresh, history, synopsis, GRAMET, model comparison, and Skew-T route view.
+
+This builds on Phases 1–3 (done) and runs in parallel with Phase 4 (model comparison refinement). It represents the "multi-client + web UI" ambition from Phase 5.
+
+---
+
+## Key Concepts
+
+### Flight
+
+A **Flight** is a saved briefing target that persists across refreshes:
+
+```
+Flight:
+  id: str                     # slug, e.g. "egtk-lsgs-2026-02-21"
+  route_name: str             # references routes.yaml key, e.g. "egtk_lsgs"
+  target_date: str            # YYYY-MM-DD
+  target_time_utc: int        # departure hour UTC (e.g. 9)
+  cruise_altitude_ft: int     # override or from route default
+  flight_duration_hours: float
+  created_at: datetime
+```
+
+A Flight is the unit people interact with: "my Oxford-to-Sion trip on Feb 21st." It references a route (reusable) and adds the date/time specifics. Refreshing a Flight triggers a new fetch, producing a new BriefingPack in the history.
+
+### BriefingPack
+
+A **BriefingPack** is the complete output of one fetch for a Flight:
+
+```
+BriefingPack:
+  flight_id: str
+  fetch_timestamp: datetime   # when this fetch happened
+  days_out: int               # D-N
+  snapshot_path: str          # snapshot.json
+  gramet_path: str | None     # gramet.png (if fetched)
+  skewt_paths: list[str]      # [{ICAO}_{model}.png, ...]
+  digest_path: str | None     # digest.md
+  digest_data: WeatherDigest | None  # structured LLM output
+```
+
+Each BriefingPack lives in a directory. History is the ordered list of all packs for a Flight.
+
+---
+
+## Storage Layout Evolution
+
+Extend the current `data/` layout to group all artifacts per fetch under one directory, and add a flight-level index:
+
+```
+data/
+├── flights.json                    # Flight registry (list of Flight configs)
+└── flights/
+    └── {flight_id}/
+        ├── flight.json             # Flight config
+        └── packs/
+            └── {fetch_timestamp}/  # ISO format, e.g. 2026-02-19T18-00-00Z
+                ├── snapshot.json   # ForecastSnapshot (existing model)
+                ├── gramet.png      # GRAMET cross-section (if available)
+                ├── skewt/
+                │   ├── EGTK_gfs.png
+                │   ├── EGTK_ecmwf.png
+                │   ├── LFPB_gfs.png
+                │   └── ...
+                ├── digest.md       # Formatted LLM digest
+                └── pack.json       # BriefingPack metadata (paths, digest_data)
+```
+
+**Why this layout:**
+- All artifacts for one fetch are co-located (easy to zip, serve, compare, delete).
+- Flight-level grouping makes history enumeration trivial (list dirs in `packs/`).
+- `pack.json` is a lightweight index so we don't need to load the full snapshot just to show the history dropdown.
+- Backward-compatible: the existing `data/forecasts/` layout continues to work for CLI usage. The new layout is additive — API/web uses `data/flights/`.
+
+### Migration from current layout
+
+The current storage (`data/forecasts/{target_date}/d-{N}_{fetch_date}/`) is keyed by target date, not by flight. The new layout keys by flight ID. Options:
+
+- **Option A: Clean break** — new API/web uses `data/flights/` exclusively. Existing CLI snapshots stay where they are.
+- **Option B: Symlink migration** — write a one-time migration that detects route from existing snapshots and creates flight entries.
+
+**Recommendation: Option A** — clean break. The existing CLI still works as-is. New flights created via API get the new layout. Future CLI enhancement could optionally adopt the new layout too.
+
+---
+
+## Data Models (new)
+
+Add to `models.py` or new `models_api.py`:
+
+```python
+class Flight(BaseModel):
+    """A saved briefing target — route + date/time specifics."""
+    id: str                          # slug: "{route_name}-{target_date}"
+    route_name: str                  # key in routes.yaml
+    target_date: str                 # YYYY-MM-DD
+    target_time_utc: int = 9         # departure hour
+    cruise_altitude_ft: int = 8000
+    flight_duration_hours: float = 0.0
+    created_at: datetime
+
+class BriefingPackMeta(BaseModel):
+    """Metadata for one fetch — lightweight index for history listing."""
+    flight_id: str
+    fetch_timestamp: str             # ISO datetime
+    days_out: int
+    has_gramet: bool = False
+    has_skewt: bool = False
+    has_digest: bool = False
+    assessment: str | None = None    # GREEN/AMBER/RED from digest
+    assessment_reason: str | None = None
+```
+
+These models keep the history dropdown fast: load `pack.json` (small) rather than the full `snapshot.json` (potentially large with all pressure-level data).
+
+---
+
+## API Design
+
+### Framework Choice: FastAPI
+
+**Why FastAPI:**
+- Native Pydantic v2 integration (our models work as request/response schemas directly).
+- Auto-generated OpenAPI docs (immediate Swagger UI for testing).
+- Async support for concurrent fetches.
+- Lightweight — no ORM needed (we're file-based).
+- Well-supported in the Python ecosystem.
+
+### Endpoints
+
+#### Routes (reusable route definitions)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/routes` | List all named routes from routes.yaml |
+| `GET` | `/api/routes/{name}` | Get route details (waypoints, defaults) |
+| `POST` | `/api/routes` | Create new named route |
+
+#### Flights (briefing targets)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/flights` | List all saved flights |
+| `POST` | `/api/flights` | Create a new flight (route + date + time) |
+| `GET` | `/api/flights/{id}` | Get flight details + latest pack summary |
+| `DELETE` | `/api/flights/{id}` | Delete flight and all its packs |
+
+#### Briefing Packs (fetch history)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/flights/{id}/refresh` | Trigger a new fetch → returns new pack |
+| `GET` | `/api/flights/{id}/packs` | List all packs (history dropdown data) |
+| `GET` | `/api/flights/{id}/packs/{timestamp}` | Get full pack detail |
+| `GET` | `/api/flights/{id}/packs/{timestamp}/snapshot` | Raw ForecastSnapshot JSON |
+| `GET` | `/api/flights/{id}/packs/{timestamp}/gramet` | GRAMET image (PNG) |
+| `GET` | `/api/flights/{id}/packs/{timestamp}/skewt/{icao}/{model}` | Specific Skew-T (PNG) |
+| `GET` | `/api/flights/{id}/packs/{timestamp}/digest` | LLM digest (markdown + structured) |
+| `GET` | `/api/flights/{id}/packs/latest` | Redirect/alias to most recent pack |
+
+#### Utility
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/models` | List available NWP models |
+| `GET` | `/health` | Health check |
+
+### Request/Response examples
+
+**Create flight:**
+```
+POST /api/flights
+{
+  "route_name": "egtk_lsgs",
+  "target_date": "2026-02-21",
+  "target_time_utc": 9,
+  "cruise_altitude_ft": 8000,
+  "flight_duration_hours": 4.5
+}
+→ 201: { "id": "egtk_lsgs-2026-02-21", "route_name": "egtk_lsgs", ... }
+```
+
+**Refresh (trigger new fetch):**
+```
+POST /api/flights/egtk_lsgs-2026-02-21/refresh
+→ 202: { "fetch_timestamp": "2026-02-19T18:00:00Z", "days_out": 2, "status": "fetching" }
+```
+
+The refresh endpoint runs the existing `run_fetch` pipeline (refactored to return results instead of printing), saving all artifacts into a new pack directory.
+
+**History listing:**
+```
+GET /api/flights/egtk_lsgs-2026-02-21/packs
+→ 200: [
+    { "fetch_timestamp": "2026-02-19T18:00:00Z", "days_out": 2,
+      "assessment": "GREEN", "assessment_reason": "Ridge established...",
+      "has_gramet": true, "has_skewt": true, "has_digest": true },
+    { "fetch_timestamp": "2026-02-18T08:00:00Z", "days_out": 3,
+      "assessment": "AMBER", ... },
+    ...
+  ]
+```
+
+### Refactoring `run_fetch` for API use
+
+The current `cli.py:run_fetch()` is monolithic — it prints to console and calls `sys.exit()`. To support API use:
+
+1. **Extract core pipeline** into a new function (e.g., `pipeline.py:execute_briefing()`) that:
+   - Takes a `Flight` (or route + date + time params).
+   - Returns a `BriefingPackResult` (all paths + structured digest data).
+   - Does not print or exit — raises exceptions.
+   - Saves artifacts to the flight's pack directory.
+
+2. **CLI calls the pipeline** — `cli.py` becomes a thin wrapper that calls `execute_briefing()` and prints results.
+
+3. **API calls the same pipeline** — FastAPI endpoint calls `execute_briefing()` and returns JSON.
+
+This is the critical refactor: **one pipeline, multiple frontends**.
+
+```
+                ┌──────────────┐
+                │  CLI (cli.py) │──── prints text ──→ terminal
+                └──────┬───────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │  execute_briefing │ ←── core pipeline
+              │  (pipeline.py)   │
+              └──────┬──────────┘
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+   ┌─────────┐ ┌──────────┐ ┌──────────┐
+   │ fetch/  │ │ analysis/│ │ digest/  │
+   │ modules │ │ modules  │ │ modules  │
+   └─────────┘ └──────────┘ └──────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │  BriefingPack    │ ←── saved to disk
+              │  (storage)       │
+              └──────┬──────────┘
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+   ┌─────────┐ ┌──────────┐ ┌──────────┐
+   │ CLI     │ │ API      │ │ Cron/    │
+   │ output  │ │ response │ │ Email    │
+   └─────────┘ └──────────┘ └──────────┘
+```
+
+---
+
+## Web App Architecture
+
+### Technology choice
+
+Following the same lightweight pattern used in [flyfun-apps](https://github.com/roznet/flyfun-apps/blob/main/designs/WEB_APP_ARCHITECTURE.md): vanilla TypeScript + Zustand store, no React or heavy framework.
+
+| Option | Pros | Cons |
+|--------|------|------|
+| **React SPA** | Large ecosystem, component model | Heavy toolchain, npm bloat, overkill for this UI |
+| **HTMX + Jinja** | Minimal JS, server-rendered | Client-side state (model toggle) awkward, no offline |
+| **Vanilla TS + Zustand** | Lightweight, proven pattern in flyfun-apps, no framework overhead, single TS compile step | Manual DOM wiring (fine for section-based UI) |
+
+**Recommendation: Vanilla TypeScript + Zustand**, matching flyfun-apps architecture.
+
+Rationale: The briefing page is mostly sections of content (text, images, a table) with a few interactive controls (refresh, history dropdown, model toggle). This doesn't warrant a virtual DOM or component framework. Direct DOM manipulation via a UIManager is clean and sufficient. Zustand handles the small amount of shared state (current pack, selected model). The pattern is already proven and familiar from flyfun-apps.
+
+### Architecture principles (same as flyfun-apps)
+
+1. **Single Source of Truth** — all state in Zustand store, no component-level duplication.
+2. **Unidirectional Data Flow** — user action → store action → state change → subscriptions → DOM update.
+3. **Separation of Concerns** — Store (state), UIManager (DOM), APIAdapter (backend), no cross-cutting.
+
+### Package structure
+
+```
+src/
+├── weatherbrief/              # existing Python package
+│   ├── api/                   # NEW: FastAPI app
+│   │   ├── __init__.py
+│   │   ├── app.py             # FastAPI app factory, CORS, static/template mount
+│   │   ├── routes.py          # /api/routes endpoints
+│   │   ├── flights.py         # /api/flights endpoints
+│   │   └── packs.py           # /api/flights/{id}/packs endpoints
+│   ├── pipeline.py            # NEW: core briefing pipeline (extracted from cli.py)
+│   └── ...existing modules...
+└── web/
+    ├── index.html             # Flights page (served by FastAPI)
+    ├── briefing.html          # Briefing report page
+    ├── css/
+    │   └── style.css          # Minimal custom CSS
+    └── ts/
+        ├── main.ts            # App bootstrap, subscriptions, event wiring
+        ├── store/
+        │   ├── store.ts       # Zustand store (flight, pack, model selection, loading)
+        │   └── types.ts       # TypeScript type definitions
+        ├── managers/
+        │   └── ui-manager.ts  # DOM updates: assessment, synopsis, table, skewt gallery
+        └── adapters/
+            └── api-adapter.ts # FastAPI backend communication
+```
+
+### Store shape
+
+```typescript
+interface BriefingState {
+  // Current context
+  flight: Flight | null;
+  packs: PackMeta[];           // history list
+  currentPack: PackDetail | null;
+
+  // UI state
+  selectedModel: string;       // for Skew-T toggle (e.g. "gfs", "ecmwf")
+  loading: boolean;
+  error: string | null;
+
+  // Actions
+  loadFlight: (id: string) => Promise<void>;
+  loadPacks: (flightId: string) => Promise<void>;
+  selectPack: (timestamp: string) => Promise<void>;
+  refresh: () => Promise<void>;
+  setSelectedModel: (model: string) => void;
+}
+```
+
+### Communication patterns
+
+| Pattern | Usage |
+|---------|-------|
+| **Store subscriptions** (primary) | Pack loaded → UIManager updates all sections |
+| **Custom events** | `refresh-complete`, `pack-selected` for cross-concern actions |
+| **Direct API calls** | APIAdapter methods called from store actions |
+
+```typescript
+// main.ts — wire subscriptions
+store.subscribe((state, prev) => {
+  if (state.currentPack !== prev.currentPack) {
+    uiManager.renderAssessment(state.currentPack);
+    uiManager.renderSynopsis(state.currentPack);
+    uiManager.renderGramet(state.currentPack);
+    uiManager.renderModelComparison(state.currentPack);
+    uiManager.renderSkewTs(state.currentPack, state.selectedModel);
+  }
+  if (state.selectedModel !== prev.selectedModel) {
+    uiManager.renderSkewTs(state.currentPack, state.selectedModel);
+  }
+  if (state.packs !== prev.packs) {
+    uiManager.renderHistoryDropdown(state.packs);
+  }
+});
+```
+
+### Development mode
+
+- `esbuild ts/main.ts --bundle --outfile=web/dist/bundle.js --watch` compiles TS.
+- `uvicorn weatherbrief.api.app:app --reload` runs the API and serves `web/` as static files.
+- No separate frontend dev server needed — FastAPI serves everything.
+- In production: same setup, just without `--watch` and `--reload`.
+
+---
+
+## Briefing Page Design
+
+The briefing page is the core user experience. It displays the complete weather briefing for a flight, with refresh and history navigation.
+
+### Layout (top to bottom)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  EGTK → LFPB → LSGS  |  Sat 21 Feb 2026 0900Z  | FL080│
+│  [⟳ Refresh]  [History: D-2 (19 Feb 18:00Z) ▾]        │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ██ ASSESSMENT: GREEN — Ridge established, models agree ██
+│                                                         │
+├──── Synopsis ───────────────────────────────────────────┤
+│                                                         │
+│  SYNOPTIC: High pressure centered over Bay of Biscay...│
+│  WINDS: Light and variable at FL080...                  │
+│  CLOUD & VISIBILITY: Scattered CI above FL150...        │
+│  PRECIPITATION: None expected along route...            │
+│  ICING: Freezing level ~6500ft, no cloud in band...     │
+│  SPECIFIC CONCERNS: Sion valley fog possible before...  │
+│                                                         │
+├──── GRAMET ─────────────────────────────────────────────┤
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │                                                 │    │
+│  │          [GRAMET cross-section image]           │    │
+│  │                                                 │    │
+│  └─────────────────────────────────────────────────┘    │
+│                                                         │
+├──── Model Comparison ───────────────────────────────────┤
+│                                                         │
+│  Variable        │ GFS   │ ECMWF │ ICON  │ Spread │Agr │
+│  ────────────────┼───────┼───────┼───────┼────────┼────│
+│  Temp (°C)       │  3.2  │  3.5  │  3.1  │  0.4   │ ✓  │
+│  Wind (kt)       │  12   │  10   │  14   │  4     │ ✓  │
+│  Wind dir (°)    │  270  │  265  │  275  │  10    │ ✓  │
+│  Cloud (%)       │  15   │  20   │  10   │  10    │ ✓  │
+│  Precip (mm)     │  0.0  │  0.0  │  0.0  │  0.0   │ ✓  │
+│  Freezing (m)    │ 1980  │ 2050  │ 1950  │  100   │ ✓  │
+│                                                         │
+│  MODEL AGREEMENT: GFS and ECMWF in strong agreement... │
+│  TREND: Improving since D-5...                          │
+│  WATCH ITEMS: Sion valley fog — check 0600Z TAF...      │
+│                                                         │
+├──── Skew-T Soundings ───────────────────────────────────┤
+│                                                         │
+│  Model: [GFS ▾]  (toggle between models)                │
+│                                                         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │   EGTK   │  │   LFPB   │  │   LSGS   │              │
+│  │          │  │          │  │          │              │
+│  │  [Skew-T │  │  [Skew-T │  │  [Skew-T │              │
+│  │  diagram] │  │  diagram] │  │  diagram] │              │
+│  │          │  │          │  │          │              │
+│  └──────────┘  └──────────┘  └──────────┘              │
+│                                                         │
+│  Waypoints displayed left-to-right matching route order │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Component Breakdown
+
+#### Header Bar
+- Route summary (origin → waypoints → destination).
+- Target date/time and altitude.
+- **Refresh button**: calls `store.refresh()` → `APIAdapter.refreshFlight()` → POST to API. UIManager shows loading spinner via store subscription. On completion, store updates trigger full re-render.
+- **History dropdown**: UIManager renders from `store.packs`. On selection, calls `store.selectPack(timestamp)` → APIAdapter loads pack → store update → UIManager re-renders all sections.
+
+#### Assessment Banner
+- Full-width colored banner: green/amber/red background.
+- Assessment text from `WeatherDigest.assessment_reason`.
+- Immediately communicates the go/no-go picture.
+
+#### Synopsis Section
+- Renders the LLM digest fields as labeled subsections:
+  - Synoptic situation
+  - Winds
+  - Cloud & Visibility
+  - Precipitation & Convection
+  - Icing
+  - Specific concerns (Alpine, foehn, valley fog, etc.)
+- If no LLM digest available (e.g., API keys not configured), falls back to the plain-text digest sections from `format_digest()`.
+
+#### GRAMET Section
+- Displays the GRAMET cross-section PNG.
+- Full-width, zoomable (click to enlarge).
+- Shows placeholder/message if GRAMET not available for this pack.
+
+#### Model Comparison Section
+- Table view: one row per compared variable, columns for each model + spread + agreement indicator.
+- Data comes from `WaypointAnalysis.model_divergence` in the snapshot.
+- Below the table: the LLM digest's `model_agreement`, `trend`, and `watch_items` fields as narrative text.
+
+#### Skew-T Route View
+- Displays Skew-T diagrams horizontally, left-to-right matching route order (origin → waypoints → destination).
+- **Model toggle dropdown**: switches which model's Skew-T to display at all waypoints simultaneously. Default: first available model.
+- Each Skew-T is a clickable thumbnail that expands to full size.
+- If a specific waypoint/model combo is missing, shows a "not available" placeholder.
+- Future enhancement: overlay two models on the same Skew-T for visual comparison (already described in the spec).
+
+---
+
+## Email Briefing & PDF Report
+
+### The problem
+
+A pilot checking email the morning of a flight wants a quick, self-contained briefing they can glance at, save to their iPad, or print. The briefing needs to work offline, render reliably everywhere, and include all the visual artifacts (GRAMET, Skew-Ts).
+
+### Delivery format options considered
+
+| Format | Pros | Cons |
+|--------|------|------|
+| **PDF attachment** | Self-contained, printable, offline, consistent rendering, archivable | Requires PDF generation library |
+| **HTML email + embedded images (CID)** | Rich formatting in-email | Gmail/Outlook handle CID inconsistently, breaks in many clients |
+| **HTML email + web-hosted images** | Small email size | Requires public server, images blocked by default in most clients, breaks offline |
+| **HTML email + base64 data URIs** | Self-contained | Many email clients strip data URIs, large email size |
+
+### Recommendation: PDF attachment + short HTML email body
+
+The email has two parts:
+
+1. **HTML body** (quick glance, no images):
+   - Assessment banner: `GREEN — Ridge established, models converging`
+   - Route + date + altitude one-liner
+   - Synopsis summary (2-3 sentences from `WeatherDigest.synoptic`)
+   - Watch items
+   - Link to web app for interactive view (when server is available)
+
+2. **PDF attachment** (full briefing, self-contained):
+   - Mirrors the briefing page layout: assessment, full synopsis, GRAMET image, model comparison table, Skew-T diagrams for all waypoints (one model, or one page per model)
+   - All images embedded in the PDF — works offline, printable
+   - Filename: `briefing_{route}_{target_date}_d{N}.pdf`
+
+This gives the pilot a quick assessment in the email preview without opening anything, and the full picture in the attached PDF.
+
+### PDF generation approach
+
+**WeasyPrint** (HTML/CSS → PDF) is the recommended approach:
+
+- We define an HTML template for the briefing report (Jinja2).
+- The template is shared conceptually with the web app's briefing page — same sections, same layout logic.
+- Images (GRAMET PNG, Skew-T PNGs) are embedded as base64 data URIs in the HTML before conversion. Base64 works reliably in WeasyPrint even though it doesn't in email clients.
+- WeasyPrint renders to a multi-page PDF with proper pagination.
+
+Alternative considered: Composing pages directly with `reportlab` or `matplotlib.backends.backend_pdf`. These work but require building the layout in code rather than CSS — more effort, less maintainable, harder to match the web look.
+
+### Architecture
+
+```
+BriefingPack (on disk)
+    │
+    ├─── report/
+    │    ├── render_html()     # Jinja2 template → HTML string
+    │    ├── render_pdf()      # HTML string → PDF bytes (via WeasyPrint)
+    │    └── templates/
+    │         └── briefing.html  # shared report template
+    │
+    └─── notify/
+         ├── send_email()      # compose + send via SMTP
+         └── email_config      # SMTP settings (from .env or config)
+```
+
+**`render_html(pack) → str`**: Takes a BriefingPack, loads all artifact files (GRAMET, Skew-Ts), encodes images as base64, renders the Jinja2 template. This HTML is also useful as a standalone static report (save to file, open in browser).
+
+**`render_pdf(pack) → bytes`**: Calls `render_html()`, then `weasyprint.HTML(string=html).write_pdf()`. Returns PDF bytes — can be saved to disk or attached to email.
+
+**`send_email(pack, recipients)`**: Composes a `multipart/mixed` email:
+- `multipart/alternative` body with plain-text fallback + HTML summary
+- PDF attachment
+
+### API endpoints for report/email
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/flights/{id}/packs/{timestamp}/report.pdf` | Download PDF report |
+| `GET` | `/api/flights/{id}/packs/{timestamp}/report.html` | View HTML report (standalone) |
+| `POST` | `/api/flights/{id}/packs/{timestamp}/email` | Send email briefing to configured recipients |
+
+The PDF/HTML endpoints are useful beyond email — the web app could offer a "Download PDF" button, and the HTML report is a printable view.
+
+### Email triggering
+
+Email can be sent:
+1. **Manually** — via the web app ("Email this briefing" button) or API call.
+2. **On every refresh** — configurable per flight: `"email_on_refresh": true` with recipient list.
+3. **Via cron** — a scheduled job calls `POST /api/flights/{id}/refresh` then `POST .../email`. This is the "daily email brief" workflow.
+
+### Email configuration
+
+```python
+class EmailConfig(BaseModel):
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_user: str
+    smtp_password: str           # from env: WEATHERBRIEF_SMTP_PASSWORD
+    from_address: str
+    use_tls: bool = True
+
+class FlightEmailSettings(BaseModel):
+    recipients: list[str]        # email addresses
+    email_on_refresh: bool = False
+```
+
+SMTP settings from `.env` or a config file. Per-flight recipient list stored in the Flight config.
+
+### Implementation steps (added to main plan)
+
+These slot in after the web app steps:
+
+- **Step 9: PDF report generation** — Jinja2 HTML template, `render_html()`, `render_pdf()` via WeasyPrint, API endpoints for PDF/HTML download.
+- **Step 10: Email delivery** — `send_email()` with SMTP, email config model, API endpoint, per-flight recipient settings, `email_on_refresh` option.
+
+---
+
+## Flights Page Design
+
+Simple list/create page for managing flights:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  My Flights                                  [+ New]    │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  EGTK → LFPB → LSGS   21 Feb 2026 0900Z   FL080       │
+│  Last briefing: D-2 (19 Feb 18:00Z) ██ GREEN           │
+│  [View Briefing →]                                      │
+│                                                         │
+│  ─────────────────────────────────────────────────────  │
+│                                                         │
+│  EGTK → LFAT           28 Feb 2026 1000Z   FL060       │
+│  Last briefing: D-5 (23 Feb 09:00Z) ██ AMBER           │
+│  [View Briefing →]                                      │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Create Flight dialog:**
+- Select from existing routes (dropdown from `GET /api/routes`) or enter inline ICAO codes.
+- Target date (date picker), time (hour selector), altitude, duration.
+- On create: `POST /api/flights` → redirects to briefing page → auto-triggers first refresh.
+
+---
+
+## Implementation Plan
+
+### Step 1: Data models & storage for Flights and BriefingPacks
+
+- Add `Flight` and `BriefingPackMeta` Pydantic models.
+- Implement `storage/flights.py`: create/list/get/delete flights, save/load/list packs.
+- Write tests for the new storage layer.
+
+### Step 2: Extract pipeline from CLI
+
+- Create `pipeline.py` with `execute_briefing(flight, db_path, options) → BriefingPackResult`.
+- Refactor `cli.py` to call `execute_briefing()` internally.
+- Verify CLI still works identically after refactor (existing tests pass).
+
+### Step 3: FastAPI app + route/flight/pack endpoints
+
+- Add `fastapi` + `uvicorn` dependencies.
+- Implement `api/app.py` (app factory, CORS config, static mount).
+- Implement `api/routes.py` — thin wrappers around `config.py`.
+- Implement `api/flights.py` — CRUD backed by `storage/flights.py`.
+- Implement `api/packs.py` — refresh triggers pipeline, list/get serve pack data and artifacts.
+- Write API tests.
+
+### Step 4: Web app scaffold + Flights page
+
+- Set up `web/` directory: `index.html`, `briefing.html`, `css/`, `ts/`.
+- Configure esbuild for TypeScript compilation.
+- Implement Zustand store (`store.ts`, `types.ts`).
+- Implement APIAdapter (`api-adapter.ts`).
+- Build Flights page: `index.html` with flight list, create flight form.
+- Configure FastAPI to serve `web/` as static files.
+
+### Step 5: Briefing page — core layout
+
+- Implement UIManager (`ui-manager.ts`) with section render methods.
+- Wire store subscriptions in `main.ts`.
+- Build `briefing.html` with header bar, history dropdown, refresh button.
+- Assessment banner rendering.
+- Synopsis section rendering (digest fields).
+
+### Step 6: Briefing page — GRAMET + Model Comparison
+
+- UIManager: `renderGramet()` (image display, fallback placeholder).
+- UIManager: `renderModelComparison()` (table from divergence data).
+- Narrative sections (model agreement, trend, watch items).
+
+### Step 7: Briefing page — Skew-T route view
+
+- UIManager: `renderSkewTs()` — horizontal layout, route order, model-aware.
+- Model toggle dropdown wired to `store.setSelectedModel()`.
+- Click-to-enlarge for thumbnails.
+
+### Step 8: Polish & integration
+
+- Error states, loading states, empty states throughout (store-driven).
+- Verify full flow: create flight → refresh → view briefing → switch history → toggle models.
+
+### Step 9: PDF report generation
+
+- Create `report/` module with Jinja2 HTML template mirroring the briefing page.
+- Implement `render_html(pack)` — loads artifacts, encodes images as base64, renders template.
+- Implement `render_pdf(pack)` — WeasyPrint HTML→PDF conversion.
+- Add API endpoints: `GET .../report.pdf`, `GET .../report.html`.
+- Add "Download PDF" button to the web briefing page.
+
+### Step 10: Email delivery
+
+- Implement `notify/send_email()` — SMTP email with HTML body + PDF attachment.
+- Add `EmailConfig` and `FlightEmailSettings` models.
+- Add API endpoint: `POST .../email`.
+- Add per-flight email settings (recipients, email_on_refresh).
+- Add "Email this briefing" button to web UI.
+- Document cron-based daily email workflow.
+
+---
+
+## Alternatives Considered
+
+### Database (SQLite/Postgres) vs. file-based storage
+
+The current system is file-based and it works well. Adding a database introduces complexity (migrations, connection management) for what is currently a single-user tool. The file-based approach:
+- Makes packs portable (zip and share).
+- Simplifies deployment (no DB server).
+- Works with the existing snapshot JSON approach.
+
+If multi-user or concurrent access becomes important, SQLite is a natural evolution: add a `flights.db` for metadata/indexing while keeping artifact files on disk. But for now, file-based is the right call.
+
+### Server-sent events for refresh progress
+
+A fetch can involve multiple API calls (Open-Meteo per waypoint per model + GRAMET + LLM digest). Options for communicating progress:
+
+- **Option A: Simple request/response** — refresh endpoint blocks until complete. Simple but can take 30-60s.
+- **Option B: Background task + polling** — refresh returns immediately, client polls for status.
+- **Option C: Server-sent events** — push progress updates to client.
+
+**Recommendation: Option B for initial implementation.** Return a 202 with a task ID, client polls `GET /api/tasks/{id}` until completion. SSE can be added later. The frontend shows a progress indicator during polling.
+
+### Route creation: API vs. YAML only
+
+Currently routes live in `routes.yaml`. Options:
+- **Keep YAML-only**: API reads from YAML. Creating routes requires file editing.
+- **API-managed routes**: API reads/writes a `routes.json` (or extends YAML writing).
+
+**Recommendation: API-managed with JSON.** Add a `data/routes.json` that the API manages, while continuing to read `config/routes.yaml` as read-only defaults. API-created routes go to `data/routes.json`. Both sources are merged when listing routes. This keeps backward compatibility and allows the web app to create routes without manual YAML editing.
+
+---
+
+## Dependencies (new)
+
+| Package | Purpose |
+|---------|---------|
+| `fastapi>=0.115` | API framework |
+| `uvicorn[standard]>=0.30` | ASGI server |
+| `python-multipart` | File upload support (future) |
+| `weasyprint>=60` | HTML→PDF report generation |
+| `jinja2>=3.1` | HTML report templates |
+
+Frontend (in `web/package.json`):
+| Package | Purpose |
+|---------|---------|
+| `typescript` | Type safety |
+| `zustand` | Lightweight state management (~1KB) |
+| `esbuild` | Fast TS bundler (single compile step) |
+
+---
+
+## Open Questions
+
+1. **Authentication**: For now, this is single-user local. When/if we add multi-user, do we want simple API key auth, OAuth, or defer to a reverse proxy?
+
+2. **Background task runner**: For refresh, do we need a proper task queue (e.g., `arq`, `celery`) or is `asyncio.create_task` with in-memory state sufficient for single-user use?
+
+3. **Image optimization**: Skew-T PNGs can be large (~200KB each). Should we generate thumbnails on save, or resize on the fly via the API?
+
+4. **Offline / PWA**: Should the web app cache the latest briefing pack for offline viewing (useful if checking weather at an airfield with poor connectivity)?
+
+---
+
+## Design Decisions
+
+### Flight ID = route + date (intentional)
+
+The flight ID is `{route_name}-{target_date}`, meaning one flight per route per day. This is deliberate — a GA pilot plans one trip on a given date. If needed later, the ID scheme can incorporate departure time, but for now the simplicity of one-flight-per-route-per-day matches the use case and avoids clutter.
+
+### Naive datetimes in pipeline (intentional)
+
+`target_dt` in `pipeline.py` is a naive datetime (no tzinfo). This is deliberate because Open-Meteo returns naive UTC timestamps, and `WaypointForecast.at_time()` compares target vs forecast times. Mixing aware and naive datetimes would cause `TypeError`. All times are UTC by convention throughout the pipeline.
+
+### PDF/email reports use ECMWF Skew-T only (intentional)
+
+The PDF report and email attachment include only ECMWF Skew-T plots, not all models. This keeps the PDF concise and focused — ECMWF is the preferred model for European GA. The web UI still allows toggling between models interactively.
+
+### CORS wildcard (acceptable for now)
+
+`allow_origins=["*"]` is used because this is a single-user local app with no authentication. No credentials (cookies, auth headers) are sent by the frontend. When/if auth is added, CORS origins should be restricted to specific hosts.
+
+---
+
+## References
+
+- Current architecture: [architecture.md](./architecture.md)
+- Data models: [data-models.md](./data-models.md)
+- Digest pipeline: [digest.md](./digest.md)
+- Original spec: [flight-weather-tracker-spec.md](./flight-weather-tracker-spec.md)
