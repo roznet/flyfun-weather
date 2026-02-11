@@ -153,7 +153,8 @@
       <tr>
         <td class="var-name">{{ d.variable }}</td>
         {% for m in wp.models %}
-        <td>{% if d.model_values[m] is not none %}{{ "%.1f"|format(d.model_values[m]) }}{% else %}&mdash;{% endif %}</td>
+        {% set val = d.model_values.get(m) %}
+        <td>{% if val is not none %}{{ "%.1f"|format(val) }}{% else %}&mdash;{% endif %}</td>
         {% endfor %}
         <td>{{ "%.1f"|format(d.spread) }}</td>
         <td class="agree-{{ d.agreement }}">
