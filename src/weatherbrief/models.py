@@ -203,24 +203,152 @@ class IcingRisk(str, Enum):
     SEVERE = "severe"
 
 
-class IcingBand(BaseModel):
-    """Icing assessment at a single pressure level."""
+
+class IcingType(str, Enum):
+    """Type of icing based on wet-bulb temperature regime."""
+
+    NONE = "none"
+    RIME = "rime"
+    MIXED = "mixed"
+    CLEAR = "clear"
+
+
+class CloudCoverage(str, Enum):
+    """Cloud coverage category derived from dewpoint depression."""
+
+    SCT = "sct"
+    BKN = "bkn"
+    OVC = "ovc"
+
+
+class ConvectiveRisk(str, Enum):
+    """Convective risk level from thermodynamic indices."""
+
+    NONE = "none"
+    LOW = "low"
+    MODERATE = "moderate"
+    HIGH = "high"
+    EXTREME = "extreme"
+
+
+class ThermodynamicIndices(BaseModel):
+    """Profile-level thermodynamic indices computed via MetPy."""
+
+    lcl_pressure_hpa: Optional[float] = None
+    lcl_altitude_ft: Optional[float] = None
+    lfc_pressure_hpa: Optional[float] = None
+    lfc_altitude_ft: Optional[float] = None
+    el_pressure_hpa: Optional[float] = None
+    el_altitude_ft: Optional[float] = None
+    cape_surface_jkg: Optional[float] = None
+    cape_most_unstable_jkg: Optional[float] = None
+    cape_mixed_layer_jkg: Optional[float] = None
+    cin_surface_jkg: Optional[float] = None
+    lifted_index: Optional[float] = None
+    showalter_index: Optional[float] = None
+    k_index: Optional[float] = None
+    total_totals: Optional[float] = None
+    precipitable_water_mm: Optional[float] = None
+    freezing_level_ft: Optional[float] = None
+    minus10c_level_ft: Optional[float] = None
+    minus20c_level_ft: Optional[float] = None
+    bulk_shear_0_6km_kt: Optional[float] = None
+    bulk_shear_0_1km_kt: Optional[float] = None
+
+
+class DerivedLevel(BaseModel):
+    """Per-pressure-level derived values for sounding analysis."""
 
     pressure_hpa: int
     altitude_ft: Optional[float] = None
     temperature_c: Optional[float] = None
+    dewpoint_c: Optional[float] = None
     relative_humidity_pct: Optional[float] = None
-    risk: IcingRisk = IcingRisk.NONE
+    wet_bulb_c: Optional[float] = None
+    dewpoint_depression_c: Optional[float] = None
+    theta_e_k: Optional[float] = None
+    lapse_rate_c_per_km: Optional[float] = None
 
 
-class CloudLayer(BaseModel):
-    """Estimated cloud layer from RH profile."""
+class EnhancedCloudLayer(BaseModel):
+    """Cloud layer detected from dewpoint depression analysis."""
 
     base_ft: float
-    top_ft: Optional[float] = None
+    top_ft: float
     base_pressure_hpa: Optional[int] = None
     top_pressure_hpa: Optional[int] = None
-    note: str = "estimated"
+    thickness_ft: Optional[float] = None
+    mean_temperature_c: Optional[float] = None
+    coverage: CloudCoverage = CloudCoverage.SCT
+    mean_dewpoint_depression_c: Optional[float] = None
+
+
+class IcingZone(BaseModel):
+    """Grouped icing zone from wet-bulb temperature analysis."""
+
+    base_ft: float
+    top_ft: float
+    base_pressure_hpa: Optional[int] = None
+    top_pressure_hpa: Optional[int] = None
+    risk: IcingRisk = IcingRisk.NONE
+    icing_type: IcingType = IcingType.NONE
+    sld_risk: bool = False
+    mean_temperature_c: Optional[float] = None
+    mean_wet_bulb_c: Optional[float] = None
+
+
+class ConvectiveAssessment(BaseModel):
+    """Convective risk assessment from thermodynamic indices."""
+
+    risk_level: ConvectiveRisk = ConvectiveRisk.NONE
+    cape_jkg: Optional[float] = None
+    cin_jkg: Optional[float] = None
+    lcl_altitude_ft: Optional[float] = None
+    lfc_altitude_ft: Optional[float] = None
+    el_altitude_ft: Optional[float] = None
+    bulk_shear_0_6km_kt: Optional[float] = None
+    lifted_index: Optional[float] = None
+    k_index: Optional[float] = None
+    total_totals: Optional[float] = None
+    severe_modifiers: list[str] = Field(default_factory=list)
+
+
+class SoundingAnalysis(BaseModel):
+    """Complete sounding analysis for one model at one waypoint/time."""
+
+    indices: Optional[ThermodynamicIndices] = None
+    derived_levels: list[DerivedLevel] = Field(default_factory=list)
+    cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
+    icing_zones: list[IcingZone] = Field(default_factory=list)
+    convective: Optional[ConvectiveAssessment] = None
+
+
+class AltitudeBand(BaseModel):
+    """Altitude band definition for grouped comparison."""
+
+    name: str
+    floor_ft: float
+    ceiling_ft: float
+
+
+class BandModelSummary(BaseModel):
+    """Per-model summary within an altitude band."""
+
+    worst_icing_risk: IcingRisk = IcingRisk.NONE
+    worst_icing_type: IcingType = IcingType.NONE
+    sld_risk: bool = False
+    cloud_coverage: Optional[CloudCoverage] = None
+    temperature_min_c: Optional[float] = None
+    temperature_max_c: Optional[float] = None
+
+
+class AltitudeBandComparison(BaseModel):
+    """Cross-model comparison within an altitude band."""
+
+    band: AltitudeBand
+    models: dict[str, BandModelSummary] = Field(default_factory=dict)
+    icing_agreement: bool = True
+    cloud_agreement: bool = True
 
 
 class AgreementLevel(str, Enum):
@@ -247,8 +375,8 @@ class WaypointAnalysis(BaseModel):
     waypoint: Waypoint
     target_time: datetime
     wind_components: dict[str, WindComponent] = Field(default_factory=dict)
-    icing_bands: dict[str, list[IcingBand]] = Field(default_factory=dict)
-    cloud_layers: dict[str, list[CloudLayer]] = Field(default_factory=dict)
+    sounding: dict[str, SoundingAnalysis] = Field(default_factory=dict)
+    band_comparisons: list[AltitudeBandComparison] = Field(default_factory=list)
     model_divergence: list[ModelDivergence] = Field(default_factory=list)
 
 

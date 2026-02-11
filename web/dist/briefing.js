@@ -363,9 +363,159 @@
       "wind_direction_deg": "Wind dir (\xB0)",
       "cloud_cover_pct": "Cloud (%)",
       "precipitation_mm": "Precip (mm)",
-      "freezing_level_m": "Freezing (m)"
+      "freezing_level_m": "Freezing (m)",
+      "freezing_level_ft": "Freezing (ft)",
+      "cape_surface_jkg": "CAPE (J/kg)",
+      "lcl_altitude_ft": "LCL (ft)",
+      "k_index": "K-index",
+      "total_totals": "Total Totals",
+      "precipitable_water_mm": "PW (mm)",
+      "lifted_index": "Lifted Index",
+      "bulk_shear_0_6km_kt": "Shear 0-6km (kt)"
     };
     return labels[name] || name;
+  }
+  var RISK_COLORS = {
+    none: "",
+    light: "risk-light",
+    low: "risk-light",
+    moderate: "risk-moderate",
+    high: "risk-high",
+    severe: "risk-severe",
+    extreme: "risk-severe"
+  };
+  function riskClass(risk) {
+    return RISK_COLORS[risk] || "";
+  }
+  function renderSoundingAnalysis(snapshot) {
+    const el = $("sounding-section");
+    if (!el) return;
+    if (!snapshot || snapshot.analyses.length === 0) {
+      el.innerHTML = '<p class="muted">No sounding analysis available.</p>';
+      return;
+    }
+    const hasSounding = snapshot.analyses.some(
+      (a) => a.sounding && Object.keys(a.sounding).length > 0
+    );
+    if (!hasSounding) {
+      el.innerHTML = '<p class="muted">Sounding analysis not available for this briefing.</p>';
+      return;
+    }
+    el.innerHTML = snapshot.analyses.map((a) => {
+      if (!a.sounding || Object.keys(a.sounding).length === 0) return "";
+      return `
+      <div class="sounding-waypoint">
+        <h4>${a.waypoint.icao} \u2014 ${a.waypoint.name}</h4>
+        ${renderConvectiveBanner(a.sounding)}
+        ${renderAltitudeMarkers(a.sounding)}
+        ${renderIcingZones(a.sounding)}
+        ${renderEnhancedClouds(a.sounding)}
+        ${renderBandComparisons(a.band_comparisons)}
+      </div>
+    `;
+    }).join("");
+  }
+  function renderConvectiveBanner(soundings) {
+    const risks = [];
+    for (const [model, sa] of Object.entries(soundings)) {
+      if (sa.convective && sa.convective.risk_level !== "none") {
+        const mods = sa.convective.severe_modifiers.length > 0 ? ` (${sa.convective.severe_modifiers.join("; ")})` : "";
+        risks.push(`<span class="${riskClass(sa.convective.risk_level)}">[${model}] ${sa.convective.risk_level.toUpperCase()}${mods}</span>`);
+      }
+    }
+    if (risks.length === 0) return "";
+    return `<div class="convective-banner">Convective: ${risks.join(" ")}</div>`;
+  }
+  function renderAltitudeMarkers(soundings) {
+    const rows = [];
+    for (const [model, sa] of Object.entries(soundings)) {
+      if (!sa.indices) continue;
+      const idx = sa.indices;
+      const parts = [];
+      if (idx.freezing_level_ft != null) parts.push(`0\xB0C: ${idx.freezing_level_ft.toFixed(0)}ft`);
+      if (idx.minus10c_level_ft != null) parts.push(`-10\xB0C: ${idx.minus10c_level_ft.toFixed(0)}ft`);
+      if (idx.minus20c_level_ft != null) parts.push(`-20\xB0C: ${idx.minus20c_level_ft.toFixed(0)}ft`);
+      if (idx.lcl_altitude_ft != null) parts.push(`LCL: ${idx.lcl_altitude_ft.toFixed(0)}ft`);
+      if (parts.length > 0) {
+        rows.push(`<div class="marker-row"><strong>${model}</strong>: ${parts.join(" | ")}</div>`);
+      }
+    }
+    if (rows.length === 0) return "";
+    return `<div class="altitude-markers"><h5>Key Altitudes</h5>${rows.join("")}</div>`;
+  }
+  function renderIcingZones(soundings) {
+    const rows = [];
+    for (const [model, sa] of Object.entries(soundings)) {
+      for (const zone of sa.icing_zones) {
+        const sld = zone.sld_risk ? ' <span class="sld-badge">SLD</span>' : "";
+        const tw = zone.mean_wet_bulb_c != null ? ` Tw=${zone.mean_wet_bulb_c.toFixed(0)}\xB0C` : "";
+        rows.push(
+          `<div class="icing-row ${riskClass(zone.risk)}">[${model}] ${zone.risk.toUpperCase()} ${zone.icing_type} ${zone.base_ft.toFixed(0)}-${zone.top_ft.toFixed(0)}ft${tw}${sld}</div>`
+        );
+      }
+    }
+    if (rows.length === 0) return "";
+    return `<div class="icing-zones"><h5>Icing Zones</h5>${rows.join("")}</div>`;
+  }
+  function renderEnhancedClouds(soundings) {
+    const rows = [];
+    for (const [model, sa] of Object.entries(soundings)) {
+      for (const cl of sa.cloud_layers) {
+        const t = cl.mean_temperature_c != null ? ` T=${cl.mean_temperature_c.toFixed(0)}\xB0C` : "";
+        rows.push(
+          `<div class="cloud-row">[${model}] ${cl.coverage.toUpperCase()} ${cl.base_ft.toFixed(0)}-${cl.top_ft.toFixed(0)}ft${t}</div>`
+        );
+      }
+    }
+    if (rows.length === 0) return "";
+    return `<div class="enhanced-clouds"><h5>Cloud Layers</h5>${rows.join("")}</div>`;
+  }
+  function renderBandComparisons(bands) {
+    if (!bands || bands.length === 0) return "";
+    const activeBands = bands.filter(
+      (bc) => Object.values(bc.models).some(
+        (s) => s.worst_icing_risk !== "none" || s.cloud_coverage != null
+      )
+    );
+    if (activeBands.length === 0) return "";
+    return activeBands.map((bc) => {
+      const models = Object.keys(bc.models);
+      const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join("");
+      const agreeIcons = [];
+      if (!bc.icing_agreement) agreeIcons.push('<span class="agree-poor" title="Icing disagree">&#10007; Ice</span>');
+      if (!bc.cloud_agreement) agreeIcons.push('<span class="agree-poor" title="Cloud disagree">&#10007; Cloud</span>');
+      const agreeStr = agreeIcons.length > 0 ? ` ${agreeIcons.join(" ")}` : "";
+      const icingRow = models.map((m) => {
+        const s = bc.models[m];
+        if (s.worst_icing_risk === "none") return "<td>\u2014</td>";
+        const sld = s.sld_risk ? ' <span class="sld-badge">SLD</span>' : "";
+        return `<td class="${riskClass(s.worst_icing_risk)}">${s.worst_icing_risk}/${s.worst_icing_type}${sld}</td>`;
+      }).join("");
+      const cloudRow = models.map((m) => {
+        const s = bc.models[m];
+        return s.cloud_coverage ? `<td>${s.cloud_coverage.toUpperCase()}</td>` : "<td>\u2014</td>";
+      }).join("");
+      const tempRow = models.map((m) => {
+        const s = bc.models[m];
+        if (s.temperature_min_c != null && s.temperature_max_c != null) {
+          return `<td>${s.temperature_min_c.toFixed(0)}/${s.temperature_max_c.toFixed(0)}\xB0C</td>`;
+        }
+        return "<td>\u2014</td>";
+      }).join("");
+      return `
+      <details class="band-details">
+        <summary>${bc.band.name}${agreeStr}</summary>
+        <table class="band-table">
+          <thead><tr><th></th>${headerCells}</tr></thead>
+          <tbody>
+            <tr><td class="var-name">Icing</td>${icingRow}</tr>
+            <tr><td class="var-name">Cloud</td>${cloudRow}</tr>
+            <tr><td class="var-name">Temp</td>${tempRow}</tr>
+          </tbody>
+        </table>
+      </details>
+    `;
+    }).join("");
   }
   function renderSkewTs(flight, pack, snapshot, selectedModel) {
     const el = $("skewt-section");
@@ -442,6 +592,7 @@
         renderAssessment(state.currentPack);
         renderSynopsis(state.flight, state.currentPack, state.digest);
         renderGramet(state.flight, state.currentPack);
+        renderSoundingAnalysis(state.snapshot);
         renderModelComparison(state.snapshot);
         renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel);
       }
@@ -519,6 +670,7 @@
       renderAssessment(s.currentPack);
       renderSynopsis(s.flight, s.currentPack, s.digest);
       renderGramet(s.flight, s.currentPack);
+      renderSoundingAnalysis(s.snapshot);
       renderModelComparison(s.snapshot);
       renderSkewTs(s.flight, s.currentPack, s.snapshot, s.selectedModel);
       renderLoading(s.loading);

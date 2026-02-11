@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from weatherbrief.analysis.clouds import estimate_cloud_layers
 from weatherbrief.analysis.comparison import compare_models
-from weatherbrief.analysis.icing import assess_icing_profile
+from weatherbrief.analysis.sounding import analyze_sounding
+from weatherbrief.analysis.sounding.bands import summarize_by_bands
 from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.fetch.open_meteo import OpenMeteoClient
 from weatherbrief.models import (
@@ -184,6 +184,15 @@ def analyze_waypoint(
     model_cloud: dict[str, float] = {}
     model_precip: dict[str, float] = {}
     model_freezing: dict[str, float] = {}
+    # New sounding-derived comparison values
+    model_freezing_ft: dict[str, float] = {}
+    model_cape: dict[str, float] = {}
+    model_lcl_ft: dict[str, float] = {}
+    model_k_index: dict[str, float] = {}
+    model_total_totals: dict[str, float] = {}
+    model_pw: dict[str, float] = {}
+    model_li: dict[str, float] = {}
+    model_shear: dict[str, float] = {}
 
     for wf in forecasts:
         hourly = wf.at_time(target_time)
@@ -209,13 +218,30 @@ def analyze_waypoint(
             model_winds[model_key] = cruise_wind.wind_speed_kt
             model_wind_dirs[model_key] = cruise_wind.wind_direction_deg
 
-        # Icing profile
-        icing = assess_icing_profile(hourly.pressure_levels)
-        analysis.icing_bands[model_key] = icing
+        # Sounding analysis
+        sounding = analyze_sounding(hourly.pressure_levels, hourly)
+        if sounding is not None:
+            analysis.sounding[model_key] = sounding
 
-        # Cloud layers
-        clouds = estimate_cloud_layers(hourly.pressure_levels)
-        analysis.cloud_layers[model_key] = clouds
+            # Collect sounding-derived comparison values
+            idx = sounding.indices
+            if idx is not None:
+                if idx.freezing_level_ft is not None:
+                    model_freezing_ft[model_key] = idx.freezing_level_ft
+                if idx.cape_surface_jkg is not None:
+                    model_cape[model_key] = idx.cape_surface_jkg
+                if idx.lcl_altitude_ft is not None:
+                    model_lcl_ft[model_key] = idx.lcl_altitude_ft
+                if idx.k_index is not None:
+                    model_k_index[model_key] = idx.k_index
+                if idx.total_totals is not None:
+                    model_total_totals[model_key] = idx.total_totals
+                if idx.precipitable_water_mm is not None:
+                    model_pw[model_key] = idx.precipitable_water_mm
+                if idx.lifted_index is not None:
+                    model_li[model_key] = idx.lifted_index
+                if idx.bulk_shear_0_6km_kt is not None:
+                    model_shear[model_key] = idx.bulk_shear_0_6km_kt
 
         # Collect comparison values
         if hourly.temperature_2m_c is not None:
@@ -227,6 +253,10 @@ def analyze_waypoint(
         if hourly.freezing_level_m is not None:
             model_freezing[model_key] = hourly.freezing_level_m
 
+    # Band comparisons across models
+    if analysis.sounding:
+        analysis.band_comparisons = summarize_by_bands(analysis.sounding)
+
     # Model comparison (need at least 2 models)
     comparisons = {
         "temperature_c": model_temps,
@@ -235,6 +265,15 @@ def analyze_waypoint(
         "cloud_cover_pct": model_cloud,
         "precipitation_mm": model_precip,
         "freezing_level_m": model_freezing,
+        # Sounding-derived
+        "freezing_level_ft": model_freezing_ft,
+        "cape_surface_jkg": model_cape,
+        "lcl_altitude_ft": model_lcl_ft,
+        "k_index": model_k_index,
+        "total_totals": model_total_totals,
+        "precipitable_water_mm": model_pw,
+        "lifted_index": model_li,
+        "bulk_shear_0_6km_kt": model_shear,
     }
 
     for var_name, values in comparisons.items():

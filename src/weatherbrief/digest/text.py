@@ -6,8 +6,10 @@ from datetime import datetime
 
 from weatherbrief.models import (
     AgreementLevel,
+    ConvectiveRisk,
     ForecastSnapshot,
     IcingRisk,
+    SoundingAnalysis,
     WaypointAnalysis,
     WaypointForecast,
 )
@@ -146,31 +148,92 @@ def _format_waypoint_analysis(analysis: WaypointAnalysis) -> list[str]:
             else:
                 lines.append(f"    [{model}] {abs(wc.headwind_kt):.0f}kt tailwind, {abs(wc.crosswind_kt):.0f}kt crosswind")
 
-    # Icing
-    if analysis.icing_bands:
-        has_risk = False
-        for model, bands in analysis.icing_bands.items():
-            risky = [b for b in bands if b.risk != IcingRisk.NONE]
-            if risky:
-                if not has_risk:
-                    lines.append("  Icing:")
-                    has_risk = True
-                for b in risky:
-                    alt_str = f"{b.altitude_ft:.0f}ft" if b.altitude_ft else f"{b.pressure_hpa}hPa"
-                    lines.append(f"    [{model}] {b.risk.value} at {alt_str} (T={b.temperature_c:.0f}C)")
-        if not has_risk:
-            lines.append("  Icing: None detected")
+    # Sounding-based analysis
+    if analysis.sounding:
+        lines.extend(_format_sounding_analysis(analysis.sounding))
+    else:
+        lines.append("  No sounding data available")
 
-    # Clouds
-    if analysis.cloud_layers:
-        for model, layers in analysis.cloud_layers.items():
-            if layers:
-                lines.append(f"  Clouds [{model}]:")
-                for cl in layers:
-                    top_str = f"-{cl.top_ft:.0f}ft" if cl.top_ft else " top unknown"
-                    lines.append(f"    {cl.base_ft:.0f}{top_str}")
-            else:
-                lines.append(f"  Clouds [{model}]: Clear")
+    # Band comparisons
+    if analysis.band_comparisons:
+        lines.append("  Altitude bands:")
+        for bc in analysis.band_comparisons:
+            active_models = [
+                m for m, s in bc.models.items()
+                if s.worst_icing_risk != IcingRisk.NONE or s.cloud_coverage is not None
+            ]
+            if not active_models:
+                continue
+            agree_str = ""
+            if not bc.icing_agreement:
+                agree_str += " [icing disagree]"
+            if not bc.cloud_agreement:
+                agree_str += " [cloud disagree]"
+            lines.append(f"    {bc.band.name}{agree_str}:")
+            for model_key, summary in bc.models.items():
+                parts = []
+                if summary.worst_icing_risk != IcingRisk.NONE:
+                    parts.append(f"icing={summary.worst_icing_risk.value}/{summary.worst_icing_type.value}")
+                    if summary.sld_risk:
+                        parts.append("SLD!")
+                if summary.cloud_coverage is not None:
+                    parts.append(f"cloud={summary.cloud_coverage.value}")
+                if summary.temperature_min_c is not None and summary.temperature_max_c is not None:
+                    parts.append(f"T={summary.temperature_min_c:.0f}/{summary.temperature_max_c:.0f}C")
+                if parts:
+                    lines.append(f"      [{model_key}] {', '.join(parts)}")
+
+    return lines
+
+
+def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[str]:
+    """Format sounding-based analysis for all models at a waypoint."""
+    lines = []
+
+    for model, sa in soundings.items():
+        # Thermodynamic indices summary
+        idx = sa.indices
+        if idx is not None:
+            idx_parts = []
+            if idx.freezing_level_ft is not None:
+                idx_parts.append(f"FzLvl {idx.freezing_level_ft:.0f}ft")
+            if idx.cape_surface_jkg is not None:
+                idx_parts.append(f"CAPE {idx.cape_surface_jkg:.0f}J/kg")
+            if idx.lcl_altitude_ft is not None:
+                idx_parts.append(f"LCL {idx.lcl_altitude_ft:.0f}ft")
+            if idx.k_index is not None:
+                idx_parts.append(f"KI {idx.k_index:.0f}")
+            if idx_parts:
+                lines.append(f"  Indices [{model}]: {', '.join(idx_parts)}")
+
+        # Convective assessment
+        if sa.convective and sa.convective.risk_level != ConvectiveRisk.NONE:
+            lines.append(f"  Convective [{model}]: {sa.convective.risk_level.value.upper()}")
+            for mod in sa.convective.severe_modifiers:
+                lines.append(f"    - {mod}")
+
+        # Icing zones
+        if sa.icing_zones:
+            for zone in sa.icing_zones:
+                sld_str = " SLD!" if zone.sld_risk else ""
+                lines.append(
+                    f"  Icing [{model}]: {zone.risk.value} {zone.icing_type.value} "
+                    f"{zone.base_ft:.0f}-{zone.top_ft:.0f}ft "
+                    f"(Tw={zone.mean_wet_bulb_c:.0f}C){sld_str}"
+                )
+
+        # Cloud layers
+        if sa.cloud_layers:
+            for cl in sa.cloud_layers:
+                lines.append(
+                    f"  Cloud [{model}]: {cl.coverage.value.upper()} "
+                    f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft "
+                    f"(T={cl.mean_temperature_c:.0f}C)" if cl.mean_temperature_c is not None
+                    else f"  Cloud [{model}]: {cl.coverage.value.upper()} "
+                    f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft"
+                )
+        elif not sa.icing_zones:
+            lines.append(f"  [{model}]: Clear, no icing")
 
     return lines
 
