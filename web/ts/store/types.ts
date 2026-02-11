@@ -47,8 +47,88 @@ export interface ModelDivergence {
   agreement: 'good' | 'moderate' | 'poor';
 }
 
+export type IcingRisk = 'none' | 'light' | 'moderate' | 'severe';
+export type IcingType = 'none' | 'rime' | 'mixed' | 'clear';
+export type CloudCoverage = 'sct' | 'bkn' | 'ovc';
+export type ConvectiveRisk = 'none' | 'low' | 'moderate' | 'high' | 'extreme';
+
+export interface ThermodynamicIndices {
+  lcl_altitude_ft: number | null;
+  lfc_altitude_ft: number | null;
+  el_altitude_ft: number | null;
+  cape_surface_jkg: number | null;
+  cin_surface_jkg: number | null;
+  lifted_index: number | null;
+  k_index: number | null;
+  total_totals: number | null;
+  precipitable_water_mm: number | null;
+  freezing_level_ft: number | null;
+  minus10c_level_ft: number | null;
+  minus20c_level_ft: number | null;
+  bulk_shear_0_6km_kt: number | null;
+  bulk_shear_0_1km_kt: number | null;
+}
+
+export interface EnhancedCloudLayer {
+  base_ft: number;
+  top_ft: number;
+  thickness_ft: number | null;
+  mean_temperature_c: number | null;
+  coverage: CloudCoverage;
+  mean_dewpoint_depression_c: number | null;
+}
+
+export interface IcingZone {
+  base_ft: number;
+  top_ft: number;
+  risk: IcingRisk;
+  icing_type: IcingType;
+  sld_risk: boolean;
+  mean_temperature_c: number | null;
+  mean_wet_bulb_c: number | null;
+}
+
+export interface ConvectiveAssessment {
+  risk_level: ConvectiveRisk;
+  cape_jkg: number | null;
+  cin_jkg: number | null;
+  lcl_altitude_ft: number | null;
+  lfc_altitude_ft: number | null;
+  el_altitude_ft: number | null;
+  bulk_shear_0_6km_kt: number | null;
+  lifted_index: number | null;
+  k_index: number | null;
+  total_totals: number | null;
+  severe_modifiers: string[];
+}
+
+export interface SoundingAnalysis {
+  indices: ThermodynamicIndices | null;
+  cloud_layers: EnhancedCloudLayer[];
+  icing_zones: IcingZone[];
+  convective: ConvectiveAssessment | null;
+}
+
+export interface BandModelSummary {
+  worst_icing_risk: IcingRisk;
+  worst_icing_type: IcingType;
+  sld_risk: boolean;
+  cloud_coverage: CloudCoverage | null;
+  temperature_min_c: number | null;
+  temperature_max_c: number | null;
+}
+
+export interface AltitudeBandComparison {
+  band: { name: string; floor_ft: number; ceiling_ft: number };
+  models: Record<string, BandModelSummary>;
+  icing_agreement: boolean;
+  cloud_agreement: boolean;
+}
+
 export interface WaypointAnalysis {
   waypoint: { icao: string; name: string };
+  sounding: Record<string, SoundingAnalysis>;
+  band_comparisons: AltitudeBandComparison[];
   model_divergence: ModelDivergence[];
 }
 

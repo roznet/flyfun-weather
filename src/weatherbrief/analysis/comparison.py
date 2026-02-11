@@ -14,6 +14,15 @@ DIVERGENCE_THRESHOLDS: dict[str, tuple[float, float]] = {
     "precipitation_mm": (1.0, 5.0),
     "cloud_cover_pct": (15.0, 40.0),
     "freezing_level_m": (200.0, 600.0),
+    # Sounding-derived metrics
+    "freezing_level_ft": (500.0, 1500.0),
+    "cape_surface_jkg": (200.0, 500.0),
+    "lcl_altitude_ft": (500.0, 1500.0),
+    "k_index": (5.0, 15.0),
+    "total_totals": (3.0, 8.0),
+    "precipitable_water_mm": (5.0, 15.0),
+    "lifted_index": (2.0, 5.0),
+    "bulk_shear_0_6km_kt": (5.0, 15.0),
 }
 
 # Variables that wrap around 360 degrees

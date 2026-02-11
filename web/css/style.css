@@ -326,6 +326,115 @@ label {
 .comparison-waypoint { margin-bottom: 1rem; }
 .comparison-waypoint h4 { font-size: 0.9rem; margin-bottom: 0.4rem; }
 
+/* --- Sounding analysis --- */
+
+.sounding-waypoint {
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.sounding-waypoint:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.sounding-waypoint h4 {
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.sounding-waypoint h5 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+  margin-top: 0.5rem;
+}
+
+.convective-banner {
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber);
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.altitude-markers, .icing-zones, .enhanced-clouds {
+  margin-bottom: 0.5rem;
+}
+
+.marker-row, .icing-row, .cloud-row {
+  font-size: 0.85rem;
+  padding: 0.2rem 0;
+}
+
+.risk-light { color: var(--green); }
+.risk-moderate { color: var(--amber); }
+.risk-high { color: var(--red); }
+.risk-severe { color: var(--red); font-weight: 600; }
+
+.sld-badge {
+  display: inline-block;
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+/* Band comparison expandable sections */
+
+.band-details {
+  margin-bottom: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.band-details summary {
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.band-details[open] summary {
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.band-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.band-table th, .band-table td {
+  padding: 0.3rem 0.5rem;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.band-table th {
+  background: var(--bg);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+}
+
+.band-table .var-name {
+  text-align: left;
+  font-weight: 500;
+}
+
 /* --- Skew-T gallery --- */
 
 .skewt-gallery {

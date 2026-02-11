@@ -35,6 +35,7 @@ function init(): void {
       ui.renderAssessment(state.currentPack);
       ui.renderSynopsis(state.flight, state.currentPack, state.digest);
       ui.renderGramet(state.flight, state.currentPack);
+      ui.renderSoundingAnalysis(state.snapshot);
       ui.renderModelComparison(state.snapshot);
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel);
     }
@@ -126,6 +127,7 @@ function init(): void {
     ui.renderAssessment(s.currentPack);
     ui.renderSynopsis(s.flight, s.currentPack, s.digest);
     ui.renderGramet(s.flight, s.currentPack);
+    ui.renderSoundingAnalysis(s.snapshot);
     ui.renderModelComparison(s.snapshot);
     ui.renderSkewTs(s.flight, s.currentPack, s.snapshot, s.selectedModel);
     ui.renderLoading(s.loading);
