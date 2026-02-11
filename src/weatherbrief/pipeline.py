@@ -40,6 +40,7 @@ class BriefingOptions:
     generate_llm_digest: bool = False
     digest_config_name: str | None = None
     data_dir: Path | None = None
+    output_dir: Path | None = None  # if set, write all artifacts here (pack mode)
 
 
 @dataclass
@@ -52,6 +53,7 @@ class BriefingResult:
     skewt_paths: list[Path] = field(default_factory=list)
     digest_path: Path | None = None
     digest_text: str | None = None
+    digest: object | None = None  # WeatherDigest (lazy import avoids hard dep)
     text_digest: str | None = None
     errors: list[str] = field(default_factory=list)
 
@@ -116,24 +118,33 @@ def execute_briefing(
         analyses=analyses,
     )
 
-    snapshot_path = save_snapshot(snapshot, data_dir)
+    if options.output_dir:
+        # Pack mode: write directly to flat output directory
+        options.output_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_path = options.output_dir / "snapshot.json"
+        snapshot_path.write_text(snapshot.model_dump_json(indent=2))
+    else:
+        snapshot_path = save_snapshot(snapshot, data_dir)
     logger.info("Snapshot saved: %s", snapshot_path)
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
 
     # --- Optional: GRAMET ---
     if options.fetch_gramet:
-        _run_gramet(route, target_date, target_hour, days_out, today, data_dir, result)
+        _run_gramet(route, target_date, target_hour, days_out, today, data_dir, result,
+                    output_dir=options.output_dir)
 
     # --- Optional: Skew-T ---
     if options.generate_skewt:
-        _run_skewt(snapshot, target_dt, target_date, days_out, today, data_dir, result)
+        _run_skewt(snapshot, target_dt, target_date, days_out, today, data_dir, result,
+                   output_dir=options.output_dir)
 
     # --- Optional: LLM digest ---
     if options.generate_llm_digest:
         _run_llm_digest(
             snapshot, target_dt, target_date, days_out, today,
             data_dir, options.digest_config_name, result,
+            output_dir=options.output_dir,
         )
 
     # --- Always: text digest ---
@@ -238,6 +249,8 @@ def _run_gramet(
     fetch_date: str,
     data_dir: Path,
     result: BriefingResult,
+    *,
+    output_dir: Path | None = None,
 ) -> None:
     """Fetch GRAMET cross-section if available."""
     try:
@@ -257,9 +270,12 @@ def _run_gramet(
             duration_hours=duration_hours,
         )
 
-        out_dir = data_dir / "gramet" / target_date / f"d-{days_out}_{fetch_date}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "gramet.png"
+        if output_dir:
+            out_path = output_dir / "gramet.png"
+        else:
+            out_dir = data_dir / "gramet" / target_date / f"d-{days_out}_{fetch_date}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / "gramet.png"
         out_path.write_bytes(data)
         result.gramet_path = out_path
         logger.info("GRAMET saved: %s", out_path)
@@ -280,12 +296,17 @@ def _run_skewt(
     fetch_date: str,
     data_dir: Path,
     result: BriefingResult,
+    *,
+    output_dir: Path | None = None,
 ) -> None:
     """Generate Skew-T plots for all waypoints."""
     try:
         from weatherbrief.digest.skewt import generate_all_skewts
 
-        out_dir = data_dir / "skewt" / target_date / f"d-{days_out}_{fetch_date}"
+        if output_dir:
+            out_dir = output_dir / "skewt"
+        else:
+            out_dir = data_dir / "skewt" / target_date / f"d-{days_out}_{fetch_date}"
         paths = generate_all_skewts(snapshot, target_time, out_dir)
         result.skewt_paths = [Path(p) for p in paths]
         for p in paths:
@@ -308,6 +329,8 @@ def _run_llm_digest(
     data_dir: Path,
     digest_config_name: str | None,
     result: BriefingResult,
+    *,
+    output_dir: Path | None = None,
 ) -> None:
     """Generate LLM-powered weather digest."""
     try:
@@ -323,10 +346,15 @@ def _run_llm_digest(
             result.errors.append(f"LLM digest: {digest_result['error']}")
             return
 
+        result.digest = digest_result.get("digest")
+
         # Save markdown digest
-        out_dir = data_dir / "digests" / target_date / f"d-{days_out}_{fetch_date}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "digest.md"
+        if output_dir:
+            out_path = output_dir / "digest.md"
+        else:
+            out_dir = data_dir / "digests" / target_date / f"d-{days_out}_{fetch_date}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / "digest.md"
         out_path.write_text(digest_result["digest_text"])
         result.digest_path = out_path
         result.digest_text = digest_result["digest_text"]

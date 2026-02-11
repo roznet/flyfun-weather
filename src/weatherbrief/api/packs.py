@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -119,23 +119,33 @@ def get_digest(flight_id: str, timestamp: str):
 
 
 @router.post("/refresh", response_model=PackMetaResponse, status_code=201)
-def refresh_briefing(flight_id: str):
+def refresh_briefing(flight_id: str, request: Request):
     """Trigger a new briefing fetch for a flight.
 
     Runs the pipeline, saves all artifacts as a new pack, returns metadata.
     """
     flight = _load_flight_or_404(flight_id)
 
+    db_path = request.app.state.db_path
+    if not db_path:
+        raise HTTPException(status_code=503, detail="WEATHERBRIEF_DB or AIRPORTS_DB not configured")
+
     try:
         from weatherbrief.config import load_route
         from weatherbrief.pipeline import BriefingOptions, execute_briefing
 
         # Resolve the route (requires airport database)
-        route = load_route(flight.route_name, db_path="")
+        route = load_route(flight.route_name, db_path=db_path)
+
+        # Determine pack directory up front so pipeline writes directly there
+        fetch_ts = datetime.now(tz=timezone.utc).isoformat()
+        pack_dir = pack_dir_for(flight_id, fetch_ts)
+        pack_dir.mkdir(parents=True, exist_ok=True)
 
         options = BriefingOptions(
             fetch_gramet=True,
             generate_skewt=True,
+            output_dir=pack_dir,
         )
 
         result = execute_briefing(
@@ -145,8 +155,7 @@ def refresh_briefing(flight_id: str):
             options=options,
         )
 
-        # Save pack metadata
-        fetch_ts = datetime.now(tz=timezone.utc).isoformat()
+        # Build and save pack metadata — artifacts already in pack_dir
         days_out = (date.fromisoformat(flight.target_date) - date.today()).days
 
         meta = BriefingPackMeta(
@@ -156,29 +165,9 @@ def refresh_briefing(flight_id: str):
             has_gramet=result.gramet_path is not None,
             has_skewt=len(result.skewt_paths) > 0,
             has_digest=result.digest_path is not None,
+            assessment=result.digest.assessment if result.digest else None,
+            assessment_reason=result.digest.assessment_reason if result.digest else None,
         )
-
-        # Copy artifacts to pack directory
-        pack_dir = pack_dir_for(flight_id, fetch_ts)
-        pack_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save snapshot
-        import shutil
-
-        shutil.copy2(result.snapshot_path, pack_dir / "snapshot.json")
-
-        if result.gramet_path and result.gramet_path.exists():
-            shutil.copy2(result.gramet_path, pack_dir / "gramet.png")
-
-        if result.skewt_paths:
-            skewt_dir = pack_dir / "skewt"
-            skewt_dir.mkdir(exist_ok=True)
-            for sp in result.skewt_paths:
-                if sp.exists():
-                    shutil.copy2(sp, skewt_dir / sp.name)
-
-        if result.digest_path and result.digest_path.exists():
-            shutil.copy2(result.digest_path, pack_dir / "digest.md")
 
         save_pack_meta(meta)
         logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)

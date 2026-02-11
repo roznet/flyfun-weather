@@ -92,8 +92,18 @@ function init(): void {
     });
   }
 
-  // --- Load flight data ---
-  store.getState().loadFlight(flightId);
+  // --- Load flight data, then render even if no packs exist ---
+  store.getState().loadFlight(flightId).then(() => {
+    const s = store.getState();
+    ui.renderHeader(s.flight, s.snapshot);
+    ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
+    ui.renderAssessment(s.currentPack);
+    ui.renderSynopsis(s.flight, s.currentPack, s.digestText);
+    ui.renderGramet(s.flight, s.currentPack);
+    ui.renderModelComparison(s.snapshot);
+    ui.renderSkewTs(s.flight, s.currentPack, s.snapshot, s.selectedModel);
+    ui.renderLoading(s.loading);
+  });
 }
 
 // Boot

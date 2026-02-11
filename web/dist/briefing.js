@@ -440,7 +440,17 @@
         lightboxImg.src = "";
       });
     }
-    store.getState().loadFlight(flightId);
+    store.getState().loadFlight(flightId).then(() => {
+      const s = store.getState();
+      renderHeader(s.flight, s.snapshot);
+      renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
+      renderAssessment(s.currentPack);
+      renderSynopsis(s.flight, s.currentPack, s.digestText);
+      renderGramet(s.flight, s.currentPack);
+      renderModelComparison(s.snapshot);
+      renderSkewTs(s.flight, s.currentPack, s.snapshot, s.selectedModel);
+      renderLoading(s.loading);
+    });
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

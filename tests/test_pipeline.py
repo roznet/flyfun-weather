@@ -122,6 +122,11 @@ class TestBriefingOptions:
         assert opts.generate_skewt is False
         assert opts.generate_llm_digest is False
         assert opts.data_dir is None
+        assert opts.output_dir is None
+
+    def test_output_dir(self, tmp_path):
+        opts = BriefingOptions(output_dir=tmp_path / "pack")
+        assert opts.output_dir == tmp_path / "pack"
 
 
 class TestBriefingResult:
@@ -143,4 +148,32 @@ class TestBriefingResult:
         assert result.gramet_path is None
         assert result.skewt_paths == []
         assert result.digest_path is None
+        assert result.digest is None
         assert result.errors == []
+
+    def test_digest_field_carries_object(self, tmp_path):
+        from weatherbrief.models import ForecastSnapshot, RouteConfig, Waypoint
+
+        route = RouteConfig(
+            name="test",
+            waypoints=[
+                Waypoint(icao="EGTK", name="Oxford", lat=51.8, lon=-1.3),
+                Waypoint(icao="LFPB", name="Paris", lat=48.9, lon=2.4),
+            ],
+        )
+        snapshot = ForecastSnapshot(
+            route=route, target_date="2026-02-21",
+            fetch_date="2026-02-19", days_out=2,
+        )
+        # Simulate a WeatherDigest-like object
+        class FakeDigest:
+            assessment = "GREEN"
+            assessment_reason = "Good weather"
+
+        result = BriefingResult(
+            snapshot=snapshot, snapshot_path=tmp_path / "snap.json",
+            digest=FakeDigest(),
+        )
+        assert result.digest is not None
+        assert result.digest.assessment == "GREEN"
+        assert result.digest.assessment_reason == "Good weather"

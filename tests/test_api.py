@@ -333,9 +333,18 @@ class TestRefreshEndpoint:
         resp = client.post("/api/flights/nonexistent/packs/refresh")
         assert resp.status_code == 404
 
-    def test_refresh_missing_dependency(self, client, sample_flight):
-        """When euro_aip is not installed, refresh returns 503."""
+    def test_refresh_no_db_configured(self, client, sample_flight):
+        """When WEATHERBRIEF_DB is empty, refresh returns 503."""
+        client.app.state.db_path = ""
         resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
-        # euro_aip is not available, so load_route will fail with ImportError
-        # (either from import or from the airports module)
-        assert resp.status_code in (503, 500)
+        assert resp.status_code == 503
+        assert "not configured" in resp.json()["detail"]
+
+    def test_refresh_uses_app_state_db_path(self, client, sample_flight):
+        """Verify app.state.db_path is used when set."""
+        client.app.state.db_path = "/fake/db/path"
+        resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+        # Will fail because /fake/db/path doesn't exist or load_route fails,
+        # but importantly it should NOT be a 503 "not configured"
+        assert resp.status_code != 503 or "not configured" not in resp.json().get("detail", "")
+        client.app.state.db_path = ""

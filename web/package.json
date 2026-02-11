@@ -7,8 +7,8 @@
     "build:flights": "npx esbuild ts/flights-main.ts --bundle --outfile=dist/flights.js --sourcemap --target=es2020",
     "build:briefing": "npx esbuild ts/briefing-main.ts --bundle --outfile=dist/briefing.js --sourcemap --target=es2020",
     "dev": "npm run dev:flights & npm run dev:briefing",
-    "dev:flights": "npx esbuild ts/flights-main.ts --bundle --outfile=dist/flights.js --sourcemap --target=es2020 --watch",
-    "dev:briefing": "npx esbuild ts/briefing-main.ts --bundle --outfile=dist/briefing.js --sourcemap --target=es2020 --watch"
+    "dev:flights": "npx esbuild ts/flights-main.ts --bundle --outfile=dist/flights.js --sourcemap --target=es2020 --watch=forever",
+    "dev:briefing": "npx esbuild ts/briefing-main.ts --bundle --outfile=dist/briefing.js --sourcemap --target=es2020 --watch=forever"
   },
   "dependencies": {
     "zustand": "^5.0.11"

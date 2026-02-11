@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -15,11 +17,15 @@ from weatherbrief.api.routes import router as routes_router
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    load_dotenv()
+
     app = FastAPI(
         title="WeatherBrief API",
         description="Aviation weather briefing API",
         version="0.1.0",
     )
+
+    app.state.db_path = os.environ.get("WEATHERBRIEF_DB") or os.environ.get("AIRPORTS_DB", "")
 
     app.add_middleware(
         CORSMiddleware,
