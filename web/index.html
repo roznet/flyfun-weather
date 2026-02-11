@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeatherBrief — Flights</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <h1>My Flights</h1>
+    </div>
+
+    <div id="error-message"></div>
+
+    <!-- Create flight form -->
+    <div class="create-panel">
+      <h3>New Flight</h3>
+      <form id="create-flight-form">
+        <div class="form-row">
+          <div class="form-group grow">
+            <label for="route-select">Route</label>
+            <select id="route-select" required>
+              <option value="">Loading routes...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="input-date">Date</label>
+            <input type="date" id="input-date" required>
+          </div>
+          <div class="form-group">
+            <label for="input-time">Time (UTC)</label>
+            <input type="number" id="input-time" value="9" min="0" max="23" step="1" style="width:60px">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="input-altitude">Altitude (ft)</label>
+            <input type="number" id="input-altitude" value="8000" min="1000" max="45000" step="500" style="width:100px">
+          </div>
+          <div class="form-group">
+            <label for="input-duration">Duration (hrs)</label>
+            <input type="number" id="input-duration" value="0" min="0" max="24" step="0.5" style="width:80px">
+          </div>
+          <div class="form-group">
+            <label>&nbsp;</label>
+            <button type="submit" class="btn btn-primary">Create Flight</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <div id="loading-spinner">Loading flights...</div>
+
+    <!-- Flight list -->
+    <div id="flight-list"></div>
+  </div>
+
+  <script src="/dist/flights.js"></script>
+</body>
+</html>

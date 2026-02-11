@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeatherBrief — Briefing</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Toolbar: back, route info, refresh, history -->
+    <div class="briefing-toolbar">
+      <button id="back-btn" class="btn btn-secondary">&larr; Flights</button>
+      <div id="briefing-header"></div>
+      <button id="refresh-btn" class="btn btn-primary">Refresh</button>
+      <select id="history-select">
+        <option>Loading...</option>
+      </select>
+    </div>
+
+    <div id="error-message"></div>
+
+    <!-- Assessment banner -->
+    <div id="assessment-banner" class="assessment-banner assessment-none">
+      Loading...
+    </div>
+
+    <!-- Synopsis -->
+    <div class="section">
+      <h3>Synopsis</h3>
+      <div id="synopsis-section">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <!-- GRAMET -->
+    <div class="section">
+      <h3>GRAMET Cross-Section</h3>
+      <div id="gramet-section">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <!-- Model Comparison -->
+    <div class="section">
+      <h3>Model Comparison</h3>
+      <div id="comparison-section">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <!-- Skew-T -->
+    <div class="section">
+      <h3>Skew-T Soundings</h3>
+      <div class="model-toggle">
+        <label for="model-select">Model:</label>
+        <select id="model-select">
+          <option value="gfs">GFS</option>
+          <option value="ecmwf">ECMWF</option>
+          <option value="icon">ICON</option>
+        </select>
+      </div>
+      <div id="skewt-section">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div id="loading-overlay">Loading briefing...</div>
+  </div>
+
+  <script src="/dist/briefing.js"></script>
+</body>
+</html>
