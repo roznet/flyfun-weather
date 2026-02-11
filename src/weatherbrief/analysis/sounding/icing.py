@@ -80,26 +80,11 @@ def _detect_sld(
 ) -> bool:
     """Detect supercooled large droplet (SLD) risk.
 
-    Conditions: thick cloud (>3000ft) with relatively warm tops (>-12C),
-    or a warm nose above an icing layer.
+    Currently disabled — the heuristics (thick-cloud and warm-nose) are too
+    sensitive without precipitation-type or droplet-size data, producing
+    excessive false positives.  Returns False unconditionally; the logic is
+    kept for reference so it can be re-enabled with better input data.
     """
-    for cl in clouds:
-        if cl.thickness_ft is not None and cl.thickness_ft > SLD_THICK_CLOUD_FT:
-            if cl.mean_temperature_c is not None and cl.mean_temperature_c > SLD_WARM_TOP_C:
-                return True
-
-    # Check for warm nose: temperature inversion above freezing zone
-    for i in range(1, len(levels) - 1):
-        lv = levels[i]
-        if lv.temperature_c is None or lv.wet_bulb_c is None:
-            continue
-        prev = levels[i - 1]
-        if prev.temperature_c is None:
-            continue
-        # Warm nose: temperature increases with altitude in icing zone
-        if lv.temperature_c > prev.temperature_c and -20 < lv.temperature_c < 0:
-            return True
-
     return False
 
 
