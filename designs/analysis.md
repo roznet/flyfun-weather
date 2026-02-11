@@ -79,7 +79,7 @@ div.spread     # → 1.0
 
 ## Pipeline Integration
 
-In `cli._analyze_waypoint()`, for each waypoint:
+In `pipeline._analyze_waypoint()`, for each waypoint:
 1. Find closest pressure level to cruise altitude for wind analysis
 2. Run all four analyses per model
 3. Collect per-model values, then compute cross-model divergence
@@ -88,7 +88,7 @@ Results stored in `WaypointAnalysis` keyed by model name string.
 
 ## Gotchas
 
-- Analysis requires at least one model with data at the target time — `_analyze_waypoint` raises `ValueError` if no forecasts
+- Analysis requires at least one model with data at the target time — `pipeline._analyze_waypoint` raises `ValueError` if no forecasts
 - Missing pressure level data silently skipped (None checks throughout)
 - Comparison needs ≥ 2 models — single-model fetch produces no `ModelDivergence`
 

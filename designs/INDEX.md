@@ -7,13 +7,13 @@ Install: `pip install -e ".[dev]"` (local development)
 ## Modules
 
 ### architecture
-System overview: data pipeline, CLI, storage layout, phase roadmap.
-Key exports: `cli.main`, `cli.run_fetch`
+System overview: pipeline, API, web app, storage layout, dependencies, phase roadmap.
+Key exports: `execute_briefing`, `create_app`
 → Full doc: architecture.md
 
 ### data-models
-Pydantic v2 models for routes, forecasts, analysis results, and snapshots.
-Key exports: `ForecastSnapshot`, `RouteConfig`, `WaypointForecast`, `WaypointAnalysis`
+Pydantic v2 models for routes, forecasts, analysis, snapshots, flights, and briefing packs.
+Key exports: `ForecastSnapshot`, `RouteConfig`, `WaypointForecast`, `Flight`, `BriefingPackMeta`
 → Full doc: data-models.md
 
 ### fetch
@@ -34,3 +34,7 @@ Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDiges
 ### flight-weather-tracker-spec
 Original requirements specification with phase roadmap, data source descriptions, algorithm details, and output format definitions.
 → Full doc: flight-weather-tracker-spec.md
+
+### plan-briefing-architecture
+Detailed implementation plan for the API-first architecture, web UI, PDF reports, and email delivery (Steps 1-10).
+→ Full doc: plan-briefing-architecture.md

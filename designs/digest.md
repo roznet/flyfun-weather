@@ -125,7 +125,7 @@ Structured output with 11 fields:
 
 ## References
 
-- Pipeline orchestration: `cli.py` `_run_llm_digest()`
+- Pipeline orchestration: `pipeline.py` `execute_briefing()`
 - Config files: `configs/weather_digest/`
 - Data models: [data-models.md](./data-models.md)
 - Fetch sources: [fetch.md](./fetch.md)
