@@ -43,6 +43,8 @@ class ModelEndpoint:
     name: str
     base_url: str
     max_days: int
+    # If set, passed as ?models= query param (for generic /v1/forecast endpoint)
+    model_param: str | None = None
     unavailable_surface: list[str] = field(default_factory=list)
     unavailable_pressure: list[str] = field(default_factory=list)
 
@@ -61,7 +63,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
                              "precipitation_probability", "cloud_cover_low",
                              "cloud_cover_mid", "cloud_cover_high",
                              "freezing_level_height", "cape", "visibility"],
-        unavailable_pressure=["relative_humidity", "dewpoint"],
+        unavailable_pressure=["dewpoint"],
     ),
     "gfs": ModelEndpoint(
         name="GFS",
@@ -73,6 +75,15 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/dwd-icon",
         max_days=7,
         unavailable_surface=["precipitation_probability"],
+    ),
+    "ukmo": ModelEndpoint(
+        name="UK Met Office",
+        base_url="https://api.open-meteo.com/v1/forecast",
+        max_days=7,
+        model_param="ukmo_seamless",
+        unavailable_surface=["dewpoint_2m", "precipitation_probability",
+                             "freezing_level_height", "cape", "visibility"],
+        unavailable_pressure=["dewpoint"],
     ),
     "meteofrance": ModelEndpoint(
         name="Météo-France",

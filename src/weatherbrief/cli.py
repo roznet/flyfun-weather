@@ -9,6 +9,8 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from weatherbrief.analysis.clouds import estimate_cloud_layers
 from weatherbrief.analysis.comparison import compare_models
 from weatherbrief.analysis.icing import assess_icing_profile
@@ -24,11 +26,11 @@ from weatherbrief.models import (
     WaypointAnalysis,
     WaypointForecast,
 )
-from weatherbrief.storage.snapshots import save_snapshot
+from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_snapshot
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODELS = [ModelSource.GFS, ModelSource.ECMWF]
+DEFAULT_MODELS = [ModelSource.GFS, ModelSource.ECMWF, ModelSource.ICON]
 
 
 def _resolve_db_path(args_db: str | None) -> str:
@@ -79,6 +81,8 @@ def run_fetch(
     models: list[ModelSource] | None = None,
     fetch_gramet: bool = False,
     generate_skewt: bool = False,
+    generate_llm_digest: bool = False,
+    digest_config_name: str | None = None,
 ) -> None:
     """Full pipeline: fetch -> analyze -> snapshot -> digest."""
     models = models or DEFAULT_MODELS
@@ -100,7 +104,7 @@ def run_fetch(
     all_forecasts: list[WaypointForecast] = []
 
     for waypoint in route.waypoints:
-        forecasts = client.fetch_all_models(waypoint, models)
+        forecasts = client.fetch_all_models(waypoint, models, days_out=days_out)
         all_forecasts.extend(forecasts)
         print(f"  Fetched {len(forecasts)} models for {waypoint.icao}")
 
@@ -137,7 +141,14 @@ def run_fetch(
     if generate_skewt:
         _run_skewt(snapshot, target_dt, target_date, days_out, today, output_paths)
 
-    # Print digest
+    # Optional: LLM digest
+    if generate_llm_digest:
+        _run_llm_digest(
+            snapshot, target_dt, target_date, days_out, today, output_paths,
+            digest_config_name,
+        )
+
+    # Print text digest
     print()
     digest = format_digest(snapshot, target_dt, output_paths=output_paths)
     print(digest)
@@ -205,6 +216,45 @@ def _run_skewt(
         logger.warning("Skew-T generation requires metpy, numpy, matplotlib")
     except Exception:
         logger.warning("Skew-T generation failed", exc_info=True)
+
+
+def _run_llm_digest(
+    snapshot: ForecastSnapshot,
+    target_time: datetime,
+    target_date: str,
+    days_out: int,
+    fetch_date: str,
+    output_paths: list[str],
+    digest_config_name: str | None,
+) -> None:
+    """Generate LLM-powered weather digest."""
+    try:
+        from weatherbrief.digest.llm_config import load_digest_config
+        from weatherbrief.digest.llm_digest import run_digest
+
+        config = load_digest_config(digest_config_name)
+        print(f"\n  LLM digest: {config.llm.provider}/{config.llm.model}")
+
+        result = run_digest(snapshot, target_time, config)
+
+        if result.get("error"):
+            print(f"  LLM digest failed: {result['error']}")
+            return
+
+        # Save markdown digest
+        out_dir = DEFAULT_DATA_DIR / "digests" / target_date / f"d-{days_out}_{fetch_date}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "digest.md"
+        out_path.write_text(result["digest_text"])
+        print(f"  LLM digest saved: {out_path}")
+        output_paths.append(str(out_path))
+
+        # Print the digest
+        print()
+        print(result["digest_text"])
+
+    except Exception:
+        logger.warning("LLM digest generation failed", exc_info=True)
 
 
 def _analyze_waypoint(
@@ -288,6 +338,8 @@ def _analyze_waypoint(
 
 def main() -> None:
     """CLI entry point."""
+    load_dotenv()
+
     parser = argparse.ArgumentParser(
         prog="weatherbrief",
         description="Medium-range weather assessment for GA flights",
@@ -332,9 +384,17 @@ def main() -> None:
         "--skewt", action="store_true", help="Also generate Skew-T plots"
     )
     fetch_parser.add_argument(
+        "--llm-digest", action="store_true",
+        help="Generate LLM-powered weather digest",
+    )
+    fetch_parser.add_argument(
+        "--digest-config", default=None,
+        help="Digest config name (default: env WEATHERBRIEF_DIGEST_CONFIG or 'default')",
+    )
+    fetch_parser.add_argument(
         "--models",
-        default="gfs,ecmwf",
-        help="Comma-separated model list (default: gfs,ecmwf)",
+        default="gfs,ecmwf,icon",
+        help="Comma-separated model list (default: gfs,ecmwf,icon)",
     )
 
     # routes subcommand
@@ -364,4 +424,6 @@ def main() -> None:
             models=models,
             fetch_gramet=args.gramet,
             generate_skewt=args.skewt,
+            generate_llm_digest=args.llm_digest,
+            digest_config_name=args.digest_config,
         )

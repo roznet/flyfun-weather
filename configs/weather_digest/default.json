@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "name": "default",
+  "llm": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5-20250929",
+    "temperature": 0.0
+  },
+  "prompts": {
+    "briefer": "prompts/briefer_v1.md"
+  }
+}

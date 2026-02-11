@@ -64,6 +64,8 @@ class OpenMeteoClient:
             "forecast_days": min(endpoint.max_days, 16),
             "timezone": "UTC",
         }
+        if endpoint.model_param:
+            params["models"] = endpoint.model_param
 
         logger.info("Fetching %s for %s (%s)", endpoint.name, waypoint.icao, waypoint.name)
 
@@ -87,11 +89,25 @@ class OpenMeteoClient:
         )
 
     def fetch_all_models(
-        self, waypoint: Waypoint, models: list[ModelSource]
+        self,
+        waypoint: Waypoint,
+        models: list[ModelSource],
+        days_out: int | None = None,
     ) -> list[WaypointForecast]:
-        """Fetch forecasts from multiple models, continuing on individual failures."""
+        """Fetch forecasts from multiple models, continuing on individual failures.
+
+        If days_out is provided, models whose max forecast range is shorter
+        than days_out are skipped.
+        """
         results = []
         for model in models:
+            endpoint = MODEL_ENDPOINTS[model.value]
+            if days_out is not None and days_out >= endpoint.max_days:
+                logger.info(
+                    "Skipping %s for %s: %d days out exceeds %d-day range",
+                    model.value, waypoint.icao, days_out, endpoint.max_days,
+                )
+                continue
             try:
                 result = self.fetch_forecast(waypoint, model)
                 results.append(result)

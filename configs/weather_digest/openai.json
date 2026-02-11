@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "name": "openai",
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "temperature": 0.0
+  },
+  "prompts": {
+    "briefer": "prompts/briefer_v1.md"
+  }
+}

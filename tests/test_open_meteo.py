@@ -118,3 +118,66 @@ def test_fetch_all_models_continues_on_failure():
 
     assert len(results) == 1
     assert results[0].model == ModelSource.GFS
+
+
+@responses.activate
+def test_fetch_all_models_skips_out_of_range():
+    """fetch_all_models skips models whose range is shorter than days_out."""
+    api_response = {
+        "hourly": {
+            "time": ["2026-02-21T09:00"],
+            "temperature_2m": [5.0],
+        }
+    }
+
+    # GFS succeeds (max_days=16)
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=api_response,
+        status=200,
+    )
+    # ICON should be skipped (max_days=7, days_out=10)
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/dwd-icon",
+        json=api_response,
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.836, lon=-1.32)
+    results = client.fetch_all_models(
+        wp, [ModelSource.GFS, ModelSource.ICON], days_out=10
+    )
+
+    # Only GFS should be fetched (ICON skipped due to 7-day range < 10 days out)
+    assert len(results) == 1
+    assert results[0].model == ModelSource.GFS
+    # Only one HTTP call should have been made (GFS), not two
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_fetch_forecast_passes_model_param():
+    """Client passes models query param for endpoints that need it (e.g. UKMO)."""
+    api_response = {
+        "hourly": {
+            "time": ["2026-02-21T09:00"],
+            "temperature_2m": [5.0],
+        }
+    }
+
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/forecast",
+        json=api_response,
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.836, lon=-1.32)
+    client.fetch_forecast(wp, ModelSource.UKMO)
+
+    req = responses.calls[0].request
+    assert "models=ukmo_seamless" in req.url

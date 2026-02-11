@@ -115,6 +115,7 @@ class ModelSource(str, Enum):
     GFS = "gfs"
     ECMWF = "ecmwf"
     ICON = "icon"
+    UKMO = "ukmo"
     METEOFRANCE = "meteofrance"
 
 
