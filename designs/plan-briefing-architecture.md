@@ -265,51 +265,109 @@ This is the critical refactor: **one pipeline, multiple frontends**.
 
 ### Technology choice
 
+Following the same lightweight pattern used in [flyfun-apps](https://github.com/roznet/flyfun-apps/blob/main/designs/WEB_APP_ARCHITECTURE.md): vanilla TypeScript + Zustand store, no React or heavy framework.
+
 | Option | Pros | Cons |
 |--------|------|------|
-| **React SPA + FastAPI backend** | Rich interactivity, large ecosystem, familiar | Build toolchain, separate deploy |
-| **FastAPI + HTMX + Jinja** | Minimal JS, fast to build, single deploy | Less interactive, harder for complex state |
-| **Next.js** | SSR, great DX, API routes built in | Node.js dependency, separate from Python |
+| **React SPA** | Large ecosystem, component model | Heavy toolchain, npm bloat, overkill for this UI |
+| **HTMX + Jinja** | Minimal JS, server-rendered | Client-side state (model toggle) awkward, no offline |
+| **Vanilla TS + Zustand** | Lightweight, proven pattern in flyfun-apps, no framework overhead, single TS compile step | Manual DOM wiring (fine for section-based UI) |
 
-**Recommendation: React SPA (Vite) + FastAPI backend.**
+**Recommendation: Vanilla TypeScript + Zustand**, matching flyfun-apps architecture.
 
-Rationale: The briefing page has real interactivity needs (model toggle for Skew-T, history dropdown, tabbed sections). React handles this well. Vite keeps the dev experience fast. The API-first design means the frontend is fully decoupled — an iOS app or CLI email sender hits the same API.
+Rationale: The briefing page is mostly sections of content (text, images, a table) with a few interactive controls (refresh, history dropdown, model toggle). This doesn't warrant a virtual DOM or component framework. Direct DOM manipulation via a UIManager is clean and sufficient. Zustand handles the small amount of shared state (current pack, selected model). The pattern is already proven and familiar from flyfun-apps.
+
+### Architecture principles (same as flyfun-apps)
+
+1. **Single Source of Truth** — all state in Zustand store, no component-level duplication.
+2. **Unidirectional Data Flow** — user action → store action → state change → subscriptions → DOM update.
+3. **Separation of Concerns** — Store (state), UIManager (DOM), APIAdapter (backend), no cross-cutting.
 
 ### Package structure
 
 ```
 src/
-├── weatherbrief/          # existing Python package
-│   ├── api/               # NEW: FastAPI app
+├── weatherbrief/              # existing Python package
+│   ├── api/                   # NEW: FastAPI app
 │   │   ├── __init__.py
-│   │   ├── app.py         # FastAPI app factory, CORS, static mount
-│   │   ├── routes.py      # /api/routes endpoints
-│   │   ├── flights.py     # /api/flights endpoints
-│   │   └── packs.py       # /api/flights/{id}/packs endpoints
-│   ├── pipeline.py        # NEW: core briefing pipeline (extracted from cli.py)
+│   │   ├── app.py             # FastAPI app factory, CORS, static/template mount
+│   │   ├── routes.py          # /api/routes endpoints
+│   │   ├── flights.py         # /api/flights endpoints
+│   │   └── packs.py           # /api/flights/{id}/packs endpoints
+│   ├── pipeline.py            # NEW: core briefing pipeline (extracted from cli.py)
 │   └── ...existing modules...
-└── web/                   # NEW: React frontend
-    ├── package.json
-    ├── vite.config.ts
-    └── src/
-        ├── App.tsx
-        ├── api/            # API client hooks
-        ├── pages/
-        │   ├── FlightsPage.tsx    # flight list + create
-        │   └── BriefingPage.tsx   # the main briefing report
-        └── components/
-            ├── Synopsis.tsx
-            ├── GrametViewer.tsx
-            ├── ModelComparison.tsx
-            ├── SkewTRoute.tsx
-            └── HistoryDropdown.tsx
+└── web/
+    ├── index.html             # Flights page (served by FastAPI)
+    ├── briefing.html          # Briefing report page
+    ├── css/
+    │   └── style.css          # Minimal custom CSS
+    └── ts/
+        ├── main.ts            # App bootstrap, subscriptions, event wiring
+        ├── store/
+        │   ├── store.ts       # Zustand store (flight, pack, model selection, loading)
+        │   └── types.ts       # TypeScript type definitions
+        ├── managers/
+        │   └── ui-manager.ts  # DOM updates: assessment, synopsis, table, skewt gallery
+        └── adapters/
+            └── api-adapter.ts # FastAPI backend communication
+```
+
+### Store shape
+
+```typescript
+interface BriefingState {
+  // Current context
+  flight: Flight | null;
+  packs: PackMeta[];           // history list
+  currentPack: PackDetail | null;
+
+  // UI state
+  selectedModel: string;       // for Skew-T toggle (e.g. "gfs", "ecmwf")
+  loading: boolean;
+  error: string | null;
+
+  // Actions
+  loadFlight: (id: string) => Promise<void>;
+  loadPacks: (flightId: string) => Promise<void>;
+  selectPack: (timestamp: string) => Promise<void>;
+  refresh: () => Promise<void>;
+  setSelectedModel: (model: string) => void;
+}
+```
+
+### Communication patterns
+
+| Pattern | Usage |
+|---------|-------|
+| **Store subscriptions** (primary) | Pack loaded → UIManager updates all sections |
+| **Custom events** | `refresh-complete`, `pack-selected` for cross-concern actions |
+| **Direct API calls** | APIAdapter methods called from store actions |
+
+```typescript
+// main.ts — wire subscriptions
+store.subscribe((state, prev) => {
+  if (state.currentPack !== prev.currentPack) {
+    uiManager.renderAssessment(state.currentPack);
+    uiManager.renderSynopsis(state.currentPack);
+    uiManager.renderGramet(state.currentPack);
+    uiManager.renderModelComparison(state.currentPack);
+    uiManager.renderSkewTs(state.currentPack, state.selectedModel);
+  }
+  if (state.selectedModel !== prev.selectedModel) {
+    uiManager.renderSkewTs(state.currentPack, state.selectedModel);
+  }
+  if (state.packs !== prev.packs) {
+    uiManager.renderHistoryDropdown(state.packs);
+  }
+});
 ```
 
 ### Development mode
 
-- `npm run dev` (Vite) proxies `/api/*` to FastAPI backend.
-- `uvicorn weatherbrief.api.app:app --reload` runs the API.
-- In production: FastAPI serves the built React assets as static files, or reverse proxy via nginx.
+- `esbuild ts/main.ts --bundle --outfile=web/dist/bundle.js --watch` compiles TS.
+- `uvicorn weatherbrief.api.app:app --reload` runs the API and serves `web/` as static files.
+- No separate frontend dev server needed — FastAPI serves everything.
+- In production: same setup, just without `--watch` and `--reload`.
 
 ---
 
@@ -381,8 +439,8 @@ The briefing page is the core user experience. It displays the complete weather 
 #### Header Bar
 - Route summary (origin → waypoints → destination).
 - Target date/time and altitude.
-- **Refresh button**: triggers `POST /api/flights/{id}/refresh`. Shows loading spinner during fetch. On completion, reloads the page with the new pack.
-- **History dropdown**: populated from `GET /api/flights/{id}/packs`. Shows `D-{N} (fetch_date fetch_time)` plus assessment color dot. Selecting an entry loads that historical pack.
+- **Refresh button**: calls `store.refresh()` → `APIAdapter.refreshFlight()` → POST to API. UIManager shows loading spinner via store subscription. On completion, store updates trigger full re-render.
+- **History dropdown**: UIManager renders from `store.packs`. On selection, calls `store.selectPack(timestamp)` → APIAdapter loads pack → store update → UIManager re-renders all sections.
 
 #### Assessment Banner
 - Full-width colored banner: green/amber/red background.
@@ -584,33 +642,36 @@ Simple list/create page for managing flights:
 
 ### Step 4: Web app scaffold + Flights page
 
-- Scaffold React app with Vite + TypeScript in `web/`.
-- Set up API client with typed hooks.
-- Build Flights page: list flights, create flight dialog.
-- Proxy config for development.
+- Set up `web/` directory: `index.html`, `briefing.html`, `css/`, `ts/`.
+- Configure esbuild for TypeScript compilation.
+- Implement Zustand store (`store.ts`, `types.ts`).
+- Implement APIAdapter (`api-adapter.ts`).
+- Build Flights page: `index.html` with flight list, create flight form.
+- Configure FastAPI to serve `web/` as static files.
 
 ### Step 5: Briefing page — core layout
 
-- Build `BriefingPage` with header bar, history dropdown, refresh button.
-- Assessment banner component.
-- Synopsis section (renders digest fields).
+- Implement UIManager (`ui-manager.ts`) with section render methods.
+- Wire store subscriptions in `main.ts`.
+- Build `briefing.html` with header bar, history dropdown, refresh button.
+- Assessment banner rendering.
+- Synopsis section rendering (digest fields).
 
 ### Step 6: Briefing page — GRAMET + Model Comparison
 
-- GRAMET viewer component (image display, zoom, fallback).
-- Model comparison table from divergence data.
+- UIManager: `renderGramet()` (image display, fallback placeholder).
+- UIManager: `renderModelComparison()` (table from divergence data).
 - Narrative sections (model agreement, trend, watch items).
 
 ### Step 7: Briefing page — Skew-T route view
 
-- Skew-T gallery component: horizontal layout, route order.
-- Model toggle dropdown (shared state across all waypoints).
-- Thumbnail → full-size expand.
+- UIManager: `renderSkewTs()` — horizontal layout, route order, model-aware.
+- Model toggle dropdown wired to `store.setSelectedModel()`.
+- Click-to-enlarge for thumbnails.
 
 ### Step 8: Polish & integration
 
-- Error states, loading states, empty states throughout.
-- Production build: FastAPI serves React static build.
+- Error states, loading states, empty states throughout (store-driven).
 - Verify full flow: create flight → refresh → view briefing → switch history → toggle models.
 
 ### Step 9: PDF report generation
@@ -676,10 +737,9 @@ Currently routes live in `routes.yaml`. Options:
 Frontend (in `web/package.json`):
 | Package | Purpose |
 |---------|---------|
-| `react`, `react-dom` | UI framework |
 | `typescript` | Type safety |
-| `vite` | Build tool |
-| `@tanstack/react-query` | API state management |
+| `zustand` | Lightweight state management (~1KB) |
+| `esbuild` | Fast TS bundler (single compile step) |
 
 ---
 
