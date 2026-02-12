@@ -6,14 +6,11 @@
 
 import type {
   AltitudeAdvisories,
-  ConvectiveRisk,
   FlightResponse,
   ForecastSnapshot,
-  IcingRisk,
   PackMeta,
   SoundingAnalysis,
-  VerticalRegime,
-  WaypointAnalysis,
+  ThermodynamicIndices,
   WeatherDigest,
 } from '../store/types';
 import * as api from '../adapters/api-adapter';
@@ -296,6 +293,10 @@ function riskClass(risk: string): string {
   return RISK_COLORS[risk] || '';
 }
 
+function roundAlt(ft: number): number {
+  return Math.round(ft / 500) * 500;
+}
+
 export function renderSoundingAnalysis(snapshot: ForecastSnapshot | null): void {
   const el = $('sounding-section');
   if (!el) return;
@@ -330,81 +331,234 @@ export function renderSoundingAnalysis(snapshot: ForecastSnapshot | null): void 
 }
 
 function renderConvectiveBanner(soundings: Record<string, SoundingAnalysis>): string {
-  const risks: string[] = [];
-  for (const [model, sa] of Object.entries(soundings)) {
-    if (sa.convective && sa.convective.risk_level !== 'none') {
-      const mods = sa.convective.severe_modifiers.length > 0
-        ? ` (${sa.convective.severe_modifiers.join('; ')})`
-        : '';
-      risks.push(`<span class="${riskClass(sa.convective.risk_level)}">[${model}] ${sa.convective.risk_level.toUpperCase()}${mods}</span>`);
-    }
-  }
-  if (risks.length === 0) return '';
-  return `<div class="convective-banner">Convective: ${risks.join(' ')}</div>`;
+  const models = Object.keys(soundings);
+  const hasConvective = models.some(
+    (m) => soundings[m].convective && soundings[m].convective!.risk_level !== 'none',
+  );
+  if (!hasConvective) return '';
+
+  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+
+  const rowSpecs: Array<{ label: string; render: (m: string) => string }> = [
+    {
+      label: 'Risk',
+      render: (m) => {
+        const c = soundings[m].convective;
+        if (!c || c.risk_level === 'none') return '<td>\u2014</td>';
+        return `<td class="${riskClass(c.risk_level)}">${c.risk_level.toUpperCase()}</td>`;
+      },
+    },
+    {
+      label: 'CAPE (J/kg)',
+      render: (m) => {
+        const v = soundings[m].convective?.cape_jkg;
+        return `<td>${v != null ? v.toFixed(0) : '\u2014'}</td>`;
+      },
+    },
+    {
+      label: 'Lifted Index',
+      render: (m) => {
+        const v = soundings[m].convective?.lifted_index;
+        return `<td>${v != null ? v.toFixed(1) : '\u2014'}</td>`;
+      },
+    },
+    {
+      label: 'K-index',
+      render: (m) => {
+        const v = soundings[m].convective?.k_index;
+        return `<td>${v != null ? v.toFixed(0) : '\u2014'}</td>`;
+      },
+    },
+    {
+      label: 'Modifiers',
+      render: (m) => {
+        const mods = soundings[m].convective?.severe_modifiers;
+        if (!mods || mods.length === 0) return '<td>\u2014</td>';
+        return `<td>${escapeHtml(mods.join(', '))}</td>`;
+      },
+    },
+  ];
+
+  const rows = rowSpecs.map(({ label, render }) => {
+    const cells = models.map(render).join('');
+    return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
+  }).join('');
+
+  return `
+    <div class="convective-section">
+      <h5>Convective</h5>
+      <table class="band-table">
+        <thead><tr><th></th>${headerCells}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderAltitudeMarkers(soundings: Record<string, SoundingAnalysis>): string {
-  const rows: string[] = [];
-  for (const [model, sa] of Object.entries(soundings)) {
-    if (!sa.indices) continue;
-    const idx = sa.indices;
-    const parts: string[] = [];
-    if (idx.freezing_level_ft != null) parts.push(`0\u00B0C: ${idx.freezing_level_ft.toFixed(0)}ft`);
-    if (idx.minus10c_level_ft != null) parts.push(`-10\u00B0C: ${idx.minus10c_level_ft.toFixed(0)}ft`);
-    if (idx.minus20c_level_ft != null) parts.push(`-20\u00B0C: ${idx.minus20c_level_ft.toFixed(0)}ft`);
-    if (idx.lcl_altitude_ft != null) parts.push(`LCL: ${idx.lcl_altitude_ft.toFixed(0)}ft`);
-    if (parts.length > 0) {
-      rows.push(`<div class="marker-row"><strong>${model}</strong>: ${parts.join(' | ')}</div>`);
-    }
-  }
-  if (rows.length === 0) return '';
-  return `<div class="altitude-markers"><h5>Key Altitudes</h5>${rows.join('')}</div>`;
+  const models = Object.keys(soundings);
+  const hasIndices = models.some((m) => soundings[m].indices != null);
+  if (!hasIndices) return '';
+
+  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+
+  const rowSpecs: Array<{ key: keyof ThermodynamicIndices; label: string }> = [
+    { key: 'freezing_level_ft', label: '0\u00B0C' },
+    { key: 'minus10c_level_ft', label: '-10\u00B0C' },
+    { key: 'minus20c_level_ft', label: '-20\u00B0C' },
+    { key: 'lcl_altitude_ft', label: 'LCL' },
+  ];
+
+  const rows = rowSpecs.map(({ key, label }) => {
+    const cells = models.map((m) => {
+      const v = soundings[m].indices?.[key] as number | null;
+      return `<td>${v != null ? v.toFixed(0) + 'ft' : '\u2014'}</td>`;
+    }).join('');
+    return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
+  }).join('');
+
+  return `
+    <div class="altitude-markers">
+      <h5>Key Altitudes</h5>
+      <table class="band-table">
+        <thead><tr><th></th>${headerCells}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderIcingZones(soundings: Record<string, SoundingAnalysis>): string {
-  const rows: string[] = [];
-  for (const [model, sa] of Object.entries(soundings)) {
-    for (const zone of sa.icing_zones) {
-      const sld = zone.sld_risk ? ' <span class="sld-badge">SLD</span>' : '';
-      const tw = zone.mean_wet_bulb_c != null ? ` Tw=${zone.mean_wet_bulb_c.toFixed(0)}\u00B0C` : '';
-      rows.push(
-        `<div class="icing-row ${riskClass(zone.risk)}">` +
-        `[${model}] ${zone.risk.toUpperCase()} ${zone.icing_type} ` +
-        `${zone.base_ft.toFixed(0)}-${zone.top_ft.toFixed(0)}ft${tw}${sld}</div>`,
-      );
+  const models = Object.keys(soundings);
+  const hasIcing = models.some((m) => soundings[m].icing_zones.length > 0);
+  if (!hasIcing) return '';
+
+  // Collect all boundary altitudes across models, rounded to 500ft
+  const allAlts = new Set<number>();
+  for (const m of models) {
+    for (const z of soundings[m].icing_zones) {
+      allAlts.add(roundAlt(z.base_ft));
+      allAlts.add(roundAlt(z.top_ft));
     }
   }
-  if (rows.length === 0) return '';
-  return `<div class="icing-zones"><h5>Icing Zones</h5>${rows.join('')}</div>`;
+  const sortedAlts = [...allAlts].sort((a, b) => b - a); // top-down
+  if (sortedAlts.length < 2) return '';
+
+  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+
+  const rows = sortedAlts.slice(0, -1).map((alt, i) => {
+    const nextAlt = sortedAlts[i + 1];
+    const midpoint = (alt + nextAlt) / 2;
+
+    let anyHit = false;
+    const cells = models.map((m) => {
+      const zone = soundings[m].icing_zones.find(
+        (z) => z.base_ft <= midpoint && z.top_ft >= midpoint,
+      );
+      if (!zone) return '<td>\u2014</td>';
+      anyHit = true;
+      const sld = zone.sld_risk ? ' SLD' : '';
+      const tw = zone.mean_wet_bulb_c != null ? ` Tw=${zone.mean_wet_bulb_c.toFixed(0)}\u00B0C` : '';
+      return `<td class="${riskClass(zone.risk)}">${zone.risk.toUpperCase()} ${zone.icing_type}${tw}${sld}</td>`;
+    }).join('');
+
+    if (!anyHit) return '';
+    return `<tr><td class="var-name">${nextAlt}-${alt}ft</td>${cells}</tr>`;
+  }).join('');
+
+  return `
+    <div class="icing-zones">
+      <h5>Icing Zones</h5>
+      <table class="band-table">
+        <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderEnhancedClouds(soundings: Record<string, SoundingAnalysis>): string {
-  const rows: string[] = [];
-  for (const [model, sa] of Object.entries(soundings)) {
-    for (const cl of sa.cloud_layers) {
-      const t = cl.mean_temperature_c != null ? ` T=${cl.mean_temperature_c.toFixed(0)}\u00B0C` : '';
-      rows.push(
-        `<div class="cloud-row">[${model}] ${cl.coverage.toUpperCase()} ` +
-        `${cl.base_ft.toFixed(0)}-${cl.top_ft.toFixed(0)}ft${t}</div>`,
-      );
+  const models = Object.keys(soundings);
+  const hasClouds = models.some((m) => soundings[m].cloud_layers.length > 0);
+  if (!hasClouds) return '';
+
+  // Collect all boundary altitudes across models, rounded to 500ft
+  const allAlts = new Set<number>();
+  for (const m of models) {
+    for (const cl of soundings[m].cloud_layers) {
+      allAlts.add(roundAlt(cl.base_ft));
+      allAlts.add(roundAlt(cl.top_ft));
     }
   }
-  if (rows.length === 0) return '';
-  return `<div class="enhanced-clouds"><h5>Cloud Layers</h5>${rows.join('')}</div>`;
+  const sortedAlts = [...allAlts].sort((a, b) => b - a);
+  if (sortedAlts.length < 2) return '';
+
+  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+
+  const rows = sortedAlts.slice(0, -1).map((alt, i) => {
+    const nextAlt = sortedAlts[i + 1];
+    const midpoint = (alt + nextAlt) / 2;
+
+    let anyHit = false;
+    const cells = models.map((m) => {
+      const layer = soundings[m].cloud_layers.find(
+        (cl) => cl.base_ft <= midpoint && cl.top_ft >= midpoint,
+      );
+      if (!layer) return '<td>\u2014</td>';
+      anyHit = true;
+      const t = layer.mean_temperature_c != null ? ` T=${layer.mean_temperature_c.toFixed(0)}\u00B0C` : '';
+      return `<td>${layer.coverage.toUpperCase()}${t}</td>`;
+    }).join('');
+
+    if (!anyHit) return '';
+    return `<tr><td class="var-name">${nextAlt}-${alt}ft</td>${cells}</tr>`;
+  }).join('');
+
+  return `
+    <div class="enhanced-clouds">
+      <h5>Cloud Layers</h5>
+      <table class="band-table">
+        <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderNwpCloudCover(soundings: Record<string, SoundingAnalysis>): string {
-  const rows: string[] = [];
-  for (const [model, sa] of Object.entries(soundings)) {
-    if (sa.cloud_cover_low_pct == null && sa.cloud_cover_mid_pct == null && sa.cloud_cover_high_pct == null) continue;
-    const low = sa.cloud_cover_low_pct != null ? `Low: ${sa.cloud_cover_low_pct.toFixed(0)}%` : '';
-    const mid = sa.cloud_cover_mid_pct != null ? `Mid: ${sa.cloud_cover_mid_pct.toFixed(0)}%` : '';
-    const high = sa.cloud_cover_high_pct != null ? `High: ${sa.cloud_cover_high_pct.toFixed(0)}%` : '';
-    const parts = [low, mid, high].filter(Boolean).join(' | ');
-    rows.push(`<div class="cloud-row">[${model}] ${parts}</div>`);
-  }
-  if (rows.length === 0) return '';
-  return `<div class="nwp-cloud-cover"><h5>NWP Cloud Cover</h5>${rows.join('')}</div>`;
+  const models = Object.keys(soundings);
+  const hasNwp = models.some((m) =>
+    soundings[m].cloud_cover_low_pct != null ||
+    soundings[m].cloud_cover_mid_pct != null ||
+    soundings[m].cloud_cover_high_pct != null,
+  );
+  if (!hasNwp) return '';
+
+  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+
+  const rowSpecs: Array<{ key: 'cloud_cover_high_pct' | 'cloud_cover_mid_pct' | 'cloud_cover_low_pct'; label: string }> = [
+    { key: 'cloud_cover_high_pct', label: 'High' },
+    { key: 'cloud_cover_mid_pct', label: 'Mid' },
+    { key: 'cloud_cover_low_pct', label: 'Low' },
+  ];
+
+  const rows = rowSpecs.map(({ key, label }) => {
+    const cells = models.map((m) => {
+      const v = soundings[m][key];
+      return `<td>${v != null ? v.toFixed(0) + '%' : '\u2014'}</td>`;
+    }).join('');
+    return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
+  }).join('');
+
+  return `
+    <div class="nwp-cloud-cover">
+      <h5>NWP Cloud Cover</h5>
+      <table class="band-table">
+        <thead><tr><th></th>${headerCells}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
@@ -463,23 +617,44 @@ function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
     `);
   }
 
-  // Advisories
+  // Advisories as table
   if (adv.advisories.length > 0) {
-    const advisoryHtml = adv.advisories.map((a) => {
-      const feasibleCls = a.feasible ? '' : ' advisory-infeasible';
-      const altStr = a.altitude_ft != null ? `${a.altitude_ft.toFixed(0)}ft` : '';
-      const modelParts = Object.entries(a.per_model_ft)
-        .map(([m, v]) => `${m}: ${v != null ? v.toFixed(0) + 'ft' : 'N/A'}`)
-        .join(', ');
-      return `
-        <div class="advisory-item${feasibleCls}">
-          <strong>${escapeHtml(a.reason)}</strong>
-          ${!a.feasible ? ' <span class="advisory-badge">INFEASIBLE</span>' : ''}
-          <div class="advisory-models">${escapeHtml(modelParts)}</div>
-        </div>
-      `;
+    const advModels = Object.keys(adv.regimes);
+    const advHeaderCells = advModels.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+
+    const advisoryRows = adv.advisories.map((a) => {
+      const isDescentToZero = a.advisory_type === 'descend_below_icing' && a.altitude_ft === 0;
+      const infeasibleBadge = !a.feasible ? ' <span class="advisory-badge">INFEASIBLE</span>' : '';
+
+      let label: string;
+      if (isDescentToZero) {
+        label = 'Unable to descend below freezing' + infeasibleBadge;
+      } else {
+        label = escapeHtml(a.reason) + infeasibleBadge;
+      }
+
+      const cells = advModels.map((m) => {
+        const v = a.per_model_ft[m];
+        if (v == null) return '<td>\u2014</td>';
+        if (a.advisory_type === 'descend_below_icing' && v === 0) {
+          return '<td>SFC</td>';
+        }
+        return `<td>${v.toFixed(0)}ft</td>`;
+      }).join('');
+
+      const rowCls = !a.feasible ? ' class="advisory-infeasible"' : '';
+      return `<tr${rowCls}><td class="var-name">${label}</td>${cells}</tr>`;
     }).join('');
-    parts.push(`<div class="advisories-section"><h5>Advisories</h5>${advisoryHtml}</div>`);
+
+    parts.push(`
+      <div class="advisories-section">
+        <h5>Advisories</h5>
+        <table class="band-table">
+          <thead><tr><th></th>${advHeaderCells}</tr></thead>
+          <tbody>${advisoryRows}</tbody>
+        </table>
+      </div>
+    `);
   }
 
   return parts.join('');
