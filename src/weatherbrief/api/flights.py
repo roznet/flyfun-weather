@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from weatherbrief.db.deps import get_db
+from weatherbrief.db.engine import DEV_USER_ID
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
     delete_flight,
@@ -16,6 +19,12 @@ from weatherbrief.storage.flights import (
 )
 
 router = APIRouter(prefix="/flights", tags=["flights"])
+
+
+def _current_user_id() -> str:
+    """Return the current user ID. Dev mode uses a hardcoded dev user."""
+    # TODO: replace with auth middleware in multi-user phase
+    return DEV_USER_ID
 
 
 class CreateFlightRequest(BaseModel):
@@ -59,14 +68,15 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
 
 
 @router.get("", response_model=list[FlightResponse])
-def list_all_flights():
+def list_all_flights(db: Session = Depends(get_db)):
     """List all saved flights."""
-    flights = list_flights()
+    user_id = _current_user_id()
+    flights = list_flights(db, user_id)
     return [_flight_to_response(f) for f in flights]
 
 
 @router.post("", response_model=FlightResponse, status_code=201)
-def create_flight(req: CreateFlightRequest):
+def create_flight(req: CreateFlightRequest, db: Session = Depends(get_db)):
     """Create a new flight."""
     if not req.waypoints and not req.route_name:
         raise HTTPException(
@@ -77,20 +87,22 @@ def create_flight(req: CreateFlightRequest):
     route_name = req.route_name or "_".join(w.lower() for w in req.waypoints)
     waypoints = [w.upper().strip() for w in req.waypoints] if req.waypoints else []
 
+    user_id = _current_user_id()
     flight_id = f"{route_name}-{req.target_date}"
 
     # Check if already exists
     try:
-        load_flight(flight_id)
+        load_flight(db, flight_id)
         raise HTTPException(
             status_code=409,
             detail=f"Flight '{flight_id}' already exists",
         )
-    except FileNotFoundError:
+    except KeyError:
         pass
 
     flight = Flight(
         id=flight_id,
+        user_id=user_id,
         route_name=route_name,
         waypoints=waypoints,
         target_date=req.target_date,
@@ -101,24 +113,24 @@ def create_flight(req: CreateFlightRequest):
         created_at=datetime.now(tz=timezone.utc),
     )
 
-    save_flight(flight)
+    save_flight(db, flight, user_id)
     return _flight_to_response(flight)
 
 
 @router.get("/{flight_id}", response_model=FlightResponse)
-def get_flight(flight_id: str):
+def get_flight(flight_id: str, db: Session = Depends(get_db)):
     """Get flight details."""
     try:
-        flight = load_flight(flight_id)
-    except FileNotFoundError:
+        flight = load_flight(db, flight_id)
+    except KeyError:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
     return _flight_to_response(flight)
 
 
 @router.delete("/{flight_id}", status_code=204)
-def remove_flight(flight_id: str):
+def remove_flight(flight_id: str, db: Session = Depends(get_db)):
     """Delete a flight and all its packs."""
     try:
-        delete_flight(flight_id)
-    except FileNotFoundError:
+        delete_flight(db, flight_id)
+    except KeyError:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")

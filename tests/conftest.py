@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from weatherbrief.db.engine import DEV_USER_ID
+from weatherbrief.db.models import Base, UserPreferencesRow, UserRow
 from weatherbrief.models import (
     HourlyForecast,
     ModelSource,
@@ -14,6 +19,50 @@ from weatherbrief.models import (
     Waypoint,
     WaypointForecast,
 )
+
+
+@pytest.fixture
+def db_engine():
+    """In-memory SQLite engine for tests."""
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def db_session(db_engine):
+    """Yield a SQLAlchemy session per test, rolled back after."""
+    session = sessionmaker(bind=db_engine)()
+    yield session
+    session.rollback()
+    session.close()
+
+
+@pytest.fixture
+def dev_user(db_session):
+    """Insert a dev user and return the user_id."""
+    user = UserRow(
+        id=DEV_USER_ID,
+        provider="local",
+        provider_sub="dev",
+        email="dev@localhost",
+        display_name="Dev User",
+        approved=True,
+    )
+    db_session.add(user)
+    db_session.add(UserPreferencesRow(user_id=DEV_USER_ID))
+    db_session.flush()
+    return DEV_USER_ID
 
 
 @pytest.fixture
