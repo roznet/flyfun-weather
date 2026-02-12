@@ -167,13 +167,32 @@ def list_packs(session: Session, flight_id: str) -> list[BriefingPackMeta]:
     return [_row_to_meta(r) for r in rows]
 
 
+def safe_path_component(value: str) -> str:
+    """Sanitize a string for use as a single path component.
+
+    Strips path separators and traversal sequences, keeping only
+    alphanumeric chars, hyphens, underscores, and dots (no leading dot).
+    """
+    import re
+
+    sanitized = re.sub(r"[^a-zA-Z0-9._-]", "_", value)
+    sanitized = sanitized.lstrip(".")
+    return sanitized or "_"
+
+
 def pack_dir_for(user_id: str, flight_id: str, fetch_timestamp: str) -> Path:
     """Get the directory path for a specific pack's artifacts.
 
     Layout: data/packs/{user_id}/{flight_id}/{safe_timestamp}/
     """
     safe_ts = fetch_timestamp.replace(":", "-").replace("+", "p")
-    return _data_dir() / "packs" / user_id / flight_id / safe_ts
+    return (
+        _data_dir()
+        / "packs"
+        / safe_path_component(user_id)
+        / safe_path_component(flight_id)
+        / safe_path_component(safe_ts)
+    )
 
 
 # --- Utilities ---

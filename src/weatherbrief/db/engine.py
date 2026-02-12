@@ -33,7 +33,11 @@ def get_engine(db_url: str | None = None) -> Engine:
     if db_url is None:
         env = os.environ.get("ENVIRONMENT", "development")
         if env == "production":
-            db_url = os.environ["DATABASE_URL"]
+            db_url = os.environ.get("DATABASE_URL")
+            if not db_url:
+                raise ValueError(
+                    "DATABASE_URL environment variable must be set in production"
+                )
         else:
             data_dir = os.environ.get("DATA_DIR", "data")
             os.makedirs(data_dir, exist_ok=True)
