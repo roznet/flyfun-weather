@@ -20,7 +20,11 @@ def _snapshot_dir(
 def save_snapshot(
     snapshot: ForecastSnapshot, data_dir: Path | None = None
 ) -> Path:
-    """Save a forecast snapshot to JSON. Returns the path written."""
+    """Save a forecast snapshot to JSON (excluding cross-section data).
+
+    Cross-section data is saved separately via :func:`save_cross_section`
+    to keep snapshot.json lean for existing consumers.
+    """
     data_dir = data_dir or DEFAULT_DATA_DIR
     out_dir = _snapshot_dir(
         snapshot.target_date, snapshot.days_out, snapshot.fetch_date, data_dir
@@ -28,7 +32,24 @@ def save_snapshot(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     out_path = out_dir / "snapshot.json"
-    out_path.write_text(snapshot.model_dump_json(indent=2))
+    out_path.write_text(snapshot.model_dump_json(indent=2, exclude={"cross_sections"}))
+    return out_path
+
+
+def save_cross_section(
+    snapshot: ForecastSnapshot, data_dir: Path | None = None
+) -> Path:
+    """Save cross-section data to a separate JSON file alongside the snapshot."""
+    data_dir = data_dir or DEFAULT_DATA_DIR
+    out_dir = _snapshot_dir(
+        snapshot.target_date, snapshot.days_out, snapshot.fetch_date, data_dir
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = out_dir / "cross_section.json"
+    out_path.write_text(
+        snapshot.model_dump_json(indent=2, include={"cross_sections"})
+    )
     return out_path
 
 

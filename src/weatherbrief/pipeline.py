@@ -16,14 +16,17 @@ from weatherbrief.analysis.sounding import analyze_sounding
 from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
 from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.fetch.open_meteo import OpenMeteoClient
+from weatherbrief.fetch.route_points import interpolate_route
+from weatherbrief.fetch.variables import MODEL_ENDPOINTS
 from weatherbrief.models import (
     ForecastSnapshot,
     ModelSource,
+    RouteCrossSection,
     RouteConfig,
     WaypointAnalysis,
     WaypointForecast,
 )
-from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_snapshot
+from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_cross_section, save_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -89,16 +92,42 @@ def execute_briefing(
     logger.info("Target: %s (%d days out)", target_date, days_out)
     logger.info("Models: %s", ", ".join(m.value for m in options.models))
 
-    # --- Fetch forecasts ---
+    # --- Fetch forecasts (multi-point: 1 API call per model) ---
     client = OpenMeteoClient()
-    all_forecasts: list[WaypointForecast] = []
+    route_points = interpolate_route(route, spacing_nm=20.0)
+    logger.info("Route interpolated: %d points along %.0f nm",
+                len(route_points), route_points[-1].distance_from_origin_nm)
 
-    for waypoint in route.waypoints:
-        forecasts = client.fetch_all_models(
-            waypoint, options.models, days_out=days_out
-        )
-        all_forecasts.extend(forecasts)
-        logger.info("Fetched %d models for %s", len(forecasts), waypoint.icao)
+    all_forecasts: list[WaypointForecast] = []
+    cross_sections: list[RouteCrossSection] = []
+
+    for model in options.models:
+        endpoint = MODEL_ENDPOINTS[model.value]
+        if days_out is not None and days_out >= endpoint.max_days:
+            logger.info(
+                "Skipping %s: %d days out exceeds %d-day range",
+                model.value, days_out, endpoint.max_days,
+            )
+            continue
+        try:
+            point_forecasts = client.fetch_multi_point(
+                route_points, model,
+                start_date=target_date, end_date=target_date,
+            )
+            # Extract waypoint-only forecasts for analysis
+            for rp, fc in zip(route_points, point_forecasts):
+                if rp.waypoint_icao:
+                    all_forecasts.append(fc)
+            # Store the full cross-section
+            cross_sections.append(RouteCrossSection(
+                model=model,
+                route_points=route_points,
+                fetched_at=point_forecasts[0].fetched_at,
+                point_forecasts=point_forecasts,
+            ))
+            logger.info("Fetched %s: %d points", model.value, len(point_forecasts))
+        except Exception:
+            logger.warning("Failed to fetch %s", model.value, exc_info=True)
 
     # --- Analyze ---
     analyses: list[WaypointAnalysis] = []
@@ -123,15 +152,26 @@ def execute_briefing(
         days_out=days_out,
         forecasts=all_forecasts,
         analyses=analyses,
+        cross_sections=cross_sections,
     )
 
     if options.output_dir:
         # Pack mode: write directly to flat output directory
         options.output_dir.mkdir(parents=True, exist_ok=True)
         snapshot_path = options.output_dir / "snapshot.json"
-        snapshot_path.write_text(snapshot.model_dump_json(indent=2))
+        # Exclude cross_sections from snapshot.json (saved separately)
+        snapshot_path.write_text(
+            snapshot.model_dump_json(indent=2, exclude={"cross_sections"})
+        )
+        if cross_sections:
+            cs_path = options.output_dir / "cross_section.json"
+            cs_path.write_text(
+                snapshot.model_dump_json(indent=2, include={"cross_sections"})
+            )
     else:
         snapshot_path = save_snapshot(snapshot, data_dir)
+        if cross_sections:
+            save_cross_section(snapshot, data_dir)
     logger.info("Snapshot saved: %s", snapshot_path)
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)

@@ -109,6 +109,15 @@ class RouteConfig(BaseModel):
         return math.degrees(math.atan2(y, x)) % 360
 
 
+class RoutePoint(BaseModel):
+    """A point along a route — either a named waypoint or an interpolated point."""
+
+    lat: float
+    lon: float
+    distance_from_origin_nm: float
+    waypoint_icao: str | None = None  # non-None if this is a named waypoint
+
+
 class ModelSource(str, Enum):
     """Weather model source identifiers."""
 
@@ -388,6 +397,15 @@ class WaypointAnalysis(BaseModel):
     model_divergence: list[ModelDivergence] = Field(default_factory=list)
 
 
+class RouteCrossSection(BaseModel):
+    """Cross-section forecast data along the full route for one model."""
+
+    model: ModelSource
+    route_points: list[RoutePoint]
+    fetched_at: datetime
+    point_forecasts: list[WaypointForecast]
+
+
 class ForecastSnapshot(BaseModel):
     """Root object: complete snapshot of one fetch run."""
 
@@ -397,6 +415,7 @@ class ForecastSnapshot(BaseModel):
     days_out: int  # D-N
     forecasts: list[WaypointForecast] = Field(default_factory=list)
     analyses: list[WaypointAnalysis] = Field(default_factory=list)
+    cross_sections: list[RouteCrossSection] = Field(default_factory=list)
 
 
 # --- Flight & briefing pack models (API/web layer) ---
