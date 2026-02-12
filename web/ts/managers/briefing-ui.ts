@@ -273,6 +273,7 @@ function formatVarName(name: string): string {
     'precipitable_water_mm': 'PW (mm)',
     'lifted_index': 'Lifted Index',
     'bulk_shear_0_6km_kt': 'Shear 0-6km (kt)',
+    'max_omega_pa_s': 'Max Omega (Pa/s)',
   };
   return labels[name] || name;
 }
@@ -320,6 +321,7 @@ export function renderSoundingAnalysis(snapshot: ForecastSnapshot | null): void 
       <div class="sounding-waypoint">
         <h4>${a.waypoint.icao} \u2014 ${a.waypoint.name}</h4>
         ${renderConvectiveBanner(a.sounding)}
+        ${renderVerticalMotion(a.sounding)}
         ${renderAltitudeMarkers(a.sounding)}
         ${renderIcingZones(a.sounding)}
         ${renderEnhancedClouds(a.sounding)}
@@ -391,6 +393,130 @@ function renderConvectiveBanner(soundings: Record<string, SoundingAnalysis>): st
         <thead><tr><th></th>${headerCells}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
+    </div>
+  `;
+}
+
+function formatClassification(cls: string): string {
+  const labels: Record<string, string> = {
+    quiescent: 'Quiescent',
+    synoptic_ascent: 'Synoptic Ascent',
+    synoptic_subsidence: 'Synoptic Subsidence',
+    convective: 'Convective',
+    oscillating: 'Oscillating',
+    unavailable: 'N/A',
+  };
+  return labels[cls] || cls;
+}
+
+function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>): string {
+  const models = Object.keys(soundings);
+  const hasVerticalMotion = models.some(
+    (m) => soundings[m].vertical_motion && soundings[m].vertical_motion!.classification !== 'unavailable',
+  );
+  if (!hasVerticalMotion) return '';
+
+  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+
+  // Summary rows
+  const rowSpecs: Array<{ label: string; render: (m: string) => string }> = [
+    {
+      label: 'Classification',
+      render: (m) => {
+        const vm = soundings[m].vertical_motion;
+        if (!vm || vm.classification === 'unavailable') return '<td class="muted">N/A</td>';
+        const cls = vm.classification === 'convective' ? 'risk-severe' : '';
+        return `<td class="${cls}">${formatClassification(vm.classification)}</td>`;
+      },
+    },
+    {
+      label: 'Max W (ft/min)',
+      render: (m) => {
+        const vm = soundings[m].vertical_motion;
+        if (!vm || vm.max_w_fpm == null) return '<td>\u2014</td>';
+        const sign = vm.max_w_fpm > 0 ? '+' : '';
+        const alt = vm.max_w_level_ft != null ? ` @ ${vm.max_w_level_ft.toFixed(0)}ft` : '';
+        return `<td>${sign}${vm.max_w_fpm.toFixed(0)}${alt}</td>`;
+      },
+    },
+  ];
+
+  // Add contamination row only if any model flags it
+  const hasContamination = models.some(
+    (m) => soundings[m].vertical_motion?.convective_contamination,
+  );
+  if (hasContamination) {
+    rowSpecs.push({
+      label: 'Contamination',
+      render: (m) => {
+        const vm = soundings[m].vertical_motion;
+        if (!vm) return '<td>\u2014</td>';
+        return vm.convective_contamination
+          ? '<td class="risk-moderate">Mid-level convective</td>'
+          : '<td>None</td>';
+      },
+    });
+  }
+
+  const summaryRows = rowSpecs.map(({ label, render }) => {
+    const cells = models.map(render).join('');
+    return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
+  }).join('');
+
+  // CAT risk layers section
+  let catSection = '';
+  const hasCat = models.some(
+    (m) => (soundings[m].vertical_motion?.cat_risk_layers?.length ?? 0) > 0,
+  );
+  if (hasCat) {
+    const allAlts = new Set<number>();
+    for (const m of models) {
+      const layers = soundings[m].vertical_motion?.cat_risk_layers || [];
+      for (const l of layers) {
+        allAlts.add(roundAlt(l.base_ft));
+        allAlts.add(roundAlt(l.top_ft));
+      }
+    }
+    const sortedAlts = [...allAlts].sort((a, b) => b - a);
+
+    if (sortedAlts.length >= 2) {
+      const catRows = sortedAlts.slice(0, -1).map((alt, i) => {
+        const nextAlt = sortedAlts[i + 1];
+        const midpoint = (alt + nextAlt) / 2;
+
+        let anyHit = false;
+        const cells = models.map((m) => {
+          const layer = (soundings[m].vertical_motion?.cat_risk_layers || []).find(
+            (l) => l.base_ft <= midpoint && l.top_ft >= midpoint,
+          );
+          if (!layer) return '<td>\u2014</td>';
+          anyHit = true;
+          const ri = layer.richardson_number != null ? ` Ri=${layer.richardson_number.toFixed(2)}` : '';
+          return `<td class="${riskClass(layer.risk)}">${layer.risk.toUpperCase()}${ri}</td>`;
+        }).join('');
+
+        if (!anyHit) return '';
+        return `<tr><td class="var-name">${nextAlt}-${alt}ft</td>${cells}</tr>`;
+      }).join('');
+
+      catSection = `
+        <h6>CAT Risk Layers</h6>
+        <table class="band-table">
+          <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
+          <tbody>${catRows}</tbody>
+        </table>
+      `;
+    }
+  }
+
+  return `
+    <div class="vertical-motion-section">
+      <h5>Vertical Motion</h5>
+      <table class="band-table">
+        <thead><tr><th></th>${headerCells}</tr></thead>
+        <tbody>${summaryRows}</tbody>
+      </table>
+      ${catSection}
     </div>
   `;
 }
