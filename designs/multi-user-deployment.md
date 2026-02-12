@@ -43,19 +43,33 @@ Local development runs without Docker, OAuth, or MySQL — everything works out 
 ### Running locally
 
 ```bash
-# 1. Activate venv (has all deps)
+# 1. Activate venv
+#    If in the main checkout:
 source venv/bin/activate
+#    If in a git worktree (e.g. multi-users/):
+source ../main/venv/bin/activate
 
-# 2. Ensure .env has development mode
+# 2. Install deps (first time or after pyproject.toml changes)
+pip install -e ".[dev]"
+
+# 3. Ensure .env has development mode (this is the default):
 #    ENVIRONMENT=development
-#    AIRPORTS_DB=data/airports.db
-#    (no MYSQL_*, no GOOGLE_CLIENT_*, no APPLE_CLIENT_*)
+#    DATA_DIR=data
+#    AIRPORTS_DB=<path to airports.db>
+#    (no DATABASE_URL needed — SQLite is used automatically)
 
-# 3. Run the app
-uvicorn weatherbrief.api.app:create_app --factory --reload --port 8020
+# 4. Run the app
+uvicorn weatherbrief.api.app:app --reload --port 8020
 
-# 4. Open http://localhost:8020 — logged in as dev user, no auth needed
+# 5. Open http://localhost:8020 — logged in as dev user, no auth needed
 ```
+
+On first startup, the app automatically:
+- Creates `data/weatherbrief.db` (SQLite)
+- Creates all tables
+- Inserts the dev user (`dev-user-001`)
+
+No manual DB setup or migration step needed for development.
 
 ### Production vs development summary
 
@@ -226,20 +240,20 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 
 ## Phases
 
-### Phase 1: Docker + DB + Deploy
+### Phase 1: Docker + DB + Deploy (Done)
 
 **Goal**: App running at weather.flyfun.aero, single-user (you), no auth yet.
 
-- [ ] Create `Dockerfile` for weatherbrief (Python 3.13, uvicorn, euro_aip from GitHub)
-- [ ] Create `docker-compose.yml` joining `shared-services` network
-- [ ] Create MySQL init script `03-create-weatherbrief-db.sql` in shared-infra
-- [ ] Add SQLAlchemy models + Alembic migrations for all tables
-- [ ] Refactor `storage/flights.py` from file-based to DB-backed
-- [ ] Refactor `storage/snapshots.py` — metadata in DB, files in volume
-- [ ] Add `weather.flyfun.aero.caddy` to sites-enabled
+- [x] Create `Dockerfile` for weatherbrief (Python 3.13, uvicorn, euro_aip from GitHub)
+- [x] Create `docker-compose.yml` joining `shared-services` network
+- [x] Create MySQL init script `deploy/03-create-weatherbrief-db.sql`
+- [x] Add SQLAlchemy models + Alembic migrations for all 5 tables
+- [x] Refactor `storage/flights.py` from file-based to DB-backed
+- [x] Add `deploy/weather.flyfun.aero.caddy` reverse proxy config
 - [ ] Add DNS A record for `weather.flyfun.aero` → 161.35.35.15
-- [ ] Dev mode: SQLite fallback when `ENVIRONMENT=development`
-- [ ] Test: full pipeline works via API and CLI
+- [ ] Deploy to server (copy repo, run `docker-compose up -d`)
+- [x] Dev mode: SQLite fallback when `ENVIRONMENT=development`
+- [x] Test: API works via Docker (health, flights CRUD)
 
 ### Phase 2: Auth + Multi-User
 
@@ -276,6 +290,77 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [ ] Admin endpoint or page: all users + usage overview
 - [ ] Hook point for `should_update_briefing()` freshness check (logs skipped=true)
 - [ ] Test: rate limit triggers correctly, usage counts accurate
+
+## Deploying to Server
+
+### First-time setup
+
+```bash
+# 1. On the server, clone the repo
+git clone https://github.com/roznet/flyfun-weather.git
+cd flyfun-weather
+git checkout multi-users
+
+# 2. Create the MySQL database (on the shared MySQL container)
+docker exec -i shared-mysql mysql -u root -p < deploy/03-create-weatherbrief-db.sql
+# Edit the SQL first to replace CHANGE_ME with a real password
+
+# 3. Create .env with production settings
+cat > .env <<'ENVEOF'
+ENVIRONMENT=production
+DATABASE_URL=mysql+pymysql://weatherbrief:YOUR_PASSWORD@shared-mysql/weatherbrief
+DATA_DIR=/app/data
+AIRPORTS_DB=/app/data/airports.db
+# Add API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
+ENVEOF
+
+# 4. Copy airports.db into the data directory
+mkdir -p data
+cp /path/to/airports.db data/
+
+# 5. Build and start
+docker-compose up -d --build
+
+# 6. Run Alembic migrations
+docker exec weatherbrief alembic upgrade head
+
+# 7. Add Caddy site config
+cp deploy/weather.flyfun.aero.caddy /etc/caddy/sites-enabled/
+caddy reload --config /etc/caddy/Caddyfile
+```
+
+### Updating
+
+```bash
+git pull
+docker-compose up -d --build
+# If there are new migrations:
+docker exec weatherbrief alembic upgrade head
+```
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | App image (python:3.13-slim, non-root UID 2000) |
+| `docker-compose.yml` | Service config, port 8020, shared-services network |
+| `.dockerignore` | Excludes .env, tests, data, venv from build context |
+| `deploy/weather.flyfun.aero.caddy` | Caddy reverse proxy with security headers |
+| `deploy/03-create-weatherbrief-db.sql` | MySQL database + user creation template |
+| `alembic.ini` + `alembic/` | Schema migrations (prod only) |
+
+### Environment variables
+
+| Variable | Required | Default | Notes |
+|----------|----------|---------|-------|
+| `ENVIRONMENT` | No | `development` | `production` for Docker/MySQL |
+| `DATABASE_URL` | Prod only | — | MySQL connection string |
+| `DATA_DIR` | No | `data` | Artifact storage root |
+| `AIRPORTS_DB` | Yes | — | Path to euro-aip airports.db |
+| `OPENAI_API_KEY` | For LLM digest | — | |
+| `ANTHROPIC_API_KEY` | For LLM digest | — | |
+| `AUTOROUTER_USERNAME` | For GRAMET | — | |
+| `AUTOROUTER_PASSWORD` | For GRAMET | — | |
 
 ## References
 
