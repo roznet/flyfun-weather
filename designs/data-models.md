@@ -43,9 +43,31 @@ One model's forecast for one waypoint: `(waypoint, model, fetched_at, hourly: li
 
 Single timestep with 17 optional surface fields + `pressure_levels: list[PressureLevelData]`. Use `level_at(pressure_hpa)` for quick lookup.
 
+### RoutePoint
+
+A point along a route — either a named waypoint or an interpolated point. Used by `fetch_multi_point()` and stored in `RouteCrossSection`.
+
+```python
+RoutePoint(lat=51.836, lon=-1.32, distance_from_origin_nm=0.0,
+           waypoint_icao="EGTK", waypoint_name="Oxford Kidlington")
+RoutePoint(lat=50.4, lon=0.5, distance_from_origin_nm=100.0)  # interpolated
+```
+
+- `waypoint_icao` / `waypoint_name` are set only for named waypoints; `None` for interpolated points
+- `distance_from_origin_nm` is cumulative distance along the route
+
+### RouteCrossSection
+
+Cross-section forecast data along the full route for one model: `(model, route_points, fetched_at, point_forecasts)`. One `WaypointForecast` per route point, in the same order as `route_points`.
+
 ### ForecastSnapshot
 
-Root object for one fetch run: `(route, target_date, fetch_date, days_out, forecasts, analyses)`. Serialized to JSON for persistence.
+Root object for one fetch run: `(route, target_date, fetch_date, days_out, forecasts, analyses, cross_sections)`. Serialized to JSON for persistence.
+
+- `forecasts` contains only waypoint forecasts (used by analysis)
+- `cross_sections` contains full route data per model (used for cross-section visualization)
+- **Storage split**: `snapshot.json` excludes `cross_sections`; saved separately as `cross_section.json` to keep the snapshot lean for existing consumers
+- `cross_sections` defaults to empty list for backward compatibility with old snapshots
 
 ## Analysis Models
 

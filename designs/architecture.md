@@ -11,11 +11,14 @@ WeatherBrief produces daily aviation weather assessments for a planned European 
 ```
 RouteConfig + target_date + options
     ↓
-OpenMeteoClient.fetch_all_models()  (per waypoint, per model)
+interpolate_route()  → ~20 RoutePoint (airports + every 20nm)
     ↓
-list[WaypointForecast]
+OpenMeteoClient.fetch_multi_point()  (1 API call per model, all points)
     ↓
-_analyze_waypoint()  (per waypoint)
+filter by waypoint_icao → list[WaypointForecast]  (for analysis)
++ list[RouteCrossSection]  (full route, saved separately)
+    ↓
+analyze_waypoint()  (per waypoint)
 ├→ compute_wind_components()
 ├→ analyze_sounding()  (per model → SoundingAnalysis)
 │   ├→ prepare_profile()
@@ -49,7 +52,8 @@ src/weatherbrief/
 ├── pipeline.py        # Core pipeline: fetch → analyze → outputs
 ├── fetch/
 │   ├── variables.py   # Model endpoints, API parameters
-│   ├── open_meteo.py  # Open-Meteo client
+│   ├── open_meteo.py  # Open-Meteo client (single + multi-point)
+│   ├── route_points.py # Route interpolation (every ~20nm)
 │   ├── dwd_text.py    # DWD synoptic text forecasts
 │   └── gramet.py      # Autorouter GRAMET
 ├── analysis/
@@ -70,7 +74,7 @@ src/weatherbrief/
 │   ├── llm_digest.py  # LangGraph digest pipeline
 │   └── prompt_builder.py  # Context assembly for LLM
 ├── storage/
-│   ├── snapshots.py   # Legacy JSON save/load/list
+│   ├── snapshots.py   # Snapshot + cross-section save/load/list
 │   └── flights.py     # Flight + BriefingPack CRUD, registry
 ├── api/
 │   ├── app.py         # FastAPI factory, static files, CORS
@@ -112,8 +116,9 @@ data/
         ├── flight.json             # Flight config
         └── packs/
             └── {safe_timestamp}/   # ISO timestamp (: → -, + → p)
-                ├── pack.json       # BriefingPackMeta
-                ├── snapshot.json   # ForecastSnapshot
+                ├── pack.json           # BriefingPackMeta
+                ├── snapshot.json       # ForecastSnapshot (excl. cross-sections)
+                ├── cross_section.json  # RouteCrossSection data (per-model route profiles)
                 ├── gramet.png
                 ├── skewt/
                 │   ├── EGTK_gfs.png
@@ -149,6 +154,7 @@ Static files served from `web/` at root.
 ## Key Choices
 
 - **Pydantic v2 throughout** — validation, serialization, JSON round-trip all free.
+- **Multi-point fetch** — 1 API call per model with all route points (not per-waypoint); 24h time window.
 - **Graceful degradation** — GRAMET/Skew-T/LLM/DWD failures logged but don't halt pipeline.
 - **Pipeline extracted from CLI** — `pipeline.py` is the single entry point for both CLI and API.
 - **File-based storage** — no database; flights and packs are directories with JSON metadata.
