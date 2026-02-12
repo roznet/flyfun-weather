@@ -19,7 +19,7 @@
 ## Setup
 
 - don't run npm run build as for development we use npv run dev
-- use venv activate if venv exist so we use correct library
+- use venv activate if venv exist so we use correct library. If there are no venv in current directory, check ../main/venv and activate this. It means we are in a git worktree and main venv should be used
 - to run the web app, use tmux session with multiple panes for server, client, logs etc. let me know the session name and instruction to attach if needed
 - use .env file to set environment variables for local development
 

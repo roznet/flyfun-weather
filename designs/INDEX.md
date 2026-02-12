@@ -43,6 +43,10 @@ Detailed implementation plan for the API-first architecture, web UI, PDF reports
 Implementation plan for Phase 4a: MetPy sounding analysis pipeline replacing simple T+RH heuristics with thermodynamic indices, enhanced cloud/icing/convective assessment, and altitude band comparison.
 → Full doc: sounding_analysis_plan.md
 
+### vertical-motion-plan
+Implementation plan for vertical motion & turbulence analysis: fetch omega from Open-Meteo (GFS/ECMWF), derive Richardson Number and Brunt-Väisälä frequency, classify vertical motion profiles, integrate into altitude advisories.
+→ Full doc: vertical-motion-plan.md
+
 ### multi-user-deployment
 Deployment plan for weather.flyfun.aero: Docker on DigitalOcean, Google/Apple OAuth, MySQL/SQLite DB, per-user flights and credentials, usage tracking, rate limiting, dev mode.
 → Full doc: multi-user-deployment.md
