@@ -110,6 +110,9 @@ export interface SoundingAnalysis {
   cloud_layers: EnhancedCloudLayer[];
   icing_zones: IcingZone[];
   convective: ConvectiveAssessment | null;
+  cloud_cover_low_pct: number | null;
+  cloud_cover_mid_pct: number | null;
+  cloud_cover_high_pct: number | null;
 }
 
 export interface VerticalRegime {
@@ -118,6 +121,7 @@ export interface VerticalRegime {
   in_cloud: boolean;
   icing_risk: IcingRisk;
   icing_type: IcingType;
+  cloud_cover_pct: number | null;
   label: string;
 }
 

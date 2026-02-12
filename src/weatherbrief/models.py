@@ -322,6 +322,10 @@ class SoundingAnalysis(BaseModel):
     cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
     icing_zones: list[IcingZone] = Field(default_factory=list)
     convective: Optional[ConvectiveAssessment] = None
+    # NWP 3-level cloud cover from Open-Meteo (None for ECMWF)
+    cloud_cover_low_pct: Optional[float] = None
+    cloud_cover_mid_pct: Optional[float] = None
+    cloud_cover_high_pct: Optional[float] = None
 
 
 class VerticalRegime(BaseModel):
@@ -332,7 +336,8 @@ class VerticalRegime(BaseModel):
     in_cloud: bool
     icing_risk: IcingRisk = IcingRisk.NONE
     icing_type: IcingType = IcingType.NONE
-    label: str  # e.g. "Clear", "In cloud", "In cloud, icing MOD (mixed)"
+    cloud_cover_pct: Optional[float] = None  # NWP cloud % for this regime's ICAO band
+    label: str  # e.g. "Clear", "In cloud 95%", "In cloud, icing MOD (mixed)"
 
 
 class AltitudeAdvisory(BaseModel):

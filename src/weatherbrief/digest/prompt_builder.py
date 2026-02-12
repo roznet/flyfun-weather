@@ -211,6 +211,14 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
             if parts:
                 lines.append(f"  Sounding [{model}]: {', '.join(parts)}")
 
+        # NWP 3-level cloud cover (not available for ECMWF)
+        if sa.cloud_cover_low_pct is not None:
+            lines.append(
+                f"  NWP cloud [{model}]: Low={sa.cloud_cover_low_pct:.0f}%"
+                f", Mid={sa.cloud_cover_mid_pct:.0f}%"
+                f", High={sa.cloud_cover_high_pct:.0f}%"
+            )
+
         if sa.convective and sa.convective.risk_level != ConvectiveRisk.NONE:
             lines.append(f"  Convective [{model}]: {sa.convective.risk_level.value}")
             for mod in sa.convective.severe_modifiers:
