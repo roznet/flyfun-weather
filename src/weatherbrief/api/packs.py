@@ -10,8 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from weatherbrief.db.deps import get_db
-from weatherbrief.db.engine import DEV_USER_ID
+from weatherbrief.db.deps import current_user_id, get_db
 from weatherbrief.models import BriefingPackMeta
 from weatherbrief.storage.flights import (
     list_packs,
@@ -24,11 +23,6 @@ from weatherbrief.storage.flights import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/flights/{flight_id}/packs", tags=["packs"])
-
-
-def _current_user_id() -> str:
-    """Return the current user ID. Dev mode uses a hardcoded dev user."""
-    return DEV_USER_ID
 
 
 class PackMetaResponse(BaseModel):
@@ -205,7 +199,7 @@ def refresh_briefing(flight_id: str, request: Request, db: Session = Depends(get
     Runs the pipeline, saves all artifacts as a new pack, returns metadata.
     """
     flight = _load_flight_or_404(db, flight_id)
-    user_id = _current_user_id()
+    user_id = current_user_id()
 
     db_path = request.app.state.db_path
     if not db_path:
@@ -305,7 +299,7 @@ def _load_pack_meta_or_404(db: Session, flight_id: str, timestamp: str) -> Brief
 
 def _get_pack_dir(db: Session, flight_id: str, timestamp: str):
     _ensure_flight_exists(db, flight_id)
-    user_id = _current_user_id()
+    user_id = current_user_id()
     pack_path = pack_dir_for(user_id, flight_id, timestamp)
     if not pack_path.exists():
         raise HTTPException(status_code=404, detail="Pack not found")

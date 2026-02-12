@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from weatherbrief.db.deps import get_db
-from weatherbrief.db.engine import DEV_USER_ID
+from weatherbrief.db.deps import current_user_id, get_db
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
+    safe_path_component,
     delete_flight,
     list_flights,
     load_flight,
@@ -19,12 +19,6 @@ from weatherbrief.storage.flights import (
 )
 
 router = APIRouter(prefix="/flights", tags=["flights"])
-
-
-def _current_user_id() -> str:
-    """Return the current user ID. Dev mode uses a hardcoded dev user."""
-    # TODO: replace with auth middleware in multi-user phase
-    return DEV_USER_ID
 
 
 class CreateFlightRequest(BaseModel):
@@ -70,7 +64,7 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
 @router.get("", response_model=list[FlightResponse])
 def list_all_flights(db: Session = Depends(get_db)):
     """List all saved flights."""
-    user_id = _current_user_id()
+    user_id = current_user_id()
     flights = list_flights(db, user_id)
     return [_flight_to_response(f) for f in flights]
 
@@ -87,8 +81,8 @@ def create_flight(req: CreateFlightRequest, db: Session = Depends(get_db)):
     route_name = req.route_name or "_".join(w.lower() for w in req.waypoints)
     waypoints = [w.upper().strip() for w in req.waypoints] if req.waypoints else []
 
-    user_id = _current_user_id()
-    flight_id = f"{route_name}-{req.target_date}"
+    user_id = current_user_id()
+    flight_id = f"{safe_path_component(route_name)}-{req.target_date}"
 
     # Check if already exists
     try:

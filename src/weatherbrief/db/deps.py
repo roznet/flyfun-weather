@@ -6,7 +6,15 @@ from collections.abc import Generator
 
 from sqlalchemy.orm import Session
 
-from weatherbrief.db.engine import SessionLocal
+from weatherbrief.db.engine import DEV_USER_ID, SessionLocal
+
+
+def current_user_id() -> str:
+    """Return the current user ID. Dev mode uses a hardcoded dev user.
+
+    TODO: replace with auth middleware in multi-user phase.
+    """
+    return DEV_USER_ID
 
 
 def get_db() -> Generator[Session, None, None]:
