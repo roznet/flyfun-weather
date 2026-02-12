@@ -11,6 +11,7 @@ from weatherbrief.models import (
     ForecastSnapshot,
     IcingRisk,
     SoundingAnalysis,
+    VerticalMotionClass,
     WaypointAnalysis,
     WaypointForecast,
 )
@@ -226,6 +227,23 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
                     f"{zone.base_ft:.0f}-{zone.top_ft:.0f}ft "
                     f"(Tw={zone.mean_wet_bulb_c:.0f}C){sld_str}"
                 )
+
+        # Vertical motion
+        vm = sa.vertical_motion
+        if vm is not None and vm.classification != VerticalMotionClass.UNAVAILABLE:
+            vm_parts = [vm.classification.value.replace("_", " ").title()]
+            if vm.max_w_fpm is not None:
+                vm_parts.append(f"max {vm.max_w_fpm:+.0f} ft/min at {vm.max_w_level_ft:.0f}ft")
+            lines.append(f"  Vertical motion [{model}]: {', '.join(vm_parts)}")
+            if vm.cat_risk_layers:
+                for layer in vm.cat_risk_layers:
+                    lines.append(
+                        f"    CAT {layer.risk.value.upper()} "
+                        f"{layer.base_ft:.0f}-{layer.top_ft:.0f}ft "
+                        f"(Ri={layer.richardson_number:.2f})"
+                    )
+            if vm.convective_contamination:
+                lines.append(f"    ** Mid-level convective contamination **")
 
         # Cloud layers
         if sa.cloud_layers:

@@ -54,6 +54,8 @@ export type IcingRisk = 'none' | 'light' | 'moderate' | 'severe';
 export type IcingType = 'none' | 'rime' | 'mixed' | 'clear';
 export type CloudCoverage = 'sct' | 'bkn' | 'ovc';
 export type ConvectiveRisk = 'none' | 'low' | 'moderate' | 'high' | 'extreme';
+export type VerticalMotionClass = 'quiescent' | 'synoptic_ascent' | 'synoptic_subsidence' | 'convective' | 'oscillating' | 'unavailable';
+export type CATRiskLevel = 'none' | 'light' | 'moderate' | 'severe';
 
 export interface ThermodynamicIndices {
   lcl_altitude_ft: number | null;
@@ -105,11 +107,30 @@ export interface ConvectiveAssessment {
   severe_modifiers: string[];
 }
 
+export interface CATRiskLayer {
+  base_ft: number;
+  top_ft: number;
+  base_pressure_hpa: number | null;
+  top_pressure_hpa: number | null;
+  richardson_number: number | null;
+  risk: CATRiskLevel;
+}
+
+export interface VerticalMotionAssessment {
+  classification: VerticalMotionClass;
+  max_omega_pa_s: number | null;
+  max_w_fpm: number | null;
+  max_w_level_ft: number | null;
+  cat_risk_layers: CATRiskLayer[];
+  convective_contamination: boolean;
+}
+
 export interface SoundingAnalysis {
   indices: ThermodynamicIndices | null;
   cloud_layers: EnhancedCloudLayer[];
   icing_zones: IcingZone[];
   convective: ConvectiveAssessment | null;
+  vertical_motion: VerticalMotionAssessment | null;
   cloud_cover_low_pct: number | null;
   cloud_cover_mid_pct: number | null;
   cloud_cover_high_pct: number | null;
@@ -122,6 +143,8 @@ export interface VerticalRegime {
   icing_risk: IcingRisk;
   icing_type: IcingType;
   cloud_cover_pct: number | null;
+  cat_risk: string | null;
+  strong_vertical_motion: boolean;
   label: string;
 }
 

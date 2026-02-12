@@ -140,6 +140,7 @@ class PressureLevelData(BaseModel):
     wind_speed_kt: Optional[float] = None
     wind_direction_deg: Optional[float] = None
     geopotential_height_m: Optional[float] = None
+    vertical_velocity_pa_s: Optional[float] = None  # omega (Pa/s)
 
 
 class HourlyForecast(BaseModel):
@@ -242,6 +243,26 @@ class ConvectiveRisk(str, Enum):
     EXTREME = "extreme"
 
 
+class VerticalMotionClass(str, Enum):
+    """Classification of the vertical motion profile."""
+
+    QUIESCENT = "quiescent"
+    SYNOPTIC_ASCENT = "synoptic_ascent"
+    SYNOPTIC_SUBSIDENCE = "synoptic_subsidence"
+    CONVECTIVE = "convective"
+    OSCILLATING = "oscillating"
+    UNAVAILABLE = "unavailable"
+
+
+class CATRiskLevel(str, Enum):
+    """Clear-air turbulence risk level from Richardson number."""
+
+    NONE = "none"
+    LIGHT = "light"
+    MODERATE = "moderate"
+    SEVERE = "severe"
+
+
 class ThermodynamicIndices(BaseModel):
     """Profile-level thermodynamic indices computed via MetPy."""
 
@@ -279,6 +300,10 @@ class DerivedLevel(BaseModel):
     dewpoint_depression_c: Optional[float] = None
     theta_e_k: Optional[float] = None
     lapse_rate_c_per_km: Optional[float] = None
+    omega_pa_s: Optional[float] = None  # raw model omega (Pa/s)
+    w_fpm: Optional[float] = None  # vertical velocity (ft/min)
+    richardson_number: Optional[float] = None  # Ri for layer below
+    bv_freq_squared_per_s2: Optional[float] = None  # N² for layer below (s⁻²)
 
 
 class EnhancedCloudLayer(BaseModel):
@@ -324,6 +349,28 @@ class ConvectiveAssessment(BaseModel):
     severe_modifiers: list[str] = Field(default_factory=list)
 
 
+class CATRiskLayer(BaseModel):
+    """A layer of clear-air turbulence risk identified by low Richardson number."""
+
+    base_ft: float
+    top_ft: float
+    base_pressure_hpa: Optional[int] = None
+    top_pressure_hpa: Optional[int] = None
+    richardson_number: Optional[float] = None  # minimum Ri in layer
+    risk: CATRiskLevel = CATRiskLevel.NONE
+
+
+class VerticalMotionAssessment(BaseModel):
+    """Vertical motion and turbulence assessment for a sounding."""
+
+    classification: VerticalMotionClass = VerticalMotionClass.UNAVAILABLE
+    max_omega_pa_s: Optional[float] = None
+    max_w_fpm: Optional[float] = None
+    max_w_level_ft: Optional[float] = None
+    cat_risk_layers: list[CATRiskLayer] = Field(default_factory=list)
+    convective_contamination: bool = False
+
+
 class SoundingAnalysis(BaseModel):
     """Complete sounding analysis for one model at one waypoint/time."""
 
@@ -332,6 +379,7 @@ class SoundingAnalysis(BaseModel):
     cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
     icing_zones: list[IcingZone] = Field(default_factory=list)
     convective: Optional[ConvectiveAssessment] = None
+    vertical_motion: Optional[VerticalMotionAssessment] = None
     # NWP 3-level cloud cover from Open-Meteo (None for ECMWF)
     cloud_cover_low_pct: Optional[float] = None
     cloud_cover_mid_pct: Optional[float] = None
@@ -347,6 +395,8 @@ class VerticalRegime(BaseModel):
     icing_risk: IcingRisk = IcingRisk.NONE
     icing_type: IcingType = IcingType.NONE
     cloud_cover_pct: Optional[float] = None  # NWP cloud % for this regime's ICAO band
+    cat_risk: Optional[str] = None  # CAT turbulence risk level at this regime
+    strong_vertical_motion: bool = False  # |w| > 200 fpm
     label: str  # e.g. "Clear", "In cloud 95%", "In cloud, icing MOD (mixed)"
 
 
