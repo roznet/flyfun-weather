@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import responses
 
 from weatherbrief.fetch.open_meteo import OpenMeteoClient, magnus_dewpoint
-from weatherbrief.models import ModelSource, Waypoint
+from weatherbrief.models import ModelSource, RoutePoint, Waypoint
 
 
 def test_magnus_dewpoint_typical():
@@ -181,3 +181,148 @@ def test_fetch_forecast_passes_model_param():
 
     req = responses.calls[0].request
     assert "models=ukmo_seamless" in req.url
+
+
+# --- fetch_multi_point tests ---
+
+_MINIMAL_HOURLY = {
+    "time": ["2026-02-21T09:00", "2026-02-21T10:00"],
+    "temperature_2m": [5.0, 6.0],
+}
+
+
+def _make_route_points():
+    """Three route points: two named waypoints with an interpolated point between them."""
+    return [
+        RoutePoint(lat=51.836, lon=-1.32, distance_from_origin_nm=0.0,
+                   waypoint_icao="EGTK", waypoint_name="Oxford Kidlington"),
+        RoutePoint(lat=50.4, lon=0.5, distance_from_origin_nm=100.0),
+        RoutePoint(lat=48.969, lon=2.441, distance_from_origin_nm=224.0,
+                   waypoint_icao="LFPB", waypoint_name="Paris Le Bourget"),
+    ]
+
+
+@responses.activate
+def test_fetch_multi_point_parses_list_response():
+    """Multi-point returns one WaypointForecast per input point."""
+    multi_response = [
+        {"hourly": _MINIMAL_HOURLY},
+        {"hourly": _MINIMAL_HOURLY},
+        {"hourly": _MINIMAL_HOURLY},
+    ]
+
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=multi_response,
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    points = _make_route_points()
+    results = client.fetch_multi_point(points, ModelSource.GFS)
+
+    assert len(results) == 3
+    assert all(r.model == ModelSource.GFS for r in results)
+    assert all(len(r.hourly) == 2 for r in results)
+
+
+@responses.activate
+def test_fetch_multi_point_preserves_waypoint_names():
+    """Named waypoints get full airport name; interpolated points get synthetic label."""
+    multi_response = [
+        {"hourly": _MINIMAL_HOURLY},
+        {"hourly": _MINIMAL_HOURLY},
+        {"hourly": _MINIMAL_HOURLY},
+    ]
+
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=multi_response,
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    points = _make_route_points()
+    results = client.fetch_multi_point(points, ModelSource.GFS)
+
+    assert results[0].waypoint.icao == "EGTK"
+    assert results[0].waypoint.name == "Oxford Kidlington"
+    assert results[1].waypoint.icao == "RP100"  # synthetic from distance
+    assert results[2].waypoint.icao == "LFPB"
+    assert results[2].waypoint.name == "Paris Le Bourget"
+
+
+@responses.activate
+def test_fetch_multi_point_sends_date_window():
+    """start_date/end_date are passed as query params instead of forecast_days."""
+    multi_response = [{"hourly": _MINIMAL_HOURLY}]
+
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=multi_response,
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    points = [RoutePoint(lat=51.836, lon=-1.32, distance_from_origin_nm=0.0,
+                         waypoint_icao="EGTK")]
+    client.fetch_multi_point(
+        points, ModelSource.GFS,
+        start_date="2026-02-21", end_date="2026-02-21",
+    )
+
+    req = responses.calls[0].request
+    assert "start_date=2026-02-21" in req.url
+    assert "end_date=2026-02-21" in req.url
+    assert "forecast_days" not in req.url
+
+
+@responses.activate
+def test_fetch_multi_point_sends_comma_separated_coords():
+    """Latitude and longitude are comma-separated in the request."""
+    multi_response = [
+        {"hourly": _MINIMAL_HOURLY},
+        {"hourly": _MINIMAL_HOURLY},
+    ]
+
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=multi_response,
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    points = [
+        RoutePoint(lat=51.836, lon=-1.32, distance_from_origin_nm=0.0),
+        RoutePoint(lat=48.969, lon=2.441, distance_from_origin_nm=224.0),
+    ]
+    client.fetch_multi_point(points, ModelSource.GFS)
+
+    req = responses.calls[0].request
+    assert "latitude=51.836%2C48.969" in req.url or "latitude=51.836,48.969" in req.url
+    assert "longitude=-1.32%2C2.441" in req.url or "longitude=-1.32,2.441" in req.url
+
+
+@responses.activate
+def test_fetch_multi_point_single_point_dict_response():
+    """Single-point response (dict, not list) is handled correctly."""
+    single_response = {"hourly": _MINIMAL_HOURLY}
+
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=single_response,
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    points = [RoutePoint(lat=51.836, lon=-1.32, distance_from_origin_nm=0.0,
+                         waypoint_icao="EGTK")]
+    results = client.fetch_multi_point(points, ModelSource.GFS)
+
+    assert len(results) == 1
+    assert results[0].waypoint.icao == "EGTK"

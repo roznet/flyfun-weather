@@ -7,7 +7,9 @@ from weatherbrief.models import (
     HourlyForecast,
     ModelSource,
     PressureLevelData,
+    RouteCrossSection,
     RouteConfig,
+    RoutePoint,
     Waypoint,
     WaypointForecast,
     bearing_between,
@@ -150,3 +152,114 @@ def test_forecast_snapshot_roundtrip(sample_route):
     assert restored.target_date == "2026-02-21"
     assert restored.route.origin.icao == "EGTK"
     assert restored.days_out == 7
+
+
+def test_snapshot_without_cross_sections_deserializes(sample_route):
+    """Old snapshots without cross_sections field still load."""
+    snapshot = ForecastSnapshot(
+        route=sample_route,
+        target_date="2026-02-21",
+        fetch_date="2026-02-14",
+        days_out=7,
+    )
+    # Serialize excluding cross_sections (simulates old format)
+    json_str = snapshot.model_dump_json(exclude={"cross_sections"})
+    restored = ForecastSnapshot.model_validate_json(json_str)
+    assert restored.cross_sections == []
+
+
+def test_snapshot_cross_section_roundtrip(sample_route):
+    """ForecastSnapshot with cross_sections roundtrips correctly."""
+    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.8, lon=-1.3)
+    route_points = [
+        RoutePoint(lat=51.8, lon=-1.3, distance_from_origin_nm=0.0,
+                   waypoint_icao="EGTK", waypoint_name="Oxford"),
+        RoutePoint(lat=50.0, lon=1.0, distance_from_origin_nm=100.0),
+    ]
+    point_forecasts = [
+        WaypointForecast(
+            waypoint=wp, model=ModelSource.GFS,
+            fetched_at=datetime(2026, 2, 14, tzinfo=timezone.utc),
+            hourly=[HourlyForecast(time=datetime(2026, 2, 21, 9))],
+        ),
+        WaypointForecast(
+            waypoint=Waypoint(icao="RP100", name="RP100", lat=50.0, lon=1.0),
+            model=ModelSource.GFS,
+            fetched_at=datetime(2026, 2, 14, tzinfo=timezone.utc),
+            hourly=[HourlyForecast(time=datetime(2026, 2, 21, 9))],
+        ),
+    ]
+
+    snapshot = ForecastSnapshot(
+        route=sample_route,
+        target_date="2026-02-21",
+        fetch_date="2026-02-14",
+        days_out=7,
+        cross_sections=[
+            RouteCrossSection(
+                model=ModelSource.GFS,
+                route_points=route_points,
+                fetched_at=datetime(2026, 2, 14, tzinfo=timezone.utc),
+                point_forecasts=point_forecasts,
+            ),
+        ],
+    )
+
+    json_str = snapshot.model_dump_json()
+    restored = ForecastSnapshot.model_validate_json(json_str)
+
+    assert len(restored.cross_sections) == 1
+    cs = restored.cross_sections[0]
+    assert cs.model == ModelSource.GFS
+    assert len(cs.route_points) == 2
+    assert cs.route_points[0].waypoint_icao == "EGTK"
+    assert cs.route_points[0].waypoint_name == "Oxford"
+    assert cs.route_points[1].waypoint_icao is None
+    assert len(cs.point_forecasts) == 2
+
+
+def test_save_cross_section_separate_file(sample_route, tmp_path):
+    """save_cross_section writes cross_section.json alongside snapshot."""
+    from weatherbrief.storage.snapshots import save_cross_section, save_snapshot
+
+    snapshot = ForecastSnapshot(
+        route=sample_route,
+        target_date="2026-02-21",
+        fetch_date="2026-02-14",
+        days_out=7,
+        cross_sections=[
+            RouteCrossSection(
+                model=ModelSource.GFS,
+                route_points=[
+                    RoutePoint(lat=51.8, lon=-1.3, distance_from_origin_nm=0.0,
+                               waypoint_icao="EGTK"),
+                ],
+                fetched_at=datetime(2026, 2, 14, tzinfo=timezone.utc),
+                point_forecasts=[
+                    WaypointForecast(
+                        waypoint=Waypoint(icao="EGTK", name="Oxford", lat=51.8, lon=-1.3),
+                        model=ModelSource.GFS,
+                        fetched_at=datetime(2026, 2, 14, tzinfo=timezone.utc),
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    snap_path = save_snapshot(snapshot, tmp_path)
+    cs_path = save_cross_section(snapshot, tmp_path)
+
+    assert snap_path.exists()
+    assert cs_path.exists()
+    assert snap_path.parent == cs_path.parent
+    assert cs_path.name == "cross_section.json"
+
+    # snapshot.json should NOT contain cross_sections
+    import json
+    snap_data = json.loads(snap_path.read_text())
+    assert "cross_sections" not in snap_data
+
+    # cross_section.json should contain cross_sections
+    cs_data = json.loads(cs_path.read_text())
+    assert "cross_sections" in cs_data
+    assert len(cs_data["cross_sections"]) == 1
