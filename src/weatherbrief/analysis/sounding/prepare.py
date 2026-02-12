@@ -33,6 +33,7 @@ class PreparedProfile:
     wind_speed: Quantity | None  # knot
     wind_direction: Quantity | None  # degree
     height: Quantity | None  # meter (geopotential)
+    omega: Quantity | None  # Pa/s (NaN for missing levels)
     # Surface observations (from HourlyForecast)
     surface_pressure: Quantity | None  # hPa
     surface_temperature: Quantity | None  # degC
@@ -96,6 +97,16 @@ def prepare_profile(
     if has_height:
         height = np.array([lv.geopotential_height_m for lv, _ in valid]) * units.meter
 
+    # Omega — use NaN for missing levels (unlike wind which requires all-or-nothing)
+    has_any_omega = any(lv.vertical_velocity_pa_s is not None for lv, _ in valid)
+    omega = None
+    if has_any_omega:
+        omega_vals = [
+            lv.vertical_velocity_pa_s if lv.vertical_velocity_pa_s is not None else np.nan
+            for lv, _ in valid
+        ]
+        omega = np.array(omega_vals) * units("Pa/s")
+
     # Surface values from HourlyForecast
     sfc_pressure = None
     sfc_temperature = None
@@ -115,6 +126,7 @@ def prepare_profile(
         wind_speed=wind_speed,
         wind_direction=wind_direction,
         height=height,
+        omega=omega,
         surface_pressure=sfc_pressure,
         surface_temperature=sfc_temperature,
         surface_dewpoint=sfc_dewpoint,
