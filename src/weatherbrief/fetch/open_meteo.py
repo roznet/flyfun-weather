@@ -240,6 +240,7 @@ class OpenMeteoClient:
                     wind_speed_kt=get(f"wind_speed_{level}hPa"),
                     wind_direction_deg=get(f"wind_direction_{level}hPa"),
                     geopotential_height_m=get(f"geopotential_height_{level}hPa"),
+                    vertical_velocity_pa_s=get(f"vertical_velocity_{level}hPa"),
                 )
             )
 

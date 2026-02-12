@@ -33,6 +33,7 @@ PRESSURE_LEVEL_VARIABLES = [
     "wind_speed",
     "wind_direction",
     "geopotential_height",
+    "vertical_velocity",
 ]
 
 
@@ -75,6 +76,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/dwd-icon",
         max_days=7,
         unavailable_surface=["precipitation_probability"],
+        unavailable_pressure=["vertical_velocity"],
     ),
     "ukmo": ModelEndpoint(
         name="UK Met Office",
@@ -83,7 +85,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         model_param="ukmo_seamless",
         unavailable_surface=["dewpoint_2m", "precipitation_probability",
                              "freezing_level_height", "cape", "visibility"],
-        unavailable_pressure=["dewpoint"],
+        unavailable_pressure=["dewpoint", "vertical_velocity"],
     ),
     "meteofrance": ModelEndpoint(
         name="Météo-France",
@@ -91,7 +93,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         max_days=6,
         unavailable_surface=["precipitation_probability",
                              "freezing_level_height", "cape", "visibility"],
-        unavailable_pressure=["dewpoint"],
+        unavailable_pressure=["dewpoint", "vertical_velocity"],
     ),
 }
 

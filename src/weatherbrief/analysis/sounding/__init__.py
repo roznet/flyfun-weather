@@ -31,6 +31,10 @@ def analyze_sounding(
         compute_derived_levels,
         compute_indices,
     )
+    from weatherbrief.analysis.sounding.vertical_motion import (
+        assess_vertical_motion,
+        compute_stability_indicators,
+    )
 
     profile = prepare_profile(levels, hourly)
     if profile is None:
@@ -56,12 +60,17 @@ def analyze_sounding(
     # Convective assessment
     convective = assess_convective(indices)
 
+    # Vertical motion and turbulence assessment
+    compute_stability_indicators(profile, derived_levels)
+    vertical_motion = assess_vertical_motion(derived_levels)
+
     return SoundingAnalysis(
         indices=indices,
         derived_levels=derived_levels,
         cloud_layers=cloud_layers,
         icing_zones=icing_zones,
         convective=convective,
+        vertical_motion=vertical_motion,
         cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         cloud_cover_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         cloud_cover_high_pct=hourly.cloud_cover_high_pct if hourly else None,

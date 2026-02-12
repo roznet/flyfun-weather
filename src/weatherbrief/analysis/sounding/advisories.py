@@ -10,6 +10,7 @@ from __future__ import annotations
 from weatherbrief.models import (
     AltitudeAdvisories,
     AltitudeAdvisory,
+    CATRiskLevel,
     IcingRisk,
     IcingType,
     SoundingAnalysis,
@@ -55,6 +56,12 @@ def compute_altitude_advisories(
     climb = _climb_above_icing(soundings, flight_ceiling_ft)
     if climb is not None:
         advisories.append(climb)
+    cat = _cat_turbulence_advisory(soundings)
+    if cat is not None:
+        advisories.append(cat)
+    strong = _strong_motion_advisory(soundings)
+    if strong is not None:
+        advisories.append(strong)
 
     return AltitudeAdvisories(
         regimes=regimes,
@@ -125,7 +132,10 @@ def _compute_regimes(
         in_cloud = _point_in_cloud(midpoint, analysis)
         icing_risk, icing_type = _point_icing(midpoint, analysis)
         cloud_cover = _nwp_cloud_cover_at(midpoint, analysis)
-        label = _regime_label(in_cloud, icing_risk, icing_type, cloud_cover)
+        cat_risk = _point_cat_risk(midpoint, analysis)
+        strong_motion = _point_strong_motion(midpoint, analysis)
+        label = _regime_label(in_cloud, icing_risk, icing_type, cloud_cover,
+                              cat_risk, strong_motion)
 
         raw_regimes.append(VerticalRegime(
             floor_ft=floor,
@@ -134,6 +144,8 @@ def _compute_regimes(
             icing_risk=icing_risk,
             icing_type=icing_type,
             cloud_cover_pct=cloud_cover,
+            cat_risk=cat_risk,
+            strong_vertical_motion=strong_motion,
             label=label,
         ))
 
@@ -156,6 +168,8 @@ def _compute_regimes(
             and prev.icing_risk == regime.icing_risk
             and prev.icing_type == regime.icing_type
             and prev.cloud_cover_pct == regime.cloud_cover_pct
+            and prev.cat_risk == regime.cat_risk
+            and prev.strong_vertical_motion == regime.strong_vertical_motion
         ):
             # Extend the previous regime
             merged[-1] = VerticalRegime(
@@ -165,6 +179,8 @@ def _compute_regimes(
                 icing_risk=prev.icing_risk,
                 icing_type=prev.icing_type,
                 cloud_cover_pct=prev.cloud_cover_pct,
+                cat_risk=prev.cat_risk,
+                strong_vertical_motion=prev.strong_vertical_motion,
                 label=prev.label,
             )
         else:
@@ -217,26 +233,166 @@ def _regime_label(
     icing_risk: IcingRisk,
     icing_type: IcingType,
     cloud_cover_pct: float | None = None,
+    cat_risk: str | None = None,
+    strong_vertical_motion: bool = False,
 ) -> str:
     """Generate a human-readable label for a regime."""
+    parts: list[str] = []
+
     if not in_cloud and icing_risk == IcingRisk.NONE:
         if cloud_cover_pct is not None and cloud_cover_pct > 0:
-            return f"Clear (cloud {cloud_cover_pct:.0f}%)"
-        return "Clear"
-
-    parts: list[str] = []
-    if in_cloud:
-        if cloud_cover_pct is not None:
-            parts.append(f"In cloud {cloud_cover_pct:.0f}%")
+            parts.append(f"Clear (cloud {cloud_cover_pct:.0f}%)")
         else:
-            parts.append("In cloud")
-    if icing_risk != IcingRisk.NONE:
-        icing_str = f"icing {icing_risk.value.upper()}"
-        if icing_type != IcingType.NONE:
-            icing_str += f" ({icing_type.value})"
-        parts.append(icing_str)
+            parts.append("Clear")
+    else:
+        if in_cloud:
+            if cloud_cover_pct is not None:
+                parts.append(f"In cloud {cloud_cover_pct:.0f}%")
+            else:
+                parts.append("In cloud")
+        if icing_risk != IcingRisk.NONE:
+            icing_str = f"icing {icing_risk.value.upper()}"
+            if icing_type != IcingType.NONE:
+                icing_str += f" ({icing_type.value})"
+            parts.append(icing_str)
+
+    if cat_risk is not None:
+        parts.append(f"CAT {cat_risk.upper()}")
+    if strong_vertical_motion:
+        parts.append("strong motion")
 
     return ", ".join(parts)
+
+
+_CAT_RISK_ORDER = [CATRiskLevel.NONE, CATRiskLevel.LIGHT, CATRiskLevel.MODERATE, CATRiskLevel.SEVERE]
+
+_STRONG_W_FPM = 200.0
+_STRONG_MOTION_PROXIMITY_FT = 2000.0
+
+
+def _point_cat_risk(
+    altitude_ft: float, analysis: SoundingAnalysis,
+) -> str | None:
+    """Return the worst CAT risk level at an altitude, or None."""
+    if analysis.vertical_motion is None:
+        return None
+    worst = CATRiskLevel.NONE
+    for layer in analysis.vertical_motion.cat_risk_layers:
+        if layer.base_ft <= altitude_ft <= layer.top_ft:
+            if _CAT_RISK_ORDER.index(layer.risk) > _CAT_RISK_ORDER.index(worst):
+                worst = layer.risk
+    if worst == CATRiskLevel.NONE:
+        return None
+    return worst.value
+
+
+def _point_strong_motion(
+    altitude_ft: float, analysis: SoundingAnalysis,
+) -> bool:
+    """Check if |w| > 200 fpm at or near an altitude."""
+    for lv in analysis.derived_levels:
+        if lv.altitude_ft is not None and lv.w_fpm is not None:
+            if abs(lv.altitude_ft - altitude_ft) < _STRONG_MOTION_PROXIMITY_FT and abs(lv.w_fpm) > _STRONG_W_FPM:
+                return True
+    return False
+
+
+def _cat_turbulence_advisory(
+    soundings: dict[str, SoundingAnalysis],
+) -> AltitudeAdvisory | None:
+    """Generate advisory for significant CAT turbulence."""
+    has_cat = any(
+        sa.vertical_motion is not None and len(sa.vertical_motion.cat_risk_layers) > 0
+        for sa in soundings.values()
+    )
+    if not has_cat:
+        return None
+
+    per_model_ft: dict[str, float | None] = {}
+    worst_risk = CATRiskLevel.NONE
+
+    for model_key, analysis in soundings.items():
+        if analysis.vertical_motion is None or not analysis.vertical_motion.cat_risk_layers:
+            per_model_ft[model_key] = None
+            continue
+        # Report the altitude of the worst CAT layer
+        worst_layer = max(
+            analysis.vertical_motion.cat_risk_layers,
+            key=lambda l: _CAT_RISK_ORDER.index(l.risk),
+        )
+        per_model_ft[model_key] = worst_layer.base_ft
+        if _CAT_RISK_ORDER.index(worst_layer.risk) > _CAT_RISK_ORDER.index(worst_risk):
+            worst_risk = worst_layer.risk
+
+    if worst_risk == CATRiskLevel.NONE:
+        return None
+
+    # Collect all CAT layer ranges across models for the reason text
+    all_bases = []
+    all_tops = []
+    for sa in soundings.values():
+        if sa.vertical_motion:
+            for layer in sa.vertical_motion.cat_risk_layers:
+                if _CAT_RISK_ORDER.index(layer.risk) >= _CAT_RISK_ORDER.index(CATRiskLevel.MODERATE):
+                    all_bases.append(layer.base_ft)
+                    all_tops.append(layer.top_ft)
+
+    if all_bases:
+        reason = (
+            f"CAT turbulence {worst_risk.value.upper()} "
+            f"{min(all_bases):.0f}-{max(all_tops):.0f}ft (low Richardson number)"
+        )
+    else:
+        reason = f"CAT turbulence risk {worst_risk.value.upper()}"
+
+    valid_alts = [v for v in per_model_ft.values() if v is not None]
+    if not valid_alts:
+        return None
+
+    return AltitudeAdvisory(
+        advisory_type="cat_turbulence",
+        altitude_ft=min(valid_alts),
+        feasible=True,
+        reason=reason,
+        per_model_ft=per_model_ft,
+    )
+
+
+def _strong_motion_advisory(
+    soundings: dict[str, SoundingAnalysis],
+) -> AltitudeAdvisory | None:
+    """Generate advisory for strong vertical motion (|w| > 200 fpm)."""
+    has_strong = any(
+        sa.vertical_motion is not None
+        and sa.vertical_motion.max_w_fpm is not None
+        and abs(sa.vertical_motion.max_w_fpm) > _STRONG_W_FPM
+        for sa in soundings.values()
+    )
+    if not has_strong:
+        return None
+
+    per_model_ft: dict[str, float | None] = {}
+    max_w = 0.0
+
+    for model_key, analysis in soundings.items():
+        vm = analysis.vertical_motion
+        if vm is None or vm.max_w_fpm is None or abs(vm.max_w_fpm) <= _STRONG_W_FPM:
+            per_model_ft[model_key] = None
+            continue
+        per_model_ft[model_key] = vm.max_w_level_ft
+        max_w = max(max_w, abs(vm.max_w_fpm))
+
+    valid = [v for v in per_model_ft.values() if v is not None]
+    if not valid:
+        return None
+
+    return AltitudeAdvisory(
+        advisory_type="strong_vertical_motion",
+        altitude_ft=min(valid),
+        feasible=True,
+        reason=f"Strong vertical motion up to {max_w:.0f} ft/min",
+        per_model_ft=per_model_ft,
+    )
 
 
 def _cruise_icing_status(

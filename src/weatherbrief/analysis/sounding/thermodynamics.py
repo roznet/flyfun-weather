@@ -218,6 +218,11 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
     else:
         heights_ft = np.array([_pressure_to_altitude_ft(p) for p in pressures])
 
+    # Extract omega values (may contain NaN for missing levels)
+    omega_vals = None
+    if profile.omega is not None:
+        omega_vals = profile.omega.to("Pa/s").magnitude
+
     # RH for each level
     try:
         rh_vals = mpcalc.relative_humidity_from_dewpoint(
@@ -263,6 +268,21 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
                 dt = temps[i + 1] - temps[i]
                 lapse = round(float(-dt / (dz_m / 1000)), 1)  # -dT/dz in C/km
 
+        # Omega → w conversion
+        omega_pa_s = None
+        w_fpm = None
+        if omega_vals is not None and not np.isnan(omega_vals[i]):
+            omega_pa_s = round(float(omega_vals[i]), 4)
+            try:
+                w = mpcalc.vertical_velocity(
+                    omega_vals[i] * units("Pa/s"),
+                    pressures[i] * units.hPa,
+                    temps[i] * units.degC,
+                )
+                w_fpm = round(float(w.to("m/s").magnitude) * 196.85, 1)  # m/s → ft/min
+            except Exception:
+                logger.debug("Omega→w conversion failed at %s hPa", pressures[i], exc_info=True)
+
         rh_pct = round(float(rh_vals[i]), 1) if rh_vals[i] is not None else None
 
         levels.append(DerivedLevel(
@@ -275,6 +295,8 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
             dewpoint_depression_c=dd,
             theta_e_k=theta_e,
             lapse_rate_c_per_km=lapse,
+            omega_pa_s=omega_pa_s,
+            w_fpm=w_fpm,
         ))
 
     return levels
