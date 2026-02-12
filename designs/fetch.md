@@ -29,19 +29,50 @@ Each model has a `ModelEndpoint` dataclass specifying URL, max forecast range, a
 
 ```python
 client = OpenMeteoClient()
-# Single model
+# Single waypoint, single model (legacy, still available)
 forecast = client.fetch_forecast(waypoint, ModelSource.GFS)
-# All models (skips out-of-range)
+# Single waypoint, all models (skips out-of-range)
 forecasts = client.fetch_all_models(waypoint, models, days_out=7)
+# Multi-point: all route points in one API call per model (preferred)
+point_forecasts = client.fetch_multi_point(
+    route_points, ModelSource.GFS,
+    start_date="2026-02-21", end_date="2026-02-21",
+)
 ```
+
+### Multi-Point Fetch (`fetch_multi_point`)
+
+The pipeline uses `fetch_multi_point()` to consolidate API calls: **1 call per model** with all route points (comma-separated lat/lon), instead of 1 call per waypoint per model.
+
+- Open-Meteo accepts comma-separated `latitude=lat1,lat2,...&longitude=lon1,lon2,...`
+- Multi-point response is a `list[dict]`; single-point is a `dict` (handled automatically)
+- `start_date`/`end_date` window the time range to the target date (24h instead of full horizon)
+- Returns one `WaypointForecast` per point; named waypoints get full airport name from `RoutePoint.waypoint_name`, interpolated points get synthetic IDs like `"RP042"`
+
+### Route Interpolation (`fetch/route_points.py`)
+
+Generates evenly-spaced points along a multi-leg route for cross-section data.
+
+```python
+route_points = interpolate_route(route, spacing_nm=20.0)
+# → ~20 RoutePoint objects for a 400nm route
+# Named waypoints included with waypoint_icao + waypoint_name
+# Interpolated points have waypoint_icao=None
+```
+
+- Uses `euro_aip.models.navpoint.NavPoint` for great-circle math (`haversine_distance`, `point_from_bearing_distance`)
+- Always includes actual waypoints; interpolated points dropped every `spacing_nm`
+- Each point has `distance_from_origin_nm` for cross-section visualization
 
 ### Key Choices
 
 - **Wind in knots** — `wind_speed_unit=kn` for aviation
 - **Magnus dewpoint derivation** — when API doesn't provide dewpoint at pressure levels, derived from T + RH using `magnus_dewpoint(temp_c, rh_pct)` (b=17.67, c=243.5)
-- **Range filtering** — `fetch_all_models` skips models where `days_out >= max_days`
+- **Range filtering** — pipeline skips models where `days_out >= max_days`
 - **Graceful failure** — individual model failures logged, others continue
 - **UKMO model_param** — uses generic `/v1/forecast` with `?models=ukmo_seamless` query param
+- **Multi-point over per-waypoint** — reduces API calls from N×M to M; trivially within free-tier rate limits (600/min, 5K/hour)
+- **24h time window** — only fetch target date data, not the full 16-day horizon (~150KB vs ~1MB per model)
 
 ## DWD Text Forecasts (`fetch/dwd_text.py`)
 

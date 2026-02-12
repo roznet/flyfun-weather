@@ -12,13 +12,13 @@ Key exports: `execute_briefing`, `create_app`
 → Full doc: architecture.md
 
 ### data-models
-Pydantic v2 models for routes, forecasts, analysis, snapshots, flights, and briefing packs.
-Key exports: `ForecastSnapshot`, `RouteConfig`, `WaypointForecast`, `SoundingAnalysis`, `Flight`, `BriefingPackMeta`
+Pydantic v2 models for routes, forecasts, analysis, snapshots, cross-sections, flights, and briefing packs.
+Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection`, `WaypointForecast`, `SoundingAnalysis`, `Flight`, `BriefingPackMeta`
 → Full doc: data-models.md
 
 ### fetch
-Weather data retrieval: Open-Meteo multi-model client, DWD text forecasts, Autorouter GRAMET.
-Key exports: `OpenMeteoClient`, `fetch_dwd_text_forecasts`, `AutorouterGramet`
+Weather data retrieval: Open-Meteo multi-point client, route interpolation, DWD text forecasts, Autorouter GRAMET.
+Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_dwd_text_forecasts`, `AutorouterGramet`
 → Full doc: fetch.md
 
 ### analysis
