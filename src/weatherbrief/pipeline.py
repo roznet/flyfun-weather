@@ -239,6 +239,7 @@ def analyze_waypoint(
     model_pw: dict[str, float] = {}
     model_li: dict[str, float] = {}
     model_shear: dict[str, float] = {}
+    model_max_omega: dict[str, float] = {}
 
     for wf in forecasts:
         hourly = wf.at_time(target_time)
@@ -289,6 +290,11 @@ def analyze_waypoint(
                 if idx.bulk_shear_0_6km_kt is not None:
                     model_shear[model_key] = idx.bulk_shear_0_6km_kt
 
+            # Vertical motion comparison value
+            vm = sounding.vertical_motion
+            if vm is not None and vm.max_omega_pa_s is not None:
+                model_max_omega[model_key] = abs(vm.max_omega_pa_s)
+
         # Collect comparison values
         if hourly.temperature_2m_c is not None:
             model_temps[model_key] = hourly.temperature_2m_c
@@ -322,6 +328,7 @@ def analyze_waypoint(
         "precipitable_water_mm": model_pw,
         "lifted_index": model_li,
         "bulk_shear_0_6km_kt": model_shear,
+        "max_omega_pa_s": model_max_omega,
     }
 
     for var_name, values in comparisons.items():
