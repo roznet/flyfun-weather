@@ -42,3 +42,7 @@ Detailed implementation plan for the API-first architecture, web UI, PDF reports
 ### sounding_analysis_plan
 Implementation plan for Phase 4a: MetPy sounding analysis pipeline replacing simple T+RH heuristics with thermodynamic indices, enhanced cloud/icing/convective assessment, and altitude band comparison.
 → Full doc: sounding_analysis_plan.md
+
+### multi-user-deployment
+Deployment plan for weather.flyfun.aero: Docker on DigitalOcean, Google/Apple OAuth, MySQL/SQLite DB, per-user flights and credentials, usage tracking, rate limiting, dev mode.
+→ Full doc: multi-user-deployment.md
