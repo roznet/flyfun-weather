@@ -1,179 +1,198 @@
-"""Flight and BriefingPack storage — file-based persistence."""
+"""Flight and BriefingPack storage — database-backed persistence."""
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from weatherbrief.db.models import BriefingPackRow, FlightRow
 from weatherbrief.models import BriefingPackMeta, Flight
-from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR
 
 
-def _flights_dir(data_dir: Path) -> Path:
-    return data_dir / "flights"
+def _data_dir() -> Path:
+    return Path(os.environ.get("DATA_DIR", "data"))
 
 
-def _flight_dir(flight_id: str, data_dir: Path) -> Path:
-    return _flights_dir(data_dir) / flight_id
+# --- Conversion helpers ---
 
 
-def _packs_dir(flight_id: str, data_dir: Path) -> Path:
-    return _flight_dir(flight_id, data_dir) / "packs"
+def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
+    return FlightRow(
+        id=flight.id,
+        user_id=user_id,
+        route_name=flight.route_name,
+        waypoints_json=json.dumps(flight.waypoints),
+        target_date=flight.target_date,
+        target_time_utc=flight.target_time_utc,
+        cruise_altitude_ft=flight.cruise_altitude_ft,
+        flight_ceiling_ft=flight.flight_ceiling_ft,
+        flight_duration_hours=flight.flight_duration_hours,
+        created_at=flight.created_at,
+    )
+
+
+def _row_to_flight(row: FlightRow) -> Flight:
+    return Flight(
+        id=row.id,
+        user_id=row.user_id,
+        route_name=row.route_name,
+        waypoints=json.loads(row.waypoints_json),
+        target_date=row.target_date,
+        target_time_utc=row.target_time_utc,
+        cruise_altitude_ft=row.cruise_altitude_ft,
+        flight_ceiling_ft=row.flight_ceiling_ft,
+        flight_duration_hours=row.flight_duration_hours,
+        created_at=row.created_at,
+    )
+
+
+def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
+    return BriefingPackRow(
+        flight_id=meta.flight_id,
+        fetch_timestamp=meta.fetch_timestamp,
+        days_out=meta.days_out,
+        has_gramet=meta.has_gramet,
+        has_skewt=meta.has_skewt,
+        has_digest=meta.has_digest,
+        assessment=meta.assessment,
+        assessment_reason=meta.assessment_reason,
+        artifact_path=meta.artifact_path,
+    )
+
+
+def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
+    return BriefingPackMeta(
+        id=row.id,
+        flight_id=row.flight_id,
+        fetch_timestamp=row.fetch_timestamp,
+        days_out=row.days_out,
+        has_gramet=row.has_gramet,
+        has_skewt=row.has_skewt,
+        has_digest=row.has_digest,
+        assessment=row.assessment,
+        assessment_reason=row.assessment_reason,
+        artifact_path=row.artifact_path,
+    )
 
 
 # --- Flight CRUD ---
 
 
-def save_flight(flight: Flight, data_dir: Path | None = None) -> Path:
-    """Save a flight config to disk. Returns the path written."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
-    flight_dir = _flight_dir(flight.id, data_dir)
-    flight_dir.mkdir(parents=True, exist_ok=True)
-
-    flight_path = flight_dir / "flight.json"
-    flight_path.write_text(flight.model_dump_json(indent=2))
-
-    # Update the flight registry
-    _update_registry(flight, data_dir)
-
-    return flight_path
-
-
-def load_flight(flight_id: str, data_dir: Path | None = None) -> Flight:
-    """Load a flight by ID. Raises FileNotFoundError if not found."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
-    flight_path = _flight_dir(flight_id, data_dir) / "flight.json"
-
-    raw = json.loads(flight_path.read_text())
-    return Flight.model_validate(raw)
+def save_flight(session: Session, flight: Flight, user_id: str) -> None:
+    """Insert or update a flight in the database."""
+    existing = session.get(FlightRow, flight.id)
+    if existing:
+        existing.route_name = flight.route_name
+        existing.waypoints_json = json.dumps(flight.waypoints)
+        existing.target_date = flight.target_date
+        existing.target_time_utc = flight.target_time_utc
+        existing.cruise_altitude_ft = flight.cruise_altitude_ft
+        existing.flight_ceiling_ft = flight.flight_ceiling_ft
+        existing.flight_duration_hours = flight.flight_duration_hours
+    else:
+        session.add(_flight_to_row(flight, user_id))
+    session.flush()
 
 
-def list_flights(data_dir: Path | None = None) -> list[Flight]:
-    """List all saved flights, sorted by creation date (newest first)."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
-    flights_dir = _flights_dir(data_dir)
-
-    if not flights_dir.exists():
-        return []
-
-    flights = []
-    for d in flights_dir.iterdir():
-        flight_path = d / "flight.json"
-        if d.is_dir() and flight_path.exists():
-            raw = json.loads(flight_path.read_text())
-            flights.append(Flight.model_validate(raw))
-
-    flights.sort(key=lambda f: f.created_at, reverse=True)
-    return flights
+def load_flight(session: Session, flight_id: str) -> Flight:
+    """Load a flight by ID. Raises KeyError if not found."""
+    row = session.get(FlightRow, flight_id)
+    if row is None:
+        raise KeyError(f"Flight not found: {flight_id}")
+    return _row_to_flight(row)
 
 
-def delete_flight(flight_id: str, data_dir: Path | None = None) -> None:
-    """Delete a flight and all its packs. Raises FileNotFoundError if not found."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
-    flight_dir = _flight_dir(flight_id, data_dir)
+def list_flights(session: Session, user_id: str) -> list[Flight]:
+    """List all flights for a user, newest first."""
+    stmt = (
+        select(FlightRow)
+        .where(FlightRow.user_id == user_id)
+        .order_by(FlightRow.created_at.desc())
+    )
+    rows = session.execute(stmt).scalars().all()
+    return [_row_to_flight(r) for r in rows]
 
-    if not flight_dir.exists():
-        raise FileNotFoundError(f"Flight not found: {flight_id}")
 
-    # Remove all files recursively
-    _rmtree(flight_dir)
+def delete_flight(session: Session, flight_id: str) -> None:
+    """Delete a flight and all its packs. Raises KeyError if not found."""
+    row = session.get(FlightRow, flight_id)
+    if row is None:
+        raise KeyError(f"Flight not found: {flight_id}")
 
-    # Update registry
-    _remove_from_registry(flight_id, data_dir)
+    # Remove artifact directories for all packs
+    for pack in row.packs:
+        if pack.artifact_path:
+            _rmtree(Path(pack.artifact_path))
+
+    session.delete(row)  # cascades to briefing_packs
+    session.flush()
 
 
 # --- BriefingPack operations ---
 
 
-def save_pack_meta(meta: BriefingPackMeta, data_dir: Path | None = None) -> Path:
-    """Save briefing pack metadata. Returns the path written."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
-    pack_dir = pack_dir_for(meta.flight_id, meta.fetch_timestamp, data_dir)
-    pack_dir.mkdir(parents=True, exist_ok=True)
-
-    pack_path = pack_dir / "pack.json"
-    pack_path.write_text(meta.model_dump_json(indent=2))
-    return pack_path
+def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
+    """Insert briefing pack metadata."""
+    session.add(_meta_to_row(meta))
+    session.flush()
 
 
 def load_pack_meta(
-    flight_id: str, fetch_timestamp: str, data_dir: Path | None = None
+    session: Session, flight_id: str, fetch_timestamp: str
 ) -> BriefingPackMeta:
-    """Load pack metadata. Raises FileNotFoundError if not found."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
-    pack_path = pack_dir_for(flight_id, fetch_timestamp, data_dir) / "pack.json"
-
-    raw = json.loads(pack_path.read_text())
-    return BriefingPackMeta.model_validate(raw)
-
-
-def list_packs(
-    flight_id: str, data_dir: Path | None = None
-) -> list[BriefingPackMeta]:
-    """List all packs for a flight, sorted by fetch timestamp (newest first)."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
-    packs_dir = _packs_dir(flight_id, data_dir)
-
-    if not packs_dir.exists():
-        return []
-
-    packs = []
-    for d in sorted(packs_dir.iterdir(), reverse=True):
-        pack_path = d / "pack.json"
-        if d.is_dir() and pack_path.exists():
-            raw = json.loads(pack_path.read_text())
-            packs.append(BriefingPackMeta.model_validate(raw))
-
-    return packs
+    """Load pack metadata. Raises KeyError if not found."""
+    stmt = select(BriefingPackRow).where(
+        BriefingPackRow.flight_id == flight_id,
+        BriefingPackRow.fetch_timestamp == fetch_timestamp,
+    )
+    row = session.execute(stmt).scalar_one_or_none()
+    if row is None:
+        raise KeyError(f"Pack not found: {flight_id}/{fetch_timestamp}")
+    return _row_to_meta(row)
 
 
-def pack_dir_for(
-    flight_id: str, fetch_timestamp: str, data_dir: Path | None = None
-) -> Path:
-    """Get the directory path for a specific pack. Useful for saving artifacts."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
-    # Sanitize timestamp for use as directory name
+def list_packs(session: Session, flight_id: str) -> list[BriefingPackMeta]:
+    """List all packs for a flight, newest first."""
+    stmt = (
+        select(BriefingPackRow)
+        .where(BriefingPackRow.flight_id == flight_id)
+        .order_by(BriefingPackRow.fetch_timestamp.desc())
+    )
+    rows = session.execute(stmt).scalars().all()
+    return [_row_to_meta(r) for r in rows]
+
+
+def safe_path_component(value: str) -> str:
+    """Sanitize a string for use as a single path component.
+
+    Strips path separators and traversal sequences, keeping only
+    alphanumeric chars, hyphens, underscores, and dots (no leading dot).
+    """
+    import re
+
+    sanitized = re.sub(r"[^a-zA-Z0-9._-]", "_", value)
+    sanitized = sanitized.lstrip(".")
+    return sanitized or "_"
+
+
+def pack_dir_for(user_id: str, flight_id: str, fetch_timestamp: str) -> Path:
+    """Get the directory path for a specific pack's artifacts.
+
+    Layout: data/packs/{user_id}/{flight_id}/{safe_timestamp}/
+    """
     safe_ts = fetch_timestamp.replace(":", "-").replace("+", "p")
-    return _packs_dir(flight_id, data_dir) / safe_ts
-
-
-# --- Registry (lightweight index of all flights) ---
-
-
-def _registry_path(data_dir: Path) -> Path:
-    return data_dir / "flights.json"
-
-
-def _update_registry(flight: Flight, data_dir: Path) -> None:
-    """Add or update a flight in the registry."""
-    registry = _load_registry(data_dir)
-
-    # Replace existing or append
-    registry = [f for f in registry if f["id"] != flight.id]
-    registry.append(json.loads(flight.model_dump_json()))
-
-    _save_registry(registry, data_dir)
-
-
-def _remove_from_registry(flight_id: str, data_dir: Path) -> None:
-    """Remove a flight from the registry."""
-    registry = _load_registry(data_dir)
-    registry = [f for f in registry if f["id"] != flight_id]
-    _save_registry(registry, data_dir)
-
-
-def _load_registry(data_dir: Path) -> list[dict]:
-    path = _registry_path(data_dir)
-    if not path.exists():
-        return []
-    return json.loads(path.read_text())
-
-
-def _save_registry(registry: list[dict], data_dir: Path) -> None:
-    path = _registry_path(data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(registry, indent=2))
+    return (
+        _data_dir()
+        / "packs"
+        / safe_path_component(user_id)
+        / safe_path_component(flight_id)
+        / safe_path_component(safe_ts)
+    )
 
 
 # --- Utilities ---

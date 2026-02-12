@@ -73,13 +73,18 @@ src/weatherbrief/
 │   ├── llm_config.py  # LLM config schema + factory
 │   ├── llm_digest.py  # LangGraph digest pipeline
 │   └── prompt_builder.py  # Context assembly for LLM
+├── db/
+│   ├── __init__.py    # Package exports (Base, SessionLocal, get_engine, init_db)
+│   ├── models.py      # SQLAlchemy ORM models (User, Flight, BriefingPack, etc.)
+│   ├── engine.py      # Singleton engine, init_db(), ensure_dev_user()
+│   └── deps.py        # FastAPI deps: get_db() session, current_user_id()
 ├── storage/
-│   ├── snapshots.py   # Snapshot + cross-section save/load/list
-│   └── flights.py     # Flight + BriefingPack CRUD, registry
+│   ├── snapshots.py   # Snapshot + cross-section save/load/list (file-based)
+│   └── flights.py     # Flight + BriefingPack CRUD (DB-backed)
 ├── api/
-│   ├── app.py         # FastAPI factory, static files, CORS
+│   ├── app.py         # FastAPI app, lifespan (DB init), static files, CORS
 │   ├── routes.py      # GET /api/routes (from YAML)
-│   ├── flights.py     # CRUD /api/flights
+│   ├── flights.py     # CRUD /api/flights (DB sessions via Depends)
 │   └── packs.py       # Packs: history, artifacts, refresh, report, email
 ├── report/
 │   ├── render.py      # render_html(), render_pdf() via Jinja2 + WeasyPrint
@@ -106,29 +111,39 @@ web/
 └── dist/              # esbuild output (committed)
 ```
 
-## Storage Layout
+## Storage
+
+### Database (SQLAlchemy — SQLite dev / MySQL prod)
+
+Flight and pack metadata are stored in a relational database via SQLAlchemy ORM. The `db/` package manages engine, models, and FastAPI session dependency.
+
+- **Dev mode** (`ENVIRONMENT=development`): SQLite at `data/weatherbrief.db`, tables auto-created on startup, dev user auto-inserted.
+- **Production** (`ENVIRONMENT=production`): MySQL via `DATABASE_URL` env var, schema managed by Alembic migrations.
+
+Tables: `users`, `user_preferences`, `flights`, `briefing_packs`, `usage_log`. See [multi-user-deployment.md](./multi-user-deployment.md) for full schema.
+
+### File artifacts (disk)
+
+Large artifacts (snapshots, images, digests) stay on disk, user-scoped:
 
 ```
-data/
-├── flights.json                    # Flight registry (lightweight index)
-└── flights/
+data/packs/
+└── {user_id}/
     └── {flight_id}/
-        ├── flight.json             # Flight config
-        └── packs/
-            └── {safe_timestamp}/   # ISO timestamp (: → -, + → p)
-                ├── pack.json           # BriefingPackMeta
-                ├── snapshot.json       # ForecastSnapshot (excl. cross-sections)
-                ├── cross_section.json  # RouteCrossSection data (per-model route profiles)
-                ├── gramet.png
-                ├── skewt/
-                │   ├── EGTK_gfs.png
-                │   ├── EGTK_ecmwf.png
-                │   └── ...
-                ├── digest.md       # Formatted LLM digest
-                └── digest.json     # Structured WeatherDigest
+        └── {safe_timestamp}/   # ISO timestamp (: → -, + → p)
+            ├── snapshot.json
+            ├── cross_section.json
+            ├── gramet.png
+            ├── skewt/
+            │   ├── EGTK_gfs.png
+            │   └── ...
+            ├── digest.md
+            └── digest.json
 ```
 
-Legacy CLI storage (`data/forecasts/`, `data/gramet/`, etc.) still works for CLI-only usage.
+Path components are sanitized via `safe_path_component()` to prevent traversal attacks.
+
+In Docker, `data/` is a volume mount (`./data:/app/data`). Legacy CLI storage (`data/forecasts/`, etc.) still works for CLI-only usage.
 
 ## API
 
@@ -157,7 +172,7 @@ Static files served from `web/` at root.
 - **Multi-point fetch** — 1 API call per model with all route points (not per-waypoint); 24h time window.
 - **Graceful degradation** — GRAMET/Skew-T/LLM/DWD failures logged but don't halt pipeline.
 - **Pipeline extracted from CLI** — `pipeline.py` is the single entry point for both CLI and API.
-- **File-based storage** — no database; flights and packs are directories with JSON metadata.
+- **DB-backed metadata, file-based artifacts** — flight/pack metadata in SQLAlchemy (SQLite dev, MySQL prod); large files (snapshots, images) on disk in user-scoped directories.
 - **Flight ID = route + date** — one flight per route per day, by design.
 - **Naive datetimes in pipeline** — matches Open-Meteo's naive UTC timestamps.
 - **Vanilla TS + Zustand** — no framework; esbuild for fast bundling.
@@ -168,6 +183,10 @@ Static files served from `web/` at root.
 | Package | Purpose |
 |---------|---------|
 | `pydantic>=2.0` | Data models |
+| `sqlalchemy>=2.0` | ORM (SQLite + MySQL) |
+| `alembic>=1.13` | Database migrations |
+| `pymysql>=1.1` | Pure-Python MySQL driver |
+| `cryptography>=42.0` | MySQL auth + future Fernet encryption |
 | `requests` | HTTP API calls |
 | `pyyaml` | Route config |
 | `fastapi`, `uvicorn` | API server |
@@ -176,7 +195,7 @@ Static files served from `web/` at root.
 | `langchain-anthropic`, `langchain-openai` | LLM providers |
 | `python-dotenv` | Environment loading |
 | `jinja2`, `weasyprint` | PDF/HTML report rendering |
-| `euro-aip` (local) | Airport DB, Autorouter credentials |
+| `euro-aip` (local / GitHub) | Airport DB, Autorouter credentials |
 
 ## Phase Roadmap
 
@@ -188,6 +207,28 @@ Static files served from `web/` at root.
 | 4a | Done | MetPy sounding analysis: thermodynamic indices, enhanced clouds/icing/convective, altitude band comparison |
 | 4b | Planned | Ensemble & remaining model comparison refinement |
 | 5 | Done | Web UI, API, PDF report, email delivery |
+| 6.1 | Done | Docker + DB + Deploy: SQLAlchemy storage, Alembic migrations, Docker packaging |
+| 6.2 | Planned | Auth + multi-user: Google/Apple OAuth, JWT, user-scoped data |
+| 6.3 | Planned | Preferences + encrypted credential storage |
+| 6.4 | Planned | Usage tracking + rate limits |
+
+## Docker
+
+The app is packaged as a Docker image (`python:3.13-slim`) with:
+- System deps for WeasyPrint (libpango, libcairo, etc.)
+- `euro-aip` installed from GitHub (not local path)
+- Non-root user (UID 2000)
+- Exposed on port 8020
+
+```bash
+# Build
+docker build -t weatherbrief .
+
+# Run with docker-compose (joins shared-services network)
+docker-compose up -d
+```
+
+`docker-compose.yml` mounts `./data:/app/data` for artifact persistence and reads env vars from `.env`.
 
 ## References
 

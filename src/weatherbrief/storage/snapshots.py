@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from weatherbrief.models import ForecastSnapshot
 
-DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
+DEFAULT_DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 
 
 def _snapshot_dir(
