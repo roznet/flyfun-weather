@@ -20,6 +20,10 @@ _ICING_ORDER = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.S
 
 _ICING_MARGIN_FT = 500
 
+# ICAO cloud level boundaries (feet AGL)
+_CLOUD_LOW_CEILING_FT = 6500
+_CLOUD_MID_CEILING_FT = 20000
+
 
 def compute_altitude_advisories(
     soundings: dict[str, SoundingAnalysis],
@@ -89,16 +93,24 @@ def _compute_regimes(
     if analysis.indices and analysis.indices.freezing_level_ft is not None:
         transitions.add(_round_alt(analysis.indices.freezing_level_ft))
 
+    # Add ICAO cloud-level boundaries when NWP cloud data is available
+    has_nwp_cloud = analysis.cloud_cover_low_pct is not None
+    if has_nwp_cloud:
+        transitions.add(float(_CLOUD_LOW_CEILING_FT))
+        transitions.add(float(_CLOUD_MID_CEILING_FT))
+
     # Clamp to [0, ceiling_ft] and sort
     sorted_alts = sorted(t for t in transitions if 0 <= t <= ceiling_ft)
 
     # Ensure we have at least two points
     if len(sorted_alts) < 2:
+        cc = _nwp_cloud_cover_at(float(ceiling_ft) / 2, analysis)
         return [VerticalRegime(
             floor_ft=0,
             ceiling_ft=float(ceiling_ft),
             in_cloud=False,
-            label="Clear",
+            cloud_cover_pct=cc,
+            label=_regime_label(False, IcingRisk.NONE, IcingType.NONE, cc),
         )]
 
     # Classify each segment
@@ -112,7 +124,8 @@ def _compute_regimes(
         midpoint = (floor + ceil) / 2
         in_cloud = _point_in_cloud(midpoint, analysis)
         icing_risk, icing_type = _point_icing(midpoint, analysis)
-        label = _regime_label(in_cloud, icing_risk, icing_type)
+        cloud_cover = _nwp_cloud_cover_at(midpoint, analysis)
+        label = _regime_label(in_cloud, icing_risk, icing_type, cloud_cover)
 
         raw_regimes.append(VerticalRegime(
             floor_ft=floor,
@@ -120,16 +133,19 @@ def _compute_regimes(
             in_cloud=in_cloud,
             icing_risk=icing_risk,
             icing_type=icing_type,
+            cloud_cover_pct=cloud_cover,
             label=label,
         ))
 
     # Merge adjacent regimes with identical conditions
     if not raw_regimes:
+        cc = _nwp_cloud_cover_at(float(ceiling_ft) / 2, analysis)
         return [VerticalRegime(
             floor_ft=0,
             ceiling_ft=float(ceiling_ft),
             in_cloud=False,
-            label="Clear",
+            cloud_cover_pct=cc,
+            label=_regime_label(False, IcingRisk.NONE, IcingType.NONE, cc),
         )]
 
     merged: list[VerticalRegime] = [raw_regimes[0]]
@@ -139,6 +155,7 @@ def _compute_regimes(
             prev.in_cloud == regime.in_cloud
             and prev.icing_risk == regime.icing_risk
             and prev.icing_type == regime.icing_type
+            and prev.cloud_cover_pct == regime.cloud_cover_pct
         ):
             # Extend the previous regime
             merged[-1] = VerticalRegime(
@@ -147,6 +164,7 @@ def _compute_regimes(
                 in_cloud=prev.in_cloud,
                 icing_risk=prev.icing_risk,
                 icing_type=prev.icing_type,
+                cloud_cover_pct=prev.cloud_cover_pct,
                 label=prev.label,
             )
         else:
@@ -177,14 +195,41 @@ def _point_icing(
     return worst_risk, worst_type
 
 
-def _regime_label(in_cloud: bool, icing_risk: IcingRisk, icing_type: IcingType) -> str:
+def _nwp_cloud_cover_at(
+    altitude_ft: float, analysis: SoundingAnalysis
+) -> float | None:
+    """Return the NWP cloud cover % for the ICAO band containing the altitude.
+
+    ICAO bands: Low SFC–6500ft, Mid 6500–20000ft, High 20000ft+.
+    Returns None when NWP cloud data is unavailable (e.g. ECMWF).
+    """
+    if analysis.cloud_cover_low_pct is None:
+        return None
+    if altitude_ft < _CLOUD_LOW_CEILING_FT:
+        return analysis.cloud_cover_low_pct
+    if altitude_ft < _CLOUD_MID_CEILING_FT:
+        return analysis.cloud_cover_mid_pct
+    return analysis.cloud_cover_high_pct
+
+
+def _regime_label(
+    in_cloud: bool,
+    icing_risk: IcingRisk,
+    icing_type: IcingType,
+    cloud_cover_pct: float | None = None,
+) -> str:
     """Generate a human-readable label for a regime."""
     if not in_cloud and icing_risk == IcingRisk.NONE:
+        if cloud_cover_pct is not None and cloud_cover_pct > 0:
+            return f"Clear (cloud {cloud_cover_pct:.0f}%)"
         return "Clear"
 
     parts: list[str] = []
     if in_cloud:
-        parts.append("In cloud")
+        if cloud_cover_pct is not None:
+            parts.append(f"In cloud {cloud_cover_pct:.0f}%")
+        else:
+            parts.append("In cloud")
     if icing_risk != IcingRisk.NONE:
         icing_str = f"icing {icing_risk.value.upper()}"
         if icing_type != IcingType.NONE:

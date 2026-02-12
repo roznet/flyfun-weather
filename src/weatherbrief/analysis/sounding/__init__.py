@@ -62,4 +62,7 @@ def analyze_sounding(
         cloud_layers=cloud_layers,
         icing_zones=icing_zones,
         convective=convective,
+        cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+        cloud_cover_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+        cloud_cover_high_pct=hourly.cloud_cover_high_pct if hourly else None,
     )

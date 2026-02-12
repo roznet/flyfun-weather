@@ -322,6 +322,7 @@ export function renderSoundingAnalysis(snapshot: ForecastSnapshot | null): void 
         ${renderAltitudeMarkers(a.sounding)}
         ${renderIcingZones(a.sounding)}
         ${renderEnhancedClouds(a.sounding)}
+        ${renderNwpCloudCover(a.sounding)}
         ${renderAltitudeAdvisories(a.altitude_advisories)}
       </div>
     `;
@@ -390,6 +391,20 @@ function renderEnhancedClouds(soundings: Record<string, SoundingAnalysis>): stri
   }
   if (rows.length === 0) return '';
   return `<div class="enhanced-clouds"><h5>Cloud Layers</h5>${rows.join('')}</div>`;
+}
+
+function renderNwpCloudCover(soundings: Record<string, SoundingAnalysis>): string {
+  const rows: string[] = [];
+  for (const [model, sa] of Object.entries(soundings)) {
+    if (sa.cloud_cover_low_pct == null && sa.cloud_cover_mid_pct == null && sa.cloud_cover_high_pct == null) continue;
+    const low = sa.cloud_cover_low_pct != null ? `Low: ${sa.cloud_cover_low_pct.toFixed(0)}%` : '';
+    const mid = sa.cloud_cover_mid_pct != null ? `Mid: ${sa.cloud_cover_mid_pct.toFixed(0)}%` : '';
+    const high = sa.cloud_cover_high_pct != null ? `High: ${sa.cloud_cover_high_pct.toFixed(0)}%` : '';
+    const parts = [low, mid, high].filter(Boolean).join(' | ');
+    rows.push(`<div class="cloud-row">[${model}] ${parts}</div>`);
+  }
+  if (rows.length === 0) return '';
+  return `<div class="nwp-cloud-cover"><h5>NWP Cloud Cover</h5>${rows.join('')}</div>`;
 }
 
 function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
