@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 
 def _resolve_db_path(args_db: str | None) -> str:
     """Resolve database path from CLI arg or environment variable."""
-    db_path = args_db or os.environ.get("WEATHERBRIEF_DB")
+    db_path = args_db or os.environ.get("AIRPORTS_DB")
     if not db_path:
-        print("Error: --db PATH or WEATHERBRIEF_DB environment variable is required.")
+        print("Error: --db PATH or AIRPORTS_DB environment variable is required.")
         sys.exit(1)
     if not Path(db_path).exists():
         print(f"Error: Database not found: {db_path}")
@@ -148,7 +148,7 @@ def main() -> None:
         "--route", help="Named route from routes.yaml (alternative to inline ICAOs)"
     )
     fetch_parser.add_argument(
-        "--db", help="Path to airport database (or set WEATHERBRIEF_DB env var)"
+        "--db", help="Path to airport database (or set AIRPORTS_DB env var)"
     )
     fetch_parser.add_argument(
         "--alt", type=int, default=8000, help="Cruise altitude in feet (default: 8000)"

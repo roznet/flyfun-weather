@@ -38,6 +38,7 @@ def interpolate_route(
                     lon=wp_a.lon,
                     distance_from_origin_nm=cumulative_nm,
                     waypoint_icao=wp_a.icao,
+                    waypoint_name=wp_a.name,
                 )
             )
 
@@ -64,6 +65,7 @@ def interpolate_route(
                 lon=wp_b.lon,
                 distance_from_origin_nm=round(cumulative_nm, 1),
                 waypoint_icao=wp_b.icao,
+                waypoint_name=wp_b.name,
             )
         )
 

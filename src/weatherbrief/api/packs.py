@@ -197,7 +197,7 @@ def refresh_briefing(flight_id: str, request: Request):
 
     db_path = request.app.state.db_path
     if not db_path:
-        raise HTTPException(status_code=503, detail="WEATHERBRIEF_DB or AIRPORTS_DB not configured")
+        raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
     try:
         from weatherbrief.airports import resolve_waypoints

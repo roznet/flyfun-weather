@@ -339,7 +339,7 @@ class TestRefreshEndpoint:
         assert resp.status_code == 404
 
     def test_refresh_no_db_configured(self, client, sample_flight):
-        """When WEATHERBRIEF_DB is empty, refresh returns 503."""
+        """When AIRPORTS_DB is empty, refresh returns 503."""
         client.app.state.db_path = ""
         resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
         assert resp.status_code == 503
