@@ -1,0 +1,20 @@
+services:
+  weatherbrief:
+    build: .
+    container_name: weatherbrief
+    restart: unless-stopped
+    ports:
+      - "8020:8020"
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    networks:
+      - shared-services
+
+networks:
+  shared-services:
+    external: true

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,6 +15,29 @@ from fastapi.staticfiles import StaticFiles
 from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import router as packs_router
 from weatherbrief.api.routes import router as routes_router
+from weatherbrief.db.engine import (
+    SessionLocal,
+    ensure_dev_user,
+    get_engine,
+    init_db,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown lifecycle."""
+    env = os.environ.get("ENVIRONMENT", "development")
+    engine = get_engine()
+
+    if env == "development":
+        init_db(engine)
+        with SessionLocal() as session:
+            ensure_dev_user(session)
+        logger.info("Dev mode: tables created, dev user ensured")
+
+    yield
 
 
 def create_app() -> FastAPI:
@@ -23,9 +48,11 @@ def create_app() -> FastAPI:
         title="WeatherBrief API",
         description="Aviation weather briefing API",
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     app.state.db_path = os.environ.get("AIRPORTS_DB", "")
+    app.state.data_dir = Path(os.environ.get("DATA_DIR", "data"))
 
     app.add_middleware(
         CORSMiddleware,

@@ -4,20 +4,50 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from weatherbrief.api.app import create_app
+from weatherbrief.db.deps import get_db
+from weatherbrief.db.engine import DEV_USER_ID
+from weatherbrief.db.models import Base, UserPreferencesRow, UserRow
 from weatherbrief.models import BriefingPackMeta, Flight
-from weatherbrief.storage.flights import save_flight, save_pack_meta
+from weatherbrief.storage.flights import pack_dir_for, save_flight, save_pack_meta
 
 
 @pytest.fixture
-def tmp_data_dir(tmp_path):
-    """Temporary data directory for isolation."""
-    return tmp_path / "data"
+def app_db():
+    """In-memory SQLite engine + session factory for the test app."""
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine)
+
+    # Seed dev user
+    session = TestSession()
+    session.add(UserRow(
+        id=DEV_USER_ID, provider="local", provider_sub="dev",
+        email="dev@localhost", display_name="Dev User", approved=True,
+    ))
+    session.add(UserPreferencesRow(user_id=DEV_USER_ID))
+    session.commit()
+    session.close()
+
+    yield TestSession
+    engine.dispose()
 
 
 @pytest.fixture
@@ -41,25 +71,41 @@ def tmp_config_dir(tmp_path):
 
 
 @pytest.fixture
-def client(tmp_data_dir, tmp_config_dir, monkeypatch):
-    """Create a test client with isolated data and config directories."""
+def client(app_db, tmp_config_dir, tmp_path, monkeypatch):
+    """Create a test client with isolated DB and config directories."""
     import weatherbrief.api.routes as routes_mod
-    import weatherbrief.storage.flights as flights_mod
-    import weatherbrief.storage.snapshots as snapshots_mod
+    import weatherbrief.db.engine as engine_mod
 
-    monkeypatch.setattr(snapshots_mod, "DEFAULT_DATA_DIR", tmp_data_dir)
-    monkeypatch.setattr(flights_mod, "DEFAULT_DATA_DIR", tmp_data_dir)
     monkeypatch.setattr(routes_mod, "CONFIG_DIR", tmp_config_dir)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ENVIRONMENT", "production")  # skip lifespan init_db
 
     app = create_app()
-    return TestClient(app)
+
+    # Override the DB dependency to use our test session
+    def _override_get_db():
+        session = app_db()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+
+    return TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture
-def sample_flight(tmp_data_dir):
+def sample_flight(app_db):
     """Create and save a sample flight."""
+    session = app_db()
     flight = Flight(
         id="egtk_lsgs-2026-02-21",
+        user_id=DEV_USER_ID,
         route_name="egtk_lsgs",
         waypoints=["EGTK", "LFPB", "LSGS"],
         target_date="2026-02-21",
@@ -68,13 +114,16 @@ def sample_flight(tmp_data_dir):
         flight_duration_hours=4.5,
         created_at=datetime(2026, 2, 19, 12, 0, 0, tzinfo=timezone.utc),
     )
-    save_flight(flight, data_dir=tmp_data_dir)
+    save_flight(session, flight, DEV_USER_ID)
+    session.commit()
+    session.close()
     return flight
 
 
 @pytest.fixture
-def sample_pack(tmp_data_dir, sample_flight):
+def sample_pack(app_db, sample_flight):
     """Create and save a sample pack for the sample flight."""
+    session = app_db()
     meta = BriefingPackMeta(
         flight_id=sample_flight.id,
         fetch_timestamp="2026-02-19T18:00:00+00:00",
@@ -85,7 +134,9 @@ def sample_pack(tmp_data_dir, sample_flight):
         assessment="GREEN",
         assessment_reason="Conditions favorable",
     )
-    save_pack_meta(meta, data_dir=tmp_data_dir)
+    save_pack_meta(session, meta)
+    session.commit()
+    session.close()
     return meta
 
 
@@ -258,13 +309,12 @@ class TestPackArtifacts:
     """Test artifact serving (snapshot, gramet, skewt, digest)."""
 
     @pytest.fixture
-    def pack_with_artifacts(self, tmp_data_dir, sample_pack):
+    def pack_with_artifacts(self, tmp_path, sample_pack, monkeypatch):
         """Create a pack with actual artifact files on disk."""
-        from weatherbrief.storage.flights import pack_dir_for
+        monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
 
         pack_dir = pack_dir_for(
-            sample_pack.flight_id, sample_pack.fetch_timestamp,
-            data_dir=tmp_data_dir,
+            DEV_USER_ID, sample_pack.flight_id, sample_pack.fetch_timestamp,
         )
         pack_dir.mkdir(parents=True, exist_ok=True)
 
