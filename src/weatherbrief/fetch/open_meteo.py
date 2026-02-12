@@ -18,6 +18,7 @@ from weatherbrief.models import (
     HourlyForecast,
     ModelSource,
     PressureLevelData,
+    RoutePoint,
     Waypoint,
     WaypointForecast,
 )
@@ -116,6 +117,92 @@ class OpenMeteoClient:
                     "Failed to fetch %s for %s", model.value, waypoint.icao,
                     exc_info=True,
                 )
+        return results
+
+    def fetch_multi_point(
+        self,
+        points: list[RoutePoint],
+        model: ModelSource,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[WaypointForecast]:
+        """Fetch forecast for multiple points in a single API call.
+
+        Open-Meteo accepts comma-separated latitude/longitude values and returns
+        a list of per-location results.  When ``start_date`` / ``end_date`` are
+        provided, only that time window is requested (reduces payload).
+
+        Returns one ``WaypointForecast`` per input point, in the same order.
+        """
+        model_key = model.value
+        endpoint = MODEL_ENDPOINTS[model_key]
+        hourly_params = build_hourly_params(endpoint)
+
+        params: dict[str, object] = {
+            "latitude": ",".join(str(p.lat) for p in points),
+            "longitude": ",".join(str(p.lon) for p in points),
+            "hourly": hourly_params,
+            "wind_speed_unit": "kn",
+            "timezone": "UTC",
+        }
+        if start_date and end_date:
+            params["start_date"] = start_date
+            params["end_date"] = end_date
+        else:
+            params["forecast_days"] = min(endpoint.max_days, 16)
+        if endpoint.model_param:
+            params["models"] = endpoint.model_param
+
+        logger.info(
+            "Fetching %s for %d route points (%s–%s)",
+            endpoint.name,
+            len(points),
+            start_date or "full",
+            end_date or "range",
+        )
+
+        resp = self.session.get(endpoint.base_url, params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        response_json = resp.json()
+
+        # Single-point returns a dict; multi-point returns a list of dicts.
+        if isinstance(response_json, dict):
+            response_json = [response_json]
+
+        fetched_at = datetime.now(timezone.utc)
+        results: list[WaypointForecast] = []
+
+        for point, point_data in zip(points, response_json):
+            hourly_data = point_data.get("hourly", {})
+            timestamps = hourly_data.get("time", [])
+
+            hourly_list = [
+                self._parse_hourly(hourly_data, i, ts, endpoint.unavailable_pressure)
+                for i, ts in enumerate(timestamps)
+            ]
+
+            # Build a synthetic Waypoint for this route point
+            if point.waypoint_icao:
+                wp = Waypoint(
+                    icao=point.waypoint_icao,
+                    name=point.waypoint_icao,
+                    lat=point.lat,
+                    lon=point.lon,
+                )
+            else:
+                label = f"RP{int(point.distance_from_origin_nm):03d}"
+                wp = Waypoint(icao=label, name=label, lat=point.lat, lon=point.lon)
+
+            results.append(
+                WaypointForecast(
+                    waypoint=wp,
+                    model=model,
+                    fetched_at=fetched_at,
+                    hourly=hourly_list,
+                )
+            )
+
         return results
 
     def _parse_hourly(
