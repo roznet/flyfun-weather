@@ -25,7 +25,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
     )
 
-    app.state.db_path = os.environ.get("WEATHERBRIEF_DB") or os.environ.get("AIRPORTS_DB", "")
+    app.state.db_path = os.environ.get("AIRPORTS_DB", "")
 
     app.add_middleware(
         CORSMiddleware,

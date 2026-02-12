@@ -186,7 +186,7 @@ class OpenMeteoClient:
             if point.waypoint_icao:
                 wp = Waypoint(
                     icao=point.waypoint_icao,
-                    name=point.waypoint_icao,
+                    name=point.waypoint_name or point.waypoint_icao,
                     lat=point.lat,
                     lon=point.lon,
                 )

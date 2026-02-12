@@ -116,6 +116,7 @@ class RoutePoint(BaseModel):
     lon: float
     distance_from_origin_nm: float
     waypoint_icao: str | None = None  # non-None if this is a named waypoint
+    waypoint_name: str | None = None  # full airport name when waypoint_icao is set
 
 
 class ModelSource(str, Enum):
