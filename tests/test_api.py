@@ -106,7 +106,7 @@ def sample_flight(app_db):
     """Create and save a sample flight."""
     session = app_db()
     flight = Flight(
-        id="egtk_lsgs-2026-02-21",
+        id="egtk_lsgs-2026-02-21-8823",
         user_id=DEV_USER_ID,
         route_name="egtk_lsgs",
         waypoints=["EGTK", "LFPB", "LSGS"],
@@ -206,7 +206,7 @@ class TestFlightsAPI:
         })
         assert resp.status_code == 201
         data = resp.json()
-        assert data["id"] == "egtk_lsgs-2026-02-21"
+        assert data["id"] == "egtk_lsgs-2026-02-21-8823"
         assert data["route_name"] == "egtk_lsgs"
         assert data["waypoints"] == ["EGTK", "LFPB", "LSGS"]
         assert data["target_date"] == "2026-02-21"
@@ -228,6 +228,10 @@ class TestFlightsAPI:
             "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
             "target_date": "2026-02-21",
+            "target_time_utc": 9,
+            "cruise_altitude_ft": 8000,
+            "flight_ceiling_ft": 18000,
+            "flight_duration_hours": 4.5,
         })
         assert resp.status_code == 409
 
@@ -236,10 +240,10 @@ class TestFlightsAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["id"] == "egtk_lsgs-2026-02-21"
+        assert data[0]["id"] == sample_flight.id
 
     def test_get_flight(self, client, sample_flight):
-        resp = client.get("/api/flights/egtk_lsgs-2026-02-21")
+        resp = client.get(f"/api/flights/{sample_flight.id}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["route_name"] == "egtk_lsgs"
@@ -249,11 +253,26 @@ class TestFlightsAPI:
         assert resp.status_code == 404
 
     def test_delete_flight(self, client, sample_flight):
-        resp = client.delete("/api/flights/egtk_lsgs-2026-02-21")
+        resp = client.delete(f"/api/flights/{sample_flight.id}")
         assert resp.status_code == 204
         # Verify it's gone
-        resp = client.get("/api/flights/egtk_lsgs-2026-02-21")
+        resp = client.get(f"/api/flights/{sample_flight.id}")
         assert resp.status_code == 404
+
+    def test_same_route_date_different_params(self, client, sample_flight):
+        """Same route+date with different time/altitude creates a new flight."""
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "route_name": "egtk_lsgs",
+            "target_date": "2026-02-21",
+            "target_time_utc": 14,  # afternoon instead of morning
+            "cruise_altitude_ft": 8000,
+            "flight_ceiling_ft": 18000,
+            "flight_duration_hours": 4.5,
+        })
+        assert resp.status_code == 201
+        assert resp.json()["id"] != sample_flight.id
+        assert resp.json()["id"].startswith("egtk_lsgs-2026-02-21-")
 
     def test_delete_flight_not_found(self, client):
         resp = client.delete("/api/flights/nonexistent")

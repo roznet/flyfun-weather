@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -111,7 +113,20 @@ def create_flight(
     )
     flight_duration_hours = req.flight_duration_hours if req.flight_duration_hours is not None else 0.0
 
-    flight_id = f"{safe_path_component(route_name)}-{req.target_date}"
+    # Build a short hash from distinguishing parameters so the same route+date
+    # can have multiple flights with different time/altitude/etc.
+    params_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "time": target_time_utc,
+                "alt": cruise_altitude_ft,
+                "ceil": flight_ceiling_ft,
+                "dur": flight_duration_hours,
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()[:4]
+    flight_id = f"{safe_path_component(route_name)}-{req.target_date}-{params_hash}"
 
     # Check if already exists
     try:
