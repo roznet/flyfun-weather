@@ -9,3 +9,5 @@ venv/
 tests/
 docs/
 *.egg-info
+web/node_modules
+web/dist

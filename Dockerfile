@@ -1,3 +1,12 @@
+# Stage 1: Build web assets
+FROM node:22-slim AS web-build
+WORKDIR /web
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci --ignore-scripts
+COPY web/ .
+RUN npm run build
+
+# Stage 2: Python application
 FROM python:3.13-slim
 
 # System deps for weasyprint (PDF generation) and git (euro-aip install)
@@ -34,8 +43,9 @@ COPY src/ src/
 COPY alembic/ alembic/
 COPY alembic.ini .
 
-# Copy web UI
+# Copy web UI (source + built JS from Node stage)
 COPY web/ web/
+COPY --from=web-build /web/dist/ web/dist/
 
 # Create data directory
 RUN mkdir -p /app/data && chown app:app /app/data
