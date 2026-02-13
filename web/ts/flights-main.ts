@@ -1,9 +1,18 @@
 /** Flights page entry point — wires store, UI manager, and event handlers. */
 
+import { fetchCurrentUser, logout } from './adapters/auth-adapter';
 import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
 
-function init(): void {
+async function init(): Promise<void> {
+  // Auth check — redirect to login if not authenticated
+  const user = await fetchCurrentUser();
+  if (!user) {
+    window.location.href = '/login.html';
+    return;
+  }
+  renderUserInfo(user.name);
+
   const store = flightsStore;
 
   // --- Subscribe to state changes ---
@@ -72,6 +81,16 @@ function init(): void {
 
 function navigateToBriefing(flightId: string): void {
   window.location.href = `/briefing.html?flight=${encodeURIComponent(flightId)}`;
+}
+
+function renderUserInfo(name: string): void {
+  const container = document.getElementById('user-info');
+  if (!container) return;
+  container.innerHTML = `
+    <span class="user-name">${name}</span>
+    <button class="btn-logout" id="logout-btn">Sign out</button>
+  `;
+  document.getElementById('logout-btn')?.addEventListener('click', () => logout());
 }
 
 // Boot

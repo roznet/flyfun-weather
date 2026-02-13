@@ -658,6 +658,93 @@ label {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
 }
 
+/* --- Login page --- */
+
+.login-panel {
+  max-width: 380px;
+  margin: 15vh auto 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+.login-panel h1 {
+  font-size: 1.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.login-subtitle {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+}
+
+.btn-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 0.15s;
+}
+
+.btn-login-google {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-login-google:hover {
+  background: var(--bg);
+  text-decoration: none;
+}
+
+.pending-message {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+/* --- User info in header --- */
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.user-name {
+  font-weight: 500;
+}
+
+.btn-logout {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius);
+}
+
+.btn-logout:hover {
+  color: var(--danger);
+  background: var(--red-bg);
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 640px) {

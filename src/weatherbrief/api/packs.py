@@ -57,17 +57,25 @@ def _meta_to_response(meta: BriefingPackMeta) -> PackMetaResponse:
 
 
 @router.get("", response_model=list[PackMetaResponse])
-def list_flight_packs(flight_id: str, db: Session = Depends(get_db)):
+def list_flight_packs(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """List all packs (history) for a flight."""
-    _ensure_flight_exists(db, flight_id)
+    _load_flight_or_404(db, flight_id, user_id)
     packs = list_packs(db, flight_id)
     return [_meta_to_response(p) for p in packs]
 
 
 @router.get("/latest", response_model=PackMetaResponse)
-def get_latest_pack(flight_id: str, db: Session = Depends(get_db)):
+def get_latest_pack(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Get the most recent pack for a flight."""
-    _ensure_flight_exists(db, flight_id)
+    _load_flight_or_404(db, flight_id, user_id)
     packs = list_packs(db, flight_id)
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")
@@ -152,10 +160,14 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db):
 
 
 @router.post("/refresh", response_model=PackMetaResponse, status_code=201)
-def refresh_briefing(flight_id: str, request: Request, db: Session = Depends(get_db)):
+def refresh_briefing(
+    flight_id: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Trigger a new briefing fetch for a flight."""
-    flight = _load_flight_or_404(db, flight_id)
-    user_id = current_user_id()
+    flight = _load_flight_or_404(db, flight_id, user_id)
 
     db_path = request.app.state.db_path
     if not db_path:
@@ -190,14 +202,17 @@ _refresh_executor = ThreadPoolExecutor(max_workers=2)
 
 
 @router.post("/refresh/stream")
-async def refresh_briefing_stream(flight_id: str, request: Request):
+async def refresh_briefing_stream(
+    flight_id: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+):
     """Stream briefing refresh progress via Server-Sent Events."""
     # Manage our own DB session — FastAPI's Depends(get_db) cleanup
     # conflicts with the long-lived StreamingResponse.
     db = SessionLocal()
     try:
-        flight = _load_flight_or_404(db, flight_id)
-        user_id = current_user_id()
+        flight = _load_flight_or_404(db, flight_id, user_id)
 
         db_path = request.app.state.db_path
         if not db_path:
@@ -276,9 +291,14 @@ async def refresh_briefing_stream(flight_id: str, request: Request):
 
 
 @router.get("/{timestamp}", response_model=PackMetaResponse)
-def get_pack(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def get_pack(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Get a specific pack's metadata."""
-    _ensure_flight_exists(db, flight_id)
+    _load_flight_or_404(db, flight_id, user_id)
     try:
         meta = load_pack_meta(db, flight_id, timestamp)
     except KeyError:
@@ -287,9 +307,14 @@ def get_pack(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{timestamp}/snapshot")
-def get_snapshot(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def get_snapshot(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Get the raw ForecastSnapshot JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     snapshot_path = pack_dir / "snapshot.json"
     if not snapshot_path.exists():
         raise HTTPException(status_code=404, detail="Snapshot not found")
@@ -297,9 +322,14 @@ def get_snapshot(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{timestamp}/gramet")
-def get_gramet(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def get_gramet(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Get the GRAMET image for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     gramet_path = pack_dir / "gramet.png"
     if not gramet_path.exists():
         raise HTTPException(status_code=404, detail="GRAMET not available")
@@ -309,10 +339,11 @@ def get_gramet(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
 @router.get("/{timestamp}/skewt/{icao}/{model}")
 def get_skewt(
     flight_id: str, timestamp: str, icao: str, model: str,
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
     """Get a Skew-T image for a waypoint, generating on-demand if needed."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     skewt_path = pack_dir / "skewt" / f"{icao}_{model}.png"
     if skewt_path.exists():
         return FileResponse(skewt_path, media_type="image/png")
@@ -346,9 +377,14 @@ def get_skewt(
 
 
 @router.get("/{timestamp}/route-analyses")
-def get_route_analyses(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def get_route_analyses(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Get the route analyses JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     ra_path = pack_dir / "route_analyses.json"
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
@@ -358,13 +394,14 @@ def get_route_analyses(flight_id: str, timestamp: str, db: Session = Depends(get
 @router.get("/{timestamp}/skewt/route/{point_index}/{model}")
 def get_route_skewt(
     flight_id: str, timestamp: str, point_index: int, model: str,
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
     """Get an on-demand Skew-T for a route point.
 
     Generates and caches the PNG on first request.
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
 
     # Cache path
     cache_dir = pack_dir / "skewt" / "route"
@@ -420,9 +457,14 @@ def get_route_skewt(
 
 
 @router.get("/{timestamp}/digest")
-def get_digest(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def get_digest(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Get the LLM digest markdown for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     digest_path = pack_dir / "digest.md"
     if not digest_path.exists():
         raise HTTPException(status_code=404, detail="Digest not available")
@@ -430,9 +472,14 @@ def get_digest(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{timestamp}/digest/json")
-def get_digest_json(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def get_digest_json(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Get the structured LLM digest as JSON."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     json_path = pack_dir / "digest.json"
     if not json_path.exists():
         raise HTTPException(status_code=404, detail="Structured digest not available")
@@ -440,10 +487,15 @@ def get_digest_json(flight_id: str, timestamp: str, db: Session = Depends(get_db
 
 
 @router.get("/{timestamp}/report.html")
-def get_report_html(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def get_report_html(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """View a self-contained HTML briefing report."""
-    flight = _load_flight_or_404(db, flight_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    flight = _load_flight_or_404(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
     from weatherbrief.report.render import render_html
@@ -453,10 +505,15 @@ def get_report_html(flight_id: str, timestamp: str, db: Session = Depends(get_db
 
 
 @router.get("/{timestamp}/report.pdf")
-def get_report_pdf(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def get_report_pdf(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Download a PDF briefing report."""
-    flight = _load_flight_or_404(db, flight_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    flight = _load_flight_or_404(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
     from weatherbrief.report.render import render_pdf
@@ -474,10 +531,15 @@ def get_report_pdf(flight_id: str, timestamp: str, db: Session = Depends(get_db)
 
 
 @router.post("/{timestamp}/email")
-def send_email(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+def send_email(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Send briefing email to configured recipients."""
-    flight = _load_flight_or_404(db, flight_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    flight = _load_flight_or_404(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
     from weatherbrief.notify.email import SmtpConfig, get_recipients, send_briefing_email
@@ -501,16 +563,15 @@ def send_email(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
 # --- Helpers ---
 
 
-def _load_flight_or_404(db: Session, flight_id: str):
-    """Load a flight or raise 404."""
+def _load_flight_or_404(db: Session, flight_id: str, user_id: str):
+    """Load a flight, verifying ownership. Returns 404 if not found or not owned."""
     try:
-        return load_flight(db, flight_id)
+        flight = load_flight(db, flight_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
-
-
-def _ensure_flight_exists(db: Session, flight_id: str) -> None:
-    _load_flight_or_404(db, flight_id)
+    if flight.user_id != user_id:
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    return flight
 
 
 def _load_pack_meta_or_404(db: Session, flight_id: str, timestamp: str) -> BriefingPackMeta:
@@ -521,9 +582,8 @@ def _load_pack_meta_or_404(db: Session, flight_id: str, timestamp: str) -> Brief
         raise HTTPException(status_code=404, detail="Pack not found")
 
 
-def _get_pack_dir(db: Session, flight_id: str, timestamp: str):
-    _ensure_flight_exists(db, flight_id)
-    user_id = current_user_id()
+def _get_pack_dir(db: Session, flight_id: str, timestamp: str, user_id: str):
+    _load_flight_or_404(db, flight_id, user_id)
     pack_path = pack_dir_for(user_id, flight_id, timestamp)
     if not pack_path.exists():
         raise HTTPException(status_code=404, detail="Pack not found")

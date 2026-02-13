@@ -11,7 +11,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
+from weatherbrief.api.auth import router as auth_router
+from weatherbrief.api.auth_config import get_jwt_secret, is_dev_mode
 from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import router as packs_router
 from weatherbrief.api.routes import router as routes_router
@@ -35,12 +38,10 @@ async def lifespan(app: FastAPI):
         init_db(engine)
         logger.info("Dev mode: tables created via init_db")
 
-    # Ensure the dev user exists until auth (Phase 2) is implemented.
-    # In production current_user_id() still returns DEV_USER_ID, so the
-    # row must exist or FK constraints on flights/packs will fail.
-    with SessionLocal() as session:
-        ensure_dev_user(session)
-    logger.info("Dev user ensured")
+    if is_dev_mode():
+        with SessionLocal() as session:
+            ensure_dev_user(session)
+        logger.info("Dev user ensured")
 
     yield
 
@@ -59,14 +60,20 @@ def create_app() -> FastAPI:
     app.state.db_path = os.environ.get("AIRPORTS_DB", "")
     app.state.data_dir = Path(os.environ.get("DATA_DIR", "data"))
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # SessionMiddleware required by authlib for OAuth CSRF state
+    app.add_middleware(SessionMiddleware, secret_key=get_jwt_secret())
 
+    if is_dev_mode():
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    # Auth routes first (before API and static)
+    app.include_router(auth_router)
     app.include_router(routes_router, prefix="/api")
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")

@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from weatherbrief.api.app import create_app
-from weatherbrief.db.deps import get_db
+from weatherbrief.db.deps import current_user_id, get_db
 from weatherbrief.db.engine import DEV_USER_ID
 from weatherbrief.db.models import Base, UserPreferencesRow, UserRow
 from weatherbrief.models import BriefingPackMeta, Flight
@@ -79,6 +79,7 @@ def client(app_db, tmp_config_dir, tmp_path, monkeypatch):
     monkeypatch.setattr(routes_mod, "CONFIG_DIR", tmp_config_dir)
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ENVIRONMENT", "production")  # skip lifespan init_db
+    monkeypatch.setenv("JWT_SECRET", "test-secret-for-api-tests")
 
     app = create_app()
 
@@ -95,6 +96,7 @@ def client(app_db, tmp_config_dir, tmp_path, monkeypatch):
             session.close()
 
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
 
     return TestClient(app, raise_server_exceptions=False)
 
