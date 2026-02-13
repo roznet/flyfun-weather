@@ -19,15 +19,20 @@ class Waypoint(BaseModel):
     lon: float
 
 
-def bearing_between(wp_a: Waypoint, wp_b: Waypoint) -> float:
-    """Compute great-circle initial bearing from wp_a to wp_b in degrees [0, 360)."""
-    lat1 = math.radians(wp_a.lat)
-    lat2 = math.radians(wp_b.lat)
-    dlon = math.radians(wp_b.lon - wp_a.lon)
+def bearing_between_coords(lat1_deg: float, lon1_deg: float, lat2_deg: float, lon2_deg: float) -> float:
+    """Compute great-circle initial bearing between two lat/lon pairs in degrees [0, 360)."""
+    lat1 = math.radians(lat1_deg)
+    lat2 = math.radians(lat2_deg)
+    dlon = math.radians(lon2_deg - lon1_deg)
 
     x = math.sin(dlon) * math.cos(lat2)
     y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
     return math.degrees(math.atan2(x, y)) % 360
+
+
+def bearing_between(wp_a: Waypoint, wp_b: Waypoint) -> float:
+    """Compute great-circle initial bearing from wp_a to wp_b in degrees [0, 360)."""
+    return bearing_between_coords(wp_a.lat, wp_a.lon, wp_b.lat, wp_b.lon)
 
 
 def altitude_to_pressure_hpa(altitude_ft: int) -> int:
@@ -446,6 +451,37 @@ class WaypointAnalysis(BaseModel):
     sounding: dict[str, SoundingAnalysis] = Field(default_factory=dict)
     altitude_advisories: Optional[AltitudeAdvisories] = None
     model_divergence: list[ModelDivergence] = Field(default_factory=list)
+
+
+class RoutePointAnalysis(BaseModel):
+    """Analysis for one route point (waypoint or interpolated)."""
+
+    point_index: int
+    lat: float
+    lon: float
+    distance_from_origin_nm: float
+    waypoint_icao: str | None = None
+    waypoint_name: str | None = None
+    interpolated_time: datetime
+    forecast_hour: datetime
+    track_deg: float
+    wind_components: dict[str, WindComponent] = Field(default_factory=dict)
+    sounding: dict[str, SoundingAnalysis] = Field(default_factory=dict)
+    altitude_advisories: Optional[AltitudeAdvisories] = None
+    model_divergence: list[ModelDivergence] = Field(default_factory=list)
+
+
+class RouteAnalysesManifest(BaseModel):
+    """Container for all route point analyses, saved as route_analyses.json."""
+
+    route_name: str
+    target_date: str
+    departure_time: datetime
+    flight_duration_hours: float
+    total_distance_nm: float
+    cruise_altitude_ft: int
+    models: list[str]
+    analyses: list[RoutePointAnalysis]
 
 
 class RouteCrossSection(BaseModel):

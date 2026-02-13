@@ -5,6 +5,7 @@ import type {
   FlightResponse,
   ForecastSnapshot,
   PackMeta,
+  RouteAnalysesManifest,
   RouteInfo,
 } from '../store/types';
 
@@ -94,6 +95,17 @@ export async function fetchSnapshot(
   );
 }
 
+// --- Route analyses ---
+
+export async function fetchRouteAnalyses(
+  flightId: string,
+  timestamp: string,
+): Promise<RouteAnalysesManifest> {
+  return apiFetch<RouteAnalysesManifest>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/route-analyses`
+  );
+}
+
 // --- Artifact URLs (for <img> src, etc.) ---
 
 export function grametUrl(flightId: string, timestamp: string): string {
@@ -107,6 +119,15 @@ export function skewtUrl(
   model: string
 ): string {
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/skewt/${encodeURIComponent(icao)}/${encodeURIComponent(model)}`;
+}
+
+export function routeSkewtUrl(
+  flightId: string,
+  timestamp: string,
+  pointIndex: number,
+  model: string,
+): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/skewt/route/${pointIndex}/${encodeURIComponent(model)}`;
 }
 
 export function digestUrl(flightId: string, timestamp: string): string {
