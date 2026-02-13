@@ -86,6 +86,93 @@ export async function refreshBriefing(flightId: string): Promise<PackMeta> {
   );
 }
 
+/** SSE event from the streaming refresh endpoint. */
+export interface RefreshStreamEvent {
+  type: 'progress' | 'complete' | 'error';
+  stage?: string;
+  detail?: string | null;
+  label?: string;
+  progress?: number;
+  pack?: PackMeta;
+  message?: string;
+}
+
+/**
+ * Stream a briefing refresh via SSE, calling onEvent for each progress update.
+ * Returns the final PackMeta on completion.
+ */
+export async function refreshBriefingStream(
+  flightId: string,
+  onEvent: (event: RefreshStreamEvent) => void,
+): Promise<PackMeta> {
+  const url = `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/refresh/stream`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    let detail: string;
+    try {
+      detail = JSON.parse(body).detail || body;
+    } catch {
+      detail = body;
+    }
+    throw new Error(`API ${resp.status}: ${detail}`);
+  }
+
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalPack: PackMeta | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE frames from buffer
+    const frames = buffer.split('\n\n');
+    buffer = frames.pop()!; // keep incomplete frame in buffer
+
+    for (const frame of frames) {
+      if (!frame.trim()) continue;
+
+      // Extract data line(s) from the SSE frame
+      let data = '';
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('data: ')) {
+          data += line.slice(6);
+        }
+      }
+      if (!data) continue;
+
+      try {
+        const event: RefreshStreamEvent = JSON.parse(data);
+        onEvent(event);
+
+        if (event.type === 'complete' && event.pack) {
+          finalPack = event.pack;
+        } else if (event.type === 'error') {
+          throw new Error(event.message || 'Refresh stream error');
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('Refresh stream error')) throw e;
+        if (e instanceof Error && e.message.startsWith('API ')) throw e;
+        // Skip unparseable frames
+      }
+    }
+  }
+
+  if (!finalPack) {
+    throw new Error('Refresh stream ended without completion');
+  }
+
+  return finalPack;
+}
+
 export async function fetchSnapshot(
   flightId: string,
   timestamp: string

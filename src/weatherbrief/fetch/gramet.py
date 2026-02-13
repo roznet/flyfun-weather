@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -24,6 +25,11 @@ class AutorouterGramet:
         self._cred_manager = AutorouterCredentialManager(
             cache_dir or str(Path.home() / ".cache" / "weatherbrief")
         )
+        # Set credentials from env vars to avoid interactive input() in Docker
+        username = os.environ.get("AUTOROUTER_USERNAME")
+        password = os.environ.get("AUTOROUTER_PASSWORD")
+        if username and password:
+            self._cred_manager.set_credentials(username, password)
         self.session = requests.Session()
 
     def fetch_gramet(

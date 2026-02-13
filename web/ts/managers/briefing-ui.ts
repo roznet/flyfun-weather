@@ -864,7 +864,9 @@ export function renderRouteSlider(
     .join('');
 
   // Format time
-  const time = new Date(current.interpolated_time);
+  // Append 'Z' so JS parses as UTC (backend sends naive ISO strings that are UTC by convention)
+  const timeIso = current.interpolated_time.endsWith('Z') ? current.interpolated_time : current.interpolated_time + 'Z';
+  const time = new Date(timeIso);
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + 'Z';
 
   // Wind info for first model
@@ -1002,12 +1004,35 @@ export function renderLoading(loading: boolean): void {
   if (el) el.style.display = loading ? 'flex' : 'none';
 }
 
-export function renderRefreshing(refreshing: boolean): void {
+export function renderRefreshing(
+  refreshing: boolean,
+  stage?: string | null,
+  detail?: string | null,
+): void {
   const btn = $('refresh-btn') as HTMLButtonElement;
   if (btn) {
     btn.disabled = refreshing;
     btn.textContent = refreshing ? 'Refreshing...' : 'Refresh';
   }
+
+  // Show/update or remove the status text next to the button
+  const statusId = 'refresh-status';
+  let statusEl = document.getElementById(statusId);
+
+  if (!refreshing || !stage) {
+    if (statusEl) statusEl.remove();
+    return;
+  }
+
+  if (!statusEl) {
+    statusEl = document.createElement('span');
+    statusEl.id = statusId;
+    statusEl.className = 'refresh-status';
+    btn?.parentElement?.insertBefore(statusEl, btn.nextSibling);
+  }
+
+  const detailSuffix = detail ? ` (${detail})` : '';
+  statusEl.textContent = `${stage}${detailSuffix}`;
 }
 
 export function renderEmailing(emailing: boolean): void {
