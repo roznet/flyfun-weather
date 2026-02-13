@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeatherBrief — Admin</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .admin-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    .admin-table th,
+    .admin-table td {
+      padding: 0.5rem 0.6rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .admin-table th {
+      background: var(--bg);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .admin-table td.num {
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <h1>Admin</h1>
+      <div class="header-right">
+        <a href="/settings.html" class="btn-settings">Settings</a>
+        <a href="/" class="btn-settings">Flights</a>
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
+
+    <div id="error-message" style="display:none;"></div>
+
+    <!-- Pending approvals -->
+    <div id="pending-section" class="section" style="display:none;">
+      <h3>Pending Approvals</h3>
+      <div id="pending-list"></div>
+    </div>
+
+    <!-- All users -->
+    <div class="section">
+      <h3>All Users</h3>
+      <div style="overflow-x:auto;">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Status</th>
+              <th>Last Login</th>
+              <th style="text-align:center;">Briefings</th>
+              <th style="text-align:center;">GRAMET</th>
+              <th style="text-align:center;">LLM</th>
+              <th style="text-align:center;">Tokens (Mo)</th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody">
+            <tr><td colspan="8" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="/dist/admin.js"></script>
+</body>
+</html>
