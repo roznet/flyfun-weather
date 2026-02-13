@@ -250,8 +250,8 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] Add SQLAlchemy models + Alembic migrations for all 5 tables
 - [x] Refactor `storage/flights.py` from file-based to DB-backed
 - [x] Add `deploy/weather.flyfun.aero.caddy` reverse proxy config
-- [ ] Add DNS A record for `weather.flyfun.aero` → 161.35.35.15
-- [ ] Deploy to server (copy repo, run `docker-compose up -d`)
+- [x] Add DNS A record for `weather.flyfun.aero` → 161.35.35.15
+- [x] Deploy to server (copy repo, run `docker-compose up -d`)
 - [x] Dev mode: SQLite fallback when `ENVIRONMENT=development`
 - [x] Test: API works via Docker (health, flights CRUD)
 
@@ -259,16 +259,16 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 
 **Goal**: Google/Apple OAuth, JWT sessions, user-scoped data.
 
-- [ ] Add `authlib` dependency
-- [ ] Implement `/auth/login/{provider}`, `/auth/callback/{provider}`, `/auth/logout`
-- [ ] JWT middleware: extract user_id, inject into request state
-- [ ] Approval gate: unapproved users see "awaiting approval" message
-- [ ] All API routes scoped by user_id (flights, packs, artifacts)
-- [ ] Login page with provider buttons (minimal HTML/CSS)
-- [ ] Dev mode bypass: auto-inject dev user, skip JWT validation
-- [ ] Register Google OAuth app (console.cloud.google.com)
-- [ ] Register Apple Sign-In (developer.apple.com)
-- [ ] Test: two users see only their own flights
+- [x] Add `authlib` dependency
+- [x] Implement `/auth/login/{provider}`, `/auth/callback/{provider}`, `/auth/logout`
+- [x] JWT dependency: extract user_id via Depends(current_user_id)
+- [x] Approval gate: unapproved users see "awaiting approval" message
+- [x] All API routes scoped by user_id (flights, packs, artifacts)
+- [x] Login page with provider buttons (minimal HTML/CSS)
+- [x] Dev mode bypass: auto-inject dev user, skip JWT validation
+- [x] Register Google OAuth app (console.cloud.google.com)
+- [ ] Register Apple Sign-In (developer.apple.com) — deferred
+- [x] Test: two users see only their own flights
 
 ### Phase 3: Preferences + Credentials
 
