@@ -14,12 +14,12 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from weatherbrief.api.flights import _load_owned_flight
 from weatherbrief.db.deps import current_user_id, get_db
 from weatherbrief.db.engine import SessionLocal
 from weatherbrief.models import BriefingPackMeta
 from weatherbrief.storage.flights import (
     list_packs,
-    load_flight,
     load_pack_meta,
     pack_dir_for,
     save_pack_meta,
@@ -63,7 +63,7 @@ def list_flight_packs(
     db: Session = Depends(get_db),
 ):
     """List all packs (history) for a flight."""
-    _load_flight_or_404(db, flight_id, user_id)
+    _load_owned_flight(db, flight_id, user_id)
     packs = list_packs(db, flight_id)
     return [_meta_to_response(p) for p in packs]
 
@@ -75,7 +75,7 @@ def get_latest_pack(
     db: Session = Depends(get_db),
 ):
     """Get the most recent pack for a flight."""
-    _load_flight_or_404(db, flight_id, user_id)
+    _load_owned_flight(db, flight_id, user_id)
     packs = list_packs(db, flight_id)
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")
@@ -167,7 +167,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
 def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
                       user_id=None):
     """Shared finalization: build and save pack metadata, log usage, return response."""
-    days_out = (date.fromisoformat(flight.target_date) - date.today()).days
+    days_out = (date.fromisoformat(flight.target_date) - datetime.now(timezone.utc).date()).days
 
     meta = BriefingPackMeta(
         flight_id=flight_id,
@@ -201,7 +201,7 @@ def refresh_briefing(
     db: Session = Depends(get_db),
 ):
     """Trigger a new briefing fetch for a flight."""
-    flight = _load_flight_or_404(db, flight_id, user_id)
+    flight = _load_owned_flight(db, flight_id, user_id)
 
     db_path = request.app.state.db_path
     if not db_path:
@@ -247,7 +247,7 @@ async def refresh_briefing_stream(
     # conflicts with the long-lived StreamingResponse.
     db = SessionLocal()
     try:
-        flight = _load_flight_or_404(db, flight_id, user_id)
+        flight = _load_owned_flight(db, flight_id, user_id)
 
         db_path = request.app.state.db_path
         if not db_path:
@@ -334,7 +334,7 @@ def get_pack(
     db: Session = Depends(get_db),
 ):
     """Get a specific pack's metadata."""
-    _load_flight_or_404(db, flight_id, user_id)
+    _load_owned_flight(db, flight_id, user_id)
     try:
         meta = load_pack_meta(db, flight_id, timestamp)
     except KeyError:
@@ -533,7 +533,7 @@ def get_report_html(
     db: Session = Depends(get_db),
 ):
     """View a self-contained HTML briefing report."""
-    flight = _load_flight_or_404(db, flight_id, user_id)
+    flight = _load_owned_flight(db, flight_id, user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
@@ -551,7 +551,7 @@ def get_report_pdf(
     db: Session = Depends(get_db),
 ):
     """Download a PDF briefing report."""
-    flight = _load_flight_or_404(db, flight_id, user_id)
+    flight = _load_owned_flight(db, flight_id, user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
@@ -577,7 +577,7 @@ def send_email(
     db: Session = Depends(get_db),
 ):
     """Send briefing email to configured recipients."""
-    flight = _load_flight_or_404(db, flight_id, user_id)
+    flight = _load_owned_flight(db, flight_id, user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
@@ -602,17 +602,6 @@ def send_email(
 # --- Helpers ---
 
 
-def _load_flight_or_404(db: Session, flight_id: str, user_id: str):
-    """Load a flight, verifying ownership. Returns 404 if not found or not owned."""
-    try:
-        flight = load_flight(db, flight_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
-    if flight.user_id != user_id:
-        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
-    return flight
-
-
 def _load_pack_meta_or_404(db: Session, flight_id: str, timestamp: str) -> BriefingPackMeta:
     """Load pack metadata or raise 404."""
     try:
@@ -622,7 +611,7 @@ def _load_pack_meta_or_404(db: Session, flight_id: str, timestamp: str) -> Brief
 
 
 def _get_pack_dir(db: Session, flight_id: str, timestamp: str, user_id: str):
-    _load_flight_or_404(db, flight_id, user_id)
+    _load_owned_flight(db, flight_id, user_id)
     pack_path = pack_dir_for(user_id, flight_id, timestamp)
     if not pack_path.exists():
         raise HTTPException(status_code=404, detail="Pack not found")
@@ -630,12 +619,16 @@ def _get_pack_dir(db: Session, flight_id: str, timestamp: str, user_id: str):
 
 
 def _parse_target_time(snapshot_data: dict) -> datetime:
-    """Extract target datetime from snapshot JSON data."""
-    route = snapshot_data.get("route", {})
-    target_date = snapshot_data.get("target_date", "")
-    # Reconstruct target_hour from the first analysis target_time, or default to 9
+    """Extract target datetime from snapshot JSON data.
+
+    Always returns a naive datetime (UTC by convention), consistent with
+    the pipeline's naive-UTC convention for Open-Meteo timestamps.
+    """
     analyses = snapshot_data.get("analyses", [])
     if analyses and "target_time" in analyses[0]:
-        return datetime.fromisoformat(analyses[0]["target_time"])
+        dt = datetime.fromisoformat(analyses[0]["target_time"])
+        # Strip tzinfo if present — pipeline works with naive-UTC convention
+        return dt.replace(tzinfo=None) if dt.tzinfo else dt
+    target_date = snapshot_data.get("target_date", "")
     year, month, day = (int(x) for x in target_date.split("-"))
     return datetime(year, month, day, 9)

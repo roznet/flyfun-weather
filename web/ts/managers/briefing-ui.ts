@@ -17,6 +17,7 @@ import type {
   WindComponent,
 } from '../store/types';
 import * as api from '../adapters/api-adapter';
+import { escapeHtml } from '../utils';
 
 function $(id: string): HTMLElement {
   return document.getElementById(id)!;
@@ -52,9 +53,9 @@ export function renderHeader(
     : `${flight.cruise_altitude_ft}ft`;
 
   el.innerHTML = `
-    <span class="route-summary">${routeStr}</span>
-    <span class="date-summary">${dateStr} ${timeStr}</span>
-    <span class="alt-summary">${alt}</span>
+    <span class="route-summary">${escapeHtml(routeStr)}</span>
+    <span class="date-summary">${escapeHtml(dateStr)} ${escapeHtml(timeStr)}</span>
+    <span class="alt-summary">${escapeHtml(alt)}</span>
   `;
 }
 
@@ -100,7 +101,7 @@ export function renderAssessment(pack: PackMeta | null): void {
   const level = pack.assessment.toUpperCase();
   el.className = `assessment-banner assessment-${level.toLowerCase()}`;
   el.innerHTML = `
-    <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${pack.assessment_reason}` : ''}
+    <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : ''}
   `;
 }
 
@@ -176,13 +177,6 @@ async function fetchAndRenderDigestJson(
   } catch {
     el.innerHTML = '<p class="muted">Failed to load digest.</p>';
   }
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 // --- GRAMET ---
@@ -272,7 +266,7 @@ function renderComparisonTable(
 
   return `
     <div class="comparison-waypoint">
-      <h4>${label}</h4>
+      <h4>${escapeHtml(label)}</h4>
       <table class="comparison-table">
         <thead>
           <tr>
@@ -859,7 +853,7 @@ export function renderRouteSlider(
     .filter((a) => a.waypoint_icao)
     .map((a) => {
       const pct = totalDist > 0 ? (a.distance_from_origin_nm / totalDist) * 100 : 0;
-      return `<span class="slider-waypoint-label" style="left: ${pct}%">${a.waypoint_icao}</span>`;
+      return `<span class="slider-waypoint-label" style="left: ${pct}%">${escapeHtml(a.waypoint_icao!)}</span>`;
     })
     .join('');
 
@@ -884,18 +878,18 @@ export function renderRouteSlider(
 
   container.innerHTML = `
     <div class="route-slider-info">
-      <span class="slider-point-label">${pointLabel}</span>
+      <span class="slider-point-label">${escapeHtml(pointLabel)}</span>
       <span class="slider-distance">${current.distance_from_origin_nm.toFixed(0)} nm</span>
-      <span class="slider-time">${timeStr}</span>
-      <span class="slider-wind">${windInfo}</span>
+      <span class="slider-time">${escapeHtml(timeStr)}</span>
+      <span class="slider-wind">${escapeHtml(windInfo)}</span>
     </div>
     <div class="route-slider-track">
       <input type="range" id="route-slider" min="0" max="${maxIdx}" value="${selectedIndex}" class="route-slider-input">
       <div class="slider-waypoint-labels">${waypointLabels}</div>
     </div>
     <div class="slider-endpoints">
-      <span>${analyses[0].waypoint_icao || 'Origin'}</span>
-      <span>${analyses[maxIdx].waypoint_icao || 'Destination'}</span>
+      <span>${escapeHtml(analyses[0].waypoint_icao || 'Origin')}</span>
+      <span>${escapeHtml(analyses[maxIdx].waypoint_icao || 'Destination')}</span>
     </div>
   `;
 
@@ -920,7 +914,7 @@ function renderSinglePointSounding(point: RoutePointAnalysis): string {
 
   return `
     <div class="sounding-waypoint">
-      <h4>${label}</h4>
+      <h4>${escapeHtml(label)}</h4>
       ${renderConvectiveBanner(point.sounding)}
       ${renderVerticalMotion(point.sounding)}
       ${renderAltitudeMarkers(point.sounding)}

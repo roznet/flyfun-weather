@@ -23,30 +23,7 @@ export interface PreferencesUpdate {
   autorouter_password?: string;
 }
 
-const API_BASE = '/api';
-
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init,
-  });
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      window.location.href = '/login.html';
-      throw new Error('Session expired');
-    }
-    const body = await resp.text();
-    let detail: string;
-    try {
-      detail = JSON.parse(body).detail || body;
-    } catch {
-      detail = body;
-    }
-    throw new Error(`API ${resp.status}: ${detail}`);
-  }
-  if (resp.status === 204) return undefined as T;
-  return resp.json();
-}
+import { apiFetch } from '../utils';
 
 export async function fetchPreferences(): Promise<PreferencesResponse> {
   return apiFetch<PreferencesResponse>('/user/preferences');

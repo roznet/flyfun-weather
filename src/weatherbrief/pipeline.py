@@ -35,6 +35,7 @@ from weatherbrief.models import (
     WaypointAnalysis,
     WaypointForecast,
     WindComponent,
+    altitude_to_pressure_hpa,
     bearing_between_coords,
 )
 from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_cross_section, save_snapshot
@@ -110,12 +111,13 @@ def execute_briefing(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
-    today = date.today().isoformat()
+    today_utc = datetime.now(timezone.utc).date()
+    today = today_utc.isoformat()
     # Naive datetime — UTC by convention, matching Open-Meteo's naive timestamps
     target_dt = datetime(
         *map(int, target_date.split("-")), target_hour
     )
-    days_out = (date.fromisoformat(target_date) - date.today()).days
+    days_out = (date.fromisoformat(target_date) - today_utc).days
 
     if days_out < 0:
         raise ValueError(f"Target date {target_date} is in the past")
@@ -318,13 +320,14 @@ def _run_point_analysis(
         "lifted_index": {}, "bulk_shear_0_6km_kt": {}, "max_omega_pa_s": {},
     }
 
+    target_pressure = altitude_to_pressure_hpa(cruise_altitude_ft)
     for model_key, hourly in forecasts_by_model.items():
-        # Cruise-altitude wind (closest level to ~750 hPa)
+        # Cruise-altitude wind (closest level to target pressure)
         cruise_wind = None
         for level in hourly.pressure_levels:
             if level.wind_speed_kt is not None and level.wind_direction_deg is not None:
-                if cruise_wind is None or abs(level.pressure_hpa - 750) < abs(
-                    cruise_wind.pressure_hpa - 750
+                if cruise_wind is None or abs(level.pressure_hpa - target_pressure) < abs(
+                    cruise_wind.pressure_hpa - target_pressure
                 ):
                     cruise_wind = level
 

@@ -8,30 +8,14 @@ import type {
   RouteAnalysesManifest,
   RouteInfo,
 } from '../store/types';
+import { apiFetch } from '../utils';
 
-const API_BASE = '/api';
-
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init,
-  });
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      window.location.href = '/login.html';
-      throw new Error('Session expired');
-    }
-    const body = await resp.text();
-    let detail: string;
-    try {
-      detail = JSON.parse(body).detail || body;
-    } catch {
-      detail = body;
-    }
-    throw new Error(`API ${resp.status}: ${detail}`);
+/** Typed error for refresh stream failures — avoids fragile string matching. */
+export class RefreshStreamError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RefreshStreamError';
   }
-  if (resp.status === 204) return undefined as T;
-  return resp.json();
 }
 
 // --- Routes ---
@@ -164,11 +148,10 @@ export async function refreshBriefingStream(
         if (event.type === 'complete' && event.pack) {
           finalPack = event.pack;
         } else if (event.type === 'error') {
-          throw new Error(event.message || 'Refresh stream error');
+          throw new RefreshStreamError(event.message || 'Refresh stream error');
         }
       } catch (e) {
-        if (e instanceof Error && e.message.startsWith('Refresh stream error')) throw e;
-        if (e instanceof Error && e.message.startsWith('API ')) throw e;
+        if (e instanceof RefreshStreamError) throw e;
         // Skip unparseable frames
       }
     }

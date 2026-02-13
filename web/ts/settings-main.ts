@@ -1,6 +1,7 @@
 /** Settings page entry point — preferences form management. */
 
-import { fetchCurrentUser, logout } from './adapters/auth-adapter';
+import { fetchCurrentUser } from './adapters/auth-adapter';
+import { renderUserInfo } from './utils';
 import {
   fetchPreferences,
   savePreferences,
@@ -135,16 +136,6 @@ function showStatus(message: string, isError = false): void {
   if (!isError) {
     setTimeout(() => { el.style.display = 'none'; }, 3000);
   }
-}
-
-function renderUserInfo(name: string): void {
-  const container = document.getElementById('user-info');
-  if (!container) return;
-  container.innerHTML = `
-    <span class="user-name">${name}</span>
-    <button class="btn-logout" id="logout-btn">Sign out</button>
-  `;
-  document.getElementById('logout-btn')?.addEventListener('click', () => logout());
 }
 
 function renderUsage(usage: UsageSummary): void {
