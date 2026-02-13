@@ -34,7 +34,7 @@ class UserRow(Base):
     flights: Mapped[list[FlightRow]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
-    usage_logs: Mapped[list[UsageLogRow]] = relationship(
+    briefing_usage: Mapped[list[BriefingUsageRow]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -95,18 +95,23 @@ class BriefingPackRow(Base):
     flight: Mapped[FlightRow] = relationship(back_populates="packs")
 
 
-class UsageLogRow(Base):
-    __tablename__ = "usage_log"
+class BriefingUsageRow(Base):
+    __tablename__ = "briefing_usage"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
+    flight_id: Mapped[str] = mapped_column(String(100), default="")
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
-    call_type: Mapped[str] = mapped_column(String(64))
-    detail_json: Mapped[str] = mapped_column(Text, default="{}")
-    skipped: Mapped[bool] = mapped_column(Boolean, default=False)
+    open_meteo_calls: Mapped[int] = mapped_column(Integer, default=0)
+    gramet_fetched: Mapped[bool] = mapped_column(Boolean, default=False)
+    gramet_failed: Mapped[bool] = mapped_column(Boolean, default=False)
+    llm_digest: Mapped[bool] = mapped_column(Boolean, default=False)
+    llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    llm_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    user: Mapped[UserRow] = relationship(back_populates="usage_logs")
+    user: Mapped[UserRow] = relationship(back_populates="briefing_usage")

@@ -75,6 +75,19 @@
         <a href="/" class="btn btn-secondary">Back to Flights</a>
       </div>
     </form>
+
+    <!-- Usage section (populated by JS) -->
+    <div id="usage-section" class="section" style="display:none;">
+      <h3>Usage</h3>
+      <div id="usage-today">
+        <h4 style="margin-bottom:0.5rem;">Today</h4>
+        <div class="usage-grid" id="usage-today-grid"></div>
+      </div>
+      <div id="usage-month" style="margin-top:1rem;">
+        <h4 style="margin-bottom:0.5rem;">This Month</h4>
+        <div id="usage-month-summary" class="muted"></div>
+      </div>
+    </div>
   </div>
 
   <script src="/dist/settings.js"></script>

@@ -144,6 +144,12 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
             valid = {m.value for m in ModelSource}
             models = [ModelSource(m) for m in defaults.models if m in valid]
 
+    # Check rate limits before running the pipeline
+    if db is not None:
+        from weatherbrief.api.usage import check_rate_limits
+
+        check_rate_limits(db, user_id)
+
     options = BriefingOptions(
         fetch_gramet=True,
         generate_skewt=False,
@@ -158,8 +164,9 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
     return route, fetch_ts, pack_path, options
 
 
-def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db):
-    """Shared finalization: build and save pack metadata, return response."""
+def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
+                      user_id=None):
+    """Shared finalization: build and save pack metadata, log usage, return response."""
     days_out = (date.fromisoformat(flight.target_date) - date.today()).days
 
     meta = BriefingPackMeta(
@@ -175,6 +182,13 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db):
     )
 
     save_pack_meta(db, meta)
+
+    # Log usage
+    if user_id is not None:
+        from weatherbrief.api.usage import log_briefing_usage
+
+        log_briefing_usage(db, user_id, flight_id, result.usage)
+
     logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)
     return meta
 
@@ -205,7 +219,8 @@ def refresh_briefing(
             target_hour=flight.target_time_utc,
             options=options,
         )
-        meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db)
+        meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
+                                 user_id=user_id)
         return _meta_to_response(meta)
 
     except ImportError as exc:
@@ -275,7 +290,8 @@ async def refresh_briefing_stream(
             # Use a dedicated DB session — the request-scoped one isn't thread-safe
             thread_db = SessionLocal()
             try:
-                meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, thread_db)
+                meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, thread_db,
+                                         user_id=user_id)
                 thread_db.commit()
             finally:
                 thread_db.close()

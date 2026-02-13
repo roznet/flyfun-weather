@@ -19,6 +19,7 @@ from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
 from weatherbrief.api.routes import router as routes_router
+from weatherbrief.api.usage import router as usage_router
 from weatherbrief.db.engine import (
     SessionLocal,
     ensure_dev_user,
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")
+    app.include_router(usage_router, prefix="/api")
 
     @app.get("/health")
     def health():

@@ -60,6 +60,19 @@ class BriefingOptions:
 
 
 @dataclass
+class BriefingUsage:
+    """Tracks resource usage during a single briefing pipeline run."""
+
+    open_meteo_calls: int = 0
+    gramet_fetched: bool = False
+    gramet_failed: bool = False
+    llm_digest: bool = False
+    llm_model: str | None = None
+    llm_input_tokens: int | None = None
+    llm_output_tokens: int | None = None
+
+
+@dataclass
 class BriefingResult:
     """Structured result from a briefing pipeline run."""
 
@@ -72,6 +85,7 @@ class BriefingResult:
     digest: object | None = None  # WeatherDigest (lazy import avoids hard dep)
     text_digest: str | None = None
     errors: list[str] = field(default_factory=list)
+    usage: BriefingUsage = field(default_factory=BriefingUsage)
 
 
 def execute_briefing(
@@ -230,6 +244,7 @@ def execute_briefing(
     logger.info("Snapshot saved: %s", snapshot_path)
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
+    result.usage.open_meteo_calls = len(cross_sections)
 
     # --- Optional: GRAMET ---
     if options.fetch_gramet:
@@ -557,6 +572,7 @@ def _run_gramet(
             out_path = out_dir / "gramet.png"
         out_path.write_bytes(data)
         result.gramet_path = out_path
+        result.usage.gramet_fetched = True
         logger.info("GRAMET saved: %s", out_path)
 
     except ImportError:
@@ -565,6 +581,7 @@ def _run_gramet(
     except Exception as exc:
         logger.warning("GRAMET fetch failed: %s", exc, exc_info=True)
         result.errors.append(f"GRAMET: {exc}")
+        result.usage.gramet_failed = True
 
 
 def _run_skewt(
@@ -627,6 +644,12 @@ def _run_llm_digest(
 
         digest_obj = digest_result.get("digest")
         result.digest = digest_obj
+
+        # Track LLM usage
+        result.usage.llm_digest = True
+        result.usage.llm_model = f"{config.llm.provider}:{config.llm.model}"
+        result.usage.llm_input_tokens = digest_result.get("llm_input_tokens")
+        result.usage.llm_output_tokens = digest_result.get("llm_output_tokens")
 
         # Save markdown + structured JSON digest
         if output_dir:

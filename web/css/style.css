@@ -255,6 +255,51 @@ label {
 
 .muted { color: var(--text-muted); font-style: italic; }
 
+/* --- Usage bars --- */
+
+.usage-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.usage-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.usage-label {
+  min-width: 100px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.usage-bar-track {
+  flex: 1;
+  height: 8px;
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.usage-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+
+.usage-bar-fill.warn { background: var(--amber); }
+.usage-bar-fill.danger { background: var(--danger); }
+
+.usage-count {
+  min-width: 60px;
+  text-align: right;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- Digest sections --- */
 
 .digest-section {

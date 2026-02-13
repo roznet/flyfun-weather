@@ -54,6 +54,8 @@ class DigestState(TypedDict, total=False):
     context: str
     digest: WeatherDigest | None
     digest_text: str
+    llm_input_tokens: int | None
+    llm_output_tokens: int | None
     error: str | None
 
 
@@ -86,16 +88,27 @@ def briefer_node(state: DigestState) -> dict:
     config: DigestConfig = state["config"]
     try:
         llm = create_llm(config)
-        structured_llm = llm.with_structured_output(WeatherDigest)
+        structured_llm = llm.with_structured_output(WeatherDigest, include_raw=True)
         system_prompt = config.load_prompt("briefer")
 
-        result = structured_llm.invoke([
+        raw_result = structured_llm.invoke([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": state["context"]},
         ])
 
+        result: WeatherDigest = raw_result["parsed"]
+
+        # Extract token usage from the raw AIMessage
+        token_info: dict = {}
+        raw_msg = raw_result.get("raw")
+        if raw_msg is not None:
+            usage_meta = getattr(raw_msg, "usage_metadata", None)
+            if usage_meta:
+                token_info["llm_input_tokens"] = usage_meta.get("input_tokens")
+                token_info["llm_output_tokens"] = usage_meta.get("output_tokens")
+
         digest_text = format_digest_markdown(result, state["snapshot"])
-        return {"digest": result, "digest_text": digest_text}
+        return {"digest": result, "digest_text": digest_text, **token_info}
     except Exception as e:
         logger.error("LLM digest generation failed", exc_info=True)
         return {"error": str(e)}
