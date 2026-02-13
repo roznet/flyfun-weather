@@ -8,7 +8,7 @@ import type {
   RouteAnalysesManifest,
   RouteInfo,
 } from '../store/types';
-import { apiFetch } from '../utils';
+import { API_BASE, apiFetch } from '../utils';
 
 /** Typed error for refresh stream failures — avoids fragile string matching. */
 export class RefreshStreamError extends Error {
