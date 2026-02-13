@@ -29,6 +29,10 @@ def sample_forecasts(target_time):
 
     levels = [
         PressureLevelData(
+            pressure_hpa=925, temperature_c=5, relative_humidity_pct=80,
+            wind_speed_kt=15, wind_direction_deg=270, geopotential_height_m=770,
+        ),
+        PressureLevelData(
             pressure_hpa=850, temperature_c=0, relative_humidity_pct=90,
             wind_speed_kt=25, wind_direction_deg=280, geopotential_height_m=1450,
         ),
@@ -48,6 +52,10 @@ def sample_forecasts(target_time):
     )
 
     levels2 = [
+        PressureLevelData(
+            pressure_hpa=925, temperature_c=6, relative_humidity_pct=78,
+            wind_speed_kt=12, wind_direction_deg=265, geopotential_height_m=775,
+        ),
         PressureLevelData(
             pressure_hpa=850, temperature_c=1, relative_humidity_pct=85,
             wind_speed_kt=20, wind_direction_deg=270, geopotential_height_m=1460,
@@ -85,15 +93,10 @@ class TestAnalyzeWaypoint:
         assert "gfs" in analysis.wind_components
         assert "ecmwf" in analysis.wind_components
 
-    def test_produces_icing_bands(self, sample_forecasts, target_time):
+    def test_produces_sounding_analysis(self, sample_forecasts, target_time):
         analysis = analyze_waypoint(sample_forecasts, target_time, track_deg=155.0)
-        assert "gfs" in analysis.icing_bands
-        assert "ecmwf" in analysis.icing_bands
-
-    def test_produces_cloud_layers(self, sample_forecasts, target_time):
-        analysis = analyze_waypoint(sample_forecasts, target_time, track_deg=155.0)
-        assert "gfs" in analysis.cloud_layers
-        assert "ecmwf" in analysis.cloud_layers
+        assert "gfs" in analysis.sounding
+        assert "ecmwf" in analysis.sounding
 
     def test_produces_model_divergence(self, sample_forecasts, target_time):
         analysis = analyze_waypoint(sample_forecasts, target_time, track_deg=155.0)

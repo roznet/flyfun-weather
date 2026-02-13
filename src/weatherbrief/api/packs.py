@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import json as json_mod
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.deps import current_user_id, get_db
+from weatherbrief.db.engine import SessionLocal
 from weatherbrief.models import BriefingPackMeta
 from weatherbrief.storage.flights import (
     list_packs,
@@ -67,6 +72,207 @@ def get_latest_pack(flight_id: str, db: Session = Depends(get_db)):
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")
     return _meta_to_response(packs[0])
+
+
+# --- Stage metadata for SSE progress ---
+
+_STAGE_LABELS: dict[str, str] = {
+    "route_interpolation": "Interpolating route",
+    "fetch_forecasts": "Fetching forecasts",
+    "waypoint_analysis": "Analyzing waypoints",
+    "route_analysis": "Analyzing route points",
+    "save_snapshot": "Saving snapshot",
+    "fetch_gramet": "Fetching GRAMET",
+    "generate_skewt": "Generating Skew-T",
+    "llm_digest": "Generating AI digest",
+}
+
+_STAGE_PROGRESS: dict[str, float] = {
+    "route_interpolation": 0.05,
+    "fetch_forecasts": 0.40,
+    "waypoint_analysis": 0.50,
+    "route_analysis": 0.60,
+    "save_snapshot": 0.65,
+    "fetch_gramet": 0.75,
+    "generate_skewt": 0.85,
+    "llm_digest": 0.95,
+}
+
+
+def _prepare_refresh(flight, db_path, user_id, flight_id):
+    """Shared setup for both sync and streaming refresh endpoints."""
+    from weatherbrief.airports import resolve_waypoints
+    from weatherbrief.models import RouteConfig
+    from weatherbrief.pipeline import BriefingOptions
+
+    if not flight.waypoints:
+        raise ValueError("Flight has no waypoints defined")
+    waypoint_objs = resolve_waypoints(flight.waypoints, db_path)
+    route = RouteConfig(
+        name=flight.route_name or " \u2192 ".join(flight.waypoints),
+        waypoints=waypoint_objs,
+        cruise_altitude_ft=flight.cruise_altitude_ft,
+        flight_ceiling_ft=flight.flight_ceiling_ft,
+        flight_duration_hours=flight.flight_duration_hours,
+    )
+
+    fetch_ts = datetime.now(tz=timezone.utc).isoformat()
+    pack_path = pack_dir_for(user_id, flight_id, fetch_ts)
+    pack_path.mkdir(parents=True, exist_ok=True)
+
+    options = BriefingOptions(
+        fetch_gramet=True,
+        generate_skewt=False,
+        generate_llm_digest=True,
+        output_dir=pack_path,
+    )
+
+    return route, fetch_ts, pack_path, options
+
+
+def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db):
+    """Shared finalization: build and save pack metadata, return response."""
+    days_out = (date.fromisoformat(flight.target_date) - date.today()).days
+
+    meta = BriefingPackMeta(
+        flight_id=flight_id,
+        fetch_timestamp=fetch_ts,
+        days_out=days_out,
+        has_gramet=result.gramet_path is not None,
+        has_skewt=len(result.skewt_paths) > 0,
+        has_digest=result.digest_path is not None,
+        assessment=result.digest.assessment if result.digest else None,
+        assessment_reason=result.digest.assessment_reason if result.digest else None,
+        artifact_path=str(pack_path),
+    )
+
+    save_pack_meta(db, meta)
+    logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)
+    return meta
+
+
+@router.post("/refresh", response_model=PackMetaResponse, status_code=201)
+def refresh_briefing(flight_id: str, request: Request, db: Session = Depends(get_db)):
+    """Trigger a new briefing fetch for a flight."""
+    flight = _load_flight_or_404(db, flight_id)
+    user_id = current_user_id()
+
+    db_path = request.app.state.db_path
+    if not db_path:
+        raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
+
+    try:
+        from weatherbrief.pipeline import execute_briefing
+
+        route, fetch_ts, pack_path, options = _prepare_refresh(
+            flight, db_path, user_id, flight_id,
+        )
+        result = execute_briefing(
+            route=route,
+            target_date=flight.target_date,
+            target_hour=flight.target_time_utc,
+            options=options,
+        )
+        meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db)
+        return _meta_to_response(meta)
+
+    except ImportError as exc:
+        logger.warning("Refresh failed (missing dependency): %s", exc)
+        raise HTTPException(status_code=503, detail=f"Missing dependency: {exc}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("Refresh failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Briefing fetch failed: {exc}")
+
+
+_refresh_executor = ThreadPoolExecutor(max_workers=2)
+
+
+@router.post("/refresh/stream")
+async def refresh_briefing_stream(flight_id: str, request: Request):
+    """Stream briefing refresh progress via Server-Sent Events."""
+    # Manage our own DB session — FastAPI's Depends(get_db) cleanup
+    # conflicts with the long-lived StreamingResponse.
+    db = SessionLocal()
+    try:
+        flight = _load_flight_or_404(db, flight_id)
+        user_id = current_user_id()
+
+        db_path = request.app.state.db_path
+        if not db_path:
+            raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
+
+        route, fetch_ts, pack_path, options = _prepare_refresh(
+            flight, db_path, user_id, flight_id,
+        )
+    except Exception:
+        db.close()
+        raise
+    db.close()  # flight data is in memory; free the session before streaming
+
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def progress_callback(stage: str, detail: str | None = None) -> None:
+        label = _STAGE_LABELS.get(stage, stage)
+        progress = _STAGE_PROGRESS.get(stage, 0.0)
+        event = {
+            "type": "progress",
+            "stage": stage,
+            "detail": detail,
+            "label": label,
+            "progress": progress,
+        }
+        asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+
+    def run_pipeline() -> None:
+        try:
+            from weatherbrief.pipeline import execute_briefing
+
+            result = execute_briefing(
+                route=route,
+                target_date=flight.target_date,
+                target_hour=flight.target_time_utc,
+                options=options,
+                progress_callback=progress_callback,
+            )
+            # Use a dedicated DB session — the request-scoped one isn't thread-safe
+            thread_db = SessionLocal()
+            try:
+                meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, thread_db)
+                thread_db.commit()
+            finally:
+                thread_db.close()
+            complete_event = {
+                "type": "complete",
+                "pack": _meta_to_response(meta).model_dump(),
+            }
+            asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
+        except Exception as exc:
+            logger.error("Streaming refresh failed: %s", exc, exc_info=True)
+            error_event = {"type": "error", "message": str(exc)}
+            asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)
+
+    loop.run_in_executor(_refresh_executor, run_pipeline)
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        while True:
+            event = await queue.get()
+            event_type = event.get("type", "progress")
+            data = json_mod.dumps(event)
+            yield f"event: {event_type}\ndata: {data}\n\n"
+            if event_type in ("complete", "error"):
+                break
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/{timestamp}", response_model=PackMetaResponse)
@@ -290,88 +496,6 @@ def send_email(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
     except Exception as exc:
         logger.error("Email send failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Email send failed: {exc}")
-
-
-@router.post("/refresh", response_model=PackMetaResponse, status_code=201)
-def refresh_briefing(flight_id: str, request: Request, db: Session = Depends(get_db)):
-    """Trigger a new briefing fetch for a flight.
-
-    Runs the pipeline, saves all artifacts as a new pack, returns metadata.
-    """
-    flight = _load_flight_or_404(db, flight_id)
-    user_id = current_user_id()
-
-    db_path = request.app.state.db_path
-    if not db_path:
-        raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
-
-    try:
-        from weatherbrief.airports import resolve_waypoints
-        from weatherbrief.models import RouteConfig
-        from weatherbrief.pipeline import BriefingOptions, execute_briefing
-
-        # Resolve waypoints from flight definition
-        if not flight.waypoints:
-            raise ValueError("Flight has no waypoints defined")
-        waypoint_objs = resolve_waypoints(flight.waypoints, db_path)
-        route = RouteConfig(
-            name=flight.route_name or " → ".join(flight.waypoints),
-            waypoints=waypoint_objs,
-            cruise_altitude_ft=flight.cruise_altitude_ft,
-            flight_ceiling_ft=flight.flight_ceiling_ft,
-            flight_duration_hours=flight.flight_duration_hours,
-        )
-
-        # Determine pack directory up front so pipeline writes directly there
-        fetch_ts = datetime.now(tz=timezone.utc).isoformat()
-        pack_path = pack_dir_for(user_id, flight_id, fetch_ts)
-        pack_path.mkdir(parents=True, exist_ok=True)
-
-        options = BriefingOptions(
-            fetch_gramet=True,
-            generate_skewt=False,  # generated on-demand via API
-            generate_llm_digest=True,
-            output_dir=pack_path,
-        )
-
-        result = execute_briefing(
-            route=route,
-            target_date=flight.target_date,
-            target_hour=flight.target_time_utc,
-            options=options,
-        )
-
-        # Build and save pack metadata — artifacts already in pack_dir
-        days_out = (date.fromisoformat(flight.target_date) - date.today()).days
-
-        meta = BriefingPackMeta(
-            flight_id=flight_id,
-            fetch_timestamp=fetch_ts,
-            days_out=days_out,
-            has_gramet=result.gramet_path is not None,
-            has_skewt=len(result.skewt_paths) > 0,
-            has_digest=result.digest_path is not None,
-            assessment=result.digest.assessment if result.digest else None,
-            assessment_reason=result.digest.assessment_reason if result.digest else None,
-            artifact_path=str(pack_path),
-        )
-
-        save_pack_meta(db, meta)
-        logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)
-
-        return _meta_to_response(meta)
-
-    except ImportError as exc:
-        logger.warning("Refresh failed (missing dependency): %s", exc)
-        raise HTTPException(
-            status_code=503,
-            detail=f"Missing dependency for route resolution: {exc}",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        logger.error("Refresh failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Briefing fetch failed: {exc}")
 
 
 # --- Helpers ---

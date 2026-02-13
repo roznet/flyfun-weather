@@ -1,84 +1,106 @@
-"""Tests for cloud layer estimation."""
+"""Tests for enhanced cloud layer detection (sounding/clouds.py)."""
 
-from weatherbrief.analysis.clouds import estimate_cloud_layers
-from weatherbrief.models import PressureLevelData
+from weatherbrief.analysis.sounding.clouds import detect_cloud_layers
+from weatherbrief.models import DerivedLevel
 
 
 def test_single_cloud_layer():
-    """Detects a single cloud layer where RH >= 80%."""
+    """Detects a single cloud layer where dewpoint depression < 3C."""
     levels = [
-        PressureLevelData(pressure_hpa=1000, relative_humidity_pct=50,
-                          geopotential_height_m=100),
-        PressureLevelData(pressure_hpa=925, relative_humidity_pct=85,
-                          geopotential_height_m=770),
-        PressureLevelData(pressure_hpa=850, relative_humidity_pct=90,
-                          geopotential_height_m=1450),
-        PressureLevelData(pressure_hpa=700, relative_humidity_pct=50,
-                          geopotential_height_m=3010),
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=2.0),
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=1.5),
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=10.0),
     ]
-    layers = estimate_cloud_layers(levels)
+    layers = detect_cloud_layers(levels)
     assert len(layers) == 1
-    # Base at 925 level (~770m -> ~2526ft)
-    assert abs(layers[0].base_ft - 770 * 3.28084) < 1
-    # Top at 700 level (~3010m -> ~9875ft)
-    assert abs(layers[0].top_ft - 3010 * 3.28084) < 1
+    assert layers[0].base_ft == 2530
+    assert layers[0].top_ft == 4760
 
 
 def test_no_cloud():
-    """No cloud when all RH below threshold."""
+    """No cloud when all dewpoint depression above threshold."""
     levels = [
-        PressureLevelData(pressure_hpa=1000, relative_humidity_pct=50,
-                          geopotential_height_m=100),
-        PressureLevelData(pressure_hpa=850, relative_humidity_pct=60,
-                          geopotential_height_m=1450),
-        PressureLevelData(pressure_hpa=700, relative_humidity_pct=40,
-                          geopotential_height_m=3010),
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=5.0),
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=8.0),
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=12.0),
     ]
-    layers = estimate_cloud_layers(levels)
+    layers = detect_cloud_layers(levels)
     assert len(layers) == 0
 
 
 def test_two_layers():
     """Detects two separate cloud layers."""
     levels = [
-        PressureLevelData(pressure_hpa=1000, relative_humidity_pct=85,
-                          geopotential_height_m=100),
-        PressureLevelData(pressure_hpa=925, relative_humidity_pct=50,
-                          geopotential_height_m=770),
-        PressureLevelData(pressure_hpa=850, relative_humidity_pct=90,
-                          geopotential_height_m=1450),
-        PressureLevelData(pressure_hpa=700, relative_humidity_pct=50,
-                          geopotential_height_m=3010),
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=1.5),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=8.0),
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=2.0),
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=6.0),
     ]
-    layers = estimate_cloud_layers(levels)
+    layers = detect_cloud_layers(levels)
     assert len(layers) == 2
 
 
-def test_cloud_top_unknown():
-    """Cloud extending to highest level has unknown top."""
+def test_cloud_extending_to_top():
+    """Cloud extending to top of profile is captured."""
     levels = [
-        PressureLevelData(pressure_hpa=1000, relative_humidity_pct=50,
-                          geopotential_height_m=100),
-        PressureLevelData(pressure_hpa=500, relative_humidity_pct=85,
-                          geopotential_height_m=5500),
-        PressureLevelData(pressure_hpa=300, relative_humidity_pct=90,
-                          geopotential_height_m=9100),
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18040, dewpoint_depression_c=1.5),
+        DerivedLevel(pressure_hpa=300, altitude_ft=29860, dewpoint_depression_c=2.0),
     ]
-    layers = estimate_cloud_layers(levels)
+    layers = detect_cloud_layers(levels)
     assert len(layers) == 1
-    assert layers[0].top_ft is None
-    assert layers[0].note == "estimated, top unknown"
+    assert layers[0].base_ft == 18040
+    assert layers[0].top_ft == 29860
 
 
-def test_missing_rh_skipped():
-    """Levels with missing RH or geopotential are skipped."""
+def test_coverage_ovc():
+    """Mean DD < 1C classifies as OVC."""
     levels = [
-        PressureLevelData(pressure_hpa=1000, relative_humidity_pct=None,
-                          geopotential_height_m=100),
-        PressureLevelData(pressure_hpa=850, relative_humidity_pct=90,
-                          geopotential_height_m=None),
-        PressureLevelData(pressure_hpa=700, relative_humidity_pct=50,
-                          geopotential_height_m=3010),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=0.5),
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=0.8),
     ]
-    layers = estimate_cloud_layers(levels)
-    assert len(layers) == 0
+    layers = detect_cloud_layers(levels)
+    assert len(layers) == 1
+    assert layers[0].coverage.value == "ovc"
+
+
+def test_coverage_bkn():
+    """Mean DD 1-2C classifies as BKN."""
+    levels = [
+        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=1.2),
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=1.8),
+    ]
+    layers = detect_cloud_layers(levels)
+    assert len(layers) == 1
+    assert layers[0].coverage.value == "bkn"
+
+
+def test_coverage_sct():
+    """Mean DD 2-3C classifies as SCT."""
+    levels = [
+        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=2.5),
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=2.8),
+    ]
+    layers = detect_cloud_layers(levels)
+    assert len(layers) == 1
+    assert layers[0].coverage.value == "sct"
+
+
+def test_missing_dd_skipped():
+    """Levels with missing dewpoint depression are skipped."""
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=None),
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=1.0),
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=None),
+    ]
+    # Single level can't form a layer (no adjacent partner)
+    layers = detect_cloud_layers(levels)
+    assert len(layers) == 1
+    assert layers[0].base_ft == 4760
+    assert layers[0].top_ft == 4760
+
+
+def test_empty_levels():
+    """Empty input returns empty list."""
+    assert detect_cloud_layers([]) == []

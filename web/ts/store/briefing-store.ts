@@ -18,6 +18,9 @@ export interface BriefingState {
   selectedPointIndex: number;
   loading: boolean;
   refreshing: boolean;
+  refreshStage: string | null;
+  refreshDetail: string | null;
+  refreshProgress: number;
   emailing: boolean;
   error: string | null;
 
@@ -43,6 +46,9 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   selectedPointIndex: 0,
   loading: false,
   refreshing: false,
+  refreshStage: null,
+  refreshDetail: null,
+  refreshProgress: 0,
   emailing: false,
   error: null,
 
@@ -113,14 +119,22 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refresh: async () => {
     const flight = get().flight;
     if (!flight) return;
-    set({ refreshing: true, error: null });
+    set({ refreshing: true, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
     try {
-      const newPack = await api.refreshBriefing(flight.id);
+      const newPack = await api.refreshBriefingStream(flight.id, (event) => {
+        if (event.type === 'progress') {
+          set({
+            refreshStage: event.label || event.stage || null,
+            refreshDetail: event.detail || null,
+            refreshProgress: event.progress || 0,
+          });
+        }
+      });
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
-      set({ refreshing: false });
+      set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
     } catch (err) {
-      set({ refreshing: false, error: `Refresh failed: ${err}` });
+      set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
     }
   },
 

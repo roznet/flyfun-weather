@@ -26,6 +26,8 @@ dependencies = [
     "alembic>=1.13",
     "pymysql>=1.1",
     "cryptography>=42.0",
+    "fastapi>=0.109",
+    "uvicorn>=0.27",
 ]
 
 [project.optional-dependencies]

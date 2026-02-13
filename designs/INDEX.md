@@ -26,6 +26,10 @@ Aviation-specific analysis: wind components, MetPy sounding analysis (thermodyna
 Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`
 → Full doc: analysis.md
 
+### analysis-metrics
+Comprehensive catalog of all ~40 weather metrics: API sources, derivation formulas, per-model availability matrix, physical interpretation, aviation relevance, known issues, and MetPy function inventory.
+→ Full doc: analysis-metrics.md
+
 ### digest
 Output generation: plain-text digest, Skew-T plots, LLM-powered weather briefing via LangGraph.
 Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDigest`

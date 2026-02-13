@@ -59,8 +59,12 @@ function init(): void {
     if (state.loading !== prev.loading) {
       ui.renderLoading(state.loading);
     }
-    if (state.refreshing !== prev.refreshing) {
-      ui.renderRefreshing(state.refreshing);
+    if (
+      state.refreshing !== prev.refreshing ||
+      state.refreshStage !== prev.refreshStage ||
+      state.refreshDetail !== prev.refreshDetail
+    ) {
+      ui.renderRefreshing(state.refreshing, state.refreshStage, state.refreshDetail);
     }
     if (state.emailing !== prev.emailing) {
       ui.renderEmailing(state.emailing);

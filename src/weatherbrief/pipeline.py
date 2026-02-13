@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from weatherbrief.analysis.comparison import compare_models
 from weatherbrief.analysis.sounding import analyze_sounding
@@ -77,6 +77,7 @@ def execute_briefing(
     target_date: str,
     target_hour: int = 9,
     options: BriefingOptions | None = None,
+    progress_callback: Callable[[str, str | None], None] | None = None,
 ) -> BriefingResult:
     """Run the full briefing pipeline.
 
@@ -88,6 +89,10 @@ def execute_briefing(
     """
     options = options or BriefingOptions()
     data_dir = options.data_dir or DEFAULT_DATA_DIR
+
+    def _notify(stage: str, detail: str | None = None) -> None:
+        if progress_callback is not None:
+            progress_callback(stage, detail)
 
     today = date.today().isoformat()
     # Naive datetime — UTC by convention, matching Open-Meteo's naive timestamps
@@ -104,6 +109,7 @@ def execute_briefing(
     logger.info("Models: %s", ", ".join(m.value for m in options.models))
 
     # --- Fetch forecasts (multi-point: 1 API call per model) ---
+    _notify("route_interpolation")
     client = OpenMeteoClient()
     route_points = interpolate_route(route, spacing_nm=20.0)
     logger.info("Route interpolated: %d points along %.0f nm",
@@ -120,6 +126,7 @@ def execute_briefing(
                 model.value, days_out, endpoint.max_days,
             )
             continue
+        _notify("fetch_forecasts", model.value)
         try:
             point_forecasts = client.fetch_multi_point(
                 route_points, model,
@@ -141,6 +148,7 @@ def execute_briefing(
             logger.warning("Failed to fetch %s", model.value, exc_info=True)
 
     # --- Analyze ---
+    _notify("waypoint_analysis")
     analyses: list[WaypointAnalysis] = []
 
     for waypoint in route.waypoints:
@@ -158,6 +166,7 @@ def execute_briefing(
     # --- Route-point analyses (all ~20 points, pre-computed) ---
     route_analyses_manifest: RouteAnalysesManifest | None = None
     if cross_sections:
+        _notify("route_analysis")
         try:
             model_names = [cs.model.value for cs in cross_sections]
             total_distance = route_points[-1].distance_from_origin_nm
@@ -215,22 +224,26 @@ def execute_briefing(
         snapshot_path = save_snapshot(snapshot, data_dir)
         if cross_sections:
             save_cross_section(snapshot, data_dir)
+    _notify("save_snapshot")
     logger.info("Snapshot saved: %s", snapshot_path)
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
 
     # --- Optional: GRAMET ---
     if options.fetch_gramet:
+        _notify("fetch_gramet")
         _run_gramet(route, target_date, target_hour, days_out, today, data_dir, result,
                     output_dir=options.output_dir)
 
     # --- Optional: Skew-T ---
     if options.generate_skewt:
+        _notify("generate_skewt")
         _run_skewt(snapshot, target_dt, target_date, days_out, today, data_dir, result,
                    output_dir=options.output_dir)
 
     # --- Optional: LLM digest ---
     if options.generate_llm_digest:
+        _notify("llm_digest")
         _run_llm_digest(
             snapshot, target_dt, target_date, days_out, today,
             data_dir, options.digest_config_name, result,

@@ -10,15 +10,17 @@ from weatherbrief.digest.prompt_builder import build_digest_context
 from weatherbrief.fetch.dwd_text import DWDTextForecasts
 from weatherbrief.models import (
     AgreementLevel,
-    CloudLayer,
+    EnhancedCloudLayer,
     ForecastSnapshot,
     HourlyForecast,
-    IcingBand,
     IcingRisk,
+    IcingType,
+    IcingZone,
     ModelDivergence,
     ModelSource,
     PressureLevelData,
     RouteConfig,
+    SoundingAnalysis,
     Waypoint,
     WaypointAnalysis,
     WaypointForecast,
@@ -52,6 +54,24 @@ def sample_snapshot(sample_route, sample_pressure_levels):
         hourly=[hourly],
     )
 
+    sounding = SoundingAnalysis(
+        icing_zones=[
+            IcingZone(
+                base_ft=5000.0,
+                top_ft=5000.0,
+                base_pressure_hpa=850,
+                top_pressure_hpa=850,
+                risk=IcingRisk.MODERATE,
+                icing_type=IcingType.MIXED,
+                mean_temperature_c=-2.0,
+                mean_wet_bulb_c=-3.0,
+            )
+        ],
+        cloud_layers=[
+            EnhancedCloudLayer(base_ft=3000.0, top_ft=6000.0)
+        ],
+    )
+
     analysis = WaypointAnalysis(
         waypoint=sample_route.waypoints[0],
         target_time=target_time,
@@ -64,20 +84,7 @@ def sample_snapshot(sample_route, sample_pressure_levels):
                 crosswind_kt=8.0,
             )
         },
-        icing_bands={
-            "gfs": [
-                IcingBand(
-                    pressure_hpa=850,
-                    altitude_ft=5000.0,
-                    temperature_c=-2.0,
-                    relative_humidity_pct=92.0,
-                    risk=IcingRisk.MODERATE,
-                )
-            ]
-        },
-        cloud_layers={
-            "gfs": [CloudLayer(base_ft=3000.0, top_ft=6000.0)]
-        },
+        sounding={"gfs": sounding},
         model_divergence=[
             ModelDivergence(
                 variable="temperature_c",
@@ -181,7 +188,7 @@ def test_build_context_quantitative_detail(sample_snapshot):
 
     # Icing
     assert "moderate" in context.lower()
-    assert "5000ft" in context
+    assert "5000" in context
 
     # Cloud layers
     assert "3000" in context
