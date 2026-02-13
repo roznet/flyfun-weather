@@ -195,3 +195,38 @@ export interface ForecastSnapshot {
   days_out: number;
   analyses: WaypointAnalysis[];
 }
+
+export interface WindComponent {
+  wind_speed_kt: number;
+  wind_direction_deg: number;
+  track_deg: number;
+  headwind_kt: number;
+  crosswind_kt: number;
+}
+
+export interface RoutePointAnalysis {
+  point_index: number;
+  lat: number;
+  lon: number;
+  distance_from_origin_nm: number;
+  waypoint_icao: string | null;
+  waypoint_name: string | null;
+  interpolated_time: string;
+  forecast_hour: string;
+  track_deg: number;
+  wind_components: Record<string, WindComponent>;
+  sounding: Record<string, SoundingAnalysis>;
+  altitude_advisories: AltitudeAdvisories | null;
+  model_divergence: ModelDivergence[];
+}
+
+export interface RouteAnalysesManifest {
+  route_name: string;
+  target_date: string;
+  departure_time: string;
+  flight_duration_hours: number;
+  total_distance_nm: number;
+  cruise_altitude_ft: number;
+  models: string[];
+  analyses: RoutePointAnalysis[];
+}

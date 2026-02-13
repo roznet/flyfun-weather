@@ -1,6 +1,6 @@
 /** Briefing page entry point — wires store, UI manager, and event handlers. */
 
-import { briefingStore } from './store/briefing-store';
+import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 
@@ -13,6 +13,18 @@ function init(): void {
   if (!flightId) {
     ui.renderError('No flight specified. Go back to flights list.');
     return;
+  }
+
+  // --- Helper to render slider-dependent sections ---
+  function renderSliderSections(state: BriefingState): void {
+    ui.renderRouteSlider(
+      state.routeAnalyses,
+      state.selectedPointIndex,
+      (idx) => store.getState().setSelectedPoint(idx),
+    );
+    ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex);
+    ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
+    ui.renderModelComparison(state.snapshot, state.routeAnalyses, state.selectedPointIndex);
   }
 
   // --- Subscribe to state changes ---
@@ -30,17 +42,19 @@ function init(): void {
     if (
       state.currentPack !== prev.currentPack ||
       state.snapshot !== prev.snapshot ||
-      state.digest !== prev.digest
+      state.digest !== prev.digest ||
+      state.routeAnalyses !== prev.routeAnalyses
     ) {
       ui.renderAssessment(state.currentPack);
       ui.renderSynopsis(state.flight, state.currentPack, state.digest);
       ui.renderGramet(state.flight, state.currentPack);
-      ui.renderSoundingAnalysis(state.snapshot);
-      ui.renderModelComparison(state.snapshot);
-      ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel);
+      renderSliderSections(state);
+    }
+    if (state.selectedPointIndex !== prev.selectedPointIndex) {
+      renderSliderSections(state);
     }
     if (state.selectedModel !== prev.selectedModel) {
-      ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel);
+      ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
     }
     if (state.loading !== prev.loading) {
       ui.renderLoading(state.loading);
@@ -127,9 +141,7 @@ function init(): void {
     ui.renderAssessment(s.currentPack);
     ui.renderSynopsis(s.flight, s.currentPack, s.digest);
     ui.renderGramet(s.flight, s.currentPack);
-    ui.renderSoundingAnalysis(s.snapshot);
-    ui.renderModelComparison(s.snapshot);
-    ui.renderSkewTs(s.flight, s.currentPack, s.snapshot, s.selectedModel);
+    renderSliderSections(s);
     ui.renderLoading(s.loading);
   });
 }

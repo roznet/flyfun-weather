@@ -1,7 +1,7 @@
 /** Zustand vanilla store for the Briefing report page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { FlightResponse, ForecastSnapshot, PackMeta, WeatherDigest } from './types';
+import type { FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import * as api from '../adapters/api-adapter';
 
 export interface BriefingState {
@@ -11,9 +11,11 @@ export interface BriefingState {
   currentPack: PackMeta | null;
   snapshot: ForecastSnapshot | null;
   digest: WeatherDigest | null;
+  routeAnalyses: RouteAnalysesManifest | null;
 
   // UI state
   selectedModel: string;
+  selectedPointIndex: number;
   loading: boolean;
   refreshing: boolean;
   emailing: boolean;
@@ -26,6 +28,7 @@ export interface BriefingState {
   selectLatest: () => Promise<void>;
   refresh: () => Promise<void>;
   setSelectedModel: (model: string) => void;
+  setSelectedPoint: (index: number) => void;
   sendEmail: () => Promise<void>;
 }
 
@@ -35,7 +38,9 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   currentPack: null,
   snapshot: null,
   digest: null,
+  routeAnalyses: null,
   selectedModel: 'ecmwf',
+  selectedPointIndex: 0,
   loading: false,
   refreshing: false,
   emailing: false,
@@ -72,6 +77,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       const pack = await api.fetchPack(flight.id, timestamp);
       let snapshot: ForecastSnapshot | null = null;
       let digest: WeatherDigest | null = null;
+      let routeAnalyses: RouteAnalysesManifest | null = null;
       try {
         snapshot = await api.fetchSnapshot(flight.id, timestamp);
       } catch {
@@ -86,7 +92,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           // Digest fetch is non-critical
         }
       }
-      set({ currentPack: pack, snapshot, digest, loading: false });
+      try {
+        routeAnalyses = await api.fetchRouteAnalyses(flight.id, timestamp);
+      } catch {
+        // Old packs may not have route analyses
+      }
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, selectedPointIndex: 0, loading: false });
     } catch (err) {
       set({ loading: false, error: `Failed to load pack: ${err}` });
     }
@@ -115,6 +126,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setSelectedModel: (model: string) => {
     set({ selectedModel: model });
+  },
+
+  setSelectedPoint: (index: number) => {
+    set({ selectedPointIndex: index });
   },
 
   sendEmail: async () => {
