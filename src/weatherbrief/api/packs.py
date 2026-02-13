@@ -581,15 +581,17 @@ def send_email(
     pack_dir = _get_pack_dir(db, flight_id, timestamp, user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
-    from weatherbrief.notify.email import SmtpConfig, get_recipients, send_briefing_email
+    from weatherbrief.db.models import UserRow
+    from weatherbrief.notify.email import send_briefing_email
 
     try:
-        recipients = get_recipients()
-        if not recipients:
+        user = db.query(UserRow).filter(UserRow.id == user_id).first()
+        if not user or not user.email:
             raise HTTPException(
                 status_code=400,
-                detail="No recipients configured. Set WEATHERBRIEF_EMAIL_RECIPIENTS.",
+                detail="No email address on file. Update your profile to send emails.",
             )
+        recipients = [user.email]
         send_briefing_email(recipients, flight, meta, pack_dir)
         return {"status": "sent", "recipients": recipients}
     except ValueError as exc:
