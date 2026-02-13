@@ -27,7 +27,7 @@ export function renderUserInfo(name: string): void {
 
 // --- Shared API fetch ---
 
-const API_BASE = '/api';
+export const API_BASE = '/api';
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
