@@ -53,12 +53,6 @@ class SmtpConfig(BaseModel):
         )
 
 
-def get_recipients() -> list[str]:
-    """Read recipients from WEATHERBRIEF_EMAIL_RECIPIENTS env var (comma-separated)."""
-    raw = os.environ.get("WEATHERBRIEF_EMAIL_RECIPIENTS", "")
-    return [addr.strip() for addr in raw.split(",") if addr.strip()]
-
-
 def _build_subject(flight: Flight, pack: BriefingPackMeta) -> str:
     """Build email subject line."""
     route = " → ".join(flight.waypoints) if flight.waypoints else flight.route_name

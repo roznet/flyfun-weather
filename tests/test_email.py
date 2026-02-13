@@ -16,7 +16,6 @@ from weatherbrief.notify.email import (
     _build_html_body,
     _build_plain_body,
     _build_subject,
-    get_recipients,
     send_briefing_email,
 )
 
@@ -113,24 +112,6 @@ class TestSmtpConfig:
         monkeypatch.delenv("WEATHERBRIEF_FROM_EMAIL", raising=False)
         with pytest.raises(ValueError, match="SMTP not fully configured"):
             SmtpConfig.from_env()
-
-
-class TestGetRecipients:
-    def test_comma_separated(self, monkeypatch):
-        monkeypatch.setenv("WEATHERBRIEF_EMAIL_RECIPIENTS", "a@b.com, c@d.com")
-        assert get_recipients() == ["a@b.com", "c@d.com"]
-
-    def test_single_recipient(self, monkeypatch):
-        monkeypatch.setenv("WEATHERBRIEF_EMAIL_RECIPIENTS", "a@b.com")
-        assert get_recipients() == ["a@b.com"]
-
-    def test_empty(self, monkeypatch):
-        monkeypatch.setenv("WEATHERBRIEF_EMAIL_RECIPIENTS", "")
-        assert get_recipients() == []
-
-    def test_not_set(self, monkeypatch):
-        monkeypatch.delenv("WEATHERBRIEF_EMAIL_RECIPIENTS", raising=False)
-        assert get_recipients() == []
 
 
 class TestBuildSubject:
