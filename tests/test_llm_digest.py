@@ -156,10 +156,17 @@ def test_run_digest_full_graph(mock_dwd, mock_create_llm, minimal_snapshot, samp
         fetched_at=datetime(2026, 2, 10, 12, 0, 0, tzinfo=timezone.utc),
     )
 
-    # Mock LLM
+    # Mock LLM — with_structured_output(include_raw=True) returns
+    # {"raw": AIMessage, "parsed": WeatherDigest, "parsing_error": None}
     mock_llm = MagicMock()
+    mock_raw_msg = MagicMock()
+    mock_raw_msg.usage_metadata = {"input_tokens": 1000, "output_tokens": 200}
     mock_structured = MagicMock()
-    mock_structured.invoke.return_value = sample_digest
+    mock_structured.invoke.return_value = {
+        "raw": mock_raw_msg,
+        "parsed": sample_digest,
+        "parsing_error": None,
+    }
     mock_llm.with_structured_output.return_value = mock_structured
     mock_create_llm.return_value = mock_llm
 
@@ -173,6 +180,8 @@ def test_run_digest_full_graph(mock_dwd, mock_create_llm, minimal_snapshot, samp
     assert result["digest_text"] is not None
     assert "GREEN" in result["digest_text"]
     assert result.get("error") is None
+    assert result.get("llm_input_tokens") == 1000
+    assert result.get("llm_output_tokens") == 200
 
 
 @patch("weatherbrief.digest.llm_digest.create_llm")

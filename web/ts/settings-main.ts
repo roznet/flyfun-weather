@@ -5,7 +5,10 @@ import {
   fetchPreferences,
   savePreferences,
   clearAutorouterCreds,
+  fetchUsageSummary,
   type PreferencesResponse,
+  type UsageSummary,
+  type ServiceUsage,
 } from './adapters/preferences-adapter';
 
 const ALL_MODELS = ['gfs', 'ecmwf', 'icon'] as const;
@@ -24,6 +27,11 @@ async function init(): Promise<void> {
   } catch (err) {
     showStatus(`Failed to load preferences: ${err}`, true);
   }
+
+  // Load usage (non-blocking — don't block the page if it fails)
+  fetchUsageSummary()
+    .then(renderUsage)
+    .catch(() => { /* usage section stays hidden */ });
 
   // Save button
   const form = document.getElementById('settings-form') as HTMLFormElement;
@@ -137,6 +145,52 @@ function renderUserInfo(name: string): void {
     <button class="btn-logout" id="logout-btn">Sign out</button>
   `;
   document.getElementById('logout-btn')?.addEventListener('click', () => logout());
+}
+
+function renderUsage(usage: UsageSummary): void {
+  const section = document.getElementById('usage-section');
+  if (!section) return;
+  section.style.display = '';
+
+  const todayGrid = document.getElementById('usage-today-grid');
+  if (todayGrid) {
+    todayGrid.innerHTML = [
+      renderUsageBar('Briefings', usage.today.briefings, null),
+      renderUsageBar('Open-Meteo', usage.today.open_meteo.used, usage.today.open_meteo.limit),
+      renderUsageBar('GRAMET', usage.today.gramet.used, usage.today.gramet.limit),
+      renderUsageBar('AI Digest', usage.today.llm_digest.used, usage.today.llm_digest.limit),
+    ].join('');
+  }
+
+  const monthSummary = document.getElementById('usage-month-summary');
+  if (monthSummary) {
+    const tokens = usage.month.total_tokens >= 1000
+      ? `~${Math.round(usage.month.total_tokens / 1000)}K tokens`
+      : `${usage.month.total_tokens} tokens`;
+    monthSummary.textContent =
+      `${usage.month.briefings} briefings / ${usage.month.gramet} GRAMET / ` +
+      `${usage.month.llm_digest} AI digests / ${tokens}`;
+  }
+}
+
+function renderUsageBar(label: string, used: number, limit: number | null): string {
+  if (limit !== null) {
+    const pct = Math.min(100, Math.round((used / limit) * 100));
+    const cls = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : '';
+    return `
+      <div class="usage-row">
+        <span class="usage-label">${label}</span>
+        <div class="usage-bar-track">
+          <div class="usage-bar-fill ${cls}" style="width:${pct}%"></div>
+        </div>
+        <span class="usage-count">${used} / ${limit}</span>
+      </div>`;
+  }
+  return `
+    <div class="usage-row">
+      <span class="usage-label">${label}</span>
+      <span class="usage-count" style="flex:1;">${used}</span>
+    </div>`;
 }
 
 if (document.readyState === 'loading') {

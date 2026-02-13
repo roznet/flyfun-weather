@@ -64,3 +64,33 @@ export async function clearAutorouterCreds(): Promise<void> {
     method: 'DELETE',
   });
 }
+
+// --- Usage ---
+
+export interface ServiceUsage {
+  used: number;
+  limit: number;
+}
+
+export interface TodayUsage {
+  briefings: number;
+  open_meteo: ServiceUsage;
+  gramet: ServiceUsage;
+  llm_digest: ServiceUsage;
+}
+
+export interface MonthUsage {
+  briefings: number;
+  gramet: number;
+  llm_digest: number;
+  total_tokens: number;
+}
+
+export interface UsageSummary {
+  today: TodayUsage;
+  month: MonthUsage;
+}
+
+export async function fetchUsageSummary(): Promise<UsageSummary> {
+  return apiFetch<UsageSummary>('/user/usage');
+}

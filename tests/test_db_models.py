@@ -9,8 +9,8 @@ import pytest
 from weatherbrief.db.engine import DEV_USER_ID
 from weatherbrief.db.models import (
     BriefingPackRow,
+    BriefingUsageRow,
     FlightRow,
-    UsageLogRow,
     UserPreferencesRow,
     UserRow,
 )
@@ -156,30 +156,36 @@ class TestBriefingPackModel:
         assert len(loaded.packs) == 3
 
 
-class TestUsageLogModel:
-    def test_create_usage_log(self, db_session, dev_user):
-        log = UsageLogRow(
+class TestBriefingUsageModel:
+    def test_create_briefing_usage(self, db_session, dev_user):
+        row = BriefingUsageRow(
             user_id=dev_user,
-            call_type="briefing_refresh",
-            detail_json='{"flight_id": "test"}',
+            flight_id="test-flight",
+            open_meteo_calls=3,
+            gramet_fetched=True,
+            llm_digest=True,
+            llm_model="anthropic:claude-sonnet-4-5",
+            llm_input_tokens=5000,
+            llm_output_tokens=1000,
         )
-        db_session.add(log)
+        db_session.add(row)
         db_session.flush()
 
-        assert log.id is not None
-        assert log.skipped is False  # default
+        assert row.id is not None
+        assert row.gramet_failed is False  # default
 
-    def test_delete_user_cascades_logs(self, db_session, dev_user):
-        log = UsageLogRow(
+    def test_delete_user_cascades_usage(self, db_session, dev_user):
+        row = BriefingUsageRow(
             user_id=dev_user,
-            call_type="test",
+            flight_id="test",
+            open_meteo_calls=1,
         )
-        db_session.add(log)
+        db_session.add(row)
         db_session.flush()
-        log_id = log.id
+        row_id = row.id
 
         user = db_session.get(UserRow, dev_user)
         db_session.delete(user)
         db_session.flush()
 
-        assert db_session.get(UsageLogRow, log_id) is None
+        assert db_session.get(BriefingUsageRow, row_id) is None
