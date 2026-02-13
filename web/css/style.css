@@ -571,6 +571,15 @@ label {
   font-size: 0.85rem;
 }
 
+/* --- Refresh status --- */
+
+.refresh-status {
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 /* --- Loading --- */
 
 #loading-spinner {
