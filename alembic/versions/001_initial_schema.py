@@ -38,9 +38,9 @@ def upgrade() -> None:
             sa.ForeignKey("users.id", ondelete="CASCADE"),
             primary_key=True,
         ),
-        sa.Column("defaults_json", sa.Text, nullable=False, server_default="{}"),
-        sa.Column("encrypted_autorouter_creds", sa.Text, nullable=False, server_default=""),
-        sa.Column("digest_config_json", sa.Text, nullable=False, server_default="{}"),
+        sa.Column("defaults_json", sa.Text, nullable=False),
+        sa.Column("encrypted_autorouter_creds", sa.Text, nullable=False),
+        sa.Column("digest_config_json", sa.Text, nullable=False),
     )
 
     op.create_table(
@@ -54,7 +54,7 @@ def upgrade() -> None:
             index=True,
         ),
         sa.Column("route_name", sa.String(256), nullable=False, server_default=""),
-        sa.Column("waypoints_json", sa.Text, nullable=False, server_default="[]"),
+        sa.Column("waypoints_json", sa.Text, nullable=False),
         sa.Column("target_date", sa.String(10), nullable=False),
         sa.Column("target_time_utc", sa.Integer, nullable=False, server_default=sa.text("9")),
         sa.Column("cruise_altitude_ft", sa.Integer, nullable=False, server_default=sa.text("8000")),
@@ -80,7 +80,7 @@ def upgrade() -> None:
         sa.Column("has_digest", sa.Boolean, nullable=False, server_default=sa.text("0")),
         sa.Column("assessment", sa.String(16), nullable=True),
         sa.Column("assessment_reason", sa.Text, nullable=True),
-        sa.Column("artifact_path", sa.Text, nullable=False, server_default=""),
+        sa.Column("artifact_path", sa.Text, nullable=False),
     )
 
     op.create_table(
@@ -95,7 +95,7 @@ def upgrade() -> None:
         ),
         sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
         sa.Column("call_type", sa.String(64), nullable=False),
-        sa.Column("detail_json", sa.Text, nullable=False, server_default="{}"),
+        sa.Column("detail_json", sa.Text, nullable=False),
         sa.Column("skipped", sa.Boolean, nullable=False, server_default=sa.text("0")),
     )
 
