@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.deps import current_user_id, get_db
@@ -21,6 +22,8 @@ from weatherbrief.storage.flights import (
 )
 
 router = APIRouter(prefix="/flights", tags=["flights"])
+
+_ICAO_PATTERN = re.compile(r"^[A-Z]{2,4}$")
 
 
 class CreateFlightRequest(BaseModel):
@@ -36,6 +39,32 @@ class CreateFlightRequest(BaseModel):
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
+
+    @field_validator("target_date")
+    @classmethod
+    def validate_target_date(cls, v: str) -> str:
+        try:
+            date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("target_date must be YYYY-MM-DD format")
+        return v
+
+    @field_validator("target_time_utc")
+    @classmethod
+    def validate_target_time(cls, v: int | None) -> int | None:
+        if v is not None and not (0 <= v <= 23):
+            raise ValueError("target_time_utc must be 0-23")
+        return v
+
+    @field_validator("waypoints")
+    @classmethod
+    def validate_waypoints(cls, v: list[str]) -> list[str]:
+        for wp in v:
+            if not _ICAO_PATTERN.match(wp.upper()):
+                raise ValueError(
+                    f"Invalid waypoint '{wp}': must be 2-4 uppercase letters"
+                )
+        return v
 
 
 class FlightResponse(BaseModel):

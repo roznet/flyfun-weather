@@ -37,18 +37,11 @@ def _generate_waypoint_skewt(
 ) -> None:
     """Generate a Skew-T PNG on-demand from snapshot forecast data."""
     try:
-        from datetime import datetime
-
+        from weatherbrief.api.packs import _parse_target_time
         from weatherbrief.digest.skewt import generate_skewt
         from weatherbrief.models import WaypointForecast
 
-        # Parse target time from first analysis
-        analyses = snapshot.get("analyses", [])
-        if analyses and "target_time" in analyses[0]:
-            target_dt = datetime.fromisoformat(analyses[0]["target_time"])
-        else:
-            parts = snapshot.get("target_date", "2026-01-01").split("-")
-            target_dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]), 9)
+        target_dt = _parse_target_time(snapshot)
 
         for wf_data in snapshot.get("forecasts", []):
             if wf_data.get("waypoint", {}).get("icao") == icao and wf_data.get("model") == model:

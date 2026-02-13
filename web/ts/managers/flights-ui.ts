@@ -1,6 +1,7 @@
 /** DOM management for the Flights list page. */
 
 import type { FlightResponse, PackMeta, RouteInfo } from '../store/types';
+import { escapeHtml } from '../utils';
 
 function $(id: string): HTMLElement {
   return document.getElementById(id)!;
@@ -65,13 +66,13 @@ export function renderFlightList(
       : f.route_name.replace(/_/g, ' → ').toUpperCase();
     const packInfo = pack
       ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
-         <span class="badge ${assessmentClass(pack.assessment)}">${pack.assessment || '—'}</span>`
+         <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
       : '<span class="pack-info">No briefings yet</span>';
 
     return `
-      <div class="flight-card" data-id="${f.id}">
+      <div class="flight-card" data-id="${escapeHtml(f.id)}">
         <div class="flight-header">
-          <span class="flight-route">${waypoints}</span>
+          <span class="flight-route">${escapeHtml(waypoints)}</span>
           <span class="flight-date">${formatDate(f.target_date)} ${formatTime(f.target_time_utc)}</span>
           <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
         </div>
@@ -79,8 +80,8 @@ export function renderFlightList(
           ${packInfo}
         </div>
         <div class="flight-actions">
-          <button class="btn btn-primary btn-view" data-id="${f.id}">View Briefing</button>
-          <button class="btn btn-danger btn-delete" data-id="${f.id}">Delete</button>
+          <button class="btn btn-primary btn-view" data-id="${escapeHtml(f.id)}">View Briefing</button>
+          <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">Delete</button>
         </div>
       </div>
     `;
@@ -106,9 +107,9 @@ export function renderRouteOptions(routes: RouteInfo[]): void {
   const select = $('route-select') as HTMLSelectElement;
   if (!select) return;
 
-  select.innerHTML = '<option value="">—</option>' +
+  select.innerHTML = '<option value="">\u2014</option>' +
     routes.map((r) =>
-      `<option value="${r.name}" data-alt="${r.cruise_altitude_ft}" data-dur="${r.flight_duration_hours}">${r.display_name} (${r.waypoints.join(' → ')})</option>`
+      `<option value="${escapeHtml(r.name)}" data-alt="${r.cruise_altitude_ft}" data-dur="${r.flight_duration_hours}">${escapeHtml(r.display_name)} (${escapeHtml(r.waypoints.join(' \u2192 '))})</option>`
     ).join('');
 }
 
@@ -132,8 +133,12 @@ export function onRouteSelected(routes: RouteInfo[]): void {
   const select = $('route-select') as HTMLSelectElement;
   if (!select) return;
 
-  select.addEventListener('change', () => {
-    const route = routes.find((r) => r.name === select.value);
+  // Replace element to remove any previously attached listeners
+  const newSelect = select.cloneNode(true) as HTMLSelectElement;
+  select.parentNode!.replaceChild(newSelect, select);
+
+  newSelect.addEventListener('change', () => {
+    const route = routes.find((r) => r.name === newSelect.value);
     if (!route) return;
 
     const wpInput = $('input-waypoints') as HTMLInputElement;
