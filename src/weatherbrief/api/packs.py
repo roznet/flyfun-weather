@@ -375,7 +375,10 @@ def get_skewt(
 
     import json
     snapshot_data = json.loads(snapshot_path.read_text())
-    target_dt = _parse_target_time(snapshot_data)
+    try:
+        target_dt = _parse_target_time(snapshot_data)
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=404, detail="Skew-T not available")
 
     # Find matching forecast
     from weatherbrief.models import WaypointForecast
