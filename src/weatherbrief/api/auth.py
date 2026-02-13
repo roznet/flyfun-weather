@@ -76,6 +76,17 @@ async def callback_google(request: Request, db: Session = Depends(get_db)):
         db.flush()
         logger.info("New user created: %s (%s)", email, user.id)
 
+        # Notify admins of new signup (fire-and-forget, don't block OAuth flow)
+        try:
+            from weatherbrief.notify.admin_email import send_new_user_notification
+
+            base_url = str(request.base_url).rstrip("/")
+            if not is_dev_mode():
+                base_url = base_url.replace("http://", "https://")
+            send_new_user_notification(email, name, user.id, base_url)
+        except Exception:
+            logger.warning("Failed to send admin notification for %s", email, exc_info=True)
+
     # Update last login
     user.last_login_at = datetime.now(timezone.utc)
     if email and user.email != email:

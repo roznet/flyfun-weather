@@ -198,9 +198,12 @@ Google and Apple Sign-In via `authlib` (lightweight, no Firebase dependency).
 
 ### Approval workflow
 
-After a user authenticates for the first time, their `approved` flag is `false`. Admin (you) flips it to `true` via:
-- Direct SQL: `UPDATE users SET approved=1 WHERE email='friend@gmail.com'`
-- Future: simple admin page listing pending users
+After a user authenticates for the first time, their `approved` flag is `false`. Admin approves via:
+- **Admin page** (`/admin.html`): shows pending users with one-click approve buttons, plus usage overview for all users
+- **Email link**: admins receive a notification email with an HMAC-signed one-click approve URL (valid 7 days)
+- **Direct SQL** (fallback): `UPDATE users SET approved=1 WHERE email='friend@gmail.com'`
+
+Admin identity is controlled by the `ADMIN_EMAILS` env var (comma-separated). In dev mode, the dev user is always treated as admin.
 
 ### Dev mode bypass
 
@@ -291,7 +294,10 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] LLM token extraction via `include_raw=True` on structured output
 - [x] `GET /api/user/usage` endpoint with today/month aggregation
 - [x] Test: rate limit triggers, usage counts, summary aggregation (13 tests)
-- [ ] Admin endpoint or page: all users + usage overview (deferred)
+- [x] Admin page with user list, usage overview, and pending approval UI
+- [x] One-click approval via HMAC-signed email links (7-day expiry)
+- [x] Email notification to admins on new user signup (`ADMIN_EMAILS` env var)
+- [x] Admin gate: dev user always admin; production checks JWT email against `ADMIN_EMAILS`
 
 ## Deploying to Server
 
@@ -364,6 +370,7 @@ docker exec weatherbrief alembic upgrade head
 | `AUTOROUTER_USERNAME` | For GRAMET | — | Fallback; per-user creds preferred |
 | `AUTOROUTER_PASSWORD` | For GRAMET | — | Fallback; per-user creds preferred |
 | `CREDENTIAL_ENCRYPTION_KEY` | Prod only | derived from JWT_SECRET in dev | Fernet key for encrypting autorouter creds |
+| `ADMIN_EMAILS` | Prod only | — | Comma-separated admin email addresses; dev user is always admin |
 
 ## References
 
