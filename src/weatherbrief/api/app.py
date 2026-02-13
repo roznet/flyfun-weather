@@ -33,9 +33,14 @@ async def lifespan(app: FastAPI):
 
     if env == "development":
         init_db(engine)
-        with SessionLocal() as session:
-            ensure_dev_user(session)
-        logger.info("Dev mode: tables created, dev user ensured")
+        logger.info("Dev mode: tables created via init_db")
+
+    # Ensure the dev user exists until auth (Phase 2) is implemented.
+    # In production current_user_id() still returns DEV_USER_ID, so the
+    # row must exist or FK constraints on flights/packs will fail.
+    with SessionLocal() as session:
+        ensure_dev_user(session)
+    logger.info("Dev user ensured")
 
     yield
 
