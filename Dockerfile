@@ -40,6 +40,7 @@ RUN mkdir -p src/weatherbrief && \
 
 # Copy application source
 COPY src/ src/
+COPY configs/ configs/
 COPY alembic/ alembic/
 COPY alembic.ini .
 
