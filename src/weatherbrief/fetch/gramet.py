@@ -21,13 +21,18 @@ class AutorouterGramet:
     Uses AutorouterCredentialManager from euro_aip for OAuth2 authentication.
     """
 
-    def __init__(self, cache_dir: str | None = None):
+    def __init__(
+        self,
+        cache_dir: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+    ):
         self._cred_manager = AutorouterCredentialManager(
             cache_dir or str(Path.home() / ".cache" / "weatherbrief")
         )
-        # Set credentials from env vars to avoid interactive input() in Docker
-        username = os.environ.get("AUTOROUTER_USERNAME")
-        password = os.environ.get("AUTOROUTER_PASSWORD")
+        # Use explicit credentials if provided, else fall back to env vars
+        username = username or os.environ.get("AUTOROUTER_USERNAME")
+        password = password or os.environ.get("AUTOROUTER_PASSWORD")
         if username and password:
             self._cred_manager.set_credentials(username, password)
         self.session = requests.Session()

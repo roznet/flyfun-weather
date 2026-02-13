@@ -22,15 +22,18 @@ router = APIRouter(prefix="/flights", tags=["flights"])
 
 
 class CreateFlightRequest(BaseModel):
-    """Request body for creating a new flight."""
+    """Request body for creating a new flight.
+
+    Fields default to None, meaning "use user preference" (or system default).
+    """
 
     route_name: str = ""  # optional preset name
     waypoints: list[str] = []  # ICAO codes (e.g. ["EGTK", "LFPB", "LSGS"])
     target_date: str  # YYYY-MM-DD
-    target_time_utc: int = 9
-    cruise_altitude_ft: int = 8000
-    flight_ceiling_ft: int = 18000
-    flight_duration_hours: float = 0.0
+    target_time_utc: int | None = None
+    cruise_altitude_ft: int | None = None
+    flight_ceiling_ft: int | None = None
+    flight_duration_hours: float | None = None
 
 
 class FlightResponse(BaseModel):
@@ -77,7 +80,13 @@ def create_flight(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Create a new flight."""
+    """Create a new flight.
+
+    Request fields that are None are filled from the user's saved preferences,
+    then from system defaults.
+    """
+    from weatherbrief.api.preferences import load_user_defaults
+
     if not req.waypoints and not req.route_name:
         raise HTTPException(
             status_code=422, detail="Either waypoints or route_name is required"
@@ -86,6 +95,21 @@ def create_flight(
     # Derive route_name from waypoints if not provided
     route_name = req.route_name or "_".join(w.lower() for w in req.waypoints)
     waypoints = [w.upper().strip() for w in req.waypoints] if req.waypoints else []
+
+    # Apply user defaults for any field left as None
+    defaults = load_user_defaults(db, user_id)
+    target_time_utc = req.target_time_utc if req.target_time_utc is not None else 9
+    cruise_altitude_ft = (
+        req.cruise_altitude_ft
+        if req.cruise_altitude_ft is not None
+        else (defaults.cruise_altitude_ft or 8000)
+    )
+    flight_ceiling_ft = (
+        req.flight_ceiling_ft
+        if req.flight_ceiling_ft is not None
+        else (defaults.flight_ceiling_ft or 18000)
+    )
+    flight_duration_hours = req.flight_duration_hours if req.flight_duration_hours is not None else 0.0
 
     flight_id = f"{safe_path_component(route_name)}-{req.target_date}"
 
@@ -105,10 +129,10 @@ def create_flight(
         route_name=route_name,
         waypoints=waypoints,
         target_date=req.target_date,
-        target_time_utc=req.target_time_utc,
-        cruise_altitude_ft=req.cruise_altitude_ft,
-        flight_ceiling_ft=req.flight_ceiling_ft,
-        flight_duration_hours=req.flight_duration_hours,
+        target_time_utc=target_time_utc,
+        cruise_altitude_ft=cruise_altitude_ft,
+        flight_ceiling_ft=flight_ceiling_ft,
+        flight_duration_hours=flight_duration_hours,
         created_at=datetime.now(tz=timezone.utc),
     )
 
