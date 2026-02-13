@@ -270,15 +270,16 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [ ] Register Apple Sign-In (developer.apple.com) — deferred
 - [x] Test: two users see only their own flights
 
-### Phase 3: Preferences + Credentials
+### Phase 3: Preferences + Credentials (Done)
 
 **Goal**: Per-user settings, encrypted autorouter credentials.
 
-- [ ] Settings page UI (default altitude, models, autorouter creds)
-- [ ] `CREDENTIAL_ENCRYPTION_KEY` env var + Fernet encrypt/decrypt
-- [ ] GRAMET fetch uses per-user autorouter credentials
-- [ ] Preferences applied as defaults when creating flights
-- [ ] Test: user with autorouter creds gets GRAMET, user without doesn't
+- [x] Settings page UI (default altitude, models, autorouter creds)
+- [x] `CREDENTIAL_ENCRYPTION_KEY` env var + Fernet encrypt/decrypt
+- [x] GRAMET fetch uses per-user autorouter credentials (with per-user token cache)
+- [x] Preferences applied as defaults when creating flights
+- [x] Flight IDs include parameter hash to allow same route+date with different time/altitude
+- [x] Test: preferences CRUD, credentials never in cleartext, flight defaults applied
 
 ### Phase 4: Usage Tracking + Rate Limits
 
@@ -359,8 +360,9 @@ docker exec weatherbrief alembic upgrade head
 | `AIRPORTS_DB` | Yes | — | Path to euro-aip airports.db |
 | `OPENAI_API_KEY` | For LLM digest | — | |
 | `ANTHROPIC_API_KEY` | For LLM digest | — | |
-| `AUTOROUTER_USERNAME` | For GRAMET | — | |
-| `AUTOROUTER_PASSWORD` | For GRAMET | — | |
+| `AUTOROUTER_USERNAME` | For GRAMET | — | Fallback; per-user creds preferred |
+| `AUTOROUTER_PASSWORD` | For GRAMET | — | Fallback; per-user creds preferred |
+| `CREDENTIAL_ENCRYPTION_KEY` | Prod only | derived from JWT_SECRET in dev | Fernet key for encrypting autorouter creds |
 
 ## References
 
