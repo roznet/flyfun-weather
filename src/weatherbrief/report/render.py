@@ -32,6 +32,35 @@ def _image_data_uri(path: Path) -> str | None:
     return f"data:{mime};base64,{b64}"
 
 
+def _generate_waypoint_skewt(
+    snapshot: dict, icao: str, model: str, output_path: Path,
+) -> None:
+    """Generate a Skew-T PNG on-demand from snapshot forecast data."""
+    try:
+        from datetime import datetime
+
+        from weatherbrief.digest.skewt import generate_skewt
+        from weatherbrief.models import WaypointForecast
+
+        # Parse target time from first analysis
+        analyses = snapshot.get("analyses", [])
+        if analyses and "target_time" in analyses[0]:
+            target_dt = datetime.fromisoformat(analyses[0]["target_time"])
+        else:
+            parts = snapshot.get("target_date", "2026-01-01").split("-")
+            target_dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]), 9)
+
+        for wf_data in snapshot.get("forecasts", []):
+            if wf_data.get("waypoint", {}).get("icao") == icao and wf_data.get("model") == model:
+                wf = WaypointForecast.model_validate(wf_data)
+                hourly = wf.at_time(target_dt)
+                if hourly and hourly.pressure_levels:
+                    generate_skewt(hourly, icao, model, output_path)
+                return
+    except Exception:
+        logger.warning("On-demand Skew-T generation failed for %s/%s", icao, model, exc_info=True)
+
+
 def _build_template_context(
     pack_dir: Path,
     flight: Flight,
@@ -47,12 +76,14 @@ def _build_template_context(
     # GRAMET image
     gramet_uri = _image_data_uri(pack_dir / "gramet.png")
 
-    # Skew-T images (ECMWF only) — one per waypoint
+    # Skew-T images (ECMWF only) — one per waypoint, generated on-demand
     skewt_images: list[dict] = []
     if snapshot and "route" in snapshot:
         for wp in snapshot["route"].get("waypoints", []):
             icao = wp["icao"]
             skewt_path = pack_dir / "skewt" / f"{icao}_ecmwf.png"
+            if not skewt_path.exists():
+                _generate_waypoint_skewt(snapshot, icao, "ecmwf", skewt_path)
             uri = _image_data_uri(skewt_path)
             skewt_images.append({"icao": icao, "name": wp.get("name", icao), "uri": uri})
 
