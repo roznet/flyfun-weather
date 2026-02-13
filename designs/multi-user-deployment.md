@@ -281,16 +281,17 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] Flight IDs include parameter hash to allow same route+date with different time/altitude
 - [x] Test: preferences CRUD, credentials never in cleartext, flight defaults applied
 
-### Phase 4: Usage Tracking + Rate Limits
+### Phase 4: Usage Tracking + Rate Limits ✓
 
 **Goal**: Per-user call counting, rate limits, usage visibility.
 
-- [ ] Logging middleware: write to `usage_log` on every external call
-- [ ] Rate limiter: check daily counts before fetch, return 429 if exceeded
-- [ ] Usage summary on settings page (calls today/this week)
-- [ ] Admin endpoint or page: all users + usage overview
-- [ ] Hook point for `should_update_briefing()` freshness check (logs skipped=true)
-- [ ] Test: rate limit triggers correctly, usage counts accurate
+- [x] Per-briefing usage logging (`briefing_usage` table replacing `usage_log`)
+- [x] Daily rate limiter: Open-Meteo 50/day, GRAMET 10/day, LLM digest 20/day → HTTP 429
+- [x] Usage summary on settings page (today with quota bars + monthly totals)
+- [x] LLM token extraction via `include_raw=True` on structured output
+- [x] `GET /api/user/usage` endpoint with today/month aggregation
+- [x] Test: rate limit triggers, usage counts, summary aggregation (13 tests)
+- [ ] Admin endpoint or page: all users + usage overview (deferred)
 
 ## Deploying to Server
 
