@@ -1,10 +1,19 @@
 /** Briefing page entry point — wires store, UI manager, and event handlers. */
 
+import { fetchCurrentUser, logout } from './adapters/auth-adapter';
 import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 
-function init(): void {
+async function init(): Promise<void> {
+  // Auth check — redirect to login if not authenticated
+  const user = await fetchCurrentUser();
+  if (!user) {
+    window.location.href = '/login.html';
+    return;
+  }
+  renderUserInfo(user.name);
+
   const store = briefingStore;
 
   // Get flight ID from URL
@@ -148,6 +157,16 @@ function init(): void {
     renderSliderSections(s);
     ui.renderLoading(s.loading);
   });
+}
+
+function renderUserInfo(name: string): void {
+  const container = document.getElementById('user-info');
+  if (!container) return;
+  container.innerHTML = `
+    <span class="user-name">${name}</span>
+    <button class="btn-logout" id="logout-btn">Sign out</button>
+  `;
+  document.getElementById('logout-btn')?.addEventListener('click', () => logout());
 }
 
 // Boot

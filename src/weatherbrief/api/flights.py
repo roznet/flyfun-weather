@@ -62,15 +62,21 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
 
 
 @router.get("", response_model=list[FlightResponse])
-def list_all_flights(db: Session = Depends(get_db)):
+def list_all_flights(
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """List all saved flights."""
-    user_id = current_user_id()
     flights = list_flights(db, user_id)
     return [_flight_to_response(f) for f in flights]
 
 
 @router.post("", response_model=FlightResponse, status_code=201)
-def create_flight(req: CreateFlightRequest, db: Session = Depends(get_db)):
+def create_flight(
+    req: CreateFlightRequest,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Create a new flight."""
     if not req.waypoints and not req.route_name:
         raise HTTPException(
@@ -81,7 +87,6 @@ def create_flight(req: CreateFlightRequest, db: Session = Depends(get_db)):
     route_name = req.route_name or "_".join(w.lower() for w in req.waypoints)
     waypoints = [w.upper().strip() for w in req.waypoints] if req.waypoints else []
 
-    user_id = current_user_id()
     flight_id = f"{safe_path_component(route_name)}-{req.target_date}"
 
     # Check if already exists
@@ -112,19 +117,36 @@ def create_flight(req: CreateFlightRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/{flight_id}", response_model=FlightResponse)
-def get_flight(flight_id: str, db: Session = Depends(get_db)):
+def get_flight(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Get flight details."""
-    try:
-        flight = load_flight(db, flight_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    flight = _load_owned_flight(db, flight_id, user_id)
     return _flight_to_response(flight)
 
 
 @router.delete("/{flight_id}", status_code=204)
-def remove_flight(flight_id: str, db: Session = Depends(get_db)):
+def remove_flight(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
     """Delete a flight and all its packs."""
+    _load_owned_flight(db, flight_id, user_id)  # verify ownership
     try:
         delete_flight(db, flight_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+
+
+def _load_owned_flight(db: Session, flight_id: str, user_id: str) -> Flight:
+    """Load a flight, verifying it belongs to the current user. Returns 404 if not found or not owned."""
+    try:
+        flight = load_flight(db, flight_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    if flight.user_id != user_id:
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    return flight

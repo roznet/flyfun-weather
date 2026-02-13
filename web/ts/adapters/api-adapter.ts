@@ -17,6 +17,10 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!resp.ok) {
+    if (resp.status === 401) {
+      window.location.href = '/login.html';
+      throw new Error('Session expired');
+    }
     const body = await resp.text();
     let detail: string;
     try {
@@ -112,6 +116,10 @@ export async function refreshBriefingStream(
   });
 
   if (!resp.ok) {
+    if (resp.status === 401) {
+      window.location.href = '/login.html';
+      throw new Error('Session expired');
+    }
     const body = await resp.text();
     let detail: string;
     try {
