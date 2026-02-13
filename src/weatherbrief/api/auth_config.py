@@ -6,7 +6,7 @@ import os
 
 from authlib.integrations.starlette_client import OAuth
 
-COOKIE_NAME = "session"
+COOKIE_NAME = "wb_auth"
 
 # Insecure default for local dev only — production MUST set JWT_SECRET env var
 _DEV_JWT_SECRET = "dev-insecure-jwt-secret-do-not-use-in-production"
