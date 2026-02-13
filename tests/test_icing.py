@@ -1,81 +1,119 @@
-"""Tests for icing band analysis."""
+"""Tests for enhanced icing assessment (sounding/icing.py)."""
 
-from weatherbrief.analysis.icing import assess_icing_at_level, assess_icing_profile
-from weatherbrief.models import IcingRisk, PressureLevelData
+from weatherbrief.analysis.sounding.icing import assess_icing_zones
+from weatherbrief.models import DerivedLevel, EnhancedCloudLayer, IcingRisk, IcingType
+
+
+def _cloud(base_ft, top_ft):
+    """Helper to create a cloud layer."""
+    return EnhancedCloudLayer(base_ft=base_ft, top_ft=top_ft)
 
 
 def test_no_icing_warm():
-    """No icing when temperature above freezing."""
-    level = PressureLevelData(
-        pressure_hpa=850, temperature_c=5, relative_humidity_pct=95,
-        geopotential_height_m=1500,
-    )
-    result = assess_icing_at_level(level)
-    assert result.risk == IcingRisk.NONE
+    """No icing when wet-bulb above 0C."""
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, wet_bulb_c=3.0,
+                     dewpoint_depression_c=2.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(4000, 6000)])
+    assert len(zones) == 0
 
 
 def test_no_icing_too_cold():
-    """No icing when temperature below -20C."""
-    level = PressureLevelData(
-        pressure_hpa=400, temperature_c=-25, relative_humidity_pct=90,
-        geopotential_height_m=7000,
-    )
-    result = assess_icing_at_level(level)
-    assert result.risk == IcingRisk.NONE
+    """No icing when wet-bulb below -20C."""
+    levels = [
+        DerivedLevel(pressure_hpa=400, altitude_ft=24000, wet_bulb_c=-25.0,
+                     dewpoint_depression_c=2.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(23000, 25000)])
+    assert len(zones) == 0
 
 
 def test_no_icing_dry():
-    """No icing when humidity is low even in temp range."""
-    level = PressureLevelData(
-        pressure_hpa=700, temperature_c=-5, relative_humidity_pct=40,
-        geopotential_height_m=3000,
-    )
-    result = assess_icing_at_level(level)
-    assert result.risk == IcingRisk.NONE
+    """No icing when not near cloud (high dewpoint depression)."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, wet_bulb_c=-5.0,
+                     dewpoint_depression_c=10.0),
+    ]
+    # No cloud layers nearby
+    zones = assess_icing_zones(levels, [])
+    assert len(zones) == 0
 
 
-def test_severe_icing():
-    """Severe icing: 0 to -10C, very high humidity."""
-    level = PressureLevelData(
-        pressure_hpa=850, temperature_c=-3, relative_humidity_pct=95,
-        geopotential_height_m=1500,
-    )
-    result = assess_icing_at_level(level)
-    assert result.risk == IcingRisk.SEVERE
+def test_severe_clear_icing():
+    """Severe clear icing: wet-bulb -3C to 0C, in cloud."""
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, wet_bulb_c=-1.5,
+                     dewpoint_depression_c=1.0, temperature_c=-2.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(4000, 6000)])
+    assert len(zones) == 1
+    assert zones[0].risk == IcingRisk.SEVERE
+    assert zones[0].icing_type == IcingType.CLEAR
 
 
-def test_moderate_icing_warm_band():
-    """Moderate icing: 0 to -10C, high humidity but not extreme."""
-    level = PressureLevelData(
-        pressure_hpa=850, temperature_c=-5, relative_humidity_pct=85,
-        geopotential_height_m=1500,
-    )
-    result = assess_icing_at_level(level)
-    assert result.risk == IcingRisk.MODERATE
+def test_moderate_mixed_icing():
+    """Moderate mixed icing: wet-bulb -10C to -3C, in cloud."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, wet_bulb_c=-6.0,
+                     dewpoint_depression_c=1.5, temperature_c=-8.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(9000, 11000)])
+    assert len(zones) == 1
+    assert zones[0].risk == IcingRisk.MODERATE
+    assert zones[0].icing_type == IcingType.MIXED
 
 
-def test_light_icing_cold_band():
-    """Light icing: -10 to -20C, moderate humidity."""
-    level = PressureLevelData(
-        pressure_hpa=600, temperature_c=-15, relative_humidity_pct=75,
-        geopotential_height_m=4200,
-    )
-    result = assess_icing_at_level(level)
-    assert result.risk == IcingRisk.LIGHT
+def test_light_rime_icing():
+    """Light rime icing: wet-bulb -20C to -15C."""
+    levels = [
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, wet_bulb_c=-17.0,
+                     dewpoint_depression_c=2.0, temperature_c=-18.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(17000, 19000)])
+    assert len(zones) == 1
+    assert zones[0].risk == IcingRisk.LIGHT
+    assert zones[0].icing_type == IcingType.RIME
 
 
-def test_profile_returns_all_levels(sample_pressure_levels):
-    """assess_icing_profile returns one band per pressure level."""
-    result = assess_icing_profile(sample_pressure_levels)
-    assert len(result) == len(sample_pressure_levels)
+def test_severity_enhanced_by_high_rh():
+    """RH > 95% upgrades moderate to severe."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, wet_bulb_c=-5.0,
+                     dewpoint_depression_c=0.5, temperature_c=-6.0,
+                     relative_humidity_pct=97.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(9000, 11000)])
+    assert len(zones) == 1
+    assert zones[0].risk == IcingRisk.SEVERE
 
 
-def test_altitude_in_feet():
-    """Altitude is converted to feet from geopotential height."""
-    level = PressureLevelData(
-        pressure_hpa=850, temperature_c=-2, relative_humidity_pct=90,
-        geopotential_height_m=1500,
-    )
-    result = assess_icing_at_level(level)
-    assert result.altitude_ft is not None
-    assert abs(result.altitude_ft - 4921) < 2  # 1500m * 3.28084
+def test_near_cloud_margin():
+    """Level within 500ft of cloud boundary is assessed."""
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=6400, wet_bulb_c=-2.0,
+                     dewpoint_depression_c=5.0, temperature_c=-3.0),
+    ]
+    # Cloud top at 6000, level at 6400 = 400ft above = within 500ft margin
+    zones = assess_icing_zones(levels, [_cloud(4000, 6000)])
+    assert len(zones) == 1
+
+
+def test_adjacent_levels_grouped():
+    """Adjacent icing levels (gap <= 100hPa) are grouped into a single zone."""
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, wet_bulb_c=-7.0,
+                     dewpoint_depression_c=1.0, temperature_c=-8.0),
+        DerivedLevel(pressure_hpa=800, altitude_ft=6500, wet_bulb_c=-8.0,
+                     dewpoint_depression_c=1.5, temperature_c=-9.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(4000, 7000)])
+    assert len(zones) == 1
+    assert zones[0].base_ft == 5000
+    assert zones[0].top_ft == 6500
+    assert zones[0].risk == IcingRisk.MODERATE
+
+
+def test_empty_levels():
+    """Empty input returns empty list."""
+    assert assess_icing_zones([], []) == []
