@@ -9,9 +9,12 @@ import type {
   FlightResponse,
   ForecastSnapshot,
   PackMeta,
+  RouteAnalysesManifest,
+  RoutePointAnalysis,
   SoundingAnalysis,
   ThermodynamicIndices,
   WeatherDigest,
+  WindComponent,
 } from '../store/types';
 import * as api from '../adapters/api-adapter';
 
@@ -204,57 +207,85 @@ export function renderGramet(
 
 // --- Model Comparison ---
 
-export function renderModelComparison(snapshot: ForecastSnapshot | null): void {
+export function renderModelComparison(
+  snapshot: ForecastSnapshot | null,
+  routeAnalyses?: RouteAnalysesManifest | null,
+  selectedPointIndex?: number,
+): void {
   const el = $('comparison-section');
   if (!el) return;
 
+  // Route-point mode: single point comparison
+  if (routeAnalyses && routeAnalyses.analyses.length > 0) {
+    const idx = selectedPointIndex ?? 0;
+    const point = routeAnalyses.analyses[idx];
+    if (point && point.model_divergence.length > 0) {
+      const label = point.waypoint_icao
+        ? `${point.waypoint_icao} \u2014 ${point.waypoint_name || ''}`
+        : `Point ${point.point_index} (${point.distance_from_origin_nm.toFixed(0)} nm)`;
+      el.innerHTML = renderComparisonTable(label, point.model_divergence);
+      return;
+    }
+    el.innerHTML = '<p class="muted">No model comparison data for this point.</p>';
+    return;
+  }
+
+  // Fallback: stacked waypoint view
   if (!snapshot || snapshot.analyses.length === 0) {
     el.innerHTML = '<p class="muted">No model comparison data available.</p>';
     return;
   }
 
-  // Render comparison tables for each waypoint
   el.innerHTML = snapshot.analyses.map((a) => {
     if (a.model_divergence.length === 0) return '';
+    return renderComparisonTable(
+      `${a.waypoint.icao} \u2014 ${a.waypoint.name}`,
+      a.model_divergence,
+    );
+  }).join('');
+}
 
-    const models = Object.keys(a.model_divergence[0]?.model_values || {});
-    const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+function renderComparisonTable(
+  label: string,
+  divergences: Array<{ variable: string; model_values: Record<string, number>; mean: number; spread: number; agreement: string }>,
+): string {
+  const models = Object.keys(divergences[0]?.model_values || {});
+  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
 
-    const rows = a.model_divergence.map((d) => {
-      const valueCells = models.map((m) => {
-        const val = d.model_values[m];
-        return `<td>${val !== undefined ? val.toFixed(1) : '\u2014'}</td>`;
-      }).join('');
-      const agreeIcon = d.agreement === 'good' ? '&#10003;'
-        : d.agreement === 'moderate' ? '&#9888;' : '&#10007;';
-      const agreeClass = `agree-${d.agreement}`;
-      return `
-        <tr>
-          <td class="var-name">${formatVarName(d.variable)}</td>
-          ${valueCells}
-          <td>${d.spread.toFixed(1)}</td>
-          <td class="${agreeClass}">${agreeIcon}</td>
-        </tr>
-      `;
+  const rows = divergences.map((d) => {
+    const valueCells = models.map((m) => {
+      const val = d.model_values[m];
+      return `<td>${val !== undefined ? val.toFixed(1) : '\u2014'}</td>`;
     }).join('');
-
+    const agreeIcon = d.agreement === 'good' ? '&#10003;'
+      : d.agreement === 'moderate' ? '&#9888;' : '&#10007;';
+    const agreeClass = `agree-${d.agreement}`;
     return `
-      <div class="comparison-waypoint">
-        <h4>${a.waypoint.icao} \u2014 ${a.waypoint.name}</h4>
-        <table class="comparison-table">
-          <thead>
-            <tr>
-              <th>Variable</th>
-              ${headerCells}
-              <th>Spread</th>
-              <th>Agree</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
+      <tr>
+        <td class="var-name">${formatVarName(d.variable)}</td>
+        ${valueCells}
+        <td>${d.spread.toFixed(1)}</td>
+        <td class="${agreeClass}">${agreeIcon}</td>
+      </tr>
     `;
   }).join('');
+
+  return `
+    <div class="comparison-waypoint">
+      <h4>${label}</h4>
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Variable</th>
+            ${headerCells}
+            <th>Spread</th>
+            <th>Agree</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 function formatVarName(name: string): string {
@@ -298,10 +329,25 @@ function roundAlt(ft: number): number {
   return Math.round(ft / 500) * 500;
 }
 
-export function renderSoundingAnalysis(snapshot: ForecastSnapshot | null): void {
+export function renderSoundingAnalysis(
+  snapshot: ForecastSnapshot | null,
+  routeAnalyses?: RouteAnalysesManifest | null,
+  selectedPointIndex?: number,
+): void {
   const el = $('sounding-section');
   if (!el) return;
 
+  // Route-point mode: show single selected point
+  if (routeAnalyses && routeAnalyses.analyses.length > 0) {
+    const idx = selectedPointIndex ?? 0;
+    const point = routeAnalyses.analyses[idx];
+    if (point) {
+      el.innerHTML = renderSinglePointSounding(point);
+      return;
+    }
+  }
+
+  // Fallback: stacked waypoint view
   if (!snapshot || snapshot.analyses.length === 0) {
     el.innerHTML = '<p class="muted">No sounding analysis available.</p>';
     return;
@@ -786,6 +832,104 @@ function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
   return parts.join('');
 }
 
+// --- Route Slider ---
+
+export function renderRouteSlider(
+  ra: RouteAnalysesManifest | null,
+  selectedIndex: number,
+  onSelect: (index: number) => void,
+): void {
+  const section = $('route-slider-section');
+  const container = $('route-slider-container');
+  if (!section || !container) return;
+
+  if (!ra || ra.analyses.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = '';
+  const analyses = ra.analyses;
+  const maxIdx = analyses.length - 1;
+  const current = analyses[selectedIndex] || analyses[0];
+  const totalDist = ra.total_distance_nm;
+
+  // Build waypoint labels for the track
+  const waypointLabels = analyses
+    .filter((a) => a.waypoint_icao)
+    .map((a) => {
+      const pct = totalDist > 0 ? (a.distance_from_origin_nm / totalDist) * 100 : 0;
+      return `<span class="slider-waypoint-label" style="left: ${pct}%">${a.waypoint_icao}</span>`;
+    })
+    .join('');
+
+  // Format time
+  const time = new Date(current.interpolated_time);
+  const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + 'Z';
+
+  // Wind info for first model
+  const modelKeys = Object.keys(current.wind_components);
+  let windInfo = '';
+  if (modelKeys.length > 0) {
+    const wc: WindComponent = current.wind_components[modelKeys[0]];
+    const hdTail = wc.headwind_kt >= 0 ? `HD ${wc.headwind_kt.toFixed(0)}` : `TL ${(-wc.headwind_kt).toFixed(0)}`;
+    windInfo = `Wind ${wc.wind_direction_deg.toFixed(0)}\u00B0/${wc.wind_speed_kt.toFixed(0)}kt (${hdTail})`;
+  }
+
+  const pointLabel = current.waypoint_icao
+    ? `${current.waypoint_icao} \u2014 ${current.waypoint_name || ''}`
+    : `${current.lat.toFixed(2)}\u00B0N ${Math.abs(current.lon).toFixed(2)}\u00B0${current.lon >= 0 ? 'E' : 'W'}`;
+
+  container.innerHTML = `
+    <div class="route-slider-info">
+      <span class="slider-point-label">${pointLabel}</span>
+      <span class="slider-distance">${current.distance_from_origin_nm.toFixed(0)} nm</span>
+      <span class="slider-time">${timeStr}</span>
+      <span class="slider-wind">${windInfo}</span>
+    </div>
+    <div class="route-slider-track">
+      <input type="range" id="route-slider" min="0" max="${maxIdx}" value="${selectedIndex}" class="route-slider-input">
+      <div class="slider-waypoint-labels">${waypointLabels}</div>
+    </div>
+    <div class="slider-endpoints">
+      <span>${analyses[0].waypoint_icao || 'Origin'}</span>
+      <span>${analyses[maxIdx].waypoint_icao || 'Destination'}</span>
+    </div>
+  `;
+
+  const slider = document.getElementById('route-slider') as HTMLInputElement;
+  if (slider) {
+    slider.addEventListener('input', () => {
+      onSelect(parseInt(slider.value, 10));
+    });
+  }
+}
+
+// --- Route-point sounding (single point) ---
+
+function renderSinglePointSounding(point: RoutePointAnalysis): string {
+  if (!point.sounding || Object.keys(point.sounding).length === 0) {
+    return '<p class="muted">No sounding data for this point.</p>';
+  }
+
+  const label = point.waypoint_icao
+    ? `${point.waypoint_icao} \u2014 ${point.waypoint_name || ''}`
+    : `Point ${point.point_index} (${point.distance_from_origin_nm.toFixed(0)} nm)`;
+
+  return `
+    <div class="sounding-waypoint">
+      <h4>${label}</h4>
+      ${renderConvectiveBanner(point.sounding)}
+      ${renderVerticalMotion(point.sounding)}
+      ${renderAltitudeMarkers(point.sounding)}
+      ${renderIcingZones(point.sounding)}
+      ${renderEnhancedClouds(point.sounding)}
+      ${renderNwpCloudCover(point.sounding)}
+      ${renderAltitudeAdvisories(point.altitude_advisories)}
+    </div>
+  `;
+}
+
 // --- Skew-T ---
 
 export function renderSkewTs(
@@ -793,11 +937,41 @@ export function renderSkewTs(
   pack: PackMeta | null,
   snapshot: ForecastSnapshot | null,
   selectedModel: string,
+  routeAnalyses?: RouteAnalysesManifest | null,
+  selectedPointIndex?: number,
 ): void {
   const el = $('skewt-section');
   if (!el) return;
 
-  if (!flight || !pack || !pack.has_skewt || !snapshot) {
+  if (!flight || !pack) {
+    el.innerHTML = '<p class="muted">Skew-T diagrams not available.</p>';
+    return;
+  }
+
+  // Route-point mode: single Skew-T via on-demand endpoint
+  if (routeAnalyses && routeAnalyses.analyses.length > 0) {
+    const idx = selectedPointIndex ?? 0;
+    const point = routeAnalyses.analyses[idx];
+    if (point) {
+      const label = point.waypoint_icao || `Point ${point.point_index}`;
+      const url = api.routeSkewtUrl(flight.id, pack.fetch_timestamp, point.point_index, selectedModel);
+      el.innerHTML = `
+        <div class="skewt-gallery">
+          <div class="skewt-card skewt-card-large">
+            <h4>${label} \u2014 ${selectedModel.toUpperCase()}</h4>
+            <img src="${url}" alt="Skew-T ${label} ${selectedModel}"
+                 class="skewt-img" loading="lazy"
+                 onerror="this.parentElement.classList.add('skewt-unavailable')">
+            <div class="skewt-fallback">Not available</div>
+          </div>
+        </div>
+      `;
+      return;
+    }
+  }
+
+  // Fallback: waypoint gallery
+  if (!pack.has_skewt || !snapshot) {
     el.innerHTML = '<p class="muted">Skew-T diagrams not available.</p>';
     return;
   }
