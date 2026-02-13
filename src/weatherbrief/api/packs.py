@@ -105,12 +105,38 @@ def get_skewt(
     flight_id: str, timestamp: str, icao: str, model: str,
     db: Session = Depends(get_db),
 ):
-    """Get a specific Skew-T image."""
+    """Get a Skew-T image for a waypoint, generating on-demand if needed."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp)
     skewt_path = pack_dir / "skewt" / f"{icao}_{model}.png"
-    if not skewt_path.exists():
+    if skewt_path.exists():
+        return FileResponse(skewt_path, media_type="image/png")
+
+    # On-demand generation from snapshot data
+    snapshot_path = pack_dir / "snapshot.json"
+    if not snapshot_path.exists():
         raise HTTPException(status_code=404, detail="Skew-T not available")
-    return FileResponse(skewt_path, media_type="image/png")
+
+    import json
+    snapshot_data = json.loads(snapshot_path.read_text())
+    target_dt = _parse_target_time(snapshot_data)
+
+    # Find matching forecast
+    from weatherbrief.models import WaypointForecast
+    for wf_data in snapshot_data.get("forecasts", []):
+        if wf_data.get("waypoint", {}).get("icao") == icao and wf_data.get("model") == model:
+            wf = WaypointForecast.model_validate(wf_data)
+            hourly = wf.at_time(target_dt)
+            if not hourly or not hourly.pressure_levels:
+                break
+            try:
+                from weatherbrief.digest.skewt import generate_skewt
+                generate_skewt(hourly, icao, model, skewt_path)
+                return FileResponse(skewt_path, media_type="image/png")
+            except Exception as exc:
+                logger.warning("Skew-T generation failed for %s/%s: %s", icao, model, exc)
+                raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}")
+
+    raise HTTPException(status_code=404, detail="Skew-T not available")
 
 
 @router.get("/{timestamp}/route-analyses")
@@ -303,7 +329,7 @@ def refresh_briefing(flight_id: str, request: Request, db: Session = Depends(get
 
         options = BriefingOptions(
             fetch_gramet=True,
-            generate_skewt=True,
+            generate_skewt=False,  # generated on-demand via API
             generate_llm_digest=True,
             output_dir=pack_path,
         )
@@ -378,3 +404,15 @@ def _get_pack_dir(db: Session, flight_id: str, timestamp: str):
     if not pack_path.exists():
         raise HTTPException(status_code=404, detail="Pack not found")
     return pack_path
+
+
+def _parse_target_time(snapshot_data: dict) -> datetime:
+    """Extract target datetime from snapshot JSON data."""
+    route = snapshot_data.get("route", {})
+    target_date = snapshot_data.get("target_date", "")
+    # Reconstruct target_hour from the first analysis target_time, or default to 9
+    analyses = snapshot_data.get("analyses", [])
+    if analyses and "target_time" in analyses[0]:
+        return datetime.fromisoformat(analyses[0]["target_time"])
+    year, month, day = (int(x) for x in target_date.split("-"))
+    return datetime(year, month, day, 9)
