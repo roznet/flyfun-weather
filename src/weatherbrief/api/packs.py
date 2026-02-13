@@ -113,6 +113,80 @@ def get_skewt(
     return FileResponse(skewt_path, media_type="image/png")
 
 
+@router.get("/{timestamp}/route-analyses")
+def get_route_analyses(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
+    """Get the route analyses JSON for a pack."""
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available")
+    return FileResponse(ra_path, media_type="application/json")
+
+
+@router.get("/{timestamp}/skewt/route/{point_index}/{model}")
+def get_route_skewt(
+    flight_id: str, timestamp: str, point_index: int, model: str,
+    db: Session = Depends(get_db),
+):
+    """Get an on-demand Skew-T for a route point.
+
+    Generates and caches the PNG on first request.
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+
+    # Cache path
+    cache_dir = pack_dir / "skewt" / "route"
+    cache_path = cache_dir / f"pt{point_index:02d}_{model}.png"
+    if cache_path.exists():
+        return FileResponse(cache_path, media_type="image/png")
+
+    # Load route analyses to get the interpolated time
+    import json
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available")
+
+    ra_data = json.loads(ra_path.read_text())
+    analyses = ra_data.get("analyses", [])
+    point_data = next((a for a in analyses if a["point_index"] == point_index), None)
+    if point_data is None:
+        raise HTTPException(status_code=404, detail=f"Point index {point_index} not found")
+
+    # Load cross-section to get forecast data
+    cs_path = pack_dir / "cross_section.json"
+    if not cs_path.exists():
+        raise HTTPException(status_code=404, detail="Cross-section data not available")
+
+    cs_data = json.loads(cs_path.read_text())
+    cross_sections = cs_data.get("cross_sections", [])
+    cs_match = next((cs for cs in cross_sections if cs["model"] == model), None)
+    if cs_match is None:
+        raise HTTPException(status_code=404, detail=f"Model {model} not found in cross-section")
+
+    if point_index >= len(cs_match["point_forecasts"]):
+        raise HTTPException(status_code=404, detail=f"Point index {point_index} out of range")
+
+    # Find closest forecast hour to the interpolated time
+    from weatherbrief.models import WaypointForecast
+    wf = WaypointForecast.model_validate(cs_match["point_forecasts"][point_index])
+    interp_time_str = point_data["interpolated_time"]
+    interp_time = datetime.fromisoformat(interp_time_str)
+    hourly = wf.at_time(interp_time)
+    if not hourly or not hourly.pressure_levels:
+        raise HTTPException(status_code=404, detail="No forecast data at this point/time")
+
+    # Generate Skew-T
+    try:
+        from weatherbrief.digest.skewt import generate_skewt
+        label = point_data.get("waypoint_icao") or f"pt{point_index:02d}"
+        generate_skewt(hourly, label, model, cache_path)
+    except Exception as exc:
+        logger.warning("Route Skew-T generation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}")
+
+    return FileResponse(cache_path, media_type="image/png")
+
+
 @router.get("/{timestamp}/digest")
 def get_digest(flight_id: str, timestamp: str, db: Session = Depends(get_db)):
     """Get the LLM digest markdown for a pack."""

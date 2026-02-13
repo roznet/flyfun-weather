@@ -14,22 +14,22 @@ import numpy as np
 from metpy.plots import SkewT
 from metpy.units import units
 
-from weatherbrief.models import ForecastSnapshot, HourlyForecast, Waypoint
+from weatherbrief.models import ForecastSnapshot, HourlyForecast
 
 logger = logging.getLogger(__name__)
 
 
 def generate_skewt(
     forecast: HourlyForecast,
-    waypoint: Waypoint,
+    label: str,
     model_name: str,
     output_path: Path,
 ) -> Path:
-    """Generate a Skew-T diagram for a single waypoint/model/time.
+    """Generate a Skew-T diagram for a single location/model/time.
 
     Args:
         forecast: HourlyForecast with pressure level data.
-        waypoint: Waypoint for labeling.
+        label: Location label for the title (e.g. ICAO code or "pt05").
         model_name: Model name for title.
         output_path: Where to save the PNG.
 
@@ -39,7 +39,7 @@ def generate_skewt(
     # Extract pressure level data — filter to levels with temp data
     levels = [pl for pl in forecast.pressure_levels if pl.temperature_c is not None]
     if len(levels) < 3:
-        logger.warning("Insufficient pressure levels for Skew-T at %s", waypoint.icao)
+        logger.warning("Insufficient pressure levels for Skew-T at %s", label)
         raise ValueError(f"Need at least 3 levels with temperature, got {len(levels)}")
 
     # Sort by pressure (high to low = surface to altitude)
@@ -92,7 +92,7 @@ def generate_skewt(
             )
             skew.plot(lcl_pressure, lcl_temperature, "ko", markersize=8, label="LCL")
         except Exception:
-            logger.debug("Could not compute parcel profile for %s", waypoint.icao)
+            logger.debug("Could not compute parcel profile for %s", label)
 
     # Icing band annotation (0 to -20 C)
     skew.ax.axvspan(-20, 0, alpha=0.08, color="blue", zorder=0)
@@ -108,7 +108,7 @@ def generate_skewt(
 
     # Labels and title
     time_str = forecast.time.strftime("%Y-%m-%d %H:%MZ")
-    skew.ax.set_title(f"{waypoint.icao} — {model_name} — {time_str}")
+    skew.ax.set_title(f"{label} — {model_name} — {time_str}")
     skew.ax.set_xlabel("Temperature (°C)")
     skew.ax.set_ylabel("Pressure (hPa)")
     skew.ax.legend(loc="upper left", fontsize=8)
@@ -151,7 +151,7 @@ def generate_all_skewts(
         out_path = output_dir / filename
 
         try:
-            generate_skewt(hourly, wf.waypoint, wf.model.value, out_path)
+            generate_skewt(hourly, wf.waypoint.icao, wf.model.value, out_path)
             paths.append(out_path)
         except Exception:
             logger.warning(

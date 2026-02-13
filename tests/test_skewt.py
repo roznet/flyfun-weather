@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from weatherbrief.digest.skewt import generate_skewt
-from weatherbrief.models import HourlyForecast, PressureLevelData, Waypoint
+from weatherbrief.models import HourlyForecast, PressureLevelData
 
 
 @pytest.fixture
@@ -54,10 +54,9 @@ def skewt_forecast():
 
 def test_generate_skewt_creates_png(skewt_forecast, tmp_path):
     """generate_skewt creates a valid PNG file."""
-    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.8, lon=-1.3)
     out_path = tmp_path / "test_skewt.png"
 
-    result = generate_skewt(skewt_forecast, wp, "gfs", out_path)
+    result = generate_skewt(skewt_forecast, "EGTK", "gfs", out_path)
 
     assert result == out_path
     assert out_path.exists()
@@ -79,10 +78,8 @@ def test_generate_skewt_insufficient_levels(tmp_path):
         time=datetime(2026, 2, 14, 9, 0),
         pressure_levels=levels,
     )
-    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.8, lon=-1.3)
-
     with pytest.raises(ValueError, match="at least 3 levels"):
-        generate_skewt(forecast, wp, "gfs", tmp_path / "fail.png")
+        generate_skewt(forecast, "EGTK", "gfs", tmp_path / "fail.png")
 
 
 def test_generate_skewt_no_dewpoint(tmp_path):
@@ -97,8 +94,7 @@ def test_generate_skewt_no_dewpoint(tmp_path):
         time=datetime(2026, 2, 14, 9, 0),
         pressure_levels=levels,
     )
-    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.8, lon=-1.3)
     out_path = tmp_path / "no_dp.png"
 
-    result = generate_skewt(forecast, wp, "gfs", out_path)
+    result = generate_skewt(forecast, "EGTK", "gfs", out_path)
     assert out_path.exists()

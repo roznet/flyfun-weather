@@ -7,9 +7,11 @@ Returns structured results without printing or exiting.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 from weatherbrief.analysis.comparison import compare_models
 from weatherbrief.analysis.sounding import analyze_sounding
@@ -19,12 +21,21 @@ from weatherbrief.fetch.open_meteo import OpenMeteoClient
 from weatherbrief.fetch.route_points import interpolate_route
 from weatherbrief.fetch.variables import MODEL_ENDPOINTS
 from weatherbrief.models import (
+    AltitudeAdvisories,
     ForecastSnapshot,
+    HourlyForecast,
+    ModelDivergence,
     ModelSource,
+    RouteAnalysesManifest,
     RouteCrossSection,
     RouteConfig,
+    RoutePoint,
+    RoutePointAnalysis,
+    SoundingAnalysis,
     WaypointAnalysis,
     WaypointForecast,
+    WindComponent,
+    bearing_between_coords,
 )
 from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_cross_section, save_snapshot
 
@@ -144,6 +155,31 @@ def execute_briefing(
         )
         analyses.append(analysis)
 
+    # --- Route-point analyses (all ~20 points, pre-computed) ---
+    route_analyses_manifest: RouteAnalysesManifest | None = None
+    if cross_sections:
+        try:
+            model_names = [cs.model.value for cs in cross_sections]
+            total_distance = route_points[-1].distance_from_origin_nm
+            rp_analyses = analyze_all_route_points(
+                cross_sections, route_points, target_dt,
+                route.flight_duration_hours, route.cruise_altitude_ft,
+                route.flight_ceiling_ft,
+            )
+            route_analyses_manifest = RouteAnalysesManifest(
+                route_name=route.name,
+                target_date=target_date,
+                departure_time=target_dt,
+                flight_duration_hours=route.flight_duration_hours,
+                total_distance_nm=total_distance,
+                cruise_altitude_ft=route.cruise_altitude_ft,
+                models=model_names,
+                analyses=rp_analyses,
+            )
+            logger.info("Route analyses: %d points", len(rp_analyses))
+        except Exception:
+            logger.warning("Route-point analysis failed", exc_info=True)
+
     # --- Build & save snapshot ---
     snapshot = ForecastSnapshot(
         route=route,
@@ -167,6 +203,13 @@ def execute_briefing(
             cs_path = options.output_dir / "cross_section.json"
             cs_path.write_text(
                 snapshot.model_dump_json(indent=2, include={"cross_sections"})
+            )
+        if route_analyses_manifest:
+            ra_path = options.output_dir / "route_analyses.json"
+            ra_path.write_text(
+                route_analyses_manifest.model_dump_json(
+                    indent=2, exclude={"analyses": {"__all__": {"sounding": {"__all__": {"derived_levels"}}}}},
+                )
             )
     else:
         snapshot_path = save_snapshot(snapshot, data_dir)
@@ -209,46 +252,42 @@ def execute_briefing(
     return result
 
 
-def analyze_waypoint(
-    forecasts: list[WaypointForecast],
-    target_time: datetime,
+def _run_point_analysis(
+    forecasts_by_model: dict[str, HourlyForecast],
     track_deg: float,
-    cruise_altitude_ft: int = 8000,
-    flight_ceiling_ft: int = 18000,
-) -> WaypointAnalysis:
-    """Run all analysis on forecasts for a single waypoint."""
-    if not forecasts:
-        raise ValueError("No forecasts to analyze")
+    cruise_altitude_ft: int,
+    flight_ceiling_ft: int,
+) -> tuple[
+    dict[str, WindComponent],
+    dict[str, SoundingAnalysis],
+    Optional[AltitudeAdvisories],
+    list[ModelDivergence],
+]:
+    """Core analysis logic shared between waypoint and route-point paths.
 
-    waypoint = forecasts[0].waypoint
-    analysis = WaypointAnalysis(waypoint=waypoint, target_time=target_time)
+    Args:
+        forecasts_by_model: model_key -> HourlyForecast at the target time.
+        track_deg: Route bearing at this point.
+        cruise_altitude_ft: Cruise altitude for wind and advisory computation.
+        flight_ceiling_ft: Flight ceiling for advisory computation.
 
-    # Collect model values for comparison
-    model_temps: dict[str, float] = {}
-    model_winds: dict[str, float] = {}
-    model_wind_dirs: dict[str, float] = {}
-    model_cloud: dict[str, float] = {}
-    model_precip: dict[str, float] = {}
-    model_freezing: dict[str, float] = {}
-    # New sounding-derived comparison values
-    model_freezing_ft: dict[str, float] = {}
-    model_cape: dict[str, float] = {}
-    model_lcl_ft: dict[str, float] = {}
-    model_k_index: dict[str, float] = {}
-    model_total_totals: dict[str, float] = {}
-    model_pw: dict[str, float] = {}
-    model_li: dict[str, float] = {}
-    model_shear: dict[str, float] = {}
-    model_max_omega: dict[str, float] = {}
+    Returns:
+        (wind_components, soundings, altitude_advisories, model_divergence)
+    """
+    wind_components: dict[str, WindComponent] = {}
+    soundings: dict[str, SoundingAnalysis] = {}
 
-    for wf in forecasts:
-        hourly = wf.at_time(target_time)
-        if not hourly:
-            continue
+    # Comparison accumulators
+    comp: dict[str, dict[str, float]] = {
+        "temperature_c": {}, "wind_speed_kt": {}, "wind_direction_deg": {},
+        "cloud_cover_pct": {}, "precipitation_mm": {}, "freezing_level_m": {},
+        "freezing_level_ft": {}, "cape_surface_jkg": {}, "lcl_altitude_ft": {},
+        "k_index": {}, "total_totals": {}, "precipitable_water_mm": {},
+        "lifted_index": {}, "bulk_shear_0_6km_kt": {}, "max_omega_pa_s": {},
+    }
 
-        model_key = wf.model.value
-
-        # Try to find cruise-altitude wind (closest level to cruise pressure)
+    for model_key, hourly in forecasts_by_model.items():
+        # Cruise-altitude wind (closest level to ~750 hPa)
         cruise_wind = None
         for level in hourly.pressure_levels:
             if level.wind_speed_kt is not None and level.wind_direction_deg is not None:
@@ -261,81 +300,198 @@ def analyze_waypoint(
             wc = compute_wind_components(
                 cruise_wind.wind_speed_kt, cruise_wind.wind_direction_deg, track_deg
             )
-            analysis.wind_components[model_key] = wc
-            model_winds[model_key] = cruise_wind.wind_speed_kt
-            model_wind_dirs[model_key] = cruise_wind.wind_direction_deg
+            wind_components[model_key] = wc
+            comp["wind_speed_kt"][model_key] = cruise_wind.wind_speed_kt
+            comp["wind_direction_deg"][model_key] = cruise_wind.wind_direction_deg
 
         # Sounding analysis
         sounding = analyze_sounding(hourly.pressure_levels, hourly)
         if sounding is not None:
-            analysis.sounding[model_key] = sounding
+            soundings[model_key] = sounding
 
-            # Collect sounding-derived comparison values
             idx = sounding.indices
             if idx is not None:
-                if idx.freezing_level_ft is not None:
-                    model_freezing_ft[model_key] = idx.freezing_level_ft
-                if idx.cape_surface_jkg is not None:
-                    model_cape[model_key] = idx.cape_surface_jkg
-                if idx.lcl_altitude_ft is not None:
-                    model_lcl_ft[model_key] = idx.lcl_altitude_ft
-                if idx.k_index is not None:
-                    model_k_index[model_key] = idx.k_index
-                if idx.total_totals is not None:
-                    model_total_totals[model_key] = idx.total_totals
-                if idx.precipitable_water_mm is not None:
-                    model_pw[model_key] = idx.precipitable_water_mm
-                if idx.lifted_index is not None:
-                    model_li[model_key] = idx.lifted_index
-                if idx.bulk_shear_0_6km_kt is not None:
-                    model_shear[model_key] = idx.bulk_shear_0_6km_kt
+                _collect_opt(comp, "freezing_level_ft", model_key, idx.freezing_level_ft)
+                _collect_opt(comp, "cape_surface_jkg", model_key, idx.cape_surface_jkg)
+                _collect_opt(comp, "lcl_altitude_ft", model_key, idx.lcl_altitude_ft)
+                _collect_opt(comp, "k_index", model_key, idx.k_index)
+                _collect_opt(comp, "total_totals", model_key, idx.total_totals)
+                _collect_opt(comp, "precipitable_water_mm", model_key, idx.precipitable_water_mm)
+                _collect_opt(comp, "lifted_index", model_key, idx.lifted_index)
+                _collect_opt(comp, "bulk_shear_0_6km_kt", model_key, idx.bulk_shear_0_6km_kt)
 
-            # Vertical motion comparison value
             vm = sounding.vertical_motion
             if vm is not None and vm.max_omega_pa_s is not None:
-                model_max_omega[model_key] = abs(vm.max_omega_pa_s)
+                comp["max_omega_pa_s"][model_key] = abs(vm.max_omega_pa_s)
 
-        # Collect comparison values
-        if hourly.temperature_2m_c is not None:
-            model_temps[model_key] = hourly.temperature_2m_c
-        if hourly.cloud_cover_pct is not None:
-            model_cloud[model_key] = hourly.cloud_cover_pct
-        if hourly.precipitation_mm is not None:
-            model_precip[model_key] = hourly.precipitation_mm
-        if hourly.freezing_level_m is not None:
-            model_freezing[model_key] = hourly.freezing_level_m
+        # Surface comparison values
+        _collect_opt(comp, "temperature_c", model_key, hourly.temperature_2m_c)
+        _collect_opt(comp, "cloud_cover_pct", model_key, hourly.cloud_cover_pct)
+        _collect_opt(comp, "precipitation_mm", model_key, hourly.precipitation_mm)
+        _collect_opt(comp, "freezing_level_m", model_key, hourly.freezing_level_m)
 
-    # Altitude advisories across models
-    if analysis.sounding:
-        analysis.altitude_advisories = compute_altitude_advisories(
-            analysis.sounding, cruise_altitude_ft, flight_ceiling_ft
+    # Altitude advisories
+    altitude_advisories = None
+    if soundings:
+        altitude_advisories = compute_altitude_advisories(
+            soundings, cruise_altitude_ft, flight_ceiling_ft
         )
 
-    # Model comparison (need at least 2 models)
-    comparisons = {
-        "temperature_c": model_temps,
-        "wind_speed_kt": model_winds,
-        "wind_direction_deg": model_wind_dirs,
-        "cloud_cover_pct": model_cloud,
-        "precipitation_mm": model_precip,
-        "freezing_level_m": model_freezing,
-        # Sounding-derived
-        "freezing_level_ft": model_freezing_ft,
-        "cape_surface_jkg": model_cape,
-        "lcl_altitude_ft": model_lcl_ft,
-        "k_index": model_k_index,
-        "total_totals": model_total_totals,
-        "precipitable_water_mm": model_pw,
-        "lifted_index": model_li,
-        "bulk_shear_0_6km_kt": model_shear,
-        "max_omega_pa_s": model_max_omega,
-    }
-
-    for var_name, values in comparisons.items():
+    # Model comparison
+    divergences: list[ModelDivergence] = []
+    for var_name, values in comp.items():
         if len(values) >= 2:
-            analysis.model_divergence.append(compare_models(var_name, values))
+            divergences.append(compare_models(var_name, values))
 
-    return analysis
+    return wind_components, soundings, altitude_advisories, divergences
+
+
+def _collect_opt(
+    comp: dict[str, dict[str, float]], key: str, model_key: str, value: float | None,
+) -> None:
+    """Add a non-None value to comparison accumulators."""
+    if value is not None:
+        comp[key][model_key] = value
+
+
+def analyze_waypoint(
+    forecasts: list[WaypointForecast],
+    target_time: datetime,
+    track_deg: float,
+    cruise_altitude_ft: int = 8000,
+    flight_ceiling_ft: int = 18000,
+) -> WaypointAnalysis:
+    """Run all analysis on forecasts for a single waypoint."""
+    if not forecasts:
+        raise ValueError("No forecasts to analyze")
+
+    waypoint = forecasts[0].waypoint
+    forecasts_by_model: dict[str, HourlyForecast] = {}
+    for wf in forecasts:
+        hourly = wf.at_time(target_time)
+        if hourly:
+            forecasts_by_model[wf.model.value] = hourly
+
+    wind_components, soundings, alt_advisories, divergences = _run_point_analysis(
+        forecasts_by_model, track_deg, cruise_altitude_ft, flight_ceiling_ft,
+    )
+
+    return WaypointAnalysis(
+        waypoint=waypoint,
+        target_time=target_time,
+        wind_components=wind_components,
+        sounding=soundings,
+        altitude_advisories=alt_advisories,
+        model_divergence=divergences,
+    )
+
+
+# --- Route-point analysis helpers ---
+
+
+def compute_route_tracks(route_points: list[RoutePoint]) -> list[float]:
+    """Compute bearing at each route point using neighbor points."""
+    n = len(route_points)
+    tracks: list[float] = []
+    for i in range(n):
+        if n == 1:
+            tracks.append(0.0)
+        elif i == 0:
+            tracks.append(bearing_between_coords(
+                route_points[0].lat, route_points[0].lon,
+                route_points[1].lat, route_points[1].lon,
+            ))
+        elif i == n - 1:
+            tracks.append(bearing_between_coords(
+                route_points[-2].lat, route_points[-2].lon,
+                route_points[-1].lat, route_points[-1].lon,
+            ))
+        else:
+            # Circular mean of incoming and outgoing bearings
+            b1 = bearing_between_coords(
+                route_points[i - 1].lat, route_points[i - 1].lon,
+                route_points[i].lat, route_points[i].lon,
+            )
+            b2 = bearing_between_coords(
+                route_points[i].lat, route_points[i].lon,
+                route_points[i + 1].lat, route_points[i + 1].lon,
+            )
+            x = math.cos(math.radians(b1)) + math.cos(math.radians(b2))
+            y = math.sin(math.radians(b1)) + math.sin(math.radians(b2))
+            tracks.append(math.degrees(math.atan2(y, x)) % 360)
+    return tracks
+
+
+def compute_interpolated_time(
+    departure: datetime, duration_hours: float,
+    distance_nm: float, total_distance_nm: float,
+) -> datetime:
+    """Compute the flight time at a given distance along the route."""
+    if total_distance_nm <= 0 or duration_hours <= 0:
+        return departure
+    fraction = distance_nm / total_distance_nm
+    return departure + timedelta(hours=fraction * duration_hours)
+
+
+def analyze_all_route_points(
+    cross_sections: list[RouteCrossSection],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    duration_hours: float,
+    cruise_altitude_ft: int,
+    flight_ceiling_ft: int,
+) -> list[RoutePointAnalysis]:
+    """Analyze all route points across all models.
+
+    For each route point, gathers the forecast from each model's cross-section
+    at the point's interpolated time, then runs the shared analysis.
+    """
+    if not cross_sections or not route_points:
+        return []
+
+    total_distance = route_points[-1].distance_from_origin_nm
+    tracks = compute_route_tracks(route_points)
+    analyses: list[RoutePointAnalysis] = []
+
+    for i, rp in enumerate(route_points):
+        interp_time = compute_interpolated_time(
+            departure_time, duration_hours, rp.distance_from_origin_nm, total_distance,
+        )
+
+        # Gather closest forecast hour from each model
+        forecasts_by_model: dict[str, HourlyForecast] = {}
+        forecast_hour = interp_time  # will be updated per-model
+        for cs in cross_sections:
+            wf = cs.point_forecasts[i]
+            hourly = wf.at_time(interp_time)
+            if hourly:
+                forecasts_by_model[cs.model.value] = hourly
+                forecast_hour = hourly.time  # last model's actual hour (they should agree)
+
+        if not forecasts_by_model:
+            continue
+
+        wind_components, soundings, alt_advisories, divergences = _run_point_analysis(
+            forecasts_by_model, tracks[i], cruise_altitude_ft, flight_ceiling_ft,
+        )
+
+        analyses.append(RoutePointAnalysis(
+            point_index=i,
+            lat=rp.lat,
+            lon=rp.lon,
+            distance_from_origin_nm=rp.distance_from_origin_nm,
+            waypoint_icao=rp.waypoint_icao,
+            waypoint_name=rp.waypoint_name,
+            interpolated_time=interp_time,
+            forecast_hour=forecast_hour,
+            track_deg=tracks[i],
+            wind_components=wind_components,
+            sounding=soundings,
+            altitude_advisories=alt_advisories,
+            model_divergence=divergences,
+        ))
+
+    return analyses
 
 
 def _run_gramet(
