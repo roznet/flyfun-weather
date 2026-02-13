@@ -55,6 +55,8 @@ class BriefingOptions:
     digest_config_name: str | None = None
     data_dir: Path | None = None
     output_dir: Path | None = None  # if set, write all artifacts here (pack mode)
+    autorouter_credentials: tuple[str, str] | None = None  # (username, password)
+    user_id: str | None = None  # for per-user token cache isolation
 
 
 @dataclass
@@ -233,7 +235,9 @@ def execute_briefing(
     if options.fetch_gramet:
         _notify("fetch_gramet")
         _run_gramet(route, target_date, target_hour, days_out, today, data_dir, result,
-                    output_dir=options.output_dir)
+                    output_dir=options.output_dir,
+                    autorouter_credentials=options.autorouter_credentials,
+                    user_id=options.user_id)
 
     # --- Optional: Skew-T ---
     if options.generate_skewt:
@@ -517,6 +521,8 @@ def _run_gramet(
     result: BriefingResult,
     *,
     output_dir: Path | None = None,
+    autorouter_credentials: tuple[str, str] | None = None,
+    user_id: str | None = None,
 ) -> None:
     """Fetch GRAMET cross-section if available."""
     try:
@@ -529,7 +535,13 @@ def _run_gramet(
         icao_codes = [wp.icao for wp in route.waypoints]
         duration_hours = route.flight_duration_hours or 2.0
 
-        gramet_client = AutorouterGramet()
+        kwargs: dict = {}
+        if autorouter_credentials:
+            kwargs["username"], kwargs["password"] = autorouter_credentials
+            # Per-user token cache dir so users don't share cached OAuth tokens
+            if user_id:
+                kwargs["cache_dir"] = str(data_dir / ".cache" / "autorouter" / user_id)
+        gramet_client = AutorouterGramet(**kwargs)
         data = gramet_client.fetch_gramet(
             icao_codes=icao_codes,
             altitude_ft=route.cruise_altitude_ft,

@@ -107,10 +107,14 @@ _STAGE_PROGRESS: dict[str, float] = {
 }
 
 
-def _prepare_refresh(flight, db_path, user_id, flight_id):
-    """Shared setup for both sync and streaming refresh endpoints."""
+def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
+    """Shared setup for both sync and streaming refresh endpoints.
+
+    If a DB session is provided, loads user preferences (models, autorouter
+    credentials) and applies them to the BriefingOptions.
+    """
     from weatherbrief.airports import resolve_waypoints
-    from weatherbrief.models import RouteConfig
+    from weatherbrief.models import ModelSource, RouteConfig
     from weatherbrief.pipeline import BriefingOptions
 
     if not flight.waypoints:
@@ -128,12 +132,28 @@ def _prepare_refresh(flight, db_path, user_id, flight_id):
     pack_path = pack_dir_for(user_id, flight_id, fetch_ts)
     pack_path.mkdir(parents=True, exist_ok=True)
 
+    # Load user preferences for models and autorouter credentials
+    autorouter_creds = None
+    models = None
+    if db is not None:
+        from weatherbrief.api.preferences import load_autorouter_credentials, load_user_defaults
+
+        autorouter_creds = load_autorouter_credentials(db, user_id)
+        defaults = load_user_defaults(db, user_id)
+        if defaults.models:
+            valid = {m.value for m in ModelSource}
+            models = [ModelSource(m) for m in defaults.models if m in valid]
+
     options = BriefingOptions(
         fetch_gramet=True,
         generate_skewt=False,
         generate_llm_digest=True,
         output_dir=pack_path,
+        autorouter_credentials=autorouter_creds,
+        user_id=user_id,
     )
+    if models:
+        options.models = models
 
     return route, fetch_ts, pack_path, options
 
@@ -177,7 +197,7 @@ def refresh_briefing(
         from weatherbrief.pipeline import execute_briefing
 
         route, fetch_ts, pack_path, options = _prepare_refresh(
-            flight, db_path, user_id, flight_id,
+            flight, db_path, user_id, flight_id, db=db,
         )
         result = execute_briefing(
             route=route,
@@ -219,12 +239,12 @@ async def refresh_briefing_stream(
             raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
         route, fetch_ts, pack_path, options = _prepare_refresh(
-            flight, db_path, user_id, flight_id,
+            flight, db_path, user_id, flight_id, db=db,
         )
     except Exception:
         db.close()
         raise
-    db.close()  # flight data is in memory; free the session before streaming
+    db.close()  # flight data + preferences are in memory; free the session before streaming
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()

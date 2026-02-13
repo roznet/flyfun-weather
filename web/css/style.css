@@ -716,6 +716,28 @@ label {
   text-align: left;
 }
 
+/* --- Header right area --- */
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.btn-settings {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius);
+}
+
+.btn-settings:hover {
+  color: var(--primary);
+  background: rgba(37, 99, 235, 0.06);
+  text-decoration: none;
+}
+
 /* --- User info in header --- */
 
 .user-info {
@@ -743,6 +765,43 @@ label {
 .btn-logout:hover {
   color: var(--danger);
   background: var(--red-bg);
+}
+
+/* --- Settings page --- */
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.status-success {
+  background: var(--green-bg);
+  color: var(--green);
+  border: 1px solid var(--green);
+  border-radius: var(--radius);
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.status-error {
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid var(--red);
+  border-radius: var(--radius);
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
 }
 
 /* --- Responsive --- */
