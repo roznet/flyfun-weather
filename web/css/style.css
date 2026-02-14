@@ -430,7 +430,8 @@ label {
   margin-bottom: 0.5rem;
 }
 
-.sounding-waypoint h5 {
+.sounding-waypoint h5,
+.sounding-waypoint h6 {
   font-size: 0.8rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -438,6 +439,10 @@ label {
   color: var(--text-muted);
   margin-bottom: 0.3rem;
   margin-top: 0.5rem;
+}
+
+.sounding-waypoint h6 {
+  font-size: 0.75rem;
 }
 
 .convective-banner {
@@ -889,10 +894,296 @@ label {
   font-size: 0.9rem;
 }
 
+/* --- Display mode toggle --- */
+
+.display-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 0.8rem;
+}
+
+.display-mode-toggle .btn-toggle {
+  padding: 0.25rem 0.6rem;
+  border: none;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+
+.display-mode-toggle .btn-toggle:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.display-mode-toggle .btn-toggle.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.display-mode-toggle .btn-toggle:hover:not(.active) {
+  background: var(--bg);
+}
+
+/* --- Metric annotations --- */
+
+.metric-annotation-row td {
+  padding: 0 0.5rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.metric-annotation {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.metric-vibe {
+  font-style: italic;
+}
+
+.metric-threshold {
+  font-weight: 600;
+  font-style: normal;
+}
+
+.metric-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+  line-height: 1;
+}
+
+.metric-info-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+/* CSS-driven compact mode: hide annotations */
+.display-compact .metric-annotation-row {
+  display: none;
+}
+
+/* Metric hint for band sections */
+.metric-hint {
+  font-size: 0.7rem;
+  font-style: italic;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 0.1rem;
+}
+
+/* --- Tier collapsing --- */
+
+.tier-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0.2rem 0;
+  margin-top: 0.2rem;
+}
+
+.tier-toggle-btn:hover {
+  text-decoration: underline;
+}
+
+.tier-hidden {
+  display: none;
+}
+
+/* --- Metric info popup --- */
+
+.metric-popup-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 300;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 3rem 1rem;
+  overflow-y: auto;
+}
+
+.metric-popup-backdrop.active {
+  display: flex;
+}
+
+.metric-popup {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+  max-width: 520px;
+  width: 100%;
+  padding: 1.5rem;
+  position: relative;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.metric-popup-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  line-height: 1;
+  padding: 0.2rem;
+}
+
+.metric-popup-close:hover {
+  color: var(--text);
+}
+
+.popup-header h3 {
+  font-size: 1.1rem;
+  margin-bottom: 0.2rem;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.popup-unit {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.popup-vibe {
+  font-style: italic;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.popup-section {
+  margin-bottom: 0.75rem;
+}
+
+.popup-section h4 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin-bottom: 0.2rem;
+}
+
+.popup-section p {
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.popup-limitations {
+  opacity: 0.8;
+}
+
+/* Threshold bar */
+.threshold-bar {
+  display: flex;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+  height: 28px;
+}
+
+.threshold-segment {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0 0.3rem;
+  color: var(--text);
+  background: var(--bg);
+  border-right: 1px solid var(--surface);
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.threshold-segment:last-child {
+  border-right: none;
+}
+
+.threshold-segment.threshold-active {
+  opacity: 1;
+  box-shadow: inset 0 0 0 2px var(--text);
+}
+
+/* Risk colors for threshold segments */
+.threshold-segment.risk-light { background: var(--green-bg); color: var(--green); }
+.threshold-segment.risk-moderate { background: var(--amber-bg); color: var(--amber); }
+.threshold-segment.risk-high { background: var(--red-bg); color: var(--red); }
+.threshold-segment.risk-severe { background: var(--red-bg); color: var(--red); }
+
+.threshold-current-value {
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+/* Popup threshold table */
+.popup-threshold-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  margin-top: 0.4rem;
+}
+
+.popup-threshold-table td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.popup-thr-range {
+  font-family: monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.popup-thr-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.threshold-row-active td {
+  background: rgba(37, 99, 235, 0.06);
+}
+
+/* Section heading info button */
+.section-info-btn {
+  margin-left: 0.4rem;
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 640px) {
   .flight-header { flex-wrap: wrap; }
   .briefing-toolbar { flex-direction: column; align-items: stretch; }
   .skewt-card { width: 220px; }
+  .metric-popup { max-width: 95vw; padding: 1rem; }
+  .display-mode-toggle { font-size: 0.75rem; }
 }

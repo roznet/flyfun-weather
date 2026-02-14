@@ -2,7 +2,27 @@
 
 import { createStore } from 'zustand/vanilla';
 import type { DataStatus, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
+import type { DisplayMode, Tier } from '../types/metrics';
+import { getTierDefaults } from '../helpers/metrics-helper';
 import * as api from '../adapters/api-adapter';
+
+// --- localStorage persistence helpers ---
+
+function loadDisplayMode(): DisplayMode {
+  try {
+    const v = localStorage.getItem('wb_displayMode');
+    if (v === 'compact' || v === 'annotated') return v;
+  } catch { /* ignore */ }
+  return 'annotated';
+}
+
+function loadTierVisibility(): Record<Tier, boolean> {
+  try {
+    const v = localStorage.getItem('wb_tierVisibility');
+    if (v) return { ...getTierDefaults(), ...JSON.parse(v) };
+  } catch { /* ignore */ }
+  return getTierDefaults();
+}
 
 export interface BriefingState {
   // Data
@@ -18,6 +38,8 @@ export interface BriefingState {
   // UI state
   selectedModel: string;
   selectedPointIndex: number;
+  displayMode: DisplayMode;
+  tierVisibility: Record<Tier, boolean>;
   loading: boolean;
   refreshing: boolean;
   refreshStage: string | null;
@@ -36,6 +58,8 @@ export interface BriefingState {
   checkFreshness: () => Promise<void>;
   setSelectedModel: (model: string) => void;
   setSelectedPoint: (index: number) => void;
+  setDisplayMode: (mode: DisplayMode) => void;
+  toggleTier: (tier: Tier) => void;
   sendEmail: () => Promise<void>;
 }
 
@@ -50,6 +74,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   freshnessLoading: false,
   selectedModel: 'ecmwf',
   selectedPointIndex: 0,
+  displayMode: loadDisplayMode(),
+  tierVisibility: loadTierVisibility(),
   loading: false,
   refreshing: false,
   refreshStage: null,
@@ -193,6 +219,18 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setSelectedPoint: (index: number) => {
     set({ selectedPointIndex: index });
+  },
+
+  setDisplayMode: (mode: DisplayMode) => {
+    set({ displayMode: mode });
+    try { localStorage.setItem('wb_displayMode', mode); } catch { /* ignore */ }
+  },
+
+  toggleTier: (tier: Tier) => {
+    const current = get().tierVisibility;
+    const updated = { ...current, [tier]: !current[tier] };
+    set({ tierVisibility: updated });
+    try { localStorage.setItem('wb_tierVisibility', JSON.stringify(updated)); } catch { /* ignore */ }
   },
 
   sendEmail: async () => {
