@@ -136,10 +136,22 @@ export interface VerticalMotionAssessment {
   convective_contamination: boolean;
 }
 
+export interface InversionLayer {
+  base_ft: number;
+  top_ft: number;
+  base_pressure_hpa: number | null;
+  top_pressure_hpa: number | null;
+  strength_c: number;
+  base_temperature_c: number | null;
+  top_temperature_c: number | null;
+  surface_based: boolean;
+}
+
 export interface SoundingAnalysis {
   indices: ThermodynamicIndices | null;
   cloud_layers: EnhancedCloudLayer[];
   icing_zones: IcingZone[];
+  inversion_layers: InversionLayer[];
   convective: ConvectiveAssessment | null;
   vertical_motion: VerticalMotionAssessment | null;
   cloud_cover_low_pct: number | null;

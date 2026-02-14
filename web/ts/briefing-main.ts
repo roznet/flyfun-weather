@@ -6,6 +6,11 @@ import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { renderUserInfo } from './utils';
 import { initInfoPopup, showMetricInfo } from './components/info-popup';
+import { CrossSectionRenderer } from './visualization/cross-section/renderer';
+import { extractVizData } from './visualization/data-extract';
+import { getAllLayers } from './visualization/cross-section/layer-registry';
+import { renderVizControls } from './visualization/controls/panel';
+import { attachInteraction } from './visualization/cross-section/interaction';
 
 async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
@@ -71,6 +76,55 @@ async function init(): Promise<void> {
   applyDisplayModeClass(store.getState().displayMode);
   updateToggleButtons(store.getState().displayMode);
 
+  // --- Cross-section visualization ---
+  let vizRenderer: CrossSectionRenderer | null = null;
+  let vizCleanupInteraction: (() => void) | null = null;
+
+  function renderVisualization(state: BriefingState): void {
+    const vizSection = document.getElementById('viz-section');
+    const canvasContainer = document.getElementById('viz-canvas-container');
+    const controlsContainer = document.getElementById('viz-controls');
+    if (!vizSection || !canvasContainer || !controlsContainer) return;
+
+    if (!state.routeAnalyses) {
+      vizSection.style.display = 'none';
+      return;
+    }
+    vizSection.style.display = '';
+
+    const data = extractVizData(state.routeAnalyses, state.selectedModel);
+    const allLayers = getAllLayers();
+
+    // Create or update renderer
+    if (!vizRenderer) {
+      vizRenderer = new CrossSectionRenderer(canvasContainer);
+    }
+
+    vizRenderer.setData(data);
+    vizRenderer.setLayers(allLayers, state.vizSettings.enabledLayers);
+    vizRenderer.setRenderMode(state.vizSettings.renderMode);
+    vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
+    vizRenderer.render();
+
+    // Re-attach interaction
+    if (vizCleanupInteraction) vizCleanupInteraction();
+    vizCleanupInteraction = attachInteraction(vizRenderer, data, {
+      onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+    });
+
+    // Render controls
+    renderVizControls(controlsContainer, state.vizSettings, {
+      onRenderModeChange: (mode) => store.getState().setRenderMode(mode),
+      onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
+    });
+  }
+
+  function updateVizOverlay(state: BriefingState): void {
+    if (vizRenderer && state.routeAnalyses) {
+      vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
+    }
+  }
+
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
@@ -93,6 +147,7 @@ async function init(): Promise<void> {
       ui.renderSynopsis(state.flight, state.currentPack, state.digest);
       ui.renderGramet(state.flight, state.currentPack);
       renderSliderSections(state);
+      renderVisualization(state);
     }
     if (
       state.freshness !== prev.freshness ||
@@ -116,6 +171,7 @@ async function init(): Promise<void> {
     }
     if (state.selectedPointIndex !== prev.selectedPointIndex) {
       renderSliderSections(state);
+      updateVizOverlay(state);
     }
     if (state.displayMode !== prev.displayMode || state.tierVisibility !== prev.tierVisibility) {
       applyDisplayModeClass(state.displayMode);
@@ -124,6 +180,10 @@ async function init(): Promise<void> {
     }
     if (state.selectedModel !== prev.selectedModel) {
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
+      renderVisualization(state);
+    }
+    if (state.vizSettings !== prev.vizSettings) {
+      renderVisualization(state);
     }
     if (state.loading !== prev.loading) {
       ui.renderLoading(state.loading);
@@ -231,6 +291,7 @@ async function init(): Promise<void> {
     ui.renderSynopsis(s.flight, s.currentPack, s.digest);
     ui.renderGramet(s.flight, s.currentPack);
     renderSliderSections(s);
+    renderVisualization(s);
     ui.renderLoading(s.loading);
 
     // Show refresh button only for the flight owner
