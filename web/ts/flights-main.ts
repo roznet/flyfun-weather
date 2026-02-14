@@ -18,18 +18,13 @@ async function init(): Promise<void> {
 
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
-    if (state.flights !== prev.flights || state.latestPacks !== prev.latestPacks || state.routes !== prev.routes) {
+    if (state.flights !== prev.flights || state.latestPacks !== prev.latestPacks) {
       ui.renderFlightList(
         state.flights,
         state.latestPacks,
-        state.routes,
         (id) => navigateToBriefing(id),
         (id) => store.getState().deleteFlight(id),
       );
-    }
-    if (state.routes !== prev.routes) {
-      ui.renderRouteOptions(state.routes);
-      ui.onRouteSelected(state.routes);
     }
     if (state.loading !== prev.loading) {
       ui.renderLoading(state.loading);
@@ -46,7 +41,6 @@ async function init(): Promise<void> {
       e.preventDefault();
 
       const wpRaw = (document.getElementById('input-waypoints') as HTMLInputElement).value.trim();
-      const routeName = (document.getElementById('route-select') as HTMLSelectElement).value || undefined;
       const targetDate = (document.getElementById('input-date') as HTMLInputElement).value;
       const targetTime = parseInt((document.getElementById('input-time') as HTMLInputElement).value || '9', 10);
       const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value || '8000', 10);
@@ -61,7 +55,6 @@ async function init(): Promise<void> {
 
       try {
         const flight = await store.getState().createFlight(waypoints, targetDate, {
-          routeName,
           targetTimeUtc: targetTime,
           cruiseAltitudeFt: altitude,
           flightCeilingFt: ceiling,
@@ -76,7 +69,6 @@ async function init(): Promise<void> {
   }
 
   // --- Initial load ---
-  store.getState().loadRoutes();
   store.getState().loadFlights();
 }
 

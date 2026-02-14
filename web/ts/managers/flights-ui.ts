@@ -1,6 +1,6 @@
 /** DOM management for the Flights list page. */
 
-import type { FlightResponse, PackMeta, RouteInfo } from '../store/types';
+import type { FlightResponse, PackMeta } from '../store/types';
 import { escapeHtml } from '../utils';
 
 function $(id: string): HTMLElement {
@@ -43,7 +43,6 @@ function assessmentClass(assessment: string | null): string {
 export function renderFlightList(
   flights: FlightResponse[],
   latestPacks: Record<string, PackMeta | null>,
-  routes: RouteInfo[],
   onView: (id: string) => void,
   onDelete: (id: string) => void,
 ): void {
@@ -103,16 +102,6 @@ export function renderFlightList(
   });
 }
 
-export function renderRouteOptions(routes: RouteInfo[]): void {
-  const select = $('route-select') as HTMLSelectElement;
-  if (!select) return;
-
-  select.innerHTML = '<option value="">\u2014</option>' +
-    routes.map((r) =>
-      `<option value="${escapeHtml(r.name)}" data-alt="${r.cruise_altitude_ft}" data-dur="${r.flight_duration_hours}">${escapeHtml(r.display_name)} (${escapeHtml(r.waypoints.join(' \u2192 '))})</option>`
-    ).join('');
-}
-
 export function renderLoading(loading: boolean): void {
   const spinner = $('loading-spinner');
   if (spinner) {
@@ -128,26 +117,3 @@ export function renderError(error: string | null): void {
   }
 }
 
-/** Fill in route defaults when a preset is selected. */
-export function onRouteSelected(routes: RouteInfo[]): void {
-  const select = $('route-select') as HTMLSelectElement;
-  if (!select) return;
-
-  // Replace element to remove any previously attached listeners
-  const newSelect = select.cloneNode(true) as HTMLSelectElement;
-  select.parentNode!.replaceChild(newSelect, select);
-
-  newSelect.addEventListener('change', () => {
-    const route = routes.find((r) => r.name === newSelect.value);
-    if (!route) return;
-
-    const wpInput = $('input-waypoints') as HTMLInputElement;
-    const altInput = $('input-altitude') as HTMLInputElement;
-    const ceilInput = $('input-ceiling') as HTMLInputElement;
-    const durInput = $('input-duration') as HTMLInputElement;
-    if (wpInput) wpInput.value = route.waypoints.join(' ');
-    if (altInput) altInput.value = String(route.cruise_altitude_ft);
-    if (ceilInput) ceilInput.value = String(route.flight_ceiling_ft);
-    if (durInput) durInput.value = String(route.flight_duration_hours);
-  });
-}

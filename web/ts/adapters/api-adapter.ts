@@ -7,7 +7,6 @@ import type {
   ForecastSnapshot,
   PackMeta,
   RouteAnalysesManifest,
-  RouteInfo,
 } from '../store/types';
 import { API_BASE, apiFetch } from '../utils';
 
@@ -17,16 +16,6 @@ export class RefreshStreamError extends Error {
     super(message);
     this.name = 'RefreshStreamError';
   }
-}
-
-// --- Routes ---
-
-export async function fetchRoutes(): Promise<RouteInfo[]> {
-  return apiFetch<RouteInfo[]>('/routes');
-}
-
-export async function fetchRoute(name: string): Promise<RouteInfo> {
-  return apiFetch<RouteInfo>(`/routes/${encodeURIComponent(name)}`);
 }
 
 // --- Flights ---

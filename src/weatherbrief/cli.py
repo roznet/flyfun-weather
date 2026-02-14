@@ -11,7 +11,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from weatherbrief.airports import resolve_waypoints
-from weatherbrief.config import list_routes, load_route
 from weatherbrief.models import ModelSource, RouteConfig
 from weatherbrief.pipeline import BriefingOptions, execute_briefing
 
@@ -31,26 +30,11 @@ def _resolve_db_path(args_db: str | None) -> str:
 
 
 def _build_route(args: argparse.Namespace) -> RouteConfig:
-    """Build RouteConfig from CLI arguments (inline ICAOs or --route)."""
+    """Build RouteConfig from CLI arguments."""
     db_path = _resolve_db_path(args.db)
 
-    if args.route:
-        route = load_route(args.route, db_path)
-        # Override altitude/duration/ceiling from CLI if given
-        overrides: dict = {}
-        if args.alt != 8000:
-            overrides["cruise_altitude_ft"] = args.alt
-        if args.ceiling != 18000:
-            overrides["flight_ceiling_ft"] = args.ceiling
-        if args.duration and route.flight_duration_hours == 0.0:
-            overrides["flight_duration_hours"] = args.duration
-        if overrides:
-            route = route.model_copy(update=overrides)
-        return route
-
-    # Inline ICAO codes
     if len(args.waypoints) < 2:
-        print("Error: At least 2 ICAO codes required (or use --route).")
+        print("Error: At least 2 ICAO codes required.")
         sys.exit(1)
 
     waypoints = resolve_waypoints(args.waypoints, db_path)
@@ -141,11 +125,8 @@ def main() -> None:
         "fetch", help="Fetch forecasts, analyze, and produce a digest"
     )
     fetch_parser.add_argument(
-        "waypoints", nargs="*", default=[], metavar="ICAO",
-        help="ICAO codes for inline route (min 2, e.g. EGTK LFPB LSGS)",
-    )
-    fetch_parser.add_argument(
-        "--route", help="Named route from routes.yaml (alternative to inline ICAOs)"
+        "waypoints", nargs="+", metavar="ICAO",
+        help="ICAO codes for route (min 2, e.g. EGTK LFPB LSGS)",
     )
     fetch_parser.add_argument(
         "--db", help="Path to airport database (or set AIRPORTS_DB env var)"
@@ -186,9 +167,6 @@ def main() -> None:
         help="Comma-separated model list (default: gfs,ecmwf,icon)",
     )
 
-    # routes subcommand
-    subparsers.add_parser("routes", help="List available routes")
-
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -196,14 +174,7 @@ def main() -> None:
         format="%(levelname)s: %(message)s",
     )
 
-    if args.command == "routes":
-        for name in list_routes():
-            print(f"  {name}")
-    elif args.command == "fetch":
-        if not args.waypoints and not args.route:
-            print("Error: Provide ICAO codes or --route NAME.")
-            sys.exit(1)
-
+    if args.command == "fetch":
         route = _build_route(args)
         models = [ModelSource(m.strip()) for m in args.models.split(",")]
         run_fetch(
