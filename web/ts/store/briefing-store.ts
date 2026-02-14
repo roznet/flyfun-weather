@@ -3,7 +3,9 @@
 import { createStore } from 'zustand/vanilla';
 import type { DataStatus, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { DisplayMode, Tier } from '../types/metrics';
+import type { RenderMode, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
+import { getDefaultEnabled } from '../visualization/cross-section/layer-registry';
 import * as api from '../adapters/api-adapter';
 
 // --- localStorage persistence helpers ---
@@ -24,6 +26,32 @@ function loadTierVisibility(): Record<Tier, boolean> {
   return getTierDefaults();
 }
 
+function loadVizSettings(): VizSettings {
+  const defaults: VizSettings = {
+    layout: 'cross-section',
+    renderMode: 'smooth',
+    enabledLayers: getDefaultEnabled(),
+    mapColorMetric: 'icing-risk',
+    mapWidthMetric: 'cloud-cover',
+  };
+  try {
+    const v = localStorage.getItem('wb_vizSettings');
+    if (v) {
+      const saved = JSON.parse(v);
+      return {
+        ...defaults,
+        ...saved,
+        enabledLayers: { ...defaults.enabledLayers, ...saved.enabledLayers },
+      };
+    }
+  } catch { /* ignore */ }
+  return defaults;
+}
+
+function saveVizSettings(settings: VizSettings): void {
+  try { localStorage.setItem('wb_vizSettings', JSON.stringify(settings)); } catch { /* ignore */ }
+}
+
 export interface BriefingState {
   // Data
   flight: FlightResponse | null;
@@ -40,6 +68,7 @@ export interface BriefingState {
   selectedPointIndex: number;
   displayMode: DisplayMode;
   tierVisibility: Record<Tier, boolean>;
+  vizSettings: VizSettings;
   loading: boolean;
   refreshing: boolean;
   refreshStage: string | null;
@@ -60,6 +89,8 @@ export interface BriefingState {
   setSelectedPoint: (index: number) => void;
   setDisplayMode: (mode: DisplayMode) => void;
   toggleTier: (tier: Tier) => void;
+  setRenderMode: (mode: RenderMode) => void;
+  toggleVizLayer: (layerId: string) => void;
   sendEmail: () => Promise<void>;
 }
 
@@ -76,6 +107,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   selectedPointIndex: 0,
   displayMode: loadDisplayMode(),
   tierVisibility: loadTierVisibility(),
+  vizSettings: loadVizSettings(),
   loading: false,
   refreshing: false,
   refreshStage: null,
@@ -231,6 +263,20 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const updated = { ...current, [tier]: !current[tier] };
     set({ tierVisibility: updated });
     try { localStorage.setItem('wb_tierVisibility', JSON.stringify(updated)); } catch { /* ignore */ }
+  },
+
+  setRenderMode: (mode: RenderMode) => {
+    const updated = { ...get().vizSettings, renderMode: mode };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  toggleVizLayer: (layerId: string) => {
+    const current = get().vizSettings;
+    const enabled = { ...current.enabledLayers, [layerId]: !(current.enabledLayers[layerId] !== false) };
+    const updated = { ...current, enabledLayers: enabled };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
   },
 
   sendEmail: async () => {
