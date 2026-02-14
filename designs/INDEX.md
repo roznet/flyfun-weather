@@ -12,8 +12,8 @@ Key exports: `execute_briefing`, `create_app`
 → Full doc: architecture.md
 
 ### data-models
-Pydantic v2 models for routes, forecasts, analysis, snapshots, cross-sections, flights, and briefing packs.
-Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection`, `WaypointForecast`, `SoundingAnalysis`, `Flight`, `BriefingPackMeta`
+Pydantic v2 models for routes, forecasts, analysis, snapshots, cross-sections, flights, and briefing packs. Models split across `models/analysis.py` and `models/storage.py`.
+Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection`, `WaypointForecast`, `SoundingAnalysis`, `VerticalMotionAssessment`, `RoutePointAnalysis`, `Flight`, `BriefingPackMeta`
 → Full doc: data-models.md
 
 ### fetch
@@ -22,8 +22,8 @@ Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_dwd_text_forecasts`,
 → Full doc: fetch.md
 
 ### analysis
-Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, clouds, icing, convective), altitude advisories, model divergence scoring.
-Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`
+Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, clouds, icing, convective, vertical motion/CAT), altitude advisories, model divergence scoring.
+Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`, `assess_vertical_motion`
 → Full doc: analysis.md
 
 ### analysis-metrics
@@ -52,5 +52,5 @@ Implementation plan for vertical motion & turbulence analysis: fetch omega from 
 → Full doc: vertical-motion-plan.md
 
 ### multi-user-deployment
-Deployment plan for weather.flyfun.aero: Docker on DigitalOcean, Google/Apple OAuth, MySQL/SQLite DB, per-user flights and credentials, usage tracking, rate limiting, dev mode.
+Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google OAuth, MySQL/SQLite DB, per-user flights and credentials, usage tracking, rate limiting, admin approval, shareable briefing links.
 → Full doc: multi-user-deployment.md
