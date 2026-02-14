@@ -625,15 +625,16 @@ function renderTierToggle(
 }
 
 function formatClassification(cls: string): string {
-  const labels: Record<string, string> = {
-    quiescent: 'Quiescent',
-    synoptic_ascent: 'Synoptic Ascent',
-    synoptic_subsidence: 'Synoptic Subsidence',
-    convective: 'Convective',
-    oscillating: 'Oscillating',
-    unavailable: 'N/A',
-  };
-  return labels[cls] || cls;
+  if (cls === 'unavailable') return 'N/A';
+  // Look up display label from metrics catalog thresholds
+  const metric = getMetric('vertical_motion_class');
+  if (metric) {
+    // Match enum value to threshold label (e.g., "synoptic_ascent" → "Synoptic Ascent")
+    const normalized = cls.replace(/_/g, ' ');
+    const match = metric.thresholds.find((t) => t.label.toLowerCase() === normalized);
+    if (match) return match.label;
+  }
+  return cls;
 }
 
 function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displayMode: DisplayMode = 'annotated'): string {
@@ -644,15 +645,19 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
   if (!hasVerticalMotion) return '';
 
   const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const colSpan = models.length + 1;
 
   // Summary rows
-  const rowSpecs: Array<{ label: string; render: (m: string) => string }> = [
+  const rowSpecs: Array<{ label: string; metricId?: string; render: (m: string) => string }> = [
     {
       label: 'Classification',
+      metricId: 'vertical_motion_class',
       render: (m) => {
         const vm = soundings[m].vertical_motion;
         if (!vm || vm.classification === 'unavailable') return '<td class="muted">N/A</td>';
-        const cls = vm.classification === 'convective' ? 'risk-severe' : '';
+        const cls = vm.classification === 'convective' ? 'risk-severe'
+          : vm.classification === 'synoptic_ascent' ? 'risk-moderate'
+          : '';
         return `<td class="${cls}">${formatClassification(vm.classification)}</td>`;
       },
     },
@@ -685,9 +690,27 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
     });
   }
 
-  const summaryRows = rowSpecs.map(({ label, render }) => {
+  const summaryRows = rowSpecs.map(({ label, metricId, render }) => {
     const cells = models.map(render).join('');
-    return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
+    const infoBtn = metricId ? ` ${renderInfoButton(metricId)}` : '';
+    const row = `<tr><td class="var-name">${label}${infoBtn}</td>${cells}</tr>`;
+
+    // Add annotation for classification row in annotated mode
+    if (metricId && displayMode === 'annotated') {
+      const metric = getMetric(metricId);
+      if (metric && metric.thresholds.length > 0) {
+        // For enum-style metrics (like vertical_motion_class), match formatted label to threshold
+        const firstCls = models.map((m) => soundings[m].vertical_motion?.classification).find((c) => c && c !== 'unavailable');
+        if (firstCls) {
+          const formatted = formatClassification(firstCls);
+          const match = metric.thresholds.find((t) => t.label === formatted);
+          if (match?.meaning) {
+            return row + `<tr class="metric-annotation-row"><td class="metric-annotation" colspan="${colSpan}">${match.meaning}</td></tr>`;
+          }
+        }
+      }
+    }
+    return row;
   }).join('');
 
   // CAT risk layers section
@@ -737,9 +760,10 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
     }
   }
 
+  const vmInfoBtn = renderInfoButton('vertical_motion_class');
   return `
     <div class="vertical-motion-section">
-      <h5>Vertical Motion</h5>
+      <h5>Vertical Motion <span class="section-info-btn">${vmInfoBtn}</span></h5>
       <table class="band-table">
         <thead><tr><th></th>${headerCells}</tr></thead>
         <tbody>${summaryRows}</tbody>
@@ -879,16 +903,19 @@ function renderEnhancedClouds(soundings: Record<string, SoundingAnalysis>, displ
       if (!layer) return '<td>\u2014</td>';
       anyHit = true;
       const t = layer.mean_temperature_c != null ? ` T=${layer.mean_temperature_c.toFixed(0)}\u00B0C` : '';
-      return `<td>${layer.coverage.toUpperCase()}${t}</td>`;
+      const covHint = displayMode === 'annotated' ? coverageHint(layer.coverage) : '';
+      return `<td>${layer.coverage.toUpperCase()}${t}${covHint}</td>`;
     }).join('');
 
     if (!anyHit) return '';
     return `<tr><td class="var-name">${nextAlt}-${alt}ft</td>${cells}</tr>`;
   }).join('');
 
+  const cloudInfoBtn = renderInfoButton('cloud_coverage');
   return `
     <div class="enhanced-clouds">
-      <h5>Cloud Layers</h5>
+      <h5>Cloud Layers <span class="section-info-btn">${cloudInfoBtn}</span></h5>
+      <p class="section-hint">Derived from sounding dewpoint depression at pressure levels.</p>
       <table class="band-table">
         <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
         <tbody>${rows}</tbody>
@@ -922,9 +949,11 @@ function renderNwpCloudCover(soundings: Record<string, SoundingAnalysis>): strin
     return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
   }).join('');
 
+  const nwpInfoBtn = renderInfoButton('nwp_cloud_cover');
   return `
     <div class="nwp-cloud-cover">
-      <h5>NWP Cloud Cover</h5>
+      <h5>Model Cloud Cover <span class="section-info-btn">${nwpInfoBtn}</span></h5>
+      <p class="section-hint">Direct model output. Low: SFC\u20136,500ft, Mid: 6,500\u201320,000ft, High: &gt;20,000ft.</p>
       <table class="band-table">
         <thead><tr><th></th>${headerCells}</tr></thead>
         <tbody>${rows}</tbody>
@@ -1116,6 +1145,17 @@ function riskHint(metricId: string, riskLevel: string): string {
   const match = metric.thresholds.find((t) => t.risk === riskLevel || t.label.toLowerCase() === riskLevel);
   if (!match) return '';
   return `<span class="metric-hint">${match.meaning}</span>`;
+}
+
+function coverageHint(coverage: string): string {
+  const metric = getMetric('cloud_coverage');
+  if (!metric) return '';
+  const label = coverage.toUpperCase();
+  const match = metric.thresholds.find((t) => t.label.startsWith(`${label} (`));
+  if (match?.meaning) {
+    return `<span class="metric-hint">${match.meaning}</span>`;
+  }
+  return '';
 }
 
 function renderSinglePointSounding(

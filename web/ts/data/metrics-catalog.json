@@ -63,6 +63,7 @@
     "best_used_for": "Deciding if you can fly direct or need to weave around cells.",
     "limitations": "Relies heavily on 700 hPa moisture. Over-predicts in tropical air masses and under-predicts in dry desert air.",
     "thresholds": [
+      { "min": null, "max": 0, "label": "Stable", "risk": "none", "meaning": "Very stable atmosphere. No thunderstorm threat." },
       { "min": 0, "max": 20, "label": "Clear", "risk": "none", "meaning": "No air-mass storms expected." },
       { "min": 20, "max": 30, "label": "Isolated", "risk": "low", "meaning": "A few cells to dodge." },
       { "min": 30, "max": 40, "label": "Scattered", "risk": "moderate", "meaning": "Frequent deviations likely." },
@@ -330,6 +331,48 @@
       { "min": 0, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
       { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
       { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Emergency action — exit cloud now." }
+    ]
+  },
+  "vertical_motion_class": {
+    "name": "Vertical Motion",
+    "unit": "",
+    "vibe": "Is the air going up, down, or sitting still?",
+    "primary_goal": "Classify the dominant vertical motion regime from omega profiles.",
+    "best_used_for": "Understanding whether the atmosphere is actively producing weather or is quiet.",
+    "limitations": "Based on model omega (vertical velocity in pressure coordinates). Cannot resolve convective-scale updrafts or local effects like mountain waves.",
+    "thresholds": [
+      { "min": null, "max": null, "label": "Quiescent", "risk": "none", "meaning": "Calm air. Minimal vertical motion. Smooth flying conditions." },
+      { "min": null, "max": null, "label": "Synoptic Ascent", "risk": "low", "meaning": "Large-scale rising air (frontal or low-pressure). Cloud and precipitation developing." },
+      { "min": null, "max": null, "label": "Synoptic Subsidence", "risk": "none", "meaning": "Large-scale sinking air (high-pressure). Clearing skies, generally smooth." },
+      { "min": null, "max": null, "label": "Convective", "risk": "moderate", "meaning": "Strong updrafts/downdrafts detected. Turbulence and weather likely." },
+      { "min": null, "max": null, "label": "Oscillating", "risk": "low", "meaning": "Alternating up/down patterns. Possible wave activity or unstable layers." }
+    ]
+  },
+  "cloud_coverage": {
+    "name": "Cloud Coverage",
+    "unit": "",
+    "vibe": "How much of the sky is blocked at this level",
+    "primary_goal": "Describe cloud coverage derived from sounding dewpoint depression analysis.",
+    "best_used_for": "Understanding vertical cloud structure — which layers have cloud and how thick.",
+    "limitations": "Derived from 8 pressure levels (coarse). Can miss thin layers. Coverage is estimated from humidity, not observed.",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "3-4 oktas. Patches of cloud, generally VFR. Sun visible between gaps." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "5-7 oktas. Mostly cloudy with some breaks. May affect VFR ceiling." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "8/8 coverage. Full cloud layer, no gaps. IFR conditions likely if low." }
+    ]
+  },
+  "nwp_cloud_cover": {
+    "name": "NWP Cloud Cover",
+    "unit": "%",
+    "vibe": "What the weather model directly predicts for cloud",
+    "primary_goal": "Show raw model cloud cover output at three ICAO altitude bands.",
+    "best_used_for": "Comparing model cloud predictions. More reliable than sounding-derived layers for coverage amount.",
+    "limitations": "Total-column percentages per band — doesn't tell you exact cloud base/top. Different models define bands slightly differently.",
+    "thresholds": [
+      { "min": 0, "max": 25, "label": "Few", "risk": "none", "meaning": "Mostly clear at this level." },
+      { "min": 25, "max": 50, "label": "Scattered", "risk": "none", "meaning": "Some cloud but gaps." },
+      { "min": 50, "max": 75, "label": "Broken", "risk": "low", "meaning": "Significant cloud." },
+      { "min": 75, "max": null, "label": "Overcast", "risk": "moderate", "meaning": "Full cloud layer." }
     ]
   },
   "freezing_level_m": {

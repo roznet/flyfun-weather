@@ -1220,6 +1220,12 @@ label {
   margin-left: 0.4rem;
 }
 
+.section-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: -0.3rem 0 0.4rem 0;
+}
+
 /* --- Cross-section visualization --- */
 
 .viz-canvas-container {
