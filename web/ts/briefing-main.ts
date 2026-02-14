@@ -257,6 +257,48 @@ async function init(): Promise<void> {
     }
   });
 
+  // --- Wire collapsible sections ---
+  function loadCollapsedSections(): Set<string> {
+    try {
+      const v = localStorage.getItem('wb_collapsedSections');
+      if (v) return new Set(JSON.parse(v));
+    } catch { /* ignore */ }
+    return new Set();
+  }
+
+  function saveCollapsedSections(collapsed: Set<string>): void {
+    try { localStorage.setItem('wb_collapsedSections', JSON.stringify([...collapsed])); } catch { /* ignore */ }
+  }
+
+  const collapsedSections = loadCollapsedSections();
+  // Apply persisted collapsed state
+  document.querySelectorAll('.section.collapsible[data-section]').forEach((el) => {
+    const key = (el as HTMLElement).dataset.section!;
+    if (collapsedSections.has(key)) {
+      el.classList.add('collapsed');
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    const h3 = (e.target as HTMLElement).closest('.section.collapsible > h3');
+    if (!h3) return;
+    const section = h3.parentElement as HTMLElement;
+    const key = section.dataset.section;
+    section.classList.toggle('collapsed');
+    if (key) {
+      if (section.classList.contains('collapsed')) {
+        collapsedSections.add(key);
+      } else {
+        collapsedSections.delete(key);
+      }
+      saveCollapsedSections(collapsedSections);
+    }
+    // Re-render viz canvas if cross-section was just expanded (canvas needs size)
+    if (key === 'cross-section' && !section.classList.contains('collapsed') && vizRenderer) {
+      vizRenderer.render();
+    }
+  });
+
   // --- Wire back button ---
   const backBtn = document.getElementById('back-btn');
   if (backBtn) {

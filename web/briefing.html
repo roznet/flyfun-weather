@@ -42,63 +42,77 @@
     </div>
 
     <!-- Synopsis -->
-    <div class="section">
+    <div class="section collapsible" data-section="synopsis">
       <h3>Synopsis</h3>
-      <div id="synopsis-section">
-        <p class="muted">Loading...</p>
+      <div class="section-body">
+        <div id="synopsis-section">
+          <p class="muted">Loading...</p>
+        </div>
       </div>
     </div>
 
     <!-- GRAMET -->
-    <div class="section">
+    <div class="section collapsible" data-section="gramet">
       <h3>GRAMET Cross-Section</h3>
-      <div id="gramet-section">
-        <p class="muted">Loading...</p>
+      <div class="section-body">
+        <div id="gramet-section">
+          <p class="muted">Loading...</p>
+        </div>
       </div>
     </div>
 
     <!-- Cross-Section Visualization -->
-    <div id="viz-section" class="section" style="display: none;">
+    <div id="viz-section" class="section collapsible" data-section="cross-section" style="display: none;">
       <h3>Cross-Section</h3>
-      <div id="viz-controls" class="viz-controls"></div>
-      <div id="viz-canvas-container" class="viz-canvas-container"></div>
+      <div class="section-body">
+        <div id="viz-controls" class="viz-controls"></div>
+        <div id="viz-canvas-container" class="viz-canvas-container"></div>
+      </div>
     </div>
 
     <!-- Route Slider -->
-    <div id="route-slider-section" class="section" style="display: none;">
+    <div id="route-slider-section" class="section collapsible" data-section="route-slider" style="display: none;">
       <h3>Route Profile</h3>
-      <div id="route-slider-container"></div>
+      <div class="section-body">
+        <div id="route-slider-container"></div>
+      </div>
     </div>
 
     <!-- Skew-T -->
-    <div class="section">
+    <div class="section collapsible" data-section="skewt">
       <h3>Skew-T Soundings</h3>
-      <div class="model-toggle">
-        <label for="model-select">Model:</label>
-        <select id="model-select">
-          <option value="gfs">GFS</option>
-          <option value="ecmwf" selected>ECMWF</option>
-          <option value="icon">ICON</option>
-        </select>
-      </div>
-      <div id="skewt-section">
-        <p class="muted">Loading...</p>
+      <div class="section-body">
+        <div class="model-toggle">
+          <label for="model-select">Model:</label>
+          <select id="model-select">
+            <option value="gfs">GFS</option>
+            <option value="ecmwf" selected>ECMWF</option>
+            <option value="icon">ICON</option>
+          </select>
+        </div>
+        <div id="skewt-section">
+          <p class="muted">Loading...</p>
+        </div>
       </div>
     </div>
 
     <!-- Sounding Analysis -->
-    <div class="section">
+    <div class="section collapsible" data-section="sounding">
       <h3>Sounding Analysis</h3>
-      <div id="sounding-section">
-        <p class="muted">Loading...</p>
+      <div class="section-body">
+        <div id="sounding-section">
+          <p class="muted">Loading...</p>
+        </div>
       </div>
     </div>
 
     <!-- Model Comparison -->
-    <div class="section">
+    <div class="section collapsible" data-section="comparison">
       <h3>Model Comparison</h3>
-      <div id="comparison-section">
-        <p class="muted">Loading...</p>
+      <div class="section-body">
+        <div id="comparison-section">
+          <p class="muted">Loading...</p>
+        </div>
       </div>
     </div>
 
