@@ -1,12 +1,11 @@
 /** Zustand vanilla store for the Flights management page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { FlightResponse, PackMeta, RouteInfo } from './types';
+import type { FlightResponse, PackMeta } from './types';
 import * as api from '../adapters/api-adapter';
 
 export interface FlightsState {
   // Data
-  routes: RouteInfo[];
   flights: FlightResponse[];
   latestPacks: Record<string, PackMeta | null>; // flight_id → latest pack
 
@@ -15,7 +14,6 @@ export interface FlightsState {
   error: string | null;
 
   // Actions
-  loadRoutes: () => Promise<void>;
   loadFlights: () => Promise<void>;
   createFlight: (waypoints: string[], targetDate: string, opts?: {
     routeName?: string;
@@ -28,20 +26,10 @@ export interface FlightsState {
 }
 
 export const flightsStore = createStore<FlightsState>((set, get) => ({
-  routes: [],
   flights: [],
   latestPacks: {},
   loading: false,
   error: null,
-
-  loadRoutes: async () => {
-    try {
-      const routes = await api.fetchRoutes();
-      set({ routes });
-    } catch (err) {
-      set({ error: `Failed to load routes: ${err}` });
-    }
-  },
 
   loadFlights: async () => {
     set({ loading: true, error: null });

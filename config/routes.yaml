@@ -1,6 +1,0 @@
-routes:
-  egtk_lsgs:
-    name: "Oxford to Sion"
-    waypoints: [EGTK, LFPB, LSGS]
-    cruise_altitude_ft: 8000
-    flight_duration_hours: 4.5

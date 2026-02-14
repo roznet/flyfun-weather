@@ -13,7 +13,7 @@ class Flight(BaseModel):
 
     id: str  # slug: "{route_name}-{target_date}"
     user_id: str = ""  # owner; empty in single-user / dev mode
-    route_name: str  # key in routes.yaml, or derived from waypoints
+    route_name: str  # user-assigned name or derived from waypoints
     waypoints: list[str] = Field(default_factory=list)  # ICAO codes
     target_date: str  # YYYY-MM-DD
     target_time_utc: int = 9  # departure hour

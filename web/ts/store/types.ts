@@ -1,14 +1,5 @@
 /** Shared TypeScript types matching the API response models. */
 
-export interface RouteInfo {
-  name: string;
-  display_name: string;
-  waypoints: string[];
-  cruise_altitude_ft: number;
-  flight_ceiling_ft: number;
-  flight_duration_hours: number;
-}
-
 export interface FlightResponse {
   id: string;
   user_id: string;
