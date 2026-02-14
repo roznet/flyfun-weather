@@ -7,7 +7,12 @@ in analysis/clouds.py.
 
 from __future__ import annotations
 
-from weatherbrief.models import CloudCoverage, DerivedLevel, EnhancedCloudLayer
+from weatherbrief.models import (
+    CloudCoverage,
+    DerivedLevel,
+    EnhancedCloudLayer,
+    ThermodynamicIndices,
+)
 
 # Dewpoint depression threshold for "in cloud" (degrees C)
 IN_CLOUD_DD_THRESHOLD = 3.0
@@ -105,3 +110,28 @@ def _build_layer(cloud_levels: list[DerivedLevel]) -> EnhancedCloudLayer | None:
         coverage=_classify_coverage(mean_dd),
         mean_dewpoint_depression_c=round(mean_dd, 1),
     )
+
+
+def enrich_cloud_top_uncertainty(
+    cloud_layers: list[EnhancedCloudLayer],
+    indices: ThermodynamicIndices,
+    cape_jkg: float | None,
+) -> None:
+    """Add theoretical max cloud top to each layer (in-place).
+
+    Uses EL for convective conditions (CAPE > 500) or −20°C level for stratiform.
+    Only sets theoretical_max_top_ft when it exceeds the sounding-derived top.
+    """
+    if not cloud_layers:
+        return
+
+    for layer in cloud_layers:
+        theoretical_max: float | None = None
+
+        if cape_jkg is not None and cape_jkg > 500 and indices.el_altitude_ft is not None:
+            theoretical_max = indices.el_altitude_ft
+        elif indices.minus20c_level_ft is not None:
+            theoretical_max = indices.minus20c_level_ft
+
+        if theoretical_max is not None and theoretical_max > layer.top_ft:
+            layer.theoretical_max_top_ft = round(theoretical_max)

@@ -62,6 +62,9 @@ def compute_altitude_advisories(
     strong = _strong_motion_advisory(soundings)
     if strong is not None:
         advisories.append(strong)
+    cloud_top = _cloud_top_uncertainty_advisory(soundings)
+    if cloud_top is not None:
+        advisories.append(cloud_top)
 
     return AltitudeAdvisories(
         regimes=regimes,
@@ -97,6 +100,10 @@ def _compute_regimes(
         transitions.add(_round_alt(zone.base_ft))
         transitions.add(_round_alt(zone.top_ft))
 
+    for inv in analysis.inversion_layers:
+        transitions.add(_round_alt(inv.base_ft))
+        transitions.add(_round_alt(inv.top_ft))
+
     if analysis.indices and analysis.indices.freezing_level_ft is not None:
         transitions.add(_round_alt(analysis.indices.freezing_level_ft))
 
@@ -131,11 +138,12 @@ def _compute_regimes(
         midpoint = (floor + ceil) / 2
         in_cloud = _point_in_cloud(midpoint, analysis)
         icing_risk, icing_type = _point_icing(midpoint, analysis)
+        inversion = _point_in_inversion(midpoint, analysis)
         cloud_cover = _nwp_cloud_cover_at(midpoint, analysis)
         cat_risk = _point_cat_risk(midpoint, analysis)
         strong_motion = _point_strong_motion(midpoint, analysis)
         label = _regime_label(in_cloud, icing_risk, icing_type, cloud_cover,
-                              cat_risk, strong_motion)
+                              cat_risk, strong_motion, inversion)
 
         raw_regimes.append(VerticalRegime(
             floor_ft=floor,
@@ -143,6 +151,7 @@ def _compute_regimes(
             in_cloud=in_cloud,
             icing_risk=icing_risk,
             icing_type=icing_type,
+            inversion=inversion,
             cloud_cover_pct=cloud_cover,
             cat_risk=cat_risk,
             strong_vertical_motion=strong_motion,
@@ -167,6 +176,7 @@ def _compute_regimes(
             prev.in_cloud == regime.in_cloud
             and prev.icing_risk == regime.icing_risk
             and prev.icing_type == regime.icing_type
+            and prev.inversion == regime.inversion
             and prev.cloud_cover_pct == regime.cloud_cover_pct
             and prev.cat_risk == regime.cat_risk
             and prev.strong_vertical_motion == regime.strong_vertical_motion
@@ -178,6 +188,7 @@ def _compute_regimes(
                 in_cloud=prev.in_cloud,
                 icing_risk=prev.icing_risk,
                 icing_type=prev.icing_type,
+                inversion=prev.inversion,
                 cloud_cover_pct=prev.cloud_cover_pct,
                 cat_risk=prev.cat_risk,
                 strong_vertical_motion=prev.strong_vertical_motion,
@@ -193,6 +204,14 @@ def _point_in_cloud(altitude_ft: float, analysis: SoundingAnalysis) -> bool:
     """Check if an altitude falls within any cloud layer."""
     for cl in analysis.cloud_layers:
         if cl.base_ft <= altitude_ft <= cl.top_ft:
+            return True
+    return False
+
+
+def _point_in_inversion(altitude_ft: float, analysis: SoundingAnalysis) -> bool:
+    """Check if an altitude falls within any inversion layer."""
+    for inv in analysis.inversion_layers:
+        if inv.base_ft <= altitude_ft <= inv.top_ft:
             return True
     return False
 
@@ -235,6 +254,7 @@ def _regime_label(
     cloud_cover_pct: float | None = None,
     cat_risk: str | None = None,
     strong_vertical_motion: bool = False,
+    inversion: bool = False,
 ) -> str:
     """Generate a human-readable label for a regime."""
     parts: list[str] = []
@@ -256,6 +276,8 @@ def _regime_label(
                 icing_str += f" ({icing_type.value})"
             parts.append(icing_str)
 
+    if inversion:
+        parts.append("inversion")
     if cat_risk is not None:
         parts.append(f"CAT {cat_risk.upper()}")
     if strong_vertical_motion:
@@ -527,14 +549,83 @@ def _climb_above_icing(
     worst_case = max(valid_alts)
     feasible = worst_case <= flight_ceiling_ft
 
+    # Include cloud top uncertainty in reason when available
+    reason_suffix = ""
+    for analysis in soundings.values():
+        for cl in analysis.cloud_layers:
+            if cl.theoretical_max_top_ft is not None:
+                reason_suffix = (
+                    f" (cloud top {cl.top_ft:.0f}ft, "
+                    f"theoretical max {cl.theoretical_max_top_ft:.0f}ft)"
+                )
+                break
+        if reason_suffix:
+            break
+
+    if feasible:
+        reason = f"Climb above {worst_case:.0f}ft to exit icing conditions{reason_suffix}"
+    else:
+        reason = (
+            f"Climb above {worst_case:.0f}ft needed but exceeds ceiling "
+            f"({flight_ceiling_ft}ft){reason_suffix}"
+        )
+
     return AltitudeAdvisory(
         advisory_type="climb_above_icing",
         altitude_ft=worst_case,
         feasible=feasible,
-        reason=(
-            f"Climb above {worst_case:.0f}ft to exit icing conditions"
-            if feasible
-            else f"Climb above {worst_case:.0f}ft needed but exceeds ceiling ({flight_ceiling_ft}ft)"
-        ),
+        reason=reason,
         per_model_ft=per_model_ft,
+    )
+
+
+_CLOUD_TOP_UNCERTAINTY_GAP_FT = 2000.0
+
+
+def _cloud_top_uncertainty_advisory(
+    soundings: dict[str, SoundingAnalysis],
+) -> AltitudeAdvisory | None:
+    """Generate advisory when cloud top uncertainty is significant.
+
+    Triggered when the highest cloud layer has theoretical_max_top_ft
+    significantly above its sounding-derived top (>2000ft gap).
+    """
+    worst_gap = 0.0
+    worst_top = 0.0
+    worst_max = 0.0
+    source = ""
+
+    for model_key, analysis in soundings.items():
+        if not analysis.cloud_layers:
+            continue
+        highest = max(analysis.cloud_layers, key=lambda cl: cl.top_ft)
+        if highest.theoretical_max_top_ft is None:
+            continue
+        gap = highest.theoretical_max_top_ft - highest.top_ft
+        if gap > worst_gap:
+            worst_gap = gap
+            worst_top = highest.top_ft
+            worst_max = highest.theoretical_max_top_ft
+            # Determine source label
+            if (
+                analysis.indices
+                and analysis.indices.cape_surface_jkg is not None
+                and analysis.indices.cape_surface_jkg > 500
+                and analysis.indices.el_altitude_ft is not None
+            ):
+                source = "EL"
+            else:
+                source = "\u221220\u00b0C"
+
+    if worst_gap < _CLOUD_TOP_UNCERTAINTY_GAP_FT:
+        return None
+
+    return AltitudeAdvisory(
+        advisory_type="cloud_top_uncertainty",
+        altitude_ft=worst_max,
+        feasible=True,
+        reason=(
+            f"Cloud top uncertainty: sounding top {worst_top:.0f}ft, "
+            f"theoretical max {worst_max:.0f}ft ({source})"
+        ),
     )
