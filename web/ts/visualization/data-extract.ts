@@ -25,10 +25,13 @@ export function extractVizData(
     }
   }
 
+  const actualCeiling = flightCeilingFt ?? manifest.cruise_altitude_ft;
+
   return {
     points,
     cruiseAltitudeFt: manifest.cruise_altitude_ft,
-    flightCeilingFt: (flightCeilingFt ?? manifest.cruise_altitude_ft) + 5000,
+    ceilingAltitudeFt: actualCeiling,
+    flightCeilingFt: Math.max(actualCeiling, manifest.cruise_altitude_ft) + 5000,
     totalDistanceNm: manifest.total_distance_nm,
     waypointMarkers,
     departureTime: manifest.departure_time,

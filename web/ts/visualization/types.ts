@@ -59,6 +59,9 @@ export type LayerGroup =
 export interface VizRouteData {
   points: VizPoint[];
   cruiseAltitudeFt: number;
+  /** Actual flight ceiling from route config (e.g. 18000). */
+  ceilingAltitudeFt: number;
+  /** Y-axis maximum = max(ceiling, cruise) + 5000. */
   flightCeilingFt: number;
   totalDistanceNm: number;
   waypointMarkers: WaypointMarker[];
