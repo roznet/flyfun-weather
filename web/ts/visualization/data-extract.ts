@@ -6,6 +6,7 @@ import type { VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLay
 export function extractVizData(
   manifest: RouteAnalysesManifest,
   model: string,
+  flightCeilingFt?: number,
 ): VizRouteData {
   const points: VizPoint[] = [];
   const waypointMarkers: WaypointMarker[] = [];
@@ -27,7 +28,7 @@ export function extractVizData(
   return {
     points,
     cruiseAltitudeFt: manifest.cruise_altitude_ft,
-    flightCeilingFt: manifest.cruise_altitude_ft + 2000,
+    flightCeilingFt: (flightCeilingFt ?? manifest.cruise_altitude_ft) + 5000,
     totalDistanceNm: manifest.total_distance_nm,
     waypointMarkers,
     departureTime: manifest.departure_time,

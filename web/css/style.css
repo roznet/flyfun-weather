@@ -1200,6 +1200,19 @@ label {
   font-size: 0.8rem;
 }
 
+.viz-model-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.viz-model-name {
+  font-weight: 600;
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--primary);
+}
+
 .viz-render-toggle {
   display: flex;
   align-items: center;

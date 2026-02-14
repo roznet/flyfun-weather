@@ -92,7 +92,7 @@ async function init(): Promise<void> {
     }
     vizSection.style.display = '';
 
-    const data = extractVizData(state.routeAnalyses, state.selectedModel);
+    const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft);
     const allLayers = getAllLayers();
 
     // Create or update renderer
@@ -116,7 +116,7 @@ async function init(): Promise<void> {
     renderVizControls(controlsContainer, state.vizSettings, {
       onRenderModeChange: (mode) => store.getState().setRenderMode(mode),
       onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
-    });
+    }, state.selectedModel);
   }
 
   function updateVizOverlay(state: BriefingState): void {

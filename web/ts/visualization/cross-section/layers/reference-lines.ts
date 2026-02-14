@@ -12,20 +12,27 @@ export const cruiseAltitudeLayer: CrossSectionLayer = {
     const y = transform.altitudeToY(data.cruiseAltitudeFt);
     const { plotArea } = transform;
 
-    ctx.strokeStyle = '#9e9e9e';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([2, 4]);
+    // Bold, prominent line
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([8, 4]);
     ctx.beginPath();
     ctx.moveTo(plotArea.left, y);
     ctx.lineTo(plotArea.left + plotArea.width, y);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Label
-    ctx.fillStyle = '#9e9e9e';
-    ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+    // Label with background for readability
+    const label = `Cruise ${data.cruiseAltitudeFt.toLocaleString()} ft`;
+    ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+    const textWidth = ctx.measureText(label).width;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.fillRect(plotArea.left + 4, y - 16, textWidth + 8, 14);
+
+    ctx.fillStyle = '#374151';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(`Cruise ${data.cruiseAltitudeFt.toLocaleString()} ft`, plotArea.left + 4, y - 3);
+    ctx.fillText(label, plotArea.left + 8, y - 3);
   },
 };
