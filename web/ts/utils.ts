@@ -1,6 +1,6 @@
 /** Shared utilities for the WeatherBrief web app. */
 
-import { logout } from './adapters/auth-adapter';
+import { logout, type CurrentUser } from './adapters/auth-adapter';
 
 // --- HTML escaping ---
 
@@ -15,11 +15,15 @@ export function escapeHtml(text: string): string {
 
 // --- Shared user info rendering ---
 
-export function renderUserInfo(name: string): void {
+export function renderUserInfo(user: CurrentUser): void {
   const container = document.getElementById('user-info');
   if (!container) return;
+  const adminLink = user.is_admin
+    ? '<a href="/admin.html" class="btn-settings" title="Admin">Admin</a>'
+    : '';
   container.innerHTML = `
-    <span class="user-name">${escapeHtml(name)}</span>
+    ${adminLink}
+    <span class="user-name">${escapeHtml(user.name)}</span>
     <button class="btn-logout" id="logout-btn">Sign out</button>
   `;
   document.getElementById('logout-btn')?.addEventListener('click', () => logout());

@@ -11,6 +11,7 @@ export interface RouteInfo {
 
 export interface FlightResponse {
   id: string;
+  user_id: string;
   route_name: string;
   waypoints: string[];
   target_date: string;

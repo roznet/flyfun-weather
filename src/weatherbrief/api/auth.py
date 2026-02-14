@@ -118,6 +118,8 @@ async def logout():
 @router.get("/me")
 async def get_me(user_id: str = Depends(current_user_id), db: Session = Depends(get_db)):
     """Return current user info from the JWT session."""
+    from weatherbrief.notify.admin_email import get_admin_emails
+
     user = db.get(UserRow, user_id)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
@@ -126,6 +128,7 @@ async def get_me(user_id: str = Depends(current_user_id), db: Session = Depends(
         "email": user.email,
         "name": user.display_name,
         "approved": user.approved,
+        "is_admin": user.email in get_admin_emails(),
     }
 
 
