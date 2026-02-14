@@ -78,7 +78,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         assessment=row.assessment,
         assessment_reason=row.assessment_reason,
         artifact_path=row.artifact_path,
-        model_init_times=json.loads(row.model_init_times_json),
+        model_init_times=json.loads(row.model_init_times_json) if row.model_init_times_json else {},
     )
 
 

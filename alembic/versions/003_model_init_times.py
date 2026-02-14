@@ -23,8 +23,7 @@ def upgrade() -> None:
         sa.Column(
             "model_init_times_json",
             sa.Text,
-            server_default="{}",
-            nullable=False,
+            nullable=True,
         ),
     )
 
