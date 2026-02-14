@@ -32,6 +32,14 @@ export interface CreateFlightRequest {
   flight_duration_hours?: number;
 }
 
+export interface DataStatus {
+  fresh: boolean;
+  stale_models: string[];
+  model_init_times: Record<string, number>;
+  next_expected_update: string | null;
+  next_expected_model: string | null;
+}
+
 export interface PackMeta {
   flight_id: string;
   fetch_timestamp: string;
@@ -41,6 +49,8 @@ export interface PackMeta {
   has_digest: boolean;
   assessment: string | null;
   assessment_reason: string | null;
+  model_init_times?: Record<string, number>;
+  data_status?: DataStatus | null;
 }
 
 export interface ModelDivergence {

@@ -62,6 +62,7 @@ def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
         assessment=meta.assessment,
         assessment_reason=meta.assessment_reason,
         artifact_path=meta.artifact_path,
+        model_init_times_json=json.dumps(meta.model_init_times),
     )
 
 
@@ -77,6 +78,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         assessment=row.assessment,
         assessment_reason=row.assessment_reason,
         artifact_path=row.artifact_path,
+        model_init_times=json.loads(row.model_init_times_json),
     )
 
 

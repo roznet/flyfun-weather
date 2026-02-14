@@ -1,7 +1,7 @@
 /** Zustand vanilla store for the Briefing report page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
+import type { DataStatus, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import * as api from '../adapters/api-adapter';
 
 export interface BriefingState {
@@ -12,6 +12,8 @@ export interface BriefingState {
   snapshot: ForecastSnapshot | null;
   digest: WeatherDigest | null;
   routeAnalyses: RouteAnalysesManifest | null;
+  freshness: DataStatus | null;
+  freshnessLoading: boolean;
 
   // UI state
   selectedModel: string;
@@ -30,6 +32,8 @@ export interface BriefingState {
   selectPack: (timestamp: string) => Promise<void>;
   selectLatest: () => Promise<void>;
   refresh: () => Promise<void>;
+  forceRefresh: () => Promise<void>;
+  checkFreshness: () => Promise<void>;
   setSelectedModel: (model: string) => void;
   setSelectedPoint: (index: number) => void;
   sendEmail: () => Promise<void>;
@@ -42,6 +46,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   snapshot: null,
   digest: null,
   routeAnalyses: null,
+  freshness: null,
+  freshnessLoading: false,
   selectedModel: 'ecmwf',
   selectedPointIndex: 0,
   loading: false,
@@ -130,11 +136,54 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           });
         }
       });
+      // If the server returned a data_status (fresh skip), update freshness
+      if (newPack.data_status) {
+        set({ freshness: newPack.data_status });
+      }
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
       set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+      // Re-check freshness after a real refresh
+      if (!newPack.data_status) {
+        get().checkFreshness();
+      }
     } catch (err) {
       set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
+    }
+  },
+
+  forceRefresh: async () => {
+    const flight = get().flight;
+    if (!flight) return;
+    set({ refreshing: true, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
+    try {
+      const newPack = await api.refreshBriefingStream(flight.id, (event) => {
+        if (event.type === 'progress') {
+          set({
+            refreshStage: event.label || event.stage || null,
+            refreshDetail: event.detail || null,
+            refreshProgress: event.progress || 0,
+          });
+        }
+      }, true);
+      await get().loadPacks();
+      await get().selectPack(newPack.fetch_timestamp);
+      set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+      get().checkFreshness();
+    } catch (err) {
+      set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
+    }
+  },
+
+  checkFreshness: async () => {
+    const flight = get().flight;
+    if (!flight) return;
+    set({ freshnessLoading: true });
+    try {
+      const status = await api.fetchFreshness(flight.id);
+      set({ freshness: status, freshnessLoading: false });
+    } catch {
+      set({ freshnessLoading: false });
     }
   },
 

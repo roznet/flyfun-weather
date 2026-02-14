@@ -198,6 +198,46 @@ label {
 .badge-red { background: var(--red-bg); color: var(--red); }
 .badge-none { background: var(--bg); color: var(--text-muted); }
 
+/* --- Freshness bar --- */
+
+.freshness-bar {
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+.freshness-current {
+  background: var(--bg);
+  color: var(--text-muted);
+}
+
+.freshness-stale {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.freshness-refreshing {
+  background: var(--bg);
+  color: var(--primary);
+  font-style: italic;
+}
+
+.freshness-basis {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.freshness-link {
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+}
+
 /* --- Assessment banner --- */
 
 .assessment-banner {
