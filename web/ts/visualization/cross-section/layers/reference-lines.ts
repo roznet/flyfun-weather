@@ -54,7 +54,7 @@ export const cruiseAltitudeLayer: CrossSectionLayer = {
     if (separation >= 1000) {
       const ceilingLabel = `Ceiling ${data.ceilingAltitudeFt.toLocaleString()} ft`;
       drawRefLine(ctx, transform, data.ceilingAltitudeFt, ceilingLabel,
-        '#9467bd', 1.5, [4, 4], 12);
+        '#9467bd', 1.5, [4, 4], -4);
     }
   },
 };
