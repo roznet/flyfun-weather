@@ -71,6 +71,7 @@ class FlightResponse(BaseModel):
     """Flight data in API responses."""
 
     id: str
+    user_id: str
     route_name: str
     waypoints: list[str] = []
     target_date: str
@@ -84,6 +85,7 @@ class FlightResponse(BaseModel):
 def _flight_to_response(flight: Flight) -> FlightResponse:
     return FlightResponse(
         id=flight.id,
+        user_id=flight.user_id,
         route_name=flight.route_name,
         waypoints=flight.waypoints,
         target_date=flight.target_date,
@@ -190,8 +192,8 @@ def get_flight(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Get flight details."""
-    flight = _load_owned_flight(db, flight_id, user_id)
+    """Get flight details. Any authenticated user can view any flight."""
+    flight = _load_flight_or_404(db, flight_id)
     return _flight_to_response(flight)
 
 
@@ -209,12 +211,17 @@ def remove_flight(
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
 
 
-def _load_owned_flight(db: Session, flight_id: str, user_id: str) -> Flight:
-    """Load a flight, verifying it belongs to the current user. Returns 404 if not found or not owned."""
+def _load_flight_or_404(db: Session, flight_id: str) -> Flight:
+    """Load a flight by ID. Returns 404 if not found. No ownership check."""
     try:
-        flight = load_flight(db, flight_id)
+        return load_flight(db, flight_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+
+
+def _load_owned_flight(db: Session, flight_id: str, user_id: str) -> Flight:
+    """Load a flight, verifying it belongs to the current user. Returns 404 if not found or not owned."""
+    flight = _load_flight_or_404(db, flight_id)
     if flight.user_id != user_id:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
     return flight

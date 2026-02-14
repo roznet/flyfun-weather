@@ -13,7 +13,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
-  renderUserInfo(user.name);
+  renderUserInfo(user);
 
   const store = briefingStore;
 
@@ -84,9 +84,10 @@ async function init(): Promise<void> {
     }
   });
 
-  // --- Wire refresh button ---
-  const refreshBtn = document.getElementById('refresh-btn');
+  // --- Wire refresh button (owner-only) ---
+  const refreshBtn = document.getElementById('refresh-btn') as HTMLButtonElement;
   if (refreshBtn) {
+    refreshBtn.style.display = 'none'; // hidden until flight loads
     refreshBtn.addEventListener('click', () => {
       store.getState().refresh();
     });
@@ -157,6 +158,11 @@ async function init(): Promise<void> {
     ui.renderGramet(s.flight, s.currentPack);
     renderSliderSections(s);
     ui.renderLoading(s.loading);
+
+    // Show refresh button only for the flight owner
+    if (refreshBtn && s.flight?.user_id === user.id) {
+      refreshBtn.style.display = '';
+    }
   });
 }
 

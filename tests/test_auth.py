@@ -218,9 +218,11 @@ class TestFlightOwnership:
         assert "flight-b-2026-03-01" in ids_b
         assert "flight-a-2026-03-01" not in ids_b
 
-    def test_cannot_get_other_users_flight(self, client_b, flights_seeded):
+    def test_can_view_other_users_flight(self, client_b, flights_seeded):
+        """Any authenticated user can view any flight (shareable links)."""
         resp = client_b.get("/api/flights/flight-a-2026-03-01")
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        assert resp.json()["id"] == "flight-a-2026-03-01"
 
     def test_cannot_delete_other_users_flight(self, client_b, flights_seeded):
         resp = client_b.delete("/api/flights/flight-a-2026-03-01")

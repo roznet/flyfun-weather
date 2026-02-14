@@ -10,7 +10,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
-  renderUserInfo(user.name);
+  renderUserInfo(user);
 
   await loadUsers();
 }

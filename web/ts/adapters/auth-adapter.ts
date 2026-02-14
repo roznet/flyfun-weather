@@ -5,6 +5,7 @@ export interface CurrentUser {
   email: string;
   name: string;
   approved: boolean;
+  is_admin: boolean;
 }
 
 export async function fetchCurrentUser(): Promise<CurrentUser | null> {
