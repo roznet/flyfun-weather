@@ -518,6 +518,20 @@ def get_skewt(
     except (ValueError, KeyError):
         raise HTTPException(status_code=404, detail="Skew-T not available")
 
+    # Extract analysis data for enhanced overlays
+    from weatherbrief.models.analysis import SoundingAnalysis
+    cruise_altitude_ft = snapshot_data.get("route", {}).get("cruise_altitude_ft")
+    sa = None
+    for wa_data in snapshot_data.get("analyses", []):
+        if wa_data.get("waypoint", {}).get("icao") == icao:
+            sounding_data = wa_data.get("sounding", {}).get(model)
+            if sounding_data:
+                try:
+                    sa = SoundingAnalysis.model_validate(sounding_data)
+                except Exception:
+                    pass
+            break
+
     # Find matching forecast
     from weatherbrief.models import WaypointForecast
     for wf_data in snapshot_data.get("forecasts", []):
@@ -528,7 +542,8 @@ def get_skewt(
                 break
             try:
                 from weatherbrief.digest.skewt import generate_skewt
-                generate_skewt(hourly, icao, model, skewt_path)
+                generate_skewt(hourly, icao, model, skewt_path,
+                               analysis=sa, cruise_altitude_ft=cruise_altitude_ft)
                 return FileResponse(skewt_path, media_type="image/png")
             except Exception as exc:
                 logger.warning("Skew-T generation failed for %s/%s: %s", icao, model, exc)
@@ -605,11 +620,23 @@ def get_route_skewt(
     if not hourly or not hourly.pressure_levels:
         raise HTTPException(status_code=404, detail="No forecast data at this point/time")
 
+    # Extract analysis data for enhanced overlays
+    from weatherbrief.models.analysis import SoundingAnalysis
+    sa = None
+    sounding_data = point_data.get("sounding", {}).get(model)
+    if sounding_data:
+        try:
+            sa = SoundingAnalysis.model_validate(sounding_data)
+        except Exception:
+            pass
+    cruise_altitude_ft = ra_data.get("cruise_altitude_ft")
+
     # Generate Skew-T
     try:
         from weatherbrief.digest.skewt import generate_skewt
         label = point_data.get("waypoint_icao") or f"pt{point_index:02d}"
-        generate_skewt(hourly, label, model, cache_path)
+        generate_skewt(hourly, label, model, cache_path,
+                       analysis=sa, cruise_altitude_ft=cruise_altitude_ft)
     except Exception as exc:
         logger.warning("Route Skew-T generation failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}")
