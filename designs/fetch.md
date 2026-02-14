@@ -103,6 +103,7 @@ data = gramet.fetch_gramet(
 ```
 
 - Auth via Bearer token from `euro_aip.utils.autorouter_credentials`
+- **Per-user credentials**: in multi-user mode, each user's encrypted autorouter credentials are loaded from the DB and passed to `AutorouterGramet(username=..., password=...)`. A per-user token cache dir (`data/.cache/autorouter/{user_id}/`) prevents users from sharing cached OAuth tokens.
 - API params: waypoints (space-separated), altitude (feet), departuretime (Unix), totaleet (seconds)
 
 ## Gotchas

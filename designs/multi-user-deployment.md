@@ -99,15 +99,14 @@ No manual DB setup or migration step needed for development.
 
 ### user_preferences
 
+JSON-based storage for flexibility — individual settings serialized rather than separate columns.
+
 | Column | Type | Notes |
 |--------|------|-------|
 | user_id | VARCHAR(36) PK FK | |
-| default_cruise_altitude_ft | INT DEFAULT 8000 | |
-| default_flight_ceiling_ft | INT DEFAULT 18000 | |
-| default_models | VARCHAR(255) DEFAULT 'gfs,ecmwf,icon' | Comma-separated |
-| autorouter_username | VARCHAR(255) NULL | Encrypted (Fernet) |
-| autorouter_password | BLOB NULL | Encrypted (Fernet) |
-| digest_config | VARCHAR(50) DEFAULT 'default' | LLM digest config name |
+| defaults_json | TEXT | JSON: `{"cruise_altitude_ft": 8000, "flight_ceiling_ft": 18000, "models": ["gfs","ecmwf","icon"]}` |
+| encrypted_autorouter_creds | TEXT | Fernet-encrypted JSON: `{"username": "...", "password": "..."}` |
+| digest_config_json | TEXT | JSON: `{"config_name": "default"}` |
 
 ### flights
 
@@ -139,18 +138,23 @@ No manual DB setup or migration step needed for development.
 | assessment_reason | TEXT NULL | |
 | artifact_path | VARCHAR(500) | Relative path to pack directory |
 
-### usage_log
+### briefing_usage
+
+Per-briefing usage tracking with fixed columns per service (better for aggregation than flexible call_type approach).
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | INT AUTO_INCREMENT PK | |
 | user_id | VARCHAR(36) FK | |
+| flight_id | VARCHAR(100) FK | Which flight was refreshed |
 | timestamp | DATETIME | |
-| call_type | VARCHAR(30) | `open_meteo`, `gramet`, `llm_tokens`, `dwd_text` |
-| detail | JSON NULL | e.g. `{"model":"gfs","points":26}` or `{"tokens_in":2000,"tokens_out":500}` |
-| skipped | BOOLEAN DEFAULT FALSE | True if a freshness check determined no update needed |
-
-**Note on usage_log.skipped**: A future `should_update_briefing()` function will check whether NWP model data has been refreshed since the last fetch. When it determines no new data is available, the pipeline skips the fetch and logs with `skipped=true`. This avoids wasting API quota on redundant calls. The freshness check implementation is independent work — the schema is ready for it.
+| open_meteo_calls | INT DEFAULT 0 | Number of Open-Meteo API calls in this refresh |
+| gramet_fetched | BOOLEAN DEFAULT FALSE | Was GRAMET successfully fetched? |
+| gramet_failed | BOOLEAN DEFAULT FALSE | Did GRAMET fetch fail? |
+| llm_digest | BOOLEAN DEFAULT FALSE | Was LLM digest generated? |
+| llm_model | VARCHAR(100) NULL | e.g. `anthropic:claude-sonnet-4-5-20250929` |
+| llm_input_tokens | INT NULL | LLM input token count |
+| llm_output_tokens | INT NULL | LLM output token count |
 
 ## File Storage Layout
 
@@ -223,14 +227,14 @@ Limits checked before each external call. If exceeded, return 429 with message.
 
 ### Tracking
 
-Every external API call is logged to `usage_log` with user_id and call_type. This enables:
+Every briefing refresh is logged to `briefing_usage` with per-service counters. This enables:
 - Per-user usage dashboard (settings page)
 - Admin overview of total consumption
 - Cost attribution if needed later
 
 ### Freshness check (future)
 
-The rate limiting design assumes a `should_update_briefing(flight, last_pack) -> bool` function will exist to check whether NWP models have published new data since the last fetch. When this returns `false`, the pipeline logs `skipped=true` in usage_log and returns the existing pack. This is **separate work** — not part of the multi-user deployment phases.
+A future `should_update_briefing(flight, last_pack) -> bool` function could check whether NWP models have published new data since the last fetch, avoiding redundant API calls. This is **separate work** — not part of the multi-user deployment phases.
 
 ## Encrypted Credential Storage
 
@@ -258,7 +262,7 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] Dev mode: SQLite fallback when `ENVIRONMENT=development`
 - [x] Test: API works via Docker (health, flights CRUD)
 
-### Phase 2: Auth + Multi-User
+### Phase 2: Auth + Multi-User (Done)
 
 **Goal**: Google/Apple OAuth, JWT sessions, user-scoped data.
 
@@ -298,6 +302,8 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] One-click approval via HMAC-signed email links (7-day expiry)
 - [x] Email notification to admins on new user signup (`ADMIN_EMAILS` env var)
 - [x] Admin gate: dev user always admin; production checks JWT email against `ADMIN_EMAILS`
+- [x] Shareable briefing links: any authenticated user can view any flight's briefings
+- [x] Ownership model: only flight owner can refresh/delete; frontend hides action buttons for non-owners
 
 ## Deploying to Server
 
@@ -307,7 +313,7 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 # 1. On the server, clone the repo
 git clone https://github.com/roznet/flyfun-weather.git
 cd flyfun-weather
-git checkout multi-users
+git checkout main
 
 # 2. Create the MySQL database (on the shared MySQL container)
 docker exec -i shared-mysql mysql -u root -p < deploy/03-create-weatherbrief-db.sql

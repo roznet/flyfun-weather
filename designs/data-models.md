@@ -2,7 +2,10 @@
 
 > Pydantic v2 models for routes, forecasts, analysis results, and snapshots
 
-All models live in `src/weatherbrief/models.py`.
+Models are organized in `src/weatherbrief/models/` package:
+- `analysis.py` — route, forecast, and weather analysis models
+- `storage.py` — `Flight`, `BriefingPackMeta`
+- `__init__.py` — re-exports everything for backward-compatible imports
 
 ## Intent
 
@@ -85,17 +88,21 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | Model | Purpose | Key fields |
 |-------|---------|------------|
 | `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km |
-| `DerivedLevel` | Per-pressure-level derived values | wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct |
+| `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2 |
 | `EnhancedCloudLayer` | Cloud layer from dewpoint depression | base/top (ft + hPa), thickness, mean_temperature_c, coverage (SCT/BKN/OVC) |
 | `IcingZone` | Grouped icing zone from wet-bulb | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_wet_bulb_c |
 | `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list |
-| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, icing_zones, convective |
+| `VerticalMotionClass` | Enum: vertical motion profile type | QUIESCENT, SYNOPTIC_ASCENT, SYNOPTIC_SUBSIDENCE, CONVECTIVE, OSCILLATING, UNAVAILABLE |
+| `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
+| `CATRiskLayer` | CAT risk identified by Richardson number | base_ft, top_ft, base/top_pressure_hpa, richardson_number, risk |
+| `VerticalMotionAssessment` | Vertical motion + turbulence | classification, max_omega_pa_s, max_w_fpm, max_w_level_ft, cat_risk_layers, convective_contamination |
+| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, icing_zones, convective, vertical_motion, cloud_cover_{low,mid,high}_pct |
 
 ### Altitude Advisories
 
 | Model | Purpose | Key fields |
 |-------|---------|------------|
-| `VerticalRegime` | A vertical slice with uniform conditions | floor_ft, ceiling_ft, in_cloud, icing_risk, icing_type, label |
+| `VerticalRegime` | A vertical slice with uniform conditions | floor_ft, ceiling_ft, in_cloud, icing_risk, icing_type, cloud_cover_pct, cat_risk, strong_vertical_motion, label |
 | `AltitudeAdvisory` | Actionable altitude recommendation | advisory_type, altitude_ft, feasible, reason, per_model_ft |
 | `AltitudeAdvisories` | Complete altitude picture for a waypoint | regimes (per-model), advisories, cruise_in_icing, cruise_icing_risk |
 
@@ -105,22 +112,36 @@ All analysis for one waypoint. Contains:
 - `wind_components: dict[str, WindComponent]` — model → wind decomposition
 - `sounding: dict[str, SoundingAnalysis]` — model → full sounding analysis
 - `altitude_advisories: AltitudeAdvisories | None` — dynamic vertical regimes and altitude advisories
-- `model_divergence: list[ModelDivergence]` — 14 metrics compared across models
+- `model_divergence: list[ModelDivergence]` — 15 metrics compared across models
+
+### RoutePointAnalysis
+
+Analysis for one route point (waypoint or interpolated). Same analysis data as `WaypointAnalysis` but keyed by point index along the route, with interpolated time based on distance/duration.
+
+Fields: `point_index`, `lat`, `lon`, `distance_from_origin_nm`, `waypoint_icao`, `waypoint_name`, `interpolated_time`, `forecast_hour`, `track_deg`, `wind_components`, `sounding`, `altitude_advisories`, `model_divergence`.
+
+### RouteAnalysesManifest
+
+Container for all route point analyses, saved as `route_analyses.json` in the pack directory.
+
+Fields: `route_name`, `target_date`, `departure_time`, `flight_duration_hours`, `total_distance_nm`, `cruise_altitude_ft`, `models`, `analyses: list[RoutePointAnalysis]`.
 
 ## API / Web Models
 
 ### Flight
 
-A saved briefing target — route + date/time specifics. ID is `{route_name}-{target_date}` (one flight per route per day, by design).
+A saved briefing target — route + date/time specifics. ID is `{route_name}-{target_date}-{hash}` where hash encodes time/altitude/duration to allow same route+date with different params.
 
 ```python
 Flight(
-    id="egtk_lsgs-2026-02-21",
+    id="egtk_lsgs-2026-02-21-a1b2c3",
+    user_id="dev-user-001",
     route_name="egtk_lsgs",
     waypoints=["EGTK", "LFPB", "LSGS"],  # ICAO codes
     target_date="2026-02-21",
     target_time_utc=9,
     cruise_altitude_ft=8000,
+    flight_ceiling_ft=18000,
     flight_duration_hours=4.5,
     created_at=datetime(...),
 )
@@ -151,6 +172,8 @@ Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` 
 - `CloudCoverage`: `SCT`, `BKN`, `OVC`
 - `ConvectiveRisk`: `NONE`, `LOW`, `MODERATE`, `HIGH`, `EXTREME`
 - `AgreementLevel`: `GOOD`, `MODERATE`, `POOR`
+- `VerticalMotionClass`: `QUIESCENT`, `SYNOPTIC_ASCENT`, `SYNOPTIC_SUBSIDENCE`, `CONVECTIVE`, `OSCILLATING`, `UNAVAILABLE`
+- `CATRiskLevel`: `NONE`, `LIGHT`, `MODERATE`, `SEVERE`
 
 ## Patterns
 

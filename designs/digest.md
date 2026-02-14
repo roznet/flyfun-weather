@@ -134,10 +134,21 @@ Structured output with 11 fields:
 - `DigestState` uses `total=False` TypedDict — all keys optional, access via `.get()`
 - `matplotlib.use("agg")` must be called before `import matplotlib.pyplot` in skewt.py
 
+## Email Delivery (`notify/`)
+
+The `notify/` package handles email delivery of digest outputs:
+
+- **`notify/email.py`** — `send_briefing_email(recipients, flight, meta, pack_dir)`: composes HTML body + PDF attachment via SMTP. SMTP settings from `SmtpConfig.from_env()` (reads `SMTP_*` env vars).
+- **`notify/admin_email.py`** — `send_new_user_notification(user, db)`: sends admin notification on new user signup with HMAC-signed one-click approval URL (7-day expiry). Targets `ADMIN_EMAILS` env var; logs URL in dev mode.
+
+**Email recipients**: the `/api/.../email` endpoint sends to the logged-in user's email (from the `users` table), not a global env var. This changed from the original `WEATHERBRIEF_EMAIL_RECIPIENTS` approach when multi-user support was added.
+
 ## References
 
 - Pipeline orchestration: `pipeline.py` `execute_briefing()`
 - Config files: `configs/weather_digest/`
+- Report rendering: `report/render.py` — `render_html()`, `render_pdf()` via Jinja2 + WeasyPrint
 - Data models: [data-models.md](./data-models.md)
 - Fetch sources: [fetch.md](./fetch.md)
 - Analysis inputs: [analysis.md](./analysis.md)
+- Multi-user deployment: [multi-user-deployment.md](./multi-user-deployment.md)

@@ -25,9 +25,10 @@ analyze_waypoint()  (per waypoint)
 │   ├→ compute_indices() + compute_derived_levels()
 │   ├→ detect_cloud_layers()
 │   ├→ assess_icing_zones()
-│   └→ assess_convective()
+│   ├→ assess_convective()
+│   └→ assess_vertical_motion()  (CAT risk, strong motion)
 ├→ compute_altitude_advisories()  (vertical regimes + advisories)
-└→ compare_models()  (14 metrics)
+└→ compare_models()  (15 metrics)
     ↓
 ForecastSnapshot  (root object, saved as JSON)
     ↓
@@ -45,7 +46,10 @@ Optional outputs:
 
 ```
 src/weatherbrief/
-├── models.py          # All Pydantic v2 data models (incl Flight, BriefingPackMeta)
+├── models/            # Pydantic v2 data models (split into submodules)
+│   ├── __init__.py    # Re-exports all models
+│   ├── analysis.py    # Route, forecast, analysis models (RouteConfig, ForecastSnapshot, etc.)
+│   └── storage.py     # Flight, BriefingPackMeta
 ├── config.py          # Route YAML loading
 ├── airports.py        # ICAO → lat/lon via euro_aip
 ├── cli.py             # CLI entry point (delegates to pipeline)
@@ -58,7 +62,7 @@ src/weatherbrief/
 │   └── gramet.py      # Autorouter GRAMET
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
-│   ├── comparison.py  # Multi-model divergence scoring (14 thresholds)
+│   ├── comparison.py  # Multi-model divergence scoring (15 thresholds)
 │   └── sounding/      # MetPy-based sounding analysis subpackage
 │       ├── __init__.py     # analyze_sounding() entry point
 │       ├── prepare.py      # Pint boundary: PressureLevelData → PreparedProfile
@@ -66,6 +70,7 @@ src/weatherbrief/
 │       ├── clouds.py       # Cloud layers from dewpoint depression
 │       ├── icing.py        # Icing zones from wet-bulb temperature
 │       ├── convective.py   # Convective risk from indices
+│       ├── vertical_motion.py  # Vertical motion classification + CAT risk
 │       └── advisories.py   # Dynamic vertical regimes + altitude advisories
 ├── digest/
 │   ├── text.py        # Plain-text digest formatter
@@ -83,14 +88,22 @@ src/weatherbrief/
 │   └── flights.py     # Flight + BriefingPack CRUD (DB-backed)
 ├── api/
 │   ├── app.py         # FastAPI app, lifespan (DB init), static files, CORS
+│   ├── auth.py        # OAuth login/callback/logout, JWT cookie
+│   ├── auth_config.py # JWT secret, dev mode detection, admin emails
+│   ├── jwt_utils.py   # JWT encode/decode helpers
+│   ├── encryption.py  # Fernet encrypt/decrypt for credentials
 │   ├── routes.py      # GET /api/routes (from YAML)
 │   ├── flights.py     # CRUD /api/flights (DB sessions via Depends)
-│   └── packs.py       # Packs: history, artifacts, refresh, report, email
+│   ├── packs.py       # Packs: history, artifacts, refresh, report, email
+│   ├── preferences.py # User preferences + autorouter credentials CRUD
+│   ├── usage.py       # Usage summary + daily rate limits
+│   └── admin.py       # Admin: user list, approval, usage overview
 ├── report/
 │   ├── render.py      # render_html(), render_pdf() via Jinja2 + WeasyPrint
 │   └── templates/     # Jinja2 template for self-contained HTML report
 └── notify/
-    └── email.py       # SMTP email with HTML body + PDF attachment
+    ├── email.py       # SMTP email with HTML body + PDF attachment
+    └── admin_email.py # Admin notification on new user signup (HMAC-signed approval links)
 ```
 
 ## Web Frontend (`web/`)
@@ -101,13 +114,19 @@ Vanilla TypeScript + Zustand (no React), bundled by esbuild.
 web/
 ├── index.html         # Flights list page
 ├── briefing.html      # Briefing report page
+├── login.html         # OAuth login page
+├── settings.html      # User preferences + usage dashboard
+├── admin.html         # Admin: user approval + usage overview
 ├── css/style.css      # Shared styles
 ├── ts/
 │   ├── store/         # Zustand vanilla stores + shared types
 │   ├── managers/      # DOM rendering functions
-│   ├── adapters/      # API communication layer
+│   ├── adapters/      # API communication layer (api, auth, preferences, admin)
+│   ├── utils.ts       # Shared utilities (API base, auth checks, nav)
 │   ├── flights-main.ts    # Flights page entry
-│   └── briefing-main.ts   # Briefing page entry
+│   ├── briefing-main.ts   # Briefing page entry
+│   ├── settings-main.ts   # Settings page entry
+│   └── admin-main.ts      # Admin page entry
 └── dist/              # esbuild output (committed)
 ```
 
@@ -120,7 +139,7 @@ Flight and pack metadata are stored in a relational database via SQLAlchemy ORM.
 - **Dev mode** (`ENVIRONMENT=development`): SQLite at `data/weatherbrief.db`, tables auto-created on startup, dev user auto-inserted.
 - **Production** (`ENVIRONMENT=production`): MySQL via `DATABASE_URL` env var, schema managed by Alembic migrations.
 
-Tables: `users`, `user_preferences`, `flights`, `briefing_packs`, `usage_log`. See [multi-user-deployment.md](./multi-user-deployment.md) for full schema.
+Tables: `users`, `user_preferences`, `flights`, `briefing_packs`, `briefing_usage`. See [multi-user-deployment.md](./multi-user-deployment.md) for full schema.
 
 ### File artifacts (disk)
 
@@ -151,18 +170,35 @@ FastAPI app at `api/app.py`, served by uvicorn.
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
+| `/auth/login/google` | GET | Redirect to Google OAuth |
+| `/auth/callback/google` | GET | OAuth callback → JWT cookie |
+| `/auth/logout` | POST | Clear JWT cookie |
+| `/auth/me` | GET | Current user info (incl. is_admin) |
 | `/api/routes` | GET | List named routes from YAML |
 | `/api/flights` | GET/POST | List/create flights |
-| `/api/flights/{id}` | GET/DELETE | Get/delete flight |
+| `/api/flights/{id}` | GET/DELETE | Get/delete (any user can view, only owner can delete) |
 | `/api/flights/{id}/packs` | GET | List pack history |
-| `/api/flights/{id}/packs/refresh` | POST | Trigger new briefing fetch |
+| `/api/flights/{id}/packs/latest` | GET | Most recent pack |
+| `/api/flights/{id}/packs/refresh` | POST | Trigger new briefing fetch (owner only) |
+| `/api/flights/{id}/packs/refresh/stream` | POST | SSE streaming refresh with progress |
+| `/api/flights/{id}/packs/{ts}` | GET | Pack metadata |
 | `/api/flights/{id}/packs/{ts}/snapshot` | GET | Raw forecast JSON |
 | `/api/flights/{id}/packs/{ts}/gramet` | GET | GRAMET PNG |
-| `/api/flights/{id}/packs/{ts}/skewt/{icao}/{model}` | GET | Skew-T PNG |
+| `/api/flights/{id}/packs/{ts}/skewt/{icao}/{model}` | GET | Skew-T PNG (by waypoint) |
+| `/api/flights/{id}/packs/{ts}/skewt/route/{idx}/{model}` | GET | Skew-T PNG (by route point) |
+| `/api/flights/{id}/packs/{ts}/route-analyses` | GET | Route point analyses JSON |
 | `/api/flights/{id}/packs/{ts}/digest/json` | GET | Structured digest |
 | `/api/flights/{id}/packs/{ts}/report.html` | GET | Self-contained HTML report |
 | `/api/flights/{id}/packs/{ts}/report.pdf` | GET | PDF download |
-| `/api/flights/{id}/packs/{ts}/email` | POST | Send email with PDF |
+| `/api/flights/{id}/packs/{ts}/email` | POST | Send email to logged-in user |
+| `/api/user/preferences` | GET/PUT | User preferences (defaults, digest config) |
+| `/api/user/preferences/autorouter` | DELETE | Clear autorouter credentials |
+| `/api/user/usage` | GET | Today/month usage summary with quotas |
+| `/api/admin/users` | GET | All users with usage (admin only) |
+| `/api/admin/users/{id}/approve` | POST | Approve user (admin only) |
+| `/api/admin/approve/{id}` | GET | One-click HMAC-signed approval link |
+
+**Shareable briefing links**: any authenticated user can view any flight's briefings via direct URL. Only the flight owner can refresh, delete, or trigger email. The frontend conditionally shows action buttons based on ownership.
 
 Static files served from `web/` at root.
 
@@ -173,7 +209,7 @@ Static files served from `web/` at root.
 - **Graceful degradation** — GRAMET/Skew-T/LLM/DWD failures logged but don't halt pipeline.
 - **Pipeline extracted from CLI** — `pipeline.py` is the single entry point for both CLI and API.
 - **DB-backed metadata, file-based artifacts** — flight/pack metadata in SQLAlchemy (SQLite dev, MySQL prod); large files (snapshots, images) on disk in user-scoped directories.
-- **Flight ID = route + date** — one flight per route per day, by design.
+- **Flight ID = route + date + params hash** — allows same route+date with different time/altitude.
 - **Naive datetimes in pipeline** — matches Open-Meteo's naive UTC timestamps.
 - **Vanilla TS + Zustand** — no framework; esbuild for fast bundling.
 - **ECMWF-only Skew-T in PDF/email** — PDF is concise; web UI allows model toggling.
@@ -186,7 +222,9 @@ Static files served from `web/` at root.
 | `sqlalchemy>=2.0` | ORM (SQLite + MySQL) |
 | `alembic>=1.13` | Database migrations |
 | `pymysql>=1.1` | Pure-Python MySQL driver |
-| `cryptography>=42.0` | MySQL auth + future Fernet encryption |
+| `cryptography>=42.0` | MySQL auth + Fernet credential encryption |
+| `authlib>=1.3` | Google OAuth OIDC flow |
+| `python-jose[cryptography]` | JWT encode/decode |
 | `requests` | HTTP API calls |
 | `pyyaml` | Route config |
 | `fastapi`, `uvicorn` | API server |
@@ -205,12 +243,13 @@ Static files served from `web/` at root.
 | 2 | Done | Route rework (YAML, per-waypoint track), GRAMET, Skew-T plots |
 | 3 | Done | DWD text forecasts, LLM digest (LangGraph + structured output) |
 | 4a | Done | MetPy sounding analysis: thermodynamic indices, enhanced clouds/icing/convective, altitude band comparison |
-| 4b | Planned | Ensemble & remaining model comparison refinement |
+| 4b | Done | Vertical motion + CAT turbulence: omega profiles, Richardson number, Brunt-Vaisala frequency |
+| 4c | Planned | Ensemble & remaining model comparison refinement |
 | 5 | Done | Web UI, API, PDF report, email delivery |
 | 6.1 | Done | Docker + DB + Deploy: SQLAlchemy storage, Alembic migrations, Docker packaging |
-| 6.2 | Planned | Auth + multi-user: Google/Apple OAuth, JWT, user-scoped data |
-| 6.3 | Planned | Preferences + encrypted credential storage |
-| 6.4 | Planned | Usage tracking + rate limits |
+| 6.2 | Done | Auth: Google OAuth, JWT sessions, user-scoped data, approval workflow |
+| 6.3 | Done | Preferences: per-user settings, Fernet-encrypted autorouter credentials |
+| 6.4 | Done | Usage tracking, daily rate limits, admin page, shareable briefing links |
 
 ## Docker
 
@@ -239,3 +278,4 @@ docker-compose up -d
 - Digest: [digest.md](./digest.md)
 - API & web plan: [plan-briefing-architecture.md](./plan-briefing-architecture.md)
 - Sounding analysis plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
+- Multi-user deployment: [multi-user-deployment.md](./multi-user-deployment.md)

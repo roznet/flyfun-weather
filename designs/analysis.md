@@ -32,7 +32,7 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → clouds → icing → convective`
+Pipeline: `prepare → thermodynamics → clouds → icing → convective → vertical_motion`
 
 ### Prepare (`sounding/prepare.py`)
 
@@ -53,11 +53,14 @@ All MetPy calls live here. Two functions:
 - Temperature crossings: freezing level (0°C), -10°C, -20°C (linear interpolation)
 
 **`compute_derived_levels(profile) → list[DerivedLevel]`** — per pressure level:
+- Altitude (ft), temperature, dewpoint (carried through from profile)
 - Wet-bulb temperature (`mpcalc.wet_bulb_temperature`)
 - Dewpoint depression (T - Td)
 - Theta-E (`mpcalc.equivalent_potential_temperature`)
 - Lapse rate between adjacent levels (°C/km)
 - Relative humidity (from `mpcalc.relative_humidity_from_dewpoint`)
+- Omega (Pa/s) and vertical velocity w (ft/min) — from NWP model data when available
+- Richardson number and Brunt-Vaisala frequency (N²) — stability indicators for CAT assessment
 
 Every MetPy call is wrapped in try/except — returns None for fields that fail. All pint magnitudes extracted via `.magnitude` before storing in Pydantic models.
 
@@ -94,7 +97,7 @@ zones = assess_icing_zones(derived_levels, cloud_layers, precipitable_water_mm=p
 | -20°C to -15°C | RIME | LIGHT |
 
 - Severity enhanced if RH > 95% or precipitable water > 25mm
-- SLD detection: thick cloud (>3000ft) with warm tops (>-12°C), or temperature inversion in icing zone
+- SLD detection: **currently disabled** — the heuristics were too sensitive for the available data resolution. The function exists but returns `False` unconditionally
 - Adjacent levels grouped into `IcingZone` bands (gap ≤ 100hPa)
 
 ### Convective (`sounding/convective.py`)
@@ -111,6 +114,32 @@ Pure threshold logic from `ThermodynamicIndices` — no MetPy dependency.
 
 - CIN < -200 J/kg suppresses risk by one level
 - Severe modifiers: bulk shear >40kt (supercell), >25kt (multicell), high freezing level + CAPE >1000 (hail), K-index >35, Total Totals >55, LI < -6
+
+### Vertical Motion & CAT (`sounding/vertical_motion.py`)
+
+Classifies vertical motion profiles and identifies clear-air turbulence (CAT) risk layers.
+
+```python
+from weatherbrief.analysis.sounding.vertical_motion import assess_vertical_motion
+vm = assess_vertical_motion(derived_levels)
+# Returns VerticalMotionAssessment | None
+```
+
+**Three functions:**
+- `compute_stability_indicators(derived_levels)` — computes Brunt-Vaisala frequency (N²) and Richardson number per layer from wind shear and temperature gradients
+- `classify_vertical_motion(derived_levels)` — classifies omega profile into `VerticalMotionClass` (QUIESCENT, SYNOPTIC_ASCENT/SUBSIDENCE, CONVECTIVE, OSCILLATING)
+- `assess_vertical_motion(derived_levels)` — combines classification with CAT risk layer identification
+
+**CAT risk from Richardson number:**
+
+| Ri range | CAT Risk |
+|----------|----------|
+| < 0.25 | SEVERE |
+| 0.25-1.0 | MODERATE |
+| 1.0-4.0 | LIGHT |
+| > 4.0 | NONE |
+
+Output: `VerticalMotionAssessment` with classification, max omega/w values, and list of `CATRiskLayer` objects identifying altitude bands with turbulence risk.
 
 ### Altitude Advisories (`sounding/advisories.py`)
 
@@ -134,7 +163,11 @@ adv = compute_altitude_advisories(soundings, cruise_altitude_ft=8000, flight_cei
 **Advisory types:**
 - `descend_below_icing`: Per model, escape = min(freezing level, lowest icing-overlapping cloud base) - 500ft. Aggregate: min() across models.
 - `climb_above_icing`: Per model, max(highest icing top, highest cloud top in icing temps) + 500ft. Aggregate: max() across models. `feasible` if ≤ flight_ceiling_ft.
+- `cat_turbulence`: CAT risk layers from Richardson number analysis, integrated into regimes.
+- `strong_vertical_motion`: Flags altitude bands where |w| > 200 fpm.
 - Cruise icing status: any model showing icing at cruise altitude → `cruise_in_icing=True`, worst risk across models.
+
+**Regime enrichment** — vertical regimes now include `cloud_cover_pct` (NWP 3-level cloud data), `cat_risk`, and `strong_vertical_motion` in addition to icing/cloud conditions.
 
 ## Model Comparison (`analysis/comparison.py`)
 
@@ -145,7 +178,7 @@ div = compare_models("temperature_c", {"gfs": 5.0, "ecmwf": 6.0, "icon": 5.5})
 div.agreement  # → AgreementLevel.GOOD
 ```
 
-**Thresholds** (good, poor) — 14 total:
+**Thresholds** (good, poor) — 15 total:
 
 | Variable | Good ≤ | Poor > |
 |----------|--------|--------|
@@ -163,17 +196,20 @@ div.agreement  # → AgreementLevel.GOOD
 | precipitable_water_mm | 5.0 | 15.0 |
 | lifted_index | 2.0 | 5.0 |
 | bulk_shear_0_6km_kt | 5.0 | 15.0 |
+| max_omega_pa_s | 1.0 | 5.0 |
 
 **Circular statistics** for `wind_direction_deg` — uses sin/cos sum for mean, max angular difference for spread.
 
 ## Pipeline Integration
 
-In `pipeline.analyze_waypoint()`, for each waypoint:
+In `pipeline.py`, shared analysis via `_run_point_analysis()` (used by both waypoint and route-point paths):
 1. Find closest pressure level to cruise altitude for wind analysis
-2. Run `analyze_sounding()` per model → store in `analysis.sounding[model_key]`
-3. Extract indices for cross-model comparison (8 sounding-derived metrics)
-4. After all models: `compute_altitude_advisories()` → `analysis.altitude_advisories`
-5. Compute cross-model divergence for all 14 metrics
+2. Run `analyze_sounding()` per model → store in `soundings[model_key]`
+3. Extract indices for cross-model comparison (9 sounding-derived metrics + 6 surface metrics)
+4. After all models: `compute_altitude_advisories()` → altitude advisories
+5. Compute cross-model divergence for all 15 metrics
+
+Route-point analysis (`analyze_all_route_points()`) adds interpolated time based on distance/speed and per-point track bearing (`compute_route_tracks()`).
 
 ## Gotchas
 
@@ -188,4 +224,5 @@ In `pipeline.analyze_waypoint()`, for each waypoint:
 - Input models: [data-models.md](./data-models.md)
 - Fetch layer: [fetch.md](./fetch.md)
 - Output consumers: [digest.md](./digest.md)
-- Implementation plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
+- Sounding implementation plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
+- Vertical motion plan: [vertical-motion-plan.md](./vertical-motion-plan.md)
