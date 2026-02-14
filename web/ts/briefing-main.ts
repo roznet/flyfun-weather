@@ -60,6 +60,26 @@ async function init(): Promise<void> {
       ui.renderGramet(state.flight, state.currentPack);
       renderSliderSections(state);
     }
+    if (
+      state.freshness !== prev.freshness ||
+      state.freshnessLoading !== prev.freshnessLoading ||
+      state.currentPack !== prev.currentPack ||
+      state.refreshing !== prev.refreshing ||
+      state.refreshStage !== prev.refreshStage ||
+      state.refreshDetail !== prev.refreshDetail
+    ) {
+      ui.renderFreshnessBar(
+        state.freshness,
+        state.freshnessLoading,
+        state.currentPack,
+        user.is_admin,
+        state.refreshing,
+        state.refreshStage,
+        state.refreshDetail,
+        () => store.getState().forceRefresh(),
+        () => store.getState().checkFreshness(),
+      );
+    }
     if (state.selectedPointIndex !== prev.selectedPointIndex) {
       renderSliderSections(state);
     }
@@ -69,12 +89,8 @@ async function init(): Promise<void> {
     if (state.loading !== prev.loading) {
       ui.renderLoading(state.loading);
     }
-    if (
-      state.refreshing !== prev.refreshing ||
-      state.refreshStage !== prev.refreshStage ||
-      state.refreshDetail !== prev.refreshDetail
-    ) {
-      ui.renderRefreshing(state.refreshing, state.refreshStage, state.refreshDetail);
+    if (state.refreshing !== prev.refreshing) {
+      ui.renderRefreshing(state.refreshing);
     }
     if (state.emailing !== prev.emailing) {
       ui.renderEmailing(state.emailing);
@@ -162,6 +178,11 @@ async function init(): Promise<void> {
     // Show refresh button only for the flight owner
     if (refreshBtn && s.flight?.user_id === user.id) {
       refreshBtn.style.display = '';
+    }
+
+    // Check freshness after loading
+    if (s.packs.length > 0) {
+      store.getState().checkFreshness();
     }
   });
 }

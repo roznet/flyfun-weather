@@ -36,3 +36,4 @@ class BriefingPackMeta(BaseModel):
     assessment: Optional[str] = None  # GREEN/AMBER/RED from digest
     assessment_reason: Optional[str] = None
     artifact_path: str = ""  # path to pack directory
+    model_init_times: dict[str, int] = Field(default_factory=dict)

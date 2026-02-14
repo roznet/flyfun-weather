@@ -2,6 +2,7 @@
 
 import type {
   CreateFlightRequest,
+  DataStatus,
   FlightResponse,
   ForecastSnapshot,
   PackMeta,
@@ -74,6 +75,12 @@ export async function refreshBriefing(flightId: string): Promise<PackMeta> {
   );
 }
 
+export async function fetchFreshness(flightId: string): Promise<DataStatus> {
+  return apiFetch<DataStatus>(
+    `/flights/${encodeURIComponent(flightId)}/packs/freshness`
+  );
+}
+
 /** SSE event from the streaming refresh endpoint. */
 export interface RefreshStreamEvent {
   type: 'progress' | 'complete' | 'error';
@@ -92,8 +99,10 @@ export interface RefreshStreamEvent {
 export async function refreshBriefingStream(
   flightId: string,
   onEvent: (event: RefreshStreamEvent) => void,
+  force?: boolean,
 ): Promise<PackMeta> {
-  const url = `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/refresh/stream`;
+  const forceParam = force ? '?force=true' : '';
+  const url = `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/refresh/stream${forceParam}`;
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

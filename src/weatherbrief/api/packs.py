@@ -11,12 +11,18 @@ from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from weatherbrief.api.auth_config import is_dev_mode
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from weatherbrief.db.deps import current_user_id, get_db
 from weatherbrief.db.engine import SessionLocal
+from weatherbrief.fetch.model_status import (
+    check_freshness,
+    compute_next_update,
+    fetch_model_metadata,
+)
 from weatherbrief.models import BriefingPackMeta
 from weatherbrief.storage.flights import (
     list_packs,
@@ -30,6 +36,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/flights/{flight_id}/packs", tags=["packs"])
 
 
+class DataStatus(BaseModel):
+    """Model freshness status."""
+
+    fresh: bool  # True = all models up to date
+    stale_models: list[str] = Field(default_factory=list)
+    model_init_times: dict[str, int] = Field(default_factory=dict)  # current live init times
+    next_expected_update: str | None = None  # ISO datetime
+    next_expected_model: str | None = None  # which model updates next
+
+
 class PackMetaResponse(BaseModel):
     """Pack metadata in API responses."""
 
@@ -41,9 +57,14 @@ class PackMetaResponse(BaseModel):
     has_digest: bool
     assessment: str | None
     assessment_reason: str | None
+    model_init_times: dict[str, int] = Field(default_factory=dict)
+    data_status: DataStatus | None = None
 
 
-def _meta_to_response(meta: BriefingPackMeta) -> PackMetaResponse:
+def _meta_to_response(
+    meta: BriefingPackMeta,
+    data_status: DataStatus | None = None,
+) -> PackMetaResponse:
     return PackMetaResponse(
         flight_id=meta.flight_id,
         fetch_timestamp=meta.fetch_timestamp,
@@ -53,6 +74,8 @@ def _meta_to_response(meta: BriefingPackMeta) -> PackMetaResponse:
         has_digest=meta.has_digest,
         assessment=meta.assessment,
         assessment_reason=meta.assessment_reason,
+        model_init_times=meta.model_init_times,
+        data_status=data_status,
     )
 
 
@@ -80,6 +103,50 @@ def get_latest_pack(
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")
     return _meta_to_response(packs[0])
+
+
+@router.get("/freshness", response_model=DataStatus)
+def get_freshness(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Check whether the latest pack's data is still fresh."""
+    _load_flight_or_404(db, flight_id)
+    packs = list_packs(db, flight_id)
+    if not packs:
+        return DataStatus(fresh=False)
+
+    latest = packs[0]
+    return _build_data_status(latest.model_init_times)
+
+
+def _build_data_status(stored_init_times: dict[str, int]) -> DataStatus:
+    """Fetch live metadata and compare against stored init times."""
+    models_to_check = list(stored_init_times.keys()) if stored_init_times else None
+    live = fetch_model_metadata(models_to_check)
+    is_fresh, stale = check_freshness(stored_init_times, live)
+    next_time, next_model = compute_next_update(live)
+
+    return DataStatus(
+        fresh=is_fresh,
+        stale_models=stale,
+        model_init_times={m: meta.last_init_time for m, meta in live.items()},
+        next_expected_update=next_time.isoformat() if next_time else None,
+        next_expected_model=next_model,
+    )
+
+
+def _can_force_refresh(request: Request) -> bool:
+    """Return True if the user is allowed to force-refresh (admin or dev mode)."""
+    if is_dev_mode():
+        return True
+    try:
+        from weatherbrief.api.admin import require_admin
+        require_admin(request)
+        return True
+    except HTTPException:
+        return False
 
 
 # --- Stage metadata for SSE progress ---
@@ -161,13 +228,20 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
     if models:
         options.models = models
 
-    return route, fetch_ts, pack_path, options
+    # Fetch current model metadata to record in the pack
+    model_metadata = fetch_model_metadata()
+
+    return route, fetch_ts, pack_path, options, model_metadata
 
 
 def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
-                      user_id=None):
+                      user_id=None, model_metadata=None):
     """Shared finalization: build and save pack metadata, log usage, return response."""
     days_out = (date.fromisoformat(flight.target_date) - datetime.now(timezone.utc).date()).days
+
+    init_times = {}
+    if model_metadata:
+        init_times = {m: meta.last_init_time for m, meta in model_metadata.items()}
 
     meta = BriefingPackMeta(
         flight_id=flight_id,
@@ -179,6 +253,7 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
         assessment=result.digest.assessment if result.digest else None,
         assessment_reason=result.digest.assessment_reason if result.digest else None,
         artifact_path=str(pack_path),
+        model_init_times=init_times,
     )
 
     save_pack_meta(db, meta)
@@ -193,24 +268,42 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
     return meta
 
 
-@router.post("/refresh", response_model=PackMetaResponse, status_code=201)
+@router.post("/refresh", response_model=PackMetaResponse)
 def refresh_briefing(
     flight_id: str,
     request: Request,
+    force: bool = False,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Trigger a new briefing fetch for a flight."""
+    """Trigger a new briefing fetch for a flight.
+
+    Checks model freshness first and skips the pipeline if data
+    hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
+    """
     flight = _load_owned_flight(db, flight_id, user_id)
+
+    if force and not _can_force_refresh(request):
+        raise HTTPException(status_code=403, detail="Force refresh requires admin access")
 
     db_path = request.app.state.db_path
     if not db_path:
         raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
+    # Smart check: skip pipeline if data is fresh
+    if not force:
+        packs = list_packs(db, flight_id)
+        if packs:
+            latest = packs[0]
+            status = _build_data_status(latest.model_init_times)
+            if status.fresh:
+                logger.info("Data is fresh for %s, skipping pipeline", flight_id)
+                return _meta_to_response(latest, data_status=status)
+
     try:
         from weatherbrief.pipeline import execute_briefing
 
-        route, fetch_ts, pack_path, options = _prepare_refresh(
+        route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
         )
         result = execute_briefing(
@@ -220,7 +313,7 @@ def refresh_briefing(
             options=options,
         )
         meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
-                                 user_id=user_id)
+                                 user_id=user_id, model_metadata=model_metadata)
         return _meta_to_response(meta)
 
     except ImportError as exc:
@@ -240,20 +333,49 @@ _refresh_executor = ThreadPoolExecutor(max_workers=2)
 async def refresh_briefing_stream(
     flight_id: str,
     request: Request,
+    force: bool = False,
     user_id: str = Depends(current_user_id),
 ):
-    """Stream briefing refresh progress via Server-Sent Events."""
+    """Stream briefing refresh progress via Server-Sent Events.
+
+    Checks model freshness first and returns immediately if data
+    hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
+    """
     # Manage our own DB session — FastAPI's Depends(get_db) cleanup
     # conflicts with the long-lived StreamingResponse.
     db = SessionLocal()
     try:
         flight = _load_owned_flight(db, flight_id, user_id)
 
+        if force and not _can_force_refresh(request):
+            raise HTTPException(status_code=403, detail="Force refresh requires admin access")
+
         db_path = request.app.state.db_path
         if not db_path:
             raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
-        route, fetch_ts, pack_path, options = _prepare_refresh(
+        # Smart check: skip pipeline if data is fresh
+        if not force:
+            packs = list_packs(db, flight_id)
+            if packs:
+                latest = packs[0]
+                status = _build_data_status(latest.model_init_times)
+                if status.fresh:
+                    logger.info("Data is fresh for %s, skipping pipeline (stream)", flight_id)
+                    db.close()
+                    pack_resp = _meta_to_response(latest, data_status=status).model_dump()
+
+                    async def fresh_generator() -> AsyncGenerator[str, None]:
+                        event = {"type": "complete", "pack": pack_resp}
+                        yield f"event: complete\ndata: {json_mod.dumps(event)}\n\n"
+
+                    return StreamingResponse(
+                        fresh_generator(),
+                        media_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                    )
+
+        route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
         )
     except Exception:
@@ -291,7 +413,7 @@ async def refresh_briefing_stream(
             thread_db = SessionLocal()
             try:
                 meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, thread_db,
-                                         user_id=user_id)
+                                         user_id=user_id, model_metadata=model_metadata)
                 thread_db.commit()
             finally:
                 thread_db.close()

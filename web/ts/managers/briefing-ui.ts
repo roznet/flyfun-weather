@@ -6,6 +6,7 @@
 
 import type {
   AltitudeAdvisories,
+  DataStatus,
   FlightResponse,
   ForecastSnapshot,
   PackMeta,
@@ -103,6 +104,102 @@ export function renderAssessment(pack: PackMeta | null): void {
   el.innerHTML = `
     <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : ''}
   `;
+}
+
+// --- Freshness bar ---
+
+function formatModelRunTime(initTime: number): string {
+  const d = new Date(initTime * 1000);
+  const h = d.getUTCHours().toString().padStart(2, '0');
+  return `${h}Z`;
+}
+
+function formatTimeUntil(isoStr: string): string {
+  const target = new Date(isoStr).getTime();
+  const now = Date.now();
+  const diffMs = target - now;
+  if (diffMs <= 0) return 'soon';
+  const hours = Math.floor(diffMs / 3600000);
+  const mins = Math.floor((diffMs % 3600000) / 60000);
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+export function renderFreshnessBar(
+  freshness: DataStatus | null,
+  freshnessLoading: boolean,
+  pack: PackMeta | null,
+  isAdmin: boolean,
+  refreshing: boolean,
+  refreshStage: string | null,
+  refreshDetail: string | null,
+  onForceRefresh: () => void,
+  onCheckAgain: () => void,
+): void {
+  const el = $('freshness-bar');
+  if (!el) return;
+
+  if (!pack && !refreshing) {
+    el.style.display = 'none';
+    return;
+  }
+
+  el.style.display = '';
+
+  // Refreshing state takes priority — show pipeline progress
+  if (refreshing) {
+    el.className = 'freshness-bar freshness-refreshing';
+    const detailSuffix = refreshDetail ? ` (${refreshDetail})` : '';
+    const label = refreshStage || 'Starting refresh...';
+    el.innerHTML = `<span>${label}${detailSuffix}</span>`;
+    return;
+  }
+
+  if (freshnessLoading && !freshness) {
+    el.className = 'freshness-bar freshness-current';
+    el.innerHTML = 'Checking for updates...';
+    return;
+  }
+
+  if (!freshness) {
+    el.style.display = 'none';
+    return;
+  }
+
+  // Model basis line from the pack's init times
+  const packTimes = pack?.model_init_times || {};
+  const basisParts = Object.entries(packTimes)
+    .map(([m, t]) => `${m.toUpperCase()} ${formatModelRunTime(t)}`)
+    .join(', ');
+  const basisLine = basisParts ? `<span class="freshness-basis">Based on ${basisParts}</span>` : '';
+
+  if (freshness.fresh) {
+    let nextInfo = '';
+    if (freshness.next_expected_update && freshness.next_expected_model) {
+      const timeStr = formatTimeUntil(freshness.next_expected_update);
+      nextInfo = `, next update ${freshness.next_expected_model.toUpperCase()} in ~${timeStr}`;
+    }
+    const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">Check again</a>`;
+    el.className = 'freshness-bar freshness-current';
+    el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}</span>${basisLine}`;
+  } else {
+    const staleStr = freshness.stale_models.map((m) => m.toUpperCase()).join(', ');
+    const forceBtn = isAdmin
+      ? ' <a href="#" class="freshness-link" id="freshness-force-refresh">Force refresh</a>'
+      : '';
+    el.className = 'freshness-bar freshness-stale';
+    el.innerHTML = `<span>Updates available: ${staleStr}${forceBtn}</span>${basisLine}`;
+  }
+
+  // Wire event handlers
+  const checkLink = document.getElementById('freshness-check-again');
+  if (checkLink) {
+    checkLink.addEventListener('click', (e) => { e.preventDefault(); onCheckAgain(); });
+  }
+  const forceLink = document.getElementById('freshness-force-refresh');
+  if (forceLink) {
+    forceLink.addEventListener('click', (e) => { e.preventDefault(); onForceRefresh(); });
+  }
 }
 
 // --- Synopsis (structured digest) ---
@@ -998,35 +1095,12 @@ export function renderLoading(loading: boolean): void {
   if (el) el.style.display = loading ? 'flex' : 'none';
 }
 
-export function renderRefreshing(
-  refreshing: boolean,
-  stage?: string | null,
-  detail?: string | null,
-): void {
+export function renderRefreshing(refreshing: boolean): void {
   const btn = $('refresh-btn') as HTMLButtonElement;
   if (btn) {
     btn.disabled = refreshing;
     btn.textContent = refreshing ? 'Refreshing...' : 'Refresh';
   }
-
-  // Show/update or remove the status text next to the button
-  const statusId = 'refresh-status';
-  let statusEl = document.getElementById(statusId);
-
-  if (!refreshing || !stage) {
-    if (statusEl) statusEl.remove();
-    return;
-  }
-
-  if (!statusEl) {
-    statusEl = document.createElement('span');
-    statusEl.id = statusId;
-    statusEl.className = 'refresh-status';
-    btn?.parentElement?.insertBefore(statusEl, btn.nextSibling);
-  }
-
-  const detailSuffix = detail ? ` (${detail})` : '';
-  statusEl.textContent = `${stage}${detailSuffix}`;
 }
 
 export function renderEmailing(emailing: boolean): void {

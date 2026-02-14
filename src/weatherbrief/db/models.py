@@ -91,6 +91,7 @@ class BriefingPackRow(Base):
     assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     assessment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_path: Mapped[str] = mapped_column(Text, default="")
+    model_init_times_json: Mapped[str] = mapped_column(Text, default="{}")
 
     flight: Mapped[FlightRow] = relationship(back_populates="packs")
 
