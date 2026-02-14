@@ -305,6 +305,7 @@ class DerivedLevel(BaseModel):
     dewpoint_depression_c: Optional[float] = None
     theta_e_k: Optional[float] = None
     lapse_rate_c_per_km: Optional[float] = None
+    icing_index: Optional[float] = None  # Ogimet continuous icing index (0–100)
     omega_pa_s: Optional[float] = None  # raw model omega (Pa/s)
     w_fpm: Optional[float] = None  # vertical velocity (ft/min)
     richardson_number: Optional[float] = None  # Ri for layer below
@@ -322,6 +323,20 @@ class EnhancedCloudLayer(BaseModel):
     mean_temperature_c: Optional[float] = None
     coverage: CloudCoverage = CloudCoverage.SCT
     mean_dewpoint_depression_c: Optional[float] = None
+    theoretical_max_top_ft: Optional[float] = None  # EL (convective) or −20°C (stratiform)
+
+
+class InversionLayer(BaseModel):
+    """Temperature inversion layer detected from lapse rate analysis."""
+
+    base_ft: float
+    top_ft: float
+    base_pressure_hpa: Optional[int] = None
+    top_pressure_hpa: Optional[int] = None
+    strength_c: float  # Total temperature gain through the inversion
+    base_temperature_c: Optional[float] = None
+    top_temperature_c: Optional[float] = None
+    surface_based: bool = False  # True if starts at lowest level
 
 
 class IcingZone(BaseModel):
@@ -336,6 +351,7 @@ class IcingZone(BaseModel):
     sld_risk: bool = False
     mean_temperature_c: Optional[float] = None
     mean_wet_bulb_c: Optional[float] = None
+    mean_icing_index: Optional[float] = None  # Mean Ogimet icing index for the zone
 
 
 class ConvectiveAssessment(BaseModel):
@@ -383,6 +399,7 @@ class SoundingAnalysis(BaseModel):
     derived_levels: list[DerivedLevel] = Field(default_factory=list)
     cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
     icing_zones: list[IcingZone] = Field(default_factory=list)
+    inversion_layers: list[InversionLayer] = Field(default_factory=list)
     convective: Optional[ConvectiveAssessment] = None
     vertical_motion: Optional[VerticalMotionAssessment] = None
     # NWP 3-level cloud cover from Open-Meteo (None for ECMWF)
@@ -399,6 +416,7 @@ class VerticalRegime(BaseModel):
     in_cloud: bool
     icing_risk: IcingRisk = IcingRisk.NONE
     icing_type: IcingType = IcingType.NONE
+    inversion: bool = False  # True if within a temperature inversion
     cloud_cover_pct: Optional[float] = None  # NWP cloud % for this regime's ICAO band
     cat_risk: Optional[str] = None  # CAT turbulence risk level at this regime
     strong_vertical_motion: bool = False  # |w| > 200 fpm

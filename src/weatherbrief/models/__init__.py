@@ -19,6 +19,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     IcingRisk,
     IcingType,
     IcingZone,
+    InversionLayer,
     ModelDivergence,
     ModelSource,
     PressureLevelData,
