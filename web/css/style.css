@@ -295,6 +295,46 @@ label {
 
 .muted { color: var(--text-muted); font-style: italic; }
 
+/* --- Collapsible sections --- */
+
+.section.collapsible > h3 {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.section.collapsible > h3::before {
+  content: '';
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+  transform: rotate(45deg);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+  margin-top: -0.15em;
+}
+
+.section.collapsible.collapsed > h3::before {
+  transform: rotate(-45deg);
+  margin-top: 0.05em;
+}
+
+.section.collapsible.collapsed > .section-body {
+  display: none;
+}
+
+.section.collapsible > h3:hover {
+  color: var(--primary);
+}
+
+.section.collapsible > h3:hover::before {
+  border-color: var(--primary);
+}
+
 /* --- Usage bars --- */
 
 .usage-grid {
