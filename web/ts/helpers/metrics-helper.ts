@@ -118,7 +118,7 @@ export function renderAnnotationRow(
   const entry = CATALOG[metricId];
   if (!entry) return '';
 
-  let annotationText = entry.vibe;
+  let annotationText = entry.primary_goal;
   let thresholdLabel = '';
   let riskClass = '';
 
