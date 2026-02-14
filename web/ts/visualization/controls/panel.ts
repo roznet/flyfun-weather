@@ -12,10 +12,19 @@ export function renderVizControls(
   container: HTMLElement,
   settings: VizSettings,
   callbacks: VizControlCallbacks,
+  selectedModel?: string,
 ): void {
   const groups = getLayerGroups();
 
   let html = '<div class="viz-toolbar">';
+
+  // Model indicator
+  if (selectedModel) {
+    html += `<div class="viz-model-indicator">`;
+    html += `<span class="viz-toggle-label">Model:</span>`;
+    html += `<span class="viz-model-name">${selectedModel.toUpperCase()}</span>`;
+    html += `</div>`;
+  }
 
   // Render mode toggle
   html += '<div class="viz-render-toggle">';
