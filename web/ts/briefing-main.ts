@@ -5,6 +5,7 @@ import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { renderUserInfo } from './utils';
+import { initInfoPopup, showMetricInfo } from './components/info-popup';
 
 async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
@@ -14,6 +15,16 @@ async function init(): Promise<void> {
     return;
   }
   renderUserInfo(user);
+
+  // Initialize metric info popup
+  initInfoPopup();
+  document.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('.metric-info-btn') as HTMLElement | null;
+    if (btn) {
+      e.preventDefault();
+      showMetricInfo(btn.dataset.metric!, btn.dataset.value);
+    }
+  });
 
   const store = briefingStore;
 
@@ -25,6 +36,25 @@ async function init(): Promise<void> {
     return;
   }
 
+  // --- Apply display mode CSS class ---
+  function applyDisplayModeClass(mode: string): void {
+    const container = document.querySelector('.container');
+    if (container) {
+      container.classList.remove('display-compact', 'display-annotated');
+      container.classList.add(`display-${mode}`);
+    }
+  }
+
+  // --- Update toggle button active state ---
+  function updateToggleButtons(mode: string): void {
+    const toggle = document.getElementById('display-mode-toggle');
+    if (!toggle) return;
+    toggle.querySelectorAll('.btn-toggle').forEach((btn) => {
+      const el = btn as HTMLElement;
+      el.classList.toggle('active', el.dataset.mode === mode);
+    });
+  }
+
   // --- Helper to render slider-dependent sections ---
   function renderSliderSections(state: BriefingState): void {
     ui.renderRouteSlider(
@@ -32,10 +62,14 @@ async function init(): Promise<void> {
       state.selectedPointIndex,
       (idx) => store.getState().setSelectedPoint(idx),
     );
-    ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex);
+    ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
     ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
-    ui.renderModelComparison(state.snapshot, state.routeAnalyses, state.selectedPointIndex);
+    ui.renderModelComparison(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
   }
+
+  // Apply initial display mode
+  applyDisplayModeClass(store.getState().displayMode);
+  updateToggleButtons(store.getState().displayMode);
 
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
@@ -81,6 +115,11 @@ async function init(): Promise<void> {
       );
     }
     if (state.selectedPointIndex !== prev.selectedPointIndex) {
+      renderSliderSections(state);
+    }
+    if (state.displayMode !== prev.displayMode || state.tierVisibility !== prev.tierVisibility) {
+      applyDisplayModeClass(state.displayMode);
+      updateToggleButtons(state.displayMode);
       renderSliderSections(state);
     }
     if (state.selectedModel !== prev.selectedModel) {
@@ -138,6 +177,25 @@ async function init(): Promise<void> {
       store.getState().setSelectedModel(modelSelect.value);
     });
   }
+
+  // --- Wire display mode toggle ---
+  const toggleContainer = document.getElementById('display-mode-toggle');
+  if (toggleContainer) {
+    toggleContainer.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('.btn-toggle') as HTMLElement | null;
+      if (btn && btn.dataset.mode) {
+        store.getState().setDisplayMode(btn.dataset.mode as 'compact' | 'annotated');
+      }
+    });
+  }
+
+  // --- Wire tier toggle buttons (delegated) ---
+  document.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('.tier-toggle-btn') as HTMLElement | null;
+    if (btn && btn.dataset.tier) {
+      store.getState().toggleTier(btn.dataset.tier as 'key' | 'useful' | 'advanced');
+    }
+  });
 
   // --- Wire back button ---
   const backBtn = document.getElementById('back-btn');

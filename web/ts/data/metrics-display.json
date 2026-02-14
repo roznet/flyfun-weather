@@ -1,0 +1,53 @@
+{
+  "sections": {
+    "convective": {
+      "label": "Convective",
+      "metrics": [
+        { "id": "convective_risk", "tier": "key", "field": "risk_level", "source": "convective" },
+        { "id": "cape_surface_jkg", "tier": "key", "field": "cape_jkg", "source": "convective" },
+        { "id": "lifted_index", "tier": "useful", "field": "lifted_index", "source": "convective" },
+        { "id": "k_index", "tier": "useful", "field": "k_index", "source": "convective" },
+        { "id": "total_totals", "tier": "useful", "field": "total_totals", "source": "convective" },
+        { "id": "cin_surface_jkg", "tier": "advanced", "field": "cin_jkg", "source": "convective" },
+        { "id": "bulk_shear_0_6km_kt", "tier": "advanced", "field": "bulk_shear_0_6km_kt", "source": "convective" },
+        { "id": "bulk_shear_0_1km_kt", "tier": "advanced", "field": "bulk_shear_0_1km_kt", "source": "indices" }
+      ]
+    },
+    "altitudes": {
+      "label": "Key Altitudes",
+      "metrics": [
+        { "id": "freezing_level_ft", "tier": "key", "field": "freezing_level_ft", "source": "indices" },
+        { "id": "minus10c_level_ft", "tier": "useful", "field": "minus10c_level_ft", "source": "indices" },
+        { "id": "minus20c_level_ft", "tier": "useful", "field": "minus20c_level_ft", "source": "indices" },
+        { "id": "lcl_altitude_ft", "tier": "useful", "field": "lcl_altitude_ft", "source": "indices" },
+        { "id": "precipitable_water_mm", "tier": "useful", "field": "precipitable_water_mm", "source": "indices" },
+        { "id": "lfc_altitude_ft", "tier": "advanced", "field": "lfc_altitude_ft", "source": "indices" },
+        { "id": "el_altitude_ft", "tier": "advanced", "field": "el_altitude_ft", "source": "indices" }
+      ]
+    },
+    "comparison": {
+      "label": "Model Comparison",
+      "metrics": [
+        { "id": "temperature_c", "tier": "key" },
+        { "id": "wind_speed_kt", "tier": "key" },
+        { "id": "cloud_cover_pct", "tier": "key" },
+        { "id": "freezing_level_ft", "tier": "key" },
+        { "id": "cape_surface_jkg", "tier": "key" },
+        { "id": "precipitation_mm", "tier": "useful" },
+        { "id": "lcl_altitude_ft", "tier": "useful" },
+        { "id": "lifted_index", "tier": "useful" },
+        { "id": "k_index", "tier": "useful" },
+        { "id": "total_totals", "tier": "useful" },
+        { "id": "precipitable_water_mm", "tier": "useful" },
+        { "id": "wind_direction_deg", "tier": "advanced" },
+        { "id": "bulk_shear_0_6km_kt", "tier": "advanced" },
+        { "id": "max_omega_pa_s", "tier": "advanced" }
+      ]
+    }
+  },
+  "tierDefaults": {
+    "key": true,
+    "useful": true,
+    "advanced": false
+  }
+}

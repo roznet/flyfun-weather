@@ -6,6 +6,7 @@
 
 import type {
   AltitudeAdvisories,
+  ConvectiveAssessment,
   DataStatus,
   FlightResponse,
   ForecastSnapshot,
@@ -17,6 +18,17 @@ import type {
   WeatherDigest,
   WindComponent,
 } from '../store/types';
+import type { DisplayMode, Tier } from '../types/metrics';
+import {
+  getDisplayConfig,
+  getMetric,
+  isMetricVisible,
+  matchThreshold,
+  renderAnnotationRow,
+  renderInfoButton,
+  riskCssClass,
+  variableToMetricId,
+} from '../helpers/metrics-helper';
 import * as api from '../adapters/api-adapter';
 import { escapeHtml } from '../utils';
 
@@ -302,6 +314,8 @@ export function renderModelComparison(
   snapshot: ForecastSnapshot | null,
   routeAnalyses?: RouteAnalysesManifest | null,
   selectedPointIndex?: number,
+  displayMode: DisplayMode = 'annotated',
+  tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): void {
   const el = $('comparison-section');
   if (!el) return;
@@ -314,7 +328,7 @@ export function renderModelComparison(
       const label = point.waypoint_icao
         ? `${point.waypoint_icao} \u2014 ${point.waypoint_name || ''}`
         : `Point ${point.point_index} (${point.distance_from_origin_nm.toFixed(0)} nm)`;
-      el.innerHTML = renderComparisonTable(label, point.model_divergence);
+      el.innerHTML = renderComparisonTable(label, point.model_divergence, displayMode, tierVisibility);
       return;
     }
     el.innerHTML = '<p class="muted">No model comparison data for this point.</p>';
@@ -332,6 +346,8 @@ export function renderModelComparison(
     return renderComparisonTable(
       `${a.waypoint.icao} \u2014 ${a.waypoint.name}`,
       a.model_divergence,
+      displayMode,
+      tierVisibility,
     );
   }).join('');
 }
@@ -339,11 +355,22 @@ export function renderModelComparison(
 function renderComparisonTable(
   label: string,
   divergences: Array<{ variable: string; model_values: Record<string, number>; mean: number; spread: number; agreement: string }>,
+  displayMode: DisplayMode = 'annotated',
+  tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): string {
   const models = Object.keys(divergences[0]?.model_values || {});
   const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const colSpan = models.length + 3; // var-name + models + spread + agree
 
   const rows = divergences.map((d) => {
+    const metricId = variableToMetricId(d.variable);
+
+    // Apply tier filtering
+    if (metricId && !isMetricVisible('comparison', metricId, tierVisibility)) return '';
+
+    const metric = metricId ? getMetric(metricId) : null;
+    const varLabel = metric?.name ?? formatVarName(d.variable);
+
     const valueCells = models.map((m) => {
       const val = d.model_values[m];
       return `<td>${val !== undefined ? val.toFixed(1) : '\u2014'}</td>`;
@@ -351,15 +378,27 @@ function renderComparisonTable(
     const agreeIcon = d.agreement === 'good' ? '&#10003;'
       : d.agreement === 'moderate' ? '&#9888;' : '&#10007;';
     const agreeClass = `agree-${d.agreement}`;
+
+    const infoBtn = metricId && displayMode === 'annotated'
+      ? ` ${renderInfoButton(metricId, d.mean)}`
+      : '';
+
+    const annotation = metricId
+      ? renderAnnotationRow(metricId, d.mean, displayMode, colSpan)
+      : '';
+
     return `
       <tr>
-        <td class="var-name">${formatVarName(d.variable)}</td>
+        <td class="var-name">${varLabel}${infoBtn}</td>
         ${valueCells}
         <td>${d.spread.toFixed(1)}</td>
         <td class="${agreeClass}">${agreeIcon}</td>
       </tr>
+      ${annotation}
     `;
   }).join('');
+
+  const tierBtn = renderTierToggle('comparison', tierVisibility);
 
   return `
     <div class="comparison-waypoint">
@@ -375,6 +414,7 @@ function renderComparisonTable(
         </thead>
         <tbody>${rows}</tbody>
       </table>
+      ${tierBtn}
     </div>
   `;
 }
@@ -424,6 +464,8 @@ export function renderSoundingAnalysis(
   snapshot: ForecastSnapshot | null,
   routeAnalyses?: RouteAnalysesManifest | null,
   selectedPointIndex?: number,
+  displayMode: DisplayMode = 'annotated',
+  tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): void {
   const el = $('sounding-section');
   if (!el) return;
@@ -433,7 +475,7 @@ export function renderSoundingAnalysis(
     const idx = selectedPointIndex ?? 0;
     const point = routeAnalyses.analyses[idx];
     if (point) {
-      el.innerHTML = renderSinglePointSounding(point);
+      el.innerHTML = renderSinglePointSounding(point, displayMode, tierVisibility);
       return;
     }
   }
@@ -457,11 +499,11 @@ export function renderSoundingAnalysis(
     return `
       <div class="sounding-waypoint">
         <h4>${a.waypoint.icao} \u2014 ${a.waypoint.name}</h4>
-        ${renderConvectiveBanner(a.sounding)}
-        ${renderVerticalMotion(a.sounding)}
-        ${renderAltitudeMarkers(a.sounding)}
-        ${renderIcingZones(a.sounding)}
-        ${renderEnhancedClouds(a.sounding)}
+        ${renderConvectiveBanner(a.sounding, displayMode, tierVisibility)}
+        ${renderVerticalMotion(a.sounding, displayMode)}
+        ${renderAltitudeMarkers(a.sounding, displayMode, tierVisibility)}
+        ${renderIcingZones(a.sounding, displayMode)}
+        ${renderEnhancedClouds(a.sounding, displayMode)}
         ${renderNwpCloudCover(a.sounding)}
         ${renderAltitudeAdvisories(a.altitude_advisories)}
       </div>
@@ -469,7 +511,11 @@ export function renderSoundingAnalysis(
   }).join('');
 }
 
-function renderConvectiveBanner(soundings: Record<string, SoundingAnalysis>): string {
+function renderConvectiveBanner(
+  soundings: Record<string, SoundingAnalysis>,
+  displayMode: DisplayMode = 'annotated',
+  tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
+): string {
   const models = Object.keys(soundings);
   const hasConvective = models.some(
     (m) => soundings[m].convective && soundings[m].convective!.risk_level !== 'none',
@@ -477,61 +523,104 @@ function renderConvectiveBanner(soundings: Record<string, SoundingAnalysis>): st
   if (!hasConvective) return '';
 
   const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const colSpan = models.length + 1;
+  const config = getDisplayConfig().sections.convective;
 
-  const rowSpecs: Array<{ label: string; render: (m: string) => string }> = [
-    {
-      label: 'Risk',
-      render: (m) => {
+  // Build row specs from display config
+  const rows = config.metrics.map((mc) => {
+    if (!isMetricVisible('convective', mc.id, tierVisibility)) return '';
+
+    const metric = getMetric(mc.id);
+    const label = metric?.name ?? mc.id;
+
+    // Special case: Risk row
+    if (mc.id === 'convective_risk') {
+      const cells = models.map((m) => {
         const c = soundings[m].convective;
         if (!c || c.risk_level === 'none') return '<td>\u2014</td>';
         return `<td class="${riskClass(c.risk_level)}">${c.risk_level.toUpperCase()}</td>`;
-      },
-    },
-    {
-      label: 'CAPE (J/kg)',
-      render: (m) => {
-        const v = soundings[m].convective?.cape_jkg;
-        return `<td>${v != null ? v.toFixed(0) : '\u2014'}</td>`;
-      },
-    },
-    {
-      label: 'Lifted Index',
-      render: (m) => {
-        const v = soundings[m].convective?.lifted_index;
-        return `<td>${v != null ? v.toFixed(1) : '\u2014'}</td>`;
-      },
-    },
-    {
-      label: 'K-index',
-      render: (m) => {
-        const v = soundings[m].convective?.k_index;
-        return `<td>${v != null ? v.toFixed(0) : '\u2014'}</td>`;
-      },
-    },
-    {
-      label: 'Modifiers',
-      render: (m) => {
+      }).join('');
+      return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
+    }
+
+    // Get the first non-null value for annotation
+    let firstValue: number | null = null;
+    const cells = models.map((m) => {
+      const v = getSoundingField(soundings[m], mc.field!, mc.source!);
+      if (v != null && firstValue === null) firstValue = v;
+      if (v == null) return '<td>\u2014</td>';
+      return `<td>${formatMetricValue(mc.id, v)}</td>`;
+    }).join('');
+
+    const annotation = renderAnnotationRow(mc.id, firstValue, displayMode, colSpan);
+    return `<tr><td class="var-name">${label}${metric?.unit ? ' (' + metric.unit + ')' : ''}</td>${cells}</tr>${annotation}`;
+  }).join('');
+
+  // Modifiers row (always shown, not in config)
+  const modsRow = models.some((m) => (soundings[m].convective?.severe_modifiers?.length ?? 0) > 0)
+    ? `<tr><td class="var-name">Modifiers</td>${models.map((m) => {
         const mods = soundings[m].convective?.severe_modifiers;
         if (!mods || mods.length === 0) return '<td>\u2014</td>';
         return `<td>${escapeHtml(mods.join(', '))}</td>`;
-      },
-    },
-  ];
+      }).join('')}</tr>`
+    : '';
 
-  const rows = rowSpecs.map(({ label, render }) => {
-    const cells = models.map(render).join('');
-    return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
-  }).join('');
+  // Tier toggle button
+  const tierBtn = renderTierToggle('convective', tierVisibility);
 
   return `
     <div class="convective-section">
       <h5>Convective</h5>
       <table class="band-table">
         <thead><tr><th></th>${headerCells}</tr></thead>
-        <tbody>${rows}</tbody>
+        <tbody>${rows}${modsRow}</tbody>
       </table>
+      ${tierBtn}
     </div>
   `;
+}
+
+/** Extract a value from ConvectiveAssessment or ThermodynamicIndices. */
+function getSoundingField(
+  sounding: SoundingAnalysis,
+  field: string,
+  source: string,
+): number | null {
+  if (source === 'convective' && sounding.convective) {
+    return (sounding.convective as Record<string, unknown>)[field] as number | null ?? null;
+  }
+  if (source === 'indices' && sounding.indices) {
+    return (sounding.indices as Record<string, unknown>)[field] as number | null ?? null;
+  }
+  return null;
+}
+
+/** Format a metric value with appropriate precision. */
+function formatMetricValue(metricId: string, value: number): string {
+  // IDs that should show 1 decimal
+  if (metricId === 'lifted_index' || metricId === 'showalter_index') {
+    return value.toFixed(1);
+  }
+  // IDs that show integer with comma formatting
+  if (metricId === 'cape_surface_jkg' && Math.abs(value) >= 1000) {
+    return value.toLocaleString('en', { maximumFractionDigits: 0 });
+  }
+  return value.toFixed(0);
+}
+
+/** Render tier toggle button for a section. */
+function renderTierToggle(
+  sectionId: string,
+  tierVisibility: Record<Tier, boolean>,
+): string {
+  const config = getDisplayConfig().sections[sectionId];
+  if (!config) return '';
+
+  const hasAdvanced = config.metrics.some((m) => m.tier === 'advanced');
+  if (!hasAdvanced) return '';
+
+  const label = tierVisibility.advanced ? 'Hide advanced' : 'Show advanced';
+  return `<button class="tier-toggle-btn" data-section="${sectionId}" data-tier="advanced">${label}</button>`;
 }
 
 function formatClassification(cls: string): string {
@@ -546,7 +635,7 @@ function formatClassification(cls: string): string {
   return labels[cls] || cls;
 }
 
-function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>): string {
+function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displayMode: DisplayMode = 'annotated'): string {
   const models = Object.keys(soundings);
   const hasVerticalMotion = models.some(
     (m) => soundings[m].vertical_motion && soundings[m].vertical_motion!.classification !== 'unavailable',
@@ -636,8 +725,9 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>): stri
         return `<tr><td class="var-name">${nextAlt}-${alt}ft</td>${cells}</tr>`;
       }).join('');
 
+      const catInfoBtn = renderInfoButton('cat_risk');
       catSection = `
-        <h6>CAT Risk Layers</h6>
+        <h6>CAT Risk Layers <span class="section-info-btn">${catInfoBtn}</span></h6>
         <table class="band-table">
           <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
           <tbody>${catRows}</tbody>
@@ -658,27 +748,41 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>): stri
   `;
 }
 
-function renderAltitudeMarkers(soundings: Record<string, SoundingAnalysis>): string {
+function renderAltitudeMarkers(
+  soundings: Record<string, SoundingAnalysis>,
+  displayMode: DisplayMode = 'annotated',
+  tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
+): string {
   const models = Object.keys(soundings);
   const hasIndices = models.some((m) => soundings[m].indices != null);
   if (!hasIndices) return '';
 
   const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const colSpan = models.length + 1;
+  const config = getDisplayConfig().sections.altitudes;
 
-  const rowSpecs: Array<{ key: keyof ThermodynamicIndices; label: string }> = [
-    { key: 'freezing_level_ft', label: '0\u00B0C' },
-    { key: 'minus10c_level_ft', label: '-10\u00B0C' },
-    { key: 'minus20c_level_ft', label: '-20\u00B0C' },
-    { key: 'lcl_altitude_ft', label: 'LCL' },
-  ];
+  const rows = config.metrics.map((mc) => {
+    if (!isMetricVisible('altitudes', mc.id, tierVisibility)) return '';
 
-  const rows = rowSpecs.map(({ key, label }) => {
+    const metric = getMetric(mc.id);
+    const label = metric?.name ?? mc.id;
+    const field = mc.field as keyof ThermodynamicIndices;
+
+    let firstValue: number | null = null;
     const cells = models.map((m) => {
-      const v = soundings[m].indices?.[key] as number | null;
-      return `<td>${v != null ? v.toFixed(0) + 'ft' : '\u2014'}</td>`;
+      const v = soundings[m].indices?.[field] as number | null;
+      if (v != null && firstValue === null) firstValue = v;
+      if (v == null) return '<td>\u2014</td>';
+      // Altitude metrics get 'ft' suffix, PW gets 'mm'
+      const suffix = mc.id === 'precipitable_water_mm' ? 'mm' : 'ft';
+      return `<td>${v.toFixed(0)}${suffix}</td>`;
     }).join('');
-    return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
+
+    const annotation = renderAnnotationRow(mc.id, firstValue, displayMode, colSpan);
+    return `<tr><td class="var-name">${label}</td>${cells}</tr>${annotation}`;
   }).join('');
+
+  const tierBtn = renderTierToggle('altitudes', tierVisibility);
 
   return `
     <div class="altitude-markers">
@@ -687,11 +791,12 @@ function renderAltitudeMarkers(soundings: Record<string, SoundingAnalysis>): str
         <thead><tr><th></th>${headerCells}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
+      ${tierBtn}
     </div>
   `;
 }
 
-function renderIcingZones(soundings: Record<string, SoundingAnalysis>): string {
+function renderIcingZones(soundings: Record<string, SoundingAnalysis>, displayMode: DisplayMode = 'annotated'): string {
   const models = Object.keys(soundings);
   const hasIcing = models.some((m) => soundings[m].icing_zones.length > 0);
   if (!hasIcing) return '';
@@ -722,16 +827,19 @@ function renderIcingZones(soundings: Record<string, SoundingAnalysis>): string {
       anyHit = true;
       const sld = zone.sld_risk ? ' SLD' : '';
       const tw = zone.mean_wet_bulb_c != null ? ` Tw=${zone.mean_wet_bulb_c.toFixed(0)}\u00B0C` : '';
-      return `<td class="${riskClass(zone.risk)}">${zone.risk.toUpperCase()} ${zone.icing_type}${tw}${sld}</td>`;
+      const hint = displayMode === 'annotated' ? riskHint('icing_risk', zone.risk) : '';
+      return `<td class="${riskClass(zone.risk)}">${zone.risk.toUpperCase()} ${zone.icing_type}${tw}${sld}${hint}</td>`;
     }).join('');
 
     if (!anyHit) return '';
     return `<tr><td class="var-name">${nextAlt}-${alt}ft</td>${cells}</tr>`;
   }).join('');
 
+  const infoBtn = renderInfoButton('icing_risk');
+
   return `
     <div class="icing-zones">
-      <h5>Icing Zones</h5>
+      <h5>Icing Zones <span class="section-info-btn">${infoBtn}</span></h5>
       <table class="band-table">
         <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
         <tbody>${rows}</tbody>
@@ -740,7 +848,7 @@ function renderIcingZones(soundings: Record<string, SoundingAnalysis>): string {
   `;
 }
 
-function renderEnhancedClouds(soundings: Record<string, SoundingAnalysis>): string {
+function renderEnhancedClouds(soundings: Record<string, SoundingAnalysis>, displayMode: DisplayMode = 'annotated'): string {
   const models = Object.keys(soundings);
   const hasClouds = models.some((m) => soundings[m].cloud_layers.length > 0);
   if (!hasClouds) return '';
@@ -1000,7 +1108,20 @@ export function renderRouteSlider(
 
 // --- Route-point sounding (single point) ---
 
-function renderSinglePointSounding(point: RoutePointAnalysis): string {
+/** Render a brief inline risk hint for band sections in annotated mode. */
+function riskHint(metricId: string, riskLevel: string): string {
+  const metric = getMetric(metricId);
+  if (!metric) return '';
+  const match = metric.thresholds.find((t) => t.risk === riskLevel || t.label.toLowerCase() === riskLevel);
+  if (!match) return '';
+  return `<span class="metric-hint">${match.meaning}</span>`;
+}
+
+function renderSinglePointSounding(
+  point: RoutePointAnalysis,
+  displayMode: DisplayMode = 'annotated',
+  tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
+): string {
   if (!point.sounding || Object.keys(point.sounding).length === 0) {
     return '<p class="muted">No sounding data for this point.</p>';
   }
@@ -1012,11 +1133,11 @@ function renderSinglePointSounding(point: RoutePointAnalysis): string {
   return `
     <div class="sounding-waypoint">
       <h4>${escapeHtml(label)}</h4>
-      ${renderConvectiveBanner(point.sounding)}
-      ${renderVerticalMotion(point.sounding)}
-      ${renderAltitudeMarkers(point.sounding)}
-      ${renderIcingZones(point.sounding)}
-      ${renderEnhancedClouds(point.sounding)}
+      ${renderConvectiveBanner(point.sounding, displayMode, tierVisibility)}
+      ${renderVerticalMotion(point.sounding, displayMode)}
+      ${renderAltitudeMarkers(point.sounding, displayMode, tierVisibility)}
+      ${renderIcingZones(point.sounding, displayMode)}
+      ${renderEnhancedClouds(point.sounding, displayMode)}
       ${renderNwpCloudCover(point.sounding)}
       ${renderAltitudeAdvisories(point.altitude_advisories)}
     </div>
