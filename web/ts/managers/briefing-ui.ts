@@ -444,6 +444,7 @@ function formatVarName(name: string): string {
 
 const RISK_COLORS: Record<string, string> = {
   none: '',
+  marginal: 'risk-marginal',
   light: 'risk-light',
   low: 'risk-light',
   moderate: 'risk-moderate',

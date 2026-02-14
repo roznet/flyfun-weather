@@ -55,7 +55,7 @@ export interface ModelDivergence {
 export type IcingRisk = 'none' | 'light' | 'moderate' | 'severe';
 export type IcingType = 'none' | 'rime' | 'mixed' | 'clear';
 export type CloudCoverage = 'sct' | 'bkn' | 'ovc';
-export type ConvectiveRisk = 'none' | 'low' | 'moderate' | 'high' | 'extreme';
+export type ConvectiveRisk = 'none' | 'marginal' | 'low' | 'moderate' | 'high' | 'extreme';
 export type VerticalMotionClass = 'quiescent' | 'synoptic_ascent' | 'synoptic_subsidence' | 'convective' | 'oscillating' | 'unavailable';
 export type CATRiskLevel = 'none' | 'light' | 'moderate' | 'severe';
 

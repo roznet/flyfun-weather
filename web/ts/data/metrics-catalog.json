@@ -270,6 +270,7 @@
     "limitations": "Based on CAPE thresholds with CIN modulation. Doesn't account for all trigger mechanisms.",
     "thresholds": [
       { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No convective threat." },
+      { "min": null, "max": null, "label": "Marginal", "risk": "marginal", "meaning": "Shallow convection possible. Scattered showers but no thunderstorms." },
       { "min": null, "max": null, "label": "Low", "risk": "low", "meaning": "Weak showers possible. Manageable." },
       { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Thunderstorms possible with trigger. Plan alternates." },
       { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Vigorous storms likely. Significant turbulence." },

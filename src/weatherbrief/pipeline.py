@@ -129,7 +129,7 @@ def execute_briefing(
     # --- Fetch forecasts (multi-point: 1 API call per model) ---
     _notify("route_interpolation")
     client = OpenMeteoClient()
-    route_points = interpolate_route(route, spacing_nm=20.0)
+    route_points = interpolate_route(route, spacing_nm=10.0)
     logger.info("Route interpolated: %d points along %.0f nm",
                 len(route_points), route_points[-1].distance_from_origin_nm)
 

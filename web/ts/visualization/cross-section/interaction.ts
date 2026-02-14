@@ -124,9 +124,15 @@ export function attachInteraction(
       lines.push(`Icing: ${worstRisk}`);
     }
 
-    // Convective
+    // Convective with tower bounds
     if (point.convectiveRisk !== 'none') {
-      lines.push(`Convective: ${point.convectiveRisk}`);
+      let convLine = `Convective: ${point.convectiveRisk}`;
+      if (point.capeSurfaceJkg > 0) convLine += ` (CAPE ${Math.round(point.capeSurfaceJkg)})`;
+      lines.push(convLine);
+      if (alt.lclAltitudeFt !== null && alt.elAltitudeFt !== null) {
+        const baseFt = alt.lfcAltitudeFt ?? alt.lclAltitudeFt;
+        lines.push(`Tower: ${fmt(baseFt)}–${fmt(alt.elAltitudeFt)} ft`);
+      }
     }
 
     tip.innerHTML = lines.join('<br>');

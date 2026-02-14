@@ -90,6 +90,7 @@ export function getTierDefaults(): Record<Tier, boolean> {
 
 const RISK_CSS: Record<string, string> = {
   none: '',
+  marginal: 'risk-marginal',
   low: 'risk-light',
   moderate: 'risk-moderate',
   high: 'risk-high',
