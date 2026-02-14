@@ -18,6 +18,7 @@ const CAT_RISK_COLORS: Record<string, string> = {
 
 const CONVECTIVE_RISK_COLORS: Record<string, string> = {
   none: 'transparent',
+  marginal: 'rgba(160, 160, 160, 0.08)', // faint gray (shallow convection)
   low: 'rgba(255, 235, 59, 0.10)',       // faint yellow
   moderate: 'rgba(255, 152, 0, 0.15)',   // faint orange
   high: 'rgba(220, 53, 69, 0.20)',       // faint red

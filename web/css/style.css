@@ -503,6 +503,7 @@ label {
   padding: 0.2rem 0;
 }
 
+.risk-marginal { color: #888; }
 .risk-light { color: var(--green); }
 .risk-moderate { color: var(--amber); }
 .risk-high { color: var(--red); }
@@ -1172,6 +1173,7 @@ label {
 }
 
 /* Risk colors for threshold segments */
+.threshold-segment.risk-marginal { background: #f0f0f0; color: #888; }
 .threshold-segment.risk-light { background: var(--green-bg); color: var(--green); }
 .threshold-segment.risk-moderate { background: var(--amber-bg); color: var(--amber); }
 .threshold-segment.risk-high { background: var(--red-bg); color: var(--red); }
@@ -1223,8 +1225,8 @@ label {
 .viz-canvas-container {
   position: relative;
   width: 100%;
-  aspect-ratio: 4 / 1;
-  min-height: 200px;
+  aspect-ratio: 3 / 1;
+  min-height: 280px;
   background: var(--surface);
 }
 

@@ -8,7 +8,7 @@ from weatherbrief.models import RouteConfig, RoutePoint
 
 
 def interpolate_route(
-    route: RouteConfig, spacing_nm: float = 20.0
+    route: RouteConfig, spacing_nm: float = 10.0
 ) -> list[RoutePoint]:
     """Generate evenly-spaced points along a route, including all named waypoints.
 

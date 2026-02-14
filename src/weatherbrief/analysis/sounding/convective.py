@@ -38,6 +38,11 @@ def assess_convective(indices: ThermodynamicIndices) -> ConvectiveAssessment:
                 risk = level
                 break
 
+        # Marginal: any CAPE > 0 with a defined LFC/EL → shallow convection
+        if risk == ConvectiveRisk.NONE and cape > 0:
+            if indices.lfc_altitude_ft is not None and indices.el_altitude_ft is not None:
+                risk = ConvectiveRisk.MARGINAL
+
     # Suppress by one level if strong CIN cap
     if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
         risk_levels = list(ConvectiveRisk)

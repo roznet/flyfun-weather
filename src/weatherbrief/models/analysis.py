@@ -242,6 +242,7 @@ class ConvectiveRisk(str, Enum):
     """Convective risk level from thermodynamic indices."""
 
     NONE = "none"
+    MARGINAL = "marginal"
     LOW = "low"
     MODERATE = "moderate"
     HIGH = "high"
