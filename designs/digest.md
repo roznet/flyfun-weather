@@ -27,16 +27,25 @@ Sections: header (route/date/alt), per-waypoint forecasts + analysis, model agre
 
 ## Skew-T Plots (`digest/skewt.py`)
 
-MetPy-based Skew-T log-P diagrams per waypoint/model combination.
+MetPy-based Skew-T log-P diagrams per waypoint/model combination with enhanced overlays.
 
 ```python
 paths = generate_all_skewts(snapshot, target_time, output_dir)
 ```
 
-- Plots: temperature (red), dewpoint (green), wind barbs, parcel profile, LCL marker
+**Core plot:**
+- Temperature (red), dewpoint (green), wind barbs, parcel profile, LCL/LFC/EL markers
 - Icing zone (0 to -20°C) shaded light blue
+
+**Enhanced overlays (added Phase 7.4):**
+- **CAPE/CIN shading**: positive area (CAPE) in red, negative area (CIN) in blue between parcel and environment profiles
+- **Hodograph inset**: wind vector trace with altitude-colored segments (sfc-1km, 1-3km, 3-6km, 6km+), Bunkers storm motion markers
+- **Indices panel**: text box showing key thermodynamic indices (CAPE, CIN, LI, K-index, TT, precipitable water, freezing level, bulk shear)
+- **Cloud/icing/inversion overlays**: colored altitude bands on the right margin showing cloud layers, icing zones, and inversion layers
+
+**Output:** PNG at 150 DPI, 10x10 inches (increased from 9x9 to accommodate panels).
+
 - Requires >= 3 pressure levels with temperature; dewpoint and wind optional
-- Output: PNG at 150 DPI, 9x9 inches
 - Uses `matplotlib.use("agg")` — required for worker thread compatibility (macOS backend crashes on non-main threads)
 
 ## LLM Digest
@@ -147,7 +156,7 @@ The `notify/` package handles email delivery of digest outputs:
 
 - Pipeline orchestration: `pipeline.py` `execute_briefing()`
 - Config files: `configs/weather_digest/`
-- Report rendering: `report/render.py` — `render_html()`, `render_pdf()` via Jinja2 + WeasyPrint
+- Report rendering: `report/render.py` — `render_html()`, `render_pdf()` via Jinja2 + WeasyPrint. GRAMET PDFs converted to PNG via PyMuPDF (`fitz`) for embedding as base64 data URIs in HTML reports.
 - Data models: [data-models.md](./data-models.md)
 - Fetch sources: [fetch.md](./fetch.md)
 - Analysis inputs: [analysis.md](./analysis.md)

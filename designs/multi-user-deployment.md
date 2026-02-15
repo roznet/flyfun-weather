@@ -136,6 +136,7 @@ JSON-based storage for flexibility — individual settings serialized rather tha
 | has_digest | BOOLEAN DEFAULT FALSE | |
 | assessment | VARCHAR(10) NULL | GREEN/AMBER/RED |
 | assessment_reason | TEXT NULL | |
+| model_init_times | TEXT NULL | JSON: NWP model init timestamps at fetch time |
 | artifact_path | VARCHAR(500) | Relative path to pack directory |
 
 ### briefing_usage
@@ -167,7 +168,9 @@ data/packs/
         └── {safe_timestamp}/
             ├── snapshot.json
             ├── cross_section.json
-            ├── gramet.png
+            ├── route_analyses.json
+            ├── elevation_profile.json
+            ├── gramet.pdf
             ├── skewt/
             │   ├── EGTK_gfs.png
             │   └── ...
@@ -232,9 +235,9 @@ Every briefing refresh is logged to `briefing_usage` with per-service counters. 
 - Admin overview of total consumption
 - Cost attribution if needed later
 
-### Freshness check (future)
+### Freshness Check (Implemented)
 
-A future `should_update_briefing(flight, last_pack) -> bool` function could check whether NWP models have published new data since the last fetch, avoiding redundant API calls. This is **separate work** — not part of the multi-user deployment phases.
+The `check_freshness()` function in `fetch/model_status.py` queries Open-Meteo metadata to compare current model init times against the previous pack's `model_init_times`. The freshness endpoint (`GET /api/flights/{id}/packs/freshness`) returns a `DataStatus` with `fresh`, `stale_models`, and `model_init_times`. The frontend shows a freshness bar with "New data available" link when stale, and admins see a force-refresh link even when data is fresh.
 
 ## Encrypted Credential Storage
 
