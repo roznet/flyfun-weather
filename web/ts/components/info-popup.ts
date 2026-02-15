@@ -1,6 +1,6 @@
 /** Metric info popup — modal overlay showing detailed metric explanations. */
 
-import { renderInfoPopupContent } from '../helpers/metrics-helper';
+import { renderInfoPopupContent, renderLayerLegend } from '../helpers/metrics-helper';
 
 let popupEl: HTMLElement | null = null;
 let backdropEl: HTMLElement | null = null;
@@ -40,6 +40,24 @@ export function showMetricInfo(metricId: string, value?: string): void {
   backdropEl.classList.add('active');
 
   // Wire close button
+  const closeBtn = popupEl.querySelector('.metric-popup-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', hideMetricInfo);
+  }
+}
+
+export function showLayerInfo(layerId: string, metricId: string): void {
+  if (!popupEl || !backdropEl) return;
+
+  const legendHtml = renderLayerLegend(layerId);
+  popupEl.innerHTML = `
+    <button class="metric-popup-close" aria-label="Close">\u00d7</button>
+    ${renderInfoPopupContent(metricId)}
+    ${legendHtml}
+  `;
+
+  backdropEl.classList.add('active');
+
   const closeBtn = popupEl.querySelector('.metric-popup-close');
   if (closeBtn) {
     closeBtn.addEventListener('click', hideMetricInfo);

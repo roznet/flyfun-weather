@@ -1249,10 +1249,15 @@ label {
 
 .viz-toolbar {
   display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.viz-toolbar-top {
+  display: flex;
   align-items: center;
   gap: 1rem;
-  flex-wrap: wrap;
-  font-size: 0.8rem;
 }
 
 .viz-model-indicator {
@@ -1283,7 +1288,7 @@ label {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
-  flex: 1;
+  width: 100%;
 }
 
 .viz-layer-group {
@@ -1327,6 +1332,81 @@ label {
   z-index: 10;
   max-width: 200px;
   white-space: nowrap;
+}
+
+/* --- Layer info button --- */
+
+.viz-layer-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+  line-height: 1;
+  margin-left: -0.1rem;
+}
+
+.viz-layer-info-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+/* --- Layer color legend in popup --- */
+
+.layer-legend {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.layer-legend h4 {
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.legend-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.8rem;
+}
+
+.legend-swatch-bg {
+  display: inline-block;
+  width: 28px;
+  height: 18px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: #b5d4e8;
+  padding: 2px;
+  border: 1px solid var(--border);
+}
+
+.legend-swatch {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+}
+
+.legend-label {
+  font-weight: 500;
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.legend-meaning {
+  color: var(--text-muted);
 }
 
 /* --- Responsive --- */

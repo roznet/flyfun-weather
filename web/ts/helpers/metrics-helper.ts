@@ -2,6 +2,7 @@
 
 import catalog from '../data/metrics-catalog.json';
 import displayConfig from '../data/metrics-display.json';
+import { getLayerLegend, type LegendEntry } from '../visualization/layer-legends';
 import type {
   DisplayMode,
   MetricCatalog,
@@ -222,6 +223,31 @@ export function renderInfoPopupContent(metricId: string, value?: number): string
       </div>
     </div>
   `;
+}
+
+/** Render an HTML color legend strip for a cross-section layer. */
+export function renderLayerLegend(layerId: string): string {
+  const entries = getLayerLegend(layerId);
+  if (!entries || entries.length === 0) return '';
+
+  const isLineLegend = entries.length === 1 && entries[0].meaning.includes('line');
+
+  const rows = entries.map((e: LegendEntry) => {
+    // For line layers, draw a line swatch; for bands, draw a filled rectangle on sky-blue bg
+    const swatchStyle = isLineLegend
+      ? `background: transparent; border-bottom: 3px solid ${e.color};`
+      : `background: ${e.color};`;
+    return `<div class="legend-entry">
+      <span class="legend-swatch-bg"><span class="legend-swatch" style="${swatchStyle}"></span></span>
+      <span class="legend-label">${e.label}</span>
+      <span class="legend-meaning">${e.meaning}</span>
+    </div>`;
+  }).join('');
+
+  return `<div class="layer-legend">
+    <h4>Color Legend</h4>
+    ${rows}
+  </div>`;
 }
 
 function formatThresholdRange(min: number | null, max: number | null, unit: string): string {

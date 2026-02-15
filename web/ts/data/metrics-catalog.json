@@ -375,6 +375,19 @@
       { "min": 75, "max": null, "label": "Overcast", "risk": "moderate", "meaning": "Full cloud layer." }
     ]
   },
+  "inversion_layer": {
+    "name": "Inversions",
+    "unit": "\u00b0C",
+    "vibe": "The invisible ceiling that traps haze, smoke, and turbulence",
+    "primary_goal": "Detect temperature inversions where air warms with altitude instead of cooling.",
+    "best_used_for": "Anticipating trapped pollution layers, turbulence at inversion boundaries, and restricted vertical visibility.",
+    "limitations": "Based on coarse pressure-level data (8 levels). Thin inversions may be missed. Strength is estimated from temperature increase across the layer.",
+    "thresholds": [
+      { "min": null, "max": null, "label": "Weak", "risk": "low", "meaning": "Mild inversion. Slight haze trapping, minor turbulence at boundary." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant lid. Reduced visibility below, bumpy transition through." },
+      { "min": null, "max": null, "label": "Strong", "risk": "high", "meaning": "Strong cap. Dense haze/fog trapped below, sharp turbulence at boundary." }
+    ]
+  },
   "freezing_level_m": {
     "name": "Freezing Level",
     "unit": "m",
