@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -149,6 +150,7 @@ def execute_briefing(
     all_forecasts: list[WaypointForecast] = []
     cross_sections: list[RouteCrossSection] = []
 
+    models_fetched = 0
     for model in options.models:
         endpoint = MODEL_ENDPOINTS[model.value]
         if days_out is not None and days_out >= endpoint.max_days:
@@ -157,6 +159,9 @@ def execute_briefing(
                 model.value, days_out, endpoint.max_days,
             )
             continue
+        # Delay between model fetches to avoid Open-Meteo rate limiting
+        if models_fetched > 0:
+            time.sleep(5)
         _notify("fetch_forecasts", model.value)
         try:
             point_forecasts = client.fetch_multi_point(
@@ -175,6 +180,7 @@ def execute_briefing(
                 point_forecasts=point_forecasts,
             ))
             logger.info("Fetched %s: %d points", model.value, len(point_forecasts))
+            models_fetched += 1
         except Exception:
             logger.warning("Failed to fetch %s", model.value, exc_info=True)
 
@@ -361,6 +367,11 @@ def _run_point_analysis(
         sounding = analyze_sounding(hourly.pressure_levels, hourly)
         if sounding is not None:
             soundings[model_key] = sounding
+        else:
+            logger.warning(
+                "Sounding analysis returned None for %s (%d pressure levels provided)",
+                model_key, len(hourly.pressure_levels),
+            )
 
             idx = sounding.indices
             if idx is not None:

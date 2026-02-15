@@ -128,7 +128,7 @@ async def get_me(user_id: str = Depends(current_user_id), db: Session = Depends(
         "email": user.email,
         "name": user.display_name,
         "approved": user.approved,
-        "is_admin": user.email in get_admin_emails(),
+        "is_admin": is_dev_mode() or user.email in get_admin_emails(),
     }
 
 
