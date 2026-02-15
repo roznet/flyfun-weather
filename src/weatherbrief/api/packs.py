@@ -488,12 +488,16 @@ def get_gramet(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Get the GRAMET image for a pack."""
+    """Get the GRAMET cross-section for a pack (PDF, with PNG fallback for old packs)."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp)
-    gramet_path = pack_dir / "gramet.png"
-    if not gramet_path.exists():
-        raise HTTPException(status_code=404, detail="GRAMET not available")
-    return FileResponse(gramet_path, media_type="image/png")
+    pdf_path = pack_dir / "gramet.pdf"
+    if pdf_path.exists():
+        return FileResponse(pdf_path, media_type="application/pdf")
+    # Fallback to PNG for packs generated before the PDF switch
+    png_path = pack_dir / "gramet.png"
+    if png_path.exists():
+        return FileResponse(png_path, media_type="image/png")
+    raise HTTPException(status_code=404, detail="GRAMET not available")
 
 
 @router.get("/{timestamp}/skewt/{icao}/{model}")

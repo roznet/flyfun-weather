@@ -32,6 +32,32 @@ def _image_data_uri(path: Path) -> str | None:
     return f"data:{mime};base64,{b64}"
 
 
+def _pdf_first_page_data_uri(path: Path) -> str | None:
+    """Render the first page of a PDF as a PNG data URI.
+
+    Uses PyMuPDF (fitz) if available, otherwise returns None.
+    """
+    if not path.exists():
+        return None
+    try:
+        import fitz  # PyMuPDF
+
+        doc = fitz.open(str(path))
+        page = doc[0]
+        # Render at 2x for crisp output
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        png_data = pix.tobytes("png")
+        doc.close()
+        b64 = base64.b64encode(png_data).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+    except ImportError:
+        logger.debug("PyMuPDF not available; skipping GRAMET PDF conversion for report")
+        return None
+    except Exception:
+        logger.warning("Failed to convert GRAMET PDF to PNG", exc_info=True)
+        return None
+
+
 def _generate_waypoint_skewt(
     snapshot: dict, icao: str, model: str, output_path: Path,
 ) -> None:
@@ -66,8 +92,10 @@ def _build_template_context(
     # Snapshot (for model comparison + waypoint list)
     snapshot = _load_json(pack_dir / "snapshot.json")
 
-    # GRAMET image
+    # GRAMET image — try PNG first (embeddable in HTML <img>), then convert PDF
     gramet_uri = _image_data_uri(pack_dir / "gramet.png")
+    if not gramet_uri:
+        gramet_uri = _pdf_first_page_data_uri(pack_dir / "gramet.pdf")
 
     # Skew-T images (ECMWF only) — one per waypoint, generated on-demand
     skewt_images: list[dict] = []

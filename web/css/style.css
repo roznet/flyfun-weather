@@ -410,6 +410,13 @@ label {
 
 /* --- GRAMET --- */
 
+.gramet-pdf {
+  width: 100%;
+  height: 480px;
+  border: none;
+  border-radius: var(--radius);
+}
+
 .gramet-img {
   width: 100%;
   border-radius: var(--radius);
