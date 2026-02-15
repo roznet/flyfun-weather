@@ -262,6 +262,53 @@ def convective_context() -> RouteContext:
 
 
 @pytest.fixture
+def high_cirrus_context() -> RouteContext:
+    """Context with high cirrus above ceiling + lower cloud below ceiling."""
+    n_points = 10
+    # High cirrus entirely above ceiling — should be ignored
+    cirrus = EnhancedCloudLayer(base_ft=35000, top_ft=39000, coverage=CloudCoverage.SCT)
+    # Lower cloud within reachable altitude
+    lower = EnhancedCloudLayer(base_ft=6000, top_ft=10000, coverage=CloudCoverage.BKN)
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(cloud_layers=[cirrus, lower]),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+    )
+
+
+@pytest.fixture
+def only_cirrus_context() -> RouteContext:
+    """Context with ONLY high cirrus above ceiling — all layers should be ignored."""
+    n_points = 10
+    cirrus = EnhancedCloudLayer(base_ft=35000, top_ft=39000, coverage=CloudCoverage.SCT)
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(cloud_layers=[cirrus]),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+    )
+
+
+@pytest.fixture
 def poor_agreement_context() -> RouteContext:
     """Context with poor model agreement."""
     n_points = 10

@@ -1570,6 +1570,39 @@ label {
   color: var(--text-muted);
   margin-top: 0.2rem;
 }
+.advisory-info-btn {
+  margin-left: auto;
+}
+.advisory-popup-category {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0;
+}
+.advisory-params-table {
+  width: 100%;
+  font-size: 0.8rem;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+}
+.advisory-params-table th,
+.advisory-params-table td {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.advisory-params-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.advisory-params-table .text-muted {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
 
 /* --- Responsive --- */
 

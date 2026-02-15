@@ -98,6 +98,22 @@ class TestCloudTop:
         result = CloudTopEvaluator.evaluate(cloudy_context, {"margin_ft": 1000, "pct_amber": 25})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
+    def test_ignores_cirrus_above_ceiling(self, high_cirrus_context: RouteContext):
+        """High cirrus (35000-39000ft) above ceiling (18000ft) should be ignored.
+        Only lower cloud (6000-10000ft) should be considered — tops well within ceiling."""
+        result = CloudTopEvaluator.evaluate(high_cirrus_context, {"margin_ft": 1000, "pct_amber": 25})
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        # max_top should be 10000 (lower layer), not 39000 (cirrus)
+        for m in result.per_model:
+            assert "10000" in m.detail or "No significant" in m.detail
+
+    def test_only_cirrus_is_green(self, only_cirrus_context: RouteContext):
+        """When ALL layers are above ceiling, treat as no significant clouds."""
+        result = CloudTopEvaluator.evaluate(only_cirrus_context, {"margin_ft": 1000, "pct_amber": 25})
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        for m in result.per_model:
+            assert "No significant" in m.detail
+
 
 class TestModelAgreement:
     def test_green_good_agreement(self, clear_context: RouteContext):
