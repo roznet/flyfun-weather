@@ -3,7 +3,7 @@
 import type { CoordTransform, VizRouteData } from '../types';
 import { altitudeToPressureHpa } from '../scales';
 
-const GRID_COLOR = '#e5e7eb';
+const GRID_COLOR = 'rgba(255, 255, 255, 0.35)';
 const LABEL_COLOR = '#6c757d';
 const FONT = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 
@@ -150,7 +150,7 @@ function drawWaypointLines(
     const x = transform.distanceToX(wp.distanceNm);
 
     // Vertical dashed line
-    ctx.strokeStyle = '#adb5bd';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();

@@ -95,6 +95,7 @@ export interface VizPoint {
   // Map-specific scalars
   cloudCoverTotalPct: number;
   cloudCoverLowPct: number;
+  cloudCoverMidPct: number;
   headwindKt: number;
   crosswindKt: number;
   capeSurfaceJkg: number;

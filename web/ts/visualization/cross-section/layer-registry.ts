@@ -10,10 +10,12 @@ import { catBandsLayer } from './layers/cat-bands';
 import { inversionBandsLayer } from './layers/inversion-bands';
 import { convectiveBgLayer } from './layers/convective-bg';
 import { terrainFillLayer } from './layers/terrain-fill';
+import { nwpCloudBandsLayer } from './layers/nwp-cloud-bands';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
-  // Rendering order: terrain → background → bands → lines → reference (back to front)
+  // Rendering order: terrain → NWP clouds → background → bands → lines → reference (back to front)
   terrainFillLayer,
+  nwpCloudBandsLayer,
   convectiveBgLayer,
   cloudBandsLayer,
   icingBandsLayer,

@@ -97,6 +97,11 @@ export class CrossSectionRenderer {
     const transform = this.createTransform();
     if (!transform) { ctx.restore(); return; }
 
+    // Sky-blue plot background
+    const { plotArea } = transform;
+    ctx.fillStyle = '#b5d4e8';
+    ctx.fillRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
+
     // Draw axes first (background grid)
     drawAxes(ctx, transform, this.data);
 
