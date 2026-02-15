@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import max_terrain_near_point, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, max_terrain_near_point, worst_status
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -100,12 +100,14 @@ class FreezingLevelEvaluator:
                 detail = "No data"
             elif below_margin > 0:
                 status = AdvisoryStatus.RED
-                detail = f"Freezing level below terrain + {margin_ft:.0f}ft at {below_margin} point(s)"
+                ext = format_extent(below_margin, total, ctx.total_distance_nm)
+                detail = f"Freezing level below terrain + {margin_ft:.0f}ft over {ext}"
                 if min_clearance is not None:
                     detail += f" (min clearance {min_clearance:.0f}ft)"
             elif below_tight > 0:
                 status = AdvisoryStatus.AMBER
-                detail = f"Tight freezing level margin at {below_tight} point(s)"
+                ext = format_extent(below_tight, total, ctx.total_distance_nm)
+                detail = f"Tight freezing level margin over {ext}"
                 if min_clearance is not None:
                     detail += f" (min clearance {min_clearance:.0f}ft)"
             else:
@@ -115,13 +117,17 @@ class FreezingLevelEvaluator:
                 else:
                     detail = "Freezing level above terrain"
 
+            affected = below_margin + below_tight
+            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
                 detail=detail,
-                affected_points=below_margin + below_tight,
+                affected_points=affected,
                 total_points=total,
-                affected_pct=100 * (below_margin + below_tight) / total if total > 0 else 0,
+                affected_pct=100 * affected / total if total > 0 else 0,
+                affected_nm=round(affected * spacing, 1),
+                total_nm=round(ctx.total_distance_nm, 1),
             ))
 
         aggregate = worst_status([m.status for m in per_model])

@@ -31,6 +31,8 @@ export interface ModelAdvisoryResult {
   affected_points: number;
   total_points: number;
   affected_pct: number;
+  affected_nm: number;
+  total_nm: number;
 }
 
 export interface RouteAdvisoryResult {

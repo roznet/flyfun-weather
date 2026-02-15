@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import pct_above_threshold, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold, worst_status
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -111,20 +111,21 @@ class ConvectiveEvaluator:
                 if conv.risk_level in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
                     has_high = True
 
+            ext = format_extent(affected, total, ctx.total_distance_nm)
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "No data"
             elif has_high:
                 status = AdvisoryStatus.RED
-                detail = f"{worst_risk.value.upper()} convective risk at {affected}/{total} points"
+                detail = f"{worst_risk.value.upper()} convective risk over {ext}"
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = "No significant convective activity"
             else:
                 status = pct_above_threshold(affected, total, affected_pct_amber, affected_pct_red)
-                pct = 100 * affected / total
-                detail = f"{worst_risk.value.upper()} convective risk at {affected}/{total} points ({pct:.0f}%)"
+                detail = f"{worst_risk.value.upper()} convective risk over {ext}"
 
+            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -132,6 +133,8 @@ class ConvectiveEvaluator:
                 affected_points=affected,
                 total_points=total,
                 affected_pct=100 * affected / total if total > 0 else 0,
+                affected_nm=round(affected * spacing, 1),
+                total_nm=round(ctx.total_distance_nm, 1),
             ))
 
         aggregate = worst_status([m.status for m in per_model])

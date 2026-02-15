@@ -10,6 +10,26 @@ if TYPE_CHECKING:
     from weatherbrief.models import RouteCrossSection
 
 
+def format_extent(
+    affected: int,
+    total: int,
+    total_distance_nm: float,
+) -> str:
+    """Format affected/total as a distance string, e.g. '30nm/55nm (55%)'.
+
+    Converts point counts to nautical miles using the actual route distance
+    and number of analysis points. When there are too few points to compute
+    spacing, falls back to the percentage only.
+    """
+    if total <= 0:
+        return "0nm"
+    spacing = total_distance_nm / max(total - 1, 1)
+    affected_nm = round(affected * spacing)
+    total_nm = round(total_distance_nm)
+    pct = 100 * affected / total
+    return f"{affected_nm}nm/{total_nm}nm ({pct:.0f}%)"
+
+
 def worst_status(statuses: list[AdvisoryStatus]) -> AdvisoryStatus:
     """Return the worst (most severe) status from a list."""
     order = [AdvisoryStatus.GREEN, AdvisoryStatus.AMBER, AdvisoryStatus.RED]

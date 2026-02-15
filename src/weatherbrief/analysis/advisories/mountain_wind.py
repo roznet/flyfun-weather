@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    format_extent,
     max_terrain_near_point,
     wind_at_altitude,
     worst_status,
@@ -122,20 +123,23 @@ class MountainWindEvaluator:
                 elif speed_kt >= wind_amber:
                     amber_count += 1
 
+            affected = red_count + amber_count
             if total_mountain == 0:
                 status = AdvisoryStatus.GREEN
                 detail = "No significant terrain along route"
             elif red_count > 0:
                 status = AdvisoryStatus.RED
-                detail = f"Severe mountain wind ({max_wind:.0f}kt near terrain) at {red_count} point(s)"
+                ext = format_extent(red_count, total_mountain, ctx.total_distance_nm)
+                detail = f"Severe mountain wind ({max_wind:.0f}kt near terrain) over {ext}"
             elif amber_count > 0:
                 status = AdvisoryStatus.AMBER
-                detail = f"Mountain wave risk ({max_wind:.0f}kt near terrain) at {amber_count} point(s)"
+                ext = format_extent(amber_count, total_mountain, ctx.total_distance_nm)
+                detail = f"Mountain wave risk ({max_wind:.0f}kt near terrain) over {ext}"
             else:
                 status = AdvisoryStatus.GREEN
                 detail = f"Light winds near terrain ({max_wind:.0f}kt)"
 
-            affected = red_count + amber_count
+            spacing = ctx.total_distance_nm / max(total_mountain - 1, 1) if total_mountain > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -143,6 +147,8 @@ class MountainWindEvaluator:
                 affected_points=affected,
                 total_points=total_mountain,
                 affected_pct=100 * affected / total_mountain if total_mountain > 0 else 0,
+                affected_nm=round(affected * spacing, 1),
+                total_nm=round(ctx.total_distance_nm, 1),
             ))
 
         aggregate = worst_status([m.status for m in per_model])

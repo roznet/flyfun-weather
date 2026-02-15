@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import max_terrain_near_point, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, max_terrain_near_point, worst_status
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -107,6 +107,7 @@ class FIKIIcingEvaluator:
                     if zone.sld_risk:
                         has_sld = True
 
+            ext = format_extent(affected, total, ctx.total_distance_nm)
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "No data"
@@ -115,20 +116,21 @@ class FIKIIcingEvaluator:
                 detail = "SLD risk detected — FIKI protection insufficient"
             elif has_severe and severe_is_red:
                 status = AdvisoryStatus.RED
-                detail = f"Severe icing at {affected}/{total} points"
+                detail = f"Severe icing over {ext}"
             elif max_thickness >= thickness_red:
                 status = AdvisoryStatus.RED
-                detail = f"Thick icing layer ({max_thickness:.0f}ft) at {affected}/{total} points"
+                detail = f"Thick icing layer ({max_thickness:.0f}ft) over {ext}"
             elif max_thickness >= thickness_amber:
                 status = AdvisoryStatus.AMBER
-                detail = f"Moderate icing layer ({max_thickness:.0f}ft) at {affected}/{total} points"
+                detail = f"Moderate icing layer ({max_thickness:.0f}ft) over {ext}"
             elif affected > 0:
                 status = AdvisoryStatus.GREEN
-                detail = f"Manageable icing at {affected}/{total} points (max {max_thickness:.0f}ft)"
+                detail = f"Manageable icing over {ext} (max {max_thickness:.0f}ft)"
             else:
                 status = AdvisoryStatus.GREEN
                 detail = "No icing along route"
 
+            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -136,6 +138,8 @@ class FIKIIcingEvaluator:
                 affected_points=affected,
                 total_points=total,
                 affected_pct=100 * affected / total if total > 0 else 0,
+                affected_nm=round(affected * spacing, 1),
+                total_nm=round(ctx.total_distance_nm, 1),
             ))
 
         aggregate = worst_status([m.status for m in per_model])

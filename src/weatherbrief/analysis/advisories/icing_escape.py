@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    format_extent,
     max_terrain_near_point,
     pct_above_threshold,
     worst_status,
@@ -116,12 +117,14 @@ class IcingEscapeEvaluator:
                     no_escape_count += 1
 
             # Determine model status
+            ext = format_extent(affected, total, ctx.total_distance_nm)
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "No data"
             elif no_escape_count > 0:
+                no_esc_ext = format_extent(no_escape_count, total, ctx.total_distance_nm)
                 status = AdvisoryStatus.RED
-                detail = f"No warm escape at {no_escape_count}/{total} points"
+                detail = f"No warm escape over {no_esc_ext}"
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = "No icing along route"
@@ -129,9 +132,9 @@ class IcingEscapeEvaluator:
                 # Icing present but escape viable — check percentage
                 status = pct_above_threshold(affected, total, route_pct_amber)
                 if status == AdvisoryStatus.GREEN:
-                    detail = f"Icing at {affected}/{total} points, warm escape available"
+                    detail = f"Icing over {ext}, warm escape available"
                 else:
-                    detail = f"Icing at {affected}/{total} points ({100*affected/total:.0f}%)"
+                    detail = f"Icing over {ext}"
 
                 # Upgrade to amber if freezing level is tight
                 if status == AdvisoryStatus.GREEN:
@@ -147,6 +150,7 @@ class IcingEscapeEvaluator:
                                 detail = f"Tight escape margin ({fz:.0f}ft freeze vs {terrain:.0f}ft terrain)"
                                 break
 
+            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -154,6 +158,8 @@ class IcingEscapeEvaluator:
                 affected_points=affected,
                 total_points=total,
                 affected_pct=100 * affected / total if total > 0 else 0,
+                affected_nm=round(affected * spacing, 1),
+                total_nm=round(ctx.total_distance_nm, 1),
             ))
 
         aggregate = worst_status([m.status for m in per_model])
