@@ -591,10 +591,12 @@ function getSoundingField(
   source: string,
 ): number | null {
   if (source === 'convective' && sounding.convective) {
-    return (sounding.convective as Record<string, unknown>)[field] as number | null ?? null;
+    const val = sounding.convective[field as keyof typeof sounding.convective];
+    return typeof val === 'number' ? val : null;
   }
   if (source === 'indices' && sounding.indices) {
-    return (sounding.indices as Record<string, unknown>)[field] as number | null ?? null;
+    const val = sounding.indices[field as keyof typeof sounding.indices];
+    return typeof val === 'number' ? val : null;
   }
   return null;
 }
