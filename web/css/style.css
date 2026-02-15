@@ -1146,6 +1146,22 @@ label {
   opacity: 0.8;
 }
 
+.popup-learn-more {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-color, #e0e0e0);
+}
+
+.popup-learn-more a {
+  font-size: 0.8rem;
+  color: var(--link-color, #4a90d9);
+  text-decoration: none;
+}
+
+.popup-learn-more a:hover {
+  text-decoration: underline;
+}
+
 /* Threshold bar */
 .threshold-bar {
   display: flex;

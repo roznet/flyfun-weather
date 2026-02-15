@@ -19,6 +19,8 @@ export interface MetricCatalogEntry {
   primary_goal: string;
   best_used_for: string;
   limitations: string;
+  theory?: string;
+  wikipedia?: string;
   thresholds: MetricThreshold[];
 }
 
