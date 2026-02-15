@@ -130,7 +130,6 @@ class FIKIIcingEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = "No icing along route"
 
-            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -138,7 +137,7 @@ class FIKIIcingEvaluator:
                 affected_points=affected,
                 total_points=total,
                 affected_pct=100 * affected / total if total > 0 else 0,
-                affected_nm=round(affected * spacing, 1),
+                affected_nm=round(ctx.total_distance_nm * affected / total, 1) if total > 0 else 0,
                 total_nm=round(ctx.total_distance_nm, 1),
             ))
 

@@ -98,7 +98,6 @@ class CloudTopEvaluator:
                 ext = format_extent(above_ceiling, total, ctx.total_distance_nm)
                 detail = f"Cloud tops above ceiling over {ext} (max {max_top:.0f}ft)"
 
-            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -106,7 +105,7 @@ class CloudTopEvaluator:
                 affected_points=above_ceiling,
                 total_points=total,
                 affected_pct=100 * above_ceiling / total if total > 0 else 0,
-                affected_nm=round(above_ceiling * spacing, 1),
+                affected_nm=round(ctx.total_distance_nm * above_ceiling / total, 1) if total > 0 else 0,
                 total_nm=round(ctx.total_distance_nm, 1),
             ))
 

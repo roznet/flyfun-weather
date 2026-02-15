@@ -139,7 +139,6 @@ class MountainWindEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = f"Light winds near terrain ({max_wind:.0f}kt)"
 
-            spacing = ctx.total_distance_nm / max(total_mountain - 1, 1) if total_mountain > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -147,7 +146,7 @@ class MountainWindEvaluator:
                 affected_points=affected,
                 total_points=total_mountain,
                 affected_pct=100 * affected / total_mountain if total_mountain > 0 else 0,
-                affected_nm=round(affected * spacing, 1),
+                affected_nm=round(ctx.total_distance_nm * affected / total_mountain, 1) if total_mountain > 0 else 0,
                 total_nm=round(ctx.total_distance_nm, 1),
             ))
 

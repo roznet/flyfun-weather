@@ -111,15 +111,15 @@ class VMCCruiseEvaluator:
                     status = AdvisoryStatus.GREEN
                     detail = "Clear at cruise altitude"
 
-            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
+            imc_total = bkn_count + ovc_count
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
                 detail=detail,
-                affected_points=bkn_count + ovc_count,
+                affected_points=imc_total,
                 total_points=total,
-                affected_pct=100 * (bkn_count + ovc_count) / total if total > 0 else 0,
-                affected_nm=round((bkn_count + ovc_count) * spacing, 1),
+                affected_pct=100 * imc_total / total if total > 0 else 0,
+                affected_nm=round(ctx.total_distance_nm * imc_total / total, 1) if total > 0 else 0,
                 total_nm=round(ctx.total_distance_nm, 1),
             ))
 
