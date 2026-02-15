@@ -185,6 +185,10 @@ export function renderFreshnessBar(
     .join(', ');
   const basisLine = basisParts ? `<span class="freshness-basis">Based on ${basisParts}</span>` : '';
 
+  const forceLink = isAdmin
+    ? ' <a href="#" class="freshness-link" id="freshness-force-refresh">Force refresh</a>'
+    : '';
+
   if (freshness.fresh) {
     let nextInfo = '';
     if (freshness.next_expected_update && freshness.next_expected_model) {
@@ -193,14 +197,11 @@ export function renderFreshnessBar(
     }
     const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">Check again</a>`;
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}</span>${basisLine}`;
+    el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}${forceLink}</span>${basisLine}`;
   } else {
     const staleStr = freshness.stale_models.map((m) => m.toUpperCase()).join(', ');
-    const forceBtn = isAdmin
-      ? ' <a href="#" class="freshness-link" id="freshness-force-refresh">Force refresh</a>'
-      : '';
     el.className = 'freshness-bar freshness-stale';
-    el.innerHTML = `<span>Updates available: ${staleStr}${forceBtn}</span>${basisLine}`;
+    el.innerHTML = `<span>Updates available: ${staleStr}${forceLink}</span>${basisLine}`;
   }
 
   // Wire event handlers
