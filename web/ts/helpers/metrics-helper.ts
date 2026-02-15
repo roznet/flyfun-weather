@@ -217,10 +217,17 @@ export function renderInfoPopupContent(metricId: string, value?: number): string
         <p>${entry.best_used_for}</p>
       </div>
       ${thresholdList}
+      ${entry.theory ? `<div class="popup-section">
+        <h4>How it works</h4>
+        <p>${entry.theory}</p>
+      </div>` : ''}
       <div class="popup-section popup-limitations">
         <h4>Limitations</h4>
         <p>${entry.limitations}</p>
       </div>
+      ${entry.wikipedia ? `<div class="popup-section popup-learn-more">
+        <a href="${entry.wikipedia}" target="_blank" rel="noopener noreferrer">Learn more on Wikipedia ↗</a>
+      </div>` : ''}
     </div>
   `;
 }
