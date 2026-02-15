@@ -209,9 +209,9 @@ export function renderFreshnessBar(
   if (checkLink) {
     checkLink.addEventListener('click', (e) => { e.preventDefault(); onCheckAgain(); });
   }
-  const forceLink = document.getElementById('freshness-force-refresh');
-  if (forceLink) {
-    forceLink.addEventListener('click', (e) => { e.preventDefault(); onForceRefresh(); });
+  const forceEl = document.getElementById('freshness-force-refresh');
+  if (forceEl) {
+    forceEl.addEventListener('click', (e) => { e.preventDefault(); onForceRefresh(); });
   }
 }
 
