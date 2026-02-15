@@ -38,12 +38,7 @@ export function showMetricInfo(metricId: string, value?: string): void {
   `;
 
   backdropEl.classList.add('active');
-
-  // Wire close button
-  const closeBtn = popupEl.querySelector('.metric-popup-close');
-  if (closeBtn) {
-    closeBtn.addEventListener('click', hideMetricInfo);
-  }
+  wirePopupButtons();
 }
 
 export function showLayerInfo(layerId: string, metricId: string): void {
@@ -57,15 +52,45 @@ export function showLayerInfo(layerId: string, metricId: string): void {
   `;
 
   backdropEl.classList.add('active');
-
-  const closeBtn = popupEl.querySelector('.metric-popup-close');
-  if (closeBtn) {
-    closeBtn.addEventListener('click', hideMetricInfo);
-  }
+  wirePopupButtons();
 }
 
 export function hideMetricInfo(): void {
   if (backdropEl) {
     backdropEl.classList.remove('active');
+  }
+}
+
+/** Wire close button and AI discuss buttons after rendering popup content. */
+function wirePopupButtons(): void {
+  if (!popupEl) return;
+
+  const closeBtn = popupEl.querySelector('.metric-popup-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', hideMetricInfo);
+  }
+
+  const discussSection = popupEl.querySelector('.popup-discuss-ai') as HTMLElement | null;
+  if (!discussSection) return;
+
+  const metricName = discussSection.dataset.metricName ?? 'this metric';
+  const llmContext = discussSection.dataset.llmPrompt;
+  const contextStr = llmContext ? ` In particular, ${llmContext}.` : '';
+  const prompt = `Tell me more about ${metricName} in the context of aviation weather.${contextStr} `
+    + `How should a VFR or IFR pilot interpret it, what are the key thresholds, `
+    + `and how does it interact with other weather parameters for flight safety?`;
+
+  const aiButtons = discussSection.querySelectorAll('.popup-ai-btn');
+  const toast = discussSection.querySelector('.popup-discuss-toast') as HTMLElement | null;
+
+  for (const btn of aiButtons) {
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(prompt).then(() => {
+        if (toast) {
+          toast.hidden = false;
+          setTimeout(() => { toast.hidden = true; }, 3000);
+        }
+      });
+    });
   }
 }

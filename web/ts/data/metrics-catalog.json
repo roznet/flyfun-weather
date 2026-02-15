@@ -316,6 +316,7 @@
     "limitations": "In very dry air, wet-bulb can be much lower than air temperature. The fixed temperature bands are a simplification — real icing severity is continuous.",
     "theory": "The lowest temperature achievable by evaporating water into the air — measured by wrapping a thermometer in a wet cloth and letting it cool. Sits between the dewpoint and air temperature: Td ≤ Tw ≤ T. Calculated iteratively from temperature, dewpoint, and pressure using the psychrometric equation. It's the key temperature for icing because when supercooled droplets hit your aircraft, evaporation cools them further before they freeze.",
     "wikipedia": "https://en.wikipedia.org/wiki/Wet-bulb_temperature",
+    "llm_prompt": "explain why wet-bulb temperature (not air temperature) determines icing type: 0 to -3°C = clear ice, -3 to -10°C = mixed, -10 to -15°C = rime, and how evaporative cooling affects ice accretion on an airframe",
     "thresholds": [
       { "min": 0, "max": null, "label": "Above freezing", "risk": "none", "meaning": "No icing concern." },
       { "min": -3, "max": 0, "label": "Clear ice zone", "risk": "severe", "meaning": "Supercooled water freezes as dense, clear glaze. Most dangerous icing type." },
@@ -350,6 +351,7 @@
     "limitations": "Most useful for relative comparisons between levels, not as an absolute number. The value itself matters less than how it changes with height.",
     "theory": "The temperature a parcel of air would have if all its moisture condensed out (releasing latent heat) and the parcel was then brought down to sea level pressure. It combines temperature, moisture, and pressure into one number that stays constant as air rises or sinks — a conserved 'fingerprint' of the air mass. When θe decreases with height, warm moist air sits below cold dry air, signalling potential instability.",
     "wikipedia": "https://en.wikipedia.org/wiki/Equivalent_potential_temperature",
+    "llm_prompt": "explain how theta-e (equivalent potential temperature) decreasing with height signals potential instability, and how pilots can use theta-e profiles to identify air mass boundaries and convective risk",
     "thresholds": []
   },
   "wind_speed_kt": {
@@ -466,6 +468,7 @@
     "limitations": "Based on CAPE thresholds with CIN modulation. Doesn't account for all trigger mechanisms.",
     "theory": "A summary risk level combining CAPE (storm energy) and CIN (the cap strength). CAPE thresholds set the base risk from none to extreme. CIN then modulates it — a strong cap downgrades the risk because storms can't fire easily without a powerful trigger. Additional severe weather flags check wind shear > 40kt, K-Index > 35, Total Totals > 55, and Lifted Index < −6.",
     "wikipedia": "https://en.wikipedia.org/wiki/Convective_available_potential_energy",
+    "llm_prompt": "explain how CAPE, CIN, wind shear, K-Index, Total Totals, and Lifted Index are combined into a composite convective risk assessment, and how CIN modulates the threat level",
     "thresholds": [
       { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No convective threat." },
       { "min": null, "max": null, "label": "Marginal", "risk": "marginal", "meaning": "Shallow convection possible. Scattered showers but no thunderstorms." },
@@ -484,6 +487,7 @@
     "limitations": "Based on wet-bulb temperature bands. Does not account for droplet size (SLD) or cloud thickness.",
     "theory": "Classified from wet-bulb temperature at each level within cloud (dewpoint depression < 3°C). The wet-bulb temperature determines what happens when supercooled droplets hit your aircraft: 0 to −3°C = clear ice (severe — dense, heavy), −3 to −10°C = mixed (moderate), −10 to −15°C = rime (moderate — rough, white), −15 to −20°C = light rime. Severity upgrades if RH > 95% or precipitable water > 25mm (more moisture = faster ice buildup).",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain how wet-bulb temperature bands determine icing type (clear, mixed, rime) and how the freezing level, -10°C, and -20°C levels define the icing envelope",
     "thresholds": [
       { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No icing concern." },
       { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
@@ -500,6 +504,7 @@
     "limitations": "Does not account for droplet size (SLD). Only valid in the 0 to -14°C range (layered) or 0 to -20°C (convective).",
     "theory": "A physics-based icing index combining layered (stratiform) and convective cloud contributions. The layered component uses a parabola peaking at −7°C: 100 × (−t) × (t + 14) / 49 for −14 ≤ t ≤ 0°C. The convective component factors in the moisture difference between cloud base and interior. Both are weighted by estimated cloud type fraction: Combined = (layered% × layered_index + convective% × convective_index) / 200. Peaks at −7°C, matching observed maximum supercooled liquid water content.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain the Ogimet parabolic icing formula that peaks at -7°C and how it combines layered (stratiform) and convective cloud contributions",
     "thresholds": [
       { "min": 0, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
       { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
@@ -515,6 +520,7 @@
     "limitations": "Only detects shear-driven turbulence. Blind to mountain waves, convective turbulence, and wake turbulence.",
     "theory": "Clear Air Turbulence risk classified from the Richardson number (Ri) at each atmospheric layer. Ri measures whether wind shear can overcome atmospheric stability: when it does (Ri < 0.25), smooth airflow breaks down into turbulence through Kelvin-Helmholtz instability — like waves breaking on the ocean. CAT occurs in clear air with no visual warning, making it particularly dangerous.",
     "wikipedia": "https://en.wikipedia.org/wiki/Clear-air_turbulence",
+    "llm_prompt": "explain how the Richardson number (ratio of stability to wind shear) predicts Clear Air Turbulence, including the critical Ri < 0.25 threshold and Kelvin-Helmholtz instability",
     "thresholds": [
       { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "Smooth. Laminar flow." },
       { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Intermittent bumps possible." },
@@ -531,6 +537,7 @@
     "limitations": "Only detects shear-driven turbulence. Blind to mountain waves, convective turbulence, and wake turbulence.",
     "theory": "The ratio of atmospheric stability to wind shear: Ri = N²/S². N² (Brunt-Väisälä frequency) measures how strongly stable air resists being displaced vertically. S² measures how much the wind changes with altitude. When shear overpowers stability (Ri drops below 0.25), smooth flow breaks down into turbulence — a process called Kelvin-Helmholtz instability, visible as wave-like cloud patterns.",
     "wikipedia": "https://en.wikipedia.org/wiki/Richardson_number",
+    "llm_prompt": "explain the Richardson number formula Ri = N²/S² (Brunt-Väisälä frequency vs wind shear), why the critical value is 0.25, and how pilots can use it to choose smoother flight levels",
     "thresholds": [
       { "min": 1.0, "max": null, "label": "Smooth", "risk": "none", "meaning": "Laminar flow — enjoy the view." },
       { "min": 0.5, "max": 1.0, "label": "Light CAT", "risk": "low", "meaning": "Approaching critical. Intermittent bumps." },
@@ -547,6 +554,7 @@
     "limitations": "Based on model omega (vertical velocity in pressure coordinates). Cannot resolve convective-scale updrafts or local effects like mountain waves.",
     "theory": "Classified from the omega (ω) profile across all pressure levels. The algorithm checks the magnitude and sign pattern of vertical velocity: all small values = quiescent, consistently negative = synoptic ascent (fronts, lows), consistently positive = synoptic subsidence (highs), alternating = oscillating (waves), extreme values = convective. Only available for models that provide omega (GFS, ECMWF).",
     "wikipedia": "https://en.wikipedia.org/wiki/Omega_equation",
+    "llm_prompt": "explain how omega (vertical velocity in pressure coordinates) profiles are classified into regimes (quiescent, synoptic ascent/subsidence, convective, oscillating) and what each means for flight conditions",
     "thresholds": [
       { "min": null, "max": null, "label": "Quiescent", "risk": "none", "meaning": "Calm air. Minimal vertical motion. Smooth flying conditions." },
       { "min": null, "max": null, "label": "Synoptic Ascent", "risk": "low", "meaning": "Large-scale rising air (frontal or low-pressure). Cloud and precipitation developing." },
@@ -564,6 +572,7 @@
     "limitations": "Derived from 8 pressure levels (coarse). Can miss thin layers. Coverage is estimated from humidity, not observed.",
     "theory": "Derived from the atmospheric sounding by checking where dewpoint depression (T − Td) drops below 3°C — meaning the air is close to saturation and likely contains cloud. Consecutive saturated levels are grouped into cloud layers. The average depression within the layer estimates coverage: < 1°C = overcast (8/8 oktas), 1–2°C = broken (5–7/8), 2–3°C = scattered (3–4/8).",
     "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "llm_prompt": "explain how cloud layers are detected by checking dewpoint depression below 3°C at each pressure level, and how the average depression maps to oktas (SCT/BKN/OVC)",
     "thresholds": [
       { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "3-4 oktas. Patches of cloud, generally VFR. Sun visible between gaps." },
       { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "5-7 oktas. Mostly cloudy with some breaks. May affect VFR ceiling." },
@@ -595,6 +604,7 @@
     "limitations": "Based on coarse pressure-level data (8 levels). Thin inversions may be missed. Strength is estimated from temperature increase across the layer.",
     "theory": "A temperature inversion is where the air gets warmer with altitude instead of the normal cooling — the lapse rate goes negative. Detected by finding layers where temperature increases with height. Inversions act as lids: they trap pollution, haze, and moisture below, restrict vertical visibility, and create turbulence (Low Level Wind Shear - LLWS) at the boundary where warm air caps cool air. Common causes include radiative cooling (overnight) and subsidence (high-pressure systems).",
     "wikipedia": "https://en.wikipedia.org/wiki/Inversion_(meteorology)",
+    "llm_prompt": "explain how temperature inversions are detected from sounding profiles, how they cause low-level wind shear (LLWS) and trap haze/pollution, and the difference between radiation and subsidence inversions",
     "thresholds": [
       { "min": null, "max": null, "label": "Weak", "risk": "low", "meaning": "Mild inversion. Slight haze trapping, minor turbulence at boundary." },
       { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant lid. Reduced visibility below, bumpy transition through." },
