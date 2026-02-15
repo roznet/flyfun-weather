@@ -90,13 +90,14 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km |
 | `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2 |
 | `EnhancedCloudLayer` | Cloud layer from dewpoint depression | base/top (ft + hPa), thickness, mean_temperature_c, coverage (SCT/BKN/OVC) |
-| `IcingZone` | Grouped icing zone from wet-bulb | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_wet_bulb_c |
+| `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |
+| `IcingZone` | Grouped icing zone from wet-bulb | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_wet_bulb_c, mean_icing_index |
 | `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list |
 | `VerticalMotionClass` | Enum: vertical motion profile type | QUIESCENT, SYNOPTIC_ASCENT, SYNOPTIC_SUBSIDENCE, CONVECTIVE, OSCILLATING, UNAVAILABLE |
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
 | `CATRiskLayer` | CAT risk identified by Richardson number | base_ft, top_ft, base/top_pressure_hpa, richardson_number, risk |
 | `VerticalMotionAssessment` | Vertical motion + turbulence | classification, max_omega_pa_s, max_w_fpm, max_w_level_ft, cat_risk_layers, convective_contamination |
-| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, icing_zones, convective, vertical_motion, cloud_cover_{low,mid,high}_pct |
+| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, icing_zones, inversion_layers, convective, vertical_motion, cloud_cover_{low,mid,high}_pct |
 
 ### Altitude Advisories
 
@@ -125,6 +126,15 @@ Fields: `point_index`, `lat`, `lon`, `distance_from_origin_nm`, `waypoint_icao`,
 Container for all route point analyses, saved as `route_analyses.json` in the pack directory.
 
 Fields: `route_name`, `target_date`, `departure_time`, `flight_duration_hours`, `total_distance_nm`, `cruise_altitude_ft`, `models`, `analyses: list[RoutePointAnalysis]`.
+
+### Elevation Profile
+
+| Model | Purpose | Key fields |
+|-------|---------|------------|
+| `ElevationPoint` | Single terrain sample along route | distance_nm, elevation_ft, lat, lon |
+| `ElevationProfile` | High-resolution terrain profile | route_name, points, max_elevation_ft, total_distance_nm, spacing_nm |
+
+Saved as `elevation_profile.json` in the pack directory. ~800 points for a 400nm route at 0.5nm spacing.
 
 ## API / Web Models
 
@@ -159,10 +169,11 @@ BriefingPackMeta(
     has_gramet=True, has_skewt=True, has_digest=True,
     assessment="GREEN",
     assessment_reason="Conditions favorable",
+    model_init_times={"gfs": 1708300800, "ecmwf": 1708300800},
 )
 ```
 
-Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` are denormalized from the digest for quick display.
+Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available.
 
 ## Enums
 
@@ -170,7 +181,7 @@ Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` 
 - `IcingRisk`: `NONE`, `LIGHT`, `MODERATE`, `SEVERE`
 - `IcingType`: `NONE`, `RIME`, `MIXED`, `CLEAR`
 - `CloudCoverage`: `SCT`, `BKN`, `OVC`
-- `ConvectiveRisk`: `NONE`, `LOW`, `MODERATE`, `HIGH`, `EXTREME`
+- `ConvectiveRisk`: `NONE`, `MARGINAL`, `LOW`, `MODERATE`, `HIGH`, `EXTREME`
 - `AgreementLevel`: `GOOD`, `MODERATE`, `POOR`
 - `VerticalMotionClass`: `QUIESCENT`, `SYNOPTIC_ASCENT`, `SYNOPTIC_SUBSIDENCE`, `CONVECTIVE`, `OSCILLATING`, `UNAVAILABLE`
 - `CATRiskLevel`: `NONE`, `LIGHT`, `MODERATE`, `SEVERE`

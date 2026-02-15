@@ -32,7 +32,7 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → clouds → icing → convective → vertical_motion`
+Pipeline: `prepare → thermodynamics → clouds → icing → inversions → convective → vertical_motion`
 
 ### Prepare (`sounding/prepare.py`)
 
@@ -77,27 +77,49 @@ layers = detect_cloud_layers(derived_levels, lcl_altitude_ft=idx.lcl_altitude_ft
 - Coverage from mean dewpoint depression: < 1°C → OVC, 1-2°C → BKN, 2-3°C → SCT
 - Records base/top altitudes, thickness, mean temperature
 
-### Icing (`sounding/icing.py`)
+### Inversions (`sounding/inversions.py`)
 
-Wet-bulb temperature based icing with cloud awareness.
+Temperature inversion detection from lapse rate analysis.
 
 ```python
-zones = assess_icing_zones(derived_levels, cloud_layers, precipitable_water_mm=pw)
+from weatherbrief.analysis.sounding.inversions import detect_inversions
+layers = detect_inversions(derived_levels)
+# → list[InversionLayer] with base/top altitudes, strength_c, surface_based flag
+```
+
+- Negative lapse rate = temperature increases with altitude → inversion
+- Groups consecutive levels with negative lapse rate into `InversionLayer`
+- `strength_c` = total temperature gain through the inversion
+- `surface_based=True` if the inversion starts at the lowest valid level
+- Used in cross-section visualization as an inversion band layer
+
+### Icing (`sounding/icing.py`)
+
+Ogimet continuous icing index with cloud awareness. Replaces previous wet-bulb band classification.
+
+```python
+zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape)
 ```
 
 **Only assesses levels near/in cloud** (DD < 3°C or within 500ft of a cloud layer).
 
-**Wet-bulb bands:**
+**Ogimet icing index**: physically-based continuous index that peaks at −7°C (matching observed supercooled liquid water distribution). Two components:
+- **Stratiform**: parabolic profile peaking at −7°C, zero at 0°C and −20°C
+- **Convective**: Gaussian centered on −10°C, broader range to −25°C
+- Components blended by CAPE (higher CAPE → more convective weight)
 
-| Tw range | Type | Base risk |
-|----------|------|-----------|
-| -3°C to 0°C | CLEAR | SEVERE |
-| -10°C to -3°C | MIXED | MODERATE |
-| -15°C to -10°C | RIME | MODERATE |
-| -20°C to -15°C | RIME | LIGHT |
+**Severity from index:**
 
-- Severity enhanced if RH > 95% or precipitable water > 25mm
-- SLD detection: **currently disabled** — the heuristics were too sensitive for the available data resolution. The function exists but returns `False` unconditionally
+| Index range | Risk |
+|-------------|------|
+| < 30 | LIGHT |
+| 30-80 | MODERATE |
+| > 80 | SEVERE |
+
+**Icing type** determined by wet-bulb temperature: CLEAR (Tw > -3°C), MIXED (-10°C to -3°C), RIME (< -10°C).
+
+- Each `IcingZone` includes `mean_icing_index` for transparency in the assessment
+- SLD detection: **currently disabled** — heuristics too sensitive for available data resolution
 - Adjacent levels grouped into `IcingZone` bands (gap ≤ 100hPa)
 
 ### Convective (`sounding/convective.py`)
@@ -106,12 +128,14 @@ Pure threshold logic from `ThermodynamicIndices` — no MetPy dependency.
 
 | CAPE (J/kg) | Risk |
 |-------------|------|
+| 0 (with LFC+EL) | MARGINAL |
 | < 100 | NONE |
 | 100-500 | LOW |
 | 500-1500 | MODERATE |
 | 1500-3000 | HIGH |
 | > 3000 | EXTREME |
 
+- **MARGINAL**: any CAPE > 0 with defined LFC and EL → shallow convection possible
 - CIN < -200 J/kg suppresses risk by one level
 - Severe modifiers: bulk shear >40kt (supercell), >25kt (multicell), high freezing level + CAPE >1000 (hail), K-index >35, Total Totals >55, LI < -6
 
