@@ -29,17 +29,6 @@ def format_extent(
     return f"{affected_nm}nm/{total_nm}nm ({pct:.0f}%)"
 
 
-def worst_status(statuses: list[AdvisoryStatus]) -> AdvisoryStatus:
-    """Return the worst (most severe) status from a list."""
-    order = [AdvisoryStatus.GREEN, AdvisoryStatus.AMBER, AdvisoryStatus.RED]
-    worst = AdvisoryStatus.GREEN
-    for s in statuses:
-        if s == AdvisoryStatus.UNAVAILABLE:
-            continue
-        if s in order and order.index(s) > order.index(worst):
-            worst = s
-    return worst
-
 
 def pct_above_threshold(
     affected: int,

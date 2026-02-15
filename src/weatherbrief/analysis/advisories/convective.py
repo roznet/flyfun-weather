@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -125,24 +125,10 @@ class ConvectiveEvaluator:
                 status = pct_above_threshold(affected, total, affected_pct_amber, affected_pct_red)
                 detail = f"{worst_risk.value.upper()} convective risk over {ext}"
 
-            per_model.append(ModelAdvisoryResult(
-                model=model,
-                status=status,
-                detail=detail,
-                affected_points=affected,
-                total_points=total,
-                affected_pct=100 * affected / total if total > 0 else 0,
-                affected_nm=round(ctx.total_distance_nm * affected / total, 1) if total > 0 else 0,
-                total_nm=round(ctx.total_distance_nm, 1),
+            per_model.append(ModelAdvisoryResult.build(
+                model=model, status=status, detail=detail,
+                affected=affected, total=total,
+                total_distance_nm=ctx.total_distance_nm,
             ))
 
-        aggregate = worst_status([m.status for m in per_model])
-        worst_model = next((m for m in per_model if m.status == aggregate), per_model[0] if per_model else None)
-
-        return RouteAdvisoryResult(
-            advisory_id="convective",
-            aggregate_status=aggregate,
-            aggregate_detail=worst_model.detail if worst_model else "",
-            per_model=per_model,
-            parameters_used=params,
-        )
+        return RouteAdvisoryResult.from_per_model("convective", per_model, params)

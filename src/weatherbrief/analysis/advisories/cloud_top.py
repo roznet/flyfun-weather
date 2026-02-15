@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -66,7 +66,7 @@ class CloudTopEvaluator:
         for model in ctx.models:
             total = 0
             above_ceiling = 0
-            max_top = 0.0
+            max_top: float | None = None
 
             for rpa in ctx.analyses:
                 sounding = rpa.sounding.get(model)
@@ -78,7 +78,7 @@ class CloudTopEvaluator:
                     continue
 
                 highest_top = max(cl.top_ft for cl in sounding.cloud_layers)
-                if highest_top > max_top:
+                if max_top is None or highest_top > max_top:
                     max_top = highest_top
 
                 if highest_top + margin_ft > ceiling:
@@ -89,7 +89,7 @@ class CloudTopEvaluator:
                 detail = "No data"
             elif above_ceiling == 0:
                 status = AdvisoryStatus.GREEN
-                if max_top > 0:
+                if max_top is not None:
                     detail = f"Cloud tops reachable (max {max_top:.0f}ft, ceiling {ceiling}ft)"
                 else:
                     detail = "No significant cloud layers"
@@ -98,24 +98,10 @@ class CloudTopEvaluator:
                 ext = format_extent(above_ceiling, total, ctx.total_distance_nm)
                 detail = f"Cloud tops above ceiling over {ext} (max {max_top:.0f}ft)"
 
-            per_model.append(ModelAdvisoryResult(
-                model=model,
-                status=status,
-                detail=detail,
-                affected_points=above_ceiling,
-                total_points=total,
-                affected_pct=100 * above_ceiling / total if total > 0 else 0,
-                affected_nm=round(ctx.total_distance_nm * above_ceiling / total, 1) if total > 0 else 0,
-                total_nm=round(ctx.total_distance_nm, 1),
+            per_model.append(ModelAdvisoryResult.build(
+                model=model, status=status, detail=detail,
+                affected=above_ceiling, total=total,
+                total_distance_nm=ctx.total_distance_nm,
             ))
 
-        aggregate = worst_status([m.status for m in per_model])
-        worst_model = next((m for m in per_model if m.status == aggregate), per_model[0] if per_model else None)
-
-        return RouteAdvisoryResult(
-            advisory_id="cloud_top",
-            aggregate_status=aggregate,
-            aggregate_detail=worst_model.detail if worst_model else "",
-            per_model=per_model,
-            parameters_used=params,
-        )
+        return RouteAdvisoryResult.from_per_model("cloud_top", per_model, params)
