@@ -60,17 +60,23 @@ def prepare_profile(
     valid = []
     for lv in levels:
         if lv.temperature_c is None:
+            logger.debug("Level %s hPa: skipped (no temperature)", lv.pressure_hpa)
             continue
         # Derive dewpoint if not directly available
         dp = lv.dewpoint_c
         if dp is None and lv.relative_humidity_pct is not None:
             dp = _derive_dewpoint(lv.temperature_c, lv.relative_humidity_pct)
         if dp is None:
+            logger.debug("Level %s hPa: skipped (no dewpoint, T=%.1f, RH=%s)",
+                         lv.pressure_hpa, lv.temperature_c, lv.relative_humidity_pct)
             continue
         valid.append((lv, dp))
 
     if len(valid) < MIN_LEVELS:
-        logger.debug("Only %d valid levels, need %d", len(valid), MIN_LEVELS)
+        logger.warning(
+            "Sounding rejected: only %d/%d levels valid out of %d total",
+            len(valid), MIN_LEVELS, len(levels),
+        )
         return None
 
     # Sort by descending pressure (surface first)

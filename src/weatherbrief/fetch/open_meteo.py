@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -42,12 +43,36 @@ def magnus_dewpoint(temp_c: float, rh_pct: float) -> float:
     return (MAGNUS_C * gamma) / (MAGNUS_B - gamma)
 
 
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [5, 15, 30]  # seconds
+
+
 class OpenMeteoClient:
     """Client for fetching forecasts from the Open-Meteo API."""
 
     def __init__(self, timeout: int = 30):
         self.timeout = timeout
         self.session = requests.Session()
+
+    def _get_with_retry(self, url: str, params: dict) -> requests.Response:
+        """GET with retry on 429 rate-limit responses."""
+        for attempt in range(_MAX_RETRIES):
+            resp = self.session.get(url, params=params, timeout=self.timeout)
+            if resp.status_code != 429:
+                resp.raise_for_status()
+                return resp
+            # Use Retry-After header if present, otherwise use backoff schedule
+            retry_after = resp.headers.get("Retry-After")
+            wait = int(retry_after) if retry_after and retry_after.isdigit() else _RETRY_BACKOFF[attempt]
+            logger.warning(
+                "Rate limited (429) on attempt %d/%d, retrying in %ds: %s",
+                attempt + 1, _MAX_RETRIES, wait, url.split("/")[-1],
+            )
+            time.sleep(wait)
+        # Final attempt — let it raise on any error
+        resp = self.session.get(url, params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp
 
     def fetch_forecast(
         self, waypoint: Waypoint, model: ModelSource
@@ -70,8 +95,7 @@ class OpenMeteoClient:
 
         logger.info("Fetching %s for %s (%s)", endpoint.name, waypoint.icao, waypoint.name)
 
-        resp = self.session.get(endpoint.base_url, params=params, timeout=self.timeout)
-        resp.raise_for_status()
+        resp = self._get_with_retry(endpoint.base_url, params)
         data = resp.json()
 
         hourly_data = data.get("hourly", {})
@@ -162,8 +186,7 @@ class OpenMeteoClient:
             end_date or "range",
         )
 
-        resp = self.session.get(endpoint.base_url, params=params, timeout=self.timeout)
-        resp.raise_for_status()
+        resp = self._get_with_retry(endpoint.base_url, params)
         response_json = resp.json()
 
         # Single-point returns a dict; multi-point returns a list of dicts.
