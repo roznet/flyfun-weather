@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import pct_above_threshold, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold, worst_status
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -95,9 +95,10 @@ class CloudTopEvaluator:
                     detail = "No significant cloud layers"
             else:
                 status = pct_above_threshold(above_ceiling, total, pct_amber, red_pct=60)
-                pct = 100 * above_ceiling / total
-                detail = f"Cloud tops above ceiling at {above_ceiling}/{total} points ({pct:.0f}%, max {max_top:.0f}ft)"
+                ext = format_extent(above_ceiling, total, ctx.total_distance_nm)
+                detail = f"Cloud tops above ceiling over {ext} (max {max_top:.0f}ft)"
 
+            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -105,6 +106,8 @@ class CloudTopEvaluator:
                 affected_points=above_ceiling,
                 total_points=total,
                 affected_pct=100 * above_ceiling / total if total > 0 else 0,
+                affected_nm=round(above_ceiling * spacing, 1),
+                total_nm=round(ctx.total_distance_nm, 1),
             ))
 
         aggregate = worst_status([m.status for m in per_model])

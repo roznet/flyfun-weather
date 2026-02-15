@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import pct_above_threshold, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold, worst_status
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AgreementLevel,
@@ -95,13 +95,14 @@ class ModelAgreementEvaluator:
         else:
             aggregate = pct_above_threshold(poor_count, total, poor_pct_amber, poor_pct_red)
             if aggregate == AdvisoryStatus.GREEN and moderate_count > 0:
-                # Still green but with moderate disagreement
-                detail = f"Mostly good agreement, moderate divergence at {moderate_count}/{total} points"
+                ext = format_extent(moderate_count, total, ctx.total_distance_nm)
+                detail = f"Mostly good agreement, moderate divergence over {ext}"
             else:
-                pct = 100 * poor_count / total
-                detail = f"Poor model agreement at {poor_count}/{total} points ({pct:.0f}%)"
+                ext = format_extent(poor_count, total, ctx.total_distance_nm)
+                detail = f"Poor model agreement over {ext}"
 
         # Report as a single "model" result since agreement is cross-model
+        spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
         per_model = [ModelAdvisoryResult(
             model="all",
             status=aggregate,
@@ -109,6 +110,8 @@ class ModelAgreementEvaluator:
             affected_points=poor_count,
             total_points=total,
             affected_pct=100 * poor_count / total if total > 0 else 0,
+            affected_nm=round(poor_count * spacing, 1),
+            total_nm=round(ctx.total_distance_nm, 1),
         )]
 
         return RouteAdvisoryResult(

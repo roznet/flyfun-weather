@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import pct_above_threshold, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold, worst_status
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -96,22 +96,22 @@ class VMCCruiseEvaluator:
                 detail = "No data"
             else:
                 imc_count = bkn_count + ovc_count
-                imc_pct = 100 * imc_count / total
                 ovc_pct = 100 * ovc_count / total
 
                 if ovc_pct >= ovc_pct_red:
                     status = AdvisoryStatus.RED
-                    detail = f"OVC at cruise {ovc_count}/{total} points ({ovc_pct:.0f}%)"
-                elif imc_pct >= bkn_pct_amber:
+                    detail = f"OVC at cruise over {format_extent(ovc_count, total, ctx.total_distance_nm)}"
+                elif 100 * imc_count / total >= bkn_pct_amber:
                     status = AdvisoryStatus.AMBER
-                    detail = f"IMC at cruise {imc_count}/{total} points ({imc_pct:.0f}%)"
+                    detail = f"IMC at cruise over {format_extent(imc_count, total, ctx.total_distance_nm)}"
                 elif imc_count > 0:
                     status = AdvisoryStatus.GREEN
-                    detail = f"Mostly clear at cruise, IMC at {imc_count}/{total} points"
+                    detail = f"Mostly clear at cruise, IMC over {format_extent(imc_count, total, ctx.total_distance_nm)}"
                 else:
                     status = AdvisoryStatus.GREEN
                     detail = "Clear at cruise altitude"
 
+            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -119,6 +119,8 @@ class VMCCruiseEvaluator:
                 affected_points=bkn_count + ovc_count,
                 total_points=total,
                 affected_pct=100 * (bkn_count + ovc_count) / total if total > 0 else 0,
+                affected_nm=round((bkn_count + ovc_count) * spacing, 1),
+                total_nm=round(ctx.total_distance_nm, 1),
             ))
 
         aggregate = worst_status([m.status for m in per_model])

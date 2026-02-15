@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import pct_above_threshold, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold, worst_status
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -101,21 +101,22 @@ class TurbulenceEvaluator:
                 if point_affected:
                     affected += 1
 
+            ext = format_extent(affected, total, ctx.total_distance_nm)
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "No data"
             elif has_severe:
                 status = AdvisoryStatus.RED
-                detail = f"Severe CAT at {affected}/{total} points"
+                detail = f"Severe CAT over {ext}"
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = "Smooth ride expected"
             else:
                 status = pct_above_threshold(affected, total, route_pct_amber, red_pct=50)
-                pct = 100 * affected / total
-                risk_label = worst_cat.value.upper() if worst_cat != CATRiskLevel.NONE else "turbulence"
-                detail = f"{risk_label} at {affected}/{total} points ({pct:.0f}%)"
+                risk_label = worst_cat.value.upper() if worst_cat != CATRiskLevel.NONE else "Turbulence"
+                detail = f"{risk_label} over {ext}"
 
+            spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
             per_model.append(ModelAdvisoryResult(
                 model=model,
                 status=status,
@@ -123,6 +124,8 @@ class TurbulenceEvaluator:
                 affected_points=affected,
                 total_points=total,
                 affected_pct=100 * affected / total if total > 0 else 0,
+                affected_nm=round(affected * spacing, 1),
+                total_nm=round(ctx.total_distance_nm, 1),
             ))
 
         aggregate = worst_status([m.status for m in per_model])

@@ -55,6 +55,8 @@ class ModelAdvisoryResult(BaseModel):
     affected_points: int = 0
     total_points: int = 0
     affected_pct: float = 0.0
+    affected_nm: float = 0.0
+    total_nm: float = 0.0
 
 
 class RouteAdvisoryResult(BaseModel):
