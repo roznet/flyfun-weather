@@ -1162,6 +1162,69 @@ label {
   text-decoration: underline;
 }
 
+/* Discuss with AI */
+.popup-discuss-ai {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color, #e0e0e0);
+}
+.popup-discuss-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.popup-discuss-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #888);
+}
+.popup-discuss-hint {
+  font-size: 0.7rem;
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+.popup-discuss-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+.popup-ai-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.popup-ai-btn:hover {
+  filter: brightness(1.1);
+  text-decoration: none;
+}
+.popup-ai-claude {
+  background: #d4a373;
+  color: #3d2b1f;
+}
+.popup-ai-chatgpt {
+  background: #74aa9c;
+  color: #fff;
+}
+.popup-ai-gemini {
+  background: #7baaf7;
+  color: #fff;
+}
+.popup-discuss-toast {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--success-color, #4caf50);
+  font-weight: 500;
+}
+
 /* Threshold bar */
 .threshold-bar {
   display: flex;

@@ -21,6 +21,7 @@ export interface MetricCatalogEntry {
   limitations: string;
   theory?: string;
   wikipedia?: string;
+  llm_prompt?: string;
   thresholds: MetricThreshold[];
 }
 
