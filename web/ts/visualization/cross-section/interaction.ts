@@ -117,10 +117,10 @@ export function attachInteraction(
     // Icing
     const activeIcing = point.icingZones.filter((z) => z.risk !== 'none');
     if (activeIcing.length > 0) {
-      const worstRisk = activeIcing.reduce((a, b) => {
-        const order = ['light', 'moderate', 'severe'];
-        return order.indexOf(b.risk) > order.indexOf(a.risk) ? b.risk : a.risk;
-      }, 'none');
+      const order = ['none', 'light', 'moderate', 'severe'];
+      const worstRisk = activeIcing.reduce((worst, z) =>
+        order.indexOf(z.risk) > order.indexOf(worst) ? z.risk : worst
+      , activeIcing[0].risk);
       lines.push(`Icing: ${worstRisk}`);
     }
 
