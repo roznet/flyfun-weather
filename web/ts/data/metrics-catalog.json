@@ -6,7 +6,7 @@
     "primary_goal": "Measure total energy available for storm growth.",
     "best_used_for": "Assessing how violent storms could be if they fire.",
     "limitations": "High CAPE means nothing without a trigger (front, orography, sea breeze). CAPE alone doesn't tell you about storm organisation — you need shear for that.",
-    "theory": "Imagine heating a bubble of air at the ground and watching it rise. Wherever it's warmer than its surroundings, it accelerates upward — that's buoyancy. CAPE sums all that upward energy from the Level of Free Convection to the Equilibrium Level: CAPE = ∫ g·(T_parcel − T_env)/T_env dz. We trace a surface parcel upward through model temperature data and add up the positive energy.",
+    "theory": "Imagine heating a bubble of air at the ground and watching it rise. Wherever it's warmer than its surroundings, it accelerates upward — that's buoyancy. CAPE (Convective Available Potential Energy) sums all that upward energy from the Level of Free Convection to the Equilibrium Level: CAPE = ∫ g·(T_parcel − T_env)/T_env dz. We trace a surface parcel upward through model temperature data and add up the positive energy.",
     "wikipedia": "https://en.wikipedia.org/wiki/Convective_available_potential_energy",
     "thresholds": [
       { "min": 0, "max": 100, "label": "None", "risk": "none", "meaning": "Storms won't have any legs." },
@@ -57,7 +57,7 @@
     "primary_goal": "Measure the energy barrier suppressing convection.",
     "best_used_for": "Judging whether storms will fire easily or need a strong trigger to break through.",
     "limitations": "CIN can erode quickly with afternoon heating. A strong cap at 09Z can vanish by 15Z. Check the trend, not just the snapshot.",
-    "theory": "The energy a rising air parcel must overcome before it can rise freely — like pushing a ball over a hill before it rolls down the other side. CIN is the sum of negative buoyancy below the LFC: CIN = ∫ g·(T_parcel − T_env)/T_env dz, where the parcel is cooler than its surroundings. A strong cap means the atmosphere needs a powerful push (front, mountain, sea breeze) to break through and release the CAPE above.",
+    "theory": "Convective Inhibition (CIN) is the energy a rising air parcel must overcome before it can rise freely — like pushing a ball over a hill before it rolls down the other side. CIN is the sum of negative buoyancy below the LFC: CIN = ∫ g·(T_parcel − T_env)/T_env dz, where the parcel is cooler than its surroundings. A strong cap means the atmosphere needs a powerful push (front, mountain, sea breeze) to break through and release the CAPE above.",
     "wikipedia": "https://en.wikipedia.org/wiki/Convective_inhibition",
     "thresholds": [
       { "min": -50, "max": 0, "label": "Weak cap", "risk": "moderate", "meaning": "Convection fires easily with modest heating or lift." },
@@ -105,7 +105,7 @@
     "best_used_for": "Deciding if you can fly direct or need to weave around cells.",
     "limitations": "Relies heavily on 700 hPa moisture. Over-predicts in tropical air masses and under-predicts in dry desert air.",
     "theory": "Combines three thunderstorm ingredients into one number: low-to-mid instability, low-level moisture, and mid-level dryness. K = (T₈₅₀ − T₅₀₀) + Td₈₅₀ − (T₇₀₀ − Td₇₀₀). The first term measures lapse rate, the second adds low-level moisture, and the third penalises dry mid-levels (which choke storms). Higher values mean more storm coverage.",
-    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_instability",
+    "wikipedia": "https://en.wikipedia.org/wiki/K-index_(meteorology)",
     "thresholds": [
       { "min": null, "max": 0, "label": "Stable", "risk": "none", "meaning": "Very stable atmosphere. No thunderstorm threat." },
       { "min": 0, "max": 20, "label": "Clear", "risk": "none", "meaning": "No air-mass storms expected." },
@@ -122,7 +122,7 @@
     "best_used_for": "Early warning of severe weather formation.",
     "limitations": "Prone to false positives in cold-core low pressure systems where the air is naturally very cold aloft but convection is shallow.",
     "theory": "Adds two components: Vertical Totals (how fast temperature drops with height: T₈₅₀ − T₅₀₀) and Cross Totals (how moist the low levels are relative to cold air aloft: Td₈₅₀ − T₅₀₀). Formula: TT = (T₈₅₀ − T₅₀₀) + (Td₈₅₀ − T₅₀₀). Values above 50 start flagging severe weather risk, above 55 means widespread dangerous conditions.",
-    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_instability",
+    "wikipedia": "https://en.wikipedia.org/wiki/Total_totals_index",
     "thresholds": [
       { "min": 0, "max": 44, "label": "Quiet", "risk": "none", "meaning": "No significant storms." },
       { "min": 44, "max": 50, "label": "Scattered", "risk": "low", "meaning": "Scattered showers and isolated lightning." },
@@ -140,7 +140,7 @@
     "theory": "The vector wind difference between the surface and 6 km altitude — how much the wind changes speed and direction through the lower atmosphere. Calculated as |V₆ₖₘ − V_sfc| using the full wind vector (both speed and direction). Strong shear tilts storm updrafts so rain falls away from the updraft instead of choking it, letting storms persist longer and sometimes rotate.",
     "wikipedia": "https://en.wikipedia.org/wiki/Wind_shear",
     "thresholds": [
-      { "min": 0, "max": 25, "label": "Weak", "risk": "none", "meaning": "Storms are disorganised and short-lived." },
+      { "min": 0, "max": 25, "label": "Weak", "risk": "none", "meaning": "Storms are disorganised and short-lived (pulse storms)." },
       { "min": 25, "max": 40, "label": "Moderate", "risk": "moderate", "meaning": "Organised multicells. Storms persist with heavy rain and gusty winds." },
       { "min": 40, "max": null, "label": "Strong", "risk": "severe", "meaning": "Supercell potential. Long-lived rotating storms." }
     ]
@@ -199,7 +199,7 @@
     "primary_goal": "Mark the altitude of peak supercooled water content.",
     "best_used_for": "Defining the worst icing band — freezing level to -10°C level is the danger zone.",
     "limitations": "The actual peak depends on cloud type and moisture. This is a temperature proxy, not a direct measurement of liquid water.",
-    "theory": "The altitude where temperature drops to −10°C, found by interpolating the model temperature profile. The zone from the freezing level to −10°C contains the most supercooled liquid water — water that's below freezing but hasn't turned to ice yet. This is where icing is most dangerous because there's the most liquid water available to freeze onto your aircraft.",
+    "theory": "The altitude where temperature drops to −10°C, found by interpolating the model temperature profile. The zone from the freezing level to −10°C contains the most supercooled liquid water — water that's below freezing but hasn't turned to ice yet. This is where icing is most dangerous (Clear/Mixed ice) because there's the most liquid water available to freeze onto your aircraft.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
     "thresholds": []
   },
@@ -209,7 +209,7 @@
     "vibe": "The ice crystal line — clouds are frozen, not wet",
     "primary_goal": "Mark the altitude above which icing risk drops sharply.",
     "best_used_for": "The icing ceiling — above here, most water is already ice crystals.",
-    "limitations": "Some supercooled water can persist below -20°C in vigorous convection. Don't treat this as a hard guarantee.",
+    "limitations": "Some supercooled water can persist below -20°C in vigorous convection (SLD). Don't treat this as a hard guarantee.",
     "theory": "The altitude where temperature reaches −20°C. Above this level, most cloud droplets have frozen into ice crystals through a process called glaciation. Ice crystals bounce off your aircraft rather than sticking, so icing risk drops sharply. In calm stratiform clouds this is a reliable boundary, though vigorous thunderstorm updrafts can carry supercooled water higher.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
     "thresholds": []
@@ -236,7 +236,7 @@
     "primary_goal": "Identify the altitude where storms become self-sustaining.",
     "best_used_for": "Judging how easily convection will fire.",
     "limitations": "May not exist in stable profiles. When it does exist, a trigger (front, orography, heating) is still needed to push air up to it.",
-    "theory": "The altitude above which a lifted air parcel becomes warmer than its environment and keeps rising on its own — the storm ignition point. Found by tracing a parcel upward through the model temperature profile and finding where it crosses from cooler-than-surroundings to warmer. If no crossing exists, the atmosphere is too stable for free convection.",
+    "theory": "The Level of Free Convection (LFC) is the altitude above which a lifted air parcel becomes warmer than its environment and keeps rising on its own — the storm ignition point. Found by tracing a parcel upward through the model temperature profile and finding where it crosses from cooler-than-surroundings to warmer. If no crossing exists, the atmosphere is too stable for free convection.",
     "wikipedia": "https://en.wikipedia.org/wiki/Level_of_free_convection",
     "thresholds": []
   },
@@ -247,7 +247,7 @@
     "primary_goal": "Estimate the top of convective storms.",
     "best_used_for": "Knowing how tall storms will get — and whether you can fly over them.",
     "limitations": "Theoretical maximum height. Real storm tops depend on entrainment and shear, so actual tops are usually a bit lower.",
-    "theory": "The altitude where a rising storm parcel cools back to the same temperature as its surroundings and stops accelerating — the theoretical storm top. Found by tracing the parcel above the LFC until its temperature matches the environment again. This is where thunderstorm anvils spread out horizontally. Higher EL means taller storms and more severe weather potential.",
+    "theory": "The Equilibrium Level (EL) is the altitude where a rising storm parcel cools back to the same temperature as its surroundings and stops accelerating — the theoretical storm top. Found by tracing the parcel above the LFC until its temperature matches the environment again. This is where thunderstorm anvils spread out horizontally. Higher EL means taller storms and more severe weather potential.",
     "wikipedia": "https://en.wikipedia.org/wiki/Equilibrium_level",
     "thresholds": []
   },
@@ -258,7 +258,7 @@
     "primary_goal": "Measure total moisture in the atmospheric column.",
     "best_used_for": "Gauging how much rain or icing moisture is hiding above you.",
     "limitations": "Climate-dependent. 25mm is extreme for Scotland but ordinary for the Mediterranean in summer. Interpret relative to the region.",
-    "theory": "If you squeezed all the water vapour out of a column of air from the ground to the top of the atmosphere, this is how deep the puddle would be. Calculated by adding up the moisture (mixing ratio) at each pressure level: PW = (1/g) × ∫ mixing_ratio dp. Higher values mean more moisture available for rain, snow, and icing accretion.",
+    "theory": "If you squeezed all the water vapour out of a column of air from the ground to the top of the atmosphere, this is how deep the puddle would be. Calculated by adding up the moisture (mixing ratio) at each pressure level: PW = (1/g) × ∫ mixing_ratio dp. Higher values mean more moisture available for heavy rain and potentially faster icing accretion if that moisture is supercooled.",
     "wikipedia": "https://en.wikipedia.org/wiki/Precipitable_water",
     "thresholds": [
       { "min": 0, "max": 15, "label": "Dry", "risk": "none", "meaning": "Light precipitation at most." },
@@ -287,7 +287,7 @@
     "primary_goal": "Indicate surface moisture and condensation risk.",
     "best_used_for": "Fog risk assessment, cloud base estimation, and understanding moisture availability.",
     "limitations": "A single surface value — doesn't tell you about moisture at altitude. Very location-dependent near coasts and water bodies.",
-    "theory": "The temperature at which the air becomes fully saturated and water starts to condense — the closer it is to the actual temperature, the closer you are to fog or cloud. When T − Td < 3°C, visible moisture is likely. A quick cloud base estimate: height ≈ 125 × (T − Td) metres. Computed from temperature and relative humidity using the Magnus formula: Td = (b·γ)/(a−γ) where γ = (a·T)/(b+T) + ln(RH/100).",
+    "theory": "The temperature at which the air becomes fully saturated and water starts to condense — the closer it is to the actual temperature, the closer you are to fog or cloud. When T − Td < 3°C, visible moisture is likely. A quick cloud base estimate: height ≈ 125 × (T − Td) metres. Computed from temperature and relative humidity using the Magnus formula approximation.",
     "wikipedia": "https://en.wikipedia.org/wiki/Dew_point",
     "thresholds": []
   },
@@ -337,8 +337,8 @@
     "thresholds": [
       { "min": null, "max": 0, "label": "Inversion", "risk": "moderate", "meaning": "Temperature increasing with height. Traps haze, creates turbulence at boundary." },
       { "min": 0, "max": 6, "label": "Stable", "risk": "none", "meaning": "Below moist adiabatic rate. Smooth, stratified air." },
-      { "min": 6, "max": 10, "label": "Conditionally unstable", "risk": "low", "meaning": "Between moist and dry adiabatic rates. Unstable if air is saturated." },
-      { "min": 10, "max": null, "label": "Absolutely unstable", "risk": "moderate", "meaning": "Steeper than the dry rate. Convection occurs freely — thermals and turbulence." }
+      { "min": 6, "max": 9.8, "label": "Conditionally unstable", "risk": "low", "meaning": "Between moist and dry adiabatic rates. Unstable if air is saturated (in cloud)." },
+      { "min": 9.8, "max": null, "label": "Absolutely unstable", "risk": "moderate", "meaning": "Steeper than the dry rate. Convection occurs freely — thermals and turbulence." }
     ]
   },
   "equivalent_potential_temperature_k": {
@@ -432,7 +432,7 @@
     "primary_goal": "Indicate expected hourly precipitation amount.",
     "best_used_for": "Planning for reduced visibility and icing in precipitation.",
     "limitations": "Model grid averages smooth out local intensity peaks. Thunderstorm rain can be much heavier than shown.",
-    "theory": "Hourly accumulated precipitation from the NWP model. The model calculates rain and snow from its temperature, moisture, and vertical motion fields. The amount is a grid-cell average, so intense local cores (especially in thunderstorms) can be much heavier than the model shows. Any precipitation below the freezing level is rain; above it, expect snow or ice pellets.",
+    "theory": "Hourly accumulated precipitation from the NWP model. The model calculates rain and snow from its temperature, moisture, and vertical motion fields. The amount is a grid-cell average, so intense local cores (especially in thunderstorms) can be much heavier than the model shows. Any precipitation below the freezing level is rain; above it, expect supercooled water (icing hazard) or snow/ice pellets depending on temperature and crystal structure.",
     "wikipedia": "https://en.wikipedia.org/wiki/Precipitation_(meteorology)",
     "thresholds": [
       { "min": 0, "max": 0.5, "label": "Dry", "risk": "none", "meaning": "Negligible precipitation." },
@@ -593,12 +593,12 @@
     "primary_goal": "Detect temperature inversions where air warms with altitude instead of cooling.",
     "best_used_for": "Anticipating trapped pollution layers, turbulence at inversion boundaries, and restricted vertical visibility.",
     "limitations": "Based on coarse pressure-level data (8 levels). Thin inversions may be missed. Strength is estimated from temperature increase across the layer.",
-    "theory": "A temperature inversion is where the air gets warmer with altitude instead of the normal cooling — the lapse rate goes negative. Detected by finding layers where temperature increases with height. Inversions act as lids: they trap pollution, haze, and moisture below, restrict vertical visibility, and create turbulence at the boundary where warm air caps cool air. Common causes include radiative cooling (overnight) and subsidence (high-pressure systems).",
+    "theory": "A temperature inversion is where the air gets warmer with altitude instead of the normal cooling — the lapse rate goes negative. Detected by finding layers where temperature increases with height. Inversions act as lids: they trap pollution, haze, and moisture below, restrict vertical visibility, and create turbulence (Low Level Wind Shear - LLWS) at the boundary where warm air caps cool air. Common causes include radiative cooling (overnight) and subsidence (high-pressure systems).",
     "wikipedia": "https://en.wikipedia.org/wiki/Inversion_(meteorology)",
     "thresholds": [
       { "min": null, "max": null, "label": "Weak", "risk": "low", "meaning": "Mild inversion. Slight haze trapping, minor turbulence at boundary." },
       { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant lid. Reduced visibility below, bumpy transition through." },
-      { "min": null, "max": null, "label": "Strong", "risk": "high", "meaning": "Strong cap. Dense haze/fog trapped below, sharp turbulence at boundary." }
+      { "min": null, "max": null, "label": "Strong", "risk": "high", "meaning": "Strong cap. Dense haze/fog trapped below, sharp turbulence (LLWS) at boundary." }
     ]
   }
 }
