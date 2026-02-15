@@ -583,14 +583,15 @@ def _run_gramet(
             altitude_ft=route.cruise_altitude_ft,
             departure_time=departure_time,
             duration_hours=duration_hours,
+            fmt="pdf",
         )
 
         if output_dir:
-            out_path = output_dir / "gramet.png"
+            out_path = output_dir / "gramet.pdf"
         else:
             out_dir = data_dir / "gramet" / target_date / f"d-{days_out}_{fetch_date}"
             out_dir.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir / "gramet.png"
+            out_path = out_dir / "gramet.pdf"
         out_path.write_bytes(data)
         result.gramet_path = out_path
         result.usage.gramet_fetched = True

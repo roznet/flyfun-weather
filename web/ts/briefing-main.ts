@@ -314,7 +314,7 @@ async function init(): Promise<void> {
   if (lightbox && lightboxImg) {
     document.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
-      if (target.classList.contains('gramet-img') || target.classList.contains('skewt-img')) {
+      if (target.classList.contains('skewt-img')) {
         lightboxImg.src = (target as HTMLImageElement).src;
         lightbox.classList.add('active');
       }

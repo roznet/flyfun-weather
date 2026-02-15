@@ -304,7 +304,9 @@ export function renderGramet(
 
   const url = api.grametUrl(flight.id, pack.fetch_timestamp);
   el.innerHTML = `
-    <img src="${url}" alt="GRAMET cross-section" class="gramet-img" loading="lazy">
+    <object data="${url}" type="application/pdf" class="gramet-pdf">
+      <p>Cannot display GRAMET PDF inline. <a href="${url}" target="_blank">Open in new tab</a></p>
+    </object>
   `;
 }
 
