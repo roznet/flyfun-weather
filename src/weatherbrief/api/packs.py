@@ -55,6 +55,7 @@ class PackMetaResponse(BaseModel):
     has_gramet: bool
     has_skewt: bool
     has_digest: bool
+    has_advisories: bool = False
     assessment: str | None
     assessment_reason: str | None
     model_init_times: dict[str, int] = Field(default_factory=dict)
@@ -65,6 +66,12 @@ def _meta_to_response(
     meta: BriefingPackMeta,
     data_status: DataStatus | None = None,
 ) -> PackMetaResponse:
+    # Check for advisories file on disk
+    has_advisories = False
+    if meta.artifact_path:
+        from pathlib import Path
+        has_advisories = (Path(meta.artifact_path) / "route_advisories.json").exists()
+
     return PackMetaResponse(
         flight_id=meta.flight_id,
         fetch_timestamp=meta.fetch_timestamp,
@@ -72,6 +79,7 @@ def _meta_to_response(
         has_gramet=meta.has_gramet,
         has_skewt=meta.has_skewt,
         has_digest=meta.has_digest,
+        has_advisories=has_advisories,
         assessment=meta.assessment,
         assessment_reason=meta.assessment_reason,
         model_init_times=meta.model_init_times,
@@ -157,6 +165,7 @@ _STAGE_LABELS: dict[str, str] = {
     "fetch_forecasts": "Fetching forecasts",
     "waypoint_analysis": "Analyzing waypoints",
     "route_analysis": "Analyzing route points",
+    "route_advisories": "Evaluating route advisories",
     "save_snapshot": "Saving snapshot",
     "fetch_gramet": "Fetching GRAMET",
     "generate_skewt": "Generating Skew-T",
@@ -168,7 +177,8 @@ _STAGE_PROGRESS: dict[str, float] = {
     "elevation_profile": 0.08,
     "fetch_forecasts": 0.40,
     "waypoint_analysis": 0.50,
-    "route_analysis": 0.60,
+    "route_analysis": 0.58,
+    "route_advisories": 0.62,
     "save_snapshot": 0.65,
     "fetch_gramet": 0.75,
     "generate_skewt": 0.85,
@@ -571,6 +581,21 @@ def get_route_analyses(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
     return FileResponse(ra_path, media_type="application/json")
+
+
+@router.get("/{timestamp}/advisories")
+def get_advisories(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get the route advisories JSON for a pack."""
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    adv_path = pack_dir / "route_advisories.json"
+    if not adv_path.exists():
+        raise HTTPException(status_code=404, detail="Route advisories not available")
+    return FileResponse(adv_path, media_type="application/json")
 
 
 @router.get("/{timestamp}/elevation")

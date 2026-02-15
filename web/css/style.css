@@ -1488,6 +1488,76 @@ label {
   color: var(--text-muted);
 }
 
+/* --- Route Advisories --- */
+
+.advisory-summary {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.advisory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.75rem;
+}
+
+.advisory-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: var(--surface);
+  transition: border-color 0.15s;
+}
+.advisory-card.advisory-red { border-left: 3px solid var(--red); }
+.advisory-card.advisory-amber { border-left: 3px solid var(--amber); }
+.advisory-card.advisory-green { border-left: 3px solid var(--green); }
+.advisory-card.advisory-unavailable { border-left: 3px solid var(--text-muted); }
+
+.advisory-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.advisory-card-header .badge {
+  flex-shrink: 0;
+  min-width: 1.5rem;
+  text-align: center;
+}
+.advisory-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.advisory-models {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.adv-model-badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.badge-muted { background: var(--bg); color: var(--text-muted); }
+
+.advisory-detail {
+  font-size: 0.8rem;
+  color: var(--text);
+  line-height: 1.4;
+}
+.advisory-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 640px) {
@@ -1496,4 +1566,5 @@ label {
   .skewt-card { width: 220px; }
   .metric-popup { max-width: 95vw; padding: 1rem; }
   .display-mode-toggle { font-size: 0.75rem; }
+  .advisory-grid { grid-template-columns: 1fr; }
 }

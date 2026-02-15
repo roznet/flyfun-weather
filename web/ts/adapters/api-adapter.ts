@@ -9,6 +9,7 @@ import type {
   PackMeta,
   RouteAnalysesManifest,
 } from '../store/types';
+import type { RouteAdvisoriesManifest } from '../types/advisories';
 import { API_BASE, apiFetch } from '../utils';
 
 /** Typed error for refresh stream failures — avoids fragile string matching. */
@@ -180,6 +181,17 @@ export async function fetchRouteAnalyses(
 ): Promise<RouteAnalysesManifest> {
   return apiFetch<RouteAnalysesManifest>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/route-analyses`
+  );
+}
+
+// --- Route advisories ---
+
+export async function fetchRouteAdvisories(
+  flightId: string,
+  timestamp: string,
+): Promise<RouteAdvisoriesManifest> {
+  return apiFetch<RouteAdvisoriesManifest>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories`
   );
 }
 

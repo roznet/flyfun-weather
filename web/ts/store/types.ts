@@ -38,6 +38,7 @@ export interface PackMeta {
   has_gramet: boolean;
   has_skewt: boolean;
   has_digest: boolean;
+  has_advisories?: boolean;
   assessment: string | null;
   assessment_reason: string | null;
   model_init_times?: Record<string, number>;

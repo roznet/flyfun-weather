@@ -4,6 +4,7 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
+import { renderAdvisories } from './managers/advisories-ui';
 import { renderUserInfo } from './utils';
 import { initInfoPopup, showMetricInfo } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
@@ -142,9 +143,11 @@ async function init(): Promise<void> {
       state.snapshot !== prev.snapshot ||
       state.digest !== prev.digest ||
       state.routeAnalyses !== prev.routeAnalyses ||
+      state.routeAdvisories !== prev.routeAdvisories ||
       state.elevationProfile !== prev.elevationProfile
     ) {
       ui.renderAssessment(state.currentPack);
+      renderAdvisories(state.routeAdvisories);
       ui.renderSynopsis(state.flight, state.currentPack, state.digest);
       ui.renderGramet(state.flight, state.currentPack);
       renderSliderSections(state);
@@ -331,6 +334,7 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack);
+    renderAdvisories(s.routeAdvisories);
     ui.renderSynopsis(s.flight, s.currentPack, s.digest);
     ui.renderGramet(s.flight, s.currentPack);
     renderSliderSections(s);

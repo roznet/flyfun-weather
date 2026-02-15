@@ -81,6 +81,7 @@ class BriefingResult:
     snapshot: ForecastSnapshot
     snapshot_path: Path
     elevation_profile_path: Path | None = None
+    route_advisories_path: Path | None = None
     gramet_path: Path | None = None
     skewt_paths: list[Path] = field(default_factory=list)
     digest_path: Path | None = None
@@ -226,6 +227,37 @@ def execute_briefing(
         except Exception:
             logger.warning("Route-point analysis failed", exc_info=True)
 
+    # --- Route advisories ---
+    route_advisories_manifest = None
+    if route_analyses_manifest and rp_analyses:
+        _notify("route_advisories")
+        try:
+            from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
+            from weatherbrief.models import RouteAdvisoriesManifest
+
+            advisory_ctx = RouteContext(
+                analyses=rp_analyses,
+                cross_sections=cross_sections,
+                elevation=elevation_profile,
+                models=model_names,
+                cruise_altitude_ft=route.cruise_altitude_ft,
+                flight_ceiling_ft=route.flight_ceiling_ft,
+                total_distance_nm=total_distance,
+            )
+            advisory_results = evaluate_all(advisory_ctx)
+            route_advisories_manifest = RouteAdvisoriesManifest(
+                advisories=advisory_results,
+                catalog=get_catalog(),
+                route_name=route.name,
+                cruise_altitude_ft=route.cruise_altitude_ft,
+                flight_ceiling_ft=route.flight_ceiling_ft,
+                total_distance_nm=total_distance,
+                models=model_names,
+            )
+            logger.info("Route advisories: %d evaluated", len(advisory_results))
+        except Exception:
+            logger.warning("Route advisory evaluation failed", exc_info=True)
+
     # --- Build & save snapshot ---
     snapshot = ForecastSnapshot(
         route=route,
@@ -257,6 +289,9 @@ def execute_briefing(
                     indent=2, exclude={"analyses": {"__all__": {"sounding": {"__all__": {"derived_levels"}}}}},
                 )
             )
+        if route_advisories_manifest:
+            adv_path = options.output_dir / "route_advisories.json"
+            adv_path.write_text(route_advisories_manifest.model_dump_json(indent=2))
         if elevation_profile:
             ep_path = options.output_dir / "elevation_profile.json"
             ep_path.write_text(elevation_profile.model_dump_json(indent=2))
@@ -271,6 +306,8 @@ def execute_briefing(
     result.usage.open_meteo_calls = len(cross_sections)
     if elevation_profile and options.output_dir:
         result.elevation_profile_path = options.output_dir / "elevation_profile.json"
+    if route_advisories_manifest and options.output_dir:
+        result.route_advisories_path = options.output_dir / "route_advisories.json"
 
     # --- Optional: GRAMET ---
     if options.fetch_gramet:

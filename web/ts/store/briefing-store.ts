@@ -2,6 +2,7 @@
 
 import { createStore } from 'zustand/vanilla';
 import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
+import type { RouteAdvisoriesManifest } from '../types/advisories';
 import type { DisplayMode, Tier } from '../types/metrics';
 import type { RenderMode, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
@@ -60,6 +61,7 @@ export interface BriefingState {
   snapshot: ForecastSnapshot | null;
   digest: WeatherDigest | null;
   routeAnalyses: RouteAnalysesManifest | null;
+  routeAdvisories: RouteAdvisoriesManifest | null;
   elevationProfile: ElevationProfile | null;
   freshness: DataStatus | null;
   freshnessLoading: boolean;
@@ -102,6 +104,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   snapshot: null,
   digest: null,
   routeAnalyses: null,
+  routeAdvisories: null,
   elevationProfile: null,
   freshness: null,
   freshnessLoading: false,
@@ -165,14 +168,17 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           // Digest fetch is non-critical
         }
       }
-      // Fetch route analyses and elevation profile in parallel
-      const [raResult, epResult] = await Promise.allSettled([
+      // Fetch route analyses, advisories, and elevation profile in parallel
+      let routeAdvisories: RouteAdvisoriesManifest | null = null;
+      const [raResult, epResult, advResult] = await Promise.allSettled([
         api.fetchRouteAnalyses(flight.id, timestamp),
         api.fetchElevationProfile(flight.id, timestamp),
+        pack.has_advisories ? api.fetchRouteAdvisories(flight.id, timestamp) : Promise.reject('no advisories'),
       ]);
       if (raResult.status === 'fulfilled') routeAnalyses = raResult.value;
       if (epResult.status === 'fulfilled') elevationProfile = epResult.value;
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, elevationProfile, selectedPointIndex: 0, loading: false });
+      if (advResult.status === 'fulfilled') routeAdvisories = advResult.value;
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, selectedPointIndex: 0, loading: false });
     } catch (err) {
       set({ loading: false, error: `Failed to load pack: ${err}` });
     }
