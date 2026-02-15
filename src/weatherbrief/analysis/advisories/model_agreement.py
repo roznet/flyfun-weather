@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold, worst_status
+from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AgreementLevel,
@@ -62,8 +62,7 @@ class ModelAgreementEvaluator:
         poor_pct_amber = params.get("poor_pct_amber", 25)
         poor_pct_red = params.get("poor_pct_red", 50)
 
-        # Model agreement is cross-model — not per-model
-        # We evaluate once and report on all models combined
+        # Model agreement is cross-model — evaluated once, not per-model
         total = 0
         poor_count = 0
         moderate_count = 0
@@ -73,13 +72,8 @@ class ModelAgreementEvaluator:
                 continue
             total += 1
 
-            # Count as "poor" if any key variable has POOR agreement
-            has_poor = any(
-                d.agreement == AgreementLevel.POOR for d in rpa.model_divergence
-            )
-            has_moderate = any(
-                d.agreement == AgreementLevel.MODERATE for d in rpa.model_divergence
-            )
+            has_poor = any(d.agreement == AgreementLevel.POOR for d in rpa.model_divergence)
+            has_moderate = any(d.agreement == AgreementLevel.MODERATE for d in rpa.model_divergence)
 
             if has_poor:
                 poor_count += 1
@@ -87,36 +81,22 @@ class ModelAgreementEvaluator:
                 moderate_count += 1
 
         if total == 0:
-            aggregate = AdvisoryStatus.UNAVAILABLE
+            status = AdvisoryStatus.UNAVAILABLE
             detail = "No model comparison data"
         elif poor_count == 0 and moderate_count == 0:
-            aggregate = AdvisoryStatus.GREEN
+            status = AdvisoryStatus.GREEN
             detail = "Good agreement across all models"
         else:
-            aggregate = pct_above_threshold(poor_count, total, poor_pct_amber, poor_pct_red)
-            if aggregate == AdvisoryStatus.GREEN and moderate_count > 0:
-                ext = format_extent(moderate_count, total, ctx.total_distance_nm)
-                detail = f"Mostly good agreement, moderate divergence over {ext}"
+            status = pct_above_threshold(poor_count, total, poor_pct_amber, poor_pct_red)
+            if status == AdvisoryStatus.GREEN and moderate_count > 0:
+                detail = f"Mostly good agreement, moderate divergence over {format_extent(moderate_count, total, ctx.total_distance_nm)}"
             else:
-                ext = format_extent(poor_count, total, ctx.total_distance_nm)
-                detail = f"Poor model agreement over {ext}"
+                detail = f"Poor model agreement over {format_extent(poor_count, total, ctx.total_distance_nm)}"
 
-        # Report as a single "model" result since agreement is cross-model
-        per_model = [ModelAdvisoryResult(
-            model="all",
-            status=aggregate,
-            detail=detail,
-            affected_points=poor_count,
-            total_points=total,
-            affected_pct=100 * poor_count / total if total > 0 else 0,
-            affected_nm=round(ctx.total_distance_nm * poor_count / total, 1) if total > 0 else 0,
-            total_nm=round(ctx.total_distance_nm, 1),
+        per_model = [ModelAdvisoryResult.build(
+            model="all", status=status, detail=detail,
+            affected=poor_count, total=total,
+            total_distance_nm=ctx.total_distance_nm,
         )]
 
-        return RouteAdvisoryResult(
-            advisory_id="model_agreement",
-            aggregate_status=aggregate,
-            aggregate_detail=detail,
-            per_model=per_model,
-            parameters_used=params,
-        )
+        return RouteAdvisoryResult.from_per_model("model_agreement", per_model, params)

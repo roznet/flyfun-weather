@@ -19,6 +19,16 @@ class AdvisoryStatus(str, Enum):
     RED = "red"
     UNAVAILABLE = "unavailable"
 
+    @classmethod
+    def worst(cls, statuses: list[AdvisoryStatus]) -> AdvisoryStatus:
+        """Return the most severe status, ignoring UNAVAILABLE."""
+        _ORDER = [cls.GREEN, cls.AMBER, cls.RED]
+        result = cls.GREEN
+        for s in statuses:
+            if s in _ORDER and _ORDER.index(s) > _ORDER.index(result):
+                result = s
+        return result
+
 
 class AdvisoryParameterDef(BaseModel):
     """Definition of a user-tunable parameter for an advisory."""
@@ -58,6 +68,29 @@ class ModelAdvisoryResult(BaseModel):
     affected_nm: float = 0.0
     total_nm: float = 0.0
 
+    @classmethod
+    def build(
+        cls,
+        *,
+        model: str,
+        status: AdvisoryStatus,
+        detail: str,
+        affected: int,
+        total: int,
+        total_distance_nm: float,
+    ) -> ModelAdvisoryResult:
+        """Build a result, computing pct and nm from point counts."""
+        return cls(
+            model=model,
+            status=status,
+            detail=detail,
+            affected_points=affected,
+            total_points=total,
+            affected_pct=round(100 * affected / total, 1) if total > 0 else 0,
+            affected_nm=round(total_distance_nm * affected / total, 1) if total > 0 else 0,
+            total_nm=round(total_distance_nm, 1),
+        )
+
 
 class RouteAdvisoryResult(BaseModel):
     """Result of one advisory evaluated across all models."""
@@ -67,6 +100,30 @@ class RouteAdvisoryResult(BaseModel):
     aggregate_detail: str = ""
     per_model: list[ModelAdvisoryResult] = Field(default_factory=list)
     parameters_used: dict[str, float] = Field(default_factory=dict)
+
+    @classmethod
+    def from_per_model(
+        cls,
+        advisory_id: str,
+        per_model: list[ModelAdvisoryResult],
+        params: dict[str, float],
+    ) -> RouteAdvisoryResult:
+        """Build aggregate result from per-model results.
+
+        Uses worst status across models; detail comes from the worst model.
+        """
+        agg = AdvisoryStatus.worst([m.status for m in per_model])
+        worst = next(
+            (m for m in per_model if m.status == agg),
+            per_model[0] if per_model else None,
+        )
+        return cls(
+            advisory_id=advisory_id,
+            aggregate_status=agg,
+            aggregate_detail=worst.detail if worst else "",
+            per_model=per_model,
+            parameters_used=params,
+        )
 
 
 class RouteAdvisoriesManifest(BaseModel):
