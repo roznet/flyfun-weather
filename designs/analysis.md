@@ -248,5 +248,6 @@ Route-point analysis (`analyze_all_route_points()`) adds interpolated time based
 - Input models: [data-models.md](./data-models.md)
 - Fetch layer: [fetch.md](./fetch.md)
 - Output consumers: [digest.md](./digest.md)
+- Route advisories: [advisories.md](./advisories.md) (route-level hazard evaluators consuming sounding analysis)
 - Sounding implementation plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
 - Vertical motion plan: [vertical-motion-plan.md](./vertical-motion-plan.md)

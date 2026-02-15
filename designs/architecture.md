@@ -34,6 +34,8 @@ analyze_waypoint()  (per waypoint)
     ↓
 analyze_all_route_points()  → RouteAnalysesManifest (full route analysis)
     ↓
+evaluate_all(RouteContext)  → RouteAdvisoriesManifest (9 hazard evaluators)
+    ↓
 ForecastSnapshot  (root object, saved as JSON)
     ↓
 Optional outputs:
@@ -69,6 +71,19 @@ src/weatherbrief/
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
 │   ├── comparison.py  # Multi-model divergence scoring (15 thresholds)
+│   ├── advisories/    # Route advisory evaluators (9 hazard types)
+│   │   ├── __init__.py      # evaluate_all(), get_catalog()
+│   │   ├── registry.py      # @register decorator, auto-discovery
+│   │   ├── _helpers.py      # Shared: format_extent, pct_above_threshold, terrain lookup
+│   │   ├── cloud_top.py     # Cloud top vs ceiling
+│   │   ├── convective.py    # Convective risk along route
+│   │   ├── fiki_icing.py    # FIKI icing layer thickness
+│   │   ├── freezing_level.py # Freezing level vs terrain
+│   │   ├── icing_escape.py  # Non-FIKI icing escape viability
+│   │   ├── model_agreement.py # Cross-model divergence
+│   │   ├── mountain_wind.py # Orographic/rotor risk
+│   │   ├── turbulence.py    # CAT + vertical motion
+│   │   └── vmc_cruise.py    # Cloud coverage at cruise
 │   └── sounding/      # MetPy-based sounding analysis subpackage
 │       ├── __init__.py     # analyze_sounding() entry point
 │       ├── prepare.py      # Pint boundary: PressureLevelData → PreparedProfile
@@ -126,11 +141,11 @@ web/
 ├── css/style.css      # Shared styles
 ├── ts/
 │   ├── store/         # Zustand vanilla stores + shared types
-│   ├── managers/      # DOM rendering functions
+│   ├── managers/      # DOM rendering functions (briefing-ui, advisories-ui, etc.)
 │   ├── adapters/      # API communication layer (api, auth, preferences, admin)
 │   ├── components/    # Reusable UI components (info-popup)
 │   ├── helpers/       # Metric lookup, threshold rendering
-│   ├── types/         # Shared TypeScript type definitions (metrics)
+│   ├── types/         # Shared TypeScript type definitions (metrics, advisories)
 │   ├── data/          # Static data (metrics-catalog.json, metrics-display.json)
 │   ├── visualization/ # Canvas-rendered cross-section visualization
 │   │   ├── cross-section/
@@ -142,6 +157,7 @@ web/
 │   │   ├── controls/panel.ts    # Layer toggles + model selector
 │   │   ├── data-extract.ts      # Transform API data → VizRouteData
 │   │   ├── scales.ts            # Color/opacity scales for risk levels
+│   │   ├── layer-legends.ts     # Legend entries for all layers
 │   │   └── types.ts             # Shared viz type definitions
 │   ├── utils.ts       # Shared utilities (API base, auth checks, nav)
 │   ├── flights-main.ts    # Flights page entry
@@ -179,6 +195,7 @@ data/packs/
             ├── skewt/
             │   ├── EGTK_gfs.png
             │   └── ...
+            ├── route_advisories.json  # RouteAdvisoriesManifest
             ├── digest.md
             └── digest.json
 ```
@@ -214,6 +231,8 @@ FastAPI app at `api/app.py`, served by uvicorn.
 | `/api/flights/{id}/packs/{ts}/digest/json` | GET | Structured digest |
 | `/api/flights/{id}/packs/{ts}/report.html` | GET | Self-contained HTML report |
 | `/api/flights/{id}/packs/{ts}/report.pdf` | GET | PDF download |
+| `/api/flights/{id}/packs/{ts}/advisories` | GET | Route advisories JSON |
+| `/api/flights/{id}/packs/{ts}/advisories/recalculate` | POST | Re-evaluate advisories with user prefs |
 | `/api/flights/{id}/packs/{ts}/email` | POST | Send email to logged-in user |
 | `/api/user/preferences` | GET/PUT | User preferences (defaults, digest config) |
 | `/api/user/preferences/autorouter` | DELETE | Clear autorouter credentials |
@@ -283,6 +302,8 @@ Static files served from `web/` at root.
 | 7.5 | Done | Metric explanations UI: catalog-driven info popups, tiered display, threshold scales |
 | 7.6 | Done | Inversion detection, Ogimet icing index, GRAMET PDF, convective risk visualization |
 | 7.7 | Done | Legacy routes.yaml removal, collapsible sections, admin force refresh |
+| 7.8 | Done | NWP cloud bands, terrain draw-order fix, layer legends, "Discuss with AI" buttons |
+| 8.1 | Done | Route advisory system: 9 evaluators, registry, user-tunable parameters, recalculation, frontend dashboard |
 
 ## Docker
 
@@ -312,4 +333,5 @@ docker-compose up -d
 - API & web plan: [plan-briefing-architecture.md](./plan-briefing-architecture.md)
 - Sounding analysis plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
 - Multi-user deployment: [multi-user-deployment.md](./multi-user-deployment.md)
+- Route advisories: [advisories.md](./advisories.md)
 - Cross-section visualization: [visualization.md](./visualization.md)

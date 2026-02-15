@@ -31,14 +31,17 @@ controls/panel.ts  (layer toggles, model selector, render mode)
 
 Rendered back-to-front in this order:
 
+Rendering order: **bands → terrain (covers below-surface artifacts) → lines → reference**.
+
 | Layer | Group | File | Default | Description |
 |-------|-------|------|---------|-------------|
-| Terrain fill | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
 | Convective BG | convection | `convective-bg.ts` | on | Tower columns LCL→EL, hatching, CB labels, anvil strip |
 | Cloud bands | clouds | `cloud-bands.ts` | on | Opacity from coverage (SCT/BKN/OVC) |
+| NWP cloud bands | clouds | `nwp-cloud-bands.ts` | on | NWP cloud cover at ICAO altitude bands (low/mid), terrain-aware |
 | Icing bands | icing | `icing-bands.ts` | on | Colored by risk (light→severe) |
 | CAT bands | turbulence | `cat-bands.ts` | on | Orange-red bands by Richardson number |
 | Inversion bands | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
+| Terrain fill | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient (drawn after bands to mask below-surface artifacts) |
 | Freezing level | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
 | −10°C level | temperature | `temperature-lines.ts` | off | Cyan dashed line |
 | −20°C level | temperature | `temperature-lines.ts` | off | Navy dashed line |
@@ -90,6 +93,7 @@ interface CoordTransform {
 
 - **Canvas over SVG** — hundreds of data points and complex fills; canvas is faster and doesn't bloat the DOM
 - **Layer registry pattern** — each layer is self-contained with `render()` method; registry controls order and defaults
+- **Terrain drawn mid-stack** — after weather bands but before lines, masking below-surface artifacts
 - **Separate overlay canvas** — hover/crosshair redraws cheaply without re-rendering all layers
 - **ResizeObserver** — responsive sizing with device pixel ratio handling for crisp rendering
 - **Clip to plot area** — all layer renders are clipped so bands/fills don't overflow axes
@@ -111,14 +115,57 @@ The convective background layer (`convective-bg.ts`) is the most complex:
 - **Click**: selects closest route point, highlights with indicator on overlay canvas
 - **Tooltip**: shows waypoint name (if named) + distance + altitude at hover position
 
-## Metrics UI System
+## NWP Cloud Bands
 
-Alongside the visualization, a catalog-driven metrics system provides contextual help:
+The NWP cloud bands layer (`nwp-cloud-bands.ts`) renders numerical weather prediction cloud cover:
 
-- `data/metrics-catalog.json`: 25+ metrics with thresholds, units, vibes, guidance
-- `helpers/metrics-helper.ts`: threshold matching, HTML rendering for annotation rows
-- `components/info-popup.ts`: modal popup with metric details and threshold scale
-- Briefing page shows metrics in tiered display (essential/detailed/diagnostic) with info icons
+- **Two-tier altitude model**: Low clouds (terrain → 6500ft) and mid-layer clouds (6500ft → 20000ft)
+- **Terrain-aware**: Interpolates terrain elevation at each point to set band base dynamically
+- **Dual render modes**: Columns (discrete NWP grid) or Smooth (interpolated trapezoids)
+- **Opacity capping**: Cloud cover % converted to opacity with `min(0.7, pct/100 * 0.8)` for readability
+- Renders on sky-blue background (set in `axes.ts`)
+
+## Layer Legends
+
+`visualization/layer-legends.ts` provides a unified legend system for all layers:
+
+- `LegendEntry`: `{ label, color, meaning }` — human-readable, visual, and contextual
+- Colors imported from `scales.ts` (single source of truth, not duplicated)
+- Risk-based legends for icing, CAT, convective bands; METAR-style for cloud bands; percentage-based for NWP clouds
+- `getLayerLegend(layerId)` returns legend or null
+- Displayed in info popups via `renderLayerLegend()` in metrics-helper.ts
+
+## Info Popup & Metrics UI System
+
+Shared modal infrastructure (`components/info-popup.ts`) used by three popup types:
+
+- **Metric info** (`showMetricInfo`): Full explanation with threshold scale bar, vibe, goal, limitations
+- **Layer info** (`showLayerInfo`): Metric details + color legend for the specific layer
+- **Advisory info** (`showPopupContent`): Custom HTML (used by advisory system)
+
+Keyboard (ESC) and click-outside close the popup.
+
+### Metrics Catalog (`data/metrics-catalog.json`)
+
+40+ metrics with catalog-driven contextual help:
+
+- `vibe`: One-liner analogy (e.g., "The atmosphere's battery level" for CAPE)
+- `primary_goal`, `best_used_for`, `limitations`: Aviation-focused guidance
+- `theory`: Mathematical/physical explanation with formulas
+- `wikipedia`: External reference link
+- `llm_prompt`: Context for "Discuss with AI" feature
+- Thresholds with `min/max/label/risk/meaning` tuples
+
+### "Discuss with AI" Buttons
+
+Info popups include buttons for Claude, ChatGPT, and Gemini that copy a context-aware prompt to clipboard:
+- Prompt includes metric name + catalog context + aviation relevance
+- Toast notification confirms copy
+- Enabled via `llm_prompt` field in metrics catalog
+
+### Layer Control Panel
+
+`controls/panel.ts` renders checkboxes grouped by category (terrain, temperature, clouds, icing, stability, turbulence, convection, reference). Layers with a `metricId` get an info button (ⓘ) that opens the layer info popup.
 
 ## Gotchas
 

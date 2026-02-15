@@ -26,13 +26,18 @@ Aviation-specific analysis: wind components, MetPy sounding analysis (thermodyna
 Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`, `assess_vertical_motion`, `detect_inversions`
 → Full doc: analysis.md
 
+### advisories
+Route advisory system: 9 deterministic evaluators (icing escape, FIKI icing, freezing level, cloud tops, VMC cruise, turbulence, mountain wind, convective, model agreement) with per-model severity grading, user-tunable parameters, registry auto-discovery, and recalculation without re-fetching.
+Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`
+→ Full doc: advisories.md
+
 ### analysis-metrics
 Comprehensive catalog of all ~40 weather metrics: API sources, derivation formulas, per-model availability matrix, physical interpretation, aviation relevance, known issues, and MetPy function inventory.
 → Full doc: analysis-metrics.md
 
 ### visualization
-Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion bands, convective towers, temperature/stability lines, hover interaction, metrics UI system.
-Key exports: `CrossSectionRenderer`, `extractVizData`, `getAllLayers`
+Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands, convective towers, temperature/stability lines, hover interaction, metrics UI system with info popups, layer legends, and "Discuss with AI" integration.
+Key exports: `CrossSectionRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
 → Full doc: visualization.md
 
 ### digest
