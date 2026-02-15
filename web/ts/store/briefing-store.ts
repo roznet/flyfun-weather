@@ -1,7 +1,7 @@
 /** Zustand vanilla store for the Briefing report page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { DataStatus, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
+import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { DisplayMode, Tier } from '../types/metrics';
 import type { RenderMode, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
@@ -60,6 +60,7 @@ export interface BriefingState {
   snapshot: ForecastSnapshot | null;
   digest: WeatherDigest | null;
   routeAnalyses: RouteAnalysesManifest | null;
+  elevationProfile: ElevationProfile | null;
   freshness: DataStatus | null;
   freshnessLoading: boolean;
 
@@ -101,6 +102,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   snapshot: null,
   digest: null,
   routeAnalyses: null,
+  elevationProfile: null,
   freshness: null,
   freshnessLoading: false,
   selectedModel: 'ecmwf',
@@ -148,6 +150,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       let snapshot: ForecastSnapshot | null = null;
       let digest: WeatherDigest | null = null;
       let routeAnalyses: RouteAnalysesManifest | null = null;
+      let elevationProfile: ElevationProfile | null = null;
       try {
         snapshot = await api.fetchSnapshot(flight.id, timestamp);
       } catch {
@@ -162,12 +165,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           // Digest fetch is non-critical
         }
       }
-      try {
-        routeAnalyses = await api.fetchRouteAnalyses(flight.id, timestamp);
-      } catch {
-        // Old packs may not have route analyses
-      }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, selectedPointIndex: 0, loading: false });
+      // Fetch route analyses and elevation profile in parallel
+      const [raResult, epResult] = await Promise.allSettled([
+        api.fetchRouteAnalyses(flight.id, timestamp),
+        api.fetchElevationProfile(flight.id, timestamp),
+      ]);
+      if (raResult.status === 'fulfilled') routeAnalyses = raResult.value;
+      if (epResult.status === 'fulfilled') elevationProfile = epResult.value;
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, elevationProfile, selectedPointIndex: 0, loading: false });
     } catch (err) {
       set({ loading: false, error: `Failed to load pack: ${err}` });
     }

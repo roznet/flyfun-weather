@@ -503,6 +503,24 @@ class RouteAnalysesManifest(BaseModel):
     analyses: list[RoutePointAnalysis]
 
 
+class ElevationPoint(BaseModel):
+    """Single elevation sample along the route."""
+
+    distance_nm: float
+    elevation_ft: float
+    lat: float
+    lon: float
+
+
+class ElevationProfile(BaseModel):
+    """High-resolution terrain profile along a route."""
+
+    route_name: str
+    points: list[ElevationPoint]
+    max_elevation_ft: float
+    total_distance_nm: float
+
+
 class RouteCrossSection(BaseModel):
     """Cross-section forecast data along the full route for one model."""
 
