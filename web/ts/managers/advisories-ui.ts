@@ -1,6 +1,7 @@
 /** Advisory dashboard renderer — compact grid of advisory cards with per-model badges. */
 
-import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry } from '../types/advisories';
+import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AdvisoryParameterDef } from '../types/advisories';
+import { showPopupContent } from '../components/info-popup';
 import { escapeHtml } from '../utils';
 
 const $ = (id: string) => document.getElementById(id);
@@ -29,6 +30,29 @@ function modelLabel(model: string): string {
   return model.toUpperCase();
 }
 
+function renderAdvisoryPopup(entry: AdvisoryCatalogEntry, paramsUsed: Record<string, number>): string {
+  const paramsHtml = entry.parameters.length > 0
+    ? `<table class="advisory-params-table">
+        <thead><tr><th>Parameter</th><th>Value</th><th>Description</th></tr></thead>
+        <tbody>${entry.parameters.map((p: AdvisoryParameterDef) => {
+          const val = paramsUsed[p.key] ?? p.default;
+          return `<tr>
+            <td>${escapeHtml(p.label)}</td>
+            <td><strong>${val}${p.unit ? ' ' + escapeHtml(p.unit) : ''}</strong></td>
+            <td class="text-muted">${escapeHtml(p.description)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`
+    : '';
+
+  return `
+    <div class="popup-header"><h3>${escapeHtml(entry.name)}</h3></div>
+    <p class="advisory-popup-category">${escapeHtml(entry.category)}</p>
+    <p style="margin: 0.75rem 0;">${escapeHtml(entry.description)}</p>
+    ${paramsHtml}
+  `;
+}
+
 function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, AdvisoryCatalogEntry>): string {
   const entry = catalog.get(adv.advisory_id);
   const name = entry ? escapeHtml(entry.name) : escapeHtml(adv.advisory_id);
@@ -39,12 +63,16 @@ function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, Advis
   ).join(' ');
 
   const aggClass = statusBadgeClass(adv.aggregate_status);
+  const infoBtn = entry
+    ? `<button class="metric-info-btn advisory-info-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="Advisory info" aria-label="Advisory info">i</button>`
+    : '';
 
   return `
     <div class="advisory-card advisory-${adv.aggregate_status}" data-advisory="${escapeHtml(adv.advisory_id)}">
       <div class="advisory-card-header">
         <span class="badge ${aggClass}">${statusLabel(adv.aggregate_status)}</span>
         <span class="advisory-name">${name}</span>
+        ${infoBtn}
       </div>
       <div class="advisory-models">${modelBadges}</div>
       <div class="advisory-detail">${escapeHtml(adv.aggregate_detail)}</div>
@@ -124,4 +152,16 @@ export function renderAdvisories(
       });
     }
   }
+
+  // Wire advisory info buttons (event delegation)
+  el.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('.advisory-info-btn') as HTMLElement | null;
+    if (!btn) return;
+    const advId = btn.dataset.advisoryId;
+    if (!advId) return;
+    const entry = catalog.get(advId);
+    if (!entry) return;
+    const adv = manifest.advisories.find(a => a.advisory_id === advId);
+    showPopupContent(renderAdvisoryPopup(entry, adv?.parameters_used ?? {}));
+  });
 }

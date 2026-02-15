@@ -25,8 +25,10 @@ class CloudTopEvaluator:
             name="Cloud Tops",
             short_description="Can fly above cloud tops",
             description=(
-                "Checks highest cloud tops against flight ceiling. "
-                "Cloud tops above ceiling means the pilot cannot get on top."
+                "Checks cloud tops for layers the pilot would encounter "
+                "(base below ceiling). High-altitude layers entirely above "
+                "the ceiling are ignored. Cloud tops near or above ceiling "
+                "means the pilot cannot get on top."
             ),
             category="cloud",
             parameters=[
@@ -74,10 +76,12 @@ class CloudTopEvaluator:
                     continue
                 total += 1
 
-                if not sounding.cloud_layers:
+                # Only consider layers the pilot would enter (base below ceiling)
+                reachable = [cl for cl in sounding.cloud_layers if cl.base_ft <= ceiling]
+                if not reachable:
                     continue
 
-                highest_top = max(cl.top_ft for cl in sounding.cloud_layers)
+                highest_top = max(cl.top_ft for cl in reachable)
                 if max_top is None or highest_top > max_top:
                     max_top = highest_top
 

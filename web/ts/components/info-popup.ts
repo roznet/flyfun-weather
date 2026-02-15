@@ -55,6 +55,23 @@ export function showLayerInfo(layerId: string, metricId: string): void {
   wirePopupButtons();
 }
 
+/** Show the popup with arbitrary HTML content. Used by advisory info buttons. */
+export function showPopupContent(html: string): void {
+  if (!popupEl || !backdropEl) return;
+
+  popupEl.innerHTML = `
+    <button class="metric-popup-close" aria-label="Close">\u00d7</button>
+    ${html}
+  `;
+
+  backdropEl.classList.add('active');
+
+  const closeBtn = popupEl.querySelector('.metric-popup-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', hideMetricInfo);
+  }
+}
+
 export function hideMetricInfo(): void {
   if (backdropEl) {
     backdropEl.classList.remove('active');
