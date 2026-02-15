@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/user/preferences", tags=["preferences"])
 
 
+class AdvisoryPreferences(BaseModel):
+    """User's advisory configuration."""
+
+    enabled: dict[str, bool] | None = None  # advisory_id -> enabled
+    params: dict[str, dict[str, float]] | None = None  # advisory_id -> {param: value}
+
+
 class FlightDefaults(BaseModel):
     """User's default flight parameters."""
 
@@ -37,6 +44,7 @@ class PreferencesResponse(BaseModel):
 
     defaults: FlightDefaults
     digest_config: DigestConfig
+    advisories: AdvisoryPreferences
     has_autorouter_creds: bool
 
 
@@ -45,6 +53,7 @@ class PreferencesUpdate(BaseModel):
 
     defaults: FlightDefaults | None = None
     digest_config: DigestConfig | None = None
+    advisories: AdvisoryPreferences | None = None
     autorouter_username: str | None = None
     autorouter_password: str | None = None
 
@@ -67,6 +76,15 @@ def _parse_defaults(raw: str) -> FlightDefaults:
     return FlightDefaults(**data)
 
 
+def _parse_advisory_prefs(raw: str) -> AdvisoryPreferences:
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        data = {}
+    adv_data = data.get("advisories", {})
+    return AdvisoryPreferences(**adv_data)
+
+
 def _parse_digest_config(raw: str) -> DigestConfig:
     try:
         data = json.loads(raw) if raw else {}
@@ -85,6 +103,7 @@ def get_preferences(
     return PreferencesResponse(
         defaults=_parse_defaults(row.defaults_json),
         digest_config=_parse_digest_config(row.digest_config_json),
+        advisories=_parse_advisory_prefs(row.defaults_json),
         has_autorouter_creds=bool(row.encrypted_autorouter_creds),
     )
 
@@ -104,6 +123,15 @@ def update_preferences(
     if body.digest_config is not None:
         row.digest_config_json = body.digest_config.model_dump_json(exclude_none=True)
 
+    if body.advisories is not None:
+        # Store advisory prefs under "advisories" key in defaults_json
+        try:
+            data = json.loads(row.defaults_json) if row.defaults_json else {}
+        except json.JSONDecodeError:
+            data = {}
+        data["advisories"] = body.advisories.model_dump(exclude_none=True)
+        row.defaults_json = json.dumps(data)
+
     if body.autorouter_username and body.autorouter_password:
         payload = json.dumps({
             "username": body.autorouter_username,
@@ -114,6 +142,7 @@ def update_preferences(
     return PreferencesResponse(
         defaults=_parse_defaults(row.defaults_json),
         digest_config=_parse_digest_config(row.digest_config_json),
+        advisories=_parse_advisory_prefs(row.defaults_json),
         has_autorouter_creds=bool(row.encrypted_autorouter_creds),
     )
 
@@ -143,6 +172,18 @@ def load_autorouter_credentials(db: Session, user_id: str) -> tuple[str, str] | 
     except Exception:
         logger.warning("Failed to decrypt autorouter credentials for user %s", user_id)
         return None
+
+
+def load_advisory_prefs(db: Session, user_id: str) -> AdvisoryPreferences:
+    """Load advisory preferences for a user.
+
+    Returns AdvisoryPreferences with None for unset fields.
+    Used by the pipeline when evaluating route advisories.
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    if not row:
+        return AdvisoryPreferences()
+    return _parse_advisory_prefs(row.defaults_json)
 
 
 def load_user_defaults(db: Session, user_id: str) -> FlightDefaults:
