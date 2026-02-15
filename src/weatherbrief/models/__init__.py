@@ -13,6 +13,8 @@ from weatherbrief.models.analysis import (  # noqa: F401
     ConvectiveAssessment,
     ConvectiveRisk,
     DerivedLevel,
+    ElevationPoint,
+    ElevationProfile,
     EnhancedCloudLayer,
     ForecastSnapshot,
     HourlyForecast,

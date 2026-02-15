@@ -92,7 +92,7 @@ async function init(): Promise<void> {
     }
     vizSection.style.display = '';
 
-    const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft);
+    const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile);
     const allLayers = getAllLayers();
 
     // Create or update renderer
@@ -141,7 +141,8 @@ async function init(): Promise<void> {
       state.currentPack !== prev.currentPack ||
       state.snapshot !== prev.snapshot ||
       state.digest !== prev.digest ||
-      state.routeAnalyses !== prev.routeAnalyses
+      state.routeAnalyses !== prev.routeAnalyses ||
+      state.elevationProfile !== prev.elevationProfile
     ) {
       ui.renderAssessment(state.currentPack);
       ui.renderSynopsis(state.flight, state.currentPack, state.digest);

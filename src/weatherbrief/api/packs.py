@@ -153,6 +153,7 @@ def _can_force_refresh(request: Request) -> bool:
 
 _STAGE_LABELS: dict[str, str] = {
     "route_interpolation": "Interpolating route",
+    "elevation_profile": "Fetching terrain data",
     "fetch_forecasts": "Fetching forecasts",
     "waypoint_analysis": "Analyzing waypoints",
     "route_analysis": "Analyzing route points",
@@ -164,6 +165,7 @@ _STAGE_LABELS: dict[str, str] = {
 
 _STAGE_PROGRESS: dict[str, float] = {
     "route_interpolation": 0.05,
+    "elevation_profile": 0.08,
     "fetch_forecasts": 0.40,
     "waypoint_analysis": 0.50,
     "route_analysis": 0.60,
@@ -565,6 +567,21 @@ def get_route_analyses(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
     return FileResponse(ra_path, media_type="application/json")
+
+
+@router.get("/{timestamp}/elevation")
+def get_elevation(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get the elevation profile JSON for a pack."""
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    path = pack_dir / "elevation_profile.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Elevation profile not available")
+    return FileResponse(path, media_type="application/json")
 
 
 @router.get("/{timestamp}/skewt/route/{point_index}/{model}")

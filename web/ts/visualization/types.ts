@@ -46,6 +46,7 @@ export interface CrossSectionLayer {
 }
 
 export type LayerGroup =
+  | 'terrain'
   | 'temperature'
   | 'clouds'
   | 'icing'
@@ -53,6 +54,13 @@ export type LayerGroup =
   | 'turbulence'
   | 'convection'
   | 'reference';
+
+// --- Terrain ---
+
+export interface TerrainPoint {
+  distanceNm: number;
+  elevationFt: number;
+}
 
 // --- Viz-ready data structures ---
 
@@ -67,6 +75,7 @@ export interface VizRouteData {
   waypointMarkers: WaypointMarker[];
   departureTime: string;
   flightDurationHours: number;
+  terrainProfile: TerrainPoint[] | null;
 }
 
 export interface WaypointMarker {

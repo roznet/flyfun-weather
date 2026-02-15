@@ -1,12 +1,13 @@
 /** Extract visualization-ready data from a RouteAnalysesManifest for a given model. */
 
-import type { RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
-import type { VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizCATLayer, VizInversionLayer } from './types';
+import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
+import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizCATLayer, VizInversionLayer } from './types';
 
 export function extractVizData(
   manifest: RouteAnalysesManifest,
   model: string,
   flightCeilingFt?: number,
+  elevationProfile?: ElevationProfile | null,
 ): VizRouteData {
   const points: VizPoint[] = [];
   const waypointMarkers: WaypointMarker[] = [];
@@ -27,6 +28,13 @@ export function extractVizData(
 
   const actualCeiling = flightCeilingFt ?? manifest.cruise_altitude_ft;
 
+  const terrainProfile: TerrainPoint[] | null = elevationProfile
+    ? elevationProfile.points.map((p) => ({
+        distanceNm: p.distance_nm,
+        elevationFt: p.elevation_ft,
+      }))
+    : null;
+
   return {
     points,
     cruiseAltitudeFt: manifest.cruise_altitude_ft,
@@ -36,6 +44,7 @@ export function extractVizData(
     waypointMarkers,
     departureTime: manifest.departure_time,
     flightDurationHours: manifest.flight_duration_hours,
+    terrainProfile,
   };
 }
 

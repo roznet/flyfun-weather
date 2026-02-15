@@ -244,3 +244,17 @@ export interface RouteAnalysesManifest {
   models: string[];
   analyses: RoutePointAnalysis[];
 }
+
+export interface ElevationPoint {
+  distance_nm: number;
+  elevation_ft: number;
+  lat: number;
+  lon: number;
+}
+
+export interface ElevationProfile {
+  route_name: string;
+  points: ElevationPoint[];
+  max_elevation_ft: number;
+  total_distance_nm: number;
+}

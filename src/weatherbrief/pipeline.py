@@ -79,6 +79,7 @@ class BriefingResult:
 
     snapshot: ForecastSnapshot
     snapshot_path: Path
+    elevation_profile_path: Path | None = None
     gramet_path: Path | None = None
     skewt_paths: list[Path] = field(default_factory=list)
     digest_path: Path | None = None
@@ -132,6 +133,18 @@ def execute_briefing(
     route_points = interpolate_route(route, spacing_nm=10.0)
     logger.info("Route interpolated: %d points along %.0f nm",
                 len(route_points), route_points[-1].distance_from_origin_nm)
+
+    # --- Elevation profile (high-res terrain along route) ---
+    elevation_profile = None
+    _notify("elevation_profile")
+    try:
+        from weatherbrief.fetch.elevation import get_elevation_profile
+
+        elevation_profile = get_elevation_profile(route, spacing_nm=0.5)
+        logger.info("Elevation profile: %d points, max %.0f ft",
+                     len(elevation_profile.points), elevation_profile.max_elevation_ft)
+    except Exception:
+        logger.warning("Elevation profile failed", exc_info=True)
 
     all_forecasts: list[WaypointForecast] = []
     cross_sections: list[RouteCrossSection] = []
@@ -238,6 +251,9 @@ def execute_briefing(
                     indent=2, exclude={"analyses": {"__all__": {"sounding": {"__all__": {"derived_levels"}}}}},
                 )
             )
+        if elevation_profile:
+            ep_path = options.output_dir / "elevation_profile.json"
+            ep_path.write_text(elevation_profile.model_dump_json(indent=2))
     else:
         snapshot_path = save_snapshot(snapshot, data_dir)
         if cross_sections:
@@ -247,6 +263,8 @@ def execute_briefing(
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
     result.usage.open_meteo_calls = len(cross_sections)
+    if elevation_profile and options.output_dir:
+        result.elevation_profile_path = options.output_dir / "elevation_profile.json"
 
     # --- Optional: GRAMET ---
     if options.fetch_gramet:

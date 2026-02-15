@@ -3,6 +3,7 @@
 import type {
   CreateFlightRequest,
   DataStatus,
+  ElevationProfile,
   FlightResponse,
   ForecastSnapshot,
   PackMeta,
@@ -179,6 +180,17 @@ export async function fetchRouteAnalyses(
 ): Promise<RouteAnalysesManifest> {
   return apiFetch<RouteAnalysesManifest>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/route-analyses`
+  );
+}
+
+// --- Elevation profile ---
+
+export async function fetchElevationProfile(
+  flightId: string,
+  timestamp: string,
+): Promise<ElevationProfile> {
+  return apiFetch<ElevationProfile>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/elevation`
   );
 }
 

@@ -9,9 +9,11 @@ import { lclLayer, lfcLayer, elLayer } from './layers/stability-lines';
 import { catBandsLayer } from './layers/cat-bands';
 import { inversionBandsLayer } from './layers/inversion-bands';
 import { convectiveBgLayer } from './layers/convective-bg';
+import { terrainFillLayer } from './layers/terrain-fill';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
-  // Rendering order: background → bands → lines → reference (back to front)
+  // Rendering order: terrain → background → bands → lines → reference (back to front)
+  terrainFillLayer,
   convectiveBgLayer,
   cloudBandsLayer,
   icingBandsLayer,
@@ -53,6 +55,7 @@ export function getLayerGroups(): LayerGroupInfo[] {
   }
 
   const groupLabels: Record<LayerGroup, string> = {
+    terrain: 'Terrain',
     temperature: 'Temperature',
     clouds: 'Clouds',
     icing: 'Icing',
@@ -62,7 +65,7 @@ export function getLayerGroups(): LayerGroupInfo[] {
     reference: 'Reference',
   };
 
-  const order: LayerGroup[] = ['reference', 'temperature', 'clouds', 'icing', 'stability', 'turbulence', 'convection'];
+  const order: LayerGroup[] = ['terrain', 'reference', 'temperature', 'clouds', 'icing', 'stability', 'turbulence', 'convection'];
 
   return order
     .filter((g) => groupMap.has(g))
