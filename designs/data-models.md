@@ -5,6 +5,7 @@
 Models are organized in `src/weatherbrief/models/` package:
 - `analysis.py` — route, forecast, and weather analysis models
 - `storage.py` — `Flight`, `BriefingPackMeta`
+- `advisories.py` — route advisory models (status, results, catalog, manifest)
 - `__init__.py` — re-exports everything for backward-compatible imports
 
 ## Intent
@@ -175,6 +176,19 @@ BriefingPackMeta(
 
 Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available.
 
+## Route Advisory Models (`models/advisories.py`)
+
+| Model | Purpose | Key fields |
+|-------|---------|------------|
+| `AdvisoryStatus` | Enum: GREEN, AMBER, RED, UNAVAILABLE | `worst()` classmethod for aggregation |
+| `AdvisoryParameterDef` | Tunable parameter metadata | key, label, type (number/percent/altitude/speed/boolean), unit, default, min, max, step |
+| `AdvisoryCatalogEntry` | Evaluator metadata for UI | id, name, short_description, description, category (icing/cloud/turbulence/convective/model), default_enabled, parameters |
+| `ModelAdvisoryResult` | One advisory, one model | status, detail, affected_count, total_count, affected_pct, affected_nm. `build()` classmethod computes pct/nm from counts |
+| `RouteAdvisoryResult` | Aggregate across models | advisory_id, aggregate_status, aggregate_detail, per_model list, parameters_used. `from_per_model()` classmethod aggregates (worst status, detail from worst model) |
+| `RouteAdvisoriesManifest` | Top-level container | advisories, catalog, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm, models |
+
+See [advisories.md](./advisories.md) for the evaluator framework.
+
 ## Enums
 
 - `ModelSource`: `BEST_MATCH`, `GFS`, `ECMWF`, `ICON`, `UKMO`, `METEOFRANCE`
@@ -185,6 +199,7 @@ Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` 
 - `AgreementLevel`: `GOOD`, `MODERATE`, `POOR`
 - `VerticalMotionClass`: `QUIESCENT`, `SYNOPTIC_ASCENT`, `SYNOPTIC_SUBSIDENCE`, `CONVECTIVE`, `OSCILLATING`, `UNAVAILABLE`
 - `CATRiskLevel`: `NONE`, `LIGHT`, `MODERATE`, `SEVERE`
+- `AdvisoryStatus`: `GREEN`, `AMBER`, `RED`, `UNAVAILABLE`
 
 ## Patterns
 
