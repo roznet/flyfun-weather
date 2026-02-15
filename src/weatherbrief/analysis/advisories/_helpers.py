@@ -23,8 +23,7 @@ def format_extent(
     """
     if total <= 0:
         return "0nm"
-    spacing = total_distance_nm / max(total - 1, 1)
-    affected_nm = round(affected * spacing)
+    affected_nm = round(total_distance_nm * affected / total)
     total_nm = round(total_distance_nm)
     pct = 100 * affected / total
     return f"{affected_nm}nm/{total_nm}nm ({pct:.0f}%)"

@@ -102,7 +102,6 @@ class ModelAgreementEvaluator:
                 detail = f"Poor model agreement over {ext}"
 
         # Report as a single "model" result since agreement is cross-model
-        spacing = ctx.total_distance_nm / max(total - 1, 1) if total > 0 else 0
         per_model = [ModelAdvisoryResult(
             model="all",
             status=aggregate,
@@ -110,7 +109,7 @@ class ModelAgreementEvaluator:
             affected_points=poor_count,
             total_points=total,
             affected_pct=100 * poor_count / total if total > 0 else 0,
-            affected_nm=round(poor_count * spacing, 1),
+            affected_nm=round(ctx.total_distance_nm * poor_count / total, 1) if total > 0 else 0,
             total_nm=round(ctx.total_distance_nm, 1),
         )]
 
