@@ -35,6 +35,7 @@ export const nwpCloudBandsLayer: CrossSectionLayer = {
   name: 'NWP Cloud Cover',
   group: 'clouds',
   defaultEnabled: true,
+  metricId: 'nwp_cloud_cover',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
     // Check if any point has NWP cloud data

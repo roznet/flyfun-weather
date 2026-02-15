@@ -9,6 +9,7 @@ export const cloudBandsLayer: CrossSectionLayer = {
   name: 'Cloud Layers',
   group: 'clouds',
   defaultEnabled: true,
+  metricId: 'cloud_coverage',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
     // Collect the maximum number of cloud layers across all points

@@ -9,6 +9,7 @@ export const inversionBandsLayer: CrossSectionLayer = {
   name: 'Inversions',
   group: 'stability',
   defaultEnabled: false,
+  metricId: 'inversion_layer',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
     if (mode === 'columns') {

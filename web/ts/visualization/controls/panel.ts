@@ -2,6 +2,7 @@
 
 import type { RenderMode, VizSettings } from '../types';
 import { getLayerGroups } from '../cross-section/layer-registry';
+import { showLayerInfo } from '../../components/info-popup';
 
 export interface VizControlCallbacks {
   onRenderModeChange: (mode: RenderMode) => void;
@@ -17,6 +18,9 @@ export function renderVizControls(
   const groups = getLayerGroups();
 
   let html = '<div class="viz-toolbar">';
+
+  // Top row: Model indicator + Render mode toggle
+  html += '<div class="viz-toolbar-top">';
 
   // Model indicator
   if (selectedModel) {
@@ -35,7 +39,9 @@ export function renderVizControls(
   html += '</div>';
   html += '</div>';
 
-  // Layer toggles
+  html += '</div>'; // .viz-toolbar-top
+
+  // Layer toggles — full width below
   html += '<div class="viz-layer-toggles">';
   for (const group of groups) {
     html += `<div class="viz-layer-group">`;
@@ -46,12 +52,15 @@ export function renderVizControls(
       html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked}>`;
       html += `<span>${layer.name}</span>`;
       html += `</label>`;
+      if (layer.metricId) {
+        html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="More info" aria-label="More info">\u24d8</button>`;
+      }
     }
     html += '</div>';
   }
   html += '</div>';
 
-  html += '</div>';
+  html += '</div>'; // .viz-toolbar
 
   container.innerHTML = html;
 
@@ -66,6 +75,18 @@ export function renderVizControls(
   container.querySelectorAll('[data-layer-id]').forEach((checkbox) => {
     checkbox.addEventListener('change', () => {
       callbacks.onLayerToggle((checkbox as HTMLInputElement).dataset.layerId!);
+    });
+  });
+
+  // Wire info buttons
+  container.querySelectorAll('[data-layer-info]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const el = btn as HTMLElement;
+      const layerId = el.dataset.layerInfo!;
+      const metricId = el.dataset.metricId!;
+      showLayerInfo(layerId, metricId);
     });
   });
 }

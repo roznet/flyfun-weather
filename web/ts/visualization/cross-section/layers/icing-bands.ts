@@ -9,6 +9,7 @@ export const icingBandsLayer: CrossSectionLayer = {
   name: 'Icing Zones',
   group: 'icing',
   defaultEnabled: true,
+  metricId: 'icing_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
     if (mode === 'columns') {

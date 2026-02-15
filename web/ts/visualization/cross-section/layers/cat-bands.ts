@@ -9,6 +9,7 @@ export const catBandsLayer: CrossSectionLayer = {
   name: 'CAT Turbulence',
   group: 'turbulence',
   defaultEnabled: false,
+  metricId: 'cat_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
     if (mode === 'columns') {

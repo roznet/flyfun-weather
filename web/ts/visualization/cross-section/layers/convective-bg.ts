@@ -98,6 +98,7 @@ export const convectiveBgLayer: CrossSectionLayer = {
   name: 'Convective Risk',
   group: 'convection',
   defaultEnabled: true,
+  metricId: 'convective_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, _mode: RenderMode) {
     const { plotArea } = transform;

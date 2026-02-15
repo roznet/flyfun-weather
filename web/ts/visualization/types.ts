@@ -37,6 +37,7 @@ export interface CrossSectionLayer {
   readonly name: string;
   readonly group: LayerGroup;
   readonly defaultEnabled: boolean;
+  readonly metricId?: string;
   render(
     ctx: CanvasRenderingContext2D,
     transform: CoordTransform,
