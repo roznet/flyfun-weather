@@ -195,6 +195,16 @@ export async function fetchRouteAdvisories(
   );
 }
 
+export async function recalculateAdvisories(
+  flightId: string,
+  timestamp: string,
+): Promise<RouteAdvisoriesManifest> {
+  return apiFetch<RouteAdvisoriesManifest>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/recalculate`,
+    { method: 'POST' },
+  );
+}
+
 // --- Elevation profile ---
 
 export async function fetchElevationProfile(

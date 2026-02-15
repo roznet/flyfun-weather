@@ -94,6 +94,7 @@ export interface BriefingState {
   toggleTier: (tier: Tier) => void;
   setRenderMode: (mode: RenderMode) => void;
   toggleVizLayer: (layerId: string) => void;
+  recalculateAdvisories: () => Promise<void>;
   sendEmail: () => Promise<void>;
 }
 
@@ -288,6 +289,17 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const updated = { ...current, enabledLayers: enabled };
     set({ vizSettings: updated });
     saveVizSettings(updated);
+  },
+
+  recalculateAdvisories: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    try {
+      const result = await api.recalculateAdvisories(flight.id, currentPack.fetch_timestamp);
+      set({ routeAdvisories: result });
+    } catch (err) {
+      set({ error: `Advisory recalculation failed: ${err}` });
+    }
   },
 
   sendEmail: async () => {

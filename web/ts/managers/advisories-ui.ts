@@ -26,7 +26,6 @@ function statusLabel(status: AdvisoryStatus): string {
 }
 
 function modelLabel(model: string): string {
-  // Capitalize model name
   return model.toUpperCase();
 }
 
@@ -35,12 +34,10 @@ function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, Advis
   const name = entry ? escapeHtml(entry.name) : escapeHtml(adv.advisory_id);
   const desc = entry ? escapeHtml(entry.short_description) : '';
 
-  // Per-model badges
   const modelBadges = adv.per_model.map((m: ModelAdvisoryResult) =>
     `<span class="adv-model-badge ${statusBadgeClass(m.status)}" title="${escapeHtml(m.detail)}">${modelLabel(m.model)}</span>`
   ).join(' ');
 
-  // Aggregate badge
   const aggClass = statusBadgeClass(adv.aggregate_status);
 
   return `
@@ -58,8 +55,12 @@ function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, Advis
 
 /**
  * Render the advisory dashboard into the #advisories-section element.
+ * onRecalculate callback wires up the recalculate button.
  */
-export function renderAdvisories(manifest: RouteAdvisoriesManifest | null): void {
+export function renderAdvisories(
+  manifest: RouteAdvisoriesManifest | null,
+  onRecalculate?: () => void,
+): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
   if (!el) return;
@@ -98,10 +99,29 @@ export function renderAdvisories(manifest: RouteAdvisoriesManifest | null): void
     ? `<div class="advisory-summary">${summaryParts.join(' ')}</div>`
     : '';
 
+  const recalcBtn = onRecalculate
+    ? '<button class="btn btn-secondary btn-sm" id="recalc-advisories-btn">Recalculate</button>'
+    : '';
+
   const cards = sorted.map(adv => renderAdvisoryCard(adv, catalog)).join('');
 
   el.innerHTML = `
-    ${summary}
+    <div class="advisory-toolbar">
+      ${summary}
+      ${recalcBtn}
+    </div>
     <div class="advisory-grid">${cards}</div>
   `;
+
+  // Wire recalculate button
+  if (onRecalculate) {
+    const btn = $('recalc-advisories-btn');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        btn.setAttribute('disabled', 'true');
+        btn.textContent = 'Recalculating...';
+        onRecalculate();
+      });
+    }
+  }
 }

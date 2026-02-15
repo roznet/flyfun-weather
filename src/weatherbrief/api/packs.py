@@ -598,6 +598,94 @@ def get_advisories(
     return FileResponse(adv_path, media_type="application/json")
 
 
+@router.post("/{timestamp}/advisories/recalculate")
+def recalculate_advisories(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Recalculate route advisories from existing analysis data.
+
+    Re-evaluates all advisory logic without re-fetching forecasts or
+    re-running the full analysis pipeline. Useful when advisory logic
+    or user parameters change.
+    """
+    import json as json_mod
+
+    from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
+    from weatherbrief.models import (
+        ElevationProfile,
+        RouteAdvisoriesManifest,
+        RouteAnalysesManifest,
+        RouteCrossSection,
+        RoutePointAnalysis,
+    )
+
+    flight = _load_flight_or_404(db, flight_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+
+    # Load route analyses (with derived_levels stripped — but advisory
+    # evaluators only use indices/zones/layers which are preserved)
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available for recalculation")
+
+    ra_data = json_mod.loads(ra_path.read_text())
+    manifest = RouteAnalysesManifest.model_validate(ra_data)
+
+    # Load elevation profile if available
+    elevation = None
+    ep_path = pack_dir / "elevation_profile.json"
+    if ep_path.exists():
+        elevation = ElevationProfile.model_validate_json(ep_path.read_text())
+
+    # Load cross-sections for mountain wind evaluator
+    cross_sections: list[RouteCrossSection] = []
+    cs_path = pack_dir / "cross_section.json"
+    if cs_path.exists():
+        cs_data = json_mod.loads(cs_path.read_text())
+        for cs_item in cs_data.get("cross_sections", []):
+            cross_sections.append(RouteCrossSection.model_validate(cs_item))
+
+    # Load user advisory preferences
+    from weatherbrief.api.preferences import load_advisory_prefs
+
+    adv_prefs = load_advisory_prefs(db, user_id)
+    enabled_ids = None
+    if adv_prefs.enabled:
+        enabled_ids = {k for k, v in adv_prefs.enabled.items() if v}
+    user_params = adv_prefs.params or {}
+
+    # Build context and evaluate
+    ctx = RouteContext(
+        analyses=manifest.analyses,
+        cross_sections=cross_sections,
+        elevation=elevation,
+        models=manifest.models,
+        cruise_altitude_ft=manifest.cruise_altitude_ft,
+        flight_ceiling_ft=flight.flight_ceiling_ft,
+        total_distance_nm=manifest.total_distance_nm,
+    )
+
+    advisory_results = evaluate_all(ctx, enabled_ids, user_params)
+    result = RouteAdvisoriesManifest(
+        advisories=advisory_results,
+        catalog=get_catalog(),
+        route_name=manifest.route_name,
+        cruise_altitude_ft=manifest.cruise_altitude_ft,
+        flight_ceiling_ft=flight.flight_ceiling_ft,
+        total_distance_nm=manifest.total_distance_nm,
+        models=manifest.models,
+    )
+
+    # Save updated advisories
+    adv_path = pack_dir / "route_advisories.json"
+    adv_path.write_text(result.model_dump_json(indent=2))
+
+    return result.model_dump()
+
+
 @router.get("/{timestamp}/elevation")
 def get_elevation(
     flight_id: str,
