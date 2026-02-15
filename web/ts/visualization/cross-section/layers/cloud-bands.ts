@@ -1,4 +1,4 @@
-/** Cloud layer bands: gray fills with coverage-based opacity. */
+/** Cloud layer bands: white fills with coverage-based opacity (sounding-derived). */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode, VizPoint } from '../../types';
 import { coverageOpacity } from '../../scales';
@@ -20,7 +20,7 @@ export const cloudBandsLayer: CrossSectionLayer = {
       for (const point of data.points) {
         for (const cl of point.cloudLayers) {
           const opacity = coverageOpacity(cl.coverage);
-          const fill = `rgba(136, 136, 136, ${opacity})`;
+          const fill = `rgba(255, 255, 255, ${Math.min(0.85, opacity + 0.15)})`;
           const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: cl.baseFt, top: cl.topFt }];
           drawColumnBand(ctx, bandPoints, transform, fill);
         }
@@ -41,7 +41,7 @@ export const cloudBandsLayer: CrossSectionLayer = {
       const p = data.points[0];
       for (const cl of p.cloudLayers) {
         const opacity = coverageOpacity(cl.coverage);
-        const fill = `rgba(136, 136, 136, ${opacity})`;
+        const fill = `rgba(255, 255, 255, ${Math.min(0.85, opacity + 0.15)})`;
         const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: cl.baseFt, top: cl.topFt }];
         drawColumnBand(ctx, bandPoints, transform, fill);
       }
@@ -79,7 +79,7 @@ function drawMatchedCloudSegment(
       usedNext.add(bestIdx);
       const nl = next.cloudLayers[bestIdx];
       const avgOpacity = (opacity + coverageOpacity(nl.coverage)) / 2;
-      const fill = `rgba(136, 136, 136, ${avgOpacity})`;
+      const fill = `rgba(255, 255, 255, ${Math.min(0.85, avgOpacity + 0.15)})`;
       const bandPoints: BandPointData[] = [
         { distance: curr.distanceNm, base: cl.baseFt, top: cl.topFt },
         { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
@@ -89,7 +89,7 @@ function drawMatchedCloudSegment(
       // No match — draw taper to midpoint
       const midDist = (curr.distanceNm + next.distanceNm) / 2;
       const midAlt = (cl.baseFt + cl.topFt) / 2;
-      const fill = `rgba(136, 136, 136, ${opacity})`;
+      const fill = `rgba(255, 255, 255, ${Math.min(0.85, opacity + 0.15)})`;
       const bandPoints: BandPointData[] = [
         { distance: curr.distanceNm, base: cl.baseFt, top: cl.topFt },
         { distance: midDist, base: midAlt, top: midAlt },
@@ -105,7 +105,7 @@ function drawMatchedCloudSegment(
     const midDist = (curr.distanceNm + next.distanceNm) / 2;
     const midAlt = (nl.baseFt + nl.topFt) / 2;
     const opacity = coverageOpacity(nl.coverage);
-    const fill = `rgba(136, 136, 136, ${opacity})`;
+    const fill = `rgba(255, 255, 255, ${Math.min(0.85, opacity + 0.15)})`;
     const bandPoints: BandPointData[] = [
       { distance: midDist, base: midAlt, top: midAlt },
       { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },

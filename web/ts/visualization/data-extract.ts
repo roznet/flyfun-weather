@@ -113,6 +113,7 @@ function extractPoint(
     convectiveRisk: sounding?.convective?.risk_level ?? 'none',
     cloudCoverTotalPct,
     cloudCoverLowPct: sounding?.cloud_cover_low_pct ?? 0,
+    cloudCoverMidPct: sounding?.cloud_cover_mid_pct ?? 0,
     headwindKt: wind?.headwind_kt ?? 0,
     crosswindKt: wind?.crosswind_kt ?? 0,
     capeSurfaceJkg: indices?.cape_surface_jkg ?? 0,
