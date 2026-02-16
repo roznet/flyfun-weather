@@ -8,11 +8,16 @@ BASE_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
 
 # 25 levels — 25 hPa spacing below 500, 50 hPa above.
 # Gives ~1000ft vertical resolution in the lower atmosphere (4x improvement).
+# GFS supports all 25; best_match (auto-blend) also supports them.
 EXTENDED_PRESSURE_LEVELS = [
     1000, 975, 950, 925, 900, 875, 850, 825, 800, 775,
     750, 725, 700, 675, 650, 625, 600, 575, 550, 525,
     500, 450, 400, 350, 300,
 ]
+
+# ECMWF IFS only supports 13 levels on Open-Meteo; these are the ones
+# within our 1000–300 hPa range (250/200/150/100/50 are above our ceiling).
+ECMWF_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
 
 # Backwards-compatible alias
 PRESSURE_LEVELS = BASE_PRESSURE_LEVELS
@@ -74,7 +79,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/ecmwf",
         max_days=10,
         unavailable_surface=["freezing_level_height", "visibility"],
-        pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
+        pressure_levels=list(ECMWF_PRESSURE_LEVELS),
     ),
     "gfs": ModelEndpoint(
         name="GFS",
