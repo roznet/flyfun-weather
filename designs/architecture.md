@@ -20,6 +20,8 @@ OpenMeteoClient.fetch_multi_point()  (1 API call per model, all points)
 filter by waypoint_icao → list[WaypointForecast]  (for analysis)
 + list[RouteCrossSection]  (full route, saved separately)
     ↓
+[optional] enrich_forecasts()  (GRIB2 CLWMR/ICMR from GFS S3)
+    ↓
 analyze_waypoint()  (per waypoint)
 ├→ compute_wind_components()
 ├→ analyze_sounding()  (per model → SoundingAnalysis)
@@ -46,7 +48,7 @@ Optional outputs:
 
 **Entry point:** `execute_briefing(route, target_date, target_hour, options)` — shared by CLI and API. Returns `BriefingResult` with all paths and structured results. Never prints or exits.
 
-`BriefingOptions` controls what gets generated (models, gramet, skewt, llm_digest, output_dir). `BriefingResult` carries snapshot, paths, digest object, and error list.
+`BriefingOptions` controls what gets generated (models, gramet, skewt, llm_digest, enrich_grib, output_dir). `BriefingResult` carries snapshot, paths, digest object, and error list.
 
 ## Package Layout
 
@@ -67,7 +69,13 @@ src/weatherbrief/
 │   ├── elevation.py   # SRTM terrain elevation profile
 │   ├── model_status.py # NWP model freshness checking
 │   ├── dwd_text.py    # DWD synoptic text forecasts
-│   └── gramet.py      # Autorouter GRAMET
+│   ├── gramet.py      # Autorouter GRAMET
+│   └── grib/          # GFS GRIB2 enrichment (CLWMR/ICMR)
+│       ├── __init__.py     # enrich_forecasts() public API
+│       ├── gfs_idx.py      # .idx parser + byte-range planner
+│       ├── grib_fetch.py   # HTTP Range downloads from S3
+│       ├── decode.py       # cfgrib decode + spatial interpolation
+│       └── cache.py        # Disk cache (48h TTL)
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
 │   ├── comparison.py  # Multi-model divergence scoring (15 thresholds)
@@ -272,6 +280,7 @@ Static files served from `web/` at root.
 | `pyyaml` | Route config |
 | `fastapi`, `uvicorn` | API server |
 | `metpy`, `matplotlib`, `numpy` | Sounding analysis + Skew-T plots |
+| `cfgrib`, `xarray`, `eccodes` | GRIB2 decoding for GFS enrichment (system dep: libeccodes-dev) |
 | `langchain`, `langgraph` | LLM digest orchestration |
 | `langchain-anthropic`, `langchain-openai` | LLM providers |
 | `python-dotenv` | Environment loading |
@@ -304,6 +313,7 @@ Static files served from `web/` at root.
 | 7.7 | Done | Legacy routes.yaml removal, collapsible sections, admin force refresh |
 | 7.8 | Done | NWP cloud bands, terrain draw-order fix, layer legends, "Discuss with AI" buttons |
 | 8.1 | Done | Route advisory system: 9 evaluators, registry, user-tunable parameters, recalculation, frontend dashboard |
+| 8.2 | Done | Extended pressure levels (25 for GFS/ECMWF) + GRIB2 enrichment (CLWMR/ICMR from GFS S3), LWC-based icing |
 
 ## Docker
 

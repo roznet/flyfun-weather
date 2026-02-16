@@ -43,6 +43,10 @@ Simple `(icao, name, lat, lon)`. Resolved from ICAO codes via `airports.resolve_
 
 One model's forecast for one waypoint: `(waypoint, model, fetched_at, hourly: list[HourlyForecast])`. Use `at_time(datetime)` to find closest hour.
 
+### PressureLevelData
+
+Per-level NWP data. Core fields: `pressure_hpa`, `temperature_c`, `dewpoint_c`, `relative_humidity_pct`, `wind_speed_kt`, `wind_direction_deg`, `geopotential_height_m`. Optional GRIB2-enriched fields: `cloud_liquid_water_kg_kg` (CLWMR), `ice_mixing_ratio_kg_kg` (ICMR) — populated by GRIB2 enrichment when enabled.
+
 ### HourlyForecast
 
 Single timestep with 17 optional surface fields + `pressure_levels: list[PressureLevelData]`. Use `level_at(pressure_hpa)` for quick lookup.
@@ -89,7 +93,7 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | Model | Purpose | Key fields |
 |-------|---------|------------|
 | `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km |
-| `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2 |
+| `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3 |
 | `EnhancedCloudLayer` | Cloud layer from dewpoint depression | base/top (ft + hPa), thickness, mean_temperature_c, coverage (SCT/BKN/OVC) |
 | `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |
 | `IcingZone` | Grouped icing zone from wet-bulb | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_wet_bulb_c, mean_icing_index |

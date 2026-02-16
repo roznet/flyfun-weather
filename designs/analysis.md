@@ -32,7 +32,7 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → clouds → icing → inversions → convective → vertical_motion`
+Pipeline: `prepare → thermodynamics → enrich_lwc → clouds → icing → inversions → convective → vertical_motion`
 
 ### Prepare (`sounding/prepare.py`)
 
@@ -95,20 +95,29 @@ layers = detect_inversions(derived_levels)
 
 ### Icing (`sounding/icing.py`)
 
-Ogimet continuous icing index with cloud awareness. Replaces previous wet-bulb band classification.
+Two-path icing assessment: direct LWC when GRIB2 data available, Ogimet index as fallback.
 
 ```python
 zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape)
 ```
 
-**Only assesses levels near/in cloud** (DD < 3°C or within 500ft of a cloud layer).
+**Path 1: Direct LWC** (when `cloud_liquid_water_g_m3` populated via GRIB2 enrichment):
+- Bypasses cloud proximity check — LWC directly measures supercooled liquid water
+- Only at freezing temperatures (0°C to −20°C)
+- Severity from LWC thresholds (aviation meteorology literature):
 
-**Ogimet icing index**: physically-based continuous index that peaks at −7°C (matching observed supercooled liquid water distribution). Two components:
-- **Stratiform**: parabolic profile peaking at −7°C, zero at 0°C and −20°C
-- **Convective**: Gaussian centered on −10°C, broader range to −25°C
-- Components blended by CAPE (higher CAPE → more convective weight)
+| LWC (g/m³) | Risk |
+|-------------|------|
+| > 0 | LIGHT |
+| ≥ 0.1 | MODERATE |
+| ≥ 0.6 | SEVERE |
 
-**Severity from index:**
+**Path 2: Ogimet index** (fallback when LWC unavailable):
+- **Only assesses levels near/in cloud** (DD < 3°C or within 500ft of a cloud layer)
+- Physically-based continuous index peaking at −7°C. Two components:
+  - **Stratiform**: parabolic profile peaking at −7°C, zero at 0°C and −20°C
+  - **Convective**: Gaussian centered on −10°C, broader range to −25°C
+  - Components blended by CAPE (higher CAPE → more convective weight)
 
 | Index range | Risk |
 |-------------|------|
@@ -121,6 +130,10 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape)
 - Each `IcingZone` includes `mean_icing_index` for transparency in the assessment
 - SLD detection: **currently disabled** — heuristics too sensitive for available data resolution
 - Adjacent levels grouped into `IcingZone` bands (gap ≤ 100hPa)
+
+### LWC Enrichment (`sounding/__init__.py`)
+
+`_enrich_lwc()` converts CLWMR (kg/kg) from `PressureLevelData` to LWC (g/m³) on `DerivedLevel` using air density from ideal gas law: `LWC = CLWMR × (P / (Rd × T_K)) × 1000`. Called after `compute_derived_levels()`, before cloud detection.
 
 ### Convective (`sounding/convective.py`)
 

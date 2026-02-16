@@ -23,7 +23,9 @@ Each model has a `ModelEndpoint` dataclass specifying URL, max forecast range, a
 | `ukmo` | `/v1/forecast?models=ukmo_seamless` | 7 | Uses `model_param` field |
 | `meteofrance` | `/v1/meteofrance` | 6 | No surface dewpoint |
 
-`build_hourly_params()` constructs the API parameter string, excluding each model's unavailable variables. Pressure levels: `[1000, 925, 850, 700, 600, 500, 400, 300]` hPa.
+`build_hourly_params()` constructs the API parameter string, excluding each model's unavailable variables. Pressure levels are **per-model** via `ModelEndpoint.pressure_levels`:
+- **Extended** (GFS, ECMWF, BestMatch): 25 levels, 25 hPa spacing below 500 hPa, 50 hPa above → ~1000ft vertical resolution
+- **Base** (ICON, UKMO, MeteoFrance): 8 levels `[1000, 925, 850, 700, 600, 500, 400, 300]` hPa
 
 ### Client Usage
 
@@ -143,6 +145,45 @@ result = check_freshness(last_pack_init_times)
 - `compute_next_update()` estimates when the next model run will be available
 - Smart refresh in the API: skips pipeline if all models are still fresh
 
+## GRIB2 Enrichment (`fetch/grib/`)
+
+Optional GFS GRIB2 enrichment for Cloud Liquid Water (CLWMR) and Ice Mixing Ratio (ICMR) — variables not available from Open-Meteo. Enabled via `BriefingOptions.enrich_grib=True` (always on in API, opt-in via `--enrich-grib` in CLI).
+
+```python
+from weatherbrief.fetch.grib import enrich_forecasts
+enrich_forecasts(cross_sections, all_forecasts, route_points,
+                 target_date, target_hour, data_dir=data_dir)
+# Modifies PressureLevelData in-place: sets cloud_liquid_water_kg_kg, ice_mixing_ratio_kg_kg
+```
+
+### Architecture
+
+| Module | Purpose |
+|--------|---------|
+| `gfs_idx.py` | Parse `.idx` files, plan HTTP byte ranges for CLMR/ICMR variables |
+| `grib_fetch.py` | Find latest GFS run, bracket forecast hours, download via HTTP Range from S3 |
+| `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points |
+| `cache.py` | Disk cache (`data/.cache/grib/gfs/{date}_{cycle}z/`) with 48h TTL |
+
+### How It Works
+1. Find latest available GFS cycle (00z/06z/12z/18z) — HEAD request on `.idx` file
+2. Bracket target time between two forecast hours (1-hourly f000–f120, 3-hourly f120–f384)
+3. Parse `.idx` to find byte offsets for CLMR + ICMR at all pressure levels
+4. Download via HTTP Range requests from `noaa-gfs-bdp-pds.s3.amazonaws.com` (public, no auth)
+5. Decode with cfgrib → xarray, bilinear interpolation to each route point
+6. Merge into existing `PressureLevelData` objects in-place
+
+### Key Choices
+- **GFS only** — regular lat/lon grid with public `.idx` files; ECMWF/ICON would need different approaches
+- **GFS uses "CLMR"** not "CLWMR" in `.idx` files (cfgrib may report either as shortName)
+- **Per-point interpolation** — `decode_grib_per_point()` returns values for each route point individually
+- **Graceful degradation** — enrichment failure logged but pipeline continues with Open-Meteo data only
+
+### Gotchas
+- **cfgrib uses lazy loading** — temp file must stay alive through interpolation, not just `open_datasets()`. Deleting too early causes `FileNotFoundError`.
+- GFS S3 bucket has ~4.5h delay after init time before data is available
+- Cache is shared across users (same model run = same data)
+
 ## Gotchas
 
 - ECMWF now has relative_humidity at pressure levels (dewpoint still derived via Magnus)
@@ -152,5 +193,6 @@ result = check_freshness(last_pack_init_times)
 ## References
 
 - Variable definitions: `fetch/variables.py`
+- GRIB2 enrichment: `fetch/grib/`
 - Data models: [data-models.md](./data-models.md)
 - Analysis consumers: [analysis.md](./analysis.md)
