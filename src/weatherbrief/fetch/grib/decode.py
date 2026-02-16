@@ -13,8 +13,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Variable name mapping: GFS shortName → our field names
+# GFS uses "clmr" (Cloud Liquid water Mixing Ratio), cfgrib may report
+# either the shortName or parameterName depending on version.
 _VAR_MAP = {
-    "clwmr": "cloud_liquid_water_kg_kg",
+    "clmr": "cloud_liquid_water_kg_kg",
+    "clwmr": "cloud_liquid_water_kg_kg",  # alias
     "icmr": "ice_mixing_ratio_kg_kg",
 }
 
@@ -50,58 +53,58 @@ def decode_grib_to_points(
 
     try:
         datasets = cfgrib.open_datasets(str(tmp_path))
+
+        result: dict[int, dict[str, float]] = {}
+
+        # Normalize longitudes to 0–360 (GFS convention)
+        target_lons = [(lon % 360) for lon in longitudes]
+
+        for ds in datasets:
+            for var_name, xr_var in ds.data_vars.items():
+                field_name = _VAR_MAP.get(str(var_name).lower())
+                if field_name is None:
+                    continue
+
+                # Determine pressure coordinate name
+                pressure_coord = None
+                for coord_name in ("isobaricInhPa", "level", "pressure"):
+                    if coord_name in xr_var.dims:
+                        pressure_coord = coord_name
+                        break
+
+                if pressure_coord is None:
+                    # Single level — try to get pressure from attributes
+                    level = xr_var.attrs.get("level")
+                    if level is not None:
+                        p_hpa = int(level)
+                        val = _interpolate_to_points(
+                            xr_var, latitudes, target_lons,
+                        )
+                        if val is not None:
+                            result.setdefault(p_hpa, {})[field_name] = val
+                    continue
+
+                # Multiple pressure levels
+                pressures = ds.coords[pressure_coord].values
+                for p_val in pressures:
+                    p_hpa = int(float(p_val))
+                    level_data = xr_var.sel({pressure_coord: p_val})
+                    val = _interpolate_to_points(
+                        level_data, latitudes, target_lons,
+                    )
+                    if val is not None:
+                        result.setdefault(p_hpa, {})[field_name] = val
+
+        # Close datasets
+        for ds in datasets:
+            ds.close()
+
+        return result
     except Exception:
         logger.warning("cfgrib failed to decode GRIB2 data", exc_info=True)
         return {}
     finally:
         tmp_path.unlink(missing_ok=True)
-
-    result: dict[int, dict[str, float]] = {}
-
-    # Normalize longitudes to 0–360 (GFS convention)
-    target_lons = [(lon % 360) for lon in longitudes]
-
-    for ds in datasets:
-        for var_name, xr_var in ds.data_vars.items():
-            field_name = _VAR_MAP.get(str(var_name).lower())
-            if field_name is None:
-                continue
-
-            # Determine pressure coordinate name
-            pressure_coord = None
-            for coord_name in ("isobaricInhPa", "level", "pressure"):
-                if coord_name in xr_var.dims:
-                    pressure_coord = coord_name
-                    break
-
-            if pressure_coord is None:
-                # Single level — try to get pressure from attributes
-                level = xr_var.attrs.get("level")
-                if level is not None:
-                    p_hpa = int(level)
-                    val = _interpolate_to_points(
-                        xr_var, latitudes, target_lons,
-                    )
-                    if val is not None:
-                        result.setdefault(p_hpa, {})[field_name] = val
-                continue
-
-            # Multiple pressure levels
-            pressures = ds.coords[pressure_coord].values
-            for p_val in pressures:
-                p_hpa = int(float(p_val))
-                level_data = xr_var.sel({pressure_coord: p_val})
-                val = _interpolate_to_points(
-                    level_data, latitudes, target_lons,
-                )
-                if val is not None:
-                    result.setdefault(p_hpa, {})[field_name] = val
-
-    # Close datasets
-    for ds in datasets:
-        ds.close()
-
-    return result
 
 
 def _interpolate_to_points(
@@ -177,57 +180,57 @@ def decode_grib_per_point(
 
     try:
         datasets = cfgrib.open_datasets(str(tmp_path))
+
+        # Normalize longitudes to 0–360
+        target_lons = [(lon % 360) for lon in longitudes]
+        n_points = len(latitudes)
+        results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+
+        for ds in datasets:
+            for var_name, xr_var in ds.data_vars.items():
+                field_name = _VAR_MAP.get(str(var_name).lower())
+                if field_name is None:
+                    continue
+
+                # Determine pressure coordinate
+                pressure_coord = None
+                for coord_name in ("isobaricInhPa", "level", "pressure"):
+                    if coord_name in xr_var.dims:
+                        pressure_coord = coord_name
+                        break
+
+                if pressure_coord is None:
+                    level = xr_var.attrs.get("level")
+                    if level is not None:
+                        p_hpa = int(level)
+                        values = _interpolate_per_point(
+                            xr_var, latitudes, target_lons,
+                        )
+                        for i, val in enumerate(values):
+                            if val is not None:
+                                results[i].setdefault(p_hpa, {})[field_name] = val
+                    continue
+
+                pressures = ds.coords[pressure_coord].values
+                for p_val in pressures:
+                    p_hpa = int(float(p_val))
+                    level_data = xr_var.sel({pressure_coord: p_val})
+                    values = _interpolate_per_point(
+                        level_data, latitudes, target_lons,
+                    )
+                    for i, val in enumerate(values):
+                        if val is not None:
+                            results[i].setdefault(p_hpa, {})[field_name] = val
+
+        for ds in datasets:
+            ds.close()
+
+        return results
     except Exception:
         logger.warning("cfgrib failed to decode GRIB2 data", exc_info=True)
         return [{} for _ in latitudes]
     finally:
         tmp_path.unlink(missing_ok=True)
-
-    # Normalize longitudes to 0–360
-    target_lons = [(lon % 360) for lon in longitudes]
-    n_points = len(latitudes)
-    results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
-
-    for ds in datasets:
-        for var_name, xr_var in ds.data_vars.items():
-            field_name = _VAR_MAP.get(str(var_name).lower())
-            if field_name is None:
-                continue
-
-            # Determine pressure coordinate
-            pressure_coord = None
-            for coord_name in ("isobaricInhPa", "level", "pressure"):
-                if coord_name in xr_var.dims:
-                    pressure_coord = coord_name
-                    break
-
-            if pressure_coord is None:
-                level = xr_var.attrs.get("level")
-                if level is not None:
-                    p_hpa = int(level)
-                    values = _interpolate_per_point(
-                        xr_var, latitudes, target_lons,
-                    )
-                    for i, val in enumerate(values):
-                        if val is not None:
-                            results[i].setdefault(p_hpa, {})[field_name] = val
-                continue
-
-            pressures = ds.coords[pressure_coord].values
-            for p_val in pressures:
-                p_hpa = int(float(p_val))
-                level_data = xr_var.sel({pressure_coord: p_val})
-                values = _interpolate_per_point(
-                    level_data, latitudes, target_lons,
-                )
-                for i, val in enumerate(values):
-                    if val is not None:
-                        results[i].setdefault(p_hpa, {})[field_name] = val
-
-    for ds in datasets:
-        ds.close()
-
-    return results
 
 
 def _interpolate_per_point(

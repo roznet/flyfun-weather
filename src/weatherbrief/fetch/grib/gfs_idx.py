@@ -20,7 +20,8 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 # Variables we want to extract
-GRIB_VARIABLES = {"CLWMR", "ICMR"}
+# GFS uses "CLMR" (not "CLWMR") for Cloud Liquid Water Mixing Ratio
+GRIB_VARIABLES = {"CLMR", "ICMR"}
 
 # Pattern to parse pressure level from .idx level field
 _LEVEL_RE = re.compile(r"^(\d+)\s+mb$")

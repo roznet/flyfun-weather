@@ -78,3 +78,7 @@ Implementation plan for Phase 4a: MetPy sounding analysis pipeline. Fully implem
 ### vertical-motion-plan
 Implementation plan for vertical motion & turbulence analysis. Fully implemented.
 → Full doc: vertical-motion-plan.md
+
+### weather-engine-specs
+Raw GRIB2 engine: what's implemented (GFS CLWMR/ICMR enrichment), data source registry (GFS/ECMWF/ICON/ARPEGE with bucket paths), future extensions (additional variables, concurrent downloads, Ellrod index, ECMWF enrichment), and implementation gotchas.
+→ Full doc: weather-engine-specs.md

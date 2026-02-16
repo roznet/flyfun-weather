@@ -36,9 +36,9 @@ from weatherbrief.models import DerivedLevel, EnhancedCloudLayer, IcingRisk, Ici
 SAMPLE_IDX = """\
 1:0:d=2023102700:HGT:1000 mb:6 hour fcst:
 2:45892:d=2023102700:TMP:1000 mb:6 hour fcst:
-3:91784:d=2023102700:CLWMR:1000 mb:6 hour fcst:
-4:137676:d=2023102700:CLWMR:975 mb:6 hour fcst:
-5:183568:d=2023102700:CLWMR:950 mb:6 hour fcst:
+3:91784:d=2023102700:CLMR:1000 mb:6 hour fcst:
+4:137676:d=2023102700:CLMR:975 mb:6 hour fcst:
+5:183568:d=2023102700:CLMR:950 mb:6 hour fcst:
 6:229460:d=2023102700:ICMR:1000 mb:6 hour fcst:
 7:275352:d=2023102700:ICMR:975 mb:6 hour fcst:
 8:321244:d=2023102700:RH:1000 mb:6 hour fcst:
@@ -48,14 +48,14 @@ SAMPLE_IDX = """\
 def test_parse_idx_filters_clwmr_icmr():
     """Only CLWMR and ICMR entries at pressure levels are returned."""
     entries = parse_idx(SAMPLE_IDX)
-    assert len(entries) == 5  # 3 CLWMR + 2 ICMR
-    assert all(e.variable in ("CLWMR", "ICMR") for e in entries)
+    assert len(entries) == 5  # 3 CLMR + 2 ICMR
+    assert all(e.variable in ("CLMR", "ICMR") for e in entries)
 
 
 def test_parse_idx_entry_fields():
     """Parsed entries have correct field values."""
     entries = parse_idx(SAMPLE_IDX)
-    clwmr_1000 = [e for e in entries if e.variable == "CLWMR" and e.level_hpa == 1000][0]
+    clwmr_1000 = [e for e in entries if e.variable == "CLMR" and e.level_hpa == 1000][0]
     assert clwmr_1000.sequence == 3
     assert clwmr_1000.byte_offset == 91784
     assert clwmr_1000.init_time == "2023102700"
@@ -64,7 +64,7 @@ def test_parse_idx_entry_fields():
 
 def test_parse_idx_ignores_non_pressure_levels():
     """Entries without pressure levels (like surface) are skipped."""
-    idx = "1:0:d=2023102700:CLWMR:surface:6 hour fcst:\n"
+    idx = "1:0:d=2023102700:CLMR:surface:6 hour fcst:\n"
     entries = parse_idx(idx)
     assert len(entries) == 0
 
@@ -74,8 +74,8 @@ def test_plan_byte_ranges():
     ranges = plan_byte_ranges(SAMPLE_IDX)
     assert len(ranges) == 5
 
-    # First CLWMR range starts at 91784, ends at next entry - 1
-    clwmr_1000 = [r for r in ranges if r.variable == "CLWMR" and r.level_hpa == 1000][0]
+    # First CLMR range starts at 91784, ends at next entry - 1
+    clwmr_1000 = [r for r in ranges if r.variable == "CLMR" and r.level_hpa == 1000][0]
     assert clwmr_1000.start == 91784
     assert clwmr_1000.end == 137676 - 1
 
@@ -83,7 +83,7 @@ def test_plan_byte_ranges():
 def test_plan_byte_ranges_with_level_filter():
     """Only requested pressure levels are included."""
     ranges = plan_byte_ranges(SAMPLE_IDX, target_levels=[1000])
-    assert len(ranges) == 2  # CLWMR@1000 + ICMR@1000
+    assert len(ranges) == 2  # CLMR@1000 + ICMR@1000
     assert all(r.level_hpa == 1000 for r in ranges)
 
 
