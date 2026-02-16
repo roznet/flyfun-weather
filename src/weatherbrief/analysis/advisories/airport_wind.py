@@ -6,6 +6,7 @@ import math
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -13,20 +14,14 @@ from weatherbrief.models import (
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
+from weatherbrief.models.airport_conditions import AirportModelCondition
 
 
-def _format_wind_detail(cond, rwy_id: str) -> str:
+def _format_wind_detail(cond: AirportModelCondition, rwy_id: str) -> str:
     """Format wind like: 230@11G25 RW24 ↓11 →5."""
-    from weatherbrief.models.airport_conditions import AirportModelCondition
-
-    if cond.wind_direction_deg is None or cond.wind_speed_kt is None:
+    wind_text = format_wind_string(cond.wind_direction_deg, cond.wind_speed_kt, cond.wind_gust_kt)
+    if not wind_text:
         return "calm"
-
-    dir_rounded = round(cond.wind_direction_deg / 10) * 10
-    dir_str = f"{dir_rounded:03.0f}"
-    spd_str = f"{cond.wind_speed_kt:.0f}"
-    gust_str = f"G{cond.wind_gust_kt:.0f}" if cond.wind_gust_kt else ""
-    wind_text = f"{dir_str}@{spd_str}{gust_str}"
 
     if cond.best_runway is None:
         return wind_text
@@ -35,6 +30,7 @@ def _format_wind_detail(cond, rwy_id: str) -> str:
     hw_arrow = "\u2193" if rwy.headwind_kt >= 0 else "\u2191"
     hw_val = f"{abs(rwy.headwind_kt):.0f}"
 
+    # Crosswind direction: sin(wind_dir - heading) >= 0 → from right → drifts left (←)
     rel = math.radians(cond.wind_direction_deg - rwy.heading_deg)
     xw_arrow = "\u2190" if math.sin(rel) >= 0 else "\u2192"
     xw_val = f"{rwy.crosswind_kt:.0f}"
@@ -132,8 +128,8 @@ class AirportWindEvaluator:
         arr = ctx.airport_conditions.arrival
 
         for model in ctx.models:
-            dep_cond = next((c for c in dep.conditions if c.model == model), None)
-            arr_cond = next((c for c in arr.conditions if c.model == model), None)
+            dep_cond = dep.condition_for_model(model)
+            arr_cond = arr.condition_for_model(model)
 
             if dep_cond is None and arr_cond is None:
                 per_model.append(ModelAdvisoryResult.build(

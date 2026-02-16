@@ -1,31 +1,7 @@
 /** DOM management for the Flights list page. */
 
 import type { FlightResponse, PackMeta } from '../store/types';
-import { escapeHtml } from '../utils';
-
-function $(id: string): HTMLElement {
-  return document.getElementById(id)!;
-}
-
-/** Format a date string for display. */
-function formatDate(iso: string): string {
-  const d = new Date(iso + 'T00:00:00Z');
-  return d.toLocaleDateString('en-GB', {
-    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
-    timeZone: 'UTC',
-  });
-}
-
-/** Format time as 4-digit UTC. */
-function formatTime(hour: number): string {
-  return `${hour.toString().padStart(2, '0')}00Z`;
-}
-
-/** Format altitude for display. */
-function formatAlt(ft: number): string {
-  if (ft >= 10000) return `FL${Math.round(ft / 100)}`;
-  return `${ft}ft`;
-}
+import { $, escapeHtml, formatDate, formatTime, formatAlt } from '../utils';
 
 /** Assessment badge color class. */
 function assessmentClass(assessment: string | null): string {

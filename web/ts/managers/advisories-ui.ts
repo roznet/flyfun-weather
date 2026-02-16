@@ -2,9 +2,7 @@
 
 import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AdvisoryParameterDef, AirportConditions, AirportConditionsSummary, AirportModelCondition, FlightCategory, RunwayWind } from '../types/advisories';
 import { showPopupContent } from '../components/info-popup';
-import { escapeHtml } from '../utils';
-
-const $ = (id: string) => document.getElementById(id);
+import { $, escapeHtml, modelLabel } from '../utils';
 
 const STATUS_ORDER: AdvisoryStatus[] = ['red', 'amber', 'green', 'unavailable'];
 
@@ -24,10 +22,6 @@ function statusLabel(status: AdvisoryStatus): string {
     case 'red': return 'R';
     default: return '?';
   }
-}
-
-function modelLabel(model: string): string {
-  return model.toUpperCase();
 }
 
 function flightCatBadgeClass(cat: FlightCategory): string {

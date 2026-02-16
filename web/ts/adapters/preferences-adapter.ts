@@ -1,5 +1,10 @@
 /** Preferences adapter — fetch, save, and clear autorouter credentials. */
 
+import { apiFetch } from '../utils';
+import type { AdvisoryParameterDef, AdvisoryCatalogEntry } from '../types/advisories';
+
+export type { AdvisoryParameterDef, AdvisoryCatalogEntry };
+
 export interface FlightDefaults {
   cruise_altitude_ft: number | null;
   flight_ceiling_ft: number | null;
@@ -29,32 +34,6 @@ export interface PreferencesUpdate {
   autorouter_username?: string;
   autorouter_password?: string;
 }
-
-// --- Advisory catalog ---
-
-export interface AdvisoryParameterDef {
-  key: string;
-  label: string;
-  description: string;
-  type: string; // "number", "percent", "altitude", "speed", "boolean"
-  unit: string;
-  default: number;
-  min: number | null;
-  max: number | null;
-  step: number | null;
-}
-
-export interface AdvisoryCatalogEntry {
-  id: string;
-  name: string;
-  short_description: string;
-  description: string;
-  category: string;
-  default_enabled: boolean;
-  parameters: AdvisoryParameterDef[];
-}
-
-import { apiFetch } from '../utils';
 
 export async function fetchPreferences(): Promise<PreferencesResponse> {
   return apiFetch<PreferencesResponse>('/user/preferences');

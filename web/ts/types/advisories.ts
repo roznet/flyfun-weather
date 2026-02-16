@@ -6,7 +6,7 @@ export interface AdvisoryParameterDef {
   key: string;
   label: string;
   description: string;
-  type: string; // "number" | "percent" | "altitude" | "speed" | "boolean"
+  type: 'number' | 'percent' | 'altitude' | 'speed' | 'boolean';
   unit: string;
   default: number;
   min: number | null;

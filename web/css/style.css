@@ -16,6 +16,7 @@
   --amber-bg: #fff3cd;
   --red: #dc3545;
   --red-bg: #f8d7da;
+  --lifr: #8e24aa;
   --radius: 6px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
@@ -955,6 +956,18 @@ label {
   font-size: 0.9rem;
 }
 
+/* --- Settings utility classes --- */
+.settings-actions { gap: 0.75rem; margin-bottom: 1rem; align-items: center; }
+.section-hint { margin-bottom: 0.75rem; }
+.subsection-heading { margin-bottom: 0.5rem; }
+.hidden-section { display: none; }
+.input-narrow { width: 120px; }
+.usage-month { margin-top: 1rem; }
+.model-checkboxes { gap: 1.5rem; margin-bottom: 0; flex-wrap: wrap; }
+.btn-inline-clear { display: none; margin-left: 0.5rem; font-size: 0.75rem; padding: 0.2rem 0.5rem; }
+.status-message { display: none; }
+.status-message.visible { display: block; }
+
 /* --- Settings tabs --- */
 
 .settings-tabs {
@@ -1013,7 +1026,7 @@ label {
 
 .advisory-setting {
   padding: 0.5rem 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border);
 }
 
 .advisory-setting:last-child {
@@ -1280,12 +1293,12 @@ label {
 .popup-learn-more {
   margin-top: 0.5rem;
   padding-top: 0.5rem;
-  border-top: 1px solid var(--border-color, #e0e0e0);
+  border-top: 1px solid var(--border);
 }
 
 .popup-learn-more a {
   font-size: 0.8rem;
-  color: var(--link-color, #4a90d9);
+  color: var(--primary);
   text-decoration: none;
 }
 
@@ -1297,7 +1310,7 @@ label {
 .popup-discuss-ai {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
-  border-top: 1px solid var(--border-color, #e0e0e0);
+  border-top: 1px solid var(--border);
 }
 .popup-discuss-header {
   display: flex;
@@ -1310,11 +1323,11 @@ label {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-muted, #888);
+  color: var(--text-muted);
 }
 .popup-discuss-hint {
   font-size: 0.7rem;
-  color: var(--text-muted, #888);
+  color: var(--text-muted);
   font-style: italic;
 }
 .popup-discuss-buttons {
@@ -1812,7 +1825,7 @@ label {
 }
 
 .flight-cat-lifr {
-  background: #8e24aa;
+  background: var(--lifr);
   color: #fff;
 }
 

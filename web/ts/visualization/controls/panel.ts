@@ -3,6 +3,7 @@
 import type { RenderMode, VizSettings } from '../types';
 import { getLayerGroups } from '../cross-section/layer-registry';
 import { showLayerInfo } from '../../components/info-popup';
+import { modelLabel } from '../../utils';
 
 export interface VizControlCallbacks {
   onRenderModeChange: (mode: RenderMode) => void;
@@ -26,7 +27,7 @@ export function renderVizControls(
   if (selectedModel) {
     html += `<div class="viz-model-indicator">`;
     html += `<span class="viz-toggle-label">Model:</span>`;
-    html += `<span class="viz-model-name">${selectedModel.toUpperCase()}</span>`;
+    html += `<span class="viz-model-name">${modelLabel(selectedModel)}</span>`;
     html += `</div>`;
   }
 

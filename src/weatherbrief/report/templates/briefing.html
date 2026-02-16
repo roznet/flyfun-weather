@@ -128,7 +128,7 @@
             <td>{% if cond.ceiling_ft is not none %}ceil {{ cond.ceiling_ft|int }}ft{% else %}CLR{% endif %}</td>
             <td>
               {% if cond.wind_speed_kt is not none and cond.wind_direction_deg is not none %}
-                {{ "%03d"|format((cond.wind_direction_deg / 10)|round(0, 'common') * 10) }}@{{ cond.wind_speed_kt|int }}{% if cond.wind_gust_kt %}G{{ cond.wind_gust_kt|int }}{% endif %}kt
+                {{ "%03d"|format(((cond.wind_direction_deg / 10)|round(0) * 10)|int) }}@{{ cond.wind_speed_kt|int }}{% if cond.wind_gust_kt %}G{{ cond.wind_gust_kt|int }}{% endif %}kt
               {% endif %}
               {% if cond.best_runway %} RW{{ cond.best_runway.runway_id }}{% endif %}
             </td>

@@ -15,6 +15,7 @@ from urllib.parse import quote
 from pydantic import BaseModel
 
 from weatherbrief.models import BriefingPackMeta, Flight
+from weatherbrief.models.airport_conditions import FLIGHT_CATEGORY_COLORS
 
 logger = logging.getLogger(__name__)
 
@@ -143,14 +144,13 @@ def _render_advisories_html(advisories_data: dict) -> str:
 
 def _format_wind(cond: dict) -> str:
     """Format wind string from a condition dict."""
-    spd = cond.get("wind_speed_kt")
-    direction = cond.get("wind_direction_deg")
-    if spd is None or direction is None:
+    from weatherbrief.analysis.airport_conditions import format_wind_string
+
+    wind = format_wind_string(cond.get("wind_direction_deg"), cond.get("wind_speed_kt"), cond.get("wind_gust_kt"))
+    if not wind:
         return ""
-    dir_str = f"{round(direction / 10) * 10:03d}"
-    gust = f"G{cond['wind_gust_kt']:.0f}" if cond.get("wind_gust_kt") else ""
     rwy = f" RW{cond['best_runway']['runway_id']}" if cond.get("best_runway") else ""
-    return f"{dir_str}@{spd:.0f}{gust}kt{rwy}"
+    return f"{wind}kt{rwy}"
 
 
 def _render_airport_card_html(apt: dict, role: str) -> str:
@@ -161,7 +161,7 @@ def _render_airport_card_html(apt: dict, role: str) -> str:
     if not conditions:
         return ""
 
-    cat_colors = {"VFR": "#0f5132", "MVFR": "#b45309", "IFR": "#dc2626", "LIFR": "#7f1d1d"}
+    cat_colors = {k.upper(): v for k, v in FLIGHT_CATEGORY_COLORS.items()}
     icao = apt.get("icao", "")
 
     rows = []

@@ -2,7 +2,7 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchAdminUsers, approveUser, type AdminUser } from './adapters/admin-adapter';
-import { renderUserInfo, escapeHtml } from './utils';
+import { renderUserInfo, escapeHtml, formatDate } from './utils';
 
 async function init(): Promise<void> {
   const user = await fetchCurrentUser();
@@ -106,14 +106,7 @@ function renderUserRow(u: AdminUser): string {
     </tr>`;
 }
 
-function formatDate(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  } catch {
-    return iso;
-  }
-}
+// formatDate imported from utils
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);

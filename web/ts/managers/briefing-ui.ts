@@ -30,11 +30,7 @@ import {
   variableToMetricId,
 } from '../helpers/metrics-helper';
 import * as api from '../adapters/api-adapter';
-import { escapeHtml } from '../utils';
-
-function $(id: string): HTMLElement {
-  return document.getElementById(id)!;
-}
+import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, ALL_MODELS } from '../utils';
 
 // --- Header ---
 
@@ -55,15 +51,9 @@ export function renderHeader(
     routeStr = flight.route_name.replace(/_/g, ' \u2192 ').toUpperCase();
   }
 
-  const date = new Date(flight.target_date + 'T00:00:00Z');
-  const dateStr = date.toLocaleDateString('en-GB', {
-    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
-    timeZone: 'UTC',
-  });
-  const timeStr = `${flight.target_time_utc.toString().padStart(2, '0')}00Z`;
-  const alt = flight.cruise_altitude_ft >= 10000
-    ? `FL${Math.round(flight.cruise_altitude_ft / 100)}`
-    : `${flight.cruise_altitude_ft}ft`;
+  const dateStr = formatDate(flight.target_date);
+  const timeStr = formatTime(flight.target_time_utc);
+  const alt = formatAlt(flight.cruise_altitude_ft);
 
   el.innerHTML = `
     <span class="route-summary">${escapeHtml(routeStr)}</span>
@@ -181,7 +171,7 @@ export function renderFreshnessBar(
   // Model basis line from the pack's init times
   const packTimes = pack?.model_init_times || {};
   const basisParts = Object.entries(packTimes)
-    .map(([m, t]) => `${m.toUpperCase()} ${formatModelRunTime(t)}`)
+    .map(([m, t]) => `${modelLabel(m)} ${formatModelRunTime(t)}`)
     .join(', ');
   const basisLine = basisParts ? `<span class="freshness-basis">Based on ${basisParts}</span>` : '';
 
@@ -193,13 +183,13 @@ export function renderFreshnessBar(
     let nextInfo = '';
     if (freshness.next_expected_update && freshness.next_expected_model) {
       const timeStr = formatTimeUntil(freshness.next_expected_update);
-      nextInfo = `, next update ${freshness.next_expected_model.toUpperCase()} in ~${timeStr}`;
+      nextInfo = `, next update ${modelLabel(freshness.next_expected_model)} in ~${timeStr}`;
     }
     const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">Check again</a>`;
     el.className = 'freshness-bar freshness-current';
     el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}${forceLink}</span>${basisLine}`;
   } else {
-    const staleStr = freshness.stale_models.map((m) => m.toUpperCase()).join(', ');
+    const staleStr = freshness.stale_models.map((m) => modelLabel(m)).join(', ');
     el.className = 'freshness-bar freshness-stale';
     el.innerHTML = `<span>Updates available: ${staleStr}${forceLink}</span>${basisLine}`;
   }
@@ -364,7 +354,7 @@ function renderComparisonTable(
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): string {
   const models = Object.keys(divergences[0]?.model_values || {});
-  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
   const colSpan = models.length + 3; // var-name + models + spread + agree
 
   const rows = divergences.map((d) => {
@@ -528,7 +518,7 @@ function renderConvectiveBanner(
   );
   if (!hasConvective) return '';
 
-  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
   const colSpan = models.length + 1;
   const config = getDisplayConfig().sections.convective;
 
@@ -651,7 +641,7 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
   );
   if (!hasVerticalMotion) return '';
 
-  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
   const colSpan = models.length + 1;
 
   // Summary rows
@@ -789,7 +779,7 @@ function renderAltitudeMarkers(
   const hasIndices = models.some((m) => soundings[m].indices != null);
   if (!hasIndices) return '';
 
-  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
   const colSpan = models.length + 1;
   const config = getDisplayConfig().sections.altitudes;
 
@@ -844,7 +834,7 @@ function renderIcingZones(soundings: Record<string, SoundingAnalysis>, displayMo
   const sortedAlts = [...allAlts].sort((a, b) => b - a); // top-down
   if (sortedAlts.length < 2) return '';
 
-  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
 
   const rows = sortedAlts.slice(0, -1).map((alt, i) => {
     const nextAlt = sortedAlts[i + 1];
@@ -896,7 +886,7 @@ function renderEnhancedClouds(soundings: Record<string, SoundingAnalysis>, displ
   const sortedAlts = [...allAlts].sort((a, b) => b - a);
   if (sortedAlts.length < 2) return '';
 
-  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
 
   const rows = sortedAlts.slice(0, -1).map((alt, i) => {
     const nextAlt = sortedAlts[i + 1];
@@ -940,7 +930,7 @@ function renderNwpCloudCover(soundings: Record<string, SoundingAnalysis>): strin
   );
   if (!hasNwp) return '';
 
-  const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
 
   const rowSpecs: Array<{ key: 'cloud_cover_high_pct' | 'cloud_cover_mid_pct' | 'cloud_cover_low_pct'; label: string }> = [
     { key: 'cloud_cover_high_pct', label: 'High' },
@@ -985,7 +975,7 @@ function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
   // Per-model vertical regimes as columns
   const models = Object.keys(adv.regimes);
   if (models.length > 0) {
-    const headerCells = models.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+    const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
 
     // Collect all unique altitudes to build rows
     const allAlts = new Set<number>();
@@ -1028,7 +1018,7 @@ function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
   // Advisories as table
   if (adv.advisories.length > 0) {
     const advModels = Object.keys(adv.regimes);
-    const advHeaderCells = advModels.map((m) => `<th>${m.toUpperCase()}</th>`).join('');
+    const advHeaderCells = advModels.map((m) => `<th>${modelLabel(m)}</th>`).join('');
 
     const advisoryRows = adv.advisories.map((a) => {
       const isDescentToZero = a.advisory_type === 'descend_below_icing' && a.altitude_ft === 0;
@@ -1194,6 +1184,19 @@ function renderSinglePointSounding(
 
 // --- Skew-T ---
 
+/** Populate the model selector dropdown from available models. */
+function populateModelSelector(models: string[], selected: string): void {
+  const select = document.getElementById('model-select') as HTMLSelectElement | null;
+  if (!select || select.options.length > 0) return; // already populated
+  for (const m of models) {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = modelLabel(m);
+    if (m === selected) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
 export function renderSkewTs(
   flight: FlightResponse | null,
   pack: PackMeta | null,
@@ -1210,6 +1213,10 @@ export function renderSkewTs(
     return;
   }
 
+  // Populate model selector from available pack models (fallback to ALL_MODELS)
+  const models = routeAnalyses?.models ?? [...ALL_MODELS];
+  populateModelSelector(models, selectedModel);
+
   // Route-point mode: single Skew-T via on-demand endpoint
   if (routeAnalyses && routeAnalyses.analyses.length > 0) {
     const idx = selectedPointIndex ?? 0;
@@ -1220,7 +1227,7 @@ export function renderSkewTs(
       el.innerHTML = `
         <div class="skewt-gallery">
           <div class="skewt-card skewt-card-large">
-            <h4>${label} \u2014 ${selectedModel.toUpperCase()}</h4>
+            <h4>${label} \u2014 ${modelLabel(selectedModel)}</h4>
             <img src="${url}" alt="Skew-T ${label} ${selectedModel}"
                  class="skewt-img" loading="lazy"
                  onerror="this.parentElement.classList.add('skewt-unavailable')">
