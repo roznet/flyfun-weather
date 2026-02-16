@@ -1,6 +1,6 @@
 /** Advisory dashboard renderer — compact grid of advisory cards with per-model badges. */
 
-import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AdvisoryParameterDef } from '../types/advisories';
+import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AdvisoryParameterDef, AirportConditions, AirportConditionsSummary, AirportModelCondition, FlightCategory, RunwayWind } from '../types/advisories';
 import { showPopupContent } from '../components/info-popup';
 import { escapeHtml } from '../utils';
 
@@ -28,6 +28,102 @@ function statusLabel(status: AdvisoryStatus): string {
 
 function modelLabel(model: string): string {
   return model.toUpperCase();
+}
+
+function flightCatBadgeClass(cat: FlightCategory): string {
+  switch (cat) {
+    case 'vfr': return 'flight-cat-vfr';
+    case 'mvfr': return 'flight-cat-mvfr';
+    case 'ifr': return 'flight-cat-ifr';
+    case 'lifr': return 'flight-cat-lifr';
+  }
+}
+
+function formatRunwayPopup(allRunways: RunwayWind[]): string {
+  if (allRunways.length === 0) return '';
+  const rows = allRunways.map(r =>
+    `<tr><td>${escapeHtml(r.runway_id)}</td><td>${r.heading_deg.toFixed(0)}&deg;</td>` +
+    `<td>${r.crosswind_kt.toFixed(0)}kt</td><td>${r.headwind_kt > 0 ? '+' : ''}${r.headwind_kt.toFixed(0)}kt</td></tr>`
+  ).join('');
+  return `
+    <div class="popup-header"><h3>All Runways</h3></div>
+    <table class="advisory-params-table">
+      <thead><tr><th>Runway</th><th>Heading</th><th>Crosswind</th><th>Headwind</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function roundWind(deg: number): string {
+  return String(Math.round(deg / 10) * 10).padStart(3, '0');
+}
+
+function formatWind(cond: AirportModelCondition): string {
+  if (cond.wind_speed_kt == null || cond.wind_direction_deg == null) return '\u2014';
+
+  const dir = roundWind(cond.wind_direction_deg);
+  const spd = cond.wind_speed_kt.toFixed(0);
+  const gust = cond.wind_gust_kt != null ? `G${cond.wind_gust_kt.toFixed(0)}` : '';
+  return `${dir}@${spd}${gust}`;
+}
+
+function formatRunwayComponents(rwy: RunwayWind, windDir: number): string {
+  // Headwind: \u2193 down = headwind, \u2191 up = tailwind
+  const hwArrow = rwy.headwind_kt >= 0 ? '\u2193' : '\u2191';
+  const hwVal = Math.abs(rwy.headwind_kt).toFixed(0);
+
+  // Crosswind direction from wind relative to runway
+  // sin(wind_dir - heading) < 0 → wind from left → drifts right → \u2192
+  // sin(wind_dir - heading) > 0 → wind from right → drifts left → \u2190
+  const rel = (windDir - rwy.heading_deg) * Math.PI / 180;
+  const xwArrow = Math.sin(rel) >= 0 ? '\u2190' : '\u2192';
+  const xwVal = rwy.crosswind_kt.toFixed(0);
+
+  return `RW${rwy.runway_id} ${hwArrow}${hwVal} ${xwArrow}${xwVal}`;
+}
+
+function renderConditionRow(cond: AirportModelCondition): string {
+  const catLabel = cond.flight_category.toUpperCase();
+  const catClass = flightCatBadgeClass(cond.flight_category);
+  const vis = cond.visibility_sm !== null ? `${cond.visibility_sm}sm` : 'N/A';
+  const ceil = cond.ceiling_ft !== null ? `${cond.ceiling_ft}ft` : 'CLR';
+
+  const wind = formatWind(cond);
+  const rwyComp = cond.best_runway && cond.wind_direction_deg != null
+    ? formatRunwayComponents(cond.best_runway, cond.wind_direction_deg)
+    : '';
+  const windCell = rwyComp ? `${wind} ${rwyComp}` : wind;
+
+  return `
+    <tr class="airport-condition-row">
+      <td class="airport-model">${modelLabel(cond.model)}</td>
+      <td><span class="flight-cat-badge ${catClass}">${catLabel}</span></td>
+      <td>vis ${vis}</td>
+      <td>ceil ${ceil}</td>
+      <td class="airport-rwy-cell" data-model="${escapeHtml(cond.model)}">${windCell}</td>
+    </tr>
+  `;
+}
+
+function renderAirportCard(summary: AirportConditionsSummary, role: 'Departure' | 'Arrival'): string {
+  if (summary.conditions.length === 0) return '';
+
+  const rows = summary.conditions.map(renderConditionRow).join('');
+  return `
+    <div class="airport-card">
+      <div class="airport-card-header">${role}: ${escapeHtml(summary.icao)}</div>
+      <table class="airport-conditions-table">
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderAirportConditions(conditions: AirportConditions): string {
+  const dep = renderAirportCard(conditions.departure, 'Departure');
+  const arr = renderAirportCard(conditions.arrival, 'Arrival');
+  if (!dep && !arr) return '';
+  return `<div class="airport-cards">${dep}${arr}</div>`;
 }
 
 function renderAdvisoryPopup(entry: AdvisoryCatalogEntry, paramsUsed: Record<string, number>): string {
@@ -131,6 +227,11 @@ export function renderAdvisories(
     ? '<button class="btn btn-secondary btn-sm" id="recalc-advisories-btn">Recalculate</button>'
     : '';
 
+  // Airport conditions cards (above advisory grid)
+  const airportHtml = manifest.airport_conditions
+    ? renderAirportConditions(manifest.airport_conditions)
+    : '';
+
   const cards = sorted.map(adv => renderAdvisoryCard(adv, catalog)).join('');
 
   el.innerHTML = `
@@ -138,6 +239,7 @@ export function renderAdvisories(
       ${summary}
       ${recalcBtn}
     </div>
+    ${airportHtml}
     <div class="advisory-grid">${cards}</div>
   `;
 
@@ -164,4 +266,26 @@ export function renderAdvisories(
     const adv = manifest.advisories.find(a => a.advisory_id === advId);
     showPopupContent(renderAdvisoryPopup(entry, adv?.parameters_used ?? {}));
   });
+
+  // Wire runway info popups (event delegation)
+  if (manifest.airport_conditions) {
+    const ac = manifest.airport_conditions;
+    el.addEventListener('click', (e) => {
+      const cell = (e.target as HTMLElement).closest('.airport-rwy-cell') as HTMLElement | null;
+      if (!cell) return;
+      const model = cell.dataset.model;
+      if (!model) return;
+
+      // Find which airport card this is in
+      const card = cell.closest('.airport-card');
+      if (!card) return;
+      const header = card.querySelector('.airport-card-header')?.textContent || '';
+      const isDep = header.startsWith('Departure');
+      const summary = isDep ? ac.departure : ac.arrival;
+      const cond = summary.conditions.find(c => c.model === model);
+      if (cond && cond.all_runways.length > 0) {
+        showPopupContent(formatRunwayPopup(cond.all_runways));
+      }
+    });
+  }
 }

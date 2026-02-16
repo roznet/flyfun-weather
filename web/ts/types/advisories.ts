@@ -43,6 +43,44 @@ export interface RouteAdvisoryResult {
   parameters_used: Record<string, number>;
 }
 
+export type FlightCategory = 'vfr' | 'mvfr' | 'ifr' | 'lifr';
+
+export interface RunwayEnd {
+  id: string;
+  heading_deg: number;
+}
+
+export interface RunwayWind {
+  runway_id: string;
+  heading_deg: number;
+  crosswind_kt: number;
+  headwind_kt: number;
+}
+
+export interface AirportModelCondition {
+  model: string;
+  flight_category: FlightCategory;
+  ceiling_ft: number | null;
+  visibility_sm: number | null;
+  wind_speed_kt: number | null;
+  wind_direction_deg: number | null;
+  wind_gust_kt: number | null;
+  best_runway: RunwayWind | null;
+  all_runways: RunwayWind[];
+}
+
+export interface AirportConditionsSummary {
+  icao: string;
+  name: string;
+  runway_ends: RunwayEnd[];
+  conditions: AirportModelCondition[];
+}
+
+export interface AirportConditions {
+  departure: AirportConditionsSummary;
+  arrival: AirportConditionsSummary;
+}
+
 export interface RouteAdvisoriesManifest {
   advisories: RouteAdvisoryResult[];
   catalog: AdvisoryCatalogEntry[];
@@ -51,4 +89,5 @@ export interface RouteAdvisoriesManifest {
   flight_ceiling_ft: number;
   total_distance_nm: number;
   models: string[];
+  airport_conditions: AirportConditions | null;
 }

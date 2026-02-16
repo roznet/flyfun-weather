@@ -236,6 +236,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
         output_dir=pack_path,
         autorouter_credentials=autorouter_creds,
         user_id=user_id,
+        airports_db_path=db_path,
     )
     if models:
         options.models = models
@@ -602,6 +603,7 @@ def get_advisories(
 def recalculate_advisories(
     flight_id: str,
     timestamp: str,
+    request: Request,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -657,6 +659,59 @@ def recalculate_advisories(
         enabled_ids = {k for k, v in adv_prefs.enabled.items() if v}
     user_params = adv_prefs.params or {}
 
+    # Recompute airport conditions from existing data
+    airport_conds = None
+    adv_path = pack_dir / "route_advisories.json"
+    try:
+        from weatherbrief.analysis.airport_conditions import compute_airport_conditions
+
+        if adv_path.exists():
+            prev_manifest = RouteAdvisoriesManifest.model_validate_json(adv_path.read_text())
+        else:
+            prev_manifest = None
+
+        if prev_manifest and prev_manifest.airport_conditions:
+            # Reuse runway data from previous manifest
+            prev_dep = prev_manifest.airport_conditions.departure
+            prev_arr = prev_manifest.airport_conditions.arrival
+            runway_data = {
+                prev_dep.icao: prev_dep.runway_ends,
+                prev_arr.icao: prev_arr.runway_ends,
+            }
+            airport_conds = compute_airport_conditions(
+                analyses=manifest.analyses,
+                cross_sections=cross_sections,
+                models=manifest.models,
+                dep_icao=prev_dep.icao,
+                dep_name=prev_dep.name,
+                arr_icao=prev_arr.icao,
+                arr_name=prev_arr.name,
+                runway_data=runway_data,
+            )
+        elif flight.waypoints and len(flight.waypoints) >= 2:
+            # Cold start: compute from flight waypoints + airports DB
+            db_path = getattr(request.app.state, "db_path", "")
+            runway_data = None
+            dep_icao = flight.waypoints[0]
+            arr_icao = flight.waypoints[-1]
+            if db_path:
+                from weatherbrief.airports import get_runway_ends
+
+                runway_data = get_runway_ends([dep_icao, arr_icao], db_path)
+            airport_conds = compute_airport_conditions(
+                analyses=manifest.analyses,
+                cross_sections=cross_sections,
+                models=manifest.models,
+                dep_icao=dep_icao,
+                dep_name=dep_icao,
+                arr_icao=arr_icao,
+                arr_name=arr_icao,
+                runway_data=runway_data,
+            )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Airport conditions computation failed in recalculate", exc_info=True)
+
     # Build context and evaluate
     ctx = RouteContext(
         analyses=manifest.analyses,
@@ -666,6 +721,7 @@ def recalculate_advisories(
         cruise_altitude_ft=manifest.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         total_distance_nm=manifest.total_distance_nm,
+        airport_conditions=airport_conds,
     )
 
     advisory_results = evaluate_all(ctx, enabled_ids, user_params)
@@ -677,6 +733,7 @@ def recalculate_advisories(
         flight_ceiling_ft=flight.flight_ceiling_ft,
         total_distance_nm=manifest.total_distance_nm,
         models=manifest.models,
+        airport_conditions=airport_conds,
     )
 
     # Save updated advisories

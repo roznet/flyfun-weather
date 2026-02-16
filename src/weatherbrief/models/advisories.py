@@ -10,6 +10,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from weatherbrief.models.airport_conditions import AirportConditions  # noqa: F401
+
 
 class AdvisoryStatus(str, Enum):
     """Route advisory status level."""
@@ -136,3 +138,4 @@ class RouteAdvisoriesManifest(BaseModel):
     flight_ceiling_ft: int = 0
     total_distance_nm: float = 0.0
     models: list[str] = Field(default_factory=list)
+    airport_conditions: AirportConditions | None = None

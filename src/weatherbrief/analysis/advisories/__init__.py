@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AirportConditions,
     ElevationProfile,
     RouteAdvisoryResult,
     RouteCrossSection,
@@ -35,6 +36,7 @@ class RouteContext:
     cruise_altitude_ft: int
     flight_ceiling_ft: int
     total_distance_nm: float
+    airport_conditions: AirportConditions | None = None
 
 
 @runtime_checkable
