@@ -15,7 +15,8 @@ import {
   type UsageSummary,
 } from './adapters/preferences-adapter';
 
-const ALL_MODELS = ['gfs', 'ecmwf', 'icon'] as const;
+const ALL_MODELS = ['gfs', 'ecmwf', 'icon', 'ukmo', 'meteofrance'] as const;
+const DEFAULT_MODELS = ['gfs', 'ecmwf', 'icon'];
 
 /** Category display order and labels. */
 const CATEGORY_ORDER: [string, string][] = [
@@ -107,7 +108,7 @@ function populateForm(prefs: PreferencesResponse): void {
   }
 
   // Models checkboxes
-  const selectedModels = d.models || [...ALL_MODELS];
+  const selectedModels = d.models || DEFAULT_MODELS;
   for (const m of ALL_MODELS) {
     const cb = document.getElementById(`model-${m}`) as HTMLInputElement;
     if (cb) cb.checked = selectedModels.includes(m);
