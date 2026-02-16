@@ -955,6 +955,124 @@ label {
   font-size: 0.9rem;
 }
 
+/* --- Settings tabs --- */
+
+.settings-tabs {
+  display: flex;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 1rem;
+  gap: 0;
+}
+
+.settings-tabs .tab-btn {
+  padding: 0.5rem 1.2rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.settings-tabs .tab-btn:hover {
+  color: var(--text);
+}
+
+.settings-tabs .tab-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+/* --- Advisory settings --- */
+
+.advisory-category {
+  margin-bottom: 1.25rem;
+}
+
+.advisory-category-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.advisory-setting {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.advisory-setting:last-child {
+  border-bottom: none;
+}
+
+.advisory-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.advisory-header label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  flex: 1;
+}
+
+.advisory-header .advisory-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 400;
+  display: block;
+}
+
+.advisory-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin-top: 0.4rem;
+  padding-left: 1.6rem;
+}
+
+.advisory-param {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+}
+
+.advisory-param label {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.advisory-param input {
+  width: 70px;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.82rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.advisory-param .param-unit {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
 /* --- Display mode toggle --- */
 
 .display-mode-toggle {

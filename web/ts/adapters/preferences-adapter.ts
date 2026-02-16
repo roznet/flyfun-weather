@@ -10,17 +10,48 @@ export interface DigestConfig {
   config_name: string | null;
 }
 
+export interface AdvisoryPreferences {
+  enabled: Record<string, boolean> | null;
+  params: Record<string, Record<string, number>> | null;
+}
+
 export interface PreferencesResponse {
   defaults: FlightDefaults;
   digest_config: DigestConfig;
+  advisories: AdvisoryPreferences;
   has_autorouter_creds: boolean;
 }
 
 export interface PreferencesUpdate {
   defaults?: FlightDefaults;
   digest_config?: DigestConfig;
+  advisories?: AdvisoryPreferences;
   autorouter_username?: string;
   autorouter_password?: string;
+}
+
+// --- Advisory catalog ---
+
+export interface AdvisoryParameterDef {
+  key: string;
+  label: string;
+  description: string;
+  type: string; // "number", "percent", "altitude", "speed", "boolean"
+  unit: string;
+  default: number;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+}
+
+export interface AdvisoryCatalogEntry {
+  id: string;
+  name: string;
+  short_description: string;
+  description: string;
+  category: string;
+  default_enabled: boolean;
+  parameters: AdvisoryParameterDef[];
 }
 
 import { apiFetch } from '../utils';
@@ -40,6 +71,10 @@ export async function clearAutorouterCreds(): Promise<void> {
   return apiFetch<void>('/user/preferences/autorouter', {
     method: 'DELETE',
   });
+}
+
+export async function fetchAdvisoryCatalog(): Promise<AdvisoryCatalogEntry[]> {
+  return apiFetch<AdvisoryCatalogEntry[]>('/user/preferences/advisories/catalog');
 }
 
 // --- Usage ---

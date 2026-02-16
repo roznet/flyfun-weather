@@ -117,20 +117,23 @@ def update_preferences(
     """Update the current user's preferences."""
     row = _load_prefs(db, user_id)
 
+    # Merge into existing defaults_json to preserve sibling keys
+    try:
+        data = json.loads(row.defaults_json) if row.defaults_json else {}
+    except json.JSONDecodeError:
+        data = {}
+
     if body.defaults is not None:
-        row.defaults_json = body.defaults.model_dump_json(exclude_none=True)
+        defaults_dict = body.defaults.model_dump(exclude_none=True)
+        data.update(defaults_dict)
+
+    if body.advisories is not None:
+        data["advisories"] = body.advisories.model_dump(exclude_none=True)
+
+    row.defaults_json = json.dumps(data)
 
     if body.digest_config is not None:
         row.digest_config_json = body.digest_config.model_dump_json(exclude_none=True)
-
-    if body.advisories is not None:
-        # Store advisory prefs under "advisories" key in defaults_json
-        try:
-            data = json.loads(row.defaults_json) if row.defaults_json else {}
-        except json.JSONDecodeError:
-            data = {}
-        data["advisories"] = body.advisories.model_dump(exclude_none=True)
-        row.defaults_json = json.dumps(data)
 
     if body.autorouter_username and body.autorouter_password:
         payload = json.dumps({
@@ -196,3 +199,11 @@ def load_user_defaults(db: Session, user_id: str) -> FlightDefaults:
     if not row:
         return FlightDefaults()
     return _parse_defaults(row.defaults_json)
+
+
+@router.get("/advisories/catalog")
+def get_advisory_catalog():
+    """Return the full advisory catalog for settings UI."""
+    from weatherbrief.analysis.advisories import get_catalog
+
+    return [entry.model_dump() for entry in get_catalog()]
