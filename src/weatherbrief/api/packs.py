@@ -951,7 +951,11 @@ def get_route_skewt(
     # Generate Skew-T
     try:
         from weatherbrief.digest.skewt import generate_skewt
-        label = point_data.get("waypoint_icao") or f"pt{point_index:02d}"
+        dist = point_data.get("distance_from_origin_nm")
+        total = ra_data.get("total_distance_nm")
+        dist_label = f"{dist:.0f}nm/{total:.0f}nm" if dist is not None and total else None
+        icao = point_data.get("waypoint_icao")
+        label = f"{icao} ({dist_label})" if icao and dist_label else icao or dist_label or f"pt{point_index:02d}"
         generate_skewt(hourly, label, model, cache_path,
                        analysis=sa, cruise_altitude_ft=cruise_altitude_ft)
     except Exception as exc:
@@ -1017,7 +1021,11 @@ def get_route_hodograph(
     # Generate hodograph
     try:
         from weatherbrief.digest.skewt import generate_hodograph
-        label = point_data.get("waypoint_icao") or f"pt{point_index:02d}"
+        dist = point_data.get("distance_from_origin_nm")
+        total = ra_data.get("total_distance_nm")
+        dist_label = f"{dist:.0f}nm/{total:.0f}nm" if dist is not None and total else None
+        icao = point_data.get("waypoint_icao")
+        label = f"{icao} ({dist_label})" if icao and dist_label else icao or dist_label or f"pt{point_index:02d}"
         generate_hodograph(hourly, label, model, cache_path)
     except Exception as exc:
         logger.warning("Route hodograph generation failed: %s", exc, exc_info=True)
