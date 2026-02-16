@@ -1,15 +1,78 @@
 /** NWP cloud cover bands: white fills at ICAO altitude bands from model cloud parameterization. */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode, VizPoint } from '../../types';
+import type {
+  CrossSectionLayer,
+  CoordTransform,
+  VizRouteData,
+  RenderMode,
+  VizPoint,
+  VizInversionLayer,
+} from '../../types';
 import { drawColumnBand, type BandPointData } from './base';
 
 /** Low cloud band: terrain surface → 6500ft. Mid band: 6500ft → 20000ft. */
 const LOW_TOP_FT = 6500;
 const MID_TOP_FT = 20000;
 
+/** Inversions weaker than this don't reliably cap clouds. */
+const INVERSION_STRENGTH_THRESHOLD_C = 2.0;
+
 /** Convert cloud cover percentage to capped opacity. */
 function cloudOpacity(pct: number): number {
   return Math.min(0.7, (pct / 100) * 0.8);
+}
+
+/** Find the lowest inversion within [floor, ceiling] that exceeds the strength threshold. */
+function findCappingInversion(
+  inversions: VizInversionLayer[],
+  floorFt: number,
+  ceilingFt: number,
+): number | null {
+  let lowest: number | null = null;
+  for (const inv of inversions) {
+    if (inv.strengthC >= INVERSION_STRENGTH_THRESHOLD_C &&
+        inv.baseFt > floorFt &&
+        inv.baseFt < ceilingFt) {
+      if (lowest === null || inv.baseFt < lowest) {
+        lowest = inv.baseFt;
+      }
+    }
+  }
+  return lowest;
+}
+
+interface BandLimits {
+  lowBase: number;
+  lowTop: number;
+  midBase: number;
+  midTop: number;
+}
+
+/** Compute narrowed band limits using LCL (cloud base) and inversions (cloud cap). */
+function computeBandLimits(point: VizPoint, terrainFt: number): BandLimits {
+  const lcl = point.altitudeLines.lclAltitudeFt;
+
+  // Low band base: raise to LCL if it falls within the low band
+  let lowBase = terrainFt;
+  if (lcl !== null && lcl > terrainFt && lcl < LOW_TOP_FT) {
+    lowBase = lcl;
+  }
+
+  // Low band top: cap at first significant inversion within [lowBase, 6500ft]
+  const lowCap = findCappingInversion(point.inversions, lowBase, LOW_TOP_FT);
+  const lowTop = lowCap ?? LOW_TOP_FT;
+
+  // Mid band base: raise to LCL if it falls within the mid band
+  let midBase = LOW_TOP_FT;
+  if (lcl !== null && lcl > LOW_TOP_FT && lcl < MID_TOP_FT) {
+    midBase = lcl;
+  }
+
+  // Mid band top: cap at first significant inversion within [midBase, 20000ft]
+  const midCap = findCappingInversion(point.inversions, midBase, MID_TOP_FT);
+  const midTop = midCap ?? MID_TOP_FT;
+
+  return { lowBase, lowTop, midBase, midTop };
 }
 
 /** Get terrain elevation at a point, falling back to 0. */
@@ -57,20 +120,21 @@ function renderColumns(
 ): void {
   for (const point of data.points) {
     const terrainFt = terrainElevationAt(data, point.distanceNm);
+    const limits = computeBandLimits(point, terrainFt);
 
-    // Low band: terrain → 6500ft
-    if (point.cloudCoverLowPct > 0) {
+    // Low band
+    if (point.cloudCoverLowPct > 0 && limits.lowBase < limits.lowTop) {
       const opacity = cloudOpacity(point.cloudCoverLowPct);
       const fill = `rgba(255, 255, 255, ${opacity})`;
-      const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: terrainFt, top: LOW_TOP_FT }];
+      const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.lowBase, top: limits.lowTop }];
       drawColumnBand(ctx, bandPoints, transform, fill);
     }
 
-    // Mid band: 6500ft → 20000ft
-    if (point.cloudCoverMidPct > 0) {
+    // Mid band
+    if (point.cloudCoverMidPct > 0 && limits.midBase < limits.midTop) {
       const opacity = cloudOpacity(point.cloudCoverMidPct);
       const fill = `rgba(255, 255, 255, ${opacity})`;
-      const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: LOW_TOP_FT, top: MID_TOP_FT }];
+      const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.midBase, top: limits.midTop }];
       drawColumnBand(ctx, bandPoints, transform, fill);
     }
   }
@@ -106,29 +170,37 @@ function drawSegment(
   const x2 = transform.distanceToX(next.distanceNm);
   const terrainCurr = terrainElevationAt(data, curr.distanceNm);
   const terrainNext = terrainElevationAt(data, next.distanceNm);
+  const limitsCurr = computeBandLimits(curr, terrainCurr);
+  const limitsNext = computeBandLimits(next, terrainNext);
 
-  // Low band: terrain → 6500ft (trapezoid since terrain varies)
+  // Low band (trapezoid — base and top vary per point)
   const avgLowPct = (curr.cloudCoverLowPct + next.cloudCoverLowPct) / 2;
-  if (avgLowPct > 0) {
+  if (avgLowPct > 0 &&
+      (limitsCurr.lowBase < limitsCurr.lowTop || limitsNext.lowBase < limitsNext.lowTop)) {
     const opacity = cloudOpacity(avgLowPct);
     ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
     ctx.beginPath();
-    ctx.moveTo(x1, transform.altitudeToY(LOW_TOP_FT));
-    ctx.lineTo(x2, transform.altitudeToY(LOW_TOP_FT));
-    ctx.lineTo(x2, transform.altitudeToY(terrainNext));
-    ctx.lineTo(x1, transform.altitudeToY(terrainCurr));
+    ctx.moveTo(x1, transform.altitudeToY(limitsCurr.lowTop));
+    ctx.lineTo(x2, transform.altitudeToY(limitsNext.lowTop));
+    ctx.lineTo(x2, transform.altitudeToY(limitsNext.lowBase));
+    ctx.lineTo(x1, transform.altitudeToY(limitsCurr.lowBase));
     ctx.closePath();
     ctx.fill();
   }
 
-  // Mid band: 6500ft → 20000ft (rectangle)
+  // Mid band (trapezoid — base and top vary per point)
   const avgMidPct = (curr.cloudCoverMidPct + next.cloudCoverMidPct) / 2;
-  if (avgMidPct > 0) {
+  if (avgMidPct > 0 &&
+      (limitsCurr.midBase < limitsCurr.midTop || limitsNext.midBase < limitsNext.midTop)) {
     const opacity = cloudOpacity(avgMidPct);
     ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
-    const yTop = transform.altitudeToY(MID_TOP_FT);
-    const yBase = transform.altitudeToY(LOW_TOP_FT);
-    ctx.fillRect(x1, yTop, x2 - x1, yBase - yTop);
+    ctx.beginPath();
+    ctx.moveTo(x1, transform.altitudeToY(limitsCurr.midTop));
+    ctx.lineTo(x2, transform.altitudeToY(limitsNext.midTop));
+    ctx.lineTo(x2, transform.altitudeToY(limitsNext.midBase));
+    ctx.lineTo(x1, transform.altitudeToY(limitsCurr.midBase));
+    ctx.closePath();
+    ctx.fill();
   }
 }
 
@@ -138,16 +210,18 @@ function drawSinglePointBands(
   p: VizPoint,
   terrainFt: number,
 ): void {
-  if (p.cloudCoverLowPct > 0) {
+  const limits = computeBandLimits(p, terrainFt);
+
+  if (p.cloudCoverLowPct > 0 && limits.lowBase < limits.lowTop) {
     const opacity = cloudOpacity(p.cloudCoverLowPct);
     const fill = `rgba(255, 255, 255, ${opacity})`;
-    const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: terrainFt, top: LOW_TOP_FT }];
+    const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.lowBase, top: limits.lowTop }];
     drawColumnBand(ctx, bandPoints, transform, fill);
   }
-  if (p.cloudCoverMidPct > 0) {
+  if (p.cloudCoverMidPct > 0 && limits.midBase < limits.midTop) {
     const opacity = cloudOpacity(p.cloudCoverMidPct);
     const fill = `rgba(255, 255, 255, ${opacity})`;
-    const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: LOW_TOP_FT, top: MID_TOP_FT }];
+    const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.midBase, top: limits.midTop }];
     drawColumnBand(ctx, bandPoints, transform, fill);
   }
 }
