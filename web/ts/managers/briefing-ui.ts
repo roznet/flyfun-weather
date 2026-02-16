@@ -440,9 +440,11 @@ function formatVarName(name: string): string {
 const RISK_COLORS: Record<string, string> = {
   none: '',
   marginal: 'risk-marginal',
+  weak: 'risk-light',
   light: 'risk-light',
   low: 'risk-light',
   moderate: 'risk-moderate',
+  strong: 'risk-high',
   high: 'risk-high',
   severe: 'risk-severe',
   extreme: 'risk-severe',
@@ -500,6 +502,7 @@ export function renderSoundingAnalysis(
         ${renderAltitudeMarkers(a.sounding, displayMode, tierVisibility)}
         ${renderIcingZones(a.sounding, displayMode)}
         ${renderEnhancedClouds(a.sounding, displayMode)}
+        ${renderInversions(a.sounding)}
         ${renderNwpCloudCover(a.sounding)}
         ${renderAltitudeAdvisories(a.altitude_advisories)}
       </div>
@@ -552,13 +555,15 @@ function renderConvectiveBanner(
     return `<tr><td class="var-name">${label}${metric?.unit ? ' (' + metric.unit + ')' : ''}</td>${cells}</tr>${annotation}`;
   }).join('');
 
-  // Modifiers row (always shown, not in config)
-  const modsRow = models.some((m) => (soundings[m].convective?.severe_modifiers?.length ?? 0) > 0)
-    ? `<tr><td class="var-name">Modifiers</td>${models.map((m) => {
-        const mods = soundings[m].convective?.severe_modifiers;
-        if (!mods || mods.length === 0) return '<td>\u2014</td>';
-        return `<td>${escapeHtml(mods.join(', '))}</td>`;
-      }).join('')}</tr>`
+  // Modifiers summary (outside table to avoid forcing columns wide)
+  const allMods = new Set<string>();
+  for (const m of models) {
+    for (const mod of soundings[m].convective?.severe_modifiers ?? []) {
+      allMods.add(mod);
+    }
+  }
+  const modsSummary = allMods.size > 0
+    ? `<p class="convective-modifiers"><strong>Severe modifiers:</strong> ${escapeHtml([...allMods].join(', '))}</p>`
     : '';
 
   // Tier toggle button
@@ -569,8 +574,9 @@ function renderConvectiveBanner(
       <h5>Convective</h5>
       <table class="band-table">
         <thead><tr><th></th>${headerCells}</tr></thead>
-        <tbody>${rows}${modsRow}</tbody>
+        <tbody>${rows}</tbody>
       </table>
+      ${modsSummary}
       ${tierBtn}
     </div>
   `;
@@ -959,6 +965,63 @@ function renderNwpCloudCover(soundings: Record<string, SoundingAnalysis>): strin
   `;
 }
 
+function inversionStrengthLabel(strengthC: number): string {
+  if (strengthC >= 3) return 'strong';
+  if (strengthC >= 1) return 'moderate';
+  return 'weak';
+}
+
+function renderInversions(soundings: Record<string, SoundingAnalysis>): string {
+  const models = Object.keys(soundings);
+  const hasInv = models.some((m) => soundings[m].inversion_layers.length > 0);
+  if (!hasInv) return '';
+
+  // Collect all boundary altitudes across models, rounded to 500ft
+  const allAlts = new Set<number>();
+  for (const m of models) {
+    for (const inv of soundings[m].inversion_layers) {
+      allAlts.add(roundAlt(inv.base_ft));
+      allAlts.add(roundAlt(inv.top_ft));
+    }
+  }
+  const sortedAlts = [...allAlts].sort((a, b) => b - a); // top-down
+  if (sortedAlts.length < 2) return '';
+
+  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
+
+  const rows = sortedAlts.slice(0, -1).map((alt, i) => {
+    const nextAlt = sortedAlts[i + 1];
+    const midpoint = (alt + nextAlt) / 2;
+
+    let anyHit = false;
+    const cells = models.map((m) => {
+      const inv = soundings[m].inversion_layers.find(
+        (l) => l.base_ft <= midpoint && l.top_ft >= midpoint,
+      );
+      if (!inv) return '<td>\u2014</td>';
+      anyHit = true;
+      const label = inversionStrengthLabel(inv.strength_c);
+      const sfc = inv.surface_based ? ' SFC' : '';
+      return `<td class="${riskClass(label)}">${label.toUpperCase()} +${inv.strength_c.toFixed(1)}\u00b0C${sfc}</td>`;
+    }).join('');
+
+    if (!anyHit) return '';
+    return `<tr><td class="var-name">${nextAlt}\u2013${alt}ft</td>${cells}</tr>`;
+  }).join('');
+
+  const infoBtn = renderInfoButton('inversion_layer');
+
+  return `
+    <div class="inversion-layers">
+      <h5>Temperature Inversions <span class="section-info-btn">${infoBtn}</span></h5>
+      <table class="band-table">
+        <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
   if (!adv) return '';
 
@@ -1176,6 +1239,7 @@ function renderSinglePointSounding(
       ${renderAltitudeMarkers(point.sounding, displayMode, tierVisibility)}
       ${renderIcingZones(point.sounding, displayMode)}
       ${renderEnhancedClouds(point.sounding, displayMode)}
+      ${renderInversions(point.sounding)}
       ${renderNwpCloudCover(point.sounding)}
       ${renderAltitudeAdvisories(point.altitude_advisories)}
     </div>

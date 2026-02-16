@@ -66,6 +66,8 @@ def analyze_sounding(
         cloud_layers,
         precipitable_water_mm=indices.precipitable_water_mm,
         cape_jkg=indices.cape_surface_jkg,
+        nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+        nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
     )
 
     # Convective assessment

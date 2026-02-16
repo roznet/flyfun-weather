@@ -587,6 +587,12 @@ label {
   font-weight: 500;
 }
 
+.convective-modifiers {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0.3rem 0 0;
+}
+
 /* --- Skew-T gallery --- */
 
 .skewt-gallery {

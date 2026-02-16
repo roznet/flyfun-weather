@@ -439,11 +439,6 @@ def _run_point_analysis(
         sounding = analyze_sounding(hourly.pressure_levels, hourly)
         if sounding is not None:
             soundings[model_key] = sounding
-        else:
-            logger.warning(
-                "Sounding analysis returned None for %s (%d pressure levels provided)",
-                model_key, len(hourly.pressure_levels),
-            )
 
             idx = sounding.indices
             if idx is not None:
@@ -459,6 +454,11 @@ def _run_point_analysis(
             vm = sounding.vertical_motion
             if vm is not None and vm.max_omega_pa_s is not None:
                 comp["max_omega_pa_s"][model_key] = abs(vm.max_omega_pa_s)
+        else:
+            logger.warning(
+                "Sounding analysis returned None for %s (%d pressure levels provided)",
+                model_key, len(hourly.pressure_levels),
+            )
 
         # Surface comparison values
         _collect_opt(comp, "temperature_c", model_key, hourly.temperature_2m_c)
