@@ -216,6 +216,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     # Load user preferences for models and autorouter credentials
     autorouter_creds = None
     models = None
+    advisory_models = None
     do_gramet = True
     do_llm_digest = True
     if db is not None:
@@ -230,6 +231,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         if defaults.models:
             valid = {m.value for m in ModelSource}
             models = [ModelSource(m) for m in defaults.models if m in valid]
+
+        advisory_models = defaults.advisory_models  # may be None
 
         # User-level service toggles
         toggles = load_service_toggles(db, user_id)
@@ -263,6 +266,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     )
     if models:
         options.models = models
+    if advisory_models:
+        options.advisory_models = advisory_models
 
     # Fetch current model metadata to record in the pack
     model_metadata = fetch_model_metadata()
@@ -713,15 +718,21 @@ def _recompute_airport_conditions(
     manifest,
     cross_sections: list,
     db_path: str = "",
+    models: list[str] | None = None,
 ):
     """Recompute airport conditions from existing analysis data.
 
     Tries to reuse runway data from the previous advisory manifest.
     Falls back to computing from flight waypoints + airports DB.
     Returns None if computation fails or data is unavailable.
+
+    Args:
+        models: Model list to evaluate. Defaults to manifest.models if not set.
     """
     from weatherbrief.analysis.airport_conditions import compute_airport_conditions
     from weatherbrief.models import RouteAdvisoriesManifest
+
+    effective_models = models or manifest.models
 
     try:
         adv_path = pack_dir / "route_advisories.json"
@@ -740,7 +751,7 @@ def _recompute_airport_conditions(
             return compute_airport_conditions(
                 analyses=manifest.analyses,
                 cross_sections=cross_sections,
-                models=manifest.models,
+                models=effective_models,
                 dep_icao=prev_dep.icao,
                 dep_name=prev_dep.name,
                 arr_icao=prev_arr.icao,
@@ -759,7 +770,7 @@ def _recompute_airport_conditions(
             return compute_airport_conditions(
                 analyses=manifest.analyses,
                 cross_sections=cross_sections,
-                models=manifest.models,
+                models=effective_models,
                 dep_icao=dep_icao,
                 dep_name=dep_icao,
                 arr_icao=arr_icao,
@@ -824,7 +835,7 @@ def recalculate_advisories(
             cross_sections.append(RouteCrossSection.model_validate(cs_item))
 
     # Load user advisory preferences
-    from weatherbrief.api.preferences import load_advisory_prefs
+    from weatherbrief.api.preferences import load_advisory_prefs, load_user_defaults
 
     adv_prefs = load_advisory_prefs(db, user_id)
     enabled_ids = None
@@ -832,10 +843,20 @@ def recalculate_advisories(
         enabled_ids = {k for k, v in adv_prefs.enabled.items() if v}
     user_params = adv_prefs.params or {}
 
-    # Recompute airport conditions from existing data
+    # Compute advisory model list (may be a subset of all fetched models)
+    defaults = load_user_defaults(db, user_id)
+    if defaults.advisory_models:
+        advisory_model_names = [m for m in defaults.advisory_models if m in manifest.models]
+    else:
+        advisory_model_names = [m for m in manifest.models if m != "best_match"]
+    if not advisory_model_names:
+        advisory_model_names = manifest.models
+
+    # Recompute airport conditions from existing data (filtered to advisory models)
     airport_conds = _recompute_airport_conditions(
         pack_dir, flight, manifest, cross_sections,
         db_path=getattr(request.app.state, "db_path", ""),
+        models=advisory_model_names,
     )
 
     # Build context and evaluate
@@ -843,7 +864,7 @@ def recalculate_advisories(
         analyses=manifest.analyses,
         cross_sections=cross_sections,
         elevation=elevation,
-        models=manifest.models,
+        models=advisory_model_names,
         cruise_altitude_ft=manifest.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         total_distance_nm=manifest.total_distance_nm,
@@ -858,7 +879,7 @@ def recalculate_advisories(
         cruise_altitude_ft=manifest.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         total_distance_nm=manifest.total_distance_nm,
-        models=manifest.models,
+        models=advisory_model_names,
         airport_conditions=airport_conds,
     )
 

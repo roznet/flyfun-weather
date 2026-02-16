@@ -51,6 +51,7 @@ class BriefingOptions:
     """Options controlling what the pipeline produces."""
 
     models: list[ModelSource] = field(default_factory=lambda: list(DEFAULT_MODELS))
+    advisory_models: list[str] | None = None  # subset of models for advisories
     enrich_grib: bool = False  # Enable GFS GRIB2 enrichment (CLWMR/ICMR)
     fetch_gramet: bool = False
     generate_skewt: bool = False
@@ -254,6 +255,18 @@ def execute_briefing(
         except Exception:
             logger.warning("Route-point analysis failed", exc_info=True)
 
+    # --- Compute advisory model list (used for both airport conditions and advisories) ---
+    advisory_model_names = model_names
+    if route_analyses_manifest and rp_analyses:
+        if options.advisory_models:
+            advisory_model_names = [m for m in options.advisory_models if m in model_names]
+        else:
+            # Default: all models except best_match
+            advisory_model_names = [m for m in model_names if m != "best_match"]
+        # Fallback: if empty after filtering, use all models
+        if not advisory_model_names:
+            advisory_model_names = model_names
+
     # --- Airport conditions ---
     airport_conds = None
     if route_analyses_manifest and rp_analyses:
@@ -272,7 +285,7 @@ def execute_briefing(
             airport_conds = compute_airport_conditions(
                 analyses=rp_analyses,
                 cross_sections=cross_sections,
-                models=model_names,
+                models=advisory_model_names,
                 dep_icao=route.origin.icao,
                 dep_name=route.origin.name,
                 arr_icao=route.destination.icao,
@@ -296,7 +309,7 @@ def execute_briefing(
                 analyses=rp_analyses,
                 cross_sections=cross_sections,
                 elevation=elevation_profile,
-                models=model_names,
+                models=advisory_model_names,
                 cruise_altitude_ft=route.cruise_altitude_ft,
                 flight_ceiling_ft=route.flight_ceiling_ft,
                 total_distance_nm=total_distance,
@@ -310,10 +323,10 @@ def execute_briefing(
                 cruise_altitude_ft=route.cruise_altitude_ft,
                 flight_ceiling_ft=route.flight_ceiling_ft,
                 total_distance_nm=total_distance,
-                models=model_names,
+                models=advisory_model_names,
                 airport_conditions=airport_conds,
             )
-            logger.info("Route advisories: %d evaluated", len(advisory_results))
+            logger.info("Route advisories: %d evaluated (%d models)", len(advisory_results), len(advisory_model_names))
         except Exception:
             logger.warning("Route advisory evaluation failed", exc_info=True)
 

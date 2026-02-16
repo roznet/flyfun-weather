@@ -31,6 +31,7 @@ class FlightDefaults(BaseModel):
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     models: list[str] | None = None  # e.g. ["gfs", "ecmwf", "icon"]
+    advisory_models: list[str] | None = None  # subset of models for advisories
 
 
 class DigestConfig(BaseModel):
@@ -148,6 +149,19 @@ def update_preferences(
 
     if body.defaults is not None:
         defaults_dict = body.defaults.model_dump(exclude_none=True)
+        # Enforce advisory_models as subset of models
+        if "advisory_models" in defaults_dict and "models" in defaults_dict:
+            allowed = set(defaults_dict["models"])
+            defaults_dict["advisory_models"] = [
+                m for m in defaults_dict["advisory_models"] if m in allowed
+            ]
+        elif "advisory_models" in defaults_dict:
+            # models not being updated — check against existing stored models
+            existing_models = set(data.get("models", []))
+            if existing_models:
+                defaults_dict["advisory_models"] = [
+                    m for m in defaults_dict["advisory_models"] if m in existing_models
+                ]
         data.update(defaults_dict)
 
     if body.advisories is not None:
