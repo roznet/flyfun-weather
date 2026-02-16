@@ -51,6 +51,14 @@ from weatherbrief.models.advisories import (  # noqa: F401
     RouteAdvisoriesManifest,
     RouteAdvisoryResult,
 )
+from weatherbrief.models.airport_conditions import (  # noqa: F401
+    AirportConditions,
+    AirportConditionsSummary,
+    AirportModelCondition,
+    FlightCategory,
+    RunwayEnd,
+    RunwayWind,
+)
 from weatherbrief.models.storage import (  # noqa: F401
     BriefingPackMeta,
     Flight,

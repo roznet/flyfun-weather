@@ -1604,6 +1604,87 @@ label {
   font-size: 0.75rem;
 }
 
+/* --- Airport Conditions Cards --- */
+
+.airport-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.airport-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.airport-card-header {
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.airport-conditions-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.airport-conditions-table td {
+  padding: 0.35rem 0.5rem;
+  white-space: nowrap;
+}
+
+.airport-condition-row:not(:last-child) td {
+  border-bottom: 1px solid var(--border);
+}
+
+.airport-model {
+  font-weight: 600;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.airport-rwy-cell {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  opacity: 0.9;
+}
+
+.flight-cat-badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.flight-cat-vfr {
+  background: var(--green, #2d8a4e);
+  color: #fff;
+}
+
+.flight-cat-mvfr {
+  background: var(--amber, #b8860b);
+  color: #fff;
+}
+
+.flight-cat-ifr {
+  background: var(--red, #c0392b);
+  color: #fff;
+}
+
+.flight-cat-lifr {
+  background: #8e24aa;
+  color: #fff;
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 640px) {
@@ -1613,4 +1694,5 @@ label {
   .metric-popup { max-width: 95vw; padding: 1rem; }
   .display-mode-toggle { font-size: 0.75rem; }
   .advisory-grid { grid-template-columns: 1fr; }
+  .airport-cards { grid-template-columns: 1fr; }
 }

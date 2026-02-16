@@ -59,6 +59,7 @@ class BriefingOptions:
     output_dir: Path | None = None  # if set, write all artifacts here (pack mode)
     autorouter_credentials: tuple[str, str] | None = None  # (username, password)
     user_id: str | None = None  # for per-user token cache isolation
+    airports_db_path: str | None = None  # euro_aip database for runway data
 
 
 @dataclass
@@ -227,6 +228,36 @@ def execute_briefing(
         except Exception:
             logger.warning("Route-point analysis failed", exc_info=True)
 
+    # --- Airport conditions ---
+    airport_conds = None
+    if route_analyses_manifest and rp_analyses:
+        try:
+            from weatherbrief.analysis.airport_conditions import compute_airport_conditions
+
+            runway_data = None
+            if options.airports_db_path:
+                from weatherbrief.airports import get_runway_ends
+
+                runway_data = get_runway_ends(
+                    [route.origin.icao, route.destination.icao],
+                    options.airports_db_path,
+                )
+
+            airport_conds = compute_airport_conditions(
+                analyses=rp_analyses,
+                cross_sections=cross_sections,
+                models=model_names,
+                dep_icao=route.origin.icao,
+                dep_name=route.origin.name,
+                arr_icao=route.destination.icao,
+                arr_name=route.destination.name,
+                runway_data=runway_data,
+            )
+            logger.info("Airport conditions computed for %s / %s",
+                        route.origin.icao, route.destination.icao)
+        except Exception:
+            logger.warning("Airport conditions computation failed", exc_info=True)
+
     # --- Route advisories ---
     route_advisories_manifest = None
     if route_analyses_manifest and rp_analyses:
@@ -243,6 +274,7 @@ def execute_briefing(
                 cruise_altitude_ft=route.cruise_altitude_ft,
                 flight_ceiling_ft=route.flight_ceiling_ft,
                 total_distance_nm=total_distance,
+                airport_conditions=airport_conds,
             )
             advisory_results = evaluate_all(advisory_ctx)
             route_advisories_manifest = RouteAdvisoriesManifest(
@@ -253,6 +285,7 @@ def execute_briefing(
                 flight_ceiling_ft=route.flight_ceiling_ft,
                 total_distance_nm=total_distance,
                 models=model_names,
+                airport_conditions=airport_conds,
             )
             logger.info("Route advisories: %d evaluated", len(advisory_results))
         except Exception:

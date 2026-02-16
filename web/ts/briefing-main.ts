@@ -26,7 +26,7 @@ async function init(): Promise<void> {
   initInfoPopup();
   document.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.metric-info-btn') as HTMLElement | null;
-    if (btn) {
+    if (btn && !btn.classList.contains('advisory-info-btn')) {
       e.preventDefault();
       showMetricInfo(btn.dataset.metric!, btn.dataset.value);
     }
