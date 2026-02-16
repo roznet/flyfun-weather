@@ -14,6 +14,7 @@ from weatherbrief.api.app import create_app
 from weatherbrief.api.usage import (
     DAILY_LIMITS,
     check_rate_limits,
+    check_service_limits,
     get_usage_summary,
     log_briefing_usage,
 )
@@ -162,33 +163,35 @@ class TestRateLimits:
         assert exc_info.value.status_code == 429
         assert "Open-Meteo" in exc_info.value.detail
 
-    def test_blocks_gramet_limit(self, db_session):
-        """429 when GRAMET daily limit exceeded."""
-        from fastapi import HTTPException
-
+    def test_gramet_limit_skips_gracefully(self, db_session):
+        """GRAMET at limit is reported as unavailable (not 429)."""
         for i in range(DAILY_LIMITS["gramet"]):
             usage = BriefingUsage(gramet_fetched=True)
             log_briefing_usage(db_session, DEV_USER_ID, f"f-{i}", usage)
         db_session.commit()
 
-        with pytest.raises(HTTPException) as exc_info:
-            check_rate_limits(db_session, DEV_USER_ID)
-        assert exc_info.value.status_code == 429
-        assert "GRAMET" in exc_info.value.detail
+        # check_rate_limits should NOT raise — GRAMET is soft-limited
+        check_rate_limits(db_session, DEV_USER_ID)
 
-    def test_blocks_llm_limit(self, db_session):
-        """429 when LLM digest daily limit exceeded."""
-        from fastapi import HTTPException
+        # check_service_limits should report GRAMET as unavailable
+        limits = check_service_limits(db_session, DEV_USER_ID)
+        assert limits["gramet"] is False
+        assert limits["llm_digest"] is True
 
+    def test_llm_limit_skips_gracefully(self, db_session):
+        """LLM digest at limit is reported as unavailable (not 429)."""
         for i in range(DAILY_LIMITS["llm_digest"]):
             usage = BriefingUsage(llm_digest=True)
             log_briefing_usage(db_session, DEV_USER_ID, f"f-{i}", usage)
         db_session.commit()
 
-        with pytest.raises(HTTPException) as exc_info:
-            check_rate_limits(db_session, DEV_USER_ID)
-        assert exc_info.value.status_code == 429
-        assert "LLM" in exc_info.value.detail
+        # check_rate_limits should NOT raise — LLM is soft-limited
+        check_rate_limits(db_session, DEV_USER_ID)
+
+        # check_service_limits should report LLM as unavailable
+        limits = check_service_limits(db_session, DEV_USER_ID)
+        assert limits["gramet"] is True
+        assert limits["llm_digest"] is False
 
     def test_yesterday_usage_not_counted(self, db_session):
         """Usage from yesterday doesn't count toward today's limits."""
