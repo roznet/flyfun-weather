@@ -9,6 +9,7 @@ export interface FlightDefaults {
   cruise_altitude_ft: number | null;
   flight_ceiling_ft: number | null;
   models: string[] | null;
+  advisory_models: string[] | null;
 }
 
 export interface DigestConfig {

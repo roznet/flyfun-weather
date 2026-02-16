@@ -29,6 +29,21 @@ const CATEGORY_ORDER: [string, string][] = [
 
 let catalog: AdvisoryCatalogEntry[] = [];
 
+/** Default advisory models: all default briefing models except best_match. */
+function defaultAdvisoryModelKeys(): string[] {
+  return defaultModelKeys().filter(k => k !== 'best_match');
+}
+
+/** Get currently selected briefing model keys from the checkboxes. */
+function getSelectedBriefingModels(): string[] {
+  const result: string[] = [];
+  for (const m of allModelKeys()) {
+    const cb = document.getElementById(`model-${m}`) as HTMLInputElement;
+    if (cb?.checked) result.push(m);
+  }
+  return result;
+}
+
 /** Generate model checkboxes from the model catalog. */
 function renderModelCheckboxes(): void {
   const container = document.getElementById('model-checkboxes');
@@ -38,6 +53,42 @@ function renderModelCheckboxes(): void {
     const label = modelLabel(m);
     const checked = defaults.includes(m) ? ' checked' : '';
     return `<label class="checkbox-label"><input type="checkbox" id="model-${m}"${checked}> ${label}</label>`;
+  }).join('');
+
+  // When briefing models change, re-render advisory model checkboxes
+  for (const m of allModelKeys()) {
+    const cb = document.getElementById(`model-${m}`) as HTMLInputElement;
+    cb?.addEventListener('change', () => {
+      renderAdvisoryModelCheckboxes(getSelectedBriefingModels());
+    });
+  }
+}
+
+/** Render advisory model checkboxes (subset of currently selected briefing models). */
+function renderAdvisoryModelCheckboxes(
+  briefingModels: string[],
+  selected?: string[],
+): void {
+  const container = document.getElementById('advisory-model-checkboxes');
+  if (!container) return;
+
+  // Preserve current selections if not explicitly provided
+  if (!selected) {
+    selected = [];
+    for (const cb of container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      if (cb.checked && cb.dataset.advModel) selected.push(cb.dataset.advModel);
+    }
+  }
+
+  // If no explicit selections, use defaults (everything except best_match)
+  const effectiveSelected = selected.length > 0
+    ? selected
+    : defaultAdvisoryModelKeys();
+
+  container.innerHTML = briefingModels.map(m => {
+    const label = modelLabel(m);
+    const checked = effectiveSelected.includes(m) ? ' checked' : '';
+    return `<label class="checkbox-label"><input type="checkbox" data-adv-model="${m}" id="adv-model-${m}"${checked}> ${label}</label>`;
   }).join('');
 }
 
@@ -130,6 +181,9 @@ function populateForm(prefs: PreferencesResponse): void {
     const cb = document.getElementById(`model-${m}`) as HTMLInputElement;
     if (cb) cb.checked = selectedModels.includes(m);
   }
+
+  // Advisory model checkboxes (subset of selected briefing models)
+  renderAdvisoryModelCheckboxes(selectedModels, d.advisory_models ?? undefined);
 
   updateAutorouterStatus(prefs.has_autorouter_creds);
 
@@ -284,6 +338,15 @@ async function handleSave(): Promise<void> {
     return;
   }
 
+  // Collect advisory models from checkboxes
+  const advisoryModels: string[] = [];
+  const advContainer = document.getElementById('advisory-model-checkboxes');
+  if (advContainer) {
+    for (const cb of advContainer.querySelectorAll<HTMLInputElement>('input[data-adv-model]')) {
+      if (cb.checked) advisoryModels.push(cb.dataset.advModel!);
+    }
+  }
+
   const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement).value.trim();
   const arPassword = (document.getElementById('input-ar-password') as HTMLInputElement).value.trim();
 
@@ -298,6 +361,7 @@ async function handleSave(): Promise<void> {
         cruise_altitude_ft: isNaN(altitude) ? null : altitude,
         flight_ceiling_ft: isNaN(ceiling) ? null : ceiling,
         models,
+        advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
       },
       advisories,
       autorouter_username: arUsername || undefined,
