@@ -1,4 +1,4 @@
-/** Settings page entry point — preferences form management. */
+/** Settings page entry point — tabbed preferences with advisory configuration. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { renderUserInfo } from './utils';
@@ -7,12 +7,27 @@ import {
   savePreferences,
   clearAutorouterCreds,
   fetchUsageSummary,
+  fetchAdvisoryCatalog,
   type PreferencesResponse,
+  type AdvisoryPreferences,
+  type AdvisoryCatalogEntry,
+  type AdvisoryParameterDef,
   type UsageSummary,
-  type ServiceUsage,
 } from './adapters/preferences-adapter';
 
 const ALL_MODELS = ['gfs', 'ecmwf', 'icon'] as const;
+
+/** Category display order and labels. */
+const CATEGORY_ORDER: [string, string][] = [
+  ['icing', 'Icing'],
+  ['cloud', 'Cloud'],
+  ['turbulence', 'Turbulence'],
+  ['convective', 'Convective'],
+  ['airport', 'Airport'],
+  ['model', 'Forecast'],
+];
+
+let catalog: AdvisoryCatalogEntry[] = [];
 
 async function init(): Promise<void> {
   const user = await fetchCurrentUser();
@@ -22,14 +37,31 @@ async function init(): Promise<void> {
   }
   renderUserInfo(user);
 
-  try {
-    const prefs = await fetchPreferences();
-    populateForm(prefs);
-  } catch (err) {
-    showStatus(`Failed to load preferences: ${err}`, true);
+  // Tab switching
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('.tab-btn')) {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab!));
   }
 
-  // Load usage (non-blocking — don't block the page if it fails)
+  // Load preferences and catalog in parallel
+  const [prefs, catalogResult] = await Promise.all([
+    fetchPreferences().catch(err => {
+      showStatus(`Failed to load preferences: ${err}`, true);
+      return null;
+    }),
+    fetchAdvisoryCatalog().catch(err => {
+      showStatus(`Failed to load advisory catalog: ${err}`, true);
+      return [] as AdvisoryCatalogEntry[];
+    }),
+  ]);
+
+  catalog = catalogResult;
+
+  if (prefs) {
+    populateForm(prefs);
+  }
+  renderAdvisorySettings(catalog, prefs?.advisories ?? { enabled: null, params: null });
+
+  // Load usage (non-blocking)
   fetchUsageSummary()
     .then(renderUsage)
     .catch(() => { /* usage section stays hidden */ });
@@ -56,6 +88,15 @@ async function init(): Promise<void> {
   });
 }
 
+function switchTab(tabId: string): void {
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('.tab-btn')) {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  }
+  for (const panel of document.querySelectorAll<HTMLElement>('.tab-panel')) {
+    panel.classList.toggle('active', panel.id === `tab-${tabId}`);
+  }
+}
+
 function populateForm(prefs: PreferencesResponse): void {
   const d = prefs.defaults;
   if (d.cruise_altitude_ft != null) {
@@ -75,6 +116,126 @@ function populateForm(prefs: PreferencesResponse): void {
   updateAutorouterStatus(prefs.has_autorouter_creds);
 }
 
+// --- Advisory settings rendering ---
+
+function renderAdvisorySettings(
+  entries: AdvisoryCatalogEntry[],
+  userAdvisories: AdvisoryPreferences,
+): void {
+  const container = document.getElementById('advisory-settings');
+  if (!container) return;
+
+  // Group by category
+  const grouped = new Map<string, AdvisoryCatalogEntry[]>();
+  for (const entry of entries) {
+    const list = grouped.get(entry.category) || [];
+    list.push(entry);
+    grouped.set(entry.category, list);
+  }
+
+  const enabledMap = userAdvisories.enabled ?? {};
+  const paramsMap = userAdvisories.params ?? {};
+
+  let html = '';
+  for (const [catKey, catLabel] of CATEGORY_ORDER) {
+    const catEntries = grouped.get(catKey);
+    if (!catEntries?.length) continue;
+
+    html += `<div class="advisory-category">`;
+    html += `<div class="advisory-category-title">${catLabel}</div>`;
+
+    for (const entry of catEntries) {
+      const isEnabled = enabledMap[entry.id] ?? entry.default_enabled;
+      const userParams = paramsMap[entry.id] ?? {};
+
+      html += `<div class="advisory-setting">`;
+      html += `<div class="advisory-header">`;
+      html += `<label class="checkbox-label">`;
+      html += `<input type="checkbox" data-advisory-id="${entry.id}" ${isEnabled ? 'checked' : ''}>`;
+      html += ` ${entry.name}`;
+      html += `<span class="advisory-desc">${entry.short_description}</span>`;
+      html += `</label>`;
+      html += `</div>`;
+
+      if (entry.parameters.length > 0) {
+        html += `<div class="advisory-params" data-params-for="${entry.id}">`;
+        for (const param of entry.parameters) {
+          const value = userParams[param.key] ?? param.default;
+          html += renderParamInput(entry.id, param, value, isEnabled);
+        }
+        html += `</div>`;
+      }
+
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+  }
+
+  container.innerHTML = html;
+
+  // Toggle param visibility when advisory is toggled
+  for (const cb of container.querySelectorAll<HTMLInputElement>('input[data-advisory-id]')) {
+    cb.addEventListener('change', () => {
+      const paramsDiv = container.querySelector(`[data-params-for="${cb.dataset.advisoryId}"]`) as HTMLElement;
+      if (paramsDiv) {
+        for (const input of paramsDiv.querySelectorAll<HTMLInputElement>('input')) {
+          input.disabled = !cb.checked;
+        }
+      }
+    });
+  }
+}
+
+function renderParamInput(
+  advisoryId: string,
+  param: AdvisoryParameterDef,
+  value: number,
+  enabled: boolean,
+): string {
+  const minAttr = param.min != null ? ` min="${param.min}"` : '';
+  const maxAttr = param.max != null ? ` max="${param.max}"` : '';
+  const stepAttr = param.step != null ? ` step="${param.step}"` : '';
+  const disabledAttr = enabled ? '' : ' disabled';
+  const unitStr = param.unit ? `<span class="param-unit">${param.unit}</span>` : '';
+
+  return `<div class="advisory-param">
+    <label title="${param.description}">${param.label}</label>
+    <input type="number" data-advisory-param="${advisoryId}:${param.key}"
+      value="${value}"${minAttr}${maxAttr}${stepAttr}${disabledAttr}>
+    ${unitStr}
+  </div>`;
+}
+
+/** Collect advisory preferences from the form. */
+function collectAdvisoryPrefs(): AdvisoryPreferences {
+  const container = document.getElementById('advisory-settings');
+  if (!container) return { enabled: null, params: null };
+
+  const enabled: Record<string, boolean> = {};
+  const params: Record<string, Record<string, number>> = {};
+
+  // Collect enabled states
+  for (const cb of container.querySelectorAll<HTMLInputElement>('input[data-advisory-id]')) {
+    const id = cb.dataset.advisoryId!;
+    enabled[id] = cb.checked;
+  }
+
+  // Collect parameter values
+  for (const input of container.querySelectorAll<HTMLInputElement>('input[data-advisory-param]')) {
+    const [advId, paramKey] = input.dataset.advisoryParam!.split(':');
+    const val = parseFloat(input.value);
+    if (!isNaN(val)) {
+      if (!params[advId]) params[advId] = {};
+      params[advId][paramKey] = val;
+    }
+  }
+
+  return { enabled, params };
+}
+
+// --- Save ---
+
 async function handleSave(): Promise<void> {
   const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value, 10);
   const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value, 10);
@@ -92,6 +253,8 @@ async function handleSave(): Promise<void> {
   const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement).value.trim();
   const arPassword = (document.getElementById('input-ar-password') as HTMLInputElement).value.trim();
 
+  const advisories = collectAdvisoryPrefs();
+
   try {
     const result = await savePreferences({
       defaults: {
@@ -99,6 +262,7 @@ async function handleSave(): Promise<void> {
         flight_ceiling_ft: isNaN(ceiling) ? null : ceiling,
         models,
       },
+      advisories,
       autorouter_username: arUsername || undefined,
       autorouter_password: arPassword || undefined,
     });
@@ -112,6 +276,8 @@ async function handleSave(): Promise<void> {
     showStatus(`Failed to save: ${err}`, true);
   }
 }
+
+// --- Autorouter status ---
 
 function updateAutorouterStatus(hasCreds: boolean): void {
   const badge = document.getElementById('ar-status-badge');
@@ -127,6 +293,8 @@ function updateAutorouterStatus(hasCreds: boolean): void {
   if (clearBtn) clearBtn.style.display = hasCreds ? '' : 'none';
 }
 
+// --- Status messages ---
+
 function showStatus(message: string, isError = false): void {
   const el = document.getElementById('status-message');
   if (!el) return;
@@ -137,6 +305,8 @@ function showStatus(message: string, isError = false): void {
     setTimeout(() => { el.style.display = 'none'; }, 3000);
   }
 }
+
+// --- Usage rendering ---
 
 function renderUsage(usage: UsageSummary): void {
   const section = document.getElementById('usage-section');
