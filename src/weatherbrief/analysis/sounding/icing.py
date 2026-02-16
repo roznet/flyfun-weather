@@ -28,6 +28,11 @@ SLD_WARM_TOP_C = -12.0
 _INDEX_MODERATE = 30.0
 _INDEX_SEVERE = 80.0
 
+# LWC-based icing severity thresholds (g/m³) — aviation meteorology literature
+_LWC_LIGHT = 0.0       # Any measurable LWC with icing-range temp
+_LWC_MODERATE = 0.1     # g/m³
+_LWC_SEVERE = 0.6       # g/m³
+
 # Water vapor: Rv = 461.5 J/(kg·K), reference ρv at 20°C saturation ≈ 17.3 g/m³
 _RV = 461.5
 _RHO_V_20SAT = 17.3e-3  # kg/m³
@@ -127,6 +132,20 @@ def _index_to_risk(index: float) -> IcingRisk:
     if index >= _INDEX_MODERATE:
         return IcingRisk.MODERATE
     if index > 0:
+        return IcingRisk.LIGHT
+    return IcingRisk.NONE
+
+
+def _lwc_to_icing_severity(lwc_g_m3: float) -> IcingRisk:
+    """Map cloud liquid water content (g/m³) to icing severity.
+
+    Based on aviation meteorology literature thresholds.
+    """
+    if lwc_g_m3 >= _LWC_SEVERE:
+        return IcingRisk.SEVERE
+    if lwc_g_m3 >= _LWC_MODERATE:
+        return IcingRisk.MODERATE
+    if lwc_g_m3 > _LWC_LIGHT:
         return IcingRisk.LIGHT
     return IcingRisk.NONE
 
@@ -280,6 +299,23 @@ def assess_icing_zones(
             continue
         if lv.dewpoint_c is None:
             continue
+
+        # Direct LWC-based icing (when GRIB2 CLWMR data is available)
+        if (
+            lv.cloud_liquid_water_g_m3 is not None
+            and lv.cloud_liquid_water_g_m3 > 0
+            and -20.0 <= lv.temperature_c <= 0.0
+        ):
+            lwc_risk = _lwc_to_icing_severity(lv.cloud_liquid_water_g_m3)
+            if lwc_risk != IcingRisk.NONE:
+                icing_type = _classify_icing_type(lv.temperature_c)
+                if icing_type != IcingType.NONE:
+                    # Store a synthetic icing index proportional to LWC
+                    index = min(lv.cloud_liquid_water_g_m3 / _LWC_SEVERE * 100, 100)
+                    lv.icing_index = round(index, 1)
+                    icing_levels.append((lv, icing_type, lwc_risk, index))
+                    continue
+
         if not _is_near_cloud(lv, clouds):
             continue
 

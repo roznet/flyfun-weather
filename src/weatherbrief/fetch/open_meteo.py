@@ -11,7 +11,6 @@ import requests
 
 from weatherbrief.fetch.variables import (
     MODEL_ENDPOINTS,
-    PRESSURE_LEVELS,
     PRESSURE_LEVEL_VARIABLES,
     build_hourly_params,
 )
@@ -103,7 +102,10 @@ class OpenMeteoClient:
         forecasts = []
 
         for i, ts in enumerate(timestamps):
-            forecast = self._parse_hourly(hourly_data, i, ts, endpoint.unavailable_pressure)
+            forecast = self._parse_hourly(
+                hourly_data, i, ts, endpoint.unavailable_pressure,
+                endpoint.pressure_levels,
+            )
             forecasts.append(forecast)
 
         return WaypointForecast(
@@ -201,7 +203,10 @@ class OpenMeteoClient:
             timestamps = hourly_data.get("time", [])
 
             hourly_list = [
-                self._parse_hourly(hourly_data, i, ts, endpoint.unavailable_pressure)
+                self._parse_hourly(
+                    hourly_data, i, ts, endpoint.unavailable_pressure,
+                    endpoint.pressure_levels,
+                )
                 for i, ts in enumerate(timestamps)
             ]
 
@@ -234,6 +239,7 @@ class OpenMeteoClient:
         idx: int,
         timestamp: str,
         unavailable_pressure: list[str],
+        pressure_levels_list: list[int],
     ) -> HourlyForecast:
         """Parse one hourly time step from the flat API response."""
 
@@ -245,7 +251,7 @@ class OpenMeteoClient:
 
         # Parse pressure level data
         pressure_levels = []
-        for level in PRESSURE_LEVELS:
+        for level in pressure_levels_list:
             temp = get(f"temperature_{level}hPa")
             rh = get(f"relative_humidity_{level}hPa")
             dp = get(f"dewpoint_{level}hPa")

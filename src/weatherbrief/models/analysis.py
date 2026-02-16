@@ -146,6 +146,8 @@ class PressureLevelData(BaseModel):
     wind_direction_deg: Optional[float] = None
     geopotential_height_m: Optional[float] = None
     vertical_velocity_pa_s: Optional[float] = None  # omega (Pa/s)
+    cloud_liquid_water_kg_kg: Optional[float] = None  # CLWMR from GRIB2
+    ice_mixing_ratio_kg_kg: Optional[float] = None  # ICMR from GRIB2
 
 
 class HourlyForecast(BaseModel):
@@ -311,6 +313,7 @@ class DerivedLevel(BaseModel):
     w_fpm: Optional[float] = None  # vertical velocity (ft/min)
     richardson_number: Optional[float] = None  # Ri for layer below
     bv_freq_squared_per_s2: Optional[float] = None  # N² for layer below (s⁻²)
+    cloud_liquid_water_g_m3: Optional[float] = None  # LWC converted from CLWMR
 
 
 class EnhancedCloudLayer(BaseModel):
