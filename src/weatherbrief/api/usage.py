@@ -22,7 +22,7 @@ router = APIRouter(prefix="/user/usage", tags=["usage"])
 
 DAILY_LIMITS = {
     "open_meteo": 50,
-    "gramet": 10,
+    "gramet": 20,
     "llm_digest": 20,
 }
 
@@ -93,13 +93,18 @@ def _query_today_usage(db: Session, user_id: str) -> dict:
     }
 
 
-def check_rate_limits(db: Session, user_id: str) -> None:
+def check_rate_limits(db: Session, user_id: str, *, bypass: bool = False) -> None:
     """Check daily rate limits. Raises HTTPException(429) only for core data (Open-Meteo).
 
     GRAMET and LLM digest limits are handled gracefully via
     ``check_service_limits`` — those services are simply skipped when
     their daily quota is exhausted.
+
+    Pass ``bypass=True`` for admin/dev users to skip the check.
     """
+    if bypass:
+        return
+
     usage = _query_today_usage(db, user_id)
 
     if usage["open_meteo"] >= DAILY_LIMITS["open_meteo"]:
