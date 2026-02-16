@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import math
 from datetime import datetime
 
+from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.models import (
     CloudCoverage,
     RouteCrossSection,
@@ -22,6 +22,26 @@ from weatherbrief.models.airport_conditions import (
 
 # Visibility conversion: meters to statute miles
 _M_PER_SM = 1609.34
+
+# Standard aviation flight category thresholds (ceiling ft / visibility SM)
+_CEIL_LIFR, _CEIL_IFR, _CEIL_MVFR = 500, 1000, 3000
+_VIS_LIFR, _VIS_IFR, _VIS_MVFR = 1, 3, 5
+
+
+def format_wind_string(
+    direction_deg: float | None,
+    speed_kt: float | None,
+    gust_kt: float | None,
+) -> str:
+    """Format wind as '230@11G25' (without units).
+
+    Returns empty string if direction or speed are unavailable.
+    """
+    if direction_deg is None or speed_kt is None:
+        return ""
+    dir_rounded = round(direction_deg / 10) * 10
+    gust_str = f"G{gust_kt:.0f}" if gust_kt else ""
+    return f"{dir_rounded:03.0f}@{speed_kt:.0f}{gust_str}"
 
 
 def classify_flight_category(
@@ -42,20 +62,20 @@ def classify_flight_category(
     """
     cat_from_ceil = FlightCategory.VFR
     if ceiling_ft is not None:
-        if ceiling_ft < 500:
+        if ceiling_ft < _CEIL_LIFR:
             cat_from_ceil = FlightCategory.LIFR
-        elif ceiling_ft < 1000:
+        elif ceiling_ft < _CEIL_IFR:
             cat_from_ceil = FlightCategory.IFR
-        elif ceiling_ft < 3000:
+        elif ceiling_ft < _CEIL_MVFR:
             cat_from_ceil = FlightCategory.MVFR
 
     cat_from_vis = FlightCategory.VFR
     if visibility_sm is not None:
-        if visibility_sm < 1:
+        if visibility_sm < _VIS_LIFR:
             cat_from_vis = FlightCategory.LIFR
-        elif visibility_sm < 3:
+        elif visibility_sm < _VIS_IFR:
             cat_from_vis = FlightCategory.IFR
-        elif visibility_sm < 5:
+        elif visibility_sm < _VIS_MVFR:
             cat_from_vis = FlightCategory.MVFR
 
     return FlightCategory.worst([cat_from_ceil, cat_from_vis])
@@ -69,14 +89,12 @@ def compute_runway_winds(
     """Compute crosswind and headwind for each runway end."""
     results: list[RunwayWind] = []
     for rwy in runway_ends:
-        relative = math.radians(wind_direction_deg - rwy.heading_deg)
-        headwind = wind_speed_kt * math.cos(relative)
-        crosswind = wind_speed_kt * math.sin(relative)
+        wc = compute_wind_components(wind_speed_kt, wind_direction_deg, rwy.heading_deg)
         results.append(RunwayWind(
             runway_id=rwy.id,
             heading_deg=rwy.heading_deg,
-            crosswind_kt=round(abs(crosswind), 1),
-            headwind_kt=round(headwind, 1),
+            crosswind_kt=round(abs(wc.crosswind_kt), 1),
+            headwind_kt=wc.headwind_kt,
         ))
     return results
 

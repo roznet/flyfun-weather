@@ -52,8 +52,8 @@ class FlightCategoryEvaluator:
         arr = ctx.airport_conditions.arrival
 
         for model in ctx.models:
-            dep_cond = next((c for c in dep.conditions if c.model == model), None)
-            arr_cond = next((c for c in arr.conditions if c.model == model), None)
+            dep_cond = dep.condition_for_model(model)
+            arr_cond = arr.condition_for_model(model)
 
             if dep_cond is None and arr_cond is None:
                 per_model.append(ModelAdvisoryResult.build(

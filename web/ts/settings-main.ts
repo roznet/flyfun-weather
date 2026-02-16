@@ -1,7 +1,7 @@
 /** Settings page entry point — tabbed preferences with advisory configuration. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { renderUserInfo } from './utils';
+import { renderUserInfo, ALL_MODELS, DEFAULT_MODELS, STATUS_DISMISS_MS, MODEL_DISPLAY_NAMES } from './utils';
 import {
   fetchPreferences,
   savePreferences,
@@ -15,10 +15,8 @@ import {
   type UsageSummary,
 } from './adapters/preferences-adapter';
 
-const ALL_MODELS = ['gfs', 'ecmwf', 'icon', 'ukmo', 'meteofrance'] as const;
-const DEFAULT_MODELS = ['gfs', 'ecmwf', 'icon'];
-
-/** Category display order and labels. */
+/** Category display order and labels.
+ *  Any categories not listed here will appear at the end under their raw key. */
 const CATEGORY_ORDER: [string, string][] = [
   ['icing', 'Icing'],
   ['cloud', 'Cloud'],
@@ -30,6 +28,17 @@ const CATEGORY_ORDER: [string, string][] = [
 
 let catalog: AdvisoryCatalogEntry[] = [];
 
+/** Generate model checkboxes from the shared ALL_MODELS config. */
+function renderModelCheckboxes(): void {
+  const container = document.getElementById('model-checkboxes');
+  if (!container) return;
+  container.innerHTML = ALL_MODELS.map(m => {
+    const label = MODEL_DISPLAY_NAMES[m] ?? m.toUpperCase();
+    const checked = DEFAULT_MODELS.includes(m) ? ' checked' : '';
+    return `<label class="checkbox-label"><input type="checkbox" id="model-${m}"${checked}> ${label}</label>`;
+  }).join('');
+}
+
 async function init(): Promise<void> {
   const user = await fetchCurrentUser();
   if (!user) {
@@ -37,6 +46,7 @@ async function init(): Promise<void> {
     return;
   }
   renderUserInfo(user);
+  renderModelCheckboxes();
 
   // Tab switching
   for (const btn of document.querySelectorAll<HTMLButtonElement>('.tab-btn')) {
@@ -137,8 +147,18 @@ function renderAdvisorySettings(
   const enabledMap = userAdvisories.enabled ?? {};
   const paramsMap = userAdvisories.params ?? {};
 
+  // Build ordered list of categories: known order first, then any extras
+  const knownKeys = new Set(CATEGORY_ORDER.map(([k]) => k));
+  const allCategories: [string, string][] = [...CATEGORY_ORDER];
+  for (const catKey of grouped.keys()) {
+    if (!knownKeys.has(catKey)) {
+      // Unknown category — capitalize key as label
+      allCategories.push([catKey, catKey.charAt(0).toUpperCase() + catKey.slice(1)]);
+    }
+  }
+
   let html = '';
-  for (const [catKey, catLabel] of CATEGORY_ORDER) {
+  for (const [catKey, catLabel] of allCategories) {
     const catEntries = grouped.get(catKey);
     if (!catEntries?.length) continue;
 
@@ -291,7 +311,7 @@ function updateAutorouterStatus(hasCreds: boolean): void {
     badge.className = 'badge badge-none';
   }
   const clearBtn = document.getElementById('clear-autorouter-btn') as HTMLButtonElement;
-  if (clearBtn) clearBtn.style.display = hasCreds ? '' : 'none';
+  if (clearBtn) clearBtn.style.display = hasCreds ? 'inline-block' : 'none';
 }
 
 // --- Status messages ---
@@ -300,10 +320,10 @@ function showStatus(message: string, isError = false): void {
   const el = document.getElementById('status-message');
   if (!el) return;
   el.textContent = message;
-  el.style.display = 'block';
+  el.classList.add('visible');
   el.className = isError ? 'status-error' : 'status-success';
   if (!isError) {
-    setTimeout(() => { el.style.display = 'none'; }, 3000);
+    setTimeout(() => { el.classList.remove('visible'); }, STATUS_DISMISS_MS);
   }
 }
 
@@ -312,7 +332,7 @@ function showStatus(message: string, isError = false): void {
 function renderUsage(usage: UsageSummary): void {
   const section = document.getElementById('usage-section');
   if (!section) return;
-  section.style.display = '';
+  section.classList.remove('hidden-section');
 
   const todayGrid = document.getElementById('usage-today-grid');
   if (todayGrid) {
@@ -326,8 +346,9 @@ function renderUsage(usage: UsageSummary): void {
 
   const monthSummary = document.getElementById('usage-month-summary');
   if (monthSummary) {
-    const tokens = usage.month.total_tokens >= 1000
-      ? `~${Math.round(usage.month.total_tokens / 1000)}K tokens`
+    const KILO = 1000;
+    const tokens = usage.month.total_tokens >= KILO
+      ? `~${Math.round(usage.month.total_tokens / KILO)}K tokens`
       : `${usage.month.total_tokens} tokens`;
     monthSummary.textContent =
       `${usage.month.briefings} briefings / ${usage.month.gramet} GRAMET / ` +

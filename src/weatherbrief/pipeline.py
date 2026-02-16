@@ -203,6 +203,8 @@ def execute_briefing(
         analyses.append(analysis)
 
     # --- Route-point analyses (all ~20 points, pre-computed) ---
+    rp_analyses: list[RoutePointAnalysis] = []
+    model_names: list[str] = []
     route_analyses_manifest: RouteAnalysesManifest | None = None
     if cross_sections:
         _notify("route_analysis")

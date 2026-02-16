@@ -52,6 +52,7 @@ from weatherbrief.models.advisories import (  # noqa: F401
     RouteAdvisoryResult,
 )
 from weatherbrief.models.airport_conditions import (  # noqa: F401
+    FLIGHT_CATEGORY_COLORS,
     AirportConditions,
     AirportConditionsSummary,
     AirportModelCondition,
