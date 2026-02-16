@@ -64,12 +64,6 @@ def db_session(app_db):
 @pytest.fixture
 def client(app_db, tmp_path, monkeypatch):
     """Create a test client with isolated DB."""
-    import weatherbrief.api.routes as routes_mod
-
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    (config_dir / "routes.yaml").write_text("routes: {}\n")
-    monkeypatch.setattr(routes_mod, "CONFIG_DIR", config_dir)
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.setenv("JWT_SECRET", "test-secret")

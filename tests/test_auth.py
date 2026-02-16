@@ -62,13 +62,6 @@ def auth_db():
 
 def _make_client(auth_db, tmp_path, monkeypatch, user_id: str | None = None):
     """Create a test client, optionally injecting a specific user."""
-    import weatherbrief.api.routes as routes_mod
-
-    # Minimal routes config
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(exist_ok=True)
-    (config_dir / "routes.yaml").write_text("routes: {}\n")
-    monkeypatch.setattr(routes_mod, "CONFIG_DIR", config_dir)
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET", TEST_SECRET)
