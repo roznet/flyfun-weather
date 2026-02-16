@@ -48,7 +48,9 @@ export function coverageOpacity(coverage: string): number {
 }
 
 export function inversionOpacity(strengthC: number): number {
-  return Math.min(0.6, 0.2 * (strengthC / 10));
+  // NWP inversions are typically 0.1–3°C at standard pressure levels.
+  // Scale so even a 0.5°C inversion is visible (0.25) and 3°C saturates (0.65).
+  return Math.min(0.65, 0.15 + 0.5 * Math.min(strengthC / 3, 1));
 }
 
 /** Standard atmosphere altitude→pressure (approximate for display ticks). */

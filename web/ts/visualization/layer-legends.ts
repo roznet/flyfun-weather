@@ -52,9 +52,9 @@ const NWP_CLOUD_LEGEND: LegendEntry[] = [
 // --- Inversion legend ---
 
 const INVERSION_LEGEND: LegendEntry[] = [
-  { label: 'Weak (~2\u00b0C)', color: `rgba(233, 30, 99, ${inversionOpacity(2)})`, meaning: 'Mild haze trapping' },
-  { label: 'Moderate (~5\u00b0C)', color: `rgba(233, 30, 99, ${inversionOpacity(5)})`, meaning: 'Reduced visibility below' },
-  { label: 'Strong (~10\u00b0C)', color: `rgba(233, 30, 99, ${inversionOpacity(10)})`, meaning: 'Dense haze/fog trapped' },
+  { label: 'Weak (<1\u00b0C)', color: `rgba(233, 30, 99, ${inversionOpacity(0.5)})`, meaning: 'Mild haze trapping' },
+  { label: 'Moderate (1\u20133\u00b0C)', color: `rgba(233, 30, 99, ${inversionOpacity(2)})`, meaning: 'Reduced visibility below' },
+  { label: 'Strong (>3\u00b0C)', color: `rgba(233, 30, 99, ${inversionOpacity(4)})`, meaning: 'Dense haze/fog trapped' },
 ];
 
 // --- Line layer legends ---

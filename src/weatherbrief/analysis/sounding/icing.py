@@ -150,23 +150,48 @@ def _is_near_cloud(level: DerivedLevel, clouds: list[EnhancedCloudLayer]) -> boo
 # --- Severity modifiers (secondary adjustment on top of Ogimet index) ---
 
 
+_ENHANCE_MIN_HIGH_RH_LEVELS = 2  # require multiple saturated levels
+_ENHANCE_RH_THRESHOLD = 95.0
+_ENHANCE_MIN_NWP_CLOUD_PCT = 25.0  # NWP must corroborate
+
+
 def _enhance_severity(
     base_risk: IcingRisk,
-    level: DerivedLevel,
+    levels_in_zone: list[DerivedLevel],
     precipitable_water_mm: float | None,
+    nwp_cloud_pct: float | None = None,
 ) -> IcingRisk:
-    """Potentially upgrade severity based on moisture indicators."""
+    """Potentially upgrade severity based on zone-level moisture indicators.
+
+    RH-based upgrade requires corroboration:
+      - At least 2 levels in the zone with RH > 95%
+      - NWP cloud cover >= 25% in the corresponding altitude band
+    This prevents single-level RH spikes at coarse NWP resolution from
+    triggering severe icing when the model's own cloud scheme disagrees.
+    """
     if base_risk == IcingRisk.NONE:
         return IcingRisk.NONE
-    rh = level.relative_humidity_pct
-    if rh is not None and rh > 95:
+
+    high_rh_count = sum(
+        1 for lv in levels_in_zone
+        if lv.relative_humidity_pct is not None
+        and lv.relative_humidity_pct > _ENHANCE_RH_THRESHOLD
+    )
+    nwp_confirms = (
+        nwp_cloud_pct is not None
+        and nwp_cloud_pct >= _ENHANCE_MIN_NWP_CLOUD_PCT
+    )
+
+    if high_rh_count >= _ENHANCE_MIN_HIGH_RH_LEVELS and nwp_confirms:
         if base_risk == IcingRisk.MODERATE:
             return IcingRisk.SEVERE
         if base_risk == IcingRisk.LIGHT:
             return IcingRisk.MODERATE
+
     if precipitable_water_mm is not None and precipitable_water_mm > 25:
         if base_risk == IcingRisk.LIGHT:
             return IcingRisk.MODERATE
+
     return base_risk
 
 
@@ -225,6 +250,8 @@ def assess_icing_zones(
     clouds: list[EnhancedCloudLayer],
     precipitable_water_mm: float | None = None,
     cape_jkg: float | None = None,
+    nwp_cloud_low_pct: float | None = None,
+    nwp_cloud_mid_pct: float | None = None,
 ) -> list[IcingZone]:
     """Assess icing zones using Ogimet continuous icing index.
 
@@ -233,6 +260,8 @@ def assess_icing_zones(
         clouds: Detected cloud layers.
         precipitable_water_mm: Total column precipitable water (severity modifier).
         cape_jkg: Surface-based CAPE for layered/convective split.
+        nwp_cloud_low_pct: NWP low cloud cover (SFC–6500ft) for severity corroboration.
+        nwp_cloud_mid_pct: NWP mid cloud cover (6500–20000ft) for severity corroboration.
 
     Returns:
         List of IcingZone, ordered from lowest to highest altitude.
@@ -244,7 +273,7 @@ def assess_icing_zones(
     layered_frac, convective_frac = _cape_to_cloud_split(cape_jkg)
     vd_base = _cloud_base_vapor_density(clouds, levels)
 
-    # Compute icing index for each level and classify
+    # Compute icing index for each level and classify (base risk only, no enhancement)
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = []
     for lv in levels:
         if lv.temperature_c is None or lv.altitude_ft is None:
@@ -269,8 +298,7 @@ def assess_icing_zones(
             continue
 
         base_risk = _index_to_risk(index)
-        risk = _enhance_severity(base_risk, lv, precipitable_water_mm)
-        icing_levels.append((lv, icing_type, risk, index))
+        icing_levels.append((lv, icing_type, base_risk, index))
 
     if not icing_levels:
         return []
@@ -285,16 +313,38 @@ def assess_icing_zones(
         if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 100:
             current.append(item)
         else:
-            zones.append(_build_zone(current, sld_risk))
+            zones.append(_build_zone(
+                current, sld_risk, precipitable_water_mm,
+                nwp_cloud_low_pct, nwp_cloud_mid_pct,
+            ))
             current = [item]
 
-    zones.append(_build_zone(current, sld_risk))
+    zones.append(_build_zone(
+        current, sld_risk, precipitable_water_mm,
+        nwp_cloud_low_pct, nwp_cloud_mid_pct,
+    ))
     return zones
+
+
+def _nwp_cloud_for_zone(
+    base_ft: float,
+    nwp_cloud_low_pct: float | None,
+    nwp_cloud_mid_pct: float | None,
+) -> float | None:
+    """Pick the NWP cloud cover band matching the zone's base altitude."""
+    if base_ft < 6500:
+        return nwp_cloud_low_pct
+    if base_ft < 20000:
+        return nwp_cloud_mid_pct
+    return None  # high clouds — no NWP corroboration available
 
 
 def _build_zone(
     items: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
     sld_risk: bool,
+    precipitable_water_mm: float | None = None,
+    nwp_cloud_low_pct: float | None = None,
+    nwp_cloud_mid_pct: float | None = None,
 ) -> IcingZone:
     """Build an IcingZone from a group of adjacent icing levels."""
     levels_in_zone = [lv for lv, _, _, _ in items]
@@ -305,9 +355,16 @@ def _build_zone(
     base = levels_in_zone[0]
     top = levels_in_zone[-1]
 
-    # Worst risk in zone
+    # Worst base risk in zone, then apply zone-level enhancement
     risk_order = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
     worst_risk = max(risks, key=lambda r: risk_order.index(r))
+
+    nwp_pct = _nwp_cloud_for_zone(
+        base.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct,
+    )
+    worst_risk = _enhance_severity(
+        worst_risk, levels_in_zone, precipitable_water_mm, nwp_pct,
+    )
 
     # Dominant icing type
     type_counts: dict[IcingType, int] = {}
