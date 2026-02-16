@@ -51,32 +51,8 @@ def app_db():
 
 
 @pytest.fixture
-def tmp_config_dir(tmp_path):
-    """Temporary config directory with sample routes.yaml."""
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    (config_dir / "routes.yaml").write_text(
-        "routes:\n"
-        "  egtk_lsgs:\n"
-        '    name: "Oxford to Sion"\n'
-        "    waypoints: [EGTK, LFPB, LSGS]\n"
-        "    cruise_altitude_ft: 8000\n"
-        "    flight_duration_hours: 4.5\n"
-        "  egtk_lfmt:\n"
-        '    name: "Oxford to Montpellier"\n'
-        "    waypoints: [EGTK, LFMT]\n"
-        "    cruise_altitude_ft: 10000\n"
-    )
-    return config_dir
-
-
-@pytest.fixture
-def client(app_db, tmp_config_dir, tmp_path, monkeypatch):
+def client(app_db, tmp_path, monkeypatch):
     """Create a test client with isolated DB and config directories."""
-    import weatherbrief.api.routes as routes_mod
-    import weatherbrief.db.engine as engine_mod
-
-    monkeypatch.setattr(routes_mod, "CONFIG_DIR", tmp_config_dir)
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ENVIRONMENT", "production")  # skip lifespan init_db
     monkeypatch.setenv("JWT_SECRET", "test-secret-for-api-tests")
@@ -151,39 +127,6 @@ class TestHealth:
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
 
-
-# --- Routes ---
-
-
-class TestRoutesAPI:
-    def test_list_routes(self, client):
-        resp = client.get("/api/routes")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data) == 2
-        names = {r["name"] for r in data}
-        assert "egtk_lsgs" in names
-        assert "egtk_lfmt" in names
-
-    def test_list_routes_contains_details(self, client):
-        resp = client.get("/api/routes")
-        data = resp.json()
-        route = next(r for r in data if r["name"] == "egtk_lsgs")
-        assert route["display_name"] == "Oxford to Sion"
-        assert route["waypoints"] == ["EGTK", "LFPB", "LSGS"]
-        assert route["cruise_altitude_ft"] == 8000
-        assert route["flight_duration_hours"] == 4.5
-
-    def test_get_route(self, client):
-        resp = client.get("/api/routes/egtk_lsgs")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["name"] == "egtk_lsgs"
-        assert data["display_name"] == "Oxford to Sion"
-
-    def test_get_route_not_found(self, client):
-        resp = client.get("/api/routes/nonexistent")
-        assert resp.status_code == 404
 
 
 # --- Flights ---

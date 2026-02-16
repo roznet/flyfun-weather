@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
+
+
+@pytest.fixture(autouse=True)
+def _clean_env_leaks(monkeypatch):
+    """Prevent load_dotenv() side-effects from leaking between test modules."""
+    monkeypatch.delenv("OPENMETEO_API_KEY", raising=False)
 
 from weatherbrief.db.engine import DEV_USER_ID
 from weatherbrief.db.models import Base, UserPreferencesRow, UserRow
