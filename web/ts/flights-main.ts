@@ -48,8 +48,19 @@ async function init(): Promise<void> {
       const duration = parseFloat((document.getElementById('input-duration') as HTMLInputElement).value || '0');
 
       const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map((w) => w.toUpperCase());
-      if (waypoints.length < 2 || !targetDate) {
-        ui.renderError('Enter at least 2 waypoints and a date.');
+      if (!targetDate) {
+        ui.renderError('Please enter a date.');
+        return;
+      }
+      if (waypoints.length < 2) {
+        ui.renderError('Route must be a list of at least 2 ICAO airport codes separated by spaces (e.g. EGTK LFQA LSGS).');
+        return;
+      }
+      const invalidCodes = waypoints.filter((w) => !/^[A-Z]{4}$/.test(w));
+      if (invalidCodes.length > 0) {
+        ui.renderError(
+          `Each waypoint must be a 4-letter ICAO airport code separated by spaces. Invalid: ${invalidCodes.join(', ')}`,
+        );
         return;
       }
 
@@ -63,7 +74,7 @@ async function init(): Promise<void> {
         // Navigate to briefing page for the new flight
         navigateToBriefing(flight.id);
       } catch {
-        // Error already set in store
+        // Error already set in store via API response
       }
     });
   }

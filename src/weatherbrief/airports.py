@@ -46,7 +46,7 @@ def resolve_waypoints(icao_codes: list[str], db_path: str) -> list[Waypoint]:
         )
 
     if missing:
-        raise KeyError(f"Airport(s) not found in database: {', '.join(missing)}")
+        raise KeyError(f"We did not find in our database: {', '.join(missing)}")
 
     return waypoints
 

@@ -71,7 +71,10 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       set({ loading: false });
       return flight;
     } catch (err) {
-      set({ loading: false, error: `Failed to create flight: ${err}` });
+      const msg = err instanceof Error ? err.message : String(err);
+      // Strip "API 422: " prefix to show the backend detail directly
+      const detail = msg.replace(/^API \d+:\s*/, '');
+      set({ loading: false, error: detail });
       throw err;
     }
   },
