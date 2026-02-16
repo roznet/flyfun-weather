@@ -25,6 +25,8 @@ export interface PreferencesResponse {
   digest_config: DigestConfig;
   advisories: AdvisoryPreferences;
   has_autorouter_creds: boolean;
+  gramet_enabled: boolean;
+  llm_digest_enabled: boolean;
 }
 
 export interface PreferencesUpdate {
@@ -33,6 +35,8 @@ export interface PreferencesUpdate {
   advisories?: AdvisoryPreferences;
   autorouter_username?: string;
   autorouter_password?: string;
+  gramet_enabled?: boolean;
+  llm_digest_enabled?: boolean;
 }
 
 export async function fetchPreferences(): Promise<PreferencesResponse> {

@@ -216,8 +216,14 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
     # Load user preferences for models and autorouter credentials
     autorouter_creds = None
     models = None
+    do_gramet = True
+    do_llm_digest = True
     if db is not None:
-        from weatherbrief.api.preferences import load_autorouter_credentials, load_user_defaults
+        from weatherbrief.api.preferences import (
+            load_autorouter_credentials,
+            load_service_toggles,
+            load_user_defaults,
+        )
 
         autorouter_creds = load_autorouter_credentials(db, user_id)
         defaults = load_user_defaults(db, user_id)
@@ -225,17 +231,31 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
             valid = {m.value for m in ModelSource}
             models = [ModelSource(m) for m in defaults.models if m in valid]
 
+        # User-level service toggles
+        toggles = load_service_toggles(db, user_id)
+        do_gramet = toggles["gramet_enabled"]
+        do_llm_digest = toggles["llm_digest_enabled"]
+
     # Check rate limits before running the pipeline
     if db is not None:
-        from weatherbrief.api.usage import check_rate_limits
+        from weatherbrief.api.usage import check_rate_limits, check_service_limits
 
         check_rate_limits(db, user_id)
 
+        # Gracefully skip optional services that have hit their daily limit
+        limits = check_service_limits(db, user_id)
+        if not limits["gramet"]:
+            logger.info("GRAMET daily limit reached for %s — skipping", user_id)
+            do_gramet = False
+        if not limits["llm_digest"]:
+            logger.info("LLM digest daily limit reached for %s — skipping", user_id)
+            do_llm_digest = False
+
     options = BriefingOptions(
         enrich_grib=True,
-        fetch_gramet=True,
+        fetch_gramet=do_gramet,
         generate_skewt=False,
-        generate_llm_digest=True,
+        generate_llm_digest=do_llm_digest,
         output_dir=pack_path,
         autorouter_credentials=autorouter_creds,
         user_id=user_id,

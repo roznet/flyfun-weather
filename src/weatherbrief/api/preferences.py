@@ -46,6 +46,8 @@ class PreferencesResponse(BaseModel):
     digest_config: DigestConfig
     advisories: AdvisoryPreferences
     has_autorouter_creds: bool
+    gramet_enabled: bool
+    llm_digest_enabled: bool
 
 
 class PreferencesUpdate(BaseModel):
@@ -56,6 +58,8 @@ class PreferencesUpdate(BaseModel):
     advisories: AdvisoryPreferences | None = None
     autorouter_username: str | None = None
     autorouter_password: str | None = None
+    gramet_enabled: bool | None = None
+    llm_digest_enabled: bool | None = None
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -76,6 +80,18 @@ def _parse_defaults(raw: str) -> FlightDefaults:
     return FlightDefaults(**data)
 
 
+def _parse_service_toggles(raw: str) -> dict[str, bool]:
+    """Extract gramet_enabled and llm_digest_enabled from the defaults blob."""
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        data = {}
+    return {
+        "gramet_enabled": data.get("gramet_enabled", True),
+        "llm_digest_enabled": data.get("llm_digest_enabled", True),
+    }
+
+
 def _parse_advisory_prefs(raw: str) -> AdvisoryPreferences:
     try:
         data = json.loads(raw) if raw else {}
@@ -93,6 +109,18 @@ def _parse_digest_config(raw: str) -> DigestConfig:
     return DigestConfig(**data)
 
 
+def _build_response(row: UserPreferencesRow) -> PreferencesResponse:
+    """Build a PreferencesResponse from a DB row."""
+    toggles = _parse_service_toggles(row.defaults_json)
+    return PreferencesResponse(
+        defaults=_parse_defaults(row.defaults_json),
+        digest_config=_parse_digest_config(row.digest_config_json),
+        advisories=_parse_advisory_prefs(row.defaults_json),
+        has_autorouter_creds=bool(row.encrypted_autorouter_creds),
+        **toggles,
+    )
+
+
 @router.get("", response_model=PreferencesResponse)
 def get_preferences(
     user_id: str = Depends(current_user_id),
@@ -100,12 +128,7 @@ def get_preferences(
 ):
     """Get the current user's preferences."""
     row = _load_prefs(db, user_id)
-    return PreferencesResponse(
-        defaults=_parse_defaults(row.defaults_json),
-        digest_config=_parse_digest_config(row.digest_config_json),
-        advisories=_parse_advisory_prefs(row.defaults_json),
-        has_autorouter_creds=bool(row.encrypted_autorouter_creds),
-    )
+    return _build_response(row)
 
 
 @router.put("", response_model=PreferencesResponse)
@@ -130,6 +153,12 @@ def update_preferences(
     if body.advisories is not None:
         data["advisories"] = body.advisories.model_dump(exclude_none=True)
 
+    # Service toggles
+    if body.gramet_enabled is not None:
+        data["gramet_enabled"] = body.gramet_enabled
+    if body.llm_digest_enabled is not None:
+        data["llm_digest_enabled"] = body.llm_digest_enabled
+
     row.defaults_json = json.dumps(data)
 
     if body.digest_config is not None:
@@ -142,12 +171,7 @@ def update_preferences(
         })
         row.encrypted_autorouter_creds = encrypt(payload)
 
-    return PreferencesResponse(
-        defaults=_parse_defaults(row.defaults_json),
-        digest_config=_parse_digest_config(row.digest_config_json),
-        advisories=_parse_advisory_prefs(row.defaults_json),
-        has_autorouter_creds=bool(row.encrypted_autorouter_creds),
-    )
+    return _build_response(row)
 
 
 @router.delete("/autorouter", status_code=204)
@@ -199,6 +223,17 @@ def load_user_defaults(db: Session, user_id: str) -> FlightDefaults:
     if not row:
         return FlightDefaults()
     return _parse_defaults(row.defaults_json)
+
+
+def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
+    """Load GRAMET and LLM digest toggle preferences for a user.
+
+    Returns dict with ``gramet_enabled`` and ``llm_digest_enabled`` (default True).
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    if not row:
+        return {"gramet_enabled": True, "llm_digest_enabled": True}
+    return _parse_service_toggles(row.defaults_json)
 
 
 @router.get("/advisories/catalog")

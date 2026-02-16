@@ -94,7 +94,12 @@ def _query_today_usage(db: Session, user_id: str) -> dict:
 
 
 def check_rate_limits(db: Session, user_id: str) -> None:
-    """Check daily rate limits. Raises HTTPException(429) if any limit exceeded."""
+    """Check daily rate limits. Raises HTTPException(429) only for core data (Open-Meteo).
+
+    GRAMET and LLM digest limits are handled gracefully via
+    ``check_service_limits`` — those services are simply skipped when
+    their daily quota is exhausted.
+    """
     usage = _query_today_usage(db, user_id)
 
     if usage["open_meteo"] >= DAILY_LIMITS["open_meteo"]:
@@ -102,16 +107,18 @@ def check_rate_limits(db: Session, user_id: str) -> None:
             status_code=429,
             detail=f"Daily Open-Meteo limit reached ({DAILY_LIMITS['open_meteo']} calls/day)",
         )
-    if usage["gramet"] >= DAILY_LIMITS["gramet"]:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Daily GRAMET limit reached ({DAILY_LIMITS['gramet']} fetches/day)",
-        )
-    if usage["llm_digest"] >= DAILY_LIMITS["llm_digest"]:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Daily LLM digest limit reached ({DAILY_LIMITS['llm_digest']} calls/day)",
-        )
+
+
+def check_service_limits(db: Session, user_id: str) -> dict[str, bool]:
+    """Return which optional services are still within their daily limits.
+
+    Returns dict with ``gramet`` and ``llm_digest`` booleans (True = OK to use).
+    """
+    usage = _query_today_usage(db, user_id)
+    return {
+        "gramet": usage["gramet"] < DAILY_LIMITS["gramet"],
+        "llm_digest": usage["llm_digest"] < DAILY_LIMITS["llm_digest"],
+    }
 
 
 def log_briefing_usage(

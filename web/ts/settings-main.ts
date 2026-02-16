@@ -125,6 +125,12 @@ function populateForm(prefs: PreferencesResponse): void {
   }
 
   updateAutorouterStatus(prefs.has_autorouter_creds);
+
+  // Service toggles
+  const grametToggle = document.getElementById('toggle-gramet') as HTMLInputElement;
+  const llmToggle = document.getElementById('toggle-llm-digest') as HTMLInputElement;
+  if (grametToggle) grametToggle.checked = prefs.gramet_enabled;
+  if (llmToggle) llmToggle.checked = prefs.llm_digest_enabled;
 }
 
 // --- Advisory settings rendering ---
@@ -276,6 +282,9 @@ async function handleSave(): Promise<void> {
 
   const advisories = collectAdvisoryPrefs();
 
+  const grametEnabled = (document.getElementById('toggle-gramet') as HTMLInputElement)?.checked ?? true;
+  const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
+
   try {
     const result = await savePreferences({
       defaults: {
@@ -286,6 +295,8 @@ async function handleSave(): Promise<void> {
       advisories,
       autorouter_username: arUsername || undefined,
       autorouter_password: arPassword || undefined,
+      gramet_enabled: grametEnabled,
+      llm_digest_enabled: llmDigestEnabled,
     });
     updateAutorouterStatus(result.has_autorouter_creds);
     // Clear password field after successful save
