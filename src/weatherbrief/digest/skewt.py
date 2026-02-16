@@ -252,8 +252,8 @@ def generate_skewt(
         u_wind, v_wind = mpcalc.wind_components(speed, direction)
 
     # --- Figure layout ---
-    fig = plt.figure(figsize=(9, 10))
-    skew = SkewT(fig, rotation=45, rect=(0.1, 0.07, 0.85, 0.88))
+    fig = plt.figure(figsize=(9, 5))
+    skew = SkewT(fig, rotation=45, aspect=90)
 
     # --- Temperature & dewpoint ---
     skew.plot(pressure, temperature, color=_C["temp"], linewidth=2.5, label="Temperature")
