@@ -188,7 +188,7 @@ _STAGE_PROGRESS: dict[str, float] = {
 }
 
 
-def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
+def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privileged=False):
     """Shared setup for both sync and streaming refresh endpoints.
 
     If a DB session is provided, loads user preferences (models, autorouter
@@ -240,7 +240,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
     if db is not None:
         from weatherbrief.api.usage import check_rate_limits, check_service_limits
 
-        check_rate_limits(db, user_id)
+        check_rate_limits(db, user_id, bypass=is_privileged)
 
         # Gracefully skip optional services that have hit their daily limit
         limits = check_service_limits(db, user_id)
@@ -341,6 +341,7 @@ def refresh_briefing(
 
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
+            is_privileged=_can_force_refresh(request),
         )
         result = execute_briefing(
             route=route,
@@ -413,6 +414,7 @@ async def refresh_briefing_stream(
 
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
+            is_privileged=_can_force_refresh(request),
         )
     except Exception:
         db.close()
