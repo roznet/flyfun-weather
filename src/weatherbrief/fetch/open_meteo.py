@@ -7,6 +7,8 @@ import math
 import time
 from datetime import datetime, timezone
 
+import os
+
 import requests
 
 from weatherbrief.fetch.variables import (
@@ -46,15 +48,30 @@ _MAX_RETRIES = 4
 _RETRY_BACKOFF = [10, 30, 60, 90]  # seconds — generous for expanded pressure levels
 
 
+_FREE_HOST = "api.open-meteo.com"
+_CUSTOMER_HOST = "customer-api.open-meteo.com"
+
+
 class OpenMeteoClient:
     """Client for fetching forecasts from the Open-Meteo API."""
 
     def __init__(self, timeout: int = 30):
         self.timeout = timeout
         self.session = requests.Session()
+        self._api_key = os.environ.get("OPENMETEO_API_KEY")
+        if self._api_key:
+            logger.info("Using Open-Meteo customer API (paid plan)")
+
+    def _prepare_request(self, url: str, params: dict) -> tuple[str, dict]:
+        """Swap to customer API host and add apikey if configured."""
+        if self._api_key:
+            url = url.replace(_FREE_HOST, _CUSTOMER_HOST)
+            params = {**params, "apikey": self._api_key}
+        return url, params
 
     def _get_with_retry(self, url: str, params: dict) -> requests.Response:
         """GET with retry on 429 rate-limit responses."""
+        url, params = self._prepare_request(url, params)
         for attempt in range(_MAX_RETRIES):
             resp = self.session.get(url, params=params, timeout=self.timeout)
             if resp.status_code != 429:
