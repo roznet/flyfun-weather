@@ -19,6 +19,23 @@ EXTENDED_PRESSURE_LEVELS = [
 # within our 1000–300 hPa range (250/200/150/100/50 are above our ceiling).
 ECMWF_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
 
+# DWD ICON: 12 levels in 1000–300 hPa range (verified via API).
+ICON_PRESSURE_LEVELS = [
+    1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300,
+]
+
+# Météo-France ARPEGE: 16 levels in 1000–300 hPa range (verified via API).
+METEOFRANCE_PRESSURE_LEVELS = [
+    1000, 950, 925, 900, 850, 800, 750, 700, 650, 600,
+    550, 500, 450, 400, 350, 300,
+]
+
+# UK Met Office: 17 levels in 1000–300 hPa range (verified via API).
+UKMO_PRESSURE_LEVELS = [
+    1000, 975, 950, 925, 900, 850, 800, 750, 700, 650,
+    600, 550, 500, 450, 400, 350, 300,
+]
+
 # Backwards-compatible alias
 PRESSURE_LEVELS = BASE_PRESSURE_LEVELS
 
@@ -93,6 +110,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         max_days=7,
         unavailable_surface=["precipitation_probability"],
         unavailable_pressure=["vertical_velocity"],
+        pressure_levels=list(ICON_PRESSURE_LEVELS),
     ),
     "ukmo": ModelEndpoint(
         name="UK Met Office",
@@ -100,6 +118,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         max_days=7,
         model_param="ukmo_seamless",
         unavailable_surface=["precipitation_probability"],
+        pressure_levels=list(UKMO_PRESSURE_LEVELS),
     ),
     "meteofrance": ModelEndpoint(
         name="Météo-France",
@@ -108,6 +127,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         unavailable_surface=["precipitation_probability",
                              "freezing_level_height", "visibility"],
         unavailable_pressure=["vertical_velocity"],
+        pressure_levels=list(METEOFRANCE_PRESSURE_LEVELS),
     ),
 }
 

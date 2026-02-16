@@ -325,11 +325,12 @@ def test_gfs_endpoint_uses_extended_levels():
     assert gfs.pressure_levels == EXTENDED_PRESSURE_LEVELS
 
 
-def test_icon_endpoint_uses_base_levels():
-    """ICON endpoint defaults to base pressure levels."""
-    from weatherbrief.fetch.variables import BASE_PRESSURE_LEVELS, MODEL_ENDPOINTS
+def test_icon_endpoint_uses_icon_levels():
+    """ICON endpoint uses its own 12-level set."""
+    from weatherbrief.fetch.variables import ICON_PRESSURE_LEVELS, MODEL_ENDPOINTS
     icon = MODEL_ENDPOINTS["icon"]
-    assert icon.pressure_levels == BASE_PRESSURE_LEVELS
+    assert icon.pressure_levels == ICON_PRESSURE_LEVELS
+    assert len(icon.pressure_levels) == 12
 
 
 def test_build_hourly_params_uses_endpoint_levels():
@@ -337,11 +338,11 @@ def test_build_hourly_params_uses_endpoint_levels():
     from weatherbrief.fetch.variables import MODEL_ENDPOINTS, build_hourly_params
 
     gfs_params = build_hourly_params(MODEL_ENDPOINTS["gfs"])
-    icon_params = build_hourly_params(MODEL_ENDPOINTS["icon"])
+    ecmwf_params = build_hourly_params(MODEL_ENDPOINTS["ecmwf"])
 
     # GFS should have more pressure params (25 vs 8 levels)
-    assert gfs_params.count("hPa") > icon_params.count("hPa")
+    assert gfs_params.count("hPa") > ecmwf_params.count("hPa")
 
-    # GFS should have 975hPa (extended), ICON should not
-    assert "temperature_975hPa" in gfs_params
-    assert "temperature_975hPa" not in icon_params
+    # GFS should have 875hPa (extended), ECMWF should not
+    assert "temperature_875hPa" in gfs_params
+    assert "temperature_875hPa" not in ecmwf_params
