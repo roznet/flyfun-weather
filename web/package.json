@@ -3,16 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "npm run build:flights && npm run build:briefing && npm run build:settings && npm run build:admin",
+    "build": "npm run build:flights && npm run build:briefing && npm run build:settings && npm run build:admin && npm run build:help",
     "build:flights": "npx esbuild ts/flights-main.ts --bundle --outfile=dist/flights.js --sourcemap --target=es2020",
     "build:briefing": "npx esbuild ts/briefing-main.ts --bundle --outfile=dist/briefing.js --sourcemap --target=es2020",
     "build:settings": "npx esbuild ts/settings-main.ts --bundle --outfile=dist/settings.js --sourcemap --target=es2020",
     "build:admin": "npx esbuild ts/admin-main.ts --bundle --outfile=dist/admin.js --sourcemap --target=es2020",
-    "dev": "npm run dev:flights & npm run dev:briefing & npm run dev:settings & npm run dev:admin",
+    "build:help": "npx esbuild ts/help-main.ts --bundle --outfile=dist/help.js --sourcemap --target=es2020",
+    "dev": "npm run dev:flights & npm run dev:briefing & npm run dev:settings & npm run dev:admin & npm run dev:help",
     "dev:flights": "npx esbuild ts/flights-main.ts --bundle --outfile=dist/flights.js --sourcemap --target=es2020 --watch=forever",
     "dev:briefing": "npx esbuild ts/briefing-main.ts --bundle --outfile=dist/briefing.js --sourcemap --target=es2020 --watch=forever",
     "dev:settings": "npx esbuild ts/settings-main.ts --bundle --outfile=dist/settings.js --sourcemap --target=es2020 --watch=forever",
-    "dev:admin": "npx esbuild ts/admin-main.ts --bundle --outfile=dist/admin.js --sourcemap --target=es2020 --watch=forever"
+    "dev:admin": "npx esbuild ts/admin-main.ts --bundle --outfile=dist/admin.js --sourcemap --target=es2020 --watch=forever",
+    "dev:help": "npx esbuild ts/help-main.ts --bundle --outfile=dist/help.js --sourcemap --target=es2020 --watch=forever"
   },
   "dependencies": {
     "zustand": "^5.0.11"
