@@ -170,7 +170,7 @@ def _draw_hodograph(
                    np.max(np.abs(v_wind.magnitude)))
     comp_range = max(40.0, float(np.ceil(max_comp * 1.3 / 10) * 10))
 
-    hodo_ax = fig.add_axes((0.70, 0.58, 0.25, 0.32))
+    hodo_ax = fig.add_axes((0.70, 0.62, 0.25, 0.28))
     h = Hodograph(hodo_ax, component_range=comp_range)
     h.add_grid(increment=20, ls="-", lw=1, alpha=0.35)
     h.add_grid(increment=10, ls="--", lw=0.5, alpha=0.12)
@@ -206,11 +206,11 @@ def _draw_indices_panel(fig: Figure, analysis: SoundingAnalysis) -> None:
 
     # Background rectangle — pushed right, more compact
     fig.patches.extend([plt.Rectangle(
-        (0.66, 0.05), 0.325, 0.46,
+        (0.66, 0.03), 0.325, 0.55,
         edgecolor="#dddddd", facecolor="white", linewidth=0.5, alpha=0.95,
         transform=fig.transFigure, figure=fig,
     )])
-    fig.text(0.823, 0.49, "Sounding Indices", fontsize=9.5,
+    fig.text(0.823, 0.565, "Sounding Indices", fontsize=9.5,
              fontweight="bold", ha="center", va="bottom", color="#333333")
 
     def _fmt(val: float | None, fmt_str: str = ".0f", suffix: str = "") -> str:
@@ -228,7 +228,7 @@ def _draw_indices_panel(fig: Figure, analysis: SoundingAnalysis) -> None:
             return "#2ca02c"
         return "#e89a3c" if val > -2 else "#d62728"
 
-    y0, dy = 0.47, 0.030
+    y0, dy = 0.54, 0.030
     lx1, vx1 = 0.67, 0.82   # left column
     lx2, vx2 = 0.835, 0.975  # right column
     fs = 8.5
@@ -327,10 +327,10 @@ def generate_skewt(
     # --- Figure layout ---
     has_panels = analysis is not None
     if has_panels:
-        fig = plt.figure(figsize=(13, 10))
-        skew = SkewT(fig, rotation=45, rect=(0.05, 0.05, 0.57, 0.90))
+        fig = plt.figure(figsize=(13, 13))
+        skew = SkewT(fig, rotation=45, rect=(0.05, 0.03, 0.57, 0.93))
     else:
-        fig = plt.figure(figsize=(9, 9))
+        fig = plt.figure(figsize=(9, 11))
         skew = SkewT(fig, rotation=45)
 
     # --- Temperature & dewpoint ---

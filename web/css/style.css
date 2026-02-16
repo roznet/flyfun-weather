@@ -716,7 +716,7 @@ label {
 }
 
 .skewt-card-large {
-  width: 400px;
+  width: 650px;
 }
 
 /* --- Model toggle --- */
@@ -1467,8 +1467,8 @@ label {
 .viz-canvas-container {
   position: relative;
   width: 100%;
-  aspect-ratio: 3 / 1;
-  min-height: 280px;
+  aspect-ratio: 2 / 1;
+  min-height: 450px;
   background: var(--surface);
 }
 
