@@ -30,7 +30,7 @@ import {
   variableToMetricId,
 } from '../helpers/metrics-helper';
 import * as api from '../adapters/api-adapter';
-import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, ALL_MODELS } from '../utils';
+import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, allModelKeys } from '../utils';
 
 // --- Header ---
 
@@ -1278,7 +1278,7 @@ export function renderSkewTs(
   }
 
   // Populate model selector from available pack models (fallback to ALL_MODELS)
-  const models = routeAnalyses?.models ?? [...ALL_MODELS];
+  const models = routeAnalyses?.models ?? allModelKeys();
   populateModelSelector(models, selectedModel);
 
   // Route-point mode: single Skew-T + Hodograph pair

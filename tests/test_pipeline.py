@@ -14,6 +14,7 @@ from weatherbrief.models import (
     Waypoint,
     WaypointForecast,
 )
+from weatherbrief.fetch.variables import MODEL_ENDPOINTS
 from weatherbrief.pipeline import BriefingOptions, BriefingResult, analyze_waypoint
 
 
@@ -87,6 +88,18 @@ def sample_forecasts(target_time):
     ]
 
 
+class TestModelCatalog:
+    def test_model_source_matches_endpoints(self):
+        """Every ModelSource value has a corresponding MODEL_ENDPOINTS key and vice versa."""
+        enum_values = {m.value for m in ModelSource}
+        endpoint_keys = set(MODEL_ENDPOINTS.keys())
+        assert enum_values == endpoint_keys
+
+    def test_at_least_one_default(self):
+        defaults = [k for k, v in MODEL_ENDPOINTS.items() if v.default]
+        assert len(defaults) >= 1
+
+
 class TestAnalyzeWaypoint:
     def test_produces_wind_components(self, sample_forecasts, target_time):
         analysis = analyze_waypoint(sample_forecasts, target_time, track_deg=155.0)
@@ -119,8 +132,10 @@ class TestAnalyzeWaypoint:
 
 class TestBriefingOptions:
     def test_defaults(self):
+        from weatherbrief.fetch.variables import MODEL_ENDPOINTS
         opts = BriefingOptions()
-        assert len(opts.models) == 3
+        expected = {k for k, v in MODEL_ENDPOINTS.items() if v.default}
+        assert {m.value for m in opts.models} == expected
         assert opts.fetch_gramet is False
         assert opts.generate_skewt is False
         assert opts.generate_llm_digest is False

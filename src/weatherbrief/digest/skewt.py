@@ -252,8 +252,8 @@ def generate_skewt(
         u_wind, v_wind = mpcalc.wind_components(speed, direction)
 
     # --- Figure layout ---
-    fig = plt.figure(figsize=(9, 11))
-    skew = SkewT(fig, rotation=45)
+    fig = plt.figure(figsize=(9, 10))
+    skew = SkewT(fig, rotation=45, rect=(0.1, 0.07, 0.85, 0.88))
 
     # --- Temperature & dewpoint ---
     skew.plot(pressure, temperature, color=_C["temp"], linewidth=2.5, label="Temperature")
@@ -366,12 +366,13 @@ def generate_skewt(
     time_str = forecast.time.strftime("%Y-%m-%d %H:%MZ")
     fig.suptitle(
         f"{label}  \u00b7  {model_name.upper()}  \u00b7  {time_str}",
-        fontsize=14, fontweight="bold", y=0.98,
+        fontsize=14, fontweight="bold", y=1.0,
     )
 
     # --- Save ---
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
+    fig.savefig(output_path, dpi=150, bbox_inches="tight",
+                pad_inches=0.15, facecolor="white")
     plt.close(fig)
 
     return output_path
@@ -417,14 +418,9 @@ def generate_hodograph(
     fig, ax = plt.subplots(1, 1, figsize=(6, 6))
     _draw_hodograph_on_axes(ax, levels, u_wind, v_wind)
 
-    time_str = forecast.time.strftime("%Y-%m-%d %H:%MZ")
-    fig.suptitle(
-        f"{label}  \u00b7  {model_name.upper()}  \u00b7  {time_str}",
-        fontsize=11, fontweight="bold", y=0.98,
-    )
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
+    fig.savefig(output_path, dpi=150, bbox_inches="tight",
+                pad_inches=0.1, facecolor="white")
     plt.close(fig)
 
     return output_path

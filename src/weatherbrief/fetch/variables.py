@@ -36,6 +36,12 @@ UKMO_PRESSURE_LEVELS = [
     600, 550, 500, 450, 400, 350, 300,
 ]
 
+# Canadian GEM: 17 levels in 1000–300 hPa range (verified via API).
+GEM_PRESSURE_LEVELS = [
+    1000, 950, 925, 900, 875, 850, 800, 750, 700, 650,
+    600, 550, 500, 450, 400, 350, 300,
+]
+
 # Backwards-compatible alias
 PRESSURE_LEVELS = BASE_PRESSURE_LEVELS
 
@@ -82,6 +88,8 @@ class ModelEndpoint:
     unavailable_surface: list[str] = field(default_factory=list)
     unavailable_pressure: list[str] = field(default_factory=list)
     pressure_levels: list[int] = field(default_factory=lambda: list(BASE_PRESSURE_LEVELS))
+    # Whether this model is included in the default selection for new users
+    default: bool = False
 
 
 MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
@@ -90,6 +98,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/forecast",
         max_days=16,
         pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
+        default=True,
     ),
     "ecmwf": ModelEndpoint(
         name="ECMWF IFS",
@@ -97,12 +106,14 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         max_days=10,
         unavailable_surface=["freezing_level_height", "visibility"],
         pressure_levels=list(ECMWF_PRESSURE_LEVELS),
+        default=True,
     ),
     "gfs": ModelEndpoint(
         name="GFS",
         base_url="https://api.open-meteo.com/v1/gfs",
         max_days=16,
         pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
+        default=True,
     ),
     "icon": ModelEndpoint(
         name="DWD ICON",
@@ -111,6 +122,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         unavailable_surface=["precipitation_probability"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(ICON_PRESSURE_LEVELS),
+        default=True,
     ),
     "ukmo": ModelEndpoint(
         name="UK Met Office",
@@ -128,6 +140,15 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
                              "freezing_level_height", "visibility"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(METEOFRANCE_PRESSURE_LEVELS),
+    ),
+    "gem": ModelEndpoint(
+        name="GEM",
+        base_url="https://api.open-meteo.com/v1/gem",
+        max_days=10,
+        unavailable_surface=["precipitation_probability",
+                             "freezing_level_height", "visibility"],
+        unavailable_pressure=["vertical_velocity"],
+        pressure_levels=list(GEM_PRESSURE_LEVELS),
     ),
 }
 

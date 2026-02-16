@@ -5,7 +5,7 @@ import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { renderAdvisories } from './managers/advisories-ui';
-import { renderUserInfo } from './utils';
+import { renderUserInfo, initModelCatalog } from './utils';
 import { initInfoPopup, showMetricInfo } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
@@ -21,6 +21,11 @@ async function init(): Promise<void> {
     return;
   }
   renderUserInfo(user);
+
+  // Load model catalog (non-blocking — modelLabel() has uppercase fallback)
+  import('./adapters/preferences-adapter').then(({ fetchModelCatalog }) =>
+    fetchModelCatalog().then(initModelCatalog).catch(() => {}),
+  );
 
   // Initialize metric info popup
   initInfoPopup();
