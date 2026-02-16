@@ -511,6 +511,46 @@ def get_gramet(
     raise HTTPException(status_code=404, detail="GRAMET not available")
 
 
+@router.get("/{timestamp}/gramet.png")
+def get_gramet_png(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get the GRAMET cross-section as a PNG image.
+
+    If the stored artifact is a PDF, converts the first page to PNG.
+    If it's already a PNG, serves it directly.
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+
+    # Prefer existing PNG
+    png_path = pack_dir / "gramet.png"
+    if png_path.exists():
+        return FileResponse(png_path, media_type="image/png")
+
+    # Convert PDF first page to PNG
+    pdf_path = pack_dir / "gramet.pdf"
+    if pdf_path.exists():
+        try:
+            import fitz  # PyMuPDF
+
+            doc = fitz.open(str(pdf_path))
+            page = doc[0]
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            png_bytes = pix.tobytes("png")
+            doc.close()
+            return Response(content=png_bytes, media_type="image/png")
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="PyMuPDF not available for PDF-to-PNG conversion",
+            )
+
+    raise HTTPException(status_code=404, detail="GRAMET not available")
+
+
 @router.get("/{timestamp}/skewt/{icao}/{model}")
 def get_skewt(
     flight_id: str, timestamp: str, icao: str, model: str,
@@ -913,6 +953,7 @@ def get_report_pdf(
 def send_email(
     flight_id: str,
     timestamp: str,
+    request: Request,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -924,6 +965,11 @@ def send_email(
     from weatherbrief.db.models import UserRow
     from weatherbrief.notify.email import send_briefing_email
 
+    # Build base URL for briefing link in email
+    base_url = str(request.base_url).rstrip("/")
+    if not is_dev_mode():
+        base_url = base_url.replace("http://", "https://")
+
     try:
         user = db.query(UserRow).filter(UserRow.id == user_id).first()
         if not user or not user.email:
@@ -932,7 +978,7 @@ def send_email(
                 detail="No email address on file. Update your profile to send emails.",
             )
         recipients = [user.email]
-        send_briefing_email(recipients, flight, meta, pack_dir)
+        send_briefing_email(recipients, flight, meta, pack_dir, base_url=base_url)
         return {"status": "sent", "recipients": recipients}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

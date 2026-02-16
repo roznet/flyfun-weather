@@ -303,11 +303,13 @@ export function renderGramet(
     return;
   }
 
-  const url = api.grametUrl(flight.id, pack.fetch_timestamp);
+  const pngUrl = api.grametPngUrl(flight.id, pack.fetch_timestamp);
+  const pdfUrl = api.grametUrl(flight.id, pack.fetch_timestamp);
   el.innerHTML = `
-    <object data="${url}" type="application/pdf" class="gramet-pdf">
-      <p>Cannot display GRAMET PDF inline. <a href="${url}" target="_blank">Open in new tab</a></p>
-    </object>
+    <img src="${pngUrl}" alt="GRAMET Cross-Section" class="gramet-img" />
+    <div class="gramet-actions">
+      <a href="${pdfUrl}" download class="btn btn-sm">Download GRAMET PDF</a>
+    </div>
   `;
 }
 

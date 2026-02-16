@@ -222,6 +222,10 @@ export function grametUrl(flightId: string, timestamp: string): string {
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/gramet`;
 }
 
+export function grametPngUrl(flightId: string, timestamp: string): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/gramet.png`;
+}
+
 export function skewtUrl(
   flightId: string,
   timestamp: string,
