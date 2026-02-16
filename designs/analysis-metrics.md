@@ -21,22 +21,22 @@ When an API field is unavailable for a model, derived alternatives fill the gap 
 | Variable | Unit | GFS | ECMWF | ICON | MétéoFr | UKMO | Physics / Interpretation |
 |----------|------|-----|-------|------|---------|------|--------------------------|
 | `temperature_2m` | °C | yes | yes | yes | yes | yes | Screen-level air temperature. Primary surface condition indicator. |
-| `relative_humidity_2m` | % | yes | **no** | yes | yes | yes | Surface moisture saturation. Near 100% = fog/mist risk. |
-| `dewpoint_2m` | °C | yes | yes | yes | yes | **no** | Temperature at which condensation begins. T−Td < 3°C = visible moisture likely. |
+| `relative_humidity_2m` | % | yes | yes | yes | yes | yes | Surface moisture saturation. Near 100% = fog/mist risk. |
+| `dewpoint_2m` | °C | yes | yes | yes | yes | yes | Temperature at which condensation begins. T−Td < 3°C = visible moisture likely. |
 | `surface_pressure` | hPa | yes | yes | yes | yes | yes | Actual station pressure. Used to anchor sounding profiles. |
 | `pressure_msl` | hPa | yes | yes | yes | yes | yes | Sea-level-corrected pressure. Altimeter setting proxy. |
 | `wind_speed_10m` | kt | yes | yes | yes | yes | yes | 10m wind speed for surface ops. |
 | `wind_direction_10m` | ° | yes | yes | yes | yes | yes | Surface wind direction (meteorological convention: direction FROM). |
-| `wind_gusts_10m` | kt | yes | **no** | yes | yes | yes | Peak gust. Relevant for crosswind limits and turbulence on approach. |
+| `wind_gusts_10m` | kt | yes | yes | yes | yes | yes | Peak gust. Relevant for crosswind limits and turbulence on approach. |
 | `precipitation` | mm | yes | yes | yes | yes | yes | Hourly accumulated precipitation. Any precip in sub-zero temps = icing concern. |
-| `precipitation_probability` | % | yes | **no** | **no** | **no** | **no** | Ensemble-derived probability. GFS-only (from ensemble spread). |
+| `precipitation_probability` | % | yes | yes | **no** | **no** | **no** | Ensemble-derived probability. GFS and ECMWF only. |
 | `cloud_cover` | % | yes | yes | yes | yes | yes | Total column cloud cover from model parameterization. |
-| `cloud_cover_low` | % | yes | **no** | yes | yes | yes | SFC–6500ft (ICAO low). Low ceilings = IFR/LIFR risk. |
-| `cloud_cover_mid` | % | yes | **no** | yes | yes | yes | 6500–20000ft (ICAO mid). Relevant for en-route icing. |
-| `cloud_cover_high` | % | yes | **no** | yes | yes | yes | 20000ft+ (ICAO high). Cirrus, usually no icing concern. |
-| `freezing_level_height` | m | yes | **no** | yes | **no** | **no** | NWP-computed 0°C isotherm height. Upper boundary of rain, lower boundary of icing. |
-| `cape` | J/kg | yes | **no** | yes | **no** | **no** | NWP-computed convective available potential energy. |
-| `visibility` | m | yes | **no** | yes | **no** | **no** | Parameterized horizontal visibility. < 5000m = marginal VFR. |
+| `cloud_cover_low` | % | yes | yes | yes | yes | yes | SFC–6500ft (ICAO low). Low ceilings = IFR/LIFR risk. |
+| `cloud_cover_mid` | % | yes | yes | yes | yes | yes | 6500–20000ft (ICAO mid). Relevant for en-route icing. |
+| `cloud_cover_high` | % | yes | yes | yes | yes | yes | 20000ft+ (ICAO high). Cirrus, usually no icing concern. |
+| `freezing_level_height` | m | yes | **no** | yes | **no** | yes | NWP-computed 0°C isotherm height. Upper boundary of rain, lower boundary of icing. |
+| `cape` | J/kg | yes | yes | yes | yes | yes | NWP-computed convective available potential energy. |
+| `visibility` | m | yes | **no** | yes | **no** | yes | Parameterized horizontal visibility. < 5000m = marginal VFR. |
 
 ### 1.2 Pressure Level Variables
 
@@ -46,11 +46,11 @@ Available at: 1000, 925, 850, 700, 600, 500, 400, 300 hPa (~SFC to ~FL300).
 |----------|------|-----|-------|------|---------|------|--------------------------|
 | `temperature` | °C | yes | yes | yes | yes | yes | Air temperature at level. Primary driver for icing type and severity. |
 | `relative_humidity` | % | yes | yes | yes | yes | yes | Moisture saturation at level. > 80% suggests cloud, > 95% = likely in cloud. |
-| `dewpoint` | °C | yes | **no** | yes | **no** | **no** | Direct dewpoint. More physically meaningful than RH for cloud detection. |
+| `dewpoint` | °C | yes | yes | yes | yes | yes | Direct dewpoint. More physically meaningful than RH for cloud detection. |
 | `wind_speed` | kt | yes | yes | yes | yes | yes | Wind at level for headwind/crosswind and shear calculations. |
 | `wind_direction` | ° | yes | yes | yes | yes | yes | Wind direction at level. |
 | `geopotential_height` | m | yes | yes | yes | yes | yes | Height of pressure surface. Converts pressure levels to altitude. |
-| `vertical_velocity` | Pa/s | yes | yes | **no** | **no** | **no** | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. |
+| `vertical_velocity` | Pa/s | yes | yes | **no** | **no** | yes | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. |
 
 ---
 
@@ -62,8 +62,8 @@ These are computed in `thermodynamics.compute_derived_levels()` for each pressur
 
 | Metric | Formula / Method | Inputs | Physics | Aviation Use |
 |--------|-----------------|--------|---------|-------------|
-| **Dewpoint** (when missing) | Magnus formula: `Td = (b·γ)/(a−γ)` where `γ = (a·T)/(b+T) + ln(RH/100)`, a=17.27, b=237.7 | T, RH | Temperature at which air parcel reaches saturation at constant pressure. | Cloud base estimation, moisture availability. Always available for all models. |
-| **Wet-bulb temperature** | `mpcalc.wet_bulb_temperature(P, T, Td)` — iterative solution of psychrometric equation | P, T, Td | Lowest temperature achievable by evaporative cooling. Accounts for both temperature and moisture. | **Primary icing classifier** in current system: clear ice (-3 to 0°C), mixed (-10 to -3°C), rime (-15 to -10°C). |
+| **Dewpoint** (fallback when missing) | Magnus formula: `Td = (c·γ)/(b−γ)` where `γ = ln(RH/100) + (b·T)/(c+T)`, b=17.67, c=243.5 | T, RH | Temperature at which air parcel reaches saturation at constant pressure. | Cloud base estimation, moisture availability. Now available directly from API for all models; Magnus derivation retained as fallback. |
+| **Wet-bulb temperature** | `mpcalc.wet_bulb_temperature(P, T, Td)` — iterative solution of psychrometric equation | P, T, Td | Lowest temperature achievable by evaporative cooling. Accounts for both temperature and moisture. | Stored per level for diagnostics. Icing severity now uses Ogimet continuous index (§3.2); icing type still classified by temperature bands. |
 | **Dewpoint depression** | `DD = T − Td` | T, Td | Gap between temperature and dewpoint. DD < 3°C = likely in visible moisture (cloud). DD < 1°C = near saturation. | Cloud layer detection: consecutive levels with DD < 3°C form a cloud layer. |
 | **Relative humidity** (at level) | `mpcalc.relative_humidity_from_dewpoint(T, Td)` | T, Td | Fraction of saturation. 100% = saturated (cloud or fog). | Icing severity modifier (RH > 95% upgrades risk). |
 | **Equivalent potential temperature** (θ_e) | `mpcalc.equivalent_potential_temperature(P, T, Td)` — Bolton (1980) | P, T, Td | Temperature a parcel would have if all moisture condensed and parcel brought adiabatically to 1000 hPa. Conserved in moist adiabatic processes. | Air mass identification. Decreasing θ_e with height = potential instability. |
@@ -125,30 +125,11 @@ These can disagree. The NWP cloud cover includes sub-grid processes the sounding
 
 **Module:** `sounding/icing.py`
 
-**Current method:** Wet-bulb temperature bands with cloud proximity check.
+**Current method:** Ogimet/Autorouter continuous icing index with cloud proximity check.
 
 Only levels near/in cloud are assessed (DD < 3°C or within 500ft of a cloud layer).
 
-| Wet-bulb range | Type | Base risk | Physics |
-|---------------|------|-----------|---------|
-| −3°C to 0°C | Clear ice | SEVERE | Supercooled water freezes on contact as a clear, dense glaze. Most dangerous — adds weight, changes airfoil shape. Highest liquid water content zone. |
-| −10°C to −3°C | Mixed | MODERATE | Mix of supercooled droplets and ice crystals. Irregular accretion. |
-| −15°C to −10°C | Rime | MODERATE | Smaller droplets freeze instantly on contact as rough, opaque ice. Less aerodynamic penalty than clear. |
-| −20°C to −15°C | Rime | LIGHT | Most water is already frozen (ice crystals). Limited supercooled liquid water available. |
-
-**Severity modifiers:**
-- RH > 95% → upgrade by one level (more moisture = faster accretion)
-- Precipitable water > 25mm → upgrade light→moderate (moisture-rich column)
-
-**Limitations of current approach:**
-- Hard severity bands at fixed temperature thresholds (real-world icing severity is continuous)
-- Peaks at −3°C to 0°C (severe), but observed maximum supercooled liquid water content peaks near −5°C to −10°C
-- Does not account for cloud thickness or liquid water content
-- Does not distinguish between stratiform (widespread, persistent) and convective (intense, localized) icing
-
-**Alternative: Ogimet/Autorouter icing index** (candidate replacement):
-
-Uses continuous index formulas that peak near −7°C and account for cloud type and moisture:
+**Continuous icing index formulas** (peak near −7°C, matching observed supercooled liquid water distribution):
 
 ```
 Combined = (layered% × layered_index + convective% × convective_index) / 200
@@ -158,11 +139,32 @@ Convective:  200 × (ρv_base − ρv_cell) / ρv_20sat × √((T − 253.15)/20
                                                 when −20 ≤ t ≤ 0 °C
 ```
 
-Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`.
+Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`. The stratiform/convective cloud split is estimated from CAPE (see §4.4).
 
-Severity: index 30–80 = moderate, > 80 = severe.
+**Index-to-risk mapping:**
 
-**Advantages:** continuous severity, physically peaks at −7°C (matches observations), inherently cloud-aware, accounts for moisture content. See §4.1 for data availability.
+| Index | Risk |
+|-------|------|
+| 0 | None |
+| > 0 | Light |
+| ≥ 30 | Moderate |
+| ≥ 80 | Severe |
+
+**Icing type classification** (physical, independent of index severity):
+
+| Temperature range | Type | Physics |
+|-------------------|------|---------|
+| −3°C to 0°C | Clear ice | Supercooled water freezes on contact as clear, dense glaze. Most dangerous — adds weight, changes airfoil shape. |
+| −10°C to −3°C | Mixed | Mix of supercooled droplets and ice crystals. Irregular accretion. |
+| < −10°C | Rime | Smaller droplets freeze instantly as rough, opaque ice. Less aerodynamic penalty than clear. |
+
+**Severity modifiers:**
+- RH > 95% → upgrade by one level (more moisture = faster accretion)
+- Precipitable water > 25mm → upgrade light→moderate (moisture-rich column)
+
+**Advantages over previous wet-bulb band method:** continuous severity, physically peaks at −7°C (matches observations), inherently cloud-aware, accounts for moisture content and cloud type.
+
+**Historical note:** An earlier implementation used fixed wet-bulb temperature bands (−3 to 0°C = SEVERE, −10 to −3°C = MODERATE, etc.). This was replaced by the Ogimet index because the fixed bands over-flagged near 0°C and under-flagged in the −5°C to −10°C zone where observed SLW content actually peaks.
 
 ### 3.3 Convective Assessment
 
@@ -254,28 +256,28 @@ Shows data source for each key quantity per model. **Bold** = derived when API f
 |----------|-----|-------|------|---------|------|-------------------|
 | T at levels | API | API | API | API | API | — |
 | RH at levels | API | API | API | API | API | — |
-| Dewpoint at levels | API | **derived** | API | **derived** | **derived** | Magnus formula from T + RH |
+| Dewpoint at levels | API | API | API | API | API | — |
 | Wind at levels | API | API | API | API | API | — |
 | Geopotential height | API | API | API | API | API | — |
-| Omega (ω) | API | API | **n/a** | **n/a** | **n/a** | Not derivable. Vertical motion analysis unavailable for these models. |
+| Omega (ω) | API | API | **n/a** | **n/a** | API | Not derivable. Vertical motion analysis unavailable for ICON and MétéoFr. |
 | Cloud cover (total) | API | API | API | API | API | — |
-| Cloud cover low/mid/high | API | **derivable** | API | API | API | From sounding cloud layers mapped to ICAO bands |
-| Freezing level | API | **derived** | API | **derived** | **derived** | Linear interpolation of T profile through 0°C |
-| CAPE | API | **derived** | API | **derived** | **derived** | `mpcalc.cape_cin()` from sounding profile |
+| Cloud cover low/mid/high | API | API | API | API | API | — |
+| Freezing level | API | **derived** | API | **derived** | API | Linear interpolation of T profile through 0°C |
+| CAPE | API | API | API | API | API | — |
 | CIN | **derived** | **derived** | **derived** | **derived** | **derived** | Always from `mpcalc.cape_cin()` (API CAPE is single value, CIN requires profile) |
-| Visibility | API | **n/a** | API | **n/a** | **n/a** | Not derivable from standard pressure levels |
-| Precipitation probability | API | **n/a** | **n/a** | **n/a** | **n/a** | Requires ensemble data. GFS-only. |
+| Visibility | API | **n/a** | API | **n/a** | API | Not derivable from standard pressure levels |
+| Precipitation probability | API | API | **n/a** | **n/a** | **n/a** | Requires ensemble data. GFS and ECMWF only. |
 | Water vapor density | **derivable** | **derivable** | **derivable** | **derivable** | **derivable** | `ρv = e_sat(Td) / (Rv × T_K)` where Rv = 461.5 J/(kg·K) |
 | Mixing ratio | **derivable** | **derivable** | **derivable** | **derivable** | **derivable** | `mpcalc.mixing_ratio_from_relative_humidity(P, T, RH)` |
 
 ### 4.2 Key Derivation Methods
 
-**Dewpoint from T + RH** (Magnus formula, used in `prepare.py`):
+**Dewpoint from T + RH** (Magnus formula, used in `open_meteo.py` for fallback derivation):
 ```
-γ = (17.27 × T) / (237.7 + T) + ln(RH / 100)
-Td = (237.7 × γ) / (17.27 − γ)
+γ = ln(RH / 100) + (b × T) / (c + T)
+Td = (c × γ) / (b − γ)
 ```
-Accurate to ~0.2°C for typical atmospheric conditions.
+Where b = 17.67, c = 243.5°C (Alduchov & Eskridge, 1996). Accurate to ~0.2°C for typical atmospheric conditions. Note: with the ECMWF, Météo-France, and UKMO API updates (Feb 2026), dewpoint is now available directly at all pressure levels for all models, so this derivation is only used as a fallback when the API field is missing.
 
 **Water vapor density** (ideal gas law, needed for Ogimet convective icing index):
 ```
@@ -284,30 +286,31 @@ e = saturation_vapor_pressure(Td)    # MetPy: mpcalc.saturation_vapor_pressure()
 ```
 At 20°C saturated: ρv ≈ 17.3 g/m³ (the constant in the Ogimet formula).
 
-**CAPE from sounding** (when not in API):
+**CAPE from sounding** (CIN always derived; CAPE used as cross-check when API value available):
 ```python
 parcel = mpcalc.parcel_profile(P, T_sfc, Td_sfc)
 cape, cin = mpcalc.cape_cin(P, T, Td, parcel)
 ```
-Integrates positive buoyancy between LFC and EL. Result matches API CAPE within ~10% for well-resolved soundings.
+Integrates positive buoyancy between LFC and EL. Note: as of Feb 2026, all five models now provide CAPE via API. CIN is always derived from the sounding profile since the API only provides scalar CAPE.
 
-**Cloud cover per ICAO band** (when low/mid/high not in API):
-Sounding-derived cloud layers are mapped to ICAO bands (low < 6500ft, mid 6500–20000ft, high > 20000ft). Cloud coverage classified from dewpoint depression. Coarser than NWP parameterization but provides a consistent fallback.
+**Cloud cover per ICAO band** (fallback when low/mid/high not in API):
+Sounding-derived cloud layers are mapped to ICAO bands (low < 6500ft, mid 6500–20000ft, high > 20000ft). Cloud coverage classified from dewpoint depression. Coarser than NWP parameterization but provides a consistent fallback. Note: as of Feb 2026, all five models now provide `cloud_cover_low/mid/high` directly via API, so this fallback is rarely needed.
 
 ### 4.3 What Cannot Be Derived
 
 | Quantity | Why | Impact |
 |----------|-----|--------|
-| Omega (ω) for ICON/MétéoFr/UKMO | Requires model dynamics, not recoverable from T/wind alone | No vertical motion classification or CAT risk for these models |
-| Visibility for ECMWF/MétéoFr/UKMO | Parameterized from sub-grid microphysics not available at pressure levels | VFR/IFR assessment limited to cloud cover proxy |
-| Precipitation probability | Requires ensemble spread data | Only available from GFS ensemble |
+| Omega (ω) for ICON/MétéoFr | Requires model dynamics, not recoverable from T/wind alone | No vertical motion classification or CAT risk for these models |
+| Visibility for ECMWF/MétéoFr | Parameterized from sub-grid microphysics not available at pressure levels | VFR/IFR assessment limited to cloud cover proxy for these models |
+| Freezing level for ECMWF/MétéoFr | Not in API | Derived via linear interpolation of T profile through 0°C |
+| Precipitation probability | Requires ensemble spread data | Only available from GFS and ECMWF |
 | Stratiform vs. convective cloud split | Not in any Open-Meteo API | Must approximate for Ogimet icing index (see §4.4) |
 
 ### 4.4 Approximating Cloud Type Split for Icing Index
 
-The Ogimet formula requires separate stratiform and convective cloud cover percentages. No model provides this directly via Open-Meteo. Proposed approximation:
+The Ogimet formula requires separate stratiform and convective cloud cover percentages. No model provides this directly via Open-Meteo. Current approximation (implemented in `icing.py`):
 
-1. **CAPE available** (GFS, ICON, or MetPy-derived for all):
+1. **CAPE-based split** (CAPE now available from API for all models):
    - CAPE < 100 J/kg → 100% layered, 0% convective
    - CAPE 100–500 → 80% layered, 20% convective
    - CAPE 500–1500 → 50% layered, 50% convective
@@ -334,9 +337,9 @@ The Ogimet formula requires separate stratiform and convective cloud cover perce
 
 **Fix direction:** When cloud_cover > 50% and sounding says clear, label should defer to NWP (e.g. "Overcast" or "Cloudy") rather than "Clear". The sounding may genuinely miss clouds at its coarse resolution.
 
-### Icing severity bands vs. observed climatology
+### ~~Icing severity bands vs. observed climatology~~ (Resolved)
 
-Current wet-bulb bands classify −3°C to 0°C as SEVERE, but observed maximum supercooled liquid water content peaks at −5°C to −10°C. The Ogimet index parabola peaking at −7°C better matches observations. The current bands tend to over-flag near 0°C and under-flag in the −5°C to −10°C zone.
+Resolved by switching to the Ogimet continuous icing index (see §3.2). The previous wet-bulb bands classified −3°C to 0°C as SEVERE, but observed maximum supercooled liquid water content peaks at −5°C to −10°C. The Ogimet index parabola peaking at −7°C matches observations.
 
 ---
 
@@ -356,7 +359,7 @@ Current wet-bulb bands classify −3°C to 0°C as SEVERE, but observed maximum 
 | `k_index()` | thermo | K-Index thunderstorm potential |
 | `total_totals_index()` | thermo | Total Totals stability index |
 | `precipitable_water()` | thermo | Column precipitable water |
-| `wet_bulb_temperature()` | thermo | Wet-bulb T (icing classifier) |
+| `wet_bulb_temperature()` | thermo | Wet-bulb T (stored per level, used for diagnostics) |
 | `equivalent_potential_temperature()` | thermo | θ_e (air mass tracer) |
 | `relative_humidity_from_dewpoint()` | thermo | RH from T and Td |
 | `potential_temperature()` | thermo | θ for stability/Ri calculation |
