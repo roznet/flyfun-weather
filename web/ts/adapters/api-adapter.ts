@@ -244,6 +244,24 @@ export function routeSkewtUrl(
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/skewt/route/${pointIndex}/${encodeURIComponent(model)}`;
 }
 
+export function hodographUrl(
+  flightId: string,
+  timestamp: string,
+  icao: string,
+  model: string,
+): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/hodograph/${encodeURIComponent(icao)}/${encodeURIComponent(model)}`;
+}
+
+export function routeHodographUrl(
+  flightId: string,
+  timestamp: string,
+  pointIndex: number,
+  model: string,
+): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/hodograph/route/${pointIndex}/${encodeURIComponent(model)}`;
+}
+
 export function digestUrl(flightId: string, timestamp: string): string {
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest`;
 }

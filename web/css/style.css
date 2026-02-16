@@ -716,7 +716,26 @@ label {
 }
 
 .skewt-card-large {
-  width: 650px;
+  width: 900px;
+  max-width: 100%;
+}
+
+.skewt-pair {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.skewt-pair .skewt-img {
+  flex: 1 1 70%;
+  min-width: 0;
+}
+
+.skewt-pair .skewt-hodo-img {
+  flex: 0 0 auto;
+  width: 30%;
+  border-radius: var(--radius);
+  cursor: pointer;
 }
 
 /* --- Model toggle --- */
@@ -1908,6 +1927,8 @@ label {
   .flight-header { flex-wrap: wrap; }
   .briefing-toolbar { flex-direction: column; align-items: stretch; }
   .skewt-card { width: 220px; }
+  .skewt-pair { flex-direction: column; }
+  .skewt-pair .skewt-hodo-img { width: 60%; }
   .metric-popup { max-width: 95vw; padding: 1rem; }
   .display-mode-toggle { font-size: 0.75rem; }
   .advisory-grid { grid-template-columns: 1fr; }
