@@ -1,6 +1,6 @@
 /** Preferences adapter — fetch, save, and clear autorouter credentials. */
 
-import { apiFetch } from '../utils';
+import { apiFetch, type ModelCatalogEntry } from '../utils';
 import type { AdvisoryParameterDef, AdvisoryCatalogEntry } from '../types/advisories';
 
 export type { AdvisoryParameterDef, AdvisoryCatalogEntry };
@@ -58,6 +58,10 @@ export async function clearAutorouterCreds(): Promise<void> {
 
 export async function fetchAdvisoryCatalog(): Promise<AdvisoryCatalogEntry[]> {
   return apiFetch<AdvisoryCatalogEntry[]>('/user/preferences/advisories/catalog');
+}
+
+export async function fetchModelCatalog(): Promise<ModelCatalogEntry[]> {
+  return apiFetch<ModelCatalogEntry[]>('/models');
 }
 
 // --- Usage ---

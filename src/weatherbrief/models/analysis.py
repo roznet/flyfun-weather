@@ -133,6 +133,7 @@ class ModelSource(str, Enum):
     ICON = "icon"
     UKMO = "ukmo"
     METEOFRANCE = "meteofrance"
+    GEM = "gem"
 
 
 class PressureLevelData(BaseModel):

@@ -1,13 +1,14 @@
 /** Settings page entry point — tabbed preferences with advisory configuration. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { renderUserInfo, ALL_MODELS, DEFAULT_MODELS, STATUS_DISMISS_MS, MODEL_DISPLAY_NAMES } from './utils';
+import { renderUserInfo, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
 import {
   fetchPreferences,
   savePreferences,
   clearAutorouterCreds,
   fetchUsageSummary,
   fetchAdvisoryCatalog,
+  fetchModelCatalog,
   type PreferencesResponse,
   type AdvisoryPreferences,
   type AdvisoryCatalogEntry,
@@ -28,13 +29,14 @@ const CATEGORY_ORDER: [string, string][] = [
 
 let catalog: AdvisoryCatalogEntry[] = [];
 
-/** Generate model checkboxes from the shared ALL_MODELS config. */
+/** Generate model checkboxes from the model catalog. */
 function renderModelCheckboxes(): void {
   const container = document.getElementById('model-checkboxes');
   if (!container) return;
-  container.innerHTML = ALL_MODELS.map(m => {
-    const label = MODEL_DISPLAY_NAMES[m] ?? m.toUpperCase();
-    const checked = DEFAULT_MODELS.includes(m) ? ' checked' : '';
+  const defaults = defaultModelKeys();
+  container.innerHTML = allModelKeys().map(m => {
+    const label = modelLabel(m);
+    const checked = defaults.includes(m) ? ' checked' : '';
     return `<label class="checkbox-label"><input type="checkbox" id="model-${m}"${checked}> ${label}</label>`;
   }).join('');
 }
@@ -46,15 +48,14 @@ async function init(): Promise<void> {
     return;
   }
   renderUserInfo(user);
-  renderModelCheckboxes();
 
   // Tab switching
   for (const btn of document.querySelectorAll<HTMLButtonElement>('.tab-btn')) {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab!));
   }
 
-  // Load preferences and catalog in parallel
-  const [prefs, catalogResult] = await Promise.all([
+  // Load preferences, advisory catalog, and model catalog in parallel
+  const [prefs, catalogResult, modelCatalog] = await Promise.all([
     fetchPreferences().catch(err => {
       showStatus(`Failed to load preferences: ${err}`, true);
       return null;
@@ -63,9 +64,15 @@ async function init(): Promise<void> {
       showStatus(`Failed to load advisory catalog: ${err}`, true);
       return [] as AdvisoryCatalogEntry[];
     }),
+    fetchModelCatalog().catch(err => {
+      showStatus(`Failed to load model catalog: ${err}`, true);
+      return [];
+    }),
   ]);
 
   catalog = catalogResult;
+  initModelCatalog(modelCatalog);
+  renderModelCheckboxes();
 
   if (prefs) {
     populateForm(prefs);
@@ -118,8 +125,8 @@ function populateForm(prefs: PreferencesResponse): void {
   }
 
   // Models checkboxes
-  const selectedModels = d.models || DEFAULT_MODELS;
-  for (const m of ALL_MODELS) {
+  const selectedModels = d.models || defaultModelKeys();
+  for (const m of allModelKeys()) {
     const cb = document.getElementById(`model-${m}`) as HTMLInputElement;
     if (cb) cb.checked = selectedModels.includes(m);
   }
@@ -268,7 +275,7 @@ async function handleSave(): Promise<void> {
   const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value, 10);
 
   const models: string[] = [];
-  for (const m of ALL_MODELS) {
+  for (const m of allModelKeys()) {
     const cb = document.getElementById(`model-${m}`) as HTMLInputElement;
     if (cb?.checked) models.push(m);
   }

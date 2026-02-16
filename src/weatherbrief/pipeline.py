@@ -43,7 +43,7 @@ from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_cross_section,
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODELS = [ModelSource.GFS, ModelSource.ECMWF, ModelSource.ICON]
+DEFAULT_MODELS = [ModelSource(k) for k, v in MODEL_ENDPOINTS.items() if v.default]
 
 
 @dataclass

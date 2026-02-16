@@ -62,25 +62,28 @@ export function formatAlt(ft: number): string {
   return `${ft}ft`;
 }
 
-/** NWP model display names. */
-export const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  gfs: 'GFS',
-  ecmwf: 'ECMWF',
-  icon: 'ICON',
-  ukmo: 'UKMO',
-  meteofrance: 'Météo-France',
-};
+// --- Model catalog (populated from /api/models at startup) ---
+
+export interface ModelCatalogEntry { key: string; name: string; default: boolean; }
+
+let _catalog: ModelCatalogEntry[] = [];
+
+export function initModelCatalog(catalog: ModelCatalogEntry[]): void {
+  _catalog = catalog;
+}
+
+export function allModelKeys(): string[] {
+  return _catalog.map(m => m.key);
+}
+
+export function defaultModelKeys(): string[] {
+  return _catalog.filter(m => m.default).map(m => m.key);
+}
 
 /** Get display name for a model key (falls back to uppercase). */
 export function modelLabel(model: string): string {
-  return MODEL_DISPLAY_NAMES[model] ?? model.toUpperCase();
+  return _catalog.find(m => m.key === model)?.name ?? model.toUpperCase();
 }
-
-/** All available NWP model keys. */
-export const ALL_MODELS = ['gfs', 'ecmwf', 'icon', 'ukmo', 'meteofrance'] as const;
-
-/** Default models for new users. */
-export const DEFAULT_MODELS = ['gfs', 'ecmwf', 'icon'];
 
 /** Auto-dismiss timeout for status messages (ms). */
 export const STATUS_DISMISS_MS = 3000;
