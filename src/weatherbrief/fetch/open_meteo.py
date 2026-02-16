@@ -42,8 +42,8 @@ def magnus_dewpoint(temp_c: float, rh_pct: float) -> float:
     return (MAGNUS_C * gamma) / (MAGNUS_B - gamma)
 
 
-_MAX_RETRIES = 3
-_RETRY_BACKOFF = [5, 15, 30]  # seconds
+_MAX_RETRIES = 4
+_RETRY_BACKOFF = [10, 30, 60, 90]  # seconds — generous for expanded pressure levels
 
 
 class OpenMeteoClient:
