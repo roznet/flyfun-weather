@@ -7,7 +7,7 @@ import json
 import re
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,7 @@ from weatherbrief.storage.flights import (
 
 router = APIRouter(prefix="/flights", tags=["flights"])
 
-_ICAO_PATTERN = re.compile(r"^[A-Z]{2,4}$")
+_ICAO_PATTERN = re.compile(r"^[A-Z]{4}$")
 
 
 class CreateFlightRequest(BaseModel):
@@ -62,7 +62,7 @@ class CreateFlightRequest(BaseModel):
         for wp in v:
             if not _ICAO_PATTERN.match(wp.upper()):
                 raise ValueError(
-                    f"Invalid waypoint '{wp}': must be 2-4 uppercase letters"
+                    f"Invalid waypoint '{wp}': must be a 4-letter ICAO code"
                 )
         return v
 
@@ -110,6 +110,7 @@ def list_all_flights(
 @router.post("", response_model=FlightResponse, status_code=201)
 def create_flight(
     req: CreateFlightRequest,
+    request: Request,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -128,6 +129,17 @@ def create_flight(
     # Derive route_name from waypoints if not provided
     route_name = req.route_name or "_".join(w.lower() for w in req.waypoints)
     waypoints = [w.upper().strip() for w in req.waypoints] if req.waypoints else []
+
+    # Validate waypoints exist in the airport database
+    if waypoints:
+        db_path = getattr(request.app.state, "db_path", "")
+        if db_path:
+            from weatherbrief.airports import resolve_waypoints
+
+            try:
+                resolve_waypoints(waypoints, db_path)
+            except KeyError as exc:
+                raise HTTPException(status_code=422, detail=exc.args[0])
 
     # Apply user defaults for any field left as None
     defaults = load_user_defaults(db, user_id)
