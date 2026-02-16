@@ -56,6 +56,28 @@
 
     .muted { color: #888; font-style: italic; }
 
+    /* Airport conditions */
+    .airport-cards { display: flex; gap: 1em; margin-bottom: 1em; }
+    .airport-card { flex: 1; border: 1px solid #ddd; border-radius: 4px; padding: 0.5em; }
+    .airport-card-header { font-weight: 600; font-size: 10pt; margin-bottom: 0.3em; border-bottom: 1px solid #eee; padding-bottom: 0.2em; }
+    .airport-conditions-table { font-size: 9pt; }
+    .airport-conditions-table td { padding: 0.15em 0.4em; text-align: left; border-bottom: 1px solid #f0f0f0; }
+    .flight-cat { font-weight: 600; display: inline-block; padding: 0 0.3em; border-radius: 2px; }
+    .cat-vfr { color: #0f5132; }
+    .cat-mvfr { color: #b45309; }
+    .cat-ifr { color: #dc2626; }
+    .cat-lifr { color: #7f1d1d; background: #fecaca; }
+
+    /* Advisories table */
+    .adv-status { font-weight: 600; text-transform: uppercase; }
+    .adv-green { color: #0f5132; }
+    .adv-amber { color: #b45309; }
+    .adv-red { color: #dc2626; }
+    .adv-unavailable { color: #888; }
+    .adv-table td.adv-name { text-align: left; font-weight: 500; }
+    .adv-table td.adv-detail { text-align: left; font-size: 9pt; color: #555; }
+    .adv-model-cell { font-size: 8.5pt; }
+
     /* Print helpers */
     @media print {
       body { padding: 0; }
@@ -85,6 +107,70 @@
   <div class="assessment assessment-{{ pack.assessment|lower }}">
     {{ pack.assessment }}{% if pack.assessment_reason %} &mdash; {{ pack.assessment_reason }}{% endif %}
   </div>
+  {% endif %}
+
+  <!-- Airport Conditions -->
+  {% if airport_conditions %}
+  <div class="airport-cards">
+    {% for role, apt in [('Departure', airport_conditions.departure), ('Arrival', airport_conditions.arrival)] %}
+    {% if apt and apt.conditions %}
+    <div class="airport-card">
+      <div class="airport-card-header">{{ role }}: {{ apt.icao }}</div>
+      <table class="airport-conditions-table">
+        <tbody>
+          {% for cond in apt.conditions %}
+          {% set cat = cond.flight_category|upper %}
+          {% set cat_cls = 'cat-' + cond.flight_category %}
+          <tr>
+            <td>{{ cond.model|upper }}</td>
+            <td><span class="flight-cat {{ cat_cls }}">{{ cat }}</span></td>
+            <td>{% if cond.visibility_sm is not none %}vis {{ cond.visibility_sm }}sm{% endif %}</td>
+            <td>{% if cond.ceiling_ft is not none %}ceil {{ cond.ceiling_ft|int }}ft{% else %}CLR{% endif %}</td>
+            <td>
+              {% if cond.wind_speed_kt is not none and cond.wind_direction_deg is not none %}
+                {{ "%03d"|format((cond.wind_direction_deg / 10)|round(0, 'common') * 10) }}@{{ cond.wind_speed_kt|int }}{% if cond.wind_gust_kt %}G{{ cond.wind_gust_kt|int }}{% endif %}kt
+              {% endif %}
+              {% if cond.best_runway %} RW{{ cond.best_runway.runway_id }}{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- Advisories -->
+  {% if advisories %}
+  <h2>Route Advisories</h2>
+  <table class="adv-table">
+    <thead>
+      <tr>
+        <th style="text-align:left;">Status</th>
+        <th style="text-align:left;">Advisory</th>
+        <th style="text-align:left;">Detail</th>
+        {% if advisories[0].per_model %}
+        {% for m in advisories[0].per_model %}
+        <th>{{ m.model|upper }}</th>
+        {% endfor %}
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for adv in advisories %}
+      <tr>
+        <td class="adv-status adv-{{ adv.aggregate_status }}">{{ adv.aggregate_status|upper }}</td>
+        <td class="adv-name">{{ adv.name }}</td>
+        <td class="adv-detail">{{ adv.aggregate_detail }}</td>
+        {% for m in adv.per_model %}
+        <td class="adv-model-cell adv-{{ m.status }}">{{ m.status|upper }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   {% endif %}
 
   <!-- Synopsis -->

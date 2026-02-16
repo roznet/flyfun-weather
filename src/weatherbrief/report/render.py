@@ -133,6 +133,24 @@ def _build_template_context(
                 "divergences": divergences,
             })
 
+    # Route advisories (advisory results + catalog + airport conditions)
+    advisories_data = _load_json(pack_dir / "route_advisories.json")
+    advisories: list[dict] = []
+    catalog: dict[str, dict] = {}
+    airport_conditions: dict | None = None
+    if advisories_data:
+        catalog = {e["id"]: e for e in advisories_data.get("catalog", [])}
+        for adv in advisories_data.get("advisories", []):
+            entry = catalog.get(adv["advisory_id"], {})
+            advisories.append({
+                "name": entry.get("name", adv["advisory_id"]),
+                "category": entry.get("category", ""),
+                "aggregate_status": adv["aggregate_status"],
+                "aggregate_detail": adv.get("aggregate_detail", ""),
+                "per_model": adv.get("per_model", []),
+            })
+        airport_conditions = advisories_data.get("airport_conditions")
+
     return {
         "flight": flight,
         "pack": pack,
@@ -142,6 +160,8 @@ def _build_template_context(
         "route_str": route_str,
         "alt_str": alt_str,
         "comparison_waypoints": comparison_waypoints,
+        "advisories": advisories,
+        "airport_conditions": airport_conditions,
     }
 
 

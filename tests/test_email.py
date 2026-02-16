@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from email import message_from_bytes
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +15,7 @@ from weatherbrief.notify.email import (
     _build_html_body,
     _build_plain_body,
     _build_subject,
+    _render_advisories_html,
     send_briefing_email,
 )
 
@@ -61,11 +61,8 @@ def smtp_config():
 
 
 @pytest.fixture
-def pack_dir(tmp_path):
-    """Pack directory with digest.json."""
-    pack = tmp_path / "pack"
-    pack.mkdir()
-    digest = {
+def sample_digest():
+    return {
         "assessment": "GREEN",
         "assessment_reason": "Conditions favorable",
         "synoptic": "High pressure dominant.",
@@ -78,7 +75,37 @@ def pack_dir(tmp_path):
         "trend": "Stable.",
         "watch_items": "Monitor EGTK fog.",
     }
-    (pack / "digest.json").write_text(json.dumps(digest))
+
+
+@pytest.fixture
+def sample_advisories():
+    return {
+        "advisories": [
+            {
+                "advisory_id": "icing_escape",
+                "aggregate_status": "green",
+                "aggregate_detail": "Freezing level above cruise",
+            },
+            {
+                "advisory_id": "vmc_cruise",
+                "aggregate_status": "amber",
+                "aggregate_detail": "Cloud along 30% of route",
+            },
+        ],
+        "catalog": [
+            {"id": "icing_escape", "name": "Icing Escape"},
+            {"id": "vmc_cruise", "name": "VMC at Cruise"},
+        ],
+    }
+
+
+@pytest.fixture
+def pack_dir(tmp_path, sample_digest, sample_advisories):
+    """Pack directory with digest.json and route_advisories.json."""
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    (pack / "digest.json").write_text(json.dumps(sample_digest))
+    (pack / "route_advisories.json").write_text(json.dumps(sample_advisories))
     return pack
 
 
@@ -132,38 +159,69 @@ class TestBuildSubject:
 class TestBuildBody:
     def test_html_body_contains_key_info(self, sample_flight, sample_pack):
         digest = {"assessment": "GREEN", "assessment_reason": "OK", "synoptic": "High pressure.", "watch_items": "Fog."}
-        html = _build_html_body(sample_flight, sample_pack, digest)
-        assert "EGTK" in html
-        assert "High pressure" in html
-        assert "Fog" in html
-        assert "GREEN" in html
+        body = _build_html_body(sample_flight, sample_pack, digest, None, "https://weather.example.com/briefing.html?flight=test")
+        assert "EGTK" in body
+        assert "High pressure" in body
+        assert "Fog" in body
+        assert "GREEN" in body
+        assert "View Full Briefing" in body
+
+    def test_html_body_contains_advisories(self, sample_flight, sample_pack, sample_advisories):
+        body = _build_html_body(sample_flight, sample_pack, None, sample_advisories, "")
+        assert "VMC at Cruise" in body
+        assert "AMBER" in body
+
+    def test_html_body_contains_briefing_link(self, sample_flight, sample_pack):
+        link = "https://weather.test.com/briefing.html?flight=egtk_lsgs-2026-02-21"
+        body = _build_html_body(sample_flight, sample_pack, None, None, link)
+        assert link in body
+        assert "View Full Briefing" in body
 
     def test_plain_body_contains_key_info(self, sample_flight, sample_pack):
         digest = {"assessment": "GREEN", "assessment_reason": "OK", "synoptic": "High pressure.", "watch_items": "Fog."}
-        text = _build_plain_body(sample_flight, sample_pack, digest)
+        text = _build_plain_body(sample_flight, sample_pack, digest, None, "https://example.com")
         assert "EGTK" in text
         assert "High pressure" in text
-        assert "PDF report" in text
+        assert "https://example.com" in text
+
+    def test_plain_body_contains_advisories(self, sample_flight, sample_pack, sample_advisories):
+        text = _build_plain_body(sample_flight, sample_pack, None, sample_advisories, "")
+        assert "VMC at Cruise" in text
+        assert "AMBER" in text
 
     def test_body_without_digest(self, sample_flight, sample_pack):
-        html = _build_html_body(sample_flight, sample_pack, None)
-        assert "EGTK" in html
-        text = _build_plain_body(sample_flight, sample_pack, None)
+        body = _build_html_body(sample_flight, sample_pack, None, None, "")
+        assert "EGTK" in body
+        text = _build_plain_body(sample_flight, sample_pack, None, None, "")
         assert "EGTK" in text
+
+
+class TestRenderAdvisories:
+    def test_all_green(self):
+        data = {
+            "advisories": [{"advisory_id": "test", "aggregate_status": "green", "per_model": []}],
+            "catalog": [{"id": "test", "name": "Test Advisory"}],
+        }
+        result = _render_advisories_html(data)
+        assert "Test Advisory" in result
+        assert "GREEN" in result
+
+    def test_amber_shown(self, sample_advisories):
+        result = _render_advisories_html(sample_advisories)
+        assert "VMC at Cruise" in result
+        assert "AMBER" in result
+        # All advisories shown (not just flagged)
+        assert "Icing Escape" in result
 
 
 class TestSendBriefingEmail:
     def test_send_email_no_recipients_raises(self, sample_flight, sample_pack, pack_dir, smtp_config):
         with pytest.raises(ValueError, match="No email recipients"):
-            send_briefing_email([], sample_flight, sample_pack, pack_dir, smtp_config)
+            send_briefing_email([], sample_flight, sample_pack, pack_dir, smtp_config=smtp_config)
 
     def test_send_email_calls_smtp(self, sample_flight, sample_pack, pack_dir, smtp_config):
         """Verify SMTP send_message is called with correct structure."""
-        mock_pdf = b"%PDF-fake"
-        with (
-            patch("weatherbrief.notify.email.smtplib.SMTP") as mock_smtp_cls,
-            patch("weatherbrief.report.render.render_pdf", return_value=mock_pdf),
-        ):
+        with patch("weatherbrief.notify.email.smtplib.SMTP") as mock_smtp_cls:
             mock_server = MagicMock()
             mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
             mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
@@ -173,7 +231,8 @@ class TestSendBriefingEmail:
                 sample_flight,
                 sample_pack,
                 pack_dir,
-                smtp_config,
+                base_url="https://weather.test.com",
+                smtp_config=smtp_config,
             )
 
             mock_smtp_cls.assert_called_once_with("smtp.example.com", 587)
@@ -186,3 +245,26 @@ class TestSendBriefingEmail:
             assert "GREEN" in msg["Subject"]
             assert msg["To"] == "pilot@test.com"
             assert msg["From"] == "briefing@example.com"
+
+    def test_send_email_no_pdf_attachment(self, sample_flight, sample_pack, pack_dir, smtp_config):
+        """Email should NOT have a PDF attachment (lightweight HTML only)."""
+        with patch("weatherbrief.notify.email.smtplib.SMTP") as mock_smtp_cls:
+            mock_server = MagicMock()
+            mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
+            mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+            send_briefing_email(
+                ["pilot@test.com"],
+                sample_flight,
+                sample_pack,
+                pack_dir,
+                smtp_config=smtp_config,
+            )
+
+            msg = mock_server.send_message.call_args[0][0]
+            # multipart/alternative with text + html, no application/pdf
+            assert msg.get_content_type() == "multipart/alternative"
+            subtypes = [p.get_content_type() for p in msg.get_payload()]
+            assert "text/plain" in subtypes
+            assert "text/html" in subtypes
+            assert "application/pdf" not in subtypes
