@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeatherBrief — Help</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <h1>Help &amp; Guide</h1>
+      <div class="header-right">
+        <a href="/" class="btn-settings">Flights</a>
+        <a href="/settings.html" class="btn-settings">Settings</a>
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
+
+    <!-- About -->
+    <div class="help-section">
+      <h3>About WeatherBrief</h3>
+      <p>
+        WeatherBrief is an exploratory weather briefing tool for general aviation pilots.
+        It fetches forecasts from multiple numerical weather prediction (NWP) models and
+        runs analysis routines to produce advisories, cross-sections, soundings, and a
+        synthesized overview of conditions along your planned route.
+      </p>
+      <div class="help-tip">
+        WeatherBrief is designed for <strong>multi-model comparison</strong> &mdash; instead of
+        relying on a single forecast, it shows you where models agree and where they diverge,
+        so you can gauge confidence in the forecast.
+      </div>
+    </div>
+
+    <!-- Getting Started -->
+    <div class="help-section">
+      <h3>Getting Started</h3>
+      <ol>
+        <li><strong>Create a flight</strong> on the Flights page by entering your waypoints (ICAO airport codes), date, time, altitude, and ceiling.</li>
+        <li><strong>Open the briefing</strong> by clicking the flight card. WeatherBrief will fetch forecast data from each enabled model, run thermodynamic analysis, compute advisories, and generate a synopsis.</li>
+        <li><strong>Refresh</strong> the briefing at any time to pull the latest available forecasts. Each refresh creates a new snapshot you can compare via the history dropdown.</li>
+      </ol>
+      <div class="help-tip">
+        You can configure which NWP models to use and tune advisory thresholds in
+        <a href="/settings.html">Settings</a>.
+      </div>
+    </div>
+
+    <!-- The Briefing Page -->
+    <div class="help-section">
+      <h3>The Briefing Page</h3>
+      <p>The briefing is organized into collapsible sections. Here's what each one shows:</p>
+
+      <h4>Route Advisories</h4>
+      <p>
+        Advisories flag hazardous conditions along your route. Each advisory is rated
+        <span class="badge badge-green">GREEN</span>,
+        <span class="badge badge-amber">AMBER</span>, or
+        <span class="badge badge-red">RED</span>
+        based on configurable thresholds. Advisories are computed <em>per-model</em>, so you
+        can see whether multiple models agree on a hazard or if only one flags it.
+      </p>
+      <p>Categories include icing, turbulence, cloud/visibility, convective activity, and airport conditions.</p>
+
+      <h4>Synopsis</h4>
+      <p>
+        An LLM-generated plain-language overview of the weather situation along your route.
+        It summarizes the key findings from the numerical analysis in a concise narrative.
+      </p>
+
+      <h4>GRAMET Cross-Section</h4>
+      <p>
+        A vertical cross-section chart from <a href="https://www.autorouter.aero" target="_blank" rel="noopener">autorouter.aero</a>
+        showing cloud, wind, temperature, and turbulence along your route. This requires
+        Autorouter credentials configured in <a href="/settings.html">Settings</a>.
+      </p>
+
+      <h4>Cross-Section Visualization</h4>
+      <p>
+        An interactive canvas-based vertical cross-section built from the NWP model data.
+        It renders multiple layers (clouds, icing, wind, humidity, etc.) that you can toggle
+        on and off using the control panel.
+      </p>
+      <ul>
+        <li>Use the <strong>model selector</strong> to switch between forecast models.</li>
+        <li><strong>Hover</strong> over the canvas to see values at a specific point.</li>
+        <li><strong>Click</strong> to pin the readout at a location.</li>
+        <li>Toggle individual <strong>layers</strong> to isolate specific phenomena.</li>
+      </ul>
+
+      <h4>Skew-T Soundings</h4>
+      <p>
+        Skew-T / Log-P diagrams for each waypoint, generated from the model data.
+        These show the vertical temperature and dewpoint profiles &mdash; essential for
+        assessing stability, cloud bases, freezing levels, and convective potential.
+        Use the model dropdown to compare soundings across models.
+      </p>
+
+      <h4>Route Profile</h4>
+      <p>
+        A slider that lets you move along the route and view a Skew-T sounding and
+        key metrics at any interpolated point, not just the waypoints. Useful for
+        examining conditions between airports.
+      </p>
+
+      <h4>Sounding Analysis</h4>
+      <p>
+        A table of thermodynamic indices derived from each sounding: CAPE, CIN, lifted index,
+        freezing level, cloud layers, icing zones, and more. Values are shown per-model so
+        you can spot where models agree or diverge.
+      </p>
+
+      <h4>Model Comparison</h4>
+      <p>
+        A divergence analysis that scores how well the models agree on key variables at each
+        waypoint. High agreement gives confidence in the forecast; poor agreement signals
+        uncertainty.
+      </p>
+    </div>
+
+    <!-- Info buttons -->
+    <div class="help-section">
+      <h3>Info Buttons</h3>
+      <p>
+        Throughout the briefing you'll see small <strong>(i)</strong> buttons next to metrics
+        and layer names. Clicking one opens a popup explaining what the metric measures,
+        what the thresholds mean, and how to interpret the values in a flying context.
+      </p>
+    </div>
+
+    <!-- Settings -->
+    <div class="help-section">
+      <h3>Settings</h3>
+      <ul>
+        <li><strong>Forecast Models</strong> &mdash; choose which NWP models are fetched on each briefing refresh.</li>
+        <li><strong>Advisory Parameters</strong> &mdash; enable/disable individual advisories and fine-tune their thresholds (e.g. icing temperature band, crosswind limits).</li>
+        <li><strong>Flight Defaults</strong> &mdash; set default cruise altitude and ceiling for new flights.</li>
+        <li><strong>Autorouter Credentials</strong> &mdash; enter your autorouter.aero username and password to enable GRAMET charts. Credentials are encrypted at rest.</li>
+      </ul>
+    </div>
+
+    <!-- Data Sources -->
+    <div class="help-section">
+      <h3>Data Sources &amp; Models</h3>
+      <p>WeatherBrief fetches data from the following NWP models:</p>
+      <table class="help-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Provider</th>
+            <th>Coverage</th>
+            <th>Resolution</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>GFS</td><td>NOAA (US)</td><td>Global</td><td>0.25&deg;</td></tr>
+          <tr><td>ICON-EU</td><td>DWD (Germany)</td><td>Europe</td><td>0.0625&deg;</td></tr>
+          <tr><td>AROME</td><td>M&eacute;t&eacute;o-France</td><td>Western Europe</td><td>0.025&deg;</td></tr>
+          <tr><td>ARPEGE</td><td>M&eacute;t&eacute;o-France</td><td>Global</td><td>0.1&deg;</td></tr>
+          <tr><td>UKMO</td><td>Met Office (UK)</td><td>Global</td><td>0.1&deg;</td></tr>
+          <tr><td>ECMWF IFS</td><td>ECMWF</td><td>Global</td><td>0.25&deg;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Disclaimer -->
+    <div class="help-section">
+      <h3>Disclaimer</h3>
+      <p>
+        WeatherBrief is an <strong>experimental, non-certified</strong> tool for educational
+        and planning purposes. It is not a substitute for official weather briefings from
+        your national aviation authority. Always cross-check with official sources (METARs,
+        TAFs, SIGMETs, AIRMETs) before flying.
+      </p>
+      <p class="muted" style="margin-top: 0.5rem;">
+        This application was built with AI assistance (Claude, Anthropic).
+      </p>
+    </div>
+  </div>
+
+  <script src="/dist/help.js"></script>
+</body>
+</html>

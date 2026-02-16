@@ -1835,6 +1835,73 @@ label {
   color: #fff;
 }
 
+/* --- Help page --- */
+
+.help-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow);
+}
+
+.help-section h3 {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.help-section h4 {
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.95rem;
+}
+
+.help-section p,
+.help-section li {
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.help-section ul,
+.help-section ol {
+  padding-left: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.help-tip {
+  background: rgba(37, 99, 235, 0.06);
+  border-left: 3px solid var(--primary);
+  padding: 0.6rem 0.8rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.help-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.help-table th,
+.help-table td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.help-table th {
+  background: var(--bg);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 640px) {
