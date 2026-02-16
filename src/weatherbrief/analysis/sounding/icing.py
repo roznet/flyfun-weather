@@ -169,9 +169,10 @@ def _is_near_cloud(level: DerivedLevel, clouds: list[EnhancedCloudLayer]) -> boo
 # --- Severity modifiers (secondary adjustment on top of Ogimet index) ---
 
 
-_ENHANCE_MIN_HIGH_RH_LEVELS = 2  # require multiple saturated levels
+_ENHANCE_MIN_HIGH_RH_LEVELS = 3  # require deep saturation (multiple levels)
 _ENHANCE_RH_THRESHOLD = 95.0
-_ENHANCE_MIN_NWP_CLOUD_PCT = 25.0  # NWP must corroborate
+_ENHANCE_MIN_NWP_CLOUD_PCT = 50.0  # NWP must strongly corroborate
+_ENHANCE_SEVERE_MAX_TEMP_C = -5.0  # warm icing stays MODERATE at most
 
 
 def _enhance_severity(
@@ -183,10 +184,11 @@ def _enhance_severity(
     """Potentially upgrade severity based on zone-level moisture indicators.
 
     RH-based upgrade requires corroboration:
-      - At least 2 levels in the zone with RH > 95%
-      - NWP cloud cover >= 25% in the corresponding altitude band
-    This prevents single-level RH spikes at coarse NWP resolution from
-    triggering severe icing when the model's own cloud scheme disagrees.
+      - At least 3 levels in the zone with RH > 95% (deep saturation)
+      - NWP cloud cover >= 50% in the corresponding altitude band
+    The MODERATE → SEVERE upgrade additionally requires the zone to be cold
+    enough (mean temp ≤ -5°C) — warm icing near the freezing level is
+    unlikely to be truly severe regardless of moisture signals.
     """
     if base_risk == IcingRisk.NONE:
         return IcingRisk.NONE
@@ -203,7 +205,16 @@ def _enhance_severity(
 
     if high_rh_count >= _ENHANCE_MIN_HIGH_RH_LEVELS and nwp_confirms:
         if base_risk == IcingRisk.MODERATE:
-            return IcingRisk.SEVERE
+            # Only upgrade to SEVERE in cold icing — warm layers near
+            # the freezing level are manageable even when saturated
+            t_vals = [
+                lv.temperature_c
+                for lv in levels_in_zone
+                if lv.temperature_c is not None
+            ]
+            mean_t = sum(t_vals) / len(t_vals) if t_vals else 0.0
+            if mean_t <= _ENHANCE_SEVERE_MAX_TEMP_C:
+                return IcingRisk.SEVERE
         if base_risk == IcingRisk.LIGHT:
             return IcingRisk.MODERATE
 

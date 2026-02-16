@@ -118,7 +118,7 @@ def test_icing_type_from_temperature():
 
 
 def test_severity_enhanced_by_high_rh():
-    """RH upgrade requires ≥2 levels with RH > 95% AND NWP cloud ≥ 25%."""
+    """RH upgrade requires ≥3 levels with RH > 95%, NWP cloud ≥ 50%, and cold temps for SEVERE."""
     # Single level, high RH — should NOT upgrade (insufficient corroboration)
     levels_single = [
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
@@ -127,9 +127,9 @@ def test_severity_enhanced_by_high_rh():
     ]
     zones = assess_icing_zones(levels_single, [_cloud(9000, 11000)])
     assert len(zones) == 1
-    assert zones[0].risk == IcingRisk.MODERATE  # no upgrade
+    assert zones[0].risk == IcingRisk.MODERATE  # no upgrade (only 1 level)
 
-    # Two levels with RH > 95% AND NWP cloud ≥ 25% — should upgrade
+    # Two levels with RH > 95% — still not enough (need 3)
     levels_two = [
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
                      dewpoint_c=-7.5, dewpoint_depression_c=0.5,
@@ -139,14 +139,50 @@ def test_severity_enhanced_by_high_rh():
                      relative_humidity_pct=98.0),
     ]
     zones = assess_icing_zones(
-        levels_two, [_cloud(9000, 13000)], nwp_cloud_mid_pct=50.0,
+        levels_two, [_cloud(9000, 13000)], nwp_cloud_mid_pct=60.0,
     )
     assert len(zones) == 1
-    assert zones[0].risk == IcingRisk.SEVERE
+    assert zones[0].risk == IcingRisk.MODERATE  # not enough levels
 
-    # Two levels with RH > 95% but NWP cloud too low — should NOT upgrade
+    # Three cold levels with RH > 95% AND NWP cloud ≥ 50% — should upgrade
+    levels_three_cold = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-7.5, dewpoint_depression_c=0.5,
+                     relative_humidity_pct=97.0),
+        DerivedLevel(pressure_hpa=650, altitude_ft=12000, temperature_c=-10.0,
+                     dewpoint_c=-10.5, dewpoint_depression_c=0.5,
+                     relative_humidity_pct=98.0),
+        DerivedLevel(pressure_hpa=600, altitude_ft=14000, temperature_c=-13.0,
+                     dewpoint_c=-13.5, dewpoint_depression_c=0.5,
+                     relative_humidity_pct=96.0),
+    ]
     zones = assess_icing_zones(
-        levels_two, [_cloud(9000, 13000)], nwp_cloud_mid_pct=10.0,
+        levels_three_cold, [_cloud(9000, 15000)], nwp_cloud_mid_pct=60.0,
+    )
+    assert len(zones) == 1
+    assert zones[0].risk == IcingRisk.SEVERE  # cold, deep, saturated → upgrade
+
+    # Three warm levels (mean > -5°C) — should NOT upgrade to SEVERE
+    levels_three_warm = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, temperature_c=-2.0,
+                     dewpoint_c=-2.5, dewpoint_depression_c=0.5,
+                     relative_humidity_pct=97.0),
+        DerivedLevel(pressure_hpa=800, altitude_ft=6500, temperature_c=-3.0,
+                     dewpoint_c=-3.5, dewpoint_depression_c=0.5,
+                     relative_humidity_pct=98.0),
+        DerivedLevel(pressure_hpa=750, altitude_ft=8000, temperature_c=-4.0,
+                     dewpoint_c=-4.5, dewpoint_depression_c=0.5,
+                     relative_humidity_pct=96.0),
+    ]
+    zones = assess_icing_zones(
+        levels_three_warm, [_cloud(4000, 9000)], nwp_cloud_low_pct=80.0,
+    )
+    assert len(zones) == 1
+    assert zones[0].risk == IcingRisk.MODERATE  # warm icing stays MODERATE
+
+    # NWP cloud too low — should NOT upgrade
+    zones = assess_icing_zones(
+        levels_three_cold, [_cloud(9000, 15000)], nwp_cloud_mid_pct=10.0,
     )
     assert len(zones) == 1
     assert zones[0].risk == IcingRisk.MODERATE
