@@ -7,6 +7,7 @@ import type {
   RenderMode,
   VizPoint,
   VizInversionLayer,
+  VizCloudLayer,
 } from '../../types';
 import { drawColumnBand, type BandPointData } from './base';
 
@@ -41,6 +42,23 @@ function findCappingInversion(
   return lowest;
 }
 
+/** Compute the envelope (lowest base, highest top) of cloud layers overlapping [floor, ceiling]. */
+function cloudEnvelopeInBand(
+  layers: VizCloudLayer[],
+  floor: number,
+  ceiling: number,
+): { base: number; top: number } | null {
+  let minBase = ceiling;
+  let maxTop = floor;
+  for (const cl of layers) {
+    if (cl.topFt > floor && cl.baseFt < ceiling) {
+      minBase = Math.min(minBase, Math.max(cl.baseFt, floor));
+      maxTop = Math.max(maxTop, Math.min(cl.topFt, ceiling));
+    }
+  }
+  return maxTop > minBase ? { base: minBase, top: maxTop } : null;
+}
+
 interface BandLimits {
   lowBase: number;
   lowTop: number;
@@ -60,7 +78,14 @@ function computeBandLimits(point: VizPoint, terrainFt: number): BandLimits {
 
   // Low band top: cap at first significant inversion within [lowBase, 6500ft]
   const lowCap = findCappingInversion(point.inversions, lowBase, LOW_TOP_FT);
-  const lowTop = lowCap ?? LOW_TOP_FT;
+  let lowTop = lowCap ?? LOW_TOP_FT;
+
+  // Narrow low band using sounding-derived cloud layers
+  const lowEnvelope = cloudEnvelopeInBand(point.cloudLayers, lowBase, lowTop);
+  if (lowEnvelope) {
+    lowBase = Math.max(lowBase, lowEnvelope.base);
+    lowTop = Math.min(lowTop, lowEnvelope.top);
+  }
 
   // Mid band base: raise to LCL if it falls within the mid band
   let midBase = LOW_TOP_FT;
@@ -70,7 +95,20 @@ function computeBandLimits(point: VizPoint, terrainFt: number): BandLimits {
 
   // Mid band top: cap at first significant inversion within [midBase, 20000ft]
   const midCap = findCappingInversion(point.inversions, midBase, MID_TOP_FT);
-  const midTop = midCap ?? MID_TOP_FT;
+  let midTop = midCap ?? MID_TOP_FT;
+
+  // Narrow mid band using sounding-derived cloud layers
+  const midEnvelope = cloudEnvelopeInBand(point.cloudLayers, midBase, midTop);
+  if (midEnvelope) {
+    midBase = Math.max(midBase, midEnvelope.base);
+    midTop = Math.min(midTop, midEnvelope.top);
+  } else if (point.cloudCoverMidPct > 0) {
+    // NWP reports mid cloud but no sounding layers overlap — use -20°C level as softer cap
+    const m20 = point.altitudeLines.minus20cLevelFt;
+    if (m20 !== null && m20 > midBase && m20 < midTop) {
+      midTop = m20;
+    }
+  }
 
   return { lowBase, lowTop, midBase, midTop };
 }

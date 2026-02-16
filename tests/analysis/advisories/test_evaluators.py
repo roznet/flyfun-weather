@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories.fiki_icing import FIKIIcingEvaluator
 from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
 from weatherbrief.analysis.advisories.vmc_cruise import VMCCruiseEvaluator
 from weatherbrief.analysis.advisories.turbulence import TurbulenceEvaluator
@@ -113,6 +114,111 @@ class TestCloudTop:
         assert result.aggregate_status == AdvisoryStatus.GREEN
         for m in result.per_model:
             assert "No significant" in m.detail
+
+
+_FIKI_DEFAULTS = {
+    "proximity_nm": 50,
+    "cruise_icing_buffer_ft": 2000,
+    "transit_thickness_amber_ft": 3000,
+    "transit_thickness_red_ft": 5000,
+    "clear_cruise_amber_pct": 80,
+    "clear_cruise_red_pct": 50,
+    "severe_is_red": 1,
+}
+
+
+class TestFIKIIcing:
+    def test_green_no_icing(self, clear_context: RouteContext):
+        result = FIKIIcingEvaluator.evaluate(clear_context, _FIKI_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert result.advisory_id == "fiki_icing"
+        for m in result.per_model:
+            assert "No icing along route" in m.detail
+
+    def test_full_route_icing_is_red(self, icing_context: RouteContext):
+        """Icing 4000–10000ft along entire route, cruise 8000ft.
+
+        Transit: 4000ft (amber), cruise: 0% clear (red) → RED overall.
+        """
+        result = FIKIIcingEvaluator.evaluate(icing_context, _FIKI_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.RED
+        for m in result.per_model:
+            assert "cruise 0% clear" in m.detail
+
+    def test_departure_only_icing(self, fiki_departure_icing_context: RouteContext):
+        """Icing only near departure, transit 5000ft, 70% clear cruise.
+
+        Transit: 5000ft >= 5000 (red), cruise: 70% < 80% (amber) → RED.
+        """
+        result = FIKIIcingEvaluator.evaluate(
+            fiki_departure_icing_context, _FIKI_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+        for m in result.per_model:
+            assert "dep 5000ft" in m.detail
+            assert "cruise 70% clear" in m.detail
+
+    def test_icing_above_cruise_with_margin(
+        self, fiki_icing_above_cruise_context: RouteContext,
+    ):
+        """Icing 11000–14000ft, cruise 8000ft, 3000ft clearance > 2000ft buffer.
+
+        Transit: 0ft, cruise: 100% clear → GREEN.
+        """
+        result = FIKIIcingEvaluator.evaluate(
+            fiki_icing_above_cruise_context, _FIKI_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        for m in result.per_model:
+            assert "No icing along route" in m.detail
+
+    def test_icing_close_above_cruise_not_clear(
+        self, fiki_icing_close_above_cruise_context: RouteContext,
+    ):
+        """Icing 9000–12000ft, cruise 8000ft, only 1000ft clearance < 2000ft buffer.
+
+        Transit: 0ft (green), cruise: 0% clear (red) → RED.
+        """
+        result = FIKIIcingEvaluator.evaluate(
+            fiki_icing_close_above_cruise_context, _FIKI_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+        for m in result.per_model:
+            assert "cruise 0% clear" in m.detail
+
+    def test_sld_always_red(self, fiki_sld_context: RouteContext):
+        result = FIKIIcingEvaluator.evaluate(fiki_sld_context, _FIKI_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.RED
+        for m in result.per_model:
+            assert "SLD" in m.detail
+
+    def test_tunable_proximity(self, fiki_departure_icing_context: RouteContext):
+        """With proximity_nm=20, only point at 0nm and 20nm count for departure.
+
+        Icing at 0, 20, 40nm. With 20nm radius, only 0 and 20nm are departure.
+        Transit thickness still 5000ft (same zones), but 40nm point is no longer
+        in departure zone — still has icing for cruise clear count though.
+        """
+        params = {**_FIKI_DEFAULTS, "proximity_nm": 20}
+        result = FIKIIcingEvaluator.evaluate(fiki_departure_icing_context, params)
+        # Should still detect transit icing at departure
+        for m in result.per_model:
+            assert "dep 5000ft" in m.detail
+
+    def test_tunable_buffer(self, fiki_icing_close_above_cruise_context: RouteContext):
+        """With smaller buffer (500ft), 1000ft clearance becomes sufficient."""
+        params = {**_FIKI_DEFAULTS, "cruise_icing_buffer_ft": 500}
+        result = FIKIIcingEvaluator.evaluate(
+            fiki_icing_close_above_cruise_context, params,
+        )
+        # 1000ft clearance > 500ft buffer → cruise is clear → GREEN
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_per_model_results(self, icing_context: RouteContext):
+        result = FIKIIcingEvaluator.evaluate(icing_context, _FIKI_DEFAULTS)
+        assert len(result.per_model) == 2  # gfs + ecmwf
+        for m in result.per_model:
+            assert m.total_points > 0
 
 
 class TestModelAgreement:

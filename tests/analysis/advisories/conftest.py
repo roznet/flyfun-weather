@@ -309,6 +309,126 @@ def only_cirrus_context() -> RouteContext:
 
 
 @pytest.fixture
+def fiki_departure_icing_context() -> RouteContext:
+    """Icing only near departure — first 3 points (0, 20, 40nm) have icing.
+
+    Icing 2000–7000ft, cruise at 8000ft, total 200nm.
+    - Departure transit: 5000ft (2000→7000 clipped to cruise)
+    - Cruise clear: 7 of 10 clear (icing top at 7000, cruise 8000, buffer 2000 → 1000ft < buffer)
+    - Arrival: no icing
+    """
+    n_points = 10
+    icing_zone = IcingZone(
+        base_ft=2000, top_ft=7000, risk=IcingRisk.MODERATE,
+        icing_type=IcingType.MIXED,
+    )
+    analyses = []
+    for i in range(n_points):
+        dist = i * 20.0
+        if dist <= 40:  # first 3 points
+            sounding = {"gfs": _make_sounding(icing_zones=[icing_zone])}
+        else:
+            sounding = {"gfs": _make_sounding()}
+        analyses.append(_make_rpa(i, dist, sounding=sounding))
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+    )
+
+
+@pytest.fixture
+def fiki_icing_above_cruise_context() -> RouteContext:
+    """Icing well above cruise — should be GREEN.
+
+    Icing 11000–14000ft, cruise at 8000ft.
+    - Transit thickness: 0 (icing starts above cruise)
+    - Cruise clearance: 11000 - 8000 = 3000ft > 2000ft buffer → clear
+    """
+    n_points = 10
+    icing_zone = IcingZone(
+        base_ft=11000, top_ft=14000, risk=IcingRisk.MODERATE,
+        icing_type=IcingType.RIME,
+    )
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(icing_zones=[icing_zone]),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+    )
+
+
+@pytest.fixture
+def fiki_icing_close_above_cruise_context() -> RouteContext:
+    """Icing just above cruise within buffer — cruise NOT clear.
+
+    Icing 9000–12000ft, cruise at 8000ft.
+    - Transit thickness: 0 (icing base 9000 > cruise 8000)
+    - Cruise clearance: 9000 - 8000 = 1000ft < 2000ft buffer → NOT clear
+    """
+    n_points = 10
+    icing_zone = IcingZone(
+        base_ft=9000, top_ft=12000, risk=IcingRisk.LIGHT,
+        icing_type=IcingType.RIME,
+    )
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(icing_zones=[icing_zone]),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+    )
+
+
+@pytest.fixture
+def fiki_sld_context() -> RouteContext:
+    """SLD risk near departure — always RED."""
+    n_points = 10
+    sld_zone = IcingZone(
+        base_ft=3000, top_ft=7000, risk=IcingRisk.MODERATE,
+        icing_type=IcingType.CLEAR, sld_risk=True,
+    )
+    analyses = []
+    for i in range(n_points):
+        dist = i * 20.0
+        if dist <= 40:
+            sounding = {"gfs": _make_sounding(icing_zones=[sld_zone])}
+        else:
+            sounding = {"gfs": _make_sounding()}
+        analyses.append(_make_rpa(i, dist, sounding=sounding))
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+    )
+
+
+@pytest.fixture
 def poor_agreement_context() -> RouteContext:
     """Context with poor model agreement."""
     n_points = 10
