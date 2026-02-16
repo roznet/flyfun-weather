@@ -60,11 +60,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="ECMWF IFS",
         base_url="https://api.open-meteo.com/v1/ecmwf",
         max_days=10,
-        unavailable_surface=["relative_humidity_2m", "wind_gusts_10m",
-                             "precipitation_probability", "cloud_cover_low",
-                             "cloud_cover_mid", "cloud_cover_high",
-                             "freezing_level_height", "cape", "visibility"],
-        unavailable_pressure=["dewpoint"],
+        unavailable_surface=["freezing_level_height", "visibility"],
     ),
     "gfs": ModelEndpoint(
         name="GFS",
@@ -83,17 +79,15 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/forecast",
         max_days=7,
         model_param="ukmo_seamless",
-        unavailable_surface=["dewpoint_2m", "precipitation_probability",
-                             "freezing_level_height", "cape", "visibility"],
-        unavailable_pressure=["dewpoint", "vertical_velocity"],
+        unavailable_surface=["precipitation_probability"],
     ),
     "meteofrance": ModelEndpoint(
         name="Météo-France",
         base_url="https://api.open-meteo.com/v1/meteofrance",
         max_days=6,
         unavailable_surface=["precipitation_probability",
-                             "freezing_level_height", "cape", "visibility"],
-        unavailable_pressure=["dewpoint", "vertical_velocity"],
+                             "freezing_level_height", "visibility"],
+        unavailable_pressure=["vertical_velocity"],
     ),
 }
 
