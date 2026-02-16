@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
+BASE_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
+
+# 25 levels — 25 hPa spacing below 500, 50 hPa above.
+# Gives ~1000ft vertical resolution in the lower atmosphere (4x improvement).
+EXTENDED_PRESSURE_LEVELS = [
+    1000, 975, 950, 925, 900, 875, 850, 825, 800, 775,
+    750, 725, 700, 675, 650, 625, 600, 575, 550, 525,
+    500, 450, 400, 350, 300,
+]
+
+# Backwards-compatible alias
+PRESSURE_LEVELS = BASE_PRESSURE_LEVELS
 
 SURFACE_VARIABLES = [
     "temperature_2m",
@@ -48,6 +59,7 @@ class ModelEndpoint:
     model_param: str | None = None
     unavailable_surface: list[str] = field(default_factory=list)
     unavailable_pressure: list[str] = field(default_factory=list)
+    pressure_levels: list[int] = field(default_factory=lambda: list(BASE_PRESSURE_LEVELS))
 
 
 MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
@@ -55,17 +67,20 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="Best Match",
         base_url="https://api.open-meteo.com/v1/forecast",
         max_days=16,
+        pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
     ),
     "ecmwf": ModelEndpoint(
         name="ECMWF IFS",
         base_url="https://api.open-meteo.com/v1/ecmwf",
         max_days=10,
         unavailable_surface=["freezing_level_height", "visibility"],
+        pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
     ),
     "gfs": ModelEndpoint(
         name="GFS",
         base_url="https://api.open-meteo.com/v1/gfs",
         max_days=16,
+        pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
     ),
     "icon": ModelEndpoint(
         name="DWD ICON",
@@ -102,7 +117,7 @@ def build_hourly_params(endpoint: ModelEndpoint) -> str:
     for var in PRESSURE_LEVEL_VARIABLES:
         if var in endpoint.unavailable_pressure:
             continue
-        for level in PRESSURE_LEVELS:
+        for level in endpoint.pressure_levels:
             pressure.append(f"{var}_{level}hPa")
 
     return ",".join(surface + pressure)

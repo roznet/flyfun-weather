@@ -9,13 +9,15 @@ RUN npm run build
 # Stage 2: Python application
 FROM python:3.13-slim
 
-# System deps for weasyprint (PDF generation) and git (euro-aip install)
+# System deps for weasyprint (PDF generation), git (euro-aip install),
+# and eccodes (GRIB2 decoding via cfgrib)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     libgdk-pixbuf-2.0-0 \
     libffi-dev \
     libcairo2 \
+    libeccodes-dev \
     git \
     && rm -rf /var/lib/apt/lists/*
 

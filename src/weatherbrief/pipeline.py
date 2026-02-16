@@ -51,6 +51,7 @@ class BriefingOptions:
     """Options controlling what the pipeline produces."""
 
     models: list[ModelSource] = field(default_factory=lambda: list(DEFAULT_MODELS))
+    enrich_grib: bool = False  # Enable GFS GRIB2 enrichment (CLWMR/ICMR)
     fetch_gramet: bool = False
     generate_skewt: bool = False
     generate_llm_digest: bool = False
@@ -67,6 +68,8 @@ class BriefingUsage:
     """Tracks resource usage during a single briefing pipeline run."""
 
     open_meteo_calls: int = 0
+    grib_enrichment: bool = False
+    grib_enrichment_failed: bool = False
     gramet_fetched: bool = False
     gramet_failed: bool = False
     llm_digest: bool = False
@@ -185,6 +188,27 @@ def execute_briefing(
             models_fetched += 1
         except Exception:
             logger.warning("Failed to fetch %s", model.value, exc_info=True)
+
+    # --- GRIB2 enrichment (optional) ---
+    result_usage_grib = False
+    result_usage_grib_failed = False
+    if options.enrich_grib and cross_sections:
+        _notify("grib_enrichment")
+        try:
+            from weatherbrief.fetch.grib import enrich_forecasts
+
+            enrich_forecasts(
+                cross_sections, all_forecasts, route_points,
+                target_date, target_hour, data_dir=data_dir,
+            )
+            result_usage_grib = True
+            logger.info("GRIB2 enrichment applied")
+        except Exception:
+            result_usage_grib_failed = True
+            logger.warning(
+                "GRIB2 enrichment failed, using Open-Meteo data only",
+                exc_info=True,
+            )
 
     # --- Analyze ---
     _notify("waypoint_analysis")
@@ -339,6 +363,8 @@ def execute_briefing(
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
     result.usage.open_meteo_calls = len(cross_sections)
+    result.usage.grib_enrichment = result_usage_grib
+    result.usage.grib_enrichment_failed = result_usage_grib_failed
     if elevation_profile and options.output_dir:
         result.elevation_profile_path = options.output_dir / "elevation_profile.json"
     if route_advisories_manifest and options.output_dir:

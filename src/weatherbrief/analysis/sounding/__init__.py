@@ -9,9 +9,45 @@ from __future__ import annotations
 
 import logging
 
-from weatherbrief.models import HourlyForecast, PressureLevelData, SoundingAnalysis
+from weatherbrief.models import DerivedLevel, HourlyForecast, PressureLevelData, SoundingAnalysis
 
 logger = logging.getLogger(__name__)
+
+# Dry air gas constant (J/(kg·K))
+_RD = 287.05
+
+
+def _enrich_lwc(
+    derived_levels: list[DerivedLevel],
+    raw_levels: list[PressureLevelData],
+) -> None:
+    """Convert CLWMR (kg/kg) to cloud liquid water content (g/m³) on derived levels.
+
+    Uses ideal gas law for air density: ρ = P / (Rd × T_K).
+    LWC (g/m³) = CLWMR (kg/kg) × ρ_air (kg/m³) × 1000.
+    """
+    # Build lookup from raw pressure levels
+    raw_by_pressure: dict[int, PressureLevelData] = {
+        lv.pressure_hpa: lv for lv in raw_levels
+    }
+
+    for dl in derived_levels:
+        raw = raw_by_pressure.get(dl.pressure_hpa)
+        if raw is None or raw.cloud_liquid_water_kg_kg is None:
+            continue
+        if dl.temperature_c is None:
+            continue
+
+        clwmr = raw.cloud_liquid_water_kg_kg
+        if clwmr <= 0:
+            continue
+
+        # Air density from ideal gas law
+        t_k = dl.temperature_c + 273.15
+        p_pa = dl.pressure_hpa * 100.0
+        rho_air = p_pa / (_RD * t_k)
+
+        dl.cloud_liquid_water_g_m3 = round(clwmr * rho_air * 1000.0, 4)
 
 
 def analyze_sounding(
@@ -47,6 +83,9 @@ def analyze_sounding(
     # Thermodynamic indices and per-level derived values
     indices = compute_indices(profile)
     derived_levels = compute_derived_levels(profile)
+
+    # Enrich derived levels with CLWMR/ICMR from raw pressure level data
+    _enrich_lwc(derived_levels, levels)
 
     # Enhanced cloud detection
     cloud_layers = detect_cloud_layers(

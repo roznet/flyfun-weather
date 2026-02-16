@@ -230,6 +230,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None):
         check_rate_limits(db, user_id)
 
     options = BriefingOptions(
+        enrich_grib=True,
         fetch_gramet=True,
         generate_skewt=False,
         generate_llm_digest=True,

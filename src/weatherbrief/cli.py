@@ -54,6 +54,7 @@ def run_fetch(
     target_date: str,
     target_hour: int = 9,
     models: list[ModelSource] | None = None,
+    enrich_grib: bool = False,
     fetch_gramet: bool = False,
     generate_skewt: bool = False,
     generate_llm_digest: bool = False,
@@ -65,6 +66,7 @@ def run_fetch(
     """
     options = BriefingOptions(
         models=models or BriefingOptions().models,
+        enrich_grib=enrich_grib,
         fetch_gramet=fetch_gramet,
         generate_skewt=generate_skewt,
         generate_llm_digest=generate_llm_digest,
@@ -148,6 +150,10 @@ def main() -> None:
         "--duration", type=float, help="Flight duration in hours"
     )
     fetch_parser.add_argument(
+        "--enrich-grib", action="store_true",
+        help="Enrich GFS data with CLWMR/ICMR from GRIB2 (requires cfgrib)",
+    )
+    fetch_parser.add_argument(
         "--gramet", action="store_true", help="Also fetch Autorouter GRAMET"
     )
     fetch_parser.add_argument(
@@ -182,6 +188,7 @@ def main() -> None:
             target_date=args.date,
             target_hour=args.hour,
             models=models,
+            enrich_grib=args.enrich_grib,
             fetch_gramet=args.gramet,
             generate_skewt=args.skewt,
             generate_llm_digest=args.llm_digest,
