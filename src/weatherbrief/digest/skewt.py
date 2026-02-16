@@ -1,8 +1,8 @@
-"""Skew-T log-P diagram generation using MetPy.
+"""Skew-T log-P diagram and standalone hodograph generation using MetPy.
 
-Produces Skew-T log-P diagrams with optional overlays from sounding analysis:
-CAPE/CIN shading, hodograph inset, derived indices panel, cloud/icing/inversion
-bands, altitude labels, and cruise altitude marker.
+Produces separate Skew-T log-P diagrams and hodograph PNGs.
+Skew-T overlays include: CAPE/CIN shading, cloud/icing/inversion bands,
+altitude labels, and cruise altitude marker.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from metpy.units import units  # noqa: E402
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
-    from matplotlib.figure import Figure
 
 from weatherbrief.models import ForecastSnapshot, HourlyForecast  # noqa: E402
 from weatherbrief.models.analysis import SoundingAnalysis  # noqa: E402
@@ -155,10 +154,10 @@ def _draw_inversion_layers(ax: Axes, analysis: SoundingAnalysis) -> None:
         ax.axhspan(top_p, base_p, alpha=alpha, color=_C["inversion"], zorder=0)
 
 
-def _draw_hodograph(
-    fig: Figure, levels: list, u_wind: np.ndarray, v_wind: np.ndarray,
+def _draw_hodograph_on_axes(
+    ax: Axes, levels: list, u_wind: np.ndarray, v_wind: np.ndarray,
 ) -> None:
-    """Hodograph inset in the top-right area."""
+    """Draw hodograph content onto an existing axes."""
     heights_ft = np.array([
         pl.geopotential_height_m * 3.28084
         if pl.geopotential_height_m is not None
@@ -170,8 +169,7 @@ def _draw_hodograph(
                    np.max(np.abs(v_wind.magnitude)))
     comp_range = max(40.0, float(np.ceil(max_comp * 1.3 / 10) * 10))
 
-    hodo_ax = fig.add_axes((0.70, 0.62, 0.25, 0.28))
-    h = Hodograph(hodo_ax, component_range=comp_range)
+    h = Hodograph(ax, component_range=comp_range)
     h.add_grid(increment=20, ls="-", lw=1, alpha=0.35)
     h.add_grid(increment=10, ls="--", lw=0.5, alpha=0.12)
 
@@ -198,77 +196,6 @@ def _draw_hodograph(
     h.ax.set_title("Hodograph (kt)", fontsize=9, fontweight="bold", pad=4)
 
 
-def _draw_indices_panel(fig: Figure, analysis: SoundingAnalysis) -> None:
-    """Derived-indices text panel in the bottom-right."""
-    idx = analysis.indices
-    if idx is None:
-        return
-
-    # Background rectangle — pushed right, more compact
-    fig.patches.extend([plt.Rectangle(
-        (0.66, 0.03), 0.325, 0.55,
-        edgecolor="#dddddd", facecolor="white", linewidth=0.5, alpha=0.95,
-        transform=fig.transFigure, figure=fig,
-    )])
-    fig.text(0.823, 0.565, "Sounding Indices", fontsize=9.5,
-             fontweight="bold", ha="center", va="bottom", color="#333333")
-
-    def _fmt(val: float | None, fmt_str: str = ".0f", suffix: str = "") -> str:
-        return "—" if val is None else f"{val:{fmt_str}}{suffix}"
-
-    def _cape_color(val: float | None) -> str:
-        if val is None or val < 100:
-            return "#888888"
-        return "#e89a3c" if val < 500 else "#d62728"
-
-    def _li_color(val: float | None) -> str:
-        if val is None:
-            return "#888888"
-        if val > 2:
-            return "#2ca02c"
-        return "#e89a3c" if val > -2 else "#d62728"
-
-    y0, dy = 0.54, 0.030
-    lx1, vx1 = 0.67, 0.82   # left column
-    lx2, vx2 = 0.835, 0.975  # right column
-    fs = 8.5
-
-    rows: list[tuple[str, str, str, str, str, str]] = [
-        ("SBCAPE:", _fmt(idx.cape_surface_jkg, suffix=" J/kg"),
-         _cape_color(idx.cape_surface_jkg),
-         "Freezing:", _fmt(idx.freezing_level_ft, suffix=" ft"), "#4a90d9"),
-
-        ("SBCIN:", _fmt(idx.cin_surface_jkg, suffix=" J/kg"), "#4a90d9",
-         "\u221210\u00b0C:", _fmt(idx.minus10c_level_ft, suffix=" ft"), "#4a90d9"),
-
-        ("MLCAPE:", _fmt(idx.cape_mixed_layer_jkg, suffix=" J/kg"),
-         _cape_color(idx.cape_mixed_layer_jkg),
-         "\u221220\u00b0C:", _fmt(idx.minus20c_level_ft, suffix=" ft"), "#4a90d9"),
-
-        ("Lifted Idx:", _fmt(idx.lifted_index, ".1f"), _li_color(idx.lifted_index),
-         "LCL:", _fmt(idx.lcl_altitude_ft, suffix=" ft"), "#888888"),
-
-        ("K-Index:", _fmt(idx.k_index, ".0f"), "#888888",
-         "LFC:", _fmt(idx.lfc_altitude_ft, suffix=" ft"), "#888888"),
-
-        ("Total-T:", _fmt(idx.total_totals, ".0f"), "#888888",
-         "EL:", _fmt(idx.el_altitude_ft, suffix=" ft"), "#888888"),
-
-        ("PW:", _fmt(idx.precipitable_water_mm, ".1f", " mm"), "#888888",
-         "Shear 0\u20136:", _fmt(idx.bulk_shear_0_6km_kt, ".0f", " kt"), "#888888"),
-
-        ("Shear 0\u20131:", _fmt(idx.bulk_shear_0_1km_kt, ".0f", " kt"), "#888888",
-         "Showalter:", _fmt(idx.showalter_index, ".1f"), "#888888"),
-    ]
-
-    for i, (l1, v1, c1, l2, v2, c2) in enumerate(rows):
-        y = y0 - i * dy
-        fig.text(lx1, y, l1, fontsize=fs, fontweight="bold", ha="left", color="#444444")
-        fig.text(vx1, y, v1, fontsize=fs, ha="right", color=c1, fontweight="bold")
-        fig.text(lx2, y, l2, fontsize=fs, fontweight="bold", ha="left", color="#444444")
-        fig.text(vx2, y, v2, fontsize=fs, ha="right", color=c2, fontweight="bold")
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -291,7 +218,7 @@ def generate_skewt(
         model_name: Model name for title.
         output_path: Where to save the PNG.
         analysis: Optional sounding analysis for overlays (clouds, icing,
-            inversions, indices panel, hodograph).
+            inversions, CAPE/CIN shading, parcel profile).
         cruise_altitude_ft: Optional planned cruise altitude for a reference line.
 
     Returns:
@@ -325,13 +252,8 @@ def generate_skewt(
         u_wind, v_wind = mpcalc.wind_components(speed, direction)
 
     # --- Figure layout ---
-    has_panels = analysis is not None
-    if has_panels:
-        fig = plt.figure(figsize=(13, 13))
-        skew = SkewT(fig, rotation=45, rect=(0.05, 0.03, 0.57, 0.93))
-    else:
-        fig = plt.figure(figsize=(9, 11))
-        skew = SkewT(fig, rotation=45)
+    fig = plt.figure(figsize=(9, 11))
+    skew = SkewT(fig, rotation=45)
 
     # --- Temperature & dewpoint ---
     skew.plot(pressure, temperature, color=_C["temp"], linewidth=2.5, label="Temperature")
@@ -440,20 +362,6 @@ def generate_skewt(
     skew.ax.set_ylabel("Pressure (hPa)")
     skew.ax.legend(loc="upper left", fontsize=8, framealpha=0.8)
 
-    # --- Hodograph inset ---
-    if has_panels and u_wind is not None and v_wind is not None:
-        try:
-            _draw_hodograph(fig, levels, u_wind, v_wind)
-        except Exception:
-            logger.debug("Could not draw hodograph for %s", label)
-
-    # --- Indices panel ---
-    if has_panels:
-        try:
-            _draw_indices_panel(fig, analysis)  # type: ignore[arg-type]
-        except Exception:
-            logger.debug("Could not draw indices panel for %s", label)
-
     # --- Title ---
     time_str = forecast.time.strftime("%Y-%m-%d %H:%MZ")
     fig.suptitle(
@@ -462,6 +370,59 @@ def generate_skewt(
     )
 
     # --- Save ---
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+    return output_path
+
+
+def generate_hodograph(
+    forecast: HourlyForecast,
+    label: str,
+    model_name: str,
+    output_path: Path,
+) -> Path:
+    """Generate a standalone hodograph plot for a single location/model/time.
+
+    Args:
+        forecast: HourlyForecast with pressure level data (wind required).
+        label: Location label for the title.
+        model_name: Model name for title.
+        output_path: Where to save the PNG.
+
+    Returns:
+        Path to the saved PNG.
+
+    Raises:
+        ValueError: If insufficient pressure levels or no wind data.
+    """
+    levels = [pl for pl in forecast.pressure_levels if pl.temperature_c is not None]
+    if len(levels) < 3:
+        raise ValueError(f"Need at least 3 levels with temperature, got {len(levels)}")
+
+    levels.sort(key=lambda pl: pl.pressure_hpa, reverse=True)
+
+    has_wind = all(
+        pl.wind_speed_kt is not None and pl.wind_direction_deg is not None
+        for pl in levels
+    )
+    if not has_wind:
+        raise ValueError("Wind data required for hodograph")
+
+    speed = np.array([pl.wind_speed_kt for pl in levels]) * units.knot
+    direction = np.array([pl.wind_direction_deg for pl in levels]) * units.degree
+    u_wind, v_wind = mpcalc.wind_components(speed, direction)
+
+    fig, ax = plt.subplots(1, 1, figsize=(6, 6))
+    _draw_hodograph_on_axes(ax, levels, u_wind, v_wind)
+
+    time_str = forecast.time.strftime("%Y-%m-%d %H:%MZ")
+    fig.suptitle(
+        f"{label}  \u00b7  {model_name.upper()}  \u00b7  {time_str}",
+        fontsize=11, fontweight="bold", y=0.98,
+    )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -515,6 +476,19 @@ def generate_all_skewts(
         except Exception:
             logger.warning(
                 "Skew-T failed for %s/%s", wf.waypoint.icao, wf.model.value,
+                exc_info=True,
+            )
+
+        # Generate companion hodograph
+        hodo_path = output_dir / f"{wf.waypoint.icao}_{wf.model.value}_hodo.png"
+        try:
+            generate_hodograph(
+                hourly, wf.waypoint.icao, wf.model.value, hodo_path,
+            )
+            paths.append(hodo_path)
+        except Exception:
+            logger.debug(
+                "Hodograph failed for %s/%s", wf.waypoint.icao, wf.model.value,
                 exc_info=True,
             )
 

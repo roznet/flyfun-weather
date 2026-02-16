@@ -1281,20 +1281,25 @@ export function renderSkewTs(
   const models = routeAnalyses?.models ?? [...ALL_MODELS];
   populateModelSelector(models, selectedModel);
 
-  // Route-point mode: single Skew-T via on-demand endpoint
+  // Route-point mode: single Skew-T + Hodograph pair
   if (routeAnalyses && routeAnalyses.analyses.length > 0) {
     const idx = selectedPointIndex ?? 0;
     const point = routeAnalyses.analyses[idx];
     if (point) {
       const label = point.waypoint_icao || `Point ${point.point_index}`;
-      const url = api.routeSkewtUrl(flight.id, pack.fetch_timestamp, point.point_index, selectedModel);
+      const skewtUrlStr = api.routeSkewtUrl(flight.id, pack.fetch_timestamp, point.point_index, selectedModel);
+      const hodoUrlStr = api.routeHodographUrl(flight.id, pack.fetch_timestamp, point.point_index, selectedModel);
       el.innerHTML = `
         <div class="skewt-gallery">
           <div class="skewt-card skewt-card-large">
             <h4>${label} \u2014 ${modelLabel(selectedModel)}</h4>
-            <img src="${url}" alt="Skew-T ${label} ${selectedModel}"
-                 class="skewt-img" loading="lazy"
-                 onerror="this.parentElement.classList.add('skewt-unavailable')">
+            <div class="skewt-pair">
+              <img src="${skewtUrlStr}" alt="Skew-T ${label} ${selectedModel}"
+                   class="skewt-img" loading="lazy"
+                   onerror="this.closest('.skewt-card').classList.add('skewt-unavailable')">
+              <img src="${hodoUrlStr}" alt="Hodograph ${label} ${selectedModel}"
+                   class="skewt-hodo-img" loading="lazy">
+            </div>
             <div class="skewt-fallback">Not available</div>
           </div>
         </div>
@@ -1313,13 +1318,18 @@ export function renderSkewTs(
   el.innerHTML = `
     <div class="skewt-gallery">
       ${waypoints.map((wp) => {
-        const url = api.skewtUrl(flight.id, pack.fetch_timestamp, wp.icao, selectedModel);
+        const skewtUrlStr = api.skewtUrl(flight.id, pack.fetch_timestamp, wp.icao, selectedModel);
+        const hodoUrlStr = api.hodographUrl(flight.id, pack.fetch_timestamp, wp.icao, selectedModel);
         return `
           <div class="skewt-card">
             <h4>${wp.icao}</h4>
-            <img src="${url}" alt="Skew-T ${wp.icao} ${selectedModel}"
-                 class="skewt-img" loading="lazy"
-                 onerror="this.parentElement.classList.add('skewt-unavailable')">
+            <div class="skewt-pair">
+              <img src="${skewtUrlStr}" alt="Skew-T ${wp.icao} ${selectedModel}"
+                   class="skewt-img" loading="lazy"
+                   onerror="this.closest('.skewt-card').classList.add('skewt-unavailable')">
+              <img src="${hodoUrlStr}" alt="Hodograph ${wp.icao} ${selectedModel}"
+                   class="skewt-hodo-img" loading="lazy">
+            </div>
             <div class="skewt-fallback">Not available</div>
           </div>
         `;

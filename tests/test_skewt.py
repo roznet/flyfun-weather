@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from weatherbrief.digest.skewt import generate_skewt
+from weatherbrief.digest.skewt import generate_hodograph, generate_skewt
 from weatherbrief.models import HourlyForecast, PressureLevelData
 
 
@@ -98,3 +98,34 @@ def test_generate_skewt_no_dewpoint(tmp_path):
 
     result = generate_skewt(forecast, "EGTK", "gfs", out_path)
     assert out_path.exists()
+
+
+def test_generate_hodograph_creates_png(skewt_forecast, tmp_path):
+    """generate_hodograph creates a valid PNG file."""
+    out_path = tmp_path / "test_hodo.png"
+
+    result = generate_hodograph(skewt_forecast, "EGTK", "gfs", out_path)
+
+    assert result == out_path
+    assert out_path.exists()
+    assert out_path.stat().st_size > 1000
+
+    # Check PNG magic bytes
+    with open(out_path, "rb") as f:
+        header = f.read(8)
+    assert header[:4] == b"\x89PNG"
+
+
+def test_generate_hodograph_no_wind(tmp_path):
+    """Raises ValueError when wind data is missing."""
+    levels = [
+        PressureLevelData(pressure_hpa=1000, temperature_c=15, geopotential_height_m=110),
+        PressureLevelData(pressure_hpa=850, temperature_c=4, geopotential_height_m=1450),
+        PressureLevelData(pressure_hpa=700, temperature_c=-5, geopotential_height_m=3010),
+    ]
+    forecast = HourlyForecast(
+        time=datetime(2026, 2, 14, 9, 0),
+        pressure_levels=levels,
+    )
+    with pytest.raises(ValueError, match="Wind data required"):
+        generate_hodograph(forecast, "EGTK", "gfs", tmp_path / "fail.png")

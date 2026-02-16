@@ -634,6 +634,49 @@ def get_skewt(
     raise HTTPException(status_code=404, detail="Skew-T not available")
 
 
+@router.get("/{timestamp}/hodograph/{icao}/{model}")
+def get_hodograph(
+    flight_id: str, timestamp: str, icao: str, model: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get a hodograph image for a waypoint, generating on-demand if needed."""
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    hodo_path = pack_dir / "skewt" / f"{icao}_{model}_hodo.png"
+    if hodo_path.exists():
+        return FileResponse(hodo_path, media_type="image/png")
+
+    # On-demand generation from snapshot data
+    snapshot_path = pack_dir / "snapshot.json"
+    if not snapshot_path.exists():
+        raise HTTPException(status_code=404, detail="Hodograph not available")
+
+    import json
+    snapshot_data = json.loads(snapshot_path.read_text())
+    try:
+        target_dt = _parse_target_time(snapshot_data)
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=404, detail="Hodograph not available")
+
+    # Find matching forecast
+    from weatherbrief.models import WaypointForecast
+    for wf_data in snapshot_data.get("forecasts", []):
+        if wf_data.get("waypoint", {}).get("icao") == icao and wf_data.get("model") == model:
+            wf = WaypointForecast.model_validate(wf_data)
+            hourly = wf.at_time(target_dt)
+            if not hourly or not hourly.pressure_levels:
+                break
+            try:
+                from weatherbrief.digest.skewt import generate_hodograph
+                generate_hodograph(hourly, icao, model, hodo_path)
+                return FileResponse(hodo_path, media_type="image/png")
+            except Exception as exc:
+                logger.warning("Hodograph generation failed for %s/%s: %s", icao, model, exc)
+                raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}")
+
+    raise HTTPException(status_code=404, detail="Hodograph not available")
+
+
 @router.get("/{timestamp}/route-analyses")
 def get_route_analyses(
     flight_id: str,
@@ -914,6 +957,71 @@ def get_route_skewt(
     except Exception as exc:
         logger.warning("Route Skew-T generation failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}")
+
+    return FileResponse(cache_path, media_type="image/png")
+
+
+@router.get("/{timestamp}/hodograph/route/{point_index}/{model}")
+def get_route_hodograph(
+    flight_id: str, timestamp: str, point_index: int, model: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get an on-demand hodograph for a route point.
+
+    Generates and caches the PNG on first request.
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+
+    # Cache path
+    cache_dir = pack_dir / "skewt" / "route"
+    cache_path = cache_dir / f"pt{point_index:02d}_{model}_hodo.png"
+    if cache_path.exists():
+        return FileResponse(cache_path, media_type="image/png")
+
+    # Load route analyses to get the interpolated time
+    import json
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available")
+
+    ra_data = json.loads(ra_path.read_text())
+    analyses = ra_data.get("analyses", [])
+    point_data = next((a for a in analyses if a["point_index"] == point_index), None)
+    if point_data is None:
+        raise HTTPException(status_code=404, detail=f"Point index {point_index} not found")
+
+    # Load cross-section to get forecast data
+    cs_path = pack_dir / "cross_section.json"
+    if not cs_path.exists():
+        raise HTTPException(status_code=404, detail="Cross-section data not available")
+
+    cs_data = json.loads(cs_path.read_text())
+    cross_sections = cs_data.get("cross_sections", [])
+    cs_match = next((cs for cs in cross_sections if cs["model"] == model), None)
+    if cs_match is None:
+        raise HTTPException(status_code=404, detail=f"Model {model} not found in cross-section")
+
+    if point_index >= len(cs_match["point_forecasts"]):
+        raise HTTPException(status_code=404, detail=f"Point index {point_index} out of range")
+
+    # Find closest forecast hour to the interpolated time
+    from weatherbrief.models import WaypointForecast
+    wf = WaypointForecast.model_validate(cs_match["point_forecasts"][point_index])
+    interp_time_str = point_data["interpolated_time"]
+    interp_time = datetime.fromisoformat(interp_time_str)
+    hourly = wf.at_time(interp_time)
+    if not hourly or not hourly.pressure_levels:
+        raise HTTPException(status_code=404, detail="No forecast data at this point/time")
+
+    # Generate hodograph
+    try:
+        from weatherbrief.digest.skewt import generate_hodograph
+        label = point_data.get("waypoint_icao") or f"pt{point_index:02d}"
+        generate_hodograph(hourly, label, model, cache_path)
+    except Exception as exc:
+        logger.warning("Route hodograph generation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}")
 
     return FileResponse(cache_path, media_type="image/png")
 
