@@ -8,6 +8,11 @@ async function init(): Promise<void> {
   if (user) {
     renderUserInfo(user);
     document.getElementById('getting-access')?.remove();
+  } else {
+    const info = document.getElementById('user-info');
+    if (info) {
+      info.innerHTML = '<a href="/login.html" class="btn-settings">Sign in</a>';
+    }
   }
 }
 
