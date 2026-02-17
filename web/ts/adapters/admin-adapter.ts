@@ -2,15 +2,10 @@
 
 import { apiFetch } from '../utils';
 
-export interface AdminUserUsageToday {
+export interface AdminUserUsage {
   briefings: number;
-  open_meteo: number;
   gramet: number;
   llm_digest: number;
-}
-
-export interface AdminUserUsageMonth {
-  briefings: number;
   total_tokens: number;
 }
 
@@ -22,12 +17,24 @@ export interface AdminUser {
   approved: boolean;
   created_at: string | null;
   last_login_at: string | null;
-  usage_today: AdminUserUsageToday;
-  usage_month: AdminUserUsageMonth;
+  usage_month: AdminUserUsage;
+  disk_usage_bytes: number;
 }
 
-export async function fetchAdminUsers(): Promise<AdminUser[]> {
-  return apiFetch<AdminUser[]>('/admin/users');
+export interface AdminSummary {
+  total_users: number;
+  total_briefings: number;
+  total_tokens: number;
+  total_disk_bytes: number;
+}
+
+export interface AdminUsersResponse {
+  summary: AdminSummary;
+  users: AdminUser[];
+}
+
+export async function fetchAdminUsers(): Promise<AdminUsersResponse> {
+  return apiFetch<AdminUsersResponse>('/admin/users');
 }
 
 export async function approveUser(userId: string): Promise<void> {
