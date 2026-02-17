@@ -1,4 +1,8 @@
-"""Admin notification emails: new-user signup alerts with one-click approval."""
+"""Admin notification emails and user lifecycle emails.
+
+Includes: new-user signup alerts (to admin), one-click approval,
+and welcome emails (to user on approval).
+"""
 
 from __future__ import annotations
 
@@ -111,10 +115,91 @@ def send_new_user_notification(
     msg.attach(MIMEText(html_body, "html"))
 
     logger.info("Sending admin notification for new user %s to %s", email, admin_emails)
+    _smtp_send(smtp_config, msg)
+    logger.info("Admin notification sent for %s", email)
+
+
+def send_welcome_email(
+    email: str,
+    name: str,
+    base_url: str,
+) -> None:
+    """Send a welcome email to a newly approved user.
+
+    In dev mode or if SMTP is not configured, logs instead of sending.
+    """
+    from weatherbrief.api.auth_config import is_dev_mode
+
+    if is_dev_mode():
+        logger.info("Welcome email (dev mode, not sent): %s", email)
+        return
+
+    try:
+        smtp_config = SmtpConfig.from_env()
+    except ValueError:
+        logger.warning("SMTP not configured — cannot send welcome email to %s", email)
+        return
+
+    esc_name = html.escape(name or "there")
+    site_url = html.escape(base_url)
+    help_url = html.escape(f"{base_url}/help.html")
+
+    subject = "[WeatherBrief] Your account has been approved"
+    html_body = f"""\
+<html>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a2e;max-width:560px;">
+  <h2 style="margin:0 0 12px;">Welcome to WeatherBrief, {esc_name}!</h2>
+  <p>Your account has been approved. You can now sign in and start using WeatherBrief
+     for your flight weather planning.</p>
+  <div style="margin:20px 0;">
+    <a href="{site_url}"
+       style="display:inline-block;padding:10px 24px;background:#2563eb;color:#fff;
+              border-radius:6px;text-decoration:none;font-weight:600;">
+      Go to WeatherBrief
+    </a>
+  </div>
+  <p>Before your first flight, we recommend reviewing the
+     <a href="{help_url}" style="color:#2563eb;font-weight:500;">Help &amp; Guide</a>
+     to get the most out of the briefings.</p>
+  <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
+  <p style="color:#6c757d;font-size:13px;">
+    <strong>Early preview</strong> &mdash; WeatherBrief is still in active development.
+    Please review your briefings carefully and don't hesitate to share feedback
+    or report any issues you encounter.
+  </p>
+</body>
+</html>"""
+
+    plain_body = (
+        f"Welcome to WeatherBrief, {name or 'there'}!\n\n"
+        f"Your account has been approved. You can now sign in and start\n"
+        f"using WeatherBrief for your flight weather planning.\n\n"
+        f"Sign in: {base_url}\n\n"
+        f"We recommend reviewing the Help & Guide before your first flight:\n"
+        f"{base_url}/help.html\n\n"
+        f"---\n"
+        f"Early preview — WeatherBrief is still in active development.\n"
+        f"Please review your briefings carefully and don't hesitate to\n"
+        f"share feedback or report any issues you encounter.\n"
+    )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = smtp_config.from_address
+    msg["To"] = email
+    msg.attach(MIMEText(plain_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    logger.info("Sending welcome email to %s", email)
+    _smtp_send(smtp_config, msg)
+    logger.info("Welcome email sent to %s", email)
+
+
+def _smtp_send(smtp_config: SmtpConfig, msg: MIMEMultipart) -> None:
+    """Send an email message via SMTP."""
     with smtplib.SMTP(smtp_config.host, smtp_config.port) as server:
         if smtp_config.use_tls:
             server.starttls()
         if smtp_config.user:
             server.login(smtp_config.user, smtp_config.password)
         server.send_message(msg)
-    logger.info("Admin notification sent for %s", email)

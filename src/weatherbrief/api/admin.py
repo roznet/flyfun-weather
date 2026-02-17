@@ -162,6 +162,7 @@ def list_users(
 
 @router.post("/users/{user_id}/approve")
 def approve_user(
+    request: Request,
     user_id: str,
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -171,14 +172,20 @@ def approve_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    already = user.approved
     user.approved = True
     db.flush()
     logger.info("User %s (%s) approved by admin", user.email, user.id)
+
+    if not already:
+        _send_welcome(user.email, user.display_name, request)
+
     return {"status": "approved", "user_id": user.id, "email": user.email}
 
 
 @router.get("/approve/{user_id}", response_class=HTMLResponse)
 def one_click_approve(
+    request: Request,
     user_id: str,
     ts: str,
     sig: str,
@@ -221,7 +228,26 @@ def one_click_approve(
     else:
         logger.info("One-click approve for %s — approved", user.email)
         status_msg = f"{user.display_name} ({user.email}) has been approved!"
+        _send_welcome(user.email, user.display_name, request)
 
+    return _approve_html(status_msg)
+
+
+def _send_welcome(email: str, name: str, request: Request) -> None:
+    """Fire-and-forget welcome email to the newly approved user."""
+    try:
+        from weatherbrief.notify.admin_email import send_welcome_email
+
+        base_url = str(request.base_url).rstrip("/")
+        if not is_dev_mode():
+            base_url = base_url.replace("http://", "https://")
+        send_welcome_email(email, name, base_url)
+    except Exception:
+        logger.warning("Failed to send welcome email to %s", email, exc_info=True)
+
+
+def _approve_html(status_msg: str) -> str:
+    """Render the one-click approval confirmation page."""
     return f"""\
 <!DOCTYPE html>
 <html lang="en">
