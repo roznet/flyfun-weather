@@ -351,8 +351,10 @@ async function init(): Promise<void> {
       refreshBtn.style.display = '';
     }
 
-    // Check freshness after loading
-    if (s.packs.length > 0) {
+    // Auto-refresh on first visit (no packs yet), otherwise check freshness
+    if (s.packs.length === 0 && s.flight?.user_id === user.id) {
+      store.getState().refresh();
+    } else if (s.packs.length > 0) {
       store.getState().checkFreshness();
     }
   });
