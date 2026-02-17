@@ -1,7 +1,7 @@
 /** Admin page entry point — user management and usage overview. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { fetchAdminUsers, approveUser, type AdminUser } from './adapters/admin-adapter';
+import { fetchAdminUsers, approveUser, type AdminUser, type AdminSummary } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 
 async function init(): Promise<void> {
@@ -16,13 +16,18 @@ async function init(): Promise<void> {
 }
 
 async function loadUsers(): Promise<void> {
+  const summaryBar = document.getElementById('summary-bar')!;
   const pendingSection = document.getElementById('pending-section')!;
   const pendingList = document.getElementById('pending-list')!;
   const usersBody = document.getElementById('users-tbody')!;
   const errorEl = document.getElementById('error-message')!;
 
   try {
-    const users = await fetchAdminUsers();
+    const response = await fetchAdminUsers();
+    const { summary, users } = response;
+
+    // Summary bar
+    renderSummaryBar(summaryBar, summary);
 
     // Pending approvals
     const pending = users.filter(u => !u.approved);
@@ -65,6 +70,19 @@ async function handleApprove(e: Event): Promise<void> {
   }
 }
 
+function renderSummaryBar(el: HTMLElement, s: AdminSummary): void {
+  const tokens = s.total_tokens >= 1000
+    ? `~${Math.round(s.total_tokens / 1000)}K`
+    : String(s.total_tokens);
+  el.style.display = '';
+  el.innerHTML = `
+    <div class="summary-card"><div class="value">${s.total_users}</div><div class="label">Users</div></div>
+    <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Briefings (Mo)</div></div>
+    <div class="summary-card"><div class="value">${tokens}</div><div class="label">Tokens (Mo)</div></div>
+    <div class="summary-card"><div class="value">${formatBytes(s.total_disk_bytes)}</div><div class="label">Disk</div></div>
+  `;
+}
+
 function renderPendingCard(u: AdminUser): string {
   const created = u.created_at ? formatDate(u.created_at) : 'Unknown';
   return `
@@ -85,7 +103,6 @@ function renderUserRow(u: AdminUser): string {
     ? '<span class="badge badge-green">Active</span>'
     : '<span class="badge badge-amber">Pending</span>';
   const lastLogin = u.last_login_at ? formatDate(u.last_login_at) : '-';
-  const t = u.usage_today;
   const m = u.usage_month;
   const tokens = m.total_tokens >= 1000
     ? `~${Math.round(m.total_tokens / 1000)}K`
@@ -99,14 +116,21 @@ function renderUserRow(u: AdminUser): string {
       <td>${escapeHtml(u.email)}</td>
       <td>${status} ${approveBtn}</td>
       <td>${lastLogin}</td>
-      <td class="num">${t.briefings}</td>
-      <td class="num">${t.gramet}</td>
-      <td class="num">${t.llm_digest}</td>
+      <td class="num">${m.briefings}</td>
+      <td class="num">${m.gramet}</td>
+      <td class="num">${m.llm_digest}</td>
       <td class="num">${tokens}</td>
+      <td class="num">${formatBytes(u.disk_usage_bytes)}</td>
     </tr>`;
 }
 
-// formatDate imported from utils
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, i);
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
+}
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);

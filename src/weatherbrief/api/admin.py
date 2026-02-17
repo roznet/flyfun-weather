@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -18,6 +20,7 @@ from weatherbrief.db.deps import get_db
 from weatherbrief.db.models import BriefingUsageRow, UserRow
 from weatherbrief.db.engine import DEV_USER_ID
 from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails
+from weatherbrief.storage.flights import safe_path_component
 
 logger = logging.getLogger(__name__)
 
@@ -62,48 +65,45 @@ def require_admin(request: Request) -> str:
 # --- Endpoints ---
 
 
+def _user_disk_bytes(data_dir: Path, user_id: str) -> int:
+    """Sum file sizes under data/packs/{safe_user_id}/."""
+    user_dir = data_dir / "packs" / safe_path_component(user_id)
+    if not user_dir.is_dir():
+        return 0
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(user_dir):
+        for f in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, f))
+            except OSError:
+                pass
+    return total
+
+
 @router.get("/users")
 def list_users(
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """List all users with today and month usage summaries."""
+    """List all users with monthly usage summaries and disk usage."""
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     users = db.query(UserRow).order_by(UserRow.created_at.desc()).all()
-
-    # Batch-query today's usage grouped by user_id
-    today_rows = (
-        db.query(
-            BriefingUsageRow.user_id,
-            func.count().label("briefings"),
-            func.coalesce(func.sum(BriefingUsageRow.open_meteo_calls), 0).label("open_meteo"),
-            func.coalesce(func.sum(func.cast(BriefingUsageRow.gramet_fetched, Integer)), 0).label("gramet"),
-            func.coalesce(func.sum(func.cast(BriefingUsageRow.llm_digest, Integer)), 0).label("llm_digest"),
-        )
-        .filter(BriefingUsageRow.timestamp >= today_start)
-        .group_by(BriefingUsageRow.user_id)
-        .all()
-    )
-    today_map = {
-        r.user_id: {
-            "briefings": r.briefings,
-            "open_meteo": int(r.open_meteo),
-            "gramet": int(r.gramet),
-            "llm_digest": int(r.llm_digest),
-        }
-        for r in today_rows
-    }
 
     # Batch-query month usage grouped by user_id
     month_rows = (
         db.query(
             BriefingUsageRow.user_id,
             func.count().label("briefings"),
+            func.coalesce(
+                func.sum(func.cast(BriefingUsageRow.gramet_fetched, Integer)), 0
+            ).label("gramet"),
+            func.coalesce(
+                func.sum(func.cast(BriefingUsageRow.llm_digest, Integer)), 0
+            ).label("llm_digest"),
             func.coalesce(
                 func.sum(BriefingUsageRow.llm_input_tokens), 0
             ).label("input_tokens"),
@@ -118,17 +118,22 @@ def list_users(
     month_map = {
         r.user_id: {
             "briefings": r.briefings,
+            "gramet": int(r.gramet),
+            "llm_digest": int(r.llm_digest),
             "total_tokens": int(r.input_tokens) + int(r.output_tokens),
         }
         for r in month_rows
     }
 
-    default_today = {"briefings": 0, "open_meteo": 0, "gramet": 0, "llm_digest": 0}
-    default_month = {"briefings": 0, "total_tokens": 0}
+    default_month = {"briefings": 0, "gramet": 0, "llm_digest": 0, "total_tokens": 0}
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
 
-    result = []
+    user_list = []
+    total_disk = 0
     for u in users:
-        result.append({
+        disk = _user_disk_bytes(data_dir, u.id)
+        total_disk += disk
+        user_list.append({
             "id": u.id,
             "email": u.email,
             "display_name": u.display_name,
@@ -136,10 +141,23 @@ def list_users(
             "approved": u.approved,
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
-            "usage_today": today_map.get(u.id, default_today),
             "usage_month": month_map.get(u.id, default_month),
+            "disk_usage_bytes": disk,
         })
-    return result
+
+    # Aggregate summary from per-user month stats
+    total_briefings = sum(u["usage_month"]["briefings"] for u in user_list)
+    total_tokens = sum(u["usage_month"]["total_tokens"] for u in user_list)
+
+    return {
+        "summary": {
+            "total_users": len(user_list),
+            "total_briefings": total_briefings,
+            "total_tokens": total_tokens,
+            "total_disk_bytes": total_disk,
+        },
+        "users": user_list,
+    }
 
 
 @router.post("/users/{user_id}/approve")
