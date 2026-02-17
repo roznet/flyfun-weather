@@ -1,15 +1,14 @@
-/** Help page entry point — auth check + user info only. Content is static HTML. */
+/** Help page entry point — user info if signed in. Content is static HTML, no auth required. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { renderUserInfo } from './utils';
 
 async function init(): Promise<void> {
   const user = await fetchCurrentUser();
-  if (!user) {
-    window.location.href = '/login.html';
-    return;
+  if (user) {
+    renderUserInfo(user);
+    document.getElementById('getting-access')?.remove();
   }
-  renderUserInfo(user);
 }
 
 init();

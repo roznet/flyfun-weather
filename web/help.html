@@ -22,15 +22,25 @@
       <h3>About WeatherBrief</h3>
       <p>
         WeatherBrief is an exploratory weather briefing tool for general aviation pilots.
-        It fetches forecasts from multiple numerical weather prediction (NWP) models and
-        runs analysis routines to produce advisories, cross-sections, soundings, and a
-        synthesized overview of conditions along your planned route.
+        Its goal is to help you form an early picture of how weather patterns are coming
+        together by comparing multiple numerical weather prediction (NWP) models. It exposes
+        the rich data that forecasting models provide &mdash; soundings, cross-sections,
+        thermodynamic indices, advisories &mdash; and lets you see where models agree and
+        where they diverge, so you can gauge confidence days before a planned flight.
       </p>
-      <div class="help-tip">
-        WeatherBrief is designed for <strong>multi-model comparison</strong> &mdash; instead of
-        relying on a single forecast, it shows you where models agree and where they diverge,
-        so you can gauge confidence in the forecast.
-      </div>
+      <p>
+        While it provides digests and advisories that distil the data into a simple
+        green/amber/red system, the general philosophy is to <strong>expose all the raw
+        data</strong> &mdash; soundings, cross-sections, thermodynamic indices, per-model
+        values &mdash; with explanations, so you have full transparency into the underlying
+        uncertainty and numbers behind any summary.
+      </p>
+      <p>
+        WeatherBrief is designed for <strong>longer-range planning</strong>, not for the
+        final go/no-go decision. It does not include METARs, TAFs, SIGMETs, AIRMETs, or
+        official weather synopses &mdash; for the day-of briefing you should always rely on
+        those official sources from your national aviation authority.
+      </p>
     </div>
 
     <!-- Getting Started -->
@@ -54,26 +64,40 @@
 
       <h4>Route Advisories</h4>
       <p>
-        Advisories flag hazardous conditions along your route. Each advisory is rated
+        Advisories bring together the model data that informs key patterns a pilot may want
+        to consider when making an early decision around flying, cancelling, or adjusting
+        the timing of a flight. They look at conditions such as winds, icing, convection,
+        cloud ceilings, and turbulence that can be deduced from the NWP models along your route.
+      </p>
+      <p>
+        Each advisory is rated
         <span class="badge badge-green">GREEN</span>,
         <span class="badge badge-amber">AMBER</span>, or
         <span class="badge badge-red">RED</span>
-        based on configurable thresholds. Advisories are computed <em>per-model</em>, so you
-        can see whether multiple models agree on a hazard or if only one flags it.
+        based on configurable thresholds. Advisories are evaluated <em>per-model</em>, so you
+        can see whether models agree on a hazard or only one flags it. The summary rating
+        shown for each advisory reflects the worst-case across all models.
       </p>
-      <p>Categories include icing, turbulence, cloud/visibility, convective activity, and airport conditions.</p>
+      <p>
+        Categories include icing, turbulence, cloud/visibility, convective activity, and
+        airport conditions. You can enable, disable, and tune the thresholds of each
+        advisory in <a href="/settings.html">Settings</a>.
+      </p>
 
       <h4>Synopsis</h4>
       <p>
         An LLM-generated plain-language overview of the weather situation along your route.
         It summarizes the key findings from the numerical analysis in a concise narrative.
+        This section requires the <strong>AI Digest</strong> service to be enabled in
+        <a href="/settings.html">Settings</a>.
       </p>
 
       <h4>GRAMET Cross-Section</h4>
       <p>
         A vertical cross-section chart from <a href="https://www.autorouter.aero" target="_blank" rel="noopener">autorouter.aero</a>
         showing cloud, wind, temperature, and turbulence along your route. This requires
-        Autorouter credentials configured in <a href="/settings.html">Settings</a>.
+        the <strong>GRAMET</strong> service to be enabled and Autorouter credentials configured
+        in <a href="/settings.html">Settings</a>.
       </p>
 
       <h4>Cross-Section Visualization</h4>
@@ -132,18 +156,30 @@
     <!-- Settings -->
     <div class="help-section">
       <h3>Settings</h3>
+      <h4>Services</h4>
       <ul>
-        <li><strong>Forecast Models</strong> &mdash; choose which NWP models are fetched on each briefing refresh.</li>
-        <li><strong>Advisory Parameters</strong> &mdash; enable/disable individual advisories and fine-tune their thresholds (e.g. icing temperature band, crosswind limits).</li>
+        <li><strong>Forecast Models</strong> &mdash; choose which NWP models are fetched on each briefing refresh. By default, Best Match, GFS, ECMWF IFS, and DWD ICON are enabled.</li>
+        <li><strong>GRAMET</strong> &mdash; enable or disable Autorouter GRAMET cross-section charts.</li>
+        <li><strong>AI Digest</strong> &mdash; enable or disable the LLM-generated weather synopsis.</li>
+        <li><strong>Autorouter Credentials</strong> &mdash; enter your autorouter.aero username and password for GRAMET charts. Credentials are encrypted at rest.</li>
+      </ul>
+      <h4>Flight Parameters</h4>
+      <ul>
         <li><strong>Flight Defaults</strong> &mdash; set default cruise altitude and ceiling for new flights.</li>
-        <li><strong>Autorouter Credentials</strong> &mdash; enter your autorouter.aero username and password to enable GRAMET charts. Credentials are encrypted at rest.</li>
+        <li><strong>Advisory Models</strong> &mdash; select which models are used for advisory evaluation (must be a subset of your enabled forecast models).</li>
+        <li><strong>Advisory Parameters</strong> &mdash; enable/disable individual advisories and fine-tune their thresholds (e.g. icing temperature band, crosswind limits).</li>
       </ul>
     </div>
 
     <!-- Data Sources -->
     <div class="help-section">
       <h3>Data Sources &amp; Models</h3>
-      <p>WeatherBrief fetches data from the following NWP models:</p>
+      <p>
+        WeatherBrief fetches data from the following NWP models via
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.
+        Each model uses a <em>seamless</em> blend that automatically selects the highest-resolution
+        variant available for the queried location.
+      </p>
       <table class="help-table">
         <thead>
           <tr>
@@ -151,17 +187,95 @@
             <th>Provider</th>
             <th>Coverage</th>
             <th>Resolution</th>
+            <th>Range</th>
+            <th>Levels</th>
+            <th>Source</th>
           </tr>
         </thead>
         <tbody>
-          <tr><td>GFS</td><td>NOAA (US)</td><td>Global</td><td>0.25&deg;</td></tr>
-          <tr><td>ICON-EU</td><td>DWD (Germany)</td><td>Europe</td><td>0.0625&deg;</td></tr>
-          <tr><td>AROME</td><td>M&eacute;t&eacute;o-France</td><td>Western Europe</td><td>0.025&deg;</td></tr>
-          <tr><td>ARPEGE</td><td>M&eacute;t&eacute;o-France</td><td>Global</td><td>0.1&deg;</td></tr>
-          <tr><td>UKMO</td><td>Met Office (UK)</td><td>Global</td><td>0.1&deg;</td></tr>
-          <tr><td>ECMWF IFS</td><td>ECMWF</td><td>Global</td><td>0.25&deg;</td></tr>
+          <tr>
+            <td>Best Match*</td>
+            <td>Open-Meteo</td>
+            <td>Global</td>
+            <td>varies by location</td>
+            <td>16 days</td>
+            <td>25</td>
+            <td><a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener">Open-Meteo</a></td>
+          </tr>
+          <tr>
+            <td>GFS</td>
+            <td>NOAA (US)</td>
+            <td>Global</td>
+            <td>0.25&deg; (~25 km)</td>
+            <td>16 days</td>
+            <td>25</td>
+            <td><a href="https://open-meteo.com/en/docs/gfs-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+          </tr>
+          <tr>
+            <td>ECMWF IFS</td>
+            <td>ECMWF</td>
+            <td>Global</td>
+            <td>0.25&deg; (~25 km)</td>
+            <td>10 days</td>
+            <td>8</td>
+            <td><a href="https://open-meteo.com/en/docs/ecmwf-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+          </tr>
+          <tr>
+            <td>DWD ICON</td>
+            <td>DWD (Germany)</td>
+            <td>Global</td>
+            <td>11 km; 7 km over Europe</td>
+            <td>7 days</td>
+            <td>12</td>
+            <td><a href="https://open-meteo.com/en/docs/dwd-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+          </tr>
+          <tr>
+            <td>UK Met Office</td>
+            <td>Met Office (UK)</td>
+            <td>Global</td>
+            <td>10 km; 2 km over UK</td>
+            <td>7 days</td>
+            <td>17</td>
+            <td><a href="https://open-meteo.com/en/docs/ukmo-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+          </tr>
+          <tr>
+            <td>M&eacute;t&eacute;o-France</td>
+            <td>M&eacute;t&eacute;o-France</td>
+            <td>Global</td>
+            <td>25 km; 11 km (EU); 2.5 km (France)</td>
+            <td>6 days</td>
+            <td>16</td>
+            <td><a href="https://open-meteo.com/en/docs/meteofrance-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+          </tr>
+          <tr>
+            <td>GEM</td>
+            <td>ECCC (Canada)</td>
+            <td>Global</td>
+            <td>15 km; 10 km (N.&nbsp;America)</td>
+            <td>10 days</td>
+            <td>17</td>
+            <td><a href="https://open-meteo.com/en/docs/gem-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+          </tr>
         </tbody>
       </table>
+      <p class="muted" style="margin-top: 0.5rem;">
+        *<strong>Best Match</strong> is Open-Meteo's automatic blend &mdash; it picks the
+        highest-resolution model available at each location rather than running a single model.
+      </p>
+      <p class="muted" style="margin-top: 0.25rem;">
+        <strong>Levels</strong> = number of pressure levels between 1000&ndash;300 hPa used for
+        upper-air analysis (soundings, cross-sections). More levels give finer vertical detail.
+        <strong>Range</strong> = maximum forecast horizon.
+      </p>
+    </div>
+
+    <!-- Early Access (hidden when signed in) -->
+    <div class="help-section" id="getting-access">
+      <h3>Getting Access</h3>
+      <p>
+        WeatherBrief is currently in early preview. To request access, sign in with Google
+        and wait for an email confirmation that your account has been enabled.
+      </p>
     </div>
 
     <!-- Disclaimer -->
