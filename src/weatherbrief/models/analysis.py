@@ -479,6 +479,18 @@ class VerticalRegime(BaseModel):
     cat_risk: Optional[str] = None  # CAT turbulence risk level at this regime
     strong_vertical_motion: bool = False  # |w| > 200 fpm
     label: str  # e.g. "Clear", "In cloud 95%", "In cloud, icing MOD (mixed)"
+    # Cloud diagnostics (from EnhancedCloudLayer)
+    cloud_coverage: Optional[str] = None  # "sct", "bkn", "ovc"
+    mean_temperature_c: Optional[float] = None
+    mean_dewpoint_depression_c: Optional[float] = None
+    # Icing diagnostics (from IcingZone)
+    sld_risk: bool = False
+    mean_wet_bulb_c: Optional[float] = None
+    mean_rh_pct: Optional[float] = None
+    mean_icing_index: Optional[float] = None
+    # Inversion diagnostics (from InversionLayer)
+    inversion_strength_c: Optional[float] = None
+    inversion_surface_based: bool = False
 
 
 class AltitudeAdvisory(BaseModel):

@@ -79,6 +79,43 @@ def _round_alt(ft: float, step: int = 1000) -> float:
     return round(ft / step) * step
 
 
+def _cloud_diagnostics_at(
+    altitude_ft: float, analysis: SoundingAnalysis,
+) -> tuple[str | None, float | None, float | None]:
+    """Return (coverage, mean_temperature_c, mean_dewpoint_depression_c) at altitude."""
+    for cl in analysis.cloud_layers:
+        if cl.base_ft <= altitude_ft <= cl.top_ft:
+            return cl.coverage.value if hasattr(cl.coverage, "value") else cl.coverage, cl.mean_temperature_c, cl.mean_dewpoint_depression_c
+    return None, None, None
+
+
+def _icing_diagnostics_at(
+    altitude_ft: float, analysis: SoundingAnalysis,
+) -> tuple[bool, float | None, float | None, float | None]:
+    """Return (sld_risk, mean_wet_bulb_c, mean_rh_pct, mean_icing_index) at altitude.
+
+    Returns values from the worst-risk zone when multiple overlap.
+    """
+    worst_risk = IcingRisk.NONE
+    result: tuple[bool, float | None, float | None, float | None] = (False, None, None, None)
+    for zone in analysis.icing_zones:
+        if zone.base_ft <= altitude_ft <= zone.top_ft:
+            if _ICING_ORDER.index(zone.risk) > _ICING_ORDER.index(worst_risk):
+                worst_risk = zone.risk
+                result = (zone.sld_risk, zone.mean_wet_bulb_c, zone.mean_rh_pct, zone.mean_icing_index)
+    return result
+
+
+def _inversion_diagnostics_at(
+    altitude_ft: float, analysis: SoundingAnalysis,
+) -> tuple[float | None, bool]:
+    """Return (strength_c, surface_based) at altitude."""
+    for inv in analysis.inversion_layers:
+        if inv.base_ft <= altitude_ft <= inv.top_ft:
+            return inv.strength_c, inv.surface_based
+    return None, False
+
+
 def _compute_regimes(
     analysis: SoundingAnalysis, ceiling_ft: int
 ) -> list[VerticalRegime]:
@@ -145,6 +182,11 @@ def _compute_regimes(
         label = _regime_label(in_cloud, icing_risk, icing_type, cloud_cover,
                               cat_risk, strong_motion, inversion)
 
+        # Diagnostic values from underlying layers
+        cloud_cov, cloud_temp, cloud_dd = _cloud_diagnostics_at(midpoint, analysis)
+        sld, tw, rh, ix = _icing_diagnostics_at(midpoint, analysis)
+        inv_strength, inv_sfc = _inversion_diagnostics_at(midpoint, analysis)
+
         raw_regimes.append(VerticalRegime(
             floor_ft=floor,
             ceiling_ft=ceil,
@@ -156,6 +198,15 @@ def _compute_regimes(
             cat_risk=cat_risk,
             strong_vertical_motion=strong_motion,
             label=label,
+            cloud_coverage=cloud_cov,
+            mean_temperature_c=cloud_temp,
+            mean_dewpoint_depression_c=cloud_dd,
+            sld_risk=sld,
+            mean_wet_bulb_c=tw,
+            mean_rh_pct=rh,
+            mean_icing_index=ix,
+            inversion_strength_c=inv_strength,
+            inversion_surface_based=inv_sfc,
         ))
 
     # Merge adjacent regimes with identical conditions
@@ -180,20 +231,11 @@ def _compute_regimes(
             and prev.cloud_cover_pct == regime.cloud_cover_pct
             and prev.cat_risk == regime.cat_risk
             and prev.strong_vertical_motion == regime.strong_vertical_motion
+            and prev.cloud_coverage == regime.cloud_coverage
+            and prev.sld_risk == regime.sld_risk
         ):
             # Extend the previous regime
-            merged[-1] = VerticalRegime(
-                floor_ft=prev.floor_ft,
-                ceiling_ft=regime.ceiling_ft,
-                in_cloud=prev.in_cloud,
-                icing_risk=prev.icing_risk,
-                icing_type=prev.icing_type,
-                inversion=prev.inversion,
-                cloud_cover_pct=prev.cloud_cover_pct,
-                cat_risk=prev.cat_risk,
-                strong_vertical_motion=prev.strong_vertical_motion,
-                label=prev.label,
-            )
+            merged[-1] = prev.model_copy(update={"ceiling_ft": regime.ceiling_ft})
         else:
             merged.append(regime)
 

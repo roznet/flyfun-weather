@@ -515,14 +515,29 @@ label {
   margin-bottom: 0.5rem;
 }
 
-.altitude-markers, .icing-zones, .enhanced-clouds {
+.altitude-markers, .atmospheric-profile {
   margin-bottom: 0.5rem;
 }
 
-.marker-row, .icing-row, .cloud-row {
+.marker-row {
   font-size: 0.85rem;
   padding: 0.2rem 0;
 }
+
+/* Horizontal scroll for wide tables */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Unified atmospheric profile cells */
+.regime-cell { text-align: left; vertical-align: top; line-height: 1.3; }
+.regime-cloud, .regime-icing, .regime-inversion, .regime-cat, .regime-motion { font-size: 0.75rem; white-space: nowrap; }
+.regime-params { font-size: 0.65rem; color: var(--text-muted); white-space: nowrap; margin-bottom: 0.15rem; }
+.regime-nwp { color: var(--text-muted); font-size: 0.7rem; }
+.regime-icing { font-weight: 500; }
+.regime-inversion { color: var(--amber); font-size: 0.7rem; }
+.regime-cat, .regime-motion { color: var(--red); }
+.regime-clear { color: var(--text-muted); }
+.regime-cell .metric-info-btn { font-size: 0.6rem; vertical-align: middle; padding: 0; margin-left: 0.15rem; opacity: 0.5; }
+.regime-cell .metric-info-btn:hover { opacity: 1; }
 
 .risk-marginal { color: #888; }
 .risk-light { color: var(--green); }

@@ -159,10 +159,23 @@ export interface VerticalRegime {
   in_cloud: boolean;
   icing_risk: IcingRisk;
   icing_type: IcingType;
+  inversion: boolean;
   cloud_cover_pct: number | null;
   cat_risk: string | null;
   strong_vertical_motion: boolean;
   label: string;
+  // Cloud diagnostics
+  cloud_coverage: string | null;
+  mean_temperature_c: number | null;
+  mean_dewpoint_depression_c: number | null;
+  // Icing diagnostics
+  sld_risk: boolean;
+  mean_wet_bulb_c: number | null;
+  mean_rh_pct: number | null;
+  mean_icing_index: number | null;
+  // Inversion diagnostics
+  inversion_strength_c: number | null;
+  inversion_surface_based: boolean;
 }
 
 export interface AltitudeAdvisory {
