@@ -68,6 +68,7 @@ function extractPoint(
     baseFt: cl.base_ft,
     topFt: cl.top_ft,
     coverage: cl.coverage,
+    meanDewpointDepressionC: cl.mean_dewpoint_depression_c ?? undefined,
   }));
 
   const icingZones: VizIcingZone[] = (sounding?.icing_zones ?? []).map((iz) => ({
