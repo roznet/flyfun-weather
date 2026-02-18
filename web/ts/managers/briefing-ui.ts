@@ -15,6 +15,7 @@ import type {
   RoutePointAnalysis,
   SoundingAnalysis,
   ThermodynamicIndices,
+  VerticalRegime,
   WeatherDigest,
   WindComponent,
 } from '../store/types';
@@ -500,11 +501,8 @@ export function renderSoundingAnalysis(
         ${renderConvectiveBanner(a.sounding, displayMode, tierVisibility)}
         ${renderVerticalMotion(a.sounding, displayMode)}
         ${renderAltitudeMarkers(a.sounding, displayMode, tierVisibility)}
-        ${renderIcingZones(a.sounding, displayMode)}
-        ${renderEnhancedClouds(a.sounding, displayMode)}
-        ${renderInversions(a.sounding)}
-        ${renderNwpCloudCover(a.sounding)}
-        ${renderAltitudeAdvisories(a.altitude_advisories)}
+        ${renderAtmosphericProfile(a.sounding, a.altitude_advisories)}
+        ${renderAdvisoriesTable(a.altitude_advisories)}
       </div>
     `;
   }).join('');
@@ -824,208 +822,101 @@ function renderAltitudeMarkers(
   `;
 }
 
-function renderIcingZones(soundings: Record<string, SoundingAnalysis>, displayMode: DisplayMode = 'annotated'): string {
-  const models = Object.keys(soundings);
-  const hasIcing = models.some((m) => soundings[m].icing_zones.length > 0);
-  if (!hasIcing) return '';
-
-  // Collect all boundary altitudes across models, rounded to 500ft
-  const allAlts = new Set<number>();
-  for (const m of models) {
-    for (const z of soundings[m].icing_zones) {
-      allAlts.add(roundAlt(z.base_ft));
-      allAlts.add(roundAlt(z.top_ft));
-    }
-  }
-  const sortedAlts = [...allAlts].sort((a, b) => b - a); // top-down
-  if (sortedAlts.length < 2) return '';
-
-  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
-
-  const rows = sortedAlts.slice(0, -1).map((alt, i) => {
-    const nextAlt = sortedAlts[i + 1];
-    const midpoint = (alt + nextAlt) / 2;
-
-    let anyHit = false;
-    const cells = models.map((m) => {
-      const zone = soundings[m].icing_zones.find(
-        (z) => z.base_ft <= midpoint && z.top_ft >= midpoint,
-      );
-      if (!zone) return '<td>\u2014</td>';
-      anyHit = true;
-      const sld = zone.sld_risk ? ' SLD' : '';
-      const tw = zone.mean_wet_bulb_c != null ? ` Tw=${zone.mean_wet_bulb_c.toFixed(0)}\u00B0C` : '';
-      const rh = zone.mean_rh_pct != null ? ` RH=${zone.mean_rh_pct.toFixed(0)}%` : '';
-      const pw = soundings[m].indices?.precipitable_water_mm;
-      const pwStr = pw != null ? ` PW=${pw.toFixed(0)}mm` : '';
-      const hint = displayMode === 'annotated' ? riskHint('icing_risk', zone.risk) : '';
-      return `<td class="${riskClass(zone.risk)}">${zone.risk.toUpperCase()} ${zone.icing_type}${tw}${rh}${pwStr}${sld}${hint}</td>`;
-    }).join('');
-
-    if (!anyHit) return '';
-    return `<tr><td class="var-name">${nextAlt}-${alt}ft</td>${cells}</tr>`;
-  }).join('');
-
-  const infoBtn = renderInfoButton('icing_risk');
-
-  return `
-    <div class="icing-zones">
-      <h5>Icing Zones <span class="section-info-btn">${infoBtn}</span></h5>
-      <table class="band-table">
-        <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderEnhancedClouds(soundings: Record<string, SoundingAnalysis>, displayMode: DisplayMode = 'annotated'): string {
-  const models = Object.keys(soundings);
-  const hasClouds = models.some((m) => soundings[m].cloud_layers.length > 0);
-  if (!hasClouds) return '';
-
-  // Collect all boundary altitudes across models, rounded to 500ft
-  const allAlts = new Set<number>();
-  for (const m of models) {
-    for (const cl of soundings[m].cloud_layers) {
-      allAlts.add(roundAlt(cl.base_ft));
-      allAlts.add(roundAlt(cl.top_ft));
-    }
-  }
-  const sortedAlts = [...allAlts].sort((a, b) => b - a);
-  if (sortedAlts.length < 2) return '';
-
-  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
-
-  const rows = sortedAlts.slice(0, -1).map((alt, i) => {
-    const nextAlt = sortedAlts[i + 1];
-    const midpoint = (alt + nextAlt) / 2;
-
-    let anyHit = false;
-    const cells = models.map((m) => {
-      const layer = soundings[m].cloud_layers.find(
-        (cl) => cl.base_ft <= midpoint && cl.top_ft >= midpoint,
-      );
-      if (!layer) return '<td>\u2014</td>';
-      anyHit = true;
-      const t = layer.mean_temperature_c != null ? ` T=${layer.mean_temperature_c.toFixed(0)}\u00B0C` : '';
-      const covHint = displayMode === 'annotated' ? coverageHint(layer.coverage) : '';
-      return `<td>${layer.coverage.toUpperCase()}${t}${covHint}</td>`;
-    }).join('');
-
-    if (!anyHit) return '';
-    return `<tr><td class="var-name">${nextAlt}-${alt}ft</td>${cells}</tr>`;
-  }).join('');
-
-  const cloudInfoBtn = renderInfoButton('cloud_coverage');
-  return `
-    <div class="enhanced-clouds">
-      <h5>Cloud Layers <span class="section-info-btn">${cloudInfoBtn}</span></h5>
-      <p class="section-hint">Derived from sounding dewpoint depression at pressure levels.</p>
-      <table class="band-table">
-        <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderNwpCloudCover(soundings: Record<string, SoundingAnalysis>): string {
-  const models = Object.keys(soundings);
-  const hasNwp = models.some((m) =>
-    soundings[m].cloud_cover_low_pct != null ||
-    soundings[m].cloud_cover_mid_pct != null ||
-    soundings[m].cloud_cover_high_pct != null,
-  );
-  if (!hasNwp) return '';
-
-  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
-
-  const rowSpecs: Array<{ key: 'cloud_cover_high_pct' | 'cloud_cover_mid_pct' | 'cloud_cover_low_pct'; label: string }> = [
-    { key: 'cloud_cover_high_pct', label: 'High' },
-    { key: 'cloud_cover_mid_pct', label: 'Mid' },
-    { key: 'cloud_cover_low_pct', label: 'Low' },
-  ];
-
-  const rows = rowSpecs.map(({ key, label }) => {
-    const cells = models.map((m) => {
-      const v = soundings[m][key];
-      return `<td>${v != null ? v.toFixed(0) + '%' : '\u2014'}</td>`;
-    }).join('');
-    return `<tr><td class="var-name">${label}</td>${cells}</tr>`;
-  }).join('');
-
-  const nwpInfoBtn = renderInfoButton('nwp_cloud_cover');
-  return `
-    <div class="nwp-cloud-cover">
-      <h5>Model Cloud Cover <span class="section-info-btn">${nwpInfoBtn}</span></h5>
-      <p class="section-hint">Direct model output. Low: SFC\u20136,500ft, Mid: 6,500\u201320,000ft, High: &gt;20,000ft.</p>
-      <table class="band-table">
-        <thead><tr><th></th>${headerCells}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  `;
-}
-
 function inversionStrengthLabel(strengthC: number): string {
   if (strengthC >= 3) return 'strong';
   if (strengthC >= 1) return 'moderate';
   return 'weak';
 }
 
-function renderInversions(soundings: Record<string, SoundingAnalysis>): string {
-  const models = Object.keys(soundings);
-  const hasInv = models.some((m) => soundings[m].inversion_layers.length > 0);
-  if (!hasInv) return '';
+const COVERAGE_OKTAS: Record<string, string> = {
+  sct: '3\u20134/8',
+  bkn: '5\u20137/8',
+  ovc: '8/8',
+};
 
-  // Collect all boundary altitudes across models, rounded to 500ft
-  const allAlts = new Set<number>();
-  for (const m of models) {
-    for (const inv of soundings[m].inversion_layers) {
-      allAlts.add(roundAlt(inv.base_ft));
-      allAlts.add(roundAlt(inv.top_ft));
+/** Build the multi-line HTML content for a single regime cell. */
+function regimeCellContent(regime: VerticalRegime): string {
+  const lines: string[] = [];
+
+  // Cloud: headline + params subtitle
+  if (regime.in_cloud) {
+    if (regime.cloud_coverage) {
+      const cov = regime.cloud_coverage.toUpperCase();
+      const oktas = COVERAGE_OKTAS[regime.cloud_coverage] ?? '';
+      const oktasStr = oktas ? ` (${oktas})` : '';
+      const infoBtn = renderInfoButton('cloud_coverage', regime.cloud_coverage);
+      lines.push(`<div class="regime-cloud">${cov}${oktasStr} ${infoBtn}</div>`);
+      const params: string[] = [];
+      if (regime.mean_dewpoint_depression_c != null)
+        params.push(`DD=${regime.mean_dewpoint_depression_c.toFixed(1)}\u00b0C`);
+      if (regime.mean_temperature_c != null)
+        params.push(`T=${regime.mean_temperature_c.toFixed(0)}\u00b0C`);
+      if (regime.cloud_cover_pct != null)
+        params.push(`NWP\u00a0${regime.cloud_cover_pct.toFixed(0)}%`);
+      if (params.length > 0)
+        lines.push(`<div class="regime-params">${params.join(' ')}</div>`);
+    } else {
+      // Old data: no coverage detail
+      lines.push(`<div class="regime-cloud">In cloud</div>`);
     }
   }
-  const sortedAlts = [...allAlts].sort((a, b) => b - a); // top-down
-  if (sortedAlts.length < 2) return '';
 
-  const headerCells = models.map((m) => `<th>${modelLabel(m)}</th>`).join('');
+  // Icing: headline + params subtitle
+  if (regime.icing_risk !== 'none') {
+    const risk = regime.icing_risk.toUpperCase();
+    const type = regime.icing_type !== 'none' ? ` ${regime.icing_type}` : '';
+    const sld = regime.sld_risk ? ' <span class="sld-badge">SLD</span>' : '';
+    const infoBtn = renderInfoButton('icing_risk', regime.icing_risk);
+    lines.push(`<div class="regime-icing">${risk}${type}${sld} ${infoBtn}</div>`);
+    const params: string[] = [];
+    if (regime.mean_wet_bulb_c != null)
+      params.push(`Tw=${regime.mean_wet_bulb_c.toFixed(0)}\u00b0C`);
+    if (regime.mean_icing_index != null)
+      params.push(`Ix=${regime.mean_icing_index.toFixed(0)} ${renderInfoButton('ogimet_index', regime.mean_icing_index)}`);
+    if (regime.mean_rh_pct != null)
+      params.push(`RH=${regime.mean_rh_pct.toFixed(0)}%`);
+    if (params.length > 0)
+      lines.push(`<div class="regime-params">${params.join(' ')}</div>`);
+  }
 
-  const rows = sortedAlts.slice(0, -1).map((alt, i) => {
-    const nextAlt = sortedAlts[i + 1];
-    const midpoint = (alt + nextAlt) / 2;
+  // Inversion line
+  if (regime.inversion && regime.inversion_strength_c != null) {
+    const label = inversionStrengthLabel(regime.inversion_strength_c).toUpperCase();
+    const sfc = regime.inversion_surface_based ? ' SFC' : '';
+    lines.push(`<div class="regime-inversion">INV ${label} +${regime.inversion_strength_c.toFixed(1)}\u00b0C${sfc}</div>`);
+  }
 
-    let anyHit = false;
-    const cells = models.map((m) => {
-      const inv = soundings[m].inversion_layers.find(
-        (l) => l.base_ft <= midpoint && l.top_ft >= midpoint,
-      );
-      if (!inv) return '<td>\u2014</td>';
-      anyHit = true;
-      const label = inversionStrengthLabel(inv.strength_c);
-      const sfc = inv.surface_based ? ' SFC' : '';
-      return `<td class="${riskClass(label)}">${label.toUpperCase()} +${inv.strength_c.toFixed(1)}\u00b0C${sfc}</td>`;
-    }).join('');
+  // CAT line
+  if (regime.cat_risk) {
+    lines.push(`<div class="regime-cat">CAT ${regime.cat_risk.toUpperCase()}</div>`);
+  }
 
-    if (!anyHit) return '';
-    return `<tr><td class="var-name">${nextAlt}\u2013${alt}ft</td>${cells}</tr>`;
-  }).join('');
+  // Strong motion line
+  if (regime.strong_vertical_motion) {
+    lines.push(`<div class="regime-motion">Strong motion</div>`);
+  }
 
-  const infoBtn = renderInfoButton('inversion_layer');
+  // Clear band
+  if (lines.length === 0) {
+    const nwp = regime.cloud_cover_pct != null && regime.cloud_cover_pct > 0
+      ? ` <span class="regime-nwp">NWP\u00a0${regime.cloud_cover_pct.toFixed(0)}%</span>` : '';
+    lines.push(`<span class="regime-clear">Clear${nwp}</span>`);
+  }
 
-  return `
-    <div class="inversion-layers">
-      <h5>Temperature Inversions <span class="section-info-btn">${infoBtn}</span></h5>
-      <table class="band-table">
-        <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  `;
+  return lines.join('');
 }
 
-function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
+/** Cell CSS class based on worst active condition. */
+function regimeCellClass(regime: VerticalRegime): string {
+  if (regime.icing_risk !== 'none') return riskClass(regime.icing_risk);
+  if (regime.cat_risk) return riskClass(regime.cat_risk);
+  return '';
+}
+
+function renderAtmosphericProfile(
+  soundings: Record<string, SoundingAnalysis>,
+  adv: AltitudeAdvisories | null,
+): string {
   if (!adv) return '';
 
   const parts: string[] = [];
@@ -1063,65 +954,68 @@ function renderAltitudeAdvisories(adv: AltitudeAdvisories | null): string {
           (r) => r.floor_ft <= midpoint && r.ceiling_ft >= midpoint,
         );
         if (!regime) return '<td>\u2014</td>';
-        const cls = regime.icing_risk !== 'none' ? riskClass(regime.icing_risk) : '';
-        return `<td class="${cls}">${escapeHtml(regime.label)}</td>`;
+        const cls = regimeCellClass(regime);
+        return `<td class="regime-cell ${cls}">${regimeCellContent(regime)}</td>`;
       }).join('');
 
       return `<tr><td class="var-name">${nextAlt.toFixed(0)}-${alt.toFixed(0)}ft</td>${cells}</tr>`;
     }).join('');
 
     parts.push(`
-      <div class="regime-table-wrap">
-        <h5>Vertical Profile</h5>
-        <table class="band-table">
-          <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    `);
-  }
-
-  // Advisories as table
-  if (adv.advisories.length > 0) {
-    const advModels = Object.keys(adv.regimes);
-    const advHeaderCells = advModels.map((m) => `<th>${modelLabel(m)}</th>`).join('');
-
-    const advisoryRows = adv.advisories.map((a) => {
-      const isDescentToZero = a.advisory_type === 'descend_below_icing' && a.altitude_ft === 0;
-      const infeasibleBadge = !a.feasible ? ' <span class="advisory-badge">INFEASIBLE</span>' : '';
-
-      let label: string;
-      if (isDescentToZero) {
-        label = 'Unable to descend below freezing' + infeasibleBadge;
-      } else {
-        label = escapeHtml(a.reason) + infeasibleBadge;
-      }
-
-      const cells = advModels.map((m) => {
-        const v = a.per_model_ft[m];
-        if (v == null) return '<td>\u2014</td>';
-        if (a.advisory_type === 'descend_below_icing' && v === 0) {
-          return '<td>SFC</td>';
-        }
-        return `<td>${v.toFixed(0)}ft</td>`;
-      }).join('');
-
-      const rowCls = !a.feasible ? ' class="advisory-infeasible"' : '';
-      return `<tr${rowCls}><td class="var-name">${label}</td>${cells}</tr>`;
-    }).join('');
-
-    parts.push(`
-      <div class="advisories-section">
-        <h5>Advisories</h5>
-        <table class="band-table">
-          <thead><tr><th></th>${advHeaderCells}</tr></thead>
-          <tbody>${advisoryRows}</tbody>
-        </table>
+      <div class="atmospheric-profile">
+        <h5>Atmospheric Profile</h5>
+        <div class="table-scroll">
+          <table class="band-table">
+            <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
       </div>
     `);
   }
 
   return parts.join('');
+}
+
+function renderAdvisoriesTable(adv: AltitudeAdvisories | null): string {
+  if (!adv || adv.advisories.length === 0) return '';
+
+  const advModels = Object.keys(adv.regimes);
+  const advHeaderCells = advModels.map((m) => `<th>${modelLabel(m)}</th>`).join('');
+
+  const advisoryRows = adv.advisories.map((a) => {
+    const isDescentToZero = a.advisory_type === 'descend_below_icing' && a.altitude_ft === 0;
+    const infeasibleBadge = !a.feasible ? ' <span class="advisory-badge">INFEASIBLE</span>' : '';
+
+    let label: string;
+    if (isDescentToZero) {
+      label = 'Unable to descend below freezing' + infeasibleBadge;
+    } else {
+      label = escapeHtml(a.reason) + infeasibleBadge;
+    }
+
+    const cells = advModels.map((m) => {
+      const v = a.per_model_ft[m];
+      if (v == null) return '<td>\u2014</td>';
+      if (a.advisory_type === 'descend_below_icing' && v === 0) {
+        return '<td>SFC</td>';
+      }
+      return `<td>${v.toFixed(0)}ft</td>`;
+    }).join('');
+
+    const rowCls = !a.feasible ? ' class="advisory-infeasible"' : '';
+    return `<tr${rowCls}><td class="var-name">${label}</td>${cells}</tr>`;
+  }).join('');
+
+  return `
+    <div class="advisories-section">
+      <h5>Advisories</h5>
+      <table class="band-table">
+        <thead><tr><th></th>${advHeaderCells}</tr></thead>
+        <tbody>${advisoryRows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 // --- Route Slider ---
@@ -1201,26 +1095,6 @@ export function renderRouteSlider(
 
 // --- Route-point sounding (single point) ---
 
-/** Render a brief inline risk hint for band sections in annotated mode. */
-function riskHint(metricId: string, riskLevel: string): string {
-  const metric = getMetric(metricId);
-  if (!metric) return '';
-  const match = metric.thresholds.find((t) => t.risk === riskLevel || t.label.toLowerCase() === riskLevel);
-  if (!match) return '';
-  return `<span class="metric-hint">${match.meaning}</span>`;
-}
-
-function coverageHint(coverage: string): string {
-  const metric = getMetric('cloud_coverage');
-  if (!metric) return '';
-  const label = coverage.toUpperCase();
-  const match = metric.thresholds.find((t) => t.label.startsWith(`${label} (`));
-  if (match?.meaning) {
-    return `<span class="metric-hint">${match.meaning}</span>`;
-  }
-  return '';
-}
-
 function renderSinglePointSounding(
   point: RoutePointAnalysis,
   displayMode: DisplayMode = 'annotated',
@@ -1240,11 +1114,8 @@ function renderSinglePointSounding(
       ${renderConvectiveBanner(point.sounding, displayMode, tierVisibility)}
       ${renderVerticalMotion(point.sounding, displayMode)}
       ${renderAltitudeMarkers(point.sounding, displayMode, tierVisibility)}
-      ${renderIcingZones(point.sounding, displayMode)}
-      ${renderEnhancedClouds(point.sounding, displayMode)}
-      ${renderInversions(point.sounding)}
-      ${renderNwpCloudCover(point.sounding)}
-      ${renderAltitudeAdvisories(point.altitude_advisories)}
+      ${renderAtmosphericProfile(point.sounding, point.altitude_advisories)}
+      ${renderAdvisoriesTable(point.altitude_advisories)}
     </div>
   `;
 }
