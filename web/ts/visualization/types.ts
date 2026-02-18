@@ -116,6 +116,8 @@ export interface VizCloudLayer {
   baseFt: number;
   topFt: number;
   coverage: string;
+  /** Mean dewpoint depression in °C (0–3). Lower = denser cloud. */
+  meanDewpointDepressionC?: number;
 }
 
 export interface VizIcingZone {
