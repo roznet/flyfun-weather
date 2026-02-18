@@ -166,6 +166,10 @@ class HourlyForecast(BaseModel):
     wind_direction_10m_deg: Optional[float] = None
     wind_gusts_10m_kt: Optional[float] = None
     precipitation_mm: Optional[float] = None
+    rain_mm: Optional[float] = None
+    showers_mm: Optional[float] = None
+    snowfall_cm: Optional[float] = None
+    weather_code: Optional[int] = None
     precipitation_probability_pct: Optional[float] = None
     cloud_cover_pct: Optional[float] = None
     cloud_cover_low_pct: Optional[float] = None
@@ -272,6 +276,26 @@ class CATRiskLevel(str, Enum):
     SEVERE = "severe"
 
 
+class PrecipPhase(str, Enum):
+    """Hydrometeor phase at a pressure level."""
+
+    SNOW = "snow"
+    MIXED = "mixed"
+    RAIN = "rain"
+    FREEZING_RAIN = "freezing_rain"
+    ICE_PELLETS = "ice_pellets"
+    DRY = "dry"
+
+
+class PrecipIntensity(str, Enum):
+    """Precipitation intensity category."""
+
+    NONE = "none"
+    LIGHT = "light"       # < 1 mm/h (or < 0.5 cm/h snow)
+    MODERATE = "moderate"  # 1-4 mm/h
+    HEAVY = "heavy"        # > 4 mm/h
+
+
 class ThermodynamicIndices(BaseModel):
     """Profile-level thermodynamic indices computed via MetPy."""
 
@@ -315,6 +339,7 @@ class DerivedLevel(BaseModel):
     richardson_number: Optional[float] = None  # Ri for layer below
     bv_freq_squared_per_s2: Optional[float] = None  # N² for layer below (s⁻²)
     cloud_liquid_water_g_m3: Optional[float] = None  # LWC converted from CLWMR
+    precip_phase: Optional[str] = None  # PrecipPhase value for this level
 
 
 class EnhancedCloudLayer(BaseModel):
@@ -357,6 +382,32 @@ class IcingZone(BaseModel):
     mean_temperature_c: Optional[float] = None
     mean_wet_bulb_c: Optional[float] = None
     mean_icing_index: Optional[float] = None  # Mean Ogimet icing index for the zone
+
+
+class PrecipitationZone(BaseModel):
+    """A vertical zone with uniform precipitation phase."""
+
+    base_ft: float
+    top_ft: float
+    base_pressure_hpa: Optional[int] = None
+    top_pressure_hpa: Optional[int] = None
+    phase: PrecipPhase = PrecipPhase.DRY
+    mean_wet_bulb_c: Optional[float] = None
+    ice_fraction: Optional[float] = None  # ICMR/(ICMR+CLWMR) when available
+
+
+class PrecipitationAssessment(BaseModel):
+    """Precipitation type and intensity assessment for a sounding."""
+
+    surface_phase: PrecipPhase = PrecipPhase.DRY
+    surface_intensity: PrecipIntensity = PrecipIntensity.NONE
+    precipitation_zones: list[PrecipitationZone] = Field(default_factory=list)
+    freezing_rain_risk: bool = False
+    warm_nose_base_ft: Optional[float] = None
+    warm_nose_top_ft: Optional[float] = None
+    rain_mm: Optional[float] = None
+    snow_cm: Optional[float] = None
+    total_mm: Optional[float] = None
 
 
 class ConvectiveAssessment(BaseModel):
@@ -406,6 +457,7 @@ class SoundingAnalysis(BaseModel):
     icing_zones: list[IcingZone] = Field(default_factory=list)
     inversion_layers: list[InversionLayer] = Field(default_factory=list)
     convective: Optional[ConvectiveAssessment] = None
+    precipitation: Optional[PrecipitationAssessment] = None
     vertical_motion: Optional[VerticalMotionAssessment] = None
     # NWP 3-level cloud cover from Open-Meteo (None for ECMWF)
     cloud_cover_low_pct: Optional[float] = None

@@ -10,6 +10,7 @@ from weatherbrief.models import (
     ConvectiveRisk,
     ForecastSnapshot,
     IcingRisk,
+    PrecipPhase,
     SoundingAnalysis,
     VerticalMotionClass,
     WaypointAnalysis,
@@ -105,7 +106,15 @@ def _format_waypoint_forecast(
         vis_km = hourly.visibility_m / 1000
         parts.append(f"Vis {vis_km:.0f}km")
     if hourly.precipitation_mm is not None and hourly.precipitation_mm > 0:
-        parts.append(f"Precip {hourly.precipitation_mm:.1f}mm")
+        precip_detail = [f"Precip {hourly.precipitation_mm:.1f}mm"]
+        if hourly.rain_mm is not None:
+            precip_detail.append(f"Rain {hourly.rain_mm:.1f}mm")
+        if hourly.showers_mm is not None and hourly.showers_mm > 0:
+            precip_detail.append(f"Showers {hourly.showers_mm:.1f}mm")
+        if hourly.snowfall_cm is not None and hourly.snowfall_cm > 0:
+            precip_detail.append(f"Snow {hourly.snowfall_cm:.1f}cm")
+        parts.append(f"{' ('.join(precip_detail[:1])}"
+                     + (f" ({', '.join(precip_detail[1:])})" if len(precip_detail) > 1 else ""))
     if hourly.freezing_level_m is not None:
         fzl_ft = hourly.freezing_level_m * 3.28084
         parts.append(f"FzLvl {fzl_ft:.0f}ft")
@@ -226,6 +235,31 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
                     f"  Icing [{model}]: {zone.risk.value} {zone.icing_type.value} "
                     f"{zone.base_ft:.0f}-{zone.top_ft:.0f}ft "
                     f"(Tw={zone.mean_wet_bulb_c:.0f}C){sld_str}"
+                )
+
+        # Precipitation
+        precip = sa.precipitation
+        if precip and precip.surface_phase != PrecipPhase.DRY:
+            phase_label = precip.surface_phase.value.replace("_", " ").title()
+            intensity_label = precip.surface_intensity.value
+            precip_parts = [f"{phase_label} at surface ({intensity_label}"]
+            if precip.total_mm:
+                precip_parts.append(f" {precip.total_mm:.1f}mm/h")
+            precip_parts.append(")")
+            lines.append(f"  Precipitation [{model}]: {''.join(precip_parts)}")
+            if precip.precipitation_zones:
+                zone_strs = []
+                for zone in precip.precipitation_zones:
+                    zone_strs.append(
+                        f"{zone.phase.value.replace('_', ' ').title()} "
+                        f"{zone.base_ft:.0f}-{zone.top_ft:.0f}ft"
+                    )
+                lines.append(f"    {', '.join(zone_strs)}")
+            if precip.freezing_rain_risk:
+                lines.append(
+                    f"    ** Freezing rain risk: warm nose "
+                    f"{precip.warm_nose_base_ft:.0f}-{precip.warm_nose_top_ft:.0f}ft "
+                    f"with cold surface layer **"
                 )
 
         # Vertical motion

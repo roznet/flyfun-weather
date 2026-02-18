@@ -44,6 +44,11 @@ def magnus_dewpoint(temp_c: float, rh_pct: float) -> float:
     return (MAGNUS_C * gamma) / (MAGNUS_B - gamma)
 
 
+def _int_or_none(v: float | None) -> int | None:
+    """Convert a float to int, or return None."""
+    return int(v) if v is not None else None
+
+
 _MAX_RETRIES = 4
 _RETRY_BACKOFF = [10, 30, 60, 90]  # seconds — generous for expanded pressure levels
 
@@ -301,6 +306,10 @@ class OpenMeteoClient:
             wind_direction_10m_deg=get("wind_direction_10m"),
             wind_gusts_10m_kt=get("wind_gusts_10m"),
             precipitation_mm=get("precipitation"),
+            rain_mm=get("rain"),
+            showers_mm=get("showers"),
+            snowfall_cm=get("snowfall"),
+            weather_code=_int_or_none(get("weather_code")),
             precipitation_probability_pct=get("precipitation_probability"),
             cloud_cover_pct=get("cloud_cover"),
             cloud_cover_low_pct=get("cloud_cover_low"),
