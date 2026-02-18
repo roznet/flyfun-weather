@@ -382,6 +382,7 @@ class IcingZone(BaseModel):
     mean_temperature_c: Optional[float] = None
     mean_wet_bulb_c: Optional[float] = None
     mean_icing_index: Optional[float] = None  # Mean Ogimet icing index for the zone
+    mean_rh_pct: Optional[float] = None  # Mean RH of levels in the zone
 
 
 class PrecipitationZone(BaseModel):

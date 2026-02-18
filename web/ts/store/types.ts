@@ -94,6 +94,8 @@ export interface IcingZone {
   sld_risk: boolean;
   mean_temperature_c: number | null;
   mean_wet_bulb_c: number | null;
+  mean_rh_pct: number | null;
+  mean_icing_index: number | null;
 }
 
 export interface ConvectiveAssessment {

@@ -855,8 +855,11 @@ function renderIcingZones(soundings: Record<string, SoundingAnalysis>, displayMo
       anyHit = true;
       const sld = zone.sld_risk ? ' SLD' : '';
       const tw = zone.mean_wet_bulb_c != null ? ` Tw=${zone.mean_wet_bulb_c.toFixed(0)}\u00B0C` : '';
+      const rh = zone.mean_rh_pct != null ? ` RH=${zone.mean_rh_pct.toFixed(0)}%` : '';
+      const pw = soundings[m].indices?.precipitable_water_mm;
+      const pwStr = pw != null ? ` PW=${pw.toFixed(0)}mm` : '';
       const hint = displayMode === 'annotated' ? riskHint('icing_risk', zone.risk) : '';
-      return `<td class="${riskClass(zone.risk)}">${zone.risk.toUpperCase()} ${zone.icing_type}${tw}${sld}${hint}</td>`;
+      return `<td class="${riskClass(zone.risk)}">${zone.risk.toUpperCase()} ${zone.icing_type}${tw}${rh}${pwStr}${sld}${hint}</td>`;
     }).join('');
 
     if (!anyHit) return '';
