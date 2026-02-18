@@ -423,6 +423,8 @@ def _build_zone(
     t_vals = [lv.temperature_c for lv in levels_in_zone if lv.temperature_c is not None]
     wb_vals = [lv.wet_bulb_c for lv in levels_in_zone if lv.wet_bulb_c is not None]
 
+    rh_vals = [lv.relative_humidity_pct for lv in levels_in_zone if lv.relative_humidity_pct is not None]
+
     return IcingZone(
         base_ft=round(base.altitude_ft),
         top_ft=round(top.altitude_ft),
@@ -434,4 +436,5 @@ def _build_zone(
         mean_temperature_c=round(sum(t_vals) / len(t_vals), 1) if t_vals else None,
         mean_wet_bulb_c=round(sum(wb_vals) / len(wb_vals), 1) if wb_vals else None,
         mean_icing_index=round(sum(indices) / len(indices), 1) if indices else None,
+        mean_rh_pct=round(sum(rh_vals) / len(rh_vals), 0) if rh_vals else None,
     )
