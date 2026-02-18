@@ -4,7 +4,7 @@
  * Threshold labels come from metrics-catalog.json.
  */
 
-import { icingRiskColor, catRiskColor, coverageOpacity, inversionOpacity } from './scales';
+import { icingRiskColor, catRiskColor, cloudFillFromDD, inversionOpacity } from './scales';
 
 export interface LegendEntry {
   label: string;
@@ -38,9 +38,9 @@ const CONVECTIVE_LEGEND: LegendEntry[] = [
 // --- Cloud layer legends ---
 
 const CLOUD_BANDS_LEGEND: LegendEntry[] = [
-  { label: 'SCT (Scattered)', color: `rgba(255, 255, 255, ${Math.min(0.85, coverageOpacity('sct') + 0.15)})`, meaning: '3-4 oktas' },
-  { label: 'BKN (Broken)', color: `rgba(255, 255, 255, ${Math.min(0.85, coverageOpacity('bkn') + 0.15)})`, meaning: '5-7 oktas' },
-  { label: 'OVC (Overcast)', color: `rgba(255, 255, 255, ${Math.min(0.85, coverageOpacity('ovc') + 0.15)})`, meaning: '8/8 coverage' },
+  { label: 'Dense (DD < 1\u00b0C)', color: cloudFillFromDD(0.5, 'ovc'), meaning: 'Near-saturated, OVC-like' },
+  { label: 'Moderate (DD 1\u20132\u00b0C)', color: cloudFillFromDD(1.5, 'bkn'), meaning: 'BKN-like coverage' },
+  { label: 'Thin (DD 2\u20133\u00b0C)', color: cloudFillFromDD(2.5, 'sct'), meaning: 'Scattered, wispy' },
 ];
 
 const NWP_CLOUD_LEGEND: LegendEntry[] = [

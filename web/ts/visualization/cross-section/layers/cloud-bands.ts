@@ -1,7 +1,7 @@
-/** Cloud layer bands: white fills with coverage-based opacity (sounding-derived). */
+/** Cloud layer bands: gray-gradient fills from dewpoint depression (sounding-derived). */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode, VizPoint } from '../../types';
-import { coverageOpacity } from '../../scales';
+import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode, VizPoint, VizCloudLayer } from '../../types';
+import { cloudFillFromDD } from '../../scales';
 import { drawSmoothBand, drawColumnBand, type BandPointData } from './base';
 
 export const cloudBandsLayer: CrossSectionLayer = {
@@ -17,11 +17,9 @@ export const cloudBandsLayer: CrossSectionLayer = {
     if (maxLayers === 0) return;
 
     if (mode === 'columns') {
-      // Column mode: draw each point's cloud layers as rectangles
       for (const point of data.points) {
         for (const cl of point.cloudLayers) {
-          const opacity = coverageOpacity(cl.coverage);
-          const fill = `rgba(255, 255, 255, ${Math.min(0.85, opacity + 0.15)})`;
+          const fill = cloudFillFromDD(cl.meanDewpointDepressionC, cl.coverage);
           const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: cl.baseFt, top: cl.topFt }];
           drawColumnBand(ctx, bandPoints, transform, fill);
         }
@@ -37,18 +35,24 @@ export const cloudBandsLayer: CrossSectionLayer = {
       drawMatchedCloudSegment(ctx, transform, curr, next);
     }
 
-    // Draw first/last point leftover layers as tapered bands
     if (data.points.length === 1) {
       const p = data.points[0];
       for (const cl of p.cloudLayers) {
-        const opacity = coverageOpacity(cl.coverage);
-        const fill = `rgba(255, 255, 255, ${Math.min(0.85, opacity + 0.15)})`;
+        const fill = cloudFillFromDD(cl.meanDewpointDepressionC, cl.coverage);
         const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: cl.baseFt, top: cl.topFt }];
         drawColumnBand(ctx, bandPoints, transform, fill);
       }
     }
   },
 };
+
+/** Average DD of two cloud layers; falls back to undefined if both missing. */
+function avgDD(a: VizCloudLayer, b: VizCloudLayer): number | undefined {
+  if (a.meanDewpointDepressionC !== undefined && b.meanDewpointDepressionC !== undefined) {
+    return (a.meanDewpointDepressionC + b.meanDewpointDepressionC) / 2;
+  }
+  return a.meanDewpointDepressionC ?? b.meanDewpointDepressionC;
+}
 
 function drawMatchedCloudSegment(
   ctx: CanvasRenderingContext2D,
@@ -59,8 +63,6 @@ function drawMatchedCloudSegment(
   const usedNext = new Set<number>();
 
   for (const cl of curr.cloudLayers) {
-    const opacity = coverageOpacity(cl.coverage);
-    // Find best matching cloud layer in next point by altitude overlap
     let bestIdx = -1;
     let bestOverlap = 0;
 
@@ -79,18 +81,16 @@ function drawMatchedCloudSegment(
     if (bestIdx >= 0) {
       usedNext.add(bestIdx);
       const nl = next.cloudLayers[bestIdx];
-      const avgOpacity = (opacity + coverageOpacity(nl.coverage)) / 2;
-      const fill = `rgba(255, 255, 255, ${Math.min(0.85, avgOpacity + 0.15)})`;
+      const fill = cloudFillFromDD(avgDD(cl, nl), cl.coverage);
       const bandPoints: BandPointData[] = [
         { distance: curr.distanceNm, base: cl.baseFt, top: cl.topFt },
         { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
       ];
       drawSmoothBand(ctx, bandPoints, transform, fill);
     } else {
-      // No match — draw taper to midpoint
       const midDist = (curr.distanceNm + next.distanceNm) / 2;
       const midAlt = (cl.baseFt + cl.topFt) / 2;
-      const fill = `rgba(255, 255, 255, ${Math.min(0.85, opacity + 0.15)})`;
+      const fill = cloudFillFromDD(cl.meanDewpointDepressionC, cl.coverage);
       const bandPoints: BandPointData[] = [
         { distance: curr.distanceNm, base: cl.baseFt, top: cl.topFt },
         { distance: midDist, base: midAlt, top: midAlt },
@@ -99,14 +99,12 @@ function drawMatchedCloudSegment(
     }
   }
 
-  // Unmatched layers in next point — draw taper from midpoint
   for (let j = 0; j < next.cloudLayers.length; j++) {
     if (usedNext.has(j)) continue;
     const nl = next.cloudLayers[j];
     const midDist = (curr.distanceNm + next.distanceNm) / 2;
     const midAlt = (nl.baseFt + nl.topFt) / 2;
-    const opacity = coverageOpacity(nl.coverage);
-    const fill = `rgba(255, 255, 255, ${Math.min(0.85, opacity + 0.15)})`;
+    const fill = cloudFillFromDD(nl.meanDewpointDepressionC, nl.coverage);
     const bandPoints: BandPointData[] = [
       { distance: midDist, base: midAlt, top: midAlt },
       { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
