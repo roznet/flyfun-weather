@@ -63,6 +63,10 @@ SURFACE_VARIABLES = [
     "freezing_level_height",
     "cape",
     "visibility",
+    "rain",
+    "showers",
+    "snowfall",
+    "weather_code",
 ]
 
 PRESSURE_LEVEL_VARIABLES = [
@@ -112,6 +116,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="GFS",
         base_url="https://api.open-meteo.com/v1/gfs",
         max_days=16,
+        unavailable_surface=["rain", "showers"],
         pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
         default=True,
     ),
@@ -146,7 +151,8 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/gem",
         max_days=10,
         unavailable_surface=["precipitation_probability",
-                             "freezing_level_height", "visibility"],
+                             "freezing_level_height", "visibility",
+                             "rain", "showers"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(GEM_PRESSURE_LEVELS),
     ),

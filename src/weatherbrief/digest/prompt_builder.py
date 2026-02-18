@@ -11,6 +11,7 @@ from weatherbrief.models import (
     ConvectiveRisk,
     ForecastSnapshot,
     IcingRisk,
+    PrecipPhase,
     SoundingAnalysis,
 )
 
@@ -82,6 +83,14 @@ def build_digest_context(
                 wx_parts.append(f"Vis={hourly.visibility_m/1000:.1f}km")
             if hourly.precipitation_mm is not None:
                 wx_parts.append(f"Precip={hourly.precipitation_mm:.1f}mm")
+                if hourly.rain_mm is not None:
+                    wx_parts.append(f"Rain={hourly.rain_mm:.1f}mm")
+                if hourly.showers_mm is not None and hourly.showers_mm > 0:
+                    wx_parts.append(f"Showers={hourly.showers_mm:.1f}mm")
+                if hourly.snowfall_cm is not None and hourly.snowfall_cm > 0:
+                    wx_parts.append(f"Snow={hourly.snowfall_cm:.1f}cm")
+                if hourly.weather_code is not None:
+                    wx_parts.append(f"WMO={hourly.weather_code}")
             if hourly.freezing_level_m is not None:
                 fzl_ft = hourly.freezing_level_m * 3.28084
                 wx_parts.append(f"FzLvl={fzl_ft:.0f}ft")
@@ -237,6 +246,23 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                 f"  Cloud [{model}]: {cl.coverage.value.upper()} "
                 f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft{t_str}"
             )
+
+        if sa.precipitation and sa.precipitation.surface_phase != PrecipPhase.DRY:
+            p = sa.precipitation
+            parts = [p.surface_phase.value]
+            parts.append(f"intensity={p.surface_intensity.value}")
+            if p.rain_mm:
+                parts.append(f"rain={p.rain_mm:.1f}mm")
+            if p.snow_cm:
+                parts.append(f"snow={p.snow_cm:.1f}cm")
+            if p.freezing_rain_risk:
+                parts.append("FREEZING RAIN RISK")
+            lines.append(f"  Precip [{model}]: {', '.join(parts)}")
+            for zone in p.precipitation_zones:
+                tw_str = f" Tw={zone.mean_wet_bulb_c:.0f}C" if zone.mean_wet_bulb_c is not None else ""
+                lines.append(
+                    f"    {zone.phase.value} {zone.base_ft:.0f}-{zone.top_ft:.0f}ft{tw_str}"
+                )
 
     return lines
 

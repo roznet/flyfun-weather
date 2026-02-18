@@ -71,6 +71,7 @@ def analyze_sounding(
         compute_derived_levels,
         compute_indices,
     )
+    from weatherbrief.analysis.sounding.precipitation import assess_precipitation
     from weatherbrief.analysis.sounding.vertical_motion import (
         assess_vertical_motion,
         compute_stability_indicators,
@@ -109,6 +110,14 @@ def analyze_sounding(
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
     )
 
+    # Precipitation phase classification
+    precipitation = assess_precipitation(
+        derived_levels,
+        levels,
+        hourly=hourly,
+        freezing_level_ft=indices.freezing_level_ft,
+    )
+
     # Convective assessment
     convective = assess_convective(indices)
 
@@ -123,6 +132,7 @@ def analyze_sounding(
         icing_zones=icing_zones,
         inversion_layers=inversion_layers,
         convective=convective,
+        precipitation=precipitation,
         vertical_motion=vertical_motion,
         cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         cloud_cover_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
