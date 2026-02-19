@@ -104,7 +104,8 @@ export function buildWindyUrl(
   model?: string,
   zoom: number = 7,
 ): string {
-  const d = typeof time === 'string' ? new Date(time) : time;
+  const iso = typeof time === 'string' ? (time.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(time) ? time : time + 'Z') : '';
+  const d = typeof time === 'string' ? new Date(iso) : time;
   const pad = (n: number) => n.toString().padStart(2, '0');
   const timePart = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}-${pad(d.getUTCHours())}`;
   const windyModel = model ? WINDY_MODEL_MAP[model] : undefined;
