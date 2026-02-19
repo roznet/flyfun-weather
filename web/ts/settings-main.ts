@@ -1,4 +1,4 @@
-/** Settings page entry point — tabbed preferences with advisory configuration. */
+/** Settings page entry point — tabbed preferences with profile-based advisory configuration. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { renderUserInfo, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
@@ -15,6 +15,15 @@ import {
   type AdvisoryParameterDef,
   type UsageSummary,
 } from './adapters/preferences-adapter';
+import {
+  fetchProfiles,
+  createProfile,
+  updateProfile,
+  deleteProfile,
+  duplicateProfile,
+  type ProfileResponse,
+  type ProfileSettings,
+} from './adapters/profiles-adapter';
 
 /** Category display order and labels.
  *  Any categories not listed here will appear at the end under their raw key. */
@@ -28,6 +37,8 @@ const CATEGORY_ORDER: [string, string][] = [
 ];
 
 let catalog: AdvisoryCatalogEntry[] = [];
+let profiles: ProfileResponse[] = [];
+let activeProfileId: number | null = null;
 
 /** Default advisory models: all default briefing models except best_match. */
 function defaultAdvisoryModelKeys(): string[] {
@@ -45,10 +56,10 @@ function getSelectedBriefingModels(): string[] {
 }
 
 /** Generate model checkboxes from the model catalog. */
-function renderModelCheckboxes(): void {
+function renderModelCheckboxes(selectedModels?: string[]): void {
   const container = document.getElementById('model-checkboxes');
   if (!container) return;
-  const defaults = defaultModelKeys();
+  const defaults = selectedModels || defaultModelKeys();
   container.innerHTML = allModelKeys().map(m => {
     const label = modelLabel(m);
     const checked = defaults.includes(m) ? ' checked' : '';
@@ -92,6 +103,140 @@ function renderAdvisoryModelCheckboxes(
   }).join('');
 }
 
+// --- Profile management ---
+
+function renderProfileSelector(): void {
+  const select = document.getElementById('profile-select') as HTMLSelectElement;
+  if (!select) return;
+
+  select.innerHTML = profiles.map(p => {
+    const defaultTag = p.is_default ? ' (default)' : '';
+    return `<option value="${p.id}"${p.id === activeProfileId ? ' selected' : ''}>${p.name}${defaultTag}</option>`;
+  }).join('');
+
+  // Update delete button state
+  const deleteBtn = document.getElementById('btn-delete-profile') as HTMLButtonElement;
+  if (deleteBtn) {
+    const activeProfile = profiles.find(p => p.id === activeProfileId);
+    deleteBtn.disabled = !!activeProfile?.is_default;
+  }
+}
+
+function populateProfileForm(profile: ProfileResponse): void {
+  const s = profile.settings;
+
+  // Flight defaults
+  const altInput = document.getElementById('input-altitude') as HTMLInputElement;
+  const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
+  if (altInput) altInput.value = String(s.cruise_altitude_ft ?? 8000);
+  if (ceilInput) ceilInput.value = String(s.flight_ceiling_ft ?? 18000);
+
+  // Models
+  const selectedModels = s.models || defaultModelKeys();
+  renderModelCheckboxes(selectedModels);
+
+  // Advisory model checkboxes
+  renderAdvisoryModelCheckboxes(selectedModels, s.advisory_models ?? undefined);
+
+  // Service toggles
+  const grametToggle = document.getElementById('toggle-gramet') as HTMLInputElement;
+  const llmToggle = document.getElementById('toggle-llm-digest') as HTMLInputElement;
+  const icingEnhanceToggle = document.getElementById('toggle-icing-enhance') as HTMLInputElement;
+  if (grametToggle) grametToggle.checked = s.gramet_enabled ?? true;
+  if (llmToggle) llmToggle.checked = s.llm_digest_enabled ?? true;
+  if (icingEnhanceToggle) icingEnhanceToggle.checked = s.icing_severity_enhance ?? true;
+
+  // Advisories
+  const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
+  renderAdvisorySettings(catalog, advPrefs);
+}
+
+function switchProfile(profileId: number): void {
+  activeProfileId = profileId;
+  renderProfileSelector();
+  const profile = profiles.find(p => p.id === profileId);
+  if (profile) {
+    populateProfileForm(profile);
+  }
+}
+
+async function handleNewProfile(): Promise<void> {
+  const name = prompt('Enter profile name:');
+  if (!name?.trim()) return;
+
+  try {
+    const newProfile = await createProfile(name.trim());
+    profiles.push(newProfile);
+    activeProfileId = newProfile.id;
+    renderProfileSelector();
+    populateProfileForm(newProfile);
+    showStatus(`Profile "${name.trim()}" created.`);
+  } catch (err) {
+    showStatus(`Failed to create profile: ${err}`, true);
+  }
+}
+
+async function handleDuplicateProfile(): Promise<void> {
+  if (!activeProfileId) return;
+  const source = profiles.find(p => p.id === activeProfileId);
+  const defaultName = source ? `${source.name} (copy)` : 'Copy';
+  const name = prompt('Enter name for the duplicate:', defaultName);
+  if (!name?.trim()) return;
+
+  try {
+    const dup = await duplicateProfile(activeProfileId, name.trim());
+    profiles.push(dup);
+    activeProfileId = dup.id;
+    renderProfileSelector();
+    populateProfileForm(dup);
+    showStatus(`Profile duplicated as "${name.trim()}".`);
+  } catch (err) {
+    showStatus(`Failed to duplicate profile: ${err}`, true);
+  }
+}
+
+async function handleRenameProfile(): Promise<void> {
+  if (!activeProfileId) return;
+  const current = profiles.find(p => p.id === activeProfileId);
+  const name = prompt('Enter new name:', current?.name);
+  if (!name?.trim() || name.trim() === current?.name) return;
+
+  try {
+    const updated = await updateProfile(activeProfileId, { name: name.trim() });
+    const idx = profiles.findIndex(p => p.id === activeProfileId);
+    if (idx >= 0) profiles[idx] = updated;
+    renderProfileSelector();
+    showStatus(`Profile renamed to "${name.trim()}".`);
+  } catch (err) {
+    showStatus(`Failed to rename profile: ${err}`, true);
+  }
+}
+
+async function handleDeleteProfile(): Promise<void> {
+  if (!activeProfileId) return;
+  const current = profiles.find(p => p.id === activeProfileId);
+  if (current?.is_default) {
+    showStatus('Cannot delete the default profile.', true);
+    return;
+  }
+  if (!confirm(`Delete profile "${current?.name}"?`)) return;
+
+  try {
+    await deleteProfile(activeProfileId);
+    profiles = profiles.filter(p => p.id !== activeProfileId);
+    // Switch to the default profile
+    const defaultProfile = profiles.find(p => p.is_default) || profiles[0];
+    if (defaultProfile) {
+      switchProfile(defaultProfile.id);
+    }
+    showStatus('Profile deleted.');
+  } catch (err) {
+    showStatus(`Failed to delete profile: ${err}`, true);
+  }
+}
+
+// --- Init ---
+
 async function init(): Promise<void> {
   const user = await fetchCurrentUser();
   if (!user) {
@@ -105,8 +250,12 @@ async function init(): Promise<void> {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab!));
   }
 
-  // Load preferences, advisory catalog, and model catalog in parallel
-  const [prefs, catalogResult, modelCatalog] = await Promise.all([
+  // Load profiles, preferences, advisory catalog, and model catalog in parallel
+  const [profilesResult, prefs, catalogResult, modelCatalog] = await Promise.all([
+    fetchProfiles().catch(err => {
+      showStatus(`Failed to load profiles: ${err}`, true);
+      return [] as ProfileResponse[];
+    }),
     fetchPreferences().catch(err => {
       showStatus(`Failed to load preferences: ${err}`, true);
       return null;
@@ -122,18 +271,40 @@ async function init(): Promise<void> {
   ]);
 
   catalog = catalogResult;
+  profiles = profilesResult;
   initModelCatalog(modelCatalog);
-  renderModelCheckboxes();
 
-  if (prefs) {
-    populateForm(prefs);
+  // Set active profile to default
+  const defaultProfile = profiles.find(p => p.is_default) || profiles[0];
+  if (defaultProfile) {
+    activeProfileId = defaultProfile.id;
+    renderProfileSelector();
+    populateProfileForm(defaultProfile);
+  } else {
+    renderModelCheckboxes();
+    renderAdvisorySettings(catalog, { enabled: null, params: null });
   }
-  renderAdvisorySettings(catalog, prefs?.advisories ?? { enabled: null, params: null });
+
+  // Populate account-level settings
+  if (prefs) {
+    populateAccountForm(prefs);
+  }
 
   // Load usage (non-blocking)
   fetchUsageSummary()
     .then(renderUsage)
     .catch(() => { /* usage section stays hidden */ });
+
+  // Profile controls
+  const profileSelect = document.getElementById('profile-select') as HTMLSelectElement;
+  profileSelect?.addEventListener('change', () => {
+    const id = parseInt(profileSelect.value, 10);
+    if (!isNaN(id)) switchProfile(id);
+  });
+  document.getElementById('btn-new-profile')?.addEventListener('click', handleNewProfile);
+  document.getElementById('btn-duplicate-profile')?.addEventListener('click', handleDuplicateProfile);
+  document.getElementById('btn-rename-profile')?.addEventListener('click', handleRenameProfile);
+  document.getElementById('btn-delete-profile')?.addEventListener('click', handleDeleteProfile);
 
   // Save button
   const form = document.getElementById('settings-form') as HTMLFormElement;
@@ -166,34 +337,8 @@ function switchTab(tabId: string): void {
   }
 }
 
-function populateForm(prefs: PreferencesResponse): void {
-  const d = prefs.defaults;
-  if (d.cruise_altitude_ft != null) {
-    (document.getElementById('input-altitude') as HTMLInputElement).value = String(d.cruise_altitude_ft);
-  }
-  if (d.flight_ceiling_ft != null) {
-    (document.getElementById('input-ceiling') as HTMLInputElement).value = String(d.flight_ceiling_ft);
-  }
-
-  // Models checkboxes
-  const selectedModels = d.models || defaultModelKeys();
-  for (const m of allModelKeys()) {
-    const cb = document.getElementById(`model-${m}`) as HTMLInputElement;
-    if (cb) cb.checked = selectedModels.includes(m);
-  }
-
-  // Advisory model checkboxes (subset of selected briefing models)
-  renderAdvisoryModelCheckboxes(selectedModels, d.advisory_models ?? undefined);
-
+function populateAccountForm(prefs: PreferencesResponse): void {
   updateAutorouterStatus(prefs.has_autorouter_creds);
-
-  // Service toggles
-  const grametToggle = document.getElementById('toggle-gramet') as HTMLInputElement;
-  const llmToggle = document.getElementById('toggle-llm-digest') as HTMLInputElement;
-  const icingEnhanceToggle = document.getElementById('toggle-icing-enhance') as HTMLInputElement;
-  if (grametToggle) grametToggle.checked = prefs.gramet_enabled;
-  if (llmToggle) llmToggle.checked = prefs.llm_digest_enabled;
-  if (icingEnhanceToggle) icingEnhanceToggle.checked = prefs.icing_severity_enhance;
 }
 
 // --- Advisory settings rendering ---
@@ -327,6 +472,7 @@ function collectAdvisoryPrefs(): AdvisoryPreferences {
 // --- Save ---
 
 async function handleSave(): Promise<void> {
+  // Collect profile settings from the form
   const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value, 10);
   const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value, 10);
 
@@ -340,7 +486,7 @@ async function handleSave(): Promise<void> {
     return;
   }
 
-  // Collect advisory models from checkboxes
+  // Collect advisory models
   const advisoryModels: string[] = [];
   const advContainer = document.getElementById('advisory-model-checkboxes');
   if (advContainer) {
@@ -349,36 +495,48 @@ async function handleSave(): Promise<void> {
     }
   }
 
-  const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement).value.trim();
-  const arPassword = (document.getElementById('input-ar-password') as HTMLInputElement).value.trim();
-
-  const advisories = collectAdvisoryPrefs();
-
   const grametEnabled = (document.getElementById('toggle-gramet') as HTMLInputElement)?.checked ?? true;
   const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? true;
+  const advisories = collectAdvisoryPrefs();
+
+  // Build profile settings
+  const profileSettings: Partial<ProfileSettings> = {
+    cruise_altitude_ft: isNaN(altitude) ? null : altitude,
+    flight_ceiling_ft: isNaN(ceiling) ? null : ceiling,
+    models,
+    advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
+    gramet_enabled: grametEnabled,
+    llm_digest_enabled: llmDigestEnabled,
+    icing_severity_enhance: icingSeverityEnhance,
+    advisories,
+  };
+
+  // Save autorouter creds (account-level)
+  const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement).value.trim();
+  const arPassword = (document.getElementById('input-ar-password') as HTMLInputElement).value.trim();
 
   try {
-    const result = await savePreferences({
-      defaults: {
-        cruise_altitude_ft: isNaN(altitude) ? null : altitude,
-        flight_ceiling_ft: isNaN(ceiling) ? null : ceiling,
-        models,
-        advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
-      },
-      advisories,
-      autorouter_username: arUsername || undefined,
-      autorouter_password: arPassword || undefined,
-      gramet_enabled: grametEnabled,
-      llm_digest_enabled: llmDigestEnabled,
-      icing_severity_enhance: icingSeverityEnhance,
-    });
-    updateAutorouterStatus(result.has_autorouter_creds);
-    // Clear password field after successful save
-    if (arPassword) {
-      (document.getElementById('input-ar-password') as HTMLInputElement).value = '';
+    // Save profile settings
+    if (activeProfileId) {
+      const updated = await updateProfile(activeProfileId, { settings: profileSettings });
+      const idx = profiles.findIndex(p => p.id === activeProfileId);
+      if (idx >= 0) profiles[idx] = updated;
     }
-    showStatus('Preferences saved.');
+
+    // Save account-level preferences (autorouter creds only)
+    if (arUsername || arPassword) {
+      const result = await savePreferences({
+        autorouter_username: arUsername || undefined,
+        autorouter_password: arPassword || undefined,
+      });
+      updateAutorouterStatus(result.has_autorouter_creds);
+      if (arPassword) {
+        (document.getElementById('input-ar-password') as HTMLInputElement).value = '';
+      }
+    }
+
+    showStatus('Settings saved.');
   } catch (err) {
     showStatus(`Failed to save: ${err}`, true);
   }
