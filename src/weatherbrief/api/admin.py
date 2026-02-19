@@ -264,6 +264,7 @@ def _approve_html(status_msg: str) -> str:
     .card {{ background: #fff; border: 1px solid #dee2e6; border-radius: 8px;
              padding: 2rem; text-align: center; max-width: 400px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
     .check {{ font-size: 2rem; margin-bottom: 0.5rem; }}
+    .status-msg {{ color: #6c757d; margin: 0.75rem 0; }}
     a {{ color: #2563eb; text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
   </style>
@@ -272,7 +273,7 @@ def _approve_html(status_msg: str) -> str:
   <div class="card">
     <div class="check">&#10003;</div>
     <h2>User Approved</h2>
-    <p style="color:#6c757d;margin:0.75rem 0;">{safe_msg}</p>
+    <p class="status-msg">{safe_msg}</p>
     <a href="/admin.html">Go to Admin Page</a>
   </div>
 </body>
