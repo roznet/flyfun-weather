@@ -1251,15 +1251,16 @@ export function updateWindyLink(
   selectedPointIndex: number,
   selectedModel: string,
 ): void {
+  const container = document.getElementById('external-links') as HTMLElement | null;
   const link = document.getElementById('windy-link') as HTMLAnchorElement | null;
-  if (!link) return;
+  if (!container || !link) return;
 
   const point = routeAnalyses?.analyses?.[selectedPointIndex];
   if (!point) {
-    link.style.display = 'none';
+    container.style.display = 'none';
     return;
   }
 
   link.href = buildWindyUrl(point.lat, point.lon, point.interpolated_time, selectedModel);
-  link.style.display = '';
+  container.style.display = '';
 }

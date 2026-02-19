@@ -763,10 +763,10 @@ label {
   font-size: 0.85rem;
 }
 
-.windy-link {
+.external-links {
   font-size: 0.8rem;
-  padding: 0.2rem 0.5rem;
-  margin-left: 0.25rem;
+  color: var(--muted);
+  margin-top: 0.25rem;
 }
 
 /* --- Refresh status --- */
