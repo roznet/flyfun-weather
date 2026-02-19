@@ -160,12 +160,21 @@ class TestPreferencesAPI:
 
 
 class TestPreferencesAppliedToFlights:
-    """Test that user preferences are applied when creating flights."""
+    """Test that profile settings are applied when creating flights."""
 
-    def test_flight_uses_user_defaults(self, client):
-        """Flight created without altitude uses user's preferred altitude."""
-        client.put("/api/user/preferences", json={
-            "defaults": {"cruise_altitude_ft": 6000, "flight_ceiling_ft": 14000},
+    def _get_default_profile_id(self, client) -> int:
+        """Get the user's default profile id (auto-created on first list)."""
+        resp = client.get("/api/user/profiles")
+        assert resp.status_code == 200
+        profiles = resp.json()
+        default = next(p for p in profiles if p["is_default"])
+        return default["id"]
+
+    def test_flight_uses_profile_defaults(self, client):
+        """Flight created without altitude uses profile's settings."""
+        pid = self._get_default_profile_id(client)
+        client.put(f"/api/user/profiles/{pid}", json={
+            "settings": {"cruise_altitude_ft": 6000, "flight_ceiling_ft": 14000},
         })
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB"],
@@ -177,9 +186,10 @@ class TestPreferencesAppliedToFlights:
         assert data["flight_ceiling_ft"] == 14000
 
     def test_flight_explicit_overrides_defaults(self, client):
-        """Explicit values in the request override user defaults."""
-        client.put("/api/user/preferences", json={
-            "defaults": {"cruise_altitude_ft": 6000},
+        """Explicit values in the request override profile defaults."""
+        pid = self._get_default_profile_id(client)
+        client.put(f"/api/user/profiles/{pid}", json={
+            "settings": {"cruise_altitude_ft": 6000},
         })
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB"],
@@ -189,8 +199,8 @@ class TestPreferencesAppliedToFlights:
         assert resp.status_code == 201
         assert resp.json()["cruise_altitude_ft"] == 10000
 
-    def test_flight_system_defaults_without_preferences(self, client):
-        """Without user preferences, system defaults (8000/18000) are used."""
+    def test_flight_system_defaults_without_profile_settings(self, client):
+        """Without profile settings, system defaults (8000/18000) are used."""
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB"],
             "target_date": "2026-06-03",
