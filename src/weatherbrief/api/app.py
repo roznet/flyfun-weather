@@ -18,6 +18,7 @@ from weatherbrief.api.auth_config import get_jwt_secret, is_dev_mode
 from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
+from weatherbrief.api.profiles import router as profiles_router
 from weatherbrief.api.admin import router as admin_router
 from weatherbrief.api.models import router as models_router
 from weatherbrief.api.usage import router as usage_router
@@ -80,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")
+    app.include_router(profiles_router, prefix="/api")
     app.include_router(usage_router, prefix="/api")
     app.include_router(admin_router, prefix="/api")
     app.include_router(models_router, prefix="/api")

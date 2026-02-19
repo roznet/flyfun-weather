@@ -39,6 +39,7 @@ class CreateFlightRequest(BaseModel):
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
+    profile_id: int | None = None  # flight profile to associate
 
     @field_validator("target_date")
     @classmethod
@@ -72,6 +73,7 @@ class FlightResponse(BaseModel):
 
     id: str
     user_id: str
+    profile_id: int | None = None
     route_name: str
     waypoints: list[str] = []
     target_date: str
@@ -86,6 +88,7 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
     return FlightResponse(
         id=flight.id,
         user_id=flight.user_id,
+        profile_id=flight.profile_id,
         route_name=flight.route_name,
         waypoints=flight.waypoints,
         target_date=flight.target_date,
@@ -116,10 +119,10 @@ def create_flight(
 ):
     """Create a new flight.
 
-    Request fields that are None are filled from the user's saved preferences,
-    then from system defaults.
+    Request fields that are None are filled from the associated profile's
+    settings (or user's default profile), then from system defaults.
     """
-    from weatherbrief.api.preferences import load_user_defaults
+    from weatherbrief.api.profiles import load_profile_settings
 
     if not req.waypoints and not req.route_name:
         raise HTTPException(
@@ -141,18 +144,18 @@ def create_flight(
             except KeyError as exc:
                 raise HTTPException(status_code=422, detail=exc.args[0])
 
-    # Apply user defaults for any field left as None
-    defaults = load_user_defaults(db, user_id)
+    # Load defaults from the selected profile (or the user's default profile)
+    profile_settings = load_profile_settings(db, req.profile_id, user_id)
     target_time_utc = req.target_time_utc if req.target_time_utc is not None else 9
     cruise_altitude_ft = (
         req.cruise_altitude_ft
         if req.cruise_altitude_ft is not None
-        else (defaults.cruise_altitude_ft or 8000)
+        else (profile_settings.get("cruise_altitude_ft") or 8000)
     )
     flight_ceiling_ft = (
         req.flight_ceiling_ft
         if req.flight_ceiling_ft is not None
-        else (defaults.flight_ceiling_ft or 18000)
+        else (profile_settings.get("flight_ceiling_ft") or 18000)
     )
     flight_duration_hours = req.flight_duration_hours if req.flight_duration_hours is not None else 0.0
 
@@ -184,6 +187,7 @@ def create_flight(
     flight = Flight(
         id=flight_id,
         user_id=user_id,
+        profile_id=req.profile_id,
         route_name=route_name,
         waypoints=waypoints,
         target_date=req.target_date,
