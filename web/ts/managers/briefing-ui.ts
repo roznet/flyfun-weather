@@ -31,7 +31,7 @@ import {
   variableToMetricId,
 } from '../helpers/metrics-helper';
 import * as api from '../adapters/api-adapter';
-import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, allModelKeys } from '../utils';
+import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, allModelKeys, buildWindyUrl } from '../utils';
 
 // --- Header ---
 
@@ -1241,4 +1241,30 @@ export function renderError(error: string | null): void {
     el.textContent = error || '';
     el.style.display = error ? 'block' : 'none';
   }
+}
+
+// --- Windy link ---
+
+/** Update the Windy link to reflect the currently selected point and model. */
+export function updateWindyLink(
+  routeAnalyses: RouteAnalysesManifest | null,
+  selectedPointIndex: number,
+  selectedModel: string,
+): void {
+  const link = document.getElementById('windy-link') as HTMLAnchorElement | null;
+  if (!link) return;
+
+  if (!routeAnalyses || routeAnalyses.analyses.length === 0) {
+    link.style.display = 'none';
+    return;
+  }
+
+  const point = routeAnalyses.analyses[selectedPointIndex];
+  if (!point) {
+    link.style.display = 'none';
+    return;
+  }
+
+  link.href = buildWindyUrl(point.lat, point.lon, point.interpolated_time, selectedModel);
+  link.style.display = '';
 }
