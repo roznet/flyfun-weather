@@ -1254,12 +1254,7 @@ export function updateWindyLink(
   const link = document.getElementById('windy-link') as HTMLAnchorElement | null;
   if (!link) return;
 
-  if (!routeAnalyses || routeAnalyses.analyses.length === 0) {
-    link.style.display = 'none';
-    return;
-  }
-
-  const point = routeAnalyses.analyses[selectedPointIndex];
+  const point = routeAnalyses?.analyses?.[selectedPointIndex];
   if (!point) {
     link.style.display = 'none';
     return;
