@@ -484,10 +484,10 @@
     "vibe": "How fast ice will build on your airframe",
     "primary_goal": "Classify the icing severity in a cloud layer.",
     "best_used_for": "Deciding whether to enter, avoid, or exit a cloud layer.",
-    "limitations": "Based on wet-bulb temperature bands. Does not account for droplet size (SLD) or cloud thickness.",
-    "theory": "Classified from wet-bulb temperature at each level within cloud (dewpoint depression < 3°C). The wet-bulb temperature determines what happens when supercooled droplets hit your aircraft: 0 to −3°C = clear ice (severe — dense, heavy), −3 to −10°C = mixed (moderate), −10 to −15°C = rime (moderate — rough, white), −15 to −20°C = light rime. Severity upgrades if RH > 95% or precipitable water > 25mm (more moisture = faster ice buildup).",
+    "limitations": "Does not account for droplet size (SLD). Only valid in the 0 to −14°C range (layered) or 0 to −20°C (convective). When NWP cloud liquid water data is available (GFS GRIB2), severity is derived directly from LWC instead.",
+    "theory": "Uses the Ogimet continuous icing index, which peaks at −7°C matching where supercooled liquid water is most abundant. Only levels near or inside cloud (dewpoint depression < 3°C or within 500 ft of a cloud layer) are assessed. The index blends a stratiform component (parabola over −14 to 0°C) with a convective component (vapor density difference from cloud base), weighted by CAPE. Index thresholds: >0 = light, ≥30 = moderate, ≥80 = severe. Icing type is classified by temperature: 0 to −3°C = clear ice, −3 to −10°C = mixed, below −10°C = rime. Optional severity upgrades: RH > 95% at multiple levels or precipitable water > 25 mm can increase severity by one step.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
-    "llm_prompt": "explain how wet-bulb temperature bands determine icing type (clear, mixed, rime) and how the freezing level, -10°C, and -20°C levels define the icing envelope",
+    "llm_prompt": "explain how the Ogimet continuous icing index works, why it peaks at −7°C, and how temperature bands classify icing type (clear, mixed, rime)",
     "thresholds": [
       { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No icing concern." },
       { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },

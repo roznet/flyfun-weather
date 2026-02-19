@@ -62,6 +62,7 @@ class BriefingOptions:
     autorouter_credentials: tuple[str, str] | None = None  # (username, password)
     user_id: str | None = None  # for per-user token cache isolation
     airports_db_path: str | None = None  # euro_aip database for runway data
+    icing_severity_enhance: bool = True  # enable RH/PW icing severity upgrades
 
 
 @dataclass
@@ -224,6 +225,7 @@ def execute_briefing(
             wp_forecasts, target_dt, track_deg,
             cruise_altitude_ft=route.cruise_altitude_ft,
             flight_ceiling_ft=route.flight_ceiling_ft,
+            icing_severity_enhance=options.icing_severity_enhance,
         )
         analyses.append(analysis)
 
@@ -240,6 +242,7 @@ def execute_briefing(
                 cross_sections, route_points, target_dt,
                 route.flight_duration_hours, route.cruise_altitude_ft,
                 route.flight_ceiling_ft,
+                icing_severity_enhance=options.icing_severity_enhance,
             )
             route_analyses_manifest = RouteAnalysesManifest(
                 route_name=route.name,
@@ -426,6 +429,7 @@ def _run_point_analysis(
     track_deg: float,
     cruise_altitude_ft: int,
     flight_ceiling_ft: int,
+    icing_severity_enhance: bool = True,
 ) -> tuple[
     dict[str, WindComponent],
     dict[str, SoundingAnalysis],
@@ -476,7 +480,7 @@ def _run_point_analysis(
             comp["wind_direction_deg"][model_key] = cruise_wind.wind_direction_deg
 
         # Sounding analysis
-        sounding = analyze_sounding(hourly.pressure_levels, hourly)
+        sounding = analyze_sounding(hourly.pressure_levels, hourly, icing_severity_enhance=icing_severity_enhance)
         if sounding is not None:
             soundings[model_key] = sounding
 
@@ -538,6 +542,7 @@ def analyze_waypoint(
     track_deg: float,
     cruise_altitude_ft: int = 8000,
     flight_ceiling_ft: int = 18000,
+    icing_severity_enhance: bool = True,
 ) -> WaypointAnalysis:
     """Run all analysis on forecasts for a single waypoint."""
     if not forecasts:
@@ -552,6 +557,7 @@ def analyze_waypoint(
 
     wind_components, soundings, alt_advisories, divergences = _run_point_analysis(
         forecasts_by_model, track_deg, cruise_altitude_ft, flight_ceiling_ft,
+        icing_severity_enhance=icing_severity_enhance,
     )
 
     return WaypointAnalysis(
@@ -618,6 +624,7 @@ def analyze_all_route_points(
     duration_hours: float,
     cruise_altitude_ft: int,
     flight_ceiling_ft: int,
+    icing_severity_enhance: bool = True,
 ) -> list[RoutePointAnalysis]:
     """Analyze all route points across all models.
 
@@ -651,6 +658,7 @@ def analyze_all_route_points(
 
         wind_components, soundings, alt_advisories, divergences = _run_point_analysis(
             forecasts_by_model, tracks[i], cruise_altitude_ft, flight_ceiling_ft,
+            icing_severity_enhance=icing_severity_enhance,
         )
 
         analyses.append(RoutePointAnalysis(

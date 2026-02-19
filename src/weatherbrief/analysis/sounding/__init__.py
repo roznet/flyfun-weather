@@ -53,6 +53,7 @@ def _enrich_lwc(
 def analyze_sounding(
     levels: list[PressureLevelData],
     hourly: HourlyForecast | None = None,
+    icing_severity_enhance: bool = True,
 ) -> SoundingAnalysis | None:
     """Run full sounding analysis on pressure level data.
 
@@ -108,6 +109,7 @@ def analyze_sounding(
         cape_jkg=indices.cape_surface_jkg,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+        severity_enhance=icing_severity_enhance,
     )
 
     # Precipitation phase classification

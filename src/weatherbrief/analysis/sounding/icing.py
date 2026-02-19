@@ -282,6 +282,7 @@ def assess_icing_zones(
     cape_jkg: float | None = None,
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
+    severity_enhance: bool = True,
 ) -> list[IcingZone]:
     """Assess icing zones using Ogimet continuous icing index.
 
@@ -292,6 +293,7 @@ def assess_icing_zones(
         cape_jkg: Surface-based CAPE for layered/convective split.
         nwp_cloud_low_pct: NWP low cloud cover (SFC–6500ft) for severity corroboration.
         nwp_cloud_mid_pct: NWP mid cloud cover (6500–20000ft) for severity corroboration.
+        severity_enhance: If False, skip RH/PW severity upgrades (user preference).
 
     Returns:
         List of IcingZone, ordered from lowest to highest altitude.
@@ -363,12 +365,14 @@ def assess_icing_zones(
             zones.append(_build_zone(
                 current, sld_risk, precipitable_water_mm,
                 nwp_cloud_low_pct, nwp_cloud_mid_pct,
+                severity_enhance=severity_enhance,
             ))
             current = [item]
 
     zones.append(_build_zone(
         current, sld_risk, precipitable_water_mm,
         nwp_cloud_low_pct, nwp_cloud_mid_pct,
+        severity_enhance=severity_enhance,
     ))
     return zones
 
@@ -392,6 +396,7 @@ def _build_zone(
     precipitable_water_mm: float | None = None,
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
+    severity_enhance: bool = True,
 ) -> IcingZone:
     """Build an IcingZone from a group of adjacent icing levels."""
     levels_in_zone = [lv for lv, _, _, _ in items]
@@ -406,12 +411,13 @@ def _build_zone(
     risk_order = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
     worst_risk = max(risks, key=lambda r: risk_order.index(r))
 
-    nwp_pct = _nwp_cloud_for_zone(
-        base.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct,
-    )
-    worst_risk = _enhance_severity(
-        worst_risk, levels_in_zone, precipitable_water_mm, nwp_pct,
-    )
+    if severity_enhance:
+        nwp_pct = _nwp_cloud_for_zone(
+            base.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct,
+        )
+        worst_risk = _enhance_severity(
+            worst_risk, levels_in_zone, precipitable_water_mm, nwp_pct,
+        )
 
     # Dominant icing type
     type_counts: dict[IcingType, int] = {}
