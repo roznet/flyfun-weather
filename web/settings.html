@@ -26,30 +26,11 @@
 
       <!-- Tab navigation -->
       <div class="settings-tabs">
-        <button type="button" class="tab-btn active" data-tab="services">Services</button>
-        <button type="button" class="tab-btn" data-tab="flight">Flight Parameters</button>
+        <button type="button" class="tab-btn" data-tab="flight">Flight Profiles</button>
+        <button type="button" class="tab-btn active" data-tab="services">Account</button>
       </div>
       <!-- Services tab -->
       <div id="tab-services" class="tab-panel active">
-        <div class="section">
-          <h3>Forecast Models</h3>
-          <p class="muted section-hint">Select which NWP models to use for briefings.</p>
-          <div id="model-checkboxes" class="form-row model-checkboxes"></div>
-        </div>
-
-        <div class="section">
-          <h3>Optional Services</h3>
-          <p class="muted section-hint">Toggle optional services on or off. Disabled services are skipped during refresh.</p>
-          <div class="form-row model-checkboxes">
-            <label class="checkbox-label">
-              <input type="checkbox" id="toggle-gramet" checked> GRAMET cross-section
-            </label>
-            <label class="checkbox-label">
-              <input type="checkbox" id="toggle-llm-digest" checked> AI weather synopsis
-            </label>
-          </div>
-        </div>
-
         <div class="section">
           <h3>Autorouter (GRAMET) Credentials</h3>
           <p class="muted section-hint">
@@ -88,9 +69,30 @@
 
       <!-- Flight Parameters tab -->
       <div id="tab-flight" class="tab-panel">
+        <!-- Profile selector -->
+        <div class="section profile-section">
+          <h3>Flight Profiles</h3>
+          <p class="muted section-hint">Create profiles for different aircraft or flight types (e.g., VFR, IFR). Each profile has its own parameters and advisory settings.</p>
+          <div class="form-row profile-controls">
+            <div class="form-group grow">
+              <label for="profile-select">Active Profile</label>
+              <select id="profile-select" class="input-select"></select>
+            </div>
+            <div class="form-group profile-actions">
+              <label>&nbsp;</label>
+              <div class="btn-group">
+                <button type="button" id="btn-new-profile" class="btn btn-secondary btn-sm">New</button>
+                <button type="button" id="btn-duplicate-profile" class="btn btn-secondary btn-sm">Duplicate</button>
+                <button type="button" id="btn-rename-profile" class="btn btn-secondary btn-sm">Rename</button>
+                <button type="button" id="btn-delete-profile" class="btn btn-danger btn-sm">Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="section">
           <h3>Flight Defaults</h3>
-          <p class="muted section-hint">Default values when creating new flights.</p>
+          <p class="muted section-hint">Default values when creating new flights with this profile.</p>
           <div class="form-row">
             <div class="form-group">
               <label for="input-altitude">Cruise Altitude (ft)</label>
@@ -99,6 +101,23 @@
             <div class="form-group">
               <label for="input-ceiling">Flight Ceiling (ft)</label>
               <input type="number" id="input-ceiling" value="18000" min="1000" max="45000" step="500" class="input-narrow">
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h3>Forecast Models</h3>
+          <p class="muted section-hint">Select which NWP models to use for briefings with this profile.</p>
+          <div id="model-checkboxes" class="form-row model-checkboxes"></div>
+          <div class="subsection">
+            <h4 class="subsection-heading">Optional Services</h4>
+            <div class="form-row model-checkboxes">
+              <label class="checkbox-label">
+                <input type="checkbox" id="toggle-gramet" checked> GRAMET cross-section
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="toggle-llm-digest" checked> AI weather synopsis
+              </label>
             </div>
           </div>
         </div>

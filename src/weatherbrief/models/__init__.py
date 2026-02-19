@@ -67,4 +67,5 @@ from weatherbrief.models.airport_conditions import (  # noqa: F401
 from weatherbrief.models.storage import (  # noqa: F401
     BriefingPackMeta,
     Flight,
+    FlightProfile,
 )
