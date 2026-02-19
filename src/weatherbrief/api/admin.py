@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html as html_mod
 import logging
 import os
 import time
@@ -248,6 +249,7 @@ def _send_welcome(email: str, name: str, request: Request) -> None:
 
 def _approve_html(status_msg: str) -> str:
     """Render the one-click approval confirmation page."""
+    safe_msg = html_mod.escape(status_msg)
     return f"""\
 <!DOCTYPE html>
 <html lang="en">
@@ -270,7 +272,7 @@ def _approve_html(status_msg: str) -> str:
   <div class="card">
     <div class="check">&#10003;</div>
     <h2>User Approved</h2>
-    <p style="color:#6c757d;margin:0.75rem 0;">{status_msg}</p>
+    <p style="color:#6c757d;margin:0.75rem 0;">{safe_msg}</p>
     <a href="/admin.html">Go to Admin Page</a>
   </div>
 </body>
