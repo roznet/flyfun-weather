@@ -24,7 +24,7 @@ def upgrade() -> None:
         sa.Column("user_id", sa.String(64), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
         sa.Column("name", sa.String(100), nullable=False, server_default="Default"),
         sa.Column("is_default", sa.Boolean, nullable=False, server_default=sa.text("0")),
-        sa.Column("settings_json", sa.Text, nullable=False, server_default="{}"),
+        sa.Column("settings_json", sa.Text, nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
