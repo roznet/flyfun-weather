@@ -1047,6 +1047,44 @@ label {
   display: block;
 }
 
+/* --- Profile section --- */
+
+.profile-section {
+  padding-bottom: 0.5rem;
+}
+
+.profile-controls {
+  align-items: flex-end;
+}
+
+.profile-actions {
+  flex-shrink: 0;
+}
+
+.profile-actions .btn-group {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.input-select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+#profile-select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  background: var(--surface);
+  color: var(--text);
+  min-width: 180px;
+}
+
 /* --- Advisory settings --- */
 
 .advisory-category {
