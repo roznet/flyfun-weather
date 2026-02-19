@@ -28,6 +28,7 @@ export interface PreferencesResponse {
   has_autorouter_creds: boolean;
   gramet_enabled: boolean;
   llm_digest_enabled: boolean;
+  icing_severity_enhance: boolean;
 }
 
 export interface PreferencesUpdate {
@@ -38,6 +39,7 @@ export interface PreferencesUpdate {
   autorouter_password?: string;
   gramet_enabled?: boolean;
   llm_digest_enabled?: boolean;
+  icing_severity_enhance?: boolean;
 }
 
 export async function fetchPreferences(): Promise<PreferencesResponse> {

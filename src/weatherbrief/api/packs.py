@@ -219,6 +219,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     advisory_models = None
     do_gramet = True
     do_llm_digest = True
+    do_icing_enhance = True
     if db is not None:
         from weatherbrief.api.preferences import (
             load_autorouter_credentials,
@@ -238,6 +239,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         toggles = load_service_toggles(db, user_id)
         do_gramet = toggles["gramet_enabled"]
         do_llm_digest = toggles["llm_digest_enabled"]
+        do_icing_enhance = toggles["icing_severity_enhance"]
 
     # Check rate limits before running the pipeline
     if db is not None:
@@ -263,6 +265,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         autorouter_credentials=autorouter_creds,
         user_id=user_id,
         airports_db_path=db_path,
+        icing_severity_enhance=do_icing_enhance,
     )
     if models:
         options.models = models

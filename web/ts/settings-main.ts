@@ -190,8 +190,10 @@ function populateForm(prefs: PreferencesResponse): void {
   // Service toggles
   const grametToggle = document.getElementById('toggle-gramet') as HTMLInputElement;
   const llmToggle = document.getElementById('toggle-llm-digest') as HTMLInputElement;
+  const icingEnhanceToggle = document.getElementById('toggle-icing-enhance') as HTMLInputElement;
   if (grametToggle) grametToggle.checked = prefs.gramet_enabled;
   if (llmToggle) llmToggle.checked = prefs.llm_digest_enabled;
+  if (icingEnhanceToggle) icingEnhanceToggle.checked = prefs.icing_severity_enhance;
 }
 
 // --- Advisory settings rendering ---
@@ -354,6 +356,7 @@ async function handleSave(): Promise<void> {
 
   const grametEnabled = (document.getElementById('toggle-gramet') as HTMLInputElement)?.checked ?? true;
   const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
+  const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? true;
 
   try {
     const result = await savePreferences({
@@ -368,6 +371,7 @@ async function handleSave(): Promise<void> {
       autorouter_password: arPassword || undefined,
       gramet_enabled: grametEnabled,
       llm_digest_enabled: llmDigestEnabled,
+      icing_severity_enhance: icingSeverityEnhance,
     });
     updateAutorouterStatus(result.has_autorouter_creds);
     // Clear password field after successful save

@@ -49,6 +49,7 @@ class PreferencesResponse(BaseModel):
     has_autorouter_creds: bool
     gramet_enabled: bool
     llm_digest_enabled: bool
+    icing_severity_enhance: bool
 
 
 class PreferencesUpdate(BaseModel):
@@ -61,6 +62,7 @@ class PreferencesUpdate(BaseModel):
     autorouter_password: str | None = None
     gramet_enabled: bool | None = None
     llm_digest_enabled: bool | None = None
+    icing_severity_enhance: bool | None = None
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -90,6 +92,7 @@ def _parse_service_toggles(raw: str) -> dict[str, bool]:
     return {
         "gramet_enabled": data.get("gramet_enabled", True),
         "llm_digest_enabled": data.get("llm_digest_enabled", True),
+        "icing_severity_enhance": data.get("icing_severity_enhance", True),
     }
 
 
@@ -172,6 +175,8 @@ def update_preferences(
         data["gramet_enabled"] = body.gramet_enabled
     if body.llm_digest_enabled is not None:
         data["llm_digest_enabled"] = body.llm_digest_enabled
+    if body.icing_severity_enhance is not None:
+        data["icing_severity_enhance"] = body.icing_severity_enhance
 
     row.defaults_json = json.dumps(data)
 
@@ -240,13 +245,14 @@ def load_user_defaults(db: Session, user_id: str) -> FlightDefaults:
 
 
 def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
-    """Load GRAMET and LLM digest toggle preferences for a user.
+    """Load service toggle preferences for a user.
 
-    Returns dict with ``gramet_enabled`` and ``llm_digest_enabled`` (default True).
+    Returns dict with ``gramet_enabled``, ``llm_digest_enabled``,
+    and ``icing_severity_enhance`` (all default True).
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": True}
     return _parse_service_toggles(row.defaults_json)
 
 
