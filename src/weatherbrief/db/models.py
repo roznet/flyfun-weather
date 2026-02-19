@@ -31,6 +31,9 @@ class UserRow(Base):
     preferences: Mapped[UserPreferencesRow | None] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    profiles: Mapped[list[FlightProfileRow]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
     flights: Mapped[list[FlightRow]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
@@ -52,12 +55,38 @@ class UserPreferencesRow(Base):
     user: Mapped[UserRow] = relationship(back_populates="preferences")
 
 
+class FlightProfileRow(Base):
+    __tablename__ = "flight_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), default="Default")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    user: Mapped[UserRow] = relationship(back_populates="profiles")
+    flights: Mapped[list[FlightRow]] = relationship(back_populates="profile")
+
+
 class FlightRow(Base):
     __tablename__ = "flights"
 
     id: Mapped[str] = mapped_column(String(256), primary_key=True)
     user_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    profile_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("flight_profiles.id", ondelete="SET NULL"), nullable=True
     )
     route_name: Mapped[str] = mapped_column(String(256), default="")
     waypoints_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -71,6 +100,7 @@ class FlightRow(Base):
     )
 
     user: Mapped[UserRow] = relationship(back_populates="flights")
+    profile: Mapped[FlightProfileRow | None] = relationship(back_populates="flights")
     packs: Mapped[list[BriefingPackRow]] = relationship(
         back_populates="flight", cascade="all, delete-orphan"
     )

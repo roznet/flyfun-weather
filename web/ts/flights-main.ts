@@ -1,9 +1,12 @@
 /** Flights page entry point — wires store, UI manager, and event handlers. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
+import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
 import { renderUserInfo } from './utils';
+
+let loadedProfiles: ProfileResponse[] = [];
 
 async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
@@ -34,6 +37,14 @@ async function init(): Promise<void> {
     }
   });
 
+  // --- Load profiles for the selector ---
+  try {
+    loadedProfiles = await fetchProfiles();
+    populateProfileSelector(loadedProfiles);
+  } catch {
+    // Profile selector stays empty; flights still work without it
+  }
+
   // --- Wire create flight form ---
   const form = document.getElementById('create-flight-form') as HTMLFormElement;
   if (form) {
@@ -46,6 +57,8 @@ async function init(): Promise<void> {
       const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value || '8000', 10);
       const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value || '18000', 10);
       const duration = parseFloat((document.getElementById('input-duration') as HTMLInputElement).value || '0');
+      const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;
+      const profileId = profileSelect?.value ? parseInt(profileSelect.value, 10) : undefined;
 
       const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map((w) => w.toUpperCase());
       if (!targetDate) {
@@ -70,6 +83,7 @@ async function init(): Promise<void> {
           cruiseAltitudeFt: altitude,
           flightCeilingFt: ceiling,
           flightDurationHours: duration,
+          profileId: !isNaN(profileId!) ? profileId : undefined,
         });
         // Navigate to briefing page for the new flight
         navigateToBriefing(flight.id);
@@ -79,8 +93,49 @@ async function init(): Promise<void> {
     });
   }
 
+  // Update altitude/ceiling defaults when profile changes
+  const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;
+  profileSelect?.addEventListener('change', () => {
+    const id = parseInt(profileSelect.value, 10);
+    const profile = loadedProfiles.find(p => p.id === id);
+    if (profile?.settings) {
+      const altInput = document.getElementById('input-altitude') as HTMLInputElement;
+      const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
+      if (altInput && profile.settings.cruise_altitude_ft != null) {
+        altInput.value = String(profile.settings.cruise_altitude_ft);
+      }
+      if (ceilInput && profile.settings.flight_ceiling_ft != null) {
+        ceilInput.value = String(profile.settings.flight_ceiling_ft);
+      }
+    }
+  });
+
   // --- Initial load ---
   store.getState().loadFlights();
+}
+
+function populateProfileSelector(profiles: ProfileResponse[]): void {
+  const select = document.getElementById('input-profile') as HTMLSelectElement;
+  if (!select) return;
+
+  select.innerHTML = profiles.map(p => {
+    const defaultTag = p.is_default ? ' (default)' : '';
+    const selected = p.is_default ? ' selected' : '';
+    return `<option value="${p.id}"${selected}>${p.name}${defaultTag}</option>`;
+  }).join('');
+
+  // Apply default profile's altitude/ceiling values
+  const defaultProfile = profiles.find(p => p.is_default) || profiles[0];
+  if (defaultProfile?.settings) {
+    const altInput = document.getElementById('input-altitude') as HTMLInputElement;
+    const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
+    if (altInput && defaultProfile.settings.cruise_altitude_ft != null) {
+      altInput.value = String(defaultProfile.settings.cruise_altitude_ft);
+    }
+    if (ceilInput && defaultProfile.settings.flight_ceiling_ft != null) {
+      ceilInput.value = String(defaultProfile.settings.flight_ceiling_ft);
+    }
+  }
 }
 
 function navigateToBriefing(flightId: string): void {

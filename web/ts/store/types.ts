@@ -3,6 +3,7 @@
 export interface FlightResponse {
   id: string;
   user_id: string;
+  profile_id: number | null;
   route_name: string;
   waypoints: string[];
   target_date: string;
@@ -21,6 +22,7 @@ export interface CreateFlightRequest {
   cruise_altitude_ft?: number;
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
+  profile_id?: number;
 }
 
 export interface DataStatus {

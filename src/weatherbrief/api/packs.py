@@ -213,31 +213,29 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     pack_path = pack_dir_for(user_id, flight_id, fetch_ts)
     pack_path.mkdir(parents=True, exist_ok=True)
 
-    # Load user preferences for models and autorouter credentials
+    # Load settings from the flight's profile (falls back to user default profile)
     autorouter_creds = None
     models = None
     advisory_models = None
     do_gramet = True
     do_llm_digest = True
     if db is not None:
-        from weatherbrief.api.preferences import (
-            load_autorouter_credentials,
-            load_service_toggles,
-            load_user_defaults,
-        )
+        from weatherbrief.api.preferences import load_autorouter_credentials
+        from weatherbrief.api.profiles import load_profile_settings
 
         autorouter_creds = load_autorouter_credentials(db, user_id)
-        defaults = load_user_defaults(db, user_id)
-        if defaults.models:
+        profile_settings = load_profile_settings(db, flight.profile_id, user_id)
+
+        profile_models = profile_settings.get("models")
+        if profile_models:
             valid = {m.value for m in ModelSource}
-            models = [ModelSource(m) for m in defaults.models if m in valid]
+            models = [ModelSource(m) for m in profile_models if m in valid]
 
-        advisory_models = defaults.advisory_models  # may be None
+        advisory_models = profile_settings.get("advisory_models")  # may be None
 
-        # User-level service toggles
-        toggles = load_service_toggles(db, user_id)
-        do_gramet = toggles["gramet_enabled"]
-        do_llm_digest = toggles["llm_digest_enabled"]
+        # Service toggles from profile
+        do_gramet = profile_settings.get("gramet_enabled", True)
+        do_llm_digest = profile_settings.get("llm_digest_enabled", True)
 
     # Check rate limits before running the pipeline
     if db is not None:
@@ -834,19 +832,21 @@ def recalculate_advisories(
         for cs_item in cs_data.get("cross_sections", []):
             cross_sections.append(RouteCrossSection.model_validate(cs_item))
 
-    # Load user advisory preferences
-    from weatherbrief.api.preferences import load_advisory_prefs, load_user_defaults
+    # Load advisory preferences from the flight's profile
+    from weatherbrief.api.profiles import load_profile_settings
 
-    adv_prefs = load_advisory_prefs(db, user_id)
+    profile_settings = load_profile_settings(db, flight.profile_id, user_id)
+    adv_config = profile_settings.get("advisories", {})
+    enabled_map = adv_config.get("enabled")
     enabled_ids = None
-    if adv_prefs.enabled:
-        enabled_ids = {k for k, v in adv_prefs.enabled.items() if v}
-    user_params = adv_prefs.params or {}
+    if enabled_map:
+        enabled_ids = {k for k, v in enabled_map.items() if v}
+    user_params = adv_config.get("params") or {}
 
-    # Compute advisory model list (may be a subset of all fetched models)
-    defaults = load_user_defaults(db, user_id)
-    if defaults.advisory_models:
-        advisory_model_names = [m for m in defaults.advisory_models if m in manifest.models]
+    # Compute advisory model list from profile (may be a subset of all fetched models)
+    profile_adv_models = profile_settings.get("advisory_models")
+    if profile_adv_models:
+        advisory_model_names = [m for m in profile_adv_models if m in manifest.models]
     else:
         advisory_model_names = [m for m in manifest.models if m != "best_match"]
     if not advisory_model_names:

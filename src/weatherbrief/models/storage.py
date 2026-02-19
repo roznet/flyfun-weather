@@ -1,4 +1,4 @@
-"""Pydantic v2 models for flights and briefing packs (API/storage layer)."""
+"""Pydantic v2 models for flights, briefing packs, and flight profiles (API/storage layer)."""
 
 from __future__ import annotations
 
@@ -8,11 +8,24 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+class FlightProfile(BaseModel):
+    """A named set of flight parameters and advisory settings."""
+
+    id: int
+    user_id: str = ""
+    name: str = "Default"
+    is_default: bool = False
+    settings: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
 class Flight(BaseModel):
     """A saved briefing target — route + date/time specifics."""
 
     id: str  # slug: "{route_name}-{target_date}"
     user_id: str = ""  # owner; empty in single-user / dev mode
+    profile_id: int | None = None  # associated flight profile
     route_name: str  # user-assigned name or derived from waypoints
     waypoints: list[str] = Field(default_factory=list)  # ICAO codes
     target_date: str  # YYYY-MM-DD
