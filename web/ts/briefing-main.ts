@@ -76,6 +76,7 @@ async function init(): Promise<void> {
     ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
     ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
     ui.renderModelComparison(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
+    ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
   }
 
   // Apply initial display mode
@@ -189,6 +190,7 @@ async function init(): Promise<void> {
     }
     if (state.selectedModel !== prev.selectedModel) {
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
+      ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
       renderVisualization(state);
     }
     if (state.vizSettings !== prev.vizSettings) {
