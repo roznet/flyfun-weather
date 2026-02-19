@@ -85,6 +85,34 @@ export function modelLabel(model: string): string {
   return _catalog.find(m => m.key === model)?.name ?? model.toUpperCase();
 }
 
+// --- Windy URL builder ---
+
+/** Map internal model keys to Windy model identifiers. */
+const WINDY_MODEL_MAP: Record<string, string> = {
+  ecmwf: 'ecmwf',
+  gfs: 'gfs',
+  icon: 'icon',
+  iconEu: 'iconEu',
+  meteofrance: 'arome',
+};
+
+/** Build a Windy URL for the given coordinates, time, and model. */
+export function buildWindyUrl(
+  lat: number,
+  lon: number,
+  time: string | Date,
+  model?: string,
+  zoom: number = 7,
+): string {
+  const iso = typeof time === 'string' ? (time.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(time) ? time : time + 'Z') : '';
+  const d = typeof time === 'string' ? new Date(iso) : time;
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const timePart = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}-${pad(d.getUTCHours())}`;
+  const windyModel = model ? WINDY_MODEL_MAP[model] : undefined;
+  const modelPart = windyModel ? `${windyModel},` : '';
+  return `https://www.windy.com/?${modelPart}${timePart},${lat.toFixed(3)},${lon.toFixed(3)},${zoom}`;
+}
+
 /** Auto-dismiss timeout for status messages (ms). */
 export const STATUS_DISMISS_MS = 3000;
 
