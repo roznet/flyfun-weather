@@ -766,7 +766,7 @@ label {
 .external-links {
   font-size: 0.8rem;
   color: var(--muted);
-  margin-top: 0.25rem;
+  margin-left: 0.5rem;
 }
 
 /* --- Refresh status --- */
