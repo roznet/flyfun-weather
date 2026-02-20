@@ -206,20 +206,17 @@ class VFRFeasibilityEvaluator:
                 imc_pct = 100.0 * imc_count / total
                 affected_pct = 100.0 * affected / total
 
+                ext = format_extent(affected, total, ctx.total_distance_nm)
+
                 if imc_pct >= imc_pct_red:
                     enroute_status = AdvisoryStatus.RED
-                    enroute_detail = (
-                        f"IMC over {format_extent(imc_count, total, ctx.total_distance_nm)}"
-                    )
+                    enroute_detail = f"IMC over {ext}"
                 elif affected_pct >= imc_pct_amber:
                     enroute_status = AdvisoryStatus.AMBER
-                    ext = format_extent(affected, total, ctx.total_distance_nm)
                     if marginal_count > 0 and imc_count > 0:
                         enroute_detail = f"IMC/marginal clearance over {ext}"
                     elif imc_count > 0:
-                        enroute_detail = (
-                            f"IMC over {format_extent(imc_count, total, ctx.total_distance_nm)}"
-                        )
+                        enroute_detail = f"IMC over {ext}"
                     else:
                         enroute_detail = f"Marginal cloud clearance over {ext}"
                 elif affected > 0:
