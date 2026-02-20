@@ -43,6 +43,17 @@ export async function deleteFlight(id: string): Promise<void> {
   });
 }
 
+export interface RouteDistanceResponse {
+  total_distance_nm: number;
+}
+
+export async function fetchRouteDistance(waypoints: string[]): Promise<RouteDistanceResponse> {
+  return apiFetch<RouteDistanceResponse>('/flights/route-distance', {
+    method: 'POST',
+    body: JSON.stringify({ waypoints }),
+  });
+}
+
 // --- Packs ---
 
 export async function fetchPacks(flightId: string): Promise<PackMeta[]> {

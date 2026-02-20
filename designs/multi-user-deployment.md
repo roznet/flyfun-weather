@@ -118,7 +118,7 @@ Named parameter templates for flights. Settings stored as flexible JSON.
 | user_id | VARCHAR(36) FK | Cascade delete with user |
 | name | VARCHAR(100) DEFAULT "Default" | Unique per user (case-insensitive) |
 | is_default | BOOLEAN DEFAULT FALSE | One default per user |
-| settings_json | TEXT | JSON: cruise_altitude_ft, flight_ceiling_ft, models, advisory_models, gramet/llm/icing toggles, advisory enable/params |
+| settings_json | TEXT | JSON: cruise_altitude_ft, flight_ceiling_ft, speed_kt, models, advisory_models, gramet/llm/icing toggles, advisory enable/params |
 | created_at | DATETIME | |
 | updated_at | DATETIME | |
 

@@ -6,6 +6,7 @@ import type { AdvisoryPreferences } from './preferences-adapter';
 export interface ProfileSettings {
   cruise_altitude_ft: number | null;
   flight_ceiling_ft: number | null;
+  speed_kt: number | null;
   models: string[] | null;
   advisory_models: string[] | null;
   gramet_enabled: boolean | null;
