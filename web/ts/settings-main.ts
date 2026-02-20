@@ -150,6 +150,8 @@ function populateProfileForm(profile: ProfileResponse): void {
 
   // Advisories
   const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
+  const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
+  if (aggSelect) aggSelect.value = advPrefs.aggregation ?? 'worst';
   renderAdvisorySettings(catalog, advPrefs);
 }
 
@@ -468,7 +470,10 @@ function collectAdvisoryPrefs(): AdvisoryPreferences {
     }
   }
 
-  return { enabled, params };
+  const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
+  const aggregation = (aggSelect?.value === 'majority' ? 'majority' : 'worst') as 'worst' | 'majority';
+
+  return { enabled, params, aggregation };
 }
 
 // --- Save ---

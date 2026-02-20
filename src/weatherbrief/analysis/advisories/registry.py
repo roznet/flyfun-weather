@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from weatherbrief.models import AdvisoryCatalogEntry, RouteAdvisoryResult
+from weatherbrief.models import AdvisoryAggregation, AdvisoryCatalogEntry, RouteAdvisoryResult
 
 if TYPE_CHECKING:
     from weatherbrief.analysis.advisories import AdvisoryEvaluator, RouteContext
@@ -32,6 +32,7 @@ def evaluate_all(
     ctx: RouteContext,
     enabled_ids: set[str] | None = None,
     user_params: dict[str, dict[str, float]] | None = None,
+    aggregation: AdvisoryAggregation = AdvisoryAggregation.WORST,
 ) -> list[RouteAdvisoryResult]:
     """Evaluate all enabled advisories against the route context.
 
@@ -39,6 +40,7 @@ def evaluate_all(
         ctx: Route context with all analysis data.
         enabled_ids: Set of advisory IDs to evaluate. None = all defaults.
         user_params: Per-advisory parameter overrides {advisory_id: {param: value}}.
+        aggregation: How per-model statuses combine (WORST or MAJORITY).
 
     Returns:
         List of RouteAdvisoryResult, one per evaluated advisory.
@@ -64,6 +66,12 @@ def evaluate_all(
 
         try:
             result = evaluator_cls.evaluate(ctx, params)
+            # Re-aggregate with the requested mode (evaluators always use WORST)
+            if aggregation != AdvisoryAggregation.WORST:
+                result = RouteAdvisoryResult.from_per_model(
+                    result.advisory_id, result.per_model, result.parameters_used,
+                    aggregation=aggregation,
+                )
             results.append(result)
         except Exception:
             logger.warning("Advisory %s evaluation failed", adv_id, exc_info=True)
