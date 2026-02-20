@@ -167,6 +167,32 @@ Info popups include buttons for Claude, ChatGPT, and Gemini that copy a context-
 
 `controls/panel.ts` renders checkboxes grouped by category (terrain, temperature, clouds, icing, stability, turbulence, convection, reference). Layers with a `metricId` get an info button (ⓘ) that opens the layer info popup.
 
+## Unified Atmospheric Profile Table
+
+The briefing UI renders a single "Atmospheric Profile" table (`renderAtmosphericProfile()` in `briefing-ui.ts`) that merges 5 previously separate altitude tables:
+
+1. Cloud layers (coverage, dewpoint depression, temperature)
+2. Icing zones (severity, type, wet-bulb, RH, Ogimet index)
+3. Inversions (strength, surface-based flag)
+4. CAT risk layers
+5. Strong vertical motion
+
+**How it works:**
+- Collects all transition altitudes across models from `VerticalRegime` data
+- Builds a unified altitude column (top-down) with per-model columns
+- Each cell shows multi-line content: cloud status, icing risk/type, inversion label, and diagnostic values
+- Cruise icing banner displayed at top when applicable
+- Uses `AltitudeAdvisories.regimes` per model (dict of model → list of `VerticalRegime`)
+
+## Windy Meteogram Link
+
+The briefing page includes a dynamic Windy link that opens the meteogram for the currently selected route point and model:
+
+- **URL builder** (`utils.ts: buildWindyUrl()`): constructs `https://www.windy.com/{lat}/{lon}/{model}/meteogram?...` URLs
+- **Model mapping**: GFS → `gfs`, ICON → `icon`, others → ECMWF (Windy's default)
+- **Updates dynamically** when the user changes route point or model selection
+- Displayed as inline text in the external links area of the briefing
+
 ## Gotchas
 
 - Y-axis is altitude in feet (0 at bottom), not pressure — `altitudeToPressureHpa()` in scales.ts for any pressure conversions

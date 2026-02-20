@@ -4,7 +4,7 @@
 
 Models are organized in `src/weatherbrief/models/` package:
 - `analysis.py` — route, forecast, and weather analysis models
-- `storage.py` — `Flight`, `BriefingPackMeta`
+- `storage.py` — `Flight`, `FlightProfile`, `BriefingPackMeta`
 - `advisories.py` — route advisory models (status, results, catalog, manifest)
 - `__init__.py` — re-exports everything for backward-compatible imports
 
@@ -96,7 +96,7 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3 |
 | `EnhancedCloudLayer` | Cloud layer from dewpoint depression | base/top (ft + hPa), thickness, mean_temperature_c, coverage (SCT/BKN/OVC) |
 | `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |
-| `IcingZone` | Grouped icing zone from wet-bulb | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_wet_bulb_c, mean_icing_index |
+| `IcingZone` | Grouped icing zone from wet-bulb | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_wet_bulb_c, mean_rh_pct, mean_icing_index |
 | `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list |
 | `VerticalMotionClass` | Enum: vertical motion profile type | QUIESCENT, SYNOPTIC_ASCENT, SYNOPTIC_SUBSIDENCE, CONVECTIVE, OSCILLATING, UNAVAILABLE |
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
@@ -108,7 +108,7 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 
 | Model | Purpose | Key fields |
 |-------|---------|------------|
-| `VerticalRegime` | A vertical slice with uniform conditions | floor_ft, ceiling_ft, in_cloud, icing_risk, icing_type, cloud_cover_pct, cat_risk, strong_vertical_motion, label |
+| `VerticalRegime` | A vertical slice with uniform conditions | floor_ft, ceiling_ft, in_cloud, icing_risk, icing_type, cloud_coverage, cat_risk, strong_vertical_motion, label + diagnostic fields (mean_temperature_c, mean_dewpoint_depression_c, mean_wet_bulb_c, mean_rh_pct, mean_icing_index, sld_risk, inversion_strength_c, inversion_surface_based) |
 | `AltitudeAdvisory` | Actionable altitude recommendation | advisory_type, altitude_ft, feasible, reason, per_model_ft |
 | `AltitudeAdvisories` | Complete altitude picture for a waypoint | regimes (per-model), advisories, cruise_in_icing, cruise_icing_risk |
 
@@ -143,6 +143,33 @@ Saved as `elevation_profile.json` in the pack directory. ~800 points for a 400nm
 
 ## API / Web Models
 
+### FlightProfile
+
+Named parameter template for flights. Stores all flight + advisory settings as flexible JSON.
+
+```python
+FlightProfile(
+    id=1,
+    user_id="dev-user-001",
+    name="VFR Training",
+    is_default=True,
+    settings={
+        "cruise_altitude_ft": 8000,
+        "flight_ceiling_ft": 18000,
+        "models": ["gfs", "ecmwf", "icon"],
+        "advisory_models": ["gfs", "ecmwf"],
+        "gramet_enabled": True,
+        "llm_digest_enabled": False,
+        "icing_severity_enhance": True,
+        "advisories": {"enabled": {"icing_escape": True}, "params": {"icing_escape": {"terrain_margin_ft": 1000}}}
+    },
+)
+```
+
+- One default profile per user (auto-created on first access, migrates legacy `defaults_json`)
+- Settings applied dynamically at briefing refresh time — not stored on Flight
+- Flexible JSON allows adding new settings without migrations
+
 ### Flight
 
 A saved briefing target — route + date/time specifics. ID is `{route_name}-{target_date}-{hash}` where hash encodes time/altitude/duration to allow same route+date with different params.
@@ -158,6 +185,7 @@ Flight(
     cruise_altitude_ft=8000,
     flight_ceiling_ft=18000,
     flight_duration_hours=4.5,
+    profile_id=1,  # optional FK → FlightProfile, SET NULL on delete
     created_at=datetime(...),
 )
 ```

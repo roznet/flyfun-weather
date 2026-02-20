@@ -124,6 +124,7 @@ src/weatherbrief/
 │   ├── encryption.py  # Fernet encrypt/decrypt for credentials
 │   ├── flights.py     # CRUD /api/flights (DB sessions via Depends)
 │   ├── packs.py       # Packs: history, artifacts, refresh, report, email
+│   ├── profiles.py    # Flight parameter profiles CRUD (per-user named templates)
 │   ├── preferences.py # User preferences + autorouter credentials CRUD
 │   ├── usage.py       # Usage summary + daily rate limits
 │   └── admin.py       # Admin: user list, approval, usage overview
@@ -150,7 +151,7 @@ web/
 ├── ts/
 │   ├── store/         # Zustand vanilla stores + shared types
 │   ├── managers/      # DOM rendering functions (briefing-ui, advisories-ui, etc.)
-│   ├── adapters/      # API communication layer (api, auth, preferences, admin)
+│   ├── adapters/      # API communication layer (api, auth, preferences, profiles, admin)
 │   ├── components/    # Reusable UI components (info-popup)
 │   ├── helpers/       # Metric lookup, threshold rendering
 │   ├── types/         # Shared TypeScript type definitions (metrics, advisories)
@@ -184,7 +185,7 @@ Flight and pack metadata are stored in a relational database via SQLAlchemy ORM.
 - **Dev mode** (`ENVIRONMENT=development`): SQLite at `data/weatherbrief.db`, tables auto-created on startup, dev user auto-inserted.
 - **Production** (`ENVIRONMENT=production`): MySQL via `DATABASE_URL` env var, schema managed by Alembic migrations.
 
-Tables: `users`, `user_preferences`, `flights`, `briefing_packs`, `briefing_usage`. See [multi-user-deployment.md](./multi-user-deployment.md) for full schema.
+Tables: `users`, `user_preferences`, `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`. See [multi-user-deployment.md](./multi-user-deployment.md) for full schema.
 
 ### File artifacts (disk)
 
@@ -242,7 +243,10 @@ FastAPI app at `api/app.py`, served by uvicorn.
 | `/api/flights/{id}/packs/{ts}/advisories` | GET | Route advisories JSON |
 | `/api/flights/{id}/packs/{ts}/advisories/recalculate` | POST | Re-evaluate advisories with user prefs |
 | `/api/flights/{id}/packs/{ts}/email` | POST | Send email to logged-in user |
-| `/api/user/preferences` | GET/PUT | User preferences (defaults, digest config) |
+| `/api/user/profiles` | GET/POST | List/create flight parameter profiles |
+| `/api/user/profiles/{id}` | GET/PUT/DELETE | Get/update/delete profile |
+| `/api/user/profiles/{id}/duplicate` | POST | Clone profile with new name |
+| `/api/user/preferences` | GET/PUT | User preferences (autorouter creds) |
 | `/api/user/preferences/autorouter` | DELETE | Clear autorouter credentials |
 | `/api/user/usage` | GET | Today/month usage summary with quotas |
 | `/api/admin/users` | GET | All users with usage (admin only) |
@@ -314,6 +318,8 @@ Static files served from `web/` at root.
 | 7.8 | Done | NWP cloud bands, terrain draw-order fix, layer legends, "Discuss with AI" buttons |
 | 8.1 | Done | Route advisory system: 9 evaluators, registry, user-tunable parameters, recalculation, frontend dashboard |
 | 8.2 | Done | Extended pressure levels (25 for GFS/ECMWF) + GRIB2 enrichment (CLWMR/ICMR from GFS S3), LWC-based icing |
+| 9.1 | Done | Flight parameter profiles: named templates for altitude/models/advisories, profile CRUD API, settings UI |
+| 9.2 | Done | Unified atmospheric profile table, icing severity toggle, Windy meteogram links |
 
 ## Docker
 
