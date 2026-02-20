@@ -15,7 +15,7 @@ RouteContext (immutable)
   ├── elevation: ElevationProfile | None
   ├── models, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm
       ↓
-Registry → evaluate_all(ctx, enabled_ids?, user_params?)
+Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register IcingEscapeEvaluator
   ├── @register FIKIIcingEvaluator
   ├── @register FreezingLevelEvaluator
@@ -26,7 +26,7 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?)
   ├── @register ConvectiveEvaluator
   └── @register ModelAgreementEvaluator
       ↓
-RouteAdvisoriesManifest (advisories + catalog)
+RouteAdvisoriesManifest (advisories + catalog + aggregation mode)
   → route_advisories.json
 ```
 
@@ -55,9 +55,18 @@ Every evaluator follows the same pattern:
 
 1. **Point level**: Iterate route points, count affected vs total per model
 2. **Model level**: `ModelAdvisoryResult.build(status, detail, affected, total, total_distance_nm)` — computes percentage and distance metrics
-3. **Route level**: `RouteAdvisoryResult.from_per_model(id, per_model, params)` — worst status across models becomes aggregate
+3. **Route level**: `RouteAdvisoryResult.from_per_model(id, per_model, params, aggregation=)` — aggregates per-model statuses using the chosen mode
+
+Aggregation is controlled by `AdvisoryAggregation` enum (`WORST` or `MAJORITY`). The registry passes the aggregation mode; individual evaluators always produce per-model results without knowing the aggregation strategy.
 
 Detail text comes from the worst-performing model. Shared classmethods on the models eliminated ~115 lines of boilerplate.
+
+### Aggregation Modes
+
+- **WORST** (default): If ANY model shows RED, the aggregate is RED. Conservative — pilots see the worst-case scenario.
+- **MAJORITY**: The most common status across models wins. Ties broken by worst status among the tied group. Example: 2 AMBER, 2 GREEN, 1 RED → tie between AMBER and GREEN → worst of tied = AMBER.
+
+`AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
 ## The 9 Evaluators
 
@@ -107,7 +116,7 @@ params = {**defaults_from_catalog, **user_overrides}
 result = evaluator.evaluate(ctx, params)
 ```
 
-User overrides stored in `flight_profiles.settings_json` under `advisories: {enabled: {id: bool}, params: {id: {key: val}}}`. Recalculation endpoint loads the flight's profile settings, re-evaluates without re-fetching weather data.
+User overrides stored in `flight_profiles.settings_json` under `advisories: {enabled: {id: bool}, params: {id: {key: val}}, aggregation: "worst"|"majority"}`. Recalculation endpoint loads the flight's profile settings (including aggregation mode), re-evaluates without re-fetching weather data.
 
 ## Pipeline Integration
 
@@ -143,7 +152,7 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 
 - **Protocol over inheritance** — evaluators are peer classes, no hierarchy. Easier to test and extend.
 - **Immutable RouteContext** — frozen dataclass prevents accidental mutation across evaluators.
-- **Worst-model aggregation** — conservative: if ANY model shows RED, the advisory is RED.
+- **Configurable aggregation** — WORST (default, conservative) or MAJORITY (most common status, ties→worst). Set per-profile in `advisories.aggregation`.
 - **Lazy evaluation** — advisories evaluated fresh each time, not cached. Enables fast parameter tuning.
 - **Cloud top filtering** — only considers layers pilot would enter (base ≤ ceiling). High cirrus above ceiling is irrelevant.
 - **Mountain wind: GREEN not UNAVAILABLE** — if no mountains on route, "no hazard" is better UX than "N/A".

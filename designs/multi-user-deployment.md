@@ -336,6 +336,15 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] Advisory recalculation uses profile's enabled/params overrides
 - [x] Settings UI: profile selector, create/rename/duplicate/delete, single form for all settings
 - [x] Icing severity enhancement toggle (`icing_severity_enhance`) in profile settings
+- [x] Advisory aggregation mode (`advisories.aggregation`): worst vs majority — see [advisories.md](./advisories.md)
+
+### UX Improvements ✓
+
+- [x] Flight list sorted by flight time descending (future flights first), not creation time
+- [x] Past flight detection: `isFlightPast()` compares current UTC against start + duration
+- [x] "Past" badge on flight cards for flights whose end time has passed
+- [x] Refresh button disabled on briefing page for past flights (no auto-refresh either)
+- [x] Settings page defaults to Flight Profiles tab (not Account)
 
 ## Deploying to Server
 
