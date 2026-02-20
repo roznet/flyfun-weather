@@ -40,6 +40,15 @@ def _make_ctx(
     )
 
 
+# Default ceiling/visibility values per flight category for test fixtures
+_CAT_DEFAULTS: dict[FlightCategory, tuple[int, float]] = {
+    FlightCategory.VFR: (5000, 10.0),
+    FlightCategory.MVFR: (2000, 4.0),
+    FlightCategory.IFR: (800, 2.0),
+    FlightCategory.LIFR: (300, 0.5),
+}
+
+
 def _make_airport_conditions(
     dep_cats: dict[str, FlightCategory],
     arr_cats: dict[str, FlightCategory],
@@ -49,17 +58,27 @@ def _make_airport_conditions(
     arr_gusts: dict[str, float | None] | None = None,
     wind_speed_kt: float = 15.0,
     wind_direction_deg: float = 270.0,
+    dep_ceiling: dict[str, int] | None = None,
+    dep_vis: dict[str, float] | None = None,
+    arr_ceiling: dict[str, int] | None = None,
+    arr_vis: dict[str, float] | None = None,
 ) -> AirportConditions:
     """Build airport conditions from flight categories and optional wind."""
     dep_wind = dep_wind or {}
     arr_wind = arr_wind or {}
     dep_gusts = dep_gusts or {}
     arr_gusts = arr_gusts or {}
+    dep_ceiling = dep_ceiling or {}
+    dep_vis = dep_vis or {}
+    arr_ceiling = arr_ceiling or {}
+    arr_vis = arr_vis or {}
 
     dep_conds = [
         AirportModelCondition(
             model=m,
             flight_category=cat,
+            ceiling_ft=dep_ceiling.get(m, _CAT_DEFAULTS[cat][0]),
+            visibility_sm=dep_vis.get(m, _CAT_DEFAULTS[cat][1]),
             best_runway=dep_wind.get(m),
             all_runways=[dep_wind[m]] if dep_wind.get(m) else [],
             wind_gust_kt=dep_gusts.get(m),
@@ -72,6 +91,8 @@ def _make_airport_conditions(
         AirportModelCondition(
             model=m,
             flight_category=cat,
+            ceiling_ft=arr_ceiling.get(m, _CAT_DEFAULTS[cat][0]),
+            visibility_sm=arr_vis.get(m, _CAT_DEFAULTS[cat][1]),
             best_runway=arr_wind.get(m),
             all_runways=[arr_wind[m]] if arr_wind.get(m) else [],
             wind_gust_kt=arr_gusts.get(m),
@@ -95,7 +116,7 @@ class TestFlightCategoryEvaluator:
         entry = FlightCategoryEvaluator.catalog_entry()
         assert entry.id == "flight_category"
         assert entry.category == "airport"
-        assert len(entry.parameters) == 0
+        assert len(entry.parameters) == 4
 
     def test_vfr_both_airports(self):
         ac = _make_airport_conditions(
