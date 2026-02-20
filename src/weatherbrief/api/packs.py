@@ -366,7 +366,8 @@ def refresh_briefing(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error("Refresh failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Briefing fetch failed: {exc}")
+        detail = f"Briefing fetch failed: {exc}" if is_dev_mode() else "Briefing fetch failed"
+        raise HTTPException(status_code=500, detail=detail)
 
 
 _refresh_executor = ThreadPoolExecutor(max_workers=2)
