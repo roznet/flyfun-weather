@@ -1,5 +1,6 @@
 .git
 .env
+.env.*
 .pytest_cache
 __pycache__
 *.pyc
@@ -8,6 +9,7 @@ venv/
 .claude/
 tests/
 docs/
+designs/
 *.egg-info
 web/node_modules
 web/dist

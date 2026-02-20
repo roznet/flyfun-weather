@@ -60,7 +60,9 @@ def get_engine(db_url: str | None = None) -> Engine:
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
-    logger.info("Database engine created: %s", db_url.split("@")[-1])
+    # Log only the host/db portion — never log credentials
+    safe_url = db_url.split("@")[-1] if "@" in db_url else db_url.split("///")[-1]
+    logger.info("Database engine created: %s", safe_url)
     return _engine
 
 

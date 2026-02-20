@@ -60,4 +60,7 @@ ENV DATA_DIR=/app/data
 
 EXPOSE 8020
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"
+
 CMD ["uvicorn", "weatherbrief.api.app:app", "--host", "0.0.0.0", "--port", "8020"]

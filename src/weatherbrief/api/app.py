@@ -54,11 +54,17 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     load_dotenv()
 
+    # Disable interactive API docs in production to reduce attack surface
+    docs_kwargs = {}
+    if not is_dev_mode():
+        docs_kwargs = {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
     app = FastAPI(
         title="WeatherBrief API",
         description="Aviation weather briefing API",
         version="0.1.0",
         lifespan=lifespan,
+        **docs_kwargs,
     )
 
     app.state.db_path = os.environ.get("AIRPORTS_DB", "")
