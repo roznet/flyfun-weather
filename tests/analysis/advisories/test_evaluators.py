@@ -11,6 +11,8 @@ from weatherbrief.analysis.advisories.convective import ConvectiveEvaluator
 from weatherbrief.analysis.advisories.freezing_level import FreezingLevelEvaluator
 from weatherbrief.analysis.advisories.cloud_top import CloudTopEvaluator
 from weatherbrief.analysis.advisories.model_agreement import ModelAgreementEvaluator
+from weatherbrief.analysis.advisories.vfr_feasibility import VFRFeasibilityEvaluator
+from weatherbrief.analysis.advisories.ifr_feasibility import IFRFeasibilityEvaluator
 from weatherbrief.models import AdvisoryStatus
 
 
@@ -234,3 +236,155 @@ class TestModelAgreement:
             {"poor_pct_amber": 25, "poor_pct_red": 50},
         )
         assert result.aggregate_status == AdvisoryStatus.RED
+
+
+# ---------------------------------------------------------------------------
+# VFR Feasibility
+# ---------------------------------------------------------------------------
+
+_VFR_DEFAULTS = {
+    "cloud_clearance_ft": 1000,
+    "imc_pct_amber": 15,
+    "imc_pct_red": 30,
+}
+
+
+class TestVFRFeasibility:
+    def test_green_clear_vfr(self, vfr_clear_context: RouteContext):
+        """VFR at airports + clear en-route → GREEN."""
+        result = VFRFeasibilityEvaluator.evaluate(vfr_clear_context, _VFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert result.advisory_id == "vfr_feasibility"
+
+    def test_red_ifr_airport(self, vfr_ifr_airport_context: RouteContext):
+        """IFR at arrival airport → RED for VFR."""
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_ifr_airport_context, _VFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_amber_mvfr_airport(self, vfr_mvfr_airport_context: RouteContext):
+        """MVFR at departure → AMBER for VFR."""
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_mvfr_airport_context, _VFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+
+    def test_marginal_cloud_clearance(self, vfr_marginal_clearance_context: RouteContext):
+        """BKN cloud 800ft above cruise — below 1000ft clearance → marginal."""
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_marginal_clearance_context, _VFR_DEFAULTS,
+        )
+        # 100% of points have marginal clearance > 15% amber threshold
+        assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+
+    def test_red_imc_enroute(self, vfr_imc_enroute_context: RouteContext):
+        """OVC at cruise along entire route → RED (100% > 30%)."""
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_imc_enroute_context, _VFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_no_airport_data_still_works(self, clear_context: RouteContext):
+        """Without airport conditions, evaluates en-route only."""
+        result = VFRFeasibilityEvaluator.evaluate(clear_context, _VFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_per_model_results(self, vfr_clear_context: RouteContext):
+        result = VFRFeasibilityEvaluator.evaluate(vfr_clear_context, _VFR_DEFAULTS)
+        assert len(result.per_model) == 2  # gfs + ecmwf
+        for m in result.per_model:
+            assert m.total_points > 0
+
+    def test_catalog_entry(self):
+        entry = VFRFeasibilityEvaluator.catalog_entry()
+        assert entry.id == "vfr_feasibility"
+        assert entry.category == "flight_rules"
+        assert len(entry.parameters) == 3
+
+    def test_tunable_clearance(self, vfr_marginal_clearance_context: RouteContext):
+        """With 500ft clearance threshold, 800ft gap is comfortable → GREEN."""
+        params = {**_VFR_DEFAULTS, "cloud_clearance_ft": 500}
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_marginal_clearance_context, params,
+        )
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+
+# ---------------------------------------------------------------------------
+# IFR Feasibility
+# ---------------------------------------------------------------------------
+
+_IFR_DEFAULTS = {
+    "min_dep_ceiling_ft": 200,
+    "min_arr_ceiling_ft": 400,
+    "icing_pct_amber": 15,
+    "icing_pct_red": 30,
+    "convective_min_risk": 3,
+    "convective_pct_red": 10,
+}
+
+
+class TestIFRFeasibility:
+    def test_green_ifr_normal(self, ifr_normal_context: RouteContext):
+        """IFR at airports, no icing/convective → GREEN."""
+        result = IFRFeasibilityEvaluator.evaluate(ifr_normal_context, _IFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert result.advisory_id == "ifr_feasibility"
+
+    def test_amber_lifr(self, ifr_lifr_context: RouteContext):
+        """LIFR at arrival (ceiling 450ft >= 400ft min) → AMBER."""
+        result = IFRFeasibilityEvaluator.evaluate(ifr_lifr_context, _IFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+
+    def test_red_lifr_below_minimums(self, ifr_lifr_below_mins_context: RouteContext):
+        """LIFR at arrival, ceiling 150ft < 400ft minimum → RED."""
+        result = IFRFeasibilityEvaluator.evaluate(
+            ifr_lifr_below_mins_context, _IFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_red_heavy_icing(self, ifr_heavy_icing_context: RouteContext):
+        """Icing at 100% of route > 30% threshold → RED."""
+        result = IFRFeasibilityEvaluator.evaluate(
+            ifr_heavy_icing_context, _IFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_red_convective(self, ifr_convective_context: RouteContext):
+        """HIGH convective risk → RED."""
+        result = IFRFeasibilityEvaluator.evaluate(
+            ifr_convective_context, _IFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_no_airport_data(self, icing_context: RouteContext):
+        """Without airport conditions, evaluates en-route factors only."""
+        result = IFRFeasibilityEvaluator.evaluate(icing_context, _IFR_DEFAULTS)
+        # 100% icing > 30% threshold → RED
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_per_model_results(self, ifr_normal_context: RouteContext):
+        result = IFRFeasibilityEvaluator.evaluate(ifr_normal_context, _IFR_DEFAULTS)
+        assert len(result.per_model) == 2
+        for m in result.per_model:
+            assert m.total_points > 0
+
+    def test_catalog_entry(self):
+        entry = IFRFeasibilityEvaluator.catalog_entry()
+        assert entry.id == "ifr_feasibility"
+        assert entry.category == "flight_rules"
+        assert len(entry.parameters) == 6
+
+    def test_tunable_icing_threshold(self, ifr_heavy_icing_context: RouteContext):
+        """With higher icing threshold, 100% icing should still be RED."""
+        params = {**_IFR_DEFAULTS, "icing_pct_red": 80}
+        result = IFRFeasibilityEvaluator.evaluate(
+            ifr_heavy_icing_context, params,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_vfr_airports_green_for_ifr(self, vfr_clear_context: RouteContext):
+        """VFR airports are fine for IFR — GREEN."""
+        result = IFRFeasibilityEvaluator.evaluate(vfr_clear_context, _IFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.GREEN

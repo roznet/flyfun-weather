@@ -9,6 +9,7 @@ import pytest
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.models import (
     AgreementLevel,
+    AirportConditions,
     CATRiskLayer,
     CATRiskLevel,
     CloudCoverage,
@@ -26,6 +27,11 @@ from weatherbrief.models import (
     ThermodynamicIndices,
     VerticalMotionAssessment,
     VerticalMotionClass,
+)
+from weatherbrief.models.airport_conditions import (
+    AirportConditionsSummary,
+    AirportModelCondition,
+    FlightCategory,
 )
 
 
@@ -455,4 +461,297 @@ def poor_agreement_context() -> RouteContext:
         cruise_altitude_ft=8000,
         flight_ceiling_ft=18000,
         total_distance_nm=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Airport condition helpers
+# ---------------------------------------------------------------------------
+
+def _make_airport_conditions(
+    dep_category: FlightCategory = FlightCategory.VFR,
+    arr_category: FlightCategory = FlightCategory.VFR,
+    dep_ceiling_ft: int | None = 5000,
+    arr_ceiling_ft: int | None = 5000,
+    models: list[str] | None = None,
+) -> AirportConditions:
+    """Create AirportConditions with given flight categories for all models."""
+    models = models or ["gfs", "ecmwf"]
+    dep_conditions = [
+        AirportModelCondition(
+            model=m, flight_category=dep_category, ceiling_ft=dep_ceiling_ft,
+        )
+        for m in models
+    ]
+    arr_conditions = [
+        AirportModelCondition(
+            model=m, flight_category=arr_category, ceiling_ft=arr_ceiling_ft,
+        )
+        for m in models
+    ]
+    return AirportConditions(
+        departure=AirportConditionsSummary(
+            icao="EGTK", name="Oxford", conditions=dep_conditions,
+        ),
+        arrival=AirportConditionsSummary(
+            icao="LSGS", name="Sion", conditions=arr_conditions,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# VFR / IFR feasibility fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def vfr_clear_context() -> RouteContext:
+    """VFR-ideal: VFR at airports, clear en-route."""
+    n_points = 10
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(), "ecmwf": _make_sounding(),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs", "ecmwf"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(),
+    )
+
+
+@pytest.fixture
+def vfr_ifr_airport_context() -> RouteContext:
+    """VFR flight with IFR conditions at arrival — should be RED for VFR."""
+    n_points = 10
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(), "ecmwf": _make_sounding(),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs", "ecmwf"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(
+            arr_category=FlightCategory.IFR, arr_ceiling_ft=800,
+        ),
+    )
+
+
+@pytest.fixture
+def vfr_mvfr_airport_context() -> RouteContext:
+    """VFR flight with MVFR at departure — should be AMBER for VFR."""
+    n_points = 10
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(), "ecmwf": _make_sounding(),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs", "ecmwf"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(
+            dep_category=FlightCategory.MVFR, dep_ceiling_ft=2500,
+        ),
+    )
+
+
+@pytest.fixture
+def vfr_marginal_clearance_context() -> RouteContext:
+    """VFR with cloud layers near cruise — marginal cloud clearance."""
+    n_points = 10
+    # BKN cloud with base at 8800ft — only 800ft above cruise (8000ft)
+    near_cloud = EnhancedCloudLayer(
+        base_ft=8800, top_ft=12000, coverage=CloudCoverage.BKN,
+    )
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(cloud_layers=[near_cloud]),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(models=["gfs"]),
+    )
+
+
+@pytest.fixture
+def vfr_imc_enroute_context() -> RouteContext:
+    """VFR with OVC cloud at cruise — in IMC en-route."""
+    n_points = 10
+    ovc_cloud = EnhancedCloudLayer(
+        base_ft=6000, top_ft=12000, coverage=CloudCoverage.OVC,
+    )
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(cloud_layers=[ovc_cloud]),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(models=["gfs"]),
+    )
+
+
+@pytest.fixture
+def ifr_normal_context() -> RouteContext:
+    """IFR-normal: IFR at airports, no icing or convective issues."""
+    n_points = 10
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(), "ecmwf": _make_sounding(),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs", "ecmwf"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(
+            dep_category=FlightCategory.IFR, dep_ceiling_ft=800,
+            arr_category=FlightCategory.IFR, arr_ceiling_ft=900,
+        ),
+    )
+
+
+@pytest.fixture
+def ifr_lifr_context() -> RouteContext:
+    """IFR with LIFR at arrival — should be AMBER."""
+    n_points = 10
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(
+            dep_category=FlightCategory.IFR, dep_ceiling_ft=800,
+            arr_category=FlightCategory.LIFR, arr_ceiling_ft=450,
+            models=["gfs"],
+        ),
+    )
+
+
+@pytest.fixture
+def ifr_lifr_below_mins_context() -> RouteContext:
+    """IFR with LIFR below minimums at arrival — should be RED."""
+    n_points = 10
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(
+            dep_category=FlightCategory.IFR, dep_ceiling_ft=800,
+            arr_category=FlightCategory.LIFR, arr_ceiling_ft=150,
+            models=["gfs"],
+        ),
+    )
+
+
+@pytest.fixture
+def ifr_heavy_icing_context() -> RouteContext:
+    """IFR with icing along most of the route — should be RED."""
+    n_points = 10
+    icing_zone = IcingZone(
+        base_ft=4000, top_ft=10000, risk=IcingRisk.MODERATE,
+        icing_type=IcingType.MIXED,
+    )
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(icing_zones=[icing_zone]),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(
+            dep_category=FlightCategory.IFR, dep_ceiling_ft=800,
+            arr_category=FlightCategory.IFR, arr_ceiling_ft=900,
+            models=["gfs"],
+        ),
+    )
+
+
+@pytest.fixture
+def ifr_convective_context() -> RouteContext:
+    """IFR with HIGH convective risk en-route — should be RED."""
+    n_points = 10
+    conv = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.HIGH,
+        cape_jkg=2500,
+    )
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(convective=conv),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(models=["gfs"]),
     )
