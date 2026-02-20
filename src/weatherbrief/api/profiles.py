@@ -31,6 +31,7 @@ class ProfileSettings(BaseModel):
 
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
+    speed_kt: int | None = None
     models: list[str] | None = None
     advisory_models: list[str] | None = None
     gramet_enabled: bool | None = None
