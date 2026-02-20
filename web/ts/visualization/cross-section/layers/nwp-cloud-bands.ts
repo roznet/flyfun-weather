@@ -1,4 +1,4 @@
-/** NWP cloud cover bands: white fills at ICAO altitude bands from model cloud parameterization. */
+/** NWP cloud cover bands: gray fills at ICAO altitude bands from model cloud parameterization. */
 
 import type {
   CrossSectionLayer,
@@ -21,6 +21,11 @@ const INVERSION_STRENGTH_THRESHOLD_C = 2.0;
 /** Convert cloud cover percentage to capped opacity. */
 function cloudOpacity(pct: number): number {
   return Math.min(0.7, (pct / 100) * 0.8);
+}
+
+/** Gray cloud fill at the given opacity. */
+function nwpCloudFill(opacity: number): string {
+  return `rgba(180, 185, 190, ${opacity})`;
 }
 
 /** Find the lowest inversion within [floor, ceiling] that exceeds the strength threshold. */
@@ -163,7 +168,7 @@ function renderColumns(
     // Low band
     if (point.cloudCoverLowPct > 0 && limits.lowBase < limits.lowTop) {
       const opacity = cloudOpacity(point.cloudCoverLowPct);
-      const fill = `rgba(255, 255, 255, ${opacity})`;
+      const fill = nwpCloudFill(opacity);
       const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.lowBase, top: limits.lowTop }];
       drawColumnBand(ctx, bandPoints, transform, fill);
     }
@@ -171,7 +176,7 @@ function renderColumns(
     // Mid band
     if (point.cloudCoverMidPct > 0 && limits.midBase < limits.midTop) {
       const opacity = cloudOpacity(point.cloudCoverMidPct);
-      const fill = `rgba(255, 255, 255, ${opacity})`;
+      const fill = nwpCloudFill(opacity);
       const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.midBase, top: limits.midTop }];
       drawColumnBand(ctx, bandPoints, transform, fill);
     }
@@ -216,7 +221,7 @@ function drawSegment(
   if (avgLowPct > 0 &&
       (limitsCurr.lowBase < limitsCurr.lowTop || limitsNext.lowBase < limitsNext.lowTop)) {
     const opacity = cloudOpacity(avgLowPct);
-    ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
+    ctx.fillStyle = nwpCloudFill(opacity);
     ctx.beginPath();
     ctx.moveTo(x1, transform.altitudeToY(limitsCurr.lowTop));
     ctx.lineTo(x2, transform.altitudeToY(limitsNext.lowTop));
@@ -231,7 +236,7 @@ function drawSegment(
   if (avgMidPct > 0 &&
       (limitsCurr.midBase < limitsCurr.midTop || limitsNext.midBase < limitsNext.midTop)) {
     const opacity = cloudOpacity(avgMidPct);
-    ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
+    ctx.fillStyle = nwpCloudFill(opacity);
     ctx.beginPath();
     ctx.moveTo(x1, transform.altitudeToY(limitsCurr.midTop));
     ctx.lineTo(x2, transform.altitudeToY(limitsNext.midTop));
@@ -252,13 +257,13 @@ function drawSinglePointBands(
 
   if (p.cloudCoverLowPct > 0 && limits.lowBase < limits.lowTop) {
     const opacity = cloudOpacity(p.cloudCoverLowPct);
-    const fill = `rgba(255, 255, 255, ${opacity})`;
+    const fill = nwpCloudFill(opacity);
     const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.lowBase, top: limits.lowTop }];
     drawColumnBand(ctx, bandPoints, transform, fill);
   }
   if (p.cloudCoverMidPct > 0 && limits.midBase < limits.midTop) {
     const opacity = cloudOpacity(p.cloudCoverMidPct);
-    const fill = `rgba(255, 255, 255, ${opacity})`;
+    const fill = nwpCloudFill(opacity);
     const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.midBase, top: limits.midTop }];
     drawColumnBand(ctx, bandPoints, transform, fill);
   }

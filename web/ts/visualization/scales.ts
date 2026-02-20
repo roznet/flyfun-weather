@@ -49,20 +49,20 @@ export function coverageOpacity(coverage: string): number {
 
 /**
  * Continuous cloud fill from dewpoint depression (0–3°C).
- * DD ≈ 0 → dense steel gray, high opacity.
- * DD ≈ 3 → faint white, low opacity.
- * Falls back to coverage-based white fill when DD unavailable.
+ * DD ≈ 0 → dense gray, high opacity.
+ * DD ≈ 3 → light gray, lower opacity.
+ * Falls back to coverage-based gray fill when DD unavailable.
  */
 export function cloudFillFromDD(dd: number | undefined, coverage: string): string {
   if (dd === undefined) {
     const opacity = Math.min(0.85, coverageOpacity(coverage) + 0.15);
-    return `rgba(255, 255, 255, ${opacity.toFixed(2)})`;
+    return `rgba(180, 185, 190, ${opacity.toFixed(2)})`;
   }
   const t = Math.min(1, Math.max(0, dd / 3));
-  const r = Math.round(180 + 75 * t);
-  const g = Math.round(185 + 70 * t);
-  const b = Math.round(195 + 60 * t);
-  const a = 0.85 - 0.65 * t;
+  const r = Math.round(140 + 60 * t);
+  const g = Math.round(145 + 60 * t);
+  const b = Math.round(155 + 55 * t);
+  const a = 0.88 - 0.55 * t;
   return `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
 }
 
