@@ -202,6 +202,60 @@ def create_flight(
     return _flight_to_response(flight)
 
 
+class RouteDistanceRequest(BaseModel):
+    """Request body for computing route distance from waypoints."""
+
+    waypoints: list[str]
+
+    @field_validator("waypoints")
+    @classmethod
+    def validate_waypoints(cls, v: list[str]) -> list[str]:
+        if len(v) < 2:
+            raise ValueError("At least 2 waypoints are required")
+        normalized = [wp.strip().upper() for wp in v]
+        for wp in normalized:
+            if not _ICAO_PATTERN.match(wp):
+                raise ValueError(
+                    f"Invalid waypoint '{wp}': must be a 4-letter ICAO code"
+                )
+        return normalized
+
+
+class RouteDistanceResponse(BaseModel):
+    """Route distance computed from waypoints."""
+
+    total_distance_nm: float
+
+
+@router.post("/route-distance", response_model=RouteDistanceResponse)
+def compute_route_distance(
+    req: RouteDistanceRequest,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+):
+    """Compute total great-circle distance for a list of waypoints."""
+    from euro_aip.models.navpoint import NavPoint
+    from weatherbrief.airports import resolve_waypoints
+
+    db_path = getattr(request.app.state, "db_path", "")
+    if not db_path:
+        raise HTTPException(status_code=500, detail="Airport database not configured")
+
+    try:
+        resolved = resolve_waypoints(req.waypoints, db_path)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=exc.args[0])
+
+    total_nm = 0.0
+    for wp_a, wp_b in zip(resolved, resolved[1:]):
+        nav_a = NavPoint(latitude=wp_a.lat, longitude=wp_a.lon)
+        nav_b = NavPoint(latitude=wp_b.lat, longitude=wp_b.lon)
+        _, leg_distance = nav_a.haversine_distance(nav_b)
+        total_nm += leg_distance
+
+    return RouteDistanceResponse(total_distance_nm=round(total_nm, 1))
+
+
 @router.get("/{flight_id}", response_model=FlightResponse)
 def get_flight(
     flight_id: str,

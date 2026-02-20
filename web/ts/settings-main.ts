@@ -128,8 +128,10 @@ function populateProfileForm(profile: ProfileResponse): void {
   // Flight defaults
   const altInput = document.getElementById('input-altitude') as HTMLInputElement;
   const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
+  const speedInput = document.getElementById('input-speed') as HTMLInputElement;
   if (altInput) altInput.value = String(s.cruise_altitude_ft ?? 8000);
   if (ceilInput) ceilInput.value = String(s.flight_ceiling_ft ?? 18000);
+  if (speedInput) speedInput.value = s.speed_kt != null ? String(s.speed_kt) : '';
 
   // Models
   const selectedModels = s.models || defaultModelKeys();
@@ -475,6 +477,8 @@ async function handleSave(): Promise<void> {
   // Collect profile settings from the form
   const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value, 10);
   const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value, 10);
+  const speedRaw = (document.getElementById('input-speed') as HTMLInputElement).value.trim();
+  const speed = speedRaw ? parseInt(speedRaw, 10) : null;
 
   const models: string[] = [];
   for (const m of allModelKeys()) {
@@ -504,6 +508,7 @@ async function handleSave(): Promise<void> {
   const profileSettings: Partial<ProfileSettings> = {
     cruise_altitude_ft: isNaN(altitude) ? null : altitude,
     flight_ceiling_ft: isNaN(ceiling) ? null : ceiling,
+    speed_kt: speed != null && !isNaN(speed) ? speed : null,
     models,
     advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
     gramet_enabled: grametEnabled,

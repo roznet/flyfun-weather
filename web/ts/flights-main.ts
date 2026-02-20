@@ -1,12 +1,58 @@
 /** Flights page entry point — wires store, UI manager, and event handlers. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
+import { fetchRouteDistance } from './adapters/api-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
 import { renderUserInfo } from './utils';
 
 let loadedProfiles: ProfileResponse[] = [];
+
+/** Whether the user has manually edited the duration field since the last
+ *  waypoint or profile change. When true, auto-calculation is suppressed. */
+let durationManuallyEdited = false;
+
+/** Get the currently selected profile, if any. */
+function getSelectedProfile(): ProfileResponse | undefined {
+  const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;
+  if (!profileSelect?.value) return undefined;
+  const id = parseInt(profileSelect.value, 10);
+  return loadedProfiles.find(p => p.id === id);
+}
+
+/** Parse waypoints from the input field. Returns valid ICAO codes or empty array. */
+function parseWaypoints(): string[] {
+  const wpRaw = (document.getElementById('input-waypoints') as HTMLInputElement)?.value.trim();
+  if (!wpRaw) return [];
+  const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map(w => w.toUpperCase());
+  if (waypoints.length < 2) return [];
+  if (waypoints.some(w => !/^[A-Z]{4}$/.test(w))) return [];
+  return waypoints;
+}
+
+/** Compute and populate the duration field from route distance and profile speed. */
+async function updateDurationFromSpeed(): Promise<void> {
+  if (durationManuallyEdited) return;
+
+  const profile = getSelectedProfile();
+  const speedKt = profile?.settings?.speed_kt;
+  if (!speedKt || speedKt <= 0) return;
+
+  const waypoints = parseWaypoints();
+  if (waypoints.length < 2) return;
+
+  try {
+    const { total_distance_nm } = await fetchRouteDistance(waypoints);
+    const durationHours = Math.ceil(total_distance_nm / speedKt);
+    const durationInput = document.getElementById('input-duration') as HTMLInputElement;
+    if (durationInput) {
+      durationInput.value = String(durationHours);
+    }
+  } catch (err) {
+    console.error('Failed to auto-calculate flight duration:', err);
+  }
+}
 
 async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
@@ -93,7 +139,20 @@ async function init(): Promise<void> {
     });
   }
 
-  // Update altitude/ceiling defaults when profile changes
+  // --- Auto-calculate duration when waypoints change ---
+  const waypointsInput = document.getElementById('input-waypoints') as HTMLInputElement;
+  waypointsInput?.addEventListener('blur', () => {
+    durationManuallyEdited = false;
+    updateDurationFromSpeed();
+  });
+
+  // --- Track manual duration edits ---
+  const durationInput = document.getElementById('input-duration') as HTMLInputElement;
+  durationInput?.addEventListener('input', () => {
+    durationManuallyEdited = true;
+  });
+
+  // Update altitude/ceiling defaults and recalculate duration when profile changes
   const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;
   profileSelect?.addEventListener('change', () => {
     const id = parseInt(profileSelect.value, 10);
@@ -108,6 +167,9 @@ async function init(): Promise<void> {
         ceilInput.value = String(profile.settings.flight_ceiling_ft);
       }
     }
+    // Recalculate duration with new profile's speed
+    durationManuallyEdited = false;
+    updateDurationFromSpeed();
   });
 
   // --- Initial load ---
