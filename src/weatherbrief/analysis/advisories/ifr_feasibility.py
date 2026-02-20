@@ -84,16 +84,22 @@ def _check_airport_ifr(
     return worst, detail
 
 
-def _check_enroute_icing(
+def _check_enroute_hazards(
     ctx: RouteContext,
     model: str,
-) -> tuple[int, int]:
-    """Count route points with icing zones for a given model.
+    convective_min_risk_idx: int,
+) -> tuple[int, int, int, int, ConvectiveRisk]:
+    """Check en-route icing and convective hazards in a single pass.
 
-    Returns (total, icing_count).
+    Returns (total, affected, icing_count, conv_count, worst_conv_risk).
+    - affected: number of unique points with icing OR convective risk
+    - icing_count / conv_count: individual counts for detail messages
     """
     total = 0
+    affected = 0
     icing_count = 0
+    conv_count = 0
+    worst_conv_risk = ConvectiveRisk.NONE
 
     for rpa in ctx.analyses:
         sounding = rpa.sounding.get(model)
@@ -101,42 +107,25 @@ def _check_enroute_icing(
             continue
         total += 1
 
-        if sounding.icing_zones:
-            icing_count += 1
-
-    return total, icing_count
-
-
-def _check_enroute_convective(
-    ctx: RouteContext,
-    model: str,
-    min_risk_idx: int,
-) -> tuple[int, int, ConvectiveRisk]:
-    """Count route points with convective risk at or above the minimum threshold.
-
-    Returns (total, convective_count, worst_risk).
-    """
-    total = 0
-    convective_count = 0
-    worst_risk = ConvectiveRisk.NONE
-
-    for rpa in ctx.analyses:
-        sounding = rpa.sounding.get(model)
-        if sounding is None:
-            continue
-        total += 1
+        has_icing = bool(sounding.icing_zones)
+        has_convective = False
 
         conv = sounding.convective
-        if conv is None:
-            continue
+        if conv is not None:
+            risk_idx = _CONVECTIVE_SEVERITY.index(conv.risk_level)
+            if risk_idx >= convective_min_risk_idx:
+                has_convective = True
+                if risk_idx > _CONVECTIVE_SEVERITY.index(worst_conv_risk):
+                    worst_conv_risk = conv.risk_level
 
-        risk_idx = _CONVECTIVE_SEVERITY.index(conv.risk_level)
-        if risk_idx >= min_risk_idx:
-            convective_count += 1
-            if risk_idx > _CONVECTIVE_SEVERITY.index(worst_risk):
-                worst_risk = conv.risk_level
+        if has_icing:
+            icing_count += 1
+        if has_convective:
+            conv_count += 1
+        if has_icing or has_convective:
+            affected += 1
 
-    return total, convective_count, worst_risk
+    return total, affected, icing_count, conv_count, worst_conv_risk
 
 
 @register
@@ -253,12 +242,9 @@ class IFRFeasibilityEvaluator:
                 ctx, model, min_dep_ceiling_ft, min_arr_ceiling_ft
             )
 
-            # 2. En-route icing
-            total, icing_count = _check_enroute_icing(ctx, model)
-
-            # 3. En-route convective
-            _, conv_count, worst_conv_risk = _check_enroute_convective(
-                ctx, model, convective_min_risk
+            # 2. En-route hazards (single pass — no double-counting)
+            total, affected, icing_count, conv_count, worst_conv_risk = (
+                _check_enroute_hazards(ctx, model, convective_min_risk)
             )
 
             if (
@@ -273,7 +259,7 @@ class IFRFeasibilityEvaluator:
                 ))
                 continue
 
-            # 4. Determine icing status
+            # 3. Determine icing status
             icing_status = AdvisoryStatus.GREEN
             icing_detail = ""
             if total > 0 and icing_count > 0:
@@ -288,7 +274,7 @@ class IFRFeasibilityEvaluator:
                         f"{format_extent(icing_count, total, ctx.total_distance_nm)}"
                     )
 
-            # 5. Determine convective status
+            # 4. Determine convective status
             conv_status = AdvisoryStatus.GREEN
             conv_detail = ""
             if total > 0 and conv_count > 0:
@@ -305,13 +291,8 @@ class IFRFeasibilityEvaluator:
                     f"{format_extent(conv_count, total, ctx.total_distance_nm)}"
                 )
 
-            # 6. Combine all factors
+            # 5. Combine all factors
             status = _worst_status(airport_status, icing_status, conv_status)
-
-            # Total affected = icing + convective affected points (don't double count)
-            affected = icing_count + conv_count
-            # Cap at total to avoid >100% when points have both icing and convective
-            affected = min(affected, total) if total > 0 else 0
 
             detail_parts = []
             if airport_detail:

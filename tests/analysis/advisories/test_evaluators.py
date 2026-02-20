@@ -271,12 +271,15 @@ class TestVFRFeasibility:
         assert result.aggregate_status == AdvisoryStatus.AMBER
 
     def test_marginal_cloud_clearance(self, vfr_marginal_clearance_context: RouteContext):
-        """BKN cloud 800ft above cruise — below 1000ft clearance → marginal."""
+        """BKN cloud 800ft above cruise — below 1000ft clearance → AMBER.
+
+        All points have marginal clearance (100% > 15% amber threshold) but
+        no points are actually in IMC (0% < 30% red threshold).
+        """
         result = VFRFeasibilityEvaluator.evaluate(
             vfr_marginal_clearance_context, _VFR_DEFAULTS,
         )
-        # 100% of points have marginal clearance > 15% amber threshold
-        assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+        assert result.aggregate_status == AdvisoryStatus.AMBER
 
     def test_red_imc_enroute(self, vfr_imc_enroute_context: RouteContext):
         """OVC at cruise along entire route → RED (100% > 30%)."""
