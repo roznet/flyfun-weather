@@ -92,7 +92,24 @@ def list_users(
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    users = db.query(UserRow).order_by(UserRow.created_at.desc()).all()
+    users = db.query(UserRow).all()
+
+    # Batch-query last activity (most recent briefing_usage) per user
+    last_active_rows = (
+        db.query(
+            BriefingUsageRow.user_id,
+            func.max(BriefingUsageRow.timestamp).label("last_active"),
+        )
+        .group_by(BriefingUsageRow.user_id)
+        .all()
+    )
+    last_active_map = {r.user_id: r.last_active for r in last_active_rows}
+
+    # Sort by last activity (falling back to last_login_at, then created_at)
+    def _sort_key(u: UserRow) -> datetime:
+        return last_active_map.get(u.id) or u.last_login_at or u.created_at or datetime.min.replace(tzinfo=timezone.utc)
+
+    users.sort(key=_sort_key, reverse=True)
 
     # Batch-query month usage grouped by user_id
     month_rows = (
@@ -142,6 +159,7 @@ def list_users(
             "approved": u.approved,
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+            "last_active_at": last_active_map[u.id].isoformat() if u.id in last_active_map else None,
             "usage_month": month_map.get(u.id, default_month),
             "disk_usage_bytes": disk,
         })
