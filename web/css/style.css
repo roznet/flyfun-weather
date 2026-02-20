@@ -198,6 +198,7 @@ label {
 .badge-amber { background: var(--amber-bg); color: var(--amber); }
 .badge-red { background: var(--red-bg); color: var(--red); }
 .badge-none { background: var(--bg); color: var(--text-muted); }
+.badge-past { background: var(--bg); color: var(--text-muted); font-weight: normal; }
 
 /* --- Freshness bar --- */
 

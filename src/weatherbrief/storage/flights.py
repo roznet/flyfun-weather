@@ -134,11 +134,11 @@ def load_flight(session: Session, flight_id: str) -> Flight:
 
 
 def list_flights(session: Session, user_id: str) -> list[Flight]:
-    """List all flights for a user, newest first."""
+    """List all flights for a user, sorted by flight time descending."""
     stmt = (
         select(FlightRow)
         .where(FlightRow.user_id == user_id)
-        .order_by(FlightRow.created_at.desc())
+        .order_by(FlightRow.target_date.desc(), FlightRow.target_time_utc.desc())
     )
     rows = session.execute(stmt).scalars().all()
     return [_row_to_flight(r) for r in rows]

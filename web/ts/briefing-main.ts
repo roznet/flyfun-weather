@@ -5,7 +5,7 @@ import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { renderAdvisories } from './managers/advisories-ui';
-import { renderUserInfo, initModelCatalog } from './utils';
+import { renderUserInfo, initModelCatalog, isFlightPast } from './utils';
 import { initInfoPopup, showMetricInfo } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
@@ -348,13 +348,20 @@ async function init(): Promise<void> {
     renderVisualization(s);
     ui.renderLoading(s.loading);
 
-    // Show refresh button only for the flight owner
+    // Show refresh button only for the flight owner; disable for past flights
+    const past = s.flight
+      ? isFlightPast(s.flight.target_date, s.flight.target_time_utc, s.flight.flight_duration_hours)
+      : false;
     if (refreshBtn && s.flight?.user_id === user.id) {
       refreshBtn.style.display = '';
+      if (past) {
+        refreshBtn.disabled = true;
+        refreshBtn.title = 'Flight is in the past';
+      }
     }
 
     // Auto-refresh on first visit (no packs yet), otherwise check freshness
-    if (s.packs.length === 0 && s.flight?.user_id === user.id) {
+    if (s.packs.length === 0 && s.flight?.user_id === user.id && !past) {
       store.getState().refresh();
     } else if (s.packs.length > 0) {
       store.getState().checkFreshness();
