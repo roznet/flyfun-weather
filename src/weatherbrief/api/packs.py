@@ -802,6 +802,7 @@ def recalculate_advisories(
     import json as json_mod
 
     from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
+    from weatherbrief.models import AdvisoryAggregation
     from weatherbrief.models import (
         ElevationProfile,
         RouteAdvisoriesManifest,
@@ -846,6 +847,7 @@ def recalculate_advisories(
     if enabled_map:
         enabled_ids = {k for k, v in enabled_map.items() if v}
     user_params = adv_config.get("params") or {}
+    aggregation = AdvisoryAggregation(adv_config.get("aggregation", "worst"))
 
     # Compute advisory model list from profile (may be a subset of all fetched models)
     profile_adv_models = profile_settings.get("advisory_models")
@@ -875,7 +877,7 @@ def recalculate_advisories(
         airport_conditions=airport_conds,
     )
 
-    advisory_results = evaluate_all(ctx, enabled_ids, user_params)
+    advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=aggregation)
     result = RouteAdvisoriesManifest(
         advisories=advisory_results,
         catalog=get_catalog(),
@@ -884,6 +886,7 @@ def recalculate_advisories(
         flight_ceiling_ft=flight.flight_ceiling_ft,
         total_distance_nm=manifest.total_distance_nm,
         models=advisory_model_names,
+        aggregation=aggregation.value,
         airport_conditions=airport_conds,
     )
 

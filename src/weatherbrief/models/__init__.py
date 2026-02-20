@@ -48,6 +48,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     bearing_between_coords,
 )
 from weatherbrief.models.advisories import (  # noqa: F401
+    AdvisoryAggregation,
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
     AdvisoryStatus,

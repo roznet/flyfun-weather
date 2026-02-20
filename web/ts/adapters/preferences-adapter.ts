@@ -19,6 +19,7 @@ export interface DigestConfig {
 export interface AdvisoryPreferences {
   enabled: Record<string, boolean> | null;
   params: Record<string, Record<string, number>> | null;
+  aggregation?: 'worst' | 'majority';
 }
 
 export interface PreferencesResponse {

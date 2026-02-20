@@ -13,6 +13,13 @@ from pydantic import BaseModel, Field
 from weatherbrief.models.airport_conditions import AirportConditions  # noqa: F401
 
 
+class AdvisoryAggregation(str, Enum):
+    """How per-model statuses are combined into an aggregate."""
+
+    WORST = "worst"
+    MAJORITY = "majority"
+
+
 class AdvisoryStatus(str, Enum):
     """Route advisory status level."""
 
@@ -30,6 +37,24 @@ class AdvisoryStatus(str, Enum):
             if s in _ORDER and _ORDER.index(s) > _ORDER.index(result):
                 result = s
         return result
+
+    @classmethod
+    def majority(cls, statuses: list[AdvisoryStatus]) -> AdvisoryStatus:
+        """Return the most common status; ties broken by worst among tied.
+
+        UNAVAILABLE values are ignored. If all are UNAVAILABLE or empty,
+        returns GREEN.
+        """
+        _ORDER = [cls.GREEN, cls.AMBER, cls.RED]
+        valid = [s for s in statuses if s in _ORDER]
+        if not valid:
+            return cls.GREEN
+        counts: dict[AdvisoryStatus, int] = {}
+        for s in valid:
+            counts[s] = counts.get(s, 0) + 1
+        max_count = max(counts.values())
+        tied = [s for s, c in counts.items() if c == max_count]
+        return cls.worst(tied)
 
 
 class AdvisoryParameterDef(BaseModel):
@@ -109,20 +134,27 @@ class RouteAdvisoryResult(BaseModel):
         advisory_id: str,
         per_model: list[ModelAdvisoryResult],
         params: dict[str, float],
+        aggregation: AdvisoryAggregation = AdvisoryAggregation.WORST,
     ) -> RouteAdvisoryResult:
         """Build aggregate result from per-model results.
 
-        Uses worst status across models; detail comes from the worst model.
+        Aggregation mode controls how per-model statuses combine:
+        - WORST: most severe status wins (default)
+        - MAJORITY: most common status; ties broken by worst among tied
         """
-        agg = AdvisoryStatus.worst([m.status for m in per_model])
-        worst = next(
+        statuses = [m.status for m in per_model]
+        if aggregation == AdvisoryAggregation.MAJORITY:
+            agg = AdvisoryStatus.majority(statuses)
+        else:
+            agg = AdvisoryStatus.worst(statuses)
+        representative = next(
             (m for m in per_model if m.status == agg),
             per_model[0] if per_model else None,
         )
         return cls(
             advisory_id=advisory_id,
             aggregate_status=agg,
-            aggregate_detail=worst.detail if worst else "",
+            aggregate_detail=representative.detail if representative else "",
             per_model=per_model,
             parameters_used=params,
         )
@@ -138,4 +170,5 @@ class RouteAdvisoriesManifest(BaseModel):
     flight_ceiling_ft: int = 0
     total_distance_nm: float = 0.0
     models: list[str] = Field(default_factory=list)
+    aggregation: str = "worst"
     airport_conditions: AirportConditions | None = None
