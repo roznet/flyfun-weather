@@ -230,12 +230,20 @@ class TestModelAgreement:
         assert result.aggregate_status in (AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE)
 
     def test_poor_agreement(self, poor_agreement_context: RouteContext):
-        """100% poor agreement → RED."""
+        """100% poor agreement (3+ variables) → RED."""
         result = ModelAgreementEvaluator.evaluate(
             poor_agreement_context,
-            {"poor_pct_amber": 25, "poor_pct_red": 50},
+            {"min_poor_vars": 3, "poor_pct_amber": 25, "poor_pct_red": 50},
         )
         assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_few_poor_variables_is_green(self, poor_agreement_context: RouteContext):
+        """With high min_poor_vars threshold, few POOR variables → GREEN."""
+        result = ModelAgreementEvaluator.evaluate(
+            poor_agreement_context,
+            {"min_poor_vars": 5, "poor_pct_amber": 25, "poor_pct_red": 50},
+        )
+        assert result.aggregate_status == AdvisoryStatus.GREEN
 
 
 # ---------------------------------------------------------------------------

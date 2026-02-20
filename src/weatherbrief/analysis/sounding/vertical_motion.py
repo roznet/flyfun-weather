@@ -113,7 +113,7 @@ def compute_stability_indicators(
             dv_dz = (v_vals[i + 1] - v_vals[i]) / dz
             shear_sq = du_dz**2 + dv_dz**2
 
-            if shear_sq > _MIN_SHEAR_SQ:
+            if shear_sq > _MIN_SHEAR_SQ and n_sq >= 0:
                 ri = n_sq / shear_sq
                 derived_levels[i + 1].richardson_number = round(float(ri), 2)
 
