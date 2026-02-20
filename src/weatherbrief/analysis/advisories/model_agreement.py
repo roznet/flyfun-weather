@@ -33,6 +33,17 @@ class ModelAgreementEvaluator:
             category="model",
             parameters=[
                 AdvisoryParameterDef(
+                    key="min_poor_vars",
+                    label="Min poor variables",
+                    description="Number of variables that must be POOR to flag a waypoint",
+                    type="number",
+                    unit="",
+                    default=3,
+                    min=1,
+                    max=8,
+                    step=1,
+                ),
+                AdvisoryParameterDef(
                     key="poor_pct_amber",
                     label="Poor % (amber)",
                     description="Route percentage with POOR agreement for amber",
@@ -59,6 +70,7 @@ class ModelAgreementEvaluator:
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
+        min_poor_vars = int(params.get("min_poor_vars", 3))
         poor_pct_amber = params.get("poor_pct_amber", 25)
         poor_pct_red = params.get("poor_pct_red", 50)
 
@@ -72,7 +84,8 @@ class ModelAgreementEvaluator:
                 continue
             total += 1
 
-            has_poor = any(d.agreement == AgreementLevel.POOR for d in rpa.model_divergence)
+            n_poor = sum(1 for d in rpa.model_divergence if d.agreement == AgreementLevel.POOR)
+            has_poor = n_poor >= min_poor_vars
             has_moderate = any(d.agreement == AgreementLevel.MODERATE for d in rpa.model_divergence)
 
             if has_poor:

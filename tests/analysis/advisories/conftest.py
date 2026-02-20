@@ -445,8 +445,19 @@ def poor_agreement_context() -> RouteContext:
                 ModelDivergence(
                     variable="temperature_c",
                     model_values={"gfs": 5.0, "ecmwf": 15.0},
-                    mean=10.0,
-                    spread=10.0,
+                    mean=10.0, spread=10.0,
+                    agreement=AgreementLevel.POOR,
+                ),
+                ModelDivergence(
+                    variable="wind_speed_kt",
+                    model_values={"gfs": 5.0, "ecmwf": 25.0},
+                    mean=15.0, spread=20.0,
+                    agreement=AgreementLevel.POOR,
+                ),
+                ModelDivergence(
+                    variable="cloud_cover_pct",
+                    model_values={"gfs": 10.0, "ecmwf": 80.0},
+                    mean=45.0, spread=70.0,
                     agreement=AgreementLevel.POOR,
                 ),
             ],
