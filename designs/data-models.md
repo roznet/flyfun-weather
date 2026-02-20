@@ -156,6 +156,7 @@ FlightProfile(
     settings={
         "cruise_altitude_ft": 8000,
         "flight_ceiling_ft": 18000,
+        "speed_kt": 120,
         "models": ["gfs", "ecmwf", "icon"],
         "advisory_models": ["gfs", "ecmwf"],
         "gramet_enabled": True,
