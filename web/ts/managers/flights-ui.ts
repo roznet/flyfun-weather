@@ -40,7 +40,7 @@ export function renderFlightList(
       ? f.waypoints.join(' → ')
       : f.route_name.replace(/_/g, ' → ').toUpperCase();
     const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours);
-    const pastBadge = past ? ' <span class="badge badge-past">Past</span>' : '';
+    const pastBadge = past ? '<span class="badge badge-past">Past</span> ' : '';
     const packInfo = pack
       ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
          <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
@@ -49,8 +49,8 @@ export function renderFlightList(
     return `
       <div class="flight-card" data-id="${escapeHtml(f.id)}">
         <div class="flight-header">
-          <span class="flight-route">${escapeHtml(waypoints)}</span>
-          <span class="flight-date">${formatDate(f.target_date)} ${formatTime(f.target_time_utc)}${pastBadge}</span>
+          ${pastBadge}<span class="flight-route">${escapeHtml(waypoints)}</span>
+          <span class="flight-date">${formatDate(f.target_date)} ${formatTime(f.target_time_utc)}</span>
           <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
         </div>
         <div class="flight-status">
