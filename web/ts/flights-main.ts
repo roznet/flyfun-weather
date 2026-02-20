@@ -49,8 +49,8 @@ async function updateDurationFromSpeed(): Promise<void> {
     if (durationInput) {
       durationInput.value = String(durationHours);
     }
-  } catch {
-    // Silently ignore — invalid waypoints or network errors shouldn't block the form
+  } catch (err) {
+    console.error('Failed to auto-calculate flight duration:', err);
   }
 }
 
