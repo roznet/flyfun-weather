@@ -62,6 +62,14 @@ export function formatAlt(ft: number): string {
   return `${ft}ft`;
 }
 
+/** Check if a flight's end time (start + duration) is in the past. */
+export function isFlightPast(targetDate: string, targetTimeUtc: number, durationHours: number): boolean {
+  const startMs = new Date(`${targetDate}T${targetTimeUtc.toString().padStart(2, '0')}:00:00Z`).getTime();
+  if (isNaN(startMs)) return false;
+  const endMs = startMs + durationHours * 3600_000;
+  return Date.now() > endMs;
+}
+
 // --- Model catalog (populated from /api/models at startup) ---
 
 export interface ModelCatalogEntry { key: string; name: string; default: boolean; }
