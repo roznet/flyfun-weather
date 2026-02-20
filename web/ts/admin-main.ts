@@ -102,7 +102,8 @@ function renderUserRow(u: AdminUser): string {
   const status = u.approved
     ? '<span class="badge badge-green">Active</span>'
     : '<span class="badge badge-amber">Pending</span>';
-  const lastLogin = u.last_login_at ? formatDate(u.last_login_at) : '-';
+  const lastActive = u.last_active_at ?? u.last_login_at;
+  const lastActiveLabel = lastActive ? formatDate(lastActive) : '-';
   const m = u.usage_month;
   const tokens = m.total_tokens >= 1000
     ? `~${Math.round(m.total_tokens / 1000)}K`
@@ -115,7 +116,7 @@ function renderUserRow(u: AdminUser): string {
       <td>${escapeHtml(u.display_name)}</td>
       <td>${escapeHtml(u.email)}</td>
       <td>${status} ${approveBtn}</td>
-      <td>${lastLogin}</td>
+      <td>${lastActiveLabel}</td>
       <td class="num">${m.briefings}</td>
       <td class="num">${m.gramet}</td>
       <td class="num">${m.llm_digest}</td>

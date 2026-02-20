@@ -17,6 +17,7 @@ export interface AdminUser {
   approved: boolean;
   created_at: string | null;
   last_login_at: string | null;
+  last_active_at: string | null;
   usage_month: AdminUserUsage;
   disk_usage_bytes: number;
 }
