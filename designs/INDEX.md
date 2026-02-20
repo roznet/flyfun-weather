@@ -13,7 +13,7 @@ Key exports: `execute_briefing`, `create_app`
 
 ### data-models
 Pydantic v2 models for routes, forecasts, analysis, snapshots, cross-sections, elevation, flights, and briefing packs. Models split across `models/analysis.py` and `models/storage.py`.
-Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection`, `WaypointForecast`, `SoundingAnalysis`, `VerticalMotionAssessment`, `RoutePointAnalysis`, `ElevationProfile`, `InversionLayer`, `Flight`, `BriefingPackMeta`
+Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection`, `WaypointForecast`, `SoundingAnalysis`, `VerticalMotionAssessment`, `RoutePointAnalysis`, `ElevationProfile`, `InversionLayer`, `Flight`, `FlightProfile`, `BriefingPackMeta`
 → Full doc: data-models.md
 
 ### fetch
@@ -36,7 +36,7 @@ Comprehensive catalog of all ~40 weather metrics: API sources, derivation formul
 → Full doc: analysis-metrics.md
 
 ### visualization
-Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands, convective towers, temperature/stability lines, hover interaction, metrics UI system with info popups, layer legends, and "Discuss with AI" integration.
+Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands, convective towers, temperature/stability lines, hover interaction, metrics UI system with info popups, layer legends, "Discuss with AI" integration, unified atmospheric profile table, and Windy meteogram links.
 Key exports: `CrossSectionRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
 → Full doc: visualization.md
 
@@ -46,7 +46,7 @@ Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDiges
 → Full doc: digest.md
 
 ### multi-user-deployment
-Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google OAuth, MySQL/SQLite DB, per-user flights and credentials, usage tracking, rate limiting, admin approval, shareable briefing links, model freshness.
+Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google OAuth, MySQL/SQLite DB, per-user flights/profiles/credentials, usage tracking, rate limiting, admin approval, shareable briefing links, flight parameter profiles.
 → Full doc: multi-user-deployment.md
 
 ### flight-weather-tracker-spec

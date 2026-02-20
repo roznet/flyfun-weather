@@ -108,12 +108,27 @@ JSON-based storage for flexibility — individual settings serialized rather tha
 | encrypted_autorouter_creds | TEXT | Fernet-encrypted JSON: `{"username": "...", "password": "..."}` |
 | digest_config_json | TEXT | JSON: `{"config_name": "default"}` |
 
+### flight_profiles
+
+Named parameter templates for flights. Settings stored as flexible JSON.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INT AUTO_INCREMENT PK | |
+| user_id | VARCHAR(36) FK | Cascade delete with user |
+| name | VARCHAR(100) DEFAULT "Default" | Unique per user (case-insensitive) |
+| is_default | BOOLEAN DEFAULT FALSE | One default per user |
+| settings_json | TEXT | JSON: cruise_altitude_ft, flight_ceiling_ft, models, advisory_models, gramet/llm/icing toggles, advisory enable/params |
+| created_at | DATETIME | |
+| updated_at | DATETIME | |
+
 ### flights
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | VARCHAR(100) PK | `{user_id}_{route_slug}_{target_date}` |
 | user_id | VARCHAR(36) FK | |
+| profile_id | INT FK NULL | → flight_profiles.id, SET NULL on delete |
 | route_name | VARCHAR(100) | |
 | waypoints | JSON | `["EGTK","LFPB","LSGS"]` |
 | target_date | DATE | |
@@ -307,6 +322,20 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] Admin gate: dev user always admin; production checks JWT email against `ADMIN_EMAILS`
 - [x] Shareable briefing links: any authenticated user can view any flight's briefings
 - [x] Ownership model: only flight owner can refresh/delete; frontend hides action buttons for non-owners
+
+### Phase 5: Flight Profiles ✓
+
+**Goal**: Named parameter profiles for flights — reusable templates for altitude, models, advisory settings.
+
+- [x] `flight_profiles` table with flexible JSON settings (migration 004)
+- [x] Profile CRUD API (`/user/profiles`): list, create, update, delete, duplicate
+- [x] Auto-create default profile on first access (migrates legacy `defaults_json`)
+- [x] One default profile per user, enforced by API
+- [x] Flights link to profiles via `profile_id` FK (nullable, SET NULL on delete)
+- [x] Briefing refresh applies profile settings (models, toggles, advisory config)
+- [x] Advisory recalculation uses profile's enabled/params overrides
+- [x] Settings UI: profile selector, create/rename/duplicate/delete, single form for all settings
+- [x] Icing severity enhancement toggle (`icing_severity_enhance`) in profile settings
 
 ## Deploying to Server
 

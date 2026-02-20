@@ -98,7 +98,7 @@ layers = detect_inversions(derived_levels)
 Two-path icing assessment: direct LWC when GRIB2 data available, Ogimet index as fallback.
 
 ```python
-zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape)
+zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity_enhance=True)
 ```
 
 **Path 1: Direct LWC** (when `cloud_liquid_water_g_m3` populated via GRIB2 enrichment):
@@ -128,6 +128,7 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape)
 **Icing type** determined by wet-bulb temperature: CLEAR (Tw > -3°C), MIXED (-10°C to -3°C), RIME (< -10°C).
 
 - Each `IcingZone` includes `mean_icing_index` for transparency in the assessment
+- **Severity enhancement** (`severity_enhance=True` default): RH/moisture-based upgrades to icing severity. Can upgrade LIGHT → MODERATE (deep saturation: ≥3 levels with RH > 95% + NWP cloud corroboration ≥50%) or MODERATE → SEVERE (same + mean T ≤ -5°C). User-toggleable via `icing_severity_enhance` profile setting.
 - SLD detection: **currently disabled** — heuristics too sensitive for available data resolution
 - Adjacent levels grouped into `IcingZone` bands (gap ≤ 100hPa)
 

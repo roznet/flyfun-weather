@@ -107,7 +107,7 @@ params = {**defaults_from_catalog, **user_overrides}
 result = evaluator.evaluate(ctx, params)
 ```
 
-User overrides stored as JSON in `user_preferences` table. Recalculation endpoint loads prefs, re-evaluates without re-fetching weather data.
+User overrides stored in `flight_profiles.settings_json` under `advisories: {enabled: {id: bool}, params: {id: {key: val}}}`. Recalculation endpoint loads the flight's profile settings, re-evaluates without re-fetching weather data.
 
 ## Pipeline Integration
 
