@@ -799,43 +799,15 @@ def recalculate_advisories(
     re-running the full analysis pipeline. Useful when advisory logic
     or user parameters change.
     """
-    import json as json_mod
-
-    from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
     from weatherbrief.models import AdvisoryAggregation
-    from weatherbrief.models import (
-        ElevationProfile,
-        RouteAdvisoriesManifest,
-        RouteAnalysesManifest,
-        RouteCrossSection,
-        RoutePointAnalysis,
-    )
+    from weatherbrief.tasks.advise import run_advisories_from_pack
 
     flight = _load_flight_or_404(db, flight_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp)
 
-    # Load route analyses (with derived_levels stripped — but advisory
-    # evaluators only use indices/zones/layers which are preserved)
     ra_path = pack_dir / "route_analyses.json"
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available for recalculation")
-
-    ra_data = json_mod.loads(ra_path.read_text())
-    manifest = RouteAnalysesManifest.model_validate(ra_data)
-
-    # Load elevation profile if available
-    elevation = None
-    ep_path = pack_dir / "elevation_profile.json"
-    if ep_path.exists():
-        elevation = ElevationProfile.model_validate_json(ep_path.read_text())
-
-    # Load cross-sections for mountain wind evaluator
-    cross_sections: list[RouteCrossSection] = []
-    cs_path = pack_dir / "cross_section.json"
-    if cs_path.exists():
-        cs_data = json_mod.loads(cs_path.read_text())
-        for cs_item in cs_data.get("cross_sections", []):
-            cross_sections.append(RouteCrossSection.model_validate(cs_item))
 
     # Load advisory preferences from the flight's profile
     from weatherbrief.api.profiles import load_profile_settings
@@ -849,52 +821,34 @@ def recalculate_advisories(
     user_params = adv_config.get("params") or {}
     aggregation = AdvisoryAggregation(adv_config.get("aggregation", "worst"))
 
-    # Compute advisory model list from profile (may be a subset of all fetched models)
     profile_adv_models = profile_settings.get("advisory_models")
-    if profile_adv_models:
-        advisory_model_names = [m for m in profile_adv_models if m in manifest.models]
-    else:
-        advisory_model_names = [m for m in manifest.models if m != "best_match"]
-    if not advisory_model_names:
-        advisory_model_names = manifest.models
+    db_path = getattr(request.app.state, "db_path", "")
 
-    # Recompute airport conditions from existing data (filtered to advisory models)
-    airport_conds = _recompute_airport_conditions(
-        pack_dir, flight, manifest, cross_sections,
-        db_path=getattr(request.app.state, "db_path", ""),
-        models=advisory_model_names,
-    )
+    def _recompute_conds(rp_analyses, cross_sections, advisory_model_names):
+        """Callback: recompute airport conditions using DB-dependent helper."""
+        from types import SimpleNamespace
 
-    # Build context and evaluate
-    ctx = RouteContext(
-        analyses=manifest.analyses,
-        cross_sections=cross_sections,
-        elevation=elevation,
-        models=advisory_model_names,
-        cruise_altitude_ft=manifest.cruise_altitude_ft,
+        # _recompute_airport_conditions expects manifest.analyses and manifest.models
+        proxy = SimpleNamespace(analyses=rp_analyses, models=advisory_model_names)
+        return _recompute_airport_conditions(
+            pack_dir, flight, proxy, cross_sections,
+            db_path=db_path, models=advisory_model_names,
+        )
+
+    advisory_result = run_advisories_from_pack(
+        pack_dir,
         flight_ceiling_ft=flight.flight_ceiling_ft,
-        total_distance_nm=manifest.total_distance_nm,
-        airport_conditions=airport_conds,
+        advisory_models=profile_adv_models,
+        enabled_ids=enabled_ids,
+        user_params=user_params,
+        aggregation=aggregation,
+        airport_conditions_recompute=_recompute_conds,
     )
 
-    advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=aggregation)
-    result = RouteAdvisoriesManifest(
-        advisories=advisory_results,
-        catalog=get_catalog(),
-        route_name=manifest.route_name,
-        cruise_altitude_ft=manifest.cruise_altitude_ft,
-        flight_ceiling_ft=flight.flight_ceiling_ft,
-        total_distance_nm=manifest.total_distance_nm,
-        models=advisory_model_names,
-        aggregation=aggregation.value,
-        airport_conditions=airport_conds,
-    )
+    if advisory_result.manifest is None:
+        raise HTTPException(status_code=500, detail=advisory_result.error or "Advisory evaluation failed")
 
-    # Save updated advisories
-    adv_path = pack_dir / "route_advisories.json"
-    adv_path.write_text(result.model_dump_json(indent=2))
-
-    return result.model_dump()
+    return advisory_result.manifest.model_dump()
 
 
 @router.get("/{timestamp}/elevation")
