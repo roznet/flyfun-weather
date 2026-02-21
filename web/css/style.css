@@ -597,6 +597,18 @@ label {
   vertical-align: middle;
 }
 
+.sfip-variant {
+  display: inline-block;
+  font-size: 0.6rem;
+  font-weight: 600;
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+  vertical-align: middle;
+  background: var(--surface-alt, #e8e8e8);
+  color: var(--text-secondary, #666);
+  border: 1px solid var(--border, #ccc);
+}
+
 /* Band comparison expandable sections */
 
 .band-details {
