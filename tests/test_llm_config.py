@@ -24,7 +24,7 @@ def test_default_config_loads():
     assert config.name == "default"
     assert config.version == "1.0"
     assert config.llm.provider == "anthropic"
-    assert config.llm.model == "claude-sonnet-4-5-20250929"
+    assert config.llm.model == "claude-sonnet-4-6"
     assert config.llm.temperature == 0.0
 
 

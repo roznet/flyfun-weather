@@ -6,12 +6,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from weatherbrief.models import (
-    AgreementLevel,
-    AltitudeAdvisories,
     ConvectiveRisk,
     ForecastSnapshot,
-    IcingRisk,
     PrecipPhase,
+    RouteAdvisoriesManifest,
     SoundingAnalysis,
 )
 
@@ -19,32 +17,40 @@ if TYPE_CHECKING:
     from weatherbrief.digest.llm_digest import WeatherDigest
     from weatherbrief.fetch.dwd_text import DWDTextForecasts
 
+# Advisory IDs excluded from digest context (meta-level, not useful for LLM)
+_DIGEST_EXCLUDE_IDS = {"model_agreement"}
+
 
 def build_digest_context(
     snapshot: ForecastSnapshot,
     target_time: datetime,
     text_forecasts: DWDTextForecasts | None = None,
     previous_digest: WeatherDigest | None = None,
+    route_advisories: RouteAdvisoriesManifest | None = None,
+    flight_rules: str | None = None,
 ) -> str:
     """Build the full context string for the LLM briefer.
 
     Sections:
-    1. Route / date / altitude metadata
+    1. Route / date / altitude metadata + pilot capability
     2. Quantitative data per waypoint
-    3. Model comparison
-    4. DWD text forecasts (German)
-    5. Trend from previous digest
+    3. Route advisories (deterministic hazard assessments)
+    4. Model comparison
+    5. DWD text forecasts (German)
+    6. Trend from previous digest
     """
     sections: list[str] = []
 
     # --- Header ---
     waypoints_str = " -> ".join(wp.icao for wp in snapshot.route.waypoints)
     days_label = f"D-{snapshot.days_out}" if snapshot.days_out > 0 else "D-0 (today)"
+    capability = "VFR only" if flight_rules == "vfr_only" else "VFR + IFR"
     sections.append(
         f"ROUTE: {waypoints_str}\n"
         f"DATE: {snapshot.target_date} ({days_label})\n"
         f"ALTITUDE: {snapshot.route.cruise_altitude_ft}ft "
-        f"(~{snapshot.route.cruise_pressure_hpa}hPa)"
+        f"(~{snapshot.route.cruise_pressure_hpa}hPa)\n"
+        f"PILOT CAPABILITY: {capability}"
     )
 
     # --- Quantitative data per waypoint ---
@@ -142,13 +148,11 @@ def build_digest_context(
         if wp_analysis.sounding:
             quant_lines.extend(_format_sounding_context(wp_analysis.sounding))
 
-        # Altitude advisories
-        if wp_analysis.altitude_advisories:
-            quant_lines.extend(
-                _format_advisories_context(wp_analysis.altitude_advisories)
-            )
-
     sections.append("\n".join(quant_lines))
+
+    # --- Route advisories ---
+    if route_advisories:
+        sections.append(_format_route_advisories_context(route_advisories))
 
     # --- Model comparison ---
     comp_lines: list[str] = ["=== MODEL COMPARISON ==="]
@@ -267,30 +271,35 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
     return lines
 
 
-def _format_advisories_context(adv: AltitudeAdvisories) -> list[str]:
-    """Format altitude advisories for LLM context."""
-    lines: list[str] = []
+def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
+    """Format route advisory manifest into a compact LLM context section."""
+    # Build advisory_id → name lookup from catalog
+    name_map = {entry.id: entry.name for entry in manifest.catalog}
 
-    if adv.cruise_in_icing:
-        lines.append(f"  CRUISE IN ICING: {adv.cruise_icing_risk.value}")
+    lines: list[str] = ["=== ROUTE ADVISORIES ==="]
 
-    for model, regimes in adv.regimes.items():
-        non_clear = [r for r in regimes if r.label != "Clear"]
-        if non_clear:
-            regime_strs = [
-                f"{r.floor_ft:.0f}-{r.ceiling_ft:.0f}ft:{r.label}" for r in regimes
-            ]
-            lines.append(f"  Vertical [{model}]: {' | '.join(regime_strs)}")
+    for result in manifest.advisories:
+        if result.advisory_id in _DIGEST_EXCLUDE_IDS:
+            continue
 
-    for advisory in adv.advisories:
-        feasible = "" if advisory.feasible else " INFEASIBLE"
-        model_strs = [
-            f"{m}={alt:.0f}ft" if alt is not None else f"{m}=N/A"
-            for m, alt in advisory.per_model_ft.items()
-        ]
-        lines.append(
-            f"  Advisory ({advisory.advisory_type}): {advisory.reason}{feasible}"
-            f" [{', '.join(model_strs)}]"
-        )
+        name = name_map.get(result.advisory_id, result.advisory_id)
+        status_tag = result.aggregate_status.value.upper()
+        detail = result.aggregate_detail
 
-    return lines
+        lines.append(f"[{status_tag}] {name}: {detail}")
+
+        # Per-model breakdown
+        model_parts = []
+        for m in result.per_model:
+            m_status = m.status.value.upper()
+            if m.affected_pct > 0:
+                model_parts.append(f"{m.model}={m_status}: {m.affected_pct:.0f}% affected")
+            else:
+                model_parts.append(f"{m.model}={m_status}")
+        if model_parts:
+            lines.append(f"  {' | '.join(model_parts)}")
+
+    if len(lines) == 1:
+        lines.append("No route advisories available.")
+
+    return "\n".join(lines)

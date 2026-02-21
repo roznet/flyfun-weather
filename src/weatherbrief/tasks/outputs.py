@@ -157,6 +157,8 @@ def run_llm_digest(
     target_date: str = "",
     days_out: int = 0,
     fetch_date: str = "",
+    route_advisories=None,  # RouteAdvisoriesManifest | None
+    flight_rules: str | None = None,
 ) -> DigestResult:
     """Generate LLM-powered weather digest."""
     try:
@@ -166,7 +168,11 @@ def run_llm_digest(
         config = load_digest_config(digest_config_name)
         logger.info("LLM digest: %s/%s", config.llm.provider, config.llm.model)
 
-        digest_result = run_digest(snapshot, target_time, config)
+        digest_result = run_digest(
+            snapshot, target_time, config,
+            route_advisories=route_advisories,
+            flight_rules=flight_rules,
+        )
 
         if digest_result.get("error"):
             return DigestResult(error=f"LLM digest: {digest_result['error']}")

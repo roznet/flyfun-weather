@@ -12,6 +12,7 @@ export interface ProfileSettings {
   gramet_enabled: boolean | null;
   llm_digest_enabled: boolean | null;
   icing_severity_enhance: boolean | null;
+  flight_rules: string | null;
   advisories: AdvisoryPreferences | null;
 }
 

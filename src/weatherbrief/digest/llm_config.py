@@ -17,7 +17,7 @@ class LLMConfig(BaseModel):
     """LLM provider and model configuration."""
 
     provider: str = "anthropic"
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str = "claude-sonnet-4-6"
     temperature: float = 0.0
 
 

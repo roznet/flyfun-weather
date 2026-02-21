@@ -50,6 +50,8 @@ class DigestState(TypedDict, total=False):
     target_time: datetime
     config: DigestConfig
     previous_digest: WeatherDigest | None
+    route_advisories: object | None  # RouteAdvisoriesManifest
+    flight_rules: str | None
     text_forecasts: DWDTextForecasts | None
     context: str
     digest: WeatherDigest | None
@@ -79,6 +81,8 @@ def assemble_context_node(state: DigestState) -> dict:
         target_time=state["target_time"],
         text_forecasts=state.get("text_forecasts"),
         previous_digest=state.get("previous_digest"),
+        route_advisories=state.get("route_advisories"),
+        flight_rules=state.get("flight_rules"),
     )
     return {"context": context}
 
@@ -137,6 +141,8 @@ def run_digest(
     target_time: datetime,
     config: DigestConfig,
     previous_digest: WeatherDigest | None = None,
+    route_advisories=None,  # RouteAdvisoriesManifest | None
+    flight_rules: str | None = None,
 ) -> DigestState:
     """Run the full digest pipeline and return final state."""
     graph = build_digest_graph(config)
@@ -145,6 +151,8 @@ def run_digest(
         "target_time": target_time,
         "config": config,
         "previous_digest": previous_digest,
+        "route_advisories": route_advisories,
+        "flight_rules": flight_rules,
     })
     return result
 
