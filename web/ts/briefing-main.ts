@@ -360,6 +360,21 @@ async function init(): Promise<void> {
       }
     }
 
+    // Render auto-refresh toggle
+    ui.renderAutoRefreshBar(s.flight, user.id, past, async (autoRefresh, hour) => {
+      if (!s.flight) return;
+      try {
+        const updated = await api.updateAutoRefresh(s.flight.id, {
+          auto_refresh: autoRefresh,
+          auto_refresh_hour: hour,
+        });
+        // Update the flight in store with new auto-refresh fields
+        store.getState().updateFlightAutoRefresh(updated.auto_refresh, updated.auto_refresh_hour);
+      } catch (err) {
+        ui.renderError(`Failed to update auto-refresh: ${err}`);
+      }
+    });
+
     // Auto-refresh on first visit (no packs yet), otherwise check freshness
     if (s.packs.length === 0 && s.flight?.user_id === user.id && !past) {
       store.getState().refresh();

@@ -96,6 +96,7 @@ export interface BriefingState {
   toggleVizLayer: (layerId: string) => void;
   recalculateAdvisories: () => Promise<void>;
   sendEmail: () => Promise<void>;
+  updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
 }
 
 export const briefingStore = createStore<BriefingState>((set, get) => ({
@@ -312,5 +313,11 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     } catch (err) {
       set({ emailing: false, error: `Email failed: ${err}` });
     }
+  },
+
+  updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => {
+    const flight = get().flight;
+    if (!flight) return;
+    set({ flight: { ...flight, auto_refresh: autoRefresh, auto_refresh_hour: hour } });
   },
 }));

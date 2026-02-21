@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -47,7 +48,18 @@ async def lifespan(app: FastAPI):
             ensure_dev_user(session)
         logger.info("Dev user ensured")
 
+    scheduler_task = None
+    if os.environ.get("DISABLE_SCHEDULER") != "1":
+        from weatherbrief.scheduler import run_scheduler_loop
+
+        scheduler_task = asyncio.create_task(run_scheduler_loop(app.state))
+
     yield
+
+    if scheduler_task:
+        scheduler_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scheduler_task
 
 
 def create_app() -> FastAPI:

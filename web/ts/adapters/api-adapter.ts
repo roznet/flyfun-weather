@@ -43,6 +43,19 @@ export async function deleteFlight(id: string): Promise<void> {
   });
 }
 
+export async function updateAutoRefresh(
+  flightId: string,
+  req: { auto_refresh: boolean; auto_refresh_hour?: number | null },
+): Promise<FlightResponse> {
+  return apiFetch<FlightResponse>(
+    `/flights/${encodeURIComponent(flightId)}/auto-refresh`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(req),
+    },
+  );
+}
+
 export interface RouteDistanceResponse {
   total_distance_nm: number;
 }
