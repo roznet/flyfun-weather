@@ -23,6 +23,8 @@ _VAR_MAP = {
     "clmr": "cloud_liquid_water_kg_kg",
     "clwmr": "cloud_liquid_water_kg_kg",  # alias
     "icmr": "ice_mixing_ratio_kg_kg",
+    "qc": "cloud_liquid_water_kg_kg",     # ICON-EU cloud liquid water
+    "qi": "ice_mixing_ratio_kg_kg",       # ICON-EU cloud ice
 }
 
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
@@ -378,6 +380,157 @@ def decode_cloud_diag_per_point(
         return results
     except Exception:
         logger.warning("cfgrib failed to decode cloud diag GRIB2", exc_info=True)
+        return [{} for _ in range(n_points)]
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def decode_icon_eu_per_point(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+    target_pressures_hpa: list[int] | None = None,
+) -> list[dict[int, dict[str, float]]]:
+    """Decode ICON-EU model-level GRIB2 and interpolate to pressure levels per point.
+
+    ICON-EU data is on model levels (not pressure levels). This function:
+    1. Decodes QC, QI, and P fields from the GRIB2 bytes
+    2. Spatially interpolates each field to route point coordinates
+    3. Vertically interpolates from model levels to pressure levels using P
+
+    Args:
+        grib_bytes: Concatenated GRIB2 messages from ICON-EU.
+        latitudes: Target latitudes for interpolation.
+        longitudes: Target longitudes for interpolation.
+        target_pressures_hpa: Target pressure levels in hPa.
+
+    Returns:
+        List of dicts (one per point): [{pressure_hpa: {field: value}}, ...].
+    """
+    import cfgrib
+
+    from weatherbrief.fetch.grib.icon_eu_levels import (
+        TARGET_PRESSURE_LEVELS_HPA,
+        interpolate_model_to_pressure_levels,
+    )
+
+    if target_pressures_hpa is None:
+        target_pressures_hpa = TARGET_PRESSURE_LEVELS_HPA
+
+    n_points = len(latitudes)
+    if not grib_bytes:
+        return [{} for _ in range(n_points)]
+
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        datasets = cfgrib.open_datasets(str(tmp_path))
+
+        # ICON-EU uses -180 to +180 longitude convention (no normalization needed)
+        target_lons = list(longitudes)
+
+        # Collect per-point, per-level values for each variable.
+        # Structure: {var_name: {level: [val_for_point_0, val_for_point_1, ...]}}
+        point_level_data: dict[str, dict[int, list[float | None]]] = {}
+
+        for ds in datasets:
+            # Find the vertical coordinate name for model levels
+            level_coord = None
+            for coord_name in ("generalVerticalLayer", "generalVertical", "level", "hybrid"):
+                if coord_name in ds.dims:
+                    level_coord = coord_name
+                    break
+
+            for var_name, xr_var in ds.data_vars.items():
+                name_lower = str(var_name).lower()
+
+                # Map ICON-EU variable names
+                if name_lower == "p":
+                    field_key = "pressure_pa"
+                elif name_lower in _VAR_MAP:
+                    field_key = _VAR_MAP[name_lower]
+                else:
+                    continue
+
+                if field_key not in point_level_data:
+                    point_level_data[field_key] = {}
+
+                # Check if this variable has the model-level dimension
+                var_level_coord = None
+                for coord_name in ("generalVerticalLayer", "generalVertical", "level", "hybrid"):
+                    if coord_name in xr_var.dims:
+                        var_level_coord = coord_name
+                        break
+
+                if var_level_coord is not None:
+                    levels = ds.coords[var_level_coord].values
+                    for lev_val in levels:
+                        lev = int(float(lev_val))
+                        level_data = xr_var.sel({var_level_coord: lev_val})
+                        values = _interpolate_per_point(
+                            level_data, latitudes, target_lons,
+                        )
+                        point_level_data[field_key][lev] = values
+                else:
+                    # Single level — use level from attrs if available
+                    lev = int(xr_var.attrs.get("level", xr_var.attrs.get("GRIB_level", 0)))
+                    values = _interpolate_per_point(
+                        xr_var, latitudes, target_lons,
+                    )
+                    if lev > 0:
+                        point_level_data[field_key][lev] = values
+
+        for ds in datasets:
+            ds.close()
+
+        # Now interpolate from model levels to pressure levels per point
+        pressure_data = point_level_data.get("pressure_pa", {})
+        if not pressure_data:
+            logger.warning("No pressure (P) data found in ICON-EU GRIB — cannot interpolate")
+            return [{} for _ in range(n_points)]
+
+        # Get sorted model levels
+        model_levels = sorted(pressure_data.keys())
+
+        results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+
+        for field_key in ("cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg"):
+            field_data = point_level_data.get(field_key, {})
+            if not field_data:
+                continue
+
+            for pt_idx in range(n_points):
+                # Build the pressure and value columns for this point
+                model_pressures: list[float] = []
+                model_values: list[float] = []
+
+                for lev in model_levels:
+                    p_vals = pressure_data.get(lev)
+                    f_vals = field_data.get(lev)
+                    if p_vals is None or f_vals is None:
+                        continue
+                    if pt_idx >= len(p_vals) or pt_idx >= len(f_vals):
+                        continue
+                    p_val = p_vals[pt_idx]
+                    f_val = f_vals[pt_idx]
+                    if p_val is not None and f_val is not None:
+                        model_pressures.append(p_val)
+                        model_values.append(f_val)
+
+                if len(model_pressures) < 2:
+                    continue
+
+                interp_result = interpolate_model_to_pressure_levels(
+                    model_pressures, model_values, target_pressures_hpa,
+                )
+                for p_hpa, val in interp_result.items():
+                    results[pt_idx].setdefault(p_hpa, {})[field_key] = val
+
+        return results
+    except Exception:
+        logger.warning("cfgrib failed to decode ICON-EU GRIB2 data", exc_info=True)
         return [{} for _ in range(n_points)]
     finally:
         tmp_path.unlink(missing_ok=True)

@@ -1,7 +1,7 @@
 """Disk cache for downloaded GRIB2 data.
 
 Cache layout:
-    {data_dir}/.cache/grib/gfs/{YYYYMMDD}_{HH}z/
+    {data_dir}/.cache/grib/{model}/{YYYYMMDD}_{HH}z/
         f{FFF}_{var}_{bbox_hash}.grib2
 
 TTL: 48 hours (model runs every 6h, but keep for comparison).
@@ -24,6 +24,7 @@ def cache_dir_for_run(
     data_dir: Path,
     init_date: str,
     init_hour: int,
+    model: str = "gfs",
 ) -> Path:
     """Return the cache directory for a specific model run.
 
@@ -31,11 +32,12 @@ def cache_dir_for_run(
         data_dir: Base data directory.
         init_date: Model init date as YYYYMMDD.
         init_hour: Model init hour (0, 6, 12, 18).
+        model: Model identifier (e.g. "gfs", "icon-eu").
 
     Returns:
-        Path like {data_dir}/.cache/grib/gfs/20231027_00z/
+        Path like {data_dir}/.cache/grib/{model}/20231027_00z/
     """
-    return data_dir / ".cache" / "grib" / "gfs" / f"{init_date}_{init_hour:02d}z"
+    return data_dir / ".cache" / "grib" / model / f"{init_date}_{init_hour:02d}z"
 
 
 def cache_key(
@@ -90,12 +92,12 @@ def put_cached(
     return path
 
 
-def purge_old_runs(data_dir: Path) -> int:
+def purge_old_runs(data_dir: Path, model: str = "gfs") -> int:
     """Remove cache directories older than CACHE_TTL_SECONDS.
 
     Returns number of directories removed.
     """
-    cache_root = data_dir / ".cache" / "grib" / "gfs"
+    cache_root = data_dir / ".cache" / "grib" / model
     if not cache_root.exists():
         return 0
 

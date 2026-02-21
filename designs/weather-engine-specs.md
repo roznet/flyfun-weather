@@ -10,12 +10,26 @@ The GRIB2 engine is an **enrichment layer** — it supplements Open-Meteo, not r
 
 ## What's Implemented
 
-**GFS GRIB2 enrichment** via `fetch/grib/`:
+### GFS GRIB2 enrichment
+Via `fetch/grib/` (gfs_idx.py, grib_fetch.py):
 - Variables: CLMR (Cloud Liquid Water Mixing Ratio), ICMR (Ice Mixing Ratio)
 - Source: `noaa-gfs-bdp-pds.s3.amazonaws.com` (public, no auth)
 - Uses `.idx` companion files for HTTP Range byte-range downloads (only fetches needed messages)
 - Bilinear spatial interpolation to route points via cfgrib + xarray
 - Disk cache with 48h TTL at `data/.cache/grib/gfs/{date}_{cycle}z/`
+
+### ICON-EU GRIB2 enrichment
+Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py):
+- Variables: QC → `cloud_liquid_water_kg_kg`, QI → `ice_mixing_ratio_kg_kg`
+- Source: `opendata.dwd.de/weather/nwp/icon-eu/grib/` (public, no auth)
+- Individual bz2-compressed files per variable/level/timestep (no .idx files)
+- Data on model levels (35–74) with P field for vertical interpolation
+- Log-pressure interpolation from model levels to ICON pressure levels (1000–300 hPa)
+- Parallel download with ThreadPoolExecutor (8 workers)
+- Domain: 29.5–70.5°N, 23.5°W–62.5°E (Europe) — routes outside skip silently
+- Cycles: every 3h (00–21z), ~3h publication delay
+- Disk cache at `data/.cache/grib/icon-eu/{date}_{cycle}z/`
+- Download volume: ~240 files (~115 MB) per 2 bracketing forecast hours
 
 See [fetch.md](./fetch.md) for implementation details.
 
@@ -41,14 +55,28 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Missing:** Vertical velocity (ω) often absent in open data; derivable from divergence
 - **Value:** CLWMR equivalent for cross-model icing comparison
 
-### C. DWD ICON (Global) — FUTURE
+### C. DWD ICON-EU (Regional Europe) — IMPLEMENTED
+- **Server:** `https://opendata.dwd.de/weather/nwp/icon-eu/grib/`
+- **Path:** `{HH}/{var}/icon-eu_europe_regular-lat-lon_model-level_{YYYYMMDDHH}_{FFF}_{LL}_{VAR}.grib2.bz2`
+  - `HH`: Cycle hour (00, 03, 06, ..., 21)
+  - `FFF`: Forecast hour (000–120), hourly to 78h, 3-hourly to 120h
+  - `LL`: Model level number (35–74 for aviation range)
+- **Resolution:** ~6.5km, regular lat-lon grid (unlike ICON-Global's icosahedral grid)
+- **Domain:** 29.5–70.5°N, 23.5°W–62.5°E
+- **Variables fetched:** QC (cloud liquid water), QI (ice mixing ratio), P (pressure for vertical interp)
+- **Model levels → pressure levels:** Log-pressure interpolation using P field; targets ICON_PRESSURE_LEVELS
+- **Publication delay:** ~3h after init time
+- **Data retention:** DWD deletes files after ~24h (only latest run available per cycle)
+- **Download:** Individual bz2-compressed files, parallel with 8 workers
+
+### D. DWD ICON-Global — FUTURE
 - **Bucket:** `s3://dwd-icon-global-pds/`
 - **Path:** `icon_global_icosahedral_single-level_{YYYYMMDD}{HH}_{FFF}_{VAR_UPPER}.grib2`
 - **Resolution:** ~13km (icosahedral grid — NOT regular lat/lon)
 - **Challenge:** Variables stored in separate files; icosahedral grid needs special interpolation
 - **Advantage:** `omega` explicitly available (unlike Open-Meteo's ICON endpoint)
 
-### D. Météo-France ARPEGE — FUTURE
+### E. Météo-France ARPEGE — FUTURE
 - **Bucket:** `s3://meteo-france-models/arpege-world/`
 - **Challenge:** Variable path conventions differ from GFS; lower priority
 
@@ -86,15 +114,24 @@ Requires 2D wind fields (not just point values), so needs the raw GRIB2 grid, no
 
 **7. Full GRIB2-primary pipeline** — Replace Open-Meteo entirely for GFS with direct GRIB2 fetch. Pros: no API dependency, full variable access, native resolution. Cons: much more data to download (~30MB per forecast hour vs ~150KB from Open-Meteo), needs robust caching and error handling.
 
-**8. ICON icosahedral grid support** — ICON's triangular grid needs scipy `griddata` or ICON-specific regridding (DWD provides weight files). High effort but ICON has best European resolution (~13km).
+**8. ICON-Global icosahedral grid support** — ICON-Global's triangular grid needs scipy `griddata` or ICON-specific regridding (DWD provides weight files). High effort. Note: ICON-EU (regular lat-lon grid, ~6.5km) is already implemented and covers European flights.
 
 ## Gotchas from Implementation
 
+### GFS
 - **cfgrib lazy loading** — `open_datasets()` only reads the GRIB2 index; actual field data is loaded lazily during interpolation. Temp file must stay alive until all `.values` calls complete.
 - **GFS variable names** — `.idx` files use `CLMR`; cfgrib may decode as either `clmr` or `clwmr` depending on version. Map both.
 - **Longitude convention** — GFS uses 0–360°; route points use -180–180°. Normalize with `lon % 360`.
 - **S3 availability delay** — GFS data appears ~4.5h after init time. `find_latest_run()` checks backward from newest cycle.
 - **Pressure coordinate names** — cfgrib may use `isobaricInhPa`, `level`, or `pressure` depending on the GRIB2 message structure. Check all three.
+
+### ICON-EU
+- **Model levels, not pressure levels** — QC/QI are on model levels (35–74). The P variable provides per-gridpoint pressure at each level. Must interpolate vertically using log-pressure.
+- **Longitude convention** — ICON-EU uses -180 to +180° (same as route points). No normalization needed (unlike GFS).
+- **Level coordinate names** — cfgrib may use `generalVerticalLayer`, `generalVertical`, `level`, or `hybrid` for model-level data. Check all variants.
+- **bz2 decompression** — Files are bz2-compressed. Decompress before passing to cfgrib.
+- **Data retention** — DWD deletes files after ~24h. Only the latest run per cycle is available.
+- **Download volume** — ~240 files per enrichment (3 vars × 40 levels × 2 forecast hours). Parallel download essential.
 
 ## References
 

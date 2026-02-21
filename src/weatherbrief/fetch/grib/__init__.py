@@ -1,9 +1,7 @@
-"""GRIB2 enrichment for GFS Cloud Liquid Water (CLWMR), Ice Mixing Ratio (ICMR),
-and cloud layer diagnostics.
+"""GRIB2 enrichment for cloud liquid water and ice mixing ratio.
 
 Public API: enrich_forecasts() adds CLWMR/ICMR data and cloud diagnostics to
-existing cross-section forecasts by downloading targeted byte ranges from GFS
-GRIB2 files on AWS S3.
+existing cross-section forecasts from GFS and ICON-EU GRIB2 data.
 """
 
 from __future__ import annotations
@@ -43,11 +41,12 @@ def enrich_forecasts(
     *,
     data_dir: Path,
 ) -> None:
-    """Enrich cross-section forecasts with CLWMR/ICMR and cloud diagnostics from GFS GRIB2.
+    """Enrich cross-section forecasts with cloud water from GRIB2 sources.
+
+    Enriches GFS cross-sections with CLWMR/ICMR and cloud diagnostics.
+    Enriches ICON cross-sections with QC/QI if route is within ICON-EU domain.
 
     This modifies PressureLevelData and HourlyForecast objects in-place.
-
-    Only enriches GFS cross-sections. Other models are skipped.
 
     Args:
         cross_sections: Route cross-sections to enrich (modified in-place).
@@ -57,13 +56,36 @@ def enrich_forecasts(
         target_hour: Target hour (UTC).
         data_dir: Base data directory for caching.
     """
-    # Only enrich GFS data
+    _enrich_gfs(
+        cross_sections, all_forecasts, route_points,
+        target_date, target_hour, data_dir=data_dir,
+    )
+    _enrich_icon_eu(
+        cross_sections, all_forecasts, route_points,
+        target_date, target_hour, data_dir=data_dir,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GFS enrichment
+# ---------------------------------------------------------------------------
+
+
+def _enrich_gfs(
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    target_date: str,
+    target_hour: int,
+    *,
+    data_dir: Path,
+) -> None:
+    """Enrich GFS cross-sections with CLWMR/ICMR and cloud diagnostics."""
     gfs_sections = [cs for cs in cross_sections if cs.model == ModelSource.GFS]
     if not gfs_sections:
         logger.info("No GFS cross-sections to enrich")
         return
 
-    # Shared setup: session, run discovery, bbox, forecast hours
     target_time = datetime.strptime(
         f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H"
     ).replace(tzinfo=timezone.utc)
@@ -88,8 +110,8 @@ def enrich_forecasts(
         int(max(lons)) + 2,
     )
 
-    purge_old_runs(data_dir)
-    run_dir = cache_dir_for_run(data_dir, init_date, init_hour)
+    purge_old_runs(data_dir, model="gfs")
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
 
     point_lats = [rp.lat for rp in route_points]
     point_lons = [rp.lon for rp in route_points]
@@ -198,56 +220,9 @@ def _enrich_clwmr_icmr(
         primary_fhour = next(iter(decoded_by_fhour))
     decoded_points = decoded_by_fhour[primary_fhour]
 
-    enriched_count = 0
-    for cs in gfs_sections:
-        for point_idx, wf in enumerate(cs.point_forecasts):
-            if point_idx >= len(decoded_points):
-                break
-            point_data = decoded_points[point_idx]
-            if not point_data:
-                continue
-
-            for hourly in wf.hourly:
-                for pl in hourly.pressure_levels:
-                    level_data = point_data.get(pl.pressure_hpa)
-                    if level_data is None:
-                        continue
-
-                    clwmr = level_data.get("cloud_liquid_water_kg_kg")
-                    if clwmr is not None:
-                        pl.cloud_liquid_water_kg_kg = clwmr
-                        enriched_count += 1
-
-                    icmr = level_data.get("ice_mixing_ratio_kg_kg")
-                    if icmr is not None:
-                        pl.ice_mixing_ratio_kg_kg = icmr
-
-    # Also enrich waypoint-only forecasts
-    wp_data_lookup: dict[str, dict[int, dict[str, float]]] = {}
-    for rp, pd in zip(route_points, decoded_points):
-        if rp.waypoint_icao and pd:
-            wp_data_lookup[rp.waypoint_icao] = pd
-
-    for wf in all_forecasts:
-        if wf.model.value != "gfs":
-            continue
-        wp_icao = wf.waypoint.icao
-        point_data = wp_data_lookup.get(wp_icao)
-        if not point_data:
-            continue
-        for hourly in wf.hourly:
-            for pl in hourly.pressure_levels:
-                level_data = point_data.get(pl.pressure_hpa)
-                if level_data is None:
-                    continue
-                clwmr = level_data.get("cloud_liquid_water_kg_kg")
-                if clwmr is not None:
-                    pl.cloud_liquid_water_kg_kg = clwmr
-                icmr = level_data.get("ice_mixing_ratio_kg_kg")
-                if icmr is not None:
-                    pl.ice_mixing_ratio_kg_kg = icmr
-
-    logger.info("GRIB2 enrichment: %d pressure levels enriched with CLWMR/ICMR", enriched_count)
+    _merge_cloud_water_into_sections(
+        gfs_sections, all_forecasts, route_points, decoded_points, "gfs",
+    )
 
 
 def _enrich_cloud_diagnostics(
@@ -351,3 +326,192 @@ def _enrich_cloud_diagnostics(
             hourly.nwp_cloud_diagnostics = diag
 
     logger.info("GRIB2 enrichment: %d hourly entries enriched with cloud diagnostics", enriched_count)
+
+
+# ---------------------------------------------------------------------------
+# ICON-EU enrichment
+# ---------------------------------------------------------------------------
+
+
+def _enrich_icon_eu(
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    target_date: str,
+    target_hour: int,
+    *,
+    data_dir: Path,
+) -> None:
+    """Enrich ICON cross-sections with QC/QI from ICON-EU GRIB2."""
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU_MODEL_LEVEL_MAX,
+        ICON_EU_MODEL_LEVEL_MIN,
+        ICON_EU_VARIABLES,
+        bracket_icon_eu_forecast_hours,
+        fetch_icon_eu_fields,
+        find_latest_icon_eu_run,
+        route_in_icon_eu_domain,
+    )
+
+    icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
+    if not icon_sections:
+        logger.debug("No ICON cross-sections to enrich")
+        return
+
+    # Domain check — skip silently if route is outside ICON-EU bounds
+    if not route_in_icon_eu_domain(route_points):
+        logger.info("Route outside ICON-EU domain, skipping ICON-EU enrichment")
+        return
+
+    target_time = datetime.strptime(
+        f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H"
+    ).replace(tzinfo=timezone.utc)
+
+    session = requests.Session()
+
+    try:
+        run_info = find_latest_icon_eu_run(target_time, session=session)
+    except Exception:
+        logger.warning("Failed to find ICON-EU model run", exc_info=True)
+        return
+
+    if run_info is None:
+        logger.warning("No ICON-EU model run found for enrichment")
+        return
+
+    init_date, init_hour = run_info
+    f_prev, f_next = bracket_icon_eu_forecast_hours(init_date, init_hour, target_time)
+
+    purge_old_runs(data_dir, model="icon-eu")
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
+
+    # Route bounding box for cache key
+    lats = [rp.lat for rp in route_points]
+    lons = [rp.lon for rp in route_points]
+    bbox = (
+        int(min(lats)) - 1,
+        int(max(lats)) + 2,
+        int(min(lons)) - 1,
+        int(max(lons)) + 2,
+    )
+
+    point_lats = [rp.lat for rp in route_points]
+    point_lons = [rp.lon for rp in route_points]
+    levels = list(range(ICON_EU_MODEL_LEVEL_MIN, ICON_EU_MODEL_LEVEL_MAX + 1))
+
+    # Download GRIB2 data for each bracketing forecast hour
+    grib_data_by_fhour: dict[int, bytes] = {}
+    for fhour in sorted({f_prev, f_next}):
+        ck = cache_key(fhour, "ICON_EU_QC_QI_P", bbox)
+        cached = get_cached(run_dir, ck)
+        if cached is not None:
+            grib_data_by_fhour[fhour] = cached
+            continue
+
+        try:
+            grib_bytes = fetch_icon_eu_fields(
+                init_date, init_hour, fhour,
+                levels=levels,
+                variables=list(ICON_EU_VARIABLES),
+                session=session,
+            )
+            if grib_bytes:
+                put_cached(run_dir, ck, grib_bytes)
+                grib_data_by_fhour[fhour] = grib_bytes
+        except Exception:
+            logger.warning("Failed to fetch ICON-EU f%03d", fhour, exc_info=True)
+            continue
+
+    if not grib_data_by_fhour:
+        logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
+        return
+
+    # Decode and interpolate
+    from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
+
+    decoded_by_fhour: dict[int, list[dict[int, dict[str, float]]]] = {}
+    for fhour, grib_bytes in grib_data_by_fhour.items():
+        decoded_by_fhour[fhour] = decode_icon_eu_per_point(
+            grib_bytes, point_lats, point_lons,
+        )
+
+    # Use closest forecast hour
+    primary_fhour = f_prev if f_prev in decoded_by_fhour else f_next
+    if primary_fhour not in decoded_by_fhour:
+        primary_fhour = next(iter(decoded_by_fhour))
+    decoded_points = decoded_by_fhour[primary_fhour]
+
+    _merge_cloud_water_into_sections(
+        icon_sections, all_forecasts, route_points, decoded_points, "icon",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared merge logic
+# ---------------------------------------------------------------------------
+
+
+def _merge_cloud_water_into_sections(
+    sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    decoded_points: list[dict[int, dict[str, float]]],
+    model_value: str,
+) -> None:
+    """Merge decoded cloud water data into cross-section and waypoint forecasts.
+
+    Shared between GFS and ICON-EU enrichment paths.
+    """
+    enriched_count = 0
+    for cs in sections:
+        for point_idx, wf in enumerate(cs.point_forecasts):
+            if point_idx >= len(decoded_points):
+                break
+            point_data = decoded_points[point_idx]
+            if not point_data:
+                continue
+
+            for hourly in wf.hourly:
+                for pl in hourly.pressure_levels:
+                    level_data = point_data.get(pl.pressure_hpa)
+                    if level_data is None:
+                        continue
+
+                    clwmr = level_data.get("cloud_liquid_water_kg_kg")
+                    if clwmr is not None:
+                        pl.cloud_liquid_water_kg_kg = clwmr
+                        enriched_count += 1
+
+                    icmr = level_data.get("ice_mixing_ratio_kg_kg")
+                    if icmr is not None:
+                        pl.ice_mixing_ratio_kg_kg = icmr
+
+    # Also enrich waypoint-only forecasts
+    wp_data_lookup: dict[str, dict[int, dict[str, float]]] = {}
+    for rp, pd in zip(route_points, decoded_points):
+        if rp.waypoint_icao and pd:
+            wp_data_lookup[rp.waypoint_icao] = pd
+
+    for wf in all_forecasts:
+        if wf.model.value != model_value:
+            continue
+        wp_icao = wf.waypoint.icao
+        point_data = wp_data_lookup.get(wp_icao)
+        if not point_data:
+            continue
+        for hourly in wf.hourly:
+            for pl in hourly.pressure_levels:
+                level_data = point_data.get(pl.pressure_hpa)
+                if level_data is None:
+                    continue
+                clwmr = level_data.get("cloud_liquid_water_kg_kg")
+                if clwmr is not None:
+                    pl.cloud_liquid_water_kg_kg = clwmr
+                icmr = level_data.get("ice_mixing_ratio_kg_kg")
+                if icmr is not None:
+                    pl.ice_mixing_ratio_kg_kg = icmr
+
+    logger.info(
+        "GRIB2 %s enrichment: %d pressure levels enriched with cloud water",
+        model_value.upper(), enriched_count,
+    )
