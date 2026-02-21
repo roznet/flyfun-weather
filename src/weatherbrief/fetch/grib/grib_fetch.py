@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from weatherbrief.fetch.grib.gfs_idx import ByteRange
+from weatherbrief.fetch.grib.gfs_idx import ByteRange, CloudDiagByteRange
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,47 @@ def fetch_byte_ranges(
             logger.warning(
                 "Failed to fetch range %s for %s %d hPa: HTTP %d",
                 range_header, br.variable, br.level_hpa, resp.status_code,
+            )
+            continue
+        result.extend(resp.content)
+
+    return bytes(result)
+
+
+def fetch_cloud_diag_ranges(
+    init_date: str,
+    init_hour: int,
+    forecast_hour: int,
+    ranges: list[CloudDiagByteRange],
+    session: requests.Session | None = None,
+) -> bytes:
+    """Download cloud diagnostic byte ranges from a GFS GRIB2 file.
+
+    Same logic as fetch_byte_ranges() but for CloudDiagByteRange type.
+    """
+    if not ranges:
+        return b""
+
+    sess = session or requests.Session()
+    url = gfs_grib2_url(init_date, init_hour, forecast_hour)
+    result = bytearray()
+
+    for br in ranges:
+        range_end = br.end if br.end is not None else ""
+        range_header = f"bytes={br.start}-{range_end}"
+        logger.debug(
+            "Fetching cloud diag %s [%s]: %s (%s)",
+            br.variable, br.level_str, url.split("/")[-1], range_header,
+        )
+        resp = sess.get(
+            url,
+            headers={"Range": range_header},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        if resp.status_code not in (200, 206):
+            logger.warning(
+                "Failed to fetch cloud diag range %s for %s [%s]: HTTP %d",
+                range_header, br.variable, br.level_str, resp.status_code,
             )
             continue
         result.extend(resp.content)
