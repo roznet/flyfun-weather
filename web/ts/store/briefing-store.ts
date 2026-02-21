@@ -110,7 +110,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   elevationProfile: null,
   freshness: null,
   freshnessLoading: false,
-  selectedModel: 'ecmwf',
+  selectedModel: 'gfs',
   selectedPointIndex: 0,
   displayMode: loadDisplayMode(),
   tierVisibility: loadTierVisibility(),

@@ -73,7 +73,7 @@ async function init(): Promise<void> {
       state.selectedPointIndex,
       (idx) => store.getState().setSelectedPoint(idx),
     );
-    ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
+    ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers);
     ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
     ui.renderModelComparison(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
     ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
@@ -195,6 +195,7 @@ async function init(): Promise<void> {
     }
     if (state.vizSettings !== prev.vizSettings) {
       renderVisualization(state);
+      renderSliderSections(state);
     }
     if (state.loading !== prev.loading) {
       ui.renderLoading(state.loading);
