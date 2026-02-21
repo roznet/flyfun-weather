@@ -141,7 +141,7 @@ def run_advisories(
             flight_ceiling_ft=route.flight_ceiling_ft,
             total_distance_nm=total_distance_nm,
             models=advisory_model_names,
-            aggregation=aggregation.value if aggregation else None,
+            aggregation=aggregation.value if aggregation else "worst",
             airport_conditions=airport_conds,
         )
         logger.info("Route advisories: %d evaluated (%d models)",
@@ -238,7 +238,7 @@ def run_advisories_from_pack(
             flight_ceiling_ft=effective_ceiling,
             total_distance_nm=manifest.total_distance_nm,
             models=advisory_model_names,
-            aggregation=aggregation.value if aggregation else None,
+            aggregation=aggregation.value if aggregation else "worst",
             airport_conditions=airport_conds,
         )
 
