@@ -26,12 +26,18 @@ def _enrich_lwc(
     Sets volumetric LWC (g/m³) for Ogimet, and mixing ratios in g/kg for SFIP.
     Uses ideal gas law for air density: ρ = P / (Rd × T_K).
     LWC (g/m³) = CLWMR (kg/kg) × ρ_air (kg/m³) × 1000.
+
+    GFS provides CLWMR/ICMR at 50-hPa standard levels, while Open-Meteo
+    provides derived levels at 25-hPa spacing.  After the direct-match pass,
+    interpolate to fill intermediate levels so SFIP sees continuous data
+    instead of alternating full/proxy.
     """
     # Build lookup from raw pressure levels
     raw_by_pressure: dict[int, PressureLevelData] = {
         lv.pressure_hpa: lv for lv in raw_levels
     }
 
+    # Pass 1: direct match — set values where raw GRIB data exists
     for dl in derived_levels:
         raw = raw_by_pressure.get(dl.pressure_hpa)
         if raw is None:
@@ -59,6 +65,70 @@ def _enrich_lwc(
         rho_air = p_pa / (_RD * t_k)
 
         dl.cloud_liquid_water_g_m3 = round(clwmr * rho_air * 1000.0, 4)
+
+    # Pass 2: interpolate CLW/ICMR to intermediate levels (e.g. 25-hPa
+    # spacing between 50-hPa GRIB levels).  Sorted high-to-low pressure.
+    _interpolate_cloud_water(derived_levels)
+
+
+def _interpolate_cloud_water(derived_levels: list[DerivedLevel]) -> None:
+    """Fill intermediate levels by linear interpolation between enriched neighbors.
+
+    Derived levels are sorted high-to-low pressure (descending).  For each
+    level that still has cloud_liquid_water_g_kg == None, find the nearest
+    enriched levels above and below in pressure and interpolate linearly.
+    Only interpolates if BOTH neighbors have data (not None).
+    """
+    # Index enriched levels by pressure for fast neighbor lookup
+    enriched: dict[int, DerivedLevel] = {}
+    for dl in derived_levels:
+        if dl.cloud_liquid_water_g_kg is not None or dl.ice_mixing_ratio_g_kg is not None:
+            enriched[dl.pressure_hpa] = dl
+
+    if len(enriched) < 2:
+        return
+
+    # Sorted pressures (descending — high pressure first = low altitude)
+    enriched_pressures = sorted(enriched.keys(), reverse=True)
+
+    for dl in derived_levels:
+        if dl.cloud_liquid_water_g_kg is not None:
+            continue  # already enriched
+
+        p = dl.pressure_hpa
+
+        # Find bracketing enriched pressures
+        p_above: int | None = None  # higher pressure (lower altitude)
+        p_below: int | None = None  # lower pressure (higher altitude)
+        for ep in enriched_pressures:
+            if ep > p:
+                p_above = ep
+            elif ep < p:
+                p_below = ep
+                break
+
+        if p_above is None or p_below is None:
+            continue
+
+        above = enriched[p_above]
+        below = enriched[p_below]
+
+        # Linear interpolation weight (in pressure space)
+        frac = (p_above - p) / (p_above - p_below)
+
+        # CLW
+        if above.cloud_liquid_water_g_kg is not None and below.cloud_liquid_water_g_kg is not None:
+            dl.cloud_liquid_water_g_kg = round(
+                above.cloud_liquid_water_g_kg * (1 - frac) + below.cloud_liquid_water_g_kg * frac,
+                6,
+            )
+
+        # ICMR
+        if above.ice_mixing_ratio_g_kg is not None and below.ice_mixing_ratio_g_kg is not None:
+            dl.ice_mixing_ratio_g_kg = round(
+                above.ice_mixing_ratio_g_kg * (1 - frac) + below.ice_mixing_ratio_g_kg * frac,
+                6,
+            )
 
 
 def analyze_sounding(
