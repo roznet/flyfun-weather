@@ -206,6 +206,67 @@ export function renderFreshnessBar(
   }
 }
 
+// --- Auto-refresh bar ---
+
+export function renderAutoRefreshBar(
+  flight: FlightResponse | null,
+  currentUserId: string,
+  isPast: boolean,
+  onUpdate: (autoRefresh: boolean, hour: number | null) => void,
+): void {
+  const el = $('auto-refresh-bar');
+  if (!el) return;
+
+  // Hide for non-owners or past flights
+  if (!flight || flight.user_id !== currentUserId || isPast) {
+    el.style.display = 'none';
+    return;
+  }
+
+  el.style.display = '';
+  const enabled = flight.auto_refresh;
+  const defaultHour = ((flight.target_time_utc - 1) + 24) % 24;
+  const effectiveHour = flight.auto_refresh_hour ?? defaultHour;
+
+  // Build hour options
+  const hourOptions = Array.from({ length: 24 }, (_, h) => {
+    const label = `${h.toString().padStart(2, '0')}:00Z`;
+    const isDefault = h === defaultHour && flight.auto_refresh_hour === null;
+    const selected = h === effectiveHour ? ' selected' : '';
+    const suffix = isDefault ? ' (auto)' : '';
+    return `<option value="${h}"${selected}>${label}${suffix}</option>`;
+  }).join('');
+
+  el.innerHTML = `
+    <label class="auto-refresh-toggle">
+      <input type="checkbox" id="auto-refresh-check" ${enabled ? 'checked' : ''}>
+      <span>Daily auto-refresh</span>
+    </label>
+    <span class="auto-refresh-hour-group" ${enabled ? '' : 'style="display:none;"'}>
+      at <select id="auto-refresh-hour">${hourOptions}</select>
+    </span>
+  `;
+
+  // Wire events
+  const checkbox = document.getElementById('auto-refresh-check') as HTMLInputElement;
+  const hourSelect = document.getElementById('auto-refresh-hour') as HTMLSelectElement;
+  const hourGroup = el.querySelector('.auto-refresh-hour-group') as HTMLElement;
+
+  checkbox.addEventListener('change', () => {
+    const isOn = checkbox.checked;
+    hourGroup.style.display = isOn ? '' : 'none';
+    const selectedHour = parseInt(hourSelect.value, 10);
+    const hourVal = selectedHour === defaultHour ? null : selectedHour;
+    onUpdate(isOn, isOn ? hourVal : null);
+  });
+
+  hourSelect.addEventListener('change', () => {
+    const selectedHour = parseInt(hourSelect.value, 10);
+    const hourVal = selectedHour === defaultHour ? null : selectedHour;
+    onUpdate(true, hourVal);
+  });
+}
+
 // --- Synopsis (structured digest) ---
 
 const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; label: string; icon: string }> = [

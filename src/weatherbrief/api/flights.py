@@ -81,6 +81,8 @@ class FlightResponse(BaseModel):
     cruise_altitude_ft: int
     flight_ceiling_ft: int
     flight_duration_hours: float
+    auto_refresh: bool = False
+    auto_refresh_hour: int | None = None
     created_at: str
 
 
@@ -96,6 +98,8 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
         cruise_altitude_ft=flight.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
+        auto_refresh=flight.auto_refresh,
+        auto_refresh_hour=flight.auto_refresh_hour,
         created_at=flight.created_at.isoformat(),
     )
 
@@ -265,6 +269,39 @@ def get_flight(
     """Get flight details. Any authenticated user can view any flight."""
     flight = _load_flight_or_404(db, flight_id)
     return _flight_to_response(flight)
+
+
+class UpdateAutoRefreshRequest(BaseModel):
+    """Request body for updating auto-refresh settings."""
+
+    auto_refresh: bool
+    auto_refresh_hour: int | None = None  # None = default (target_time_utc - 1)
+
+    @field_validator("auto_refresh_hour")
+    @classmethod
+    def validate_hour(cls, v: int | None) -> int | None:
+        if v is not None and not (0 <= v <= 23):
+            raise ValueError("auto_refresh_hour must be 0-23")
+        return v
+
+
+@router.patch("/{flight_id}/auto-refresh", response_model=FlightResponse)
+def update_auto_refresh(
+    flight_id: str,
+    req: UpdateAutoRefreshRequest,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Update auto-refresh settings for a flight."""
+    from weatherbrief.db.models import FlightRow
+
+    flight = _load_owned_flight(db, flight_id, user_id)
+    row = db.get(FlightRow, flight_id)
+    row.auto_refresh = req.auto_refresh
+    row.auto_refresh_hour = req.auto_refresh_hour
+    db.flush()
+    updated = load_flight(db, flight_id)
+    return _flight_to_response(updated)
 
 
 @router.delete("/{flight_id}", status_code=204)
