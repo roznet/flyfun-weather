@@ -66,6 +66,9 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     load_dotenv()
 
+    # Ensure app-level loggers (scheduler, pipeline, etc.) are visible
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
     # Disable interactive API docs in production to reduce attack surface
     docs_kwargs = {}
     if not is_dev_mode():
