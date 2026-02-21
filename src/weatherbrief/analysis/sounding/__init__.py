@@ -37,10 +37,12 @@ def _enrich_lwc(
         if raw is None:
             continue
 
-        # Mixing ratios in g/kg for SFIP (simple unit conversion, no density needed)
-        if raw.cloud_liquid_water_kg_kg is not None and raw.cloud_liquid_water_kg_kg > 0:
+        # Mixing ratios in g/kg for SFIP (simple unit conversion, no density needed).
+        # Preserve 0.0 values — SFIP needs to distinguish "measured zero" (full
+        # variant, NONE severity) from "no data" (None → proxy variant).
+        if raw.cloud_liquid_water_kg_kg is not None:
             dl.cloud_liquid_water_g_kg = round(raw.cloud_liquid_water_kg_kg * 1000.0, 6)
-        if raw.ice_mixing_ratio_kg_kg is not None and raw.ice_mixing_ratio_kg_kg > 0:
+        if raw.ice_mixing_ratio_kg_kg is not None:
             dl.ice_mixing_ratio_g_kg = round(raw.ice_mixing_ratio_kg_kg * 1000.0, 6)
 
         # Volumetric LWC (g/m³) for Ogimet — requires temperature for density
