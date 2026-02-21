@@ -53,6 +53,56 @@ def altitude_to_pressure_hpa(altitude_ft: int) -> int:
     return round(pressure)
 
 
+def pressure_pa_to_altitude_ft(pa: float) -> float:
+    """Convert pressure in Pascals to altitude in feet using standard atmosphere.
+
+    Uses the hypsometric formula for the troposphere (valid up to ~36,000 ft).
+    Same formula as altitude_to_pressure_hpa, inverted.
+    """
+    P0 = 1013.25  # sea level pressure hPa
+    T0 = 288.15  # sea level temperature K
+    L = 0.0065  # lapse rate K/m
+    g = 9.80665  # gravity m/s^2
+    M = 0.0289644  # molar mass of air kg/mol
+    R = 8.31447  # gas constant J/(mol·K)
+
+    hpa = pa / 100.0
+    if hpa <= 0:
+        return 0.0
+    exp = R * L / (g * M)
+    altitude_m = (T0 / L) * (1 - (hpa / P0) ** exp)
+    return altitude_m * 3.28084
+
+
+class NWPCloudLayerDiag(BaseModel):
+    """Cloud diagnostics for a single ICAO layer (low/mid/high)."""
+
+    cover_pct: Optional[float] = None
+    base_ft: Optional[float] = None
+    top_ft: Optional[float] = None
+    top_temp_c: Optional[float] = None
+
+
+class NWPCloudDiagnostics(BaseModel):
+    """GFS cloud layer diagnostics from GRIB2 enrichment.
+
+    All fields are Optional — partial data is normal when some GRIB2
+    messages are missing or the model reports no clouds in a layer.
+    """
+
+    low: NWPCloudLayerDiag = Field(default_factory=NWPCloudLayerDiag)
+    mid: NWPCloudLayerDiag = Field(default_factory=NWPCloudLayerDiag)
+    high: NWPCloudLayerDiag = Field(default_factory=NWPCloudLayerDiag)
+
+    convective_cover_pct: Optional[float] = None
+    convective_base_ft: Optional[float] = None
+    convective_top_ft: Optional[float] = None
+
+    total_cover_pct: Optional[float] = None
+    boundary_cover_pct: Optional[float] = None
+    ceiling_ft: Optional[float] = None
+
+
 class RouteConfig(BaseModel):
     """A flight route definition loaded from config."""
 
@@ -178,6 +228,9 @@ class HourlyForecast(BaseModel):
     freezing_level_m: Optional[float] = None
     cape_jkg: Optional[float] = None
     visibility_m: Optional[float] = None
+
+    # GFS cloud layer diagnostics from GRIB2 enrichment
+    nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
 
     # Pressure level data
     pressure_levels: list[PressureLevelData] = Field(default_factory=list)
@@ -339,6 +392,12 @@ class DerivedLevel(BaseModel):
     richardson_number: Optional[float] = None  # Ri for layer below
     bv_freq_squared_per_s2: Optional[float] = None  # N² for layer below (s⁻²)
     cloud_liquid_water_g_m3: Optional[float] = None  # LWC converted from CLWMR
+    cloud_liquid_water_g_kg: Optional[float] = None  # CLW mixing ratio (g/kg) for SFIP
+    ice_mixing_ratio_g_kg: Optional[float] = None  # ICE mixing ratio (g/kg) for glaciation factor
+    sfip_raw: Optional[float] = None  # SFIP index 0.0–1.0
+    sfip_100: Optional[float] = None  # SFIP index 0–100
+    sfip_severity: Optional[str] = None  # "NONE"/"LIGHT"/"MODERATE"/"SEVERE" (GA mapping)
+    sfip_variant: Optional[str] = None  # "full" or "proxy"
     precip_phase: Optional[str] = None  # PrecipPhase value for this level
 
 
@@ -383,6 +442,21 @@ class IcingZone(BaseModel):
     mean_wet_bulb_c: Optional[float] = None
     mean_icing_index: Optional[float] = None  # Mean Ogimet icing index for the zone
     mean_rh_pct: Optional[float] = None  # Mean RH of levels in the zone
+
+
+class SfipZone(BaseModel):
+    """SFIP icing zone — separate from Ogimet IcingZone for comparison."""
+
+    base_ft: float
+    top_ft: float
+    base_pressure_hpa: Optional[int] = None
+    top_pressure_hpa: Optional[int] = None
+    risk: IcingRisk = IcingRisk.NONE
+    icing_type: IcingType = IcingType.NONE
+    mean_sfip_100: Optional[float] = None
+    mean_temperature_c: Optional[float] = None
+    mean_rh_pct: Optional[float] = None
+    variant: str = "full"  # "full" or "proxy"
 
 
 class PrecipitationZone(BaseModel):
@@ -456,6 +530,7 @@ class SoundingAnalysis(BaseModel):
     derived_levels: list[DerivedLevel] = Field(default_factory=list)
     cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
     icing_zones: list[IcingZone] = Field(default_factory=list)
+    sfip_zones: list[SfipZone] = Field(default_factory=list)
     inversion_layers: list[InversionLayer] = Field(default_factory=list)
     convective: Optional[ConvectiveAssessment] = None
     precipitation: Optional[PrecipitationAssessment] = None
@@ -464,6 +539,8 @@ class SoundingAnalysis(BaseModel):
     cloud_cover_low_pct: Optional[float] = None
     cloud_cover_mid_pct: Optional[float] = None
     cloud_cover_high_pct: Optional[float] = None
+    # GFS cloud layer diagnostics from GRIB2 enrichment
+    nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
 
 
 class VerticalRegime(BaseModel):
