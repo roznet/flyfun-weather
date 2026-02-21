@@ -574,3 +574,326 @@ def test_build_cloud_diagnostics_partial():
     assert diag.low.base_ft is None  # Not provided
     assert diag.ceiling_ft is not None
     assert diag.mid.cover_pct is None
+
+
+# === ICON-EU enrichment tests ===
+
+
+# --- ICON-EU URL format tests ---
+
+
+class TestIconEuFetch:
+    """Tests for ICON-EU fetch module."""
+
+    def test_icon_eu_file_url_format(self):
+        """URL follows DWD naming convention."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_file_url
+
+        url = icon_eu_file_url("20260221", 0, 6, 50, "qc")
+        assert url == (
+            "https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/qc/"
+            "icon-eu_europe_regular-lat-lon_model-level_"
+            "2026022100_006_50_QC.grib2.bz2"
+        )
+
+    def test_icon_eu_file_url_pressure(self):
+        """Pressure variable URL works correctly."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_file_url
+
+        url = icon_eu_file_url("20260221", 12, 0, 74, "p")
+        assert "icon-eu_europe_regular-lat-lon_model-level_" in url
+        assert "_000_74_P.grib2.bz2" in url
+        assert "/12/p/" in url
+
+    def test_icon_eu_file_url_level_padding(self):
+        """Level number is zero-padded to 2 digits."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_file_url
+
+        url = icon_eu_file_url("20260221", 0, 0, 5, "qi")
+        assert "_05_QI" in url
+
+    # --- Domain check tests ---
+
+    def test_route_in_domain_all_inside(self):
+        """All points inside ICON-EU domain returns True."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import route_in_icon_eu_domain
+        from weatherbrief.models import RoutePoint
+
+        points = [
+            RoutePoint(lat=48.0, lon=11.0, distance_from_origin_nm=0),
+            RoutePoint(lat=51.5, lon=-0.1, distance_from_origin_nm=100),
+            RoutePoint(lat=40.0, lon=2.0, distance_from_origin_nm=200),
+        ]
+        assert route_in_icon_eu_domain(points) is True
+
+    def test_route_outside_domain_lat(self):
+        """Point north of domain returns False."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import route_in_icon_eu_domain
+        from weatherbrief.models import RoutePoint
+
+        points = [
+            RoutePoint(lat=48.0, lon=11.0, distance_from_origin_nm=0),
+            RoutePoint(lat=75.0, lon=11.0, distance_from_origin_nm=100),
+        ]
+        assert route_in_icon_eu_domain(points) is False
+
+    def test_route_outside_domain_lon(self):
+        """Point west of domain returns False."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import route_in_icon_eu_domain
+        from weatherbrief.models import RoutePoint
+
+        points = [
+            RoutePoint(lat=48.0, lon=-30.0, distance_from_origin_nm=0),
+        ]
+        assert route_in_icon_eu_domain(points) is False
+
+    def test_route_outside_domain_usa(self):
+        """US route is outside ICON-EU domain."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import route_in_icon_eu_domain
+        from weatherbrief.models import RoutePoint
+
+        points = [
+            RoutePoint(lat=40.7, lon=-74.0, distance_from_origin_nm=0),
+            RoutePoint(lat=33.9, lon=-118.4, distance_from_origin_nm=500),
+        ]
+        assert route_in_icon_eu_domain(points) is False
+
+    # --- Forecast hour bracketing tests ---
+
+    def test_bracket_hourly_region(self):
+        """Within 0-78h, 1-hourly spacing."""
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import bracket_icon_eu_forecast_hours
+
+        target = datetime(2026, 2, 21, 6, 30, tzinfo=timezone.utc)
+        f_prev, f_next = bracket_icon_eu_forecast_hours("20260221", 0, target)
+        assert f_prev == 6
+        assert f_next == 7
+
+    def test_bracket_3hourly_region(self):
+        """Beyond 78h, 3-hourly spacing."""
+        from datetime import datetime, timedelta, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import bracket_icon_eu_forecast_hours
+
+        # 85h after init
+        target = datetime(2026, 2, 21, 0, 0, tzinfo=timezone.utc) + timedelta(hours=85)
+        f_prev, f_next = bracket_icon_eu_forecast_hours("20260221", 0, target)
+        assert f_prev == 84
+        assert f_next == 87
+
+    def test_bracket_at_boundary(self):
+        """Exactly at 78h returns f78/f79 (still hourly)."""
+        from datetime import datetime, timedelta, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import bracket_icon_eu_forecast_hours
+
+        target = datetime(2026, 2, 21, 0, 0, tzinfo=timezone.utc) + timedelta(hours=78)
+        f_prev, f_next = bracket_icon_eu_forecast_hours("20260221", 0, target)
+        assert f_prev == 78
+        assert f_next == 79
+
+    def test_bracket_clamp_max(self):
+        """Forecast hours clamped to 120."""
+        from datetime import datetime, timedelta, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import bracket_icon_eu_forecast_hours
+
+        target = datetime(2026, 2, 21, 0, 0, tzinfo=timezone.utc) + timedelta(hours=200)
+        f_prev, f_next = bracket_icon_eu_forecast_hours("20260221", 0, target)
+        assert f_prev == 120
+        assert f_next == 120
+
+    # --- Run discovery tests ---
+
+    def test_find_latest_run_probes_correct_url(self):
+        """find_latest_icon_eu_run uses HEAD request on a P file."""
+        from unittest.mock import MagicMock, patch
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import find_latest_icon_eu_run
+
+        mock_session = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_session.head.return_value = mock_resp
+
+        # Fix "now" to a specific time so we can predict which cycle is tried
+        fixed_now = datetime(2026, 2, 21, 10, 0, tzinfo=timezone.utc)
+        with patch("weatherbrief.fetch.grib.icon_eu_fetch.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.strptime = datetime.strptime
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            result = find_latest_icon_eu_run(fixed_now, session=mock_session)
+
+        assert result is not None
+        # At 10:00 UTC, cycles 06z (4h ago > 3h delay) should be tried first
+        assert mock_session.head.called
+        head_url = mock_session.head.call_args[0][0]
+        assert "icon-eu_europe_regular-lat-lon_model-level_" in head_url
+        assert "_74_P.grib2.bz2" in head_url
+
+
+# --- ICON-EU level interpolation tests ---
+
+
+class TestIconEuLevels:
+    """Tests for model-level to pressure-level interpolation."""
+
+    def test_basic_interpolation(self):
+        """Linear-in-log-p interpolation produces correct values."""
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+
+        # Simple case: two model levels straddling 700 hPa
+        model_p = [60000.0, 80000.0]  # 600 and 800 hPa in Pa
+        model_v = [0.0001, 0.0005]
+
+        result = interpolate_model_to_pressure_levels(model_p, model_v, [700])
+        assert 700 in result
+        # Value should be between 0.0001 and 0.0005
+        assert 0.0001 < result[700] < 0.0005
+
+    def test_exact_level_match(self):
+        """When target exactly matches a model level, returns exact value."""
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+
+        model_p = [50000.0, 70000.0, 85000.0]  # 500, 700, 850 hPa
+        model_v = [0.0001, 0.0003, 0.0005]
+
+        result = interpolate_model_to_pressure_levels(model_p, model_v, [700])
+        assert 700 in result
+        assert abs(result[700] - 0.0003) < 1e-10
+
+    def test_out_of_range_excluded(self):
+        """Target levels outside model pressure range are excluded."""
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+
+        model_p = [60000.0, 80000.0]  # 600–800 hPa range
+        model_v = [0.0001, 0.0005]
+
+        result = interpolate_model_to_pressure_levels(model_p, model_v, [300, 700, 1000])
+        # Only 700 is within range
+        assert 700 in result
+        assert 300 not in result
+        assert 1000 not in result
+
+    def test_negative_values_clamped(self):
+        """Negative interpolation results clamped to zero."""
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+
+        # Values that could produce negative interpolation
+        model_p = [50000.0, 60000.0, 70000.0]
+        model_v = [0.0, 0.0, 0.0]
+
+        result = interpolate_model_to_pressure_levels(model_p, model_v, [600])
+        assert result.get(600, 0.0) >= 0.0
+
+    def test_insufficient_data(self):
+        """Less than 2 valid points returns empty."""
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+
+        result = interpolate_model_to_pressure_levels([50000.0], [0.001], [500])
+        assert result == {}
+
+    def test_mismatched_lengths(self):
+        """Mismatched input lengths returns empty."""
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+
+        result = interpolate_model_to_pressure_levels(
+            [50000.0, 70000.0], [0.001], [500, 700],
+        )
+        assert result == {}
+
+    def test_uses_icon_pressure_levels_by_default(self):
+        """Default target levels are ICON_PRESSURE_LEVELS."""
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+        from weatherbrief.fetch.variables import ICON_PRESSURE_LEVELS
+
+        # Wide pressure range covering all ICON levels
+        model_p = [30000.0, 100000.0]  # 300–1000 hPa
+        model_v = [0.0001, 0.0010]
+
+        result = interpolate_model_to_pressure_levels(model_p, model_v)
+        # Should have entries for all ICON pressure levels
+        for level in ICON_PRESSURE_LEVELS:
+            assert level in result, f"Missing level {level}"
+
+    def test_many_model_levels(self):
+        """Handles realistic number of model levels (40)."""
+        import numpy as np
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+
+        # Simulate 40 model levels from 300 to 1000 hPa
+        n_levels = 40
+        model_p = list(np.linspace(30000, 100000, n_levels))
+        # QC profile: peak around 700 hPa
+        model_v = [max(0, 0.0005 * np.exp(-((p/100 - 700)**2) / (200**2)))
+                    for p in model_p]
+
+        result = interpolate_model_to_pressure_levels(model_p, model_v, [700, 500, 850])
+        assert len(result) == 3
+        # Peak should be at 700 hPa
+        assert result[700] >= result[500]
+        assert result[700] >= result[850]
+
+
+# --- ICON-EU variable mapping tests ---
+
+
+class TestIconEuDecode:
+    """Tests for ICON-EU variable mapping in decode module."""
+
+    def test_qc_mapped_to_cloud_liquid_water(self):
+        """QC maps to cloud_liquid_water_kg_kg."""
+        from weatherbrief.fetch.grib.decode import _VAR_MAP
+
+        assert _VAR_MAP["qc"] == "cloud_liquid_water_kg_kg"
+
+    def test_qi_mapped_to_ice_mixing_ratio(self):
+        """QI maps to ice_mixing_ratio_kg_kg."""
+        from weatherbrief.fetch.grib.decode import _VAR_MAP
+
+        assert _VAR_MAP["qi"] == "ice_mixing_ratio_kg_kg"
+
+    def test_gfs_vars_still_mapped(self):
+        """GFS variable mappings unchanged."""
+        from weatherbrief.fetch.grib.decode import _VAR_MAP
+
+        assert _VAR_MAP["clmr"] == "cloud_liquid_water_kg_kg"
+        assert _VAR_MAP["clwmr"] == "cloud_liquid_water_kg_kg"
+        assert _VAR_MAP["icmr"] == "ice_mixing_ratio_kg_kg"
+
+
+# --- Cache model parameter tests ---
+
+
+class TestCacheModelParam:
+    """Tests for cache generalization with model parameter."""
+
+    def test_cache_dir_default_gfs(self, tmp_path):
+        """Default model is gfs (backward compatible)."""
+        run_dir = cache_dir_for_run(tmp_path, "20260221", 0)
+        assert run_dir == tmp_path / ".cache" / "grib" / "gfs" / "20260221_00z"
+
+    def test_cache_dir_icon_eu(self, tmp_path):
+        """model='icon-eu' produces icon-eu path."""
+        run_dir = cache_dir_for_run(tmp_path, "20260221", 6, model="icon-eu")
+        assert run_dir == tmp_path / ".cache" / "grib" / "icon-eu" / "20260221_06z"
+
+    def test_cache_roundtrip_icon_eu(self, tmp_path):
+        """Cache works for icon-eu model."""
+        run_dir = cache_dir_for_run(tmp_path, "20260221", 0, model="icon-eu")
+        ck = cache_key(3, "ICON_EU_QC_QI_P", (45, 55, -5, 10))
+        data = b"fake icon-eu grib2"
+
+        put_cached(run_dir, ck, data)
+        result = get_cached(run_dir, ck)
+        assert result == data
+
+    def test_different_models_isolated(self, tmp_path):
+        """GFS and ICON-EU caches don't interfere."""
+        gfs_dir = cache_dir_for_run(tmp_path, "20260221", 0, model="gfs")
+        icon_dir = cache_dir_for_run(tmp_path, "20260221", 0, model="icon-eu")
+
+        put_cached(gfs_dir, "test.grib2", b"gfs data")
+        put_cached(icon_dir, "test.grib2", b"icon data")
+
+        assert get_cached(gfs_dir, "test.grib2") == b"gfs data"
+        assert get_cached(icon_dir, "test.grib2") == b"icon data"
