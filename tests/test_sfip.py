@@ -13,7 +13,7 @@ from weatherbrief.analysis.sounding.sfip import (
     membership_vv,
     sfip_to_risk,
 )
-from weatherbrief.models import DerivedLevel, IcingRisk, IcingType
+from weatherbrief.models import DerivedLevel, EnhancedCloudLayer, IcingRisk, IcingType
 
 
 # ── membership_temperature ───────────────────────────────────────────
@@ -421,7 +421,6 @@ def test_zone_icing_type():
 def test_comparison_both_indices():
     """Same profile produces both Ogimet and SFIP zones (may differ)."""
     from weatherbrief.analysis.sounding.icing import assess_icing_zones
-    from weatherbrief.models import EnhancedCloudLayer
 
     levels = [
         DerivedLevel(
@@ -438,7 +437,121 @@ def test_comparison_both_indices():
     clouds = [EnhancedCloudLayer(base_ft=9000, top_ft=13000)]
 
     ogimet_zones = assess_icing_zones(levels, clouds)
-    sfip_zones = assess_sfip_zones(levels)
+    sfip_zones = assess_sfip_zones(levels, cloud_layers=clouds)
 
     assert len(ogimet_zones) >= 1
     assert len(sfip_zones) >= 1
+
+
+# ── Cloud gating tests ──────────────────────────────────────────────
+
+
+def test_full_variant_clw_zero_gated():
+    """Full variant: CLW=0 produces no SFIP (cloud gated out)."""
+    levels = [
+        _level(700, 10000, -8.0, -9.0, 96.0, 1.0, clw=0.0),
+        _level(650, 12000, -12.0, -13.0, 95.0, 1.0, clw=0.0),
+    ]
+    zones = assess_sfip_zones(levels)
+    assert len(zones) == 0
+
+
+def test_full_variant_clw_positive_not_gated():
+    """Full variant: CLW > 0 produces zones (no cloud gating)."""
+    levels = [
+        _level(700, 10000, -8.0, -9.0, 96.0, 1.0, clw=0.15),
+        _level(650, 12000, -12.0, -13.0, 95.0, 1.0, clw=0.10),
+    ]
+    zones = assess_sfip_zones(levels)
+    assert len(zones) >= 1
+    assert all(z.variant == "full" for z in zones)
+
+
+def test_level_full_variant_clw_zero_returns_none():
+    """compute_sfip_level: CLW=0 with full variant returns NONE severity."""
+    _, s100, sev, var = compute_sfip_level(
+        temperature_c=-10.0, rh_pct=98.0, dewpoint_depression_c=0.5,
+        clw_g_kg=0.0, icmr_g_kg=None, omega_pa_s=-3.0, cloud_cover_at_band=100.0,
+    )
+    assert s100 == 0.0
+    assert sev == "NONE"
+    assert var == "full"
+
+
+def test_proxy_no_cloud_layers_no_dd_gated():
+    """Proxy variant: levels far from cloud (DD > 3, no cloud layers) → gated out."""
+    levels = [
+        _level(700, 10000, -8.0, -14.0, 70.0, 6.0),  # DD=6, dry
+        _level(650, 12000, -12.0, -18.0, 65.0, 6.0),
+    ]
+    zones = assess_sfip_zones(levels, nwp_cloud_mid_pct=80.0)
+    assert len(zones) == 0
+
+
+def test_proxy_near_cloud_by_dd():
+    """Proxy variant: DD < 3°C passes cloud gating even without cloud layers."""
+    levels = [
+        _level(700, 10000, -8.0, -9.0, 96.0, 1.0),  # DD=1, in cloud
+        _level(650, 12000, -12.0, -13.0, 95.0, 1.0),
+    ]
+    zones = assess_sfip_zones(levels, nwp_cloud_mid_pct=80.0)
+    assert len(zones) >= 1
+    assert all(z.variant == "proxy" for z in zones)
+
+
+def test_proxy_near_cloud_by_layer_proximity():
+    """Proxy variant: within 500ft of cloud layer passes gating, even with DD > 3."""
+    clouds = [EnhancedCloudLayer(base_ft=9500, top_ft=12500)]
+    levels = [
+        # DD=4 (> 3, so DD alone would gate it out), but altitude within cloud layer
+        _level(700, 10000, -8.0, -12.0, 80.0, 4.0),
+        _level(650, 12000, -12.0, -16.0, 78.0, 4.0),
+    ]
+    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    assert len(zones) >= 1
+    assert all(z.variant == "proxy" for z in zones)
+
+
+def test_proxy_far_from_cloud_layer_gated():
+    """Proxy variant: altitude far from cloud layer AND DD > 3 → gated out."""
+    clouds = [EnhancedCloudLayer(base_ft=15000, top_ft=20000)]
+    levels = [
+        _level(850, 5000, -3.0, -8.0, 70.0, 5.0),  # Far below cloud, dry
+        _level(800, 6500, -6.0, -12.0, 65.0, 6.0),
+    ]
+    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    assert len(zones) == 0
+
+
+def test_proxy_cloud_margin_500ft():
+    """Proxy variant: level just within 500ft margin of cloud passes gating."""
+    # Cloud base at 10000ft, level at 9600ft (within 500ft margin)
+    clouds = [EnhancedCloudLayer(base_ft=10000, top_ft=15000)]
+    levels = [
+        _level(700, 9600, -8.0, -12.0, 78.0, 4.0),  # DD > 3, but within margin
+    ]
+    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    # Should produce a zone (within 500ft of cloud base)
+    assert len(zones) >= 1
+
+
+def test_proxy_outside_margin_gated():
+    """Proxy variant: level just outside 500ft margin → gated out."""
+    # Cloud base at 10000ft, level at 9000ft (1000ft below, outside 500ft margin)
+    clouds = [EnhancedCloudLayer(base_ft=10000, top_ft=15000)]
+    levels = [
+        _level(750, 9000, -8.0, -12.0, 78.0, 4.0),  # DD > 3, outside margin
+    ]
+    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    assert len(zones) == 0
+
+
+def test_mixed_full_proxy_clw_zero_clear_air():
+    """Full variant with CLW=0 in clear air: no false alarms even with high T/RH."""
+    levels = [
+        _level(700, 10000, -10.0, -10.5, 97.0, 0.5, clw=0.0),
+        _level(650, 12000, -14.0, -14.5, 98.0, 0.5, clw=0.0),
+    ]
+    zones = assess_sfip_zones(levels)
+    # CLW=0 means full variant but gated → no zones despite perfect T/RH
+    assert len(zones) == 0
