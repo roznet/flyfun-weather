@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories for 9 weather hazard categories along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories for 13 weather hazard categories along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -13,18 +13,23 @@ RouteContext (immutable)
   ├── analyses: list[RoutePointAnalysis]   (~20 points along route)
   ├── cross_sections: list[RouteCrossSection]  (per-model forecast grids)
   ├── elevation: ElevationProfile | None
+  ├── airport_conditions: AirportConditions | None  (dep + arr weather)
   ├── models, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm
       ↓
 Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
-  ├── @register IcingEscapeEvaluator
+  ├── @register IcingEscapeEvaluator       # en-route icing
   ├── @register FIKIIcingEvaluator
   ├── @register FreezingLevelEvaluator
-  ├── @register CloudTopEvaluator
+  ├── @register CloudTopEvaluator          # en-route cloud
   ├── @register VMCCruiseEvaluator
-  ├── @register TurbulenceEvaluator
+  ├── @register TurbulenceEvaluator        # en-route turbulence
   ├── @register MountainWindEvaluator
-  ├── @register ConvectiveEvaluator
-  └── @register ModelAgreementEvaluator
+  ├── @register ConvectiveEvaluator        # convective
+  ├── @register ModelAgreementEvaluator    # model quality
+  ├── @register FlightCategoryEvaluator    # airport conditions
+  ├── @register AirportWindEvaluator
+  ├── @register VFRFeasibilityEvaluator    # composite go/no-go
+  └── @register IFRFeasibilityEvaluator
       ↓
 RouteAdvisoriesManifest (advisories + catalog + aggregation mode)
   → route_advisories.json
@@ -68,7 +73,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
-## The 9 Evaluators
+## The 13 Evaluators
 
 ### Icing
 
@@ -99,6 +104,20 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | `ConvectiveEvaluator` | convective | Route points with convective risk ≥ threshold. HIGH/EXTREME → instant RED | `min_risk`, `affected_pct_amber`, `affected_pct_red` |
 | `ModelAgreementEvaluator` | model | Cross-model divergence (POOR/MODERATE agreement). Evaluated once, not per-model | `poor_pct_amber`, `poor_pct_red` |
 
+### Airport
+
+| Evaluator | Category | Logic | Key Parameters |
+|-----------|----------|-------|----------------|
+| `FlightCategoryEvaluator` | airport | Ceiling/visibility at departure + arrival. OR logic: either metric below threshold triggers. Defaults match MVFR/IFR boundaries | `amber_ceiling_ft` (3000), `amber_vis_sm` (5), `red_ceiling_ft` (1000), `red_vis_sm` (3) |
+| `AirportWindEvaluator` | airport | Crosswind on best runway + gust severity at departure + arrival. Worst of dep/arr becomes the status | `xwind_green_kt`, `xwind_red_kt`, `gust_green_kt`, `gust_red_kt` |
+
+### Feasibility (Composite)
+
+| Evaluator | Category | Logic | Key Parameters |
+|-----------|----------|-------|----------------|
+| `VFRFeasibilityEvaluator` | feasibility | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage). Worst of sub-assessments wins | `cloud_base_margin_ft`, `bkn_pct_amber`, `ovc_pct_red` |
+| `IFRFeasibilityEvaluator` | feasibility | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (layer thickness), convective risk along route | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `icing_amber_ft`, `icing_red_ft` |
+
 ## Shared Helpers (`_helpers.py`)
 
 - **`format_extent(affected, total, total_distance_nm)`** → `"30nm/55nm (55%)"` — human-readable spatial extent
@@ -120,10 +139,12 @@ User overrides stored in `flight_profiles.settings_json` under `advisories: {ena
 
 ## Pipeline Integration
 
-In `pipeline.py` at the `"route_advisories"` stage (0.62 progress):
-1. Build `RouteContext` from existing route analyses, cross-sections, elevation
+In `tasks/advise.py` via `run_advisories()`:
+1. Build `RouteContext` from existing route analyses, cross-sections, elevation, airport conditions
 2. Call `evaluate_all(ctx)` → `list[RouteAdvisoryResult]`
 3. Save `RouteAdvisoriesManifest` to `route_advisories.json`
+
+Also supports `run_advisories_from_pack()` for re-evaluation from saved artifacts without re-fetching.
 
 ## API Endpoints
 
