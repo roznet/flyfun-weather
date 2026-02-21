@@ -1,7 +1,7 @@
 /** Extract visualization-ready data from a RouteAnalysesManifest for a given model. */
 
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
-import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizCATLayer, VizInversionLayer } from './types';
+import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizCATLayer, VizInversionLayer, VizCloudDiag } from './types';
 
 export function extractVizData(
   manifest: RouteAnalysesManifest,
@@ -78,6 +78,15 @@ function extractPoint(
     type: iz.icing_type,
   }));
 
+  const sfipZones: VizSfipZone[] = (sounding?.sfip_zones ?? []).map((sz) => ({
+    baseFt: sz.base_ft,
+    topFt: sz.top_ft,
+    risk: sz.risk,
+    type: sz.icing_type,
+    meanSfip100: sz.mean_sfip_100,
+    variant: sz.variant,
+  }));
+
   const catLayers: VizCATLayer[] = (sounding?.vertical_motion?.cat_risk_layers ?? []).map((cl) => ({
     baseFt: cl.base_ft,
     topFt: cl.top_ft,
@@ -103,12 +112,22 @@ function extractPoint(
     if (d.agreement === 'moderate') { worstModelAgreement = 'moderate'; }
   }
 
+  // GFS cloud diagnostics
+  const diag = sounding?.nwp_cloud_diagnostics ?? null;
+  const nwpCloudDiag: VizCloudDiag | null = diag ? {
+    low: { coverPct: diag.low.cover_pct, baseFt: diag.low.base_ft, topFt: diag.low.top_ft },
+    mid: { coverPct: diag.mid.cover_pct, baseFt: diag.mid.base_ft, topFt: diag.mid.top_ft },
+    high: { coverPct: diag.high.cover_pct, baseFt: diag.high.base_ft, topFt: diag.high.top_ft },
+    ceilingFt: diag.ceiling_ft,
+  } : null;
+
   return {
     distanceNm: rpa.distance_from_origin_nm,
     time: rpa.interpolated_time,
     altitudeLines,
     cloudLayers,
     icingZones,
+    sfipZones,
     catLayers,
     inversions,
     convectiveRisk: sounding?.convective?.risk_level ?? 'none',
@@ -119,5 +138,6 @@ function extractPoint(
     crosswindKt: wind?.crosswind_kt ?? 0,
     capeSurfaceJkg: indices?.cape_surface_jkg ?? 0,
     worstModelAgreement,
+    nwpCloudDiag,
   };
 }

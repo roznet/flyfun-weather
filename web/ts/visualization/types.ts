@@ -84,12 +84,26 @@ export interface WaypointMarker {
   icao: string;
 }
 
+export interface VizCloudDiagLayer {
+  coverPct: number | null;
+  baseFt: number | null;
+  topFt: number | null;
+}
+
+export interface VizCloudDiag {
+  low: VizCloudDiagLayer;
+  mid: VizCloudDiagLayer;
+  high: VizCloudDiagLayer;
+  ceilingFt: number | null;
+}
+
 export interface VizPoint {
   distanceNm: number;
   time: string;
   altitudeLines: AltitudeLines;
   cloudLayers: VizCloudLayer[];
   icingZones: VizIcingZone[];
+  sfipZones: VizSfipZone[];
   catLayers: VizCATLayer[];
   inversions: VizInversionLayer[];
   convectiveRisk: string;
@@ -101,6 +115,8 @@ export interface VizPoint {
   crosswindKt: number;
   capeSurfaceJkg: number;
   worstModelAgreement: string;
+  // GFS cloud diagnostics (null when not available)
+  nwpCloudDiag: VizCloudDiag | null;
 }
 
 export interface AltitudeLines {
@@ -125,6 +141,15 @@ export interface VizIcingZone {
   topFt: number;
   risk: string;
   type: string;
+}
+
+export interface VizSfipZone {
+  baseFt: number;
+  topFt: number;
+  risk: string;
+  type: string;
+  meanSfip100: number | null;
+  variant: string;  // "full" or "proxy"
 }
 
 export interface VizCATLayer {

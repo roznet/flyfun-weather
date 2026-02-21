@@ -13,6 +13,7 @@ import type {
   PackMeta,
   RouteAnalysesManifest,
   RoutePointAnalysis,
+  SfipZone,
   SoundingAnalysis,
   ThermodynamicIndices,
   VerticalRegime,
@@ -895,8 +896,19 @@ const COVERAGE_OKTAS: Record<string, string> = {
   ovc: '8/8',
 };
 
+/** Find the SFIP zone that best overlaps a given altitude band. */
+function findOverlappingSfip(sfipZones: SfipZone[], floorFt: number, ceilingFt: number): SfipZone | null {
+  let best: SfipZone | null = null;
+  let bestOverlap = 0;
+  for (const sz of sfipZones) {
+    const overlap = Math.min(sz.top_ft, ceilingFt) - Math.max(sz.base_ft, floorFt);
+    if (overlap > bestOverlap) { bestOverlap = overlap; best = sz; }
+  }
+  return best;
+}
+
 /** Build the multi-line HTML content for a single regime cell. */
-function regimeCellContent(regime: VerticalRegime): string {
+function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[]): string {
   const lines: string[] = [];
 
   // Cloud: headline + params subtitle
@@ -934,6 +946,12 @@ function regimeCellContent(regime: VerticalRegime): string {
       params.push(`Tw=${regime.mean_wet_bulb_c.toFixed(0)}\u00b0C`);
     if (regime.mean_icing_index != null)
       params.push(`Ix=${regime.mean_icing_index.toFixed(0)} ${renderInfoButton('ogimet_index', regime.mean_icing_index)}`);
+    // SFIP index from overlapping sfip_zone
+    const sfipMatch = sfipZones ? findOverlappingSfip(sfipZones, regime.floor_ft, regime.ceiling_ft) : null;
+    if (sfipMatch && sfipMatch.mean_sfip_100 != null) {
+      const variantBadge = `<span class="sfip-variant">${sfipMatch.variant === 'full' ? 'CLW' : 'proxy'}</span>`;
+      params.push(`SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${variantBadge}`);
+    }
     if (regime.mean_rh_pct != null)
       params.push(`RH=${regime.mean_rh_pct.toFixed(0)}%`);
     if (params.length > 0)
@@ -1016,7 +1034,8 @@ function renderAtmosphericProfile(
         );
         if (!regime) return '<td>\u2014</td>';
         const cls = regimeCellClass(regime);
-        return `<td class="regime-cell ${cls}">${regimeCellContent(regime)}</td>`;
+        const modelSfipZones = soundings[m]?.sfip_zones ?? [];
+        return `<td class="regime-cell ${cls}">${regimeCellContent(regime, modelSfipZones)}</td>`;
       }).join('');
 
       return `<tr><td class="var-name">${nextAlt.toFixed(0)}-${alt.toFixed(0)}ft</td>${cells}</tr>`;

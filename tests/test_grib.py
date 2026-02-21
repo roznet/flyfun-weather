@@ -1,4 +1,5 @@
-"""Tests for GRIB2 enrichment layer: .idx parser, byte-range planner, cache, and icing LWC."""
+"""Tests for GRIB2 enrichment layer: .idx parser, byte-range planner, cache, icing LWC,
+and cloud diagnostics."""
 
 from __future__ import annotations
 
@@ -9,9 +10,13 @@ import pytest
 
 from weatherbrief.fetch.grib.gfs_idx import (
     ByteRange,
+    CloudDiagByteRange,
+    CloudDiagIdxEntry,
     IdxEntry,
+    parse_cloud_diag_idx,
     parse_idx,
     plan_byte_ranges,
+    plan_cloud_diag_byte_ranges,
 )
 from weatherbrief.fetch.grib.cache import (
     cache_dir_for_run,
@@ -24,11 +29,20 @@ from weatherbrief.fetch.grib.grib_fetch import (
     gfs_grib2_url,
     gfs_idx_url,
 )
+from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
 from weatherbrief.analysis.sounding.icing import (
     _lwc_to_icing_severity,
     assess_icing_zones,
 )
-from weatherbrief.models import DerivedLevel, EnhancedCloudLayer, IcingRisk, IcingType
+from weatherbrief.models import (
+    DerivedLevel,
+    EnhancedCloudLayer,
+    IcingRisk,
+    IcingType,
+    NWPCloudDiagnostics,
+    NWPCloudLayerDiag,
+    pressure_pa_to_altitude_ft,
+)
 
 
 # --- .idx parser tests ---
@@ -346,3 +360,217 @@ def test_build_hourly_params_uses_endpoint_levels():
     # GFS should have 875hPa (extended), ECMWF should not
     assert "temperature_875hPa" in gfs_params
     assert "temperature_875hPa" not in ecmwf_params
+
+
+# --- Cloud diagnostic .idx parser tests ---
+
+
+CLOUD_DIAG_IDX = """\
+1:0:d=2026022112:HGT:1000 mb:6 hour fcst:
+630:437912319:d=2026022112:LCDC:low cloud layer:6 hour fcst:
+631:438715784:d=2026022112:LCDC:low cloud layer:0-6 hour ave fcst:
+632:439598564:d=2026022112:MCDC:middle cloud layer:6 hour fcst:
+633:440173084:d=2026022112:MCDC:middle cloud layer:0-6 hour ave fcst:
+634:440841444:d=2026022112:HCDC:high cloud layer:6 hour fcst:
+636:442369379:d=2026022112:TCDC:entire atmosphere:6 hour fcst:
+638:444082677:d=2026022112:HGT:cloud ceiling:6 hour fcst:
+639:445193187:d=2026022112:PRES:convective cloud bottom level:6 hour fcst:
+640:445715716:d=2026022112:PRES:low cloud bottom level:0-6 hour ave fcst:
+641:447111239:d=2026022112:PRES:middle cloud bottom level:0-6 hour ave fcst:
+644:450220663:d=2026022112:PRES:low cloud top level:0-6 hour ave fcst:
+647:454147299:d=2026022112:TMP:low cloud top level:0-6 hour ave fcst:
+650:457095069:d=2026022112:TCDC:convective cloud layer:6 hour fcst:
+651:457790771:d=2026022112:TCDC:boundary layer cloud layer:0-6 hour ave fcst:
+700:500000000:d=2026022112:TMP:2 m above ground:6 hour fcst:
+"""
+
+
+def test_parse_cloud_diag_idx_returns_correct_entries():
+    """Cloud diag parser returns only cloud diagnostic entries."""
+    entries = parse_cloud_diag_idx(CLOUD_DIAG_IDX)
+    # Should not include HGT:1000 mb or TMP:2 m above ground
+    assert all(isinstance(e, CloudDiagIdxEntry) for e in entries)
+    vars_found = {(e.variable, e.level_str) for e in entries}
+    assert ("LCDC", "low cloud layer") in vars_found
+    assert ("HCDC", "high cloud layer") in vars_found
+    assert ("HGT", "cloud ceiling") in vars_found
+    assert ("PRES", "convective cloud bottom level") in vars_found
+    assert ("TMP", "low cloud top level") in vars_found
+    # Should NOT include pressure-level HGT or surface TMP
+    assert ("HGT", "1000 mb") not in vars_found
+    assert ("TMP", "2 m above ground") not in vars_found
+
+
+def test_parse_cloud_diag_idx_prefers_instant_over_avg():
+    """When both instant and averaged entries exist, only instant is kept."""
+    entries = parse_cloud_diag_idx(CLOUD_DIAG_IDX)
+    # LCDC has both "6 hour fcst" and "0-6 hour ave fcst"
+    lcdc_entries = [e for e in entries if e.variable == "LCDC"]
+    assert len(lcdc_entries) == 1
+    assert "ave" not in lcdc_entries[0].forecast_step
+
+
+def test_parse_cloud_diag_idx_keeps_avg_when_no_instant():
+    """Averaged entries are kept when no instant version exists."""
+    entries = parse_cloud_diag_idx(CLOUD_DIAG_IDX)
+    # PRES low cloud bottom level only has averaged version
+    pres_low_bottom = [e for e in entries
+                       if e.variable == "PRES" and e.level_str == "low cloud bottom level"]
+    assert len(pres_low_bottom) == 1
+    assert "ave" in pres_low_bottom[0].forecast_step
+
+
+def test_plan_cloud_diag_byte_ranges():
+    """Cloud diag byte ranges are correctly computed."""
+    ranges = plan_cloud_diag_byte_ranges(CLOUD_DIAG_IDX)
+    assert len(ranges) > 0
+    assert all(isinstance(r, CloudDiagByteRange) for r in ranges)
+
+    # Check specific range: LCDC instant at offset 437912319
+    lcdc = [r for r in ranges if r.variable == "LCDC"][0]
+    assert lcdc.start == 437912319
+    # Next entry is LCDC ave at 438715784
+    assert lcdc.end == 438715784 - 1
+
+    # HGT cloud ceiling
+    hgt = [r for r in ranges if r.variable == "HGT" and r.level_str == "cloud ceiling"][0]
+    assert hgt.start == 444082677
+
+
+def test_parse_idx_unchanged_by_cloud_diag():
+    """Existing parse_idx() is not affected by cloud diag additions."""
+    entries = parse_idx(CLOUD_DIAG_IDX)
+    # Only HGT:1000 mb would match but HGT is not in GRIB_VARIABLES
+    assert len(entries) == 0
+
+
+# --- Unit conversion tests ---
+
+
+def test_pressure_pa_to_altitude_ft_sea_level():
+    """Sea level pressure (101325 Pa) returns ~0 ft."""
+    alt = pressure_pa_to_altitude_ft(101325.0)
+    assert abs(alt) < 50  # Should be very close to 0
+
+
+def test_pressure_pa_to_altitude_ft_typical_values():
+    """Standard atmosphere pressure-altitude checks."""
+    # 70000 Pa ≈ 700 hPa ≈ ~9882 ft
+    alt_700 = pressure_pa_to_altitude_ft(70000.0)
+    assert 9500 < alt_700 < 10500
+
+    # 50000 Pa ≈ 500 hPa ≈ ~18289 ft
+    alt_500 = pressure_pa_to_altitude_ft(50000.0)
+    assert 17500 < alt_500 < 19000
+
+    # 30000 Pa ≈ 300 hPa ≈ ~30065 ft
+    alt_300 = pressure_pa_to_altitude_ft(30000.0)
+    assert 29000 < alt_300 < 31000
+
+
+def test_pressure_pa_to_altitude_ft_zero():
+    """Zero pressure returns 0 ft (edge case)."""
+    assert pressure_pa_to_altitude_ft(0.0) == 0.0
+
+
+# --- NWPCloudDiagnostics data model tests ---
+
+
+def test_nwp_cloud_diagnostics_defaults():
+    """NWPCloudDiagnostics with defaults has all None values."""
+    diag = NWPCloudDiagnostics()
+    assert diag.low.cover_pct is None
+    assert diag.low.base_ft is None
+    assert diag.mid.top_ft is None
+    assert diag.ceiling_ft is None
+    assert diag.total_cover_pct is None
+
+
+def test_nwp_cloud_diagnostics_creation():
+    """NWPCloudDiagnostics can be created with values."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=80.0, base_ft=2000, top_ft=5000),
+        mid=NWPCloudLayerDiag(cover_pct=40.0, base_ft=10000, top_ft=15000),
+        ceiling_ft=2000,
+    )
+    assert diag.low.cover_pct == 80.0
+    assert diag.low.base_ft == 2000
+    assert diag.mid.cover_pct == 40.0
+    assert diag.ceiling_ft == 2000
+
+
+def test_nwp_cloud_diagnostics_serialization():
+    """NWPCloudDiagnostics serializes to dict and back."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=50.0, base_ft=3000, top_ft=6000, top_temp_c=-5.0),
+        total_cover_pct=75.0,
+    )
+    data = diag.model_dump()
+    restored = NWPCloudDiagnostics.model_validate(data)
+    assert restored.low.cover_pct == 50.0
+    assert restored.low.top_temp_c == -5.0
+    assert restored.total_cover_pct == 75.0
+    # high should have defaults
+    assert restored.high.cover_pct is None
+
+
+# --- build_cloud_diagnostics tests ---
+
+
+def test_build_cloud_diagnostics_full():
+    """build_cloud_diagnostics converts all raw values correctly."""
+    raw = {
+        "low_cover_pct": 80.0,
+        "low_base_pa": 90000.0,      # ~3200 ft
+        "low_top_pa": 70000.0,       # ~9900 ft
+        "low_top_temp_k": 268.15,    # -5°C
+        "mid_cover_pct": 40.0,
+        "mid_base_pa": 50000.0,      # ~18300 ft
+        "mid_top_pa": 40000.0,       # ~23600 ft
+        "high_cover_pct": 20.0,
+        "total_cover_pct": 90.0,
+        "ceiling_gpm": 1000.0,       # → 3281 ft
+        "convective_cover_pct": 10.0,
+        "convective_base_pa": 85000.0,
+        "convective_top_pa": 30000.0,
+    }
+    diag = build_cloud_diagnostics(raw)
+    assert diag is not None
+
+    # Cloud cover preserved as-is
+    assert diag.low.cover_pct == 80.0
+    assert diag.mid.cover_pct == 40.0
+    assert diag.total_cover_pct == 90.0
+
+    # Pa → ft conversion
+    assert diag.low.base_ft is not None
+    assert 2500 < diag.low.base_ft < 4000
+    assert diag.low.top_ft is not None
+    assert 9000 < diag.low.top_ft < 11000
+
+    # K → °C conversion
+    assert diag.low.top_temp_c == -5.0
+
+    # gpm → ft conversion
+    assert diag.ceiling_ft is not None
+    assert abs(diag.ceiling_ft - 3281) < 5
+
+    # Physical sanity: base < top
+    assert diag.low.base_ft < diag.low.top_ft
+    assert diag.mid.base_ft < diag.mid.top_ft
+
+
+def test_build_cloud_diagnostics_empty():
+    """build_cloud_diagnostics returns None for empty raw dict."""
+    assert build_cloud_diagnostics({}) is None
+
+
+def test_build_cloud_diagnostics_partial():
+    """build_cloud_diagnostics handles partial data gracefully."""
+    raw = {"low_cover_pct": 50.0, "ceiling_gpm": 500.0}
+    diag = build_cloud_diagnostics(raw)
+    assert diag is not None
+    assert diag.low.cover_pct == 50.0
+    assert diag.low.base_ft is None  # Not provided
+    assert diag.ceiling_ft is not None
+    assert diag.mid.cover_pct is None

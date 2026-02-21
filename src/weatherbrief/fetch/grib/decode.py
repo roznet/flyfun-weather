@@ -2,6 +2,10 @@
 
 Decodes concatenated GRIB2 bytes into xarray Datasets, then interpolates
 to specific route point coordinates.
+
+Handles two categories of GFS variables:
+1. Pressure-level variables (CLWMR/ICMR) — one value per pressure level per point
+2. Cloud diagnostic variables (LCDC, PRES cloud layers, etc.) — one scalar per point
 """
 
 from __future__ import annotations
@@ -19,6 +23,52 @@ _VAR_MAP = {
     "clmr": "cloud_liquid_water_kg_kg",
     "clwmr": "cloud_liquid_water_kg_kg",  # alias
     "icmr": "ice_mixing_ratio_kg_kg",
+}
+
+# Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
+# cfgrib uses avg_ prefix for time-averaged stepType variables.
+# Field names use a flat namespace for build_cloud_diagnostics().
+_CLOUD_DIAG_FIELD_MAP: dict[tuple[str, str], str] = {
+    # Cloud cover percentages (instant)
+    ("lcc", "lowCloudLayer"): "low_cover_pct",
+    ("mcc", "middleCloudLayer"): "mid_cover_pct",
+    ("hcc", "highCloudLayer"): "high_cover_pct",
+    ("tcc", "atmosphere"): "total_cover_pct",
+    ("tcc", "convectiveCloudLayer"): "convective_cover_pct",
+    ("tcc", "boundaryLayerCloudLayer"): "boundary_cover_pct",
+    # Cloud cover percentages (time-averaged fallbacks)
+    ("avg_lcc", "lowCloudLayer"): "low_cover_pct",
+    ("avg_mcc", "middleCloudLayer"): "mid_cover_pct",
+    ("avg_hcc", "highCloudLayer"): "high_cover_pct",
+    ("avg_tcc", "atmosphere"): "total_cover_pct",
+    ("avg_tcc", "convectiveCloudLayer"): "convective_cover_pct",
+    ("avg_tcc", "boundaryLayerCloudLayer"): "boundary_cover_pct",
+    # Cloud boundary pressures (Pa) — mostly time-averaged in GFS
+    ("pres", "convectiveCloudBottom"): "convective_base_pa",
+    ("pres", "convectiveCloudTop"): "convective_top_pa",
+    ("avg_pres", "lowCloudBottom"): "low_base_pa",
+    ("avg_pres", "lowCloudTop"): "low_top_pa",
+    ("avg_pres", "middleCloudBottom"): "mid_base_pa",
+    ("avg_pres", "middleCloudTop"): "mid_top_pa",
+    ("avg_pres", "highCloudBottom"): "high_base_pa",
+    ("avg_pres", "highCloudTop"): "high_top_pa",
+    # Instantaneous pressure fallbacks
+    ("pres", "lowCloudBottom"): "low_base_pa",
+    ("pres", "lowCloudTop"): "low_top_pa",
+    ("pres", "middleCloudBottom"): "mid_base_pa",
+    ("pres", "middleCloudTop"): "mid_top_pa",
+    ("pres", "highCloudBottom"): "high_base_pa",
+    ("pres", "highCloudTop"): "high_top_pa",
+    # Cloud top temperatures (K) — time-averaged
+    ("avg_t", "lowCloudTop"): "low_top_temp_k",
+    ("avg_t", "middleCloudTop"): "mid_top_temp_k",
+    ("avg_t", "highCloudTop"): "high_top_temp_k",
+    # Instantaneous temperature fallbacks
+    ("t", "lowCloudTop"): "low_top_temp_k",
+    ("t", "middleCloudTop"): "mid_top_temp_k",
+    ("t", "highCloudTop"): "high_top_temp_k",
+    # Cloud ceiling height (gpm)
+    ("gh", "cloudCeiling"): "ceiling_gpm",
 }
 
 
@@ -270,3 +320,141 @@ def _interpolate_per_point(
     except Exception:
         logger.debug("Per-point interpolation failed", exc_info=True)
         return [None] * n
+
+
+def decode_cloud_diag_per_point(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """Decode cloud diagnostic GRIB2 and interpolate to each route point.
+
+    These are surface-type scalar variables (no pressure dimension).
+    Uses _CLOUD_DIAG_FIELD_MAP to identify variables by (shortName, typeOfLevel).
+
+    Returns:
+        List of flat dicts (one per point): [{field_name: raw_value, ...}, ...].
+        Raw values are in native units (Pa, K, gpm, %).
+    """
+    import cfgrib
+    import numpy as np
+
+    n_points = len(latitudes)
+    if not grib_bytes:
+        return [{} for _ in range(n_points)]
+
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        datasets = cfgrib.open_datasets(str(tmp_path))
+        target_lons = [(lon % 360) for lon in longitudes]
+        results: list[dict[str, float]] = [{} for _ in range(n_points)]
+
+        for ds in datasets:
+            for var_name, xr_var in ds.data_vars.items():
+                short_name = str(var_name)
+                type_of_level = xr_var.attrs.get("GRIB_typeOfLevel", "")
+
+                field_name = _CLOUD_DIAG_FIELD_MAP.get(
+                    (short_name, type_of_level)
+                )
+                if field_name is None:
+                    continue
+
+                values = _interpolate_per_point(
+                    xr_var, latitudes, target_lons,
+                )
+                for i, val in enumerate(values):
+                    if val is not None:
+                        # Don't overwrite — first match wins (instant over avg)
+                        if field_name not in results[i]:
+                            results[i][field_name] = val
+
+        for ds in datasets:
+            ds.close()
+
+        return results
+    except Exception:
+        logger.warning("cfgrib failed to decode cloud diag GRIB2", exc_info=True)
+        return [{} for _ in range(n_points)]
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def build_cloud_diagnostics(
+    raw: dict[str, float],
+) -> "NWPCloudDiagnostics | None":
+    """Convert raw decoded values into an NWPCloudDiagnostics model.
+
+    Unit conversions applied:
+    - Pressure (Pa) → altitude (ft) via standard atmosphere
+    - Temperature (K) → °C
+    - Geopotential height (gpm) → ft (× 3.28084)
+    - Cloud cover (%) → kept as-is
+
+    Returns None if the raw dict is empty.
+    """
+    from weatherbrief.models.analysis import (
+        NWPCloudDiagnostics,
+        NWPCloudLayerDiag,
+        pressure_pa_to_altitude_ft,
+    )
+
+    if not raw:
+        return None
+
+    def _pa_to_ft(key: str) -> float | None:
+        val = raw.get(key)
+        if val is None or val <= 0:
+            return None
+        return round(pressure_pa_to_altitude_ft(val))
+
+    def _k_to_c(key: str) -> float | None:
+        val = raw.get(key)
+        if val is None:
+            return None
+        return round(val - 273.15, 1)
+
+    def _gpm_to_ft(key: str) -> float | None:
+        val = raw.get(key)
+        if val is None:
+            return None
+        return round(val * 3.28084)
+
+    def _pct(key: str) -> float | None:
+        return raw.get(key)
+
+    low = NWPCloudLayerDiag(
+        cover_pct=_pct("low_cover_pct"),
+        base_ft=_pa_to_ft("low_base_pa"),
+        top_ft=_pa_to_ft("low_top_pa"),
+        top_temp_c=_k_to_c("low_top_temp_k"),
+    )
+    mid = NWPCloudLayerDiag(
+        cover_pct=_pct("mid_cover_pct"),
+        base_ft=_pa_to_ft("mid_base_pa"),
+        top_ft=_pa_to_ft("mid_top_pa"),
+        top_temp_c=_k_to_c("mid_top_temp_k"),
+    )
+    high = NWPCloudLayerDiag(
+        cover_pct=_pct("high_cover_pct"),
+        base_ft=_pa_to_ft("high_base_pa"),
+        top_ft=_pa_to_ft("high_top_pa"),
+        top_temp_c=_k_to_c("high_top_temp_k"),
+    )
+
+    diag = NWPCloudDiagnostics(
+        low=low,
+        mid=mid,
+        high=high,
+        convective_cover_pct=_pct("convective_cover_pct"),
+        convective_base_ft=_pa_to_ft("convective_base_pa"),
+        convective_top_ft=_pa_to_ft("convective_top_pa"),
+        total_cover_pct=_pct("total_cover_pct"),
+        boundary_cover_pct=_pct("boundary_cover_pct"),
+        ceiling_ft=_gpm_to_ft("ceiling_gpm"),
+    )
+
+    return diag

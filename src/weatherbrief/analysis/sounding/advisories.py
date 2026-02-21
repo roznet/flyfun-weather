@@ -144,9 +144,22 @@ def _compute_regimes(
     if analysis.indices and analysis.indices.freezing_level_ft is not None:
         transitions.add(_round_alt(analysis.indices.freezing_level_ft))
 
-    # Add ICAO cloud-level boundaries when NWP cloud data is available
-    has_nwp_cloud = analysis.cloud_cover_low_pct is not None
-    if has_nwp_cloud:
+    # Add cloud boundaries from GFS diagnostics when available;
+    # fall back to fixed ICAO boundaries otherwise
+    diag = analysis.nwp_cloud_diagnostics
+    if diag is not None:
+        for layer in (diag.low, diag.mid, diag.high):
+            if layer.base_ft is not None and layer.cover_pct and layer.cover_pct > 0:
+                transitions.add(_round_alt(layer.base_ft))
+            if layer.top_ft is not None and layer.cover_pct and layer.cover_pct > 0:
+                transitions.add(_round_alt(layer.top_ft))
+        if (diag.convective_base_ft is not None
+                and diag.convective_cover_pct and diag.convective_cover_pct > 0):
+            transitions.add(_round_alt(diag.convective_base_ft))
+        if (diag.convective_top_ft is not None
+                and diag.convective_cover_pct and diag.convective_cover_pct > 0):
+            transitions.add(_round_alt(diag.convective_top_ft))
+    elif analysis.cloud_cover_low_pct is not None:
         transitions.add(float(_CLOUD_LOW_CEILING_FT))
         transitions.add(float(_CLOUD_MID_CEILING_FT))
 
@@ -275,11 +288,31 @@ def _point_icing(
 def _nwp_cloud_cover_at(
     altitude_ft: float, analysis: SoundingAnalysis
 ) -> float | None:
-    """Return the NWP cloud cover % for the ICAO band containing the altitude.
+    """Return the NWP cloud cover % for the band containing the altitude.
 
-    ICAO bands: Low SFC–6500ft, Mid 6500–20000ft, High 20000ft+.
-    Returns None when NWP cloud data is unavailable (e.g. ECMWF).
+    When GFS cloud diagnostics are available, uses actual cloud base/top
+    boundaries to determine if the altitude falls within a cloud layer.
+    Falls back to fixed ICAO bands (SFC–6500ft, 6500–20000ft, 20000ft+)
+    when diagnostics are unavailable (e.g. ECMWF or Open-Meteo only).
     """
+    diag = analysis.nwp_cloud_diagnostics
+    if diag is not None:
+        # Check actual GFS cloud boundaries per layer
+        for layer in (diag.low, diag.mid, diag.high):
+            if (layer.cover_pct is not None and layer.cover_pct > 0
+                    and layer.base_ft is not None and layer.top_ft is not None
+                    and layer.base_ft <= altitude_ft <= layer.top_ft):
+                return layer.cover_pct
+        # Check convective layer
+        if (diag.convective_cover_pct is not None and diag.convective_cover_pct > 0
+                and diag.convective_base_ft is not None
+                and diag.convective_top_ft is not None
+                and diag.convective_base_ft <= altitude_ft <= diag.convective_top_ft):
+            return diag.convective_cover_pct
+        # Altitude doesn't fall within any diagnosed cloud layer
+        return 0.0
+
+    # Fallback to ICAO bands with Open-Meteo cloud cover
     if analysis.cloud_cover_low_pct is None:
         return None
     if altitude_ft < _CLOUD_LOW_CEILING_FT:

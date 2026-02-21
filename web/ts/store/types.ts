@@ -102,6 +102,17 @@ export interface IcingZone {
   mean_icing_index: number | null;
 }
 
+export interface SfipZone {
+  base_ft: number;
+  top_ft: number;
+  risk: IcingRisk;
+  icing_type: IcingType;
+  mean_sfip_100: number | null;
+  mean_temperature_c: number | null;
+  mean_rh_pct: number | null;
+  variant: string;  // "full" or "proxy"
+}
+
 export interface ConvectiveAssessment {
   risk_level: ConvectiveRisk;
   cape_jkg: number | null;
@@ -145,16 +156,37 @@ export interface InversionLayer {
   surface_based: boolean;
 }
 
+export interface NWPCloudLayerDiag {
+  cover_pct: number | null;
+  base_ft: number | null;
+  top_ft: number | null;
+  top_temp_c: number | null;
+}
+
+export interface NWPCloudDiagnostics {
+  low: NWPCloudLayerDiag;
+  mid: NWPCloudLayerDiag;
+  high: NWPCloudLayerDiag;
+  convective_cover_pct: number | null;
+  convective_base_ft: number | null;
+  convective_top_ft: number | null;
+  total_cover_pct: number | null;
+  boundary_cover_pct: number | null;
+  ceiling_ft: number | null;
+}
+
 export interface SoundingAnalysis {
   indices: ThermodynamicIndices | null;
   cloud_layers: EnhancedCloudLayer[];
   icing_zones: IcingZone[];
+  sfip_zones: SfipZone[];
   inversion_layers: InversionLayer[];
   convective: ConvectiveAssessment | null;
   vertical_motion: VerticalMotionAssessment | null;
   cloud_cover_low_pct: number | null;
   cloud_cover_mid_pct: number | null;
   cloud_cover_high_pct: number | null;
+  nwp_cloud_diagnostics: NWPCloudDiagnostics | null;
 }
 
 export interface VerticalRegime {
