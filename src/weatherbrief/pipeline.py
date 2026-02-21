@@ -53,6 +53,7 @@ class BriefingOptions:
     user_id: str | None = None  # for per-user token cache isolation
     airports_db_path: str | None = None  # euro_aip database for runway data
     icing_severity_enhance: bool = True  # enable RH/PW icing severity upgrades
+    flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
 
 
 @dataclass
@@ -253,6 +254,8 @@ def execute_briefing(
             target_date=target_date,
             days_out=days_out,
             fetch_date=today,
+            route_advisories=route_advisories_manifest,
+            flight_rules=options.flight_rules,
         )
         if digest_result.digest is not None:
             result.digest = digest_result.digest

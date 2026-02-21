@@ -217,6 +217,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     autorouter_creds = None
     models = None
     advisory_models = None
+    flight_rules = None
     do_gramet = True
     do_llm_digest = True
     do_icing_enhance = True
@@ -238,6 +239,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         do_gramet = profile_settings.get("gramet_enabled", True)
         do_llm_digest = profile_settings.get("llm_digest_enabled", True)
         do_icing_enhance = profile_settings.get("icing_severity_enhance", True)
+        flight_rules = profile_settings.get("flight_rules")  # "vfr_only" or "vfr_ifr"
 
     # Check rate limits before running the pipeline
     if db is not None:
@@ -269,6 +271,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         options.models = models
     if advisory_models:
         options.advisory_models = advisory_models
+    if flight_rules:
+        options.flight_rules = flight_rules
 
     # Fetch current model metadata to record in the pack
     model_metadata = fetch_model_metadata()

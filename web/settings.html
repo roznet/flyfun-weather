@@ -101,6 +101,15 @@
           </div>
           <div class="form-row">
             <div class="form-group">
+              <label for="input-flight-rules">Flight Rules Capability</label>
+              <select id="input-flight-rules" class="input-select">
+                <option value="vfr_ifr">VFR + IFR capable</option>
+                <option value="vfr_only">VFR only</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
               <label for="input-altitude">Cruise Altitude (ft)</label>
               <input type="number" id="input-altitude" value="8000" min="1000" max="45000" step="500" class="input-narrow">
             </div>

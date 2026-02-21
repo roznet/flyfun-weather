@@ -126,9 +126,11 @@ function populateProfileForm(profile: ProfileResponse): void {
   const s = profile.settings;
 
   // Flight defaults
+  const flightRulesSelect = document.getElementById('input-flight-rules') as HTMLSelectElement;
   const altInput = document.getElementById('input-altitude') as HTMLInputElement;
   const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
   const speedInput = document.getElementById('input-speed') as HTMLInputElement;
+  if (flightRulesSelect) flightRulesSelect.value = s.flight_rules ?? 'vfr_ifr';
   if (altInput) altInput.value = String(s.cruise_altitude_ft ?? 8000);
   if (ceilInput) ceilInput.value = String(s.flight_ceiling_ft ?? 18000);
   if (speedInput) speedInput.value = s.speed_kt != null ? String(s.speed_kt) : '';
@@ -504,6 +506,7 @@ async function handleSave(): Promise<void> {
     }
   }
 
+  const flightRules = (document.getElementById('input-flight-rules') as HTMLSelectElement)?.value || 'vfr_ifr';
   const grametEnabled = (document.getElementById('toggle-gramet') as HTMLInputElement)?.checked ?? true;
   const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? true;
@@ -516,6 +519,7 @@ async function handleSave(): Promise<void> {
     speed_kt: speed != null && !isNaN(speed) ? speed : null,
     models,
     advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
+    flight_rules: flightRules,
     gramet_enabled: grametEnabled,
     llm_digest_enabled: llmDigestEnabled,
     icing_severity_enhance: icingSeverityEnhance,
