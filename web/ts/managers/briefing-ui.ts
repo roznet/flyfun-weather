@@ -950,7 +950,7 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[]): stri
     const sfipMatch = sfipZones ? findOverlappingSfip(sfipZones, regime.floor_ft, regime.ceiling_ft) : null;
     if (sfipMatch && sfipMatch.mean_sfip_100 != null) {
       const variantBadge = `<span class="sfip-variant">${sfipMatch.variant === 'full' ? 'CLW' : 'proxy'}</span>`;
-      params.push(`SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${variantBadge}`);
+      params.push(`SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100)} ${variantBadge}`);
     }
     if (regime.mean_rh_pct != null)
       params.push(`RH=${regime.mean_rh_pct.toFixed(0)}%`);

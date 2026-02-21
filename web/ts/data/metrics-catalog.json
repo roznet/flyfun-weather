@@ -511,6 +511,23 @@
       { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Emergency action — exit cloud now." }
     ]
   },
+  "sfip_risk": {
+    "name": "SFIP Icing Index",
+    "unit": "0–100",
+    "vibe": "The fuzzy-logic ice detector",
+    "primary_goal": "Forecast icing potential using fuzzy-logic membership functions, the algorithm family behind Windy.com and European met service icing products.",
+    "best_used_for": "Comparing against Ogimet as a second opinion. Especially useful with GFS data where cloud liquid water (CLW) is available for direct icing detection rather than relying on temperature proxies.",
+    "limitations": "Proxy variant (without CLW) is less accurate than the full variant. Temperature range limited to 0 to −25°C. Does not account for droplet size (SLD). Severity thresholds are GA-tuned and may not match airliner certification categories.",
+    "theory": "Combines four fuzzy-logic membership functions with weighted averaging. Temperature membership peaks at 1.0 in [−5, −14]°C and tapers to zero at 0°C and −25°C. RH membership ramps from 0 at 50% to 1.0 at 100%. Cloud liquid water membership ramps over [0, 0.2] g/kg. Vertical velocity boosts the score for ascent (negative omega) and penalizes subsidence. Two variants: Full (SFIP_O) uses actual CLW from GFS GRIB2 data with weights T=0.35, RH=0.15, CLW=0.35, VV=0.15. Proxy (SFIP_4) substitutes a dewpoint-depression + NWP cloud cover proxy when CLW is unavailable, with weights T=0.40, RH=0.25, proxy=0.25, VV=0.10. A glaciation factor reduces the score when ice mixing ratio dominates over liquid water. Cloud gating prevents false alarms: the full variant requires CLW > 0, the proxy variant requires proximity to a detected cloud layer.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain the SFIP (Simplified Forecast Icing Potential) fuzzy-logic icing algorithm, how it combines temperature, relative humidity, cloud liquid water, and vertical velocity membership functions, and the difference between the full CLW variant and the proxy variant",
+    "thresholds": [
+      { "min": 0, "max": 15, "label": "None", "risk": "none", "meaning": "No significant icing potential." },
+      { "min": 15, "max": 30, "label": "Light", "risk": "low", "meaning": "Trace to light icing possible in cloud." },
+      { "min": 30, "max": 55, "label": "Moderate", "risk": "moderate", "meaning": "Moderate icing likely — avoid prolonged exposure." },
+      { "min": 55, "max": 100, "label": "Severe", "risk": "severe", "meaning": "Severe icing — avoid or exit immediately." }
+    ]
+  },
   "cat_risk": {
     "name": "CAT Risk",
     "unit": "",
