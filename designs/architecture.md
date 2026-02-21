@@ -6,7 +6,7 @@
 
 WeatherBrief produces daily aviation weather assessments for a planned European GA cross-country flight, tracking conditions from D-7 through D-0. It fetches quantitative data from multiple NWP models, performs aviation-specific analysis, and generates both human-readable text digests and LLM-powered briefings. A web UI and API serve the briefings with history, PDF reports, and email delivery.
 
-## Pipeline (`pipeline.py`)
+## Pipeline (`pipeline.py` + `tasks/`)
 
 ```
 RouteConfig + target_date + options
@@ -36,7 +36,7 @@ analyze_waypoint()  (per waypoint)
     ↓
 analyze_all_route_points()  → RouteAnalysesManifest (full route analysis)
     ↓
-evaluate_all(RouteContext)  → RouteAdvisoriesManifest (9 hazard evaluators)
+evaluate_all(RouteContext)  → RouteAdvisoriesManifest (13 hazard evaluators)
     ↓
 ForecastSnapshot  (root object, saved as JSON)
     ↓
@@ -50,6 +50,8 @@ Optional outputs:
 
 `BriefingOptions` controls what gets generated (models, gramet, skewt, llm_digest, enrich_grib, output_dir). `BriefingResult` carries snapshot, paths, digest object, and error list.
 
+**Task modules** (`tasks/`): Pipeline stages extracted into independent modules for testability and incremental re-runs. `pipeline.py` is now a thin orchestrator calling `run_fetch()` → `run_analysis()` → `run_advisories()` → optional outputs. Each task module can also run standalone from saved artifacts (e.g. `run_advisories_from_pack()`).
+
 ## Package Layout
 
 ```
@@ -60,7 +62,14 @@ src/weatherbrief/
 │   └── storage.py     # Flight, BriefingPackMeta
 ├── airports.py        # ICAO → lat/lon via euro_aip
 ├── cli.py             # CLI entry point (delegates to pipeline)
-├── pipeline.py        # Core pipeline: fetch → analyze → outputs
+├── pipeline.py        # Thin orchestrator: calls tasks/ modules in sequence
+├── tasks/             # Independent pipeline stages (extracted from pipeline.py)
+│   ├── __init__.py    # Re-exports: run_fetch, run_analysis, run_advisories, etc.
+│   ├── fetch.py       # run_fetch() → FetchResult (route interpolation, Open-Meteo, GRIB)
+│   ├── analyze.py     # run_analysis() → AnalysisResult (waypoint + route point analysis)
+│   ├── advise.py      # run_advisories() → AdvisoryResult (evaluator + airport conditions)
+│   ├── artifacts.py   # Save/load helpers for pack_dir I/O (JSON serialization)
+│   └── outputs.py     # run_gramet(), run_skewt(), run_llm_digest() → independent results
 ├── fetch/
 │   ├── variables.py   # Model endpoints, API parameters
 │   ├── open_meteo.py  # Open-Meteo client (single + multi-point)
@@ -79,18 +88,22 @@ src/weatherbrief/
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
 │   ├── comparison.py  # Multi-model divergence scoring (15 thresholds)
-│   ├── advisories/    # Route advisory evaluators (9 hazard types)
+│   ├── advisories/    # Route advisory evaluators (13 hazard types)
 │   │   ├── __init__.py      # evaluate_all(), get_catalog()
 │   │   ├── registry.py      # @register decorator, auto-discovery
 │   │   ├── _helpers.py      # Shared: format_extent, pct_above_threshold, terrain lookup
 │   │   ├── cloud_top.py     # Cloud top vs ceiling
 │   │   ├── convective.py    # Convective risk along route
 │   │   ├── fiki_icing.py    # FIKI icing layer thickness
+│   │   ├── flight_category.py # Airport ceiling/visibility (tunable MVFR/IFR thresholds)
+│   │   ├── airport_wind.py  # Airport crosswind + gust assessment
 │   │   ├── freezing_level.py # Freezing level vs terrain
 │   │   ├── icing_escape.py  # Non-FIKI icing escape viability
+│   │   ├── ifr_feasibility.py # Composite IFR go/no-go (airport + icing + convective)
 │   │   ├── model_agreement.py # Cross-model divergence
 │   │   ├── mountain_wind.py # Orographic/rotor risk
 │   │   ├── turbulence.py    # CAT + vertical motion
+│   │   ├── vfr_feasibility.py # Composite VFR go/no-go (airport + cloud + VMC)
 │   │   └── vmc_cruise.py    # Cloud coverage at cruise
 │   └── sounding/      # MetPy-based sounding analysis subpackage
 │       ├── __init__.py     # analyze_sounding() entry point
@@ -262,7 +275,7 @@ Static files served from `web/` at root.
 - **Pydantic v2 throughout** — validation, serialization, JSON round-trip all free.
 - **Multi-point fetch** — 1 API call per model with all route points (not per-waypoint); 24h time window.
 - **Graceful degradation** — GRAMET/Skew-T/LLM/DWD failures logged but don't halt pipeline.
-- **Pipeline extracted from CLI** — `pipeline.py` is the single entry point for both CLI and API.
+- **Pipeline extracted from CLI** — `pipeline.py` is the single entry point for both CLI and API. Stages extracted into `tasks/` modules for independent testability and re-run from artifacts.
 - **DB-backed metadata, file-based artifacts** — flight/pack metadata in SQLAlchemy (SQLite dev, MySQL prod); large files (snapshots, images) on disk in user-scoped directories.
 - **Flight ID = route + date + params hash** — allows same route+date with different time/altitude.
 - **Naive datetimes in pipeline** — matches Open-Meteo's naive UTC timestamps.
@@ -316,7 +329,7 @@ Static files served from `web/` at root.
 | 7.6 | Done | Inversion detection, Ogimet icing index, GRAMET PDF, convective risk visualization |
 | 7.7 | Done | Legacy routes.yaml removal, collapsible sections, admin force refresh |
 | 7.8 | Done | NWP cloud bands, terrain draw-order fix, layer legends, "Discuss with AI" buttons |
-| 8.1 | Done | Route advisory system: 9 evaluators, registry, user-tunable parameters, recalculation, frontend dashboard |
+| 8.1 | Done | Route advisory system: 13 evaluators, registry, user-tunable parameters, recalculation, frontend dashboard |
 | 8.2 | Done | Extended pressure levels (25 for GFS/ECMWF) + GRIB2 enrichment (CLWMR/ICMR from GFS S3), LWC-based icing |
 | 9.1 | Done | Flight parameter profiles: named templates for altitude/models/advisories, profile CRUD API, settings UI |
 | 9.2 | Done | Unified atmospheric profile table, icing severity toggle, Windy meteogram links |
