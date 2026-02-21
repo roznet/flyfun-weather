@@ -7,39 +7,29 @@ Returns structured results without printing or exiting.
 from __future__ import annotations
 
 import logging
-import math
-import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
-from weatherbrief.analysis.comparison import compare_models
-from weatherbrief.analysis.sounding import analyze_sounding
-from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
-from weatherbrief.analysis.wind import compute_wind_components
-from weatherbrief.fetch.open_meteo import OpenMeteoClient
-from weatherbrief.fetch.route_points import interpolate_route
 from weatherbrief.fetch.variables import MODEL_ENDPOINTS
 from weatherbrief.models import (
-    AltitudeAdvisories,
     ForecastSnapshot,
-    HourlyForecast,
-    ModelDivergence,
     ModelSource,
-    RouteAnalysesManifest,
-    RouteCrossSection,
     RouteConfig,
-    RoutePoint,
-    RoutePointAnalysis,
-    SoundingAnalysis,
     WaypointAnalysis,
-    WaypointForecast,
-    WindComponent,
-    altitude_to_pressure_hpa,
-    bearing_between_coords,
 )
 from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_cross_section, save_snapshot
+from weatherbrief.tasks.analyze import (  # noqa: F401  — backward compat re-exports
+    analyze_all_route_points,
+    analyze_waypoint,
+    compute_interpolated_time,
+    compute_route_tracks,
+)
+from weatherbrief.tasks.fetch import run_fetch
+from weatherbrief.tasks.analyze import run_analysis
+from weatherbrief.tasks.advise import run_advisories
+from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +105,7 @@ def execute_briefing(
     """
     options = options or BriefingOptions()
     data_dir = options.data_dir or DEFAULT_DATA_DIR
+    pack_dir = options.output_dir  # None means legacy snapshot mode
 
     def _notify(stage: str, detail: str | None = None) -> None:
         if progress_callback is not None:
@@ -135,281 +126,149 @@ def execute_briefing(
     logger.info("Target: %s (%d days out)", target_date, days_out)
     logger.info("Models: %s", ", ".join(m.value for m in options.models))
 
-    # --- Fetch forecasts (multi-point: 1 API call per model) ---
-    _notify("route_interpolation")
-    client = OpenMeteoClient()
-    route_points = interpolate_route(route, spacing_nm=10.0)
-    logger.info("Route interpolated: %d points along %.0f nm",
-                len(route_points), route_points[-1].distance_from_origin_nm)
+    # === 1. Fetch ===
+    fetch_result = run_fetch(
+        route=route,
+        target_date=target_date,
+        target_hour=target_hour,
+        models=options.models,
+        enrich_grib=options.enrich_grib,
+        data_dir=data_dir,
+        pack_dir=pack_dir,
+        user_id=options.user_id,
+        progress_callback=progress_callback,
+    )
 
-    # --- Elevation profile (high-res terrain along route) ---
-    elevation_profile = None
-    _notify("elevation_profile")
-    try:
-        from weatherbrief.fetch.elevation import get_elevation_profile
+    # === 2. Analyze ===
+    analysis_result = run_analysis(
+        route=route,
+        target_date=target_date,
+        target_hour=target_hour,
+        all_forecasts=fetch_result.all_forecasts,
+        cross_sections=fetch_result.cross_sections,
+        route_points=fetch_result.route_points,
+        icing_severity_enhance=options.icing_severity_enhance,
+        pack_dir=pack_dir,
+        progress_callback=progress_callback,
+    )
 
-        elevation_profile = get_elevation_profile(route, spacing_nm=0.5)
-        logger.info("Elevation profile: %d points, max %.0f ft",
-                     len(elevation_profile.points), elevation_profile.max_elevation_ft)
-    except Exception:
-        logger.warning("Elevation profile failed", exc_info=True)
-
-    all_forecasts: list[WaypointForecast] = []
-    cross_sections: list[RouteCrossSection] = []
-
-    models_fetched = 0
-    for model in options.models:
-        endpoint = MODEL_ENDPOINTS[model.value]
-        if days_out is not None and days_out >= endpoint.max_days:
-            logger.info(
-                "Skipping %s: %d days out exceeds %d-day range",
-                model.value, days_out, endpoint.max_days,
-            )
-            continue
-        # Delay between model fetches to avoid Open-Meteo rate limiting
-        if models_fetched > 0:
-            time.sleep(5)
-        _notify("fetch_forecasts", model.value)
-        try:
-            point_forecasts = client.fetch_multi_point(
-                route_points, model,
-                start_date=target_date, end_date=target_date,
-            )
-            # Extract waypoint-only forecasts for analysis
-            for rp, fc in zip(route_points, point_forecasts):
-                if rp.waypoint_icao:
-                    all_forecasts.append(fc)
-            # Store the full cross-section
-            cross_sections.append(RouteCrossSection(
-                model=model,
-                route_points=route_points,
-                fetched_at=point_forecasts[0].fetched_at,
-                point_forecasts=point_forecasts,
-            ))
-            logger.info("Fetched %s: %d points", model.value, len(point_forecasts))
-            models_fetched += 1
-        except Exception:
-            logger.warning("Failed to fetch %s", model.value, exc_info=True)
-
-    # --- GRIB2 enrichment (optional) ---
-    result_usage_grib = False
-    result_usage_grib_failed = False
-    if options.enrich_grib and cross_sections:
-        _notify("grib_enrichment")
-        try:
-            from weatherbrief.fetch.grib import enrich_forecasts
-
-            enrich_forecasts(
-                cross_sections, all_forecasts, route_points,
-                target_date, target_hour, data_dir=data_dir,
-            )
-            result_usage_grib = True
-            logger.info("GRIB2 enrichment applied")
-        except Exception:
-            result_usage_grib_failed = True
-            logger.warning(
-                "GRIB2 enrichment failed, using Open-Meteo data only",
-                exc_info=True,
-            )
-
-    # --- Analyze ---
-    _notify("waypoint_analysis")
-    analyses: list[WaypointAnalysis] = []
-
-    for waypoint in route.waypoints:
-        wp_forecasts = [
-            f for f in all_forecasts if f.waypoint.icao == waypoint.icao
-        ]
-        track_deg = route.waypoint_track(waypoint.icao)
-        analysis = analyze_waypoint(
-            wp_forecasts, target_dt, track_deg,
-            cruise_altitude_ft=route.cruise_altitude_ft,
-            flight_ceiling_ft=route.flight_ceiling_ft,
-            icing_severity_enhance=options.icing_severity_enhance,
-        )
-        analyses.append(analysis)
-
-    # --- Route-point analyses (all ~20 points, pre-computed) ---
-    rp_analyses: list[RoutePointAnalysis] = []
-    model_names: list[str] = []
-    route_analyses_manifest: RouteAnalysesManifest | None = None
-    if cross_sections:
-        _notify("route_analysis")
-        try:
-            model_names = [cs.model.value for cs in cross_sections]
-            total_distance = route_points[-1].distance_from_origin_nm
-            rp_analyses = analyze_all_route_points(
-                cross_sections, route_points, target_dt,
-                route.flight_duration_hours, route.cruise_altitude_ft,
-                route.flight_ceiling_ft,
-                icing_severity_enhance=options.icing_severity_enhance,
-            )
-            route_analyses_manifest = RouteAnalysesManifest(
-                route_name=route.name,
-                target_date=target_date,
-                departure_time=target_dt,
-                flight_duration_hours=route.flight_duration_hours,
-                total_distance_nm=total_distance,
-                cruise_altitude_ft=route.cruise_altitude_ft,
-                models=model_names,
-                analyses=rp_analyses,
-            )
-            logger.info("Route analyses: %d points", len(rp_analyses))
-        except Exception:
-            logger.warning("Route-point analysis failed", exc_info=True)
-
-    # --- Compute advisory model list (used for both airport conditions and advisories) ---
-    advisory_model_names = model_names
-    if route_analyses_manifest and rp_analyses:
-        if options.advisory_models:
-            advisory_model_names = [m for m in options.advisory_models if m in model_names]
-        else:
-            # Default: all models except best_match
-            advisory_model_names = [m for m in model_names if m != "best_match"]
-        # Fallback: if empty after filtering, use all models
-        if not advisory_model_names:
-            advisory_model_names = model_names
-
-    # --- Airport conditions ---
-    airport_conds = None
-    if route_analyses_manifest and rp_analyses:
-        try:
-            from weatherbrief.analysis.airport_conditions import compute_airport_conditions
-
-            runway_data = None
-            if options.airports_db_path:
-                from weatherbrief.airports import get_runway_ends
-
-                runway_data = get_runway_ends(
-                    [route.origin.icao, route.destination.icao],
-                    options.airports_db_path,
-                )
-
-            airport_conds = compute_airport_conditions(
-                analyses=rp_analyses,
-                cross_sections=cross_sections,
-                models=advisory_model_names,
-                dep_icao=route.origin.icao,
-                dep_name=route.origin.name,
-                arr_icao=route.destination.icao,
-                arr_name=route.destination.name,
-                runway_data=runway_data,
-            )
-            logger.info("Airport conditions computed for %s / %s",
-                        route.origin.icao, route.destination.icao)
-        except Exception:
-            logger.warning("Airport conditions computation failed", exc_info=True)
-
-    # --- Route advisories ---
+    # === 3. Advisories ===
     route_advisories_manifest = None
-    if route_analyses_manifest and rp_analyses:
-        _notify("route_advisories")
-        try:
-            from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
-            from weatherbrief.models import RouteAdvisoriesManifest
+    if analysis_result.route_analyses_manifest and analysis_result.route_analyses:
+        total_distance = fetch_result.route_points[-1].distance_from_origin_nm
+        advisory_result = run_advisories(
+            rp_analyses=analysis_result.route_analyses,
+            cross_sections=fetch_result.cross_sections,
+            elevation_profile=fetch_result.elevation_profile,
+            model_names=analysis_result.model_names,
+            route=route,
+            total_distance_nm=total_distance,
+            advisory_models=options.advisory_models,
+            airports_db_path=options.airports_db_path,
+            pack_dir=pack_dir,
+            progress_callback=progress_callback,
+        )
+        route_advisories_manifest = advisory_result.manifest
 
-            advisory_ctx = RouteContext(
-                analyses=rp_analyses,
-                cross_sections=cross_sections,
-                elevation=elevation_profile,
-                models=advisory_model_names,
-                cruise_altitude_ft=route.cruise_altitude_ft,
-                flight_ceiling_ft=route.flight_ceiling_ft,
-                total_distance_nm=total_distance,
-                airport_conditions=airport_conds,
-            )
-            advisory_results = evaluate_all(advisory_ctx)
-            route_advisories_manifest = RouteAdvisoriesManifest(
-                advisories=advisory_results,
-                catalog=get_catalog(),
-                route_name=route.name,
-                cruise_altitude_ft=route.cruise_altitude_ft,
-                flight_ceiling_ft=route.flight_ceiling_ft,
-                total_distance_nm=total_distance,
-                models=advisory_model_names,
-                airport_conditions=airport_conds,
-            )
-            logger.info("Route advisories: %d evaluated (%d models)", len(advisory_results), len(advisory_model_names))
-        except Exception:
-            logger.warning("Route advisory evaluation failed", exc_info=True)
-
-    # --- Build & save snapshot ---
+    # === 4. Build & save snapshot ===
     snapshot = ForecastSnapshot(
         route=route,
         target_date=target_date,
         fetch_date=today,
         days_out=days_out,
-        forecasts=all_forecasts,
-        analyses=analyses,
-        cross_sections=cross_sections,
+        forecasts=fetch_result.all_forecasts,
+        analyses=analysis_result.waypoint_analyses,
+        cross_sections=fetch_result.cross_sections,
     )
 
-    if options.output_dir:
-        # Pack mode: write directly to flat output directory
-        options.output_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_path = options.output_dir / "snapshot.json"
-        # Exclude cross_sections from snapshot.json (saved separately)
-        snapshot_path.write_text(
-            snapshot.model_dump_json(indent=2, exclude={"cross_sections"})
-        )
-        if cross_sections:
-            cs_path = options.output_dir / "cross_section.json"
-            cs_path.write_text(
-                snapshot.model_dump_json(indent=2, include={"cross_sections"})
-            )
-        if route_analyses_manifest:
-            ra_path = options.output_dir / "route_analyses.json"
-            ra_path.write_text(
-                route_analyses_manifest.model_dump_json(
-                    indent=2, exclude={"analyses": {"__all__": {"sounding": {"__all__": {"derived_levels"}}}}},
-                )
-            )
-        if route_advisories_manifest:
-            adv_path = options.output_dir / "route_advisories.json"
-            adv_path.write_text(route_advisories_manifest.model_dump_json(indent=2))
-        if elevation_profile:
-            ep_path = options.output_dir / "elevation_profile.json"
-            ep_path.write_text(elevation_profile.model_dump_json(indent=2))
+    if pack_dir:
+        from weatherbrief.tasks.artifacts import save_analysis_artifacts
+
+        save_analysis_artifacts(pack_dir, snapshot, analysis_result.route_analyses_manifest)
+        snapshot_path = pack_dir / "snapshot.json"
     else:
         snapshot_path = save_snapshot(snapshot, data_dir)
-        if cross_sections:
+        if fetch_result.cross_sections:
             save_cross_section(snapshot, data_dir)
     _notify("save_snapshot")
     logger.info("Snapshot saved: %s", snapshot_path)
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
-    result.usage.open_meteo_calls = len(cross_sections)
-    result.usage.grib_enrichment = result_usage_grib
-    result.usage.grib_enrichment_failed = result_usage_grib_failed
-    if elevation_profile and options.output_dir:
-        result.elevation_profile_path = options.output_dir / "elevation_profile.json"
-    if route_advisories_manifest and options.output_dir:
-        result.route_advisories_path = options.output_dir / "route_advisories.json"
+    result.usage.open_meteo_calls = len(fetch_result.cross_sections)
+    result.usage.grib_enrichment = fetch_result.grib_enriched
+    result.usage.grib_enrichment_failed = fetch_result.grib_enrichment_failed
+    if fetch_result.elevation_profile and pack_dir:
+        result.elevation_profile_path = pack_dir / "elevation_profile.json"
+    if route_advisories_manifest and pack_dir:
+        result.route_advisories_path = pack_dir / "route_advisories.json"
 
-    # --- Optional: GRAMET ---
+    # === 5. Optional: GRAMET ===
     if options.fetch_gramet:
         _notify("fetch_gramet")
-        _run_gramet(route, target_date, target_hour, days_out, today, data_dir, result,
-                    output_dir=options.output_dir,
-                    autorouter_credentials=options.autorouter_credentials,
-                    user_id=options.user_id)
+        gramet_result = run_gramet(
+            route=route,
+            target_date=target_date,
+            target_hour=target_hour,
+            pack_dir=pack_dir,
+            data_dir=data_dir,
+            days_out=days_out,
+            fetch_date=today,
+            autorouter_credentials=options.autorouter_credentials,
+            user_id=options.user_id,
+        )
+        if gramet_result.path:
+            result.gramet_path = gramet_result.path
+            result.usage.gramet_fetched = gramet_result.fetched
+        if gramet_result.failed:
+            result.usage.gramet_failed = True
+        if gramet_result.error:
+            result.errors.append(gramet_result.error)
 
-    # --- Optional: Skew-T ---
+    # === 6. Optional: Skew-T ===
     if options.generate_skewt:
         _notify("generate_skewt")
-        _run_skewt(snapshot, target_dt, target_date, days_out, today, data_dir, result,
-                   output_dir=options.output_dir)
+        skewt_result = run_skewt(
+            snapshot=snapshot,
+            target_time=target_dt,
+            pack_dir=pack_dir,
+            data_dir=data_dir,
+            target_date=target_date,
+            days_out=days_out,
+            fetch_date=today,
+        )
+        if skewt_result.paths:
+            result.skewt_paths = skewt_result.paths
+        if skewt_result.error:
+            result.errors.append(skewt_result.error)
 
-    # --- Optional: LLM digest ---
+    # === 7. Optional: LLM digest ===
     if options.generate_llm_digest:
         _notify("llm_digest")
-        _run_llm_digest(
-            snapshot, target_dt, target_date, days_out, today,
-            data_dir, options.digest_config_name, result,
-            output_dir=options.output_dir,
+        digest_result = run_llm_digest(
+            snapshot=snapshot,
+            target_time=target_dt,
+            digest_config_name=options.digest_config_name,
+            pack_dir=pack_dir,
+            data_dir=data_dir,
+            target_date=target_date,
+            days_out=days_out,
+            fetch_date=today,
         )
+        if digest_result.digest is not None:
+            result.digest = digest_result.digest
+        if digest_result.path:
+            result.digest_path = digest_result.path
+        if digest_result.text:
+            result.digest_text = digest_result.text
+        if digest_result.llm_model:
+            result.usage.llm_digest = True
+            result.usage.llm_model = digest_result.llm_model
+            result.usage.llm_input_tokens = digest_result.llm_input_tokens
+            result.usage.llm_output_tokens = digest_result.llm_output_tokens
+        if digest_result.error:
+            result.errors.append(digest_result.error)
 
-    # --- Always: text digest ---
+    # === 8. Always: text digest ===
     from weatherbrief.digest.text import format_digest
 
     output_paths = [str(result.snapshot_path)]
@@ -422,406 +281,3 @@ def execute_briefing(
     result.text_digest = format_digest(snapshot, target_dt, output_paths=output_paths)
 
     return result
-
-
-def _run_point_analysis(
-    forecasts_by_model: dict[str, HourlyForecast],
-    track_deg: float,
-    cruise_altitude_ft: int,
-    flight_ceiling_ft: int,
-    icing_severity_enhance: bool = True,
-) -> tuple[
-    dict[str, WindComponent],
-    dict[str, SoundingAnalysis],
-    Optional[AltitudeAdvisories],
-    list[ModelDivergence],
-]:
-    """Core analysis logic shared between waypoint and route-point paths.
-
-    Args:
-        forecasts_by_model: model_key -> HourlyForecast at the target time.
-        track_deg: Route bearing at this point.
-        cruise_altitude_ft: Cruise altitude for wind and advisory computation.
-        flight_ceiling_ft: Flight ceiling for advisory computation.
-
-    Returns:
-        (wind_components, soundings, altitude_advisories, model_divergence)
-    """
-    wind_components: dict[str, WindComponent] = {}
-    soundings: dict[str, SoundingAnalysis] = {}
-
-    # Comparison accumulators
-    comp: dict[str, dict[str, float]] = {
-        "temperature_c": {}, "wind_speed_kt": {}, "wind_direction_deg": {},
-        "cloud_cover_pct": {}, "precipitation_mm": {}, "freezing_level_m": {},
-        "freezing_level_ft": {}, "cape_surface_jkg": {}, "lcl_altitude_ft": {},
-        "k_index": {}, "total_totals": {}, "precipitable_water_mm": {},
-        "lifted_index": {}, "bulk_shear_0_6km_kt": {}, "max_omega_pa_s": {},
-        "snowfall_cm": {}, "rain_mm": {},
-    }
-
-    target_pressure = altitude_to_pressure_hpa(cruise_altitude_ft)
-    for model_key, hourly in forecasts_by_model.items():
-        # Cruise-altitude wind (closest level to target pressure)
-        cruise_wind = None
-        for level in hourly.pressure_levels:
-            if level.wind_speed_kt is not None and level.wind_direction_deg is not None:
-                if cruise_wind is None or abs(level.pressure_hpa - target_pressure) < abs(
-                    cruise_wind.pressure_hpa - target_pressure
-                ):
-                    cruise_wind = level
-
-        if cruise_wind and cruise_wind.wind_speed_kt is not None:
-            wc = compute_wind_components(
-                cruise_wind.wind_speed_kt, cruise_wind.wind_direction_deg, track_deg
-            )
-            wind_components[model_key] = wc
-            comp["wind_speed_kt"][model_key] = cruise_wind.wind_speed_kt
-            comp["wind_direction_deg"][model_key] = cruise_wind.wind_direction_deg
-
-        # Sounding analysis
-        sounding = analyze_sounding(hourly.pressure_levels, hourly, icing_severity_enhance=icing_severity_enhance)
-        if sounding is not None:
-            soundings[model_key] = sounding
-
-            idx = sounding.indices
-            if idx is not None:
-                _collect_opt(comp, "freezing_level_ft", model_key, idx.freezing_level_ft)
-                _collect_opt(comp, "cape_surface_jkg", model_key, idx.cape_surface_jkg)
-                _collect_opt(comp, "lcl_altitude_ft", model_key, idx.lcl_altitude_ft)
-                _collect_opt(comp, "k_index", model_key, idx.k_index)
-                _collect_opt(comp, "total_totals", model_key, idx.total_totals)
-                _collect_opt(comp, "precipitable_water_mm", model_key, idx.precipitable_water_mm)
-                _collect_opt(comp, "lifted_index", model_key, idx.lifted_index)
-                _collect_opt(comp, "bulk_shear_0_6km_kt", model_key, idx.bulk_shear_0_6km_kt)
-
-            vm = sounding.vertical_motion
-            if vm is not None and vm.max_omega_pa_s is not None:
-                comp["max_omega_pa_s"][model_key] = abs(vm.max_omega_pa_s)
-        else:
-            logger.warning(
-                "Sounding analysis returned None for %s (%d pressure levels provided)",
-                model_key, len(hourly.pressure_levels),
-            )
-
-        # Surface comparison values
-        _collect_opt(comp, "temperature_c", model_key, hourly.temperature_2m_c)
-        _collect_opt(comp, "cloud_cover_pct", model_key, hourly.cloud_cover_pct)
-        _collect_opt(comp, "precipitation_mm", model_key, hourly.precipitation_mm)
-        _collect_opt(comp, "snowfall_cm", model_key, hourly.snowfall_cm)
-        _collect_opt(comp, "rain_mm", model_key, hourly.rain_mm)
-        _collect_opt(comp, "freezing_level_m", model_key, hourly.freezing_level_m)
-
-    # Altitude advisories
-    altitude_advisories = None
-    if soundings:
-        altitude_advisories = compute_altitude_advisories(
-            soundings, cruise_altitude_ft, flight_ceiling_ft
-        )
-
-    # Model comparison
-    divergences: list[ModelDivergence] = []
-    for var_name, values in comp.items():
-        if len(values) >= 2:
-            divergences.append(compare_models(var_name, values))
-
-    return wind_components, soundings, altitude_advisories, divergences
-
-
-def _collect_opt(
-    comp: dict[str, dict[str, float]], key: str, model_key: str, value: float | None,
-) -> None:
-    """Add a non-None value to comparison accumulators."""
-    if value is not None:
-        comp[key][model_key] = value
-
-
-def analyze_waypoint(
-    forecasts: list[WaypointForecast],
-    target_time: datetime,
-    track_deg: float,
-    cruise_altitude_ft: int = 8000,
-    flight_ceiling_ft: int = 18000,
-    icing_severity_enhance: bool = True,
-) -> WaypointAnalysis:
-    """Run all analysis on forecasts for a single waypoint."""
-    if not forecasts:
-        raise ValueError("No forecasts to analyze")
-
-    waypoint = forecasts[0].waypoint
-    forecasts_by_model: dict[str, HourlyForecast] = {}
-    for wf in forecasts:
-        hourly = wf.at_time(target_time)
-        if hourly:
-            forecasts_by_model[wf.model.value] = hourly
-
-    wind_components, soundings, alt_advisories, divergences = _run_point_analysis(
-        forecasts_by_model, track_deg, cruise_altitude_ft, flight_ceiling_ft,
-        icing_severity_enhance=icing_severity_enhance,
-    )
-
-    return WaypointAnalysis(
-        waypoint=waypoint,
-        target_time=target_time,
-        wind_components=wind_components,
-        sounding=soundings,
-        altitude_advisories=alt_advisories,
-        model_divergence=divergences,
-    )
-
-
-# --- Route-point analysis helpers ---
-
-
-def compute_route_tracks(route_points: list[RoutePoint]) -> list[float]:
-    """Compute bearing at each route point using neighbor points."""
-    n = len(route_points)
-    tracks: list[float] = []
-    for i in range(n):
-        if n == 1:
-            tracks.append(0.0)
-        elif i == 0:
-            tracks.append(bearing_between_coords(
-                route_points[0].lat, route_points[0].lon,
-                route_points[1].lat, route_points[1].lon,
-            ))
-        elif i == n - 1:
-            tracks.append(bearing_between_coords(
-                route_points[-2].lat, route_points[-2].lon,
-                route_points[-1].lat, route_points[-1].lon,
-            ))
-        else:
-            # Circular mean of incoming and outgoing bearings
-            b1 = bearing_between_coords(
-                route_points[i - 1].lat, route_points[i - 1].lon,
-                route_points[i].lat, route_points[i].lon,
-            )
-            b2 = bearing_between_coords(
-                route_points[i].lat, route_points[i].lon,
-                route_points[i + 1].lat, route_points[i + 1].lon,
-            )
-            x = math.cos(math.radians(b1)) + math.cos(math.radians(b2))
-            y = math.sin(math.radians(b1)) + math.sin(math.radians(b2))
-            tracks.append(math.degrees(math.atan2(y, x)) % 360)
-    return tracks
-
-
-def compute_interpolated_time(
-    departure: datetime, duration_hours: float,
-    distance_nm: float, total_distance_nm: float,
-) -> datetime:
-    """Compute the flight time at a given distance along the route."""
-    if total_distance_nm <= 0 or duration_hours <= 0:
-        return departure
-    fraction = distance_nm / total_distance_nm
-    return departure + timedelta(hours=fraction * duration_hours)
-
-
-def analyze_all_route_points(
-    cross_sections: list[RouteCrossSection],
-    route_points: list[RoutePoint],
-    departure_time: datetime,
-    duration_hours: float,
-    cruise_altitude_ft: int,
-    flight_ceiling_ft: int,
-    icing_severity_enhance: bool = True,
-) -> list[RoutePointAnalysis]:
-    """Analyze all route points across all models.
-
-    For each route point, gathers the forecast from each model's cross-section
-    at the point's interpolated time, then runs the shared analysis.
-    """
-    if not cross_sections or not route_points:
-        return []
-
-    total_distance = route_points[-1].distance_from_origin_nm
-    tracks = compute_route_tracks(route_points)
-    analyses: list[RoutePointAnalysis] = []
-
-    for i, rp in enumerate(route_points):
-        interp_time = compute_interpolated_time(
-            departure_time, duration_hours, rp.distance_from_origin_nm, total_distance,
-        )
-
-        # Gather closest forecast hour from each model
-        forecasts_by_model: dict[str, HourlyForecast] = {}
-        forecast_hour = interp_time  # will be updated per-model
-        for cs in cross_sections:
-            wf = cs.point_forecasts[i]
-            hourly = wf.at_time(interp_time)
-            if hourly:
-                forecasts_by_model[cs.model.value] = hourly
-                forecast_hour = hourly.time  # last model's actual hour (they should agree)
-
-        if not forecasts_by_model:
-            continue
-
-        wind_components, soundings, alt_advisories, divergences = _run_point_analysis(
-            forecasts_by_model, tracks[i], cruise_altitude_ft, flight_ceiling_ft,
-            icing_severity_enhance=icing_severity_enhance,
-        )
-
-        analyses.append(RoutePointAnalysis(
-            point_index=i,
-            lat=rp.lat,
-            lon=rp.lon,
-            distance_from_origin_nm=rp.distance_from_origin_nm,
-            waypoint_icao=rp.waypoint_icao,
-            waypoint_name=rp.waypoint_name,
-            interpolated_time=interp_time,
-            forecast_hour=forecast_hour,
-            track_deg=tracks[i],
-            wind_components=wind_components,
-            sounding=soundings,
-            altitude_advisories=alt_advisories,
-            model_divergence=divergences,
-        ))
-
-    return analyses
-
-
-def _run_gramet(
-    route: RouteConfig,
-    target_date: str,
-    target_hour: int,
-    days_out: int,
-    fetch_date: str,
-    data_dir: Path,
-    result: BriefingResult,
-    *,
-    output_dir: Path | None = None,
-    autorouter_credentials: tuple[str, str] | None = None,
-    user_id: str | None = None,
-) -> None:
-    """Fetch GRAMET cross-section if available."""
-    try:
-        from weatherbrief.fetch.gramet import AutorouterGramet
-
-        # UTC-aware for correct Unix timestamp in GRAMET API call
-        departure_time = datetime(
-            *map(int, target_date.split("-")), target_hour, tzinfo=timezone.utc
-        )
-        icao_codes = [wp.icao for wp in route.waypoints]
-        duration_hours = route.flight_duration_hours or 2.0
-
-        kwargs: dict = {}
-        if autorouter_credentials:
-            kwargs["username"], kwargs["password"] = autorouter_credentials
-            # Per-user token cache dir so users don't share cached OAuth tokens
-            if user_id:
-                kwargs["cache_dir"] = str(data_dir / ".cache" / "autorouter" / user_id)
-        gramet_client = AutorouterGramet(**kwargs)
-        data = gramet_client.fetch_gramet(
-            icao_codes=icao_codes,
-            altitude_ft=route.cruise_altitude_ft,
-            departure_time=departure_time,
-            duration_hours=duration_hours,
-            fmt="pdf",
-        )
-
-        if output_dir:
-            out_path = output_dir / "gramet.pdf"
-        else:
-            out_dir = data_dir / "gramet" / target_date / f"d-{days_out}_{fetch_date}"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir / "gramet.pdf"
-        out_path.write_bytes(data)
-        result.gramet_path = out_path
-        result.usage.gramet_fetched = True
-        logger.info("GRAMET saved: %s", out_path)
-
-    except ImportError:
-        logger.warning("GRAMET fetch requires euro_aip with autorouter credentials")
-        result.errors.append("GRAMET: euro_aip not available")
-    except Exception as exc:
-        logger.warning("GRAMET fetch failed: %s", exc, exc_info=True)
-        result.errors.append(f"GRAMET: {exc}")
-        result.usage.gramet_failed = True
-
-
-def _run_skewt(
-    snapshot: ForecastSnapshot,
-    target_time: datetime,
-    target_date: str,
-    days_out: int,
-    fetch_date: str,
-    data_dir: Path,
-    result: BriefingResult,
-    *,
-    output_dir: Path | None = None,
-) -> None:
-    """Generate Skew-T plots for all waypoints."""
-    try:
-        from weatherbrief.digest.skewt import generate_all_skewts
-
-        if output_dir:
-            out_dir = output_dir / "skewt"
-        else:
-            out_dir = data_dir / "skewt" / target_date / f"d-{days_out}_{fetch_date}"
-        paths = generate_all_skewts(snapshot, target_time, out_dir)
-        result.skewt_paths = [Path(p) for p in paths]
-        for p in paths:
-            logger.info("Skew-T saved: %s", p)
-
-    except ImportError:
-        logger.warning("Skew-T generation requires metpy, numpy, matplotlib")
-        result.errors.append("Skew-T: metpy not available")
-    except Exception as exc:
-        logger.warning("Skew-T generation failed: %s", exc, exc_info=True)
-        result.errors.append(f"Skew-T: {exc}")
-
-
-def _run_llm_digest(
-    snapshot: ForecastSnapshot,
-    target_time: datetime,
-    target_date: str,
-    days_out: int,
-    fetch_date: str,
-    data_dir: Path,
-    digest_config_name: str | None,
-    result: BriefingResult,
-    *,
-    output_dir: Path | None = None,
-) -> None:
-    """Generate LLM-powered weather digest."""
-    try:
-        from weatherbrief.digest.llm_config import load_digest_config
-        from weatherbrief.digest.llm_digest import run_digest
-
-        config = load_digest_config(digest_config_name)
-        logger.info("LLM digest: %s/%s", config.llm.provider, config.llm.model)
-
-        digest_result = run_digest(snapshot, target_time, config)
-
-        if digest_result.get("error"):
-            result.errors.append(f"LLM digest: {digest_result['error']}")
-            return
-
-        digest_obj = digest_result.get("digest")
-        result.digest = digest_obj
-
-        # Track LLM usage
-        result.usage.llm_digest = True
-        result.usage.llm_model = f"{config.llm.provider}:{config.llm.model}"
-        result.usage.llm_input_tokens = digest_result.get("llm_input_tokens")
-        result.usage.llm_output_tokens = digest_result.get("llm_output_tokens")
-
-        # Save markdown + structured JSON digest
-        if output_dir:
-            md_path = output_dir / "digest.md"
-            json_path = output_dir / "digest.json"
-        else:
-            out_dir = data_dir / "digests" / target_date / f"d-{days_out}_{fetch_date}"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            md_path = out_dir / "digest.md"
-            json_path = out_dir / "digest.json"
-        md_path.write_text(digest_result["digest_text"])
-        if digest_obj is not None:
-            json_path.write_text(digest_obj.model_dump_json(indent=2))
-        result.digest_path = md_path
-        result.digest_text = digest_result["digest_text"]
-        logger.info("LLM digest saved: %s", md_path)
-
-    except Exception as exc:
-        logger.warning("LLM digest generation failed: %s", exc, exc_info=True)
-        result.errors.append(f"LLM digest: {exc}")
