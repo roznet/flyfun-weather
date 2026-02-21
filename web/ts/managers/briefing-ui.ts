@@ -527,6 +527,7 @@ export function renderSoundingAnalysis(
   selectedPointIndex?: number,
   displayMode: DisplayMode = 'annotated',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
+  enabledLayers?: Record<string, boolean>,
 ): void {
   const el = $('sounding-section');
   if (!el) return;
@@ -536,7 +537,7 @@ export function renderSoundingAnalysis(
     const idx = selectedPointIndex ?? 0;
     const point = routeAnalyses.analyses[idx];
     if (point) {
-      el.innerHTML = renderSinglePointSounding(point, displayMode, tierVisibility);
+      el.innerHTML = renderSinglePointSounding(point, displayMode, tierVisibility, enabledLayers);
       return;
     }
   }
@@ -908,11 +909,15 @@ function findOverlappingSfip(sfipZones: SfipZone[], floorFt: number, ceilingFt: 
 }
 
 /** Build the multi-line HTML content for a single regime cell. */
-function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[]): string {
+function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[], enabledLayers?: Record<string, boolean>): string {
+  const layerOn = (id: string) => !enabledLayers || enabledLayers[id] !== false;
   const lines: string[] = [];
 
+  // SFIP zone lookup (used by both icing paths)
+  const sfipMatch = sfipZones ? findOverlappingSfip(sfipZones, regime.floor_ft, regime.ceiling_ft) : null;
+
   // Cloud: headline + params subtitle
-  if (regime.in_cloud) {
+  if (regime.in_cloud && layerOn('cloud-bands')) {
     if (regime.cloud_coverage) {
       const cov = regime.cloud_coverage.toUpperCase();
       const oktas = COVERAGE_OKTAS[regime.cloud_coverage] ?? '';
@@ -924,7 +929,7 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[]): stri
         params.push(`DD=${regime.mean_dewpoint_depression_c.toFixed(1)}\u00b0C`);
       if (regime.mean_temperature_c != null)
         params.push(`T=${regime.mean_temperature_c.toFixed(0)}\u00b0C`);
-      if (regime.cloud_cover_pct != null)
+      if (regime.cloud_cover_pct != null && layerOn('nwp-cloud-bands'))
         params.push(`NWP\u00a0${regime.cloud_cover_pct.toFixed(0)}%`);
       if (params.length > 0)
         lines.push(`<div class="regime-params">${params.join(' ')}</div>`);
@@ -932,10 +937,13 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[]): stri
       // Old data: no coverage detail
       lines.push(`<div class="regime-cloud">In cloud</div>`);
     }
+  } else if (!layerOn('cloud-bands') && layerOn('nwp-cloud-bands') && regime.cloud_cover_pct != null && regime.cloud_cover_pct > 0) {
+    // Cloud-bands OFF but NWP ON: show minimal NWP line
+    lines.push(`<div class="regime-cloud">NWP\u00a0${regime.cloud_cover_pct.toFixed(0)}%</div>`);
   }
 
   // Icing: headline + params subtitle
-  if (regime.icing_risk !== 'none') {
+  if (regime.icing_risk !== 'none' && layerOn('icing-bands')) {
     const risk = regime.icing_risk.toUpperCase();
     const type = regime.icing_type !== 'none' ? ` ${regime.icing_type}` : '';
     const sld = regime.sld_risk ? ' <span class="sld-badge">SLD</span>' : '';
@@ -946,9 +954,7 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[]): stri
       params.push(`Tw=${regime.mean_wet_bulb_c.toFixed(0)}\u00b0C`);
     if (regime.mean_icing_index != null)
       params.push(`Ix=${regime.mean_icing_index.toFixed(0)} ${renderInfoButton('ogimet_index', regime.mean_icing_index)}`);
-    // SFIP index from overlapping sfip_zone
-    const sfipMatch = sfipZones ? findOverlappingSfip(sfipZones, regime.floor_ft, regime.ceiling_ft) : null;
-    if (sfipMatch && sfipMatch.mean_sfip_100 != null) {
+    if (layerOn('sfip-bands') && sfipMatch && sfipMatch.mean_sfip_100 != null) {
       const variantBadge = `<span class="sfip-variant">${sfipMatch.variant === 'full' ? 'CLW' : 'proxy'}</span>`;
       params.push(`SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100)} ${variantBadge}`);
     }
@@ -956,17 +962,24 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[]): stri
       params.push(`RH=${regime.mean_rh_pct.toFixed(0)}%`);
     if (params.length > 0)
       lines.push(`<div class="regime-params">${params.join(' ')}</div>`);
+  } else if (!layerOn('icing-bands') && layerOn('sfip-bands') && sfipMatch && sfipMatch.mean_sfip_100 != null && sfipMatch.risk !== 'none') {
+    // Icing-bands OFF but SFIP ON: show SFIP-only icing data
+    const risk = sfipMatch.risk.toUpperCase();
+    const infoBtn = renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100);
+    lines.push(`<div class="regime-icing">${risk} ${infoBtn}</div>`);
+    const variantBadge = `<span class="sfip-variant">${sfipMatch.variant === 'full' ? 'CLW' : 'proxy'}</span>`;
+    lines.push(`<div class="regime-params">SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100)} ${variantBadge}</div>`);
   }
 
   // Inversion line
-  if (regime.inversion && regime.inversion_strength_c != null) {
+  if (regime.inversion && regime.inversion_strength_c != null && layerOn('inversion-bands')) {
     const label = inversionStrengthLabel(regime.inversion_strength_c).toUpperCase();
     const sfc = regime.inversion_surface_based ? ' SFC' : '';
     lines.push(`<div class="regime-inversion">INV ${label} +${regime.inversion_strength_c.toFixed(1)}\u00b0C${sfc}</div>`);
   }
 
   // CAT line
-  if (regime.cat_risk) {
+  if (regime.cat_risk && layerOn('cat-bands')) {
     lines.push(`<div class="regime-cat">CAT ${regime.cat_risk.toUpperCase()}</div>`);
   }
 
@@ -977,7 +990,7 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[]): stri
 
   // Clear band
   if (lines.length === 0) {
-    const nwp = regime.cloud_cover_pct != null && regime.cloud_cover_pct > 0
+    const nwp = layerOn('nwp-cloud-bands') && regime.cloud_cover_pct != null && regime.cloud_cover_pct > 0
       ? ` <span class="regime-nwp">NWP\u00a0${regime.cloud_cover_pct.toFixed(0)}%</span>` : '';
     lines.push(`<span class="regime-clear">Clear${nwp}</span>`);
   }
@@ -995,6 +1008,7 @@ function regimeCellClass(regime: VerticalRegime): string {
 function renderAtmosphericProfile(
   soundings: Record<string, SoundingAnalysis>,
   adv: AltitudeAdvisories | null,
+  enabledLayers?: Record<string, boolean>,
 ): string {
   if (!adv) return '';
 
@@ -1035,7 +1049,7 @@ function renderAtmosphericProfile(
         if (!regime) return '<td>\u2014</td>';
         const cls = regimeCellClass(regime);
         const modelSfipZones = soundings[m]?.sfip_zones ?? [];
-        return `<td class="regime-cell ${cls}">${regimeCellContent(regime, modelSfipZones)}</td>`;
+        return `<td class="regime-cell ${cls}">${regimeCellContent(regime, modelSfipZones, enabledLayers)}</td>`;
       }).join('');
 
       return `<tr><td class="var-name">${nextAlt.toFixed(0)}-${alt.toFixed(0)}ft</td>${cells}</tr>`;
@@ -1179,6 +1193,7 @@ function renderSinglePointSounding(
   point: RoutePointAnalysis,
   displayMode: DisplayMode = 'annotated',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
+  enabledLayers?: Record<string, boolean>,
 ): string {
   if (!point.sounding || Object.keys(point.sounding).length === 0) {
     return '<p class="muted">No sounding data for this point.</p>';
@@ -1194,7 +1209,7 @@ function renderSinglePointSounding(
       ${renderConvectiveBanner(point.sounding, displayMode, tierVisibility)}
       ${renderVerticalMotion(point.sounding, displayMode)}
       ${renderAltitudeMarkers(point.sounding, displayMode, tierVisibility)}
-      ${renderAtmosphericProfile(point.sounding, point.altitude_advisories)}
+      ${renderAtmosphericProfile(point.sounding, point.altitude_advisories, enabledLayers)}
       ${renderAdvisoriesTable(point.altitude_advisories)}
     </div>
   `;
