@@ -14,10 +14,15 @@ from __future__ import annotations
 
 from weatherbrief.models import (
     DerivedLevel,
+    EnhancedCloudLayer,
     IcingRisk,
     IcingType,
     SfipZone,
 )
+
+# Cloud proximity threshold for proxy variant (same as Ogimet)
+_IN_CLOUD_DD_THRESHOLD = 3.0
+_CLOUD_MARGIN_FT = 500.0
 
 # --- SFIP_O weights (full variant, with CLW) ---
 _W_T_FULL = 0.35
@@ -203,9 +208,15 @@ def compute_sfip_level(
     Returns (sfip_raw, sfip_100, severity_str, variant_str).
     Temperature gating: returns zeros outside [0, -25]°C.
     """
+    variant = "full" if clw_g_kg is not None else "proxy"
+
     # Temperature gating
     if temperature_c >= 0.0 or temperature_c < -25.0:
-        return 0.0, 0.0, "NONE", "full" if clw_g_kg is not None else "proxy"
+        return 0.0, 0.0, "NONE", variant
+
+    # Cloud gating for full variant: no liquid water → no icing
+    if clw_g_kg is not None and clw_g_kg <= 0:
+        return 0.0, 0.0, "NONE", variant
 
     m_t = membership_temperature(temperature_c)
     m_rh = membership_rh(rh_pct)
@@ -267,22 +278,49 @@ def _classify_icing_type(temperature_c: float) -> IcingType:
     return IcingType.NONE
 
 
+# ── Cloud proximity (proxy variant gating) ───────────────────────────
+
+
+def _is_near_cloud(level: DerivedLevel, clouds: list[EnhancedCloudLayer]) -> bool:
+    """Check if a level is within or very near a cloud layer.
+
+    Same logic as Ogimet: DD < 3°C or altitude within 500ft of a cloud layer.
+    Used to gate the proxy variant only — full variant gates on CLW > 0 instead.
+    """
+    if level.altitude_ft is None:
+        return False
+    if level.dewpoint_depression_c is not None and level.dewpoint_depression_c < _IN_CLOUD_DD_THRESHOLD:
+        return True
+    for cl in clouds:
+        if (cl.base_ft - _CLOUD_MARGIN_FT) <= level.altitude_ft <= (cl.top_ft + _CLOUD_MARGIN_FT):
+            return True
+    return False
+
+
 # ── Zone builder ─────────────────────────────────────────────────────
 
 
 def assess_sfip_zones(
     levels: list[DerivedLevel],
+    cloud_layers: list[EnhancedCloudLayer] | None = None,
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
     nwp_cloud_high_pct: float | None = None,
 ) -> list[SfipZone]:
     """Compute SFIP at each level and group into icing zones.
 
+    Cloud gating per variant:
+      - Full (CLW available): levels with CLW <= 0 are gated out in compute_sfip_level.
+      - Proxy (no CLW): levels must be near a detected cloud layer (DD < 3°C
+        or within 500ft of an EnhancedCloudLayer).
+
     Stores per-level SFIP results on DerivedLevel objects.
     Returns list of SfipZone ordered by ascending altitude.
     """
     if not levels:
         return []
+
+    clouds = cloud_layers or []
 
     # Compute SFIP for each level
     sfip_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = []
@@ -291,6 +329,11 @@ def assess_sfip_zones(
         if lv.temperature_c is None or lv.altitude_ft is None:
             continue
         if lv.relative_humidity_pct is None or lv.dewpoint_depression_c is None:
+            continue
+
+        # Proxy variant cloud gating: skip levels not near cloud
+        is_proxy = lv.cloud_liquid_water_g_kg is None
+        if is_proxy and not _is_near_cloud(lv, clouds):
             continue
 
         cloud_cover = _cloud_cover_for_pressure(
