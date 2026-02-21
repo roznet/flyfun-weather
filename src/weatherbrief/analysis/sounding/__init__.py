@@ -21,8 +21,9 @@ def _enrich_lwc(
     derived_levels: list[DerivedLevel],
     raw_levels: list[PressureLevelData],
 ) -> None:
-    """Convert CLWMR (kg/kg) to cloud liquid water content (g/m³) on derived levels.
+    """Enrich derived levels with cloud liquid water and ice mixing ratio fields.
 
+    Sets volumetric LWC (g/m³) for Ogimet, and mixing ratios in g/kg for SFIP.
     Uses ideal gas law for air density: ρ = P / (Rd × T_K).
     LWC (g/m³) = CLWMR (kg/kg) × ρ_air (kg/m³) × 1000.
     """
@@ -33,9 +34,17 @@ def _enrich_lwc(
 
     for dl in derived_levels:
         raw = raw_by_pressure.get(dl.pressure_hpa)
-        if raw is None or raw.cloud_liquid_water_kg_kg is None:
+        if raw is None:
             continue
-        if dl.temperature_c is None:
+
+        # Mixing ratios in g/kg for SFIP (simple unit conversion, no density needed)
+        if raw.cloud_liquid_water_kg_kg is not None and raw.cloud_liquid_water_kg_kg > 0:
+            dl.cloud_liquid_water_g_kg = round(raw.cloud_liquid_water_kg_kg * 1000.0, 6)
+        if raw.ice_mixing_ratio_kg_kg is not None and raw.ice_mixing_ratio_kg_kg > 0:
+            dl.ice_mixing_ratio_g_kg = round(raw.ice_mixing_ratio_kg_kg * 1000.0, 6)
+
+        # Volumetric LWC (g/m³) for Ogimet — requires temperature for density
+        if raw.cloud_liquid_water_kg_kg is None or dl.temperature_c is None:
             continue
 
         clwmr = raw.cloud_liquid_water_kg_kg
@@ -101,6 +110,16 @@ def analyze_sounding(
     # Temperature inversion detection
     inversion_layers = detect_inversions(derived_levels)
 
+    # SFIP icing index (fuzzy-logic, parallel to Ogimet)
+    from weatherbrief.analysis.sounding.sfip import assess_sfip_zones
+
+    sfip_zones = assess_sfip_zones(
+        derived_levels,
+        nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+        nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+        nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+    )
+
     # Enhanced icing assessment (Ogimet index with CAPE-based cloud split)
     icing_zones = assess_icing_zones(
         derived_levels,
@@ -132,6 +151,7 @@ def analyze_sounding(
         derived_levels=derived_levels,
         cloud_layers=cloud_layers,
         icing_zones=icing_zones,
+        sfip_zones=sfip_zones,
         inversion_layers=inversion_layers,
         convective=convective,
         precipitation=precipitation,
@@ -139,4 +159,5 @@ def analyze_sounding(
         cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         cloud_cover_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         cloud_cover_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )

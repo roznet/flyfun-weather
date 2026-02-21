@@ -24,6 +24,8 @@ from weatherbrief.models.analysis import (  # noqa: F401
     InversionLayer,
     ModelDivergence,
     ModelSource,
+    NWPCloudDiagnostics,
+    NWPCloudLayerDiag,
     PrecipIntensity,
     PrecipPhase,
     PrecipitationAssessment,
@@ -34,6 +36,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     RouteCrossSection,
     RoutePoint,
     RoutePointAnalysis,
+    SfipZone,
     SoundingAnalysis,
     ThermodynamicIndices,
     VerticalMotionAssessment,
@@ -46,6 +49,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     altitude_to_pressure_hpa,
     bearing_between,
     bearing_between_coords,
+    pressure_pa_to_altitude_ft,
 )
 from weatherbrief.models.advisories import (  # noqa: F401
     AdvisoryAggregation,
