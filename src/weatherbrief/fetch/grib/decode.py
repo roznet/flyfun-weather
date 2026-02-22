@@ -73,6 +73,15 @@ _CLOUD_DIAG_FIELD_MAP: dict[tuple[str, str], str] = {
     ("gh", "cloudCeiling"): "ceiling_gpm",
 }
 
+# ICON-EU single-level cloud diagnostic field mapping.
+# ICON reports heights in meters (not gpm like GFS).
+# cfgrib shortName → internal field name
+_ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
+    "ceiling": "ceiling_m",
+    "hbas_con": "convective_cloud_base_m",
+    "htop_con": "convective_cloud_top_m",
+}
+
 
 def decode_grib_to_points(
     grib_bytes: bytes,
@@ -611,3 +620,106 @@ def build_cloud_diagnostics(
     )
 
     return diag
+
+
+def decode_icon_eu_cloud_diag_per_point(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """Decode ICON-EU single-level cloud diagnostic GRIB2 per route point.
+
+    These are single-level variables (CEILING, HBAS_CON, HTOP_CON) with
+    no pressure dimension. Uses _ICON_CLOUD_DIAG_FIELD_MAP to identify
+    variables by shortName.
+
+    ICON-EU uses -180 to +180 longitude convention (no normalization needed).
+
+    Returns:
+        List of flat dicts (one per point): [{field_name: raw_value_m, ...}, ...].
+        Raw values are in meters (native ICON-EU units).
+    """
+    import cfgrib
+
+    n_points = len(latitudes)
+    if not grib_bytes:
+        return [{} for _ in range(n_points)]
+
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        datasets = cfgrib.open_datasets(str(tmp_path))
+        # ICON-EU uses -180 to +180 (same as route points)
+        target_lons = list(longitudes)
+        results: list[dict[str, float]] = [{} for _ in range(n_points)]
+
+        for ds in datasets:
+            for var_name, xr_var in ds.data_vars.items():
+                short_name = str(var_name).lower()
+                field_name = _ICON_CLOUD_DIAG_FIELD_MAP.get(short_name)
+                if field_name is None:
+                    continue
+
+                values = _interpolate_per_point(
+                    xr_var, latitudes, target_lons,
+                )
+                for i, val in enumerate(values):
+                    if val is not None and field_name not in results[i]:
+                        results[i][field_name] = val
+
+        for ds in datasets:
+            ds.close()
+
+        return results
+    except Exception:
+        logger.warning("cfgrib failed to decode ICON-EU cloud diag GRIB2", exc_info=True)
+        return [{} for _ in range(n_points)]
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+_M_TO_FT = 3.28084
+
+
+def build_icon_cloud_diagnostics(
+    raw: dict[str, float],
+) -> "NWPCloudDiagnostics | None":
+    """Convert raw ICON-EU decoded values into an NWPCloudDiagnostics model.
+
+    ICON-EU reports heights in meters (not gpm or Pa like GFS).
+
+    Unit conversions applied:
+    - meters → feet (× 3.28084)
+
+    Only populates ceiling and convective base/top from ICON-EU single-level
+    data. Low/mid/high cloud layers are not populated (would need additional
+    variables like CLCL/CLCM/CLCH which only provide cover %, not base/top).
+
+    Returns None if the raw dict is empty.
+    """
+    from weatherbrief.models.analysis import NWPCloudDiagnostics
+
+    if not raw:
+        return None
+
+    def _m_to_ft(key: str) -> float | None:
+        val = raw.get(key)
+        if val is None or val <= 0:
+            return None
+        return round(val * _M_TO_FT)
+
+    ceiling_ft = _m_to_ft("ceiling_m")
+    convective_base_ft = _m_to_ft("convective_cloud_base_m")
+    convective_top_ft = _m_to_ft("convective_cloud_top_m")
+
+    # Only create diagnostics if at least one field is populated
+    if ceiling_ft is None and convective_base_ft is None and convective_top_ft is None:
+        return None
+
+    return NWPCloudDiagnostics(
+        ceiling_ft=ceiling_ft,
+        convective_base_ft=convective_base_ft,
+        convective_top_ft=convective_top_ft,
+    )

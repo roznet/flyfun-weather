@@ -59,17 +59,62 @@ See [fetch.md](./fetch.md) for implementation details.
 
 ### C. DWD ICON-EU (Regional Europe) — IMPLEMENTED
 - **Server:** `https://opendata.dwd.de/weather/nwp/icon-eu/grib/`
-- **Path:** `{HH}/{var}/icon-eu_europe_regular-lat-lon_model-level_{YYYYMMDDHH}_{FFF}_{LL}_{VAR}.grib2.bz2`
+- **Model-level path:** `{HH}/{var}/icon-eu_europe_regular-lat-lon_model-level_{YYYYMMDDHH}_{FFF}_{LL}_{VAR}.grib2.bz2`
   - `HH`: Cycle hour (00, 03, 06, ..., 21)
   - `FFF`: Forecast hour (000–120), hourly to 78h, 3-hourly to 120h
   - `LL`: Model level number (35–74 for aviation range)
+- **Single-level path:** `{HH}/{var}/icon-eu_europe_regular-lat-lon_single-level_{YYYYMMDDHH}_{FFF}_{VAR}.grib2.bz2`
+  - No level number in filename (scalar fields)
 - **Resolution:** ~6.5km, regular lat-lon grid (unlike ICON-Global's icosahedral grid)
 - **Domain:** 29.5–70.5°N, 23.5°W–62.5°E
-- **Variables fetched:** QC (cloud liquid water), QI (ice mixing ratio), P (pressure for vertical interp)
+- **Variables fetched:**
+  - Model-level: QC (cloud liquid water), QI (ice mixing ratio), P (pressure for vertical interp)
+  - Single-level: CEILING (cloud ceiling height), HBAS_CON (convective cloud base), HTOP_CON (convective cloud top)
 - **Model levels → pressure levels:** Log-pressure interpolation using P field; targets ICON_PRESSURE_LEVELS
+- **Single-level → NWPCloudDiagnostics:** Heights in meters converted to feet (× 3.28084)
 - **Publication delay:** ~3h after init time
 - **Data retention:** DWD deletes files after ~24h (only latest run available per cycle)
 - **Download:** Individual bz2-compressed files, parallel with 8 workers
+
+### ICON-EU Variable Reference
+
+Comprehensive listing of DWD ICON-EU opendata variables. Organized by level type.
+
+#### Single-Level Variables
+
+| Variable | Description | Unit | Status | Aviation Use |
+|----------|-------------|------|--------|-------------|
+| `CEILING` | Cloud ceiling height | m | **Implemented** | Primary IFR/VFR metric. Converted to ft for NWPCloudDiagnostics. |
+| `HBAS_CON` | Convective cloud base height | m | **Implemented** | Cb base altitude. |
+| `HTOP_CON` | Convective cloud top height | m | **Implemented** | Cb top altitude. |
+| `CLCL` | Low cloud cover | % | Available | SFC–6500ft cloud fraction. |
+| `CLCM` | Medium cloud cover | % | Available | 6500–20000ft cloud fraction. |
+| `CLCH` | High cloud cover | % | Available | >20000ft cloud fraction. |
+| `CLCT` | Total cloud cover | % | Available | Full-column cloud fraction. |
+| `T_2M` | 2m temperature | K | Available | Screen-level temperature. |
+| `TD_2M` | 2m dewpoint | K | Available | Screen-level dewpoint. |
+| `U_10M` | 10m U wind component | m/s | Available | Surface wind (east-west). |
+| `V_10M` | 10m V wind component | m/s | Available | Surface wind (north-south). |
+| `VMAX_10M` | 10m max wind gust | m/s | Available | Peak surface gust. |
+| `PMSL` | Mean sea level pressure | Pa | Available | Altimeter setting. |
+| `TOT_PREC` | Total precipitation | kg/m² | Available | Hourly accumulated precipitation. |
+| `CAPE_ML` | Mixed-layer CAPE | J/kg | Available | Convective potential energy. |
+| `CIN_ML` | Mixed-layer CIN | J/kg | Available | Convective inhibition. |
+
+#### Model-Level Variables
+
+| Variable | Description | Unit | Levels | Status | Note |
+|----------|-------------|------|--------|--------|------|
+| `QC` | Cloud liquid water mixing ratio | kg/kg | 35–74 | **Implemented** | Log-p interpolated to pressure levels. |
+| `QI` | Ice mixing ratio | kg/kg | 35–74 | **Implemented** | Same interpolation as QC. |
+| `P` | Pressure | Pa | 35–74 | **Implemented** | Used for vertical interpolation. |
+| `T` | Temperature | K | 1–74 | Available | Could replace Open-Meteo for ICON. |
+| `U` | U wind component | m/s | 1–74 | Available | East-west wind. |
+| `V` | V wind component | m/s | 1–74 | Available | North-south wind. |
+| `W` | Vertical velocity | m/s | 1–74 | Available | Physical vertical velocity (not omega). |
+| `QV` | Specific humidity | kg/kg | 35–74 | Available | Moisture content. |
+| `QR` | Rain water mixing ratio | kg/kg | 35–74 | Available | Precipitation in column. |
+| `QS` | Snow mixing ratio | kg/kg | 35–74 | Available | Frozen precipitation in column. |
 
 ### D. DWD ICON-Global — FUTURE
 - **Bucket:** `s3://dwd-icon-global-pds/`

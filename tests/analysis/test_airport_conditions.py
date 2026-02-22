@@ -9,6 +9,7 @@ import pytest
 
 from weatherbrief.analysis.airport_conditions import (
     _ceiling_from_sounding,
+    _reconcile_ceiling,
     classify_flight_category,
     compute_airport_conditions,
     compute_runway_winds,
@@ -16,6 +17,8 @@ from weatherbrief.analysis.airport_conditions import (
 from weatherbrief.models import (
     CloudCoverage,
     EnhancedCloudLayer,
+    HourlyForecast,
+    NWPCloudDiagnostics,
     RoutePointAnalysis,
     SoundingAnalysis,
     ThermodynamicIndices,
@@ -290,3 +293,99 @@ class TestComputeAirportConditions:
         assert result.departure.runway_ends == runway_data["LFPG"]
         # No cross-section → no wind → no runway wind computed
         assert result.departure.conditions[0].best_runway is None
+
+
+# --- ceiling reconciliation ---
+
+class TestReconcileCeiling:
+
+    def test_both_available_takes_lower(self):
+        """When both sounding and NWP ceilings exist, take the lower."""
+        sounding = SoundingAnalysis(
+            cloud_layers=[
+                EnhancedCloudLayer(base_ft=3000, top_ft=5000, coverage=CloudCoverage.BKN),
+            ],
+        )
+        hourly = HourlyForecast(
+            time=datetime(2026, 3, 1, 10, 0),
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=2000),
+        )
+        result = _reconcile_ceiling(sounding, hourly)
+        assert result == 2000  # NWP is lower
+
+    def test_both_available_sounding_lower(self):
+        """When sounding is lower than NWP, take sounding."""
+        sounding = SoundingAnalysis(
+            cloud_layers=[
+                EnhancedCloudLayer(base_ft=1500, top_ft=4000, coverage=CloudCoverage.OVC),
+            ],
+        )
+        hourly = HourlyForecast(
+            time=datetime(2026, 3, 1, 10, 0),
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=5000),
+        )
+        result = _reconcile_ceiling(sounding, hourly)
+        assert result == 1500  # Sounding is lower
+
+    def test_only_sounding(self):
+        """When only sounding has ceiling, use it."""
+        sounding = SoundingAnalysis(
+            cloud_layers=[
+                EnhancedCloudLayer(base_ft=4000, top_ft=8000, coverage=CloudCoverage.BKN),
+            ],
+        )
+        hourly = HourlyForecast(
+            time=datetime(2026, 3, 1, 10, 0),
+        )
+        result = _reconcile_ceiling(sounding, hourly)
+        assert result == 4000
+
+    def test_only_nwp(self):
+        """When only NWP has ceiling, use it."""
+        sounding = SoundingAnalysis(cloud_layers=[])
+        hourly = HourlyForecast(
+            time=datetime(2026, 3, 1, 10, 0),
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=2500),
+        )
+        result = _reconcile_ceiling(sounding, hourly)
+        assert result == 2500
+
+    def test_neither_returns_none(self):
+        """When neither source has ceiling, return None."""
+        sounding = SoundingAnalysis(cloud_layers=[])
+        hourly = HourlyForecast(time=datetime(2026, 3, 1, 10, 0))
+        result = _reconcile_ceiling(sounding, hourly)
+        assert result is None
+
+    def test_no_sounding_no_hourly(self):
+        """Both None returns None."""
+        result = _reconcile_ceiling(None, None)
+        assert result is None
+
+    def test_sounding_sct_only_nwp_ceiling(self):
+        """SCT layers are not ceilings; NWP ceiling should be used."""
+        sounding = SoundingAnalysis(
+            cloud_layers=[
+                EnhancedCloudLayer(base_ft=2000, top_ft=4000, coverage=CloudCoverage.SCT),
+            ],
+        )
+        hourly = HourlyForecast(
+            time=datetime(2026, 3, 1, 10, 0),
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=3000),
+        )
+        result = _reconcile_ceiling(sounding, hourly)
+        assert result == 3000  # SCT doesn't count as ceiling
+
+    def test_nwp_diag_no_ceiling_field(self):
+        """NWP diagnostics exist but ceiling_ft is None — use sounding only."""
+        sounding = SoundingAnalysis(
+            cloud_layers=[
+                EnhancedCloudLayer(base_ft=2500, top_ft=5000, coverage=CloudCoverage.BKN),
+            ],
+        )
+        hourly = HourlyForecast(
+            time=datetime(2026, 3, 1, 10, 0),
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(),  # no ceiling_ft
+        )
+        result = _reconcile_ceiling(sounding, hourly)
+        assert result == 2500

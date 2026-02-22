@@ -860,6 +860,124 @@ class TestIconEuDecode:
         assert _VAR_MAP["clwmr"] == "cloud_liquid_water_kg_kg"
         assert _VAR_MAP["icmr"] == "ice_mixing_ratio_kg_kg"
 
+    def test_icon_cloud_diag_field_map(self):
+        """ICON cloud diagnostic field map has correct entries."""
+        from weatherbrief.fetch.grib.decode import _ICON_CLOUD_DIAG_FIELD_MAP
+
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["ceiling"] == "ceiling_m"
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["hbas_con"] == "convective_cloud_base_m"
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["htop_con"] == "convective_cloud_top_m"
+
+
+# --- ICON-EU single-level URL format tests ---
+
+
+class TestIconEuSingleLevel:
+    """Tests for ICON-EU single-level URL builder and cloud diagnostic builder."""
+
+    def test_single_level_url_ceiling(self):
+        """Single-level URL follows DWD naming convention."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_single_level_url
+
+        url = icon_eu_single_level_url("20260221", 0, 6, "ceiling")
+        assert url == (
+            "https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/ceiling/"
+            "icon-eu_europe_regular-lat-lon_single-level_"
+            "2026022100_006_CEILING.grib2.bz2"
+        )
+
+    def test_single_level_url_hbas_con(self):
+        """Convective cloud base URL format."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_single_level_url
+
+        url = icon_eu_single_level_url("20260221", 12, 24, "hbas_con")
+        assert "icon-eu_europe_regular-lat-lon_single-level_" in url
+        assert "_024_HBAS_CON.grib2.bz2" in url
+        assert "/12/hbas_con/" in url
+
+    def test_single_level_url_htop_con(self):
+        """Convective cloud top URL format."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_single_level_url
+
+        url = icon_eu_single_level_url("20260221", 6, 0, "htop_con")
+        assert "_000_HTOP_CON.grib2.bz2" in url
+        assert "/06/htop_con/" in url
+
+    def test_single_level_url_no_level_number(self):
+        """Single-level URLs have no level number (unlike model-level)."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_single_level_url, icon_eu_file_url
+
+        sl_url = icon_eu_single_level_url("20260221", 0, 6, "ceiling")
+        ml_url = icon_eu_file_url("20260221", 0, 6, 50, "qc")
+
+        # Single-level: ..._006_CEILING.grib2.bz2 (no level between fhour and var)
+        assert "single-level" in sl_url
+        assert "model-level" in ml_url
+        # Model-level has extra level number segment
+        assert "_006_50_" in ml_url
+        assert "_006_CEILING" in sl_url
+
+
+# --- build_icon_cloud_diagnostics tests ---
+
+
+class TestBuildIconCloudDiagnostics:
+    """Tests for ICON-EU cloud diagnostic builder (m→ft conversion)."""
+
+    def test_ceiling_m_to_ft(self):
+        """Ceiling height correctly converted from meters to feet."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        raw = {"ceiling_m": 1000.0}  # 1000m = 3281 ft
+        diag = build_icon_cloud_diagnostics(raw)
+        assert diag is not None
+        assert diag.ceiling_ft is not None
+        assert abs(diag.ceiling_ft - 3281) < 2
+
+    def test_convective_base_top_m_to_ft(self):
+        """Convective cloud base/top converted from meters to feet."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        raw = {
+            "convective_cloud_base_m": 500.0,   # ~1640 ft
+            "convective_cloud_top_m": 10000.0,  # ~32808 ft
+        }
+        diag = build_icon_cloud_diagnostics(raw)
+        assert diag is not None
+        assert diag.convective_base_ft is not None
+        assert abs(diag.convective_base_ft - 1640) < 5
+        assert diag.convective_top_ft is not None
+        assert abs(diag.convective_top_ft - 32808) < 5
+
+    def test_empty_returns_none(self):
+        """Empty raw dict returns None."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        assert build_icon_cloud_diagnostics({}) is None
+
+    def test_zero_or_negative_values_returns_none(self):
+        """Zero/negative meter values treated as missing."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        raw = {"ceiling_m": 0.0, "convective_cloud_base_m": -1.0}
+        diag = build_icon_cloud_diagnostics(raw)
+        # All values are zero/negative, so nothing populates → None
+        assert diag is None
+
+    def test_partial_data(self):
+        """Only ceiling populated, convective fields None."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        raw = {"ceiling_m": 300.0}  # ~984 ft
+        diag = build_icon_cloud_diagnostics(raw)
+        assert diag is not None
+        assert diag.ceiling_ft is not None
+        assert abs(diag.ceiling_ft - 984) < 2
+        assert diag.convective_base_ft is None
+        assert diag.convective_top_ft is None
+        # Low/mid/high not populated by ICON single-level
+        assert diag.low.cover_pct is None
+
 
 # --- Cache model parameter tests ---
 

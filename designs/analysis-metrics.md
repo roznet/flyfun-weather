@@ -108,7 +108,19 @@ Unit conversions: Pa → altitude ft via standard atmosphere, K → °C, gpm →
 | Cloud Ice Mixing Ratio | QI | kg/kg | Same | Same interpolation |
 | Pressure | P | Pa | Same | Used for log-pressure vertical interpolation |
 
-**ICON-EU specifics:** Domain 29.5–70.5°N, 23.5°W–62.5°E (Europe only). Routes outside are silently skipped. Data on model levels (not pressure levels) — log-pressure interpolation using P field to target 12 ICON pressure levels. ~6.5km resolution. Cycles every 3h, ~3h publication delay, files deleted after ~24h.
+#### ICON-EU Cloud Diagnostics (via DWD opendata)
+
+Single-level scalar fields providing cloud ceiling and convective boundaries. Stored in `NWPCloudDiagnostics` model.
+
+| Field | GRIB2 Variable | Stored As | Unit | Aviation Use |
+|-------|---------------|-----------|------|-------------|
+| Cloud ceiling | CEILING | `ceiling_ft` | m→ft | Lowest opaque cloud layer height |
+| Convective cloud base | HBAS_CON | `convective_base_ft` | m→ft | Cb base altitude |
+| Convective cloud top | HTOP_CON | `convective_top_ft` | m→ft | Cb top altitude |
+
+Unit conversion: meters → feet (× 3.28084). Unlike GFS which uses gpm for ceiling and Pa for cloud boundaries, ICON-EU reports all heights in meters.
+
+**ICON-EU specifics:** Domain 29.5–70.5°N, 23.5°W–62.5°E (Europe only). Routes outside are silently skipped. Model-level data on levels 35–74 (not pressure levels) — log-pressure interpolation using P field to target 12 ICON pressure levels. Single-level data requires no vertical interpolation. ~6.5km resolution. Cycles every 3h, ~3h publication delay, files deleted after ~24h.
 
 ---
 
@@ -402,7 +414,7 @@ Shows data source for each key quantity per model. **Bold** = derived when API f
 | Precip probability | API | API | **n/a** | **n/a** | **n/a** | **n/a** | Requires ensemble data |
 | CLWMR (cloud liquid water) | **GRIB2** | **n/a** | **GRIB2**† | **n/a** | **n/a** | **n/a** | GFS: S3 `.idx`. ICON: DWD model levels. |
 | ICMR (ice mixing ratio) | **GRIB2** | **n/a** | **GRIB2**† | **n/a** | **n/a** | **n/a** | Same sources as CLWMR |
-| NWP cloud diagnostics | **GRIB2** | **n/a** | **n/a** | **n/a** | **n/a** | **n/a** | GFS only: ceiling, cloud base/top/temp per layer |
+| NWP cloud diagnostics | **GRIB2** | **n/a** | **GRIB2**† | **n/a** | **n/a** | **n/a** | GFS: full (ceiling, base/top/temp per layer). ICON: ceiling, convective base/top only. |
 | SFIP icing index | Full | Proxy | Full†/Proxy | Proxy | Proxy | Proxy | Full uses GRIB2 CLW; proxy uses DD+cloud cover |
 | Precipitation phase | GRIB2+Tw | Tw only | GRIB2†+Tw | Tw only | Tw only | Tw only | GRIB2 ice fraction preferred, wet-bulb fallback |
 
@@ -444,7 +456,7 @@ Sounding-derived cloud layers are mapped to ICAO bands (low < 6500ft, mid 6500�
 | Precipitation probability | Requires ensemble spread data | Only available from GFS and ECMWF |
 | Stratiform vs. convective cloud split | Not in any Open-Meteo API | Must approximate for Ogimet icing index (see §4.4) |
 | CLWMR/ICMR for ECMWF/MétéoFr/UKMO/GEM | No GRIB2 enrichment implemented for these models | SFIP uses proxy variant; precipitation phase uses wet-bulb only |
-| Cloud diagnostics for non-GFS models | GRIB2 cloud diagnostics only implemented for GFS | No NWP-native cloud base/top/ceiling for other models |
+| Cloud diagnostics for ECMWF/MétéoFr/UKMO/GEM | No GRIB2 cloud diagnostic enrichment for these models | No NWP-native cloud base/top/ceiling. GFS has full diagnostics; ICON-EU has ceiling + convective base/top. |
 
 ### 4.4 Approximating Cloud Type Split for Icing Index
 
