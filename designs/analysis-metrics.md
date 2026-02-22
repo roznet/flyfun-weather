@@ -4,10 +4,11 @@
 
 ## Overview
 
-WeatherBrief computes ~40 metrics from NWP model data. Each metric falls into one of three source categories:
+WeatherBrief computes ~85 metrics from NWP model data across 7 weather models (GFS, ECMWF, ICON, Météo-France, UKMO, GEM, Best-Match). Each metric falls into one of four source categories:
 
 - **API** — fetched directly from Open-Meteo
-- **Derived** — calculated from API data using MetPy or physics formulas
+- **GRIB2** — fetched from raw GRIB2 files (GFS S3, DWD ICON-EU opendata)
+- **Derived** — calculated from API/GRIB2 data using MetPy or physics formulas
 - **Assessed** — classified from derived values using aviation-specific thresholds
 
 When an API field is unavailable for a model, derived alternatives fill the gap so that all assessments work across all models.
@@ -18,39 +19,96 @@ When an API field is unavailable for a model, derived alternatives fill the gap 
 
 ### 1.1 Surface Variables
 
-| Variable | Unit | GFS | ECMWF | ICON | MétéoFr | UKMO | Physics / Interpretation |
-|----------|------|-----|-------|------|---------|------|--------------------------|
-| `temperature_2m` | °C | yes | yes | yes | yes | yes | Screen-level air temperature. Primary surface condition indicator. |
-| `relative_humidity_2m` | % | yes | yes | yes | yes | yes | Surface moisture saturation. Near 100% = fog/mist risk. |
-| `dewpoint_2m` | °C | yes | yes | yes | yes | yes | Temperature at which condensation begins. T−Td < 3°C = visible moisture likely. |
-| `surface_pressure` | hPa | yes | yes | yes | yes | yes | Actual station pressure. Used to anchor sounding profiles. |
-| `pressure_msl` | hPa | yes | yes | yes | yes | yes | Sea-level-corrected pressure. Altimeter setting proxy. |
-| `wind_speed_10m` | kt | yes | yes | yes | yes | yes | 10m wind speed for surface ops. |
-| `wind_direction_10m` | ° | yes | yes | yes | yes | yes | Surface wind direction (meteorological convention: direction FROM). |
-| `wind_gusts_10m` | kt | yes | yes | yes | yes | yes | Peak gust. Relevant for crosswind limits and turbulence on approach. |
-| `precipitation` | mm | yes | yes | yes | yes | yes | Hourly accumulated precipitation. Any precip in sub-zero temps = icing concern. |
-| `precipitation_probability` | % | yes | yes | **no** | **no** | **no** | Ensemble-derived probability. GFS and ECMWF only. |
-| `cloud_cover` | % | yes | yes | yes | yes | yes | Total column cloud cover from model parameterization. |
-| `cloud_cover_low` | % | yes | yes | yes | yes | yes | SFC–6500ft (ICAO low). Low ceilings = IFR/LIFR risk. |
-| `cloud_cover_mid` | % | yes | yes | yes | yes | yes | 6500–20000ft (ICAO mid). Relevant for en-route icing. |
-| `cloud_cover_high` | % | yes | yes | yes | yes | yes | 20000ft+ (ICAO high). Cirrus, usually no icing concern. |
-| `freezing_level_height` | m | yes | **no** | yes | **no** | yes | NWP-computed 0°C isotherm height. Upper boundary of rain, lower boundary of icing. |
-| `cape` | J/kg | yes | yes | yes | yes | yes | NWP-computed convective available potential energy. |
-| `visibility` | m | yes | **no** | yes | **no** | yes | Parameterized horizontal visibility. < 5000m = marginal VFR. |
+| Variable | Unit | GFS | ECMWF | ICON | MétéoFr | UKMO | GEM | Physics / Interpretation |
+|----------|------|-----|-------|------|---------|------|-----|--------------------------|
+| `temperature_2m` | °C | yes | yes | yes | yes | yes | yes | Screen-level air temperature. Primary surface condition indicator. |
+| `relative_humidity_2m` | % | yes | yes | yes | yes | yes | yes | Surface moisture saturation. Near 100% = fog/mist risk. |
+| `dewpoint_2m` | °C | yes | yes | yes | yes | yes | yes | Temperature at which condensation begins. T−Td < 3°C = visible moisture likely. |
+| `surface_pressure` | hPa | yes | yes | yes | yes | yes | yes | Actual station pressure. Used to anchor sounding profiles. |
+| `pressure_msl` | hPa | yes | yes | yes | yes | yes | yes | Sea-level-corrected pressure. Altimeter setting proxy. |
+| `wind_speed_10m` | kt | yes | yes | yes | yes | yes | yes | 10m wind speed for surface ops. |
+| `wind_direction_10m` | ° | yes | yes | yes | yes | yes | yes | Surface wind direction (meteorological convention: direction FROM). |
+| `wind_gusts_10m` | kt | yes | yes | yes | yes | yes | yes | Peak gust. Relevant for crosswind limits and turbulence on approach. |
+| `precipitation` | mm | yes | yes | yes | yes | yes | **no** | Hourly accumulated precipitation. Any precip in sub-zero temps = icing concern. |
+| `precipitation_probability` | % | yes | yes | **no** | **no** | **no** | **no** | Ensemble-derived probability. GFS and ECMWF only. |
+| `cloud_cover` | % | yes | yes | yes | yes | yes | yes | Total column cloud cover from model parameterization. |
+| `cloud_cover_low` | % | yes | yes | yes | yes | yes | yes | SFC–6500ft (ICAO low). Low ceilings = IFR/LIFR risk. |
+| `cloud_cover_mid` | % | yes | yes | yes | yes | yes | yes | 6500–20000ft (ICAO mid). Relevant for en-route icing. |
+| `cloud_cover_high` | % | yes | yes | yes | yes | yes | yes | 20000ft+ (ICAO high). Cirrus, usually no icing concern. |
+| `freezing_level_height` | m | yes | **no** | yes | **no** | yes | **no** | NWP-computed 0°C isotherm height. Upper boundary of rain, lower boundary of icing. |
+| `cape` | J/kg | yes | yes | yes | yes | yes | yes | NWP-computed convective available potential energy. |
+| `visibility` | m | yes | **no** | yes | **no** | yes | **no** | Parameterized horizontal visibility. < 5000m = marginal VFR. |
+| `rain` | mm | **no** | yes | yes | yes | yes | **no** | Liquid precipitation only. Used for precipitation phase classification. |
+| `showers` | mm | **no** | yes | yes | yes | yes | **no** | Convective precipitation. |
+| `snowfall` | cm | yes | yes | yes | yes | yes | yes | Solid precipitation. Used for surface phase assessment. |
+| `weather_code` | code | yes | yes | yes | yes | yes | yes | WMO weather interpretation code. |
 
 ### 1.2 Pressure Level Variables
 
-Available at: 1000, 925, 850, 700, 600, 500, 400, 300 hPa (~SFC to ~FL300).
+Pressure levels vary by model (range 1000–300 hPa, ~SFC to ~FL300):
 
-| Variable | Unit | GFS | ECMWF | ICON | MétéoFr | UKMO | Physics / Interpretation |
-|----------|------|-----|-------|------|---------|------|--------------------------|
-| `temperature` | °C | yes | yes | yes | yes | yes | Air temperature at level. Primary driver for icing type and severity. |
-| `relative_humidity` | % | yes | yes | yes | yes | yes | Moisture saturation at level. > 80% suggests cloud, > 95% = likely in cloud. |
-| `dewpoint` | °C | yes | yes | yes | yes | yes | Direct dewpoint. More physically meaningful than RH for cloud detection. |
-| `wind_speed` | kt | yes | yes | yes | yes | yes | Wind at level for headwind/crosswind and shear calculations. |
-| `wind_direction` | ° | yes | yes | yes | yes | yes | Wind direction at level. |
-| `geopotential_height` | m | yes | yes | yes | yes | yes | Height of pressure surface. Converts pressure levels to altitude. |
-| `vertical_velocity` | Pa/s | yes | yes | **no** | **no** | yes | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. |
+| Model | Levels | Count | Note |
+|-------|--------|-------|------|
+| GFS / Best-Match | 1000, 975, 950, ..., 300 (25 hPa spacing below 500) | 25 | ~1000ft vertical resolution |
+| ECMWF | 1000, 925, 850, 700, 600, 500, 400, 300 | 8 | Coarsest resolution |
+| ICON | 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300 | 12 | |
+| Météo-France | 1000, 950, 925, ..., 300 | 16 | |
+| UKMO | 1000, 975, 950, ..., 300 | 17 | |
+| GEM | 1000, 950, 925, ..., 300 | 17 | |
+
+| Variable | Unit | GFS | ECMWF | ICON | MétéoFr | UKMO | GEM | Physics / Interpretation |
+|----------|------|-----|-------|------|---------|------|-----|--------------------------|
+| `temperature` | °C | yes | yes | yes | yes | yes | yes | Air temperature at level. Primary driver for icing type and severity. |
+| `relative_humidity` | % | yes | yes | yes | yes | yes | yes | Moisture saturation at level. > 80% suggests cloud, > 95% = likely in cloud. |
+| `dewpoint` | °C | yes | yes | yes | yes | yes | yes | Direct dewpoint. More physically meaningful than RH for cloud detection. |
+| `wind_speed` | kt | yes | yes | yes | yes | yes | yes | Wind at level for headwind/crosswind and shear calculations. |
+| `wind_direction` | ° | yes | yes | yes | yes | yes | yes | Wind direction at level. |
+| `geopotential_height` | m | yes | yes | yes | yes | yes | yes | Height of pressure surface. Converts pressure levels to altitude. |
+| `vertical_velocity` | Pa/s | yes | yes | **no** | **no** | yes | **no** | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. |
+
+### 1.3 GRIB2 Enrichment Variables
+
+Direct GRIB2 fetch supplements Open-Meteo with variables it doesn't provide. See [weather-engine-specs.md](./weather-engine-specs.md) for implementation details.
+
+#### GFS Pressure-Level Variables (via NOAA S3)
+
+| Variable | GRIB2 Name | Unit | Source | Aviation Use |
+|----------|-----------|------|--------|-------------|
+| Cloud Liquid Water Mixing Ratio | CLMR (idx) / clwmr (cfgrib) | kg/kg | `noaa-gfs-bdp-pds` S3, HTTP Range via `.idx` | Direct measure of supercooled liquid water. Primary input for SFIP icing index. |
+| Ice Mixing Ratio | ICMR | kg/kg | Same | Glaciation factor: high ICMR + low CLWMR = mostly glaciated cloud, lower icing risk. |
+
+Fetched at all GFS pressure levels. Bilinear spatial interpolation to route points.
+
+#### GFS Cloud Diagnostics (via NOAA S3)
+
+Scalar fields (no pressure dimension) providing NWP-native cloud structure. Stored in `NWPCloudDiagnostics` model.
+
+| Field | GRIB2 Source | Stored As | Unit | Aviation Use |
+|-------|-------------|-----------|------|-------------|
+| Low cloud cover | LCC (lowCloudLayer) | `low.cover_pct` | % | SFC–6500ft cloud coverage from model cloud scheme |
+| Mid cloud cover | MCC (middleCloudLayer) | `mid.cover_pct` | % | 6500–20000ft coverage |
+| High cloud cover | HCC (highCloudLayer) | `high.cover_pct` | % | >20000ft coverage |
+| Total cloud cover | TCC (atmosphere) | `total_cover_pct` | % | Full-column coverage |
+| Convective cloud cover | TCC (convectiveCloudLayer) | `convective_cover_pct` | % | Convection-specific clouds |
+| Boundary layer cloud | TCC (boundaryLayerCloudLayer) | `boundary_cover_pct` | % | Sub-6500ft layer |
+| Low cloud base/top | PRES (lowCloudBottom/Top) | `low.base_ft`, `low.top_ft` | Pa→ft | Low ceiling detection |
+| Mid cloud base/top | PRES (middleCloudBottom/Top) | `mid.base_ft`, `mid.top_ft` | Pa→ft | En-route cloud layers |
+| High cloud base/top | PRES (highCloudBottom/Top) | `high.base_ft`, `high.top_ft` | Pa→ft | Cirrus boundaries |
+| Convective base/top | PRES (convectiveCloudBottom/Top) | `convective_base_ft`, `convective_top_ft` | Pa→ft | Cb extent |
+| Cloud top temperatures | TMP (low/mid/highCloudTop) | `*.top_temp_c` | K→°C | Cloud-top icing type |
+| Cloud ceiling | GH (cloudCeiling) | `ceiling_ft` | gpm→ft | Lowest opaque layer — primary IFR/VFR metric |
+
+Unit conversions: Pa → altitude ft via standard atmosphere, K → °C, gpm → ft (×3.28084).
+
+#### ICON-EU Pressure-Level Variables (via DWD opendata)
+
+| Variable | GRIB2 Name | Unit | Source | Note |
+|----------|-----------|------|--------|------|
+| Cloud Liquid Water | QC | kg/kg | `opendata.dwd.de/weather/nwp/icon-eu/grib/` | On model levels 35–74, interpolated to pressure levels |
+| Cloud Ice Mixing Ratio | QI | kg/kg | Same | Same interpolation |
+| Pressure | P | Pa | Same | Used for log-pressure vertical interpolation |
+
+**ICON-EU specifics:** Domain 29.5–70.5°N, 23.5°W–62.5°E (Europe only). Routes outside are silently skipped. Data on model levels (not pressure levels) — log-pressure interpolation using P field to target 12 ICON pressure levels. ~6.5km resolution. Cycles every 3h, ~3h publication delay, files deleted after ~24h.
 
 ---
 
@@ -72,6 +130,11 @@ These are computed in `thermodynamics.compute_derived_levels()` for each pressur
 | **Potential temperature** (θ) | `mpcalc.potential_temperature(P, T)` — Poisson equation: `θ = T × (1000/P)^(R/cp)` | P, T | Temperature parcel would have if brought adiabatically to 1000 hPa. Conserved in dry adiabatic processes. | Stability assessment: dθ/dz > 0 = stable, < 0 = unstable. Used for N² and Richardson number. |
 | **Brunt-Väisälä frequency²** (N²) | `N² = (g/θ̄) × (dθ/dz)` | θ at adjacent levels, height | Static stability frequency. Positive = stable (oscillations), negative = convectively unstable, zero = neutral. | N² > 0 = stable stratification. Used in Richardson number for CAT. |
 | **Richardson number** (Ri) | `Ri = N² / S²` where `S² = (du/dz)² + (dv/dz)²` | N², wind shear between levels | Ratio of buoyancy to shear. Determines whether turbulence is suppressed (high Ri) or generated (low Ri). | Ri < 0.25 = severe CAT, < 0.5 = moderate CAT, < 1.0 = light CAT. Standard clear-air turbulence predictor. |
+| **Cloud liquid water** (g/m³) | `CLWMR × ρ_air` | CLWMR (GRIB2), P, T | Liquid water content in volume units. | Ogimet icing index input. GFS and ICON-EU only. |
+| **Cloud liquid water** (g/kg) | `CLWMR × 1000` | CLWMR (GRIB2) | Mixing ratio in g/kg. | SFIP icing index input. GFS and ICON-EU only. |
+| **Ice mixing ratio** (g/kg) | `ICMR × 1000` | ICMR (GRIB2) | Ice content mixing ratio. | Glaciation factor: CLW/(CLW+ICE). Reduces SFIP when cloud is glaciated. |
+| **SFIP per-level** | Fuzzy-logic membership + weights | T, RH, CLW, ω, CAPE | See §3.2b. 0–100 icing potential at each level. | Stored as `sfip_raw`, `sfip_100`, `sfip_severity`, `sfip_variant` on each DerivedLevel. |
+| **Precipitation phase** | Wet-bulb T or GRIB2 ice fraction | Tw or CLWMR+ICMR | Phase of precipitation at altitude. | Stored as `precip_phase` on each DerivedLevel. See §3.6. |
 
 ### 2.2 Profile-Level Indices
 
@@ -166,6 +229,54 @@ Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`. The str
 
 **Historical note:** An earlier implementation used fixed wet-bulb temperature bands (−3 to 0°C = SEVERE, −10 to −3°C = MODERATE, etc.). This was replaced by the Ogimet index because the fixed bands over-flagged near 0°C and under-flagged in the −5°C to −10°C zone where observed SLW content actually peaks.
 
+### 3.2b SFIP Icing Index
+
+**Module:** `sounding/sfip.py` — See [sfip-implementation-design.md](./sfip-implementation-design.md) for full algorithm details.
+
+A second icing index computed alongside Ogimet, based on fuzzy-logic membership functions (Belo-Pereira 2015, Morcrette et al. 2019). Same algorithm family used by Windy.com and European operational met services.
+
+**Two variants** depending on data availability:
+
+| Variant | Name | When | Inputs | Weights |
+|---------|------|------|--------|---------|
+| Full | SFIP_O | GFS/ICON-EU (CLWMR from GRIB2) | T, RH, CLW, ω | 0.35, 0.15, 0.35, 0.15 |
+| Proxy | SFIP_4 | Other models (no CLW) | T, RH, DD+cloud proxy, ω | 0.40, 0.25, 0.25, 0.10 |
+
+**Membership functions** (all return 0.0–1.0 except VV which returns −0.3 to +0.5):
+- **M_T:** Piecewise linear, peaks 1.0 in [−5, −14]°C, tapers to 0 at 0°C and −25°C
+- **M_RH:** Ramp from 0 at 50% to 1.0 at 100%, steeper near saturation
+- **M_CLW:** Ramp from 0 to 1.0 over [0, 0.2] g/kg (requires GRIB2 CLW data)
+- **M_CLW_proxy:** Combines sounding DD score + NWP cloud cover factor (max of both)
+- **M_VV:** Boost for ascent (neg ω), penalty for subsidence; neutral when unavailable
+
+**Glaciation factor** (GFS/ICON-EU only): When ICMR data is available, `M_CLW *= CLW / (CLW + ICE)`. Reduces icing when cloud is mostly glaciated.
+
+**Gating:** Temperature [0, −25]°C. Full variant also gates on CLW > 0; proxy variant requires cloud proximity (DD < 3°C or within 500ft of detected cloud layer).
+
+**Severity mapping** (GA-tuned thresholds matching IcingRisk enum):
+
+| SFIP_100 | Risk |
+|----------|------|
+| < 15 | None |
+| 15–30 | Light |
+| 30–55 | Moderate |
+| ≥ 55 | Severe |
+
+**Output:** `SfipZone` objects (grouped adjacent icing levels) with `mean_sfip_100`, `risk`, `icing_type`, `variant` ("full" or "proxy").
+
+**Per-model behavior:**
+
+| Model | Variant | CLW Source | VV Source | Glaciation |
+|-------|---------|-----------|-----------|-----------|
+| GFS | Full (SFIP_O) | CLWMR from GFS GRIB2 | ω from API | Yes (ICMR from GRIB2) |
+| ICON | Full (SFIP_O)* | QC from ICON-EU GRIB2 | None (ω unavailable) | Yes (QI from ICON-EU) |
+| ECMWF | Proxy (SFIP_4) | DD + cloud proxy | ω from API | No |
+| MétéoFr | Proxy (SFIP_4) | DD + cloud proxy | None (ω unavailable) | No |
+| UKMO | Proxy (SFIP_4) | DD + cloud proxy | ω from API | No |
+| GEM | Proxy (SFIP_4) | DD + cloud proxy | None (ω unavailable) | No |
+
+\* ICON uses full variant only when route is within ICON-EU domain (Europe). Falls back to proxy for routes outside the domain.
+
 ### 3.3 Convective Assessment
 
 **Module:** `sounding/convective.py`
@@ -222,7 +333,29 @@ Aggregates cloud, icing, turbulence, and vertical motion data into vertical regi
 | `cat_turbulence` | worst across models | Reports worst CAT layer altitude and risk level. |
 | `strong_vertical_motion` | max \|w\| across models | Flags altitudes with \|w\| > 200 ft/min. |
 
-### 3.6 Wind Components
+### 3.6 Precipitation Assessment
+
+**Module:** `sounding/precipitation.py`
+
+Classifies precipitation phase at each pressure level and detects hazardous profiles (freezing rain, ice pellets).
+
+**Per-level phase classification** (two methods, GRIB2 preferred):
+1. **GRIB2 ice fraction** (when CLWMR + ICMR available): `ice_frac = ICMR / (CLWMR + ICMR)`. >0.8 = snow, 0.2–0.8 = mixed, <0.2 = rain.
+2. **Wet-bulb temperature** (fallback): Tw < −5°C = snow, −5 to 0°C = mixed, >0°C = rain.
+
+**Warm nose detection:** Identifies temperature inversions where T > 0°C exists between sub-zero layers. Cold surface + warm nose above = freezing rain risk. Deep cold surface layer + significant warm nose = ice pellets.
+
+**Surface phase determination** (priority order):
+1. Warm nose flags → freezing rain or ice pellets
+2. Model rain/snow breakdown from API (`rain`, `showers`, `snowfall`)
+3. Surface wet-bulb temperature
+4. Surface temperature (final fallback)
+
+**Surface intensity** from hourly precipitation total: <1 mm/h = light, 1–4 = moderate, >4 = heavy.
+
+**Output:** `PrecipitationAssessment` with surface phase/intensity, `PrecipitationZone` list (vertical zones grouped by phase), warm-nose altitudes, and rain/snow amounts.
+
+### 3.7 Wind Components
 
 **Module:** `analysis/wind.py`
 
@@ -230,7 +363,7 @@ Decomposes wind vector relative to flight track:
 - `headwind = V × cos(wind_dir − track)` — positive = headwind, negative = tailwind
 - `crosswind = V × sin(wind_dir − track)` — positive = from right
 
-### 3.7 Model Divergence
+### 3.8 Model Divergence
 
 **Module:** `analysis/comparison.py`
 
@@ -252,23 +385,28 @@ Poor agreement signals forecast uncertainty — brief conservatively.
 
 Shows data source for each key quantity per model. **Bold** = derived when API field is unavailable.
 
-| Quantity | GFS | ECMWF | ICON | MétéoFr | UKMO | Derivation method |
-|----------|-----|-------|------|---------|------|-------------------|
-| T at levels | API | API | API | API | API | — |
-| RH at levels | API | API | API | API | API | — |
-| Dewpoint at levels | API | API | API | API | API | — |
-| Wind at levels | API | API | API | API | API | — |
-| Geopotential height | API | API | API | API | API | — |
-| Omega (ω) | API | API | **n/a** | **n/a** | API | Not derivable. Vertical motion analysis unavailable for ICON and MétéoFr. |
-| Cloud cover (total) | API | API | API | API | API | — |
-| Cloud cover low/mid/high | API | API | API | API | API | — |
-| Freezing level | API | **derived** | API | **derived** | API | Linear interpolation of T profile through 0°C |
-| CAPE | API | API | API | API | API | — |
-| CIN | **derived** | **derived** | **derived** | **derived** | **derived** | Always from `mpcalc.cape_cin()` (API CAPE is single value, CIN requires profile) |
-| Visibility | API | **n/a** | API | **n/a** | API | Not derivable from standard pressure levels |
-| Precipitation probability | API | API | **n/a** | **n/a** | **n/a** | Requires ensemble data. GFS and ECMWF only. |
-| Water vapor density | **derivable** | **derivable** | **derivable** | **derivable** | **derivable** | `ρv = e_sat(Td) / (Rv × T_K)` where Rv = 461.5 J/(kg·K) |
-| Mixing ratio | **derivable** | **derivable** | **derivable** | **derivable** | **derivable** | `mpcalc.mixing_ratio_from_relative_humidity(P, T, RH)` |
+| Quantity | GFS | ECMWF | ICON | MétéoFr | UKMO | GEM | Derivation method |
+|----------|-----|-------|------|---------|------|-----|-------------------|
+| T at levels | API | API | API | API | API | API | — |
+| RH at levels | API | API | API | API | API | API | — |
+| Dewpoint at levels | API | API | API | API | API | API | — |
+| Wind at levels | API | API | API | API | API | API | — |
+| Geopotential height | API | API | API | API | API | API | — |
+| Omega (ω) | API | API | **n/a** | **n/a** | API | **n/a** | Not derivable. No vertical motion/CAT for ICON, MétéoFr, GEM. |
+| Cloud cover (total) | API | API | API | API | API | API | — |
+| Cloud cover low/mid/high | API | API | API | API | API | API | — |
+| Freezing level | API | **derived** | API | **derived** | API | **derived** | Linear interpolation of T profile through 0°C |
+| CAPE | API | API | API | API | API | API | — |
+| CIN | **derived** | **derived** | **derived** | **derived** | **derived** | **derived** | Always from `mpcalc.cape_cin()` |
+| Visibility | API | **n/a** | API | **n/a** | API | **n/a** | Not derivable from standard pressure levels |
+| Precip probability | API | API | **n/a** | **n/a** | **n/a** | **n/a** | Requires ensemble data |
+| CLWMR (cloud liquid water) | **GRIB2** | **n/a** | **GRIB2**† | **n/a** | **n/a** | **n/a** | GFS: S3 `.idx`. ICON: DWD model levels. |
+| ICMR (ice mixing ratio) | **GRIB2** | **n/a** | **GRIB2**† | **n/a** | **n/a** | **n/a** | Same sources as CLWMR |
+| NWP cloud diagnostics | **GRIB2** | **n/a** | **n/a** | **n/a** | **n/a** | **n/a** | GFS only: ceiling, cloud base/top/temp per layer |
+| SFIP icing index | Full | Proxy | Full†/Proxy | Proxy | Proxy | Proxy | Full uses GRIB2 CLW; proxy uses DD+cloud cover |
+| Precipitation phase | GRIB2+Tw | Tw only | GRIB2†+Tw | Tw only | Tw only | Tw only | GRIB2 ice fraction preferred, wet-bulb fallback |
+
+† ICON GRIB2 enrichment only available when route is within ICON-EU domain (Europe: 29.5–70.5°N, 23.5°W–62.5°E).
 
 ### 4.2 Key Derivation Methods
 
@@ -291,20 +429,22 @@ At 20°C saturated: ρv ≈ 17.3 g/m³ (the constant in the Ogimet formula).
 parcel = mpcalc.parcel_profile(P, T_sfc, Td_sfc)
 cape, cin = mpcalc.cape_cin(P, T, Td, parcel)
 ```
-Integrates positive buoyancy between LFC and EL. Note: as of Feb 2026, all five models now provide CAPE via API. CIN is always derived from the sounding profile since the API only provides scalar CAPE.
+Integrates positive buoyancy between LFC and EL. Note: as of Feb 2026, all seven models now provide CAPE via API. CIN is always derived from the sounding profile since the API only provides scalar CAPE.
 
 **Cloud cover per ICAO band** (fallback when low/mid/high not in API):
-Sounding-derived cloud layers are mapped to ICAO bands (low < 6500ft, mid 6500–20000ft, high > 20000ft). Cloud coverage classified from dewpoint depression. Coarser than NWP parameterization but provides a consistent fallback. Note: as of Feb 2026, all five models now provide `cloud_cover_low/mid/high` directly via API, so this fallback is rarely needed.
+Sounding-derived cloud layers are mapped to ICAO bands (low < 6500ft, mid 6500–20000ft, high > 20000ft). Cloud coverage classified from dewpoint depression. Coarser than NWP parameterization but provides a consistent fallback. Note: as of Feb 2026, all seven models now provide `cloud_cover_low/mid/high` directly via API, so this fallback is rarely needed.
 
 ### 4.3 What Cannot Be Derived
 
 | Quantity | Why | Impact |
 |----------|-----|--------|
-| Omega (ω) for ICON/MétéoFr | Requires model dynamics, not recoverable from T/wind alone | No vertical motion classification or CAT risk for these models |
-| Visibility for ECMWF/MétéoFr | Parameterized from sub-grid microphysics not available at pressure levels | VFR/IFR assessment limited to cloud cover proxy for these models |
-| Freezing level for ECMWF/MétéoFr | Not in API | Derived via linear interpolation of T profile through 0°C |
+| Omega (ω) for ICON/MétéoFr/GEM | Requires model dynamics, not recoverable from T/wind alone | No vertical motion classification or CAT risk for these models |
+| Visibility for ECMWF/MétéoFr/GEM | Parameterized from sub-grid microphysics not available at pressure levels | VFR/IFR assessment limited to cloud cover proxy for these models |
+| Freezing level for ECMWF/MétéoFr/GEM | Not in API | Derived via linear interpolation of T profile through 0°C |
 | Precipitation probability | Requires ensemble spread data | Only available from GFS and ECMWF |
 | Stratiform vs. convective cloud split | Not in any Open-Meteo API | Must approximate for Ogimet icing index (see §4.4) |
+| CLWMR/ICMR for ECMWF/MétéoFr/UKMO/GEM | No GRIB2 enrichment implemented for these models | SFIP uses proxy variant; precipitation phase uses wet-bulb only |
+| Cloud diagnostics for non-GFS models | GRIB2 cloud diagnostics only implemented for GFS | No NWP-native cloud base/top/ceiling for other models |
 
 ### 4.4 Approximating Cloud Type Split for Icing Index
 
@@ -384,7 +524,10 @@ Resolved by switching to the Ogimet continuous icing index (see §3.2). The prev
 - Analysis implementation: [analysis.md](./analysis.md)
 - Data models: [data-models.md](./data-models.md)
 - Fetch layer & model endpoints: [fetch.md](./fetch.md)
+- GRIB2 engine: [weather-engine-specs.md](./weather-engine-specs.md)
+- SFIP algorithm: [sfip-implementation-design.md](./sfip-implementation-design.md)
 - Ogimet icing index: Autorouter GRAMET documentation
+- SFIP references: Belo-Pereira (2015), Morcrette et al. (2019)
 - MetPy documentation: https://unidata.github.io/MetPy/
 - Sounding analysis plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
 - Vertical motion plan: [vertical-motion-plan.md](./vertical-motion-plan.md)

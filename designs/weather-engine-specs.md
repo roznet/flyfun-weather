@@ -11,10 +11,12 @@ The GRIB2 engine is an **enrichment layer** — it supplements Open-Meteo, not r
 ## What's Implemented
 
 ### GFS GRIB2 enrichment
-Via `fetch/grib/` (gfs_idx.py, grib_fetch.py):
-- Variables: CLMR (Cloud Liquid Water Mixing Ratio), ICMR (Ice Mixing Ratio)
+Via `fetch/grib/` (gfs_idx.py, grib_fetch.py, decode.py):
+- **Pressure-level variables:** CLMR (Cloud Liquid Water Mixing Ratio), ICMR (Ice Mixing Ratio) at all pressure levels
+- **Cloud diagnostics:** LCC/MCC/HCC/TCC (cloud cover by layer), PRES (cloud base/top per layer), TMP (cloud top temperatures), GH (cloud ceiling). Decoded into `NWPCloudDiagnostics` model.
 - Source: `noaa-gfs-bdp-pds.s3.amazonaws.com` (public, no auth)
 - Uses `.idx` companion files for HTTP Range byte-range downloads (only fetches needed messages)
+- Two separate fetch paths: `plan_byte_ranges()` for CLWMR/ICMR, `plan_cloud_diag_byte_ranges()` for cloud diagnostics
 - Bilinear spatial interpolation to route points via cfgrib + xarray
 - Disk cache with 48h TTL at `data/.cache/grib/gfs/{date}_{cycle}z/`
 
@@ -44,7 +46,7 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Index files:** `.idx` companion files list byte offset of every GRIB2 message
 - **Key detail:** GFS uses `CLMR` (not `CLWMR`) as the variable name in `.idx` files
 - **Availability:** ~4.5h after init time
-- **Currently fetching:** CLMR, ICMR at all pressure levels
+- **Currently fetching:** CLMR, ICMR at all pressure levels; cloud diagnostics (LCC/MCC/HCC/TCC covers, PRES bases/tops, TMP cloud-top temps, GH ceiling)
 - **Available but not yet used:** TMP, HGT, UGRD, VGRD, VVEL, RH (could replace Open-Meteo entirely)
 
 ### B. ECMWF (IFS HRES - Open Data) — FUTURE
