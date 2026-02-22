@@ -53,3 +53,4 @@ class BriefingPackMeta(BaseModel):
     assessment_reason: Optional[str] = None
     artifact_path: str = ""  # path to pack directory
     model_init_times: dict[str, int] = Field(default_factory=dict)
+    grib_init_times: dict[str, int] = Field(default_factory=dict)

@@ -50,6 +50,15 @@ def _apply_cloud_diagnostics(hourly: HourlyForecast, diag: NWPCloudDiagnostics) 
         hourly.cloud_cover_high_pct = diag.high.cover_pct
 
 
+def _run_info_to_timestamp(init_date: str, init_hour: int) -> int:
+    """Convert GRIB run info (date string + hour) to a Unix timestamp."""
+    return int(
+        datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H")
+        .replace(tzinfo=timezone.utc)
+        .timestamp()
+    )
+
+
 def enrich_forecasts(
     cross_sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
@@ -58,7 +67,7 @@ def enrich_forecasts(
     target_hour: int,
     *,
     data_dir: Path,
-) -> None:
+) -> dict[str, int]:
     """Enrich cross-section forecasts with cloud water from GRIB2 sources.
 
     Enriches GFS cross-sections with CLWMR/ICMR and cloud diagnostics.
@@ -73,15 +82,27 @@ def enrich_forecasts(
         target_date: ISO date string (YYYY-MM-DD).
         target_hour: Target hour (UTC).
         data_dir: Base data directory for caching.
+
+    Returns:
+        Dict mapping model name to GRIB init Unix timestamp (only non-None).
     """
-    _enrich_gfs(
+    grib_init_times: dict[str, int] = {}
+
+    gfs_ts = _enrich_gfs(
         cross_sections, all_forecasts, route_points,
         target_date, target_hour, data_dir=data_dir,
     )
-    _enrich_icon_eu(
+    if gfs_ts is not None:
+        grib_init_times["gfs"] = gfs_ts
+
+    icon_ts = _enrich_icon_eu(
         cross_sections, all_forecasts, route_points,
         target_date, target_hour, data_dir=data_dir,
     )
+    if icon_ts is not None:
+        grib_init_times["icon"] = icon_ts
+
+    return grib_init_times
 
 
 # ---------------------------------------------------------------------------
@@ -97,12 +118,15 @@ def _enrich_gfs(
     target_hour: int,
     *,
     data_dir: Path,
-) -> None:
-    """Enrich GFS cross-sections with CLWMR/ICMR and cloud diagnostics."""
+) -> int | None:
+    """Enrich GFS cross-sections with CLWMR/ICMR and cloud diagnostics.
+
+    Returns the GRIB init Unix timestamp, or None if enrichment was skipped.
+    """
     gfs_sections = [cs for cs in cross_sections if cs.model == ModelSource.GFS]
     if not gfs_sections:
         logger.info("No GFS cross-sections to enrich")
-        return
+        return None
 
     target_time = datetime.strptime(
         f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H"
@@ -113,7 +137,7 @@ def _enrich_gfs(
     run_info = find_latest_run(target_time, session=session)
     if run_info is None:
         logger.warning("No GFS model run found for enrichment")
-        return
+        return None
 
     init_date, init_hour = run_info
     f_prev, f_next = bracket_forecast_hours(init_date, init_hour, target_time)
@@ -144,7 +168,7 @@ def _enrich_gfs(
 
     if not idx_by_fhour:
         logger.warning("No .idx files retrieved for enrichment")
-        return
+        return None
 
     # Run both enrichment paths
     _enrich_clwmr_icmr(
@@ -157,6 +181,8 @@ def _enrich_gfs(
         init_date, init_hour, f_prev, f_next, bbox,
         run_dir, idx_by_fhour, point_lats, point_lons, session,
     )
+
+    return _run_info_to_timestamp(init_date, init_hour)
 
 
 def _enrich_clwmr_icmr(
@@ -359,8 +385,11 @@ def _enrich_icon_eu(
     target_hour: int,
     *,
     data_dir: Path,
-) -> None:
-    """Enrich ICON cross-sections with QC/QI from ICON-EU GRIB2."""
+) -> int | None:
+    """Enrich ICON cross-sections with QC/QI from ICON-EU GRIB2.
+
+    Returns the GRIB init Unix timestamp, or None if enrichment was skipped.
+    """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_MODEL_LEVEL_MAX,
         ICON_EU_MODEL_LEVEL_MIN,
@@ -374,12 +403,12 @@ def _enrich_icon_eu(
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
     if not icon_sections:
         logger.debug("No ICON cross-sections to enrich")
-        return
+        return None
 
     # Domain check — skip silently if route is outside ICON-EU bounds
     if not route_in_icon_eu_domain(route_points):
         logger.info("Route outside ICON-EU domain, skipping ICON-EU enrichment")
-        return
+        return None
 
     target_time = datetime.strptime(
         f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H"
@@ -391,11 +420,11 @@ def _enrich_icon_eu(
         run_info = find_latest_icon_eu_run(target_time, session=session)
     except Exception:
         logger.warning("Failed to find ICON-EU model run", exc_info=True)
-        return
+        return None
 
     if run_info is None:
         logger.warning("No ICON-EU model run found for enrichment")
-        return
+        return None
 
     init_date, init_hour = run_info
     f_prev, f_next = bracket_icon_eu_forecast_hours(init_date, init_hour, target_time)
@@ -442,7 +471,7 @@ def _enrich_icon_eu(
 
     if not grib_data_by_fhour:
         logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
-        return
+        return None
 
     # Decode and interpolate
     from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
@@ -469,6 +498,8 @@ def _enrich_icon_eu(
         init_date, init_hour, f_prev, f_next, bbox,
         run_dir, point_lats, point_lons, session,
     )
+
+    return _run_info_to_timestamp(init_date, init_hour)
 
 
 def _enrich_icon_eu_cloud_diagnostics(

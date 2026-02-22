@@ -38,6 +38,7 @@ class FetchResult:
     models_fetched: list[str]
     grib_enriched: bool = False
     grib_enrichment_failed: bool = False
+    grib_init_times: dict[str, int] = field(default_factory=dict)
 
 
 def run_fetch(
@@ -127,12 +128,13 @@ def run_fetch(
     # --- GRIB2 enrichment (optional) ---
     grib_enriched = False
     grib_enrichment_failed = False
+    grib_init_times: dict[str, int] = {}
     if enrich_grib and cross_sections:
         _notify("grib_enrichment")
         try:
             from weatherbrief.fetch.grib import enrich_forecasts
 
-            enrich_forecasts(
+            grib_init_times = enrich_forecasts(
                 cross_sections, all_forecasts, route_points,
                 target_date, target_hour, data_dir=data_dir,
             )
@@ -162,4 +164,5 @@ def run_fetch(
         models_fetched=models_fetched_names,
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
+        grib_init_times=grib_init_times,
     )

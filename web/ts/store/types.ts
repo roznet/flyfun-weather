@@ -46,6 +46,7 @@ export interface PackMeta {
   assessment: string | null;
   assessment_reason: string | null;
   model_init_times?: Record<string, number>;
+  grib_init_times?: Record<string, number>;
   data_status?: DataStatus | null;
 }
 

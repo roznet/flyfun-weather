@@ -59,6 +59,7 @@ class PackMetaResponse(BaseModel):
     assessment: str | None
     assessment_reason: str | None
     model_init_times: dict[str, int] = Field(default_factory=dict)
+    grib_init_times: dict[str, int] = Field(default_factory=dict)
     data_status: DataStatus | None = None
 
 
@@ -83,6 +84,7 @@ def _meta_to_response(
         assessment=meta.assessment,
         assessment_reason=meta.assessment_reason,
         model_init_times=meta.model_init_times,
+        grib_init_times=meta.grib_init_times,
         data_status=data_status,
     )
 
@@ -300,6 +302,7 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
         assessment_reason=result.digest.assessment_reason if result.digest else None,
         artifact_path=str(pack_path),
         model_init_times=init_times,
+        grib_init_times=result.grib_init_times,
     )
 
     save_pack_meta(db, meta)
