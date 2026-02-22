@@ -627,5 +627,39 @@
       { "min": 1, "max": 3, "label": "Moderate (1–3°C)", "risk": "moderate", "meaning": "Significant lid. Reduced visibility below, bumpy transition through." },
       { "min": 3, "max": null, "label": "Strong (>3°C)", "risk": "high", "meaning": "Strong cap. Dense haze/fog trapped below, sharp turbulence (LLWS) at boundary." }
     ]
+  },
+  "sounding_ceiling_ft": {
+    "name": "Sounding Ceiling",
+    "unit": "ft",
+    "vibe": "The lowest dense cloud layer from the atmospheric profile",
+    "primary_goal": "Estimate the ceiling from sounding-derived cloud layers.",
+    "best_used_for": "Comparing against NWP ceiling — if both agree on a low ceiling, confidence is high.",
+    "limitations": "Derived from 8 pressure levels (coarse resolution). Thin cloud layers may be missed. Based on dewpoint depression, not direct observation.",
+    "theory": "The base of the lowest BKN (broken, 5–7 oktas) or OVC (overcast, 8 oktas) cloud layer detected from the atmospheric sounding. Cloud layers are identified where dewpoint depression drops below 3°C at consecutive pressure levels. Only BKN/OVC layers count as a 'ceiling' — scattered clouds allow VFR flight underneath.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Ceiling_(cloud)",
+    "thresholds": [
+      { "min": 0, "max": 200, "label": "LIFR", "risk": "severe", "meaning": "Very low ceiling. Low IFR conditions." },
+      { "min": 200, "max": 500, "label": "LIFR", "risk": "severe", "meaning": "Extremely low ceiling. Dangerous for most operations." },
+      { "min": 500, "max": 1000, "label": "IFR", "risk": "high", "meaning": "IFR ceiling. Instrument approaches required." },
+      { "min": 1000, "max": 3000, "label": "MVFR", "risk": "moderate", "meaning": "Marginal VFR. Low ceiling limits maneuvering." },
+      { "min": 3000, "max": null, "label": "VFR", "risk": "none", "meaning": "Good ceiling for VFR operations." }
+    ]
+  },
+  "nwp_ceiling_ft": {
+    "name": "NWP Ceiling",
+    "unit": "ft",
+    "vibe": "The weather model's direct ceiling prediction",
+    "primary_goal": "Show the model-predicted cloud ceiling height.",
+    "best_used_for": "Direct NWP ceiling estimate — often more reliable than sounding-derived for coverage, especially from GFS and ICON-EU.",
+    "limitations": "Model grid resolution smooths out local effects. GFS reports geopotential height at cloud ceiling; ICON-EU reports geometric height. Neither accounts for terrain-induced fog or valley inversions.",
+    "theory": "Cloud ceiling height directly from the NWP model's cloud diagnostics. GFS provides ceiling as geopotential height (gpm) converted to feet. ICON-EU provides ceiling as geometric height (meters) converted to feet. The model ceiling uses its own cloud parameterisation, which can differ from the sounding-derived ceiling because it uses sub-grid physics to estimate cloud at scales smaller than the grid spacing.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Ceiling_(cloud)",
+    "thresholds": [
+      { "min": 0, "max": 200, "label": "LIFR", "risk": "severe", "meaning": "Very low ceiling. Low IFR conditions." },
+      { "min": 200, "max": 500, "label": "LIFR", "risk": "severe", "meaning": "Extremely low ceiling. Dangerous for most operations." },
+      { "min": 500, "max": 1000, "label": "IFR", "risk": "high", "meaning": "IFR ceiling. Instrument approaches required." },
+      { "min": 1000, "max": 3000, "label": "MVFR", "risk": "moderate", "meaning": "Marginal VFR. Low ceiling limits maneuvering." },
+      { "min": 3000, "max": null, "label": "VFR", "risk": "none", "meaning": "Good ceiling for VFR operations." }
+    ]
   }
 }

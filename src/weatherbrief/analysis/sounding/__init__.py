@@ -219,6 +219,24 @@ def analyze_sounding(
     compute_stability_indicators(profile, derived_levels)
     vertical_motion = assess_vertical_motion(derived_levels)
 
+    # Compute ceiling fields for Key Altitudes display
+    from weatherbrief.models.analysis import CloudCoverage
+
+    sounding_ceiling_ft: float | None = None
+    bkn_ovc_bases = [
+        cl.base_ft for cl in cloud_layers
+        if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+    ]
+    if bkn_ovc_bases:
+        sounding_ceiling_ft = min(bkn_ovc_bases)
+
+    nwp_ceiling_ft: float | None = None
+    if hourly and hourly.nwp_cloud_diagnostics:
+        nwp_ceiling_ft = hourly.nwp_cloud_diagnostics.ceiling_ft
+
+    indices.sounding_ceiling_ft = sounding_ceiling_ft
+    indices.nwp_ceiling_ft = nwp_ceiling_ft
+
     return SoundingAnalysis(
         indices=indices,
         derived_levels=derived_levels,

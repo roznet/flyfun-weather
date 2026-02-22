@@ -903,6 +903,13 @@ class TestIconEuSingleLevel:
         assert "_000_HTOP_CON.grib2.bz2" in url
         assert "/06/htop_con/" in url
 
+    def test_cloud_diag_variables_include_cloud_cover(self):
+        """ICON_EU_CLOUD_DIAG_VARIABLES includes CLCL/CLCM/CLCH/CLCT."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_CLOUD_DIAG_VARIABLES
+
+        for var in ("clcl", "clcm", "clch", "clct"):
+            assert var in ICON_EU_CLOUD_DIAG_VARIABLES, f"{var} missing"
+
     def test_single_level_url_no_level_number(self):
         """Single-level URLs have no level number (unlike model-level)."""
         from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_single_level_url, icon_eu_file_url
@@ -975,8 +982,55 @@ class TestBuildIconCloudDiagnostics:
         assert abs(diag.ceiling_ft - 984) < 2
         assert diag.convective_base_ft is None
         assert diag.convective_top_ft is None
-        # Low/mid/high not populated by ICON single-level
+        # Low/mid/high not populated when only ceiling provided
         assert diag.low.cover_pct is None
+
+    def test_cloud_cover_percentages(self):
+        """CLCL/CLCM/CLCH/CLCT cloud cover percentages stored correctly."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        raw = {
+            "low_cover_pct": 80.0,
+            "mid_cover_pct": 40.0,
+            "high_cover_pct": 10.0,
+            "total_cover_pct": 85.0,
+        }
+        diag = build_icon_cloud_diagnostics(raw)
+        assert diag is not None
+        assert diag.low.cover_pct == 80.0
+        assert diag.mid.cover_pct == 40.0
+        assert diag.high.cover_pct == 10.0
+        assert diag.total_cover_pct == 85.0
+        # No height data provided
+        assert diag.ceiling_ft is None
+        assert diag.low.base_ft is None
+
+    def test_cloud_cover_with_ceiling(self):
+        """Cloud cover percentages combined with ceiling height."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        raw = {
+            "ceiling_m": 500.0,
+            "low_cover_pct": 90.0,
+            "mid_cover_pct": 20.0,
+            "high_cover_pct": 0.0,
+            "total_cover_pct": 92.0,
+        }
+        diag = build_icon_cloud_diagnostics(raw)
+        assert diag is not None
+        assert diag.ceiling_ft is not None
+        assert abs(diag.ceiling_ft - 1640) < 5
+        assert diag.low.cover_pct == 90.0
+        assert diag.high.cover_pct == 0.0
+
+    def test_icon_cloud_diag_field_map_has_cover_entries(self):
+        """ICON cloud diag field map includes CLCL/CLCM/CLCH/CLCT."""
+        from weatherbrief.fetch.grib.decode import _ICON_CLOUD_DIAG_FIELD_MAP
+
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["clcl"] == "low_cover_pct"
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["clcm"] == "mid_cover_pct"
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["clch"] == "high_cover_pct"
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["clct"] == "total_cover_pct"
 
 
 # --- Cache model parameter tests ---

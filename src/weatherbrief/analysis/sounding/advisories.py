@@ -297,20 +297,28 @@ def _nwp_cloud_cover_at(
     """
     diag = analysis.nwp_cloud_diagnostics
     if diag is not None:
-        # Check actual GFS cloud boundaries per layer
-        for layer in (diag.low, diag.mid, diag.high):
-            if (layer.cover_pct is not None and layer.cover_pct > 0
-                    and layer.base_ft is not None and layer.top_ft is not None
-                    and layer.base_ft <= altitude_ft <= layer.top_ft):
-                return layer.cover_pct
-        # Check convective layer
-        if (diag.convective_cover_pct is not None and diag.convective_cover_pct > 0
-                and diag.convective_base_ft is not None
-                and diag.convective_top_ft is not None
-                and diag.convective_base_ft <= altitude_ft <= diag.convective_top_ft):
-            return diag.convective_cover_pct
-        # Altitude doesn't fall within any diagnosed cloud layer
-        return 0.0
+        # Check if diagnostics include layer cover percentages (GFS has them,
+        # ICON-EU may only have ceiling/convective heights without cover data).
+        has_layer_cover = any(
+            layer.cover_pct is not None
+            for layer in (diag.low, diag.mid, diag.high)
+        )
+        if has_layer_cover:
+            # Full diagnostics (GFS): use actual cloud boundaries per layer
+            for layer in (diag.low, diag.mid, diag.high):
+                if (layer.cover_pct is not None and layer.cover_pct > 0
+                        and layer.base_ft is not None and layer.top_ft is not None
+                        and layer.base_ft <= altitude_ft <= layer.top_ft):
+                    return layer.cover_pct
+            # Check convective layer
+            if (diag.convective_cover_pct is not None and diag.convective_cover_pct > 0
+                    and diag.convective_base_ft is not None
+                    and diag.convective_top_ft is not None
+                    and diag.convective_base_ft <= altitude_ft <= diag.convective_top_ft):
+                return diag.convective_cover_pct
+            # Altitude doesn't fall within any diagnosed cloud layer
+            return 0.0
+        # Partial diagnostics (ICON-EU): no cover data — fall through to ICAO bands
 
     # Fallback to ICAO bands with Open-Meteo cloud cover
     if analysis.cloud_cover_low_pct is None:
