@@ -167,6 +167,26 @@ class TestCeilingFromSounding:
         sounding = SoundingAnalysis(cloud_layers=[])
         assert _ceiling_from_sounding(sounding) is None
 
+    def test_uses_precomputed_ceiling_from_indices(self):
+        """Pre-computed sounding_ceiling_ft (LCL-corrected) is preferred over cloud_layers."""
+        sounding = SoundingAnalysis(
+            indices=ThermodynamicIndices(sounding_ceiling_ft=1400.0),
+            cloud_layers=[
+                EnhancedCloudLayer(base_ft=430, top_ft=2000, coverage=CloudCoverage.BKN),
+            ],
+        )
+        # Should use indices value (1400), not cloud layer base (430)
+        assert _ceiling_from_sounding(sounding) == 1400.0
+
+    def test_fallback_when_no_indices(self):
+        """Without indices, falls back to cloud layer scan."""
+        sounding = SoundingAnalysis(
+            cloud_layers=[
+                EnhancedCloudLayer(base_ft=3000, top_ft=5000, coverage=CloudCoverage.BKN),
+            ],
+        )
+        assert _ceiling_from_sounding(sounding) == 3000
+
 
 # --- FlightCategory.worst ---
 

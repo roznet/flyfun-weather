@@ -101,7 +101,10 @@ def compute_runway_winds(
 
 
 def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:
-    """Extract ceiling: lowest BKN or OVC cloud layer base."""
+    """Extract ceiling: lowest BKN or OVC cloud layer base (LCL-corrected)."""
+    if sounding.indices and sounding.indices.sounding_ceiling_ft is not None:
+        return sounding.indices.sounding_ceiling_ft
+    # Fallback for data without pre-computed ceiling
     ceilings = [
         cl.base_ft
         for cl in sounding.cloud_layers

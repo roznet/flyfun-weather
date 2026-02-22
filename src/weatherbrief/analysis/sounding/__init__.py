@@ -223,12 +223,23 @@ def analyze_sounding(
     from weatherbrief.models.analysis import CloudCoverage
 
     sounding_ceiling_ft: float | None = None
-    bkn_ovc_bases = [
-        cl.base_ft for cl in cloud_layers
+    bkn_ovc_layers = [
+        cl for cl in cloud_layers
         if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
     ]
-    if bkn_ovc_bases:
-        sounding_ceiling_ft = min(bkn_ovc_bases)
+    if bkn_ovc_layers:
+        lowest = min(bkn_ovc_layers, key=lambda cl: cl.base_ft)
+        sounding_ceiling_ft = lowest.base_ft
+        # LCL floor: when the ceiling layer starts at the bottom of the
+        # sounding (first derived level), the base is just the level's
+        # standard-atmosphere altitude, not a real cloud base.
+        # Use LCL as a more realistic ceiling estimate.
+        if (indices.lcl_altitude_ft is not None
+                and derived_levels
+                and lowest.base_pressure_hpa is not None
+                and lowest.base_pressure_hpa >= derived_levels[0].pressure_hpa
+                and indices.lcl_altitude_ft > sounding_ceiling_ft):
+            sounding_ceiling_ft = round(indices.lcl_altitude_ft)
 
     nwp_ceiling_ft: float | None = None
     if hourly and hourly.nwp_cloud_diagnostics:
