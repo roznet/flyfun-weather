@@ -170,10 +170,17 @@ export function renderFreshnessBar(
     return;
   }
 
-  // Model basis line from the pack's init times
+  // Model basis line from the pack's init times, with GRIB annotation when different
   const packTimes = pack?.model_init_times || {};
+  const gribTimes = pack?.grib_init_times || {};
   const basisParts = Object.entries(packTimes)
-    .map(([m, t]) => `${modelLabel(m)} ${formatModelRunTime(t)}`)
+    .map(([m, t]) => {
+      const gribTs = gribTimes[m];
+      if (gribTs && gribTs !== t) {
+        return `${modelLabel(m)} ${formatModelRunTime(t)} (GRIB ${formatModelRunTime(gribTs)})`;
+      }
+      return `${modelLabel(m)} ${formatModelRunTime(t)}`;
+    })
     .join(', ');
   const basisLine = basisParts ? `<span class="freshness-basis">Based on ${basisParts}</span>` : '';
 
