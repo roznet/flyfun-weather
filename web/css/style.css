@@ -230,6 +230,18 @@ label {
   font-style: italic;
 }
 
+.dots-spinner::after {
+  content: '...';
+  display: inline-block;
+  width: 0;
+  overflow: hidden;
+  animation: dots-reveal 1.2s steps(3, end) infinite;
+}
+
+@keyframes dots-reveal {
+  to { width: 1.2em; }
+}
+
 .freshness-basis {
   color: var(--text-muted);
   font-size: 0.8rem;

@@ -154,8 +154,8 @@ export function renderFreshnessBar(
   if (refreshing) {
     el.className = 'freshness-bar freshness-refreshing';
     const detailSuffix = refreshDetail ? ` (${refreshDetail})` : '';
-    const label = refreshStage || 'Starting refresh...';
-    el.innerHTML = `<span>${label}${detailSuffix}</span>`;
+    const label = refreshStage || 'Starting refresh';
+    el.innerHTML = `<span>${label}${detailSuffix}<span class="dots-spinner"></span></span>`;
     return;
   }
 
