@@ -7,6 +7,7 @@ import pytest
 from weatherbrief.analysis.sounding.advisories import _nwp_cloud_cover_at
 from weatherbrief.models import (
     CloudCoverage,
+    DerivedLevel,
     EnhancedCloudLayer,
     NWPCloudDiagnostics,
     NWPCloudLayerDiag,
@@ -164,3 +165,102 @@ class TestCeilingFields:
         assert restored.sounding_ceiling_ft == 4000.0
         assert restored.nwp_ceiling_ft == 3500.0
         assert restored.freezing_level_ft == 8000.0
+
+
+# --- LCL floor for sounding ceiling tests ---
+
+
+class TestLCLFloor:
+    """Test LCL floor logic in analyze_sounding ceiling computation."""
+
+    def _run_ceiling(
+        self,
+        cloud_layers: list[EnhancedCloudLayer],
+        derived_levels: list[DerivedLevel],
+        lcl_altitude_ft: float | None,
+    ) -> float | None:
+        """Replicate the ceiling computation from analyze_sounding."""
+        from weatherbrief.models.analysis import CloudCoverage
+
+        indices = ThermodynamicIndices(lcl_altitude_ft=lcl_altitude_ft)
+
+        sounding_ceiling_ft: float | None = None
+        bkn_ovc_layers = [
+            cl for cl in cloud_layers
+            if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+        ]
+        if bkn_ovc_layers:
+            lowest = min(bkn_ovc_layers, key=lambda cl: cl.base_ft)
+            sounding_ceiling_ft = lowest.base_ft
+            if (indices.lcl_altitude_ft is not None
+                    and derived_levels
+                    and lowest.base_pressure_hpa is not None
+                    and lowest.base_pressure_hpa >= derived_levels[0].pressure_hpa
+                    and indices.lcl_altitude_ft > sounding_ceiling_ft):
+                sounding_ceiling_ft = round(indices.lcl_altitude_ft)
+
+        return sounding_ceiling_ft
+
+    def test_lcl_floor_applied(self):
+        """Cloud at first level (1000 hPa), LCL at 1400ft → ceiling = 1400."""
+        cloud_layers = [
+            EnhancedCloudLayer(
+                base_ft=430, top_ft=2000,
+                base_pressure_hpa=1000,
+                coverage=CloudCoverage.BKN,
+            ),
+        ]
+        derived_levels = [
+            DerivedLevel(pressure_hpa=1000, altitude_ft=430),
+            DerivedLevel(pressure_hpa=975, altitude_ft=1200),
+            DerivedLevel(pressure_hpa=950, altitude_ft=1800),
+        ]
+        result = self._run_ceiling(cloud_layers, derived_levels, lcl_altitude_ft=1400.0)
+        assert result == 1400
+
+    def test_lcl_floor_not_applied_mid_level(self):
+        """Cloud at 850 hPa (not first level) → ceiling unchanged."""
+        cloud_layers = [
+            EnhancedCloudLayer(
+                base_ft=5000, top_ft=8000,
+                base_pressure_hpa=850,
+                coverage=CloudCoverage.BKN,
+            ),
+        ]
+        derived_levels = [
+            DerivedLevel(pressure_hpa=1000, altitude_ft=430),
+            DerivedLevel(pressure_hpa=975, altitude_ft=1200),
+            DerivedLevel(pressure_hpa=850, altitude_ft=5000),
+        ]
+        result = self._run_ceiling(cloud_layers, derived_levels, lcl_altitude_ft=1400.0)
+        assert result == 5000
+
+    def test_lcl_floor_not_applied_no_lcl(self):
+        """No LCL → ceiling unchanged."""
+        cloud_layers = [
+            EnhancedCloudLayer(
+                base_ft=430, top_ft=2000,
+                base_pressure_hpa=1000,
+                coverage=CloudCoverage.BKN,
+            ),
+        ]
+        derived_levels = [
+            DerivedLevel(pressure_hpa=1000, altitude_ft=430),
+        ]
+        result = self._run_ceiling(cloud_layers, derived_levels, lcl_altitude_ft=None)
+        assert result == 430
+
+    def test_lcl_floor_not_applied_lcl_below(self):
+        """LCL below cloud base → ceiling unchanged."""
+        cloud_layers = [
+            EnhancedCloudLayer(
+                base_ft=1500, top_ft=3000,
+                base_pressure_hpa=1000,
+                coverage=CloudCoverage.OVC,
+            ),
+        ]
+        derived_levels = [
+            DerivedLevel(pressure_hpa=1000, altitude_ft=1500),
+        ]
+        result = self._run_ceiling(cloud_layers, derived_levels, lcl_altitude_ft=1200.0)
+        assert result == 1500
