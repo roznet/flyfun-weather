@@ -69,7 +69,7 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Domain:** 29.5–70.5°N, 23.5°W–62.5°E
 - **Variables fetched:**
   - Model-level: QC (cloud liquid water), QI (ice mixing ratio), P (pressure for vertical interp)
-  - Single-level: CEILING (cloud ceiling height), HBAS_CON (convective cloud base), HTOP_CON (convective cloud top)
+  - Single-level: CEILING (cloud ceiling), HBAS_CON/HTOP_CON (convective base/top), CLCL/CLCM/CLCH/CLCT (layer + total cloud cover %)
 - **Model levels → pressure levels:** Log-pressure interpolation using P field; targets ICON_PRESSURE_LEVELS
 - **Single-level → NWPCloudDiagnostics:** Heights in meters converted to feet (× 3.28084)
 - **Publication delay:** ~3h after init time

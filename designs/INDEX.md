@@ -17,8 +17,8 @@ Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection
 → Full doc: data-models.md
 
 ### fetch
-Weather data retrieval: Open-Meteo multi-point client, route interpolation, DWD text forecasts, Autorouter GRAMET, SRTM elevation, model freshness.
-Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_dwd_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `check_freshness`
+Weather data retrieval: Open-Meteo multi-point client, route interpolation, DWD text forecasts, Autorouter GRAMET, SRTM elevation, model freshness, GRIB2 enrichment (GFS + ICON-EU cloud water, diagnostics, and cloud cover override).
+Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_dwd_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `check_freshness`, `enrich_forecasts`
 → Full doc: fetch.md
 
 ### analysis
@@ -32,11 +32,11 @@ Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesMani
 → Full doc: advisories.md
 
 ### analysis-metrics
-Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API sources, GRIB2 enrichment (GFS cloud water/diagnostics, ICON-EU CLW/ICE), MetPy derivations, SFIP/Ogimet icing indices, precipitation assessment, per-model availability matrix, and known issues.
+Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API sources, GRIB2 enrichment (GFS cloud water/diagnostics, ICON-EU CLW/ICE/cloud cover/ceiling), MetPy derivations, SFIP/Ogimet icing indices, precipitation assessment, per-model availability matrix, and known issues.
 → Full doc: analysis-metrics.md
 
 ### visualization
-Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands, convective towers, temperature/stability lines, hover interaction, metrics UI system with info popups, layer legends, "Discuss with AI" integration, unified atmospheric profile table, and Windy meteogram links.
+Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands (per-band hybrid with sounding-corroborated collapse), convective towers, temperature/stability lines, hover interaction, metrics UI system with info popups, layer legends, "Discuss with AI" integration, unified atmospheric profile table, ceiling metrics, and Windy meteogram links.
 Key exports: `CrossSectionRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
 → Full doc: visualization.md
 
