@@ -495,8 +495,9 @@ def decode_icon_eu_per_point(
                     if lev > 0:
                         point_level_data[field_key][lev] = values
 
-        for ds in datasets:
+            # Close each dataset immediately to free memory (ICON-EU grids are large)
             ds.close()
+        del datasets
 
         # Now interpolate from model levels to pressure levels per point
         pressure_data = point_level_data.get("pressure_pa", {})
