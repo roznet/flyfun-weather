@@ -446,47 +446,47 @@ def _enrich_icon_eu(
     point_lons = [rp.lon for rp in route_points]
     levels = list(range(ICON_EU_MODEL_LEVEL_MIN, ICON_EU_MODEL_LEVEL_MAX + 1))
 
-    # Download GRIB2 data for each bracketing forecast hour
-    grib_data_by_fhour: dict[int, bytes] = {}
-    for fhour in sorted({f_prev, f_next}):
-        ck = cache_key(fhour, "ICON_EU_QC_QI_P", bbox)
-        cached = get_cached(run_dir, ck)
-        if cached is not None:
-            grib_data_by_fhour[fhour] = cached
-            continue
+    # Fetch and decode only the closest forecast hour to limit memory usage.
+    # ICON-EU GRIB data is ~190MB per fhour; decoding via cfgrib/xarray
+    # expands to ~800MB+, so loading both fhours would exceed container limits.
+    import gc
 
-        try:
-            grib_bytes = fetch_icon_eu_fields(
-                init_date, init_hour, fhour,
-                levels=levels,
-                variables=list(ICON_EU_VARIABLES),
-                session=session,
-            )
-            if grib_bytes:
-                put_cached(run_dir, ck, grib_bytes)
-                grib_data_by_fhour[fhour] = grib_bytes
-        except Exception:
-            logger.warning("Failed to fetch ICON-EU f%03d", fhour, exc_info=True)
-            continue
-
-    if not grib_data_by_fhour:
-        logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
-        return None
-
-    # Decode and interpolate
     from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
 
-    decoded_by_fhour: dict[int, list[dict[int, dict[str, float]]]] = {}
-    for fhour, grib_bytes in grib_data_by_fhour.items():
-        decoded_by_fhour[fhour] = decode_icon_eu_per_point(
-            grib_bytes, point_lats, point_lons,
-        )
+    def _fetch_and_decode_fhour(fhour: int) -> list[dict[int, dict[str, float]]] | None:
+        ck = cache_key(fhour, "ICON_EU_QC_QI_P", bbox)
+        grib_bytes = get_cached(run_dir, ck)
+        if grib_bytes is None:
+            try:
+                grib_bytes = fetch_icon_eu_fields(
+                    init_date, init_hour, fhour,
+                    levels=levels,
+                    variables=list(ICON_EU_VARIABLES),
+                    session=session,
+                )
+                if grib_bytes:
+                    put_cached(run_dir, ck, grib_bytes)
+            except Exception:
+                logger.warning("Failed to fetch ICON-EU f%03d", fhour, exc_info=True)
+                return None
+        if not grib_bytes:
+            return None
+        decoded = decode_icon_eu_per_point(grib_bytes, point_lats, point_lons)
+        del grib_bytes
+        gc.collect()
+        return decoded
 
-    # Use closest forecast hour
-    primary_fhour = f_prev if f_prev in decoded_by_fhour else f_next
-    if primary_fhour not in decoded_by_fhour:
-        primary_fhour = next(iter(decoded_by_fhour))
-    decoded_points = decoded_by_fhour[primary_fhour]
+    # Prefer f_prev (closest); fall back to f_next only if needed
+    preferred_order = [f_prev, f_next] if f_prev != f_next else [f_prev]
+    decoded_points = None
+    for fhour in preferred_order:
+        decoded_points = _fetch_and_decode_fhour(fhour)
+        if decoded_points:
+            break
+
+    if not decoded_points:
+        logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
+        return None
 
     _merge_cloud_water_into_sections(
         icon_sections, all_forecasts, route_points, decoded_points, "icon",
@@ -523,47 +523,38 @@ def _enrich_icon_eu_cloud_diagnostics(
     )
     from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
 
-    # Download single-level GRIB2 data
-    grib_data_by_fhour: dict[int, bytes] = {}
-    forecast_hours = sorted({f_prev, f_next})
+    # Fetch and decode only the closest forecast hour (same memory strategy
+    # as model-level enrichment above — single-level data is smaller but
+    # still benefits from processing only what's needed).
+    preferred_order = [f_prev, f_next] if f_prev != f_next else [f_prev]
+    decoded_points: list[dict[str, float]] | None = None
 
-    for fhour in forecast_hours:
+    for fhour in preferred_order:
         ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG", bbox)
-        cached = get_cached(run_dir, ck)
-        if cached is not None:
-            grib_data_by_fhour[fhour] = cached
+        grib_bytes = get_cached(run_dir, ck)
+        if grib_bytes is None:
+            try:
+                fetched = fetch_icon_eu_single_level(
+                    init_date, init_hour, [fhour], session=session,
+                )
+                grib_bytes = fetched.get(fhour)
+                if grib_bytes:
+                    put_cached(run_dir, ck, grib_bytes)
+            except Exception:
+                logger.warning("Failed to fetch ICON-EU cloud diagnostics f%03d", fhour, exc_info=True)
+                continue
+        if not grib_bytes:
             continue
-
-    # Fetch any missing forecast hours in one call
-    missing_fhours = [fh for fh in forecast_hours if fh not in grib_data_by_fhour]
-    if missing_fhours:
-        try:
-            fetched = fetch_icon_eu_single_level(
-                init_date, init_hour, missing_fhours, session=session,
-            )
-            for fhour, grib_bytes in fetched.items():
-                ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG", bbox)
-                put_cached(run_dir, ck, grib_bytes)
-                grib_data_by_fhour[fhour] = grib_bytes
-        except Exception:
-            logger.warning("Failed to fetch ICON-EU cloud diagnostics", exc_info=True)
-
-    if not grib_data_by_fhour:
-        logger.debug("No ICON-EU cloud diagnostic GRIB2 data retrieved")
-        return
-
-    # Decode each forecast hour
-    decoded_by_fhour: dict[int, list[dict[str, float]]] = {}
-    for fhour, grib_bytes in grib_data_by_fhour.items():
-        decoded_by_fhour[fhour] = decode_icon_eu_cloud_diag_per_point(
+        decoded_points = decode_icon_eu_cloud_diag_per_point(
             grib_bytes, point_lats, point_lons,
         )
+        del grib_bytes
+        if decoded_points:
+            break
 
-    # Use closest forecast hour
-    primary_fhour = f_prev if f_prev in decoded_by_fhour else f_next
-    if primary_fhour not in decoded_by_fhour:
-        primary_fhour = next(iter(decoded_by_fhour))
-    decoded_points = decoded_by_fhour[primary_fhour]
+    if not decoded_points:
+        logger.debug("No ICON-EU cloud diagnostic GRIB2 data retrieved")
+        return
 
     # Build NWPCloudDiagnostics per point and merge into forecasts
     diagnostics_per_point = [build_icon_cloud_diagnostics(raw) for raw in decoded_points]
