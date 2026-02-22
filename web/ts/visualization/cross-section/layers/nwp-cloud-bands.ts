@@ -114,21 +114,22 @@ function computeBandLimits(point: VizPoint, terrainFt: number): BandLimits {
     midBase = diag.mid.baseFt;
     midTop = diag.mid.topFt;
   } else {
-    midBase = LOW_TOP_FT;
-    if (lcl !== null && lcl > LOW_TOP_FT && lcl < MID_TOP_FT) {
-      midBase = lcl;
-    }
-    const midCap = findCappingInversion(point.inversions, midBase, MID_TOP_FT);
-    midTop = midCap ?? MID_TOP_FT;
-    const midEnvelope = cloudEnvelopeInBand(point.cloudLayers, midBase, midTop);
+    // Heuristic: narrow using sounding cloud layers in the mid band.
+    // If no sounding evidence exists, collapse the band — the NWP cover %
+    // has no vertical placement so painting the full ICAO band is misleading.
+    const midEnvelope = cloudEnvelopeInBand(point.cloudLayers, LOW_TOP_FT, MID_TOP_FT);
     if (midEnvelope) {
-      midBase = Math.max(midBase, midEnvelope.base);
-      midTop = Math.min(midTop, midEnvelope.top);
-    } else if (point.cloudCoverMidPct > 0) {
-      const m20 = point.altitudeLines.minus20cLevelFt;
-      if (m20 !== null && m20 > midBase && m20 < midTop) {
-        midTop = m20;
+      midBase = midEnvelope.base;
+      midTop = midEnvelope.top;
+      // Further narrow with inversions within the envelope
+      const midCap = findCappingInversion(point.inversions, midBase, midTop);
+      if (midCap !== null) {
+        midTop = midCap;
       }
+    } else {
+      // No sounding cloud layers in mid band — collapse (don't render)
+      midBase = LOW_TOP_FT;
+      midTop = LOW_TOP_FT;
     }
   }
 
@@ -141,8 +142,15 @@ function computeBandLimits(point: VizPoint, terrainFt: number): BandLimits {
     highTop = diag.high.topFt;
     highCoverPct = diag.high.coverPct ?? 0;
   } else {
-    highBase = MID_TOP_FT;
-    highTop = 40000;
+    // Same logic: only render if sounding finds cloud layers in high band
+    const highEnvelope = cloudEnvelopeInBand(point.cloudLayers, MID_TOP_FT, 45000);
+    if (highEnvelope) {
+      highBase = highEnvelope.base;
+      highTop = highEnvelope.top;
+    } else {
+      highBase = MID_TOP_FT;
+      highTop = MID_TOP_FT;
+    }
     highCoverPct = diag?.high.coverPct ?? 0;
   }
 
