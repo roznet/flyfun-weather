@@ -110,15 +110,19 @@ Unit conversions: Pa → altitude ft via standard atmosphere, K → °C, gpm →
 
 #### ICON-EU Cloud Diagnostics (via DWD opendata)
 
-Single-level scalar fields providing cloud ceiling and convective boundaries. Stored in `NWPCloudDiagnostics` model.
+Single-level scalar fields providing cloud ceiling, convective boundaries, and layer cloud cover percentages. Stored in `NWPCloudDiagnostics` model.
 
 | Field | GRIB2 Variable | Stored As | Unit | Aviation Use |
 |-------|---------------|-----------|------|-------------|
 | Cloud ceiling | CEILING | `ceiling_ft` | m→ft | Lowest opaque cloud layer height |
 | Convective cloud base | HBAS_CON | `convective_base_ft` | m→ft | Cb base altitude |
 | Convective cloud top | HTOP_CON | `convective_top_ft` | m→ft | Cb top altitude |
+| Low cloud cover | CLCL | `low.cover_pct` | % | SFC–6500ft cloud fraction |
+| Medium cloud cover | CLCM | `mid.cover_pct` | % | 6500–20000ft cloud fraction |
+| High cloud cover | CLCH | `high.cover_pct` | % | >20000ft cloud fraction |
+| Total cloud cover | CLCT | `total_cover_pct` | % | Full-column cloud fraction |
 
-Unit conversion: meters → feet (× 3.28084). Unlike GFS which uses gpm for ceiling and Pa for cloud boundaries, ICON-EU reports all heights in meters.
+Unit conversion: meters → feet (× 3.28084) for heights. Cloud cover percentages (0–100%) stored as-is. Unlike GFS which uses gpm for ceiling and Pa for cloud boundaries, ICON-EU reports all heights in meters. With CLCL/CLCM/CLCH/CLCT, ICON-EU now provides layer cloud cover percentages that enable `_nwp_cloud_cover_at()` to use model-native cloud data instead of falling through to Open-Meteo ICAO band values.
 
 **ICON-EU specifics:** Domain 29.5–70.5°N, 23.5°W–62.5°E (Europe only). Routes outside are silently skipped. Model-level data on levels 35–74 (not pressure levels) — log-pressure interpolation using P field to target 12 ICON pressure levels. Single-level data requires no vertical interpolation. ~6.5km resolution. Cycles every 3h, ~3h publication delay, files deleted after ~24h.
 

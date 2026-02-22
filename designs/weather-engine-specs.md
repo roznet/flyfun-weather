@@ -87,10 +87,10 @@ Comprehensive listing of DWD ICON-EU opendata variables. Organized by level type
 | `CEILING` | Cloud ceiling height | m | **Implemented** | Primary IFR/VFR metric. Converted to ft for NWPCloudDiagnostics. |
 | `HBAS_CON` | Convective cloud base height | m | **Implemented** | Cb base altitude. |
 | `HTOP_CON` | Convective cloud top height | m | **Implemented** | Cb top altitude. |
-| `CLCL` | Low cloud cover | % | Available | SFC–6500ft cloud fraction. |
-| `CLCM` | Medium cloud cover | % | Available | 6500–20000ft cloud fraction. |
-| `CLCH` | High cloud cover | % | Available | >20000ft cloud fraction. |
-| `CLCT` | Total cloud cover | % | Available | Full-column cloud fraction. |
+| `CLCL` | Low cloud cover | % | **Implemented** | SFC–6500ft cloud fraction. Populates `low.cover_pct`. |
+| `CLCM` | Medium cloud cover | % | **Implemented** | 6500–20000ft cloud fraction. Populates `mid.cover_pct`. |
+| `CLCH` | High cloud cover | % | **Implemented** | >20000ft cloud fraction. Populates `high.cover_pct`. |
+| `CLCT` | Total cloud cover | % | **Implemented** | Full-column cloud fraction. Populates `total_cover_pct`. |
 | `T_2M` | 2m temperature | K | Available | Screen-level temperature. |
 | `TD_2M` | 2m dewpoint | K | Available | Screen-level dewpoint. |
 | `U_10M` | 10m U wind component | m/s | Available | Surface wind (east-west). |

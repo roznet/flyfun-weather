@@ -372,6 +372,8 @@ class ThermodynamicIndices(BaseModel):
     minus20c_level_ft: Optional[float] = None
     bulk_shear_0_6km_kt: Optional[float] = None
     bulk_shear_0_1km_kt: Optional[float] = None
+    sounding_ceiling_ft: Optional[float] = None
+    nwp_ceiling_ft: Optional[float] = None
 
 
 class DerivedLevel(BaseModel):

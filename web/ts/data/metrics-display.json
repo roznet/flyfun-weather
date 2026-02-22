@@ -21,6 +21,8 @@
         { "id": "minus20c_level_ft", "tier": "useful", "field": "minus20c_level_ft", "source": "indices" },
         { "id": "lcl_altitude_ft", "tier": "useful", "field": "lcl_altitude_ft", "source": "indices" },
         { "id": "precipitable_water_mm", "tier": "useful", "field": "precipitable_water_mm", "source": "indices" },
+        { "id": "sounding_ceiling_ft", "tier": "key", "field": "sounding_ceiling_ft", "source": "indices" },
+        { "id": "nwp_ceiling_ft", "tier": "key", "field": "nwp_ceiling_ft", "source": "indices" },
         { "id": "lfc_altitude_ft", "tier": "advanced", "field": "lfc_altitude_ft", "source": "indices" },
         { "id": "el_altitude_ft", "tier": "advanced", "field": "el_altitude_ft", "source": "indices" }
       ]

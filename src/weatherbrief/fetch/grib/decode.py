@@ -80,6 +80,10 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "ceiling": "ceiling_m",
     "hbas_con": "convective_cloud_base_m",
     "htop_con": "convective_cloud_top_m",
+    "clcl": "low_cover_pct",
+    "clcm": "mid_cover_pct",
+    "clch": "high_cover_pct",
+    "clct": "total_cover_pct",
 }
 
 
@@ -689,17 +693,17 @@ def build_icon_cloud_diagnostics(
     """Convert raw ICON-EU decoded values into an NWPCloudDiagnostics model.
 
     ICON-EU reports heights in meters (not gpm or Pa like GFS).
+    Cloud cover percentages (CLCL/CLCM/CLCH/CLCT) are 0–100 and kept as-is.
 
     Unit conversions applied:
     - meters → feet (× 3.28084)
 
-    Only populates ceiling and convective base/top from ICON-EU single-level
-    data. Low/mid/high cloud layers are not populated (would need additional
-    variables like CLCL/CLCM/CLCH which only provide cover %, not base/top).
-
-    Returns None if the raw dict is empty.
+    Returns None if the raw dict is empty or no fields are populated.
     """
-    from weatherbrief.models.analysis import NWPCloudDiagnostics
+    from weatherbrief.models.analysis import (
+        NWPCloudDiagnostics,
+        NWPCloudLayerDiag,
+    )
 
     if not raw:
         return None
@@ -710,15 +714,35 @@ def build_icon_cloud_diagnostics(
             return None
         return round(val * _M_TO_FT)
 
+    def _pct(key: str) -> float | None:
+        return raw.get(key)
+
     ceiling_ft = _m_to_ft("ceiling_m")
     convective_base_ft = _m_to_ft("convective_cloud_base_m")
     convective_top_ft = _m_to_ft("convective_cloud_top_m")
+    low_cover = _pct("low_cover_pct")
+    mid_cover = _pct("mid_cover_pct")
+    high_cover = _pct("high_cover_pct")
+    total_cover = _pct("total_cover_pct")
 
     # Only create diagnostics if at least one field is populated
-    if ceiling_ft is None and convective_base_ft is None and convective_top_ft is None:
+    has_any = (
+        ceiling_ft is not None
+        or convective_base_ft is not None
+        or convective_top_ft is not None
+        or low_cover is not None
+        or mid_cover is not None
+        or high_cover is not None
+        or total_cover is not None
+    )
+    if not has_any:
         return None
 
     return NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=low_cover),
+        mid=NWPCloudLayerDiag(cover_pct=mid_cover),
+        high=NWPCloudLayerDiag(cover_pct=high_cover),
+        total_cover_pct=total_cover,
         ceiling_ft=ceiling_ft,
         convective_base_ft=convective_base_ft,
         convective_top_ft=convective_top_ft,

@@ -45,7 +45,10 @@ ICON_EU_MODEL_LEVEL_MAX = 74
 ICON_EU_VARIABLES = ("qc", "qi", "p")
 
 # Single-level cloud diagnostic variables
-ICON_EU_CLOUD_DIAG_VARIABLES = ("ceiling", "hbas_con", "htop_con")
+ICON_EU_CLOUD_DIAG_VARIABLES = (
+    "ceiling", "hbas_con", "htop_con",
+    "clcl", "clcm", "clch", "clct",
+)
 
 # Parallel download settings
 MAX_DOWNLOAD_WORKERS = 8

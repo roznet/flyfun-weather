@@ -79,6 +79,8 @@ export interface ThermodynamicIndices {
   minus20c_level_ft: number | null;
   bulk_shear_0_6km_kt: number | null;
   bulk_shear_0_1km_kt: number | null;
+  sounding_ceiling_ft: number | null;
+  nwp_ceiling_ft: number | null;
 }
 
 export interface EnhancedCloudLayer {
