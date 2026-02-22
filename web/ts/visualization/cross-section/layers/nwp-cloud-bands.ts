@@ -85,9 +85,16 @@ interface BandLimits {
 function computeBandLimits(point: VizPoint, terrainFt: number): BandLimits {
   const diag = point.nwpCloudDiag;
 
-  // When GFS cloud diagnostics provide actual boundaries, use them directly
-  if (diag) {
-    return computeBandLimitsFromDiag(diag, terrainFt);
+  // Use actual boundaries when available (GFS provides base/top for each layer).
+  // ICON-EU only has cover_pct — no base/top — so fall through to heuristic.
+  const hasLayerBounds = diag != null && (
+    diag.low.baseFt != null || diag.low.topFt != null ||
+    diag.mid.baseFt != null || diag.mid.topFt != null ||
+    diag.high.baseFt != null || diag.high.topFt != null
+  );
+
+  if (hasLayerBounds) {
+    return computeBandLimitsFromDiag(diag!, terrainFt);
   }
 
   // Fallback: heuristic band limits from ICAO bands + sounding
