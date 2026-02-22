@@ -252,17 +252,13 @@ label {
   margin-left: 0.5rem;
 }
 
-/* --- Auto-refresh bar --- */
+/* --- Auto-refresh (inline in toolbar) --- */
 
-.auto-refresh-bar {
-  padding: 0.4rem 1rem;
-  border-radius: var(--radius);
-  font-size: 0.85rem;
-  margin-bottom: 0.5rem;
+.auto-refresh-inline {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  background: var(--bg);
+  gap: 0.5rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
 
@@ -328,6 +324,12 @@ label {
 .route-summary { font-weight: 600; }
 .date-summary { color: var(--text-muted); font-size: 0.9rem; }
 .alt-summary { color: var(--text-muted); font-size: 0.9rem; font-family: monospace; }
+
+.toolbar-end-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
 
 /* --- Sections --- */
 

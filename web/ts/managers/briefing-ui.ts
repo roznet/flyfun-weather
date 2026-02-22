@@ -248,7 +248,7 @@ export function renderAutoRefreshBar(
   el.innerHTML = `
     <label class="auto-refresh-toggle">
       <input type="checkbox" id="auto-refresh-check" ${enabled ? 'checked' : ''}>
-      <span>Daily auto-refresh</span>
+      <span>Auto-refresh</span>
     </label>
     <span class="auto-refresh-hour-group" ${enabled ? '' : 'style="display:none;"'}>
       at <select id="auto-refresh-hour">${hourOptions}</select>

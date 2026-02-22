@@ -11,15 +11,15 @@
     <div class="page-header" style="padding-bottom: 0.5rem;">
       <div></div>
       <div class="header-right">
+        <a href="/" class="btn-settings" title="Flights">Flights</a>
         <a href="/help.html" class="btn-settings" title="Help">Help</a>
         <a href="/settings.html" class="btn-settings" title="Settings">Settings</a>
         <div id="user-info" class="user-info"></div>
       </div>
     </div>
 
-    <!-- Toolbar: back, route info, refresh, history -->
+    <!-- Toolbar: route info, actions, history, auto-refresh -->
     <div class="briefing-toolbar">
-      <button id="back-btn" class="btn btn-secondary">&larr; Flights</button>
       <div id="briefing-header"></div>
       <button id="refresh-btn" class="btn btn-primary">Refresh</button>
       <button id="pdf-btn" class="btn btn-secondary">Download PDF</button>
@@ -28,13 +28,15 @@
         <button class="btn-toggle" data-mode="compact">Compact</button>
         <button class="btn-toggle active" data-mode="annotated">Annotated</button>
       </div>
-      <select id="history-select">
-        <option>Loading...</option>
-      </select>
+      <div class="toolbar-end-group">
+        <select id="history-select">
+          <option>Loading...</option>
+        </select>
+        <div id="auto-refresh-bar" class="auto-refresh-inline" style="display: none;"></div>
+      </div>
     </div>
 
     <div id="freshness-bar" class="freshness-bar" style="display: none;"></div>
-    <div id="auto-refresh-bar" class="auto-refresh-bar" style="display: none;"></div>
 
     <div id="error-message"></div>
 
