@@ -32,7 +32,7 @@ Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesMani
 → Full doc: advisories.md
 
 ### analysis-metrics
-Comprehensive catalog of all ~40 weather metrics: API sources, derivation formulas, per-model availability matrix, physical interpretation, aviation relevance, known issues, and MetPy function inventory.
+Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API sources, GRIB2 enrichment (GFS cloud water/diagnostics, ICON-EU CLW/ICE), MetPy derivations, SFIP/Ogimet icing indices, precipitation assessment, per-model availability matrix, and known issues.
 → Full doc: analysis-metrics.md
 
 ### visualization
@@ -80,5 +80,9 @@ Implementation plan for vertical motion & turbulence analysis. Fully implemented
 → Full doc: vertical-motion-plan.md
 
 ### weather-engine-specs
-Raw GRIB2 engine: what's implemented (GFS CLWMR/ICMR enrichment), data source registry (GFS/ECMWF/ICON/ARPEGE with bucket paths), future extensions (additional variables, concurrent downloads, Ellrod index, ECMWF enrichment), and implementation gotchas.
+Raw GRIB2 engine: what's implemented (GFS CLWMR/ICMR/cloud diagnostics, ICON-EU QC/QI enrichment), data source registry (GFS/ECMWF/ICON/ARPEGE with bucket paths), future extensions (additional variables, Ellrod index, ECMWF enrichment), and implementation gotchas.
 → Full doc: weather-engine-specs.md
+
+### sfip-implementation-design
+SFIP (Simplified Forecast Icing Potential) algorithm design: fuzzy-logic membership functions (temperature, RH, CLW, vertical velocity), two variants (full with GRIB2 CLW, proxy with DD+cloud cover), glaciation factor from ICMR, severity mapping, per-model behavior. Based on Belo-Pereira (2015) and Morcrette et al. (2019).
+→ Full doc: sfip-implementation-design.md
