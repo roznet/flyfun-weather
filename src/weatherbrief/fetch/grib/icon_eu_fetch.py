@@ -44,6 +44,9 @@ ICON_EU_MODEL_LEVEL_MAX = 74
 # Variables to fetch: cloud liquid water, ice mixing ratio, pressure
 ICON_EU_VARIABLES = ("qc", "qi", "p")
 
+# Single-level cloud diagnostic variables
+ICON_EU_CLOUD_DIAG_VARIABLES = ("ceiling", "hbas_con", "htop_con")
+
 # Parallel download settings
 MAX_DOWNLOAD_WORKERS = 8
 REQUEST_TIMEOUT = 30  # seconds per file
@@ -83,6 +86,93 @@ def icon_eu_file_url(
         f"{init_date}{init_hour:02d}_{forecast_hour:03d}_{level:02d}_{var_upper}"
         f".grib2.bz2"
     )
+
+
+def icon_eu_single_level_url(
+    init_date: str,
+    init_hour: int,
+    forecast_hour: int,
+    variable: str,
+) -> str:
+    """Build URL for a single ICON-EU GRIB2 bz2 file (no level number).
+
+    Example:
+        https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/ceiling/
+        icon-eu_europe_regular-lat-lon_single-level_2026022100_006_CEILING.grib2.bz2
+    """
+    var_lower = variable.lower()
+    var_upper = variable.upper()
+    return (
+        f"{DWD_BASE_URL}/{init_hour:02d}/{var_lower}/"
+        f"icon-eu_europe_regular-lat-lon_single-level_"
+        f"{init_date}{init_hour:02d}_{forecast_hour:03d}_{var_upper}"
+        f".grib2.bz2"
+    )
+
+
+def fetch_icon_eu_single_level(
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    variables: list[str] | None = None,
+    session: requests.Session | None = None,
+) -> dict[int, bytes]:
+    """Download ICON-EU single-level GRIB2 fields and return concatenated bytes per fhour.
+
+    Downloads single-level cloud diagnostic files (no level dimension)
+    using the same parallel pattern as model-level fetch.
+
+    Args:
+        init_date: YYYYMMDD format.
+        init_hour: Cycle hour (0, 3, 6, ..., 21).
+        forecast_hours: Forecast hours to download.
+        variables: Variable names (defaults to ICON_EU_CLOUD_DIAG_VARIABLES).
+        session: Optional requests session.
+
+    Returns:
+        Dict of {forecast_hour: concatenated decompressed GRIB2 bytes}.
+    """
+    if variables is None:
+        variables = list(ICON_EU_CLOUD_DIAG_VARIABLES)
+
+    sess = session or requests.Session()
+    result: dict[int, bytes] = {}
+
+    for fhour in forecast_hours:
+        urls = [
+            icon_eu_single_level_url(init_date, init_hour, fhour, var)
+            for var in variables
+        ]
+
+        buf = bytearray()
+        downloaded = 0
+        failed = 0
+
+        with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+            futures = {
+                pool.submit(_download_one_file, url, sess): url
+                for url in urls
+            }
+            for future in as_completed(futures):
+                data = future.result()
+                if data is not None:
+                    buf.extend(data)
+                    downloaded += 1
+                else:
+                    failed += 1
+
+        if buf:
+            result[fhour] = bytes(buf)
+            logger.info(
+                "ICON-EU single-level f%03d: downloaded %d/%d files (%.1f KB)",
+                fhour, downloaded, downloaded + failed, len(buf) / 1024,
+            )
+        else:
+            logger.debug(
+                "ICON-EU single-level f%03d: all %d files failed", fhour, failed,
+            )
+
+    return result
 
 
 def find_latest_icon_eu_run(

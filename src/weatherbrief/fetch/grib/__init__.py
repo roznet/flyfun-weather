@@ -445,6 +445,115 @@ def _enrich_icon_eu(
         icon_sections, all_forecasts, route_points, decoded_points, "icon",
     )
 
+    # Cloud diagnostics (ceiling, convective base/top) from single-level files
+    _enrich_icon_eu_cloud_diagnostics(
+        icon_sections, all_forecasts, route_points,
+        init_date, init_hour, f_prev, f_next, bbox,
+        run_dir, point_lats, point_lons, session,
+    )
+
+
+def _enrich_icon_eu_cloud_diagnostics(
+    icon_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    f_prev: int,
+    f_next: int,
+    bbox: tuple[int, int, int, int],
+    run_dir: Path,
+    point_lats: list[float],
+    point_lons: list[float],
+    session: requests.Session,
+) -> None:
+    """Enrich ICON forecasts with single-level cloud diagnostics (ceiling, etc.)."""
+    from weatherbrief.fetch.grib.decode import (
+        build_icon_cloud_diagnostics,
+        decode_icon_eu_cloud_diag_per_point,
+    )
+    from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
+
+    # Download single-level GRIB2 data
+    grib_data_by_fhour: dict[int, bytes] = {}
+    forecast_hours = sorted({f_prev, f_next})
+
+    for fhour in forecast_hours:
+        ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG", bbox)
+        cached = get_cached(run_dir, ck)
+        if cached is not None:
+            grib_data_by_fhour[fhour] = cached
+            continue
+
+    # Fetch any missing forecast hours in one call
+    missing_fhours = [fh for fh in forecast_hours if fh not in grib_data_by_fhour]
+    if missing_fhours:
+        try:
+            fetched = fetch_icon_eu_single_level(
+                init_date, init_hour, missing_fhours, session=session,
+            )
+            for fhour, grib_bytes in fetched.items():
+                ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG", bbox)
+                put_cached(run_dir, ck, grib_bytes)
+                grib_data_by_fhour[fhour] = grib_bytes
+        except Exception:
+            logger.warning("Failed to fetch ICON-EU cloud diagnostics", exc_info=True)
+
+    if not grib_data_by_fhour:
+        logger.debug("No ICON-EU cloud diagnostic GRIB2 data retrieved")
+        return
+
+    # Decode each forecast hour
+    decoded_by_fhour: dict[int, list[dict[str, float]]] = {}
+    for fhour, grib_bytes in grib_data_by_fhour.items():
+        decoded_by_fhour[fhour] = decode_icon_eu_cloud_diag_per_point(
+            grib_bytes, point_lats, point_lons,
+        )
+
+    # Use closest forecast hour
+    primary_fhour = f_prev if f_prev in decoded_by_fhour else f_next
+    if primary_fhour not in decoded_by_fhour:
+        primary_fhour = next(iter(decoded_by_fhour))
+    decoded_points = decoded_by_fhour[primary_fhour]
+
+    # Build NWPCloudDiagnostics per point and merge into forecasts
+    diagnostics_per_point = [build_icon_cloud_diagnostics(raw) for raw in decoded_points]
+
+    enriched_count = 0
+    for cs in icon_sections:
+        for point_idx, wf in enumerate(cs.point_forecasts):
+            if point_idx >= len(diagnostics_per_point):
+                break
+            diag = diagnostics_per_point[point_idx]
+            if diag is None:
+                continue
+            for hourly in wf.hourly:
+                # Only set if not already populated (GFS takes priority)
+                if hourly.nwp_cloud_diagnostics is None:
+                    hourly.nwp_cloud_diagnostics = diag
+                    enriched_count += 1
+
+    # Also enrich waypoint-only forecasts
+    wp_diag_lookup: dict[str, object] = {}
+    for rp, diag in zip(route_points, diagnostics_per_point):
+        if rp.waypoint_icao and diag is not None:
+            wp_diag_lookup[rp.waypoint_icao] = diag
+
+    for wf in all_forecasts:
+        if wf.model.value != "icon":
+            continue
+        diag = wp_diag_lookup.get(wf.waypoint.icao)
+        if diag is None:
+            continue
+        for hourly in wf.hourly:
+            if hourly.nwp_cloud_diagnostics is None:
+                hourly.nwp_cloud_diagnostics = diag
+
+    logger.info(
+        "ICON-EU enrichment: %d hourly entries enriched with cloud diagnostics",
+        enriched_count,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Shared merge logic

@@ -7,6 +7,7 @@ from datetime import datetime
 from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.models import (
     CloudCoverage,
+    HourlyForecast,
     RouteCrossSection,
     RoutePointAnalysis,
     SoundingAnalysis,
@@ -109,6 +110,28 @@ def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:
     return min(ceilings) if ceilings else None
 
 
+def _reconcile_ceiling(
+    sounding: SoundingAnalysis | None,
+    hourly: HourlyForecast | None,
+) -> float | None:
+    """Reconcile ceiling from sounding-derived cloud layers and NWP diagnostics.
+
+    Strategy:
+    - Both available: use the lower (more conservative for flight safety)
+    - Only one available: use whichever exists
+    - Neither: return None (VFR assumed)
+    """
+    sounding_ceil = _ceiling_from_sounding(sounding) if sounding else None
+
+    nwp_ceil: float | None = None
+    if hourly and hourly.nwp_cloud_diagnostics:
+        nwp_ceil = hourly.nwp_cloud_diagnostics.ceiling_ft
+
+    if sounding_ceil is not None and nwp_ceil is not None:
+        return min(sounding_ceil, nwp_ceil)
+    return sounding_ceil if sounding_ceil is not None else nwp_ceil
+
+
 def _find_airport_rpa(
     analyses: list[RoutePointAnalysis],
     icao: str,
@@ -155,14 +178,14 @@ def _compute_for_airport(
 
     conditions: list[AirportModelCondition] = []
     for model in models:
-        # Ceiling from sounding
-        sounding = rpa.sounding.get(model)
-        ceiling_ft = _ceiling_from_sounding(sounding) if sounding else None
-
-        # Surface data from cross-section hourly forecast
+        # Surface data from cross-section hourly forecast (needed for ceiling reconciliation)
         hourly = _get_hourly_at_point(
             cross_sections, model, rpa.point_index, rpa.interpolated_time,
         )
+
+        # Ceiling: reconcile sounding-derived and NWP diagnostics
+        sounding = rpa.sounding.get(model)
+        ceiling_ft = _reconcile_ceiling(sounding, hourly)
 
         visibility_sm: float | None = None
         wind_speed_kt: float | None = None
