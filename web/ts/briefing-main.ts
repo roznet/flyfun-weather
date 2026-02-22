@@ -311,14 +311,6 @@ async function init(): Promise<void> {
     }
   });
 
-  // --- Wire back button ---
-  const backBtn = document.getElementById('back-btn');
-  if (backBtn) {
-    backBtn.addEventListener('click', () => {
-      window.location.href = '/';
-    });
-  }
-
   // --- Wire image lightbox ---
   const lightbox = document.getElementById('lightbox');
   const lightboxImg = document.getElementById('lightbox-img') as HTMLImageElement;
