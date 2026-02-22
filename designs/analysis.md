@@ -32,7 +32,7 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → enrich_lwc → clouds → icing → inversions → convective → vertical_motion`
+Pipeline: `prepare → thermodynamics → enrich_lwc → clouds → icing → inversions → convective → vertical_motion → ceiling`
 
 ### Prepare (`sounding/prepare.py`)
 
@@ -51,6 +51,7 @@ All MetPy calls live here. Two functions:
 - Precipitable water
 - Bulk wind shear: 0-6km and 0-1km
 - Temperature crossings: freezing level (0°C), -10°C, -20°C (linear interpolation)
+- Ceiling: `sounding_ceiling_ft` (lowest BKN/OVC cloud layer, LCL as floor when cloud starts at first level) and `nwp_ceiling_ft` (from NWP diagnostics)
 
 **`compute_derived_levels(profile) → list[DerivedLevel]`** — per pressure level:
 - Altitude (ft), temperature, dewpoint (carried through from profile)

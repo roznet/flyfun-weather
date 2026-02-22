@@ -119,10 +119,14 @@ The convective background layer (`convective-bg.ts`) is the most complex:
 
 The NWP cloud bands layer (`nwp-cloud-bands.ts`) renders numerical weather prediction cloud cover:
 
-- **Two-tier altitude model**: Low clouds (terrain → 6500ft) and mid-layer clouds (6500ft → 20000ft)
-- **Terrain-aware**: Interpolates terrain elevation at each point to set band base dynamically
+- **Three-tier altitude model**: Low (terrain → 6500ft), mid (6500ft → 20000ft), high (20000ft+)
+- **Per-band hybrid rendering**: Each band independently uses model diagnostics (GFS base/top) when available, or falls back to sounding-derived heuristics (LCL, inversions, cloud envelope) when boundaries are missing (e.g. ICON-EU provides cover % but not base/top)
+- **Sounding-corroborated collapse**: For mid/high bands without diagnostic boundaries, if the sounding finds NO cloud layers in that altitude range, the band collapses to zero height (prevents false fills from NWP-only coverage)
+- **Heuristic narrowing** (when diagnostics unavailable): LCL raises band floor, inversions (≥2°C strength) cap band top, sounding cloud envelopes constrain bounds
+- **Terrain-aware**: Interpolates terrain elevation at each point to set low band base dynamically
 - **Dual render modes**: Columns (discrete NWP grid) or Smooth (interpolated trapezoids)
 - **Opacity capping**: Cloud cover % converted to opacity with `min(0.7, pct/100 * 0.8)` for readability
+- **Model-run consistency**: When GRIB diagnostics are available, they override Open-Meteo cloud cover values so all cloud data comes from the same model run
 - Renders on sky-blue background (set in `axes.ts`)
 
 ## Layer Legends
@@ -147,7 +151,7 @@ Keyboard (ESC) and click-outside close the popup.
 
 ### Metrics Catalog (`data/metrics-catalog.json`)
 
-40+ metrics with catalog-driven contextual help:
+40+ metrics (including `sounding_ceiling_ft` and `nwp_ceiling_ft` for Key Altitudes) with catalog-driven contextual help:
 
 - `vibe`: One-liner analogy (e.g., "The atmosphere's battery level" for CAPE)
 - `primary_goal`, `best_used_for`, `limitations`: Aviation-focused guidance
