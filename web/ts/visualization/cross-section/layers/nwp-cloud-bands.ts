@@ -78,87 +78,75 @@ interface BandLimits {
 /**
  * Compute band limits for NWP cloud rendering.
  *
- * When GFS cloud diagnostics are available, uses actual model-predicted
- * base/top boundaries. Otherwise falls back to ICAO band heuristics
- * (LCL, inversions, sounding cloud envelopes).
+ * Hybrid approach: uses actual GFS base/top boundaries when available for
+ * each band, and falls back to heuristic narrowing (sounding cloud envelopes,
+ * inversions, LCL) for bands where boundaries are missing (ICON-EU, or GFS
+ * with NaN boundaries for a specific layer).
  */
 function computeBandLimits(point: VizPoint, terrainFt: number): BandLimits {
   const diag = point.nwpCloudDiag;
-
-  // Use actual boundaries when available (GFS provides base/top for each layer).
-  // ICON-EU only has cover_pct — no base/top — so fall through to heuristic.
-  const hasLayerBounds = diag != null && (
-    diag.low.baseFt != null || diag.low.topFt != null ||
-    diag.mid.baseFt != null || diag.mid.topFt != null ||
-    diag.high.baseFt != null || diag.high.topFt != null
-  );
-
-  if (hasLayerBounds) {
-    return computeBandLimitsFromDiag(diag!, terrainFt);
-  }
-
-  // Fallback: heuristic band limits from ICAO bands + sounding
-  return computeBandLimitsHeuristic(point, terrainFt);
-}
-
-/** Use actual GFS cloud base/top boundaries. */
-function computeBandLimitsFromDiag(diag: VizCloudDiag, terrainFt: number): BandLimits {
-  const lowBase = diag.low.baseFt ?? terrainFt;
-  const lowTop = diag.low.topFt ?? LOW_TOP_FT;
-  const midBase = diag.mid.baseFt ?? LOW_TOP_FT;
-  const midTop = diag.mid.topFt ?? MID_TOP_FT;
-  const highBase = diag.high.baseFt ?? MID_TOP_FT;
-  const highTop = diag.high.topFt ?? 40000;
-  const highCoverPct = diag.high.coverPct ?? 0;
-
-  return { lowBase, lowTop, midBase, midTop, highBase, highTop, highCoverPct };
-}
-
-/** Heuristic band limits using LCL, inversions, and sounding cloud envelopes. */
-function computeBandLimitsHeuristic(point: VizPoint, terrainFt: number): BandLimits {
   const lcl = point.altitudeLines.lclAltitudeFt;
 
-  // Low band base: raise to LCL if it falls within the low band
-  let lowBase = terrainFt;
-  if (lcl !== null && lcl > terrainFt && lcl < LOW_TOP_FT) {
-    lowBase = lcl;
-  }
-
-  // Low band top: cap at first significant inversion within [lowBase, 6500ft]
-  const lowCap = findCappingInversion(point.inversions, lowBase, LOW_TOP_FT);
-  let lowTop = lowCap ?? LOW_TOP_FT;
-
-  // Narrow low band using sounding-derived cloud layers
-  const lowEnvelope = cloudEnvelopeInBand(point.cloudLayers, lowBase, lowTop);
-  if (lowEnvelope) {
-    lowBase = Math.max(lowBase, lowEnvelope.base);
-    lowTop = Math.min(lowTop, lowEnvelope.top);
-  }
-
-  // Mid band base: raise to LCL if it falls within the mid band
-  let midBase = LOW_TOP_FT;
-  if (lcl !== null && lcl > LOW_TOP_FT && lcl < MID_TOP_FT) {
-    midBase = lcl;
-  }
-
-  // Mid band top: cap at first significant inversion within [midBase, 20000ft]
-  const midCap = findCappingInversion(point.inversions, midBase, MID_TOP_FT);
-  let midTop = midCap ?? MID_TOP_FT;
-
-  // Narrow mid band using sounding-derived cloud layers
-  const midEnvelope = cloudEnvelopeInBand(point.cloudLayers, midBase, midTop);
-  if (midEnvelope) {
-    midBase = Math.max(midBase, midEnvelope.base);
-    midTop = Math.min(midTop, midEnvelope.top);
-  } else if (point.cloudCoverMidPct > 0) {
-    // NWP reports mid cloud but no sounding layers overlap — use -20°C level as softer cap
-    const m20 = point.altitudeLines.minus20cLevelFt;
-    if (m20 !== null && m20 > midBase && m20 < midTop) {
-      midTop = m20;
+  // --- Low band ---
+  let lowBase: number;
+  let lowTop: number;
+  if (diag?.low.baseFt != null && diag?.low.topFt != null) {
+    lowBase = diag.low.baseFt;
+    lowTop = diag.low.topFt;
+  } else {
+    lowBase = terrainFt;
+    if (lcl !== null && lcl > terrainFt && lcl < LOW_TOP_FT) {
+      lowBase = lcl;
+    }
+    const lowCap = findCappingInversion(point.inversions, lowBase, LOW_TOP_FT);
+    lowTop = lowCap ?? LOW_TOP_FT;
+    const lowEnvelope = cloudEnvelopeInBand(point.cloudLayers, lowBase, lowTop);
+    if (lowEnvelope) {
+      lowBase = Math.max(lowBase, lowEnvelope.base);
+      lowTop = Math.min(lowTop, lowEnvelope.top);
     }
   }
 
-  return { lowBase, lowTop, midBase, midTop, highBase: MID_TOP_FT, highTop: 40000, highCoverPct: 0 };
+  // --- Mid band ---
+  let midBase: number;
+  let midTop: number;
+  if (diag?.mid.baseFt != null && diag?.mid.topFt != null) {
+    midBase = diag.mid.baseFt;
+    midTop = diag.mid.topFt;
+  } else {
+    midBase = LOW_TOP_FT;
+    if (lcl !== null && lcl > LOW_TOP_FT && lcl < MID_TOP_FT) {
+      midBase = lcl;
+    }
+    const midCap = findCappingInversion(point.inversions, midBase, MID_TOP_FT);
+    midTop = midCap ?? MID_TOP_FT;
+    const midEnvelope = cloudEnvelopeInBand(point.cloudLayers, midBase, midTop);
+    if (midEnvelope) {
+      midBase = Math.max(midBase, midEnvelope.base);
+      midTop = Math.min(midTop, midEnvelope.top);
+    } else if (point.cloudCoverMidPct > 0) {
+      const m20 = point.altitudeLines.minus20cLevelFt;
+      if (m20 !== null && m20 > midBase && m20 < midTop) {
+        midTop = m20;
+      }
+    }
+  }
+
+  // --- High band ---
+  let highBase: number;
+  let highTop: number;
+  let highCoverPct: number;
+  if (diag?.high.baseFt != null && diag?.high.topFt != null) {
+    highBase = diag.high.baseFt;
+    highTop = diag.high.topFt;
+    highCoverPct = diag.high.coverPct ?? 0;
+  } else {
+    highBase = MID_TOP_FT;
+    highTop = 40000;
+    highCoverPct = diag?.high.coverPct ?? 0;
+  }
+
+  return { lowBase, lowTop, midBase, midTop, highBase, highTop, highCoverPct };
 }
 
 /** Get terrain elevation at a point, falling back to 0. */
