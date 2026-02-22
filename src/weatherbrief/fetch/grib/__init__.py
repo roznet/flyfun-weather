@@ -27,9 +27,27 @@ from weatherbrief.fetch.grib.grib_fetch import (
     fetch_idx,
     find_latest_run,
 )
-from weatherbrief.models import ModelSource, RouteCrossSection, RoutePoint, WaypointForecast
+from weatherbrief.models import (
+    HourlyForecast,
+    ModelSource,
+    NWPCloudDiagnostics,
+    RouteCrossSection,
+    RoutePoint,
+    WaypointForecast,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_cloud_diagnostics(hourly: HourlyForecast, diag: NWPCloudDiagnostics) -> None:
+    """Attach NWP cloud diagnostics and override Open-Meteo cloud cover for consistency."""
+    hourly.nwp_cloud_diagnostics = diag
+    if diag.low.cover_pct is not None:
+        hourly.cloud_cover_low_pct = diag.low.cover_pct
+    if diag.mid.cover_pct is not None:
+        hourly.cloud_cover_mid_pct = diag.mid.cover_pct
+    if diag.high.cover_pct is not None:
+        hourly.cloud_cover_high_pct = diag.high.cover_pct
 
 
 def enrich_forecasts(
@@ -307,7 +325,7 @@ def _enrich_cloud_diagnostics(
             if diag is None:
                 continue
             for hourly in wf.hourly:
-                hourly.nwp_cloud_diagnostics = diag
+                _apply_cloud_diagnostics(hourly, diag)
                 enriched_count += 1
 
     # Also enrich waypoint-only forecasts
@@ -323,7 +341,7 @@ def _enrich_cloud_diagnostics(
         if diag is None:
             continue
         for hourly in wf.hourly:
-            hourly.nwp_cloud_diagnostics = diag
+            _apply_cloud_diagnostics(hourly, diag)
 
     logger.info("GRIB2 enrichment: %d hourly entries enriched with cloud diagnostics", enriched_count)
 
@@ -530,7 +548,7 @@ def _enrich_icon_eu_cloud_diagnostics(
             for hourly in wf.hourly:
                 # Only set if not already populated (GFS takes priority)
                 if hourly.nwp_cloud_diagnostics is None:
-                    hourly.nwp_cloud_diagnostics = diag
+                    _apply_cloud_diagnostics(hourly, diag)
                     enriched_count += 1
 
     # Also enrich waypoint-only forecasts
@@ -547,7 +565,7 @@ def _enrich_icon_eu_cloud_diagnostics(
             continue
         for hourly in wf.hourly:
             if hourly.nwp_cloud_diagnostics is None:
-                hourly.nwp_cloud_diagnostics = diag
+                _apply_cloud_diagnostics(hourly, diag)
 
     logger.info(
         "ICON-EU enrichment: %d hourly entries enriched with cloud diagnostics",

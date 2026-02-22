@@ -37,12 +37,14 @@ from weatherbrief.analysis.sounding.icing import (
 from weatherbrief.models import (
     DerivedLevel,
     EnhancedCloudLayer,
+    HourlyForecast,
     IcingRisk,
     IcingType,
     NWPCloudDiagnostics,
     NWPCloudLayerDiag,
     pressure_pa_to_altitude_ft,
 )
+from weatherbrief.fetch.grib import _apply_cloud_diagnostics
 
 
 # --- .idx parser tests ---
@@ -1069,3 +1071,74 @@ class TestCacheModelParam:
 
         assert get_cached(gfs_dir, "test.grib2") == b"gfs data"
         assert get_cached(icon_dir, "test.grib2") == b"icon data"
+
+
+# --- Cloud cover override tests ---
+
+
+class TestCloudCoverOverride:
+    """Tests for GRIB cloud cover overriding Open-Meteo values."""
+
+    def test_cloud_cover_override_from_grib(self):
+        """After _apply_cloud_diagnostics, cloud_cover_*_pct match GRIB values."""
+        from datetime import datetime, timezone
+
+        hourly = HourlyForecast(
+            time=datetime(2026, 2, 22, 12, tzinfo=timezone.utc),
+            cloud_cover_low_pct=10.0,   # Open-Meteo value
+            cloud_cover_mid_pct=0.0,    # Open-Meteo value
+            cloud_cover_high_pct=50.0,  # Open-Meteo value
+        )
+        diag = NWPCloudDiagnostics(
+            low=NWPCloudLayerDiag(cover_pct=80.0),
+            mid=NWPCloudLayerDiag(cover_pct=96.0),
+            high=NWPCloudLayerDiag(cover_pct=5.0),
+        )
+
+        _apply_cloud_diagnostics(hourly, diag)
+
+        assert hourly.nwp_cloud_diagnostics is diag
+        assert hourly.cloud_cover_low_pct == 80.0
+        assert hourly.cloud_cover_mid_pct == 96.0
+        assert hourly.cloud_cover_high_pct == 5.0
+
+    def test_cloud_cover_override_partial(self):
+        """Only non-None GRIB values override; others are left unchanged."""
+        from datetime import datetime, timezone
+
+        hourly = HourlyForecast(
+            time=datetime(2026, 2, 22, 12, tzinfo=timezone.utc),
+            cloud_cover_low_pct=10.0,
+            cloud_cover_mid_pct=20.0,
+            cloud_cover_high_pct=30.0,
+        )
+        diag = NWPCloudDiagnostics(
+            low=NWPCloudLayerDiag(cover_pct=80.0),
+            # mid and high left as defaults (None)
+        )
+
+        _apply_cloud_diagnostics(hourly, diag)
+
+        assert hourly.cloud_cover_low_pct == 80.0
+        # Mid and high unchanged (GRIB had None)
+        assert hourly.cloud_cover_mid_pct == 20.0
+        assert hourly.cloud_cover_high_pct == 30.0
+
+    def test_cloud_cover_override_no_original(self):
+        """Override works when hourly had no original cloud cover values."""
+        from datetime import datetime, timezone
+
+        hourly = HourlyForecast(
+            time=datetime(2026, 2, 22, 12, tzinfo=timezone.utc),
+        )
+        diag = NWPCloudDiagnostics(
+            low=NWPCloudLayerDiag(cover_pct=50.0),
+            mid=NWPCloudLayerDiag(cover_pct=25.0),
+            high=NWPCloudLayerDiag(cover_pct=0.0),
+        )
+
+        _apply_cloud_diagnostics(hourly, diag)
+
+        assert hourly.cloud_cover_low_pct == 50.0
+        assert hourly.cloud_cover_mid_pct == 25.0
+        assert hourly.cloud_cover_high_pct == 0.0
