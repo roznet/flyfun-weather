@@ -11,6 +11,9 @@ export interface VizSettings {
   enabledLayers: Record<string, boolean>;
   mapColorMetric: string;
   mapWidthMetric: string;
+  routeGraphVisible: boolean;
+  routeGraphLeftMetric: string;
+  routeGraphRightMetric: string;  // 'none' to disable right axis
 }
 
 // --- Coordinate Transform ---
@@ -117,6 +120,9 @@ export interface VizPoint {
   worstModelAgreement: string;
   // GFS cloud diagnostics (null when not available)
   nwpCloudDiag: VizCloudDiag | null;
+  // Route graph scalars (extracted from model_divergence)
+  temperatureC: number | null;
+  precipitationMm: number | null;
 }
 
 export interface AltitudeLines {

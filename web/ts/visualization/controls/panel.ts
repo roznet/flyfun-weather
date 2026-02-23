@@ -1,13 +1,16 @@
-/** Visualization control panel: layout toggle, render mode, layer checkboxes. */
+/** Visualization control panel: layout toggle, render mode, layer checkboxes, route graph controls. */
 
 import type { RenderMode, VizSettings } from '../types';
 import { getLayerGroups } from '../cross-section/layer-registry';
 import { showLayerInfo } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
+import { getMetricOptions } from '../route-graph/metrics';
 
 export interface VizControlCallbacks {
   onRenderModeChange: (mode: RenderMode) => void;
   onLayerToggle: (layerId: string) => void;
+  onRouteGraphToggle: (visible: boolean) => void;
+  onRouteGraphMetricChange: (axis: 'left' | 'right', metricId: string) => void;
 }
 
 export function renderVizControls(
@@ -61,6 +64,9 @@ export function renderVizControls(
   }
   html += '</div>';
 
+  // Route graph controls
+  html += renderRouteGraphControls(settings);
+
   html += '</div>'; // .viz-toolbar
 
   container.innerHTML = html;
@@ -90,4 +96,69 @@ export function renderVizControls(
       showLayerInfo(layerId, metricId);
     });
   });
+
+  // Wire route graph toggle
+  const graphToggle = container.querySelector('#route-graph-toggle') as HTMLButtonElement | null;
+  if (graphToggle) {
+    graphToggle.addEventListener('click', () => {
+      callbacks.onRouteGraphToggle(!settings.routeGraphVisible);
+    });
+  }
+
+  // Wire route graph metric dropdowns
+  const leftSelect = container.querySelector('#route-graph-left-metric') as HTMLSelectElement | null;
+  if (leftSelect) {
+    leftSelect.addEventListener('change', () => {
+      callbacks.onRouteGraphMetricChange('left', leftSelect.value);
+    });
+  }
+  const rightSelect = container.querySelector('#route-graph-right-metric') as HTMLSelectElement | null;
+  if (rightSelect) {
+    rightSelect.addEventListener('change', () => {
+      callbacks.onRouteGraphMetricChange('right', rightSelect.value);
+    });
+  }
+}
+
+function renderRouteGraphControls(settings: VizSettings): string {
+  const leftOptions = getMetricOptions(false);
+  const rightOptions = getMetricOptions(true);
+  const arrow = settings.routeGraphVisible ? '\u25BC' : '\u25B6';
+
+  let html = '<div class="route-graph-controls">';
+
+  // Toggle button
+  html += `<button id="route-graph-toggle" class="route-graph-toggle-btn" title="Show/hide route graph">`;
+  html += `<span class="route-graph-arrow">${arrow}</span> Route Graph`;
+  html += `</button>`;
+
+  // Metric selectors (only shown when visible)
+  if (settings.routeGraphVisible) {
+    html += '<div class="route-graph-selectors">';
+
+    html += '<label class="route-graph-select-label">';
+    html += '<span class="viz-toggle-label">Left:</span>';
+    html += '<select id="route-graph-left-metric" class="route-graph-select">';
+    for (const opt of leftOptions) {
+      const selected = opt.id === settings.routeGraphLeftMetric ? ' selected' : '';
+      html += `<option value="${opt.id}"${selected}>${opt.label}</option>`;
+    }
+    html += '</select>';
+    html += '</label>';
+
+    html += '<label class="route-graph-select-label">';
+    html += '<span class="viz-toggle-label">Right:</span>';
+    html += '<select id="route-graph-right-metric" class="route-graph-select">';
+    for (const opt of rightOptions) {
+      const selected = opt.id === settings.routeGraphRightMetric ? ' selected' : '';
+      html += `<option value="${opt.id}"${selected}>${opt.label}</option>`;
+    }
+    html += '</select>';
+    html += '</label>';
+
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
 }

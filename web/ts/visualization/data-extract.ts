@@ -16,7 +16,7 @@ export function extractVizData(
     const sounding = rpa.sounding[model] ?? null;
     const wind = rpa.wind_components[model] ?? null;
 
-    points.push(extractPoint(rpa, sounding, wind));
+    points.push(extractPoint(rpa, sounding, wind, model));
 
     if (rpa.waypoint_icao) {
       waypointMarkers.push({
@@ -52,6 +52,7 @@ function extractPoint(
   rpa: RoutePointAnalysis,
   sounding: SoundingAnalysis | null,
   wind: { headwind_kt: number; crosswind_kt: number } | null,
+  model: string,
 ): VizPoint {
   const indices = sounding?.indices ?? null;
 
@@ -121,6 +122,10 @@ function extractPoint(
     ceilingFt: diag.ceiling_ft,
   } : null;
 
+  // Extract surface values from model_divergence (per-model values)
+  const temperatureC = divergenceValue(rpa, 'temperature_c', model);
+  const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
+
   return {
     distanceNm: rpa.distance_from_origin_nm,
     time: rpa.interpolated_time,
@@ -139,5 +144,17 @@ function extractPoint(
     capeSurfaceJkg: indices?.cape_surface_jkg ?? 0,
     worstModelAgreement,
     nwpCloudDiag,
+    temperatureC,
+    precipitationMm,
   };
+}
+
+/** Look up a per-model value from the model_divergence comparison data. */
+function divergenceValue(rpa: RoutePointAnalysis, variable: string, model: string): number | null {
+  for (const d of rpa.model_divergence) {
+    if (d.variable === variable) {
+      return d.model_values[model] ?? null;
+    }
+  }
+  return null;
 }

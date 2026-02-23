@@ -178,7 +178,7 @@ export function drawColumnBand(
 
 // --- Monotone cubic tangent computation (Fritsch-Carlson) ---
 
-function monotoneCubicTangents(xs: number[], ys: number[]): number[] {
+export function monotoneCubicTangents(xs: number[], ys: number[]): number[] {
   const n = xs.length;
   if (n < 2) return new Array(n).fill(0);
 
