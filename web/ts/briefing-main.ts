@@ -10,7 +10,7 @@ import { initInfoPopup, showMetricInfo } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
 import { getAllLayers } from './visualization/cross-section/layer-registry';
-import { renderVizControls } from './visualization/controls/panel';
+import { renderVizControls, renderRouteGraphControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { RouteGraphRenderer } from './visualization/route-graph/renderer';
 import { getMetricById, METRIC_NONE } from './visualization/route-graph/metrics';
@@ -97,6 +97,7 @@ async function init(): Promise<void> {
     const canvasContainer = document.getElementById('viz-canvas-container');
     const controlsContainer = document.getElementById('viz-controls');
     const routeGraphContainer = document.getElementById('route-graph-container');
+    const routeGraphControlsContainer = document.getElementById('route-graph-controls');
     if (!vizSection || !canvasContainer || !controlsContainer) return;
 
     if (!state.routeAnalyses) {
@@ -170,13 +171,19 @@ async function init(): Promise<void> {
       });
     }
 
-    // Render controls (includes route graph toggle + dropdowns)
+    // Render cross-section controls (above canvas)
     renderVizControls(controlsContainer, state.vizSettings, {
       onRenderModeChange: (mode) => store.getState().setRenderMode(mode),
       onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
-      onRouteGraphToggle: (visible) => store.getState().setRouteGraphVisible(visible),
-      onRouteGraphMetricChange: (axis, metricId) => store.getState().setRouteGraphMetric(axis, metricId),
     }, state.selectedModel);
+
+    // Render route graph controls (below graph)
+    if (routeGraphControlsContainer) {
+      renderRouteGraphControls(routeGraphControlsContainer, state.vizSettings, {
+        onRouteGraphToggle: (visible) => store.getState().setRouteGraphVisible(visible),
+        onRouteGraphMetricChange: (axis, metricId) => store.getState().setRouteGraphMetric(axis, metricId),
+      });
+    }
   }
 
   function updateVizOverlay(state: BriefingState): void {
