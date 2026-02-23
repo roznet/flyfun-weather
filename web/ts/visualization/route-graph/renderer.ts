@@ -1,12 +1,11 @@
 /** Route graph canvas renderer — 2D chart below the cross-section. */
 
-import type { PlotArea, VizRouteData } from '../types';
+import type { PlotArea, VizRouteData, VizPoint } from '../types';
 import type { RouteGraphMetric } from './metrics';
 import type { YAxisScale } from './axes';
 import { computeYScale, drawLeftYAxis, drawRightYAxis, drawXGrid, drawZeroLine, drawBorder } from './axes';
-
-/** Margins match cross-section left/right for X-axis alignment. */
-const MARGIN = { left: 60, right: 50, top: 8, bottom: 24 };
+import { monotoneCubicTangents } from '../cross-section/layers/base';
+import { MARGIN } from './constants';
 
 export class RouteGraphRenderer {
   private container: HTMLElement;
@@ -221,10 +220,10 @@ export class RouteGraphRenderer {
     metric: RouteGraphMetric,
     scale: YAxisScale,
     distanceToX: (d: number) => number,
-    points: readonly { distanceNm: number }[],
+    points: readonly VizPoint[],
   ): void {
-    const values = (points as any[]).map((p) => metric.getValue(p));
-    const validPairs: Array<{ x: number; y: number }> = [];
+    const values = points.map((p) => metric.getValue(p));
+    const allDots: Array<{ x: number; y: number }> = [];
 
     ctx.strokeStyle = metric.color;
     ctx.lineWidth = 2;
@@ -232,30 +231,52 @@ export class RouteGraphRenderer {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    // Draw segments, breaking at nulls
-    let inPath = false;
+    // Collect segments of consecutive non-null values
+    const segments: Array<{ xs: number[]; ys: number[] }> = [];
+    let curXs: number[] = [];
+    let curYs: number[] = [];
+
     for (let i = 0; i < points.length; i++) {
       const v = values[i];
       if (v === null) {
-        if (inPath) { ctx.stroke(); inPath = false; }
+        if (curXs.length > 0) {
+          segments.push({ xs: curXs, ys: curYs });
+          curXs = [];
+          curYs = [];
+        }
         continue;
       }
       const x = distanceToX(points[i].distanceNm);
       const y = scale.valueToY(v);
-      if (!inPath) {
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        inPath = true;
-      } else {
-        ctx.lineTo(x, y);
-      }
-      validPairs.push({ x, y });
+      curXs.push(x);
+      curYs.push(y);
+      allDots.push({ x, y });
     }
-    if (inPath) ctx.stroke();
+    if (curXs.length > 0) segments.push({ xs: curXs, ys: curYs });
+
+    // Draw each segment as a smooth monotone cubic spline
+    for (const seg of segments) {
+      if (seg.xs.length < 2) {
+        // Single point — just a dot (drawn below)
+        continue;
+      }
+      const tangents = monotoneCubicTangents(seg.xs, seg.ys);
+      ctx.beginPath();
+      ctx.moveTo(seg.xs[0], seg.ys[0]);
+      for (let i = 0; i < seg.xs.length - 1; i++) {
+        const dx = seg.xs[i + 1] - seg.xs[i];
+        ctx.bezierCurveTo(
+          seg.xs[i] + dx / 3, seg.ys[i] + tangents[i] * dx / 3,
+          seg.xs[i + 1] - dx / 3, seg.ys[i + 1] - tangents[i + 1] * dx / 3,
+          seg.xs[i + 1], seg.ys[i + 1],
+        );
+      }
+      ctx.stroke();
+    }
 
     // Draw data point dots
     ctx.fillStyle = metric.color;
-    for (const { x, y } of validPairs) {
+    for (const { x, y } of allDots) {
       ctx.beginPath();
       ctx.arc(x, y, 2.5, 0, Math.PI * 2);
       ctx.fill();
@@ -268,14 +289,14 @@ export class RouteGraphRenderer {
     scale: YAxisScale,
     distanceToX: (d: number) => number,
     plotArea: PlotArea,
-    points: readonly { distanceNm: number }[],
+    points: readonly VizPoint[],
   ): void {
     const zeroY = scale.valueToY(0);
     ctx.fillStyle = metric.color;
     ctx.globalAlpha = 0.6;
 
     for (let i = 0; i < points.length; i++) {
-      const v = metric.getValue(points[i] as any);
+      const v = metric.getValue(points[i]);
       if (v === null || v === 0) continue;
 
       const x = distanceToX(points[i].distanceNm);
