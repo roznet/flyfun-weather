@@ -69,7 +69,7 @@ prompt = config.load_prompt("briefer")  # → markdown string
 ```python
 context = build_digest_context(
     snapshot, target_time,
-    text_forecasts=dwd_fcsts,      # optional
+    text_forecasts=text_fcsts,      # optional TextForecasts (NWS or DWD)
     previous_digest=prev_digest,    # optional, for trend
 )
 ```
@@ -80,8 +80,9 @@ Builds structured text with sections:
 3. `=== SOUNDING ANALYSIS ===` — per-waypoint thermodynamic indices, icing zones (type/SLD/risk), cloud layers (coverage), convective risk with severe modifiers
 4. `=== ALTITUDE BAND COMPARISON ===` — per-band cross-model icing/cloud agreement
 5. `=== MODEL COMPARISON ===` — divergence per variable (14 metrics)
-6. `=== TEXT FORECASTS ===` — DWD German text (if available)
-7. `=== PREVIOUS DIGEST ===` — prior assessment for trend (if available)
+6. `=== METAR/TAF OBSERVATIONS ===` — D-0 only: corridor airports, flight categories, raw METARs, TAF trends, model-obs comparisons
+7. `=== TEXT FORECASTS ({source}, {language}) ===` — NWS AFD (English) or DWD (German), route-dependent
+8. `=== PREVIOUS DIGEST ===` — prior assessment for trend (if available)
 
 ### LangGraph Pipeline (`digest/llm_digest.py`)
 
@@ -91,7 +92,7 @@ Builds structured text with sections:
 START → fetch_text → assemble → briefer → END
 ```
 
-- **fetch_text**: calls `fetch_dwd_text_forecasts()`, returns None on failure
+- **fetch_text**: calls `fetch_text_forecasts(route)` — dispatches to NWS or DWD based on route destination, returns None on failure
 - **assemble**: calls `build_digest_context()` combining quant + text
 - **briefer**: calls LLM with `with_structured_output(WeatherDigest)`, formats markdown
 
@@ -126,7 +127,7 @@ Structured output with 11 fields:
 
 ### System Prompt
 
-`configs/weather_digest/prompts/briefer_v1.md`: aviation weather briefer persona, instructs the LLM to translate German DWD text, use aviation terminology, be direct about uncertainty.
+`configs/weather_digest/prompts/briefer_v1.md`: aviation weather briefer persona, instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty.
 
 ## Key Choices
 
@@ -138,7 +139,7 @@ Structured output with 11 fields:
 ## Gotchas
 
 - LLM providers need API keys in environment (loaded via `.env` by `python-dotenv`)
-- DWD text is in German — prompt instructs LLM to translate during synthesis
+- Text forecasts are region-dependent: NWS AFD (English) for US routes, DWD (German) for European routes — prompt handles both
 - `with_structured_output()` behavior varies by provider (tool-calling vs JSON mode)
 - `DigestState` uses `total=False` TypedDict — all keys optional, access via `.get()`
 - `matplotlib.use("agg")` must be called before `import matplotlib.pyplot` in skewt.py
