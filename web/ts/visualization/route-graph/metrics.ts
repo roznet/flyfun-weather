@@ -104,8 +104,12 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
 ];
 
-/** Look up a metric by id. */
+/** Sentinel value for "no metric selected" (used for the optional right Y-axis). */
+export const METRIC_NONE = 'none';
+
+/** Look up a metric by id. Returns undefined for METRIC_NONE or unknown ids. */
 export function getMetricById(id: string): RouteGraphMetric | undefined {
+  if (id === METRIC_NONE) return undefined;
   return ROUTE_GRAPH_METRICS.find((m) => m.id === id);
 }
 
@@ -113,7 +117,7 @@ export function getMetricById(id: string): RouteGraphMetric | undefined {
 export function getMetricOptions(includeNone: boolean): Array<{ id: string; label: string }> {
   const options: Array<{ id: string; label: string }> = [];
   if (includeNone) {
-    options.push({ id: 'none', label: 'None' });
+    options.push({ id: METRIC_NONE, label: 'None' });
   }
   for (const m of ROUTE_GRAPH_METRICS) {
     options.push({ id: m.id, label: m.label });

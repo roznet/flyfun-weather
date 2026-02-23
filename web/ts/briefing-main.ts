@@ -11,10 +11,10 @@ import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
 import { getAllLayers } from './visualization/cross-section/layer-registry';
 import { renderVizControls } from './visualization/controls/panel';
-import { attachInteraction } from './visualization/cross-section/interaction';
+import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { RouteGraphRenderer } from './visualization/route-graph/renderer';
-import { getMetricById } from './visualization/route-graph/metrics';
-import { attachRouteGraphInteraction } from './visualization/route-graph/interaction';
+import { getMetricById, METRIC_NONE } from './visualization/route-graph/metrics';
+import { attachRouteGraphInteraction, type RouteGraphInteractionHandle } from './visualization/route-graph/interaction';
 
 async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
@@ -88,9 +88,9 @@ async function init(): Promise<void> {
 
   // --- Cross-section visualization + route graph ---
   let vizRenderer: CrossSectionRenderer | null = null;
-  let vizCleanupInteraction: (() => void) | null = null;
+  let vizInteraction: InteractionHandle | null = null;
   let routeGraphRenderer: RouteGraphRenderer | null = null;
-  let routeGraphCleanupInteraction: (() => void) | null = null;
+  let routeGraphInteraction: RouteGraphInteractionHandle | null = null;
 
   function renderVisualization(state: BriefingState): void {
     const vizSection = document.getElementById('viz-section');
@@ -132,35 +132,43 @@ async function init(): Promise<void> {
 
       const leftMetric = getMetricById(state.vizSettings.routeGraphLeftMetric) ?? null;
       const rightId = state.vizSettings.routeGraphRightMetric;
-      const rightMetric = rightId === 'none' ? null : (getMetricById(rightId) ?? null);
+      const rightMetric = rightId === METRIC_NONE ? null : (getMetricById(rightId) ?? null);
 
       routeGraphRenderer.setData(data);
       routeGraphRenderer.setMetrics(leftMetric, rightMetric);
       routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
       routeGraphRenderer.render();
 
-      // Re-attach route graph interaction with hover sync
-      if (routeGraphCleanupInteraction) routeGraphCleanupInteraction();
-      routeGraphCleanupInteraction = attachRouteGraphInteraction(
-        routeGraphRenderer, data, leftMetric, rightMetric, {
-          onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
-          onHover: (x) => {
-            // Sync crosshair to cross-section overlay
-            if (vizRenderer) vizRenderer.renderOverlay(x);
+      // Attach or update route graph interaction
+      if (routeGraphInteraction) {
+        routeGraphInteraction.update(data, leftMetric, rightMetric);
+      } else {
+        routeGraphInteraction = attachRouteGraphInteraction(
+          routeGraphRenderer, data, leftMetric, rightMetric, {
+            onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+            onHover: (x) => {
+              if (vizRenderer) vizRenderer.renderOverlay(x);
+            },
           },
-        },
-      );
+        );
+      }
+    } else {
+      // Destroy route graph when hidden to stop ResizeObserver
+      if (routeGraphInteraction) { routeGraphInteraction.destroy(); routeGraphInteraction = null; }
+      if (routeGraphRenderer) { routeGraphRenderer.destroy(); routeGraphRenderer = null; }
     }
 
-    // Re-attach cross-section interaction with hover sync to route graph
-    if (vizCleanupInteraction) vizCleanupInteraction();
-    vizCleanupInteraction = attachInteraction(vizRenderer, data, {
-      onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
-      onHover: (x) => {
-        // Sync crosshair to route graph overlay
-        if (routeGraphRenderer && graphVisible) routeGraphRenderer.renderOverlay(x);
-      },
-    });
+    // Attach or update cross-section interaction
+    if (vizInteraction) {
+      vizInteraction.update(data);
+    } else {
+      vizInteraction = attachInteraction(vizRenderer, data, {
+        onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+        onHover: (x) => {
+          if (routeGraphRenderer && state.vizSettings.routeGraphVisible) routeGraphRenderer.renderOverlay(x);
+        },
+      });
+    }
 
     // Render controls (includes route graph toggle + dropdowns)
     renderVizControls(controlsContainer, state.vizSettings, {
