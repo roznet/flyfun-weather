@@ -20,7 +20,23 @@
 
 - don't run npm run build as for development we use npv run dev
 - use venv activate if venv exist so we use correct library. If there are no venv in current directory, check ../main/venv and activate this. It means we are in a git worktree and main venv should be used
-- to run the web app, use tmux session with multiple panes for server, client, logs etc. let me know the session name and instruction to attach if needed
 - use .env file to set environment variables for local development
+
+## Running the Web App
+
+Start both servers in a tmux session:
+
+```bash
+tmux new-session -s weatherbrief
+# Pane 0 — backend (FastAPI on :8000)
+source venv/bin/activate
+uvicorn weatherbrief.api.app:app --reload --port 8000
+
+# Pane 1 (Ctrl-b %) — frontend (Vite on :3000)
+cd web && npx vite --port 3000
+```
+
+Open http://localhost:3000 in the browser. Vite proxies API requests to the backend.
+Attach to the session with `tmux attach -t weatherbrief`.
 
 
