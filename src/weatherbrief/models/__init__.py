@@ -69,6 +69,11 @@ from weatherbrief.models.airport_conditions import (  # noqa: F401
     RunwayEnd,
     RunwayWind,
 )
+from weatherbrief.models.observations import (  # noqa: F401
+    AirportObservation,
+    ObservationComparison,
+    RouteObservations,
+)
 from weatherbrief.models.storage import (  # noqa: F401
     BriefingPackMeta,
     Flight,

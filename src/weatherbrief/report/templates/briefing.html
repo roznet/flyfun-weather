@@ -142,6 +142,79 @@
   </div>
   {% endif %}
 
+  <!-- Route Observations (METAR/TAF) -->
+  {% if route_observations and route_observations.airports %}
+  <h2>METAR/TAF Observations</h2>
+  <p class="header-meta">
+    {{ route_observations.airports_with_metar }} METAR, {{ route_observations.airports_with_taf }} TAF
+    within {{ route_observations.corridor_nm|int }}nm corridor
+    {% if route_observations.worst_metar_category %}
+      &mdash; Worst: <span class="flight-cat cat-{{ route_observations.worst_metar_category|lower }}">{{ route_observations.worst_metar_category }}</span>
+    {% endif %}
+    {% if route_observations.phenomena_along_route %}
+      &mdash; Phenomena: {{ route_observations.phenomena_along_route|join(', ') }}
+    {% endif %}
+  </p>
+  {% if route_observations.has_conflicts %}
+  <div class="assessment assessment-amber" style="margin-top:0.4em;">Observation/model conflicts detected</div>
+  {% endif %}
+  <table>
+    <thead>
+      <tr>
+        <th style="text-align:left;">ICAO</th>
+        <th>Dist</th>
+        <th>METAR Cat</th>
+        <th>TAF Cat</th>
+        <th>Model Cat</th>
+        <th>Match</th>
+        <th style="text-align:left;">METAR</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for apt in route_observations.airports %}
+      {% if apt.has_metar or apt.has_taf %}
+      {% set comp = None %}
+      {% for c in route_observations.comparisons %}
+        {% if c.icao == apt.icao %}{% set comp = c %}{% endif %}
+      {% endfor %}
+      {% set row_class = '' %}
+      {% if comp and comp.category_match == 'CONFLICTING' %}{% set row_class = 'style="background:#fff3cd;"' %}{% endif %}
+      <tr {{ row_class }}>
+        <td style="text-align:left; font-family:monospace;">{{ apt.icao }}</td>
+        <td>{{ apt.distance_from_route_nm|round(0)|int }}nm</td>
+        <td>
+          {% if apt.metar_flight_category %}
+          <span class="flight-cat cat-{{ apt.metar_flight_category|lower }}">{{ apt.metar_flight_category }}</span>
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td>
+          {% if apt.taf_flight_category_at_eta %}
+          <span class="flight-cat cat-{{ apt.taf_flight_category_at_eta|lower }}">{{ apt.taf_flight_category_at_eta }}</span>
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td>
+          {% if comp and comp.model_category %}
+          <span class="flight-cat cat-{{ comp.model_category|lower }}">{{ comp.model_category }}</span>
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td>
+          {% if comp %}
+            {% if comp.category_match == 'CONFIRMING' %}<span class="agree-good">&#10003;</span>
+            {% elif comp.category_match == 'SIGNIFICANT' %}<span class="agree-moderate">&#9888;</span>
+            {% elif comp.category_match == 'CONFLICTING' %}<span class="agree-poor">&#10007;</span>
+            {% endif %}
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td style="text-align:left; font-size:8.5pt; font-family:monospace; max-width:40em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          {{ apt.metar_raw or '&mdash;' }}
+        </td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
   <!-- Advisories -->
   {% if advisories %}
   <h2>Route Advisories</h2>

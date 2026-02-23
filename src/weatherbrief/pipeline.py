@@ -54,6 +54,7 @@ class BriefingOptions:
     airports_db_path: str | None = None  # euro_aip database for runway data
     icing_severity_enhance: bool = True  # enable RH/PW icing severity upgrades
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
+    metar_taf_corridor_nm: float = 30  # corridor width for METAR/TAF search
 
 
 @dataclass
@@ -69,6 +70,8 @@ class BriefingUsage:
     llm_model: str | None = None
     llm_input_tokens: int | None = None
     llm_output_tokens: int | None = None
+    metar_taf_fetched: bool = False
+    metar_taf_airports: int = 0
 
 
 @dataclass
@@ -172,6 +175,38 @@ def execute_briefing(
         )
         route_advisories_manifest = advisory_result.manifest
 
+    # === 3.5 Route weather observations (D-0 only) ===
+    route_observations = None
+    if days_out == 0 and options.airports_db_path:
+        _notify("route_weather")
+        try:
+            from weatherbrief.tasks.route_weather import (
+                run_observation_comparison,
+                run_route_weather,
+            )
+
+            route_observations = run_route_weather(
+                route=route,
+                target_time=target_dt,
+                corridor_nm=options.metar_taf_corridor_nm,
+                airports_db_path=options.airports_db_path,
+            )
+            route_observations = run_observation_comparison(
+                observations=route_observations,
+                snapshot_forecasts=fetch_result.all_forecasts,
+                target_time=target_dt,
+                route=route,
+            )
+            result_usage_metar = True
+            result_usage_metar_airports = route_observations.airports_with_metar
+        except Exception:
+            logger.warning("Route weather fetch failed", exc_info=True)
+            result_usage_metar = False
+            result_usage_metar_airports = 0
+    else:
+        result_usage_metar = False
+        result_usage_metar_airports = 0
+
     # === 4. Build & save snapshot ===
     snapshot = ForecastSnapshot(
         route=route,
@@ -181,6 +216,7 @@ def execute_briefing(
         forecasts=fetch_result.all_forecasts,
         analyses=analysis_result.waypoint_analyses,
         cross_sections=fetch_result.cross_sections,
+        route_observations=route_observations,
     )
 
     if pack_dir:
@@ -200,6 +236,8 @@ def execute_briefing(
     result.usage.open_meteo_calls = len(fetch_result.cross_sections)
     result.usage.grib_enrichment = fetch_result.grib_enriched
     result.usage.grib_enrichment_failed = fetch_result.grib_enrichment_failed
+    result.usage.metar_taf_fetched = result_usage_metar
+    result.usage.metar_taf_airports = result_usage_metar_airports
     if fetch_result.elevation_profile and pack_dir:
         result.elevation_profile_path = pack_dir / "elevation_profile.json"
     if route_advisories_manifest and pack_dir:

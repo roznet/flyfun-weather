@@ -151,6 +151,11 @@ def _build_template_context(
             })
         airport_conditions = advisories_data.get("airport_conditions")
 
+    # Route observations (METAR/TAF from D-0 flights)
+    route_observations = None
+    if snapshot:
+        route_observations = snapshot.get("route_observations")
+
     return {
         "flight": flight,
         "pack": pack,
@@ -162,6 +167,7 @@ def _build_template_context(
         "comparison_waypoints": comparison_waypoints,
         "advisories": advisories,
         "airport_conditions": airport_conditions,
+        "route_observations": route_observations,
     }
 
 
