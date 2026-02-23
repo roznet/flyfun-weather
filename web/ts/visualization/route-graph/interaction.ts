@@ -136,7 +136,8 @@ export function attachRouteGraphInteraction(
     const tipY = e.clientY - rect.top - 10;
 
     const containerW = canvas.parentElement!.clientWidth;
-    if (tipX + 160 > containerW) {
+    const tipWidth = tip.offsetWidth || 160;
+    if (tipX + tipWidth > containerW) {
       tip.style.left = '';
       tip.style.right = `${containerW - tipX + 24}px`;
     } else {

@@ -2,6 +2,7 @@
 
 import type { PlotArea, VizRouteData } from '../types';
 import type { RouteGraphMetric } from './metrics';
+import { MARGIN } from './constants';
 
 const GRID_COLOR = 'rgba(0, 0, 0, 0.08)';
 const LABEL_COLOR = '#6c757d';
@@ -90,11 +91,12 @@ export function drawLeftYAxis(
     ctx.fillText(formatTick(v), plotArea.left - 5, y);
   }
 
-  // Unit label
+  // Unit label (rotated, positioned within the left margin)
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.translate(10, plotArea.top + plotArea.height / 2);
+  const labelInset = Math.round(MARGIN.left / 6);
+  ctx.translate(labelInset, plotArea.top + plotArea.height / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.fillText(metric.unit, 0, 0);
   ctx.restore();
@@ -122,12 +124,12 @@ export function drawRightYAxis(
     ctx.fillText(formatTick(v), plotArea.left + plotArea.width + 5, y);
   }
 
-  // Unit label
+  // Unit label (rotated, positioned within the right margin)
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const rightEdge = plotArea.left + plotArea.width + 44;
-  ctx.translate(rightEdge, plotArea.top + plotArea.height / 2);
+  const rightLabelX = plotArea.left + plotArea.width + MARGIN.right - 6;
+  ctx.translate(rightLabelX, plotArea.top + plotArea.height / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.fillText(metric.unit, 0, 0);
   ctx.restore();
