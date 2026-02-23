@@ -1,6 +1,6 @@
 # WeatherBrief
 
-> Medium-range (D-7 to D-0) aviation weather assessment for cross-country GA flights in Europe
+> Medium-range (D-7 to D-0) aviation weather assessment for cross-country GA flights
 
 Install: `pip install -e ".[dev]"` (local development)
 
@@ -17,8 +17,8 @@ Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection
 → Full doc: data-models.md
 
 ### fetch
-Weather data retrieval: Open-Meteo multi-point client, route interpolation, DWD text forecasts, Autorouter GRAMET, SRTM elevation, model freshness (GFS/ECMWF/ICON/UKMO/MeteoFrance), GRIB2 enrichment (GFS + ICON-EU cloud water, diagnostics, cloud cover override, init time tracking).
-Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_dwd_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `check_freshness`, `enrich_forecasts`
+Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD for US, DWD for Europe), Autorouter GRAMET, SRTM elevation, model freshness (GFS/ECMWF/ICON/UKMO/MeteoFrance), GRIB2 enrichment (GFS + ICON-EU cloud water, diagnostics, cloud cover override, init time tracking).
+Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `detect_region`, `fetch_nws_afd`, `fetch_dwd_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `check_freshness`, `enrich_forecasts`
 → Full doc: fetch.md
 
 ### analysis
@@ -90,3 +90,8 @@ SFIP (Simplified Forecast Icing Potential) algorithm design: fuzzy-logic members
 ### route-graph
 2D chart below the cross-section for plotting scalar weather values (head/tailwind, temperature, precipitation, cloud cover, CAPE, freezing level) along the route. X-axis aligned with cross-section, dual Y-axes, extensible metric registry, line and bar render types, hover sync.
 → Full doc: route-graph.md
+
+### metar-taf-route-weather
+D-0 METAR/TAF integration: fetch real observations from airports along route corridor via euro_aip RouteWeatherService, compare against NWP model predictions (CONFIRMING/SIGNIFICANT/CONFLICTING), surface in digest and HTML report.
+Key exports: `run_route_weather`, `run_observation_comparison`, `RouteObservations`, `AirportObservation`
+→ Full doc: metar-taf-route-weather.md
