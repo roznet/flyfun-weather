@@ -86,3 +86,7 @@ Raw GRIB2 engine: what's implemented (GFS CLWMR/ICMR/cloud diagnostics, ICON-EU 
 ### sfip-implementation-design
 SFIP (Simplified Forecast Icing Potential) algorithm design: fuzzy-logic membership functions (temperature, RH, CLW, vertical velocity), two variants (full with GRIB2 CLW, proxy with DD+cloud cover), glaciation factor from ICMR, severity mapping, per-model behavior. Based on Belo-Pereira (2015) and Morcrette et al. (2019).
 → Full doc: sfip-implementation-design.md
+
+### route-graph
+2D chart below the cross-section for plotting scalar weather values (head/tailwind, temperature, precipitation, cloud cover, CAPE, freezing level) along the route. X-axis aligned with cross-section, dual Y-axes, extensible metric registry, line and bar render types, hover sync.
+→ Full doc: route-graph.md

@@ -12,6 +12,9 @@ import { extractVizData } from './visualization/data-extract';
 import { getAllLayers } from './visualization/cross-section/layer-registry';
 import { renderVizControls } from './visualization/controls/panel';
 import { attachInteraction } from './visualization/cross-section/interaction';
+import { RouteGraphRenderer } from './visualization/route-graph/renderer';
+import { getMetricById } from './visualization/route-graph/metrics';
+import { attachRouteGraphInteraction } from './visualization/route-graph/interaction';
 
 async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
@@ -83,14 +86,17 @@ async function init(): Promise<void> {
   applyDisplayModeClass(store.getState().displayMode);
   updateToggleButtons(store.getState().displayMode);
 
-  // --- Cross-section visualization ---
+  // --- Cross-section visualization + route graph ---
   let vizRenderer: CrossSectionRenderer | null = null;
   let vizCleanupInteraction: (() => void) | null = null;
+  let routeGraphRenderer: RouteGraphRenderer | null = null;
+  let routeGraphCleanupInteraction: (() => void) | null = null;
 
   function renderVisualization(state: BriefingState): void {
     const vizSection = document.getElementById('viz-section');
     const canvasContainer = document.getElementById('viz-canvas-container');
     const controlsContainer = document.getElementById('viz-controls');
+    const routeGraphContainer = document.getElementById('route-graph-container');
     if (!vizSection || !canvasContainer || !controlsContainer) return;
 
     if (!state.routeAnalyses) {
@@ -102,7 +108,7 @@ async function init(): Promise<void> {
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile);
     const allLayers = getAllLayers();
 
-    // Create or update renderer
+    // Create or update cross-section renderer
     if (!vizRenderer) {
       vizRenderer = new CrossSectionRenderer(canvasContainer);
     }
@@ -113,22 +119,64 @@ async function init(): Promise<void> {
     vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
     vizRenderer.render();
 
-    // Re-attach interaction
+    // --- Route graph ---
+    const graphVisible = state.vizSettings.routeGraphVisible;
+    if (routeGraphContainer) {
+      routeGraphContainer.style.display = graphVisible ? '' : 'none';
+    }
+
+    if (graphVisible && routeGraphContainer) {
+      if (!routeGraphRenderer) {
+        routeGraphRenderer = new RouteGraphRenderer(routeGraphContainer);
+      }
+
+      const leftMetric = getMetricById(state.vizSettings.routeGraphLeftMetric) ?? null;
+      const rightId = state.vizSettings.routeGraphRightMetric;
+      const rightMetric = rightId === 'none' ? null : (getMetricById(rightId) ?? null);
+
+      routeGraphRenderer.setData(data);
+      routeGraphRenderer.setMetrics(leftMetric, rightMetric);
+      routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      routeGraphRenderer.render();
+
+      // Re-attach route graph interaction with hover sync
+      if (routeGraphCleanupInteraction) routeGraphCleanupInteraction();
+      routeGraphCleanupInteraction = attachRouteGraphInteraction(
+        routeGraphRenderer, data, leftMetric, rightMetric, {
+          onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+          onHover: (x) => {
+            // Sync crosshair to cross-section overlay
+            if (vizRenderer) vizRenderer.renderOverlay(x);
+          },
+        },
+      );
+    }
+
+    // Re-attach cross-section interaction with hover sync to route graph
     if (vizCleanupInteraction) vizCleanupInteraction();
     vizCleanupInteraction = attachInteraction(vizRenderer, data, {
       onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+      onHover: (x) => {
+        // Sync crosshair to route graph overlay
+        if (routeGraphRenderer && graphVisible) routeGraphRenderer.renderOverlay(x);
+      },
     });
 
-    // Render controls
+    // Render controls (includes route graph toggle + dropdowns)
     renderVizControls(controlsContainer, state.vizSettings, {
       onRenderModeChange: (mode) => store.getState().setRenderMode(mode),
       onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
+      onRouteGraphToggle: (visible) => store.getState().setRouteGraphVisible(visible),
+      onRouteGraphMetricChange: (axis, metricId) => store.getState().setRouteGraphMetric(axis, metricId),
     }, state.selectedModel);
   }
 
   function updateVizOverlay(state: BriefingState): void {
     if (vizRenderer && state.routeAnalyses) {
       vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
+    }
+    if (routeGraphRenderer && state.routeAnalyses && state.vizSettings.routeGraphVisible) {
+      routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
     }
   }
 
@@ -305,9 +353,10 @@ async function init(): Promise<void> {
       }
       saveCollapsedSections(collapsedSections);
     }
-    // Re-render viz canvas if cross-section was just expanded (canvas needs size)
-    if (key === 'cross-section' && !section.classList.contains('collapsed') && vizRenderer) {
-      vizRenderer.render();
+    // Re-render viz canvases if cross-section was just expanded (canvas needs size)
+    if (key === 'cross-section' && !section.classList.contains('collapsed')) {
+      if (vizRenderer) vizRenderer.render();
+      if (routeGraphRenderer && store.getState().vizSettings.routeGraphVisible) routeGraphRenderer.render();
     }
   });
 
