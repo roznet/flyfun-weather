@@ -139,7 +139,7 @@ result = check_freshness(last_pack_init_times)
 # → {"fresh": False, "stale_models": ["gfs"], "model_init_times": {...}}
 ```
 
-- Queries Open-Meteo metadata API for current model init times (GFS, ECMWF, ICON)
+- Queries Open-Meteo metadata API for current model init times (GFS, ECMWF, ICON, UKMO, MeteoFrance)
 - Compares against `model_init_times` stored on the previous pack
 - DWD text forecasts checked on assumed update schedule (06:00/18:00 UTC short-range, 10:30 UTC medium-range)
 - `compute_next_update()` estimates when the next model run will be available
@@ -195,6 +195,7 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 - **Cloud cover override** — eliminates model-run mismatches between Open-Meteo (which may lag) and GRIB (latest run)
 - **Per-point interpolation** — `decode_grib_per_point()` / `decode_icon_eu_per_point()` return values per route point
 - **Graceful degradation** — enrichment failure logged but pipeline continues with Open-Meteo data only
+- **Init time tracking** — `enrich_forecasts()` returns `grib_init_times: dict[str, int]` mapping model names ("gfs", "icon") to Unix timestamps of the GRIB model run used. Stored in `BriefingPackMeta.grib_init_times` and displayed in the freshness bar when GRIB run differs from Open-Meteo (e.g., "GFS 12Z (GRIB 18Z)")
 
 ### Gotchas
 - **cfgrib uses lazy loading** — temp file must stay alive through interpolation, not just `open_datasets()`. Deleting too early causes `FileNotFoundError`.

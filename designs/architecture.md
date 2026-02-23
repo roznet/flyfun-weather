@@ -41,6 +41,7 @@ evaluate_all(RouteContext)  → RouteAdvisoriesManifest (13 hazard evaluators)
 ForecastSnapshot  (root object, saved as JSON)
     ↓
 Optional outputs:
+├→ GRIB init times tracking (grib_init_times dict, when GRIB model run differs from Open-Meteo)
 ├→ GRAMET cross-section (Autorouter API → PDF, rendered as PNG via PyMuPDF)
 ├→ Skew-T plots (MetPy → PNG with CAPE/CIN shading, hodograph, indices panel)
 ├→ LLM digest (LangGraph: DWD text + quant → WeatherDigest → Markdown + JSON)

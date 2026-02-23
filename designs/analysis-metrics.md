@@ -68,7 +68,7 @@ Pressure levels vary by model (range 1000–300 hPa, ~SFC to ~FL300):
 
 ### 1.3 GRIB2 Enrichment Variables
 
-Direct GRIB2 fetch supplements Open-Meteo with variables it doesn't provide. See [weather-engine-specs.md](./weather-engine-specs.md) for implementation details.
+Direct GRIB2 fetch supplements Open-Meteo with variables it doesn't provide. See [weather-engine-specs.md](./weather-engine-specs.md) for implementation details. The GRIB model run init times are tracked separately in `BriefingPackMeta.grib_init_times` — when they differ from the Open-Meteo init times, the freshness bar annotates the discrepancy (e.g., "GFS 12Z (GRIB 18Z)").
 
 #### GFS Pressure-Level Variables (via NOAA S3)
 
