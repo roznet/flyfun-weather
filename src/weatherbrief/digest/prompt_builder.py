@@ -1,4 +1,4 @@
-"""Assemble LLM context string from ForecastSnapshot + DWD text forecasts."""
+"""Assemble LLM context string from ForecastSnapshot + text forecasts."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from weatherbrief.models import (
 
 if TYPE_CHECKING:
     from weatherbrief.digest.llm_digest import WeatherDigest
-    from weatherbrief.fetch.dwd_text import DWDTextForecasts
+    from weatherbrief.fetch.text_forecasts import TextForecasts
 
 # Advisory IDs excluded from digest context (meta-level, not useful for LLM)
 _DIGEST_EXCLUDE_IDS = {"model_agreement"}
@@ -24,7 +24,7 @@ _DIGEST_EXCLUDE_IDS = {"model_agreement"}
 def build_digest_context(
     snapshot: ForecastSnapshot,
     target_time: datetime,
-    text_forecasts: DWDTextForecasts | None = None,
+    text_forecasts: TextForecasts | None = None,
     previous_digest: WeatherDigest | None = None,
     route_advisories: RouteAdvisoriesManifest | None = None,
     flight_rules: str | None = None,
@@ -36,7 +36,7 @@ def build_digest_context(
     2. Quantitative data per waypoint
     3. Route advisories (deterministic hazard assessments)
     4. Model comparison
-    5. DWD text forecasts (German)
+    5. Text forecasts (NWS AFD or DWD, region-dependent)
     6. Trend from previous digest
     """
     sections: list[str] = []
@@ -173,16 +173,14 @@ def build_digest_context(
     sections.append("\n".join(comp_lines))
 
     # --- Text forecasts ---
-    if text_forecasts and (text_forecasts.short_range or text_forecasts.medium_range):
-        text_lines: list[str] = ["=== TEXT FORECASTS (DWD, German) ==="]
-        if text_forecasts.medium_range:
-            text_lines.append(
-                f"\n--- Mittelfrist (medium-range) ---\n{text_forecasts.medium_range}"
-            )
-        if text_forecasts.short_range:
-            text_lines.append(
-                f"\n--- Kurzfrist (short-range) ---\n{text_forecasts.short_range}"
-            )
+    if text_forecasts and text_forecasts.entries:
+        header = (
+            f"=== TEXT FORECASTS ({text_forecasts.source_label}, "
+            f"{text_forecasts.language_note}) ==="
+        )
+        text_lines: list[str] = [header]
+        for entry in text_forecasts.entries:
+            text_lines.append(f"\n--- {entry.label} ---\n{entry.text}")
         sections.append("\n".join(text_lines))
 
     # --- Trend ---

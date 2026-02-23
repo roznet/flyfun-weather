@@ -39,6 +39,7 @@ META_URLS: dict[str, str] = {
 ASSUMED_UPDATE_HOURS: dict[str, list[int]] = {
     "dwd_short_range": [5, 17],  # actual ~04:30, ~16:30
     "dwd_medium_range": [11],  # actual ~10:30
+    "nws_afd": [4, 10, 16, 22],  # ~4x daily, varies by WFO
 }
 
 
