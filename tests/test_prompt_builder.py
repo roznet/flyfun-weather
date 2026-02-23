@@ -7,7 +7,11 @@ from datetime import datetime, timezone
 import pytest
 
 from weatherbrief.digest.prompt_builder import build_digest_context
-from weatherbrief.fetch.dwd_text import DWDTextForecasts
+from weatherbrief.fetch.text_forecasts import (
+    ForecastRegion,
+    TextForecastEntry,
+    TextForecasts,
+)
 from weatherbrief.models import (
     AgreementLevel,
     EnhancedCloudLayer,
@@ -122,15 +126,28 @@ def test_build_context_basic(sample_snapshot):
 def test_build_context_with_text_forecasts(sample_snapshot):
     """Text forecasts section included when provided."""
     target_time = datetime(2026, 2, 17, 9, 0, 0)
-    text_fcsts = DWDTextForecasts(
-        short_range="Kurzfrist: Hochdruckeinfluss.",
-        medium_range="Mittelfrist: Umstellung auf Westwetterlage.",
+    text_fcsts = TextForecasts(
+        region=ForecastRegion.EUROPE,
+        source_label="DWD Synoptic Overview",
+        language_note="German — translate relevant content",
+        entries=[
+            TextForecastEntry(
+                label="Kurzfrist (short-range)",
+                text="Kurzfrist: Hochdruckeinfluss.",
+            ),
+            TextForecastEntry(
+                label="Mittelfrist (medium-range)",
+                text="Mittelfrist: Umstellung auf Westwetterlage.",
+            ),
+        ],
         fetched_at=datetime(2026, 2, 10, 12, 0, 0, tzinfo=timezone.utc),
     )
 
     context = build_digest_context(sample_snapshot, target_time, text_forecasts=text_fcsts)
 
     assert "TEXT FORECASTS" in context
+    assert "DWD Synoptic Overview" in context
+    assert "German" in context
     assert "Kurzfrist" in context
     assert "Mittelfrist" in context
 

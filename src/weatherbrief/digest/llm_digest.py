@@ -1,7 +1,7 @@
 """LLM-powered weather digest using LangGraph.
 
 Produces a structured WeatherDigest from quantitative forecast data
-and DWD text forecasts via an LLM briefer.
+and regional text forecasts (NWS AFD or DWD) via an LLM briefer.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing_extensions import TypedDict
 
 from weatherbrief.digest.llm_config import DigestConfig, create_llm
 from weatherbrief.digest.prompt_builder import build_digest_context
-from weatherbrief.fetch.dwd_text import DWDTextForecasts, fetch_dwd_text_forecasts
+from weatherbrief.fetch.text_forecasts import TextForecasts, fetch_text_forecasts
 from weatherbrief.models import ForecastSnapshot
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ class DigestState(TypedDict, total=False):
     previous_digest: WeatherDigest | None
     route_advisories: object | None  # RouteAdvisoriesManifest
     flight_rules: str | None
-    text_forecasts: DWDTextForecasts | None
+    text_forecasts: TextForecasts | None
     context: str
     digest: WeatherDigest | None
     digest_text: str
@@ -65,12 +65,13 @@ class DigestState(TypedDict, total=False):
 
 
 def fetch_text_node(state: DigestState) -> dict:
-    """Fetch DWD text forecasts (graceful failure)."""
+    """Fetch region-appropriate text forecasts (graceful failure)."""
     try:
-        text_forecasts = fetch_dwd_text_forecasts()
+        route = state["snapshot"].route
+        text_forecasts = fetch_text_forecasts(route=route)
         return {"text_forecasts": text_forecasts}
     except Exception:
-        logger.warning("DWD text forecast fetch failed", exc_info=True)
+        logger.warning("Text forecast fetch failed", exc_info=True)
         return {"text_forecasts": None}
 
 

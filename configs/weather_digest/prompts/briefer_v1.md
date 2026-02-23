@@ -69,7 +69,8 @@ Structure your response as JSON with these exact fields:
   everything.
 - If the ensemble says it's clearly fine, say so. If it's clearly unflyable,
   say that too.
-- Text forecasts from DWD are in German — translate and synthesize the relevant
-  meteorological information as part of your analysis.
+- Text forecasts may be from NWS (Area Forecast Discussions, in English — synthesize
+  the synoptic and aviation sections) or DWD (German — translate and synthesize the
+  relevant meteorological information). The header indicates the source and language.
 - All wind speeds should be in knots, altitudes in feet, temperatures in
   Celsius.
