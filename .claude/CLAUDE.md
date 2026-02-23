@@ -32,11 +32,12 @@ tmux new-session -s weatherbrief
 source venv/bin/activate
 uvicorn weatherbrief.api.app:app --reload --port 8000
 
-# Pane 1 (Ctrl-b %) — frontend (Vite on :3000)
-cd web && npx vite --port 3000
+# Pane 1 (Ctrl-b %) — frontend (esbuild watch)
+cd web && npm run dev
 ```
 
-Open http://localhost:3000 in the browser. Vite proxies API requests to the backend.
+Open http://localhost:8000 in the browser. The backend serves static files from `web/`.
+esbuild watches TypeScript sources and rebuilds `web/dist/*.js` on change.
 Attach to the session with `tmux attach -t weatherbrief`.
 
 
