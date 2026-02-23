@@ -197,6 +197,15 @@ The briefing page includes a dynamic Windy link that opens the meteogram for the
 - **Updates dynamically** when the user changes route point or model selection
 - Displayed as inline text in the external links area of the briefing
 
+## Freshness Bar
+
+The freshness bar (`renderFreshnessBar()` in `briefing-ui.ts`) shows data age and model basis:
+
+- **Basis line:** `"Based on GFS 12Z, ECMWF 00Z, ..."` from `pack.model_init_times`
+- **GRIB annotation:** When `pack.grib_init_times[model]` differs from `pack.model_init_times[model]`, displays `"GFS 12Z (GRIB 18Z)"` — indicates Open-Meteo data from one cycle, GRIB enrichment from another
+- **States:** current (muted), stale (amber), refreshing (animated dots spinner)
+- **Force refresh link:** shown for admins when data is stale
+
 ## Gotchas
 
 - Y-axis is altitude in feet (0 at bottom), not pressure — `altitudeToPressureHpa()` in scales.ts for any pressure conversions

@@ -123,9 +123,15 @@ Comprehensive listing of DWD ICON-EU opendata variables. Organized by level type
 - **Challenge:** Variables stored in separate files; icosahedral grid needs special interpolation
 - **Advantage:** `omega` explicitly available (unlike Open-Meteo's ICON endpoint)
 
-### E. Météo-France ARPEGE — FUTURE
+### E. Météo-France ARPEGE — METADATA TRACKED, GRIB2 FUTURE
 - **Bucket:** `s3://meteo-france-models/arpege-world/`
+- **Open-Meteo metadata:** `https://api.open-meteo.com/data/meteofrance_arpege_world025/static/meta.json`
 - **Challenge:** Variable path conventions differ from GFS; lower priority
+
+### F. UKMO (UK Met Office Global Deterministic) — METADATA TRACKED
+- **Open-Meteo metadata:** `https://api.open-meteo.com/data/ukmo_global_deterministic_10km/static/meta.json`
+- **Resolution:** ~10km
+- **Status:** Freshness metadata tracked via Open-Meteo; no direct GRIB2 fetch
 
 ## Future Extensions
 

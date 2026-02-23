@@ -17,7 +17,7 @@ Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection
 → Full doc: data-models.md
 
 ### fetch
-Weather data retrieval: Open-Meteo multi-point client, route interpolation, DWD text forecasts, Autorouter GRAMET, SRTM elevation, model freshness, GRIB2 enrichment (GFS + ICON-EU cloud water, diagnostics, and cloud cover override).
+Weather data retrieval: Open-Meteo multi-point client, route interpolation, DWD text forecasts, Autorouter GRAMET, SRTM elevation, model freshness (GFS/ECMWF/ICON/UKMO/MeteoFrance), GRIB2 enrichment (GFS + ICON-EU cloud water, diagnostics, cloud cover override, init time tracking).
 Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_dwd_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `check_freshness`, `enrich_forecasts`
 → Full doc: fetch.md
 
@@ -36,7 +36,7 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands (per-band hybrid with sounding-corroborated collapse), convective towers, temperature/stability lines, hover interaction, metrics UI system with info popups, layer legends, "Discuss with AI" integration, unified atmospheric profile table, ceiling metrics, and Windy meteogram links.
+Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands (per-band hybrid with sounding-corroborated collapse), convective towers, temperature/stability lines, hover interaction, metrics UI system with info popups, layer legends, "Discuss with AI" integration, unified atmospheric profile table, ceiling metrics, Windy meteogram links, and freshness bar with GRIB init time annotations.
 Key exports: `CrossSectionRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
 → Full doc: visualization.md
 
@@ -80,7 +80,7 @@ Implementation plan for vertical motion & turbulence analysis. Fully implemented
 → Full doc: vertical-motion-plan.md
 
 ### weather-engine-specs
-Raw GRIB2 engine: what's implemented (GFS CLWMR/ICMR/cloud diagnostics, ICON-EU QC/QI enrichment), data source registry (GFS/ECMWF/ICON/ARPEGE with bucket paths), future extensions (additional variables, Ellrod index, ECMWF enrichment), and implementation gotchas.
+Raw GRIB2 engine: what's implemented (GFS CLWMR/ICMR/cloud diagnostics, ICON-EU QC/QI enrichment), data source registry (GFS/ECMWF/ICON/ARPEGE/UKMO with bucket paths and metadata URLs), future extensions (additional variables, Ellrod index, ECMWF enrichment), and implementation gotchas.
 → Full doc: weather-engine-specs.md
 
 ### sfip-implementation-design

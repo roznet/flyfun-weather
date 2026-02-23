@@ -204,10 +204,11 @@ BriefingPackMeta(
     assessment="GREEN",
     assessment_reason="Conditions favorable",
     model_init_times={"gfs": 1708300800, "ecmwf": 1708300800},
+    grib_init_times={"gfs": 1708344000},
 )
 ```
 
-Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available.
+Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)".
 
 ## Route Advisory Models (`models/advisories.py`)
 
