@@ -80,18 +80,39 @@ route_points = interpolate_route(route, spacing_nm=20.0)
 - **Multi-point over per-waypoint** — reduces API calls from N×M to M; trivially within free-tier rate limits (600/min, 5K/hour)
 - **24h time window** — only fetch target date data, not the full 16-day horizon (~150KB vs ~1MB per model)
 
-## DWD Text Forecasts (`fetch/dwd_text.py`)
+## Text Forecasts (Route-Aware)
 
-German synoptic overviews from DWD Open Data (free, no API key).
+Regional text forecasts are fetched based on route destination. A unified `TextForecasts` container (`fetch/text_forecasts.py`) dispatches to the right source.
 
 ```python
-text_fcsts = fetch_dwd_text_forecasts()
-text_fcsts.short_range   # SXDL31 Kurzfrist (2-3 day), updated 2x daily
-text_fcsts.medium_range  # SXDL33 Mittelfrist (7-day), updated daily ~10:30 UTC
+from weatherbrief.fetch.text_forecasts import fetch_text_forecasts
+text_fcsts = fetch_text_forecasts(route=route)  # → TextForecasts | None
+text_fcsts.region        # ForecastRegion.US or .EUROPE
+text_fcsts.source_label  # "NWS AFD" or "DWD Synoptic Overview"
+text_fcsts.entries       # list[TextForecastEntry(label, text)]
 ```
 
+**Region detection** (`detect_region(route)`): uses destination (last waypoint) ICAO prefix — `K`/`P` → US, else Europe.
+
+### NWS Area Forecast Discussions (`fetch/nws_text.py`)
+
+US routes get AFDs from aviationweather.gov. AFDs include synoptic discussion, aviation-specific sections, forecaster reasoning, and confidence levels (~6.5KB each).
+
+- **WFO lookup** — `api.weather.gov/points/{lat},{lon}` returns the 3-letter CWA (Weather Forecast Office) code
+- **CWA deduplication** — two airports in the same WFO area → one AFD fetch
+- **ICAO prefix mapping** — CWA to ICAO station: `K` for CONUS, `PA` for Alaska, `PH` for Hawaii, `TJ` for Puerto Rico
+- **AFD fetch** — `aviationweather.gov/api/data/fcstdisc?cwa={ICAO_CWA}&type=af`
+- **WFO cache** — JSON file at `{cache_dir}/airport_wfo_cache.json` (ICAO → CWA), loaded/saved once per call
+- **User-Agent required** — `api.weather.gov` mandates a UA header
+- **Graceful failure** — per-waypoint and per-AFD; 15s timeout
+
+### DWD Synoptic Overviews (`fetch/dwd_text.py`)
+
+European routes get German synoptic overviews from DWD Open Data (free, no API key).
+
+- SXDL31 Kurzfrist (2-3 day), updated 2x daily; SXDL33 Mittelfrist (7-day), updated daily ~10:30 UTC
 - **latin-1 encoding** — DWD files use ISO 8859-1, not UTF-8
-- **Graceful failure** — each forecast independently None-able; catches both `RequestException` and `ConnectionError`
+- **Graceful failure** — each forecast independently None-able
 - Text is in German — the LLM translates and synthesizes as part of the digest
 
 ## Autorouter GRAMET (`fetch/gramet.py`)
