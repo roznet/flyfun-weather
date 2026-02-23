@@ -72,5 +72,11 @@ Structure your response as JSON with these exact fields:
 - Text forecasts may be from NWS (Area Forecast Discussions, in English — synthesize
   the synoptic and aviation sections) or DWD (German — translate and synthesize the
   relevant meteorological information). The header indicates the source and language.
+- On D-0 (day of flight), a METAR/TAF OBSERVATIONS section may be present.
+  When available, cross-reference actual observations against model predictions.
+  Flag any SIGNIFICANT or CONFLICTING discrepancies between observed and
+  forecast flight categories. Give observations higher weight than model data
+  for current conditions, but use TAF trends and model forecasts for conditions
+  at flight time.
 - All wind speeds should be in knots, altitudes in feet, temperatures in
   Celsius.

@@ -6,7 +6,7 @@ Only used on D-0 (day of flight) when real observations add value.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from weatherbrief.models.analysis import RouteConfig, WaypointForecast
 from weatherbrief.models.observations import (
@@ -49,20 +49,16 @@ def _find_nearest_waypoint(
 
 def _compute_route_distances(route: RouteConfig) -> list[float]:
     """Compute cumulative great-circle distance for each waypoint in NM."""
-    import math
+    from euro_aip.models.navpoint import NavPoint
 
     distances = [0.0]
     for i in range(1, len(route.waypoints)):
         prev = route.waypoints[i - 1]
         curr = route.waypoints[i]
-        lat1, lon1 = math.radians(prev.lat), math.radians(prev.lon)
-        lat2, lon2 = math.radians(curr.lat), math.radians(curr.lon)
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        nm = c * 3440.065  # Earth radius in NM
-        distances.append(distances[-1] + nm)
+        nav_a = NavPoint(latitude=prev.lat, longitude=prev.lon)
+        nav_b = NavPoint(latitude=curr.lat, longitude=curr.lon)
+        _, leg_nm = nav_a.haversine_distance(nav_b)
+        distances.append(distances[-1] + leg_nm)
     return distances
 
 
@@ -154,7 +150,7 @@ def run_route_weather(
 
     return RouteObservations(
         corridor_nm=corridor_nm,
-        fetch_time=datetime.utcnow(),
+        fetch_time=datetime.now(timezone.utc),
         airports_found=len(airports),
         airports_with_metar=sum(1 for a in airports if a.has_metar),
         airports_with_taf=sum(1 for a in airports if a.has_taf),
@@ -171,7 +167,7 @@ def _classify_discrepancy(
 ) -> str:
     """Classify the discrepancy between observed and model flight categories.
 
-    Returns one of: CONFIRMING, MINOR_DELTA, SIGNIFICANT, CONFLICTING.
+    Returns one of: CONFIRMING, SIGNIFICANT, CONFLICTING.
     """
     if obs_cat is None or model_cat is None:
         return "CONFIRMING"  # can't compare

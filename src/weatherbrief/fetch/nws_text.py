@@ -89,6 +89,9 @@ def _cwa_to_icao_prefix(cwa: str) -> str:
     return f"K{cwa}"
 
 
+_AFD_MIN_LENGTH = 100  # Real AFDs are much longer; short responses are errors
+
+
 def _fetch_afd(cwa_icao: str, session: requests.Session) -> str | None:
     """Fetch a single AFD for the given ICAO CWA identifier."""
     url = AWC_AFD_URL.format(cwa=cwa_icao)
@@ -96,7 +99,10 @@ def _fetch_afd(cwa_icao: str, session: requests.Session) -> str | None:
         resp = session.get(url, timeout=_TIMEOUT_SECONDS)
         resp.raise_for_status()
         text = resp.text.strip()
-        return text if text else None
+        if not text or len(text) < _AFD_MIN_LENGTH:
+            logger.warning("AFD response too short for %s (%d chars), ignoring", cwa_icao, len(text))
+            return None
+        return text
     except requests.RequestException:
         logger.warning("Failed to fetch AFD for %s", cwa_icao, exc_info=True)
         return None

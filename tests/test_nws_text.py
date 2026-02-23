@@ -78,7 +78,7 @@ def test_fetch_nws_afd_success(tmp_path):
     responses.add(
         responses.GET,
         AWC_AFD_URL.format(cwa="KLOX"),
-        body="LOX AFD text here.",
+        body="FXUS66 KLOX 101200\nAFDLOX\n\nAREA FORECAST DISCUSSION\nNational Weather Service Los Angeles\n4 AM PST Mon Feb 10 2026\n\n.SYNOPSIS...\nOnshore flow continues.",
         status=200,
     )
 
@@ -114,7 +114,7 @@ def test_wfo_lookup_failure_graceful(tmp_path):
     responses.add(
         responses.GET,
         AWC_AFD_URL.format(cwa="KLOX"),
-        body="LOX AFD text.",
+        body="FXUS66 KLOX 101200\nAFDLOX\n\nAREA FORECAST DISCUSSION\nNational Weather Service Los Angeles\n4 AM PST Mon Feb 10 2026\n\n.SYNOPSIS...\nMarine layer persists.",
         status=200,
     )
 
