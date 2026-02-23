@@ -1,21 +1,23 @@
-/** Cross-section interaction: hover crosshair, click-to-select, tooltip. */
+/** Route graph interaction: hover crosshair synced with cross-section, click-to-select, tooltip. */
 
 import type { VizRouteData, VizPoint } from '../types';
-import type { CrossSectionRenderer } from './renderer';
+import type { RouteGraphRenderer } from './renderer';
+import type { RouteGraphMetric } from './metrics';
 
-export interface InteractionCallbacks {
+export interface RouteGraphInteractionCallbacks {
   onSelectPoint: (index: number) => void;
-  /** Called on hover to sync crosshair with other visualizations. */
-  onHover?: (x: number | undefined) => void;
+  /** Called on hover to sync crosshair with cross-section. */
+  onHover: (x: number | undefined) => void;
 }
 
-export function attachInteraction(
-  renderer: CrossSectionRenderer,
+export function attachRouteGraphInteraction(
+  renderer: RouteGraphRenderer,
   data: VizRouteData,
-  callbacks: InteractionCallbacks,
+  leftMetric: RouteGraphMetric | null,
+  rightMetric: RouteGraphMetric | null,
+  callbacks: RouteGraphInteractionCallbacks,
 ): () => void {
   const canvas = renderer.getCanvas();
-  // Make the overlay canvas receive pointer events
   canvas.style.pointerEvents = 'auto';
   canvas.style.cursor = 'crosshair';
 
@@ -48,41 +50,43 @@ export function attachInteraction(
     return bestIdx;
   }
 
+  function xToDistance(x: number): number {
+    const plotArea = renderer.getPlotArea();
+    if (!plotArea) return 0;
+    return ((x - plotArea.left) / plotArea.width) * data.totalDistanceNm;
+  }
+
   function handleMouseMove(e: MouseEvent): void {
-    const transform = renderer.createTransform();
-    if (!transform) return;
+    const plotArea = renderer.getPlotArea();
+    if (!plotArea) return;
 
     const x = getCanvasX(e);
-    const { plotArea } = transform;
 
     if (x < plotArea.left || x > plotArea.left + plotArea.width) {
       renderer.renderOverlay();
       hideTooltip();
-      callbacks.onHover?.(undefined);
+      callbacks.onHover(undefined);
       return;
     }
 
     renderer.renderOverlay(x);
-    callbacks.onHover?.(x);
+    callbacks.onHover(x);
 
     // Show tooltip
-    const distanceNm = transform.xToDistance(x);
+    const distanceNm = xToDistance(x);
     const idx = findNearestPointIndex(distanceNm);
     const point = data.points[idx];
-
-    showTooltip(e, point, idx, data);
+    showTooltip(e, point, idx);
   }
 
   function handleClick(e: MouseEvent): void {
-    const transform = renderer.createTransform();
-    if (!transform) return;
+    const plotArea = renderer.getPlotArea();
+    if (!plotArea) return;
 
     const x = getCanvasX(e);
-    const { plotArea } = transform;
-
     if (x < plotArea.left || x > plotArea.left + plotArea.width) return;
 
-    const distanceNm = transform.xToDistance(x);
+    const distanceNm = xToDistance(x);
     const idx = findNearestPointIndex(distanceNm);
     callbacks.onSelectPoint(idx);
   }
@@ -90,65 +94,47 @@ export function attachInteraction(
   function handleMouseLeave(): void {
     renderer.renderOverlay();
     hideTooltip();
-    callbacks.onHover?.(undefined);
+    callbacks.onHover(undefined);
   }
 
-  function showTooltip(e: MouseEvent, point: VizPoint, idx: number, routeData: VizRouteData): void {
+  function showTooltip(e: MouseEvent, point: VizPoint, idx: number): void {
     const tip = ensureTooltip();
     const lines: string[] = [];
 
     // Waypoint or point index
-    const wp = routeData.waypointMarkers.find((w) => Math.abs(w.distanceNm - point.distanceNm) < 1);
+    const wp = data.waypointMarkers.find((w) => Math.abs(w.distanceNm - point.distanceNm) < 1);
     lines.push(wp ? `<strong>${wp.icao}</strong>` : `<strong>Point ${idx}</strong>`);
-
-    // Distance and time
     lines.push(`${point.distanceNm.toFixed(0)} nm`);
-    try {
-      const d = new Date(point.time);
-      lines.push(d.toISOString().slice(11, 16) + 'Z');
-    } catch { /* skip */ }
 
-    // Temperature lines
-    const alt = point.altitudeLines;
-    if (alt.freezingLevelFt !== null) lines.push(`0°C: ${fmt(alt.freezingLevelFt)} ft`);
-    if (alt.minus10cLevelFt !== null) lines.push(`-10°C: ${fmt(alt.minus10cLevelFt)} ft`);
-    if (alt.lclAltitudeFt !== null) lines.push(`LCL: ${fmt(alt.lclAltitudeFt)} ft`);
-
-    // Cloud layers
-    if (point.cloudLayers.length > 0) {
-      lines.push(`Clouds: ${point.cloudLayers.length} layer${point.cloudLayers.length > 1 ? 's' : ''}`);
+    // Left metric value
+    if (leftMetric) {
+      const v = leftMetric.getValue(point);
+      if (v !== null) {
+        const fmt = leftMetric.formatValue ? leftMetric.formatValue(v) : v.toFixed(1);
+        lines.push(`<span style="color:${leftMetric.color}">${leftMetric.label}: ${fmt}</span>`);
+      } else {
+        lines.push(`<span style="color:${leftMetric.color}">${leftMetric.label}: N/A</span>`);
+      }
     }
 
-    // Icing
-    const activeIcing = point.icingZones.filter((z) => z.risk !== 'none');
-    if (activeIcing.length > 0) {
-      const order = ['none', 'light', 'moderate', 'severe'];
-      const worstRisk = activeIcing.reduce((worst, z) =>
-        order.indexOf(z.risk) > order.indexOf(worst) ? z.risk : worst
-      , activeIcing[0].risk);
-      lines.push(`Icing: ${worstRisk}`);
-    }
-
-    // Convective with tower bounds
-    if (point.convectiveRisk !== 'none') {
-      let convLine = `Convective: ${point.convectiveRisk}`;
-      if (point.capeSurfaceJkg > 0) convLine += ` (CAPE ${Math.round(point.capeSurfaceJkg)})`;
-      lines.push(convLine);
-      if (alt.lclAltitudeFt !== null && alt.elAltitudeFt !== null) {
-        const baseFt = alt.lfcAltitudeFt ?? alt.lclAltitudeFt;
-        lines.push(`Tower: ${fmt(baseFt)}–${fmt(alt.elAltitudeFt)} ft`);
+    // Right metric value
+    if (rightMetric) {
+      const v = rightMetric.getValue(point);
+      if (v !== null) {
+        const fmt = rightMetric.formatValue ? rightMetric.formatValue(v) : v.toFixed(1);
+        lines.push(`<span style="color:${rightMetric.color}">${rightMetric.label}: ${fmt}</span>`);
+      } else {
+        lines.push(`<span style="color:${rightMetric.color}">${rightMetric.label}: N/A</span>`);
       }
     }
 
     tip.innerHTML = lines.join('<br>');
     tip.style.display = 'block';
 
-    // Position tooltip
     const rect = canvas.getBoundingClientRect();
     const tipX = e.clientX - rect.left + 12;
     const tipY = e.clientY - rect.top - 10;
 
-    // Flip if too close to right edge
     const containerW = canvas.parentElement!.clientWidth;
     if (tipX + 160 > containerW) {
       tip.style.left = '';
@@ -161,29 +147,19 @@ export function attachInteraction(
   }
 
   function hideTooltip(): void {
-    if (tooltip) {
-      tooltip.style.display = 'none';
-    }
+    if (tooltip) tooltip.style.display = 'none';
   }
 
   canvas.addEventListener('mousemove', handleMouseMove);
   canvas.addEventListener('click', handleClick);
   canvas.addEventListener('mouseleave', handleMouseLeave);
 
-  // Return cleanup function
   return () => {
     canvas.removeEventListener('mousemove', handleMouseMove);
     canvas.removeEventListener('click', handleClick);
     canvas.removeEventListener('mouseleave', handleMouseLeave);
-    if (tooltip) {
-      tooltip.remove();
-      tooltip = null;
-    }
+    if (tooltip) { tooltip.remove(); tooltip = null; }
     canvas.style.pointerEvents = '';
     canvas.style.cursor = '';
   };
-}
-
-function fmt(n: number): string {
-  return Math.round(n).toLocaleString();
 }

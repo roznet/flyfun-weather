@@ -34,6 +34,9 @@ function loadVizSettings(): VizSettings {
     enabledLayers: getDefaultEnabled(),
     mapColorMetric: 'icing-risk',
     mapWidthMetric: 'cloud-cover',
+    routeGraphVisible: true,
+    routeGraphLeftMetric: 'headwind',
+    routeGraphRightMetric: 'temperature',
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
@@ -97,6 +100,8 @@ export interface BriefingState {
   recalculateAdvisories: () => Promise<void>;
   sendEmail: () => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
+  setRouteGraphVisible: (visible: boolean) => void;
+  setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => void;
 }
 
 export const briefingStore = createStore<BriefingState>((set, get) => ({
@@ -319,5 +324,18 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     set({ flight: { ...flight, auto_refresh: autoRefresh, auto_refresh_hour: hour } });
+  },
+
+  setRouteGraphVisible: (visible: boolean) => {
+    const updated = { ...get().vizSettings, routeGraphVisible: visible };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => {
+    const key = axis === 'left' ? 'routeGraphLeftMetric' : 'routeGraphRightMetric';
+    const updated = { ...get().vizSettings, [key]: metricId };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
   },
 }));
