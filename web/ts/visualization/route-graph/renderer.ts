@@ -292,6 +292,7 @@ export class RouteGraphRenderer {
     points: readonly VizPoint[],
   ): void {
     const zeroY = scale.valueToY(0);
+    ctx.save();
     ctx.fillStyle = metric.color;
     ctx.globalAlpha = 0.6;
 
@@ -317,7 +318,7 @@ export class RouteGraphRenderer {
       ctx.fillRect(barLeft, barTop, barWidth, barHeight);
     }
 
-    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   private setupCanvas(canvas: HTMLCanvasElement, cssW: number, cssH: number, dpr: number): void {

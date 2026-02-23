@@ -13,15 +13,25 @@ export interface InteractionCallbacks {
   onHover?: (x: number | undefined) => void;
 }
 
+/** Returned by attachInteraction — allows updating data without re-attaching listeners. */
+export interface InteractionHandle {
+  /** Update the closed-over data without tearing down listeners. */
+  update(data: VizRouteData): void;
+  /** Remove all listeners and clean up tooltip. */
+  destroy(): void;
+}
+
 export function attachInteraction(
   renderer: CrossSectionRenderer,
   data: VizRouteData,
   callbacks: InteractionCallbacks,
-): () => void {
+): InteractionHandle {
   const canvas = renderer.getCanvas();
   canvas.style.pointerEvents = 'auto';
   canvas.style.cursor = 'crosshair';
 
+  // Mutable state that can be swapped via update()
+  let currentData = data;
   let tooltip: HTMLElement | null = null;
 
   function handleMouseMove(e: MouseEvent): void {
@@ -42,8 +52,8 @@ export function attachInteraction(
     callbacks.onHover?.(x);
 
     const distanceNm = transform.xToDistance(x);
-    const idx = findNearestPointIndex(data.points, distanceNm);
-    const point = data.points[idx];
+    const idx = findNearestPointIndex(currentData.points, distanceNm);
+    const point = currentData.points[idx];
     showTooltip(e, point, idx);
   }
 
@@ -57,7 +67,7 @@ export function attachInteraction(
     if (x < plotArea.left || x > plotArea.left + plotArea.width) return;
 
     const distanceNm = transform.xToDistance(x);
-    const idx = findNearestPointIndex(data.points, distanceNm);
+    const idx = findNearestPointIndex(currentData.points, distanceNm);
     callbacks.onSelectPoint(idx);
   }
 
@@ -71,7 +81,7 @@ export function attachInteraction(
     tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
     const lines: string[] = [];
 
-    const wp = findNearbyWaypoint(data, point);
+    const wp = findNearbyWaypoint(currentData, point);
     lines.push(wp ? `<strong>${wp.icao}</strong>` : `<strong>Point ${idx}</strong>`);
 
     // Distance and time
@@ -122,13 +132,18 @@ export function attachInteraction(
   canvas.addEventListener('click', handleClick);
   canvas.addEventListener('mouseleave', handleMouseLeave);
 
-  return () => {
-    canvas.removeEventListener('mousemove', handleMouseMove);
-    canvas.removeEventListener('click', handleClick);
-    canvas.removeEventListener('mouseleave', handleMouseLeave);
-    if (tooltip) { tooltip.remove(); tooltip = null; }
-    canvas.style.pointerEvents = '';
-    canvas.style.cursor = '';
+  return {
+    update(newData) {
+      currentData = newData;
+    },
+    destroy() {
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('click', handleClick);
+      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      if (tooltip) { tooltip.remove(); tooltip = null; }
+      canvas.style.pointerEvents = '';
+      canvas.style.cursor = '';
+    },
   };
 }
 

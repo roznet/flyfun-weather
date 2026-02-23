@@ -14,23 +14,35 @@ export interface RouteGraphInteractionCallbacks {
   onHover: (x: number | undefined) => void;
 }
 
+/** Returned by attachRouteGraphInteraction — allows updating data without re-attaching listeners. */
+export interface RouteGraphInteractionHandle {
+  /** Update the closed-over data and metrics without tearing down listeners. */
+  update(data: VizRouteData, leftMetric: RouteGraphMetric | null, rightMetric: RouteGraphMetric | null): void;
+  /** Remove all listeners and clean up tooltip. */
+  destroy(): void;
+}
+
 export function attachRouteGraphInteraction(
   renderer: RouteGraphRenderer,
   data: VizRouteData,
   leftMetric: RouteGraphMetric | null,
   rightMetric: RouteGraphMetric | null,
   callbacks: RouteGraphInteractionCallbacks,
-): () => void {
+): RouteGraphInteractionHandle {
   const canvas = renderer.getCanvas();
   canvas.style.pointerEvents = 'auto';
   canvas.style.cursor = 'crosshair';
 
+  // Mutable state that can be swapped via update()
+  let currentData = data;
+  let currentLeft = leftMetric;
+  let currentRight = rightMetric;
   let tooltip: HTMLElement | null = null;
 
   function xToDistance(x: number): number {
     const plotArea = renderer.getPlotArea();
     if (!plotArea) return 0;
-    return ((x - plotArea.left) / plotArea.width) * data.totalDistanceNm;
+    return ((x - plotArea.left) / plotArea.width) * currentData.totalDistanceNm;
   }
 
   function handleMouseMove(e: MouseEvent): void {
@@ -49,10 +61,9 @@ export function attachRouteGraphInteraction(
     renderer.renderOverlay(x);
     callbacks.onHover(x);
 
-    // Show tooltip
     const distanceNm = xToDistance(x);
-    const idx = findNearestPointIndex(data.points, distanceNm);
-    const point = data.points[idx];
+    const idx = findNearestPointIndex(currentData.points, distanceNm);
+    const point = currentData.points[idx];
     showTooltip(e, point, idx);
   }
 
@@ -64,7 +75,7 @@ export function attachRouteGraphInteraction(
     if (x < plotArea.left || x > plotArea.left + plotArea.width) return;
 
     const distanceNm = xToDistance(x);
-    const idx = findNearestPointIndex(data.points, distanceNm);
+    const idx = findNearestPointIndex(currentData.points, distanceNm);
     callbacks.onSelectPoint(idx);
   }
 
@@ -86,12 +97,12 @@ export function attachRouteGraphInteraction(
     tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
     const lines: string[] = [];
 
-    const wp = findNearbyWaypoint(data, point);
+    const wp = findNearbyWaypoint(currentData, point);
     lines.push(wp ? `<strong>${wp.icao}</strong>` : `<strong>Point ${idx}</strong>`);
     lines.push(`${point.distanceNm.toFixed(0)} nm`);
 
-    if (leftMetric) lines.push(formatMetricLine(leftMetric, point));
-    if (rightMetric) lines.push(formatMetricLine(rightMetric, point));
+    if (currentLeft) lines.push(formatMetricLine(currentLeft, point));
+    if (currentRight) lines.push(formatMetricLine(currentRight, point));
 
     tooltip.innerHTML = lines.join('<br>');
     tooltip.style.display = 'block';
@@ -102,12 +113,19 @@ export function attachRouteGraphInteraction(
   canvas.addEventListener('click', handleClick);
   canvas.addEventListener('mouseleave', handleMouseLeave);
 
-  return () => {
-    canvas.removeEventListener('mousemove', handleMouseMove);
-    canvas.removeEventListener('click', handleClick);
-    canvas.removeEventListener('mouseleave', handleMouseLeave);
-    if (tooltip) { tooltip.remove(); tooltip = null; }
-    canvas.style.pointerEvents = '';
-    canvas.style.cursor = '';
+  return {
+    update(newData, newLeft, newRight) {
+      currentData = newData;
+      currentLeft = newLeft;
+      currentRight = newRight;
+    },
+    destroy() {
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('click', handleClick);
+      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      if (tooltip) { tooltip.remove(); tooltip = null; }
+      canvas.style.pointerEvents = '';
+      canvas.style.cursor = '';
+    },
   };
 }
