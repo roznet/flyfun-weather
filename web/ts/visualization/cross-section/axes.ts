@@ -2,6 +2,7 @@
 
 import type { CoordTransform, VizRouteData } from '../types';
 import { altitudeToPressureHpa } from '../scales';
+import { chooseDistanceTickInterval, findNearestPointIndex } from '../interaction-utils';
 
 const GRID_COLOR = 'rgba(255, 255, 255, 0.35)';
 const LABEL_COLOR = '#6c757d';
@@ -95,7 +96,7 @@ function drawDistanceAxis(
   const maxDist = data.totalDistanceNm;
 
   // Auto-space distance ticks
-  const tickInterval = chooseTickInterval(maxDist);
+  const tickInterval = chooseDistanceTickInterval(maxDist);
   const ticks: number[] = [];
   for (let d = 0; d <= maxDist; d += tickInterval) {
     ticks.push(d);
@@ -130,7 +131,8 @@ function drawDistanceAxis(
   for (const wp of data.waypointMarkers) {
     const x = transform.distanceToX(wp.distanceNm);
     // Find the nearest point to get the time
-    const nearest = findNearestPoint(data, wp.distanceNm);
+    const nearestIdx = findNearestPointIndex(data.points, wp.distanceNm);
+    const nearest = data.points[nearestIdx];
     if (nearest) {
       const timeStr = formatTimeUTC(nearest.time);
       ctx.fillStyle = LABEL_COLOR;
@@ -181,27 +183,6 @@ function drawPlotBorder(
 }
 
 // --- Helpers ---
-
-function chooseTickInterval(maxDistance: number): number {
-  if (maxDistance <= 50) return 10;
-  if (maxDistance <= 150) return 25;
-  if (maxDistance <= 300) return 50;
-  if (maxDistance <= 600) return 100;
-  return 200;
-}
-
-function findNearestPoint(data: VizRouteData, distanceNm: number) {
-  let nearest = data.points[0];
-  let minDelta = Math.abs(nearest.distanceNm - distanceNm);
-  for (const pt of data.points) {
-    const delta = Math.abs(pt.distanceNm - distanceNm);
-    if (delta < minDelta) {
-      minDelta = delta;
-      nearest = pt;
-    }
-  }
-  return nearest;
-}
 
 function formatTimeUTC(isoTime: string): string {
   try {

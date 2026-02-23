@@ -3,6 +3,7 @@
 import type { PlotArea, VizRouteData } from '../types';
 import type { RouteGraphMetric } from './metrics';
 import { MARGIN } from './constants';
+import { chooseDistanceTickInterval } from '../interaction-utils';
 
 const GRID_COLOR = 'rgba(0, 0, 0, 0.08)';
 const LABEL_COLOR = '#6c757d';
@@ -143,7 +144,7 @@ export function drawXGrid(
   distanceToX: (d: number) => number,
 ): void {
   const maxDist = data.totalDistanceNm;
-  const tickInterval = chooseTickInterval(maxDist);
+  const tickInterval = chooseDistanceTickInterval(maxDist);
 
   ctx.strokeStyle = GRID_COLOR;
   ctx.lineWidth = 0.5;
@@ -201,14 +202,6 @@ export function drawBorder(
 }
 
 // --- Helpers ---
-
-function chooseTickInterval(maxDistance: number): number {
-  if (maxDistance <= 50) return 10;
-  if (maxDistance <= 150) return 25;
-  if (maxDistance <= 300) return 50;
-  if (maxDistance <= 600) return 100;
-  return 200;
-}
 
 function niceTickInterval(range: number, targetTicks: number): number {
   const rough = range / targetTicks;
