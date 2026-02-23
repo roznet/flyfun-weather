@@ -40,7 +40,7 @@ class ObservationComparison(BaseModel):
     icao: str
     obs_category: str | None = None
     model_category: str | None = None
-    category_match: str  # "CONFIRMING" / "MINOR_DELTA" / "SIGNIFICANT" / "CONFLICTING"
+    category_match: str  # "CONFIRMING" / "SIGNIFICANT" / "CONFLICTING"
     ceiling_delta_ft: int | None = None
     visibility_delta_m: float | None = None
     wind_speed_delta_kt: float | None = None

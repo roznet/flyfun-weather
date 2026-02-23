@@ -94,7 +94,7 @@ def _fetch_us_text(
         return None
 
     entries = [
-        TextForecastEntry(label=f"K{cwa} ({cwa})", text=text)
+        TextForecastEntry(label=f"CWA {cwa}", text=text)
         for cwa, text in result.afd_texts.items()
     ]
 
