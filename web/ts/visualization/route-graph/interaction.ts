@@ -3,6 +3,10 @@
 import type { VizRouteData, VizPoint } from '../types';
 import type { RouteGraphRenderer } from './renderer';
 import type { RouteGraphMetric } from './metrics';
+import {
+  getCanvasX, findNearestPointIndex, ensureTooltip as ensureTooltipEl,
+  positionTooltip, hideTooltip as hideTooltipEl, findNearbyWaypoint,
+} from '../interaction-utils';
 
 export interface RouteGraphInteractionCallbacks {
   onSelectPoint: (index: number) => void;
@@ -23,33 +27,6 @@ export function attachRouteGraphInteraction(
 
   let tooltip: HTMLElement | null = null;
 
-  function ensureTooltip(): HTMLElement {
-    if (!tooltip) {
-      tooltip = document.createElement('div');
-      tooltip.className = 'viz-tooltip';
-      canvas.parentElement!.appendChild(tooltip);
-    }
-    return tooltip;
-  }
-
-  function getCanvasX(e: MouseEvent): number {
-    const rect = canvas.getBoundingClientRect();
-    return e.clientX - rect.left;
-  }
-
-  function findNearestPointIndex(distanceNm: number): number {
-    let bestIdx = 0;
-    let bestDelta = Math.abs(data.points[0].distanceNm - distanceNm);
-    for (let i = 1; i < data.points.length; i++) {
-      const delta = Math.abs(data.points[i].distanceNm - distanceNm);
-      if (delta < bestDelta) {
-        bestDelta = delta;
-        bestIdx = i;
-      }
-    }
-    return bestIdx;
-  }
-
   function xToDistance(x: number): number {
     const plotArea = renderer.getPlotArea();
     if (!plotArea) return 0;
@@ -60,11 +37,11 @@ export function attachRouteGraphInteraction(
     const plotArea = renderer.getPlotArea();
     if (!plotArea) return;
 
-    const x = getCanvasX(e);
+    const x = getCanvasX(e, canvas);
 
     if (x < plotArea.left || x > plotArea.left + plotArea.width) {
       renderer.renderOverlay();
-      hideTooltip();
+      hideTooltipEl(tooltip);
       callbacks.onHover(undefined);
       return;
     }
@@ -74,7 +51,7 @@ export function attachRouteGraphInteraction(
 
     // Show tooltip
     const distanceNm = xToDistance(x);
-    const idx = findNearestPointIndex(distanceNm);
+    const idx = findNearestPointIndex(data.points, distanceNm);
     const point = data.points[idx];
     showTooltip(e, point, idx);
   }
@@ -83,72 +60,42 @@ export function attachRouteGraphInteraction(
     const plotArea = renderer.getPlotArea();
     if (!plotArea) return;
 
-    const x = getCanvasX(e);
+    const x = getCanvasX(e, canvas);
     if (x < plotArea.left || x > plotArea.left + plotArea.width) return;
 
     const distanceNm = xToDistance(x);
-    const idx = findNearestPointIndex(distanceNm);
+    const idx = findNearestPointIndex(data.points, distanceNm);
     callbacks.onSelectPoint(idx);
   }
 
   function handleMouseLeave(): void {
     renderer.renderOverlay();
-    hideTooltip();
+    hideTooltipEl(tooltip);
     callbacks.onHover(undefined);
   }
 
+  function formatMetricLine(metric: RouteGraphMetric, point: VizPoint): string {
+    const v = metric.getValue(point);
+    const fmt = v !== null
+      ? (metric.formatValue ? metric.formatValue(v) : v.toFixed(1))
+      : 'N/A';
+    return `<span style="color:${metric.color}">${metric.label}: ${fmt}</span>`;
+  }
+
   function showTooltip(e: MouseEvent, point: VizPoint, idx: number): void {
-    const tip = ensureTooltip();
+    tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
     const lines: string[] = [];
 
-    // Waypoint or point index
-    const wp = data.waypointMarkers.find((w) => Math.abs(w.distanceNm - point.distanceNm) < 1);
+    const wp = findNearbyWaypoint(data, point);
     lines.push(wp ? `<strong>${wp.icao}</strong>` : `<strong>Point ${idx}</strong>`);
     lines.push(`${point.distanceNm.toFixed(0)} nm`);
 
-    // Left metric value
-    if (leftMetric) {
-      const v = leftMetric.getValue(point);
-      if (v !== null) {
-        const fmt = leftMetric.formatValue ? leftMetric.formatValue(v) : v.toFixed(1);
-        lines.push(`<span style="color:${leftMetric.color}">${leftMetric.label}: ${fmt}</span>`);
-      } else {
-        lines.push(`<span style="color:${leftMetric.color}">${leftMetric.label}: N/A</span>`);
-      }
-    }
+    if (leftMetric) lines.push(formatMetricLine(leftMetric, point));
+    if (rightMetric) lines.push(formatMetricLine(rightMetric, point));
 
-    // Right metric value
-    if (rightMetric) {
-      const v = rightMetric.getValue(point);
-      if (v !== null) {
-        const fmt = rightMetric.formatValue ? rightMetric.formatValue(v) : v.toFixed(1);
-        lines.push(`<span style="color:${rightMetric.color}">${rightMetric.label}: ${fmt}</span>`);
-      } else {
-        lines.push(`<span style="color:${rightMetric.color}">${rightMetric.label}: N/A</span>`);
-      }
-    }
-
-    tip.innerHTML = lines.join('<br>');
-    tip.style.display = 'block';
-
-    const rect = canvas.getBoundingClientRect();
-    const tipX = e.clientX - rect.left + 12;
-    const tipY = e.clientY - rect.top - 10;
-
-    const containerW = canvas.parentElement!.clientWidth;
-    const tipWidth = tip.offsetWidth || 160;
-    if (tipX + tipWidth > containerW) {
-      tip.style.left = '';
-      tip.style.right = `${containerW - tipX + 24}px`;
-    } else {
-      tip.style.left = `${tipX}px`;
-      tip.style.right = '';
-    }
-    tip.style.top = `${Math.max(0, tipY)}px`;
-  }
-
-  function hideTooltip(): void {
-    if (tooltip) tooltip.style.display = 'none';
+    tooltip.innerHTML = lines.join('<br>');
+    tooltip.style.display = 'block';
+    positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
   canvas.addEventListener('mousemove', handleMouseMove);

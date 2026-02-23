@@ -2,6 +2,10 @@
 
 import type { VizRouteData, VizPoint } from '../types';
 import type { CrossSectionRenderer } from './renderer';
+import {
+  getCanvasX, findNearestPointIndex, ensureTooltip as ensureTooltipEl,
+  positionTooltip, hideTooltip as hideTooltipEl, findNearbyWaypoint,
+} from '../interaction-utils';
 
 export interface InteractionCallbacks {
   onSelectPoint: (index: number) => void;
@@ -15,49 +19,21 @@ export function attachInteraction(
   callbacks: InteractionCallbacks,
 ): () => void {
   const canvas = renderer.getCanvas();
-  // Make the overlay canvas receive pointer events
   canvas.style.pointerEvents = 'auto';
   canvas.style.cursor = 'crosshair';
 
   let tooltip: HTMLElement | null = null;
 
-  function ensureTooltip(): HTMLElement {
-    if (!tooltip) {
-      tooltip = document.createElement('div');
-      tooltip.className = 'viz-tooltip';
-      canvas.parentElement!.appendChild(tooltip);
-    }
-    return tooltip;
-  }
-
-  function getCanvasX(e: MouseEvent): number {
-    const rect = canvas.getBoundingClientRect();
-    return e.clientX - rect.left;
-  }
-
-  function findNearestPointIndex(distanceNm: number): number {
-    let bestIdx = 0;
-    let bestDelta = Math.abs(data.points[0].distanceNm - distanceNm);
-    for (let i = 1; i < data.points.length; i++) {
-      const delta = Math.abs(data.points[i].distanceNm - distanceNm);
-      if (delta < bestDelta) {
-        bestDelta = delta;
-        bestIdx = i;
-      }
-    }
-    return bestIdx;
-  }
-
   function handleMouseMove(e: MouseEvent): void {
     const transform = renderer.createTransform();
     if (!transform) return;
 
-    const x = getCanvasX(e);
+    const x = getCanvasX(e, canvas);
     const { plotArea } = transform;
 
     if (x < plotArea.left || x > plotArea.left + plotArea.width) {
       renderer.renderOverlay();
-      hideTooltip();
+      hideTooltipEl(tooltip);
       callbacks.onHover?.(undefined);
       return;
     }
@@ -65,40 +41,37 @@ export function attachInteraction(
     renderer.renderOverlay(x);
     callbacks.onHover?.(x);
 
-    // Show tooltip
     const distanceNm = transform.xToDistance(x);
-    const idx = findNearestPointIndex(distanceNm);
+    const idx = findNearestPointIndex(data.points, distanceNm);
     const point = data.points[idx];
-
-    showTooltip(e, point, idx, data);
+    showTooltip(e, point, idx);
   }
 
   function handleClick(e: MouseEvent): void {
     const transform = renderer.createTransform();
     if (!transform) return;
 
-    const x = getCanvasX(e);
+    const x = getCanvasX(e, canvas);
     const { plotArea } = transform;
 
     if (x < plotArea.left || x > plotArea.left + plotArea.width) return;
 
     const distanceNm = transform.xToDistance(x);
-    const idx = findNearestPointIndex(distanceNm);
+    const idx = findNearestPointIndex(data.points, distanceNm);
     callbacks.onSelectPoint(idx);
   }
 
   function handleMouseLeave(): void {
     renderer.renderOverlay();
-    hideTooltip();
+    hideTooltipEl(tooltip);
     callbacks.onHover?.(undefined);
   }
 
-  function showTooltip(e: MouseEvent, point: VizPoint, idx: number, routeData: VizRouteData): void {
-    const tip = ensureTooltip();
+  function showTooltip(e: MouseEvent, point: VizPoint, idx: number): void {
+    tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
     const lines: string[] = [];
 
-    // Waypoint or point index
-    const wp = routeData.waypointMarkers.find((w) => Math.abs(w.distanceNm - point.distanceNm) < 1);
+    const wp = findNearbyWaypoint(data, point);
     lines.push(wp ? `<strong>${wp.icao}</strong>` : `<strong>Point ${idx}</strong>`);
 
     // Distance and time
@@ -140,45 +113,20 @@ export function attachInteraction(
       }
     }
 
-    tip.innerHTML = lines.join('<br>');
-    tip.style.display = 'block';
-
-    // Position tooltip
-    const rect = canvas.getBoundingClientRect();
-    const tipX = e.clientX - rect.left + 12;
-    const tipY = e.clientY - rect.top - 10;
-
-    // Flip if too close to right edge
-    const containerW = canvas.parentElement!.clientWidth;
-    if (tipX + 160 > containerW) {
-      tip.style.left = '';
-      tip.style.right = `${containerW - tipX + 24}px`;
-    } else {
-      tip.style.left = `${tipX}px`;
-      tip.style.right = '';
-    }
-    tip.style.top = `${Math.max(0, tipY)}px`;
-  }
-
-  function hideTooltip(): void {
-    if (tooltip) {
-      tooltip.style.display = 'none';
-    }
+    tooltip.innerHTML = lines.join('<br>');
+    tooltip.style.display = 'block';
+    positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
   canvas.addEventListener('mousemove', handleMouseMove);
   canvas.addEventListener('click', handleClick);
   canvas.addEventListener('mouseleave', handleMouseLeave);
 
-  // Return cleanup function
   return () => {
     canvas.removeEventListener('mousemove', handleMouseMove);
     canvas.removeEventListener('click', handleClick);
     canvas.removeEventListener('mouseleave', handleMouseLeave);
-    if (tooltip) {
-      tooltip.remove();
-      tooltip = null;
-    }
+    if (tooltip) { tooltip.remove(); tooltip = null; }
     canvas.style.pointerEvents = '';
     canvas.style.cursor = '';
   };
