@@ -9,6 +9,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from weatherbrief.models.observations import RouteObservations
+
 
 class Waypoint(BaseModel):
     """An aviation waypoint with coordinates."""
@@ -688,3 +690,4 @@ class ForecastSnapshot(BaseModel):
     forecasts: list[WaypointForecast] = Field(default_factory=list)
     analyses: list[WaypointAnalysis] = Field(default_factory=list)
     cross_sections: list[RouteCrossSection] = Field(default_factory=list)
+    route_observations: RouteObservations | None = None

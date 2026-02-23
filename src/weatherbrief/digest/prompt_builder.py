@@ -10,6 +10,7 @@ from weatherbrief.models import (
     ForecastSnapshot,
     PrecipPhase,
     RouteAdvisoriesManifest,
+    RouteObservations,
     SoundingAnalysis,
 )
 
@@ -172,6 +173,10 @@ def build_digest_context(
         comp_lines.append("No multi-model comparison available.")
     sections.append("\n".join(comp_lines))
 
+    # --- METAR/TAF observations (D-0 only) ---
+    if snapshot.route_observations:
+        sections.append(_format_observations_context(snapshot.route_observations))
+
     # --- Text forecasts ---
     if text_forecasts and text_forecasts.entries:
         header = (
@@ -267,6 +272,50 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                 )
 
     return lines
+
+
+def _format_observations_context(obs: RouteObservations) -> str:
+    """Format METAR/TAF observations into a compact LLM context section."""
+    lines: list[str] = ["=== METAR/TAF OBSERVATIONS ==="]
+    lines.append(
+        f"Corridor: {obs.corridor_nm}nm | "
+        f"Airports: {obs.airports_found} found, "
+        f"{obs.airports_with_metar} with METAR, "
+        f"{obs.airports_with_taf} with TAF"
+    )
+    if obs.worst_metar_category:
+        lines.append(f"Worst METAR category: {obs.worst_metar_category}")
+    if obs.worst_taf_category:
+        lines.append(f"Worst TAF category: {obs.worst_taf_category}")
+    if obs.phenomena_along_route:
+        lines.append(f"Phenomena along route: {', '.join(obs.phenomena_along_route)}")
+    if obs.has_conflicts:
+        lines.append("** CONFLICTS between observations and model predictions **")
+
+    for apt in obs.airports:
+        if not apt.has_metar and not apt.has_taf:
+            continue
+        dist_str = f"{apt.distance_from_route_nm:.0f}nm from route"
+        parts = [f"{apt.icao} ({dist_str}, near {apt.nearest_waypoint_icao})"]
+
+        if apt.has_metar:
+            cat_str = f" [{apt.metar_flight_category}]" if apt.metar_flight_category else ""
+            parts.append(f"  METAR{cat_str}: {apt.metar_raw}")
+        if apt.has_taf:
+            cat_str = f" [{apt.taf_flight_category_at_eta}]" if apt.taf_flight_category_at_eta else ""
+            trend_str = f" ({apt.taf_trend_type})" if apt.taf_trend_type else ""
+            parts.append(f"  TAF at ETA{cat_str}{trend_str}")
+
+        lines.append("\n".join(parts))
+
+    # Comparison annotations
+    for comp in obs.comparisons:
+        if comp.category_match != "CONFIRMING":
+            lines.append(
+                f"  [{comp.category_match}] {comp.icao}: {comp.detail}"
+            )
+
+    return "\n".join(lines)
 
 
 def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:

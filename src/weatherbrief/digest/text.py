@@ -11,6 +11,7 @@ from weatherbrief.models import (
     ForecastSnapshot,
     IcingRisk,
     PrecipPhase,
+    RouteObservations,
     SoundingAnalysis,
     VerticalMotionClass,
     WaypointAnalysis,
@@ -58,6 +59,10 @@ def format_digest(
             lines.extend(_format_waypoint_analysis(wp_analysis))
 
         lines.append("")
+
+    # METAR/TAF observations (D-0 only)
+    if snapshot.route_observations:
+        lines.extend(_format_route_observations(snapshot.route_observations))
 
     # Model agreement summary
     lines.extend(_format_model_agreement(snapshot))
@@ -292,6 +297,42 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
         elif not sa.icing_zones:
             lines.append(f"  [{model}]: Clear, no icing")
 
+    return lines
+
+
+def _format_route_observations(obs: RouteObservations) -> list[str]:
+    """Format METAR/TAF observations for plain-text digest."""
+    lines: list[str] = ["--- METAR/TAF Observations ---"]
+    lines.append(
+        f"  {obs.airports_with_metar} airports with METAR, "
+        f"{obs.airports_with_taf} with TAF "
+        f"(within {obs.corridor_nm:.0f}nm corridor)"
+    )
+    if obs.worst_metar_category:
+        lines.append(f"  Worst METAR: {obs.worst_metar_category}")
+    if obs.phenomena_along_route:
+        lines.append(f"  Phenomena: {', '.join(obs.phenomena_along_route)}")
+    if obs.has_conflicts:
+        lines.append("  ** Obs/model conflicts detected **")
+    lines.append("")
+
+    for apt in obs.airports:
+        if not apt.has_metar and not apt.has_taf:
+            continue
+        cat_str = f" [{apt.metar_flight_category}]" if apt.metar_flight_category else ""
+        dist_str = f"{apt.distance_from_route_nm:.0f}nm"
+        lines.append(f"  {apt.icao}{cat_str} ({dist_str} from route)")
+        if apt.metar_raw:
+            lines.append(f"    METAR: {apt.metar_raw}")
+        if apt.has_taf:
+            taf_cat = f" [{apt.taf_flight_category_at_eta}]" if apt.taf_flight_category_at_eta else ""
+            lines.append(f"    TAF at ETA{taf_cat}")
+
+    for comp in obs.comparisons:
+        if comp.category_match != "CONFIRMING":
+            lines.append(f"  [{comp.category_match}] {comp.icao}: {comp.detail}")
+
+    lines.append("")
     return lines
 
 

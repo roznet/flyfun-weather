@@ -33,6 +33,10 @@ from weatherbrief.tasks.fetch import (  # noqa: F401
     FetchResult,
     run_fetch,
 )
+from weatherbrief.tasks.route_weather import (  # noqa: F401
+    run_observation_comparison,
+    run_route_weather,
+)
 from weatherbrief.tasks.outputs import (  # noqa: F401
     DigestResult,
     GrametResult,
