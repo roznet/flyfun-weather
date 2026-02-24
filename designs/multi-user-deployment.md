@@ -93,7 +93,7 @@ No manual DB setup or migration step needed for development.
 | provider_sub | VARCHAR(255) UNIQUE | OAuth subject ID |
 | email | VARCHAR(255) | From OAuth profile |
 | display_name | VARCHAR(255) | |
-| approved | BOOLEAN DEFAULT FALSE | Admin flips to grant access |
+| approved | BOOLEAN DEFAULT TRUE | Auto-approved on signup; admin can revoke |
 | created_at | DATETIME | |
 | last_login_at | DATETIME | |
 
@@ -213,17 +213,20 @@ Google and Apple Sign-In via `authlib` (lightweight, no Firebase dependency).
 1. User clicks "Sign in with Google" → redirected to Google consent screen
 2. Google redirects back to `/auth/callback/google` with auth code
 3. Server exchanges code for ID token, extracts `sub`, `email`, `name`
-4. Lookup user by `(provider, provider_sub)` — create if first login
-5. Check `users.approved = true` — if not, show "awaiting approval" page
-6. Issue JWT (HS256, 7-day expiry) in httpOnly secure cookie
+4. Lookup user by `(provider, provider_sub)` — create if first login (auto-approved)
+5. On first login: send welcome email to user + notification email to admins
+6. Check `users.approved = true` — if revoked, show "account inactive" page
+7. Issue JWT (HS256, 7-day expiry) in httpOnly secure cookie
 7. All `/api/*` routes validate JWT via FastAPI dependency
 
-### Approval workflow
+### Auto-approval & notifications
 
-After a user authenticates for the first time, their `approved` flag is `false`. Admin approves via:
-- **Admin page** (`/admin.html`): shows pending users with one-click approve buttons, plus usage overview for all users
-- **Email link**: admins receive a notification email with an HMAC-signed one-click approve URL (valid 7 days)
-- **Direct SQL** (fallback): `UPDATE users SET approved=1 WHERE email='friend@gmail.com'`
+New users are **auto-approved** on first login — no admin action needed. On signup:
+1. User account created with `approved=True`
+2. **Welcome email** sent to user (site link + help guide)
+3. **Notification email** sent to admins (FYI — user name, email, admin page link)
+
+Admin can still **revoke** access by setting `approved=False` via the admin page. Revoked users see an "account inactive" message on login. The one-click HMAC-signed approval link in admin.py still works for re-enabling revoked users.
 
 Admin identity is controlled by the `ADMIN_EMAILS` env var (comma-separated). In dev mode, the dev user is always treated as admin.
 
@@ -287,7 +290,7 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] Add `authlib` dependency
 - [x] Implement `/auth/login/{provider}`, `/auth/callback/{provider}`, `/auth/logout`
 - [x] JWT dependency: extract user_id via Depends(current_user_id)
-- [x] Approval gate: unapproved users see "awaiting approval" message
+- [x] Auto-approve new users on first login; send welcome + admin notification emails
 - [x] All API routes scoped by user_id (flights, packs, artifacts)
 - [x] Login page with provider buttons (minimal HTML/CSS)
 - [x] Dev mode bypass: auto-inject dev user, skip JWT validation
@@ -316,9 +319,9 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] LLM token extraction via `include_raw=True` on structured output
 - [x] `GET /api/user/usage` endpoint with today/month aggregation
 - [x] Test: rate limit triggers, usage counts, summary aggregation (13 tests)
-- [x] Admin page with user list, usage overview, and pending approval UI
-- [x] One-click approval via HMAC-signed email links (7-day expiry)
-- [x] Email notification to admins on new user signup (`ADMIN_EMAILS` env var)
+- [x] Admin page with user list, usage overview, and user management
+- [x] HMAC-signed approval links for re-enabling revoked users (7-day expiry)
+- [x] Auto-approve + welcome email on signup; admin notification email (`ADMIN_EMAILS` env var)
 - [x] Admin gate: dev user always admin; production checks JWT email against `ADMIN_EMAILS`
 - [x] Shareable briefing links: any authenticated user can view any flight's briefings
 - [x] Ownership model: only flight owner can refresh/delete; frontend hides action buttons for non-owners
