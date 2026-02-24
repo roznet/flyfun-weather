@@ -40,6 +40,9 @@ class UserRow(Base):
     briefing_usage: Mapped[list[BriefingUsageRow]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    api_tokens: Mapped[list[ApiTokenRow]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class UserPreferencesRow(Base):
@@ -150,3 +153,26 @@ class BriefingUsageRow(Base):
     llm_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped[UserRow] = relationship(back_populates="briefing_usage")
+
+
+class ApiTokenRow(Base):
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    user: Mapped[UserRow] = relationship(back_populates="api_tokens")

@@ -1,4 +1,4 @@
-"""Admin API: user management and one-click approval."""
+"""Admin API: user management, one-click approval, and API agent management."""
 
 from __future__ import annotations
 
@@ -7,18 +7,23 @@ import hmac
 import html as html_mod
 import logging
 import os
+import secrets
 import time
+import uuid
+from base64 import urlsafe_b64encode
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from sqlalchemy import Integer, func
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.auth_config import get_jwt_secret, is_dev_mode
 from weatherbrief.api.jwt_utils import decode_token
-from weatherbrief.db.deps import get_db
-from weatherbrief.db.models import BriefingUsageRow, UserRow
+from weatherbrief.db.deps import TOKEN_PREFIX, get_db
+from weatherbrief.db.models import ApiTokenRow, BriefingUsageRow, UserPreferencesRow, UserRow
 from weatherbrief.db.engine import DEV_USER_ID
 from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails
 from weatherbrief.storage.flights import safe_path_component
@@ -146,23 +151,51 @@ def list_users(
     default_month = {"briefings": 0, "gramet": 0, "llm_digest": 0, "total_tokens": 0}
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
 
+    # Batch-query active token count and last-used per agent user
+    token_stats_rows = (
+        db.query(
+            ApiTokenRow.user_id,
+            func.count().label("token_count"),
+            func.sum(func.cast(ApiTokenRow.revoked == False, Integer)).label("active_tokens"),  # noqa: E712
+            func.max(ApiTokenRow.last_used_at).label("token_last_used"),
+        )
+        .group_by(ApiTokenRow.user_id)
+        .all()
+    )
+    token_stats_map = {
+        r.user_id: {
+            "token_count": int(r.token_count),
+            "active_tokens": int(r.active_tokens or 0),
+            "token_last_used": r.token_last_used,
+        }
+        for r in token_stats_rows
+    }
+
     user_list = []
     total_disk = 0
     for u in users:
         disk = _user_disk_bytes(data_dir, u.id)
         total_disk += disk
-        user_list.append({
+        is_agent = u.provider == "api_token"
+        entry: dict = {
             "id": u.id,
             "email": u.email,
             "display_name": u.display_name,
             "provider": u.provider,
+            "type": "agent" if is_agent else "human",
             "approved": u.approved,
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
             "last_active_at": last_active_map[u.id].isoformat() if u.id in last_active_map else None,
             "usage_month": month_map.get(u.id, default_month),
             "disk_usage_bytes": disk,
-        })
+        }
+        if is_agent:
+            ts = token_stats_map.get(u.id, {"token_count": 0, "active_tokens": 0, "token_last_used": None})
+            entry["token_count"] = ts["token_count"]
+            entry["active_tokens"] = ts["active_tokens"]
+            entry["token_last_used"] = ts["token_last_used"].isoformat() if ts["token_last_used"] else None
+        user_list.append(entry)
 
     # Aggregate summary from per-user month stats
     total_briefings = sum(u["usage_month"]["briefings"] for u in user_list)
@@ -296,3 +329,126 @@ def _approve_html(status_msg: str) -> str:
   </div>
 </body>
 </html>"""
+
+
+# --- API Agent management ---
+
+
+def _generate_token() -> str:
+    """Generate a random API token with the wb_ prefix (~48 chars total)."""
+    return TOKEN_PREFIX + urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+
+
+def _hash_token(token: str) -> str:
+    """SHA-256 hash a plaintext token for storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+class CreateAgentRequest(BaseModel):
+    name: str
+
+
+class CreateTokenRequest(BaseModel):
+    name: str = ""
+
+
+@router.post("/agents")
+def create_agent(
+    body: CreateAgentRequest,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Create a bot/agent user with an initial API token.
+
+    Returns the plaintext token exactly once — it cannot be retrieved later.
+    """
+    user_id = f"agent-{uuid.uuid4().hex[:12]}"
+    user = UserRow(
+        id=user_id,
+        provider="api_token",
+        provider_sub=uuid.uuid4().hex,
+        email="",
+        display_name=body.name,
+        approved=True,
+    )
+    db.add(user)
+    db.add(UserPreferencesRow(user_id=user_id))
+
+    plaintext = _generate_token()
+    db.add(ApiTokenRow(
+        user_id=user_id,
+        token_hash=_hash_token(plaintext),
+        name=body.name,
+    ))
+    db.flush()
+
+    return {"user_id": user_id, "token": plaintext, "name": body.name}
+
+
+@router.post("/agents/{user_id}/tokens")
+def create_agent_token(
+    user_id: str,
+    body: CreateTokenRequest,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Generate an additional API token for an existing agent user."""
+    user = db.query(UserRow).filter(
+        UserRow.id == user_id, UserRow.provider == "api_token"
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    plaintext = _generate_token()
+    token_row = ApiTokenRow(
+        user_id=user_id,
+        token_hash=_hash_token(plaintext),
+        name=body.name or user.display_name,
+    )
+    db.add(token_row)
+    db.flush()
+
+    return {"token": plaintext, "token_id": token_row.id}
+
+
+@router.delete("/agents/{user_id}")
+def revoke_agent(
+    user_id: str,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Revoke an agent user — disables account and all tokens."""
+    user = db.query(UserRow).filter(
+        UserRow.id == user_id, UserRow.provider == "api_token"
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    user.approved = False
+    db.query(ApiTokenRow).filter(ApiTokenRow.user_id == user_id).update(
+        {"revoked": True}
+    )
+    db.flush()
+
+    return {"status": "revoked", "user_id": user_id}
+
+
+@router.delete("/agents/{user_id}/tokens/{token_id}")
+def revoke_agent_token(
+    user_id: str,
+    token_id: int,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Revoke a single API token."""
+    token_row = db.query(ApiTokenRow).filter(
+        ApiTokenRow.id == token_id,
+        ApiTokenRow.user_id == user_id,
+    ).first()
+    if not token_row:
+        raise HTTPException(status_code=404, detail="Token not found")
+
+    token_row.revoked = True
+    db.flush()
+
+    return {"status": "revoked", "token_id": token_id}

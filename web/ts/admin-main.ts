@@ -1,7 +1,10 @@
-/** Admin page entry point — user management and usage overview. */
+/** Admin page entry point — user management, agent management, and usage overview. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { fetchAdminUsers, approveUser, type AdminUser, type AdminSummary } from './adapters/admin-adapter';
+import {
+  fetchAdminUsers, approveUser, createAgent, createAgentToken,
+  revokeAgent, type AdminUser, type AdminSummary,
+} from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 
 async function init(): Promise<void> {
@@ -12,7 +15,12 @@ async function init(): Promise<void> {
   }
   renderUserInfo(user);
 
+  setupAgentCreateButton();
   await loadUsers();
+}
+
+function setupAgentCreateButton(): void {
+  document.getElementById('btn-create-agent')?.addEventListener('click', handleCreateAgent);
 }
 
 async function loadUsers(): Promise<void> {
@@ -20,17 +28,22 @@ async function loadUsers(): Promise<void> {
   const pendingSection = document.getElementById('pending-section')!;
   const pendingList = document.getElementById('pending-list')!;
   const usersBody = document.getElementById('users-tbody')!;
+  const agentsBody = document.getElementById('agents-tbody')!;
+  const agentsSection = document.getElementById('agents-section')!;
   const errorEl = document.getElementById('error-message')!;
 
   try {
     const response = await fetchAdminUsers();
     const { summary, users } = response;
 
+    const humans = users.filter(u => u.type !== 'agent');
+    const agents = users.filter(u => u.type === 'agent');
+
     // Summary bar
     renderSummaryBar(summaryBar, summary);
 
     // Pending approvals
-    const pending = users.filter(u => !u.approved);
+    const pending = humans.filter(u => !u.approved);
     if (pending.length > 0) {
       pendingSection.style.display = '';
       pendingList.innerHTML = pending.map(renderPendingCard).join('');
@@ -41,8 +54,22 @@ async function loadUsers(): Promise<void> {
       pendingSection.style.display = 'none';
     }
 
-    // All users table
-    usersBody.innerHTML = users.map(renderUserRow).join('');
+    // Agents section
+    if (agents.length > 0) {
+      agentsSection.style.display = '';
+      agentsBody.innerHTML = agents.map(renderAgentRow).join('');
+      agentsBody.querySelectorAll('.btn-revoke-agent').forEach(btn => {
+        btn.addEventListener('click', handleRevokeAgent);
+      });
+      agentsBody.querySelectorAll('.btn-new-token').forEach(btn => {
+        btn.addEventListener('click', handleNewToken);
+      });
+    } else {
+      agentsBody.innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center;padding:1rem;">No agents yet</td></tr>';
+    }
+
+    // All users table (humans only)
+    usersBody.innerHTML = humans.map(renderUserRow).join('');
     usersBody.querySelectorAll('.btn-approve').forEach(btn => {
       btn.addEventListener('click', handleApprove);
     });
@@ -68,6 +95,100 @@ async function handleApprove(e: Event): Promise<void> {
     errorEl.textContent = `Failed to approve user: ${err}`;
     errorEl.style.display = 'block';
   }
+}
+
+async function handleCreateAgent(): Promise<void> {
+  const name = prompt('Agent name (e.g. "Claude Desktop", "Cursor"):');
+  if (!name) return;
+
+  const btn = document.getElementById('btn-create-agent') as HTMLButtonElement;
+  btn.disabled = true;
+
+  try {
+    const result = await createAgent(name);
+    showTokenModal(result.token, result.name);
+    await loadUsers();
+  } catch (err) {
+    alert(`Failed to create agent: ${err}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function handleRevokeAgent(e: Event): Promise<void> {
+  const btn = e.currentTarget as HTMLButtonElement;
+  const userId = btn.dataset.userId!;
+  const name = btn.dataset.agentName || 'this agent';
+
+  if (!confirm(`Revoke agent "${name}"? This will disable all its tokens immediately.`)) return;
+
+  btn.disabled = true;
+  try {
+    await revokeAgent(userId);
+    await loadUsers();
+  } catch (err) {
+    btn.disabled = false;
+    alert(`Failed to revoke agent: ${err}`);
+  }
+}
+
+async function handleNewToken(e: Event): Promise<void> {
+  const btn = e.currentTarget as HTMLButtonElement;
+  const userId = btn.dataset.userId!;
+  const agentName = btn.dataset.agentName || '';
+
+  const tokenName = prompt('Token label (optional):', agentName);
+  if (tokenName === null) return;
+
+  btn.disabled = true;
+  try {
+    const result = await createAgentToken(userId, tokenName);
+    showTokenModal(result.token, tokenName || agentName);
+    await loadUsers();
+  } catch (err) {
+    alert(`Failed to create token: ${err}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showTokenModal(token: string, name: string): void {
+  // Remove existing modal if any
+  document.getElementById('token-modal')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'token-modal';
+  modal.className = 'token-modal-overlay';
+  modal.innerHTML = `
+    <div class="token-modal">
+      <h3>API Token Created</h3>
+      <p>Token for <strong>${escapeHtml(name)}</strong>. Copy it now — it won't be shown again.</p>
+      <div class="token-display">
+        <code id="token-value">${escapeHtml(token)}</code>
+      </div>
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
+        <button class="btn" id="btn-copy-token">Copy</button>
+        <button class="btn btn-primary" id="btn-close-modal">Done</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+
+  document.getElementById('btn-copy-token')!.addEventListener('click', () => {
+    navigator.clipboard.writeText(token).then(() => {
+      const copyBtn = document.getElementById('btn-copy-token')!;
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+    });
+  });
+
+  document.getElementById('btn-close-modal')!.addEventListener('click', () => {
+    modal.remove();
+  });
+
+  modal.addEventListener('click', (ev) => {
+    if (ev.target === modal) modal.remove();
+  });
 }
 
 function renderSummaryBar(el: HTMLElement, s: AdminSummary): void {
@@ -96,6 +217,34 @@ function renderPendingCard(u: AdminUser): string {
         <button class="btn btn-primary btn-approve" data-user-id="${escapeHtml(u.id)}">Approve</button>
       </div>
     </div>`;
+}
+
+function renderAgentRow(u: AdminUser): string {
+  const status = u.approved
+    ? '<span class="badge badge-green">Active</span>'
+    : '<span class="badge badge-amber">Revoked</span>';
+  const lastUsed = u.token_last_used ? formatDate(u.token_last_used) : (u.last_active_at ? formatDate(u.last_active_at) : '-');
+  const created = u.created_at ? formatDate(u.created_at) : '-';
+  const m = u.usage_month;
+  const tokens = m.total_tokens >= 1000
+    ? `~${Math.round(m.total_tokens / 1000)}K`
+    : String(m.total_tokens);
+  const actions = u.approved
+    ? `<button class="btn btn-new-token" style="font-size:0.75rem;padding:0.2rem 0.5rem;" data-user-id="${escapeHtml(u.id)}" data-agent-name="${escapeHtml(u.display_name)}">New Token</button>
+       <button class="btn btn-danger btn-revoke-agent" style="font-size:0.75rem;padding:0.2rem 0.5rem;margin-left:0.25rem;" data-user-id="${escapeHtml(u.id)}" data-agent-name="${escapeHtml(u.display_name)}">Revoke</button>`
+    : '<span class="muted">Revoked</span>';
+
+  return `
+    <tr>
+      <td>${escapeHtml(u.display_name)}</td>
+      <td>${status}</td>
+      <td class="num">${u.active_tokens ?? 0} / ${u.token_count ?? 0}</td>
+      <td>${created}</td>
+      <td>${lastUsed}</td>
+      <td class="num">${m.briefings}</td>
+      <td class="num">${tokens}</td>
+      <td>${actions}</td>
+    </tr>`;
 }
 
 function renderUserRow(u: AdminUser): string {
