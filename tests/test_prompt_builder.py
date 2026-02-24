@@ -182,8 +182,10 @@ def test_build_context_with_previous_digest(sample_snapshot):
     context = build_digest_context(sample_snapshot, target_time, previous_digest=prev)
 
     assert "PREVIOUS DIGEST" in context
-    assert "AMBER" in context
-    assert "Frontal passage timing uncertain" in context
+    assert "Previous assessment: AMBER" in context
+    assert "Previous reason: Frontal passage timing uncertain" in context
+    assert "Previous synoptic: Low pressure approaching" in context
+    assert "Previous trend: Deteriorating from yesterday." in context
 
 
 def test_build_context_quantitative_detail(sample_snapshot):

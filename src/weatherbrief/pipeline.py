@@ -97,6 +97,56 @@ class BriefingResult:
     usage: BriefingUsage = field(default_factory=BriefingUsage)
 
 
+def _load_previous_digest(pack_dir: Path | None, days_out: int = -1):
+    """Load the most recent prior WeatherDigest from a different briefing cycle.
+
+    Pack layout: ``data/packs/{user}/{flight}/{timestamp}/digest.json``
+    Looks at sibling timestamp directories (sorted descending) and returns
+    the first valid WeatherDigest whose ``days_out`` differs from the current
+    briefing, so we compare across briefing days rather than re-refreshes.
+    """
+    if pack_dir is None:
+        return None
+    import json
+
+    flight_dir = pack_dir.parent
+    current_ts = pack_dir.name
+    try:
+        siblings = sorted(
+            (d for d in flight_dir.iterdir()
+             if d.is_dir() and d.name != current_ts),
+            key=lambda d: d.name,
+            reverse=True,
+        )
+    except OSError:
+        return None
+
+    from weatherbrief.digest.llm_digest import WeatherDigest
+
+    for sibling in siblings:
+        digest_path = sibling / "digest.json"
+        if not digest_path.exists():
+            continue
+        # Check days_out from the snapshot to skip same-day re-refreshes
+        snapshot_path = sibling / "snapshot.json"
+        if snapshot_path.exists() and days_out >= 0:
+            try:
+                snap_data = json.loads(snapshot_path.read_text())
+                if snap_data.get("days_out") == days_out:
+                    continue
+            except Exception:
+                pass  # can't read snapshot — still try the digest
+        try:
+            data = json.loads(digest_path.read_text())
+            prev = WeatherDigest.model_validate(data)
+            logger.info("Loaded previous digest from %s", digest_path)
+            return prev
+        except Exception:
+            logger.debug("Could not load digest from %s", digest_path, exc_info=True)
+            continue
+    return None
+
+
 def execute_briefing(
     route: RouteConfig,
     target_date: str,
@@ -313,6 +363,7 @@ def execute_briefing(
     # === 7. Optional: LLM digest ===
     if options.generate_llm_digest:
         _notify("llm_digest")
+        previous_digest = _load_previous_digest(pack_dir, days_out)
         digest_result = run_llm_digest(
             snapshot=snapshot,
             target_time=target_dt,
@@ -324,6 +375,7 @@ def execute_briefing(
             fetch_date=today,
             route_advisories=route_advisories_manifest,
             flight_rules=options.flight_rules,
+            previous_digest=previous_digest,
         )
         if digest_result.digest is not None:
             result.digest = digest_result.digest
