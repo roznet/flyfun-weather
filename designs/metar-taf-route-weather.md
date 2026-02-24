@@ -15,10 +15,12 @@ On the day of flight (D-0), NWP model output alone is insufficient — actual ME
 ```
 tasks/route_weather.py
 ├── run_route_weather()          ← fetch METAR/TAF via euro_aip
+│     _interpolate_airport_time()← per-airport ETA from enroute distance
 │     RouteWeatherService → AvWxSource → aviationweather.gov
 │     compute_wind_advisory()    ← runway crosswind assessment per airport
 │     _applicable_taf_lines()    ← TAF line indices for UI highlighting
 └── run_observation_comparison() ← compare obs vs model predictions
+      _interpolate_airport_time()← per-airport time for model lookup
       classify_flight_category() from analysis/airport_conditions.py
 
 models/observations.py
@@ -49,6 +51,7 @@ Gated by `days_out == 0 and options.airports_db_path`. Wrapped in try/except so 
 - TAF: raw text, flight category at ETA, applicable trend type, wind (dir/speed/gust)
 - Wind advisories: `metar_wind_advisory`, `taf_wind_advisory` (OK/CAUTION/WARNING) with best runway and crosswind values
 - TAF highlighting: `taf_applicable_lines: list[int]` — line indices for base + applicable BECMG/TEMPO groups
+- ETA: `eta_hour_offset: int | None` — rounded hours after departure (from enroute distance interpolation)
 - Metadata: ICAO, distance from route, enroute distance, nearest waypoint
 
 `ObservationComparison` stores the obs-vs-model result:
@@ -67,14 +70,15 @@ Added to `ForecastSnapshot` as `route_observations: RouteObservations | None`.
 
 1. Load `EuroAipModel` from SQLite via `DatabaseStorage` (same pattern as `airports.py`)
 2. Call `RouteWeatherService().fetch_route_weather(route_icaos, corridor_nm, model)`
-3. For each `RouteAirportWeather`, extract structured fields into `AirportObservation`
-4. For TAFs, use `WeatherAnalyzer.find_applicable_taf(taf, target_time)` to get active group at ETA
-5. Map each airport to nearest waypoint via cumulative great-circle distance
+3. For each `RouteAirportWeather`, compute per-airport ETA via `_interpolate_airport_time(departure, duration, enroute_dist, total_dist)` — uses `enroute_distance_nm` from euro_aip spatial query and `flight_duration_hours` from `RouteConfig`
+4. Extract structured fields into `AirportObservation`, including `eta_hour_offset` (rounded hours)
+5. For TAFs, use `WeatherAnalyzer.find_applicable_taf(taf, airport_time)` to get active group at the interpolated ETA (not departure)
+6. Map each airport to nearest waypoint via cumulative great-circle distance
 
 ### Comparison (`run_observation_comparison`)
 
 For each airport with a METAR:
-1. Find model forecast at nearest waypoint via `WaypointForecast.at_time(target_time)`
+1. Compute per-airport interpolated time, then find model forecast at nearest waypoint via `WaypointForecast.at_time(airport_time)`
 2. Derive model flight category from `HourlyForecast.visibility_m` via `classify_flight_category()`
 3. Classify discrepancy by flight category distance:
    - `CONFIRMING`: same category (diff=0)
@@ -94,7 +98,7 @@ For each airport with a METAR:
 
 Observations section on the briefing page with:
 - **Summary bar**: airport count, worst flight category, phenomena list, refresh button (D-0 only)
-- **Two-row grouped table headers**: Conditions group (METAR/TAF/Model categories + agreement) and Wind group (METAR/TAF/Model wind + advisory match)
+- **Two-row grouped table headers**: ICAO, Dist, ETA (+0h/+1h/etc.), Conditions group (METAR/TAF/Model categories + agreement) and Wind group (METAR/TAF/Model wind + advisory match)
 - **Info button**: ⓘ in ICAO cell opens detailed airport popup
 - **TAF highlighting**: `taf_applicable_lines` indices highlight the base forecast + applicable BECMG/TEMPO lines in the TAF raw text
 - **Wind advisory icons**: OK/CAUTION/WARNING badges with crosswind values per source
@@ -103,7 +107,7 @@ Observations section on the briefing page with:
 
 ### HTML Report
 
-Table after airport conditions with columns: ICAO, Distance, METAR Cat, TAF Cat, Model Cat, Match, METAR raw text. Flight categories are color-coded. Conflicting rows are highlighted amber.
+Table after airport conditions with columns: ICAO, Distance, ETA, METAR Cat, TAF Cat, Model Cat, Match, METAR raw text. Flight categories are color-coded. Conflicting rows are highlighted amber.
 
 ## Key Choices
 
@@ -116,6 +120,7 @@ Table after airport conditions with columns: ICAO, Distance, METAR Cat, TAF Cat,
 | Sounding ceiling for model category | Uses `sounding_ceiling_ft` from route analyses when available, falling back to visibility-only |
 | Runway crosswind advisory | `compute_wind_advisory()` evaluates all runway ends, picks best runway; OK/CAUTION/WARNING thresholds |
 | TAF line highlighting | `_applicable_taf_lines()` identifies base + BECMG/TEMPO groups active at target time for UI highlighting |
+| Per-airport time interpolation | TAF matching and model comparison use `enroute_distance / total_distance * flight_duration` to estimate when the flight passes each airport; falls back to departure time when `flight_duration_hours == 0` |
 | Graceful failure (try/except in pipeline) | Network failures shouldn't block the NWP-based briefing |
 
 ## Euro_aip Dependencies
@@ -149,7 +154,6 @@ metar_taf_airports: int = 0
 
 - **METAR/TAF-specific advisories**: ceiling check, visibility check, obs-model conflict, TAF deterioration alerts
 - **D-1 TAF fetch**: If TAF validity periods are detected to cover the next day, fetch on D-1 too
-- **Transit time estimation**: Use route distance + ground speed to estimate when the flight passes each airport, for more precise TAF matching
 
 ## References
 
