@@ -321,7 +321,8 @@ def _format_route_observations(obs: RouteObservations) -> list[str]:
             continue
         cat_str = f" [{apt.metar_flight_category}]" if apt.metar_flight_category else ""
         dist_str = f"{apt.distance_from_route_nm:.0f}nm"
-        lines.append(f"  {apt.icao}{cat_str} ({dist_str} from route)")
+        eta_str = f", ETA +{apt.eta_hour_offset}h" if apt.eta_hour_offset is not None else ""
+        lines.append(f"  {apt.icao}{cat_str} ({dist_str} from route{eta_str})")
         if apt.metar_raw:
             lines.append(f"    METAR: {apt.metar_raw}")
         if apt.has_taf:

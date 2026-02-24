@@ -45,6 +45,7 @@ class AirportObservation(BaseModel):
     taf_headwind_kt: float | None = None
     has_metar: bool = False
     has_taf: bool = False
+    eta_hour_offset: int | None = None  # rounded hours after departure
 
 
 class ObservationComparison(BaseModel):

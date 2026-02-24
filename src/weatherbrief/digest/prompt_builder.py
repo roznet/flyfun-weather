@@ -296,7 +296,8 @@ def _format_observations_context(obs: RouteObservations) -> str:
         if not apt.has_metar and not apt.has_taf:
             continue
         dist_str = f"{apt.distance_from_route_nm:.0f}nm from route"
-        parts = [f"{apt.icao} ({dist_str}, near {apt.nearest_waypoint_icao})"]
+        eta_str = f", ETA +{apt.eta_hour_offset}h" if apt.eta_hour_offset is not None else ""
+        parts = [f"{apt.icao} ({dist_str}{eta_str}, near {apt.nearest_waypoint_icao})"]
 
         if apt.has_metar:
             cat_str = f" [{apt.metar_flight_category}]" if apt.metar_flight_category else ""

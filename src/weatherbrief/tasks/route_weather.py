@@ -6,7 +6,7 @@ Only used on D-0 (day of flight) when real observations add value.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from weatherbrief.models.analysis import RouteConfig, WaypointForecast
 from weatherbrief.models.airport_conditions import RunwayEnd
@@ -61,6 +61,23 @@ def _compute_route_distances(route: RouteConfig) -> list[float]:
         _, leg_nm = nav_a.haversine_distance(nav_b)
         distances.append(distances[-1] + leg_nm)
     return distances
+
+
+def _interpolate_airport_time(
+    departure: datetime,
+    duration_hours: float,
+    enroute_distance_nm: float | None,
+    total_distance_nm: float,
+) -> datetime:
+    """Compute estimated time at an airport based on its enroute distance."""
+    if (
+        total_distance_nm <= 0
+        or duration_hours <= 0
+        or enroute_distance_nm is None
+    ):
+        return departure
+    fraction = min(enroute_distance_nm / total_distance_nm, 1.0)
+    return departure + timedelta(hours=fraction * duration_hours)
 
 
 # Default wind advisory thresholds (matching airport_wind evaluator defaults)
@@ -188,6 +205,8 @@ def run_route_weather(
 
     route_icaos = [wp.icao for wp in route.waypoints]
     route_distances = _compute_route_distances(route)
+    total_distance = route_distances[-1] if route_distances else 0.0
+    duration_hours = route.flight_duration_hours
 
     service = RouteWeatherService()
     result = service.fetch_route_weather(
@@ -206,12 +225,24 @@ def run_route_weather(
             raw.enroute_distance_nm, route, route_distances,
         )
 
+        # Compute per-airport ETA based on enroute distance
+        airport_time = _interpolate_airport_time(
+            target_time, duration_hours,
+            raw.enroute_distance_nm, total_distance,
+        )
+        if duration_hours > 0 and raw.enroute_distance_nm is not None:
+            offset_hours = (airport_time - target_time).total_seconds() / 3600
+            eta_hour_offset = round(offset_hours)
+        else:
+            eta_hour_offset = None
+
         obs = AirportObservation(
             icao=raw.icao,
             name=raw.name,
             distance_from_route_nm=raw.distance_from_route_nm,
             enroute_distance_nm=raw.enroute_distance_nm,
             nearest_waypoint_icao=nearest_wp,
+            eta_hour_offset=eta_hour_offset,
         )
 
         metar = raw.latest_metar
@@ -237,7 +268,7 @@ def run_route_weather(
         if taf is not None:
             obs.has_taf = True
             obs.taf_raw = taf.raw_text
-            applicable = WeatherAnalyzer.find_applicable_taf(taf, target_time)
+            applicable = WeatherAnalyzer.find_applicable_taf(taf, airport_time)
             if applicable is not None:
                 if applicable.flight_category is not None:
                     obs.taf_flight_category_at_eta = applicable.flight_category.value
@@ -250,7 +281,7 @@ def run_route_weather(
 
             # Build list of applicable TAF line indices for highlighting
             obs.taf_applicable_lines = _applicable_taf_lines(
-                taf, target_time,
+                taf, airport_time,
             )
 
         airports.append(obs)
@@ -367,12 +398,22 @@ def run_observation_comparison(
             if icao:
                 rpa_by_icao[icao] = rpa
 
+    route_distances = _compute_route_distances(route)
+    total_distance = route_distances[-1] if route_distances else 0.0
+    duration_hours = route.flight_duration_hours
+
     comparisons: list[ObservationComparison] = []
     has_conflicts = False
 
     for obs in observations.airports:
         if not obs.has_metar or obs.metar_flight_category is None:
             continue
+
+        # Compute per-airport interpolated time
+        airport_time = _interpolate_airport_time(
+            target_time, duration_hours,
+            obs.enroute_distance_nm, total_distance,
+        )
 
         # Find model forecast for the nearest waypoint
         wp_icao = obs.nearest_waypoint_icao
@@ -384,7 +425,7 @@ def run_observation_comparison(
 
         # Use first model's forecast as reference (typically best_match or primary)
         wf = wp_forecasts[0]
-        hourly = wf.at_time(target_time)
+        hourly = wf.at_time(airport_time)
         if hourly is None:
             continue
 
