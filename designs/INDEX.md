@@ -36,8 +36,8 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands (per-band hybrid with sounding-corroborated collapse), convective towers, temperature/stability lines, hover interaction, metrics UI system with info popups, layer legends, "Discuss with AI" integration, unified atmospheric profile table, ceiling metrics, Windy meteogram links, and freshness bar with GRIB init time annotations.
-Key exports: `CrossSectionRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
+Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands (per-band hybrid with sounding-corroborated collapse), convective towers (marginal risk skipped), temperature/stability lines, hover interaction, shared interaction helpers, route graph (scalar metrics chart), metrics UI system with info popups, layer legends, "Discuss with AI" integration, unified atmospheric profile table, ceiling metrics, Windy meteogram links, and freshness bar with GRIB init time annotations.
+Key exports: `CrossSectionRenderer`, `RouteGraphRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
 → Full doc: visualization.md
 
 ### digest
@@ -46,7 +46,7 @@ Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDiges
 → Full doc: digest.md
 
 ### multi-user-deployment
-Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google OAuth, MySQL/SQLite DB, per-user flights/profiles/credentials, usage tracking, rate limiting, admin approval, shareable briefing links, flight parameter profiles.
+Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google OAuth + API token auth (bot/agent users), MySQL/SQLite DB, per-user flights/profiles/credentials, usage tracking, rate limiting, auto-approve + welcome email, admin management, shareable briefing links, flight parameter profiles.
 → Full doc: multi-user-deployment.md
 
 ### flight-weather-tracker-spec
@@ -92,6 +92,6 @@ SFIP (Simplified Forecast Icing Potential) algorithm design: fuzzy-logic members
 → Full doc: route-graph.md
 
 ### metar-taf-route-weather
-D-0 METAR/TAF integration: fetch real observations from airports along route corridor via euro_aip RouteWeatherService, compare against NWP model predictions (CONFIRMING/SIGNIFICANT/CONFLICTING), surface in digest and HTML report.
-Key exports: `run_route_weather`, `run_observation_comparison`, `RouteObservations`, `AirportObservation`
+D-0 METAR/TAF integration: fetch real observations from airports along route corridor via euro_aip RouteWeatherService, compare against NWP model predictions (CONFIRMING/SIGNIFICANT/CONFLICTING), wind advisory computation with runway crosswind, TAF line highlighting, sounding ceiling for model category, observations refresh endpoint, surface in digest, HTML report, and web UI.
+Key exports: `run_route_weather`, `run_observation_comparison`, `compute_wind_advisory`, `RouteObservations`, `AirportObservation`
 → Full doc: metar-taf-route-weather.md

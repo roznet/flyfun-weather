@@ -42,16 +42,17 @@ ForecastSnapshot  (root object, saved as JSON)
     ↓
 Optional outputs:
 ├→ GRIB init times tracking (grib_init_times dict, when GRIB model run differs from Open-Meteo)
+├→ Route weather observations (D-0 only: METAR/TAF via euro_aip, obs-vs-model comparison)
 ├→ GRAMET cross-section (Autorouter API → PDF, rendered as PNG via PyMuPDF)
 ├→ Skew-T plots (MetPy → PNG with CAPE/CIN shading, hodograph, indices panel)
-├→ LLM digest (LangGraph: DWD text + quant → WeatherDigest → Markdown + JSON)
+├→ LLM digest (LangGraph: text forecasts + quant → WeatherDigest → Markdown + JSON)
 ```
 
 **Entry point:** `execute_briefing(route, target_date, target_hour, options)` — shared by CLI and API. Returns `BriefingResult` with all paths and structured results. Never prints or exits.
 
 `BriefingOptions` controls what gets generated (models, gramet, skewt, llm_digest, enrich_grib, output_dir). `BriefingResult` carries snapshot, paths, digest object, and error list.
 
-**Task modules** (`tasks/`): Pipeline stages extracted into independent modules for testability and incremental re-runs. `pipeline.py` is now a thin orchestrator calling `run_fetch()` → `run_analysis()` → `run_advisories()` → optional outputs. Each task module can also run standalone from saved artifacts (e.g. `run_advisories_from_pack()`).
+**Task modules** (`tasks/`): Pipeline stages extracted into independent modules for testability and incremental re-runs. `pipeline.py` is now a thin orchestrator calling `run_fetch()` → `run_analysis()` → `run_advisories()` → `run_route_weather()` (D-0) → optional outputs. Each task module can also run standalone from saved artifacts (e.g. `run_advisories_from_pack()`).
 
 ## Package Layout
 
@@ -60,6 +61,7 @@ src/weatherbrief/
 ├── models/            # Pydantic v2 data models (split into submodules)
 │   ├── __init__.py    # Re-exports all models
 │   ├── analysis.py    # Route, forecast, analysis models (RouteConfig, ForecastSnapshot, etc.)
+│   ├── observations.py # METAR/TAF models (AirportObservation, ObservationComparison, RouteObservations)
 │   └── storage.py     # Flight, BriefingPackMeta
 ├── airports.py        # ICAO → lat/lon via euro_aip
 ├── cli.py             # CLI entry point (delegates to pipeline)
@@ -69,6 +71,7 @@ src/weatherbrief/
 │   ├── fetch.py       # run_fetch() → FetchResult (route interpolation, Open-Meteo, GRIB)
 │   ├── analyze.py     # run_analysis() → AnalysisResult (waypoint + route point analysis)
 │   ├── advise.py      # run_advisories() → AdvisoryResult (evaluator + airport conditions)
+│   ├── route_weather.py # run_route_weather() + run_observation_comparison() (D-0 METAR/TAF)
 │   ├── artifacts.py   # Save/load helpers for pack_dir I/O (JSON serialization)
 │   └── outputs.py     # run_gramet(), run_skewt(), run_llm_digest() → independent results
 ├── fetch/
@@ -78,7 +81,9 @@ src/weatherbrief/
 │   ├── route_walk.py  # Common route walking utility (great-circle)
 │   ├── elevation.py   # SRTM terrain elevation profile
 │   ├── model_status.py # NWP model freshness checking
-│   ├── dwd_text.py    # DWD synoptic text forecasts
+│   ├── nws_text.py    # NWS Area Forecast Discussions (US routes)
+│   ├── text_forecasts.py # Route-aware text forecast dispatcher (NWS or DWD by region)
+│   ├── dwd_text.py    # DWD synoptic text forecasts (European routes)
 │   ├── gramet.py      # Autorouter GRAMET
 │   └── grib/          # GFS GRIB2 enrichment (CLWMR/ICMR)
 │       ├── __init__.py     # enrich_forecasts() public API
@@ -141,7 +146,7 @@ src/weatherbrief/
 │   ├── profiles.py    # Flight parameter profiles CRUD (per-user named templates)
 │   ├── preferences.py # User preferences + autorouter credentials CRUD
 │   ├── usage.py       # Usage summary + daily rate limits
-│   └── admin.py       # Admin: user list, approval, usage overview
+│   └── admin.py       # Admin: user list, approval, usage overview, API agent/token management
 ├── report/
 │   ├── render.py      # render_html(), render_pdf() via Jinja2 + WeasyPrint
 │   └── templates/     # Jinja2 template for self-contained HTML report
@@ -170,14 +175,21 @@ web/
 │   ├── helpers/       # Metric lookup, threshold rendering
 │   ├── types/         # Shared TypeScript type definitions (metrics, advisories)
 │   ├── data/          # Static data (metrics-catalog.json, metrics-display.json)
-│   ├── visualization/ # Canvas-rendered cross-section visualization
+│   ├── visualization/ # Canvas-rendered visualizations (cross-section + route graph)
 │   │   ├── cross-section/
 │   │   │   ├── renderer.ts      # Main canvas engine + coordinate transforms
 │   │   │   ├── axes.ts          # Distance/altitude axis rendering
 │   │   │   ├── interaction.ts   # Hover crosshair + click-to-select
 │   │   │   ├── layer-registry.ts # Central layer toggle registry
 │   │   │   └── layers/          # Individual layers (terrain, clouds, icing, etc.)
-│   │   ├── controls/panel.ts    # Layer toggles + model selector
+│   │   ├── route-graph/
+│   │   │   ├── renderer.ts      # Scalar metric chart below cross-section
+│   │   │   ├── axes.ts          # Dual Y-axis rendering
+│   │   │   ├── interaction.ts   # Hover + selection sync with cross-section
+│   │   │   ├── metrics.ts       # Metric registry (wind, temp, precip, CAPE, etc.)
+│   │   │   └── constants.ts     # Shared layout constants
+│   │   ├── interaction-utils.ts # Shared: tooltip, nearest point, axis ticks
+│   │   ├── controls/panel.ts    # Layer toggles + model selector + route graph controls
 │   │   ├── data-extract.ts      # Transform API data → VizRouteData
 │   │   ├── scales.ts            # Color/opacity scales for risk levels
 │   │   ├── layer-legends.ts     # Legend entries for all layers
@@ -199,7 +211,7 @@ Flight and pack metadata are stored in a relational database via SQLAlchemy ORM.
 - **Dev mode** (`ENVIRONMENT=development`): SQLite at `data/weatherbrief.db`, tables auto-created on startup, dev user auto-inserted.
 - **Production** (`ENVIRONMENT=production`): MySQL via `DATABASE_URL` env var, schema managed by Alembic migrations.
 
-Tables: `users`, `user_preferences`, `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`. See [multi-user-deployment.md](./multi-user-deployment.md) for full schema.
+Tables: `users`, `user_preferences`, `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `api_tokens`. See [multi-user-deployment.md](./multi-user-deployment.md) for full schema.
 
 ### File artifacts (disk)
 
@@ -237,6 +249,8 @@ FastAPI app at `api/app.py`, served by uvicorn.
 | `/auth/callback/google` | GET | OAuth callback → JWT cookie |
 | `/auth/logout` | POST | Clear JWT cookie |
 | `/auth/me` | GET | Current user info (incl. is_admin) |
+
+Authentication supports both JWT cookies (browser sessions) and API tokens (`Authorization: Bearer wb_...`) for bot/agent users. See [multi-user-deployment.md](./multi-user-deployment.md) for API token details.
 | `/api/flights` | GET/POST | List/create flights |
 | `/api/flights/{id}` | GET/DELETE | Get/delete (any user can view, only owner can delete) |
 | `/api/flights/{id}/packs` | GET | List pack history |
@@ -256,6 +270,7 @@ FastAPI app at `api/app.py`, served by uvicorn.
 | `/api/flights/{id}/packs/{ts}/report.pdf` | GET | PDF download |
 | `/api/flights/{id}/packs/{ts}/advisories` | GET | Route advisories JSON |
 | `/api/flights/{id}/packs/{ts}/advisories/recalculate` | POST | Re-evaluate advisories with user prefs |
+| `/api/flights/{id}/packs/{ts}/observations/refresh` | POST | Re-fetch METAR/TAF for D-0 packs (owner only) |
 | `/api/flights/{id}/packs/{ts}/email` | POST | Send email to logged-in user |
 | `/api/user/profiles` | GET/POST | List/create flight parameter profiles |
 | `/api/user/profiles/{id}` | GET/PUT/DELETE | Get/update/delete profile |
@@ -266,6 +281,9 @@ FastAPI app at `api/app.py`, served by uvicorn.
 | `/api/admin/users` | GET | All users with usage (admin only) |
 | `/api/admin/users/{id}/approve` | POST | Approve user (admin only) |
 | `/api/admin/approve/{id}` | GET | One-click HMAC-signed approval link |
+| `/api/admin/agents` | POST | Create bot/agent user with initial API token |
+| `/api/admin/agents/{uid}/tokens` | POST | Create additional API token for agent |
+| `/api/admin/agents/{uid}/tokens/{tid}` | DELETE | Revoke API token |
 
 **Shareable briefing links**: any authenticated user can view any flight's briefings via direct URL. Only the flight owner can refresh, delete, or trigger email. The frontend conditionally shows action buttons based on ownership.
 
@@ -334,6 +352,10 @@ Static files served from `web/` at root.
 | 8.2 | Done | Extended pressure levels (25 for GFS/ECMWF) + GRIB2 enrichment (CLWMR/ICMR from GFS S3), LWC-based icing |
 | 9.1 | Done | Flight parameter profiles: named templates for altitude/models/advisories, profile CRUD API, settings UI |
 | 9.2 | Done | Unified atmospheric profile table, icing severity toggle, Windy meteogram links |
+| 10.1 | Done | Route graph: canvas chart below cross-section for scalar metrics (wind, temp, precip, CAPE, freezing level) |
+| 10.2 | Done | Route-aware text forecasts: NWS AFD (US) and DWD (Europe) integrated into LLM digest |
+| 10.3 | Done | METAR/TAF route weather: D-0 observations, obs-vs-model comparison, TAF highlighting, wind advisories |
+| 10.4 | Done | API token authentication for bot/agent users (admin-managed, `wb_` prefix, SHA-256 hashed) |
 
 ## Docker
 
@@ -364,4 +386,6 @@ docker-compose up -d
 - Sounding analysis plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
 - Multi-user deployment: [multi-user-deployment.md](./multi-user-deployment.md)
 - Route advisories: [advisories.md](./advisories.md)
-- Cross-section visualization: [visualization.md](./visualization.md)
+- Cross-section & route graph visualization: [visualization.md](./visualization.md)
+- Route graph: [route-graph.md](./route-graph.md)
+- METAR/TAF route weather: [metar-taf-route-weather.md](./metar-taf-route-weather.md)

@@ -16,6 +16,8 @@ On the day of flight (D-0), NWP model output alone is insufficient — actual ME
 tasks/route_weather.py
 ├── run_route_weather()          ← fetch METAR/TAF via euro_aip
 │     RouteWeatherService → AvWxSource → aviationweather.gov
+│     compute_wind_advisory()    ← runway crosswind assessment per airport
+│     _applicable_taf_lines()    ← TAF line indices for UI highlighting
 └── run_observation_comparison() ← compare obs vs model predictions
       classify_flight_category() from analysis/airport_conditions.py
 
@@ -43,13 +45,17 @@ Gated by `days_out == 0 and options.airports_db_path`. Wrapped in try/except so 
 ### Data Models (`models/observations.py`)
 
 `AirportObservation` stores flat, serializable METAR/TAF fields (no euro_aip `WeatherReport` objects):
-- METAR: raw text, flight category, ceiling, visibility, wind, weather phenomena, temp, dewpoint, QNH
-- TAF: raw text, flight category at ETA, applicable trend type
+- METAR: raw text, flight category, ceiling, visibility, wind (dir/speed/gust), weather phenomena, temp, dewpoint, QNH
+- TAF: raw text, flight category at ETA, applicable trend type, wind (dir/speed/gust)
+- Wind advisories: `metar_wind_advisory`, `taf_wind_advisory` (OK/CAUTION/WARNING) with best runway and crosswind values
+- TAF highlighting: `taf_applicable_lines: list[int]` — line indices for base + applicable BECMG/TEMPO groups
 - Metadata: ICAO, distance from route, enroute distance, nearest waypoint
 
 `ObservationComparison` stores the obs-vs-model result:
 - `category_match`: `CONFIRMING` / `SIGNIFICANT` / `CONFLICTING`
 - Visibility and wind deltas, detail string
+- `model_wind_advisory`, `model_best_runway_id`, `model_crosswind_kt` — model-derived wind assessment
+- `wind_advisory_match`: `CONFIRMING` / `SIGNIFICANT` / `CONFLICTING` — compares METAR vs model wind advisory
 
 `RouteObservations` aggregates everything:
 - Airport list, comparison list
@@ -76,13 +82,24 @@ For each airport with a METAR:
    - `CONFLICTING`: 2+ categories apart (e.g., VFR↔IFR)
 4. Compute visibility and wind deltas for detail annotation
 
-**Limitation**: Model ceiling is not available from `HourlyForecast` surface data, so model category is derived from visibility only. This means ceiling-driven IFR (e.g., BKN008 with 10km vis) won't match a model that correctly predicts good visibility.
+**Model ceiling**: When `route_analyses` are provided, model flight category uses `sounding_ceiling_ft` from the nearest `RoutePointAnalysis` (via `classify_flight_category(ceiling, visibility)`). This allows ceiling-driven IFR comparisons. Falls back to visibility-only when route analyses are unavailable.
 
 ### Digest Integration
 
 **LLM prompt** (`digest/prompt_builder.py`): `=== METAR/TAF OBSERVATIONS ===` section between MODEL COMPARISON and TEXT FORECASTS. Includes per-airport METAR raw + category, TAF at ETA, and comparison annotations for non-confirming airports.
 
 **Text digest** (`digest/text.py`): `--- METAR/TAF Observations ---` section with summary stats, per-airport METAR/TAF lines, and conflict flags.
+
+### Web UI (`briefing-ui.ts`)
+
+Observations section on the briefing page with:
+- **Summary bar**: airport count, worst flight category, phenomena list, refresh button (D-0 only)
+- **Two-row grouped table headers**: Conditions group (METAR/TAF/Model categories + agreement) and Wind group (METAR/TAF/Model wind + advisory match)
+- **Info button**: ⓘ in ICAO cell opens detailed airport popup
+- **TAF highlighting**: `taf_applicable_lines` indices highlight the base forecast + applicable BECMG/TEMPO lines in the TAF raw text
+- **Wind advisory icons**: OK/CAUTION/WARNING badges with crosswind values per source
+- **Agreement column**: CONFIRMING/SIGNIFICANT/CONFLICTING badges for both conditions and wind
+- **Refresh button**: re-fetches METAR/TAF via `POST .../observations/refresh` endpoint, updates snapshot in place
 
 ### HTML Report
 
@@ -96,7 +113,9 @@ Table after airport conditions with columns: ICAO, Distance, METAR Cat, TAF Cat,
 | Flat Pydantic models, not euro_aip dataclasses | Serializable to JSON for snapshot storage and template rendering |
 | Category-based comparison (not raw values) | Flight category is the operationally meaningful unit; raw value comparison is noisy |
 | Three-tier classification (no MINOR_DELTA) | Implemented as CONFIRMING/SIGNIFICANT/CONFLICTING; MINOR_DELTA was dropped for simplicity |
-| Visibility-only model category | Ceiling not available from HourlyForecast; acceptable since visibility is the primary model-comparable field |
+| Sounding ceiling for model category | Uses `sounding_ceiling_ft` from route analyses when available, falling back to visibility-only |
+| Runway crosswind advisory | `compute_wind_advisory()` evaluates all runway ends, picks best runway; OK/CAUTION/WARNING thresholds |
+| TAF line highlighting | `_applicable_taf_lines()` identifies base + BECMG/TEMPO groups active at target time for UI highlighting |
 | Graceful failure (try/except in pipeline) | Network failures shouldn't block the NWP-based briefing |
 
 ## Euro_aip Dependencies
@@ -129,7 +148,6 @@ metar_taf_airports: int = 0
 ## Future Extensions
 
 - **METAR/TAF-specific advisories**: ceiling check, visibility check, obs-model conflict, TAF deterioration alerts
-- **Ceiling comparison**: Once sounding-derived ceiling is available at arbitrary points (not just waypoints), ceiling comparison becomes meaningful
 - **D-1 TAF fetch**: If TAF validity periods are detected to cover the next day, fetch on D-1 too
 - **Transit time estimation**: Use route distance + ground speed to estimate when the flight passes each airport, for more precise TAF matching
 

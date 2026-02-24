@@ -154,6 +154,19 @@ Named parameter templates for flights. Settings stored as flexible JSON.
 | model_init_times | TEXT NULL | JSON: NWP model init timestamps at fetch time |
 | artifact_path | VARCHAR(500) | Relative path to pack directory |
 
+### api_tokens
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INT AUTO_INCREMENT PK | |
+| user_id | VARCHAR(36) FK | Cascade delete with user |
+| token_hash | VARCHAR(64) UNIQUE | SHA-256 hex digest of `wb_...` token |
+| name | VARCHAR(100) | Human-readable label (e.g., "CI bot") |
+| created_at | DATETIME | |
+| expires_at | DATETIME NULL | Optional expiry |
+| last_used_at | DATETIME NULL | Updated on each authenticated request |
+| revoked | BOOLEAN DEFAULT FALSE | Soft-delete for audit trail |
+
 ### briefing_usage
 
 Per-briefing usage tracking with fixed columns per service (better for aggregation than flexible call_type approach).
@@ -229,6 +242,23 @@ New users are **auto-approved** on first login — no admin action needed. On si
 Admin can still **revoke** access by setting `approved=False` via the admin page. Revoked users see an "account inactive" message on login. The one-click HMAC-signed approval link in admin.py still works for re-enabling revoked users.
 
 Admin identity is controlled by the `ADMIN_EMAILS` env var (comma-separated). In dev mode, the dev user is always treated as admin.
+
+### API Token Authentication (bot/agent users)
+
+For programmatic access (bots, agents, automation), admins can create agent users with API tokens via the admin page.
+
+**Token format**: `wb_` prefix + 48 random characters. Tokens are SHA-256 hashed before storage — the plaintext is shown once at creation and cannot be recovered.
+
+**Database**: `api_tokens` table with `token_hash`, `name`, `expires_at`, `last_used_at`, `revoked` fields. Each token belongs to a user via `user_id` FK.
+
+**Auth flow**: `Authorization: Bearer wb_...` header → hash lookup → user resolution. Falls through to JWT cookie auth if no Bearer token. Both auth methods produce the same `user_id` dependency.
+
+**Admin endpoints**:
+- `POST /api/admin/agents` — create agent user (provider=`api`, auto-approved) with initial token
+- `POST /api/admin/agents/{user_id}/tokens` — create additional token for existing agent
+- `DELETE /api/admin/agents/{user_id}/tokens/{token_id}` — revoke token
+
+**Admin UI**: Agent management section in `admin.html` with create/revoke controls, token display (copy-once), and last-used timestamps.
 
 ### Dev mode bypass
 
