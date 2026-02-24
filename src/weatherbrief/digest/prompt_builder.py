@@ -192,8 +192,9 @@ def build_digest_context(
     if previous_digest:
         trend_lines: list[str] = ["=== PREVIOUS DIGEST (for trend comparison) ==="]
         trend_lines.append(f"Previous assessment: {previous_digest.assessment}")
-        trend_lines.append(f"Reason: {previous_digest.assessment_reason}")
-        trend_lines.append(f"Synoptic: {previous_digest.synoptic}")
+        trend_lines.append(f"Previous reason: {previous_digest.assessment_reason}")
+        trend_lines.append(f"Previous synoptic: {previous_digest.synoptic}")
+        trend_lines.append(f"Previous trend: {previous_digest.trend}")
         sections.append("\n".join(trend_lines))
 
     return "\n\n".join(sections)
