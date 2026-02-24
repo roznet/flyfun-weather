@@ -98,6 +98,7 @@ export interface BriefingState {
   setRenderMode: (mode: RenderMode) => void;
   toggleVizLayer: (layerId: string) => void;
   recalculateAdvisories: () => Promise<void>;
+  refreshObservations: () => Promise<void>;
   sendEmail: () => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   setRouteGraphVisible: (visible: boolean) => void;
@@ -305,6 +306,17 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       set({ routeAdvisories: result });
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });
+    }
+  },
+
+  refreshObservations: async () => {
+    const { flight, currentPack, snapshot } = get();
+    if (!flight || !currentPack || !snapshot) return;
+    try {
+      const newObs = await api.refreshObservations(flight.id, currentPack.fetch_timestamp);
+      set({ snapshot: { ...snapshot, route_observations: newObs } });
+    } catch (err) {
+      set({ error: `Observation refresh failed: ${err}` });
     }
   },
 

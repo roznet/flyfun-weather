@@ -8,6 +8,7 @@ import type {
   ForecastSnapshot,
   PackMeta,
   RouteAnalysesManifest,
+  RouteObservations,
 } from '../store/types';
 import type { RouteAdvisoriesManifest } from '../types/advisories';
 import { API_BASE, apiFetch } from '../utils';
@@ -225,6 +226,18 @@ export async function recalculateAdvisories(
 ): Promise<RouteAdvisoriesManifest> {
   return apiFetch<RouteAdvisoriesManifest>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/recalculate`,
+    { method: 'POST' },
+  );
+}
+
+// --- Observations refresh ---
+
+export async function refreshObservations(
+  flightId: string,
+  timestamp: string,
+): Promise<RouteObservations> {
+  return apiFetch<RouteObservations>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/observations/refresh`,
     { method: 'POST' },
   );
 }

@@ -9,7 +9,7 @@ import pytest
 
 from weatherbrief.analysis.airport_conditions import (
     _ceiling_from_sounding,
-    _reconcile_ceiling,
+    reconcile_ceiling,
     classify_flight_category,
     compute_airport_conditions,
     compute_runway_winds,
@@ -330,7 +330,7 @@ class TestReconcileCeiling:
             time=datetime(2026, 3, 1, 10, 0),
             nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=2000),
         )
-        result = _reconcile_ceiling(sounding, hourly)
+        result = reconcile_ceiling(sounding, hourly)
         assert result == 2000  # NWP is lower
 
     def test_both_available_sounding_lower(self):
@@ -344,7 +344,7 @@ class TestReconcileCeiling:
             time=datetime(2026, 3, 1, 10, 0),
             nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=5000),
         )
-        result = _reconcile_ceiling(sounding, hourly)
+        result = reconcile_ceiling(sounding, hourly)
         assert result == 1500  # Sounding is lower
 
     def test_only_sounding(self):
@@ -357,7 +357,7 @@ class TestReconcileCeiling:
         hourly = HourlyForecast(
             time=datetime(2026, 3, 1, 10, 0),
         )
-        result = _reconcile_ceiling(sounding, hourly)
+        result = reconcile_ceiling(sounding, hourly)
         assert result == 4000
 
     def test_only_nwp(self):
@@ -367,19 +367,19 @@ class TestReconcileCeiling:
             time=datetime(2026, 3, 1, 10, 0),
             nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=2500),
         )
-        result = _reconcile_ceiling(sounding, hourly)
+        result = reconcile_ceiling(sounding, hourly)
         assert result == 2500
 
     def test_neither_returns_none(self):
         """When neither source has ceiling, return None."""
         sounding = SoundingAnalysis(cloud_layers=[])
         hourly = HourlyForecast(time=datetime(2026, 3, 1, 10, 0))
-        result = _reconcile_ceiling(sounding, hourly)
+        result = reconcile_ceiling(sounding, hourly)
         assert result is None
 
     def test_no_sounding_no_hourly(self):
         """Both None returns None."""
-        result = _reconcile_ceiling(None, None)
+        result = reconcile_ceiling(None, None)
         assert result is None
 
     def test_sounding_sct_only_nwp_ceiling(self):
@@ -393,7 +393,7 @@ class TestReconcileCeiling:
             time=datetime(2026, 3, 1, 10, 0),
             nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=3000),
         )
-        result = _reconcile_ceiling(sounding, hourly)
+        result = reconcile_ceiling(sounding, hourly)
         assert result == 3000  # SCT doesn't count as ceiling
 
     def test_nwp_diag_no_ceiling_field(self):
@@ -407,5 +407,5 @@ class TestReconcileCeiling:
             time=datetime(2026, 3, 1, 10, 0),
             nwp_cloud_diagnostics=NWPCloudDiagnostics(),  # no ceiling_ft
         )
-        result = _reconcile_ceiling(sounding, hourly)
+        result = reconcile_ceiling(sounding, hourly)
         assert result == 2500

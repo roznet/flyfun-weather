@@ -2150,6 +2150,32 @@ label {
   background: rgba(184, 134, 11, 0.12);
 }
 
+.obs-fetch-time {
+  font-size: 0.78rem;
+  color: var(--text-tertiary, #888);
+  margin-left: 0.25rem;
+}
+
+.obs-refresh-btn {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.obs-refresh-btn:hover {
+  background: var(--surface-hover, #f0f0f0);
+}
+
+.obs-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* --- Help page --- */
 
 .help-section {

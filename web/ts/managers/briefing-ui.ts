@@ -385,7 +385,10 @@ function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | u
   `;
 }
 
-export function renderRouteObservations(snapshot: ForecastSnapshot | null): void {
+export function renderRouteObservations(
+  snapshot: ForecastSnapshot | null,
+  onRefresh?: () => Promise<void>,
+): void {
   const el = $('observations-section');
   const wrapper = $('observations-wrapper');
   if (!el) return;
@@ -404,6 +407,20 @@ export function renderRouteObservations(snapshot: ForecastSnapshot | null): void
     compMap.set(c.icao, c);
   }
 
+  // Fetch time label
+  let fetchLabel = '';
+  if (obs.fetch_time) {
+    try {
+      const d = new Date(obs.fetch_time);
+      fetchLabel = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + 'Z';
+    } catch { /* ignore */ }
+  }
+
+  // Refresh button (D-0 only, when callback provided)
+  const refreshBtn = (onRefresh && snapshot?.days_out === 0)
+    ? `<button class="obs-refresh-btn" title="Re-fetch METAR/TAF observations">Refresh</button>`
+    : '';
+
   // Summary header
   const worstBadge = obs.worst_metar_category
     ? ` \u2014 Worst: ${flightCatBadge(obs.worst_metar_category)}`
@@ -411,7 +428,8 @@ export function renderRouteObservations(snapshot: ForecastSnapshot | null): void
   const phenomena = obs.phenomena_along_route.length > 0
     ? ` \u2014 Phenomena: ${escapeHtml(obs.phenomena_along_route.join(', '))}`
     : '';
-  const summaryHtml = `<p class="obs-summary">${obs.airports_with_metar} METAR, ${obs.airports_with_taf} TAF within ${Math.round(obs.corridor_nm)}nm corridor${worstBadge}${phenomena}</p>`;
+  const fetchInfo = fetchLabel ? `<span class="obs-fetch-time">Fetched ${fetchLabel}</span>` : '';
+  const summaryHtml = `<p class="obs-summary">${obs.airports_with_metar} METAR, ${obs.airports_with_taf} TAF within ${Math.round(obs.corridor_nm)}nm corridor${worstBadge}${phenomena} ${fetchInfo}${refreshBtn}</p>`;
 
   // Conflict banner
   const conflictHtml = obs.has_conflicts
@@ -470,16 +488,33 @@ export function renderRouteObservations(snapshot: ForecastSnapshot | null): void
     </div>
   `;
 
-  // Wire (i) button via event delegation
+  // Wire click handlers via event delegation
   el.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest('.obs-info-btn') as HTMLElement | null;
-    if (!btn) return;
-    const icao = btn.dataset.icao;
-    if (!icao) return;
-    const apt = obs.airports.find((a) => a.icao === icao);
-    if (!apt) return;
-    const comp = compMap.get(icao);
-    showPopupContent(renderObsPopup(apt, comp));
+    const target = e.target as HTMLElement;
+
+    // (i) info button
+    const infoBtn = target.closest('.obs-info-btn') as HTMLElement | null;
+    if (infoBtn) {
+      const icao = infoBtn.dataset.icao;
+      if (!icao) return;
+      const apt = obs.airports.find((a) => a.icao === icao);
+      if (!apt) return;
+      const comp = compMap.get(icao);
+      showPopupContent(renderObsPopup(apt, comp));
+      return;
+    }
+
+    // Refresh button
+    const refreshBtn = target.closest('.obs-refresh-btn') as HTMLButtonElement | null;
+    if (refreshBtn && onRefresh) {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Refreshing...';
+      onRefresh().finally(() => {
+        // Re-render will replace the button, but just in case:
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = 'Refresh';
+      });
+    }
   });
 }
 
