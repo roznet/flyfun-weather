@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timezone
 
 from weatherbrief.models.analysis import RouteConfig, WaypointForecast
+from weatherbrief.models.airport_conditions import RunwayEnd
 from weatherbrief.models.observations import (
     AirportObservation,
     ObservationComparison,
@@ -60,6 +61,105 @@ def _compute_route_distances(route: RouteConfig) -> list[float]:
         _, leg_nm = nav_a.haversine_distance(nav_b)
         distances.append(distances[-1] + leg_nm)
     return distances
+
+
+# Default wind advisory thresholds (matching airport_wind evaluator defaults)
+_XWIND_GREEN = 15
+_XWIND_RED = 25
+_GUST_GREEN = 25
+_GUST_RED = 35
+
+
+def _wind_advisory_status(
+    crosswind_kt: float | None,
+    gust_kt: float | None,
+) -> str:
+    """Determine wind advisory status: 'green', 'amber', or 'red'."""
+    status = "green"
+    if crosswind_kt is not None:
+        if crosswind_kt >= _XWIND_RED:
+            return "red"
+        if crosswind_kt >= _XWIND_GREEN:
+            status = "amber"
+    if gust_kt is not None:
+        if gust_kt >= _GUST_RED:
+            return "red"
+        if gust_kt >= _GUST_GREEN:
+            status = "amber"
+    return status
+
+
+def compute_wind_advisory(
+    wind_dir: int | float | None,
+    wind_speed_kt: int | float | None,
+    wind_gust_kt: int | float | None,
+    runway_ends: list[RunwayEnd],
+) -> tuple[str | None, str | None, float | None, float | None]:
+    """Compute wind advisory from wind and runway data.
+
+    Returns:
+        (advisory_status, best_runway_id, crosswind_kt, headwind_kt)
+        or (None, None, None, None) if data is insufficient.
+    """
+    if wind_dir is None or wind_speed_kt is None or not runway_ends:
+        return None, None, None, None
+
+    from weatherbrief.analysis.airport_conditions import compute_runway_winds
+
+    all_runways = compute_runway_winds(runway_ends, float(wind_speed_kt), float(wind_dir))
+    if not all_runways:
+        return None, None, None, None
+
+    best = min(all_runways, key=lambda r: (r.crosswind_kt, -r.headwind_kt))
+    advisory = _wind_advisory_status(best.crosswind_kt, wind_gust_kt)
+    return advisory, best.runway_id, best.crosswind_kt, best.headwind_kt
+
+
+def _applicable_taf_lines(
+    taf,  # WeatherReport
+    target_time: datetime,
+) -> list[int]:
+    """Return 0-based line indices within taf.raw_text that are applicable at target_time.
+
+    Always includes line 0 (base conditions). For each applicable trend,
+    finds matching line(s) by validity period string. PROB lines preceding
+    a matched TEMPO line are also included.
+    """
+    from euro_aip.briefing.weather.analysis import WeatherAnalyzer
+
+    raw = taf.raw_text
+    if not raw:
+        return []
+
+    lines = raw.splitlines()
+    if not lines:
+        return []
+
+    result = {0}  # base conditions always applicable
+
+    applicable = WeatherAnalyzer.applicable_trends(taf, target_time)
+
+    for trend in applicable:
+        vs = trend.validity_start
+        ve = trend.validity_end
+        if vs is None:
+            continue
+        # Build validity token like "2409/2411"
+        if ve is not None:
+            token = f"{vs.day:02d}{vs.hour:02d}/{ve.day:02d}{ve.hour:02d}"
+        else:
+            # FM group: "FM2409" style
+            token = f"FM{vs.day:02d}{vs.hour:02d}"
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if token in stripped:
+                result.add(i)
+                # Include preceding PROB line if present
+                if i > 0 and lines[i - 1].strip().startswith("PROB"):
+                    result.add(i - 1)
+
+    return sorted(result)
 
 
 def run_route_weather(
@@ -138,15 +238,61 @@ def run_route_weather(
             obs.has_taf = True
             obs.taf_raw = taf.raw_text
             applicable = WeatherAnalyzer.find_applicable_taf(taf, target_time)
-            if applicable is not None and applicable.flight_category is not None:
-                obs.taf_flight_category_at_eta = applicable.flight_category.value
-                obs.taf_trend_type = applicable.trend_type
-                taf_categories.append(applicable.flight_category.value)
+            if applicable is not None:
+                if applicable.flight_category is not None:
+                    obs.taf_flight_category_at_eta = applicable.flight_category.value
+                    obs.taf_trend_type = applicable.trend_type
+                    taf_categories.append(applicable.flight_category.value)
+                obs.taf_wind_dir = applicable.wind_direction
+                obs.taf_wind_speed_kt = applicable.wind_speed
+                obs.taf_wind_gust_kt = applicable.wind_gust
+                obs.taf_applicable_text = applicable.raw_text
+
+            # Build list of applicable TAF line indices for highlighting
+            obs.taf_applicable_lines = _applicable_taf_lines(
+                taf, target_time,
+            )
 
         airports.append(obs)
 
     # De-duplicate phenomena
     unique_phenomena = sorted(set(all_phenomena))
+
+    # Compute runway-relative wind advisories for METAR and TAF
+    try:
+        from weatherbrief.airports import get_runway_ends as _get_runway_ends
+
+        obs_icaos = list({a.icao for a in airports})
+        runway_data = _get_runway_ends(obs_icaos, airports_db_path)
+
+        for obs in airports:
+            rwy_ends = runway_data.get(obs.icao, [])
+            if not rwy_ends:
+                continue
+
+            # METAR wind advisory
+            adv, rwy_id, xw, hw = compute_wind_advisory(
+                obs.metar_wind_dir, obs.metar_wind_speed_kt,
+                obs.metar_wind_gust_kt, rwy_ends,
+            )
+            if adv is not None:
+                obs.metar_wind_advisory = adv
+                obs.metar_best_runway_id = rwy_id
+                obs.metar_crosswind_kt = xw
+                obs.metar_headwind_kt = hw
+
+            # TAF wind advisory
+            adv, rwy_id, xw, hw = compute_wind_advisory(
+                obs.taf_wind_dir, obs.taf_wind_speed_kt,
+                obs.taf_wind_gust_kt, rwy_ends,
+            )
+            if adv is not None:
+                obs.taf_wind_advisory = adv
+                obs.taf_best_runway_id = rwy_id
+                obs.taf_crosswind_kt = xw
+                obs.taf_headwind_kt = hw
+    except Exception:
+        logger.warning("Failed to compute observation wind advisories", exc_info=True)
 
     return RouteObservations(
         corridor_nm=corridor_nm,
@@ -188,6 +334,7 @@ def run_observation_comparison(
     snapshot_forecasts: list[WaypointForecast],
     target_time: datetime,
     route: RouteConfig,
+    runway_data: dict[str, list[RunwayEnd]] | None = None,
 ) -> RouteObservations:
     """Compare METAR observations against model predictions at nearest waypoints.
 
@@ -244,6 +391,30 @@ def run_observation_comparison(
         if obs.metar_wind_speed_kt is not None and hourly.wind_speed_10m_kt is not None:
             wind_delta = float(obs.metar_wind_speed_kt) - hourly.wind_speed_10m_kt
 
+        # Model wind advisory
+        model_wind_dir = hourly.wind_direction_10m_deg
+        model_wind_speed = hourly.wind_speed_10m_kt
+        model_wind_gust = getattr(hourly, "wind_gusts_10m_kt", None)
+        model_adv = None
+        model_rwy_id = None
+        model_xw = None
+        rwy_ends = (runway_data or {}).get(obs.icao, [])
+        if rwy_ends:
+            model_adv, model_rwy_id, model_xw, _ = compute_wind_advisory(
+                model_wind_dir, model_wind_speed, model_wind_gust, rwy_ends,
+            )
+
+        # Wind advisory match (METAR vs model)
+        wind_adv_match = None
+        metar_adv = obs.metar_wind_advisory
+        if metar_adv is not None and model_adv is not None:
+            if metar_adv == model_adv:
+                wind_adv_match = "CONFIRMING"
+            else:
+                _ADV_ORDER = {"green": 0, "amber": 1, "red": 2}
+                diff = abs(_ADV_ORDER.get(metar_adv, 0) - _ADV_ORDER.get(model_adv, 0))
+                wind_adv_match = "SIGNIFICANT" if diff == 1 else "CONFLICTING"
+
         detail_parts = []
         if obs_cat and m_cat and obs_cat != m_cat:
             detail_parts.append(f"METAR {obs_cat} vs model {m_cat}")
@@ -259,6 +430,13 @@ def run_observation_comparison(
             category_match=match,
             visibility_delta_m=vis_delta,
             wind_speed_delta_kt=wind_delta,
+            model_wind_dir=model_wind_dir,
+            model_wind_speed_kt=model_wind_speed,
+            model_wind_gust_kt=model_wind_gust,
+            model_wind_advisory=model_adv,
+            model_best_runway_id=model_rwy_id,
+            model_crosswind_kt=model_xw,
+            wind_advisory_match=wind_adv_match,
             detail="; ".join(detail_parts),
         )
         comparisons.append(comp)

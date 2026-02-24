@@ -30,6 +30,19 @@ class AirportObservation(BaseModel):
     taf_raw: str | None = None
     taf_flight_category_at_eta: str | None = None
     taf_trend_type: str | None = None
+    taf_wind_dir: int | None = None
+    taf_wind_speed_kt: int | None = None
+    taf_wind_gust_kt: int | None = None
+    taf_applicable_text: str | None = None
+    taf_applicable_lines: list[int] = Field(default_factory=list)
+    metar_wind_advisory: str | None = None
+    metar_best_runway_id: str | None = None
+    metar_crosswind_kt: float | None = None
+    metar_headwind_kt: float | None = None
+    taf_wind_advisory: str | None = None
+    taf_best_runway_id: str | None = None
+    taf_crosswind_kt: float | None = None
+    taf_headwind_kt: float | None = None
     has_metar: bool = False
     has_taf: bool = False
 
@@ -44,6 +57,13 @@ class ObservationComparison(BaseModel):
     ceiling_delta_ft: int | None = None
     visibility_delta_m: float | None = None
     wind_speed_delta_kt: float | None = None
+    model_wind_dir: float | None = None
+    model_wind_speed_kt: float | None = None
+    model_wind_gust_kt: float | None = None
+    model_wind_advisory: str | None = None
+    model_best_runway_id: str | None = None
+    model_crosswind_kt: float | None = None
+    wind_advisory_match: str | None = None
     detail: str = ""
 
 

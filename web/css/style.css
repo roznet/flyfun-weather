@@ -2075,17 +2075,75 @@ label {
   text-align: left;
 }
 
-.obs-metar-cell {
-  text-align: left;
-  max-width: 30em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.obs-group-header {
+  text-align: center;
+  border-bottom: 2px solid var(--border);
+  background: var(--surface);
+  font-size: 0.8rem;
 }
 
-.obs-metar-raw {
+.obs-group-start {
+  border-left: 2px solid var(--border);
+}
+
+.obs-table td {
+  text-align: center;
+}
+
+.obs-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  line-height: 1;
+}
+
+.obs-info-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.obs-popup-metar,
+.obs-popup-taf {
+  display: block;
   font-family: monospace;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.75rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.obs-popup-taf mark {
+  background: var(--amber-bg);
+  color: var(--text);
+  font-weight: 700;
+  padding: 0.1rem 0.15rem;
+  border-radius: 2px;
+}
+
+.obs-wind-summary {
+  font-family: monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.75rem;
+  margin: 0.25rem 0 0.5rem;
 }
 
 .obs-conflict-row {

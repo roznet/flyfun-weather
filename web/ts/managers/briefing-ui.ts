@@ -34,6 +34,7 @@ import {
   riskCssClass,
   variableToMetricId,
 } from '../helpers/metrics-helper';
+import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
 import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, allModelKeys, buildWindyUrl } from '../utils';
 
@@ -300,6 +301,90 @@ function matchIcon(match: string): string {
   }
 }
 
+function windAdvisoryBadge(status: string | null, tooltip?: string): string {
+  if (!status) return '\u2014';
+  const cls = status === 'green' ? 'badge-green'
+    : status === 'amber' ? 'badge-amber'
+    : status === 'red' ? 'badge-red'
+    : 'badge-muted';
+  const label = status === 'green' ? 'G'
+    : status === 'amber' ? 'A'
+    : status === 'red' ? 'R'
+    : '?';
+  const titleAttr = tooltip ? ` title="${escapeHtml(tooltip)}"` : '';
+  return `<span class="badge ${cls}"${titleAttr}>${label}</span>`;
+}
+
+function windTooltip(rwyId: string | null, crosswind: number | null): string {
+  if (!rwyId || crosswind == null) return '';
+  return `RW${rwyId} xwind ${Math.round(crosswind)}kt`;
+}
+
+function formatWindStr(dir: number | null, speed: number | null, gust: number | null): string {
+  if (dir == null || speed == null) return '';
+  const d = Math.round(dir / 10) * 10;
+  const g = gust != null ? `G${Math.round(gust)}` : '';
+  return `${String(d).padStart(3, '0')}@${Math.round(speed)}${g}`;
+}
+
+function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | undefined): string {
+  // METAR raw
+  const metarBlock = apt.metar_raw
+    ? `<h4>METAR</h4><code class="obs-popup-metar">${escapeHtml(apt.metar_raw)}</code>`
+    : '<h4>METAR</h4><p class="muted">Not available</p>';
+
+  // TAF raw with applicable lines highlighted
+  let tafBlock: string;
+  if (apt.taf_raw) {
+    const lines = apt.taf_raw.split('\n');
+    const applicable = new Set(apt.taf_applicable_lines ?? []);
+    const tafHtml = lines.map((line, i) => {
+      const escaped = escapeHtml(line);
+      return applicable.has(i) ? `<mark>${escaped}</mark>` : escaped;
+    }).join('\n');
+    tafBlock = `<h4>TAF</h4><code class="obs-popup-taf">${tafHtml}</code>`;
+  } else {
+    tafBlock = '<h4>TAF</h4><p class="muted">Not available</p>';
+  }
+
+  // Wind summary
+  const windLines: string[] = [];
+
+  const metarWind = formatWindStr(apt.metar_wind_dir, apt.metar_wind_speed_kt, apt.metar_wind_gust_kt);
+  if (metarWind) {
+    const rwy = apt.metar_best_runway_id ? ` RW${apt.metar_best_runway_id}` : '';
+    const xw = apt.metar_crosswind_kt != null ? ` xwind ${Math.round(apt.metar_crosswind_kt)}kt` : '';
+    windLines.push(`METAR: ${metarWind}${rwy}${xw}`);
+  }
+
+  const tafWind = formatWindStr(apt.taf_wind_dir, apt.taf_wind_speed_kt, apt.taf_wind_gust_kt);
+  if (tafWind) {
+    const rwy = apt.taf_best_runway_id ? ` RW${apt.taf_best_runway_id}` : '';
+    const xw = apt.taf_crosswind_kt != null ? ` xwind ${Math.round(apt.taf_crosswind_kt)}kt` : '';
+    windLines.push(`TAF:   ${tafWind}${rwy}${xw}`);
+  }
+
+  if (comp) {
+    const modelWind = formatWindStr(comp.model_wind_dir, comp.model_wind_speed_kt, comp.model_wind_gust_kt);
+    if (modelWind) {
+      const rwy = comp.model_best_runway_id ? ` RW${comp.model_best_runway_id}` : '';
+      const xw = comp.model_crosswind_kt != null ? ` xwind ${Math.round(comp.model_crosswind_kt)}kt` : '';
+      windLines.push(`Model: ${modelWind}${rwy}${xw}`);
+    }
+  }
+
+  const windBlock = windLines.length > 0
+    ? `<h4>Wind Summary</h4><pre class="obs-wind-summary">${windLines.join('\n')}</pre>`
+    : '';
+
+  return `
+    <div class="popup-header"><h3>${escapeHtml(apt.icao)}${apt.name ? ' \u2014 ' + escapeHtml(apt.name) : ''}</h3></div>
+    ${metarBlock}
+    ${tafBlock}
+    ${windBlock}
+  `;
+}
+
 export function renderRouteObservations(snapshot: ForecastSnapshot | null): void {
   const el = $('observations-section');
   const wrapper = $('observations-wrapper');
@@ -341,19 +426,23 @@ export function renderRouteObservations(snapshot: ForecastSnapshot | null): void
       const isConflict = comp?.category_match === 'CONFLICTING';
       const rowClass = isConflict ? ' class="obs-conflict-row"' : '';
 
-      const metarRaw = apt.metar_raw
-        ? `<span class="obs-metar-raw">${escapeHtml(apt.metar_raw)}</span>`
-        : '\u2014';
+      // Wind tooltips
+      const mTip = windTooltip(apt.metar_best_runway_id, apt.metar_crosswind_kt);
+      const tTip = windTooltip(apt.taf_best_runway_id, apt.taf_crosswind_kt);
+      const mdlTip = windTooltip(comp?.model_best_runway_id ?? null, comp?.model_crosswind_kt ?? null);
 
       return `
         <tr${rowClass}>
-          <td class="obs-icao">${escapeHtml(apt.icao)}</td>
+          <td class="obs-icao">${escapeHtml(apt.icao)} <button class="obs-info-btn" data-icao="${escapeHtml(apt.icao)}" title="Show METAR/TAF details" aria-label="Info">i</button></td>
           <td>${Math.round(apt.distance_from_route_nm)}nm</td>
-          <td>${flightCatBadge(apt.metar_flight_category)}</td>
+          <td class="obs-group-start">${flightCatBadge(apt.metar_flight_category)}</td>
           <td>${flightCatBadge(apt.taf_flight_category_at_eta)}</td>
           <td>${flightCatBadge(comp?.model_category ?? null)}</td>
           <td>${comp ? matchIcon(comp.category_match) : '\u2014'}</td>
-          <td class="obs-metar-cell">${metarRaw}</td>
+          <td class="obs-group-start">${windAdvisoryBadge(apt.metar_wind_advisory, mTip)}</td>
+          <td>${windAdvisoryBadge(apt.taf_wind_advisory, tTip)}</td>
+          <td>${windAdvisoryBadge(comp?.model_wind_advisory ?? null, mdlTip)}</td>
+          <td>${comp?.wind_advisory_match ? matchIcon(comp.wind_advisory_match) : '\u2014'}</td>
         </tr>
       `;
     })
@@ -366,19 +455,32 @@ export function renderRouteObservations(snapshot: ForecastSnapshot | null): void
       <table class="band-table obs-table">
         <thead>
           <tr>
-            <th style="text-align:left;">ICAO</th>
-            <th>Dist</th>
-            <th>METAR</th>
-            <th>TAF</th>
-            <th>Model</th>
-            <th>Match</th>
-            <th style="text-align:left;">METAR Raw</th>
+            <th rowspan="2" style="text-align:left;">ICAO</th>
+            <th rowspan="2">Dist</th>
+            <th colspan="4" class="obs-group-header">Condition</th>
+            <th colspan="4" class="obs-group-header">Wind</th>
+          </tr>
+          <tr>
+            <th class="obs-group-start">METAR</th><th>TAF</th><th>Model</th><th></th>
+            <th class="obs-group-start">METAR</th><th>TAF</th><th>Model</th><th></th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
   `;
+
+  // Wire (i) button via event delegation
+  el.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('.obs-info-btn') as HTMLElement | null;
+    if (!btn) return;
+    const icao = btn.dataset.icao;
+    if (!icao) return;
+    const apt = obs.airports.find((a) => a.icao === icao);
+    if (!apt) return;
+    const comp = compMap.get(icao);
+    showPopupContent(renderObsPopup(apt, comp));
+  });
 }
 
 // --- Synopsis (structured digest) ---

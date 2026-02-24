@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 import requests
 
@@ -67,6 +68,7 @@ def enrich_forecasts(
     target_hour: int,
     *,
     data_dir: Path,
+    progress_callback: Callable[[str, str | None], None] | None = None,
 ) -> dict[str, int]:
     """Enrich cross-section forecasts with cloud water from GRIB2 sources.
 
@@ -88,6 +90,8 @@ def enrich_forecasts(
     """
     grib_init_times: dict[str, int] = {}
 
+    if progress_callback is not None:
+        progress_callback("grib_enrichment", "GFS")
     gfs_ts = _enrich_gfs(
         cross_sections, all_forecasts, route_points,
         target_date, target_hour, data_dir=data_dir,
@@ -95,6 +99,8 @@ def enrich_forecasts(
     if gfs_ts is not None:
         grib_init_times["gfs"] = gfs_ts
 
+    if progress_callback is not None:
+        progress_callback("grib_enrichment", "ICON-EU")
     icon_ts = _enrich_icon_eu(
         cross_sections, all_forecasts, route_points,
         target_date, target_hour, data_dir=data_dir,
