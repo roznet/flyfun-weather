@@ -230,6 +230,11 @@ label {
   font-style: italic;
 }
 
+.freshness-refreshing .refresh-prefix {
+  color: var(--text);
+  font-style: normal;
+}
+
 .dots-spinner::after {
   content: '...';
   display: inline-block;
@@ -1704,8 +1709,20 @@ label {
   border-radius: 4px;
   pointer-events: none;
   z-index: 10;
-  max-width: 200px;
-  white-space: nowrap;
+  max-width: 280px;
+  white-space: normal;
+}
+
+.viz-tooltip .tt-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  margin-top: 3px;
+  padding-top: 3px;
+}
+
+.viz-tooltip .tt-section:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
 }
 
 /* --- Layer info button --- */
