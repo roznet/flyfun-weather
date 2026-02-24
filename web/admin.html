@@ -52,6 +52,46 @@
       color: var(--text-muted);
       margin-top: 0.15rem;
     }
+    .btn-danger {
+      background: #dc3545;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+    }
+    .btn-danger:hover { background: #c82333; }
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .token-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .token-modal {
+      background: var(--surface, #fff);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem;
+      max-width: 560px;
+      width: 90%;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .token-display {
+      background: var(--bg, #f8f9fa);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.75rem;
+      word-break: break-all;
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+    }
   </style>
 </head>
 <body>
@@ -77,9 +117,36 @@
       <div id="pending-list"></div>
     </div>
 
+    <!-- API Agents -->
+    <div id="agents-section" class="section">
+      <div class="section-header">
+        <h3>API Agents</h3>
+        <button class="btn btn-primary" id="btn-create-agent" style="font-size:0.8rem;">Create Agent</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Status</th>
+              <th style="text-align:center;">Tokens (active/total)</th>
+              <th>Created</th>
+              <th>Last Used</th>
+              <th style="text-align:center;">Briefings (Mo)</th>
+              <th style="text-align:center;">LLM Tokens (Mo)</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="agents-tbody">
+            <tr><td colspan="8" class="muted" style="text-align:center;padding:1rem;">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- All users -->
     <div class="section">
-      <h3>All Users</h3>
+      <h3>Users</h3>
       <div style="overflow-x:auto;">
         <table class="admin-table">
           <thead>
