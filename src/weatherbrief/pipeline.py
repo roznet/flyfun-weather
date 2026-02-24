@@ -223,6 +223,7 @@ def execute_briefing(
                 target_time=target_dt,
                 route=route,
                 runway_data=obs_runway_data,
+                route_analyses=analysis_result.route_analyses,
             )
             result_usage_metar = True
             result_usage_metar_airports = route_observations.airports_with_metar

@@ -217,7 +217,7 @@ async function init(): Promise<void> {
     ) {
       ui.renderAssessment(state.currentPack);
       renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories());
-      ui.renderRouteObservations(state.snapshot);
+      ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest);
       ui.renderGramet(state.flight, state.currentPack);
       renderSliderSections(state);
@@ -400,7 +400,7 @@ async function init(): Promise<void> {
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack);
     renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories());
-    ui.renderRouteObservations(s.snapshot);
+    ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest);
     ui.renderGramet(s.flight, s.currentPack);
     renderSliderSections(s);

@@ -335,6 +335,7 @@ def run_observation_comparison(
     target_time: datetime,
     route: RouteConfig,
     runway_data: dict[str, list[RunwayEnd]] | None = None,
+    route_analyses: list | None = None,
 ) -> RouteObservations:
     """Compare METAR observations against model predictions at nearest waypoints.
 
@@ -345,13 +346,26 @@ def run_observation_comparison(
         snapshot_forecasts: All WaypointForecast from the fetch stage.
         target_time: Flight target time.
         route: Flight route configuration.
+        runway_data: Optional runway data for wind advisory comparison.
+        route_analyses: Optional RoutePointAnalysis list (provides sounding ceiling).
 
     Returns:
         The same RouteObservations, enriched with comparisons.
     """
-    from weatherbrief.analysis.airport_conditions import classify_flight_category
+    from weatherbrief.analysis.airport_conditions import (
+        reconcile_ceiling,
+        classify_flight_category,
+    )
 
     _M_PER_SM = 1609.34
+
+    # Build lookup: waypoint_icao -> RoutePointAnalysis (for sounding ceiling)
+    rpa_by_icao: dict = {}
+    if route_analyses:
+        for rpa in route_analyses:
+            icao = rpa.waypoint_icao if hasattr(rpa, "waypoint_icao") else rpa.get("waypoint_icao")
+            if icao:
+                rpa_by_icao[icao] = rpa
 
     comparisons: list[ObservationComparison] = []
     has_conflicts = False
@@ -374,9 +388,16 @@ def run_observation_comparison(
         if hourly is None:
             continue
 
-        # Derive model flight category from visibility (ceiling not available from HourlyForecast)
+        # Derive ceiling from sounding + NWP diagnostics (same as advisory system)
+        ceiling_ft = None
+        rpa = rpa_by_icao.get(wp_icao)
+        if rpa is not None:
+            model_name = wf.model.value if hasattr(wf.model, "value") else str(wf.model)
+            sounding = rpa.sounding.get(model_name) if hasattr(rpa, "sounding") else None
+            ceiling_ft = reconcile_ceiling(sounding, hourly)
+
         vis_sm = round(hourly.visibility_m / _M_PER_SM, 1) if hourly.visibility_m is not None else None
-        model_fc = classify_flight_category(ceiling_ft=None, visibility_sm=vis_sm)
+        model_fc = classify_flight_category(ceiling_ft=ceiling_ft, visibility_sm=vis_sm)
 
         obs_cat = obs.metar_flight_category.upper()
         m_cat = model_fc.value.upper()

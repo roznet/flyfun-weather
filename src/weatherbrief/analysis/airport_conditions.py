@@ -113,7 +113,7 @@ def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:
     return min(ceilings) if ceilings else None
 
 
-def _reconcile_ceiling(
+def reconcile_ceiling(
     sounding: SoundingAnalysis | None,
     hourly: HourlyForecast | None,
 ) -> float | None:
@@ -188,7 +188,7 @@ def _compute_for_airport(
 
         # Ceiling: reconcile sounding-derived and NWP diagnostics
         sounding = rpa.sounding.get(model)
-        ceiling_ft = _reconcile_ceiling(sounding, hourly)
+        ceiling_ft = reconcile_ceiling(sounding, hourly)
 
         visibility_sm: float | None = None
         wind_speed_kt: float | None = None

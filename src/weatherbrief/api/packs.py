@@ -541,6 +541,105 @@ def get_snapshot(
     return FileResponse(snapshot_path, media_type="application/json")
 
 
+@router.post("/{timestamp}/observations/refresh")
+def refresh_observations(
+    flight_id: str,
+    timestamp: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Re-fetch METAR/TAF observations and update snapshot without full pipeline.
+
+    Only available for D-0 briefings where observations are meaningful.
+    Re-runs route_weather + observation_comparison using existing forecast data,
+    then patches the snapshot on disk.
+    """
+    flight = _load_owned_flight(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+
+    snapshot_path = pack_dir / "snapshot.json"
+    if not snapshot_path.exists():
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    snapshot_data = json_mod.loads(snapshot_path.read_text())
+    days_out = snapshot_data.get("days_out")
+    if days_out is not None and days_out != 0:
+        raise HTTPException(status_code=400, detail="METAR/TAF refresh only available for D-0 briefings")
+
+    db_path = getattr(request.app.state, "db_path", "")
+    if not db_path:
+        raise HTTPException(status_code=503, detail="Airport database not configured")
+
+    try:
+        from weatherbrief.models import ForecastSnapshot, RouteConfig, WaypointForecast
+        from weatherbrief.models.observations import RouteObservations
+        from weatherbrief.tasks.route_weather import (
+            run_observation_comparison,
+            run_route_weather,
+        )
+
+        route = RouteConfig.model_validate(snapshot_data["route"])
+        target_dt = _parse_target_time(snapshot_data)
+
+        # Options for corridor width
+        corridor_nm = 30.0
+        if snapshot_data.get("route_observations"):
+            corridor_nm = snapshot_data["route_observations"].get("corridor_nm", 30.0)
+
+        # Fetch fresh METAR/TAF
+        new_obs = run_route_weather(
+            route=route,
+            target_time=target_dt,
+            corridor_nm=corridor_nm,
+            airports_db_path=db_path,
+        )
+
+        # Run observation-vs-model comparison using stored forecasts
+        forecasts = [
+            WaypointForecast.model_validate(f)
+            for f in snapshot_data.get("forecasts", [])
+        ]
+
+        # Load route analyses for sounding ceiling data
+        route_analyses = None
+        ra_path = pack_dir / "route_analyses.json"
+        if ra_path.exists():
+            from weatherbrief.tasks.artifacts import load_route_analyses
+            ra_manifest = load_route_analyses(pack_dir)
+            route_analyses = ra_manifest.analyses
+
+        # Runway data for wind advisory comparison
+        obs_runway_data = None
+        try:
+            from weatherbrief.airports import get_runway_ends
+            obs_icaos = list({a.icao for a in new_obs.airports})
+            obs_runway_data = get_runway_ends(obs_icaos, db_path)
+        except Exception:
+            pass
+
+        new_obs = run_observation_comparison(
+            observations=new_obs,
+            snapshot_forecasts=forecasts,
+            target_time=target_dt,
+            route=route,
+            runway_data=obs_runway_data,
+            route_analyses=route_analyses,
+        )
+
+        # Patch snapshot on disk
+        snapshot_data["route_observations"] = new_obs.model_dump(mode="json")
+        snapshot_path.write_text(json_mod.dumps(snapshot_data, indent=2))
+
+        return new_obs.model_dump(mode="json")
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Observation refresh failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Observation refresh failed")
+
+
 @router.get("/{timestamp}/gramet")
 def get_gramet(
     flight_id: str,
