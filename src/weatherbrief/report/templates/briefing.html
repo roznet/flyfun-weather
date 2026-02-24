@@ -163,6 +163,7 @@
       <tr>
         <th style="text-align:left;">ICAO</th>
         <th>Dist</th>
+        <th>ETA</th>
         <th>METAR Cat</th>
         <th>TAF Cat</th>
         <th>Model Cat</th>
@@ -182,6 +183,7 @@
       <tr {{ row_class }}>
         <td style="text-align:left; font-family:monospace;">{{ apt.icao }}</td>
         <td>{{ apt.distance_from_route_nm|round(0)|int }}nm</td>
+        <td>{% if apt.eta_hour_offset is not none %}+{{ apt.eta_hour_offset }}h{% else %}&mdash;{% endif %}</td>
         <td>
           {% if apt.metar_flight_category %}
           <span class="flight-cat cat-{{ apt.metar_flight_category|lower }}">{{ apt.metar_flight_category }}</span>

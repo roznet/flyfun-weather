@@ -453,6 +453,7 @@ export function renderRouteObservations(
         <tr${rowClass}>
           <td class="obs-icao">${escapeHtml(apt.icao)} <button class="obs-info-btn" data-icao="${escapeHtml(apt.icao)}" title="Show METAR/TAF details" aria-label="Info">i</button></td>
           <td>${Math.round(apt.distance_from_route_nm)}nm</td>
+          <td>${apt.eta_hour_offset != null ? `+${apt.eta_hour_offset}h` : '\u2014'}</td>
           <td class="obs-group-start">${flightCatBadge(apt.metar_flight_category)}</td>
           <td>${flightCatBadge(apt.taf_flight_category_at_eta)}</td>
           <td>${flightCatBadge(comp?.model_category ?? null)}</td>
@@ -475,6 +476,7 @@ export function renderRouteObservations(
           <tr>
             <th rowspan="2" style="text-align:left;">ICAO</th>
             <th rowspan="2">Dist</th>
+            <th rowspan="2">ETA</th>
             <th colspan="4" class="obs-group-header">Condition</th>
             <th colspan="4" class="obs-group-header">Wind</th>
           </tr>

@@ -289,6 +289,7 @@ export interface AirportObservation {
   taf_headwind_kt: number | null;
   has_metar: boolean;
   has_taf: boolean;
+  eta_hour_offset: number | null;
 }
 
 export interface ObservationComparison {
