@@ -75,8 +75,8 @@ function estimateTowerTop(p: VizPoint, baseFt: number, thermodynamicElFt: number
   const alt = p.altitudeLines;
   const risk = p.convectiveRisk;
 
-  // For marginal/low risk: shallow Cu tops out near or above freezing level
-  if (risk === 'marginal' || risk === 'low') {
+  // For low risk: shallow Cu tops out near or above freezing level
+  if (risk === 'low') {
     if (alt.freezingLevelFt != null) {
       // Shallow convection: use freezing level + 2000ft buffer
       return Math.max(thermodynamicElFt, alt.freezingLevelFt + 2000);
@@ -105,7 +105,7 @@ export const convectiveBgLayer: CrossSectionLayer = {
 
     for (let i = 0; i < data.points.length; i++) {
       const p = data.points[i];
-      if (p.convectiveRisk === 'none') continue;
+      if (p.convectiveRisk === 'none' || p.convectiveRisk === 'marginal') continue;
 
       // Column x-bounds (midpoint between neighbors)
       const x = transform.distanceToX(p.distanceNm);
