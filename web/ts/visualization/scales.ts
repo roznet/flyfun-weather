@@ -47,10 +47,22 @@ export function coverageOpacity(coverage: string): number {
   return COVERAGE_OPACITY[coverage] ?? 0.3;
 }
 
+/** Coverage multiplier: SCT layers render more transparent than BKN/OVC. */
+const COVERAGE_FACTOR: Record<string, number> = {
+  sct: 0.55,
+  bkn: 0.85,
+  ovc: 1.0,
+};
+
+function coverageFactor(coverage: string): number {
+  return COVERAGE_FACTOR[coverage] ?? 0.7;
+}
+
 /**
- * Continuous cloud fill from dewpoint depression (0–3°C).
+ * Continuous cloud fill from dewpoint depression (0–3°C) modulated by coverage.
  * DD ≈ 0 → dense gray, high opacity.
  * DD ≈ 3 → light gray, lower opacity.
+ * SCT layers are rendered more transparently than BKN/OVC at the same DD.
  * Falls back to coverage-based gray fill when DD unavailable.
  */
 export function cloudFillFromDD(dd: number | undefined, coverage: string): string {
@@ -62,7 +74,7 @@ export function cloudFillFromDD(dd: number | undefined, coverage: string): strin
   const r = Math.round(140 + 60 * t);
   const g = Math.round(145 + 60 * t);
   const b = Math.round(155 + 55 * t);
-  const a = 0.88 - 0.55 * t;
+  const a = (0.88 - 0.55 * t) * coverageFactor(coverage);
   return `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
 }
 
