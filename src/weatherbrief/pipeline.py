@@ -55,6 +55,10 @@ class BriefingOptions:
     icing_severity_enhance: bool = True  # enable RH/PW icing severity upgrades
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     metar_taf_corridor_nm: float = 30  # corridor width for METAR/TAF search
+    # Advisory preferences (from user profile)
+    advisory_aggregation: str | None = None  # "worst" or "majority"
+    advisory_enabled: dict[str, bool] | None = None  # {advisory_id: enabled}
+    advisory_params: dict[str, dict[str, float]] | None = None  # {advisory_id: {param: value}}
 
 
 @dataclass
@@ -161,6 +165,16 @@ def execute_briefing(
     route_advisories_manifest = None
     if analysis_result.route_analyses_manifest and analysis_result.route_analyses:
         total_distance = fetch_result.route_points[-1].distance_from_origin_nm
+        # Build advisory preference args from options
+        adv_aggregation = None
+        if options.advisory_aggregation:
+            from weatherbrief.models import AdvisoryAggregation
+            adv_aggregation = AdvisoryAggregation(options.advisory_aggregation)
+
+        adv_enabled_ids = None
+        if options.advisory_enabled is not None:
+            adv_enabled_ids = {k for k, v in options.advisory_enabled.items() if v}
+
         advisory_result = run_advisories(
             rp_analyses=analysis_result.route_analyses,
             cross_sections=fetch_result.cross_sections,
@@ -170,6 +184,9 @@ def execute_briefing(
             total_distance_nm=total_distance,
             advisory_models=options.advisory_models,
             airports_db_path=options.airports_db_path,
+            enabled_ids=adv_enabled_ids,
+            user_params=options.advisory_params,
+            aggregation=adv_aggregation,
             pack_dir=pack_dir,
             progress_callback=progress_callback,
         )
