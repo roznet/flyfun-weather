@@ -92,6 +92,6 @@ SFIP (Simplified Forecast Icing Potential) algorithm design: fuzzy-logic members
 → Full doc: route-graph.md
 
 ### metar-taf-route-weather
-D-0 METAR/TAF integration: fetch real observations from airports along route corridor via euro_aip RouteWeatherService, compare against NWP model predictions (CONFIRMING/SIGNIFICANT/CONFLICTING), wind advisory computation with runway crosswind, TAF line highlighting, sounding ceiling for model category, observations refresh endpoint, surface in digest, HTML report, and web UI.
+D-0 METAR/TAF integration: fetch real observations from airports along route corridor via euro_aip RouteWeatherService, compare against NWP model predictions (CONFIRMING/SIGNIFICANT/CONFLICTING), wind advisory computation with runway crosswind, TAF line highlighting, sounding ceiling for model category, per-airport ETA interpolation from enroute distance, observations refresh endpoint, surface in digest, HTML report, and web UI.
 Key exports: `run_route_weather`, `run_observation_comparison`, `compute_wind_advisory`, `RouteObservations`, `AirportObservation`
 → Full doc: metar-taf-route-weather.md
