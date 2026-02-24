@@ -159,7 +159,7 @@ export function renderFreshnessBar(
     el.className = 'freshness-bar freshness-refreshing';
     const detailSuffix = refreshDetail ? ` (${refreshDetail})` : '';
     const label = refreshStage || 'Starting refresh';
-    el.innerHTML = `<span>Refreshing (may take a minute) · ${label}${detailSuffix}<span class="dots-spinner"></span></span>`;
+    el.innerHTML = `<span class="refresh-prefix">Refreshing (may take a minute)</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>`;
     return;
   }
 
