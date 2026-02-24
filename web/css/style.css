@@ -2047,6 +2047,51 @@ label {
   color: #fff;
 }
 
+/* --- Route Observations (METAR/TAF) --- */
+
+.obs-summary {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.obs-conflict-banner {
+  background: var(--amber, #b8860b);
+  color: #fff;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.obs-table th {
+  font-size: 0.75rem;
+}
+
+.obs-icao {
+  font-family: monospace;
+  font-weight: 600;
+  text-align: left;
+}
+
+.obs-metar-cell {
+  text-align: left;
+  max-width: 30em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.obs-metar-raw {
+  font-family: monospace;
+  font-size: 0.75rem;
+}
+
+.obs-conflict-row {
+  background: rgba(184, 134, 11, 0.12);
+}
+
 /* --- Help page --- */
 
 .help-section {
