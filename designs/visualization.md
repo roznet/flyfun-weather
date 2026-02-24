@@ -102,12 +102,24 @@ interface CoordTransform {
 ## Convective Tower Rendering
 
 The convective background layer (`convective-bg.ts`) is the most complex:
+- **Marginal risk skipped**: points with `convectiveRisk === 'marginal'` skip tower rendering entirely (marginal CAPE <100 J/kg produces misleading visual towers for noise-level instability)
 - **Tower columns**: drawn from LCL → estimated tower top for each route point with risk ≥ LOW
 - **Tower top estimation**: uses thermodynamic EL if available and reliable (>3000ft above LCL), else estimates from `max(freezingLevel, −10°C, −20°C)` altitude lines as fallbacks
 - **Anvil strip**: 500ft strip at tower top (darker shade)
 - **Hatching**: diagonal lines on HIGH/EXTREME risk
 - **CB labels**: "CB" text at tower top for HIGH+ risk
 - **Color gradient**: marginal (light green) → low (yellow) → moderate (orange) → high (red) → extreme (purple)
+
+## Shared Interaction Helpers (`interaction-utils.ts`)
+
+Common utilities extracted from cross-section and route-graph to avoid duplication:
+- `getCanvasX()` — mouse X relative to canvas element
+- `findNearestPointIndex()` — find closest route point by distance
+- `chooseDistanceTickInterval()` — smart axis tick spacing
+- `ensureTooltip()`, `positionTooltip()`, `hideTooltip()` — tooltip lifecycle
+- `findNearbyWaypoint()` — find waypoint within 1nm
+
+Both cross-section and route-graph interaction modules import from this shared utility.
 
 ## Interaction
 
@@ -205,6 +217,17 @@ The freshness bar (`renderFreshnessBar()` in `briefing-ui.ts`) shows data age an
 - **GRIB annotation:** When `pack.grib_init_times[model]` differs from `pack.model_init_times[model]`, displays `"GFS 12Z (GRIB 18Z)"` — indicates Open-Meteo data from one cycle, GRIB enrichment from another
 - **States:** current (muted), stale (amber), refreshing (animated dots spinner)
 - **Force refresh link:** shown for admins when data is stale
+
+## Route Graph
+
+A separate canvas-based chart rendered below the cross-section for scalar weather metrics along the route. See [route-graph.md](./route-graph.md) for full design.
+
+- **X-axis aligned** with cross-section (same `distanceToX` transform and margins)
+- **Dual Y-axes**: left and right metrics independently selectable
+- **7 metrics**: headwind, crosswind, temperature, precipitation, cloud cover, CAPE, freezing level
+- **Render types**: line (monotone cubic spline) and bar charts
+- **State**: `VizSettings` extended with `routeGraphVisible`, `routeGraphLeftMetric`, `routeGraphRightMetric`, persisted to localStorage
+- **Controls**: dropdown selectors below the graph, integrated into the controls panel
 
 ## Gotchas
 
