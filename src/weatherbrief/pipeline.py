@@ -208,11 +208,21 @@ def execute_briefing(
                 corridor_nm=options.metar_taf_corridor_nm,
                 airports_db_path=options.airports_db_path,
             )
+            # Collect runway data for wind advisory comparison
+            try:
+                from weatherbrief.airports import get_runway_ends
+
+                obs_icaos = [a.icao for a in route_observations.airports]
+                obs_runway_data = get_runway_ends(obs_icaos, options.airports_db_path)
+            except Exception:
+                obs_runway_data = None
+
             route_observations = run_observation_comparison(
                 observations=route_observations,
                 snapshot_forecasts=fetch_result.all_forecasts,
                 target_time=target_dt,
                 route=route,
+                runway_data=obs_runway_data,
             )
             result_usage_metar = True
             result_usage_metar_airports = route_observations.airports_with_metar

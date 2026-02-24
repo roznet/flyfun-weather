@@ -137,6 +137,7 @@ def run_fetch(
             grib_init_times = enrich_forecasts(
                 cross_sections, all_forecasts, route_points,
                 target_date, target_hour, data_dir=data_dir,
+                progress_callback=progress_callback,
             )
             grib_enriched = True
             logger.info("GRIB2 enrichment applied")

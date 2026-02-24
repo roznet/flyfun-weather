@@ -274,6 +274,19 @@ export interface AirportObservation {
   taf_raw: string | null;
   taf_flight_category_at_eta: string | null;
   taf_trend_type: string | null;
+  taf_wind_dir: number | null;
+  taf_wind_speed_kt: number | null;
+  taf_wind_gust_kt: number | null;
+  taf_applicable_text: string | null;
+  taf_applicable_lines: number[];
+  metar_wind_advisory: string | null;
+  metar_best_runway_id: string | null;
+  metar_crosswind_kt: number | null;
+  metar_headwind_kt: number | null;
+  taf_wind_advisory: string | null;
+  taf_best_runway_id: string | null;
+  taf_crosswind_kt: number | null;
+  taf_headwind_kt: number | null;
   has_metar: boolean;
   has_taf: boolean;
 }
@@ -286,6 +299,13 @@ export interface ObservationComparison {
   ceiling_delta_ft: number | null;
   visibility_delta_m: number | null;
   wind_speed_delta_kt: number | null;
+  model_wind_dir: number | null;
+  model_wind_speed_kt: number | null;
+  model_wind_gust_kt: number | null;
+  model_wind_advisory: string | null;
+  model_best_runway_id: string | null;
+  model_crosswind_kt: number | null;
+  wind_advisory_match: string | null;
   detail: string;
 }
 
