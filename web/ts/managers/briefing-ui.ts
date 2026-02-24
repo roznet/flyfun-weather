@@ -5,13 +5,16 @@
  */
 
 import type {
+  AirportObservation,
   AltitudeAdvisories,
   ConvectiveAssessment,
   DataStatus,
   FlightResponse,
   ForecastSnapshot,
+  ObservationComparison,
   PackMeta,
   RouteAnalysesManifest,
+  RouteObservations,
   RoutePointAnalysis,
   SfipZone,
   SoundingAnalysis,
@@ -273,6 +276,109 @@ export function renderAutoRefreshBar(
     const hourVal = selectedHour === defaultHour ? null : selectedHour;
     onUpdate(true, hourVal);
   });
+}
+
+// --- Route Observations (METAR/TAF) ---
+
+function flightCatBadge(cat: string | null): string {
+  if (!cat) return '\u2014';
+  const lower = cat.toLowerCase();
+  const cls = lower === 'vfr' ? 'flight-cat-vfr'
+    : lower === 'mvfr' ? 'flight-cat-mvfr'
+    : lower === 'ifr' ? 'flight-cat-ifr'
+    : lower === 'lifr' ? 'flight-cat-lifr'
+    : '';
+  return `<span class="flight-cat-badge ${cls}">${escapeHtml(cat.toUpperCase())}</span>`;
+}
+
+function matchIcon(match: string): string {
+  switch (match) {
+    case 'CONFIRMING': return '<span class="agree-good">&#10003;</span>';
+    case 'SIGNIFICANT': return '<span class="agree-moderate">&#9888;</span>';
+    case 'CONFLICTING': return '<span class="agree-poor">&#10007;</span>';
+    default: return '\u2014';
+  }
+}
+
+export function renderRouteObservations(snapshot: ForecastSnapshot | null): void {
+  const el = $('observations-section');
+  const wrapper = $('observations-wrapper');
+  if (!el) return;
+
+  const obs = snapshot?.route_observations;
+  if (!obs || obs.airports.length === 0) {
+    if (wrapper) wrapper.style.display = 'none';
+    return;
+  }
+
+  if (wrapper) wrapper.style.display = '';
+
+  // Build comparison lookup by ICAO
+  const compMap = new Map<string, ObservationComparison>();
+  for (const c of obs.comparisons) {
+    compMap.set(c.icao, c);
+  }
+
+  // Summary header
+  const worstBadge = obs.worst_metar_category
+    ? ` \u2014 Worst: ${flightCatBadge(obs.worst_metar_category)}`
+    : '';
+  const phenomena = obs.phenomena_along_route.length > 0
+    ? ` \u2014 Phenomena: ${escapeHtml(obs.phenomena_along_route.join(', '))}`
+    : '';
+  const summaryHtml = `<p class="obs-summary">${obs.airports_with_metar} METAR, ${obs.airports_with_taf} TAF within ${Math.round(obs.corridor_nm)}nm corridor${worstBadge}${phenomena}</p>`;
+
+  // Conflict banner
+  const conflictHtml = obs.has_conflicts
+    ? '<div class="obs-conflict-banner">Observation/model conflicts detected</div>'
+    : '';
+
+  // Table rows — only airports with METAR or TAF
+  const rows = obs.airports
+    .filter((apt) => apt.has_metar || apt.has_taf)
+    .map((apt) => {
+      const comp = compMap.get(apt.icao);
+      const isConflict = comp?.category_match === 'CONFLICTING';
+      const rowClass = isConflict ? ' class="obs-conflict-row"' : '';
+
+      const metarRaw = apt.metar_raw
+        ? `<span class="obs-metar-raw">${escapeHtml(apt.metar_raw)}</span>`
+        : '\u2014';
+
+      return `
+        <tr${rowClass}>
+          <td class="obs-icao">${escapeHtml(apt.icao)}</td>
+          <td>${Math.round(apt.distance_from_route_nm)}nm</td>
+          <td>${flightCatBadge(apt.metar_flight_category)}</td>
+          <td>${flightCatBadge(apt.taf_flight_category_at_eta)}</td>
+          <td>${flightCatBadge(comp?.model_category ?? null)}</td>
+          <td>${comp ? matchIcon(comp.category_match) : '\u2014'}</td>
+          <td class="obs-metar-cell">${metarRaw}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  el.innerHTML = `
+    ${summaryHtml}
+    ${conflictHtml}
+    <div class="table-scroll">
+      <table class="band-table obs-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">ICAO</th>
+            <th>Dist</th>
+            <th>METAR</th>
+            <th>TAF</th>
+            <th>Model</th>
+            <th>Match</th>
+            <th style="text-align:left;">METAR Raw</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 // --- Synopsis (structured digest) ---

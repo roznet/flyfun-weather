@@ -253,6 +253,56 @@ export interface WeatherDigest {
   watch_items: string;
 }
 
+export interface AirportObservation {
+  icao: string;
+  name: string | null;
+  distance_from_route_nm: number;
+  enroute_distance_nm: number | null;
+  nearest_waypoint_icao: string;
+  metar_raw: string | null;
+  metar_time: string | null;
+  metar_flight_category: string | null;
+  metar_ceiling_ft: number | null;
+  metar_visibility_m: number | null;
+  metar_wind_dir: number | null;
+  metar_wind_speed_kt: number | null;
+  metar_wind_gust_kt: number | null;
+  metar_weather: string[];
+  metar_temperature_c: number | null;
+  metar_dewpoint_c: number | null;
+  metar_qnh: number | null;
+  taf_raw: string | null;
+  taf_flight_category_at_eta: string | null;
+  taf_trend_type: string | null;
+  has_metar: boolean;
+  has_taf: boolean;
+}
+
+export interface ObservationComparison {
+  icao: string;
+  obs_category: string | null;
+  model_category: string | null;
+  category_match: string;
+  ceiling_delta_ft: number | null;
+  visibility_delta_m: number | null;
+  wind_speed_delta_kt: number | null;
+  detail: string;
+}
+
+export interface RouteObservations {
+  corridor_nm: number;
+  fetch_time: string;
+  airports_found: number;
+  airports_with_metar: number;
+  airports_with_taf: number;
+  airports: AirportObservation[];
+  comparisons: ObservationComparison[];
+  worst_metar_category: string | null;
+  worst_taf_category: string | null;
+  has_conflicts: boolean;
+  phenomena_along_route: string[];
+}
+
 export interface ForecastSnapshot {
   route: {
     name: string;
@@ -263,6 +313,7 @@ export interface ForecastSnapshot {
   fetch_date: string;
   days_out: number;
   analyses: WaypointAnalysis[];
+  route_observations?: RouteObservations | null;
 }
 
 export interface WindComponent {
