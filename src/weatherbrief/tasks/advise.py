@@ -132,7 +132,8 @@ def run_advisories(
             total_distance_nm=total_distance_nm,
             airport_conditions=airport_conds,
         )
-        advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=aggregation)
+        effective_aggregation = aggregation or AdvisoryAggregation.WORST
+        advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
         manifest = RouteAdvisoriesManifest(
             advisories=advisory_results,
             catalog=get_catalog(),
@@ -141,7 +142,7 @@ def run_advisories(
             flight_ceiling_ft=route.flight_ceiling_ft,
             total_distance_nm=total_distance_nm,
             models=advisory_model_names,
-            aggregation=aggregation.value if aggregation else "worst",
+            aggregation=effective_aggregation.value,
             airport_conditions=airport_conds,
         )
         logger.info("Route advisories: %d evaluated (%d models)",
@@ -229,7 +230,8 @@ def run_advisories_from_pack(
             total_distance_nm=manifest.total_distance_nm,
             airport_conditions=airport_conds,
         )
-        advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=aggregation)
+        effective_aggregation = aggregation or AdvisoryAggregation.WORST
+        advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
         result_manifest = RouteAdvisoriesManifest(
             advisories=advisory_results,
             catalog=get_catalog(),
@@ -238,7 +240,7 @@ def run_advisories_from_pack(
             flight_ceiling_ft=effective_ceiling,
             total_distance_nm=manifest.total_distance_nm,
             models=advisory_model_names,
-            aggregation=aggregation.value if aggregation else "worst",
+            aggregation=effective_aggregation.value,
             airport_conditions=airport_conds,
         )
 
