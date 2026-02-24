@@ -53,6 +53,10 @@ export class CrossSectionRenderer {
     return this.overlayCanvas;
   }
 
+  isLayerEnabled(id: string): boolean {
+    return this.enabledLayers[id] !== false;
+  }
+
   /** Create a coordinate transform for the current canvas size and data. */
   createTransform(): CoordTransform | null {
     if (!this.data) return null;
@@ -127,7 +131,7 @@ export class CrossSectionRenderer {
     this.renderOverlay();
   }
 
-  renderOverlay(hoverX?: number): void {
+  renderOverlay(hoverX?: number, hoverY?: number): void {
     const cssW = this.container.clientWidth;
     const cssH = this.container.clientHeight;
     if (cssW === 0 || cssH === 0) return;
@@ -156,7 +160,7 @@ export class CrossSectionRenderer {
       ctx.stroke();
     }
 
-    // Draw hover crosshair
+    // Draw hover crosshair (vertical)
     if (hoverX !== undefined && hoverX >= plotArea.left && hoverX <= plotArea.left + plotArea.width) {
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
       ctx.lineWidth = 1;
@@ -164,6 +168,18 @@ export class CrossSectionRenderer {
       ctx.beginPath();
       ctx.moveTo(hoverX, plotArea.top);
       ctx.lineTo(hoverX, plotArea.top + plotArea.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Draw hover crosshair (horizontal)
+    if (hoverY !== undefined && hoverY >= plotArea.top && hoverY <= plotArea.top + plotArea.height) {
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(plotArea.left, hoverY);
+      ctx.lineTo(plotArea.left + plotArea.width, hoverY);
       ctx.stroke();
       ctx.setLineDash([]);
     }

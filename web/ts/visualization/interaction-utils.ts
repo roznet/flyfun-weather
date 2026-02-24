@@ -8,6 +8,12 @@ export function getCanvasX(e: MouseEvent, el: HTMLElement): number {
   return e.clientX - rect.left;
 }
 
+/** Get the CSS-space Y coordinate of a mouse event relative to an element. */
+export function getCanvasY(e: MouseEvent, el: HTMLElement): number {
+  const rect = el.getBoundingClientRect();
+  return e.clientY - rect.top;
+}
+
 /** Find the index of the route point nearest to the given distance. */
 export function findNearestPointIndex(points: readonly VizPoint[], distanceNm: number): number {
   let bestIdx = 0;
