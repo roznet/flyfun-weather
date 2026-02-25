@@ -302,3 +302,77 @@ def test_high_cape_convective_icing():
     # The indices may differ due to different layered/convective weighting
     assert len(zones_layered) == 1
     assert len(zones_convective) == 1
+
+
+# --- NWP cloud cover fallback tests ---
+
+
+def test_nwp_cloud_fallback_catches_dry_level():
+    """NWP cloud cover > 50% triggers icing assessment for dry-sounding levels."""
+    # Level at -7°C but high DD (dry sounding) — no cloud proximity
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-15.0, dewpoint_depression_c=8.0),
+    ]
+    # Without NWP cloud: no icing detected
+    zones_no_nwp = assess_icing_zones(levels, [])
+    assert len(zones_no_nwp) == 0
+
+    # Reset icing_index
+    levels[0].icing_index = None
+
+    # With NWP mid cloud > 50%: icing should be detected via fallback
+    zones_nwp = assess_icing_zones(levels, [], nwp_cloud_mid_pct=80.0)
+    assert len(zones_nwp) == 1
+    assert zones_nwp[0].risk != IcingRisk.NONE
+
+
+def test_nwp_cloud_fallback_skips_warm_levels():
+    """NWP fallback does not trigger for levels above 0°C."""
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, temperature_c=3.0,
+                     dewpoint_c=-5.0, dewpoint_depression_c=8.0),
+    ]
+    zones = assess_icing_zones(levels, [], nwp_cloud_low_pct=90.0)
+    assert len(zones) == 0
+
+
+def test_nwp_cloud_fallback_skips_already_assessed():
+    """NWP fallback doesn't double-count levels already assessed in pass 1."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.0, dewpoint_depression_c=1.0),
+    ]
+    # Level has low DD → will be assessed in pass 1 via cloud proximity
+    # NWP cloud also high → pass 2 should skip it
+    zones = assess_icing_zones(
+        levels, [_cloud(9000, 11000)], nwp_cloud_mid_pct=90.0,
+    )
+    assert len(zones) == 1  # only one zone, not duplicated
+
+
+def test_nwp_cloud_fallback_low_cloud_below_threshold():
+    """NWP cloud < 50% does not trigger the fallback."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-15.0, dewpoint_depression_c=8.0),
+    ]
+    zones = assess_icing_zones(levels, [], nwp_cloud_mid_pct=30.0)
+    assert len(zones) == 0
+
+
+# --- Wet-bulb icing type tests ---
+
+
+def test_icing_type_uses_wet_bulb():
+    """Icing type classification uses wet-bulb when available."""
+    from weatherbrief.analysis.sounding.icing import _classify_icing_type
+
+    # Dry-bulb = -3°C (border clear/mixed), wet-bulb = -5°C (MIXED range)
+    assert _classify_icing_type(-3.0, wet_bulb_c=-5.0) == IcingType.MIXED
+
+    # Dry-bulb = -10°C (border mixed/rime), wet-bulb = -12°C (RIME range)
+    assert _classify_icing_type(-10.0, wet_bulb_c=-12.0) == IcingType.RIME
+
+    # No wet-bulb → falls back to dry-bulb
+    assert _classify_icing_type(-2.0) == IcingType.CLEAR

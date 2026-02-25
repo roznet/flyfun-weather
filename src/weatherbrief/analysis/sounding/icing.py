@@ -118,13 +118,19 @@ def _compute_icing_index(
     return min(max(raw / 2.0, 0.0), 100.0)
 
 
-def _classify_icing_type(temperature_c: float) -> IcingType:
-    """Classify icing type from temperature (physical, independent of severity)."""
-    if -3.0 <= temperature_c <= 0.0:
+def _classify_icing_type(temperature_c: float, wet_bulb_c: float | None = None) -> IcingType:
+    """Classify icing type from wet-bulb temperature (or dry-bulb fallback).
+
+    The accretion surface temperature is closer to wet-bulb than dry-bulb
+    in cloud/precipitating conditions.  Wet-bulb is always <= dry-bulb,
+    so thresholds are shifted down by ~1°C to compensate.
+    """
+    t = wet_bulb_c if wet_bulb_c is not None else temperature_c
+    if -4.0 <= t <= 0.0:
         return IcingType.CLEAR
-    if -10.0 <= temperature_c < -3.0:
+    if -11.0 <= t < -4.0:
         return IcingType.MIXED
-    if temperature_c < -10.0:
+    if t < -11.0:
         return IcingType.RIME
     return IcingType.NONE
 
@@ -279,6 +285,26 @@ def _cloud_base_vapor_density(
 # --- Main assessment ---
 
 
+def _nwp_cloud_for_altitude(
+    altitude_ft: float,
+    nwp_cloud_low_pct: float | None,
+    nwp_cloud_mid_pct: float | None,
+    nwp_cloud_high_pct: float | None = None,
+) -> float | None:
+    """Return the NWP cloud cover percentage for a given altitude."""
+    if altitude_ft < 6500:
+        return nwp_cloud_low_pct
+    if altitude_ft < 20000:
+        return nwp_cloud_mid_pct
+    return nwp_cloud_high_pct
+
+
+# NWP cloud cover threshold for the fallback icing pass — when the NWP model
+# reports cloud cover above this in an icing-temperature band, assess icing
+# even if the sounding didn't detect cloud proximity at that level.
+_NWP_CLOUD_ICING_THRESHOLD = 50.0
+
+
 def assess_icing_zones(
     levels: list[DerivedLevel],
     clouds: list[EnhancedCloudLayer],
@@ -286,17 +312,27 @@ def assess_icing_zones(
     cape_jkg: float | None = None,
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
+    nwp_cloud_high_pct: float | None = None,
     severity_enhance: bool = True,
 ) -> list[IcingZone]:
     """Assess icing zones using Ogimet continuous icing index.
+
+    Two-pass approach:
+      1. Standard pass: LWC-direct or cloud-proximity-gated Ogimet index.
+      2. NWP fallback pass: for levels in the 0 to −20°C band that were
+         skipped in pass 1, if NWP cloud cover > 50% at the corresponding
+         altitude band, compute the Ogimet index anyway.  This prevents
+         false-negative icing when NWP sub-grid microphysics detects cloud
+         that the coarse pressure-level sounding missed.
 
     Args:
         levels: Derived levels sorted by descending pressure (surface first).
         clouds: Detected cloud layers.
         precipitable_water_mm: Total column precipitable water (severity modifier).
         cape_jkg: Surface-based CAPE for layered/convective split.
-        nwp_cloud_low_pct: NWP low cloud cover (SFC–6500ft) for severity corroboration.
-        nwp_cloud_mid_pct: NWP mid cloud cover (6500–20000ft) for severity corroboration.
+        nwp_cloud_low_pct: NWP low cloud cover (SFC–6500ft).
+        nwp_cloud_mid_pct: NWP mid cloud cover (6500–20000ft).
+        nwp_cloud_high_pct: NWP high cloud cover (>20000ft).
         severity_enhance: If False, skip RH/PW severity upgrades (user preference).
 
     Returns:
@@ -313,8 +349,10 @@ def assess_icing_zones(
     layered_frac, convective_frac = _cape_to_cloud_split(cape_jkg)
     vd_base = _cloud_base_vapor_density(clouds, levels)
 
-    # Compute icing index for each level and classify (base risk only, no enhancement)
+    # Pass 1: standard assessment (LWC-direct + cloud-proximity gated Ogimet)
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = []
+    assessed: set[int] = set()  # pressure levels already assessed
+
     for lv in levels:
         if lv.temperature_c is None or lv.altitude_ft is None:
             continue
@@ -329,12 +367,13 @@ def assess_icing_zones(
         ):
             lwc_risk = _lwc_to_icing_severity(lv.cloud_liquid_water_g_m3)
             if lwc_risk != IcingRisk.NONE:
-                icing_type = _classify_icing_type(lv.temperature_c)
+                icing_type = _classify_icing_type(lv.temperature_c, lv.wet_bulb_c)
                 if icing_type != IcingType.NONE:
                     # Store a synthetic icing index proportional to LWC
                     index = min(lv.cloud_liquid_water_g_m3 / _LWC_SEVERE * 100, 100)
                     lv.icing_index = round(index, 1)
                     icing_levels.append((lv, icing_type, lwc_risk, index))
+                    assessed.add(lv.pressure_hpa)
                     continue
 
         if not _is_near_cloud(lv, clouds):
@@ -346,11 +385,46 @@ def assess_icing_zones(
             layered_frac, convective_frac, vd_base,
         )
         lv.icing_index = round(index, 1)
+        assessed.add(lv.pressure_hpa)
 
         if index <= 0:
             continue
 
-        icing_type = _classify_icing_type(lv.temperature_c)
+        icing_type = _classify_icing_type(lv.temperature_c, lv.wet_bulb_c)
+        if icing_type == IcingType.NONE:
+            continue
+
+        base_risk = _index_to_risk(index)
+        icing_levels.append((lv, icing_type, base_risk, index))
+
+    # Pass 2: NWP cloud cover fallback — catch levels the sounding missed.
+    # The NWP cloud scheme has sub-grid microphysics not recoverable from
+    # coarse pressure levels; trust it for icing gating when DD is too dry.
+    for lv in levels:
+        if lv.pressure_hpa in assessed:
+            continue
+        if lv.temperature_c is None or lv.altitude_ft is None or lv.dewpoint_c is None:
+            continue
+        if not (-20.0 <= lv.temperature_c <= 0.0):
+            continue
+
+        nwp_cloud = _nwp_cloud_for_altitude(
+            lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+        )
+        if nwp_cloud is None or nwp_cloud < _NWP_CLOUD_ICING_THRESHOLD:
+            continue
+
+        # NWP says cloudy in icing-temperature band — compute index
+        index = _compute_icing_index(
+            lv.temperature_c, lv.dewpoint_c,
+            layered_frac, convective_frac, vd_base,
+        )
+        lv.icing_index = round(index, 1)
+
+        if index <= 0:
+            continue
+
+        icing_type = _classify_icing_type(lv.temperature_c, lv.wet_bulb_c)
         if icing_type == IcingType.NONE:
             continue
 
@@ -391,11 +465,7 @@ def _nwp_cloud_for_zone(
     nwp_cloud_mid_pct: float | None,
 ) -> float | None:
     """Pick the NWP cloud cover band matching the zone's base altitude."""
-    if base_ft < 6500:
-        return nwp_cloud_low_pct
-    if base_ft < 20000:
-        return nwp_cloud_mid_pct
-    return None  # high clouds — no NWP corroboration available
+    return _nwp_cloud_for_altitude(base_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct)
 
 
 def _build_zone(
