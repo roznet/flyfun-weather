@@ -182,6 +182,94 @@ def send_welcome_email(
     logger.info("Welcome email sent to %s", email)
 
 
+CATEGORY_LABELS = {
+    "data_issue": "Briefing Data Issue",
+    "too_conservative": "Briefing Too Conservative",
+    "too_optimistic": "Briefing Too Optimistic",
+    "incorrect_interpretation": "Briefing Incorrect Interpretation",
+    "other": "Other Bug/Issue",
+}
+
+
+def send_feedback_notification(
+    user_email: str,
+    user_name: str,
+    flight_id: str,
+    pack_timestamp: str,
+    category: str,
+    comment: str,
+    base_url: str,
+) -> None:
+    """Notify admins when a user submits feedback.
+
+    In dev mode (no ADMIN_EMAILS set), logs instead.
+    """
+    from weatherbrief.api.auth_config import is_dev_mode
+
+    admin_emails = get_admin_emails()
+
+    if is_dev_mode() or not admin_emails:
+        logger.info("Feedback from %s: [%s] %s", user_email, category, comment)
+        return
+
+    try:
+        smtp_config = SmtpConfig.from_env()
+    except ValueError:
+        logger.warning("SMTP not configured — cannot send feedback notification")
+        return
+
+    category_label = CATEGORY_LABELS.get(category, category)
+
+    if pack_timestamp:
+        briefing_url = (
+            f"{base_url}/briefing.html?flight={flight_id}&t={pack_timestamp}"
+        )
+    else:
+        briefing_url = f"{base_url}/briefing.html?flight={flight_id}"
+
+    subject = f"[WeatherBrief] Feedback: {category_label}"
+    html_body = f"""\
+<html>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a2e;">
+  <h2 style="margin:0 0 12px;">User Feedback</h2>
+  <table style="border-collapse:collapse;margin-bottom:16px;">
+    <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">From</td><td>{html.escape(user_name)} ({html.escape(user_email)})</td></tr>
+    <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">Category</td><td>{html.escape(category_label)}</td></tr>
+    <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">Flight</td><td style="font-family:monospace;font-size:12px;">{html.escape(flight_id)}</td></tr>
+  </table>
+  <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:12px;margin-bottom:16px;">
+    {html.escape(comment).replace(chr(10), '<br>')}
+  </div>
+  <p>
+    <a href="{html.escape(briefing_url)}" style="color:#2563eb;font-weight:500;">View Briefing</a>
+    &nbsp;&middot;&nbsp;
+    <a href="{html.escape(base_url + '/admin.html')}" style="color:#2563eb;">Admin Page</a>
+  </p>
+</body>
+</html>"""
+
+    plain_body = (
+        f"User Feedback\n\n"
+        f"From: {user_name} ({user_email})\n"
+        f"Category: {category_label}\n"
+        f"Flight: {flight_id}\n\n"
+        f"Comment:\n{comment}\n\n"
+        f"Briefing: {briefing_url}\n"
+        f"Admin page: {base_url}/admin.html\n"
+    )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = smtp_config.from_address
+    msg["To"] = ", ".join(admin_emails)
+    msg.attach(MIMEText(plain_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    logger.info("Sending feedback notification to %s", admin_emails)
+    _smtp_send(smtp_config, msg)
+    logger.info("Feedback notification sent")
+
+
 def _smtp_send(smtp_config: SmtpConfig, msg: MIMEMultipart) -> None:
     """Send an email message via SMTP."""
     with smtplib.SMTP(smtp_config.host, smtp_config.port) as server:
