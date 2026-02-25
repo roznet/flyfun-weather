@@ -25,10 +25,14 @@ from weatherbrief.models import (
 
 logger = logging.getLogger(__name__)
 
-# Richardson number thresholds for CAT risk
-_RI_SEVERE = 0.25
-_RI_MODERATE = 0.5
-_RI_LIGHT = 1.0
+# Richardson number thresholds for CAT risk.
+# Loosened from classical 0.25/0.5/1.0 to compensate for the systematic
+# positive bias in NWP-derived Ri: model vertical resolution (25–50 hPa
+# between levels) is too coarse to resolve the thin shear layers (100–300m)
+# where KH instability develops, so computed Ri is always too high.
+_RI_SEVERE = 0.5
+_RI_MODERATE = 1.0
+_RI_LIGHT = 2.0
 
 # Omega thresholds (Pa/s) for classification
 _OMEGA_QUIESCENT = 1.0  # |omega| < 1 Pa/s → quiescent

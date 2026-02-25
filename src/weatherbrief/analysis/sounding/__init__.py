@@ -201,6 +201,7 @@ def analyze_sounding(
         cape_jkg=indices.cape_surface_jkg,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+        nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
         severity_enhance=icing_severity_enhance,
     )
 

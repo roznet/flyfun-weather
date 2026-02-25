@@ -127,9 +127,9 @@ def test_cat_risk_from_low_ri():
     assessment = assess_vertical_motion(levels)
     assert len(assessment.cat_risk_layers) > 0
 
-    # Ri=0.3 → MODERATE, Ri=0.8 → LIGHT
+    # With loosened thresholds: Ri=0.3 → SEVERE, Ri=0.8 → MODERATE
     risks = {l.risk for l in assessment.cat_risk_layers}
-    assert CATRiskLevel.MODERATE in risks or CATRiskLevel.LIGHT in risks
+    assert CATRiskLevel.SEVERE in risks or CATRiskLevel.MODERATE in risks
 
 
 def test_no_cat_risk_high_ri():

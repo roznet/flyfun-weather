@@ -8,26 +8,43 @@ from __future__ import annotations
 
 from weatherbrief.models import ConvectiveAssessment, ConvectiveRisk, ThermodynamicIndices
 
-# CAPE thresholds (J/kg) for risk classification
+# CAPE thresholds (J/kg) for risk classification — European-calibrated.
+# European convection produces severe weather at lower CAPE than the US;
+# CAPE > 2000 J/kg is already exceptional over western Europe.
 _CAPE_THRESHOLDS = [
-    (3000, ConvectiveRisk.EXTREME),
-    (1500, ConvectiveRisk.HIGH),
-    (500, ConvectiveRisk.MODERATE),
-    (100, ConvectiveRisk.LOW),
+    (2000, ConvectiveRisk.EXTREME),
+    (1000, ConvectiveRisk.HIGH),
+    (300, ConvectiveRisk.MODERATE),
+    (50, ConvectiveRisk.LOW),
 ]
 
 # CIN threshold above which convection is capped
 CIN_CAP_THRESHOLD = -200  # J/kg (strong cap)
 
 
+def _effective_cape(indices: ThermodynamicIndices) -> float | None:
+    """Return the most relevant CAPE for convective risk.
+
+    Uses max(SB-CAPE, MU-CAPE) to catch elevated convection common in
+    European maritime environments where SB-CAPE can be near zero while
+    a warm layer aloft is unstable.
+    """
+    values = [
+        v for v in (indices.cape_surface_jkg, indices.cape_most_unstable_jkg)
+        if v is not None
+    ]
+    return max(values) if values else None
+
+
 def assess_convective(indices: ThermodynamicIndices) -> ConvectiveAssessment:
     """Assess convective risk from thermodynamic indices.
 
-    Risk is primarily driven by CAPE, modulated by CIN (convective
-    inhibition). Severe modifiers flag additional hazards when shear,
-    freezing level, or instability indices exceed critical values.
+    Risk is primarily driven by CAPE (max of surface-based and most-unstable),
+    modulated by CIN (convective inhibition). Severe modifiers flag additional
+    hazards when shear, freezing level, or instability indices exceed critical
+    values.
     """
-    cape = indices.cape_surface_jkg
+    cape = _effective_cape(indices)
     cin = indices.cin_surface_jkg
 
     # Base risk from CAPE
