@@ -1,6 +1,7 @@
 /** Settings page entry point — tabbed preferences with profile-based advisory configuration. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
+import { fetchCreditSummary, type CreditSummary } from './adapters/credits-adapter';
 import { renderUserInfo, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
 import {
   fetchPreferences,
@@ -296,10 +297,13 @@ async function init(): Promise<void> {
     populateAccountForm(prefs);
   }
 
-  // Load usage (non-blocking)
+  // Load usage and credits (non-blocking)
   fetchUsageSummary()
     .then(renderUsage)
     .catch(() => { /* usage section stays hidden */ });
+  fetchCreditSummary()
+    .then(renderCredits)
+    .catch(() => { /* credits section stays hidden */ });
 
   // Profile controls
   const profileSelect = document.getElementById('profile-select') as HTMLSelectElement;
@@ -582,6 +586,50 @@ function showStatus(message: string, isError = false): void {
   el.className = isError ? 'status-error' : 'status-success';
   if (!isError) {
     setTimeout(() => { el.classList.remove('visible'); }, STATUS_DISMISS_MS);
+  }
+}
+
+// --- Credits rendering ---
+
+function renderCredits(credits: CreditSummary): void {
+  const section = document.getElementById('credits-section');
+  if (!section) return;
+  section.classList.remove('hidden-section');
+
+  // Balance badge
+  const balanceEl = document.getElementById('credits-balance');
+  if (balanceEl) {
+    const bal = credits.balance;
+    const cls = bal > 200 ? 'badge-green' : bal > 50 ? 'badge-amber' : 'badge-red';
+    balanceEl.innerHTML = `
+      <div class="credits-summary">
+        <span class="badge ${cls}">${bal.toFixed(0)} credits</span>
+        <span class="muted credits-detail">Today: ${credits.credits_used_today.toFixed(1)} used &middot; Month: ${credits.credits_used_month.toFixed(1)} used</span>
+      </div>`;
+  }
+
+  // Recent transactions
+  const txEl = document.getElementById('credits-transactions');
+  if (txEl && credits.recent_transactions.length > 0) {
+    const rows = credits.recent_transactions.slice(0, 10).map(tx => {
+      const sign = tx.amount >= 0 ? '+' : '';
+      const cls = tx.amount >= 0 ? 'credit-positive' : 'credit-negative';
+      const ts = new Date(tx.timestamp).toLocaleDateString('en-GB', {
+        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+      });
+      return `<tr>
+        <td class="muted">${ts}</td>
+        <td class="${cls}">${sign}${tx.amount.toFixed(2)}</td>
+        <td>${tx.balance_after.toFixed(0)}</td>
+        <td class="muted">${tx.category}</td>
+      </tr>`;
+    }).join('');
+    txEl.innerHTML = `
+      <h4 class="subsection-heading">Recent Transactions</h4>
+      <table class="credits-table">
+        <thead><tr><th>Date</th><th>Amount</th><th>Balance</th><th>Type</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
   }
 }
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json as json_mod
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -292,6 +294,50 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     return route, fetch_ts, pack_path, options, model_metadata
 
 
+def _measure_pack_size(pack_path: Path) -> int:
+    """Sum file sizes under a pack directory."""
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(pack_path):
+        for f in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, f))
+            except OSError:
+                pass
+    return total
+
+
+def _charge_briefing_cost(
+    db: Session,
+    user_id: str,
+    usage,
+    result_size_bytes: int,
+    usage_row_id: int,
+) -> None:
+    """Compute and charge the cost for a briefing. Failures are logged but never block."""
+    try:
+        from weatherbrief.api.credits import charge_briefing, get_active_cost_config
+        from weatherbrief.costs import compute_cost, config_from_row
+
+        config_row = get_active_cost_config(db)
+        if not config_row:
+            return
+
+        config = config_from_row(config_row)
+        breakdown = compute_cost(
+            input_tokens=usage.llm_input_tokens or 0,
+            output_tokens=usage.llm_output_tokens or 0,
+            result_size_bytes=result_size_bytes,
+            config=config,
+        )
+        charge_briefing(db, user_id, usage_row_id, breakdown)
+        logger.info(
+            "Charged %.2f credits to %s (usage #%d)",
+            breakdown.credits_charged, user_id, usage_row_id,
+        )
+    except Exception:
+        logger.warning("Failed to charge briefing cost for %s", user_id, exc_info=True)
+
+
 def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
                       user_id=None, model_metadata=None):
     """Shared finalization: build and save pack metadata, log usage, return response."""
@@ -317,11 +363,15 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
 
     save_pack_meta(db, meta)
 
-    # Log usage
+    # Log usage and charge credits
     if user_id is not None:
         from weatherbrief.api.usage import log_briefing_usage
 
-        log_briefing_usage(db, user_id, flight_id, result.usage)
+        pack_size = _measure_pack_size(pack_path)
+        usage_row_id = log_briefing_usage(
+            db, user_id, flight_id, result.usage, result_size_bytes=pack_size,
+        )
+        _charge_briefing_cost(db, user_id, result.usage, pack_size, usage_row_id)
 
     logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)
     return meta

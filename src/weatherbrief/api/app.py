@@ -21,6 +21,11 @@ from weatherbrief.api.packs import router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
 from weatherbrief.api.profiles import router as profiles_router
 from weatherbrief.api.admin import router as admin_router
+from weatherbrief.api.credits import (
+    admin_router as cost_config_router,
+    router as credits_router,
+    transparency_router,
+)
 from weatherbrief.api.feedback import router as feedback_router
 from weatherbrief.api.models import router as models_router
 from weatherbrief.api.usage import router as usage_router
@@ -47,6 +52,14 @@ async def lifespan(app: FastAPI):
     if is_dev_mode():
         with SessionLocal() as session:
             ensure_dev_user(session)
+            # Ensure a default cost config exists
+            from weatherbrief.api.credits import get_active_cost_config
+            from weatherbrief.db.models import CostConfigRow
+
+            if not get_active_cost_config(session):
+                session.add(CostConfigRow())
+                session.commit()
+                logger.info("Seeded default cost config")
         logger.info("Dev user ensured")
 
     scheduler_task = None
@@ -105,9 +118,12 @@ def create_app() -> FastAPI:
     app.include_router(preferences_router, prefix="/api")
     app.include_router(profiles_router, prefix="/api")
     app.include_router(usage_router, prefix="/api")
+    app.include_router(credits_router, prefix="/api")
     app.include_router(admin_router, prefix="/api")
+    app.include_router(cost_config_router, prefix="/api")
     app.include_router(feedback_router, prefix="/api")
     app.include_router(models_router, prefix="/api")
+    app.include_router(transparency_router, prefix="/api")
 
     @app.get("/health")
     def health():
