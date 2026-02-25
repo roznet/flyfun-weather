@@ -11,6 +11,7 @@ export interface VizSettings {
   enabledLayers: Record<string, boolean>;
   mapColorMetric: string;
   mapWidthMetric: string;
+  mapAltitudeFt: number | null;  // altitude for level-dependent map metrics (null = cruise)
   routeGraphVisible: boolean;
   routeGraphLeftMetric: string;
   routeGraphRightMetric: string;  // 'none' to disable right axis
@@ -85,6 +86,8 @@ export interface VizRouteData {
 export interface WaypointMarker {
   distanceNm: number;
   icao: string;
+  lat: number;
+  lon: number;
 }
 
 export interface VizCloudDiagLayer {
@@ -102,6 +105,8 @@ export interface VizCloudDiag {
 
 export interface VizPoint {
   distanceNm: number;
+  lat: number;
+  lon: number;
   time: string;
   altitudeLines: AltitudeLines;
   cloudLayers: VizCloudLayer[];

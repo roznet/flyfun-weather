@@ -10,11 +10,16 @@ import { initInfoPopup, showMetricInfo } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
 import { getAllLayers } from './visualization/cross-section/layer-registry';
-import { renderVizControls, renderRouteGraphControls } from './visualization/controls/panel';
+import { renderVizControls, renderRouteGraphControls, renderMapControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { RouteGraphRenderer } from './visualization/route-graph/renderer';
 import { getMetricById, METRIC_NONE } from './visualization/route-graph/metrics';
 import { attachRouteGraphInteraction, type RouteGraphInteractionHandle } from './visualization/route-graph/interaction';
+import { RouteMapRenderer } from './visualization/route-map/renderer';
+import { getMapMetricById, MAP_METRIC_NONE } from './visualization/route-map/metrics';
+import { attachMapInteraction, type MapInteractionHandle } from './visualization/route-map/interaction';
+import { renderMapLegend } from './visualization/route-map/legend';
+import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
 
 async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
@@ -86,11 +91,22 @@ async function init(): Promise<void> {
   applyDisplayModeClass(store.getState().displayMode);
   updateToggleButtons(store.getState().displayMode);
 
-  // --- Cross-section visualization + route graph ---
+  // --- Cross-section visualization + route graph + route map ---
   let vizRenderer: CrossSectionRenderer | null = null;
   let vizInteraction: InteractionHandle | null = null;
   let routeGraphRenderer: RouteGraphRenderer | null = null;
   let routeGraphInteraction: RouteGraphInteractionHandle | null = null;
+  let mapRenderer: RouteMapRenderer | null = null;
+  let mapInteraction: MapInteractionHandle | null = null;
+
+  /** Apply the CSS layout class to the layout wrapper. */
+  function applyLayoutClass(layout: string): void {
+    const wrapper = document.getElementById('viz-layout-wrapper');
+    if (wrapper) {
+      wrapper.classList.remove('layout-cross-section', 'layout-map', 'layout-split');
+      wrapper.classList.add(`layout-${layout}`);
+    }
+  }
 
   function renderVisualization(state: BriefingState): void {
     const vizSection = document.getElementById('viz-section');
@@ -98,6 +114,10 @@ async function init(): Promise<void> {
     const controlsContainer = document.getElementById('viz-controls');
     const routeGraphContainer = document.getElementById('route-graph-container');
     const routeGraphControlsContainer = document.getElementById('route-graph-controls');
+    const mapContainer = document.getElementById('map-container');
+    const mapControlsContainer = document.getElementById('map-controls');
+    const mapLegendContainer = document.getElementById('map-legend');
+    const mapSliderContainer = document.getElementById('map-altitude-slider');
     if (!vizSection || !canvasContainer || !controlsContainer) return;
 
     if (!state.routeAnalyses) {
@@ -106,79 +126,207 @@ async function init(): Promise<void> {
     }
     vizSection.style.display = '';
 
+    const layout = state.vizSettings.layout;
+    applyLayoutClass(layout);
+
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile);
     const allLayers = getAllLayers();
+    const showCrossSection = layout !== 'map';
+    const showMap = layout !== 'cross-section';
 
-    // Create or update cross-section renderer
-    if (!vizRenderer) {
-      vizRenderer = new CrossSectionRenderer(canvasContainer);
-    }
-
-    vizRenderer.setData(data);
-    vizRenderer.setLayers(allLayers, state.vizSettings.enabledLayers);
-    vizRenderer.setRenderMode(state.vizSettings.renderMode);
-    vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
-    vizRenderer.render();
-
-    // --- Route graph ---
-    const graphVisible = state.vizSettings.routeGraphVisible;
-    if (routeGraphContainer) {
-      routeGraphContainer.style.display = graphVisible ? '' : 'none';
-    }
-
-    if (graphVisible && routeGraphContainer) {
-      if (!routeGraphRenderer) {
-        routeGraphRenderer = new RouteGraphRenderer(routeGraphContainer);
+    // --- Cross-section ---
+    if (showCrossSection) {
+      if (!vizRenderer) {
+        vizRenderer = new CrossSectionRenderer(canvasContainer);
       }
 
-      const leftMetric = getMetricById(state.vizSettings.routeGraphLeftMetric) ?? null;
-      const rightId = state.vizSettings.routeGraphRightMetric;
-      const rightMetric = rightId === METRIC_NONE ? null : (getMetricById(rightId) ?? null);
+      vizRenderer.setData(data);
+      vizRenderer.setLayers(allLayers, state.vizSettings.enabledLayers);
+      vizRenderer.setRenderMode(state.vizSettings.renderMode);
+      vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      vizRenderer.render();
 
-      routeGraphRenderer.setData(data);
-      routeGraphRenderer.setMetrics(leftMetric, rightMetric);
-      routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
-      routeGraphRenderer.render();
+      // --- Route graph ---
+      const graphVisible = state.vizSettings.routeGraphVisible;
+      if (routeGraphContainer) {
+        routeGraphContainer.style.display = graphVisible ? '' : 'none';
+      }
 
-      // Attach or update route graph interaction
-      if (routeGraphInteraction) {
-        routeGraphInteraction.update(data, leftMetric, rightMetric);
-      } else {
-        routeGraphInteraction = attachRouteGraphInteraction(
-          routeGraphRenderer, data, leftMetric, rightMetric, {
-            onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
-            onHover: (x) => {
-              if (vizRenderer) vizRenderer.renderOverlay(x);
+      if (graphVisible && routeGraphContainer) {
+        if (!routeGraphRenderer) {
+          routeGraphRenderer = new RouteGraphRenderer(routeGraphContainer);
+        }
+
+        const leftMetric = getMetricById(state.vizSettings.routeGraphLeftMetric) ?? null;
+        const rightId = state.vizSettings.routeGraphRightMetric;
+        const rightMetric = rightId === METRIC_NONE ? null : (getMetricById(rightId) ?? null);
+
+        routeGraphRenderer.setData(data);
+        routeGraphRenderer.setMetrics(leftMetric, rightMetric);
+        routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
+        routeGraphRenderer.render();
+
+        // Attach or update route graph interaction
+        if (routeGraphInteraction) {
+          routeGraphInteraction.update(data, leftMetric, rightMetric);
+        } else {
+          routeGraphInteraction = attachRouteGraphInteraction(
+            routeGraphRenderer, data, leftMetric, rightMetric, {
+              onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+              onHover: (x) => {
+                if (vizRenderer) vizRenderer.renderOverlay(x);
+                // Sync hover to map: find nearest point from x
+                if (mapRenderer && showMap && x !== undefined) {
+                  const distToX = routeGraphRenderer!.createDistanceToX();
+                  if (distToX && data.points.length > 0) {
+                    const plotArea = routeGraphRenderer!.getPlotArea();
+                    if (plotArea) {
+                      const dist = ((x - plotArea.left) / plotArea.width) * data.totalDistanceNm;
+                      let bestIdx = 0;
+                      let bestDelta = Infinity;
+                      for (let i = 0; i < data.points.length; i++) {
+                        const d = Math.abs(data.points[i].distanceNm - dist);
+                        if (d < bestDelta) { bestDelta = d; bestIdx = i; }
+                      }
+                      mapRenderer.highlightSegment(bestIdx);
+                    }
+                  }
+                } else if (mapRenderer && x === undefined) {
+                  mapRenderer.highlightSegment(-1);
+                }
+              },
             },
+          );
+        }
+      } else {
+        if (routeGraphInteraction) { routeGraphInteraction.destroy(); routeGraphInteraction = null; }
+        if (routeGraphRenderer) { routeGraphRenderer.destroy(); routeGraphRenderer = null; }
+      }
+
+      // Attach or update cross-section interaction
+      if (vizInteraction) {
+        vizInteraction.update(data);
+      } else {
+        vizInteraction = attachInteraction(vizRenderer, data, {
+          onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+          onHover: (x) => {
+            if (routeGraphRenderer && state.vizSettings.routeGraphVisible) routeGraphRenderer.renderOverlay(x);
+            // Sync hover to map
+            if (mapRenderer && showMap && x !== undefined) {
+              const transform = vizRenderer!.getTransform();
+              if (transform) {
+                const dist = transform.xToDistance(x);
+                let bestIdx = 0;
+                let bestDelta = Infinity;
+                for (let i = 0; i < data.points.length; i++) {
+                  const d = Math.abs(data.points[i].distanceNm - dist);
+                  if (d < bestDelta) { bestDelta = d; bestIdx = i; }
+                }
+                mapRenderer.highlightSegment(bestIdx);
+              }
+            } else if (mapRenderer && x === undefined) {
+              mapRenderer.highlightSegment(-1);
+            }
           },
-        );
+        });
       }
     } else {
-      // Destroy route graph when hidden to stop ResizeObserver
+      // Cross-section not visible — destroy renderers
+      if (vizInteraction) { vizInteraction.destroy(); vizInteraction = null; }
+      if (vizRenderer) { vizRenderer = null; }
       if (routeGraphInteraction) { routeGraphInteraction.destroy(); routeGraphInteraction = null; }
       if (routeGraphRenderer) { routeGraphRenderer.destroy(); routeGraphRenderer = null; }
     }
 
-    // Attach or update cross-section interaction
-    if (vizInteraction) {
-      vizInteraction.update(data);
-    } else {
-      vizInteraction = attachInteraction(vizRenderer, data, {
-        onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
-        onHover: (x) => {
-          if (routeGraphRenderer && state.vizSettings.routeGraphVisible) routeGraphRenderer.renderOverlay(x);
-        },
+    // --- Route map ---
+    if (showMap && mapContainer) {
+      const colorMetric = getMapMetricById(state.vizSettings.mapColorMetric) ?? null;
+      const widthId = state.vizSettings.mapWidthMetric;
+      const widthMetric = widthId === MAP_METRIC_NONE ? null : (getMapMetricById(widthId) ?? null);
+      const altFt = state.vizSettings.mapAltitudeFt ?? data.cruiseAltitudeFt;
+      const isAltDependent = (colorMetric?.altitudeDependent || widthMetric?.altitudeDependent) ?? false;
+
+      if (!mapRenderer) {
+        mapRenderer = new RouteMapRenderer(mapContainer);
+      }
+
+      mapRenderer.setData(data);
+      mapRenderer.setColorMetric(colorMetric);
+      mapRenderer.setWidthMetric(widthMetric);
+      mapRenderer.setAltitude(altFt);
+      mapRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      mapRenderer.render();
+
+      // Attach or update map interaction
+      if (mapInteraction) {
+        mapInteraction.update(data, colorMetric, widthMetric);
+      } else {
+        mapInteraction = attachMapInteraction(
+          mapRenderer, data, colorMetric, widthMetric, altFt, {
+            onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+            onHover: (idx) => {
+              if (idx !== undefined && vizRenderer && showCrossSection) {
+                const transform = vizRenderer.createTransform();
+                if (transform && data.points[idx]) {
+                  const x = transform.distanceToX(data.points[idx].distanceNm);
+                  vizRenderer.renderOverlay(x);
+                  if (routeGraphRenderer && state.vizSettings.routeGraphVisible) {
+                    routeGraphRenderer.renderOverlay(x);
+                  }
+                }
+              } else if (idx === undefined) {
+                if (vizRenderer) vizRenderer.renderOverlay();
+                if (routeGraphRenderer && state.vizSettings.routeGraphVisible) routeGraphRenderer.renderOverlay();
+              }
+            },
+          },
+        );
+      }
+
+      // Map controls
+      if (mapControlsContainer) {
+        renderMapControls(mapControlsContainer, state.vizSettings, {
+          onColorMetricChange: (id) => store.getState().setMapColorMetric(id),
+          onWidthMetricChange: (id) => store.getState().setMapWidthMetric(id),
+        });
+      }
+
+      // Legend
+      if (mapLegendContainer) {
+        renderMapLegend(mapLegendContainer, colorMetric, widthMetric);
+      }
+
+      // Altitude slider
+      if (mapSliderContainer) {
+        if (isAltDependent) {
+          mapSliderContainer.style.display = '';
+          renderAltitudeSlider(mapSliderContainer, altFt, data.flightCeilingFt, {
+            onChange: (ft) => store.getState().setMapAltitude(ft),
+          });
+        } else {
+          mapSliderContainer.style.display = 'none';
+        }
+      }
+
+      // Ensure map size is correct after layout change
+      requestAnimationFrame(() => {
+        if (mapRenderer) mapRenderer.invalidateSize();
       });
+    } else {
+      // Map not visible — destroy
+      if (mapInteraction) { mapInteraction.destroy(); mapInteraction = null; }
+      if (mapRenderer) { mapRenderer.destroy(); mapRenderer = null; }
     }
 
     // Render cross-section controls (above canvas)
     renderVizControls(controlsContainer, state.vizSettings, {
       onRenderModeChange: (mode) => store.getState().setRenderMode(mode),
       onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
+      onLayoutChange: (layout) => store.getState().setLayout(layout),
     }, state.selectedModel);
 
     // Render route graph controls (below graph)
-    if (routeGraphControlsContainer) {
+    if (routeGraphControlsContainer && showCrossSection) {
       renderRouteGraphControls(routeGraphControlsContainer, state.vizSettings, {
         onRouteGraphToggle: (visible) => store.getState().setRouteGraphVisible(visible),
         onRouteGraphMetricChange: (axis, metricId) => store.getState().setRouteGraphMetric(axis, metricId),
@@ -192,6 +340,9 @@ async function init(): Promise<void> {
     }
     if (routeGraphRenderer && state.routeAnalyses && state.vizSettings.routeGraphVisible) {
       routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
+    }
+    if (mapRenderer && state.routeAnalyses) {
+      mapRenderer.setSelectedPointIndex(state.selectedPointIndex);
     }
   }
 
@@ -471,6 +622,10 @@ async function init(): Promise<void> {
     if (key === 'cross-section' && !section.classList.contains('collapsed')) {
       if (vizRenderer) vizRenderer.render();
       if (routeGraphRenderer && store.getState().vizSettings.routeGraphVisible) routeGraphRenderer.render();
+      if (mapRenderer) {
+        mapRenderer.invalidateSize();
+        mapRenderer.render();
+      }
     }
   });
 

@@ -22,6 +22,8 @@ export function extractVizData(
       waypointMarkers.push({
         distanceNm: rpa.distance_from_origin_nm,
         icao: rpa.waypoint_icao,
+        lat: rpa.lat,
+        lon: rpa.lon,
       });
     }
   }
@@ -128,6 +130,8 @@ function extractPoint(
 
   return {
     distanceNm: rpa.distance_from_origin_nm,
+    lat: rpa.lat,
+    lon: rpa.lon,
     time: rpa.interpolated_time,
     altitudeLines,
     cloudLayers,
