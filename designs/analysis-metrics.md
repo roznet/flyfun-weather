@@ -247,7 +247,7 @@ Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`. The str
 
 ### 3.2b SFIP Icing Index
 
-**Module:** `sounding/sfip.py` — See [sfip-implementation-design.md](./sfip-implementation-design.md) for full algorithm details.
+**Module:** `sounding/sfip.py` — See [analysis.md](./analysis.md) for algorithm summary.
 
 A second icing index computed alongside Ogimet, based on fuzzy-logic membership functions (Belo-Pereira 2015, Morcrette et al. 2019). Same algorithm family used by Windy.com and European operational met services.
 
@@ -541,9 +541,7 @@ Resolved by switching to the Ogimet continuous icing index (see §3.2). The prev
 - Data models: [data-models.md](./data-models.md)
 - Fetch layer & model endpoints: [fetch.md](./fetch.md)
 - GRIB2 engine: [weather-engine-specs.md](./weather-engine-specs.md)
-- SFIP algorithm: [sfip-implementation-design.md](./sfip-implementation-design.md)
+- Analysis layer (icing, SFIP, vertical motion): [analysis.md](./analysis.md)
 - Ogimet icing index: Autorouter GRAMET documentation
 - SFIP references: Belo-Pereira (2015), Morcrette et al. (2019)
 - MetPy documentation: https://unidata.github.io/MetPy/
-- Sounding analysis plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
-- Vertical motion plan: [vertical-motion-plan.md](./vertical-motion-plan.md)

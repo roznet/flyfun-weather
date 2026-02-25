@@ -134,6 +134,15 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity
 - Adjacent levels grouped into `IcingZone` bands (gap ≤ 100hPa)
 - **Minimum zone thickness**: single-level zones expanded to ±500ft (1000ft total) to match GFS vertical resolution (~25 hPa) and ensure visibility on the cross-section canvas
 
+**Path 3: SFIP index** (`sounding/sfip.py`) — Simplified Forecast Icing Potential, the algorithm used by Windy.com and European met services. Computed per-level alongside Ogimet; both indices stored for comparison.
+
+- **Fuzzy logic** — four membership functions (temperature, RH, CLW, vertical velocity) each return 0.0–1.0, combined with weights
+- **Two variants**: SFIP_O (full, GFS — has real CLW from GRIB) uses `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; SFIP_4 (proxy, other models — uses DD+cloud cover proxy for CLW) uses `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`
+- **Glaciation factor** (GFS only): reduces icing potential when ICMR >> CLWMR (cloud is glaciated)
+- **Temperature gating**: only 0°C to −25°C (same as Ogimet)
+- Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (`"full"` or `"proxy"`)
+- Based on Belo-Pereira (2015) and Morcrette et al. (2019)
+
 ### LWC Enrichment (`sounding/__init__.py`)
 
 `_enrich_lwc()` converts CLWMR (kg/kg) from `PressureLevelData` to LWC (g/m³) on `DerivedLevel` using air density from ideal gas law: `LWC = CLWMR × (P / (Rd × T_K)) × 1000`. Called after `compute_derived_levels()`, before cloud detection.
@@ -174,10 +183,21 @@ vm = assess_vertical_motion(derived_levels)
 
 | Ri range | CAT Risk |
 |----------|----------|
-| < 0.25 | SEVERE |
+| < 0.25 | SEVERE (Kelvin-Helmholtz instability) |
 | 0.25-1.0 | MODERATE |
 | 1.0-4.0 | LIGHT |
 | > 4.0 | NONE |
+
+**Vertical motion magnitude reference:**
+
+| Scale | Omega (Pa/s) | w (ft/min) | Aviation Impact |
+|-------|-------------|------------|-----------------|
+| Quiescent | < 0.5 | < 15 | Smooth air |
+| Moderate synoptic | 1–5 | 30–160 | Light–moderate bumps |
+| Strong forcing | 5–10 | 160–300 | Moderate turbulence |
+| Convective | 10–100+ | 300–3000+ | Severe / avoid |
+
+**Data source:** Open-Meteo `vertical_velocity` field (omega in Pa/s, negative = ascent). Available for GFS and ECMWF; unavailable for ICON, UKMO, Météo-France.
 
 Output: `VerticalMotionAssessment` with classification, max omega/w values, and list of `CATRiskLayer` objects identifying altitude bands with turbulence risk.
 
@@ -265,5 +285,3 @@ Route-point analysis (`analyze_all_route_points()`) adds interpolated time based
 - Fetch layer: [fetch.md](./fetch.md)
 - Output consumers: [digest.md](./digest.md)
 - Route advisories: [advisories.md](./advisories.md) (route-level hazard evaluators consuming sounding analysis)
-- Sounding implementation plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
-- Vertical motion plan: [vertical-motion-plan.md](./vertical-motion-plan.md)
