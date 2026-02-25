@@ -13,3 +13,4 @@ venv/
 .DS_Store
 .env
 .vite
+web/test-results
