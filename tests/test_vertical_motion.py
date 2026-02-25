@@ -164,6 +164,37 @@ def test_cat_layer_grouping():
     assert layer.top_ft == 14000
 
 
+def test_boundary_layer_shear_not_merged_to_cruise():
+    """Boundary-layer shear (low Ri near surface) must not merge into a deep
+    layer that reaches cruise altitude.  With the 100 hPa grouping threshold,
+    levels at 950/900 hPa (BL) should stay separate from 700/600 hPa."""
+    levels = [
+        # Surface / boundary layer — low Ri (wind shear in BL)
+        DerivedLevel(pressure_hpa=1000, altitude_ft=300, omega_pa_s=-0.5),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1800, omega_pa_s=-0.5,
+                     richardson_number=0.2),
+        DerivedLevel(pressure_hpa=900, altitude_ft=3200, omega_pa_s=-0.5,
+                     richardson_number=0.3),
+        # Gap — no shear at mid-levels
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.5,
+                     richardson_number=5.0),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.5,
+                     richardson_number=5.0),
+        DerivedLevel(pressure_hpa=600, altitude_ft=14000, omega_pa_s=-0.5,
+                     richardson_number=5.0),
+    ]
+    assessment = assess_vertical_motion(levels)
+
+    # Should get exactly one CAT layer from the BL shear
+    assert len(assessment.cat_risk_layers) == 1
+    layer = assessment.cat_risk_layers[0]
+
+    # Layer must be confined to boundary layer, not reaching cruise (~6000 ft)
+    assert layer.top_ft <= 4000, (
+        f"BL shear layer top {layer.top_ft} ft should not reach cruise altitude"
+    )
+
+
 # --- Convective contamination tests ---
 
 

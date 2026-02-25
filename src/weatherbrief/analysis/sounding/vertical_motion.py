@@ -185,14 +185,14 @@ def _build_cat_layers(derived_levels: list[DerivedLevel]) -> list[CATRiskLayer]:
     if not cat_levels:
         return []
 
-    # Group adjacent levels (pressure gap <= 200 hPa)
+    # Group adjacent levels (pressure gap <= 100 hPa)
     layers: list[CATRiskLayer] = []
     current: list[tuple[DerivedLevel, CATRiskLevel, float]] = [cat_levels[0]]
 
     for item in cat_levels[1:]:
         prev_lv = current[-1][0]
         this_lv = item[0]
-        if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 200:
+        if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 100:
             current.append(item)
         else:
             layers.append(_build_single_cat_layer(current))
