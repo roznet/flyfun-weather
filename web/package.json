@@ -3,18 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "npm run build:flights && npm run build:briefing && npm run build:settings && npm run build:admin && npm run build:help",
+    "build": "npm run build:flights && npm run build:briefing && npm run build:settings && npm run build:admin && npm run build:help && npm run build:user-costs",
     "build:flights": "npx esbuild ts/flights-main.ts --bundle --outfile=dist/flights.js --sourcemap --target=es2020",
     "build:briefing": "npx esbuild ts/briefing-main.ts --bundle --outfile=dist/briefing.js --sourcemap --target=es2020",
     "build:settings": "npx esbuild ts/settings-main.ts --bundle --outfile=dist/settings.js --sourcemap --target=es2020",
     "build:admin": "npx esbuild ts/admin-main.ts --bundle --outfile=dist/admin.js --sourcemap --target=es2020",
     "build:help": "npx esbuild ts/help-main.ts --bundle --outfile=dist/help.js --sourcemap --target=es2020",
-    "dev": "npm run dev:flights & npm run dev:briefing & npm run dev:settings & npm run dev:admin & npm run dev:help",
+    "build:user-costs": "npx esbuild ts/user-costs-main.ts --bundle --outfile=dist/user-costs.js --sourcemap --target=es2020",
+    "dev": "npm run dev:flights & npm run dev:briefing & npm run dev:settings & npm run dev:admin & npm run dev:help & npm run dev:user-costs",
     "dev:flights": "npx esbuild ts/flights-main.ts --bundle --outfile=dist/flights.js --sourcemap --target=es2020 --watch=forever",
     "dev:briefing": "npx esbuild ts/briefing-main.ts --bundle --outfile=dist/briefing.js --sourcemap --target=es2020 --watch=forever",
     "dev:settings": "npx esbuild ts/settings-main.ts --bundle --outfile=dist/settings.js --sourcemap --target=es2020 --watch=forever",
     "dev:admin": "npx esbuild ts/admin-main.ts --bundle --outfile=dist/admin.js --sourcemap --target=es2020 --watch=forever",
-    "dev:help": "npx esbuild ts/help-main.ts --bundle --outfile=dist/help.js --sourcemap --target=es2020 --watch=forever"
+    "dev:help": "npx esbuild ts/help-main.ts --bundle --outfile=dist/help.js --sourcemap --target=es2020 --watch=forever",
+    "dev:user-costs": "npx esbuild ts/user-costs-main.ts --bundle --outfile=dist/user-costs.js --sourcemap --target=es2020 --watch=forever"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

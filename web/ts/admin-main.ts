@@ -308,10 +308,11 @@ function renderAgentRow(u: AdminUser): string {
     ? `<button class="btn btn-new-token" style="font-size:0.75rem;padding:0.2rem 0.5rem;" data-user-id="${escapeHtml(u.id)}" data-agent-name="${escapeHtml(u.display_name)}">New Token</button>
        <button class="btn btn-danger btn-revoke-agent" style="font-size:0.75rem;padding:0.2rem 0.5rem;margin-left:0.25rem;" data-user-id="${escapeHtml(u.id)}" data-agent-name="${escapeHtml(u.display_name)}">Revoke</button>`
     : '<span class="muted">Revoked</span>';
+  const costsHref = `/user-costs.html?user=${encodeURIComponent(u.id)}`;
 
   return `
     <tr>
-      <td>${escapeHtml(u.display_name)}</td>
+      <td><a href="${costsHref}">${escapeHtml(u.display_name)}</a></td>
       <td>${status}</td>
       <td class="num">${u.active_tokens ?? 0} / ${u.token_count ?? 0}</td>
       <td>${created}</td>
@@ -335,9 +336,10 @@ function renderUserRow(u: AdminUser): string {
   const approveBtn = u.approved
     ? ''
     : `<button class="btn btn-primary btn-approve" style="font-size:0.75rem;padding:0.2rem 0.5rem;" data-user-id="${escapeHtml(u.id)}">Approve</button>`;
+  const costsHref = `/user-costs.html?user=${encodeURIComponent(u.id)}`;
   return `
     <tr>
-      <td>${escapeHtml(u.display_name)}</td>
+      <td><a href="${costsHref}">${escapeHtml(u.display_name)}</a></td>
       <td>${escapeHtml(u.email)}</td>
       <td>${status} ${approveBtn}</td>
       <td>${lastActiveLabel}</td>

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeatherBrief — User Costs</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .back-link { font-size: 0.85rem; }
+
+    /* User info card */
+    .user-card {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.25rem;
+      box-shadow: var(--shadow);
+    }
+    .user-card-left .user-name-display { font-size: 1.2rem; font-weight: 600; }
+    .user-card-left .user-email { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.15rem; }
+    .user-card-left .user-meta { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.3rem; }
+    .user-card-right { text-align: right; }
+    .credit-balance { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .credit-balance.positive { color: var(--green); }
+    .credit-balance.low { color: var(--amber); }
+    .credit-balance.negative { color: var(--red); }
+    .credit-label { font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); }
+
+    /* Summary bar */
+    .summary-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.75rem 1rem;
+      text-align: center;
+    }
+    .summary-card .value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .summary-card .label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-top: 0.1rem;
+    }
+
+    /* Shared table style */
+    .costs-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    .costs-table th,
+    .costs-table td {
+      padding: 0.45rem 0.6rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .costs-table th {
+      background: var(--bg);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+    .costs-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Cost distribution bar */
+    .cost-bar-container { margin-bottom: 1rem; }
+    .cost-stacked-bar {
+      display: flex;
+      height: 28px;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .cost-stacked-bar .bar-segment {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      min-width: 2px;
+    }
+    .cost-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      margin-top: 0.6rem;
+      font-size: 0.8rem;
+    }
+    .cost-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .cost-legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .cost-avg { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem; }
+
+    /* Transaction expand */
+    .tx-expand-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--primary);
+      font-size: 0.8rem;
+      padding: 0;
+    }
+    .tx-expand-btn:hover { text-decoration: underline; }
+    .tx-breakdown {
+      display: none;
+      background: var(--bg);
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+    }
+    .tx-breakdown.open { display: table-row; }
+    .tx-breakdown td { border-bottom: none; padding-top: 0; }
+    .breakdown-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 0.3rem 1rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .breakdown-grid .bd-label { color: var(--text-muted); font-size: 0.75rem; }
+    .breakdown-grid .bd-value { font-weight: 600; }
+
+    /* Amount coloring */
+    .amount-neg { color: var(--red); }
+    .amount-pos { color: var(--green); }
+
+    .section { margin-bottom: 1.5rem; }
+    .section h3 { margin-bottom: 0.5rem; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .badge-green { background: var(--green-bg); color: var(--green); }
+    .badge-amber { background: var(--amber-bg); color: var(--amber); }
+
+    #loading { text-align: center; padding: 3rem; color: var(--text-muted); }
+    #error-message { color: var(--danger); text-align: center; padding: 1rem; display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <h1>User Costs</h1>
+      <div class="header-right">
+        <a href="/admin.html" class="btn-settings">Admin</a>
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
+
+    <div id="error-message"></div>
+    <div id="loading"><p class="muted">Loading user cost data...</p></div>
+
+    <div id="page-content" style="display:none;">
+      <!-- User info card -->
+      <div id="user-card" class="user-card"></div>
+
+      <!-- Summary bar -->
+      <div id="summary-bar" class="summary-bar"></div>
+
+      <!-- Recent flights -->
+      <div id="flights-section" class="section">
+        <h3>Recent Flights</h3>
+        <div style="overflow-x:auto;">
+          <table class="costs-table">
+            <thead>
+              <tr>
+                <th>Route</th>
+                <th>Date</th>
+                <th>Time</th>
+                <th>Altitude</th>
+                <th>Briefing</th>
+              </tr>
+            </thead>
+            <tbody id="flights-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Cost distribution -->
+      <div id="cost-section" class="section">
+        <h3>Cost Distribution (All Time)</h3>
+        <div id="cost-distribution"></div>
+      </div>
+
+      <!-- Transaction ledger -->
+      <div class="section">
+        <h3>Transaction Ledger</h3>
+        <div style="overflow-x:auto;">
+          <table class="costs-table" id="tx-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Description</th>
+                <th style="text-align:right;">Amount</th>
+                <th style="text-align:right;">Balance</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="tx-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/dist/user-costs.js"></script>
+</body>
+</html>
