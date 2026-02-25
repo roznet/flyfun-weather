@@ -321,11 +321,11 @@ async function init(): Promise<void> {
     document.getElementById('feedback-modal')?.remove();
 
     const categories = [
-      ['data_quality', 'Data Quality Issue'],
-      ['missing_data', 'Missing Data'],
-      ['ui_issue', 'UI / Display Issue'],
-      ['feature_request', 'Feature Request'],
-      ['other', 'Other'],
+      ['data_issue', 'Briefing Data Issue'],
+      ['too_conservative', 'Briefing Too Conservative'],
+      ['too_optimistic', 'Briefing Too Optimistic'],
+      ['incorrect_interpretation', 'Briefing Incorrect Interpretation'],
+      ['other', 'Other Bug/Issue'],
     ];
     const optionsHtml = categories
       .map(([val, label]) => `<option value="${val}">${label}</option>`)
