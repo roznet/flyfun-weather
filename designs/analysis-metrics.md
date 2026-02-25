@@ -149,7 +149,7 @@ These are computed in `thermodynamics.compute_derived_levels()` for each pressur
 | **Cloud liquid water** (g/m³) | `CLWMR × ρ_air` | CLWMR (GRIB2), P, T | Liquid water content in volume units. | Ogimet icing index input. GFS and ICON-EU only. |
 | **Cloud liquid water** (g/kg) | `CLWMR × 1000` | CLWMR (GRIB2) | Mixing ratio in g/kg. | SFIP icing index input. GFS and ICON-EU only. |
 | **Ice mixing ratio** (g/kg) | `ICMR × 1000` | ICMR (GRIB2) | Ice content mixing ratio. | Glaciation factor: CLW/(CLW+ICE). Reduces SFIP when cloud is glaciated. |
-| **SFIP per-level** | Fuzzy-logic membership + weights | T, RH, CLW, ω, CAPE | See §3.2b. 0–100 icing potential at each level. | Stored as `sfip_raw`, `sfip_100`, `sfip_severity`, `sfip_variant` on each DerivedLevel. |
+| **SFIP per-level** | Fuzzy-logic membership + weights | T, RH, CLW, ω, CAPE | See §3.2b. 0–100 icing potential at each level. | Stored as `sfip_raw`, `sfip_100`, `sfip_severity`, `sfip_variant` ("full"/"interp"/"proxy") on each DerivedLevel. `clw_interpolated` flag tracks spatially-interpolated CLW. |
 | **Precipitation phase** | Wet-bulb T or GRIB2 ice fraction | Tw or CLWMR+ICMR | Phase of precipitation at altitude. | Stored as `precip_phase` on each DerivedLevel. See §3.6. |
 
 ### 2.2 Profile-Level Indices
@@ -253,11 +253,12 @@ Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`. The str
 
 A second icing index computed alongside Ogimet, based on fuzzy-logic membership functions (Belo-Pereira 2015, Morcrette et al. 2019). Same algorithm family used by Windy.com and European operational met services.
 
-**Two variants** depending on data availability:
+**Three variants** depending on data availability:
 
 | Variant | Name | When | Inputs | Weights |
 |---------|------|------|--------|---------|
 | Full | SFIP_O | GFS/ICON-EU (CLWMR from GRIB2) | T, RH, CLW, ω | 0.35, 0.15, 0.35, 0.15 |
+| Interp | SFIP_O | CLW spatially interpolated from neighbors | T, RH, CLW(interp), ω | 0.35, 0.15, 0.35, 0.15 |
 | Proxy | SFIP_4 | Other models (no CLW) | T, RH, DD+cloud proxy, ω | 0.40, 0.25, 0.25, 0.10 |
 
 **Membership functions** (all return 0.0–1.0 except VV which returns −0.3 to +0.5):
@@ -280,14 +281,16 @@ A second icing index computed alongside Ogimet, based on fuzzy-logic membership 
 | 30–55 | Moderate |
 | ≥ 55 | Severe |
 
-**Output:** `SfipZone` objects (grouped adjacent icing levels) with `mean_sfip_100`, `risk`, `icing_type`, `variant` ("full" or "proxy").
+**Output:** `SfipZone` objects (grouped adjacent icing levels) with `mean_sfip_100`, `risk`, `icing_type`, `variant` ("full", "interp", or "proxy").
+
+**Spatial CLW/ICMR interpolation** (`analysis/spatial_interpolation.py`): Some GFS grid cells return `None` for CLW/ICMR via Open-Meteo, forcing the proxy variant which overestimates icing extent. Before sounding analysis, `interpolate_cloud_water_spatially()` fills gaps per-pressure-level by linear interpolation in distance-space between neighboring route points with data. Interpolated metrics: `cloud_liquid_water_kg_kg` and `ice_mixing_ratio_kg_kg`. Max gap: 100 nm (default). Filled points are flagged `clw_interpolated=True` → variant="interp" → tooltip shows `(INTERP)`.
 
 **Per-model behavior:**
 
 | Model | Variant | CLW Source | VV Source | Glaciation |
 |-------|---------|-----------|-----------|-----------|
-| GFS | Full (SFIP_O) | CLWMR from GFS GRIB2 | ω from API | Yes (ICMR from GRIB2) |
-| ICON | Full (SFIP_O)* | QC from ICON-EU GRIB2 | None (ω unavailable) | Yes (QI from ICON-EU) |
+| GFS | Full/Interp (SFIP_O) | CLWMR from GFS GRIB2 (interp where gaps filled spatially) | ω from API | Yes (ICMR from GRIB2) |
+| ICON | Full/Interp (SFIP_O)* | QC from ICON-EU GRIB2 (interp where gaps filled spatially) | None (ω unavailable) | Yes (QI from ICON-EU) |
 | ECMWF | Proxy (SFIP_4) | DD + cloud proxy | ω from API | No |
 | MétéoFr | Proxy (SFIP_4) | DD + cloud proxy | None (ω unavailable) | No |
 | UKMO | Proxy (SFIP_4) | DD + cloud proxy | ω from API | No |
