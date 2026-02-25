@@ -38,7 +38,7 @@ def upgrade() -> None:
         sa.Column("subscriptions_monthly_usd", sa.Float, nullable=False, server_default="30.0"),
         sa.Column(
             "subscription_details_json",
-            sa.Text,
+            sa.String(1024),
             nullable=False,
             server_default='{"open_meteo": 30}',
         ),
