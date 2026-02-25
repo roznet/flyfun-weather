@@ -133,6 +133,33 @@ Comprehensive listing of DWD ICON-EU opendata variables. Organized by level type
 - **Resolution:** ~10km
 - **Status:** Freshness metadata tracked via Open-Meteo; no direct GRIB2 fetch
 
+### G. GFS WAFS Turbulence Products (G-GTG) — RESEARCHED, NOT FEASIBLE
+
+The ICAO WAFS (World Area Forecast System) produces aviation turbulence and icing products derived from GFS post-processing via the **G-GTG (Global Graphical Turbulence Guidance)** algorithm. These are *derived* products, not raw model fields — G-GTG combines Richardson number, wind shear, deformation, convergence, frontogenesis, and mountain wave algorithms into a single EDR metric.
+
+**GRIB2 parameters** (Discipline 0, Category 19 — Physical Atmospheric Properties):
+
+| Param # | Short Name | Description | Units |
+|---------|-----------|-------------|-------|
+| 28 | MWTURB | Mountain Wave Turbulence (EDR) | m^(2/3) s^(-1) |
+| 29 | CATEDR | Clear Air Turbulence (EDR) | m^(2/3) s^(-1) |
+| 30 | EDPARM | Eddy Dissipation Parameter | m^(2/3) s^(-1) |
+| 31 | MXEDPRM | Maximum of EDR in Layer (MaxEDR) | m^(2/3) s^(-1) |
+| 50 | CITEDR | Convectively-Induced Turbulence (EDR) | m^(2/3) s^(-1) |
+
+In current WAFS products, CATEDR and MWTURB are combined into **MaxEDR (MXEDPRM)** as the primary operational field.
+
+**File:** `gfs.t{HH}z.wafs_0p25.f{FFF}.grib2` (formerly `gfs.t{HH}z.gtg.0p25.f{FFF}.grib2`, renamed in GFS v16)
+
+**Why it's not feasible for us:**
+- **Not on the S3 bucket** — `wafs_0p25` files are absent from `noaa-gfs-bdp-pds`. The S3 bucket only has pgrb2, pgrb2b, goessimpgrb2, and legacy wafs_grb45 (met fields, not turbulence).
+- **Limited distribution** — available through WIFS (requires registration) or possibly NOMADS (not in standard grib filter datasets).
+- **Limited forecast range** — f006 to f036 only (3-hourly), vs our 7-day requirement.
+- **Flight levels, not pressure levels** — 26 levels from FL100–FL450 at 1000ft intervals. Would need a separate decode path.
+- **No .idx files** — can't use our byte-range download infrastructure; would need full file downloads.
+
+**Practical alternative:** Compute turbulence indices from raw GFS fields we already have access to (see Future Extensions §6 Ellrod index, §1 VVEL fetch).
+
 ## Future Extensions
 
 ### Near-term (high value, moderate effort)
@@ -161,7 +188,7 @@ Integrate from surface upward using `metpy.calc.divergence(u, v)`. Requires full
 ```
 TI = VWS × (DEF + CVG)
 ```
-Requires 2D wind fields (not just point values), so needs the raw GRIB2 grid, not interpolated points. Would give route-wide turbulence map.
+Requires 2D wind fields (not just point values), so needs the raw GRIB2 grid, not interpolated points. Would give route-wide turbulence map. This is our best path to operationally-useful CAT prediction — the WAFS G-GTG product (which uses a similar but more sophisticated algorithm) is not accessible from S3 (see §G above). UGRD/VGRD are available in pgrb2 at all pressure levels via .idx.
 
 ### Long-term (speculative)
 
@@ -192,3 +219,7 @@ Requires 2D wind fields (not just point values), so needs the raw GRIB2 grid, no
 - Fetch design: [fetch.md](./fetch.md)
 - Icing analysis (LWC consumer): [analysis.md](./analysis.md)
 - Data models (CLWMR/ICMR fields): [data-models.md](./data-models.md)
+- [GRIB2 Table 4.2-0-19 (Physical Atmospheric Properties)](https://www.nco.ncep.noaa.gov/pmb/docs/grib2/grib2_doc/grib2_table4-2-0-19.shtml) — EDR parameter definitions
+- [WAFS Help (Aviation Weather Center)](https://aviationweather.gov/wafs/help.html) — WAFS product descriptions
+- [GFS v16 Service Change Notice SCN21-20](https://www.weather.gov/media/notification/pdf2/scn21-20gfs_v16.0_aac.pdf) — wafs_0p25 file rename, variable additions
+- [G-GTG turbulence prediction (BAMS 2018)](https://journals.ametsoc.org/view/journals/bams/99/11/bams-d-17-0117.1.xml) — algorithm behind WAFS turbulence

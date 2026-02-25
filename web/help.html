@@ -181,6 +181,8 @@
         <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.
         Each model uses a <em>seamless</em> blend that automatically selects the highest-resolution
         variant available for the queried location.
+        All metrics, calculations, and data sources are fully documented in the
+        <a href="https://github.com/roznet/flyfun-weather/blob/main/designs/analysis-metrics.md" target="_blank" rel="noopener">Analysis Metrics Reference</a>.
       </p>
       <table class="help-table">
         <thead>
@@ -201,7 +203,7 @@
             <td>Global</td>
             <td>varies by location</td>
             <td>16 days</td>
-            <td>25</td>
+            <td>28</td>
             <td><a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
@@ -210,7 +212,7 @@
             <td>Global</td>
             <td>0.25&deg; (~25 km)</td>
             <td>16 days</td>
-            <td>25</td>
+            <td>28</td>
             <td><a href="https://open-meteo.com/en/docs/gfs-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
@@ -219,7 +221,7 @@
             <td>Global</td>
             <td>0.25&deg; (~25 km)</td>
             <td>10 days</td>
-            <td>8</td>
+            <td>11</td>
             <td><a href="https://open-meteo.com/en/docs/ecmwf-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
@@ -237,7 +239,7 @@
             <td>Global</td>
             <td>10 km; 2 km over UK</td>
             <td>7 days</td>
-            <td>17</td>
+            <td>20</td>
             <td><a href="https://open-meteo.com/en/docs/ukmo-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
@@ -246,7 +248,7 @@
             <td>Global</td>
             <td>25 km; 11 km (EU); 2.5 km (France)</td>
             <td>6 days</td>
-            <td>16</td>
+            <td>19</td>
             <td><a href="https://open-meteo.com/en/docs/meteofrance-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
@@ -255,7 +257,7 @@
             <td>Global</td>
             <td>15 km; 10 km (N.&nbsp;America)</td>
             <td>10 days</td>
-            <td>17</td>
+            <td>20</td>
             <td><a href="https://open-meteo.com/en/docs/gem-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
         </tbody>
@@ -265,7 +267,7 @@
         highest-resolution model available at each location rather than running a single model.
       </p>
       <p class="muted" style="margin-top: 0.25rem;">
-        <strong>Levels</strong> = number of pressure levels between 1000&ndash;300 hPa used for
+        <strong>Levels</strong> = number of pressure levels between 1000&ndash;150 hPa used for
         upper-air analysis (soundings, cross-sections). More levels give finer vertical detail.
         <strong>Range</strong> = maximum forecast horizon.
       </p>

@@ -29,8 +29,8 @@ When an API field is unavailable for a model, derived alternatives fill the gap 
 | `wind_speed_10m` | kt | yes | yes | yes | yes | yes | yes | 10m wind speed for surface ops. |
 | `wind_direction_10m` | ° | yes | yes | yes | yes | yes | yes | Surface wind direction (meteorological convention: direction FROM). |
 | `wind_gusts_10m` | kt | yes | yes | yes | yes | yes | yes | Peak gust. Relevant for crosswind limits and turbulence on approach. |
-| `precipitation` | mm | yes | yes | yes | yes | yes | **no** | Hourly accumulated precipitation. Any precip in sub-zero temps = icing concern. |
-| `precipitation_probability` | % | yes | yes | **no** | **no** | **no** | **no** | Ensemble-derived probability. GFS and ECMWF only. |
+| `precipitation` | mm | yes | yes | yes | yes | yes | yes | Hourly accumulated precipitation. Any precip in sub-zero temps = icing concern. |
+| `precipitation_probability` | % | yes | yes | yes | **no** | **no** | yes | Ensemble-derived probability. |
 | `cloud_cover` | % | yes | yes | yes | yes | yes | yes | Total column cloud cover from model parameterization. |
 | `cloud_cover_low` | % | yes | yes | yes | yes | yes | yes | SFC–6500ft (ICAO low). Low ceilings = IFR/LIFR risk. |
 | `cloud_cover_mid` | % | yes | yes | yes | yes | yes | yes | 6500–20000ft (ICAO mid). Relevant for en-route icing. |
@@ -38,23 +38,23 @@ When an API field is unavailable for a model, derived alternatives fill the gap 
 | `freezing_level_height` | m | yes | **no** | yes | **no** | yes | **no** | NWP-computed 0°C isotherm height. Upper boundary of rain, lower boundary of icing. |
 | `cape` | J/kg | yes | yes | yes | yes | yes | yes | NWP-computed convective available potential energy. |
 | `visibility` | m | yes | **no** | yes | **no** | yes | **no** | Parameterized horizontal visibility. < 5000m = marginal VFR. |
-| `rain` | mm | **no** | yes | yes | yes | yes | **no** | Liquid precipitation only. Used for precipitation phase classification. |
-| `showers` | mm | **no** | yes | yes | yes | yes | **no** | Convective precipitation. |
+| `rain` | mm | yes | yes | yes | yes | yes | yes | Liquid precipitation only. Used for precipitation phase classification. |
+| `showers` | mm | yes | yes | yes | yes | yes | yes | Convective precipitation. |
 | `snowfall` | cm | yes | yes | yes | yes | yes | yes | Solid precipitation. Used for surface phase assessment. |
 | `weather_code` | code | yes | yes | yes | yes | yes | yes | WMO weather interpretation code. |
 
 ### 1.2 Pressure Level Variables
 
-Pressure levels vary by model (range 1000–300 hPa, ~SFC to ~FL300):
+Pressure levels vary by model (range 1000–150 hPa, ~SFC to ~FL450):
 
 | Model | Levels | Count | Note |
 |-------|--------|-------|------|
-| GFS / Best-Match | 1000, 975, 950, ..., 300 (25 hPa spacing below 500) | 25 | ~1000ft vertical resolution |
-| ECMWF | 1000, 925, 850, 700, 600, 500, 400, 300 | 8 | Coarsest resolution |
-| ICON | 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300 | 12 | |
-| Météo-France | 1000, 950, 925, ..., 300 | 16 | |
-| UKMO | 1000, 975, 950, ..., 300 | 17 | |
-| GEM | 1000, 950, 925, ..., 300 | 17 | |
+| GFS / Best-Match | 1000, 975, 950, ..., 300, 250, 200, 150 | 28 | 25 hPa spacing below 500, extends to FL450 |
+| ECMWF | 1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150 | 11 | Extended to upper atmosphere |
+| ICON | 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300 | 12 | 250/200/150 return null |
+| Météo-France | 1000, 950, 925, ..., 300, 250, 200, 150 | 19 | |
+| UKMO | 1000, 975, 950, ..., 300, 250, 200, 150 | 20 | Supports vertical_velocity |
+| GEM | 1000, 950, 925, ..., 300, 250, 200, 150 | 20 | |
 
 | Variable | Unit | GFS | ECMWF | ICON | MétéoFr | UKMO | GEM | Physics / Interpretation |
 |----------|------|-----|-------|------|---------|------|-----|--------------------------|
@@ -64,7 +64,7 @@ Pressure levels vary by model (range 1000–300 hPa, ~SFC to ~FL300):
 | `wind_speed` | kt | yes | yes | yes | yes | yes | yes | Wind at level for headwind/crosswind and shear calculations. |
 | `wind_direction` | ° | yes | yes | yes | yes | yes | yes | Wind direction at level. |
 | `geopotential_height` | m | yes | yes | yes | yes | yes | yes | Height of pressure surface. Converts pressure levels to altitude. |
-| `vertical_velocity` | Pa/s | yes | yes | **no** | **no** | yes | **no** | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. |
+| `vertical_velocity` | Pa/s | yes | yes | **no** | **no** | yes | **no** | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. Available for GFS, ECMWF, UKMO. |
 
 ### 1.3 GRIB2 Enrichment Variables
 
@@ -145,7 +145,7 @@ These are computed in `thermodynamics.compute_derived_levels()` for each pressur
 | **Vertical velocity** (w) | `mpcalc.vertical_velocity(ω, P, T)` — converts ω (Pa/s) to w (m/s) using hydrostatic relation: `w ≈ −ω/(ρ·g)` | ω, P, T | Physical vertical air speed. Negative ω = upward motion. | Strong updrafts (> 200 ft/min) = turbulence/convection. |
 | **Potential temperature** (θ) | `mpcalc.potential_temperature(P, T)` — Poisson equation: `θ = T × (1000/P)^(R/cp)` | P, T | Temperature parcel would have if brought adiabatically to 1000 hPa. Conserved in dry adiabatic processes. | Stability assessment: dθ/dz > 0 = stable, < 0 = unstable. Used for N² and Richardson number. |
 | **Brunt-Väisälä frequency²** (N²) | `N² = (g/θ̄) × (dθ/dz)` | θ at adjacent levels, height | Static stability frequency. Positive = stable (oscillations), negative = convectively unstable, zero = neutral. | N² > 0 = stable stratification. Used in Richardson number for CAT. |
-| **Richardson number** (Ri) | `Ri = N² / S²` where `S² = (du/dz)² + (dv/dz)²` | N², wind shear between levels | Ratio of buoyancy to shear. Determines whether turbulence is suppressed (high Ri) or generated (low Ri). | Ri < 0.25 = severe CAT, < 0.5 = moderate CAT, < 1.0 = light CAT. Standard clear-air turbulence predictor. |
+| **Richardson number** (Ri) | `Ri = N² / S²` where `S² = (du/dz)² + (dv/dz)²` | N², wind shear between levels | Ratio of buoyancy to shear. Determines whether turbulence is suppressed (high Ri) or generated (low Ri). | Ri < 0.5 = severe CAT, < 1.0 = moderate CAT, < 2.0 = light CAT. Thresholds loosened from classical 0.25/0.5/1.0 to compensate for NWP vertical resolution bias. |
 | **Cloud liquid water** (g/m³) | `CLWMR × ρ_air` | CLWMR (GRIB2), P, T | Liquid water content in volume units. | Ogimet icing index input. GFS and ICON-EU only. |
 | **Cloud liquid water** (g/kg) | `CLWMR × 1000` | CLWMR (GRIB2) | Mixing ratio in g/kg. | SFIP icing index input. GFS and ICON-EU only. |
 | **Ice mixing ratio** (g/kg) | `ICMR × 1000` | ICMR (GRIB2) | Ice content mixing ratio. | Glaciation factor: CLW/(CLW+ICE). Reduces SFIP when cloud is glaciated. |
@@ -161,7 +161,7 @@ Computed in `thermodynamics.compute_indices()` — one value per sounding profil
 | **LCL** (Lifting Condensation Level) | `mpcalc.lcl(P_sfc, T_sfc, Td_sfc)` | Altitude where a surface parcel first saturates when lifted. Always exists. | Theoretical cloud base for convective clouds. Compare with observed cloud cover for consistency check. |
 | **LFC** (Level of Free Convection) | `mpcalc.lfc(P, T, Td, parcel)` | Altitude above which a lifted parcel is warmer than environment and rises freely. May not exist in stable profiles. | Convection trigger point. Low LFC = easier convection initiation. None = convection unlikely from surface heating alone. |
 | **EL** (Equilibrium Level) | `mpcalc.el(P, T, Td, parcel)` | Altitude where rising parcel temperature equals environment again. Approximate cloud top for deep convection. | Higher EL = taller storms, more severe. EL > FL350 = deep convection, significant hazard. |
-| **CAPE** (surface-based) | `mpcalc.cape_cin(P, T, Td, parcel)` | Integrated positive buoyancy of a surface parcel through the troposphere. Energy available for convection. J/kg. | < 100 = none, 100–500 = low, 500–1500 = moderate, 1500–3000 = high, > 3000 = extreme. High CAPE + trigger = strong updrafts, hail, turbulence. |
+| **CAPE** (surface-based) | `mpcalc.cape_cin(P, T, Td, parcel)` | Integrated positive buoyancy of a surface parcel through the troposphere. Energy available for convection. J/kg. | Convective risk uses effective CAPE = max(SB, MU). EU-calibrated thresholds: < 50 = none, 50–300 = low, 300–1000 = moderate, 1000–2000 = high, > 2000 = extreme. |
 | **CAPE** (most-unstable) | `mpcalc.most_unstable_cape_cin(P, T, Td)` | CAPE computed from the most unstable parcel in the lowest 300 hPa, not just surface. | Better than surface CAPE when instability is elevated (e.g. warm air aloft over cold surface). Captures convective potential when surface parcel is capped. |
 | **CAPE** (mixed-layer) | `mpcalc.mixed_layer_cape_cin(P, T, Td)` | CAPE from a well-mixed boundary layer parcel (average of lowest 100 hPa). | Realistic for afternoon convection when boundary layer is well-mixed. More representative than pure surface parcel. |
 | **CIN** (Convective Inhibition) | From `mpcalc.cape_cin()` | Negative buoyancy energy a parcel must overcome to reach the LFC. Acts as a "lid" on convection. J/kg. | CIN < −200 = strong cap, convection unlikely without forced lifting. CIN near 0 = convection initiates easily with modest heating/lift. |
@@ -229,13 +229,15 @@ Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`. The str
 | ≥ 30 | Moderate |
 | ≥ 80 | Severe |
 
-**Icing type classification** (physical, independent of index severity):
+**Icing type classification** from wet-bulb temperature (dry-bulb fallback). The accretion surface temperature is closer to wet-bulb than dry-bulb in cloud/precipitating conditions; thresholds are shifted ~1°C colder than dry-bulb equivalents:
 
-| Temperature range | Type | Physics |
-|-------------------|------|---------|
-| −3°C to 0°C | Clear ice | Supercooled water freezes on contact as clear, dense glaze. Most dangerous — adds weight, changes airfoil shape. |
-| −10°C to −3°C | Mixed | Mix of supercooled droplets and ice crystals. Irregular accretion. |
-| < −10°C | Rime | Smaller droplets freeze instantly as rough, opaque ice. Less aerodynamic penalty than clear. |
+| Wet-bulb range | Type | Physics |
+|----------------|------|---------|
+| −4°C to 0°C | Clear ice | Supercooled water freezes on contact as clear, dense glaze. Most dangerous — adds weight, changes airfoil shape. |
+| −11°C to −4°C | Mixed | Mix of supercooled droplets and ice crystals. Irregular accretion. |
+| < −11°C | Rime | Smaller droplets freeze instantly as rough, opaque ice. Less aerodynamic penalty than clear. |
+
+**NWP cloud cover fallback** (pass 2): Levels in the 0 to −20°C icing band that pass 1 skipped (dry DD, not near sounding cloud) are re-assessed if NWP cloud cover > 50% at the corresponding ICAO altitude band. Prevents false-negative icing when NWP sub-grid microphysics detects cloud the coarse pressure-level sounding missed.
 
 **Severity modifiers:**
 - RH > 95% → upgrade by one level (more moisture = faster accretion)
@@ -297,15 +299,17 @@ A second icing index computed alongside Ogimet, based on fuzzy-logic membership 
 
 **Module:** `sounding/convective.py`
 
-Classifies convective risk from CAPE with CIN modulation and severe weather modifiers.
+Classifies convective risk from effective CAPE — max(SB-CAPE, MU-CAPE) — with CIN modulation and severe weather modifiers. MU-CAPE catches elevated convection common in European maritime environments where SB-CAPE is near zero while a warm layer aloft is unstable.
 
-| CAPE | Risk | Significance |
-|------|------|-------------|
-| < 100 J/kg | None | Stable or very weakly unstable. Convection not possible. |
-| 100–500 | Low | Weak instability. Fair-weather cumulus, weak showers at best. |
-| 500–1500 | Moderate | Moderate instability. Thunderstorms possible with sufficient trigger. |
-| 1500–3000 | High | Strong instability. Vigorous thunderstorms likely if triggered. Significant turbulence. |
-| > 3000 | Extreme | Extreme instability. Severe storms, large hail, possible tornadoes. Avoid at all costs. |
+European-calibrated thresholds (lower than US values — European convection produces severe weather at lower CAPE):
+
+| Effective CAPE | Risk | Significance |
+|----------------|------|-------------|
+| < 50 J/kg | None | Stable or very weakly unstable. Convection not possible. |
+| 50–300 | Low | Weak instability. Fair-weather cumulus, weak showers at best. |
+| 300–1000 | Moderate | Moderate instability. Thunderstorms possible with sufficient trigger. |
+| 1000–2000 | High | Strong instability. Vigorous thunderstorms likely if triggered. Significant turbulence. |
+| > 2000 | Extreme | Extreme instability. Severe storms, large hail, possible tornadoes. Avoid at all costs. |
 
 **Severe modifiers** flag additional hazards when thresholds are crossed (shear > 40kt, K > 35, TT > 55, LI < −6, high freezing level + CAPE > 1000).
 
@@ -323,14 +327,14 @@ Classifies convective risk from CAPE with CIN modulation and severe weather modi
 | Oscillating | ≥ 2 sign changes in ω | Wave activity. Mountain waves, gravity waves. Possible turbulence. |
 | Convective | \|ω\| > 10 Pa/s | Vigorous vertical motion. Active convection in model. |
 
-**CAT risk** from Richardson number at each layer:
+**CAT risk** from Richardson number at each layer (thresholds loosened from classical 0.25/0.5/1.0 to compensate for NWP vertical resolution bias — 25-50 hPa between levels is too coarse to resolve thin shear layers where KH instability develops, so computed Ri is systematically too high):
 
 | Ri | CAT Risk | Physics |
 |----|----------|---------|
-| < 0.25 | Severe | Shear overwhelms stability. Turbulent breakdown guaranteed (Kelvin-Helmholtz instability). |
-| 0.25–0.5 | Moderate | Marginal stability. Turbulence likely, especially with external forcing. |
-| 0.5–1.0 | Light | Dynamically stable but approaching critical. Intermittent turbulence possible. |
-| > 1.0 | None | Shear insufficient to overcome buoyancy. Laminar flow. |
+| < 0.5 | Severe | Shear overwhelms stability. Turbulent breakdown guaranteed (Kelvin-Helmholtz instability). |
+| 0.5–1.0 | Moderate | Marginal stability. Turbulence likely, especially with external forcing. |
+| 1.0–2.0 | Light | Dynamically stable but approaching critical. Intermittent turbulence possible. |
+| > 2.0 | None | Shear insufficient to overcome buoyancy. Laminar flow. |
 
 ### 3.5 Altitude Advisories
 
@@ -408,7 +412,7 @@ Shows data source for each key quantity per model. **Bold** = derived when API f
 | Dewpoint at levels | API | API | API | API | API | API | — |
 | Wind at levels | API | API | API | API | API | API | — |
 | Geopotential height | API | API | API | API | API | API | — |
-| Omega (ω) | API | API | **n/a** | **n/a** | API | **n/a** | Not derivable. No vertical motion/CAT for ICON, MétéoFr, GEM. |
+| Omega (ω) | API | API | **n/a** | **n/a** | API | **n/a** | Not derivable. No vertical motion/CAT for ICON, MétéoFr, GEM. Available for GFS, ECMWF, UKMO. |
 | Cloud cover (total) | API | API | API | API | API | API | — |
 | Cloud cover low/mid/high | API | API | API | API | API | API | — |
 | Freezing level | API | **derived** | API | **derived** | API | **derived** | Linear interpolation of T profile through 0°C |
@@ -454,7 +458,7 @@ Sounding-derived cloud layers are mapped to ICAO bands (low < 6500ft, mid 6500�
 
 | Quantity | Why | Impact |
 |----------|-----|--------|
-| Omega (ω) for ICON/MétéoFr/GEM | Requires model dynamics, not recoverable from T/wind alone | No vertical motion classification or CAT risk for these models |
+| Omega (ω) for ICON/MétéoFr/GEM | Requires model dynamics, not recoverable from T/wind alone | No vertical motion classification or CAT risk for these models. Available for GFS, ECMWF, UKMO. |
 | Visibility for ECMWF/MétéoFr/GEM | Parameterized from sub-grid microphysics not available at pressure levels | VFR/IFR assessment limited to cloud cover proxy for these models |
 | Freezing level for ECMWF/MétéoFr/GEM | Not in API | Derived via linear interpolation of T profile through 0°C |
 | Precipitation probability | Requires ensemble spread data | Only available from GFS and ECMWF |

@@ -126,7 +126,9 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity
 | 30-80 | MODERATE |
 | > 80 | SEVERE |
 
-**Icing type** determined by wet-bulb temperature: CLEAR (Tw > -3°C), MIXED (-10°C to -3°C), RIME (< -10°C).
+**Icing type** determined by wet-bulb temperature (dry-bulb fallback): CLEAR (−4°C to 0°C), MIXED (−11°C to −4°C), RIME (< −11°C). Thresholds are shifted ~1°C colder than dry-bulb equivalents because the accretion surface temperature is closer to wet-bulb in cloud/precipitating conditions.
+
+**NWP cloud cover fallback** (pass 2): Levels in the 0 to −20°C band that pass 1 skipped (dry DD, not near sounding cloud) are re-assessed if NWP cloud cover > 50% at the corresponding altitude band. This prevents false-negative icing when NWP sub-grid microphysics detects cloud the coarse pressure-level sounding missed.
 
 - Each `IcingZone` includes `mean_icing_index` for transparency in the assessment
 - **Severity enhancement** (`severity_enhance=True` default): RH/moisture-based upgrades to icing severity. Can upgrade LIGHT → MODERATE (deep saturation: ≥3 levels with RH > 95% + NWP cloud corroboration ≥50%) or MODERATE → SEVERE (same + mean T ≤ -5°C). User-toggleable via `icing_severity_enhance` profile setting.
@@ -151,14 +153,18 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity
 
 Pure threshold logic from `ThermodynamicIndices` — no MetPy dependency.
 
+**Effective CAPE** = max(SB-CAPE, MU-CAPE). Uses MU-CAPE to catch elevated convection common in European maritime environments where SB-CAPE is near zero while a warm layer aloft is unstable.
+
+European-calibrated thresholds (lower than US values — European convection produces severe weather at lower CAPE):
+
 | CAPE (J/kg) | Risk |
 |-------------|------|
 | 0 (with LFC+EL) | MARGINAL |
-| < 100 | NONE |
-| 100-500 | LOW |
-| 500-1500 | MODERATE |
-| 1500-3000 | HIGH |
-| > 3000 | EXTREME |
+| < 50 | NONE |
+| 50-300 | LOW |
+| 300-1000 | MODERATE |
+| 1000-2000 | HIGH |
+| > 2000 | EXTREME |
 
 - **MARGINAL**: any CAPE > 0 with defined LFC and EL → shallow convection possible
 - CIN < -200 J/kg suppresses risk by one level
@@ -179,14 +185,14 @@ vm = assess_vertical_motion(derived_levels)
 - `classify_vertical_motion(derived_levels)` — classifies omega profile into `VerticalMotionClass` (QUIESCENT, SYNOPTIC_ASCENT/SUBSIDENCE, CONVECTIVE, OSCILLATING)
 - `assess_vertical_motion(derived_levels)` — combines classification with CAT risk layer identification
 
-**CAT risk from Richardson number:**
+**CAT risk from Richardson number** (loosened from classical 0.25/0.5/1.0 to compensate for NWP vertical resolution bias — 25-50 hPa between levels is too coarse to resolve thin shear layers where KH instability develops, so computed Ri is systematically too high):
 
 | Ri range | CAT Risk |
 |----------|----------|
-| < 0.25 | SEVERE (Kelvin-Helmholtz instability) |
-| 0.25-1.0 | MODERATE |
-| 1.0-4.0 | LIGHT |
-| > 4.0 | NONE |
+| < 0.5 | SEVERE (Kelvin-Helmholtz instability) |
+| 0.5-1.0 | MODERATE |
+| 1.0-2.0 | LIGHT |
+| > 2.0 | NONE |
 
 **Vertical motion magnitude reference:**
 
@@ -197,7 +203,7 @@ vm = assess_vertical_motion(derived_levels)
 | Strong forcing | 5–10 | 160–300 | Moderate turbulence |
 | Convective | 10–100+ | 300–3000+ | Severe / avoid |
 
-**Data source:** Open-Meteo `vertical_velocity` field (omega in Pa/s, negative = ascent). Available for GFS and ECMWF; unavailable for ICON, UKMO, Météo-France.
+**Data source:** Open-Meteo `vertical_velocity` field (omega in Pa/s, negative = ascent). Available for GFS, ECMWF, and UKMO; unavailable for ICON, Météo-France, and GEM.
 
 Output: `VerticalMotionAssessment` with classification, max omega/w values, and list of `CATRiskLayer` objects identifying altitude bands with turbulence risk.
 
