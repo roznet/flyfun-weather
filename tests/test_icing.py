@@ -199,6 +199,33 @@ def test_near_cloud_margin():
     assert len(zones) == 1
 
 
+def test_single_level_zone_minimum_thickness():
+    """Single-level zone is expanded to ±500ft minimum thickness."""
+    levels = [
+        DerivedLevel(pressure_hpa=550, altitude_ft=14000, temperature_c=-12.0,
+                     dewpoint_c=-13.0, dewpoint_depression_c=1.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(13000, 15000)])
+    assert len(zones) == 1
+    # Single level at 14000ft → should expand to 13500–14500ft
+    assert zones[0].base_ft == 13500
+    assert zones[0].top_ft == 14500
+
+
+def test_multi_level_zone_unchanged():
+    """Multi-level zone spanning >1000ft is not expanded."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.0, dewpoint_depression_c=1.0),
+        DerivedLevel(pressure_hpa=600, altitude_ft=14000, temperature_c=-12.0,
+                     dewpoint_c=-13.0, dewpoint_depression_c=1.0),
+    ]
+    zones = assess_icing_zones(levels, [_cloud(9000, 15000)])
+    assert len(zones) == 1
+    assert zones[0].base_ft == 10000
+    assert zones[0].top_ft == 14000
+
+
 def test_adjacent_levels_grouped():
     """Adjacent icing levels (gap <= 100hPa) are grouped into a single zone."""
     levels = [

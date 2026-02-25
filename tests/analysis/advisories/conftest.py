@@ -743,6 +743,36 @@ def ifr_heavy_icing_context() -> RouteContext:
 
 
 @pytest.fixture
+def ifr_high_altitude_icing_context() -> RouteContext:
+    """IFR with icing only at 14000ft, cruise 6000ft — icing is irrelevant."""
+    n_points = 10
+    icing_zone = IcingZone(
+        base_ft=13500, top_ft=14500, risk=IcingRisk.LIGHT,
+        icing_type=IcingType.RIME,
+    )
+    analyses = [
+        _make_rpa(i, i * 20.0, sounding={
+            "gfs": _make_sounding(icing_zones=[icing_zone]),
+        })
+        for i in range(n_points)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=6000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=_make_airport_conditions(
+            dep_category=FlightCategory.IFR, dep_ceiling_ft=800,
+            arr_category=FlightCategory.IFR, arr_ceiling_ft=900,
+            models=["gfs"],
+        ),
+    )
+
+
+@pytest.fixture
 def ifr_convective_context() -> RouteContext:
     """IFR with HIGH convective risk en-route — should be RED."""
     n_points = 10

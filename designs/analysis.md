@@ -132,6 +132,7 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity
 - **Severity enhancement** (`severity_enhance=True` default): RH/moisture-based upgrades to icing severity. Can upgrade LIGHT → MODERATE (deep saturation: ≥3 levels with RH > 95% + NWP cloud corroboration ≥50%) or MODERATE → SEVERE (same + mean T ≤ -5°C). User-toggleable via `icing_severity_enhance` profile setting.
 - SLD detection: **currently disabled** — heuristics too sensitive for available data resolution
 - Adjacent levels grouped into `IcingZone` bands (gap ≤ 100hPa)
+- **Minimum zone thickness**: single-level zones expanded to ±500ft (1000ft total) to match GFS vertical resolution (~25 hPa) and ensure visibility on the cross-section canvas
 
 ### LWC Enrichment (`sounding/__init__.py`)
 

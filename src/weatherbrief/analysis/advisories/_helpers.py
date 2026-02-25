@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from weatherbrief.models import AdvisoryStatus, ElevationProfile
+from weatherbrief.models import AdvisoryStatus, ElevationProfile, IcingZone
 
 if TYPE_CHECKING:
     from weatherbrief.models import RouteCrossSection
@@ -28,6 +28,28 @@ def format_extent(
     pct = 100 * affected / total
     return f"{affected_nm}nm/{total_nm}nm ({pct:.0f}%)"
 
+
+def icing_zones_in_altitude_range(
+    zones: list[IcingZone],
+    floor_ft: float,
+    ceiling_ft: float,
+) -> list[IcingZone]:
+    """Return icing zones that overlap the altitude range [floor_ft, ceiling_ft]."""
+    return [z for z in zones if z.top_ft > floor_ft and z.base_ft < ceiling_ft]
+
+
+def has_relevant_icing(
+    zones: list[IcingZone],
+    cruise_altitude_ft: float,
+    buffer_ft: float = 2000,
+) -> bool:
+    """Check whether any icing zone overlaps [0, cruise_altitude + buffer].
+
+    Consistent with FIKI's cruise_icing_buffer_ft logic: icing far above the
+    cruise altitude is irrelevant for non-FIKI advisories.
+    """
+    ceiling = cruise_altitude_ft + buffer_ft
+    return bool(icing_zones_in_altitude_range(zones, 0, ceiling))
 
 
 def pct_above_threshold(
