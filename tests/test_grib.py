@@ -329,9 +329,9 @@ def test_enrich_lwc_no_clwmr():
 
 
 def test_extended_pressure_levels_count():
-    """Extended levels list has 25 entries."""
+    """Extended levels list has 28 entries (25 low/mid + 3 upper-atmosphere)."""
     from weatherbrief.fetch.variables import EXTENDED_PRESSURE_LEVELS
-    assert len(EXTENDED_PRESSURE_LEVELS) == 25
+    assert len(EXTENDED_PRESSURE_LEVELS) == 28
 
 
 def test_gfs_endpoint_uses_extended_levels():

@@ -8,38 +8,41 @@ BASE_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
 
 # 25 levels — 25 hPa spacing below 500, 50 hPa above.
 # Gives ~1000ft vertical resolution in the lower atmosphere (4x improvement).
-# GFS supports all 25; best_match (auto-blend) also supports them.
+# GFS and best_match support all of these plus upper-atmosphere levels.
 EXTENDED_PRESSURE_LEVELS = [
     1000, 975, 950, 925, 900, 875, 850, 825, 800, 775,
     750, 725, 700, 675, 650, 625, 600, 575, 550, 525,
-    500, 450, 400, 350, 300,
+    500, 450, 400, 350, 300, 250, 200, 150,
 ]
 
-# ECMWF IFS only supports 13 levels on Open-Meteo; these are the ones
-# within our 1000–300 hPa range (250/200/150/100/50 are above our ceiling).
-ECMWF_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
+# ECMWF IFS: 13 levels on Open-Meteo (verified Feb 2025).
+# All pressure-level variables available including vertical_velocity.
+ECMWF_PRESSURE_LEVELS = [
+    1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150,
+]
 
-# DWD ICON: 12 levels in 1000–300 hPa range (verified via API).
+# DWD ICON: 12 levels (verified via API; 250/200/150 return null).
 ICON_PRESSURE_LEVELS = [
     1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300,
 ]
 
-# Météo-France ARPEGE: 16 levels in 1000–300 hPa range (verified via API).
+# Météo-France ARPEGE: 19 levels (verified Feb 2025).
 METEOFRANCE_PRESSURE_LEVELS = [
     1000, 950, 925, 900, 850, 800, 750, 700, 650, 600,
-    550, 500, 450, 400, 350, 300,
+    550, 500, 450, 400, 350, 300, 250, 200, 150,
 ]
 
-# UK Met Office: 17 levels in 1000–300 hPa range (verified via API).
+# UK Met Office: 20 levels including upper atmosphere (verified Feb 2025).
+# Supports vertical_velocity at all levels.
 UKMO_PRESSURE_LEVELS = [
     1000, 975, 950, 925, 900, 850, 800, 750, 700, 650,
-    600, 550, 500, 450, 400, 350, 300,
+    600, 550, 500, 450, 400, 350, 300, 250, 200, 150,
 ]
 
-# Canadian GEM: 17 levels in 1000–300 hPa range (verified via API).
+# Canadian GEM: 20 levels (verified Feb 2025).
 GEM_PRESSURE_LEVELS = [
     1000, 950, 925, 900, 875, 850, 800, 750, 700, 650,
-    600, 550, 500, 450, 400, 350, 300,
+    600, 550, 500, 450, 400, 350, 300, 250, 200, 150,
 ]
 
 # Backwards-compatible alias
@@ -109,6 +112,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/ecmwf",
         max_days=10,
         unavailable_surface=["freezing_level_height", "visibility"],
+        # vertical_velocity now available (verified Feb 2025)
         pressure_levels=list(ECMWF_PRESSURE_LEVELS),
         default=True,
     ),
@@ -116,7 +120,6 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="GFS",
         base_url="https://api.open-meteo.com/v1/gfs",
         max_days=16,
-        unavailable_surface=["rain", "showers"],
         pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
         default=True,
     ),
@@ -124,7 +127,6 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="DWD ICON",
         base_url="https://api.open-meteo.com/v1/dwd-icon",
         max_days=7,
-        unavailable_surface=["precipitation_probability"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(ICON_PRESSURE_LEVELS),
         default=True,
@@ -150,9 +152,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="GEM",
         base_url="https://api.open-meteo.com/v1/gem",
         max_days=10,
-        unavailable_surface=["precipitation_probability",
-                             "freezing_level_height", "visibility",
-                             "rain", "showers"],
+        unavailable_surface=["freezing_level_height", "visibility"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(GEM_PRESSURE_LEVELS),
     ),
