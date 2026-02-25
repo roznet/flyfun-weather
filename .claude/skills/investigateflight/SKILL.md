@@ -231,6 +231,51 @@ for wp in snapshot.waypoints:
         print(f"  Model: {model_name}, {len(forecast.levels)} levels")
 ```
 
+### G. Re-run analysis pipeline on a single point's forecast
+
+When a metric looks wrong at a specific route point (icing, clouds, SFIP, precip,
+vertical motion, etc.), the pattern is always: **get the `HourlyForecast` → call
+`analyze_sounding()` → inspect the result**. This re-runs the full pipeline
+(thermodynamics → clouds → inversions → icing → SFIP → precip → vertical motion)
+and gives you all intermediate results.
+
+```python
+# 1. Load forecasts and get the HourlyForecast for the point of interest
+forecasts_data = load_forecasts(pack_dir)
+snapshot = ForecastSnapshot.model_validate(forecasts_data)
+
+wp = snapshot.waypoints[point_index]   # by index, or iterate by lat/lon
+forecast = wp.forecasts["gfs"]         # or "ecmwf", etc.
+hourly = forecast.hourly[hour_index]   # the target hour
+
+# 2. Re-run the full sounding analysis pipeline
+from weatherbrief.analysis.sounding import analyze_sounding
+result = analyze_sounding(hourly.levels, hourly, icing_severity_enhance=True)
+
+# 3. Inspect whichever part is relevant:
+#    result.cloud_layers         — EnhancedCloudLayer list
+#    result.icing_zones          — IcingZone list (Ogimet index)
+#    result.sfip_zones           — SFIPZone list (fuzzy-logic)
+#    result.inversion_layers     — InversionLayer list
+#    result.precipitation        — PrecipitationAssessment
+#    result.vertical_motion      — VerticalMotionAssessment (CAT layers)
+#    result.convective           — ConvectiveAssessment
+#    result.indices              — ThermodynamicIndices (CAPE, freezing level, etc.)
+#    result.derived_levels       — per-level DerivedLevel with all computed fields
+#    result.nwp_cloud_diagnostics — NWPCloudDiagnostics (GFS per-layer base/top)
+```
+
+The `HourlyForecast` (`hourly`) also carries the NWP inputs that feed the pipeline:
+- `hourly.levels` — raw `PressureLevelData` list (the input)
+- `hourly.nwp_cloud_diagnostics` — `NWPCloudDiagnostics` with `.low`/`.mid`/`.high`
+  layers, each having `cover_pct`, `base_ft`, `top_ft`, `top_temp_c`
+- `hourly.cloud_cover_low_pct` / `_mid_pct` / `_high_pct` — bulk NWP cloud %
+
+For deeper tracing, call individual sub-modules directly (they're all in
+`weatherbrief.analysis.sounding.*`: `clouds`, `icing`, `sfip`, `precipitation`,
+`vertical_motion`, `inversions`). Check each module's main function signature —
+they take `derived_levels` + relevant context from `hourly`.
+
 ## Step 6 — Run a single advisory evaluator in isolation
 
 ```python
