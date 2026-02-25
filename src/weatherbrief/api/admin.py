@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import html as html_mod
+import json
 import logging
 import os
 import secrets
@@ -23,7 +24,10 @@ from sqlalchemy.orm import Session
 from weatherbrief.api.auth_config import get_jwt_secret, is_dev_mode
 from weatherbrief.api.jwt_utils import decode_token
 from weatherbrief.db.deps import TOKEN_PREFIX, get_db
-from weatherbrief.db.models import ApiTokenRow, BriefingUsageRow, UserPreferencesRow, UserRow
+from weatherbrief.db.models import (
+    ApiTokenRow, BriefingUsageRow, CreditLedgerRow, FlightRow,
+    UserPreferencesRow, UserRow,
+)
 from weatherbrief.db.engine import DEV_USER_ID
 from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails
 from weatherbrief.storage.flights import safe_path_component
@@ -209,6 +213,169 @@ def list_users(
             "total_disk_bytes": total_disk,
         },
         "users": user_list,
+    }
+
+
+@router.get("/users/{user_id}/costs")
+def get_user_costs(
+    user_id: str,
+    limit: int = 50,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Return detailed cost data for a single user (admin only)."""
+    user = db.query(UserRow).filter(UserRow.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # --- Credits used today/month (reuse pattern from credits.py) ---
+    from weatherbrief.api.credits import _credits_used_since
+
+    credits_today = round(_credits_used_since(db, user_id, today_start), 2)
+    credits_month = round(_credits_used_since(db, user_id, month_start), 2)
+
+    # --- Total credits charged (all time) + total briefings ---
+    total_charged_result = (
+        db.query(func.coalesce(func.sum(CreditLedgerRow.amount), 0.0))
+        .filter(
+            CreditLedgerRow.user_id == user_id,
+            CreditLedgerRow.amount < 0,
+        )
+        .scalar()
+    )
+    total_credits_charged = round(abs(float(total_charged_result)), 2)
+
+    total_briefings = (
+        db.query(func.count())
+        .select_from(CreditLedgerRow)
+        .filter(
+            CreditLedgerRow.user_id == user_id,
+            CreditLedgerRow.category == "briefing",
+        )
+        .scalar()
+    ) or 0
+
+    avg_cost = round(total_credits_charged / total_briefings, 2) if total_briefings > 0 else 0.0
+
+    # --- Last active ---
+    last_active_row = (
+        db.query(func.max(BriefingUsageRow.timestamp))
+        .filter(BriefingUsageRow.user_id == user_id)
+        .scalar()
+    )
+
+    # --- Transactions with flight_id via briefing_usage join ---
+    tx_query = (
+        db.query(CreditLedgerRow, BriefingUsageRow.flight_id)
+        .outerjoin(
+            BriefingUsageRow,
+            CreditLedgerRow.briefing_usage_id == BriefingUsageRow.id,
+        )
+        .filter(CreditLedgerRow.user_id == user_id)
+        .order_by(CreditLedgerRow.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    transactions = []
+    for ledger_row, flight_id in tx_query:
+        breakdown = None
+        if ledger_row.breakdown_json:
+            try:
+                breakdown = json.loads(ledger_row.breakdown_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        transactions.append({
+            "id": ledger_row.id,
+            "timestamp": ledger_row.timestamp.isoformat() if ledger_row.timestamp else "",
+            "amount": ledger_row.amount,
+            "balance_after": ledger_row.balance_after,
+            "category": ledger_row.category,
+            "description": ledger_row.description,
+            "breakdown": breakdown,
+            "flight_id": flight_id or None,
+        })
+
+    # --- Recent flights ---
+    flights = (
+        db.query(FlightRow)
+        .filter(FlightRow.user_id == user_id)
+        .order_by(FlightRow.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    recent_flights = [
+        {
+            "flight_id": f.id,
+            "route_name": f.route_name,
+            "target_date": f.target_date,
+            "target_time_utc": f.target_time_utc,
+            "cruise_altitude_ft": f.cruise_altitude_ft,
+            "created_at": f.created_at.isoformat() if f.created_at else None,
+        }
+        for f in flights
+    ]
+
+    # --- Aggregate cost breakdown from all briefing ledger entries ---
+    briefing_entries = (
+        db.query(CreditLedgerRow.breakdown_json)
+        .filter(
+            CreditLedgerRow.user_id == user_id,
+            CreditLedgerRow.category == "briefing",
+            CreditLedgerRow.breakdown_json.isnot(None),
+        )
+        .all()
+    )
+    agg_breakdown = {
+        "token_cost_usd": 0.0,
+        "infra_share_usd": 0.0,
+        "subscription_share_usd": 0.0,
+        "storage_cost_usd": 0.0,
+        "margin_usd": 0.0,
+        "total_usd": 0.0,
+    }
+    for (bj,) in briefing_entries:
+        if not bj:
+            continue
+        try:
+            bd = json.loads(bj)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        agg_breakdown["token_cost_usd"] += bd.get("token_cost_usd", 0.0)
+        agg_breakdown["infra_share_usd"] += bd.get("infra_share_usd", 0.0)
+        agg_breakdown["subscription_share_usd"] += bd.get("subscription_share_usd", 0.0)
+        agg_breakdown["storage_cost_usd"] += bd.get("storage_cost_usd", 0.0)
+        agg_breakdown["margin_usd"] += bd.get("margin_usd", 0.0)
+        agg_breakdown["total_usd"] += bd.get("total_usd", 0.0)
+    # Round all aggregated values
+    for k in agg_breakdown:
+        agg_breakdown[k] = round(agg_breakdown[k], 4)
+
+    return {
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "approved": user.approved,
+            "provider": user.provider,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "last_active_at": last_active_row.isoformat() if last_active_row else None,
+        },
+        "credit_balance": round(user.credit_balance, 2),
+        "summary": {
+            "credits_used_today": credits_today,
+            "credits_used_month": credits_month,
+            "total_credits_charged": total_credits_charged,
+            "total_briefings": total_briefings,
+            "avg_cost_per_briefing": avg_cost,
+        },
+        "transactions": transactions,
+        "recent_flights": recent_flights,
+        "cost_breakdown": agg_breakdown,
     }
 
 

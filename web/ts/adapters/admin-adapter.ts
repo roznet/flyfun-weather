@@ -80,6 +80,69 @@ export async function revokeAgentToken(userId: string, tokenId: number): Promise
   await apiFetch<unknown>(`/admin/agents/${userId}/tokens/${tokenId}`, { method: 'DELETE' });
 }
 
+// --- User Costs ---
+
+export interface UserCostUser {
+  id: string;
+  email: string;
+  display_name: string;
+  approved: boolean;
+  provider: string;
+  created_at: string | null;
+  last_login_at: string | null;
+  last_active_at: string | null;
+}
+
+export interface UserCostSummary {
+  credits_used_today: number;
+  credits_used_month: number;
+  total_credits_charged: number;
+  total_briefings: number;
+  avg_cost_per_briefing: number;
+}
+
+export interface UserCostTransaction {
+  id: number;
+  timestamp: string;
+  amount: number;
+  balance_after: number;
+  category: string;
+  description: string;
+  breakdown: Record<string, number> | null;
+  flight_id: string | null;
+}
+
+export interface UserCostFlight {
+  flight_id: string;
+  route_name: string;
+  target_date: string;
+  target_time_utc: number;
+  cruise_altitude_ft: number;
+  created_at: string | null;
+}
+
+export interface UserCostBreakdown {
+  token_cost_usd: number;
+  infra_share_usd: number;
+  subscription_share_usd: number;
+  storage_cost_usd: number;
+  margin_usd: number;
+  total_usd: number;
+}
+
+export interface UserCostsResponse {
+  user: UserCostUser;
+  credit_balance: number;
+  summary: UserCostSummary;
+  transactions: UserCostTransaction[];
+  recent_flights: UserCostFlight[];
+  cost_breakdown: UserCostBreakdown;
+}
+
+export async function fetchUserCosts(userId: string, limit = 50): Promise<UserCostsResponse> {
+  return apiFetch<UserCostsResponse>(`/admin/users/${encodeURIComponent(userId)}/costs?limit=${limit}`);
+}
+
 // --- Feedback ---
 
 export interface FeedbackEntry {
