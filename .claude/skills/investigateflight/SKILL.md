@@ -71,7 +71,8 @@ Example: `2026-02-25T13-23-00.013596p00-00`
 
 | File | Contents |
 |------|----------|
-| `snapshot.json` | Raw forecast data — all waypoints, all models, all pressure levels |
+| `briefing.json` | Route + analyses + observations + metadata (no raw forecasts) |
+| `forecasts.json` | Route + metadata + raw forecasts only (large file) |
 | `cross_section.json` | `RouteCrossSection[]` — interpolated vertical slices for visualization |
 | `route_analyses.json` | `RouteAnalysesManifest` — sounding analysis per waypoint & route point |
 | `elevation_profile.json` | `ElevationProfile` — SRTM terrain along route |
@@ -81,6 +82,8 @@ Example: `2026-02-25T13-23-00.013596p00-00`
 | `gramet.pdf` | GRAMET cross-section image (Autorouter) |
 | `skewt/*.png` | Skew-T diagrams per waypoint/model |
 | `digest.md` / `digest.json` | LLM-generated weather digest |
+
+> **Legacy note**: Old packs may have a single `snapshot.json` instead of the split files. The `load_briefing()` / `load_forecasts()` helpers handle fallback automatically.
 
 ## Step 4 — Load and inspect data in Python
 
@@ -98,15 +101,23 @@ from weatherbrief.tasks.artifacts import (
     load_route_analyses,
     load_cross_sections,
     load_elevation_profile,
+    load_briefing,
+    load_forecasts,
 )
 
 manifest = load_route_analyses(pack_dir)
 cross_sections = load_cross_sections(pack_dir)
 elevation = load_elevation_profile(pack_dir)
 
-# --- Load raw snapshot ---
+# --- Load briefing data (route + analyses + observations) ---
+briefing_data = load_briefing(pack_dir)  # dict, auto-falls back to snapshot.json
+
+# --- Load raw forecasts (large — only when needed) ---
+forecasts_data = load_forecasts(pack_dir)  # dict, auto-falls back to snapshot.json
+
+# --- Parse into typed model ---
 from weatherbrief.models import ForecastSnapshot
-snapshot = ForecastSnapshot.model_validate_json((pack_dir / "snapshot.json").read_text())
+snapshot = ForecastSnapshot.model_validate(forecasts_data)
 
 # --- Load advisories ---
 from weatherbrief.models.analysis import RouteAdvisoriesManifest
@@ -117,7 +128,32 @@ advisories = RouteAdvisoriesManifest.model_validate_json(
 
 ## Step 5 — Reproduce and debug specific computations
 
-### A. Recompute advisories (without re-fetching weather data)
+### A. Recompute analysis (without re-fetching weather data)
+
+Re-runs sounding analysis from saved cross-sections and route points. Useful when you've
+changed analysis logic (cloud layers, icing, vertical motion, etc.) and want to verify
+against an existing briefing.
+
+```python
+from weatherbrief.tasks.analyze import run_analysis_from_pack
+from weatherbrief.models import RouteConfig
+
+# Load route from briefing data
+route = RouteConfig.model_validate(briefing_data["route"])
+
+result = run_analysis_from_pack(
+    pack_dir=pack_dir,
+    route=route,
+    target_date="2026-02-27",
+    target_hour=9,
+    icing_severity_enhance=True,
+)
+# result.waypoint_analyses — per-waypoint sounding analyses
+# result.route_analyses — per-route-point analyses (used by advisories)
+# result.route_analyses_manifest — RouteAnalysesManifest
+```
+
+### B. Recompute advisories (without re-fetching weather data)
 
 ```python
 from weatherbrief.tasks.advise import run_advisories_from_pack
@@ -151,7 +187,7 @@ for rpa in manifest.analyses:
             print(f"    CAT: {[(c.base_ft, c.top_ft, c.severity) for c in vm.cat_layers]}")
 ```
 
-### C. Recompute altitude advisories from a sounding
+### D. Recompute altitude advisories from a sounding
 
 ```python
 from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
@@ -166,7 +202,7 @@ for rpa in manifest.analyses:
         print(f"{rpa.location_name} / {model}: {alt_adv}")
 ```
 
-### D. Inspect cross-section data for a layer
+### E. Inspect cross-section data for a layer
 
 ```python
 cross_sections = load_cross_sections(pack_dir)
@@ -181,10 +217,12 @@ for cs in cross_sections:
                   f" wind={lvl.wind_speed_kts}kt cloud={lvl.cloud_cover}")
 ```
 
-### E. Inspect raw forecast snapshot for a specific waypoint/model/level
+### F. Inspect raw forecast data for a specific waypoint/model/level
 
 ```python
-snapshot = ForecastSnapshot.model_validate_json((pack_dir / "snapshot.json").read_text())
+# Load forecasts (large file — only when you need raw data)
+forecasts_data = load_forecasts(pack_dir)
+snapshot = ForecastSnapshot.model_validate(forecasts_data)
 
 # snapshot structure: snapshot.waypoints[i].forecasts[model_name].levels[j]
 for wp in snapshot.waypoints:
@@ -248,7 +286,7 @@ Pattern: `/api/flights/{flight_id}/packs/{timestamp}/{resource}` (use `latest` f
 ## Tips
 
 - Use `python -m json.tool` or `jq` to pretty-print API responses
-- The `snapshot.json` file can be very large (10+ MB) — use `jq` to extract specific parts
+- The `forecasts.json` file can be very large (10+ MB) — use `jq` to extract specific parts
 - For frontend visualization debugging, the cross-section renderer is at `web/ts/visualization/cross-section/renderer.ts` and layer definitions at `web/ts/visualization/cross-section/layers.ts`
 - The data extraction pipeline (JSON → canvas) is in `web/ts/visualization/data-extract.ts`
 - Route map rendering (colored segments) is in `web/ts/visualization/route-map/renderer.ts`
