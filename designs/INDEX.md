@@ -46,8 +46,13 @@ Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDiges
 → Full doc: digest.md
 
 ### multi-user-deployment
-Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google OAuth + API token auth (bot/agent users), MySQL/SQLite DB, per-user flights/profiles/credentials, usage tracking, rate limiting, auto-approve + welcome email, admin management, shareable briefing links, flight parameter profiles.
+Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google OAuth + API token auth (bot/agent users), MySQL/SQLite DB, per-user flights/profiles/credentials, usage tracking, rate limiting, auto-approve + welcome email, admin management, shareable briefing links, flight parameter profiles, user feedback with admin email notifications.
 → Full doc: multi-user-deployment.md
+
+### cost-attribution
+Fair cost attribution system: per-briefing cost computation from LLM tokens + infrastructure share + storage + margin, credit balance with auto-reload, append-only ledger, versioned admin cost config, public transparency endpoint. Pure computation module + API layer.
+Key exports: `compute_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `get_active_cost_config`
+→ Full doc: cost-attribution-design.md
 
 ### flight-weather-tracker-spec
 Original requirements specification with phase roadmap, data source descriptions, algorithm details, and output format definitions.
