@@ -24,6 +24,10 @@ IN_CLOUD_DD_THRESHOLD = 3.0
 SLD_THICK_CLOUD_FT = 3000
 SLD_WARM_TOP_C = -12.0
 
+# Minimum half-thickness for single-level icing zones (matches GFS vertical
+# resolution ~25 hPa ≈ 750–1000 ft and the _is_near_cloud() margin).
+_MIN_ZONE_HALF_THICKNESS_FT = 500
+
 # Ogimet icing index severity thresholds
 _INDEX_MODERATE = 30.0
 _INDEX_SEVERE = 80.0
@@ -407,6 +411,16 @@ def _build_zone(
     base = levels_in_zone[0]
     top = levels_in_zone[-1]
 
+    base_ft = round(base.altitude_ft)
+    top_ft = round(top.altitude_ft)
+
+    # Expand thin zones (single pressure level) to minimum thickness so they
+    # are visible on the cross-section canvas and detectable by evaluators.
+    if top_ft - base_ft < _MIN_ZONE_HALF_THICKNESS_FT * 2:
+        mid_ft = (base_ft + top_ft) / 2
+        base_ft = round(mid_ft - _MIN_ZONE_HALF_THICKNESS_FT)
+        top_ft = round(mid_ft + _MIN_ZONE_HALF_THICKNESS_FT)
+
     # Worst base risk in zone, then apply zone-level enhancement
     risk_order = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
     worst_risk = max(risks, key=lambda r: risk_order.index(r))
@@ -432,8 +446,8 @@ def _build_zone(
     rh_vals = [lv.relative_humidity_pct for lv in levels_in_zone if lv.relative_humidity_pct is not None]
 
     return IcingZone(
-        base_ft=round(base.altitude_ft),
-        top_ft=round(top.altitude_ft),
+        base_ft=base_ft,
+        top_ft=top_ft,
         base_pressure_hpa=base.pressure_hpa,
         top_pressure_hpa=top.pressure_hpa,
         risk=worst_risk,

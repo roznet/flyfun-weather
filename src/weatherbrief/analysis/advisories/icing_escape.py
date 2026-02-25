@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     format_extent,
+    has_relevant_icing,
     max_terrain_near_point,
     pct_above_threshold,
 )
@@ -58,6 +59,20 @@ class IcingEscapeEvaluator:
                     step=500,
                 ),
                 AdvisoryParameterDef(
+                    key="icing_altitude_buffer_ft",
+                    label="Icing alt buffer",
+                    description=(
+                        "Icing above cruise + buffer is ignored "
+                        "(irrelevant altitude)"
+                    ),
+                    type="altitude",
+                    unit="ft",
+                    default=2000,
+                    min=500,
+                    max=5000,
+                    step=500,
+                ),
+                AdvisoryParameterDef(
                     key="route_pct_amber",
                     label="Route % (amber)",
                     description="Percentage of route with icing to trigger amber",
@@ -75,6 +90,7 @@ class IcingEscapeEvaluator:
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         terrain_margin = params.get("terrain_margin_ft", 1000)
         tight_margin = params.get("tight_margin_ft", 2000)
+        icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
         route_pct_amber = params.get("route_pct_amber", 20)
 
         per_model: list[ModelAdvisoryResult] = []
@@ -91,7 +107,11 @@ class IcingEscapeEvaluator:
                     continue
                 total += 1
 
-                if not sounding.icing_zones:
+                if not has_relevant_icing(
+                    sounding.icing_zones,
+                    ctx.cruise_altitude_ft,
+                    icing_altitude_buffer_ft,
+                ):
                     continue
 
                 affected += 1

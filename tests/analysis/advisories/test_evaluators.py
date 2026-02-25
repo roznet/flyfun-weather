@@ -42,6 +42,24 @@ class TestIcingEscape:
         for m in result.per_model:
             assert m.total_points > 0
 
+    def test_high_altitude_icing_ignored(
+        self, ifr_high_altitude_icing_context: RouteContext,
+    ):
+        """Icing at 14000ft with cruise 6000ft — above cruise + buffer → GREEN."""
+        result = IcingEscapeEvaluator.evaluate(
+            ifr_high_altitude_icing_context,
+            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "route_pct_amber": 20},
+        )
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_icing_at_cruise_still_triggers(self, icing_context: RouteContext):
+        """Icing at 4000–10000ft with cruise 8000ft is relevant."""
+        result = IcingEscapeEvaluator.evaluate(
+            icing_context,
+            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "route_pct_amber": 20},
+        )
+        assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+
 
 class TestVMCCruise:
     def test_green_clear_sky(self, clear_context: RouteContext):
@@ -385,7 +403,7 @@ class TestIFRFeasibility:
         entry = IFRFeasibilityEvaluator.catalog_entry()
         assert entry.id == "ifr_feasibility"
         assert entry.category == "flight_rules"
-        assert len(entry.parameters) == 6
+        assert len(entry.parameters) == 7
 
     def test_tunable_icing_threshold(self, ifr_heavy_icing_context: RouteContext):
         """With higher icing threshold, 100% icing should still be RED."""
@@ -399,3 +417,30 @@ class TestIFRFeasibility:
         """VFR airports are fine for IFR — GREEN."""
         result = IFRFeasibilityEvaluator.evaluate(vfr_clear_context, _IFR_DEFAULTS)
         assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_high_altitude_icing_ignored(
+        self, ifr_high_altitude_icing_context: RouteContext,
+    ):
+        """Icing at 14000ft with cruise 6000ft — above cruise + 2000ft buffer → GREEN."""
+        result = IFRFeasibilityEvaluator.evaluate(
+            ifr_high_altitude_icing_context, _IFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_icing_at_cruise_still_red(self, ifr_heavy_icing_context: RouteContext):
+        """Icing at 4000–10000ft with cruise 8000ft is relevant → RED."""
+        result = IFRFeasibilityEvaluator.evaluate(
+            ifr_heavy_icing_context, _IFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_tunable_icing_altitude_buffer(
+        self, ifr_high_altitude_icing_context: RouteContext,
+    ):
+        """With large buffer (10000ft), icing at 14000ft becomes relevant for cruise 6000ft."""
+        params = {**_IFR_DEFAULTS, "icing_altitude_buffer_ft": 10000}
+        result = IFRFeasibilityEvaluator.evaluate(
+            ifr_high_altitude_icing_context, params,
+        )
+        # 14000 < 6000 + 10000 = 16000 → relevant → 100% icing > 30% → RED
+        assert result.aggregate_status == AdvisoryStatus.RED

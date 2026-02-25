@@ -7,7 +7,7 @@ and convective activity into a single go/no-go style assessment for IFR flights.
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent
+from weatherbrief.analysis.advisories._helpers import format_extent, has_relevant_icing
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -88,6 +88,8 @@ def _check_enroute_hazards(
     ctx: RouteContext,
     model: str,
     convective_min_risk_idx: int,
+    cruise_altitude_ft: float,
+    icing_altitude_buffer_ft: float,
 ) -> tuple[int, int, int, int, ConvectiveRisk]:
     """Check en-route icing and convective hazards in a single pass.
 
@@ -107,7 +109,9 @@ def _check_enroute_hazards(
             continue
         total += 1
 
-        has_icing = bool(sounding.icing_zones)
+        has_icing = has_relevant_icing(
+            sounding.icing_zones, cruise_altitude_ft, icing_altitude_buffer_ft,
+        )
         has_convective = False
 
         conv = sounding.convective
@@ -199,6 +203,20 @@ class IFRFeasibilityEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
+                    key="icing_altitude_buffer_ft",
+                    label="Icing alt buffer",
+                    description=(
+                        "Icing above cruise + buffer is ignored "
+                        "(irrelevant altitude)"
+                    ),
+                    type="altitude",
+                    unit="ft",
+                    default=2000,
+                    min=500,
+                    max=5000,
+                    step=500,
+                ),
+                AdvisoryParameterDef(
                     key="convective_min_risk",
                     label="Convective min",
                     description=(
@@ -231,6 +249,7 @@ class IFRFeasibilityEvaluator:
         min_arr_ceiling_ft = params.get("min_arr_ceiling_ft", 400)
         icing_pct_amber = params.get("icing_pct_amber", 15)
         icing_pct_red = params.get("icing_pct_red", 30)
+        icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
         convective_min_risk = int(params.get("convective_min_risk", 3))
         convective_pct_red = params.get("convective_pct_red", 10)
 
@@ -244,7 +263,10 @@ class IFRFeasibilityEvaluator:
 
             # 2. En-route hazards (single pass — no double-counting)
             total, affected, icing_count, conv_count, worst_conv_risk = (
-                _check_enroute_hazards(ctx, model, convective_min_risk)
+                _check_enroute_hazards(
+                    ctx, model, convective_min_risk,
+                    ctx.cruise_altitude_ft, icing_altitude_buffer_ft,
+                )
             )
 
             if (
