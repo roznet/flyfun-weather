@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.admin import require_admin
+from weatherbrief.api.auth_config import is_dev_mode
 from weatherbrief.db.deps import current_user_id, get_db
 from weatherbrief.db.models import FeedbackRow, UserRow
 
@@ -44,10 +45,13 @@ class FeedbackRequest(BaseModel):
 @router.post("")
 def submit_feedback(
     body: FeedbackRequest,
+    request: Request,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
     """Submit feedback for a specific briefing pack."""
+    user = db.query(UserRow).filter(UserRow.id == user_id).first()
+
     row = FeedbackRow(
         user_id=user_id,
         flight_id=body.flight_id,
@@ -58,6 +62,26 @@ def submit_feedback(
     db.add(row)
     db.flush()
     logger.info("Feedback #%d from user %s on flight %s", row.id, user_id, body.flight_id)
+
+    # Email admin (fire-and-forget)
+    try:
+        from weatherbrief.notify.admin_email import send_feedback_notification
+
+        base_url = str(request.base_url).rstrip("/")
+        if not is_dev_mode():
+            base_url = base_url.replace("http://", "https://")
+        send_feedback_notification(
+            user_email=user.email if user else "",
+            user_name=user.display_name if user else user_id,
+            flight_id=body.flight_id,
+            pack_timestamp=body.pack_timestamp,
+            category=body.category,
+            comment=body.comment,
+            base_url=base_url,
+        )
+    except Exception:
+        logger.warning("Failed to send feedback notification email", exc_info=True)
+
     return {"id": row.id, "status": "ok"}
 
 
