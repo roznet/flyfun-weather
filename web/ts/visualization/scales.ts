@@ -48,33 +48,35 @@ export function coverageOpacity(coverage: string): number {
 }
 
 /** Coverage multiplier: SCT layers render more transparent than BKN/OVC. */
-const COVERAGE_FACTOR: Record<string, number> = {
-  sct: 0.55,
-  bkn: 0.85,
-  ovc: 1.0,
+/** Coverage alpha range: [min, max] opacity for each coverage class. */
+const COVERAGE_ALPHA: Record<string, [number, number]> = {
+  sct: [0.40, 0.55],
+  bkn: [0.50, 0.80],
+  ovc: [0.60, 0.92],
 };
 
-function coverageFactor(coverage: string): number {
-  return COVERAGE_FACTOR[coverage] ?? 0.7;
+function coverageAlpha(coverage: string, t: number): number {
+  const [lo, hi] = COVERAGE_ALPHA[coverage] ?? [0.30, 0.65];
+  return hi - (hi - lo) * t;
 }
 
 /**
  * Continuous cloud fill from dewpoint depression (0–3°C) modulated by coverage.
- * DD ≈ 0 → dense gray, high opacity.
- * DD ≈ 3 → light gray, lower opacity.
- * SCT layers are rendered more transparently than BKN/OVC at the same DD.
- * Falls back to coverage-based gray fill when DD unavailable.
+ * DD ≈ 0 → medium gray (dense cloud), high opacity.
+ * DD ≈ 3 → white (thin cloud edge), lower opacity with visible floor.
+ * Falls back to coverage-based fill when DD unavailable.
  */
 export function cloudFillFromDD(dd: number | undefined, coverage: string): string {
   if (dd === undefined) {
-    const opacity = Math.min(0.85, coverageOpacity(coverage) + 0.15);
-    return `rgba(180, 185, 190, ${opacity.toFixed(2)})`;
+    const [, hi] = COVERAGE_ALPHA[coverage] ?? [0.30, 0.65];
+    return `rgba(190, 190, 195, ${hi.toFixed(2)})`;
   }
   const t = Math.min(1, Math.max(0, dd / 3));
-  const r = Math.round(140 + 60 * t);
-  const g = Math.round(145 + 60 * t);
-  const b = Math.round(155 + 55 * t);
-  const a = (0.88 - 0.55 * t) * coverageFactor(coverage);
+  // White (245) at DD=3 → medium gray (170) at DD=0
+  const r = Math.round(170 + 75 * t);
+  const g = Math.round(170 + 75 * t);
+  const b = Math.round(175 + 73 * t);
+  const a = coverageAlpha(coverage, t);
   return `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
 }
 

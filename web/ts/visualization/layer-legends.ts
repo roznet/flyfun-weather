@@ -44,9 +44,9 @@ const CLOUD_BANDS_LEGEND: LegendEntry[] = [
 ];
 
 const NWP_CLOUD_LEGEND: LegendEntry[] = [
-  { label: '25% cover', color: 'rgba(180, 185, 190, 0.20)', meaning: 'Scattered' },
-  { label: '50% cover', color: 'rgba(180, 185, 190, 0.40)', meaning: 'Broken' },
-  { label: '75%+ cover', color: 'rgba(180, 185, 190, 0.60)', meaning: 'Overcast' },
+  { label: '25% cover', color: 'rgba(214, 218, 232, 0.38)', meaning: 'Scattered' },
+  { label: '50% cover', color: 'rgba(198, 202, 215, 0.50)', meaning: 'Broken' },
+  { label: '75%+ cover', color: 'rgba(181, 186, 201, 0.63)', meaning: 'Overcast' },
 ];
 
 // --- Inversion legend ---

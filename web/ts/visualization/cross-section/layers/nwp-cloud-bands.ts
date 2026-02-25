@@ -19,14 +19,20 @@ const MID_TOP_FT = 20000;
 /** Inversions weaker than this don't reliably cap clouds. */
 const INVERSION_STRENGTH_THRESHOLD_C = 2.0;
 
-/** Convert cloud cover percentage to capped opacity. */
+/** Convert cloud cover percentage to opacity with visible floor. */
 function cloudOpacity(pct: number): number {
-  return Math.min(0.7, (pct / 100) * 0.8);
+  // Floor at 0.25 so even 25% cover is visible; cap at 0.75
+  return Math.min(0.75, 0.25 + (pct / 100) * 0.50);
 }
 
-/** Gray cloud fill at the given opacity. */
-function nwpCloudFill(opacity: number): string {
-  return `rgba(180, 185, 190, ${opacity})`;
+/** Blue-tinted white-to-gray fill — distinct from sounding cloud layers. */
+function nwpCloudFill(pct: number): string {
+  // Low cover → bright blue-white, high cover → cool gray
+  const t = Math.min(1, Math.max(0, pct / 100));
+  const r = Math.round(230 - 65 * t);
+  const g = Math.round(233 - 63 * t);
+  const b = Math.round(245 - 60 * t);
+  return `rgba(${r}, ${g}, ${b}, ${cloudOpacity(pct)})`;
 }
 
 /** Find the lowest inversion within [floor, ceiling] that exceeds the strength threshold. */
@@ -219,7 +225,7 @@ function renderColumns(
     // Low band
     const lowPct = bandCoverPct(point, 'low');
     if (lowPct > 0 && limits.lowBase < limits.lowTop) {
-      const fill = nwpCloudFill(cloudOpacity(lowPct));
+      const fill = nwpCloudFill(lowPct);
       const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.lowBase, top: limits.lowTop }];
       drawColumnBand(ctx, bandPoints, transform, fill);
     }
@@ -227,7 +233,7 @@ function renderColumns(
     // Mid band
     const midPct = bandCoverPct(point, 'mid');
     if (midPct > 0 && limits.midBase < limits.midTop) {
-      const fill = nwpCloudFill(cloudOpacity(midPct));
+      const fill = nwpCloudFill(midPct);
       const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.midBase, top: limits.midTop }];
       drawColumnBand(ctx, bandPoints, transform, fill);
     }
@@ -235,7 +241,7 @@ function renderColumns(
     // High band (only with GFS diagnostics)
     const highPct = bandCoverPct(point, 'high');
     if (highPct > 0 && limits.highBase < limits.highTop) {
-      const fill = nwpCloudFill(cloudOpacity(highPct));
+      const fill = nwpCloudFill(highPct);
       const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.highBase, top: limits.highTop }];
       drawColumnBand(ctx, bandPoints, transform, fill);
     }
@@ -273,7 +279,7 @@ function drawBandTrapezoid(
   if (coverPct <= 0) return;
   if (currBase >= currTop && nextBase >= nextTop) return;
 
-  ctx.fillStyle = nwpCloudFill(cloudOpacity(coverPct));
+  ctx.fillStyle = nwpCloudFill(coverPct);
   ctx.beginPath();
   ctx.moveTo(x1, transform.altitudeToY(currTop));
   ctx.lineTo(x2, transform.altitudeToY(nextTop));
@@ -326,21 +332,21 @@ function drawSinglePointBands(
 
   const lowPct = bandCoverPct(p, 'low');
   if (lowPct > 0 && limits.lowBase < limits.lowTop) {
-    const fill = nwpCloudFill(cloudOpacity(lowPct));
+    const fill = nwpCloudFill(lowPct);
     const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.lowBase, top: limits.lowTop }];
     drawColumnBand(ctx, bandPoints, transform, fill);
   }
 
   const midPct = bandCoverPct(p, 'mid');
   if (midPct > 0 && limits.midBase < limits.midTop) {
-    const fill = nwpCloudFill(cloudOpacity(midPct));
+    const fill = nwpCloudFill(midPct);
     const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.midBase, top: limits.midTop }];
     drawColumnBand(ctx, bandPoints, transform, fill);
   }
 
   const highPct = bandCoverPct(p, 'high');
   if (highPct > 0 && limits.highBase < limits.highTop) {
-    const fill = nwpCloudFill(cloudOpacity(highPct));
+    const fill = nwpCloudFill(highPct);
     const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.highBase, top: limits.highTop }];
     drawColumnBand(ctx, bandPoints, transform, fill);
   }
