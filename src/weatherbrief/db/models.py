@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -41,6 +41,10 @@ class UserRow(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     api_tokens: Mapped[list[ApiTokenRow]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    credit_balance: Mapped[float] = mapped_column(Float, default=500.0, server_default="500.0")
+    credit_ledger: Mapped[list[CreditLedgerRow]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -151,6 +155,7 @@ class BriefingUsageRow(Base):
     llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     llm_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     llm_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped[UserRow] = relationship(back_populates="briefing_usage")
 
@@ -193,3 +198,53 @@ class FeedbackRow(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
     user: Mapped[UserRow] = relationship()
+
+
+class CostConfigRow(Base):
+    __tablename__ = "cost_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    active_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    active_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    token_cost_per_1k_input: Mapped[float] = mapped_column(Float, default=0.003)
+    token_cost_per_1k_output: Mapped[float] = mapped_column(Float, default=0.015)
+    droplet_monthly_usd: Mapped[float] = mapped_column(Float, default=24.0)
+    misc_monthly_usd: Mapped[float] = mapped_column(Float, default=2.0)
+    subscriptions_monthly_usd: Mapped[float] = mapped_column(Float, default=30.0)
+    subscription_details_json: Mapped[str] = mapped_column(
+        Text, default='{"open_meteo": 30}',
+    )
+    disk_cost_per_gb_monthly: Mapped[float] = mapped_column(Float, default=0.10)
+    estimated_monthly_briefings: Mapped[int] = mapped_column(Integer, default=500)
+    margin_percent: Mapped[float] = mapped_column(Float, default=30.0)
+    usd_per_credit: Mapped[float] = mapped_column(Float, default=0.01)
+
+
+class CreditLedgerRow(Base):
+    __tablename__ = "credit_ledger"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True,
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+    )
+    amount: Mapped[float] = mapped_column(Float)
+    balance_after: Mapped[float] = mapped_column(Float)
+    category: Mapped[str] = mapped_column(String(32))
+    description: Mapped[str] = mapped_column(String(256), default="")
+    breakdown_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    briefing_usage_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("briefing_usage.id", ondelete="SET NULL"), nullable=True,
+    )
+    cost_config_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("cost_config.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    user: Mapped[UserRow] = relationship(back_populates="credit_ledger")

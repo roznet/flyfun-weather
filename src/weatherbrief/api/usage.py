@@ -127,9 +127,14 @@ def check_service_limits(db: Session, user_id: str) -> dict[str, bool]:
 
 
 def log_briefing_usage(
-    db: Session, user_id: str, flight_id: str, usage: BriefingUsage,
-) -> None:
-    """Insert a BriefingUsageRow after a briefing refresh."""
+    db: Session,
+    user_id: str,
+    flight_id: str,
+    usage: BriefingUsage,
+    *,
+    result_size_bytes: int | None = None,
+) -> int:
+    """Insert a BriefingUsageRow after a briefing refresh. Returns the row id."""
     row = BriefingUsageRow(
         user_id=user_id,
         flight_id=flight_id,
@@ -140,6 +145,7 @@ def log_briefing_usage(
         llm_model=usage.llm_model,
         llm_input_tokens=usage.llm_input_tokens,
         llm_output_tokens=usage.llm_output_tokens,
+        result_size_bytes=result_size_bytes,
     )
     db.add(row)
     db.flush()
@@ -148,6 +154,7 @@ def log_briefing_usage(
         user_id, flight_id, usage.open_meteo_calls,
         usage.gramet_fetched, usage.llm_digest,
     )
+    return row.id
 
 
 def get_usage_summary(db: Session, user_id: str) -> UsageSummary:

@@ -441,6 +441,42 @@ label {
   font-variant-numeric: tabular-nums;
 }
 
+/* --- Credits --- */
+
+.credits-summary {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.credits-detail { font-size: 0.85rem; }
+
+.credits-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.credits-table th,
+.credits-table td {
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.credits-table th {
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.credit-positive { color: var(--green); }
+.credit-negative { color: var(--text-muted); }
+
 /* --- Digest sections --- */
 
 .digest-section {
