@@ -80,15 +80,11 @@ def migrate_pack(pack_dir: Path, *, dry_run: bool) -> dict:
 def find_pack_dirs(data_dir: Path) -> list[Path]:
     """Find all directories that contain a snapshot.json."""
     pack_dirs = []
-    packs_root = data_dir / "packs"
-    if packs_root.exists():
-        for snapshot_path in packs_root.rglob("snapshot.json"):
-            pack_dirs.append(snapshot_path.parent)
-    # Also check legacy forecasts/ layout
-    forecasts_root = data_dir / "forecasts"
-    if forecasts_root.exists():
-        for snapshot_path in forecasts_root.rglob("snapshot.json"):
-            pack_dirs.append(snapshot_path.parent)
+    for subdir in ("packs", "forecasts", "flights"):
+        root = data_dir / subdir
+        if root.exists():
+            for snapshot_path in root.rglob("snapshot.json"):
+                pack_dirs.append(snapshot_path.parent)
     return sorted(set(pack_dirs))
 
 
