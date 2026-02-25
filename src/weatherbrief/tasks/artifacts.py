@@ -66,13 +66,29 @@ def save_analysis_artifacts(
     snapshot,  # ForecastSnapshot
     route_analyses_manifest: RouteAnalysesManifest | None,
 ) -> None:
-    """Persist analysis-stage artifacts to *pack_dir*."""
+    """Persist analysis-stage artifacts to *pack_dir*.
+
+    Writes two files:
+    - **briefing.json** — route, analyses, observations, metadata (no forecasts)
+    - **forecasts.json** — route, metadata, raw forecasts (no analyses)
+    """
     pack_dir.mkdir(parents=True, exist_ok=True)
 
-    # Snapshot without cross_sections (saved separately by fetch stage)
-    snapshot_path = pack_dir / "snapshot.json"
-    snapshot_path.write_text(
-        snapshot.model_dump_json(indent=2, exclude={"cross_sections"})
+    # briefing.json: everything except cross_sections and forecasts
+    briefing_path = pack_dir / "briefing.json"
+    briefing_path.write_text(
+        snapshot.model_dump_json(
+            indent=2, exclude={"cross_sections", "forecasts"},
+        )
+    )
+
+    # forecasts.json: route + metadata + forecasts only
+    forecasts_path = pack_dir / "forecasts.json"
+    forecasts_path.write_text(
+        snapshot.model_dump_json(
+            indent=2,
+            include={"route", "target_date", "fetch_date", "days_out", "forecasts"},
+        )
     )
 
     if route_analyses_manifest:
@@ -140,3 +156,26 @@ def load_fetch_meta(pack_dir: Path) -> dict | None:
     if not meta_path.exists():
         return None
     return json.loads(meta_path.read_text())
+
+
+def _load_json_with_fallback(
+    pack_dir: Path, name: str, fallback: str = "snapshot.json",
+) -> dict | None:
+    """Load a JSON file, falling back to snapshot.json for old packs."""
+    path = pack_dir / name
+    if path.exists():
+        return json.loads(path.read_text())
+    fb_path = pack_dir / fallback
+    if fb_path.exists():
+        return json.loads(fb_path.read_text())
+    return None
+
+
+def load_briefing(pack_dir: Path) -> dict | None:
+    """Load briefing.json (route + analyses + observations), fallback to snapshot.json."""
+    return _load_json_with_fallback(pack_dir, "briefing.json")
+
+
+def load_forecasts(pack_dir: Path) -> dict | None:
+    """Load forecasts.json (route + metadata + raw forecasts), fallback to snapshot.json."""
+    return _load_json_with_fallback(pack_dir, "forecasts.json")

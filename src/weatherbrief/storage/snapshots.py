@@ -21,10 +21,10 @@ def _snapshot_dir(
 def save_snapshot(
     snapshot: ForecastSnapshot, data_dir: Path | None = None
 ) -> Path:
-    """Save a forecast snapshot to JSON (excluding cross-section data).
+    """Save a forecast snapshot as split files (briefing.json + forecasts.json).
 
-    Cross-section data is saved separately via :func:`save_cross_section`
-    to keep snapshot.json lean for existing consumers.
+    Cross-section data is saved separately via :func:`save_cross_section`.
+    Returns the path to briefing.json.
     """
     data_dir = data_dir or DEFAULT_DATA_DIR
     out_dir = _snapshot_dir(
@@ -32,9 +32,24 @@ def save_snapshot(
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    out_path = out_dir / "snapshot.json"
-    out_path.write_text(snapshot.model_dump_json(indent=2, exclude={"cross_sections"}))
-    return out_path
+    # briefing.json: everything except cross_sections and forecasts
+    briefing_path = out_dir / "briefing.json"
+    briefing_path.write_text(
+        snapshot.model_dump_json(
+            indent=2, exclude={"cross_sections", "forecasts"},
+        )
+    )
+
+    # forecasts.json: route + metadata + forecasts only
+    forecasts_path = out_dir / "forecasts.json"
+    forecasts_path.write_text(
+        snapshot.model_dump_json(
+            indent=2,
+            include={"route", "target_date", "fetch_date", "days_out", "forecasts"},
+        )
+    )
+
+    return briefing_path
 
 
 def save_cross_section(
@@ -60,12 +75,25 @@ def load_snapshot(
     fetch_date: str,
     data_dir: Path | None = None,
 ) -> ForecastSnapshot:
-    """Load a snapshot from JSON."""
+    """Load a snapshot from split files (briefing.json + forecasts.json).
+
+    Falls back to legacy snapshot.json if new files don't exist.
+    """
     data_dir = data_dir or DEFAULT_DATA_DIR
     snap_dir = _snapshot_dir(target_date, days_out, fetch_date, data_dir)
-    snap_path = snap_dir / "snapshot.json"
 
-    raw = json.loads(snap_path.read_text())
+    briefing_path = snap_dir / "briefing.json"
+    forecasts_path = snap_dir / "forecasts.json"
+    legacy_path = snap_dir / "snapshot.json"
+
+    if briefing_path.exists() and forecasts_path.exists():
+        briefing = json.loads(briefing_path.read_text())
+        forecasts = json.loads(forecasts_path.read_text())
+        briefing["forecasts"] = forecasts.get("forecasts", [])
+        return ForecastSnapshot.model_validate(briefing)
+
+    # Legacy fallback
+    raw = json.loads(legacy_path.read_text())
     return ForecastSnapshot.model_validate(raw)
 
 
@@ -84,14 +112,22 @@ def list_snapshots(
 
     snapshots = []
     for d in sorted(target_dir.iterdir()):
-        if d.is_dir() and (d / "snapshot.json").exists():
-            parts = d.name.split("_", 1)
-            days_out = parts[0] if parts else d.name
-            fetch_date = parts[1] if len(parts) > 1 else ""
-            snapshots.append({
-                "days_out": days_out,
-                "fetch_date": fetch_date,
-                "path": str(d / "snapshot.json"),
-            })
+        if not d.is_dir():
+            continue
+        # Prefer briefing.json, fall back to legacy snapshot.json
+        if (d / "briefing.json").exists():
+            snap_file = "briefing.json"
+        elif (d / "snapshot.json").exists():
+            snap_file = "snapshot.json"
+        else:
+            continue
+        parts = d.name.split("_", 1)
+        days_out = parts[0] if parts else d.name
+        fetch_date = parts[1] if len(parts) > 1 else ""
+        snapshots.append({
+            "days_out": days_out,
+            "fetch_date": fetch_date,
+            "path": str(d / snap_file),
+        })
 
     return snapshots

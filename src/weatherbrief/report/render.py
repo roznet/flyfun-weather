@@ -59,17 +59,14 @@ def _pdf_first_page_data_uri(path: Path) -> str | None:
 
 
 def _generate_waypoint_skewt(
-    snapshot: dict, icao: str, model: str, output_path: Path,
+    forecasts_data: dict, target_dt, icao: str, model: str, output_path: Path,
 ) -> None:
-    """Generate a Skew-T PNG on-demand from snapshot forecast data."""
+    """Generate a Skew-T PNG on-demand from forecast data."""
     try:
-        from weatherbrief.api.packs import _parse_target_time
         from weatherbrief.digest.skewt import generate_skewt
         from weatherbrief.models import WaypointForecast
 
-        target_dt = _parse_target_time(snapshot)
-
-        for wf_data in snapshot.get("forecasts", []):
+        for wf_data in forecasts_data.get("forecasts", []):
             if wf_data.get("waypoint", {}).get("icao") == icao and wf_data.get("model") == model:
                 wf = WaypointForecast.model_validate(wf_data)
                 hourly = wf.at_time(target_dt)
@@ -89,22 +86,34 @@ def _build_template_context(
     # Digest (structured JSON)
     digest = _load_json(pack_dir / "digest.json")
 
-    # Snapshot (for model comparison + waypoint list)
-    snapshot = _load_json(pack_dir / "snapshot.json")
+    # Load split files (briefing.json + forecasts.json), fallback to snapshot.json
+    from weatherbrief.tasks.artifacts import load_briefing, load_forecasts
+
+    briefing = load_briefing(pack_dir)
+    forecasts_data = load_forecasts(pack_dir)
 
     # GRAMET image — try PNG first (embeddable in HTML <img>), then convert PDF
     gramet_uri = _image_data_uri(pack_dir / "gramet.png")
     if not gramet_uri:
         gramet_uri = _pdf_first_page_data_uri(pack_dir / "gramet.pdf")
 
+    # Parse target time for on-demand Skew-T generation
+    target_dt = None
+    if briefing or forecasts_data:
+        try:
+            from weatherbrief.api.packs import _parse_target_time
+            target_dt = _parse_target_time(briefing or forecasts_data)
+        except (ValueError, KeyError):
+            pass
+
     # Skew-T images (ECMWF only) — one per waypoint, generated on-demand
     skewt_images: list[dict] = []
-    if snapshot and "route" in snapshot:
-        for wp in snapshot["route"].get("waypoints", []):
+    if briefing and "route" in briefing:
+        for wp in briefing["route"].get("waypoints", []):
             icao = wp["icao"]
             skewt_path = pack_dir / "skewt" / f"{icao}_ecmwf.png"
-            if not skewt_path.exists():
-                _generate_waypoint_skewt(snapshot, icao, "ecmwf", skewt_path)
+            if not skewt_path.exists() and forecasts_data and target_dt:
+                _generate_waypoint_skewt(forecasts_data, target_dt, icao, "ecmwf", skewt_path)
             uri = _image_data_uri(skewt_path)
             skewt_images.append({"icao": icao, "name": wp.get("name", icao), "uri": uri})
 
@@ -118,10 +127,10 @@ def _build_template_context(
     alt_ft = flight.cruise_altitude_ft
     alt_str = f"FL{alt_ft // 100:03d}" if alt_ft >= 10000 else f"{alt_ft} ft"
 
-    # Model comparison data (from snapshot analyses)
+    # Model comparison data (from briefing analyses)
     comparison_waypoints: list[dict] = []
-    if snapshot:
-        for analysis in snapshot.get("analyses", []):
+    if briefing:
+        for analysis in briefing.get("analyses", []):
             divergences = analysis.get("model_divergence", [])
             if not divergences:
                 continue
@@ -153,8 +162,8 @@ def _build_template_context(
 
     # Route observations (METAR/TAF from D-0 flights)
     route_observations = None
-    if snapshot:
-        route_observations = snapshot.get("route_observations")
+    if briefing:
+        route_observations = briefing.get("route_observations")
 
     return {
         "flight": flight,
