@@ -306,6 +306,104 @@ async function init(): Promise<void> {
     });
   }
 
+  // --- Wire feedback button + modal ---
+  const feedbackBtn = document.getElementById('feedback-btn') as HTMLButtonElement;
+  if (feedbackBtn) {
+    feedbackBtn.addEventListener('click', () => {
+      const { flight, currentPack } = store.getState();
+      if (!flight) return;
+      showFeedbackModal(flight.id, currentPack?.fetch_timestamp ?? '');
+    });
+  }
+
+  function showFeedbackModal(flightId: string, packTimestamp: string): void {
+    // Remove existing modal if any
+    document.getElementById('feedback-modal')?.remove();
+
+    const categories = [
+      ['data_quality', 'Data Quality Issue'],
+      ['missing_data', 'Missing Data'],
+      ['ui_issue', 'UI / Display Issue'],
+      ['feature_request', 'Feature Request'],
+      ['other', 'Other'],
+    ];
+    const optionsHtml = categories
+      .map(([val, label]) => `<option value="${val}">${label}</option>`)
+      .join('');
+
+    const overlay = document.createElement('div');
+    overlay.id = 'feedback-modal';
+    overlay.className = 'feedback-modal-overlay';
+    overlay.innerHTML = `
+      <div class="feedback-modal">
+        <h3>Send Feedback</h3>
+        <p class="muted" style="margin:0 0 0.75rem;">Report an issue or suggest an improvement for this briefing.</p>
+        <label for="feedback-category" style="font-weight:500;font-size:0.85rem;">Category</label>
+        <select id="feedback-category" style="width:100%;padding:0.4rem;margin:0.25rem 0 0.75rem;border:1px solid var(--border);border-radius:4px;">
+          ${optionsHtml}
+        </select>
+        <label for="feedback-comment" style="font-weight:500;font-size:0.85rem;">Comment</label>
+        <textarea id="feedback-comment" rows="4" style="width:100%;padding:0.4rem;margin:0.25rem 0 0;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit;" placeholder="Describe the issue or suggestion..."></textarea>
+        <div id="feedback-error" style="color:#dc3545;font-size:0.8rem;min-height:1.2em;margin-top:0.25rem;"></div>
+        <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem;">
+          <button class="btn" id="feedback-cancel">Cancel</button>
+          <button class="btn btn-primary" id="feedback-submit">Submit</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+    const commentEl = document.getElementById('feedback-comment') as HTMLTextAreaElement;
+    const categoryEl = document.getElementById('feedback-category') as HTMLSelectElement;
+    const errorEl = document.getElementById('feedback-error')!;
+    const submitBtn = document.getElementById('feedback-submit') as HTMLButtonElement;
+
+    function dismiss(): void {
+      overlay.remove();
+    }
+
+    document.getElementById('feedback-cancel')!.addEventListener('click', dismiss);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss(); });
+
+    function onEsc(e: KeyboardEvent): void {
+      if (e.key === 'Escape') { dismiss(); document.removeEventListener('keydown', onEsc); }
+    }
+    document.addEventListener('keydown', onEsc);
+
+    submitBtn.addEventListener('click', async () => {
+      const comment = commentEl.value.trim();
+      if (!comment) {
+        errorEl.textContent = 'Please enter a comment.';
+        return;
+      }
+      errorEl.textContent = '';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Submitting...';
+
+      try {
+        await api.submitFeedback({
+          flight_id: flightId,
+          pack_timestamp: packTimestamp,
+          category: categoryEl.value,
+          comment,
+        });
+        // Show success state
+        const modal = overlay.querySelector('.feedback-modal')!;
+        modal.innerHTML = `
+          <h3>Thanks for your feedback!</h3>
+          <p class="muted">Your report has been submitted.</p>`;
+        setTimeout(dismiss, 1500);
+      } catch (err) {
+        errorEl.textContent = `Failed to submit: ${err}`;
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Submit';
+      }
+    });
+
+    // Focus textarea
+    commentEl.focus();
+  }
+
   // --- Wire model toggle ---
   const modelSelect = document.getElementById('model-select') as HTMLSelectElement;
   if (modelSelect) {

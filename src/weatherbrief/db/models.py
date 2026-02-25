@@ -176,3 +176,20 @@ class ApiTokenRow(Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
 
     user: Mapped[UserRow] = relationship(back_populates="api_tokens")
+
+
+class FeedbackRow(Base):
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    flight_id: Mapped[str] = mapped_column(String(256), index=True)
+    pack_timestamp: Mapped[str] = mapped_column(String(64), default="")
+    category: Mapped[str] = mapped_column(String(32))
+    comment: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    user: Mapped[UserRow] = relationship()
