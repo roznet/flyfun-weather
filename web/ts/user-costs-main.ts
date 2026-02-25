@@ -9,8 +9,11 @@ import {
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt } from './utils';
 
+// Cost breakdown keys that map to numeric fields on UserCostBreakdown
+type CostKey = 'token_cost_usd' | 'infra_share_usd' | 'subscription_share_usd' | 'storage_cost_usd' | 'margin_usd';
+
 // Cost category colors (stable across renders)
-const COST_COLORS: Record<string, string> = {
+const COST_COLORS: Record<CostKey, string> = {
   token_cost_usd: '#2563eb',
   infra_share_usd: '#6366f1',
   subscription_share_usd: '#0891b2',
@@ -18,7 +21,7 @@ const COST_COLORS: Record<string, string> = {
   margin_usd: '#d97706',
 };
 
-const COST_LABELS: Record<string, string> = {
+const COST_LABELS: Record<CostKey, string> = {
   token_cost_usd: 'LLM Tokens',
   infra_share_usd: 'Infrastructure',
   subscription_share_usd: 'Subscriptions',
@@ -132,19 +135,19 @@ function renderCostDistribution(bd: UserCostBreakdown, avgCost: number, totalBri
     return;
   }
 
-  const keys = Object.keys(COST_LABELS) as (keyof typeof COST_LABELS)[];
+  const keys = Object.keys(COST_LABELS) as CostKey[];
   // Build bar segments
   const segments = keys
-    .filter(k => (bd as Record<string, number>)[k] > 0)
+    .filter(k => bd[k] > 0)
     .map(k => {
-      const val = (bd as Record<string, number>)[k];
+      const val = bd[k];
       const pct = (val / total) * 100;
       return `<div class="bar-segment" style="width:${pct.toFixed(1)}%;background:${COST_COLORS[k]}" title="${COST_LABELS[k]}: $${val.toFixed(4)}">${pct >= 8 ? pct.toFixed(0) + '%' : ''}</div>`;
     })
     .join('');
 
   const legendItems = keys.map(k => {
-    const val = (bd as Record<string, number>)[k];
+    const val = bd[k];
     return `<div class="cost-legend-item"><span class="cost-legend-swatch" style="background:${COST_COLORS[k]}"></span>${COST_LABELS[k]}: $${val.toFixed(4)}</div>`;
   }).join('');
 
