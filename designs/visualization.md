@@ -1,10 +1,23 @@
-# Cross-Section Visualization
+# Visualization System
 
-> Canvas-rendered interactive cross-section showing weather layers along a flight route
+> Three synchronized visualizations: canvas cross-section, canvas route graph, and Leaflet route map
 
 ## Intent
 
-Provide a visual vertical cross-section of the route, showing clouds, icing, turbulence, inversions, convective towers, terrain, and key altitude references. All data comes from the `RouteAnalysesManifest` (per-model sounding analysis at each route point) and `ElevationProfile`.
+Provide interactive visual analysis of weather along a flight route through three coordinated views: a vertical cross-section (clouds, icing, turbulence, terrain), a scalar route graph (wind, temperature, CAPE), and a geographic route map (metric-colored segments on a Leaflet map). All views share the same `VizRouteData` and synchronize hover/selection through the Zustand store.
+
+## Layout Modes
+
+The visualization supports three layout modes (persisted to localStorage):
+- **cross-section**: Vertical profile only (cross-section + route graph)
+- **map**: Geographic view only (Leaflet route map)
+- **split**: Side-by-side (cross-section left, map right)
+
+Toggled via buttons in the control panel. Components are created/destroyed on layout change.
+
+## Cross-Section
+
+Vertical cross-section showing weather layers along the route. All data comes from the `RouteAnalysesManifest` (per-model sounding analysis at each route point) and `ElevationProfile`.
 
 ## Architecture
 
@@ -16,13 +29,20 @@ briefing-store (Zustand)
         ↓
 data-extract.ts  → extractVizData() → VizRouteData
         ↓
-CrossSectionRenderer
-  ├── axes.ts          (distance/altitude axes, grid lines, waypoint markers)
-  ├── layer-registry.ts (ordered list of all layers)
-  ├── layers/*.ts      (13 individual layer renderers)
-  └── interaction.ts   (hover crosshair, click-to-select point, tooltip)
+┌───────────────────────┬──────────────────────┬──────────────────────┐
+│  CrossSectionRenderer │  RouteGraphRenderer  │  RouteMapRenderer    │
+│  ├── axes.ts          │  ├── axes.ts         │  ├── renderer.ts     │
+│  ├── layer-registry   │  ├── metrics.ts      │  ├── metrics.ts (14) │
+│  ├── layers/*.ts (13) │  ├── interaction.ts  │  ├── segment-style   │
+│  └── interaction.ts   │  └── constants.ts    │  ├── interaction.ts  │
+│                       │                      │  ├── altitude-slider │
+│                       │                      │  └── legend.ts       │
+└───────────────────────┴──────────────────────┴──────────────────────┘
+        ↓                       ↓                       ↓
+       Hover sync (via callbacks in briefing-main.ts)
         ↓
-controls/panel.ts  (layer toggles, model selector, render mode)
+controls/panel.ts  (layer toggles, model selector, render mode, layout, map metric selectors)
+scales.ts          (shared color/opacity functions for all three renderers)
 ```
 
 **Two canvases:** main (layers) + overlay (crosshair/selection indicator). Overlay redraws on mouse move without re-rendering expensive layers.
@@ -228,6 +248,80 @@ A separate canvas-based chart rendered below the cross-section for scalar weathe
 - **Render types**: line (monotone cubic spline) and bar charts
 - **State**: `VizSettings` extended with `routeGraphVisible`, `routeGraphLeftMetric`, `routeGraphRightMetric`, persisted to localStorage
 - **Controls**: dropdown selectors below the graph, integrated into the controls panel
+
+## Route Map
+
+Leaflet-based geographic visualization showing weather metrics as colored route segments on an interactive map. Located in `web/ts/visualization/route-map/`.
+
+### Components
+
+| File | Purpose |
+|------|---------|
+| `renderer.ts` | Leaflet map lifecycle: lazy init, segment polylines, waypoint markers, highlight |
+| `metrics.ts` | 14-metric registry: `MapMetric` objects with `getValue`, `getColor`, `getWidth`, `formatValue` |
+| `segment-style.ts` | Pure function: `computeSegmentStyles()` → `{color, weight}[]` from metric + points |
+| `interaction.ts` | Hover (highlight + tooltip + sync), click (select point), event attach/detach |
+| `altitude-slider.ts` | Range input for level-dependent metrics (0 → ceiling, 500ft steps, FL labels) |
+| `legend.ts` | DOM gradient bar with color stops and labels |
+
+### Metric Registry (14 metrics)
+
+| Metric | Alt-Dependent | Color Scale |
+|--------|:---:|-------------|
+| cloud-cover-total | | Gray 0-100% |
+| cloud-cover-low | | Gray 0-100% |
+| convective-risk | | Green→Yellow→Red discrete |
+| headwind | | Green (tailwind) ↔ Red (headwind) diverging |
+| crosswind | | White→Purple |
+| cape | | Green→Yellow→Red continuous |
+| freezing-level | | Dark→Light blue |
+| nwp-ceiling | | Purple (LIFR)→Red (IFR)→Amber (MVFR)→Green (VFR) |
+| temperature | | Blue→White→Red diverging |
+| model-agreement | | Green/Orange/Red discrete |
+| icing-risk-at-level | Yes | Green→Yellow→Orange→Red |
+| sfip-at-level | Yes | Green→Yellow→Orange→Red |
+| cat-risk-at-level | Yes | Green→Yellow→Orange→Red |
+| cloud-at-level | Yes | Gray 0-100% |
+
+Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `cloudAtAlt()`) to find the relevant value at the slider's flight level.
+
+### Rendering
+
+- **Segments**: One `L.polyline` per adjacent point pair, colored/sized by metric via `computeSegmentStyles()`. Midpoint averaging of endpoint values for stable visuals.
+- **Waypoints**: White circle markers with ICAO tooltip on hover.
+- **Highlight**: Temporary weight increase (+3px) on hovered segment.
+- **Auto-fit**: Bounds fit route with 30px padding on data load.
+
+### Hover Sync
+
+All three visualizations synchronize through callbacks in `briefing-main.ts`:
+- Map hover → cross-section `renderOverlay(x)` + route-graph overlay
+- Cross-section/route-graph hover → map `highlightSegment(index)`
+- Click in any view → `setSelectedPoint(index)` in store → all views update
+
+### Store State
+
+`VizSettings` (persisted to localStorage) includes:
+- `layout`: `'cross-section' | 'map' | 'split'`
+- `mapColorMetric`: default `'icing-risk-at-level'`
+- `mapWidthMetric`: default `'cloud-cover-total'`
+- `mapAltitudeFt`: for level-dependent metrics (default = cruise altitude)
+
+### Key Choices
+
+- **Leaflet over Canvas** — built-in pan/zoom, waypoint tooltips, basemap tiles; simpler for geographic rendering
+- **Opaque map colors** — better visibility on complex basemap vs. semi-transparent cross-section bands
+- **Metric-driven styling** — no hardcoded thresholds; all defined in `MapMetric` objects
+- **Debounced altitude slider** (50ms) — prevents expensive re-renders during drag
+- **Segment recoloring** — segments cleared and recreated on metric change (clean event handler lifecycle)
+
+### Shared Scales Module (`scales.ts`)
+
+Single source of truth for all color/opacity functions used by cross-section bands, route graph, and route map:
+- Risk colors: icing (cornflower→red), CAT (amber→red), convection (gray→dark red)
+- Map colors: `riskMapColor()`, `cloudCoverMapColor()`, `headwindMapColor()`, `capeMapColor()`, `freezingLevelMapColor()`, `ceilingMapColor()`, `temperatureMapColor()`, `crosswindMapColor()`, `agreementMapColor()`
+- Width: `linearWidth(value, max, minW, maxW)` — linear interpolation for segment width
+- Cloud opacity: modulated by coverage so SCT layers render lighter than OVC
 
 ## Gotchas
 

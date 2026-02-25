@@ -148,7 +148,7 @@ src/weatherbrief/
 │   ├── usage.py       # Usage summary + daily rate limits
 │   ├── credits.py     # Credit balance, charge, admin cost config, transparency endpoint
 │   ├── feedback.py    # User feedback submission + admin listing
-│   └── admin.py       # Admin: user list, approval, usage overview, API agent/token management
+│   └── admin.py       # Admin: user list, approval, usage overview, per-user costs, API agent/token mgmt
 ├── costs.py           # Pure cost computation (no DB/IO): CostConfig, CostBreakdown, compute_cost()
 ├── report/
 │   ├── render.py      # render_html(), render_pdf() via Jinja2 + WeasyPrint
@@ -169,6 +169,8 @@ web/
 ├── login.html         # OAuth login page
 ├── settings.html      # User preferences + usage dashboard
 ├── admin.html         # Admin: user approval + usage overview
+├── user-costs.html    # Admin: per-user cost attribution dashboard
+├── help.html          # Help & documentation
 ├── css/style.css      # Shared styles
 ├── ts/
 │   ├── store/         # Zustand vanilla stores + shared types
@@ -178,7 +180,7 @@ web/
 │   ├── helpers/       # Metric lookup, threshold rendering
 │   ├── types/         # Shared TypeScript type definitions (metrics, advisories)
 │   ├── data/          # Static data (metrics-catalog.json, metrics-display.json)
-│   ├── visualization/ # Canvas-rendered visualizations (cross-section + route graph)
+│   ├── visualization/ # Interactive visualizations (cross-section + route graph + route map)
 │   │   ├── cross-section/
 │   │   │   ├── renderer.ts      # Main canvas engine + coordinate transforms
 │   │   │   ├── axes.ts          # Distance/altitude axis rendering
@@ -191,17 +193,26 @@ web/
 │   │   │   ├── interaction.ts   # Hover + selection sync with cross-section
 │   │   │   ├── metrics.ts       # Metric registry (wind, temp, precip, CAPE, etc.)
 │   │   │   └── constants.ts     # Shared layout constants
+│   │   ├── route-map/           # Leaflet geographic route visualization
+│   │   │   ├── renderer.ts      # Leaflet map lifecycle, segment polylines, waypoints
+│   │   │   ├── metrics.ts       # 14-metric registry (MapMetric objects)
+│   │   │   ├── segment-style.ts # Pure: computeSegmentStyles() → {color, weight}[]
+│   │   │   ├── interaction.ts   # Hover, click, tooltip, sync callbacks
+│   │   │   ├── altitude-slider.ts # Range input for level-dependent metrics
+│   │   │   └── legend.ts        # DOM gradient bar with color stops
 │   │   ├── interaction-utils.ts # Shared: tooltip, nearest point, axis ticks
-│   │   ├── controls/panel.ts    # Layer toggles + model selector + route graph controls
+│   │   ├── controls/panel.ts    # Layer toggles, model selector, layout mode, map metric selectors
 │   │   ├── data-extract.ts      # Transform API data → VizRouteData
-│   │   ├── scales.ts            # Color/opacity scales for risk levels
+│   │   ├── scales.ts            # Shared color/opacity scales for all three renderers
 │   │   ├── layer-legends.ts     # Legend entries for all layers
 │   │   └── types.ts             # Shared viz type definitions
-│   ├── utils.ts       # Shared utilities (API base, auth checks, nav)
+│   ├── utils.ts       # Shared utilities (API base, auth checks, centralized nav banner)
 │   ├── flights-main.ts    # Flights page entry
 │   ├── briefing-main.ts   # Briefing page entry
 │   ├── settings-main.ts   # Settings page entry
-│   └── admin-main.ts      # Admin page entry
+│   ├── admin-main.ts      # Admin page entry
+│   ├── user-costs-main.ts # Admin: per-user cost attribution page
+│   └── help-main.ts       # Help page entry
 └── dist/              # esbuild output (committed)
 ```
 
@@ -281,7 +292,8 @@ Authentication supports both JWT cookies (browser sessions) and API tokens (`Aut
 | `/api/user/preferences` | GET/PUT | User preferences (autorouter creds) |
 | `/api/user/preferences/autorouter` | DELETE | Clear autorouter credentials |
 | `/api/user/usage` | GET | Today/month usage summary with quotas |
-| `/api/admin/users` | GET | All users with usage (admin only) |
+| `/api/admin/users` | GET | All users with monthly summaries (admin only) |
+| `/api/admin/users/{id}/costs` | GET | Per-user cost detail: balance, transactions, breakdown (admin) |
 | `/api/admin/users/{id}/approve` | POST | Approve user (admin only) |
 | `/api/admin/approve/{id}` | GET | One-click HMAC-signed approval link |
 | `/api/admin/agents` | POST | Create bot/agent user with initial API token |
@@ -370,6 +382,9 @@ Static files served from `web/` at root.
 | 11.1 | Done | Cost attribution: per-briefing cost computation, credit balance, auto-reload, ledger, admin config, transparency endpoint |
 | 11.2 | Done | User feedback: submission with categories, admin email notifications, admin feedback listing |
 | 11.3 | Done | Refresh registry: prevent duplicate refreshes, per-flight status tracking, SSE progress streaming |
+| 11.4 | Done | Route map visualization: Leaflet geographic view with 14-metric coloring, altitude slider, hover sync |
+| 11.5 | Done | Admin user costs page: per-user cost attribution dashboard, cost distribution chart, transaction ledger |
+| 11.6 | Done | UX: centralized navigation banner, consistent nav across all pages |
 
 ## Docker
 
