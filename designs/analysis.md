@@ -139,11 +139,26 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity
 **Path 3: SFIP index** (`sounding/sfip.py`) — Simplified Forecast Icing Potential, the algorithm used by Windy.com and European met services. Computed per-level alongside Ogimet; both indices stored for comparison.
 
 - **Fuzzy logic** — four membership functions (temperature, RH, CLW, vertical velocity) each return 0.0–1.0, combined with weights
-- **Two variants**: SFIP_O (full, GFS — has real CLW from GRIB) uses `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; SFIP_4 (proxy, other models — uses DD+cloud cover proxy for CLW) uses `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`
+- **Three variants**: SFIP_O (full, GFS — has real CLW from GRIB) uses `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; SFIP_4 (proxy, other models — uses DD+cloud cover proxy for CLW) uses `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; SFIP_interp (same formula as full, but CLW was spatially interpolated from neighbors — see below)
 - **Glaciation factor** (GFS only): reduces icing potential when ICMR >> CLWMR (cloud is glaciated)
 - **Temperature gating**: only 0°C to −25°C (same as Ogimet)
-- Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (`"full"` or `"proxy"`)
+- Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (`"full"`, `"interp"`, or `"proxy"`)
 - Based on Belo-Pereira (2015) and Morcrette et al. (2019)
+
+### Spatial CLW/ICMR Interpolation (`analysis/spatial_interpolation.py`)
+
+Some GFS grid cells return `None` for CLW/ICMR via Open-Meteo, which forces SFIP to use the proxy variant. The proxy variant overestimates icing extent (e.g. 13,400ft SEVERE zone vs 2,400ft MODERATE at neighboring data points).
+
+`interpolate_cloud_water_spatially()` fills these gaps **before** sounding analysis runs, per model cross-section, per hourly entry, per pressure level:
+
+- **Metrics interpolated**: `cloud_liquid_water_kg_kg` (CLWMR) and `ice_mixing_ratio_kg_kg` (ICMR) on `PressureLevelData`
+- **Method**: linear interpolation in distance-space between nearest left and right route-point neighbors that have data
+- **Max gap**: 100 nm default (`max_gap_nm`). Wider gaps are left unfilled → proxy fallback
+- **Edge gaps**: first/last point with no data on one side → not interpolated
+- **CLW=0.0 preserved**: treated as real "measured zero", not a gap
+- **Flag**: `PressureLevelData.clw_interpolated = True` → propagated to `DerivedLevel.clw_interpolated` → SFIP reports variant=`"interp"` → tooltip shows `(INTERP)`
+
+Called in `analyze_all_route_points()` between `compute_route_tracks()` and the per-point analysis loop.
 
 ### LWC Enrichment (`sounding/__init__.py`)
 
