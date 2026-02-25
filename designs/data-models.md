@@ -74,8 +74,12 @@ Root object for one fetch run: `(route, target_date, fetch_date, days_out, forec
 
 - `forecasts` contains only waypoint forecasts (used by analysis)
 - `cross_sections` contains full route data per model (used for cross-section visualization)
-- **Storage split**: `snapshot.json` excludes `cross_sections`; saved separately as `cross_section.json` to keep the snapshot lean for existing consumers
+- **Storage split**: Snapshot is saved as two files plus a separate cross-section file:
+  - `briefing.json` — everything *except* `forecasts` and `cross_sections` (route, analyses, observations, metadata). This is what the `/snapshot` API endpoint serves.
+  - `forecasts.json` — `route` + `target_date` + `fetch_date` + `days_out` + `forecasts` only. Large file (~5-10 MB with all pressure levels), loaded only when raw forecasts are needed (e.g. Skew-T generation, on-demand analysis).
+  - `cross_section.json` — `cross_sections` only (full route, all models). Loaded for cross-section visualization.
 - `cross_sections` defaults to empty list for backward compatibility with old snapshots
+- **Legacy fallback**: Old packs may have a single `snapshot.json` — load helpers (`load_briefing()`, `load_forecasts()`) fall back to it automatically
 
 ## Analysis Models
 

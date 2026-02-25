@@ -147,7 +147,8 @@ class ElevationProfile(BaseModel):
 
 ```
 data/packs/{user_id}/{flight_id}/{timestamp}/
-├── snapshot.json
+├── briefing.json
+├── forecasts.json
 ├── cross_section.json
 ├── elevation_profile.json    ← NEW
 ├── route_analyses.json

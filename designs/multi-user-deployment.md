@@ -212,7 +212,8 @@ data/packs/
 └── {user_id}/
     └── {flight_id}/
         └── {safe_timestamp}/
-            ├── snapshot.json
+            ├── briefing.json           # Route, analyses, observations, metadata
+            ├── forecasts.json          # Route, metadata, raw forecasts
             ├── cross_section.json
             ├── route_analyses.json
             ├── elevation_profile.json
