@@ -127,15 +127,16 @@ def _load_previous_digest(pack_dir: Path | None, days_out: int = -1):
         digest_path = sibling / "digest.json"
         if not digest_path.exists():
             continue
-        # Check days_out from the snapshot to skip same-day re-refreshes
-        snapshot_path = sibling / "snapshot.json"
-        if snapshot_path.exists() and days_out >= 0:
+        # Check days_out from briefing/snapshot to skip same-day re-refreshes
+        briefing_path = sibling / "briefing.json"
+        meta_path = briefing_path if briefing_path.exists() else sibling / "snapshot.json"
+        if meta_path.exists() and days_out >= 0:
             try:
-                snap_data = json.loads(snapshot_path.read_text())
+                snap_data = json.loads(meta_path.read_text())
                 if snap_data.get("days_out") == days_out:
                     continue
             except Exception:
-                pass  # can't read snapshot — still try the digest
+                pass  # can't read metadata — still try the digest
         try:
             data = json.loads(digest_path.read_text())
             prev = WeatherDigest.model_validate(data)
@@ -301,7 +302,7 @@ def execute_briefing(
         from weatherbrief.tasks.artifacts import save_analysis_artifacts
 
         save_analysis_artifacts(pack_dir, snapshot, analysis_result.route_analyses_manifest)
-        snapshot_path = pack_dir / "snapshot.json"
+        snapshot_path = pack_dir / "briefing.json"
     else:
         snapshot_path = save_snapshot(snapshot, data_dir)
         if fetch_result.cross_sections:

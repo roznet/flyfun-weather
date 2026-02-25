@@ -720,12 +720,16 @@ def get_snapshot(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Get the raw ForecastSnapshot JSON for a pack."""
+    """Get the briefing JSON for a pack (route + analyses + observations, no forecasts)."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    # Prefer briefing.json, fall back to legacy snapshot.json for old packs
+    briefing_path = pack_dir / "briefing.json"
+    if briefing_path.exists():
+        return FileResponse(briefing_path, media_type="application/json")
     snapshot_path = pack_dir / "snapshot.json"
-    if not snapshot_path.exists():
-        raise HTTPException(status_code=404, detail="Snapshot not found")
-    return FileResponse(snapshot_path, media_type="application/json")
+    if snapshot_path.exists():
+        return FileResponse(snapshot_path, media_type="application/json")
+    raise HTTPException(status_code=404, detail="Snapshot not found")
 
 
 @router.post("/{timestamp}/observations/refresh")
@@ -745,12 +749,13 @@ def refresh_observations(
     flight = _load_owned_flight(db, flight_id, user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp)
 
-    snapshot_path = pack_dir / "snapshot.json"
-    if not snapshot_path.exists():
+    from weatherbrief.tasks.artifacts import load_briefing, load_forecasts as load_forecasts_json
+
+    briefing_data = load_briefing(pack_dir)
+    if not briefing_data:
         raise HTTPException(status_code=404, detail="Snapshot not found")
 
-    snapshot_data = json_mod.loads(snapshot_path.read_text())
-    days_out = snapshot_data.get("days_out")
+    days_out = briefing_data.get("days_out")
     if days_out is not None and days_out != 0:
         raise HTTPException(status_code=400, detail="METAR/TAF refresh only available for D-0 briefings")
 
@@ -766,13 +771,13 @@ def refresh_observations(
             run_route_weather,
         )
 
-        route = RouteConfig.model_validate(snapshot_data["route"])
-        target_dt = _parse_target_time(snapshot_data)
+        route = RouteConfig.model_validate(briefing_data["route"])
+        target_dt = _parse_target_time(briefing_data)
 
         # Options for corridor width
         corridor_nm = 30.0
-        if snapshot_data.get("route_observations"):
-            corridor_nm = snapshot_data["route_observations"].get("corridor_nm", 30.0)
+        if briefing_data.get("route_observations"):
+            corridor_nm = briefing_data["route_observations"].get("corridor_nm", 30.0)
 
         # Fetch fresh METAR/TAF
         new_obs = run_route_weather(
@@ -783,9 +788,10 @@ def refresh_observations(
         )
 
         # Run observation-vs-model comparison using stored forecasts
+        forecasts_data = load_forecasts_json(pack_dir)
         forecasts = [
             WaypointForecast.model_validate(f)
-            for f in snapshot_data.get("forecasts", [])
+            for f in (forecasts_data or {}).get("forecasts", [])
         ]
 
         # Load route analyses for sounding ceiling data
@@ -814,9 +820,14 @@ def refresh_observations(
             route_analyses=route_analyses,
         )
 
-        # Patch snapshot on disk
-        snapshot_data["route_observations"] = new_obs.model_dump(mode="json")
-        snapshot_path.write_text(json_mod.dumps(snapshot_data, indent=2))
+        # Patch briefing on disk (prefer briefing.json, fall back to snapshot.json)
+        briefing_data["route_observations"] = new_obs.model_dump(mode="json")
+        briefing_path = pack_dir / "briefing.json"
+        if briefing_path.exists():
+            briefing_path.write_text(json_mod.dumps(briefing_data, indent=2))
+        else:
+            snapshot_path = pack_dir / "snapshot.json"
+            snapshot_path.write_text(json_mod.dumps(briefing_data, indent=2))
 
         return new_obs.model_dump(mode="json")
 
@@ -898,35 +909,37 @@ def get_skewt(
     if skewt_path.exists():
         return FileResponse(skewt_path, media_type="image/png")
 
-    # On-demand generation from snapshot data
-    snapshot_path = pack_dir / "snapshot.json"
-    if not snapshot_path.exists():
+    # On-demand generation from split files (forecasts.json + briefing.json)
+    from weatherbrief.tasks.artifacts import load_briefing, load_forecasts as load_forecasts_json
+
+    briefing_data = load_briefing(pack_dir)
+    forecasts_data = load_forecasts_json(pack_dir)
+    if not forecasts_data:
         raise HTTPException(status_code=404, detail="Skew-T not available")
 
-    import json
-    snapshot_data = json.loads(snapshot_path.read_text())
     try:
-        target_dt = _parse_target_time(snapshot_data)
+        target_dt = _parse_target_time(briefing_data or forecasts_data)
     except (ValueError, KeyError):
         raise HTTPException(status_code=404, detail="Skew-T not available")
 
     # Extract analysis data for enhanced overlays
     from weatherbrief.models.analysis import SoundingAnalysis
-    cruise_altitude_ft = snapshot_data.get("route", {}).get("cruise_altitude_ft")
+    cruise_altitude_ft = (briefing_data or forecasts_data).get("route", {}).get("cruise_altitude_ft")
     sa = None
-    for wa_data in snapshot_data.get("analyses", []):
-        if wa_data.get("waypoint", {}).get("icao") == icao:
-            sounding_data = wa_data.get("sounding", {}).get(model)
-            if sounding_data:
-                try:
-                    sa = SoundingAnalysis.model_validate(sounding_data)
-                except Exception:
-                    pass
-            break
+    if briefing_data:
+        for wa_data in briefing_data.get("analyses", []):
+            if wa_data.get("waypoint", {}).get("icao") == icao:
+                sounding_data = wa_data.get("sounding", {}).get(model)
+                if sounding_data:
+                    try:
+                        sa = SoundingAnalysis.model_validate(sounding_data)
+                    except Exception:
+                        pass
+                break
 
     # Find matching forecast
     from weatherbrief.models import WaypointForecast
-    for wf_data in snapshot_data.get("forecasts", []):
+    for wf_data in forecasts_data.get("forecasts", []):
         if wf_data.get("waypoint", {}).get("icao") == icao and wf_data.get("model") == model:
             wf = WaypointForecast.model_validate(wf_data)
             hourly = wf.at_time(target_dt)
@@ -956,21 +969,23 @@ def get_hodograph(
     if hodo_path.exists():
         return FileResponse(hodo_path, media_type="image/png")
 
-    # On-demand generation from snapshot data
-    snapshot_path = pack_dir / "snapshot.json"
-    if not snapshot_path.exists():
+    # On-demand generation from forecasts file
+    from weatherbrief.tasks.artifacts import load_briefing, load_forecasts as load_forecasts_json
+
+    forecasts_data = load_forecasts_json(pack_dir)
+    if not forecasts_data:
         raise HTTPException(status_code=404, detail="Hodograph not available")
 
-    import json
-    snapshot_data = json.loads(snapshot_path.read_text())
+    # Parse target time — prefer briefing (has analyses), fall back to forecasts metadata
+    briefing_data = load_briefing(pack_dir)
     try:
-        target_dt = _parse_target_time(snapshot_data)
+        target_dt = _parse_target_time(briefing_data or forecasts_data)
     except (ValueError, KeyError):
         raise HTTPException(status_code=404, detail="Hodograph not available")
 
     # Find matching forecast
     from weatherbrief.models import WaypointForecast
-    for wf_data in snapshot_data.get("forecasts", []):
+    for wf_data in forecasts_data.get("forecasts", []):
         if wf_data.get("waypoint", {}).get("icao") == icao and wf_data.get("model") == model:
             wf = WaypointForecast.model_validate(wf_data)
             hourly = wf.at_time(target_dt)
