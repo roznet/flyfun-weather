@@ -51,6 +51,10 @@ def _enrich_lwc(
         if raw.ice_mixing_ratio_kg_kg is not None:
             dl.ice_mixing_ratio_g_kg = round(raw.ice_mixing_ratio_kg_kg * 1000.0, 6)
 
+        # Propagate spatial interpolation flag
+        if raw.clw_interpolated:
+            dl.clw_interpolated = True
+
         # Volumetric LWC (g/m³) for Ogimet — requires temperature for density
         if raw.cloud_liquid_water_kg_kg is None or dl.temperature_c is None:
             continue

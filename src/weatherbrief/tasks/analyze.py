@@ -269,6 +269,11 @@ def analyze_all_route_points(
 
     total_distance = route_points[-1].distance_from_origin_nm
     tracks = compute_route_tracks(route_points)
+
+    # Fill CLW/ICMR gaps by spatial interpolation before sounding analysis
+    from weatherbrief.analysis.spatial_interpolation import interpolate_cloud_water_spatially
+    interpolate_cloud_water_spatially(cross_sections, route_points)
+
     analyses: list[RoutePointAnalysis] = []
 
     for i, rp in enumerate(route_points):

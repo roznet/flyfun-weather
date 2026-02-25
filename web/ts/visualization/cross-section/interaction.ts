@@ -153,7 +153,8 @@ export function attachInteraction(
       for (const z of point.sfipZones) {
         if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
           const sfipVal = z.meanSfip100 !== null ? ` ${Math.round(z.meanSfip100)}/100` : '';
-          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} SFIP${sfipVal}`);
+          const tag = z.variant === 'proxy' ? ' (PROXY)' : z.variant === 'interp' ? ' (INTERP)' : '';
+          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} SFIP${sfipVal}${tag}`);
         }
       }
       if (lines.length > 0) sections.push(lines.join('<br>'));
