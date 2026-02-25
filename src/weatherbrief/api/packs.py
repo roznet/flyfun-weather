@@ -671,10 +671,12 @@ def get_refresh_status(
     entry = refresh_registry.get(flight_id)
     if entry is None:
         return {"active": False}
+    label = _STAGE_LABELS.get(entry.stage, entry.stage) if entry.stage else None
     return {
         "active": True,
         "status": entry.status,
         "stage": entry.stage,
+        "label": label,
         "detail": entry.detail,
         "triggered_by": entry.triggered_by,
         "queued_at": entry.queued_at,
