@@ -202,13 +202,19 @@ def compute_sfip_level(
     icmr_g_kg: float | None,
     omega_pa_s: float | None,
     cloud_cover_at_band: float,
+    clw_interpolated: bool = False,
 ) -> tuple[float, float, str, str]:
     """Compute SFIP for a single pressure level.
 
     Returns (sfip_raw, sfip_100, severity_str, variant_str).
     Temperature gating: returns zeros outside [0, -25]°C.
     """
-    variant = "full" if clw_g_kg is not None else "proxy"
+    if clw_g_kg is not None and clw_interpolated:
+        variant = "interp"
+    elif clw_g_kg is not None:
+        variant = "full"
+    else:
+        variant = "proxy"
 
     # Temperature gating
     if temperature_c >= 0.0 or temperature_c < -25.0:
@@ -234,7 +240,6 @@ def compute_sfip_level(
             + _W_CLW_FULL * m_clw
             + _W_VV_FULL * m_vv
         )
-        variant = "full"
     else:
         # Proxy variant (SFIP_4)
         m_clw_p = membership_clw_proxy(dewpoint_depression_c, rh_pct, cloud_cover_at_band)
@@ -244,7 +249,6 @@ def compute_sfip_level(
             + _W_CLW_PROXY * m_clw_p
             + _W_VV_PROXY * m_vv
         )
-        variant = "proxy"
 
     sfip_raw = max(0.0, min(1.0, sfip_value))
     sfip_100 = round(sfip_raw * 100.0, 1)
@@ -348,6 +352,7 @@ def assess_sfip_zones(
             icmr_g_kg=lv.ice_mixing_ratio_g_kg,
             omega_pa_s=lv.omega_pa_s,
             cloud_cover_at_band=cloud_cover,
+            clw_interpolated=lv.clw_interpolated,
         )
 
         # Store on level

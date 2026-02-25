@@ -201,6 +201,7 @@ class PressureLevelData(BaseModel):
     vertical_velocity_pa_s: Optional[float] = None  # omega (Pa/s)
     cloud_liquid_water_kg_kg: Optional[float] = None  # CLWMR from GRIB2
     ice_mixing_ratio_kg_kg: Optional[float] = None  # ICMR from GRIB2
+    clw_interpolated: bool = False  # True when CLW filled by spatial interpolation
 
 
 class HourlyForecast(BaseModel):
@@ -401,7 +402,8 @@ class DerivedLevel(BaseModel):
     sfip_raw: Optional[float] = None  # SFIP index 0.0–1.0
     sfip_100: Optional[float] = None  # SFIP index 0–100
     sfip_severity: Optional[str] = None  # "NONE"/"LIGHT"/"MODERATE"/"SEVERE" (GA mapping)
-    sfip_variant: Optional[str] = None  # "full" or "proxy"
+    sfip_variant: Optional[str] = None  # "full", "proxy", or "interp"
+    clw_interpolated: bool = False  # True when CLW came from spatial interpolation
     precip_phase: Optional[str] = None  # PrecipPhase value for this level
 
 
