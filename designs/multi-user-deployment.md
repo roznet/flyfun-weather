@@ -404,6 +404,14 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] Refresh registry: thread-safe in-memory registry prevents duplicate refreshes
 - [x] Per-flight refresh status endpoint + global active refreshes listing
 - [x] SSE progress streaming shows refresh stage/detail in real-time
+- [x] Admin user costs page: per-user cost attribution dashboard (`user-costs.html`)
+  - User header (name, email, status, credit balance), summary cards (today/month/total)
+  - Cost distribution chart (stacked bar: LLM tokens, infra, subscriptions, storage, margin)
+  - Transaction ledger with expandable breakdowns, recent flights with briefing links
+  - API: `GET /admin/users/{id}/costs` returns full cost detail for a user
+- [x] Route map visualization: Leaflet geographic view with metric-colored segments
+  - 14 metrics (4 altitude-dependent with slider), hover sync with cross-section
+  - Three layout modes: cross-section, map, split
 
 ### UX Improvements ✓
 
@@ -412,6 +420,7 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] "Past" badge on flight cards for flights whose end time has passed
 - [x] Refresh button disabled on briefing page for past flights (no auto-refresh either)
 - [x] Settings page defaults to Flight Profiles tab (not Account)
+- [x] Centralized navigation banner: `renderUserInfo(user, currentPage)` in `utils.ts` generates consistent nav across all pages (Flights, Settings, Help, Admin). Current page shown as non-clickable, admin-only items hidden for non-admins.
 
 ## Deploying to Server
 

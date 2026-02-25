@@ -36,8 +36,8 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Canvas-rendered interactive cross-section visualization: layer registry, data extraction, terrain fill, cloud/icing/CAT/inversion/NWP-cloud bands (per-band hybrid with sounding-corroborated collapse), convective towers (marginal risk skipped), temperature/stability lines, hover interaction, shared interaction helpers, route graph (scalar metrics chart), metrics UI system with info popups, layer legends, "Discuss with AI" integration, unified atmospheric profile table, ceiling metrics, Windy meteogram links, and freshness bar with GRIB init time annotations.
-Key exports: `CrossSectionRenderer`, `RouteGraphRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
+Three synchronized visualizations: canvas cross-section (13 weather layers), canvas route graph (7 scalar metrics), and Leaflet route map (14 metric-colored segment types with altitude slider). Three layout modes (cross-section/map/split), shared color scales, hover sync across all views. Also: metrics UI with info popups, layer legends, "Discuss with AI" integration, atmospheric profile table, Windy meteogram links, freshness bar.
+Key exports: `CrossSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
 → Full doc: visualization.md
 
 ### digest
@@ -50,7 +50,7 @@ Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google 
 → Full doc: multi-user-deployment.md
 
 ### cost-attribution
-Fair cost attribution system: per-briefing cost computation from LLM tokens + infrastructure share + storage + margin, credit balance with auto-reload, append-only ledger, versioned admin cost config, public transparency endpoint. Pure computation module + API layer.
+Fair cost attribution system: per-briefing cost computation from LLM tokens + infrastructure share + storage + margin, credit balance with auto-reload, append-only ledger, versioned admin cost config, public transparency endpoint, admin per-user cost dashboard with distribution chart and transaction ledger. Pure computation module + API layer.
 Key exports: `compute_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `get_active_cost_config`
 → Full doc: cost-attribution-design.md
 
@@ -61,7 +61,7 @@ Original requirements specification with phase roadmap, data source descriptions
 ## Implementation Plans
 
 ### visualization-plan
-Detailed plan for cross-section plot and route map visualizations (Phase 7). Cross-section is implemented; route map is planned.
+Detailed plan for cross-section plot and route map visualizations (Phase 7). Both fully implemented.
 → Full doc: visualization-plan.md
 
 ### elevation-profile-plan

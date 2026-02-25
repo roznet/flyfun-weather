@@ -117,6 +117,7 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 | `/api/admin/cost-config` | GET | Admin | Current active config |
 | `/api/admin/cost-config` | PUT | Admin | Create new config version |
 | `/api/admin/cost-config/history` | GET | Admin | All config versions |
+| `/api/admin/users/{id}/costs` | GET | Admin | Per-user cost detail (see below) |
 | `/api/transparency` | GET | None | Public pricing structure |
 
 ## Frontend Integration
@@ -125,6 +126,18 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 - **settings-main.ts**: Credit balance display in settings page
 - **briefing-store.ts**: Credit info available for post-refresh cost display
 - **flights-store.ts**: Credit balance in flight list header
+
+### Admin User Costs Page (`user-costs.html`)
+
+Dedicated per-user cost attribution dashboard at `/user-costs.html?user={id}`, linked from the admin user list:
+
+- **User header**: Name, email, status badge, member since, credit balance (color-coded: green/amber/red)
+- **Summary cards**: Credits used today, this month, all-time total, briefing count
+- **Cost distribution chart**: Stacked horizontal bar showing category breakdown (LLM tokens, infrastructure, subscriptions, storage, margin) with dollar amounts and average cost per briefing
+- **Recent flights table**: Route, date, time, altitude with links to individual briefings
+- **Transaction ledger**: Date, type, description, amount, running balance; expandable detail rows showing per-transaction cost breakdown grid
+
+**API endpoint** (`GET /admin/users/{id}/costs`): Returns user info, credit balance, summary aggregates (today/month/total), full transaction history with breakdowns, recent flights, and aggregate cost breakdown by category. Joins `CreditLedgerRow` with `BriefingUsageRow` to link transactions to flights.
 
 ## Key Choices
 
