@@ -282,8 +282,8 @@ class TestPackArtifacts:
         )
         pack_dir.mkdir(parents=True, exist_ok=True)
 
-        # Snapshot JSON
-        (pack_dir / "snapshot.json").write_text('{"route": {}}')
+        # Briefing JSON (snapshot split: briefing.json has route/analyses/observations)
+        (pack_dir / "briefing.json").write_text('{"route": {}}')
 
         # GRAMET PNG (fake 1-pixel PNG header)
         (pack_dir / "gramet.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")

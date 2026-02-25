@@ -246,18 +246,27 @@ def test_save_cross_section_separate_file(sample_route, tmp_path):
         ],
     )
 
-    snap_path = save_snapshot(snapshot, tmp_path)
+    briefing_path = save_snapshot(snapshot, tmp_path)
     cs_path = save_cross_section(snapshot, tmp_path)
 
-    assert snap_path.exists()
+    assert briefing_path.exists()
+    assert briefing_path.name == "briefing.json"
     assert cs_path.exists()
-    assert snap_path.parent == cs_path.parent
+    assert briefing_path.parent == cs_path.parent
     assert cs_path.name == "cross_section.json"
 
-    # snapshot.json should NOT contain cross_sections
+    # briefing.json should NOT contain cross_sections or forecasts
     import json
-    snap_data = json.loads(snap_path.read_text())
-    assert "cross_sections" not in snap_data
+    briefing_data = json.loads(briefing_path.read_text())
+    assert "cross_sections" not in briefing_data
+    assert "forecasts" not in briefing_data
+
+    # forecasts.json should exist alongside briefing.json
+    forecasts_path = briefing_path.parent / "forecasts.json"
+    assert forecasts_path.exists()
+    forecasts_data = json.loads(forecasts_path.read_text())
+    assert "forecasts" in forecasts_data
+    assert "route" in forecasts_data
 
     # cross_section.json should contain cross_sections
     cs_data = json.loads(cs_path.read_text())

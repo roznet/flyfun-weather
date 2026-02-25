@@ -10,12 +10,10 @@ Example:
     python create-fixture.py lfbo_lfrs-2026-03-01-a1b2 --base-url http://localhost:8000
 
 Creates a fixture directory under fixtures/<route_name>/ with trimmed JSON files
-suitable for Playwright tests (~200 KB instead of ~3+ MB).
+suitable for Playwright tests.
 
-Trimming rules:
-  - Snapshot forecasts: keep only ecmwf + gfs models
-  - Hourly data: keep only flight hours ± 1 hour
-  - Pressure levels: keep only the 8 lowest (highest hPa)
+The /snapshot endpoint serves briefing.json (no forecasts), so the fixture is
+already small. Trimming rules for analyses:
   - Analyses: filter per-model dicts to ecmwf + gfs
   - Pack metadata: set has_gramet=False, keep only ecmwf + gfs init times
 """
@@ -26,12 +24,8 @@ import os
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
 
 KEEP_MODELS = ("ecmwf", "gfs")
-KEEP_PRESSURE_LEVELS = 8
-HOURS_BEFORE = 1
-HOURS_AFTER = 1
 
 
 def api_get(base_url: str, path: str):
@@ -53,35 +47,12 @@ def api_get_safe(base_url: str, path: str):
         return None
 
 
-def trim_snapshot(snapshot: dict, target_hour: int) -> dict:
-    """Trim a snapshot to keep only relevant models, hours, and pressure levels."""
-    # Determine which hours to keep based on target flight time
-    target_date = snapshot["target_date"]
-    flight_duration = snapshot["route"].get("flight_duration_hours", 1.0)
+def trim_snapshot(snapshot: dict) -> dict:
+    """Trim a snapshot/briefing to keep only ecmwf + gfs model data in analyses.
 
-    # Build set of hours to keep: 1 before flight start through 1 after flight end
-    keep_hours = set()
-    start_hour = max(0, target_hour - HOURS_BEFORE)
-    end_hour = min(23, target_hour + int(flight_duration) + HOURS_AFTER)
-    for h in range(start_hour, end_hour + 1):
-        keep_hours.add(f"{target_date}T{h:02d}:00:00")
-
-    print(f"  keeping hours: {sorted(keep_hours)}")
-
-    # Filter forecasts to keep models
-    snapshot["forecasts"] = [
-        f for f in snapshot["forecasts"] if f["model"] in KEEP_MODELS
-    ]
-
-    # Trim hourly data and pressure levels
-    for f in snapshot["forecasts"]:
-        f["hourly"] = [h for h in f["hourly"] if h["time"] in keep_hours]
-        for h in f["hourly"]:
-            if h.get("pressure_levels"):
-                h["pressure_levels"] = sorted(
-                    h["pressure_levels"], key=lambda p: -p["pressure_hpa"]
-                )[:KEEP_PRESSURE_LEVELS]
-
+    The /snapshot endpoint now serves briefing.json which has no forecasts,
+    so we only need to trim the analyses per-model dicts.
+    """
     # Trim analyses per-model dicts
     for a in snapshot.get("analyses", []):
         for section in ("wind_components", "sounding"):
@@ -125,7 +96,6 @@ def main():
     print(f"Fetching flight {fid}...")
     flight = api_get(base, f"/flights/{enc_fid}")
     route_name = flight["route_name"]
-    target_hour = flight.get("target_time_utc", 12)
 
     # 2. Determine output directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -145,10 +115,10 @@ def main():
     # 4. Fetch pack metadata
     pack_meta = api_get(base, f"/flights/{enc_fid}/packs/{enc_ts}")
 
-    # 5. Fetch snapshot and trim it
+    # 5. Fetch snapshot (briefing.json — no forecasts) and trim analyses
     print("Fetching and trimming snapshot...")
     snapshot = api_get(base, f"/flights/{enc_fid}/packs/{enc_ts}/snapshot")
-    snapshot = trim_snapshot(snapshot, target_hour)
+    snapshot = trim_snapshot(snapshot)
 
     # 6. Fetch remaining endpoints
     route_analyses = api_get_safe(base, f"/flights/{enc_fid}/packs/{enc_ts}/route-analyses")

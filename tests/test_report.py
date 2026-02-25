@@ -47,8 +47,8 @@ def pack_dir(tmp_path, sample_pack):
     pack = tmp_path / "pack"
     pack.mkdir()
 
-    # Snapshot
-    snapshot = {
+    # Briefing (route + analyses + observations — no forecasts)
+    briefing = {
         "route": {
             "name": "Oxford to Sion",
             "waypoints": [
@@ -76,7 +76,7 @@ def pack_dir(tmp_path, sample_pack):
             }
         ],
     }
-    (pack / "snapshot.json").write_text(json.dumps(snapshot))
+    (pack / "briefing.json").write_text(json.dumps(briefing))
 
     # Digest
     digest = {
