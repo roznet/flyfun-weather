@@ -199,6 +199,25 @@ label {
 .badge-red { background: var(--red-bg); color: var(--red); }
 .badge-none { background: var(--bg); color: var(--text-muted); }
 .badge-past { background: var(--bg); color: var(--text-muted); font-weight: normal; }
+.badge-refreshing {
+  background: #dbeafe;
+  color: #2563eb;
+  animation: badge-pulse 2s ease-in-out infinite;
+}
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.dots-spinner::after {
+  content: '';
+  animation: dots 1.4s steps(4, end) infinite;
+}
+@keyframes dots {
+  0%  { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+}
 
 /* --- Freshness bar --- */
 

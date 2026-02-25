@@ -46,7 +46,15 @@ async def process_auto_refreshes(app_state) -> None:
         logger.info("Auto-refresh: %d flight(s) due", len(due))
 
         for row in due:
+            from weatherbrief.api.packs import refresh_registry
+
+            entry = refresh_registry.try_register(row.id, triggered_by="scheduler")
+            if entry is None:
+                logger.info("Auto-refresh: skipping %s (refresh already in progress)", row.id)
+                continue
+
             try:
+                refresh_registry.set_refreshing(row.id)
                 await asyncio.to_thread(
                     _auto_refresh_one, row, app_state, row.user_id
                 )
@@ -62,6 +70,8 @@ async def process_auto_refreshes(app_state) -> None:
                 logger.info("Auto-refresh completed: %s", row.id)
             except Exception:
                 logger.error("Auto-refresh failed for %s", row.id, exc_info=True)
+            finally:
+                refresh_registry.unregister(row.id)
     finally:
         db.close()
 

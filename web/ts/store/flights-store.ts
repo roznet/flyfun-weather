@@ -2,12 +2,14 @@
 
 import { createStore } from 'zustand/vanilla';
 import type { FlightResponse, PackMeta } from './types';
+import type { RefreshEntry } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 
 export interface FlightsState {
   // Data
   flights: FlightResponse[];
   latestPacks: Record<string, PackMeta | null>; // flight_id → latest pack
+  activeRefreshes: Record<string, RefreshEntry>; // flight_id → active refresh entry
 
   // UI state
   loading: boolean;
@@ -15,6 +17,7 @@ export interface FlightsState {
 
   // Actions
   loadFlights: () => Promise<void>;
+  pollActiveRefreshes: () => Promise<void>;
   createFlight: (waypoints: string[], targetDate: string, opts?: {
     routeName?: string;
     targetTimeUtc?: number;
@@ -29,6 +32,7 @@ export interface FlightsState {
 export const flightsStore = createStore<FlightsState>((set, get) => ({
   flights: [],
   latestPacks: {},
+  activeRefreshes: {},
   loading: false,
   error: null,
 
@@ -52,6 +56,19 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       set({ latestPacks: packs });
     } catch (err) {
       set({ loading: false, error: `Failed to load flights: ${err}` });
+    }
+  },
+
+  pollActiveRefreshes: async () => {
+    try {
+      const entries = await api.fetchActiveRefreshes();
+      const map: Record<string, RefreshEntry> = {};
+      for (const e of entries) {
+        map[e.flight_id] = e;
+      }
+      set({ activeRefreshes: map });
+    } catch {
+      // Non-critical — silently ignore polling errors
     }
   },
 

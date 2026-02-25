@@ -537,6 +537,10 @@ async function init(): Promise<void> {
       store.getState().refresh();
     } else if (s.packs.length > 0) {
       store.getState().checkFreshness();
+      // Pick up scheduler or other-tab refreshes
+      if (!s.refreshing) {
+        store.getState().checkActiveRefresh();
+      }
     }
   });
 }

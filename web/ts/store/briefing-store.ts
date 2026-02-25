@@ -7,6 +7,7 @@ import type { DisplayMode, Tier } from '../types/metrics';
 import type { RenderMode, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
 import { getDefaultEnabled } from '../visualization/cross-section/layer-registry';
+import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 
 // --- localStorage persistence helpers ---
@@ -90,6 +91,7 @@ export interface BriefingState {
   selectLatest: () => Promise<void>;
   refresh: () => Promise<void>;
   forceRefresh: () => Promise<void>;
+  checkActiveRefresh: () => Promise<void>;
   checkFreshness: () => Promise<void>;
   setSelectedModel: (model: string) => void;
   setSelectedPoint: (index: number) => void;
@@ -225,6 +227,11 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         get().checkFreshness();
       }
     } catch (err) {
+      // If another refresh is already in progress, poll for its completion
+      if (err instanceof RefreshStreamError && /already in progress/i.test(err.message)) {
+        get().checkActiveRefresh();
+        return;
+      }
       set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
     }
   },
@@ -248,7 +255,50 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
       get().checkFreshness();
     } catch (err) {
+      if (err instanceof RefreshStreamError && /already in progress/i.test(err.message)) {
+        get().checkActiveRefresh();
+        return;
+      }
       set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
+    }
+  },
+
+  checkActiveRefresh: async () => {
+    const flight = get().flight;
+    if (!flight) return;
+    try {
+      const status = await api.fetchRefreshStatus(flight.id);
+      if (!status.active) return;
+
+      // A refresh is active — show its progress and poll until done
+      set({
+        refreshing: true,
+        refreshStage: status.stage ?? null,
+        refreshDetail: status.detail ?? null,
+        refreshProgress: 0,
+        error: null,
+      });
+
+      const poll = async (): Promise<void> => {
+        await new Promise(r => setTimeout(r, 3000));
+        const s = await api.fetchRefreshStatus(flight.id);
+        if (!s.active) {
+          // Done — reload packs and select latest
+          set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+          await get().loadPacks();
+          await get().selectLatest();
+          get().checkFreshness();
+          return;
+        }
+        set({
+          refreshStage: s.stage ?? null,
+          refreshDetail: s.detail ?? null,
+        });
+        return poll();
+      };
+      await poll();
+    } catch {
+      // Non-critical — silently ignore
     }
   },
 
