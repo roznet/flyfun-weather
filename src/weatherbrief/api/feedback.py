@@ -39,6 +39,8 @@ class FeedbackRequest(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("comment must not be empty")
+        if len(v) > 5000:
+            raise ValueError("comment must not exceed 5000 characters")
         return v
 
 

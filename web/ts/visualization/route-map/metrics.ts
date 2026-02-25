@@ -21,9 +21,11 @@ export interface MapMetric {
 
 // --- Helpers for altitude-dependent zone search ---
 
-/** Icing risk numeric encoding for comparison. */
-const RISK_ORDER: Record<string, number> = { none: 0, light: 1, moderate: 2, severe: 3 };
-const RISK_LABELS = ['none', 'light', 'moderate', 'severe'];
+/** Risk numeric encoding for comparison (shared by icing/CAT/convective). */
+const RISK_ORDER: Record<string, number> = {
+  none: 0, marginal: 1, light: 1, low: 1, moderate: 2, high: 3, severe: 3, extreme: 4,
+};
+const RISK_LABELS = ['none', 'light', 'moderate', 'severe', 'extreme'];
 
 function worstRiskAtAlt(
   zones: Array<{ baseFt: number; topFt: number; risk: string }>,
@@ -105,20 +107,23 @@ const cloudCoverLow: MapMetric = {
   legendStops: cloudCoverTotal.legendStops,
 };
 
+const CONVECTIVE_LABELS = ['none', 'low', 'moderate', 'high', 'extreme'];
+
 const convectiveRisk: MapMetric = {
   id: 'convective-risk',
   label: 'Convective Risk',
   unit: '',
   altitudeDependent: false,
   getValue: (p) => RISK_ORDER[p.convectiveRisk] ?? 0,
-  getColor: (v) => riskMapColor(RISK_LABELS[Math.min(v, 3)] ?? 'none'),
+  getColor: (v) => riskMapColor(CONVECTIVE_LABELS[Math.min(Math.round(v), 4)] ?? 'none'),
   getWidth: defaultWidth,
-  formatValue: (v) => RISK_LABELS[Math.min(Math.round(v), 3)] ?? 'none',
+  formatValue: (v) => CONVECTIVE_LABELS[Math.min(Math.round(v), 4)] ?? 'none',
   legendStops: [
     { value: 0, label: 'None', color: riskMapColor('none') },
     { value: 1, label: 'Low', color: riskMapColor('low') },
     { value: 2, label: 'Moderate', color: riskMapColor('moderate') },
-    { value: 3, label: 'High/Severe', color: riskMapColor('severe') },
+    { value: 3, label: 'High', color: riskMapColor('high') },
+    { value: 4, label: 'Extreme', color: riskMapColor('extreme') },
   ],
 };
 

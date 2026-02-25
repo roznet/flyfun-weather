@@ -301,6 +301,10 @@ def assess_icing_zones(
 
     Returns:
         List of IcingZone, ordered from lowest to highest altitude.
+
+    Note:
+        Mutates input levels in-place: sets ``icing_index`` on each
+        :class:`DerivedLevel` that has a computed icing index.
     """
     if not levels:
         return []

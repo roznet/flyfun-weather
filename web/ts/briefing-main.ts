@@ -176,7 +176,7 @@ async function init(): Promise<void> {
               onHover: (x) => {
                 if (vizRenderer) vizRenderer.renderOverlay(x);
                 // Sync hover to map: find nearest point from x
-                if (mapRenderer && showMap && x !== undefined) {
+                if (mapRenderer && store.getState().vizSettings.layout !== 'cross-section' && x !== undefined) {
                   const distToX = routeGraphRenderer!.createDistanceToX();
                   if (distToX && data.points.length > 0) {
                     const plotArea = routeGraphRenderer!.getPlotArea();
@@ -210,10 +210,11 @@ async function init(): Promise<void> {
         vizInteraction = attachInteraction(vizRenderer, data, {
           onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
           onHover: (x) => {
-            if (routeGraphRenderer && state.vizSettings.routeGraphVisible) routeGraphRenderer.renderOverlay(x);
+            const liveState = store.getState();
+            if (routeGraphRenderer && liveState.vizSettings.routeGraphVisible) routeGraphRenderer.renderOverlay(x);
             // Sync hover to map
-            if (mapRenderer && showMap && x !== undefined) {
-              const transform = vizRenderer!.getTransform();
+            if (mapRenderer && liveState.vizSettings.layout !== 'cross-section' && x !== undefined) {
+              const transform = vizRenderer!.createTransform();
               if (transform) {
                 const dist = transform.xToDistance(x);
                 let bestIdx = 0;
@@ -233,7 +234,7 @@ async function init(): Promise<void> {
     } else {
       // Cross-section not visible — destroy renderers
       if (vizInteraction) { vizInteraction.destroy(); vizInteraction = null; }
-      if (vizRenderer) { vizRenderer = null; }
+      if (vizRenderer) { vizRenderer.destroy(); vizRenderer = null; }
       if (routeGraphInteraction) { routeGraphInteraction.destroy(); routeGraphInteraction = null; }
       if (routeGraphRenderer) { routeGraphRenderer.destroy(); routeGraphRenderer = null; }
     }
@@ -259,24 +260,26 @@ async function init(): Promise<void> {
 
       // Attach or update map interaction
       if (mapInteraction) {
-        mapInteraction.update(data, colorMetric, widthMetric);
+        mapInteraction.update(data, colorMetric, widthMetric, altFt);
       } else {
         mapInteraction = attachMapInteraction(
           mapRenderer, data, colorMetric, widthMetric, altFt, {
             onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
             onHover: (idx) => {
-              if (idx !== undefined && vizRenderer && showCrossSection) {
+              const liveState = store.getState();
+              const liveShowCrossSection = liveState.vizSettings.layout !== 'map';
+              if (idx !== undefined && vizRenderer && liveShowCrossSection) {
                 const transform = vizRenderer.createTransform();
                 if (transform && data.points[idx]) {
                   const x = transform.distanceToX(data.points[idx].distanceNm);
                   vizRenderer.renderOverlay(x);
-                  if (routeGraphRenderer && state.vizSettings.routeGraphVisible) {
+                  if (routeGraphRenderer && liveState.vizSettings.routeGraphVisible) {
                     routeGraphRenderer.renderOverlay(x);
                   }
                 }
               } else if (idx === undefined) {
                 if (vizRenderer) vizRenderer.renderOverlay();
-                if (routeGraphRenderer && state.vizSettings.routeGraphVisible) routeGraphRenderer.renderOverlay();
+                if (routeGraphRenderer && liveState.vizSettings.routeGraphVisible) routeGraphRenderer.renderOverlay();
               }
             },
           },

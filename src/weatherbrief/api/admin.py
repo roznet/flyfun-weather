@@ -15,7 +15,7 @@ from base64 import urlsafe_b64encode
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import Integer, func
@@ -219,7 +219,7 @@ def list_users(
 @router.get("/users/{user_id}/costs")
 def get_user_costs(
     user_id: str,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=500),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
