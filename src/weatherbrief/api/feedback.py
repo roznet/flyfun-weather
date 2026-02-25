@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
-ALLOWED_CATEGORIES = {"data_quality", "missing_data", "ui_issue", "feature_request", "other"}
+ALLOWED_CATEGORIES = {"data_issue", "too_conservative", "too_optimistic", "incorrect_interpretation", "other"}
 
 
 class FeedbackRequest(BaseModel):

@@ -38,11 +38,11 @@ function setupTabs(): void {
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
-  data_quality: 'Data Quality',
-  missing_data: 'Missing Data',
-  ui_issue: 'UI Issue',
-  feature_request: 'Feature Request',
-  other: 'Other',
+  data_issue: 'Data Issue',
+  too_conservative: 'Too Conservative',
+  too_optimistic: 'Too Optimistic',
+  incorrect_interpretation: 'Incorrect Interpretation',
+  other: 'Other Bug/Issue',
 };
 
 async function loadFeedback(): Promise<void> {
