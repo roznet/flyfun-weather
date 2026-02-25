@@ -322,6 +322,36 @@ export async function sendEmail(flightId: string, timestamp: string): Promise<vo
   );
 }
 
+// --- Refresh status ---
+
+export interface RefreshEntry {
+  flight_id: string;
+  status: 'queued' | 'refreshing';
+  triggered_by: string;
+  stage: string | null;
+  detail: string | null;
+  queued_at: string;
+}
+
+export interface RefreshStatusResponse {
+  active: boolean;
+  status?: string;
+  stage?: string | null;
+  detail?: string | null;
+  triggered_by?: string;
+  queued_at?: string;
+}
+
+export async function fetchRefreshStatus(flightId: string): Promise<RefreshStatusResponse> {
+  return apiFetch<RefreshStatusResponse>(
+    `/flights/${encodeURIComponent(flightId)}/packs/refresh/status`
+  );
+}
+
+export async function fetchActiveRefreshes(): Promise<RefreshEntry[]> {
+  return apiFetch<RefreshEntry[]>('/refresh/active');
+}
+
 // --- Feedback ---
 
 export interface FeedbackRequest {

@@ -6,6 +6,7 @@ import asyncio
 import json as json_mod
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -34,6 +35,71 @@ from weatherbrief.storage.flights import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Refresh Registry — prevents duplicate refreshes, tracks status
+# ---------------------------------------------------------------------------
+
+
+class RefreshEntry(BaseModel):
+    """Status entry for an active refresh."""
+
+    flight_id: str
+    status: str = "queued"  # "queued" | "refreshing"
+    triggered_by: str = "user"  # "user" | "scheduler"
+    stage: str | None = None
+    detail: str | None = None
+    queued_at: str = ""  # ISO timestamp
+
+
+class _RefreshRegistry:
+    """Thread-safe in-memory registry of active refreshes."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[str, RefreshEntry] = {}
+
+    def try_register(self, flight_id: str, triggered_by: str = "user") -> RefreshEntry | None:
+        """Atomically register a refresh.  Returns the entry, or None if already active."""
+        with self._lock:
+            if flight_id in self._entries:
+                return None
+            entry = RefreshEntry(
+                flight_id=flight_id,
+                status="queued",
+                triggered_by=triggered_by,
+                queued_at=datetime.now(tz=timezone.utc).isoformat(),
+            )
+            self._entries[flight_id] = entry
+            return entry
+
+    def set_refreshing(self, flight_id: str) -> None:
+        with self._lock:
+            if flight_id in self._entries:
+                self._entries[flight_id].status = "refreshing"
+
+    def update_progress(self, flight_id: str, stage: str, detail: str | None = None) -> None:
+        with self._lock:
+            if flight_id in self._entries:
+                self._entries[flight_id].stage = stage
+                self._entries[flight_id].detail = detail
+
+    def unregister(self, flight_id: str) -> None:
+        with self._lock:
+            self._entries.pop(flight_id, None)
+
+    def get(self, flight_id: str) -> RefreshEntry | None:
+        with self._lock:
+            entry = self._entries.get(flight_id)
+            return entry.model_copy() if entry else None
+
+    def get_all_active(self) -> list[RefreshEntry]:
+        with self._lock:
+            return [e.model_copy() for e in self._entries.values()]
+
+
+refresh_registry = _RefreshRegistry()
 
 router = APIRouter(prefix="/flights/{flight_id}/packs", tags=["packs"])
 
@@ -378,7 +444,7 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
 
 
 @router.post("/refresh", response_model=PackMetaResponse)
-def refresh_briefing(
+async def refresh_briefing(
     flight_id: str,
     request: Request,
     force: bool = False,
@@ -389,6 +455,7 @@ def refresh_briefing(
 
     Checks model freshness first and skips the pipeline if data
     hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
+    Returns 409 if a refresh is already in progress for this flight.
     """
     flight = _load_owned_flight(db, flight_id, user_id)
 
@@ -409,6 +476,11 @@ def refresh_briefing(
                 logger.info("Data is fresh for %s, skipping pipeline", flight_id)
                 return _meta_to_response(latest, data_status=status)
 
+    # Duplicate check
+    entry = refresh_registry.try_register(flight_id, triggered_by="user")
+    if entry is None:
+        raise HTTPException(status_code=409, detail="Refresh already in progress")
+
     try:
         from weatherbrief.pipeline import execute_briefing
 
@@ -416,11 +488,17 @@ def refresh_briefing(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=_can_force_refresh(request),
         )
-        result = execute_briefing(
-            route=route,
-            target_date=flight.target_date,
-            target_hour=flight.target_time_utc,
-            options=options,
+
+        refresh_registry.set_refreshing(flight_id)
+
+        result = await asyncio.get_event_loop().run_in_executor(
+            _refresh_executor,
+            lambda: execute_briefing(
+                route=route,
+                target_date=flight.target_date,
+                target_hour=flight.target_time_utc,
+                options=options,
+            ),
         )
         meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
                                  user_id=user_id, model_metadata=model_metadata)
@@ -435,6 +513,8 @@ def refresh_briefing(
         logger.error("Refresh failed: %s", exc, exc_info=True)
         detail = f"Briefing fetch failed: {exc}" if is_dev_mode() else "Briefing fetch failed"
         raise HTTPException(status_code=500, detail=detail)
+    finally:
+        refresh_registry.unregister(flight_id)
 
 
 _refresh_executor = ThreadPoolExecutor(max_workers=2)
@@ -451,6 +531,7 @@ async def refresh_briefing_stream(
 
     Checks model freshness first and returns immediately if data
     hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
+    Returns an SSE error event if a refresh is already in progress.
     """
     # Manage our own DB session — FastAPI's Depends(get_db) cleanup
     # conflicts with the long-lived StreamingResponse.
@@ -486,12 +567,29 @@ async def refresh_briefing_stream(
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                     )
 
+        # Duplicate check — return SSE error instead of HTTP 409 so clients
+        # that already opened the stream can handle it gracefully.
+        entry = refresh_registry.try_register(flight_id, triggered_by="user")
+        if entry is None:
+            db.close()
+
+            async def duplicate_generator() -> AsyncGenerator[str, None]:
+                event = {"type": "error", "message": "Refresh already in progress"}
+                yield f"event: error\ndata: {json_mod.dumps(event)}\n\n"
+
+            return StreamingResponse(
+                duplicate_generator(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=_can_force_refresh(request),
         )
     except Exception:
         db.close()
+        refresh_registry.unregister(flight_id)
         raise
     db.close()  # flight data + preferences are in memory; free the session before streaming
 
@@ -508,9 +606,11 @@ async def refresh_briefing_stream(
             "label": label,
             "progress": progress,
         }
+        refresh_registry.update_progress(flight_id, stage, detail)
         asyncio.run_coroutine_threadsafe(queue.put(event), loop)
 
     def run_pipeline() -> None:
+        refresh_registry.set_refreshing(flight_id)
         try:
             from weatherbrief.pipeline import execute_briefing
 
@@ -538,6 +638,8 @@ async def refresh_briefing_stream(
             logger.error("Streaming refresh failed: %s", exc, exc_info=True)
             error_event = {"type": "error", "message": str(exc)}
             asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)
+        finally:
+            refresh_registry.unregister(flight_id)
 
     loop.run_in_executor(_refresh_executor, run_pipeline)
 
@@ -558,6 +660,39 @@ async def refresh_briefing_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/refresh/status")
+def get_refresh_status(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+):
+    """Get the refresh status for a specific flight."""
+    entry = refresh_registry.get(flight_id)
+    if entry is None:
+        return {"active": False}
+    return {
+        "active": True,
+        "status": entry.status,
+        "stage": entry.stage,
+        "detail": entry.detail,
+        "triggered_by": entry.triggered_by,
+        "queued_at": entry.queued_at,
+    }
+
+
+# --- Global refresh status router (not per-flight) ---
+
+refresh_router = APIRouter(prefix="/refresh", tags=["refresh"])
+
+
+@refresh_router.get("/active")
+def get_active_refreshes(
+    user_id: str = Depends(current_user_id),
+):
+    """Return all currently active refreshes."""
+    entries = refresh_registry.get_all_active()
+    return [e.model_dump() for e in entries]
 
 
 @router.get("/{timestamp}", response_model=PackMetaResponse)

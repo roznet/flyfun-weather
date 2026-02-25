@@ -1,6 +1,7 @@
 /** DOM management for the Flights list page. */
 
 import type { FlightResponse, PackMeta } from '../store/types';
+import type { RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatTime, formatAlt, isFlightPast } from '../utils';
 
 /** Assessment badge color class. */
@@ -19,6 +20,7 @@ function assessmentClass(assessment: string | null): string {
 export function renderFlightList(
   flights: FlightResponse[],
   latestPacks: Record<string, PackMeta | null>,
+  activeRefreshes: Record<string, RefreshEntry>,
   onView: (id: string) => void,
   onDelete: (id: string) => void,
 ): void {
@@ -36,11 +38,20 @@ export function renderFlightList(
 
   container.innerHTML = flights.map((f) => {
     const pack = latestPacks[f.id];
+    const refreshEntry = activeRefreshes[f.id];
     const waypoints = f.waypoints.length > 0
       ? f.waypoints.join(' → ')
       : f.route_name.replace(/_/g, ' → ').toUpperCase();
     const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours);
     const pastBadge = past ? '<span class="badge badge-past">Past</span> ' : '';
+
+    let refreshBadge = '';
+    if (refreshEntry) {
+      const label = refreshEntry.status === 'queued' ? 'Queued' : 'Refreshing';
+      const spinner = refreshEntry.status === 'refreshing' ? '<span class="dots-spinner"></span>' : '';
+      refreshBadge = `<span class="badge badge-refreshing">${label}${spinner}</span> `;
+    }
+
     const packInfo = pack
       ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
          <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
@@ -54,7 +65,7 @@ export function renderFlightList(
           <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
         </div>
         <div class="flight-status">
-          ${packInfo}
+          ${refreshBadge}${packInfo}
         </div>
         <div class="flight-actions">
           <button class="btn btn-primary btn-view" data-id="${escapeHtml(f.id)}">View Briefing</button>

@@ -67,10 +67,15 @@ async function init(): Promise<void> {
 
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
-    if (state.flights !== prev.flights || state.latestPacks !== prev.latestPacks) {
+    if (
+      state.flights !== prev.flights ||
+      state.latestPacks !== prev.latestPacks ||
+      state.activeRefreshes !== prev.activeRefreshes
+    ) {
       ui.renderFlightList(
         state.flights,
         state.latestPacks,
+        state.activeRefreshes,
         (id) => navigateToBriefing(id),
         (id) => store.getState().deleteFlight(id),
       );
@@ -173,7 +178,19 @@ async function init(): Promise<void> {
   });
 
   // --- Initial load ---
-  store.getState().loadFlights();
+  store.getState().loadFlights().then(() => {
+    // Start polling active refreshes after flights load
+    store.getState().pollActiveRefreshes();
+  });
+
+  // Poll active refreshes every 5 seconds
+  const refreshPollInterval = setInterval(() => {
+    store.getState().pollActiveRefreshes();
+  }, 5000);
+
+  window.addEventListener('beforeunload', () => {
+    clearInterval(refreshPollInterval);
+  });
 }
 
 function populateProfileSelector(profiles: ProfileResponse[]): void {
