@@ -43,7 +43,7 @@ BriefingPack:
   flight_id: str
   fetch_timestamp: datetime   # when this fetch happened
   days_out: int               # D-N
-  snapshot_path: str          # snapshot.json
+  snapshot_path: str          # briefing.json (+ forecasts.json alongside)
   gramet_path: str | None     # gramet.png (if fetched)
   skewt_paths: list[str]      # [{ICAO}_{model}.png, ...]
   digest_path: str | None     # digest.md
@@ -66,7 +66,8 @@ data/
         ├── flight.json             # Flight config
         └── packs/
             └── {fetch_timestamp}/  # ISO format, e.g. 2026-02-19T18-00-00Z
-                ├── snapshot.json   # ForecastSnapshot (existing model)
+                ├── briefing.json   # ForecastSnapshot (analyses, observations, metadata)
+                ├── forecasts.json  # Route + metadata + raw forecasts
                 ├── gramet.png      # GRAMET cross-section (if available)
                 ├── skewt/
                 │   ├── EGTK_gfs.png
@@ -121,7 +122,7 @@ class BriefingPackMeta(BaseModel):
     assessment_reason: str | None = None
 ```
 
-These models keep the history dropdown fast: load `pack.json` (small) rather than the full `snapshot.json` (potentially large with all pressure-level data).
+These models keep the history dropdown fast: load `pack.json` (small) rather than the full `briefing.json` + `forecasts.json` (potentially large with all pressure-level data).
 
 ---
 

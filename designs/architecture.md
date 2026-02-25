@@ -38,7 +38,7 @@ analyze_all_route_points()  → RouteAnalysesManifest (full route analysis)
     ↓
 evaluate_all(RouteContext)  → RouteAdvisoriesManifest (13 hazard evaluators)
     ↓
-ForecastSnapshot  (root object, saved as JSON)
+ForecastSnapshot  (root object, saved as briefing.json + forecasts.json)
     ↓
 Optional outputs:
 ├→ GRIB init times tracking (grib_init_times dict, when GRIB model run differs from Open-Meteo)
@@ -48,7 +48,7 @@ Optional outputs:
 ├→ LLM digest (LangGraph: text forecasts + quant → WeatherDigest → Markdown + JSON)
 ```
 
-**Entry point:** `execute_briefing(route, target_date, target_hour, options)` — shared by CLI and API. Returns `BriefingResult` with all paths and structured results. Never prints or exits.
+**Entry point:** `execute_briefing(route, target_date, target_hour, options)` — called by the API. Returns `BriefingResult` with all paths and structured results. Never prints or exits.
 
 `BriefingOptions` controls what gets generated (models, gramet, skewt, llm_digest, enrich_grib, output_dir). `BriefingResult` carries snapshot, paths, digest object, and error list.
 
@@ -64,7 +64,6 @@ src/weatherbrief/
 │   ├── observations.py # METAR/TAF models (AirportObservation, ObservationComparison, RouteObservations)
 │   └── storage.py     # Flight, BriefingPackMeta
 ├── airports.py        # ICAO → lat/lon via euro_aip
-├── cli.py             # CLI entry point (delegates to pipeline)
 ├── pipeline.py        # Thin orchestrator: calls tasks/ modules in sequence
 ├── tasks/             # Independent pipeline stages (extracted from pipeline.py)
 │   ├── __init__.py    # Re-exports: run_fetch, run_analysis, run_advisories, etc.
@@ -236,7 +235,8 @@ data/packs/
 └── {user_id}/
     └── {flight_id}/
         └── {safe_timestamp}/   # ISO timestamp (: → -, + → p)
-            ├── snapshot.json
+            ├── briefing.json           # ForecastSnapshot minus forecasts & cross_sections
+            ├── forecasts.json          # Route + metadata + raw forecasts only
             ├── cross_section.json
             ├── route_analyses.json    # RouteAnalysesManifest
             ├── elevation_profile.json # ElevationProfile (SRTM terrain)
@@ -251,7 +251,7 @@ data/packs/
 
 Path components are sanitized via `safe_path_component()` to prevent traversal attacks.
 
-In Docker, `data/` is a volume mount (`./data:/app/data`). Legacy CLI storage (`data/forecasts/`, etc.) still works for CLI-only usage.
+In Docker, `data/` is a volume mount (`./data:/app/data`). Legacy storage (`data/forecasts/`) still exists for backward compatibility.
 
 ## API
 
@@ -317,8 +317,8 @@ Static files served from `web/` at root.
 - **Pydantic v2 throughout** — validation, serialization, JSON round-trip all free.
 - **Multi-point fetch** — 1 API call per model with all route points (not per-waypoint); 24h time window.
 - **Graceful degradation** — GRAMET/Skew-T/LLM/DWD failures logged but don't halt pipeline.
-- **Pipeline extracted from CLI** — `pipeline.py` is the single entry point for both CLI and API. Stages extracted into `tasks/` modules for independent testability and re-run from artifacts.
-- **DB-backed metadata, file-based artifacts** — flight/pack metadata in SQLAlchemy (SQLite dev, MySQL prod); large files (snapshots, images) on disk in user-scoped directories.
+- **Pipeline as API entry point** — `pipeline.py` is the single entry point for the API. Stages extracted into `tasks/` modules for independent testability and re-run from artifacts.
+- **DB-backed metadata, file-based artifacts** — flight/pack metadata in SQLAlchemy (SQLite dev, MySQL prod); large files (snapshots, images) on disk in user-scoped directories. Snapshots are split into `briefing.json` (analyses, observations, metadata) and `forecasts.json` (raw forecasts) — see [data-models.md](./data-models.md) for details.
 - **Flight ID = route + date + params hash** — allows same route+date with different time/altitude.
 - **Naive datetimes in pipeline** — matches Open-Meteo's naive UTC timestamps.
 - **Vanilla TS + Zustand** — no framework; esbuild for fast bundling.

@@ -18,7 +18,8 @@ User clicks Refresh
 **What gets saved today:**
 - `cross_section.json` — raw Open-Meteo response (all points, all models, all hours) ~6-12MB
 - `route_analyses.json` — pre-computed analysis for all points ~400-800KB
-- `snapshot.json` — waypoint forecasts + analyses ~850KB
+- `briefing.json` — route, analyses, observations, metadata (no raw forecasts) ~200KB
+- `forecasts.json` — route, metadata, raw waypoint forecasts ~600KB
 - `digest.json` / `digest.md` — LLM-generated briefing
 
 Key insight: **raw forecast data is already preserved** in `cross_section.json`. Analysis can be re-run from it at any time.
@@ -36,7 +37,7 @@ User clicks Refresh
   -> Fetch raw data (3 API calls, ~3s)
   -> Save cross_section.json immediately
   -> Analyze waypoints only (3 pts x 3 models, ~1s)
-  -> Save snapshot.json + start streaming results to UI
+  -> Save briefing.json + forecasts.json + start streaming results to UI
   -> Analyze route points PER MODEL as needed:
        - Selected model first (e.g., ECMWF, ~4s for 48 pts)
        - Cache to route_analyses_{model}.json
@@ -71,7 +72,8 @@ Background scheduler (cron / worker process)
 **Pre-build everything:**
 - `cross_section.json` — raw data
 - `route_analyses.json` — all models, all points, fully analyzed
-- `snapshot.json` — waypoint data + analysis
+- `briefing.json` — route, analyses, observations, metadata
+- `forecasts.json` — route, metadata, raw forecasts
 - `digest.json` — LLM briefing (only if input changed)
 - Skew-T PNGs for waypoints (pre-render)
 
