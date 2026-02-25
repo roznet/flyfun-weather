@@ -321,3 +321,19 @@ export async function sendEmail(flightId: string, timestamp: string): Promise<vo
     { method: 'POST' }
   );
 }
+
+// --- Feedback ---
+
+export interface FeedbackRequest {
+  flight_id: string;
+  pack_timestamp: string;
+  category: string;
+  comment: string;
+}
+
+export async function submitFeedback(req: FeedbackRequest): Promise<{ id: number; status: string }> {
+  return apiFetch<{ id: number; status: string }>('/feedback', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}

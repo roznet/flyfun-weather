@@ -79,3 +79,20 @@ export async function revokeAgent(userId: string): Promise<void> {
 export async function revokeAgentToken(userId: string, tokenId: number): Promise<void> {
   await apiFetch<unknown>(`/admin/agents/${userId}/tokens/${tokenId}`, { method: 'DELETE' });
 }
+
+// --- Feedback ---
+
+export interface FeedbackEntry {
+  id: number;
+  user_email: string;
+  user_name: string;
+  flight_id: string;
+  pack_timestamp: string;
+  category: string;
+  comment: string;
+  created_at: string | null;
+}
+
+export async function fetchAdminFeedback(): Promise<FeedbackEntry[]> {
+  return apiFetch<FeedbackEntry[]>('/feedback/admin');
+}

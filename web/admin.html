@@ -108,64 +108,80 @@
 
     <div id="error-message" style="display:none;"></div>
 
-    <!-- Summary stats -->
-    <div id="summary-bar" class="summary-bar" style="display:none;"></div>
-
-    <!-- Pending approvals -->
-    <div id="pending-section" class="section" style="display:none;">
-      <h3>Pending Approvals</h3>
-      <div id="pending-list"></div>
+    <!-- Tabs -->
+    <div class="settings-tabs">
+      <button class="tab-btn active" data-tab="tab-feedback">Feedback</button>
+      <button class="tab-btn" data-tab="tab-usage">Usage</button>
     </div>
 
-    <!-- API Agents -->
-    <div id="agents-section" class="section">
-      <div class="section-header">
-        <h3>API Agents</h3>
-        <button class="btn btn-primary" id="btn-create-agent" style="font-size:0.8rem;">Create Agent</button>
-      </div>
-      <div style="overflow-x:auto;">
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th style="text-align:center;">Tokens (active/total)</th>
-              <th>Created</th>
-              <th>Last Used</th>
-              <th style="text-align:center;">Briefings (Mo)</th>
-              <th style="text-align:center;">LLM Tokens (Mo)</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="agents-tbody">
-            <tr><td colspan="8" class="muted" style="text-align:center;padding:1rem;">Loading...</td></tr>
-          </tbody>
-        </table>
+    <!-- Feedback tab -->
+    <div id="tab-feedback" class="tab-panel active">
+      <div id="feedback-list">
+        <p class="muted" style="text-align:center;padding:2rem;">Loading feedback...</p>
       </div>
     </div>
 
-    <!-- All users -->
-    <div class="section">
-      <h3>Users</h3>
-      <div style="overflow-x:auto;">
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Status</th>
-              <th>Last Active</th>
-              <th style="text-align:center;">Briefings (Mo)</th>
-              <th style="text-align:center;">GRAMET (Mo)</th>
-              <th style="text-align:center;">LLM (Mo)</th>
-              <th style="text-align:center;">Tokens (Mo)</th>
-              <th style="text-align:center;">Disk</th>
-            </tr>
-          </thead>
-          <tbody id="users-tbody">
-            <tr><td colspan="9" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>
-          </tbody>
-        </table>
+    <!-- Usage tab -->
+    <div id="tab-usage" class="tab-panel">
+      <!-- Summary stats -->
+      <div id="summary-bar" class="summary-bar" style="display:none;"></div>
+
+      <!-- Pending approvals -->
+      <div id="pending-section" class="section" style="display:none;">
+        <h3>Pending Approvals</h3>
+        <div id="pending-list"></div>
+      </div>
+
+      <!-- API Agents -->
+      <div id="agents-section" class="section">
+        <div class="section-header">
+          <h3>API Agents</h3>
+          <button class="btn btn-primary" id="btn-create-agent" style="font-size:0.8rem;">Create Agent</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th style="text-align:center;">Tokens (active/total)</th>
+                <th>Created</th>
+                <th>Last Used</th>
+                <th style="text-align:center;">Briefings (Mo)</th>
+                <th style="text-align:center;">LLM Tokens (Mo)</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="agents-tbody">
+              <tr><td colspan="8" class="muted" style="text-align:center;padding:1rem;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- All users -->
+      <div class="section">
+        <h3>Users</h3>
+        <div style="overflow-x:auto;">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Last Active</th>
+                <th style="text-align:center;">Briefings (Mo)</th>
+                <th style="text-align:center;">GRAMET (Mo)</th>
+                <th style="text-align:center;">LLM (Mo)</th>
+                <th style="text-align:center;">Tokens (Mo)</th>
+                <th style="text-align:center;">Disk</th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody">
+              <tr><td colspan="9" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>

@@ -3,7 +3,8 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
-  revokeAgent, type AdminUser, type AdminSummary,
+  revokeAgent, fetchAdminFeedback,
+  type AdminUser, type AdminSummary, type FeedbackEntry,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 
@@ -16,7 +17,81 @@ async function init(): Promise<void> {
   renderUserInfo(user);
 
   setupAgentCreateButton();
-  await loadUsers();
+  setupTabs();
+  // Load both tabs in parallel
+  await Promise.all([loadUsers(), loadFeedback()]);
+}
+
+function setupTabs(): void {
+  document.querySelectorAll('.settings-tabs .tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tabId = (btn as HTMLElement).dataset.tab;
+      if (!tabId) return;
+      // Update button active state
+      document.querySelectorAll('.settings-tabs .tab-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      // Show selected panel, hide others
+      document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+      document.getElementById(tabId)?.classList.add('active');
+    });
+  });
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  data_quality: 'Data Quality',
+  missing_data: 'Missing Data',
+  ui_issue: 'UI Issue',
+  feature_request: 'Feature Request',
+  other: 'Other',
+};
+
+async function loadFeedback(): Promise<void> {
+  const container = document.getElementById('feedback-list')!;
+  try {
+    const entries = await fetchAdminFeedback();
+    if (entries.length === 0) {
+      container.innerHTML = '<p class="muted" style="text-align:center;padding:2rem;">No feedback yet.</p>';
+      return;
+    }
+    const rows = entries.map(renderFeedbackRow).join('');
+    container.innerHTML = `
+      <div style="overflow-x:auto;">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>User</th>
+              <th>Flight</th>
+              <th>Category</th>
+              <th>Comment</th>
+              <th>Briefing</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } catch (err) {
+    container.innerHTML = `<p style="color:#dc3545;text-align:center;padding:1rem;">Failed to load feedback: ${err}</p>`;
+  }
+}
+
+function renderFeedbackRow(fb: FeedbackEntry): string {
+  const date = fb.created_at ? formatDate(fb.created_at) : '-';
+  const userName = fb.user_name || fb.user_email || '-';
+  const category = CATEGORY_LABELS[fb.category] ?? fb.category;
+  const comment = escapeHtml(fb.comment.length > 120 ? fb.comment.slice(0, 120) + '...' : fb.comment);
+  const briefingLink = fb.pack_timestamp
+    ? `<a href="/briefing.html?flight=${encodeURIComponent(fb.flight_id)}&t=${encodeURIComponent(fb.pack_timestamp)}" target="_blank">View</a>`
+    : `<a href="/briefing.html?flight=${encodeURIComponent(fb.flight_id)}" target="_blank">View</a>`;
+  return `
+    <tr>
+      <td style="white-space:nowrap;">${date}</td>
+      <td>${escapeHtml(userName)}</td>
+      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(fb.flight_id)}">${escapeHtml(fb.flight_id)}</td>
+      <td>${category}</td>
+      <td style="max-width:300px;" title="${escapeHtml(fb.comment)}">${comment}</td>
+      <td>${briefingLink}</td>
+    </tr>`;
 }
 
 function setupAgentCreateButton(): void {
