@@ -61,7 +61,7 @@ async function loadUserCosts(userId: string): Promise<void> {
     renderUserHeader(data);
     renderSummaryCards(data);
     renderRecentFlights(data);
-    renderCostDistribution(data.cost_breakdown, data.summary.avg_cost_per_briefing);
+    renderCostDistribution(data.cost_breakdown, data.summary.avg_cost_per_briefing, data.summary.total_briefings);
     renderTransactions(data.transactions);
     setupBreakdownToggles();
   } catch (err) {
@@ -123,7 +123,7 @@ function renderRecentFlights(data: UserCostsResponse): void {
   }).join('');
 }
 
-function renderCostDistribution(bd: UserCostBreakdown, avgCost: number): void {
+function renderCostDistribution(bd: UserCostBreakdown, avgCost: number, totalBriefings: number): void {
   const container = document.getElementById('cost-distribution')!;
   const total = bd.total_usd;
 
@@ -148,11 +148,13 @@ function renderCostDistribution(bd: UserCostBreakdown, avgCost: number): void {
     return `<div class="cost-legend-item"><span class="cost-legend-swatch" style="background:${COST_COLORS[k]}"></span>${COST_LABELS[k]}: $${val.toFixed(4)}</div>`;
   }).join('');
 
+  const avgUsd = totalBriefings > 0 ? (total / totalBriefings).toFixed(4) : '0.0000';
+
   container.innerHTML = `
     <div class="cost-bar-container">
       <div class="cost-stacked-bar">${segments}</div>
       <div class="cost-legend">${legendItems}</div>
-      <div class="cost-avg">Average cost per briefing: <strong>${avgCost.toFixed(2)}</strong> credits ($${(total / Math.max(1, avgCost > 0 ? Math.round(bd.total_usd / avgCost) : 1)).toFixed(4)} USD avg)</div>
+      <div class="cost-avg">Total: <strong>$${total.toFixed(4)}</strong> USD across ${totalBriefings} briefings &middot; Average: <strong>${avgCost.toFixed(2)}</strong> credits / <strong>$${avgUsd}</strong> USD per briefing</div>
     </div>`;
 }
 
