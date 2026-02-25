@@ -18,14 +18,22 @@ Each model has a `ModelEndpoint` dataclass specifying URL, max forecast range, a
 |-------|----------|----------|-------|
 | `best_match` | `/v1/forecast` | 16 | Open-Meteo's auto-blend |
 | `gfs` | `/v1/gfs` | 16 | NCEP GFS |
-| `ecmwf` | `/v1/ecmwf` | 10 | No surface dewpoint |
-| `icon` | `/v1/dwd-icon` | 7 | No precip probability |
-| `ukmo` | `/v1/forecast?models=ukmo_seamless` | 7 | Uses `model_param` field |
-| `meteofrance` | `/v1/meteofrance` | 6 | No surface dewpoint |
+| `ecmwf` | `/v1/ecmwf` | 10 | No freezing_level, visibility |
+| `icon` | `/v1/dwd-icon` | 7 | No vertical_velocity at pressure levels |
+| `ukmo` | `/v1/forecast?models=ukmo_seamless` | 7 | Uses `model_param` field, no precip_probability |
+| `meteofrance` | `/v1/meteofrance` | 6 | No precip_probability, freezing_level, visibility, vertical_velocity |
+| `gem` | `/v1/gem` | 10 | No freezing_level, visibility, vertical_velocity |
 
 `build_hourly_params()` constructs the API parameter string, excluding each model's unavailable variables. Pressure levels are **per-model** via `ModelEndpoint.pressure_levels`:
-- **Extended** (GFS, ECMWF, BestMatch): 25 levels, 25 hPa spacing below 500 hPa, 50 hPa above → ~1000ft vertical resolution
-- **Base** (ICON, UKMO, MeteoFrance): 8 levels `[1000, 925, 850, 700, 600, 500, 400, 300]` hPa
+
+| Model | Count | Range | Notes |
+|-------|-------|-------|-------|
+| GFS / Best-Match | 28 | 1000–150 hPa | 25 hPa spacing below 500, extends to upper atmosphere |
+| ECMWF | 11 | 1000–150 hPa | Coarser spacing, includes 250/200/150 |
+| ICON | 12 | 1000–300 hPa | 250/200/150 return null |
+| Météo-France | 19 | 1000–150 hPa | |
+| UKMO | 20 | 1000–150 hPa | Supports vertical_velocity |
+| GEM | 20 | 1000–150 hPa | |
 
 ### Client Usage
 
@@ -227,7 +235,7 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 
 ## Gotchas
 
-- ECMWF now has relative_humidity at pressure levels (dewpoint still derived via Magnus)
+- ECMWF now has relative_humidity and dewpoint at pressure levels, plus vertical_velocity
 - Open-Meteo API returns flat arrays keyed by variable name, indexed by time step
 - DWD URLs use `_LATEST` suffix for most recent version of each forecast type
 
