@@ -142,17 +142,20 @@ src/weatherbrief/
 │   ├── jwt_utils.py   # JWT encode/decode helpers
 │   ├── encryption.py  # Fernet encrypt/decrypt for credentials
 │   ├── flights.py     # CRUD /api/flights (DB sessions via Depends)
-│   ├── packs.py       # Packs: history, artifacts, refresh, report, email
+│   ├── packs.py       # Packs: history, artifacts, refresh (with RefreshRegistry), report, email
 │   ├── profiles.py    # Flight parameter profiles CRUD (per-user named templates)
 │   ├── preferences.py # User preferences + autorouter credentials CRUD
 │   ├── usage.py       # Usage summary + daily rate limits
+│   ├── credits.py     # Credit balance, charge, admin cost config, transparency endpoint
+│   ├── feedback.py    # User feedback submission + admin listing
 │   └── admin.py       # Admin: user list, approval, usage overview, API agent/token management
+├── costs.py           # Pure cost computation (no DB/IO): CostConfig, CostBreakdown, compute_cost()
 ├── report/
 │   ├── render.py      # render_html(), render_pdf() via Jinja2 + WeasyPrint
 │   └── templates/     # Jinja2 template for self-contained HTML report
 └── notify/
     ├── email.py       # SMTP email with HTML body + PDF attachment
-    └── admin_email.py # Admin notification on new user signup (HMAC-signed approval links)
+    └── admin_email.py # Admin notifications: new user signup, feedback submission, welcome email
 ```
 
 ## Web Frontend (`web/`)
@@ -170,7 +173,7 @@ web/
 ├── ts/
 │   ├── store/         # Zustand vanilla stores + shared types
 │   ├── managers/      # DOM rendering functions (briefing-ui, advisories-ui, etc.)
-│   ├── adapters/      # API communication layer (api, auth, preferences, profiles, admin)
+│   ├── adapters/      # API communication layer (api, auth, preferences, profiles, admin, credits)
 │   ├── components/    # Reusable UI components (info-popup)
 │   ├── helpers/       # Metric lookup, threshold rendering
 │   ├── types/         # Shared TypeScript type definitions (metrics, advisories)
@@ -211,7 +214,7 @@ Flight and pack metadata are stored in a relational database via SQLAlchemy ORM.
 - **Dev mode** (`ENVIRONMENT=development`): SQLite at `data/weatherbrief.db`, tables auto-created on startup, dev user auto-inserted.
 - **Production** (`ENVIRONMENT=production`): MySQL via `DATABASE_URL` env var, schema managed by Alembic migrations.
 
-Tables: `users`, `user_preferences`, `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `api_tokens`. See [multi-user-deployment.md](./multi-user-deployment.md) for full schema.
+Tables: `users`, `user_preferences`, `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `api_tokens`, `feedback`, `cost_config`, `credit_ledger`. See [multi-user-deployment.md](./multi-user-deployment.md) for user/flight schema, [cost-attribution-design.md](./cost-attribution-design.md) for cost/credit schema.
 
 ### File artifacts (disk)
 
@@ -284,6 +287,14 @@ Authentication supports both JWT cookies (browser sessions) and API tokens (`Aut
 | `/api/admin/agents` | POST | Create bot/agent user with initial API token |
 | `/api/admin/agents/{uid}/tokens` | POST | Create additional API token for agent |
 | `/api/admin/agents/{uid}/tokens/{tid}` | DELETE | Revoke API token |
+| `/api/user/credits` | GET | Credit balance, recent transactions, daily/monthly usage |
+| `/api/admin/cost-config` | GET/PUT | View/update cost configuration (admin) |
+| `/api/admin/cost-config/history` | GET | Cost config version history (admin) |
+| `/api/transparency` | GET | Public pricing structure (no auth) |
+| `/api/feedback` | POST | Submit user feedback on a briefing |
+| `/api/feedback/admin` | GET | List all feedback (admin only) |
+| `/api/refresh/active` | GET | List all currently active refreshes |
+| `/api/flights/{id}/packs/refresh/status` | GET | Refresh status for a specific flight |
 
 **Shareable briefing links**: any authenticated user can view any flight's briefings via direct URL. Only the flight owner can refresh, delete, or trigger email. The frontend conditionally shows action buttons based on ownership.
 
@@ -356,6 +367,9 @@ Static files served from `web/` at root.
 | 10.2 | Done | Route-aware text forecasts: NWS AFD (US) and DWD (Europe) integrated into LLM digest |
 | 10.3 | Done | METAR/TAF route weather: D-0 observations, obs-vs-model comparison, TAF highlighting, wind advisories |
 | 10.4 | Done | API token authentication for bot/agent users (admin-managed, `wb_` prefix, SHA-256 hashed) |
+| 11.1 | Done | Cost attribution: per-briefing cost computation, credit balance, auto-reload, ledger, admin config, transparency endpoint |
+| 11.2 | Done | User feedback: submission with categories, admin email notifications, admin feedback listing |
+| 11.3 | Done | Refresh registry: prevent duplicate refreshes, per-flight status tracking, SSE progress streaming |
 
 ## Docker
 
@@ -389,3 +403,4 @@ docker-compose up -d
 - Cross-section & route graph visualization: [visualization.md](./visualization.md)
 - Route graph: [route-graph.md](./route-graph.md)
 - METAR/TAF route weather: [metar-taf-route-weather.md](./metar-taf-route-weather.md)
+- Cost attribution & credits: [cost-attribution-design.md](./cost-attribution-design.md)

@@ -89,11 +89,12 @@ No manual DB setup or migration step needed for development.
 | Column | Type | Notes |
 |--------|------|-------|
 | id | VARCHAR(36) PK | UUID |
-| provider | VARCHAR(20) | `google` or `apple` |
+| provider | VARCHAR(20) | `google`, `apple`, or `api` (bot/agent) |
 | provider_sub | VARCHAR(255) UNIQUE | OAuth subject ID |
 | email | VARCHAR(255) | From OAuth profile |
 | display_name | VARCHAR(255) | |
 | approved | BOOLEAN DEFAULT TRUE | Auto-approved on signup; admin can revoke |
+| credit_balance | FLOAT DEFAULT 500.0 | Cached credit balance (derived from ledger) |
 | created_at | DATETIME | |
 | last_login_at | DATETIME | |
 
@@ -184,6 +185,23 @@ Per-briefing usage tracking with fixed columns per service (better for aggregati
 | llm_model | VARCHAR(100) NULL | e.g. `anthropic:claude-sonnet-4-5-20250929` |
 | llm_input_tokens | INT NULL | LLM input token count |
 | llm_output_tokens | INT NULL | LLM output token count |
+| result_size_bytes | INT NULL | Total artifact size on disk |
+
+### feedback
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INT AUTO_INCREMENT PK | |
+| user_id | VARCHAR(64) FK | → users.id |
+| flight_id | VARCHAR(256) | |
+| pack_timestamp | VARCHAR(64) | Specific pack within the flight |
+| category | VARCHAR(32) | `data_issue`, `too_conservative`, `too_optimistic`, `incorrect_interpretation`, `other` |
+| comment | TEXT | Required, non-empty |
+| created_at | DATETIME | |
+
+### cost_config & credit_ledger
+
+See [cost-attribution-design.md](./cost-attribution-design.md) for full schema of cost configuration and credit ledger tables.
 
 ## File Storage Layout
 
@@ -370,6 +388,22 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - [x] Settings UI: profile selector, create/rename/duplicate/delete, single form for all settings
 - [x] Icing severity enhancement toggle (`icing_severity_enhance`) in profile settings
 - [x] Advisory aggregation mode (`advisories.aggregation`): worst vs majority — see [advisories.md](./advisories.md)
+
+### Phase 6: Cost Attribution & Feedback ✓
+
+**Goal**: Per-briefing cost tracking, credit system, user feedback, and operational improvements.
+
+- [x] Cost attribution: pure computation module (`costs.py`) + credit API (`credits.py`)
+- [x] Credit system: per-user balance, append-only ledger, auto-reload at 500 credits
+- [x] Versioned admin cost config with history (migration 009)
+- [x] Public transparency endpoint (`/api/transparency`) — no auth required
+- [x] Credit summary on settings page (balance, daily/monthly usage, recent transactions)
+- [x] User feedback submission with category validation (5 briefing-quality categories)
+- [x] Admin feedback listing with user info
+- [x] Admin email notification on feedback submission (with briefing link)
+- [x] Refresh registry: thread-safe in-memory registry prevents duplicate refreshes
+- [x] Per-flight refresh status endpoint + global active refreshes listing
+- [x] SSE progress streaming shows refresh stage/detail in real-time
 
 ### UX Improvements ✓
 
