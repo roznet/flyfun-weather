@@ -1063,6 +1063,17 @@ label {
   text-decoration: none;
 }
 
+.btn-settings.nav-current {
+  color: var(--text);
+  font-weight: 600;
+  cursor: default;
+}
+
+.btn-settings.nav-current:hover {
+  background: none;
+  color: var(--text);
+}
+
 /* --- User info in header --- */
 
 .user-info {

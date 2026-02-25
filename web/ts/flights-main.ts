@@ -61,7 +61,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
-  renderUserInfo(user);
+  renderUserInfo(user, 'flights');
 
   const store = flightsStore;
 

@@ -250,7 +250,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
-  renderUserInfo(user);
+  renderUserInfo(user, 'settings');
 
   // Tab switching
   for (const btn of document.querySelectorAll<HTMLButtonElement>('.tab-btn')) {
