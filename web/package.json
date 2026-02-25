@@ -17,9 +17,11 @@
     "dev:help": "npx esbuild ts/help-main.ts --bundle --outfile=dist/help.js --sourcemap --target=es2020 --watch=forever"
   },
   "dependencies": {
+    "leaflet": "^1.9.4",
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.21",
     "esbuild": "^0.27.3",
     "typescript": "^5.9.3"
   }

@@ -4,7 +4,7 @@ import { createStore } from 'zustand/vanilla';
 import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { RouteAdvisoriesManifest } from '../types/advisories';
 import type { DisplayMode, Tier } from '../types/metrics';
-import type { RenderMode, VizSettings } from '../visualization/types';
+import type { RenderMode, VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
 import { getDefaultEnabled } from '../visualization/cross-section/layer-registry';
 import { RefreshStreamError } from '../adapters/api-adapter';
@@ -33,8 +33,9 @@ function loadVizSettings(): VizSettings {
     layout: 'cross-section',
     renderMode: 'smooth',
     enabledLayers: getDefaultEnabled(),
-    mapColorMetric: 'icing-risk',
-    mapWidthMetric: 'cloud-cover',
+    mapColorMetric: 'icing-risk-at-level',
+    mapWidthMetric: 'cloud-cover-total',
+    mapAltitudeFt: null,
     routeGraphVisible: true,
     routeGraphLeftMetric: 'headwind',
     routeGraphRightMetric: 'temperature',
@@ -103,6 +104,10 @@ export interface BriefingState {
   refreshObservations: () => Promise<void>;
   sendEmail: () => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
+  setLayout: (layout: VizLayout) => void;
+  setMapColorMetric: (metricId: string) => void;
+  setMapWidthMetric: (metricId: string) => void;
+  setMapAltitude: (altitudeFt: number | null) => void;
   setRouteGraphVisible: (visible: boolean) => void;
   setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => void;
 }
@@ -386,6 +391,30 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     set({ flight: { ...flight, auto_refresh: autoRefresh, auto_refresh_hour: hour } });
+  },
+
+  setLayout: (layout: VizLayout) => {
+    const updated = { ...get().vizSettings, layout };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setMapColorMetric: (metricId: string) => {
+    const updated = { ...get().vizSettings, mapColorMetric: metricId };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setMapWidthMetric: (metricId: string) => {
+    const updated = { ...get().vizSettings, mapWidthMetric: metricId };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setMapAltitude: (altitudeFt: number | null) => {
+    const updated = { ...get().vizSettings, mapAltitudeFt: altitudeFt };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
   },
 
   setRouteGraphVisible: (visible: boolean) => {

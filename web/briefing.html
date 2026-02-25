@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WeatherBrief — Briefing</title>
   <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 </head>
 <body>
   <div class="container">
@@ -86,14 +87,26 @@
       </div>
     </div>
 
-    <!-- Cross-Section Visualization -->
+    <!-- Cross-Section & Route Map Visualization -->
     <div id="viz-section" class="section collapsible" data-section="cross-section" style="display: none;">
       <h3>Cross-Section</h3>
       <div class="section-body">
         <div id="viz-controls" class="viz-controls"></div>
-        <div id="viz-canvas-container" class="viz-canvas-container"></div>
-        <div id="route-graph-container" class="route-graph-canvas-container"></div>
-        <div id="route-graph-controls" class="viz-controls"></div>
+        <div id="viz-layout-wrapper" class="viz-layout-wrapper layout-cross-section">
+          <!-- Cross-section pane -->
+          <div id="viz-cross-section-pane" class="viz-pane viz-pane-cross-section">
+            <div id="viz-canvas-container" class="viz-canvas-container"></div>
+            <div id="route-graph-container" class="route-graph-canvas-container"></div>
+            <div id="route-graph-controls" class="viz-controls"></div>
+          </div>
+          <!-- Map pane -->
+          <div id="viz-map-pane" class="viz-pane viz-pane-map">
+            <div id="map-container" class="map-container"></div>
+            <div id="map-altitude-slider" class="map-altitude-slider" style="display: none;"></div>
+            <div id="map-legend" class="map-legend"></div>
+            <div id="map-controls" class="map-controls"></div>
+          </div>
+        </div>
       </div>
     </div>
 

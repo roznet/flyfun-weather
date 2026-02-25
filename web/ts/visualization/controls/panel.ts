@@ -1,19 +1,26 @@
-/** Visualization control panel: layout toggle, render mode, layer checkboxes. */
+/** Visualization control panel: layout toggle, render mode, layer checkboxes, map controls. */
 
-import type { RenderMode, VizSettings } from '../types';
+import type { RenderMode, VizLayout, VizSettings } from '../types';
 import { getLayerGroups } from '../cross-section/layer-registry';
 import { showLayerInfo } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
+import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
 
 export interface VizControlCallbacks {
   onRenderModeChange: (mode: RenderMode) => void;
   onLayerToggle: (layerId: string) => void;
+  onLayoutChange: (layout: VizLayout) => void;
 }
 
 export interface RouteGraphControlCallbacks {
   onRouteGraphToggle: (visible: boolean) => void;
   onRouteGraphMetricChange: (axis: 'left' | 'right', metricId: string) => void;
+}
+
+export interface MapControlCallbacks {
+  onColorMetricChange: (metricId: string) => void;
+  onWidthMetricChange: (metricId: string) => void;
 }
 
 export function renderVizControls(
@@ -26,8 +33,15 @@ export function renderVizControls(
 
   let html = '<div class="viz-toolbar">';
 
-  // Top row: Model indicator + Render mode toggle
+  // Top row: Layout toggle + Model indicator + Render mode toggle
   html += '<div class="viz-toolbar-top">';
+
+  // Layout toggle
+  html += '<div class="viz-layout-toggle">';
+  html += `<button class="btn-toggle${settings.layout === 'cross-section' ? ' active' : ''}" data-layout="cross-section" title="Cross-section only">X-Section</button>`;
+  html += `<button class="btn-toggle${settings.layout === 'split' ? ' active' : ''}" data-layout="split" title="Side-by-side">Split</button>`;
+  html += `<button class="btn-toggle${settings.layout === 'map' ? ' active' : ''}" data-layout="map" title="Map only">Map</button>`;
+  html += '</div>';
 
   // Model indicator
   if (selectedModel) {
@@ -37,39 +51,50 @@ export function renderVizControls(
     html += `</div>`;
   }
 
-  // Render mode toggle
-  html += '<div class="viz-render-toggle">';
-  html += '<span class="viz-toggle-label">Render:</span>';
-  html += `<div class="display-mode-toggle">`;
-  html += `<button class="btn-toggle${settings.renderMode === 'smooth' ? ' active' : ''}" data-render-mode="smooth">Smooth</button>`;
-  html += `<button class="btn-toggle${settings.renderMode === 'columns' ? ' active' : ''}" data-render-mode="columns">Columns</button>`;
-  html += '</div>';
-  html += '</div>';
+  // Render mode toggle (only when cross-section visible)
+  if (settings.layout !== 'map') {
+    html += '<div class="viz-render-toggle">';
+    html += '<span class="viz-toggle-label">Render:</span>';
+    html += `<div class="display-mode-toggle">`;
+    html += `<button class="btn-toggle${settings.renderMode === 'smooth' ? ' active' : ''}" data-render-mode="smooth">Smooth</button>`;
+    html += `<button class="btn-toggle${settings.renderMode === 'columns' ? ' active' : ''}" data-render-mode="columns">Columns</button>`;
+    html += '</div>';
+    html += '</div>';
+  }
 
   html += '</div>'; // .viz-toolbar-top
 
-  // Layer toggles — full width below
-  html += '<div class="viz-layer-toggles">';
-  for (const group of groups) {
-    html += `<div class="viz-layer-group">`;
-    html += `<span class="viz-group-label">${group.label}:</span>`;
-    for (const layer of group.layers) {
-      const checked = settings.enabledLayers[layer.id] !== false ? 'checked' : '';
-      html += `<label class="viz-layer-checkbox">`;
-      html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked}>`;
-      html += `<span>${layer.name}</span>`;
-      html += `</label>`;
-      if (layer.metricId) {
-        html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="More info" aria-label="More info">\u24d8</button>`;
+  // Layer toggles — only when cross-section visible
+  if (settings.layout !== 'map') {
+    html += '<div class="viz-layer-toggles">';
+    for (const group of groups) {
+      html += `<div class="viz-layer-group">`;
+      html += `<span class="viz-group-label">${group.label}:</span>`;
+      for (const layer of group.layers) {
+        const checked = settings.enabledLayers[layer.id] !== false ? 'checked' : '';
+        html += `<label class="viz-layer-checkbox">`;
+        html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked}>`;
+        html += `<span>${layer.name}</span>`;
+        html += `</label>`;
+        if (layer.metricId) {
+          html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="More info" aria-label="More info">\u24d8</button>`;
+        }
       }
+      html += '</div>';
     }
     html += '</div>';
   }
-  html += '</div>';
 
   html += '</div>'; // .viz-toolbar
 
   container.innerHTML = html;
+
+  // Wire layout toggle
+  container.querySelectorAll('[data-layout]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      callbacks.onLayoutChange((btn as HTMLElement).dataset.layout as VizLayout);
+    });
+  });
 
   // Wire render mode toggle
   container.querySelectorAll('[data-render-mode]').forEach((btn) => {
@@ -165,6 +190,56 @@ export function renderRouteGraphControls(
   if (rightSelect) {
     rightSelect.addEventListener('change', () => {
       callbacks.onRouteGraphMetricChange('right', rightSelect.value);
+    });
+  }
+}
+
+/** Render map-specific controls (color + width metric dropdowns) into the map controls container. */
+export function renderMapControls(
+  container: HTMLElement,
+  settings: VizSettings,
+  callbacks: MapControlCallbacks,
+): void {
+  const colorOptions = getMapMetricOptions(false);
+  const widthOptions = getMapMetricOptions(true);
+
+  let html = '<div class="map-controls">';
+
+  html += '<label class="map-control-label">';
+  html += '<span class="viz-toggle-label">Color:</span>';
+  html += '<select id="map-color-metric" class="map-control-select">';
+  for (const opt of colorOptions) {
+    const selected = opt.id === settings.mapColorMetric ? ' selected' : '';
+    html += `<option value="${opt.id}"${selected}>${opt.label}</option>`;
+  }
+  html += '</select>';
+  html += '</label>';
+
+  html += '<label class="map-control-label">';
+  html += '<span class="viz-toggle-label">Width:</span>';
+  html += '<select id="map-width-metric" class="map-control-select">';
+  for (const opt of widthOptions) {
+    const selected = opt.id === settings.mapWidthMetric ? ' selected' : '';
+    html += `<option value="${opt.id}"${selected}>${opt.label}</option>`;
+  }
+  html += '</select>';
+  html += '</label>';
+
+  html += '</div>';
+
+  container.innerHTML = html;
+
+  // Wire metric dropdowns
+  const colorSelect = container.querySelector('#map-color-metric') as HTMLSelectElement | null;
+  if (colorSelect) {
+    colorSelect.addEventListener('change', () => {
+      callbacks.onColorMetricChange(colorSelect.value);
+    });
+  }
+  const widthSelect = container.querySelector('#map-width-metric') as HTMLSelectElement | null;
+  if (widthSelect) {
+    widthSelect.addEventListener('change', () => {
+      callbacks.onWidthMetricChange(widthSelect.value);
     });
   }
 }
