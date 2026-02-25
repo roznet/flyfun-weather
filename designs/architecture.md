@@ -406,13 +406,11 @@ docker-compose up -d
 
 ## References
 
-- Spec: [flight-weather-tracker-spec.md](./flight-weather-tracker-spec.md)
+- Original spec: [archive/flight-weather-tracker-spec.md](./archive/flight-weather-tracker-spec.md)
 - Data models: [data-models.md](./data-models.md)
 - Fetch: [fetch.md](./fetch.md)
 - Analysis: [analysis.md](./analysis.md)
 - Digest: [digest.md](./digest.md)
-- API & web plan: [plan-briefing-architecture.md](./plan-briefing-architecture.md)
-- Sounding analysis plan: [sounding_analysis_plan.md](./sounding_analysis_plan.md)
 - Multi-user deployment: [multi-user-deployment.md](./multi-user-deployment.md)
 - Route advisories: [advisories.md](./advisories.md)
 - Cross-section & route graph visualization: [visualization.md](./visualization.md)

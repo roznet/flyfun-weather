@@ -203,6 +203,6 @@ web/ts/visualization/
 ## References
 
 - Cross-section implementation: [visualization.md](./visualization.md)
-- Cross-section plan: [visualization-plan.md](./visualization-plan.md)
+- Cross-section design: [visualization.md](./visualization.md)
 - Data models: [data-models.md](./data-models.md)
 - Issue: #17

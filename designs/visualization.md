@@ -335,4 +335,4 @@ Single source of truth for all color/opacity functions used by cross-section ban
 - Data models: [data-models.md](./data-models.md) (RouteAnalysesManifest, ElevationProfile)
 - Fetch layer: [fetch.md](./fetch.md) (elevation.py, route_walk.py)
 - Analysis: [analysis.md](./analysis.md) (sounding analysis pipeline)
-- Implementation plans: [visualization-plan.md](./visualization-plan.md), [elevation-profile-plan.md](./elevation-profile-plan.md)
+- Historical plans: [archive/visualization-plan.md](./archive/visualization-plan.md), [archive/elevation-profile-plan.md](./archive/elevation-profile-plan.md)
