@@ -284,7 +284,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         error: null,
       });
 
-      const poll = async (): Promise<void> => {
+      const MAX_POLL_ATTEMPTS = 100; // ~5 minutes at 3s intervals
+      const poll = async (attempt = 0): Promise<void> => {
+        if (attempt >= MAX_POLL_ATTEMPTS) {
+          set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: 'Refresh timed out' });
+          return;
+        }
         await new Promise(r => setTimeout(r, 3000));
         const s = await api.fetchRefreshStatus(flight.id);
         if (!s.active) {
@@ -299,7 +304,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           refreshStage: s.label ?? s.stage ?? null,
           refreshDetail: s.detail ?? null,
         });
-        return poll();
+        return poll(attempt + 1);
       };
       await poll();
     } catch {

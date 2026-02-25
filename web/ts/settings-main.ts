@@ -2,7 +2,7 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchCreditSummary, type CreditSummary } from './adapters/credits-adapter';
-import { renderUserInfo, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
+import { renderUserInfo, escapeHtml, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
 import {
   fetchPreferences,
   savePreferences,
@@ -112,7 +112,7 @@ function renderProfileSelector(): void {
 
   select.innerHTML = profiles.map(p => {
     const defaultTag = p.is_default ? ' (default)' : '';
-    return `<option value="${p.id}"${p.id === activeProfileId ? ' selected' : ''}>${p.name}${defaultTag}</option>`;
+    return `<option value="${p.id}"${p.id === activeProfileId ? ' selected' : ''}>${escapeHtml(p.name)}${defaultTag}</option>`;
   }).join('');
 
   // Update delete button state
@@ -582,8 +582,7 @@ function showStatus(message: string, isError = false): void {
   const el = document.getElementById('status-message');
   if (!el) return;
   el.textContent = message;
-  el.classList.add('visible');
-  el.className = isError ? 'status-error' : 'status-success';
+  el.className = isError ? 'status-error visible' : 'status-success visible';
   if (!isError) {
     setTimeout(() => { el.classList.remove('visible'); }, STATUS_DISMISS_MS);
   }

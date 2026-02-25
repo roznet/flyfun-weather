@@ -28,6 +28,7 @@ _CONVECTIVE_SEVERITY = [
     ConvectiveRisk.HIGH,
     ConvectiveRisk.EXTREME,
 ]
+_CONVECTIVE_SEVERITY_INDEX = {r: i for i, r in enumerate(_CONVECTIVE_SEVERITY)}
 
 
 def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
@@ -116,10 +117,10 @@ def _check_enroute_hazards(
 
         conv = sounding.convective
         if conv is not None:
-            risk_idx = _CONVECTIVE_SEVERITY.index(conv.risk_level)
+            risk_idx = _CONVECTIVE_SEVERITY_INDEX.get(conv.risk_level, 0)
             if risk_idx >= convective_min_risk_idx:
                 has_convective = True
-                if risk_idx > _CONVECTIVE_SEVERITY.index(worst_conv_risk):
+                if risk_idx > _CONVECTIVE_SEVERITY_INDEX.get(worst_conv_risk, 0):
                     worst_conv_risk = conv.risk_level
 
         if has_icing:

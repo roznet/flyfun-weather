@@ -4,6 +4,9 @@ export interface AltitudeSliderCallbacks {
   onChange: (altitudeFt: number) => void;
 }
 
+// Track debounce timer at module level so it can be cleared on re-render
+let _sliderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
  * Render the altitude slider into the container.
  * The slider steps in 500ft increments from surface to flightCeiling.
@@ -14,6 +17,12 @@ export function renderAltitudeSlider(
   flightCeilingFt: number,
   callbacks: AltitudeSliderCallbacks,
 ): void {
+  // Clear any pending debounce from a previous render
+  if (_sliderDebounceTimer) {
+    clearTimeout(_sliderDebounceTimer);
+    _sliderDebounceTimer = null;
+  }
+
   const min = 0;
   const max = flightCeilingFt;
   const step = 500;
@@ -30,15 +39,13 @@ export function renderAltitudeSlider(
   const rangeInput = container.querySelector('#map-alt-range') as HTMLInputElement;
   const labelEl = container.querySelector('#map-alt-label') as HTMLElement;
 
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
   rangeInput.addEventListener('input', () => {
     const val = parseInt(rangeInput.value, 10);
     labelEl.textContent = formatFL(val);
 
     // Debounce the callback to avoid excessive re-renders
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
+    if (_sliderDebounceTimer) clearTimeout(_sliderDebounceTimer);
+    _sliderDebounceTimer = setTimeout(() => {
       callbacks.onChange(val);
     }, 50);
   });

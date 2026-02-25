@@ -6,8 +6,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -151,6 +151,38 @@ class CostConfigUpdate(BaseModel):
     margin_percent: float | None = None
     usd_per_credit: float | None = None
 
+    @field_validator(
+        "token_cost_per_1k_input", "token_cost_per_1k_output",
+        "droplet_monthly_usd", "misc_monthly_usd",
+        "subscriptions_monthly_usd", "disk_cost_per_gb_monthly",
+    )
+    @classmethod
+    def non_negative_float(cls, v: float | None) -> float | None:
+        if v is not None and v < 0:
+            raise ValueError("value must be non-negative")
+        return v
+
+    @field_validator("usd_per_credit")
+    @classmethod
+    def positive_usd_per_credit(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError("usd_per_credit must be positive")
+        return v
+
+    @field_validator("margin_percent")
+    @classmethod
+    def reasonable_margin(cls, v: float | None) -> float | None:
+        if v is not None and (v < 0 or v > 200):
+            raise ValueError("margin_percent must be between 0 and 200")
+        return v
+
+    @field_validator("estimated_monthly_briefings")
+    @classmethod
+    def positive_briefings(cls, v: int | None) -> int | None:
+        if v is not None and v < 1:
+            raise ValueError("estimated_monthly_briefings must be at least 1")
+        return v
+
 
 class TransparencyResponse(BaseModel):
     token_cost_per_1k_input: float
@@ -232,7 +264,9 @@ def get_credits(
 ) -> CreditSummaryResponse:
     """Return credit balance and recent transactions for the current user."""
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
-    balance = user.credit_balance if user else 500.0
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    balance = user.credit_balance
 
     transactions = get_recent_transactions(db, user_id)
 

@@ -130,12 +130,14 @@ export class RouteMapRenderer {
 
     // Fit to route bounds
     if (this.data && this.data.points.length > 0) {
-      const lats = this.data.points.map((p) => p.lat);
-      const lons = this.data.points.map((p) => p.lon);
-      const bounds = L.latLngBounds(
-        [Math.min(...lats), Math.min(...lons)],
-        [Math.max(...lats), Math.max(...lons)],
-      );
+      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+      for (const p of this.data.points) {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+      }
+      const bounds = L.latLngBounds([minLat, minLon], [maxLat, maxLon]);
       this.map.fitBounds(bounds, { padding: [30, 30] });
     }
 

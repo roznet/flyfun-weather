@@ -121,7 +121,7 @@ export async function refreshBriefingStream(
   const url = `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/refresh/stream${forceParam}`;
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
   });
 
   if (!resp.ok) {
