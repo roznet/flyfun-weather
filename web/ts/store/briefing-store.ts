@@ -278,7 +278,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       // A refresh is active — show its progress and poll until done
       set({
         refreshing: true,
-        refreshStage: status.stage ?? null,
+        refreshStage: status.label ?? status.stage ?? null,
         refreshDetail: status.detail ?? null,
         refreshProgress: 0,
         error: null,
@@ -296,7 +296,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           return;
         }
         set({
-          refreshStage: s.stage ?? null,
+          refreshStage: s.label ?? s.stage ?? null,
           refreshDetail: s.detail ?? null,
         });
         return poll();

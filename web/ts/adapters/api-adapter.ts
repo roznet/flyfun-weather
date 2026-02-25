@@ -337,6 +337,7 @@ export interface RefreshStatusResponse {
   active: boolean;
   status?: string;
   stage?: string | null;
+  label?: string | null;
   detail?: string | null;
   triggered_by?: string;
   queued_at?: string;
