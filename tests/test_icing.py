@@ -6,7 +6,14 @@ from weatherbrief.analysis.sounding.icing import (
     _index_to_risk,
     assess_icing_zones,
 )
-from weatherbrief.models import DerivedLevel, EnhancedCloudLayer, IcingRisk, IcingType
+from weatherbrief.models import (
+    DerivedLevel,
+    EnhancedCloudLayer,
+    IcingRisk,
+    IcingType,
+    NWPCloudDiagnostics,
+    NWPCloudLayerDiag,
+)
 
 
 def _cloud(base_ft, top_ft):
@@ -321,8 +328,14 @@ def test_nwp_cloud_fallback_catches_dry_level():
     # Reset icing_index
     levels[0].icing_index = None
 
-    # With NWP mid cloud > 50%: icing should be detected via fallback
-    zones_nwp = assess_icing_zones(levels, [], nwp_cloud_mid_pct=80.0)
+    # With NWP mid cloud > 50% and diagnostics covering 10,000ft:
+    # icing should be detected via fallback
+    diag = NWPCloudDiagnostics(
+        mid=NWPCloudLayerDiag(cover_pct=80.0, base_ft=8000, top_ft=12000),
+    )
+    zones_nwp = assess_icing_zones(
+        levels, [], nwp_cloud_mid_pct=80.0, nwp_cloud_diagnostics=diag,
+    )
     assert len(zones_nwp) == 1
     assert zones_nwp[0].risk != IcingRisk.NONE
 
@@ -376,3 +389,53 @@ def test_icing_type_uses_wet_bulb():
 
     # No wet-bulb → falls back to dry-bulb
     assert _classify_icing_type(-2.0) == IcingType.CLEAR
+
+
+# --- Altitude-aware NWP cloud diagnostics tests ---
+
+
+def test_nwp_cloud_high_altitude_no_icing_at_low():
+    """NWP mid cloud at 72% but located at 21,000ft should NOT trigger icing at 10,000ft."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-15.0, dewpoint_depression_c=8.0),
+    ]
+    # Cloud diagnostics: mid-cloud layer is at 21,000–23,000ft (glaciated, far above)
+    diag = NWPCloudDiagnostics(
+        mid=NWPCloudLayerDiag(cover_pct=72.0, base_ft=21000, top_ft=23000),
+    )
+    zones = assess_icing_zones(
+        levels, [], nwp_cloud_mid_pct=72.0, nwp_cloud_diagnostics=diag,
+    )
+    assert len(zones) == 0
+
+
+def test_nwp_cloud_covering_level_triggers_icing():
+    """NWP mid cloud at 72% with base/top covering 10,000ft SHOULD trigger icing."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-15.0, dewpoint_depression_c=8.0),
+    ]
+    # Cloud diagnostics: mid-cloud layer covers the level altitude
+    diag = NWPCloudDiagnostics(
+        mid=NWPCloudLayerDiag(cover_pct=72.0, base_ft=8000, top_ft=14000),
+    )
+    zones = assess_icing_zones(
+        levels, [], nwp_cloud_mid_pct=72.0, nwp_cloud_diagnostics=diag,
+    )
+    assert len(zones) == 1
+    assert zones[0].risk != IcingRisk.NONE
+
+
+def test_nwp_cloud_fallback_bulk_pct_when_no_diagnostics():
+    """Without diagnostics, fall back to bulk % behavior (backward compat)."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-15.0, dewpoint_depression_c=8.0),
+    ]
+    # No diagnostics — should use bulk nwp_cloud_mid_pct as before
+    zones = assess_icing_zones(
+        levels, [], nwp_cloud_mid_pct=80.0, nwp_cloud_diagnostics=None,
+    )
+    assert len(zones) == 1
+    assert zones[0].risk != IcingRisk.NONE

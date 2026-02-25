@@ -207,6 +207,7 @@ def analyze_sounding(
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
         severity_enhance=icing_severity_enhance,
+        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
     # Precipitation phase classification

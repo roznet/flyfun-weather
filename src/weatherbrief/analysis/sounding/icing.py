@@ -15,6 +15,7 @@ from weatherbrief.models import (
     IcingRisk,
     IcingType,
     IcingZone,
+    NWPCloudDiagnostics,
 )
 
 # Dewpoint depression threshold — level must be near/in cloud
@@ -285,18 +286,48 @@ def _cloud_base_vapor_density(
 # --- Main assessment ---
 
 
+_NWP_CLOUD_ALTITUDE_MARGIN_FT = 500.0
+
+
 def _nwp_cloud_for_altitude(
     altitude_ft: float,
     nwp_cloud_low_pct: float | None,
     nwp_cloud_mid_pct: float | None,
     nwp_cloud_high_pct: float | None = None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
 ) -> float | None:
-    """Return the NWP cloud cover percentage for a given altitude."""
+    """Return the NWP cloud cover percentage for a given altitude.
+
+    When *nwp_cloud_diagnostics* is provided, the bulk cloud percentage is
+    only returned if the level actually falls within the NWP cloud layer's
+    base/top range (with a margin).  This prevents, e.g., 72% mid-cloud at
+    22,000ft from triggering icing at 10,000ft.
+
+    When diagnostics are ``None`` or the layer lacks base/top, fall back to
+    the existing bulk percentage behavior (backward compatible).
+    """
+    # Determine the band and its bulk percentage + diagnostics layer
     if altitude_ft < 6500:
-        return nwp_cloud_low_pct
-    if altitude_ft < 20000:
-        return nwp_cloud_mid_pct
-    return nwp_cloud_high_pct
+        bulk_pct = nwp_cloud_low_pct
+        diag_layer = nwp_cloud_diagnostics.low if nwp_cloud_diagnostics else None
+    elif altitude_ft < 20000:
+        bulk_pct = nwp_cloud_mid_pct
+        diag_layer = nwp_cloud_diagnostics.mid if nwp_cloud_diagnostics else None
+    else:
+        bulk_pct = nwp_cloud_high_pct
+        diag_layer = nwp_cloud_diagnostics.high if nwp_cloud_diagnostics else None
+
+    # If no diagnostics or layer lacks base/top, fall back to bulk %
+    if diag_layer is None or diag_layer.base_ft is None or diag_layer.top_ft is None:
+        return bulk_pct
+
+    # Altitude-aware check: only confirm cloud if level is within the layer
+    margin = _NWP_CLOUD_ALTITUDE_MARGIN_FT
+    if (diag_layer.base_ft - margin) <= altitude_ft <= (diag_layer.top_ft + margin):
+        return bulk_pct
+
+    # NWP cloud exists in this band but not at this altitude
+    return 0.0
 
 
 # NWP cloud cover threshold for the fallback icing pass — when the NWP model
@@ -314,6 +345,7 @@ def assess_icing_zones(
     nwp_cloud_mid_pct: float | None = None,
     nwp_cloud_high_pct: float | None = None,
     severity_enhance: bool = True,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
 ) -> list[IcingZone]:
     """Assess icing zones using Ogimet continuous icing index.
 
@@ -334,6 +366,9 @@ def assess_icing_zones(
         nwp_cloud_mid_pct: NWP mid cloud cover (6500–20000ft).
         nwp_cloud_high_pct: NWP high cloud cover (>20000ft).
         severity_enhance: If False, skip RH/PW severity upgrades (user preference).
+        nwp_cloud_diagnostics: GFS cloud layer diagnostics with per-layer base/top.
+            When provided, NWP cloud checks are altitude-aware; when None, falls
+            back to bulk percentage behavior.
 
     Returns:
         List of IcingZone, ordered from lowest to highest altitude.
@@ -410,6 +445,7 @@ def assess_icing_zones(
 
         nwp_cloud = _nwp_cloud_for_altitude(
             lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+            nwp_cloud_diagnostics=nwp_cloud_diagnostics,
         )
         if nwp_cloud is None or nwp_cloud < _NWP_CLOUD_ICING_THRESHOLD:
             continue
@@ -448,6 +484,7 @@ def assess_icing_zones(
                 current, sld_risk, precipitable_water_mm,
                 nwp_cloud_low_pct, nwp_cloud_mid_pct,
                 severity_enhance=severity_enhance,
+                nwp_cloud_diagnostics=nwp_cloud_diagnostics,
             ))
             current = [item]
 
@@ -455,6 +492,7 @@ def assess_icing_zones(
         current, sld_risk, precipitable_water_mm,
         nwp_cloud_low_pct, nwp_cloud_mid_pct,
         severity_enhance=severity_enhance,
+        nwp_cloud_diagnostics=nwp_cloud_diagnostics,
     ))
     return zones
 
@@ -463,9 +501,13 @@ def _nwp_cloud_for_zone(
     base_ft: float,
     nwp_cloud_low_pct: float | None,
     nwp_cloud_mid_pct: float | None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
 ) -> float | None:
     """Pick the NWP cloud cover band matching the zone's base altitude."""
-    return _nwp_cloud_for_altitude(base_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct)
+    return _nwp_cloud_for_altitude(
+        base_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct,
+        nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+    )
 
 
 def _build_zone(
@@ -475,6 +517,7 @@ def _build_zone(
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
     severity_enhance: bool = True,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
 ) -> IcingZone:
     """Build an IcingZone from a group of adjacent icing levels."""
     levels_in_zone = [lv for lv, _, _, _ in items]
@@ -502,6 +545,7 @@ def _build_zone(
     if severity_enhance:
         nwp_pct = _nwp_cloud_for_zone(
             base.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct,
+            nwp_cloud_diagnostics=nwp_cloud_diagnostics,
         )
         worst_risk = _enhance_severity(
             worst_risk, levels_in_zone, precipitable_water_mm, nwp_pct,
