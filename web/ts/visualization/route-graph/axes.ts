@@ -172,11 +172,12 @@ export function drawXGrid(
   ctx.setLineDash([]);
 }
 
-/** Draw a horizontal zero-reference line. */
+/** Draw a horizontal zero-reference line with optional above/below labels. */
 export function drawZeroLine(
   ctx: CanvasRenderingContext2D,
   scale: YAxisScale,
   plotArea: PlotArea,
+  labels?: [string, string],
 ): void {
   if (scale.min > 0 || scale.max < 0) return;
   const y = scale.valueToY(0);
@@ -188,6 +189,20 @@ export function drawZeroLine(
   ctx.lineTo(plotArea.left + plotArea.width, y);
   ctx.stroke();
   ctx.setLineDash([]);
+
+  if (labels) {
+    ctx.save();
+    ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = LABEL_COLOR;
+    const x = plotArea.left + 4;
+    // Above zero line
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(labels[0], x, y - 2);
+    // Below zero line
+    ctx.textBaseline = 'top';
+    ctx.fillText(labels[1], x, y + 2);
+    ctx.restore();
+  }
 }
 
 /** Draw the plot border. */

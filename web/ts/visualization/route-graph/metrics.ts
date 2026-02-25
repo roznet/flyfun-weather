@@ -23,6 +23,8 @@ export interface RouteGraphMetric {
   suggestedRange?: [number, number];
   /** Draw a reference line at y=0 (useful for head/tailwind). */
   showZeroLine?: boolean;
+  /** Labels drawn above/below the zero line: [aboveLabel, belowLabel]. */
+  zeroLineLabels?: [string, string];
 }
 
 /**
@@ -37,6 +39,7 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     renderType: 'line',
     color: '#2563eb',
     showZeroLine: true,
+    zeroLineLabels: ['Headwind \u2191', 'Tailwind \u2193'],
     getValue: (p) => p.headwindKt,
     formatValue: (v) => {
       const abs = Math.abs(v).toFixed(0);
