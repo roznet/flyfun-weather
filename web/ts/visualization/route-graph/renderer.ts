@@ -121,8 +121,8 @@ export class RouteGraphRenderer {
     ctx.clip();
 
     // Draw zero lines
-    if (this.leftMetric?.showZeroLine && leftScale) drawZeroLine(ctx, leftScale, plotArea);
-    if (this.rightMetric?.showZeroLine && rightScale) drawZeroLine(ctx, rightScale, plotArea);
+    if (this.leftMetric?.showZeroLine && leftScale) drawZeroLine(ctx, leftScale, plotArea, this.leftMetric.zeroLineLabels);
+    if (this.rightMetric?.showZeroLine && rightScale) drawZeroLine(ctx, rightScale, plotArea, this.rightMetric.zeroLineLabels);
 
     // Render left metric
     if (this.leftMetric && leftScale) {
