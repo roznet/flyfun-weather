@@ -217,7 +217,7 @@ class CostConfigRow(Base):
     misc_monthly_usd: Mapped[float] = mapped_column(Float, default=2.0)
     subscriptions_monthly_usd: Mapped[float] = mapped_column(Float, default=30.0)
     subscription_details_json: Mapped[str] = mapped_column(
-        Text, default='{"open_meteo": 30}',
+        String(1024), default='{"open_meteo": 30}',
     )
     disk_cost_per_gb_monthly: Mapped[float] = mapped_column(Float, default=0.10)
     estimated_monthly_briefings: Mapped[int] = mapped_column(Integer, default=500)
