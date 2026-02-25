@@ -32,7 +32,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
-  renderUserInfo(user);
+  renderUserInfo(user, 'user-costs');
 
   const params = new URLSearchParams(window.location.search);
   const userId = params.get('user');

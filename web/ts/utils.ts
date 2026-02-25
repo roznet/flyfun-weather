@@ -15,14 +15,29 @@ export function escapeHtml(text: string): string {
 
 // --- Shared user info rendering ---
 
-export function renderUserInfo(user: CurrentUser): void {
+export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
   const container = document.getElementById('user-info');
   if (!container) return;
-  const adminLink = user.is_admin
-    ? '<a href="/admin.html" class="btn-settings" title="Admin">Admin</a>'
-    : '';
+
+  const navItems: { label: string; href: string; page: string; adminOnly?: boolean }[] = [
+    { label: 'Flights', href: '/',               page: 'flights' },
+    { label: 'Settings', href: '/settings.html',  page: 'settings' },
+    { label: 'Help',     href: '/help.html',      page: 'help' },
+    { label: 'Admin',    href: '/admin.html',     page: 'admin', adminOnly: true },
+  ];
+
+  const links = navItems
+    .filter(item => !item.adminOnly || user.is_admin)
+    .map(item => {
+      if (item.page === currentPage) {
+        return `<span class="btn-settings nav-current">${item.label}</span>`;
+      }
+      return `<a href="${item.href}" class="btn-settings" title="${item.label}">${item.label}</a>`;
+    })
+    .join('\n');
+
   container.innerHTML = `
-    ${adminLink}
+    ${links}
     <span class="user-name">${escapeHtml(user.name)}</span>
     <button class="btn-logout" id="logout-btn">Sign out</button>
   `;

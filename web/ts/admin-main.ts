@@ -14,7 +14,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
-  renderUserInfo(user);
+  renderUserInfo(user, 'admin');
 
   setupAgentCreateButton();
   setupTabs();

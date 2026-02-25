@@ -28,7 +28,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
-  renderUserInfo(user);
+  renderUserInfo(user, 'briefing');
 
   // Load model catalog (non-blocking — modelLabel() has uppercase fallback)
   import('./adapters/preferences-adapter').then(({ fetchModelCatalog }) =>
