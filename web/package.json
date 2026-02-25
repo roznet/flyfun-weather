@@ -23,6 +23,7 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/leaflet": "^1.9.21",
     "esbuild": "^0.27.3",
     "typescript": "^5.9.3"

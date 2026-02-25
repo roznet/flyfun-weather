@@ -13,3 +13,6 @@ designs/
 *.egg-info
 web/node_modules
 web/dist
+web/tests
+web/test-results
+web/playwright.config.ts
