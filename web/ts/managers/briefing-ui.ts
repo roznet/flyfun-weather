@@ -604,7 +604,23 @@ export function renderGramet(
   if (!el) return;
 
   if (!flight || !pack || !pack.has_gramet) {
-    el.innerHTML = '<p class="muted">GRAMET not available for this briefing.</p>';
+    el.innerHTML = '<p class="muted">Loading...</p>';
+    import('../adapters/preferences-adapter').then(({ fetchPreferences }) =>
+      fetchPreferences()
+        .then((prefs) => {
+          if (!prefs.has_autorouter_creds) {
+            el.innerHTML =
+              '<p class="muted">No GRAMET available. To enable, enter your ' +
+              '<a href="https://www.autorouter.aero" target="_blank">autorouter.aero</a> ' +
+              'credentials in <a href="settings.html">Account Settings</a>.</p>';
+          } else {
+            el.innerHTML = '<p class="muted">GRAMET not available for this briefing.</p>';
+          }
+        })
+        .catch(() => {
+          el.innerHTML = '<p class="muted">GRAMET not available for this briefing.</p>';
+        }),
+    );
     return;
   }
 
