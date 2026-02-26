@@ -175,7 +175,7 @@ web/
 │   ├── store/         # Zustand vanilla stores + shared types
 │   ├── managers/      # DOM rendering functions (briefing-ui, advisories-ui, etc.)
 │   ├── adapters/      # API communication layer (api, auth, preferences, profiles, admin, credits)
-│   ├── components/    # Reusable UI components (info-popup)
+│   ├── components/    # Reusable UI components (info-popup, welcome-wizard)
 │   ├── helpers/       # Metric lookup, threshold rendering
 │   ├── types/         # Shared TypeScript type definitions (metrics, advisories)
 │   ├── data/          # Static data (metrics-catalog.json, metrics-display.json)
@@ -385,6 +385,7 @@ Static files served from `web/` at root.
 | 11.4 | Done | Route map visualization: Leaflet geographic view with 14-metric coloring, altitude slider, hover sync |
 | 11.5 | Done | Admin user costs page: per-user cost attribution dashboard, cost distribution chart, transaction ledger |
 | 11.6 | Done | UX: centralized navigation banner, consistent nav across all pages |
+| 11.7 | Done | First-login workflow: welcome wizard (intro, aircraft defaults, guided tour), setup_completed tracking |
 
 ## Docker
 
