@@ -33,6 +33,7 @@ def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
         cruise_altitude_ft=flight.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
+        private=flight.private,
         auto_refresh=flight.auto_refresh,
         auto_refresh_hour=flight.auto_refresh_hour,
         last_auto_refresh_date=flight.last_auto_refresh_date,
@@ -52,6 +53,7 @@ def _row_to_flight(row: FlightRow) -> Flight:
         cruise_altitude_ft=row.cruise_altitude_ft,
         flight_ceiling_ft=row.flight_ceiling_ft,
         flight_duration_hours=row.flight_duration_hours,
+        private=row.private,
         auto_refresh=row.auto_refresh,
         auto_refresh_hour=row.auto_refresh_hour,
         last_auto_refresh_date=row.last_auto_refresh_date,
@@ -128,6 +130,7 @@ def save_flight(session: Session, flight: Flight, user_id: str) -> None:
         existing.cruise_altitude_ft = flight.cruise_altitude_ft
         existing.flight_ceiling_ft = flight.flight_ceiling_ft
         existing.flight_duration_hours = flight.flight_duration_hours
+        existing.private = flight.private
         existing.auto_refresh = flight.auto_refresh
         existing.auto_refresh_hour = flight.auto_refresh_hour
         existing.last_auto_refresh_date = flight.last_auto_refresh_date

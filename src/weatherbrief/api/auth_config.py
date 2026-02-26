@@ -19,6 +19,10 @@ def is_dev_mode() -> bool:
 def get_jwt_secret() -> str:
     secret = os.environ.get("JWT_SECRET")
     if secret:
+        if not is_dev_mode() and secret == _DEV_JWT_SECRET:
+            raise ValueError(
+                "Production must use a unique JWT_SECRET, not the dev default"
+            )
         return secret
     if is_dev_mode():
         return _DEV_JWT_SECRET

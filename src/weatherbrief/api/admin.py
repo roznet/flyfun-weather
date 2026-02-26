@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import Integer, func
 from sqlalchemy.orm import Session
 
@@ -512,11 +512,11 @@ def _hash_token(token: str) -> str:
 
 
 class CreateAgentRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
 
 
 class CreateTokenRequest(BaseModel):
-    name: str = ""
+    name: str = Field("", max_length=200)
 
 
 @router.post("/agents")
