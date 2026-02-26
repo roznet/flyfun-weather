@@ -2,8 +2,10 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { renderUserInfo } from './utils';
+import { initTheme } from './theme';
 
 async function init(): Promise<void> {
+  initTheme();
   const user = await fetchCurrentUser();
   if (user) {
     renderUserInfo(user, 'help');

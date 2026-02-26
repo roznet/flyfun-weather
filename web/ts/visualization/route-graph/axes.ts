@@ -3,12 +3,14 @@
 import type { PlotArea, VizRouteData } from '../types';
 import type { RouteGraphMetric } from './metrics';
 import { MARGIN } from './constants';
-import { chooseDistanceTickInterval } from '../interaction-utils';
+import { chooseDistanceTickInterval, isDarkTheme } from '../interaction-utils';
 
-const GRID_COLOR = 'rgba(0, 0, 0, 0.08)';
-const LABEL_COLOR = '#6c757d';
+function gridColor(): string { return isDarkTheme() ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)'; }
+function labelColor(): string { return isDarkTheme() ? '#9ca3af' : '#6c757d'; }
+function zeroLineColor(): string { return isDarkTheme() ? 'rgba(255, 255, 255, 0.25)' : 'rgba(0, 0, 0, 0.25)'; }
+function borderColor(): string { return isDarkTheme() ? '#4a4a5a' : '#adb5bd'; }
+function waypointGridColor(): string { return isDarkTheme() ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)'; }
 const FONT = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
-const ZERO_LINE_COLOR = 'rgba(0, 0, 0, 0.25)';
 
 export interface YAxisScale {
   min: number;
@@ -89,6 +91,19 @@ export function drawLeftYAxis(
   for (let v = start; v <= scale.max + step * 0.01; v += step) {
     const y = scale.valueToY(v);
     if (y < plotArea.top - 1 || y > plotArea.top + plotArea.height + 1) continue;
+
+    // Horizontal grid line
+    ctx.save();
+    ctx.strokeStyle = gridColor();
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(plotArea.left, y);
+    ctx.lineTo(plotArea.left + plotArea.width, y);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = metric.color;
     ctx.fillText(formatTick(v), plotArea.left - 5, y);
   }
 
@@ -96,6 +111,7 @@ export function drawLeftYAxis(
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  ctx.fillStyle = metric.color;
   const labelInset = Math.round(MARGIN.left / 6);
   ctx.translate(labelInset, plotArea.top + plotArea.height / 2);
   ctx.rotate(-Math.PI / 2);
@@ -146,7 +162,7 @@ export function drawXGrid(
   const maxDist = data.totalDistanceNm;
   const tickInterval = chooseDistanceTickInterval(maxDist);
 
-  ctx.strokeStyle = GRID_COLOR;
+  ctx.strokeStyle = gridColor();
   ctx.lineWidth = 0.5;
   ctx.setLineDash([]);
 
@@ -159,7 +175,7 @@ export function drawXGrid(
   }
 
   // Waypoint markers
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+  ctx.strokeStyle = waypointGridColor();
   ctx.lineWidth = 1;
   ctx.setLineDash([3, 3]);
   for (const wp of data.waypointMarkers) {
@@ -181,7 +197,7 @@ export function drawZeroLine(
 ): void {
   if (scale.min > 0 || scale.max < 0) return;
   const y = scale.valueToY(0);
-  ctx.strokeStyle = ZERO_LINE_COLOR;
+  ctx.strokeStyle = zeroLineColor();
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 3]);
   ctx.beginPath();
@@ -193,7 +209,7 @@ export function drawZeroLine(
   if (labels) {
     ctx.save();
     ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
-    ctx.fillStyle = LABEL_COLOR;
+    ctx.fillStyle = labelColor();
     const x = plotArea.left + 4;
     // Above zero line
     ctx.textBaseline = 'bottom';
@@ -210,7 +226,7 @@ export function drawBorder(
   ctx: CanvasRenderingContext2D,
   plotArea: PlotArea,
 ): void {
-  ctx.strokeStyle = '#adb5bd';
+  ctx.strokeStyle = borderColor();
   ctx.lineWidth = 1;
   ctx.setLineDash([]);
   ctx.strokeRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);

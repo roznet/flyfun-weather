@@ -83,3 +83,13 @@ export function findNearbyWaypoint(
 ): { distanceNm: number; icao: string } | undefined {
   return data.waypointMarkers.find((w) => Math.abs(w.distanceNm - point.distanceNm) < 1);
 }
+
+/** Read a CSS custom property value from the document root. */
+export function cssVar(name: string, fallback: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+/** Check whether the current effective theme is dark. */
+export function isDarkTheme(): boolean {
+  return document.documentElement.dataset.theme === 'dark';
+}

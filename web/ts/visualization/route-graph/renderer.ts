@@ -6,6 +6,7 @@ import type { YAxisScale } from './axes';
 import { computeYScale, drawLeftYAxis, drawRightYAxis, drawXGrid, drawZeroLine, drawBorder } from './axes';
 import { monotoneCubicTangents } from '../cross-section/layers/base';
 import { MARGIN } from './constants';
+import { cssVar, isDarkTheme } from '../interaction-utils';
 
 export class RouteGraphRenderer {
   private container: HTMLElement;
@@ -30,6 +31,8 @@ export class RouteGraphRenderer {
 
     this.resizeObserver = new ResizeObserver(() => this.render());
     this.resizeObserver.observe(container);
+
+    window.addEventListener('theme-changed', () => this.render());
   }
 
   setData(data: VizRouteData): void {
@@ -99,8 +102,8 @@ export class RouteGraphRenderer {
     const maxDist = this.data.totalDistanceNm;
     const distanceToX = (d: number) => plotArea.left + (d / maxDist) * plotArea.width;
 
-    // Light background
-    ctx.fillStyle = '#f8f9fa';
+    // Plot background
+    ctx.fillStyle = cssVar('--bg', '#f8f9fa');
     ctx.fillRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
 
     // X grid lines (aligned with cross-section)
@@ -177,7 +180,7 @@ export class RouteGraphRenderer {
 
     // Hover crosshair
     if (hoverX !== undefined && hoverX >= plotArea.left && hoverX <= plotArea.left + plotArea.width) {
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.strokeStyle = isDarkTheme() ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
