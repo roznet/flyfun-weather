@@ -12,7 +12,7 @@ WeatherBrief is generally well-architected from a security perspective for its i
 **Critical findings: 0** | **High: 2** | **Medium: 5** | **Low: 7** | **Informational: 4**
 
 > **Fixed:** H1, H2, M2, M5, L1, L2, L5, L6.
-> **Deferred:** M4 (rate limiting), L3 (innerHTML audit), L4 (thread pool bounds).
+> **Deferred:** M4 (rate limiting — needs new DB table, do after migration merge), L3 (innerHTML — cosmetic given CSP), L4 (generation semaphore — do alongside M4).
 
 ---
 
