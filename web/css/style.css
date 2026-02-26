@@ -2618,6 +2618,16 @@ label {
   text-align: center;
 }
 
+.wizard-beta-notice {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: var(--bg-surface, rgba(0,0,0,0.04));
+  border-radius: 6px;
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+}
+
 .wizard-actions {
   display: flex;
   justify-content: flex-end;
@@ -2757,6 +2767,12 @@ label {
   font-size: 0.8rem;
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+.wizard-tour-hint {
+  font-style: italic;
+  font-size: 0.75rem !important;
+  opacity: 0.8;
 }
 
 .wizard-info-icon {

@@ -140,14 +140,21 @@ function renderWelcomeStep(): string {
       <p class="wizard-subtitle">
         Aviation weather assessment for cross-country GA flights
       </p>
+      <p class="wizard-beta-notice">
+        WeatherBrief is currently in <strong>beta</strong>. We appreciate your time trying the tool — please help us improve by sending feedback when a briefing appears suspicious or you encounter any issues.
+      </p>
       <div class="wizard-features">
         <div class="wizard-feature">
-          <strong>Multi-model comparison</strong>
-          <span>See where GFS, ECMWF, ICON and others agree or diverge</span>
+          <strong>AI synopsis &amp; advisories</strong>
+          <span>An AI-generated overview plus go/no-go factors for your route</span>
         </div>
         <div class="wizard-feature">
           <strong>Route advisories</strong>
           <span>Icing, turbulence, clouds and airport conditions rated GREEN/AMBER/RED</span>
+        </div>
+        <div class="wizard-feature">
+          <strong>Multi-model comparison</strong>
+          <span>See where GFS, ECMWF, ICON and others agree or diverge</span>
         </div>
         <div class="wizard-feature">
           <strong>Interactive cross-section</strong>
@@ -184,6 +191,7 @@ function renderAircraftStep(): string {
     <div class="wizard-step wizard-aircraft">
       <h2>Aircraft Defaults</h2>
       <p class="wizard-subtitle">These defaults apply when creating new flights.</p>
+      <p class="wizard-hint">You can edit these or create multiple profiles later in the <strong>Settings</strong> page.</p>
 
       <div class="wizard-form">
         <div class="wizard-form-row">
@@ -231,25 +239,33 @@ function renderTourStep(): string {
           <div class="wizard-tour-number">1</div>
           <div class="wizard-tour-text">
             <strong>Create a flight</strong>
-            <span>Enter your waypoints (ICAO codes), date and time. Your aircraft defaults are pre-filled from the profile you just set up.</span>
+            <span>Enter your waypoints (airport ICAO codes), date and time. Your aircraft defaults are pre-filled from the profile you just set up.</span>
           </div>
         </div>
         <div class="wizard-tour-item">
           <div class="wizard-tour-number">2</div>
           <div class="wizard-tour-text">
             <strong>Read the briefing</strong>
-            <span>The briefing opens automatically. It shows <em>advisories</em> (go/no-go factors), an <em>AI synopsis</em>, <em>interactive cross-section</em>, and <em>sounding analysis</em> for each waypoint.</span>
+            <span>The briefing opens automatically. It shows <em>red/amber/green advisories</em>, an <em>AI synopsis</em>, <em>interactive cross-section</em>, and <em>sounding analysis</em> for each waypoint.</span>
           </div>
         </div>
         <div class="wizard-tour-item">
           <div class="wizard-tour-number">3</div>
           <div class="wizard-tour-text">
             <strong>Refresh for updates</strong>
-            <span>Come back and refresh the briefing as the flight date approaches — each refresh captures a new snapshot you can compare.</span>
+            <span>Come back and refresh the briefing as the flight date approaches — each refresh captures a new snapshot you can compare. You can also set up an auto-refresh at a given time to receive an update by email each day.</span>
+            <span class="wizard-tour-hint">Note: a refresh can take around 1 minute.</span>
           </div>
         </div>
         <div class="wizard-tour-item">
           <div class="wizard-tour-number">4</div>
+          <div class="wizard-tour-text">
+            <strong>Explore the briefing</strong>
+            <span>Use <em>Compact</em> mode for a summary or <em>Full Details</em> to explore every metric. Click on any point in the cross-section to see all metrics and Skew-T for all models. This can be used on the day of the flight but is most useful to form an early picture of the feasibility of a flight.</span>
+          </div>
+        </div>
+        <div class="wizard-tour-item">
+          <div class="wizard-tour-number">5</div>
           <div class="wizard-tour-text">
             <strong>Look for <span class="wizard-info-icon">(i)</span> buttons</strong>
             <span>Click them anywhere in the briefing to learn what a metric means and how to interpret it.</span>
