@@ -105,7 +105,9 @@ class FlightRow(Base):
     flight_duration_hours: Mapped[float] = mapped_column(default=0.0)
     auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_refresh_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    last_auto_refresh_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    last_auto_refresh_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

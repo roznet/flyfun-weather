@@ -35,7 +35,7 @@ class Flight(BaseModel):
     flight_duration_hours: float = 0.0
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
-    last_auto_refresh_date: str | None = None
+    last_auto_refresh_at: datetime | None = None
     created_at: datetime
 
 
