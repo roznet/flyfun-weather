@@ -512,11 +512,11 @@ def _hash_token(token: str) -> str:
 
 
 class CreateAgentRequest(BaseModel):
-    name: str = Field(max_length=200)
+    name: str = Field(max_length=256)
 
 
 class CreateTokenRequest(BaseModel):
-    name: str = Field("", max_length=200)
+    name: str = Field("", max_length=256)
 
 
 @router.post("/agents")
