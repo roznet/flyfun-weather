@@ -1,7 +1,7 @@
 """Add private column to flights.
 
-Revision ID: 010
-Revises: 009
+Revision ID: 012
+Revises: 011
 Create Date: 2026-02-26
 """
 from __future__ import annotations
@@ -11,8 +11,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "010"
-down_revision: Union[str, None] = "009"
+revision: str = "012"
+down_revision: Union[str, None] = "011"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
