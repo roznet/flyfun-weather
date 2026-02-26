@@ -81,6 +81,7 @@ def _find_due_flights(db: Session) -> list[FlightRow]:
     today = _today_str()
     now_utc = datetime.now(timezone.utc)
     current_hour = now_utc.hour
+    today_date = now_utc.date()
 
     stmt = select(FlightRow).where(FlightRow.auto_refresh.is_(True))
     rows = db.execute(stmt).scalars().all()
@@ -93,15 +94,68 @@ def _find_due_flights(db: Session) -> list[FlightRow]:
         # Flight is past
         if _is_flight_past(row):
             continue
-        # Not yet the scheduled hour
-        effective_hour = row.auto_refresh_hour
+        # Compute effective refresh hour (may be adjusted near flight day)
+        effective_hour = _effective_refresh_hour(row, today_date, current_hour)
         if effective_hour is None:
-            effective_hour = (row.target_time_utc - 1) % 24
+            continue
         if current_hour < effective_hour:
             continue
         due.append(row)
 
     return due
+
+
+_PREFLIGHT_LEAD_HOURS = 2
+
+
+def _effective_refresh_hour(
+    row: FlightRow, today_date: date, current_hour: int,
+) -> int | None:
+    """Compute the effective refresh hour, with pre-flight adjustment.
+
+    On the day of the flight, if the scheduled refresh would fall at or after
+    the flight start, it is moved to ``_PREFLIGHT_LEAD_HOURS`` before the
+    flight.  When that pre-flight time wraps to the previous calendar day
+    (early-UTC flights such as afternoon departures in the western US), the
+    adjustment is applied on the day before instead.
+
+    Returns ``None`` when no valid refresh slot exists today (flight already
+    started, or the pre-flight slot belongs to a different day).
+    """
+    effective = row.auto_refresh_hour
+    if effective is None:
+        effective = (row.target_time_utc - 1) % 24
+
+    try:
+        flight_date = date.fromisoformat(row.target_date)
+    except (ValueError, TypeError):
+        return effective  # Malformed date — fall back to regular schedule
+
+    flight_start_hour = row.target_time_utc
+    flight_start_dt = datetime(
+        flight_date.year, flight_date.month, flight_date.day,
+        flight_start_hour, tzinfo=timezone.utc,
+    )
+    preflight_dt = flight_start_dt - timedelta(hours=_PREFLIGHT_LEAD_HOURS)
+
+    if today_date == flight_date:
+        # Flight day — no auto-refresh once the flight has started
+        if current_hour >= flight_start_hour:
+            return None
+        # If scheduled at or after flight start, use the pre-flight time
+        if effective >= flight_start_hour:
+            if preflight_dt.date() == flight_date:
+                return preflight_dt.hour
+            # Pre-flight time is on the previous day — no valid slot today
+            return None
+
+    elif today_date == preflight_dt.date() and preflight_dt.date() < flight_date:
+        # Day before flight — the pre-flight time wraps into today
+        # (e.g. flight at 01:00Z → pre-flight at 23:00Z the day before)
+        if effective >= flight_start_hour:
+            return preflight_dt.hour
+
+    return effective
 
 
 def _is_flight_past(row: FlightRow) -> bool:
