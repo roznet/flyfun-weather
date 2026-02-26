@@ -127,12 +127,14 @@ async def get_me(user_id: str = Depends(current_user_id), db: Session = Depends(
     user = db.get(UserRow, user_id)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    prefs = db.get(UserPreferencesRow, user_id)
     return {
         "id": user.id,
         "email": user.email,
         "name": user.display_name,
         "approved": user.approved,
         "is_admin": is_dev_mode() or user.email in get_admin_emails(),
+        "setup_completed": prefs.setup_completed if prefs else False,
     }
 
 
