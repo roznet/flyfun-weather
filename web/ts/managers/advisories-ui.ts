@@ -1,8 +1,12 @@
 /** Advisory dashboard renderer — compact grid of advisory cards with per-model badges. */
 
 import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AdvisoryParameterDef, AirportConditions, AirportConditionsSummary, AirportModelCondition, FlightCategory, RunwayWind } from '../types/advisories';
+import type { DisplayMode } from '../types/metrics';
 import { showPopupContent } from '../components/info-popup';
 import { $, escapeHtml, modelLabel } from '../utils';
+
+/** Advisory categories hidden in compact mode (informational, not actionable). */
+const COMPACT_HIDDEN_CATEGORIES = new Set(['model']);
 
 const STATUS_ORDER: AdvisoryStatus[] = ['red', 'amber', 'green', 'unavailable'];
 
@@ -178,6 +182,7 @@ function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, Advis
 export function renderAdvisories(
   manifest: RouteAdvisoriesManifest | null,
   onRecalculate?: () => void,
+  displayMode: DisplayMode = 'full',
 ): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
@@ -197,8 +202,16 @@ export function renderAdvisories(
     catalog.set(entry.id, entry);
   }
 
+  // In compact mode, filter out secondary advisories (e.g. model confidence)
+  const advisories = displayMode === 'compact'
+    ? manifest.advisories.filter(adv => {
+        const entry = catalog.get(adv.advisory_id);
+        return !entry || !COMPACT_HIDDEN_CATEGORIES.has(entry.category);
+      })
+    : manifest.advisories;
+
   // Sort: RED first, then AMBER, then GREEN, then UNAVAILABLE
-  const sorted = [...manifest.advisories].sort((a, b) => {
+  const sorted = [...advisories].sort((a, b) => {
     return STATUS_ORDER.indexOf(a.aggregate_status) - STATUS_ORDER.indexOf(b.aggregate_status);
   });
 

@@ -15,9 +15,10 @@ import * as api from '../adapters/api-adapter';
 function loadDisplayMode(): DisplayMode {
   try {
     const v = localStorage.getItem('wb_displayMode');
-    if (v === 'compact' || v === 'annotated') return v;
+    if (v === 'compact') return v;
+    if (v === 'full' || v === 'annotated') return 'full';
   } catch { /* ignore */ }
-  return 'annotated';
+  return 'full';
 }
 
 function loadTierVisibility(): Record<Tier, boolean> {

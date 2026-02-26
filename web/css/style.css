@@ -1389,8 +1389,12 @@ label {
   border-color: var(--primary);
 }
 
-/* CSS-driven compact mode: hide annotations */
+/* CSS-driven compact mode: hide annotations and detail sections */
 .display-compact .metric-annotation-row {
+  display: none;
+}
+.display-compact [data-section="sounding"],
+.display-compact [data-section="comparison"] {
   display: none;
 }
 
@@ -2543,4 +2547,224 @@ label {
   max-width: 480px;
   width: 90%;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* --- Welcome wizard --- */
+
+.wizard-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.wizard-backdrop.active {
+  opacity: 1;
+}
+
+.wizard-modal {
+  background: var(--surface);
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+  max-width: 560px;
+  width: 92%;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 2rem;
+}
+
+.wizard-progress {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.wizard-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.2s;
+}
+
+.wizard-dot.active {
+  background: var(--primary);
+  transform: scale(1.25);
+}
+
+.wizard-content h2 {
+  font-size: 1.35rem;
+  margin-bottom: 0.3rem;
+  text-align: center;
+}
+
+.wizard-subtitle {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+.wizard-hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-top: 1rem;
+  text-align: center;
+}
+
+.wizard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Welcome step */
+
+.wizard-features {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.wizard-feature {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--primary);
+}
+
+.wizard-feature strong {
+  font-size: 0.9rem;
+}
+
+.wizard-feature span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Aircraft step */
+
+.wizard-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wizard-form-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.wizard-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 120px;
+}
+
+.wizard-form-group label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.wizard-form-group input,
+.wizard-form-group select {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.875rem;
+}
+
+.wizard-models-section {
+  margin-top: 0.5rem;
+}
+
+.wizard-models-section > label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.wizard-model-hint {
+  font-size: 0.8rem;
+  margin-bottom: 0.4rem;
+}
+
+.wizard-model-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+.wizard-model-checkboxes .checkbox-label {
+  font-size: 0.85rem;
+}
+
+/* Tour step */
+
+.wizard-tour-items {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.wizard-tour-item {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.wizard-tour-number {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wizard-tour-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-top: 0.15rem;
+}
+
+.wizard-tour-text strong {
+  font-size: 0.9rem;
+}
+
+.wizard-tour-text span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.wizard-info-icon {
+  font-weight: 600;
+  color: var(--primary);
+}
+
+@media (max-width: 600px) {
+  .wizard-modal { padding: 1.25rem; }
+  .wizard-form-row { flex-direction: column; }
 }

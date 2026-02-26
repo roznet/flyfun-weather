@@ -60,6 +60,12 @@ export async function clearAutorouterCreds(): Promise<void> {
   });
 }
 
+export async function completeSetup(): Promise<void> {
+  return apiFetch<void>('/user/preferences/setup-complete', {
+    method: 'POST',
+  });
+}
+
 export async function fetchAdvisoryCatalog(): Promise<AdvisoryCatalogEntry[]> {
   return apiFetch<AdvisoryCatalogEntry[]>('/user/preferences/advisories/catalog');
 }

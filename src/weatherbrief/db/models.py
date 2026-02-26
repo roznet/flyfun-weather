@@ -58,6 +58,7 @@ class UserPreferencesRow(Base):
     defaults_json: Mapped[str] = mapped_column(Text, default="{}")
     encrypted_autorouter_creds: Mapped[str] = mapped_column(Text, default="")
     digest_config_json: Mapped[str] = mapped_column(Text, default="{}")
+    setup_completed: Mapped[bool] = mapped_column(Boolean, default=False)
 
     user: Mapped[UserRow] = relationship(back_populates="preferences")
 
@@ -105,7 +106,9 @@ class FlightRow(Base):
     private: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_refresh_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    last_auto_refresh_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    last_auto_refresh_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

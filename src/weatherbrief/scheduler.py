@@ -2,6 +2,14 @@
 
 Polls every 10 minutes for flights with auto_refresh enabled that are due
 for a refresh. Runs the briefing pipeline and optionally sends an email.
+
+Scheduling formula
+------------------
+    next_due = min(next_regular, flight_start − PREFLIGHT_LEAD_HOURS)
+
+where *next_regular* is the next occurrence of the user's preferred hour
+after the last refresh.  All comparisons use absolute UTC datetimes, so
+there is no hour wrap-around or calendar-day ambiguity.
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_SECONDS = 600  # 10 minutes
 _STARTUP_DELAY_SECONDS = 30
+_PREFLIGHT_LEAD_HOURS = 2
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -58,12 +67,12 @@ async def process_auto_refreshes(app_state) -> None:
                 await asyncio.to_thread(
                     _auto_refresh_one, row, app_state, row.user_id
                 )
-                # Mark as refreshed today (in a fresh session to avoid stale state)
+                # Record the refresh timestamp
                 mark_db = SessionLocal()
                 try:
                     mark_row = mark_db.get(FlightRow, row.id)
                     if mark_row:
-                        mark_row.last_auto_refresh_date = _today_str()
+                        mark_row.last_auto_refresh_at = datetime.now(timezone.utc)
                         mark_db.commit()
                 finally:
                     mark_db.close()
@@ -76,47 +85,88 @@ async def process_auto_refreshes(app_state) -> None:
         db.close()
 
 
+# ---------------------------------------------------------------------------
+# Scheduling helpers
+# ---------------------------------------------------------------------------
+
+
 def _find_due_flights(db: Session) -> list[FlightRow]:
     """Return flights that are due for auto-refresh."""
-    today = _today_str()
     now_utc = datetime.now(timezone.utc)
-    current_hour = now_utc.hour
 
     stmt = select(FlightRow).where(FlightRow.auto_refresh.is_(True))
     rows = db.execute(stmt).scalars().all()
 
-    due = []
+    due: list[FlightRow] = []
     for row in rows:
-        # Already refreshed today
-        if row.last_auto_refresh_date == today:
+        flight_start = _flight_start_dt(row)
+        if flight_start is None:
             continue
-        # Flight is past
-        if _is_flight_past(row):
+
+        # Flight already started — no auto-refresh (manual still works)
+        if now_utc >= flight_start:
             continue
-        # Not yet the scheduled hour
-        effective_hour = row.auto_refresh_hour
-        if effective_hour is None:
-            effective_hour = (row.target_time_utc - 1) % 24
-        if current_hour < effective_hour:
-            continue
-        due.append(row)
+
+        due_at = _next_due_at(row, flight_start, now_utc)
+        if due_at is not None and now_utc >= due_at:
+            due.append(row)
 
     return due
 
 
-def _is_flight_past(row: FlightRow) -> bool:
-    """Check if a flight's target time + duration has passed."""
+def _next_due_at(
+    row: FlightRow,
+    flight_start_dt: datetime,
+    now_utc: datetime,
+) -> datetime | None:
+    """Absolute UTC datetime when the next auto-refresh is due.
+
+    Formula: ``min(next_regular, flight_start − PREFLIGHT_LEAD_HOURS)``
+
+    *next_regular* is the next occurrence of the user's preferred hour
+    (``auto_refresh_hour``, defaulting to ``target_time_utc − 1``).
+
+    Always returns a time strictly before ``flight_start_dt`` (since
+    *preflight* is ``flight_start − PREFLIGHT_LEAD_HOURS``).
+    """
+    effective_hour = row.auto_refresh_hour
+    if effective_hour is None:
+        effective_hour = (row.target_time_utc - 1) % 24
+
+    preflight = flight_start_dt - timedelta(hours=_PREFLIGHT_LEAD_HOURS)
+
+    # Determine the base date for the next regular refresh slot
+    if row.last_auto_refresh_at is None:
+        base_date = now_utc.date()
+    else:
+        base_date = row.last_auto_refresh_at.date() + timedelta(days=1)
+
+    regular = datetime(
+        base_date.year, base_date.month, base_date.day,
+        effective_hour, tzinfo=timezone.utc,
+    )
+
+    return min(regular, preflight)
+
+
+def _flight_start_dt(row: FlightRow) -> datetime | None:
+    """Parse a FlightRow into an absolute UTC flight-start datetime.
+
+    Returns ``None`` for malformed / unparseable data.
+    """
     try:
         flight_date = date.fromisoformat(row.target_date)
-        flight_start = datetime(
+        return datetime(
             flight_date.year, flight_date.month, flight_date.day,
             row.target_time_utc, tzinfo=timezone.utc,
         )
-        duration_hours = row.flight_duration_hours or 0.0
-        flight_end = flight_start + timedelta(hours=duration_hours)
-        return datetime.now(timezone.utc) > flight_end
     except (ValueError, TypeError):
-        return True  # Treat malformed dates as past
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Pipeline execution
+# ---------------------------------------------------------------------------
 
 
 def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
@@ -193,8 +243,3 @@ def _try_send_email(
         logger.info("Auto-refresh email sent for %s to %s", flight.id, user.email)
     except Exception:
         logger.warning("Auto-refresh email failed for %s", flight.id, exc_info=True)
-
-
-def _today_str() -> str:
-    """Return today's date as YYYY-MM-DD in UTC."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
