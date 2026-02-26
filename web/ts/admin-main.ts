@@ -7,6 +7,7 @@ import {
   type AdminUser, type AdminSummary, type FeedbackEntry,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
+import { initTheme } from './theme';
 
 async function init(): Promise<void> {
   const user = await fetchCurrentUser();
@@ -14,6 +15,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
+  initTheme();
   renderUserInfo(user, 'admin');
 
   setupAgentCreateButton();

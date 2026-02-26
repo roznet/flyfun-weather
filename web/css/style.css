@@ -21,6 +21,103 @@
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
+/* --- Dark theme overrides --- */
+
+[data-theme="dark"] {
+  --bg: #121218;
+  --surface: #1e1e2a;
+  --text: #e4e4e8;
+  --text-muted: #9ca3af;
+  --border: #2d2d3a;
+  --primary: #60a5fa;
+  --primary-hover: #93bbfd;
+  --danger: #f87171;
+  --danger-hover: #fca5a5;
+  --green: #34d399;
+  --green-bg: #064e3b;
+  --amber: #fbbf24;
+  --amber-bg: #78350f;
+  --red: #f87171;
+  --red-bg: #7f1d1d;
+  --lifr: #c084fc;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+}
+
+[data-theme="dark"] .badge-refreshing {
+  background: #1e3a5f;
+  color: #60a5fa;
+}
+
+[data-theme="dark"] .threshold-segment.risk-marginal {
+  background: #2a2a2a;
+  color: #888;
+}
+
+[data-theme="dark"] .btn-primary:disabled {
+  background: #2a4a7f;
+}
+
+[data-theme="dark"] img.skewt-img {
+  filter: invert(0.88) hue-rotate(180deg);
+}
+
+[data-theme="dark"] img.skewt-hodo-img {
+  filter: invert(0.88) hue-rotate(180deg);
+}
+
+/* --- Theme toggle --- */
+
+.theme-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 0.8rem;
+}
+
+.theme-toggle .btn-toggle {
+  padding: 0.15rem 0.45rem;
+  border: none;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+
+.theme-toggle .btn-toggle:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.theme-toggle .btn-toggle.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.theme-toggle .btn-toggle:hover:not(.active) {
+  background: var(--bg);
+}
+
+/* Leaflet dark overrides */
+[data-theme="dark"] .leaflet-control-zoom a,
+[data-theme="dark"] .leaflet-control-attribution {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] .leaflet-control-attribution a {
+  color: var(--primary);
+}
+
+[data-theme="dark"] .map-waypoint-tooltip {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {

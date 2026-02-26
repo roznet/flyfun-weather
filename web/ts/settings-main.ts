@@ -25,6 +25,7 @@ import {
   type ProfileResponse,
   type ProfileSettings,
 } from './adapters/profiles-adapter';
+import { initTheme } from './theme';
 
 /** Category display order and labels.
  *  Any categories not listed here will appear at the end under their raw key. */
@@ -250,6 +251,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
+  initTheme();
   renderUserInfo(user, 'settings');
 
   // Tab switching

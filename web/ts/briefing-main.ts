@@ -21,6 +21,7 @@ import { getMapMetricById, MAP_METRIC_NONE } from './visualization/route-map/met
 import { attachMapInteraction, type MapInteractionHandle } from './visualization/route-map/interaction';
 import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
+import { initTheme } from './theme';
 
 async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
@@ -29,6 +30,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
+  initTheme();
   renderUserInfo(user, 'briefing');
 
   // Load model catalog (non-blocking — modelLabel() has uppercase fallback)

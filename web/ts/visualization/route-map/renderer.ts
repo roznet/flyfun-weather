@@ -4,10 +4,17 @@ import * as L from 'leaflet';
 import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
 import { computeSegmentStyles } from './segment-style';
+import { isDarkTheme } from '../interaction-utils';
+
+const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const LIGHT_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
+const DARK_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
 
 export class RouteMapRenderer {
   private container: HTMLElement;
   private map: L.Map | null = null;
+  private tileLayer: L.TileLayer | null = null;
   private segmentGroup: L.LayerGroup | null = null;
   private waypointGroup: L.LayerGroup | null = null;
   private highlightMarker: L.CircleMarker | null = null;
@@ -18,6 +25,7 @@ export class RouteMapRenderer {
   private altitudeFt = 0;
   private selectedPointIndex = -1;
   private initialized = false;
+  private currentTileTheme: 'light' | 'dark' = 'light';
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -120,10 +128,17 @@ export class RouteMapRenderer {
       attributionControl: true,
     });
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+    const dark = isDarkTheme();
+    this.currentTileTheme = dark ? 'dark' : 'light';
+    this.tileLayer = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
+      attribution: dark ? DARK_ATTR : LIGHT_ATTR,
       maxZoom: 18,
     }).addTo(this.map);
+
+    // Switch tiles when theme changes
+    window.addEventListener('theme-changed', ((e: CustomEvent<string>) => {
+      this.updateTiles(e.detail === 'dark');
+    }) as EventListener);
 
     this.segmentGroup = L.layerGroup().addTo(this.map);
     this.waypointGroup = L.layerGroup().addTo(this.map);
@@ -142,6 +157,17 @@ export class RouteMapRenderer {
     }
 
     this.initialized = true;
+  }
+
+  private updateTiles(dark: boolean): void {
+    const target = dark ? 'dark' : 'light';
+    if (!this.map || !this.tileLayer || this.currentTileTheme === target) return;
+    this.currentTileTheme = target;
+    this.tileLayer.setUrl(dark ? DARK_TILES : LIGHT_TILES);
+    this.map.attributionControl.remove();
+    L.control.attribution().addTo(this.map);
+    this.tileLayer.getAttribution = () => dark ? DARK_ATTR : LIGHT_ATTR;
+    this.renderWaypoints();
   }
 
   private renderSegments(): void {
@@ -186,10 +212,11 @@ export class RouteMapRenderer {
     this.waypointGroup.clearLayers();
 
     for (const wp of this.data.waypointMarkers) {
+      const dark = isDarkTheme();
       const marker = L.circleMarker([wp.lat, wp.lon], {
         radius: 5,
-        color: '#1a1a2e',
-        fillColor: '#ffffff',
+        color: dark ? '#e4e4e8' : '#1a1a2e',
+        fillColor: dark ? '#1e1e2a' : '#ffffff',
         fillOpacity: 1,
         weight: 2,
       });

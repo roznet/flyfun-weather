@@ -8,6 +8,7 @@ import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
 import { renderUserInfo, initModelCatalog } from './utils';
 import { showWelcomeWizard } from './components/welcome-wizard';
+import { initTheme } from './theme';
 
 let loadedProfiles: ProfileResponse[] = [];
 
@@ -63,6 +64,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
+  initTheme();
   renderUserInfo(user, 'flights');
 
   const store = flightsStore;

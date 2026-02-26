@@ -8,6 +8,7 @@ import {
   type UserCostBreakdown,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt } from './utils';
+import { initTheme } from './theme';
 
 // Cost breakdown keys that map to numeric fields on UserCostBreakdown
 type CostKey = 'token_cost_usd' | 'infra_share_usd' | 'subscription_share_usd' | 'storage_cost_usd' | 'margin_usd';
@@ -35,6 +36,7 @@ async function init(): Promise<void> {
     window.location.href = '/login.html';
     return;
   }
+  initTheme();
   renderUserInfo(user, 'user-costs');
 
   const params = new URLSearchParams(window.location.search);

@@ -2,6 +2,7 @@
 
 import type { CoordTransform, PlotArea, RenderMode, VizRouteData, CrossSectionLayer } from '../types';
 import { drawAxes } from './axes';
+import { isDarkTheme } from '../interaction-utils';
 
 const MARGIN = { left: 60, right: 50, top: 20, bottom: 50 };
 
@@ -29,6 +30,8 @@ export class CrossSectionRenderer {
 
     this.resizeObserver = new ResizeObserver(() => this.render());
     this.resizeObserver.observe(container);
+
+    window.addEventListener('theme-changed', () => this.render());
   }
 
   setData(data: VizRouteData): void {

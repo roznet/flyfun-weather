@@ -2,10 +2,12 @@
 
 import type { CoordTransform, VizRouteData } from '../types';
 import { altitudeToPressureHpa } from '../scales';
-import { chooseDistanceTickInterval, findNearestPointIndex } from '../interaction-utils';
+import { chooseDistanceTickInterval, findNearestPointIndex, isDarkTheme } from '../interaction-utils';
 
 const GRID_COLOR = 'rgba(255, 255, 255, 0.35)';
-const LABEL_COLOR = '#6c757d';
+function labelColor(): string { return isDarkTheme() ? '#9ca3af' : '#6c757d'; }
+function waypointLabelColor(): string { return isDarkTheme() ? '#d1d5db' : '#495057'; }
+function borderColor(): string { return isDarkTheme() ? '#4a4a5a' : '#adb5bd'; }
 const FONT = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 
 export function drawAxes(
@@ -49,7 +51,7 @@ function drawAltitudeAxis(
     ctx.stroke();
 
     // Left label: altitude in feet
-    ctx.fillStyle = LABEL_COLOR;
+    ctx.fillStyle = labelColor();
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     const label = alt >= 10000 ? `FL${Math.round(alt / 100)}` : `${alt.toLocaleString()}`;
@@ -63,7 +65,7 @@ function drawAltitudeAxis(
 
   // Axis titles
   ctx.save();
-  ctx.fillStyle = LABEL_COLOR;
+  ctx.fillStyle = labelColor();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -74,7 +76,7 @@ function drawAltitudeAxis(
   ctx.restore();
 
   ctx.save();
-  ctx.fillStyle = LABEL_COLOR;
+  ctx.fillStyle = labelColor();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -106,7 +108,7 @@ function drawDistanceAxis(
     ticks.push(maxDist);
   }
 
-  ctx.fillStyle = LABEL_COLOR;
+  ctx.fillStyle = labelColor();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
 
@@ -135,7 +137,7 @@ function drawDistanceAxis(
     const nearest = data.points[nearestIdx];
     if (nearest) {
       const timeStr = formatTimeUTC(nearest.time);
-      ctx.fillStyle = LABEL_COLOR;
+      ctx.fillStyle = labelColor();
       ctx.fillText(timeStr, x, plotArea.top + plotArea.height + 20);
     }
   }
@@ -162,7 +164,7 @@ function drawWaypointLines(
     ctx.setLineDash([]);
 
     // ICAO label at top
-    ctx.fillStyle = '#495057';
+    ctx.fillStyle = waypointLabelColor();
     ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
@@ -176,7 +178,7 @@ function drawPlotBorder(
   transform: CoordTransform,
 ): void {
   const { plotArea } = transform;
-  ctx.strokeStyle = '#adb5bd';
+  ctx.strokeStyle = borderColor();
   ctx.lineWidth = 1;
   ctx.setLineDash([]);
   ctx.strokeRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
