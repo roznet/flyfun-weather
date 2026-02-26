@@ -70,6 +70,7 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 | defaults_json | TEXT | JSON: `{"cruise_altitude_ft": 8000, "flight_ceiling_ft": 18000, "models": ["gfs","ecmwf","icon"]}` |
 | encrypted_autorouter_creds | TEXT | Fernet-encrypted JSON: `{"username": "...", "password": "..."}` |
 | digest_config_json | TEXT | JSON: `{"config_name": "default"}` |
+| setup_completed | BOOLEAN DEFAULT FALSE | True after user completes first-login wizard |
 
 ### flight_profiles
 
