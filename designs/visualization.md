@@ -118,6 +118,21 @@ interface CoordTransform {
 - **ResizeObserver** — responsive sizing with device pixel ratio handling for crisp rendering
 - **Clip to plot area** — all layer renders are clipped so bands/fills don't overflow axes
 - **Monotone cubic for terrain** — Fritsch-Carlson tangents prevent overshoot (important for elevation data)
+- **Theme-aware canvas colors** — axes, grid lines, borders, and backgrounds read from `isDarkTheme()` / `cssVar()` at render time; both renderers listen for `theme-changed` events to re-render automatically
+
+## Dark / Light / System Theme
+
+Three-way theme support via `web/ts/theme.ts`:
+
+- **Persistence**: `localStorage('wb_theme')` → `'light' | 'dark' | 'system'` (default: `system`)
+- **Resolution**: `system` checks `matchMedia('(prefers-color-scheme: dark)')` with a live listener
+- **Application**: sets `document.documentElement.dataset.theme` to `'light'` or `'dark'`; CSS custom properties in `[data-theme="dark"]` override all colors
+- **FOUC prevention**: inline `<script>` in every HTML `<head>` (before stylesheets) reads localStorage and sets `data-theme` before first paint
+- **Toggle UI**: 3-segment button (☀ ◐ ☾) injected into `.header-right` by `initTheme()`
+- **Canvas re-rendering**: `CrossSectionRenderer` and `RouteGraphRenderer` listen for `theme-changed` custom event to re-render with updated colors
+- **Map tiles**: `RouteMapRenderer` switches between OSM (light) and CartoDB Dark Matter (dark) tiles on theme change
+- **Server-generated images**: Skew-T and hodograph PNGs get CSS `filter: invert(0.88) hue-rotate(180deg)` in dark mode; GRAMET images are left unchanged (work on both backgrounds)
+- **Cross-section sky background**: stays `#87CEEB` in both themes (contextual sky color); grid lines on it remain white
 
 ## Convective Tower Rendering
 
@@ -138,6 +153,8 @@ Common utilities extracted from cross-section and route-graph to avoid duplicati
 - `chooseDistanceTickInterval()` — smart axis tick spacing
 - `ensureTooltip()`, `positionTooltip()`, `hideTooltip()` — tooltip lifecycle
 - `findNearbyWaypoint()` — find waypoint within 1nm
+- `cssVar(name, fallback)` — read a CSS custom property from document root
+- `isDarkTheme()` — check if `data-theme="dark"` is set on `<html>`
 
 Both cross-section and route-graph interaction modules import from this shared utility.
 
@@ -288,7 +305,8 @@ Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `clou
 ### Rendering
 
 - **Segments**: One `L.polyline` per adjacent point pair, colored/sized by metric via `computeSegmentStyles()`. Midpoint averaging of endpoint values for stable visuals.
-- **Waypoints**: White circle markers with ICAO tooltip on hover.
+- **Waypoints**: Circle markers (theme-aware colors) with ICAO tooltip on hover.
+- **Tiles**: OSM standard (light) or CartoDB Dark Matter (dark), switched via `theme-changed` event.
 - **Highlight**: Temporary weight increase (+3px) on hovered segment.
 - **Auto-fit**: Bounds fit route with 30px padding on data load.
 

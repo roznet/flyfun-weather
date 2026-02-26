@@ -206,6 +206,7 @@ web/
 │   │   ├── layer-legends.ts     # Legend entries for all layers
 │   │   └── types.ts             # Shared viz type definitions
 │   ├── utils.ts       # Shared utilities (API base, auth checks, centralized nav banner)
+│   ├── theme.ts       # Dark/light/system theme: persistence, toggle UI, matchMedia listener
 │   ├── flights-main.ts    # Flights page entry
 │   ├── briefing-main.ts   # Briefing page entry
 │   ├── settings-main.ts   # Settings page entry
@@ -322,6 +323,7 @@ Static files served from `web/` at root.
 - **Flight ID = route + date + params hash** — allows same route+date with different time/altitude.
 - **Naive datetimes in pipeline** — matches Open-Meteo's naive UTC timestamps.
 - **Vanilla TS + Zustand** — no framework; esbuild for fast bundling.
+- **CSS custom property theming** — dark/light/system mode via `[data-theme]` on `<html>`, FOUC-prevention inline script, `theme-changed` custom event for canvas/map reactivity.
 - **ECMWF-only Skew-T in PDF/email** — PDF is concise; web UI allows model toggling.
 
 ## Dependencies
@@ -386,6 +388,7 @@ Static files served from `web/` at root.
 | 11.5 | Done | Admin user costs page: per-user cost attribution dashboard, cost distribution chart, transaction ledger |
 | 11.6 | Done | UX: centralized navigation banner, consistent nav across all pages |
 | 11.7 | Done | First-login workflow: welcome wizard (intro, aircraft defaults, guided tour), setup_completed tracking |
+| 11.8 | Done | Dark/light/system theme: CSS custom properties, FOUC prevention, theme-aware canvases, map tile switching, image inversion |
 
 ## Docker
 
