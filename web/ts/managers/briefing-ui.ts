@@ -534,10 +534,30 @@ const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; label: string; icon: st
   { key: 'watch_items', label: 'Watch Items', icon: '\uD83D\uDC41\uFE0F' },
 ];
 
+/** Digest section keys shown in compact mode (synoptic overview + trend only). */
+const COMPACT_DIGEST_KEYS: Set<keyof WeatherDigest> = new Set(['synoptic', 'trend']);
+
+function renderDigestHtml(digest: WeatherDigest, displayMode: DisplayMode): string {
+  const sections = displayMode === 'compact'
+    ? DIGEST_SECTIONS.filter(s => COMPACT_DIGEST_KEYS.has(s.key))
+    : DIGEST_SECTIONS;
+  return sections.map(({ key, label, icon }) => {
+    const text = digest[key];
+    if (!text) return '';
+    return `
+      <div class="digest-section">
+        <h4>${icon} ${label}</h4>
+        <p>${escapeHtml(text as string)}</p>
+      </div>
+    `;
+  }).join('');
+}
+
 export function renderSynopsis(
   flight: FlightResponse | null,
   pack: PackMeta | null,
   digest: WeatherDigest | null,
+  displayMode: DisplayMode = 'full',
 ): void {
   const el = $('synopsis-section');
   if (!el) return;
@@ -548,22 +568,13 @@ export function renderSynopsis(
   }
 
   if (digest) {
-    el.innerHTML = DIGEST_SECTIONS.map(({ key, label, icon }) => {
-      const text = digest[key];
-      if (!text) return '';
-      return `
-        <div class="digest-section">
-          <h4>${icon} ${label}</h4>
-          <p>${escapeHtml(text as string)}</p>
-        </div>
-      `;
-    }).join('');
+    el.innerHTML = renderDigestHtml(digest, displayMode);
     return;
   }
 
   if (pack.has_digest) {
     el.innerHTML = '<p class="muted">Loading digest...</p>';
-    fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el);
+    fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el, displayMode);
     return;
   }
 
@@ -571,24 +582,14 @@ export function renderSynopsis(
 }
 
 async function fetchAndRenderDigestJson(
-  flightId: string, timestamp: string, el: HTMLElement,
+  flightId: string, timestamp: string, el: HTMLElement, displayMode: DisplayMode,
 ): Promise<void> {
   try {
     const url = api.digestJsonUrl(flightId, timestamp);
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`${resp.status}`);
     const digest: WeatherDigest = await resp.json();
-
-    el.innerHTML = DIGEST_SECTIONS.map(({ key, label, icon }) => {
-      const text = digest[key];
-      if (!text) return '';
-      return `
-        <div class="digest-section">
-          <h4>${icon} ${label}</h4>
-          <p>${escapeHtml(text as string)}</p>
-        </div>
-      `;
-    }).join('');
+    el.innerHTML = renderDigestHtml(digest, displayMode);
   } catch {
     el.innerHTML = '<p class="muted">Failed to load digest.</p>';
   }
@@ -640,7 +641,7 @@ export function renderModelComparison(
   snapshot: ForecastSnapshot | null,
   routeAnalyses?: RouteAnalysesManifest | null,
   selectedPointIndex?: number,
-  displayMode: DisplayMode = 'annotated',
+  displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): void {
   const el = $('comparison-section');
@@ -681,7 +682,7 @@ export function renderModelComparison(
 function renderComparisonTable(
   label: string,
   divergences: Array<{ variable: string; model_values: Record<string, number>; mean: number; spread: number; agreement: string }>,
-  displayMode: DisplayMode = 'annotated',
+  displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): string {
   const models = Object.keys(divergences[0]?.model_values || {});
@@ -705,7 +706,7 @@ function renderComparisonTable(
       : d.agreement === 'moderate' ? '&#9888;' : '&#10007;';
     const agreeClass = `agree-${d.agreement}`;
 
-    const infoBtn = metricId && displayMode === 'annotated'
+    const infoBtn = metricId && displayMode === 'full'
       ? ` ${renderInfoButton(metricId, d.mean)}`
       : '';
 
@@ -793,7 +794,7 @@ export function renderSoundingAnalysis(
   snapshot: ForecastSnapshot | null,
   routeAnalyses?: RouteAnalysesManifest | null,
   selectedPointIndex?: number,
-  displayMode: DisplayMode = 'annotated',
+  displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
   enabledLayers?: Record<string, boolean>,
 ): void {
@@ -841,7 +842,7 @@ export function renderSoundingAnalysis(
 
 function renderConvectiveBanner(
   soundings: Record<string, SoundingAnalysis>,
-  displayMode: DisplayMode = 'annotated',
+  displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): string {
   const models = Object.keys(soundings);
@@ -969,7 +970,7 @@ function formatClassification(cls: string): string {
   return cls;
 }
 
-function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displayMode: DisplayMode = 'annotated'): string {
+function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displayMode: DisplayMode = 'full'): string {
   const models = Object.keys(soundings);
   const hasVerticalMotion = models.some(
     (m) => soundings[m].vertical_motion && soundings[m].vertical_motion!.classification !== 'unavailable',
@@ -1028,7 +1029,7 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
     const row = `<tr><td class="var-name">${label}${infoBtn}</td>${cells}</tr>`;
 
     // Add annotation for classification row in annotated mode
-    if (metricId && displayMode === 'annotated') {
+    if (metricId && displayMode === 'full') {
       const metric = getMetric(metricId);
       if (metric && metric.thresholds.length > 0) {
         // For enum-style metrics (like vertical_motion_class), match formatted label to threshold
@@ -1107,7 +1108,7 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
 
 function renderAltitudeMarkers(
   soundings: Record<string, SoundingAnalysis>,
-  displayMode: DisplayMode = 'annotated',
+  displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): string {
   const models = Object.keys(soundings);
@@ -1459,7 +1460,7 @@ export function renderRouteSlider(
 
 function renderSinglePointSounding(
   point: RoutePointAnalysis,
-  displayMode: DisplayMode = 'annotated',
+  displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
   enabledLayers?: Record<string, boolean>,
 ): string {

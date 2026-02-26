@@ -1389,8 +1389,12 @@ label {
   border-color: var(--primary);
 }
 
-/* CSS-driven compact mode: hide annotations */
+/* CSS-driven compact mode: hide annotations and detail sections */
 .display-compact .metric-annotation-row {
+  display: none;
+}
+.display-compact [data-section="sounding"],
+.display-compact [data-section="comparison"] {
   display: none;
 }
 
