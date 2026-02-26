@@ -6,6 +6,7 @@ import asyncio
 import json as json_mod
 import logging
 import os
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
@@ -18,6 +19,24 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.auth_config import is_dev_mode
+
+# Input validation for path-sensitive parameters
+_ICAO_RE = re.compile(r"^[A-Za-z0-9]{2,6}$")
+_MODEL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_icao(icao: str) -> str:
+    """Validate and sanitize ICAO code used in file paths."""
+    if not _ICAO_RE.match(icao):
+        raise HTTPException(status_code=400, detail="Invalid ICAO code")
+    return icao
+
+
+def _validate_model(model: str) -> str:
+    """Validate and sanitize model name used in file paths."""
+    if not _MODEL_RE.match(model):
+        raise HTTPException(status_code=400, detail="Invalid model name")
+    return model
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from weatherbrief.db.deps import current_user_id, get_db
 from weatherbrief.db.engine import SessionLocal
@@ -164,7 +183,7 @@ def list_flight_packs(
     db: Session = Depends(get_db),
 ):
     """List all packs (history) for a flight. Any authenticated user can view."""
-    _load_flight_or_404(db, flight_id)
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = list_packs(db, flight_id)
     return [_meta_to_response(p) for p in packs]
 
@@ -176,7 +195,7 @@ def get_latest_pack(
     db: Session = Depends(get_db),
 ):
     """Get the most recent pack for a flight. Any authenticated user can view."""
-    _load_flight_or_404(db, flight_id)
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = list_packs(db, flight_id)
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")
@@ -190,7 +209,7 @@ def get_freshness(
     db: Session = Depends(get_db),
 ):
     """Check whether the latest pack's data is still fresh."""
-    _load_flight_or_404(db, flight_id)
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = list_packs(db, flight_id)
     if not packs:
         return DataStatus(fresh=False)
@@ -536,6 +555,7 @@ async def refresh_briefing_stream(
     # Manage our own DB session — FastAPI's Depends(get_db) cleanup
     # conflicts with the long-lived StreamingResponse.
     db = SessionLocal()
+    registered = False
     try:
         flight = _load_owned_flight(db, flight_id, user_id)
 
@@ -554,7 +574,6 @@ async def refresh_briefing_stream(
                 status = _build_data_status(latest.model_init_times)
                 if status.fresh:
                     logger.info("Data is fresh for %s, skipping pipeline (stream)", flight_id)
-                    db.close()
                     pack_resp = _meta_to_response(latest, data_status=status).model_dump()
 
                     async def fresh_generator() -> AsyncGenerator[str, None]:
@@ -571,8 +590,6 @@ async def refresh_briefing_stream(
         # that already opened the stream can handle it gracefully.
         entry = refresh_registry.try_register(flight_id, triggered_by="user")
         if entry is None:
-            db.close()
-
             async def duplicate_generator() -> AsyncGenerator[str, None]:
                 event = {"type": "error", "message": "Refresh already in progress"}
                 yield f"event: error\ndata: {json_mod.dumps(event)}\n\n"
@@ -582,16 +599,18 @@ async def refresh_briefing_stream(
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
+        registered = True
 
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=_can_force_refresh(request),
         )
     except Exception:
-        db.close()
-        refresh_registry.unregister(flight_id)
+        if registered:
+            refresh_registry.unregister(flight_id)
         raise
-    db.close()  # flight data + preferences are in memory; free the session before streaming
+    finally:
+        db.close()
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
@@ -705,7 +724,7 @@ def get_pack(
     db: Session = Depends(get_db),
 ):
     """Get a specific pack's metadata. Any authenticated user can view."""
-    _load_flight_or_404(db, flight_id)
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
     try:
         meta = load_pack_meta(db, flight_id, timestamp)
     except KeyError:
@@ -721,7 +740,7 @@ def get_snapshot(
     db: Session = Depends(get_db),
 ):
     """Get the briefing JSON for a pack (route + analyses + observations, no forecasts)."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     # Prefer briefing.json, fall back to legacy snapshot.json for old packs
     briefing_path = pack_dir / "briefing.json"
     if briefing_path.exists():
@@ -747,7 +766,7 @@ def refresh_observations(
     then patches the snapshot on disk.
     """
     flight = _load_owned_flight(db, flight_id, user_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
     from weatherbrief.tasks.artifacts import load_briefing, load_forecasts as load_forecasts_json
 
@@ -846,7 +865,7 @@ def get_gramet(
     db: Session = Depends(get_db),
 ):
     """Get the GRAMET cross-section for a pack (PDF, with PNG fallback for old packs)."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     pdf_path = pack_dir / "gramet.pdf"
     if pdf_path.exists():
         return FileResponse(pdf_path, media_type="application/pdf")
@@ -869,7 +888,7 @@ def get_gramet_png(
     If the stored artifact is a PDF, converts the first page to PNG.
     If it's already a PNG, serves it directly.
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
     # Prefer existing PNG
     png_path = pack_dir / "gramet.png"
@@ -904,7 +923,8 @@ def get_skewt(
     db: Session = Depends(get_db),
 ):
     """Get a Skew-T image for a waypoint, generating on-demand if needed."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    icao, model = _validate_icao(icao), _validate_model(model)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     skewt_path = pack_dir / "skewt" / f"{icao}_{model}.png"
     if skewt_path.exists():
         return FileResponse(skewt_path, media_type="image/png")
@@ -952,7 +972,7 @@ def get_skewt(
                 return FileResponse(skewt_path, media_type="image/png")
             except Exception as exc:
                 logger.warning("Skew-T generation failed for %s/%s: %s", icao, model, exc)
-                raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}")
+                raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}" if is_dev_mode() else "Skew-T generation failed")
 
     raise HTTPException(status_code=404, detail="Skew-T not available")
 
@@ -964,7 +984,8 @@ def get_hodograph(
     db: Session = Depends(get_db),
 ):
     """Get a hodograph image for a waypoint, generating on-demand if needed."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    icao, model = _validate_icao(icao), _validate_model(model)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     hodo_path = pack_dir / "skewt" / f"{icao}_{model}_hodo.png"
     if hodo_path.exists():
         return FileResponse(hodo_path, media_type="image/png")
@@ -997,7 +1018,7 @@ def get_hodograph(
                 return FileResponse(hodo_path, media_type="image/png")
             except Exception as exc:
                 logger.warning("Hodograph generation failed for %s/%s: %s", icao, model, exc)
-                raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}")
+                raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}" if is_dev_mode() else "Hodograph generation failed")
 
     raise HTTPException(status_code=404, detail="Hodograph not available")
 
@@ -1010,7 +1031,7 @@ def get_route_analyses(
     db: Session = Depends(get_db),
 ):
     """Get the route analyses JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     ra_path = pack_dir / "route_analyses.json"
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
@@ -1025,7 +1046,7 @@ def get_advisories(
     db: Session = Depends(get_db),
 ):
     """Get the route advisories JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     adv_path = pack_dir / "route_advisories.json"
     if not adv_path.exists():
         raise HTTPException(status_code=404, detail="Route advisories not available")
@@ -1120,8 +1141,8 @@ def recalculate_advisories(
     from weatherbrief.models import AdvisoryAggregation
     from weatherbrief.tasks.advise import run_advisories_from_pack
 
-    flight = _load_flight_or_404(db, flight_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
     ra_path = pack_dir / "route_analyses.json"
     if not ra_path.exists():
@@ -1177,7 +1198,7 @@ def get_elevation(
     db: Session = Depends(get_db),
 ):
     """Get the elevation profile JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     path = pack_dir / "elevation_profile.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Elevation profile not available")
@@ -1194,7 +1215,8 @@ def get_route_skewt(
 
     Generates and caches the PNG on first request.
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    model = _validate_model(model)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
     # Cache path
     cache_dir = pack_dir / "skewt" / "route"
@@ -1260,7 +1282,7 @@ def get_route_skewt(
                        analysis=sa, cruise_altitude_ft=cruise_altitude_ft)
     except Exception as exc:
         logger.warning("Route Skew-T generation failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}" if is_dev_mode() else "Skew-T generation failed")
 
     return FileResponse(cache_path, media_type="image/png")
 
@@ -1275,7 +1297,8 @@ def get_route_hodograph(
 
     Generates and caches the PNG on first request.
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    model = _validate_model(model)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
     # Cache path
     cache_dir = pack_dir / "skewt" / "route"
@@ -1329,7 +1352,7 @@ def get_route_hodograph(
         generate_hodograph(hourly, label, model, cache_path)
     except Exception as exc:
         logger.warning("Route hodograph generation failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}" if is_dev_mode() else "Hodograph generation failed")
 
     return FileResponse(cache_path, media_type="image/png")
 
@@ -1342,7 +1365,7 @@ def get_digest(
     db: Session = Depends(get_db),
 ):
     """Get the LLM digest markdown for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     digest_path = pack_dir / "digest.md"
     if not digest_path.exists():
         raise HTTPException(status_code=404, detail="Digest not available")
@@ -1357,7 +1380,7 @@ def get_digest_json(
     db: Session = Depends(get_db),
 ):
     """Get the structured LLM digest as JSON."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     json_path = pack_dir / "digest.json"
     if not json_path.exists():
         raise HTTPException(status_code=404, detail="Structured digest not available")
@@ -1372,8 +1395,8 @@ def get_report_html(
     db: Session = Depends(get_db),
 ):
     """View a self-contained HTML briefing report. Any authenticated user can view."""
-    flight = _load_flight_or_404(db, flight_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
     from weatherbrief.report.render import render_html
@@ -1390,8 +1413,8 @@ def get_report_pdf(
     db: Session = Depends(get_db),
 ):
     """Download a PDF briefing report. Any authenticated user can view."""
-    flight = _load_flight_or_404(db, flight_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
     from weatherbrief.report.render import render_pdf
@@ -1399,7 +1422,7 @@ def get_report_pdf(
     import re
 
     pdf_bytes = render_pdf(pack_dir, flight, meta)
-    route_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", flight.route_name or "-".join(flight.waypoints))
+    route_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", flight.route_name or "-".join(flight.waypoints))[:80]
     filename = f"briefing_{route_slug}_{flight.target_date}_d{meta.days_out}.pdf"
     return Response(
         content=pdf_bytes,
@@ -1417,8 +1440,8 @@ def send_email(
     db: Session = Depends(get_db),
 ):
     """Send briefing email to the current user. Any authenticated user can send."""
-    flight = _load_flight_or_404(db, flight_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
     from weatherbrief.db.models import UserRow
@@ -1443,7 +1466,7 @@ def send_email(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error("Email send failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Email send failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Email send failed: {exc}" if is_dev_mode() else "Email send failed")
 
 
 # --- Helpers ---
@@ -1457,9 +1480,9 @@ def _load_pack_meta_or_404(db: Session, flight_id: str, timestamp: str) -> Brief
         raise HTTPException(status_code=404, detail="Pack not found")
 
 
-def _get_pack_dir(db: Session, flight_id: str, timestamp: str):
+def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str | None = None):
     """Resolve the pack directory for any flight. Uses the flight owner's user_id for the path."""
-    flight = _load_flight_or_404(db, flight_id)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=viewer_id)
     pack_path = pack_dir_for(flight.user_id, flight_id, timestamp)
     if not pack_path.exists():
         raise HTTPException(status_code=404, detail="Pack not found")

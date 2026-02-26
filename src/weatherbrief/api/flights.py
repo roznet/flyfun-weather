@@ -8,7 +8,7 @@ import re
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.deps import current_user_id, get_db
@@ -32,8 +32,8 @@ class CreateFlightRequest(BaseModel):
     Fields default to None, meaning "use user preference" (or system default).
     """
 
-    route_name: str = ""  # optional preset name
-    waypoints: list[str] = []  # ICAO codes (e.g. ["EGTK", "LFPB", "LSGS"])
+    route_name: str = Field("", max_length=200)  # optional preset name
+    waypoints: list[str] = Field(default_factory=list, max_length=20)  # ICAO codes
     target_date: str  # YYYY-MM-DD
     target_time_utc: int | None = None
     cruise_altitude_ft: int | None = None
@@ -81,6 +81,7 @@ class FlightResponse(BaseModel):
     cruise_altitude_ft: int
     flight_ceiling_ft: int
     flight_duration_hours: float
+    private: bool = False
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
     created_at: str
@@ -98,6 +99,7 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
         cruise_altitude_ft=flight.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
+        private=flight.private,
         auto_refresh=flight.auto_refresh,
         auto_refresh_hour=flight.auto_refresh_hour,
         created_at=flight.created_at.isoformat(),
@@ -266,8 +268,8 @@ def get_flight(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Get flight details. Any authenticated user can view any flight."""
-    flight = _load_flight_or_404(db, flight_id)
+    """Get flight details. Any authenticated user can view public flights."""
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     return _flight_to_response(flight)
 
 
@@ -304,6 +306,30 @@ def update_auto_refresh(
     return _flight_to_response(updated)
 
 
+class UpdatePrivacyRequest(BaseModel):
+    """Request body for updating flight privacy."""
+
+    private: bool
+
+
+@router.patch("/{flight_id}/privacy", response_model=FlightResponse)
+def update_privacy(
+    flight_id: str,
+    req: UpdatePrivacyRequest,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Toggle flight visibility. Only the flight owner can change this."""
+    from weatherbrief.db.models import FlightRow
+
+    _load_owned_flight(db, flight_id, user_id)
+    row = db.get(FlightRow, flight_id)
+    row.private = req.private
+    db.flush()
+    updated = load_flight(db, flight_id)
+    return _flight_to_response(updated)
+
+
 @router.delete("/{flight_id}", status_code=204)
 def remove_flight(
     flight_id: str,
@@ -318,12 +344,15 @@ def remove_flight(
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
 
 
-def _load_flight_or_404(db: Session, flight_id: str) -> Flight:
-    """Load a flight by ID. Returns 404 if not found. No ownership check."""
+def _load_flight_or_404(db: Session, flight_id: str, *, viewer_id: str | None = None) -> Flight:
+    """Load a flight by ID. Returns 404 if not found or private and not owned by viewer."""
     try:
-        return load_flight(db, flight_id)
+        flight = load_flight(db, flight_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    if flight.private and viewer_id is not None and flight.user_id != viewer_id:
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    return flight
 
 
 def _load_owned_flight(db: Session, flight_id: str, user_id: str) -> Flight:

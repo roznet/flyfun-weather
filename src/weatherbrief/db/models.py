@@ -103,6 +103,7 @@ class FlightRow(Base):
     cruise_altitude_ft: Mapped[int] = mapped_column(Integer, default=8000)
     flight_ceiling_ft: Mapped[int] = mapped_column(Integer, default=18000)
     flight_duration_hours: Mapped[float] = mapped_column(default=0.0)
+    private: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_refresh_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_auto_refresh_at: Mapped[datetime | None] = mapped_column(

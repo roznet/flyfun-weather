@@ -105,6 +105,7 @@ export interface BriefingState {
   refreshObservations: () => Promise<void>;
   sendEmail: () => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
+  updateFlightPrivacy: (isPrivate: boolean) => void;
   setLayout: (layout: VizLayout) => void;
   setMapColorMetric: (metricId: string) => void;
   setMapWidthMetric: (metricId: string) => void;
@@ -397,6 +398,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     set({ flight: { ...flight, auto_refresh: autoRefresh, auto_refresh_hour: hour } });
+  },
+
+  updateFlightPrivacy: (isPrivate: boolean) => {
+    const flight = get().flight;
+    if (!flight) return;
+    set({ flight: { ...flight, private: isPrivate } });
   },
 
   setLayout: (layout: VizLayout) => {

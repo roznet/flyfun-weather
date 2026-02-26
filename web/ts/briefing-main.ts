@@ -680,6 +680,17 @@ async function init(): Promise<void> {
       }
     }
 
+    // Render privacy toggle
+    ui.renderPrivacyToggle(s.flight, user.id, async (isPrivate) => {
+      if (!s.flight) return;
+      try {
+        const updated = await api.updatePrivacy(s.flight.id, isPrivate);
+        store.getState().updateFlightPrivacy(updated.private);
+      } catch (err) {
+        ui.renderError(`Failed to update privacy: ${err}`);
+      }
+    });
+
     // Render auto-refresh toggle
     ui.renderAutoRefreshBar(s.flight, user.id, past, async (autoRefresh, hour) => {
       if (!s.flight) return;
