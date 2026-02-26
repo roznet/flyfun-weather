@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from weatherbrief.api.auth_config import is_dev_mode
 
 # Input validation for path-sensitive parameters
-_ICAO_RE = re.compile(r"^[A-Za-z0-9]{2,6}$")
+_ICAO_RE = re.compile(r"^[A-Z]{4}$", re.IGNORECASE)
 _MODEL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 

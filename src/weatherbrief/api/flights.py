@@ -32,7 +32,7 @@ class CreateFlightRequest(BaseModel):
     Fields default to None, meaning "use user preference" (or system default).
     """
 
-    route_name: str = Field("", max_length=200)  # optional preset name
+    route_name: str = Field("", max_length=256)  # optional preset name
     waypoints: list[str] = Field(default_factory=list, max_length=20)  # ICAO codes
     target_date: str  # YYYY-MM-DD
     target_time_utc: int | None = None
@@ -295,10 +295,7 @@ def update_auto_refresh(
     db: Session = Depends(get_db),
 ):
     """Update auto-refresh settings for a flight."""
-    from weatherbrief.db.models import FlightRow
-
-    flight = _load_owned_flight(db, flight_id, user_id)
-    row = db.get(FlightRow, flight_id)
+    row = _load_owned_row(db, flight_id, user_id)
     row.auto_refresh = req.auto_refresh
     row.auto_refresh_hour = req.auto_refresh_hour
     db.flush()
@@ -320,10 +317,7 @@ def update_privacy(
     db: Session = Depends(get_db),
 ):
     """Toggle flight visibility. Only the flight owner can change this."""
-    from weatherbrief.db.models import FlightRow
-
-    _load_owned_flight(db, flight_id, user_id)
-    row = db.get(FlightRow, flight_id)
+    row = _load_owned_row(db, flight_id, user_id)
     row.private = req.private
     db.flush()
     updated = load_flight(db, flight_id)
@@ -361,3 +355,13 @@ def _load_owned_flight(db: Session, flight_id: str, user_id: str) -> Flight:
     if flight.user_id != user_id:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
     return flight
+
+
+def _load_owned_row(db: Session, flight_id: str, user_id: str):
+    """Load the ORM FlightRow, verifying ownership. Single query for PATCH endpoints."""
+    from weatherbrief.db.models import FlightRow
+
+    row = db.get(FlightRow, flight_id)
+    if row is None or row.user_id != user_id:
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    return row
