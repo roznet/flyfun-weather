@@ -1,8 +1,9 @@
 /** Advisory dashboard renderer — compact grid of advisory cards with per-model badges. */
 
-import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AdvisoryParameterDef, AirportConditions, AirportConditionsSummary, AirportModelCondition, FlightCategory, RunwayWind } from '../types/advisories';
+import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AirportConditions, AirportConditionsSummary, AirportModelCondition, FlightCategory, RunwayWind } from '../types/advisories';
 import type { DisplayMode } from '../types/metrics';
 import { showPopupContent } from '../components/info-popup';
+import { renderAdvisoryPopup } from '../helpers/advisory-popup';
 import { $, escapeHtml, modelLabel } from '../utils';
 
 /** Advisory categories hidden in compact mode (informational, not actionable). */
@@ -124,28 +125,6 @@ function renderAirportConditions(conditions: AirportConditions): string {
   return `<div class="airport-cards">${dep}${arr}</div>`;
 }
 
-function renderAdvisoryPopup(entry: AdvisoryCatalogEntry, paramsUsed: Record<string, number>): string {
-  const paramsHtml = entry.parameters.length > 0
-    ? `<table class="advisory-params-table">
-        <thead><tr><th>Parameter</th><th>Value</th><th>Description</th></tr></thead>
-        <tbody>${entry.parameters.map((p: AdvisoryParameterDef) => {
-          const val = paramsUsed[p.key] ?? p.default;
-          return `<tr>
-            <td>${escapeHtml(p.label)}</td>
-            <td><strong>${val}${p.unit ? ' ' + escapeHtml(p.unit) : ''}</strong></td>
-            <td class="text-muted">${escapeHtml(p.description)}</td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table>`
-    : '';
-
-  return `
-    <div class="popup-header"><h3>${escapeHtml(entry.name)}</h3></div>
-    <p class="advisory-popup-category">${escapeHtml(entry.category)}</p>
-    <p style="margin: 0.75rem 0;">${escapeHtml(entry.description)}</p>
-    ${paramsHtml}
-  `;
-}
 
 function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, AdvisoryCatalogEntry>): string {
   const entry = catalog.get(adv.advisory_id);

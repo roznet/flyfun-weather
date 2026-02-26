@@ -26,6 +26,8 @@ import {
   type ProfileSettings,
 } from './adapters/profiles-adapter';
 import { initTheme } from './theme';
+import { initInfoPopup, showPopupContent } from './components/info-popup';
+import { renderAdvisoryPopup } from './helpers/advisory-popup';
 
 /** Category display order and labels.
  *  Any categories not listed here will appear at the end under their raw key. */
@@ -252,6 +254,7 @@ async function init(): Promise<void> {
     return;
   }
   initTheme();
+  initInfoPopup();
   renderUserInfo(user, 'settings');
 
   // Tab switching
@@ -401,6 +404,7 @@ function renderAdvisorySettings(
       html += `<input type="checkbox" data-advisory-id="${entry.id}" ${isEnabled ? 'checked' : ''}>`;
       html += ` ${entry.name}`;
       html += `<span class="advisory-desc">${entry.short_description}</span>`;
+      html += `<button class="metric-info-btn advisory-settings-info-btn" data-advisory-id="${entry.id}" title="Advisory details" aria-label="Advisory details">i</button>`;
       html += `</label>`;
       html += `</div>`;
 
@@ -432,6 +436,34 @@ function renderAdvisorySettings(
       }
     });
   }
+
+  // Info popup for advisory details
+  const catalogMap = new Map(entries.map(e => [e.id, e]));
+  for (const btn of container.querySelectorAll<HTMLButtonElement>('.advisory-settings-info-btn')) {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const advId = btn.dataset.advisoryId!;
+      const entry = catalogMap.get(advId);
+      if (!entry) return;
+      const currentParams = collectParamsFor(container, advId);
+      showPopupContent(renderAdvisoryPopup(entry, currentParams));
+    });
+  }
+}
+
+/** Read current parameter values from the settings form for a single advisory. */
+function collectParamsFor(container: HTMLElement, advisoryId: string): Record<string, number> {
+  const params: Record<string, number> = {};
+  const prefix = `${advisoryId}:`;
+  for (const input of container.querySelectorAll<HTMLInputElement>('input[data-advisory-param]')) {
+    const key = input.dataset.advisoryParam!;
+    if (key.startsWith(prefix)) {
+      const paramKey = key.slice(prefix.length);
+      const val = parseFloat(input.value);
+      if (!isNaN(val)) params[paramKey] = val;
+    }
+  }
+  return params;
 }
 
 function renderParamInput(
