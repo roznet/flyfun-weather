@@ -246,6 +246,14 @@ The briefing page includes a dynamic Windy link that opens the meteogram for the
 - **Updates dynamically** when the user changes route point or model selection
 - Displayed as inline text in the external links area of the briefing
 
+## Display Mode (Compact / Full Details)
+
+The briefing UI supports two display modes (persisted to localStorage via `VizSettings.displayMode`):
+- **Compact**: Shows essential info only — hides sounding analysis, model comparison, secondary advisories (model confidence), and shows only synoptic + trend in the synopsis
+- **Full Details**: Shows everything including all analysis tables and advisory details
+
+Toggled via a button pair in the briefing page header. The mode is `'compact' | 'full'` (backward compat maps old `'annotated'` → `'full'`).
+
 ## Freshness Bar
 
 The freshness bar (`renderFreshnessBar()` in `briefing-ui.ts`) shows data age and model basis:

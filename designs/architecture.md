@@ -65,6 +65,7 @@ src/weatherbrief/
 │   └── storage.py     # Flight, BriefingPackMeta
 ├── airports.py        # ICAO → lat/lon via euro_aip
 ├── pipeline.py        # Thin orchestrator: calls tasks/ modules in sequence
+├── scheduler.py       # Background auto-refresh: polls every 10min, freshness check, email notification
 ├── tasks/             # Independent pipeline stages (extracted from pipeline.py)
 │   ├── __init__.py    # Re-exports: run_fetch, run_analysis, run_advisories, etc.
 │   ├── fetch.py       # run_fetch() → FetchResult (route interpolation, Open-Meteo, GRIB)
@@ -389,6 +390,9 @@ Static files served from `web/` at root.
 | 11.6 | Done | UX: centralized navigation banner, consistent nav across all pages |
 | 11.7 | Done | First-login workflow: welcome wizard (intro, aircraft defaults, guided tour), setup_completed tracking |
 | 11.8 | Done | Dark/light/system theme: CSS custom properties, FOUC prevention, theme-aware canvases, map tile switching, image inversion |
+| 11.9 | Done | Auto-refresh scheduler: background polling, freshness check, pre-flight lead time, email notification |
+| 11.10 | Done | Flight privacy: private flag hides flights from shared briefing links |
+| 11.11 | Done | Compact/full display mode: compact hides sounding analysis, model comparison, secondary advisories |
 
 ## Docker
 

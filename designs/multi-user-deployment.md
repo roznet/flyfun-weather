@@ -98,6 +98,10 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 | cruise_altitude_ft | INT DEFAULT 8000 | |
 | flight_ceiling_ft | INT DEFAULT 18000 | |
 | flight_duration_hours | FLOAT DEFAULT 0.0 | |
+| private | BOOLEAN DEFAULT FALSE | Hide from other users' shared briefing links |
+| auto_refresh | BOOLEAN DEFAULT FALSE | Enable background auto-refresh |
+| auto_refresh_hour | INT NULL | Preferred UTC hour for daily refresh (default: target_time − 1) |
+| last_auto_refresh_at | DATETIME NULL | Timestamp of last auto-refresh (for scheduling) |
 | created_at | DATETIME | |
 
 ### briefing_packs
@@ -196,6 +200,21 @@ Admin identity: `ADMIN_EMAILS` env var (comma-separated). Dev user is always adm
 | LLM digest calls | 20/day per user | Token cost |
 
 Every refresh logged to `briefing_usage`. Freshness check via `check_freshness()` in `fetch/model_status.py`.
+
+## Auto-Refresh Scheduler
+
+Background scheduler (`scheduler.py`) polls every 10 minutes for flights with `auto_refresh=True` that are due.
+
+**Scheduling formula**: `next_due = min(next_regular, flight_start − 2h)` where `next_regular` is the next occurrence of the user's preferred hour (`auto_refresh_hour`, defaulting to `target_time_utc − 1`) after the last refresh.
+
+**Behavior**:
+- Skips flights whose start time has passed
+- Checks data freshness before refreshing (skips if models unchanged)
+- Uses `RefreshRegistry` to prevent concurrent refreshes
+- Sends email notification on successful refresh (if SMTP configured)
+- Records `last_auto_refresh_at` timestamp after each refresh
+
+**Integration**: started as an `asyncio.Task` from the FastAPI app lifespan (30s startup delay).
 
 ## Encrypted Credential Storage
 
