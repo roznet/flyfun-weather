@@ -10,13 +10,15 @@
  */
 
 import { updateProfile, type ProfileResponse, type ProfileSettings } from '../adapters/profiles-adapter';
-import { completeSetup, fetchModelCatalog } from '../adapters/preferences-adapter';
+import { completeSetup } from '../adapters/preferences-adapter';
 import { escapeHtml, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from '../utils';
 import type { ModelCatalogEntry } from '../utils';
 
 type StepId = 'welcome' | 'aircraft' | 'tour';
 
 const STEPS: StepId[] = ['welcome', 'aircraft', 'tour'];
+const DEFAULT_CRUISE_ALT_FT = 8000;
+const DEFAULT_CEILING_FT = 18000;
 
 let backdropEl: HTMLElement | null = null;
 let wizardEl: HTMLElement | null = null;
@@ -25,7 +27,6 @@ let defaultProfile: ProfileResponse | null = null;
 
 /** Show the welcome wizard. Returns a promise that resolves when the user finishes. */
 export async function showWelcomeWizard(
-  userName: string,
   profile: ProfileResponse,
   modelCatalog: ModelCatalogEntry[],
 ): Promise<void> {
@@ -34,12 +35,12 @@ export async function showWelcomeWizard(
   currentStep = 0;
 
   return new Promise<void>((resolve) => {
-    createWizardDOM(userName, resolve);
+    createWizardDOM(resolve);
     renderStep();
   });
 }
 
-function createWizardDOM(userName: string, onComplete: () => void): void {
+function createWizardDOM(onComplete: () => void): void {
   // Backdrop
   backdropEl = document.createElement('div');
   backdropEl.className = 'wizard-backdrop';
@@ -110,20 +111,20 @@ function wireStepHandlers(): void {
   const nextBtn = wizardEl.querySelector('.wizard-btn-next');
   const finishBtn = wizardEl.querySelector('.wizard-btn-finish');
 
-  backBtn?.addEventListener('click', () => {
+  backBtn?.addEventListener('click', async () => {
     if (currentStep > 0) {
       // Save aircraft settings before going back from tour
       if (STEPS[currentStep] === 'tour') {
-        collectAndSaveAircraftSettings();
+        await collectAndSaveAircraftSettings();
       }
       currentStep--;
       renderStep();
     }
   });
 
-  nextBtn?.addEventListener('click', () => {
+  nextBtn?.addEventListener('click', async () => {
     if (STEPS[currentStep] === 'aircraft') {
-      collectAndSaveAircraftSettings();
+      await collectAndSaveAircraftSettings();
     }
     currentStep++;
     renderStep();
@@ -166,17 +167,17 @@ function renderWelcomeStep(): string {
 
 function renderAircraftStep(): string {
   const settings = defaultProfile?.settings;
-  const altitude = settings?.cruise_altitude_ft ?? 8000;
-  const ceiling = settings?.flight_ceiling_ft ?? 18000;
+  const altitude = settings?.cruise_altitude_ft ?? DEFAULT_CRUISE_ALT_FT;
+  const ceiling = settings?.flight_ceiling_ft ?? DEFAULT_CEILING_FT;
   const speed = settings?.speed_kt ?? '';
   const rules = settings?.flight_rules ?? 'vfr_ifr';
 
   // Model checkboxes
   const defaults = settings?.models ?? defaultModelKeys();
   const modelHtml = allModelKeys().map(m => {
-    const label = modelLabel(m);
+    const label = escapeHtml(modelLabel(m));
     const checked = defaults.includes(m) ? ' checked' : '';
-    return `<label class="checkbox-label"><input type="checkbox" data-model="${m}"${checked}> ${label}</label>`;
+    return `<label class="checkbox-label"><input type="checkbox" data-model="${escapeHtml(m)}"${checked}> ${label}</label>`;
   }).join('');
 
   return `
@@ -267,8 +268,8 @@ function renderTourStep(): string {
 async function collectAndSaveAircraftSettings(): Promise<void> {
   if (!wizardEl || !defaultProfile) return;
 
-  const altitude = parseInt((wizardEl.querySelector('#wiz-altitude') as HTMLInputElement)?.value || '8000', 10);
-  const ceiling = parseInt((wizardEl.querySelector('#wiz-ceiling') as HTMLInputElement)?.value || '18000', 10);
+  const altitude = parseInt((wizardEl.querySelector('#wiz-altitude') as HTMLInputElement)?.value || String(DEFAULT_CRUISE_ALT_FT), 10);
+  const ceiling = parseInt((wizardEl.querySelector('#wiz-ceiling') as HTMLInputElement)?.value || String(DEFAULT_CEILING_FT), 10);
   const speedRaw = (wizardEl.querySelector('#wiz-speed') as HTMLInputElement)?.value?.trim();
   const speed = speedRaw ? parseInt(speedRaw, 10) : null;
   const rules = (wizardEl.querySelector('#wiz-flight-rules') as HTMLSelectElement)?.value || 'vfr_ifr';
