@@ -2,6 +2,14 @@
 
 Polls every 10 minutes for flights with auto_refresh enabled that are due
 for a refresh. Runs the briefing pipeline and optionally sends an email.
+
+Scheduling formula
+------------------
+    next_due = min(next_regular, flight_start − PREFLIGHT_LEAD_HOURS)
+
+where *next_regular* is the next occurrence of the user's preferred hour
+after the last refresh.  All comparisons use absolute UTC datetimes, so
+there is no hour wrap-around or calendar-day ambiguity.
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_SECONDS = 600  # 10 minutes
 _STARTUP_DELAY_SECONDS = 30
+_PREFLIGHT_LEAD_HOURS = 2
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -58,12 +67,12 @@ async def process_auto_refreshes(app_state) -> None:
                 await asyncio.to_thread(
                     _auto_refresh_one, row, app_state, row.user_id
                 )
-                # Mark as refreshed today (in a fresh session to avoid stale state)
+                # Record the refresh timestamp
                 mark_db = SessionLocal()
                 try:
                     mark_row = mark_db.get(FlightRow, row.id)
                     if mark_row:
-                        mark_row.last_auto_refresh_date = _today_str()
+                        mark_row.last_auto_refresh_at = datetime.now(timezone.utc)
                         mark_db.commit()
                 finally:
                     mark_db.close()
@@ -76,101 +85,98 @@ async def process_auto_refreshes(app_state) -> None:
         db.close()
 
 
+# ---------------------------------------------------------------------------
+# Scheduling helpers
+# ---------------------------------------------------------------------------
+
+
 def _find_due_flights(db: Session) -> list[FlightRow]:
     """Return flights that are due for auto-refresh."""
-    today = _today_str()
     now_utc = datetime.now(timezone.utc)
-    current_hour = now_utc.hour
-    today_date = now_utc.date()
 
     stmt = select(FlightRow).where(FlightRow.auto_refresh.is_(True))
     rows = db.execute(stmt).scalars().all()
 
-    due = []
+    due: list[FlightRow] = []
     for row in rows:
-        # Already refreshed today
-        if row.last_auto_refresh_date == today:
+        flight_start = _flight_start_dt(row)
+        if flight_start is None:
             continue
-        # Flight is past
-        if _is_flight_past(row):
+
+        # Flight already started — no auto-refresh (manual still works)
+        if now_utc >= flight_start:
             continue
-        # Compute effective refresh hour (may be adjusted near flight day)
-        effective_hour = _effective_refresh_hour(row, today_date, current_hour)
-        if effective_hour is None:
-            continue
-        if current_hour < effective_hour:
-            continue
-        due.append(row)
+
+        due_at = _next_due_at(row, flight_start, now_utc)
+        if due_at is not None and now_utc >= due_at:
+            due.append(row)
 
     return due
 
 
-_PREFLIGHT_LEAD_HOURS = 2
+def _next_due_at(
+    row: FlightRow,
+    flight_start_dt: datetime,
+    now_utc: datetime,
+) -> datetime | None:
+    """Absolute UTC datetime when the next auto-refresh is due.
 
+    Formula: ``min(next_regular, flight_start − PREFLIGHT_LEAD_HOURS)``
 
-def _effective_refresh_hour(
-    row: FlightRow, today_date: date, current_hour: int,
-) -> int | None:
-    """Compute the effective refresh hour, with pre-flight adjustment.
+    *next_regular* is the next occurrence of the user's preferred hour
+    (``auto_refresh_hour``, defaulting to ``target_time_utc − 1``).
 
-    On the day of the flight, if the scheduled refresh would fall at or after
-    the flight start, it is moved to ``_PREFLIGHT_LEAD_HOURS`` before the
-    flight.  When that pre-flight time wraps to the previous calendar day
-    (early-UTC flights such as afternoon departures in the western US), the
-    adjustment is applied on the day before instead.
-
-    Returns ``None`` when no valid refresh slot exists today (flight already
-    started, or the pre-flight slot belongs to a different day).
+    Returns ``None`` when no further refresh should happen (e.g. the only
+    possible slot has already passed the flight start).
     """
-    effective = row.auto_refresh_hour
-    if effective is None:
-        effective = (row.target_time_utc - 1) % 24
+    effective_hour = row.auto_refresh_hour
+    if effective_hour is None:
+        effective_hour = (row.target_time_utc - 1) % 24
 
+    preflight = flight_start_dt - timedelta(hours=_PREFLIGHT_LEAD_HOURS)
+
+    if row.last_auto_refresh_at is None:
+        # Never refreshed — next regular is today at the preferred hour
+        today = now_utc.date()
+        regular = datetime(
+            today.year, today.month, today.day,
+            effective_hour, tzinfo=timezone.utc,
+        )
+    else:
+        # Next regular: day after last refresh, at the preferred hour
+        next_day = row.last_auto_refresh_at.date() + timedelta(days=1)
+        regular = datetime(
+            next_day.year, next_day.month, next_day.day,
+            effective_hour, tzinfo=timezone.utc,
+        )
+
+    due_at = min(regular, preflight)
+
+    # If the due time is at or past flight start, no point refreshing
+    if due_at >= flight_start_dt:
+        return None
+
+    return due_at
+
+
+def _flight_start_dt(row: FlightRow) -> datetime | None:
+    """Parse a FlightRow into an absolute UTC flight-start datetime.
+
+    Returns ``None`` for malformed / unparseable data.
+    """
     try:
         flight_date = date.fromisoformat(row.target_date)
-    except (ValueError, TypeError):
-        return effective  # Malformed date — fall back to regular schedule
-
-    flight_start_hour = row.target_time_utc
-    flight_start_dt = datetime(
-        flight_date.year, flight_date.month, flight_date.day,
-        flight_start_hour, tzinfo=timezone.utc,
-    )
-    preflight_dt = flight_start_dt - timedelta(hours=_PREFLIGHT_LEAD_HOURS)
-
-    if today_date == flight_date:
-        # Flight day — no auto-refresh once the flight has started
-        if current_hour >= flight_start_hour:
-            return None
-        # If scheduled at or after flight start, use the pre-flight time
-        if effective >= flight_start_hour:
-            if preflight_dt.date() == flight_date:
-                return preflight_dt.hour
-            # Pre-flight time is on the previous day — no valid slot today
-            return None
-
-    elif today_date == preflight_dt.date() and preflight_dt.date() < flight_date:
-        # Day before flight — the pre-flight time wraps into today
-        # (e.g. flight at 01:00Z → pre-flight at 23:00Z the day before)
-        if effective >= flight_start_hour:
-            return preflight_dt.hour
-
-    return effective
-
-
-def _is_flight_past(row: FlightRow) -> bool:
-    """Check if a flight's target time + duration has passed."""
-    try:
-        flight_date = date.fromisoformat(row.target_date)
-        flight_start = datetime(
+        return datetime(
             flight_date.year, flight_date.month, flight_date.day,
             row.target_time_utc, tzinfo=timezone.utc,
         )
-        duration_hours = row.flight_duration_hours or 0.0
-        flight_end = flight_start + timedelta(hours=duration_hours)
-        return datetime.now(timezone.utc) > flight_end
     except (ValueError, TypeError):
-        return True  # Treat malformed dates as past
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Pipeline execution
+# ---------------------------------------------------------------------------
 
 
 def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
@@ -247,8 +253,3 @@ def _try_send_email(
         logger.info("Auto-refresh email sent for %s to %s", flight.id, user.email)
     except Exception:
         logger.warning("Auto-refresh email failed for %s", flight.id, exc_info=True)
-
-
-def _today_str() -> str:
-    """Return today's date as YYYY-MM-DD in UTC."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
