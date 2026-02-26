@@ -5,6 +5,7 @@ import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { renderAdvisories } from './managers/advisories-ui';
+import type { DisplayMode } from './types/metrics';
 import { renderUserInfo, initModelCatalog, isFlightPast } from './utils';
 import { initInfoPopup, showMetricInfo } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
@@ -59,7 +60,7 @@ async function init(): Promise<void> {
   function applyDisplayModeClass(mode: string): void {
     const container = document.querySelector('.container');
     if (container) {
-      container.classList.remove('display-compact', 'display-annotated');
+      container.classList.remove('display-compact', 'display-full');
       container.classList.add(`display-${mode}`);
     }
   }
@@ -370,9 +371,9 @@ async function init(): Promise<void> {
       state.elevationProfile !== prev.elevationProfile
     ) {
       ui.renderAssessment(state.currentPack);
-      renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories());
+      renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
-      ui.renderSynopsis(state.flight, state.currentPack, state.digest);
+      ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
       ui.renderGramet(state.flight, state.currentPack);
       renderSliderSections(state);
       renderVisualization(state);
@@ -405,6 +406,10 @@ async function init(): Promise<void> {
       applyDisplayModeClass(state.displayMode);
       updateToggleButtons(state.displayMode);
       renderSliderSections(state);
+      if (state.displayMode !== prev.displayMode) {
+        renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode);
+        ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
+      }
     }
     if (state.selectedModel !== prev.selectedModel) {
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
@@ -572,7 +577,7 @@ async function init(): Promise<void> {
     toggleContainer.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest('.btn-toggle') as HTMLElement | null;
       if (btn && btn.dataset.mode) {
-        store.getState().setDisplayMode(btn.dataset.mode as 'compact' | 'annotated');
+        store.getState().setDisplayMode(btn.dataset.mode as DisplayMode);
       }
     });
   }
@@ -655,9 +660,9 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack);
-    renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories());
+    renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories(), s.displayMode);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
-    ui.renderSynopsis(s.flight, s.currentPack, s.digest);
+    ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode);
     ui.renderGramet(s.flight, s.currentPack);
     renderSliderSections(s);
     renderVisualization(s);
