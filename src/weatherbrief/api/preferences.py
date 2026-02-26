@@ -256,6 +256,16 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
     return _parse_service_toggles(row.defaults_json)
 
 
+@router.post("/setup-complete", status_code=204)
+def mark_setup_complete(
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Mark the user's initial setup as completed."""
+    row = _load_prefs(db, user_id)
+    row.setup_completed = True
+
+
 @router.get("/advisories/catalog")
 def get_advisory_catalog():
     """Return the full advisory catalog for settings UI."""
