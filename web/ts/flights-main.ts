@@ -2,10 +2,12 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchRouteDistance } from './adapters/api-adapter';
+import { fetchModelCatalog } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
-import { renderUserInfo } from './utils';
+import { renderUserInfo, initModelCatalog } from './utils';
+import { showWelcomeWizard } from './components/welcome-wizard';
 
 let loadedProfiles: ProfileResponse[] = [];
 
@@ -94,6 +96,23 @@ async function init(): Promise<void> {
     populateProfileSelector(loadedProfiles);
   } catch {
     // Profile selector stays empty; flights still work without it
+  }
+
+  // --- First-login welcome wizard ---
+  if (!user.setup_completed) {
+    try {
+      const modelCatalog = await fetchModelCatalog();
+      initModelCatalog(modelCatalog);
+      const defaultProfile = loadedProfiles.find(p => p.is_default) || loadedProfiles[0];
+      if (defaultProfile) {
+        await showWelcomeWizard(user.name, defaultProfile, modelCatalog);
+        // Reload profiles after wizard may have updated the default profile
+        loadedProfiles = await fetchProfiles();
+        populateProfileSelector(loadedProfiles);
+      }
+    } catch (err) {
+      console.error('Welcome wizard error:', err);
+    }
   }
 
   // --- Wire create flight form ---

@@ -58,6 +58,7 @@ class UserPreferencesRow(Base):
     defaults_json: Mapped[str] = mapped_column(Text, default="{}")
     encrypted_autorouter_creds: Mapped[str] = mapped_column(Text, default="")
     digest_config_json: Mapped[str] = mapped_column(Text, default="{}")
+    setup_completed: Mapped[bool] = mapped_column(Boolean, default=False)
 
     user: Mapped[UserRow] = relationship(back_populates="preferences")
 

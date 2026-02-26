@@ -6,6 +6,7 @@ export interface CurrentUser {
   name: string;
   approved: boolean;
   is_admin: boolean;
+  setup_completed: boolean;
 }
 
 export async function fetchCurrentUser(): Promise<CurrentUser | null> {
