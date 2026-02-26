@@ -218,6 +218,38 @@ export function renderFreshnessBar(
   }
 }
 
+// --- Privacy toggle ---
+
+export function renderPrivacyToggle(
+  flight: FlightResponse | null,
+  currentUserId: string,
+  onUpdate: (isPrivate: boolean) => void,
+): void {
+  const el = $('privacy-bar');
+  if (!el) return;
+
+  // Only show for flight owners
+  if (!flight || flight.user_id !== currentUserId) {
+    el.style.display = 'none';
+    return;
+  }
+
+  el.style.display = '';
+  const isPrivate = flight.private;
+
+  el.innerHTML = `
+    <label class="auto-refresh-toggle">
+      <input type="checkbox" id="privacy-check" ${isPrivate ? 'checked' : ''}>
+      <span>Private</span>
+    </label>
+  `;
+
+  const checkbox = document.getElementById('privacy-check') as HTMLInputElement;
+  checkbox.addEventListener('change', () => {
+    onUpdate(checkbox.checked);
+  });
+}
+
 // --- Auto-refresh bar ---
 
 export function renderAutoRefreshBar(

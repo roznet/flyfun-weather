@@ -33,6 +33,7 @@ class Flight(BaseModel):
     cruise_altitude_ft: int = 8000
     flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
+    private: bool = False
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
     last_auto_refresh_at: datetime | None = None

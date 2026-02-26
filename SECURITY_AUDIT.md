@@ -11,6 +11,8 @@ WeatherBrief is generally well-architected from a security perspective for its i
 
 **Critical findings: 0** | **High: 2** | **Medium: 5** | **Low: 7** | **Informational: 4**
 
+> **Status:** All actionable findings (H1, H2, M2, M5, L1, L2, L5, L6) have been fixed in this commit.
+
 ---
 
 ## HIGH Severity

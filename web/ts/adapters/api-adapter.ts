@@ -57,6 +57,19 @@ export async function updateAutoRefresh(
   );
 }
 
+export async function updatePrivacy(
+  flightId: string,
+  isPrivate: boolean,
+): Promise<FlightResponse> {
+  return apiFetch<FlightResponse>(
+    `/flights/${encodeURIComponent(flightId)}/privacy`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ private: isPrivate }),
+    },
+  );
+}
+
 export interface RouteDistanceResponse {
   total_distance_nm: number;
 }

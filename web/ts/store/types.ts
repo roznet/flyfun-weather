@@ -11,6 +11,7 @@ export interface FlightResponse {
   cruise_altitude_ft: number;
   flight_ceiling_ft: number;
   flight_duration_hours: number;
+  private: boolean;
   auto_refresh: boolean;
   auto_refresh_hour: number | null;
   created_at: string;
