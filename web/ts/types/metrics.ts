@@ -2,7 +2,7 @@
 
 export type RiskLevel = 'none' | 'low' | 'moderate' | 'high' | 'severe';
 export type Tier = 'key' | 'useful' | 'advanced';
-export type DisplayMode = 'compact' | 'annotated';
+export type DisplayMode = 'compact' | 'full';
 
 export interface MetricThreshold {
   min: number | null;
