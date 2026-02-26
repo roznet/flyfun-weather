@@ -126,8 +126,8 @@ def _next_due_at(
     *next_regular* is the next occurrence of the user's preferred hour
     (``auto_refresh_hour``, defaulting to ``target_time_utc − 1``).
 
-    Returns ``None`` when no further refresh should happen (e.g. the only
-    possible slot has already passed the flight start).
+    Always returns a time strictly before ``flight_start_dt`` (since
+    *preflight* is ``flight_start − PREFLIGHT_LEAD_HOURS``).
     """
     effective_hour = row.auto_refresh_hour
     if effective_hour is None:
@@ -135,28 +135,18 @@ def _next_due_at(
 
     preflight = flight_start_dt - timedelta(hours=_PREFLIGHT_LEAD_HOURS)
 
+    # Determine the base date for the next regular refresh slot
     if row.last_auto_refresh_at is None:
-        # Never refreshed — next regular is today at the preferred hour
-        today = now_utc.date()
-        regular = datetime(
-            today.year, today.month, today.day,
-            effective_hour, tzinfo=timezone.utc,
-        )
+        base_date = now_utc.date()
     else:
-        # Next regular: day after last refresh, at the preferred hour
-        next_day = row.last_auto_refresh_at.date() + timedelta(days=1)
-        regular = datetime(
-            next_day.year, next_day.month, next_day.day,
-            effective_hour, tzinfo=timezone.utc,
-        )
+        base_date = row.last_auto_refresh_at.date() + timedelta(days=1)
 
-    due_at = min(regular, preflight)
+    regular = datetime(
+        base_date.year, base_date.month, base_date.day,
+        effective_hour, tzinfo=timezone.utc,
+    )
 
-    # If the due time is at or past flight start, no point refreshing
-    if due_at >= flight_start_dt:
-        return None
-
-    return due_at
+    return min(regular, preflight)
 
 
 def _flight_start_dt(row: FlightRow) -> datetime | None:

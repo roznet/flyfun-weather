@@ -220,23 +220,22 @@ class TestPreflightWrapAround:
 
 class TestNoRefreshAfterFlightStart:
 
-    def test_due_at_past_flight_start_returns_none(self):
-        """If both regular and preflight are past flight start → None."""
+    def test_preflight_returned_when_regular_is_past_flight_start(self):
+        """When regular slot is past flight start, preflight still wins via min().
+
+        _next_due_at always returns a time < flight_start (since preflight
+        is flight_start − 2h).  The caller (_find_due_flights) separately
+        guards against now >= flight_start.
+        """
         row = _make_row(
             target_time_utc=9,
             auto_refresh_hour=14,
-            # Last refresh was well after the only possible slot
             last_auto_refresh_at=_utc(2026, 3, 1, 8, 0),
         )
         flight_start = _utc(2026, 3, 1, 9)
         now = _utc(2026, 3, 1, 8, 30)
         due = _next_due_at(row, flight_start, now)
-        # next regular = Mar 2 14:00Z (past flight), preflight = 07:00Z (past now,
-        # but doesn't matter because min is still Mar 1 07:00Z which is < flight start)
-        # Actually: min(Mar 2 14:00Z, Mar 1 07:00Z) = Mar 1 07:00Z, which is < 09:00Z
-        # So this would return Mar 1 07:00Z. But now >= 07:00Z → it IS due.
-        # However, _find_due_flights checks `now < flight_start` first.
-        # _next_due_at itself returns the due time regardless; the caller guards.
+        # min(Mar 2 14:00Z, Mar 1 07:00Z) = Mar 1 07:00Z
         assert due == _utc(2026, 3, 1, 7)
 
     def test_find_due_skips_after_flight_start(self, db_session, dev_user):
