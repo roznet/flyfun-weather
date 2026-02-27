@@ -1,6 +1,6 @@
 /** Terrain fill layer: earth-tone filled area from ground to chart bottom. */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode, TerrainPoint } from '../../types';
+import type { CrossSectionLayer, CoordTransform, VizRouteData, TerrainPoint } from '../../types';
 import { drawSmoothLine, type PointData } from './base';
 
 const FILL_COLOR = '#8B7355';
@@ -12,17 +12,13 @@ export const terrainFillLayer: CrossSectionLayer = {
   group: 'terrain',
   defaultEnabled: true,
 
-  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
+  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     if (!data.terrainProfile || data.terrainProfile.length === 0) return;
 
     const { plotArea } = transform;
     const bottomY = plotArea.top + plotArea.height;
 
-    if (mode === 'columns') {
-      drawColumnTerrain(ctx, data.terrainProfile, transform, bottomY);
-    } else {
-      drawSmoothTerrain(ctx, data.terrainProfile, transform, bottomY);
-    }
+    drawSmoothTerrain(ctx, data.terrainProfile, transform, bottomY);
 
     // Outline along the terrain surface
     const linePoints: PointData[] = data.terrainProfile.map((p) => ({
@@ -70,40 +66,6 @@ function drawSmoothTerrain(
   ctx.lineTo(xs[xs.length - 1], bottomY);
   ctx.closePath();
   ctx.fill();
-}
-
-function drawColumnTerrain(
-  ctx: CanvasRenderingContext2D,
-  profile: TerrainPoint[],
-  transform: CoordTransform,
-  bottomY: number,
-): void {
-  ctx.fillStyle = FILL_COLOR;
-
-  for (let i = 0; i < profile.length; i++) {
-    const p = profile[i];
-    const x = transform.distanceToX(p.distanceNm);
-    const y = transform.altitudeToY(p.elevationFt);
-
-    // Column left/right edges
-    let xLeft: number;
-    let xRight: number;
-    if (i === 0) {
-      xLeft = x;
-      xRight = (x + transform.distanceToX(profile[1]?.distanceNm ?? p.distanceNm)) / 2;
-    } else if (i === profile.length - 1) {
-      xLeft = (transform.distanceToX(profile[i - 1].distanceNm) + x) / 2;
-      xRight = x;
-    } else {
-      xLeft = (transform.distanceToX(profile[i - 1].distanceNm) + x) / 2;
-      xRight = (x + transform.distanceToX(profile[i + 1].distanceNm)) / 2;
-    }
-
-    const h = bottomY - y;
-    if (h > 0) {
-      ctx.fillRect(xLeft, y, xRight - xLeft, h);
-    }
-  }
 }
 
 /** Fritsch-Carlson monotone cubic tangents (same algorithm as base.ts). */

@@ -1,6 +1,6 @@
 /** Main cross-section canvas renderer with coordinate transform. */
 
-import type { CoordTransform, PlotArea, RenderMode, VizRouteData, CrossSectionLayer } from '../types';
+import type { CoordTransform, PlotArea, VizRouteData, CrossSectionLayer } from '../types';
 import { drawAxes } from './axes';
 import { isDarkTheme } from '../interaction-utils';
 
@@ -14,7 +14,6 @@ export class CrossSectionRenderer {
   private data: VizRouteData | null = null;
   private layers: CrossSectionLayer[] = [];
   private enabledLayers: Record<string, boolean> = {};
-  private renderMode: RenderMode = 'smooth';
   private selectedPointIndex = -1;
 
   constructor(container: HTMLElement) {
@@ -41,10 +40,6 @@ export class CrossSectionRenderer {
   setLayers(layers: CrossSectionLayer[], enabled: Record<string, boolean>): void {
     this.layers = layers;
     this.enabledLayers = enabled;
-  }
-
-  setRenderMode(mode: RenderMode): void {
-    this.renderMode = mode;
   }
 
   setSelectedPointIndex(index: number): void {
@@ -125,7 +120,7 @@ export class CrossSectionRenderer {
           transform.plotArea.height,
         );
         ctx.clip();
-        layer.render(ctx, transform, this.data, this.renderMode);
+        layer.render(ctx, transform, this.data);
         ctx.restore();
       }
     }

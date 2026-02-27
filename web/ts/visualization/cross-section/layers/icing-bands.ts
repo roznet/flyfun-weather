@@ -1,8 +1,8 @@
 /** Icing zone bands: colored fills by risk level. */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode } from '../../types';
+import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { icingRiskColor } from '../../scales';
-import { drawSmoothBand, drawColumnBand, type BandPointData } from './base';
+import { drawSmoothBand, type BandPointData } from './base';
 
 export const icingBandsLayer: CrossSectionLayer = {
   id: 'icing-bands',
@@ -11,20 +11,8 @@ export const icingBandsLayer: CrossSectionLayer = {
   defaultEnabled: true,
   metricId: 'icing_risk',
 
-  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
-    if (mode === 'columns') {
-      for (const point of data.points) {
-        for (const iz of point.icingZones) {
-          if (iz.risk === 'none') continue;
-          const fill = icingRiskColor(iz.risk);
-          const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: iz.baseFt, top: iz.topFt }];
-          drawColumnBand(ctx, bandPoints, transform, fill);
-        }
-      }
-      return;
-    }
-
-    // Smooth mode: draw matched bands between adjacent points
+  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
+    // Draw matched bands between adjacent points
     for (let i = 0; i < data.points.length - 1; i++) {
       const curr = data.points[i];
       const next = data.points[i + 1];

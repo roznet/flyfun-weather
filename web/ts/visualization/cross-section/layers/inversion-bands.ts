@@ -1,8 +1,8 @@
 /** Inversion layer bands: warm pink fills with strength-based opacity. */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode } from '../../types';
+import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { inversionOpacity } from '../../scales';
-import { drawSmoothBand, drawColumnBand, type BandPointData } from './base';
+import { drawSmoothBand, type BandPointData } from './base';
 
 export const inversionBandsLayer: CrossSectionLayer = {
   id: 'inversion-bands',
@@ -11,21 +11,7 @@ export const inversionBandsLayer: CrossSectionLayer = {
   defaultEnabled: false,
   metricId: 'inversion_layer',
 
-  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
-    if (mode === 'columns') {
-      for (const point of data.points) {
-        for (const inv of point.inversions) {
-          const opacity = inversionOpacity(inv.strengthC);
-          const fill = `rgba(233, 30, 99, ${opacity})`;
-          drawColumnBand(ctx,
-            [{ distance: point.distanceNm, base: inv.baseFt, top: inv.topFt }],
-            transform, fill);
-        }
-      }
-      return;
-    }
-
-    // Smooth mode
+  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     for (let i = 0; i < data.points.length - 1; i++) {
       const curr = data.points[i];
       const next = data.points[i + 1];

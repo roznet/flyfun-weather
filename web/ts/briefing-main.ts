@@ -145,7 +145,6 @@ async function init(): Promise<void> {
 
       vizRenderer.setData(data);
       vizRenderer.setLayers(allLayers, state.vizSettings.enabledLayers);
-      vizRenderer.setRenderMode(state.vizSettings.renderMode);
       vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
       vizRenderer.render();
 
@@ -327,7 +326,6 @@ async function init(): Promise<void> {
     // Render cross-section controls (above canvas)
     const availableModels = state.routeAnalyses?.models ?? undefined;
     renderVizControls(controlsContainer, state.vizSettings, {
-      onRenderModeChange: (mode) => store.getState().setRenderMode(mode),
       onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
       onLayoutChange: (layout) => store.getState().setLayout(layout),
       onModelChange: (model) => store.getState().setSelectedModel(model),

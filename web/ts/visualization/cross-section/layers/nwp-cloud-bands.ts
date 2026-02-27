@@ -4,7 +4,6 @@ import type {
   CrossSectionLayer,
   CoordTransform,
   VizRouteData,
-  RenderMode,
   VizPoint,
   VizInversionLayer,
   VizCloudLayer,
@@ -188,17 +187,13 @@ export const nwpCloudBandsLayer: CrossSectionLayer = {
   defaultEnabled: true,
   metricId: 'nwp_cloud_cover',
 
-  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
+  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     // Check if any point has NWP cloud data (from Open-Meteo or GFS diagnostics)
     const hasData = data.points.some((p) =>
       p.cloudCoverLowPct > 0 || p.cloudCoverMidPct > 0 || p.nwpCloudDiag !== null);
     if (!hasData) return;
 
-    if (mode === 'columns') {
-      renderColumns(ctx, transform, data);
-    } else {
-      renderSmooth(ctx, transform, data);
-    }
+    renderSmooth(ctx, transform, data);
   },
 };
 
@@ -211,41 +206,6 @@ function bandCoverPct(point: VizPoint, band: 'low' | 'mid' | 'high'): number {
   if (band === 'low') return point.cloudCoverLowPct;
   if (band === 'mid') return point.cloudCoverMidPct;
   return 0; // No high-cloud data without diagnostics
-}
-
-function renderColumns(
-  ctx: CanvasRenderingContext2D,
-  transform: CoordTransform,
-  data: VizRouteData,
-): void {
-  for (const point of data.points) {
-    const terrainFt = terrainElevationAt(data, point.distanceNm);
-    const limits = computeBandLimits(point, terrainFt);
-
-    // Low band
-    const lowPct = bandCoverPct(point, 'low');
-    if (lowPct > 0 && limits.lowBase < limits.lowTop) {
-      const fill = nwpCloudFill(lowPct);
-      const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.lowBase, top: limits.lowTop }];
-      drawColumnBand(ctx, bandPoints, transform, fill);
-    }
-
-    // Mid band
-    const midPct = bandCoverPct(point, 'mid');
-    if (midPct > 0 && limits.midBase < limits.midTop) {
-      const fill = nwpCloudFill(midPct);
-      const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.midBase, top: limits.midTop }];
-      drawColumnBand(ctx, bandPoints, transform, fill);
-    }
-
-    // High band (only with GFS diagnostics)
-    const highPct = bandCoverPct(point, 'high');
-    if (highPct > 0 && limits.highBase < limits.highTop) {
-      const fill = nwpCloudFill(highPct);
-      const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: limits.highBase, top: limits.highTop }];
-      drawColumnBand(ctx, bandPoints, transform, fill);
-    }
-  }
 }
 
 function renderSmooth(

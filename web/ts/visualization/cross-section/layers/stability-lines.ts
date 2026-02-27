@@ -1,7 +1,7 @@
 /** Stability lines: LCL, LFC, EL (convective assessment levels). */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode } from '../../types';
-import { drawSmoothLine, drawColumnLine, type PointData } from './base';
+import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
+import { drawSmoothLine, type PointData } from './base';
 
 function makeStabilityLayer(
   id: string,
@@ -17,14 +17,13 @@ function makeStabilityLayer(
     group: 'stability',
     defaultEnabled: true,
     metricId,
-    render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
+    render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
       const points: PointData[] = data.points.map((p) => ({
         distance: p.distanceNm,
         value: accessor(p),
       }));
 
-      const drawFn = mode === 'smooth' ? drawSmoothLine : drawColumnLine;
-      drawFn(ctx, points, transform, { color, width, dash: [6, 4] });
+      drawSmoothLine(ctx, points, transform, { color, width, dash: [6, 4] });
     },
   };
 }

@@ -1,6 +1,6 @@
 /** Cloud layer bands: gray-gradient fills from dewpoint depression (sounding-derived). */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode, VizPoint, VizCloudLayer } from '../../types';
+import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint, VizCloudLayer } from '../../types';
 import { cloudFillFromDD } from '../../scales';
 import { drawSmoothBand, drawColumnBand, type BandPointData } from './base';
 
@@ -11,24 +11,12 @@ export const cloudBandsLayer: CrossSectionLayer = {
   defaultEnabled: true,
   metricId: 'cloud_coverage',
 
-  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
+  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     // Collect the maximum number of cloud layers across all points
     const maxLayers = data.points.reduce((max, p) => Math.max(max, p.cloudLayers.length), 0);
     if (maxLayers === 0) return;
 
-    if (mode === 'columns') {
-      for (const point of data.points) {
-        for (const cl of point.cloudLayers) {
-          const fill = cloudFillFromDD(cl.meanDewpointDepressionC, cl.coverage);
-          const bandPoints: BandPointData[] = [{ distance: point.distanceNm, base: cl.baseFt, top: cl.topFt }];
-          drawColumnBand(ctx, bandPoints, transform, fill);
-        }
-      }
-      return;
-    }
-
-    // Smooth mode: match cloud layers between adjacent points by altitude overlap
-    // Strategy: iterate pairs of adjacent points, match layers, draw bands
+    // Match cloud layers between adjacent points by altitude overlap
     for (let i = 0; i < data.points.length - 1; i++) {
       const curr = data.points[i];
       const next = data.points[i + 1];

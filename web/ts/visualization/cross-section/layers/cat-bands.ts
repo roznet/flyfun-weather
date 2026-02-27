@@ -1,8 +1,8 @@
 /** CAT turbulence bands: amber/red fills by risk level. */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode } from '../../types';
+import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { catRiskColor } from '../../scales';
-import { drawSmoothBand, drawColumnBand, type BandPointData } from './base';
+import { drawSmoothBand, type BandPointData } from './base';
 
 export const catBandsLayer: CrossSectionLayer = {
   id: 'cat-bands',
@@ -11,20 +11,7 @@ export const catBandsLayer: CrossSectionLayer = {
   defaultEnabled: false,
   metricId: 'cat_risk',
 
-  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
-    if (mode === 'columns') {
-      for (const point of data.points) {
-        for (const cl of point.catLayers) {
-          if (cl.risk === 'none') continue;
-          drawColumnBand(ctx,
-            [{ distance: point.distanceNm, base: cl.baseFt, top: cl.topFt }],
-            transform, catRiskColor(cl.risk));
-        }
-      }
-      return;
-    }
-
-    // Smooth mode
+  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     for (let i = 0; i < data.points.length - 1; i++) {
       const curr = data.points[i];
       const next = data.points[i + 1];
