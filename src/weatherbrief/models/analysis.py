@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -255,10 +255,19 @@ class WaypointForecast(BaseModel):
     hourly: list[HourlyForecast] = Field(default_factory=list)
 
     def at_time(self, target: datetime) -> Optional[HourlyForecast]:
-        """Find the forecast hour closest to target time."""
+        """Find the forecast hour closest to target time.
+
+        Handles mixed naive/aware datetimes for backward compatibility
+        with old pack snapshots that stored naive timestamps.
+        """
         if not self.hourly:
             return None
-        return min(self.hourly, key=lambda h: abs((h.time - target).total_seconds()))
+        # Normalize: if one side is naive and the other aware, treat naive as UTC
+        t = target if target.tzinfo else target.replace(tzinfo=timezone.utc)
+        def _delta(h: HourlyForecast) -> float:
+            ht = h.time if h.time.tzinfo else h.time.replace(tzinfo=timezone.utc)
+            return abs((ht - t).total_seconds())
+        return min(self.hourly, key=_delta)
 
 
 # --- Analysis result models ---
