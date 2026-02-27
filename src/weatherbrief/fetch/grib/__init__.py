@@ -119,6 +119,9 @@ def enrich_forecasts(
     if icon_ts is not None:
         grib_init_times["icon"] = icon_ts
 
+    # Fill interpolated hours that lack GRIB diagnostics from nearest native step
+    _propagate_cloud_diagnostics(cross_sections, all_forecasts)
+
     return grib_init_times
 
 
@@ -391,6 +394,47 @@ def _apply_cloud_diagnostics_to_sections(
             _apply_cloud_diagnostics(hourly, diag)
 
     return enriched_count
+
+
+def _propagate_cloud_diagnostics(
+    sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+) -> None:
+    """Forward-fill cloud diagnostics from native GRIB hours to interpolated hours.
+
+    Open-Meteo provides hourly data interpolated between native GFS steps (3h at
+    longer lead times).  GRIB enrichment only targets native steps, leaving
+    interpolated hours without ``nwp_cloud_diagnostics``.  Without diagnostics the
+    icing fallback applies the bulk NWP cloud percentage across the full altitude
+    band, causing false positives.
+
+    This fills each gap by copying diagnostics from the preceding enriched hour.
+    Cloud layer geometry (base/top) changes slowly between 3-hour GFS steps, so
+    the earlier step's diagnostics are a reasonable approximation.
+    """
+    def _fill_hourly_list(hourly_list: list[HourlyForecast]) -> int:
+        filled = 0
+        last_diag: NWPCloudDiagnostics | None = None
+        for h in sorted(hourly_list, key=lambda h: h.time):
+            if h.nwp_cloud_diagnostics is not None:
+                last_diag = h.nwp_cloud_diagnostics
+            elif last_diag is not None:
+                _apply_cloud_diagnostics(h, last_diag)
+                filled += 1
+        return filled
+
+    total = 0
+    for cs in sections:
+        for wf in cs.point_forecasts:
+            total += _fill_hourly_list(wf.hourly)
+
+    for wf in all_forecasts:
+        total += _fill_hourly_list(wf.hourly)
+
+    if total:
+        logger.info(
+            "Cloud diagnostics propagated to %d interpolated hourly entries", total,
+        )
 
 
 def _enrich_cloud_diagnostics(
