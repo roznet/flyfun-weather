@@ -132,7 +132,7 @@ def run_advisories(
             total_distance_nm=total_distance_nm,
             airport_conditions=airport_conds,
         )
-        effective_aggregation = aggregation or AdvisoryAggregation.WORST
+        effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
         manifest = RouteAdvisoriesManifest(
             advisories=advisory_results,
@@ -230,7 +230,7 @@ def run_advisories_from_pack(
             total_distance_nm=manifest.total_distance_nm,
             airport_conditions=airport_conds,
         )
-        effective_aggregation = aggregation or AdvisoryAggregation.WORST
+        effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
         result_manifest = RouteAdvisoriesManifest(
             advisories=advisory_results,

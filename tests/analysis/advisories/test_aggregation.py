@@ -97,10 +97,10 @@ class TestFromPerModelAggregation:
         assert result.aggregate_status == AdvisoryStatus.AMBER
         assert "amber" in result.aggregate_detail
 
-    def test_default_aggregation_is_worst(self):
+    def test_default_aggregation_is_majority(self):
         per_model = self._make_per_model([AdvisoryStatus.GREEN, AdvisoryStatus.GREEN, AdvisoryStatus.RED])
         result = RouteAdvisoryResult.from_per_model("test", per_model, {})
-        assert result.aggregate_status == AdvisoryStatus.RED
+        assert result.aggregate_status == AdvisoryStatus.GREEN
 
 
 # ---------------------------------------------------------------------------

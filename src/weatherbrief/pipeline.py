@@ -52,7 +52,7 @@ class BriefingOptions:
     autorouter_credentials: tuple[str, str] | None = None  # (username, password)
     user_id: str | None = None  # for per-user token cache isolation
     airports_db_path: str | None = None  # euro_aip database for runway data
-    icing_severity_enhance: bool = True  # enable RH/PW icing severity upgrades
+    icing_severity_enhance: bool = False  # enable RH/PW icing severity upgrades
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     metar_taf_corridor_nm: float = 30  # corridor width for METAR/TAF search
     # Advisory preferences (from user profile)

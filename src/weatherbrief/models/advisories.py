@@ -134,13 +134,13 @@ class RouteAdvisoryResult(BaseModel):
         advisory_id: str,
         per_model: list[ModelAdvisoryResult],
         params: dict[str, float],
-        aggregation: AdvisoryAggregation = AdvisoryAggregation.WORST,
+        aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
     ) -> RouteAdvisoryResult:
         """Build aggregate result from per-model results.
 
         Aggregation mode controls how per-model statuses combine:
-        - WORST: most severe status wins (default)
-        - MAJORITY: most common status; ties broken by worst among tied
+        - MAJORITY: most common status; ties broken by worst among tied (default)
+        - WORST: most severe status wins
         """
         statuses = [m.status for m in per_model]
         if aggregation == AdvisoryAggregation.MAJORITY:

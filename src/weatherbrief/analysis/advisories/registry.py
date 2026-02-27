@@ -32,7 +32,7 @@ def evaluate_all(
     ctx: RouteContext,
     enabled_ids: set[str] | None = None,
     user_params: dict[str, dict[str, float]] | None = None,
-    aggregation: AdvisoryAggregation = AdvisoryAggregation.WORST,
+    aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
 ) -> list[RouteAdvisoryResult]:
     """Evaluate all enabled advisories against the route context.
 
