@@ -52,7 +52,21 @@ Optional but useful:
 
 In development mode the app uses SQLite and auto-creates a dev user, so no OAuth setup is needed.
 
-### 5. Create the virtual environment and install dependencies
+### 5. Download the airports database
+
+The app needs an airports database (SQLite, ~11 MB). It's stored with Git LFS in a separate repo:
+
+```bash
+git clone --depth 1 https://github.com/roznet/flyfun-apps.git /tmp/flyfun-apps
+cp /tmp/flyfun-apps/data/airports.db data/airports.db
+rm -rf /tmp/flyfun-apps
+```
+
+> **Note:** You need [Git LFS](https://git-lfs.com/) installed (`brew install git-lfs && git lfs install`) for the clone to pull the actual database file.
+
+Then make sure `AIRPORTS_DB` in your `.env` points to it (e.g., `AIRPORTS_DB=./data/airports.db`).
+
+### 6. Create the virtual environment and install dependencies
 
 ```bash
 python -m venv venv
@@ -61,7 +75,7 @@ pip install -e ".[dev]"
 cd web && npm install && cd ..
 ```
 
-### 6. Start Claude Code
+### 7. Start Claude Code
 
 ```bash
 claude
