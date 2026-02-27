@@ -83,6 +83,12 @@ export interface ThermodynamicIndices {
   bulk_shear_0_1km_kt: number | null;
   sounding_ceiling_ft: number | null;
   nwp_ceiling_ft: number | null;
+  nwp_cape_jkg: number | null;
+  nwp_cape_type: string | null;
+  nwp_cin_jkg: number | null;
+  nwp_lifted_index: number | null;
+  nwp_freezing_level_ft: number | null;
+  cape_raw_vs_calc_divergent: boolean | null;
 }
 
 export interface EnhancedCloudLayer {

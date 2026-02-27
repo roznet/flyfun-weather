@@ -215,6 +215,8 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                 parts.append(f"CAPE={idx.cape_surface_jkg:.0f}J/kg")
             if idx.cin_surface_jkg is not None:
                 parts.append(f"CIN={idx.cin_surface_jkg:.0f}J/kg")
+            if idx.nwp_cin_jkg is not None:
+                parts.append(f"NWP-CIN={idx.nwp_cin_jkg:.0f}J/kg")
             if idx.lcl_altitude_ft is not None:
                 parts.append(f"LCL={idx.lcl_altitude_ft:.0f}ft")
             if idx.k_index is not None:

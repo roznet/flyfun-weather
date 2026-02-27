@@ -13,6 +13,25 @@ WeatherBrief computes ~85 metrics from NWP model data across 7 weather models (G
 
 When an API field is unavailable for a model, derived alternatives fill the gap so that all assessments work across all models.
 
+### Raw Value Preservation
+
+**Design principle:** Always preserve raw NWP model values alongside MetPy-derived equivalents in `ThermodynamicIndices`.
+
+NWP models compute thermodynamic indices internally using their full vertical resolution (50–140 levels). MetPy re-derives them from 8–28 pressure levels available via the API. When pressure data is coarse or has gaps, MetPy values can diverge significantly — e.g., showing convective instability when the model's own CAPE is zero. Preserving both enables validation, fallback, and transparency.
+
+**Naming convention:** `nwp_` prefix on `ThermodynamicIndices` fields, following the existing `nwp_ceiling_ft` and `nwp_cloud_diagnostics` pattern.
+
+**Preserved raw fields:**
+
+| Raw Field | Source | MetPy Equivalent | Divergence Detection |
+|-----------|--------|-------------------|---------------------|
+| `nwp_cape_jkg` | `HourlyForecast.cape_jkg` | `cape_surface_jkg` | `cape_raw_vs_calc_divergent`: >200 J/kg or >100% relative diff |
+| `nwp_cape_type` | Model-specific annotation | — | Indicates what CAPE type the model provides: sb/ml/mu/unknown |
+| `nwp_cin_jkg` | `HourlyForecast.convective_inhibition_jkg` | `cin_surface_jkg` | — |
+| `nwp_lifted_index` | `HourlyForecast.lifted_index_raw` | `lifted_index` | — |
+| `nwp_freezing_level_ft` | `HourlyForecast.freezing_level_m` × 3.28084 | `freezing_level_ft` | — |
+| `nwp_ceiling_ft` | `NWPCloudDiagnostics.ceiling_ft` | `sounding_ceiling_ft` | — |
+
 ---
 
 ## 1. Raw Input Variables (from Open-Meteo API)
@@ -36,7 +55,9 @@ When an API field is unavailable for a model, derived alternatives fill the gap 
 | `cloud_cover_mid` | % | yes | yes | yes | yes | yes | yes | 6500–20000ft (ICAO mid). Relevant for en-route icing. |
 | `cloud_cover_high` | % | yes | yes | yes | yes | yes | yes | 20000ft+ (ICAO high). Cirrus, usually no icing concern. |
 | `freezing_level_height` | m | yes | **no** | yes | **no** | yes | **no** | NWP-computed 0°C isotherm height. Upper boundary of rain, lower boundary of icing. |
-| `cape` | J/kg | yes | yes | yes | yes | yes | yes | NWP-computed convective available potential energy. |
+| `cape` | J/kg | yes | yes | yes | yes | yes | yes | NWP-computed convective available potential energy. Type varies: GFS/best_match=SB, ECMWF=MU, ICON=ML. |
+| `convective_inhibition` | J/kg | yes | yes | **no** | **no** | **no** | **no** | NWP-computed CIN. Only GFS and ECMWF. Preserved as `nwp_cin_jkg` for validation vs MetPy-derived CIN. |
+| `lifted_index` | — | yes | **no** | **no** | **no** | **no** | **no** | NWP-computed lifted index. GFS only. Preserved as `nwp_lifted_index` for validation vs MetPy-derived LI. |
 | `visibility` | m | yes | **no** | yes | **no** | yes | **no** | Parameterized horizontal visibility. < 5000m = marginal VFR. |
 | `rain` | mm | yes | yes | yes | yes | yes | yes | Liquid precipitation only. Used for precipitation phase classification. |
 | `showers` | mm | yes | yes | yes | yes | yes | yes | Convective precipitation. |

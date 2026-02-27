@@ -139,6 +139,7 @@ def analyze_sounding(
     levels: list[PressureLevelData],
     hourly: HourlyForecast | None = None,
     icing_severity_enhance: bool = True,
+    model_key: str | None = None,
 ) -> SoundingAnalysis | None:
     """Run full sounding analysis on pressure level data.
 
@@ -253,6 +254,29 @@ def analyze_sounding(
 
     indices.sounding_ceiling_ft = sounding_ceiling_ft
     indices.nwp_ceiling_ft = nwp_ceiling_ft
+
+    # --- Raw NWP value preservation ---
+    # Attach raw model-computed values alongside MetPy-derived equivalents
+    # for validation and divergence detection.
+    if hourly is not None:
+        from weatherbrief.fetch.variables import NWP_CAPE_TYPE
+
+        indices.nwp_cape_jkg = hourly.cape_jkg
+        indices.nwp_cape_type = NWP_CAPE_TYPE.get(model_key, "unknown") if model_key else None
+        indices.nwp_cin_jkg = hourly.convective_inhibition_jkg
+        indices.nwp_lifted_index = hourly.lifted_index_raw
+        if hourly.freezing_level_m is not None:
+            indices.nwp_freezing_level_ft = round(hourly.freezing_level_m * 3.28084)
+
+        # Divergence flag: raw CAPE vs computed CAPE differ significantly
+        raw = indices.nwp_cape_jkg
+        calc = indices.cape_surface_jkg
+        if raw is not None and calc is not None:
+            abs_diff = abs(raw - calc)
+            larger = max(abs(raw), abs(calc), 1.0)  # avoid division by zero
+            indices.cape_raw_vs_calc_divergent = (
+                abs_diff > 200.0 or abs_diff / larger > 1.0
+            )
 
     return SoundingAnalysis(
         indices=indices,

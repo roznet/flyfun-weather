@@ -317,6 +317,8 @@ class OpenMeteoClient:
             cloud_cover_high_pct=get("cloud_cover_high"),
             freezing_level_m=get("freezing_level_height"),
             cape_jkg=get("cape"),
+            convective_inhibition_jkg=get("convective_inhibition"),
+            lifted_index_raw=get("lifted_index"),
             visibility_m=get("visibility"),
             pressure_levels=pressure_levels,
         )

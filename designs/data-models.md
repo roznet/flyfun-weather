@@ -96,7 +96,7 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 
 | Model | Purpose | Key fields |
 |-------|---------|------------|
-| `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km |
+| `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km. **Raw NWP values:** nwp_cape_jkg, nwp_cape_type (sb/ml/mu/unknown), nwp_cin_jkg, nwp_lifted_index, nwp_freezing_level_ft, cape_raw_vs_calc_divergent |
 | `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3 |
 | `EnhancedCloudLayer` | Cloud layer from dewpoint depression | base/top (ft + hPa), thickness, mean_temperature_c, coverage (SCT/BKN/OVC) |
 | `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |

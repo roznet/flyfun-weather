@@ -65,12 +65,23 @@ SURFACE_VARIABLES = [
     "cloud_cover_high",
     "freezing_level_height",
     "cape",
+    "convective_inhibition",
+    "lifted_index",
     "visibility",
     "rain",
     "showers",
     "snowfall",
     "weather_code",
 ]
+
+# What type of CAPE each model's surface "cape" variable represents.
+# GFS/best_match: surface-based, ECMWF: most-unstable, ICON: mixed-layer.
+NWP_CAPE_TYPE: dict[str, str] = {
+    "gfs": "sb",
+    "best_match": "sb",
+    "ecmwf": "mu",
+    "icon": "ml",
+}
 
 PRESSURE_LEVEL_VARIABLES = [
     "temperature",
@@ -111,7 +122,8 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="ECMWF IFS",
         base_url="https://api.open-meteo.com/v1/ecmwf",
         max_days=10,
-        unavailable_surface=["freezing_level_height", "visibility"],
+        unavailable_surface=["freezing_level_height", "visibility",
+                             "lifted_index"],
         # vertical_velocity now available (verified Feb 2025)
         pressure_levels=list(ECMWF_PRESSURE_LEVELS),
         default=True,
@@ -127,6 +139,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="DWD ICON",
         base_url="https://api.open-meteo.com/v1/dwd-icon",
         max_days=7,
+        unavailable_surface=["convective_inhibition", "lifted_index"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(ICON_PRESSURE_LEVELS),
         default=True,
@@ -136,7 +149,8 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/forecast",
         max_days=7,
         model_param="ukmo_seamless",
-        unavailable_surface=["precipitation_probability"],
+        unavailable_surface=["precipitation_probability",
+                             "convective_inhibition", "lifted_index"],
         pressure_levels=list(UKMO_PRESSURE_LEVELS),
     ),
     "meteofrance": ModelEndpoint(
@@ -144,7 +158,8 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/meteofrance",
         max_days=6,
         unavailable_surface=["precipitation_probability",
-                             "freezing_level_height", "visibility"],
+                             "freezing_level_height", "visibility",
+                             "convective_inhibition", "lifted_index"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(METEOFRANCE_PRESSURE_LEVELS),
     ),
@@ -152,7 +167,8 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         name="GEM",
         base_url="https://api.open-meteo.com/v1/gem",
         max_days=10,
-        unavailable_surface=["freezing_level_height", "visibility"],
+        unavailable_surface=["freezing_level_height", "visibility",
+                             "convective_inhibition", "lifted_index"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(GEM_PRESSURE_LEVELS),
     ),
