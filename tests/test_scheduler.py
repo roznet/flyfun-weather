@@ -220,12 +220,12 @@ class TestPreflightWrapAround:
 
 class TestNoRefreshAfterFlightStart:
 
-    def test_preflight_returned_when_regular_is_past_flight_start(self):
-        """When regular slot is past flight start, preflight still wins via min().
+    def test_no_more_refreshes_after_preflight_served(self):
+        """Once refreshed after preflight, only regular schedule applies.
 
-        _next_due_at always returns a time < flight_start (since preflight
-        is flight_start − 2h).  The caller (_find_due_flights) separately
-        guards against now >= flight_start.
+        Last refresh at 08:00Z is past preflight 07:00Z, so preflight slot
+        is satisfied.  Next due is the regular slot (Mar 2 14:00Z), which is
+        past flight_start — so _find_due_flights won't trigger another refresh.
         """
         row = _make_row(
             target_time_utc=9,
@@ -235,8 +235,28 @@ class TestNoRefreshAfterFlightStart:
         flight_start = _utc(2026, 3, 1, 9)
         now = _utc(2026, 3, 1, 8, 30)
         due = _next_due_at(row, flight_start, now)
-        # min(Mar 2 14:00Z, Mar 1 07:00Z) = Mar 1 07:00Z
-        assert due == _utc(2026, 3, 1, 7)
+        # Preflight (07:00Z) already served → next is regular Mar 2 14:00Z
+        assert due == _utc(2026, 3, 2, 14)
+
+    def test_preflight_not_due_again_after_served(self):
+        """After the pre-flight refresh, the flight must NOT be due on
+        subsequent scheduler polls (bug: repeated emails every ~hour)."""
+        row = _make_row(
+            target_time_utc=9,
+            auto_refresh_hour=14,
+            # Pre-flight refresh happened at 07:10Z (preflight was 07:00Z)
+            last_auto_refresh_at=_utc(2026, 3, 1, 7, 10),
+        )
+        flight_start = _utc(2026, 3, 1, 9)
+
+        # Poll 10 min later
+        due = _next_due_at(row, flight_start, _utc(2026, 3, 1, 7, 20))
+        # Next regular is Mar 2 14:00Z — well past flight start
+        assert due == _utc(2026, 3, 2, 14)
+
+        # Poll 1 hour later — still shouldn't be due
+        due = _next_due_at(row, flight_start, _utc(2026, 3, 1, 8, 10))
+        assert due == _utc(2026, 3, 2, 14)
 
     def test_find_due_skips_after_flight_start(self, db_session, dev_user):
         """Integration: _find_due_flights skips flights past their start."""
@@ -357,6 +377,24 @@ class TestFindDueFlights:
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             due = _find_due_flights(db_session)
         assert len(due) == 1
+
+    def test_not_due_after_preflight_served(self, db_session, dev_user):
+        """After the pre-flight refresh, flight should NOT be due again."""
+        self._insert(
+            db_session, dev_user,
+            target_date="2026-03-01",
+            target_time_utc=9,
+            auto_refresh_hour=14,
+            # Pre-flight refresh already happened at 07:10Z
+            last_auto_refresh_at=_utc(2026, 3, 1, 7, 10),
+        )
+        # 08:00Z — between preflight (07:00Z) and flight start (09:00Z)
+        now = _utc(2026, 3, 1, 8, 0)
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            due = _find_due_flights(db_session)
+        assert len(due) == 0
 
     def test_flight_day_not_due_before_preflight(self, db_session, dev_user):
         """At 06:00Z, preflight 07:00Z hasn't arrived yet → not due."""

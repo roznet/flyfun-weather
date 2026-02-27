@@ -94,7 +94,12 @@ def _find_due_flights(db: Session) -> list[FlightRow]:
     """Return flights that are due for auto-refresh."""
     now_utc = datetime.now(timezone.utc)
 
-    stmt = select(FlightRow).where(FlightRow.auto_refresh.is_(True))
+    today_str = now_utc.strftime("%Y-%m-%d")
+    stmt = (
+        select(FlightRow)
+        .where(FlightRow.auto_refresh.is_(True))
+        .where(FlightRow.target_date >= today_str)
+    )
     rows = db.execute(stmt).scalars().all()
 
     due: list[FlightRow] = []
@@ -145,6 +150,14 @@ def _next_due_at(
         base_date.year, base_date.month, base_date.day,
         effective_hour, tzinfo=timezone.utc,
     )
+
+    # If we already refreshed at or after the pre-flight time, that slot is
+    # satisfied — only the regular schedule matters from here on.
+    last_refresh = row.last_auto_refresh_at
+    if last_refresh is not None and last_refresh.tzinfo is None:
+        last_refresh = last_refresh.replace(tzinfo=timezone.utc)
+    if last_refresh is not None and last_refresh >= preflight:
+        return regular
 
     return min(regular, preflight)
 
