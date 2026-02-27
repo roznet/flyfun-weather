@@ -29,13 +29,14 @@ def upgrade() -> None:
         )
 
     # Populate departure_time from target_date + target_time_utc
-    # SQLite: build ISO string, then store as text (SQLAlchemy handles parsing)
+    # Format as 'YYYY-MM-DD HH:MM:SS' (space separator, no timezone suffix)
+    # to match SQLAlchemy's DateTime storage format in SQLite.
     op.execute(
         """
         UPDATE flights
-        SET departure_time = target_date || 'T'
+        SET departure_time = target_date || ' '
             || substr('0' || target_time_utc, -2, 2)
-            || ':00:00+00:00'
+            || ':00:00'
         """
     )
 
@@ -50,10 +51,12 @@ def upgrade() -> None:
             sa.Column("fetch_timestamp_dt", sa.DateTime(timezone=True), nullable=True)
         )
 
+    # Normalize ISO strings to SQLAlchemy DateTime format:
+    # replace 'T' with space, strip '+00:00' timezone suffix.
     op.execute(
         """
         UPDATE briefing_packs
-        SET fetch_timestamp_dt = fetch_timestamp
+        SET fetch_timestamp_dt = REPLACE(REPLACE(fetch_timestamp, 'T', ' '), '+00:00', '')
         """
     )
 
@@ -67,12 +70,13 @@ def upgrade() -> None:
             sa.Column("pack_timestamp_dt", sa.DateTime(timezone=True), nullable=True)
         )
 
+    # Normalize ISO strings to SQLAlchemy DateTime format.
     op.execute(
         """
         UPDATE feedback
         SET pack_timestamp_dt = CASE
             WHEN pack_timestamp IS NOT NULL AND pack_timestamp != ''
-            THEN pack_timestamp
+            THEN REPLACE(REPLACE(pack_timestamp, 'T', ' '), '+00:00', '')
             ELSE NULL
         END
         """

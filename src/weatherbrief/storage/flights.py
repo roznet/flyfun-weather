@@ -198,13 +198,15 @@ def load_pack_meta(
 
     if isinstance(fetch_timestamp, str):
         ts = datetime.fromisoformat(fetch_timestamp)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=_tz.utc)
         fetch_timestamp = ts
+
+    # SQLite stores datetimes as naive text (no timezone suffix).
+    # Strip tzinfo so the bound parameter matches the stored format.
+    naive_ts = fetch_timestamp.replace(tzinfo=None)
 
     stmt = select(BriefingPackRow).where(
         BriefingPackRow.flight_id == flight_id,
-        BriefingPackRow.fetch_timestamp == fetch_timestamp,
+        BriefingPackRow.fetch_timestamp == naive_ts,
     )
     row = session.execute(stmt).scalar_one_or_none()
     if row is None:
