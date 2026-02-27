@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -94,11 +94,10 @@ def _find_due_flights(db: Session) -> list[FlightRow]:
     """Return flights that are due for auto-refresh."""
     now_utc = datetime.now(timezone.utc)
 
-    today_str = now_utc.strftime("%Y-%m-%d")
     stmt = (
         select(FlightRow)
         .where(FlightRow.auto_refresh.is_(True))
-        .where(FlightRow.target_date >= today_str)
+        .where(FlightRow.departure_time >= now_utc)
     )
     rows = db.execute(stmt).scalars().all()
 
@@ -136,7 +135,7 @@ def _next_due_at(
     """
     effective_hour = row.auto_refresh_hour
     if effective_hour is None:
-        effective_hour = (row.target_time_utc - 1) % 24
+        effective_hour = (row.departure_time.hour - 1) % 24
 
     preflight = flight_start_dt - timedelta(hours=_PREFLIGHT_LEAD_HOURS)
 
@@ -163,18 +162,16 @@ def _next_due_at(
 
 
 def _flight_start_dt(row: FlightRow) -> datetime | None:
-    """Parse a FlightRow into an absolute UTC flight-start datetime.
+    """Return the absolute UTC flight-start datetime.
 
-    Returns ``None`` for malformed / unparseable data.
+    Returns ``None`` if departure_time is not set.
     """
-    try:
-        flight_date = date.fromisoformat(row.target_date)
-        return datetime(
-            flight_date.year, flight_date.month, flight_date.day,
-            row.target_time_utc, tzinfo=timezone.utc,
-        )
-    except (ValueError, TypeError):
+    dt = row.departure_time
+    if dt is None:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +212,7 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
 
         result = execute_briefing(
             route=route,
-            target_date=flight.target_date,
-            target_hour=flight.target_time_utc,
+            departure_time=flight.departure_time,
             options=options,
         )
 

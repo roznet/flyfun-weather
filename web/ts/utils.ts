@@ -77,9 +77,12 @@ export function formatAlt(ft: number): string {
   return `${ft}ft`;
 }
 
-/** Check if a flight's end time (start + duration) is in the past. */
-export function isFlightPast(targetDate: string, targetTimeUtc: number, durationHours: number): boolean {
-  const startMs = new Date(`${targetDate}T${targetTimeUtc.toString().padStart(2, '0')}:00:00Z`).getTime();
+/** Check if a flight's end time (start + duration) is in the past.
+ *  Accepts either a departure_time ISO string or legacy target_date + target_time_utc. */
+export function isFlightPast(targetDate: string, targetTimeUtc: number, durationHours: number, departureTime?: string): boolean {
+  const startMs = departureTime
+    ? new Date(departureTime).getTime()
+    : new Date(`${targetDate}T${targetTimeUtc.toString().padStart(2, '0')}:00:00Z`).getTime();
   if (isNaN(startMs)) return false;
   const endMs = startMs + durationHours * 3600_000;
   return Date.now() > endMs;

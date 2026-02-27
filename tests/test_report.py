@@ -19,8 +19,7 @@ def sample_flight():
         id="egtk_lsgs-2026-02-21",
         route_name="egtk_lsgs",
         waypoints=["EGTK", "LFPB", "LSGS"],
-        target_date="2026-02-21",
-        target_time_utc=9,
+        departure_time=datetime(2026, 2, 21, 9, tzinfo=timezone.utc),
         cruise_altitude_ft=8000,
         flight_duration_hours=4.5,
         created_at=datetime(2026, 2, 19, 12, 0, 0, tzinfo=timezone.utc),
@@ -31,7 +30,7 @@ def sample_flight():
 def sample_pack():
     return BriefingPackMeta(
         flight_id="egtk_lsgs-2026-02-21",
-        fetch_timestamp="2026-02-19T18:00:00+00:00",
+        fetch_timestamp=datetime(2026, 2, 19, 18, 0, 0, tzinfo=timezone.utc),
         days_out=2,
         has_gramet=True,
         has_skewt=True,

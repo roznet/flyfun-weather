@@ -26,8 +26,7 @@ def sample_flight():
         id="egtk_lsgs-2026-02-21",
         user_id=DEV_USER_ID,
         route_name="egtk_lsgs",
-        target_date="2026-02-21",
-        target_time_utc=9,
+        departure_time=datetime(2026, 2, 21, 9, tzinfo=timezone.utc),
         cruise_altitude_ft=8000,
         flight_duration_hours=4.5,
         created_at=datetime(2026, 2, 14, 10, 0, 0, tzinfo=timezone.utc),
@@ -38,7 +37,7 @@ def sample_flight():
 def sample_pack_meta():
     return BriefingPackMeta(
         flight_id="egtk_lsgs-2026-02-21",
-        fetch_timestamp="2026-02-19T18:00:00Z",
+        fetch_timestamp=datetime(2026, 2, 19, 18, 0, 0, tzinfo=timezone.utc),
         days_out=2,
         has_gramet=True,
         has_skewt=True,
@@ -58,8 +57,7 @@ class TestFlightCRUD:
         loaded = load_flight(db_session, sample_flight.id)
         assert loaded.id == sample_flight.id
         assert loaded.route_name == sample_flight.route_name
-        assert loaded.target_date == sample_flight.target_date
-        assert loaded.target_time_utc == sample_flight.target_time_utc
+        assert loaded.departure_time == sample_flight.departure_time
         assert loaded.cruise_altitude_ft == sample_flight.cruise_altitude_ft
         assert loaded.flight_duration_hours == sample_flight.flight_duration_hours
 
@@ -77,8 +75,7 @@ class TestFlightCRUD:
             id="egtk_lfat-2026-03-01",
             user_id=dev_user,
             route_name="egtk_lfat",
-            target_date="2026-03-01",
-            target_time_utc=10,
+            departure_time=datetime(2026, 3, 1, 10, tzinfo=timezone.utc),
             created_at=datetime(2026, 2, 15, 12, 0, 0, tzinfo=timezone.utc),
         )
         save_flight(db_session, flight2, dev_user)
@@ -92,11 +89,13 @@ class TestFlightCRUD:
     def test_save_overwrites(self, db_session, dev_user, sample_flight):
         save_flight(db_session, sample_flight, dev_user)
 
-        updated = sample_flight.model_copy(update={"target_time_utc": 10})
+        updated = sample_flight.model_copy(update={
+            "departure_time": datetime(2026, 2, 21, 10, tzinfo=timezone.utc),
+        })
         save_flight(db_session, updated, dev_user)
 
         loaded = load_flight(db_session, sample_flight.id)
-        assert loaded.target_time_utc == 10
+        assert loaded.departure_time.hour == 10
 
     def test_delete(self, db_session, dev_user, sample_flight):
         save_flight(db_session, sample_flight, dev_user)
@@ -141,7 +140,7 @@ class TestBriefingPacks:
 
         pack2 = BriefingPackMeta(
             flight_id=sample_flight.id,
-            fetch_timestamp="2026-02-18T08:00:00Z",
+            fetch_timestamp=datetime(2026, 2, 18, 8, 0, 0, tzinfo=timezone.utc),
             days_out=3,
             has_digest=True,
             assessment="AMBER",
@@ -173,10 +172,11 @@ class TestFlightModel:
         f = Flight(
             id="test-2026-01-01",
             route_name="test",
-            target_date="2026-01-01",
+            departure_time=datetime(2026, 1, 1, 9, tzinfo=timezone.utc),
             created_at=datetime.now(tz=timezone.utc),
         )
-        assert f.target_time_utc == 9
+        assert f.target_time_utc == 9  # computed field
+        assert f.target_date == "2026-01-01"  # computed field
         assert f.cruise_altitude_ft == 8000
         assert f.flight_duration_hours == 0.0
         assert f.user_id == ""
@@ -191,7 +191,7 @@ class TestBriefingPackMetaModel:
     def test_defaults(self):
         meta = BriefingPackMeta(
             flight_id="test-2026-01-01",
-            fetch_timestamp="2026-01-01T00:00:00Z",
+            fetch_timestamp=datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
             days_out=7,
         )
         assert meta.has_gramet is False

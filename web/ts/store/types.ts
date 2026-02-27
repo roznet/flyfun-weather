@@ -6,8 +6,9 @@ export interface FlightResponse {
   profile_id: number | null;
   route_name: string;
   waypoints: string[];
-  target_date: string;
-  target_time_utc: number;
+  departure_time: string;
+  target_date: string;        // backward compat (computed from departure_time)
+  target_time_utc: number;    // backward compat (computed from departure_time)
   cruise_altitude_ft: number;
   flight_ceiling_ft: number;
   flight_duration_hours: number;
@@ -20,8 +21,7 @@ export interface FlightResponse {
 export interface CreateFlightRequest {
   route_name?: string;
   waypoints: string[];
-  target_date: string;
-  target_time_utc?: number;
+  departure_time: string;     // ISO 8601 datetime with timezone
   cruise_altitude_ft?: number;
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;

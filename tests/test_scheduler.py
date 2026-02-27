@@ -38,8 +38,7 @@ def _make_row(**overrides) -> SimpleNamespace:
     defaults = dict(
         id="test-flight",
         user_id="u1",
-        target_date="2026-03-01",
-        target_time_utc=9,
+        departure_time=_utc(2026, 3, 1, 9),
         flight_duration_hours=2.0,
         auto_refresh=True,
         auto_refresh_hour=None,
@@ -56,11 +55,11 @@ def _make_row(**overrides) -> SimpleNamespace:
 class TestFlightStartDt:
 
     def test_parses_valid_flight(self):
-        row = _make_row(target_date="2026-03-01", target_time_utc=9)
+        row = _make_row(departure_time=_utc(2026, 3, 1, 9))
         assert _flight_start_dt(row) == _utc(2026, 3, 1, 9)
 
-    def test_returns_none_for_malformed_date(self):
-        row = _make_row(target_date="bad-date")
+    def test_returns_none_for_missing_departure(self):
+        row = _make_row(departure_time=None)
         assert _flight_start_dt(row) is None
 
 
@@ -79,7 +78,7 @@ class TestNextDueAtBasic:
         assert _next_due_at(row, flight_start, now) == _utc(2026, 2, 27, 6)
 
     def test_default_hour_is_target_minus_1(self):
-        row = _make_row(target_time_utc=9, auto_refresh_hour=None)
+        row = _make_row(departure_time=_utc(2026, 3, 1, 9), auto_refresh_hour=None)
         flight_start = _utc(2026, 3, 1, 9)
         now = _utc(2026, 2, 27, 7, 0)
         assert _next_due_at(row, flight_start, now) == _utc(2026, 2, 27, 8)
@@ -134,7 +133,7 @@ class TestPreflightSameDay:
     def test_flight_at_10_schedule_at_18(self):
         """auto_refresh_hour=18, flight at 10:00Z → capped at 08:00Z."""
         row = _make_row(
-            target_time_utc=10,
+            departure_time=_utc(2026, 3, 1, 10),
             auto_refresh_hour=18,
             last_auto_refresh_at=_utc(2026, 2, 28, 18, 0),
         )
@@ -146,7 +145,7 @@ class TestPreflightSameDay:
     def test_flight_at_3_schedule_at_10(self):
         """auto_refresh_hour=10, flight at 03:00Z → capped at 01:00Z."""
         row = _make_row(
-            target_time_utc=3,
+            departure_time=_utc(2026, 3, 1, 3),
             auto_refresh_hour=10,
             last_auto_refresh_at=_utc(2026, 2, 28, 10, 0),
         )
@@ -171,8 +170,7 @@ class TestPreflightWrapAround:
         second refresh on the same day — the key scenario.
         """
         row = _make_row(
-            target_date="2026-03-01",
-            target_time_utc=1,
+            departure_time=_utc(2026, 3, 1, 1),
             auto_refresh_hour=14,
             last_auto_refresh_at=_utc(2026, 2, 28, 14, 5),
         )
@@ -184,8 +182,7 @@ class TestPreflightWrapAround:
     def test_flight_at_0z_wraps_to_day_before(self):
         """Flight 00:00Z Mar 1, schedule 10 → preflight 22:00Z Feb 28."""
         row = _make_row(
-            target_date="2026-03-01",
-            target_time_utc=0,
+            departure_time=_utc(2026, 3, 1, 0),
             auto_refresh_hour=10,
             last_auto_refresh_at=_utc(2026, 2, 28, 10, 0),
         )
@@ -203,8 +200,7 @@ class TestPreflightWrapAround:
         3pm Pacific (23:00Z) pre-flight on the same UTC day.
         """
         row = _make_row(
-            target_date="2026-03-01",
-            target_time_utc=1,
+            departure_time=_utc(2026, 3, 1, 1),
             auto_refresh_hour=4,
             last_auto_refresh_at=_utc(2026, 2, 28, 4, 0),
         )
@@ -228,7 +224,7 @@ class TestNoRefreshAfterFlightStart:
         past flight_start — so _find_due_flights won't trigger another refresh.
         """
         row = _make_row(
-            target_time_utc=9,
+            departure_time=_utc(2026, 3, 1, 9),
             auto_refresh_hour=14,
             last_auto_refresh_at=_utc(2026, 3, 1, 8, 0),
         )
@@ -242,7 +238,7 @@ class TestNoRefreshAfterFlightStart:
         """After the pre-flight refresh, the flight must NOT be due on
         subsequent scheduler polls (bug: repeated emails every ~hour)."""
         row = _make_row(
-            target_time_utc=9,
+            departure_time=_utc(2026, 3, 1, 9),
             auto_refresh_hour=14,
             # Pre-flight refresh happened at 07:10Z (preflight was 07:00Z)
             last_auto_refresh_at=_utc(2026, 3, 1, 7, 10),
@@ -265,8 +261,7 @@ class TestNoRefreshAfterFlightStart:
             user_id=dev_user,
             route_name="test",
             waypoints_json="[]",
-            target_date="2026-03-01",
-            target_time_utc=9,
+            departure_time=_utc(2026, 3, 1, 9),
             cruise_altitude_ft=8000,
             flight_ceiling_ft=18000,
             flight_duration_hours=2.0,
@@ -298,8 +293,7 @@ class TestFindDueFlights:
             user_id=dev_user,
             route_name="test",
             waypoints_json="[]",
-            target_date="2026-03-01",
-            target_time_utc=9,
+            departure_time=_utc(2026, 3, 1, 9),
             cruise_altitude_ft=8000,
             flight_ceiling_ft=18000,
             flight_duration_hours=2.0,
@@ -349,8 +343,7 @@ class TestFindDueFlights:
         """The western US scenario: regular + pre-flight on the same UTC day."""
         self._insert(
             db_session, dev_user,
-            target_date="2026-03-01",
-            target_time_utc=1,
+            departure_time=_utc(2026, 3, 1, 1),
             auto_refresh_hour=14,
             last_auto_refresh_at=_utc(2026, 2, 28, 14, 5),
         )
@@ -366,8 +359,7 @@ class TestFindDueFlights:
         """Flight at 09:00Z, schedule 14 → due at 07:00Z on flight day."""
         self._insert(
             db_session, dev_user,
-            target_date="2026-03-01",
-            target_time_utc=9,
+            departure_time=_utc(2026, 3, 1, 9),
             auto_refresh_hour=14,
             last_auto_refresh_at=_utc(2026, 2, 28, 14, 0),
         )
@@ -382,8 +374,7 @@ class TestFindDueFlights:
         """After the pre-flight refresh, flight should NOT be due again."""
         self._insert(
             db_session, dev_user,
-            target_date="2026-03-01",
-            target_time_utc=9,
+            departure_time=_utc(2026, 3, 1, 9),
             auto_refresh_hour=14,
             # Pre-flight refresh already happened at 07:10Z
             last_auto_refresh_at=_utc(2026, 3, 1, 7, 10),
@@ -400,8 +391,7 @@ class TestFindDueFlights:
         """At 06:00Z, preflight 07:00Z hasn't arrived yet → not due."""
         self._insert(
             db_session, dev_user,
-            target_date="2026-03-01",
-            target_time_utc=9,
+            departure_time=_utc(2026, 3, 1, 9),
             auto_refresh_hour=14,
             last_auto_refresh_at=_utc(2026, 2, 28, 14, 0),
         )

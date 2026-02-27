@@ -178,7 +178,7 @@ class TestPreferencesAppliedToFlights:
         })
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB"],
-            "target_date": "2026-06-01",
+            "departure_time": "2026-06-01T09:00:00Z",
         })
         assert resp.status_code == 201
         data = resp.json()
@@ -193,7 +193,7 @@ class TestPreferencesAppliedToFlights:
         })
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB"],
-            "target_date": "2026-06-02",
+            "departure_time": "2026-06-02T09:00:00Z",
             "cruise_altitude_ft": 10000,
         })
         assert resp.status_code == 201
@@ -203,7 +203,7 @@ class TestPreferencesAppliedToFlights:
         """Without profile settings, system defaults (8000/18000) are used."""
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB"],
-            "target_date": "2026-06-03",
+            "departure_time": "2026-06-03T09:00:00Z",
         })
         assert resp.status_code == 201
         data = resp.json()

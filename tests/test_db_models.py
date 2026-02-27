@@ -55,7 +55,7 @@ class TestFlightModel:
             user_id=dev_user,
             route_name="test",
             waypoints_json='["EGTK", "LSGS"]',
-            target_date="2026-03-01",
+            departure_time=datetime(2026, 3, 1, 9, tzinfo=timezone.utc),
         )
         db_session.add(flight)
         db_session.flush()
@@ -63,7 +63,7 @@ class TestFlightModel:
         loaded = db_session.get(FlightRow, "test-flight-2026-03-01")
         assert loaded is not None
         assert loaded.user_id == dev_user
-        assert loaded.target_time_utc == 9  # default
+        assert loaded.departure_time.hour == 9
         assert loaded.cruise_altitude_ft == 8000  # default
 
     def test_flight_belongs_to_user(self, db_session, dev_user):
@@ -72,7 +72,7 @@ class TestFlightModel:
             user_id=dev_user,
             route_name="test",
             waypoints_json="[]",
-            target_date="2026-03-01",
+            departure_time=datetime(2026, 3, 1, 9, tzinfo=timezone.utc),
         )
         db_session.add(flight)
         db_session.flush()
@@ -89,14 +89,14 @@ class TestBriefingPackModel:
             user_id=dev_user,
             route_name="test",
             waypoints_json="[]",
-            target_date="2026-03-01",
+            departure_time=datetime(2026, 3, 1, 9, tzinfo=timezone.utc),
         )
         db_session.add(flight)
         db_session.flush()
 
         pack = BriefingPackRow(
             flight_id="pack-test-flight",
-            fetch_timestamp="2026-02-28T12:00:00Z",
+            fetch_timestamp=datetime(2026, 2, 28, 12, 0, 0, tzinfo=timezone.utc),
             days_out=1,
             has_gramet=True,
             assessment="GREEN",
@@ -114,14 +114,14 @@ class TestBriefingPackModel:
             user_id=dev_user,
             route_name="test",
             waypoints_json="[]",
-            target_date="2026-03-01",
+            departure_time=datetime(2026, 3, 1, 9, tzinfo=timezone.utc),
         )
         db_session.add(flight)
         db_session.flush()
 
         pack = BriefingPackRow(
             flight_id="cascade-flight",
-            fetch_timestamp="2026-02-28T12:00:00Z",
+            fetch_timestamp=datetime(2026, 2, 28, 12, 0, 0, tzinfo=timezone.utc),
             days_out=1,
         )
         db_session.add(pack)
@@ -139,7 +139,7 @@ class TestBriefingPackModel:
             user_id=dev_user,
             route_name="test",
             waypoints_json="[]",
-            target_date="2026-03-01",
+            departure_time=datetime(2026, 3, 1, 9, tzinfo=timezone.utc),
         )
         db_session.add(flight)
         db_session.flush()
@@ -147,7 +147,7 @@ class TestBriefingPackModel:
         for i in range(3):
             db_session.add(BriefingPackRow(
                 flight_id="rel-flight",
-                fetch_timestamp=f"2026-02-{28-i}T12:00:00Z",
+                fetch_timestamp=datetime(2026, 2, 28 - i, 12, 0, 0, tzinfo=timezone.utc),
                 days_out=i + 1,
             ))
         db_session.flush()

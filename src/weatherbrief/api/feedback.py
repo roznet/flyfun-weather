@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
@@ -54,10 +55,20 @@ def submit_feedback(
     """Submit feedback for a specific briefing pack."""
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
 
+    # Parse pack_timestamp string to datetime (nullable)
+    pack_ts: datetime | None = None
+    if body.pack_timestamp:
+        try:
+            pack_ts = datetime.fromisoformat(body.pack_timestamp)
+            if pack_ts.tzinfo is None:
+                pack_ts = pack_ts.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pack_ts = None
+
     row = FeedbackRow(
         user_id=user_id,
         flight_id=body.flight_id,
-        pack_timestamp=body.pack_timestamp,
+        pack_timestamp=pack_ts,
         category=body.category,
         comment=body.comment,
     )
@@ -105,7 +116,7 @@ def list_feedback(
             "user_email": email,
             "user_name": name,
             "flight_id": fb.flight_id,
-            "pack_timestamp": fb.pack_timestamp,
+            "pack_timestamp": fb.pack_timestamp.isoformat() if fb.pack_timestamp else "",
             "category": fb.category,
             "comment": fb.comment,
             "created_at": fb.created_at.isoformat() if fb.created_at else None,

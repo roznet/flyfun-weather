@@ -86,8 +86,7 @@ def sample_flight(app_db):
         user_id=DEV_USER_ID,
         route_name="egtk_lsgs",
         waypoints=["EGTK", "LFPB", "LSGS"],
-        target_date="2026-02-21",
-        target_time_utc=9,
+        departure_time=datetime(2026, 2, 21, 9, tzinfo=timezone.utc),
         cruise_altitude_ft=8000,
         flight_duration_hours=4.5,
         created_at=datetime(2026, 2, 19, 12, 0, 0, tzinfo=timezone.utc),
@@ -104,7 +103,7 @@ def sample_pack(app_db, sample_flight):
     session = app_db()
     meta = BriefingPackMeta(
         flight_id=sample_flight.id,
-        fetch_timestamp="2026-02-19T18:00:00+00:00",
+        fetch_timestamp=datetime(2026, 2, 19, 18, 0, 0, tzinfo=timezone.utc),
         days_out=2,
         has_gramet=True,
         has_skewt=True,
@@ -142,8 +141,7 @@ class TestFlightsAPI:
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
-            "target_date": "2026-02-21",
-            "target_time_utc": 9,
+            "departure_time": "2026-02-21T09:00:00Z",
             "cruise_altitude_ft": 8000,
             "flight_duration_hours": 4.5,
         })
@@ -153,11 +151,12 @@ class TestFlightsAPI:
         assert data["route_name"] == "egtk_lsgs"
         assert data["waypoints"] == ["EGTK", "LFPB", "LSGS"]
         assert data["target_date"] == "2026-02-21"
+        assert data["departure_time"] == "2026-02-21T09:00:00+00:00"
 
     def test_create_flight_defaults(self, client):
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LSGS"],
-            "target_date": "2026-03-01",
+            "departure_time": "2026-03-01T09:00:00Z",
         })
         assert resp.status_code == 201
         data = resp.json()
@@ -170,8 +169,7 @@ class TestFlightsAPI:
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
-            "target_date": "2026-02-21",
-            "target_time_utc": 9,
+            "departure_time": "2026-02-21T09:00:00Z",
             "cruise_altitude_ft": 8000,
             "flight_ceiling_ft": 18000,
             "flight_duration_hours": 4.5,
@@ -207,8 +205,7 @@ class TestFlightsAPI:
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
-            "target_date": "2026-02-21",
-            "target_time_utc": 14,  # afternoon instead of morning
+            "departure_time": "2026-02-21T14:00:00Z",  # afternoon instead of morning
             "cruise_altitude_ft": 8000,
             "flight_ceiling_ft": 18000,
             "flight_duration_hours": 4.5,
@@ -236,7 +233,7 @@ class TestPacksAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["fetch_timestamp"] == "2026-02-19T18:00:00+00:00"
+        assert data[0]["fetch_timestamp"] == "2026-02-19T18:00:00+00:00"  # serialized as ISO str
         assert data[0]["has_gramet"] is True
 
     def test_list_packs_flight_not_found(self, client):
@@ -255,7 +252,7 @@ class TestPacksAPI:
 
     def test_get_specific_pack(self, client, sample_pack):
         resp = client.get(
-            f"/api/flights/{sample_pack.flight_id}/packs/2026-02-19T18:00:00+00:00"
+            f"/api/flights/{sample_pack.flight_id}/packs/{sample_pack.fetch_timestamp.isoformat()}"
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -299,47 +296,47 @@ class TestPackArtifacts:
         return sample_pack
 
     def test_get_snapshot(self, client, pack_with_artifacts):
-        ts = pack_with_artifacts.fetch_timestamp
+        ts = pack_with_artifacts.fetch_timestamp.isoformat()
         fid = pack_with_artifacts.flight_id
         resp = client.get(f"/api/flights/{fid}/packs/{ts}/snapshot")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/json"
 
     def test_get_gramet(self, client, pack_with_artifacts):
-        ts = pack_with_artifacts.fetch_timestamp
+        ts = pack_with_artifacts.fetch_timestamp.isoformat()
         fid = pack_with_artifacts.flight_id
         resp = client.get(f"/api/flights/{fid}/packs/{ts}/gramet")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "image/png"
 
     def test_get_skewt(self, client, pack_with_artifacts):
-        ts = pack_with_artifacts.fetch_timestamp
+        ts = pack_with_artifacts.fetch_timestamp.isoformat()
         fid = pack_with_artifacts.flight_id
         resp = client.get(f"/api/flights/{fid}/packs/{ts}/skewt/EGTK/gfs")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "image/png"
 
     def test_get_skewt_not_found(self, client, pack_with_artifacts):
-        ts = pack_with_artifacts.fetch_timestamp
+        ts = pack_with_artifacts.fetch_timestamp.isoformat()
         fid = pack_with_artifacts.flight_id
         resp = client.get(f"/api/flights/{fid}/packs/{ts}/skewt/XXXX/gfs")
         assert resp.status_code == 404
 
     def test_get_digest(self, client, pack_with_artifacts):
-        ts = pack_with_artifacts.fetch_timestamp
+        ts = pack_with_artifacts.fetch_timestamp.isoformat()
         fid = pack_with_artifacts.flight_id
         resp = client.get(f"/api/flights/{fid}/packs/{ts}/digest")
         assert resp.status_code == 200
         assert "text/markdown" in resp.headers["content-type"]
 
     def test_snapshot_not_found(self, client, sample_pack):
-        ts = sample_pack.fetch_timestamp
+        ts = sample_pack.fetch_timestamp.isoformat()
         fid = sample_pack.flight_id
         resp = client.get(f"/api/flights/{fid}/packs/{ts}/snapshot")
         assert resp.status_code == 404
 
     def test_gramet_not_found(self, client, sample_pack):
-        ts = sample_pack.fetch_timestamp
+        ts = sample_pack.fetch_timestamp.isoformat()
         fid = sample_pack.flight_id
         resp = client.get(f"/api/flights/{fid}/packs/{ts}/gramet")
         assert resp.status_code == 404

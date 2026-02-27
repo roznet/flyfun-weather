@@ -94,7 +94,7 @@
     <div class="header-meta">
       {{ flight.target_date }} &mdash; Departure {{ "%02d"|format(flight.target_time_utc) }}00Z &mdash; {{ alt_str }}
       &mdash; D-{{ pack.days_out }}
-      &mdash; Fetched {{ pack.fetch_timestamp[:16] }}Z
+      &mdash; Fetched {{ pack.fetch_timestamp.strftime('%Y-%m-%dT%H:%M') }}Z
     </div>
   </div>
 

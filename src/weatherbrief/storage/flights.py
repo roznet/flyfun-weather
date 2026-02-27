@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -12,6 +13,13 @@ from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import BriefingPackRow, FlightProfileRow, FlightRow
 from weatherbrief.models import BriefingPackMeta, Flight, FlightProfile
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Promote naive datetimes to UTC (SQLite loses timezone on round-trip)."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _data_dir() -> Path:
@@ -28,8 +36,7 @@ def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
         profile_id=flight.profile_id,
         route_name=flight.route_name,
         waypoints_json=json.dumps(flight.waypoints),
-        target_date=flight.target_date,
-        target_time_utc=flight.target_time_utc,
+        departure_time=flight.departure_time,
         cruise_altitude_ft=flight.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
@@ -48,8 +55,7 @@ def _row_to_flight(row: FlightRow) -> Flight:
         profile_id=row.profile_id,
         route_name=row.route_name,
         waypoints=json.loads(row.waypoints_json),
-        target_date=row.target_date,
-        target_time_utc=row.target_time_utc,
+        departure_time=_ensure_utc(row.departure_time),
         cruise_altitude_ft=row.cruise_altitude_ft,
         flight_ceiling_ft=row.flight_ceiling_ft,
         flight_duration_hours=row.flight_duration_hours,
@@ -102,7 +108,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
     return BriefingPackMeta(
         id=row.id,
         flight_id=row.flight_id,
-        fetch_timestamp=row.fetch_timestamp,
+        fetch_timestamp=_ensure_utc(row.fetch_timestamp),
         days_out=row.days_out,
         has_gramet=row.has_gramet,
         has_skewt=row.has_skewt,
@@ -125,8 +131,7 @@ def save_flight(session: Session, flight: Flight, user_id: str) -> None:
         existing.route_name = flight.route_name
         existing.profile_id = flight.profile_id
         existing.waypoints_json = json.dumps(flight.waypoints)
-        existing.target_date = flight.target_date
-        existing.target_time_utc = flight.target_time_utc
+        existing.departure_time = flight.departure_time
         existing.cruise_altitude_ft = flight.cruise_altitude_ft
         existing.flight_ceiling_ft = flight.flight_ceiling_ft
         existing.flight_duration_hours = flight.flight_duration_hours
@@ -152,7 +157,7 @@ def list_flights(session: Session, user_id: str) -> list[Flight]:
     stmt = (
         select(FlightRow)
         .where(FlightRow.user_id == user_id)
-        .order_by(FlightRow.target_date.desc(), FlightRow.target_time_utc.desc())
+        .order_by(FlightRow.departure_time.desc())
     )
     rows = session.execute(stmt).scalars().all()
     return [_row_to_flight(r) for r in rows]
@@ -183,9 +188,20 @@ def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
 
 
 def load_pack_meta(
-    session: Session, flight_id: str, fetch_timestamp: str
+    session: Session, flight_id: str, fetch_timestamp: str | datetime
 ) -> BriefingPackMeta:
-    """Load pack metadata. Raises KeyError if not found."""
+    """Load pack metadata. Raises KeyError if not found.
+
+    ``fetch_timestamp`` can be a datetime or an ISO string (parsed automatically).
+    """
+    from datetime import timezone as _tz
+
+    if isinstance(fetch_timestamp, str):
+        ts = datetime.fromisoformat(fetch_timestamp)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        fetch_timestamp = ts
+
     stmt = select(BriefingPackRow).where(
         BriefingPackRow.flight_id == flight_id,
         BriefingPackRow.fetch_timestamp == fetch_timestamp,
@@ -324,12 +340,13 @@ def safe_path_component(value: str) -> str:
     return sanitized or "_"
 
 
-def pack_dir_for(user_id: str, flight_id: str, fetch_timestamp: str) -> Path:
+def pack_dir_for(user_id: str, flight_id: str, fetch_timestamp: str | datetime) -> Path:
     """Get the directory path for a specific pack's artifacts.
 
     Layout: data/packs/{user_id}/{flight_id}/{safe_timestamp}/
     """
-    safe_ts = fetch_timestamp.replace(":", "-").replace("+", "p")
+    ts_str = fetch_timestamp.isoformat() if isinstance(fetch_timestamp, datetime) else fetch_timestamp
+    safe_ts = ts_str.replace(":", "-").replace("+", "p")
     return (
         _data_dir()
         / "packs"
