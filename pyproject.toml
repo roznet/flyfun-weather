@@ -11,7 +11,7 @@ dependencies = [
     "requests>=2.31",
     "pyyaml>=6.0",
     "pydantic>=2.0",
-    "euro-aip @ file:///Users/brice/Developer/public/rzflight/euro_aip",
+    "euro-aip>=0.2.0",
     "metpy>=1.5",
     "numpy>=1.24",
     "matplotlib>=3.7",
