@@ -22,8 +22,7 @@ from sqlalchemy import Integer, func
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.auth_config import get_jwt_secret, is_dev_mode
-from weatherbrief.api.jwt_utils import decode_token
-from weatherbrief.db.deps import TOKEN_PREFIX, get_db
+from weatherbrief.db.deps import TOKEN_PREFIX, _decode_user_id, get_db
 from weatherbrief.db.models import (
     ApiTokenRow, BriefingUsageRow, CreditLedgerRow, FlightRow,
     UserPreferencesRow, UserRow,
@@ -38,38 +37,32 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 # --- Admin dependency ---
 
-COOKIE_NAME = "wb_auth"
-
-
-def require_admin(request: Request) -> str:
+def require_admin(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> str:
     """Validate that the current request comes from an admin user.
 
     In dev mode the dev user is always treated as admin.
-    In production, decodes the JWT and checks the email against ADMIN_EMAILS.
+    In production, authenticates via JWT cookie or Bearer token (using the
+    shared auth logic in deps.py), then checks the user's email against
+    ADMIN_EMAILS.
     Returns the user_id on success, raises 403 otherwise.
     """
+    user_id = _decode_user_id(request, db)
+
     if is_dev_mode():
-        return DEV_USER_ID
+        return user_id
 
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    user = db.query(UserRow).filter(UserRow.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
 
-    import jwt as pyjwt
-
-    try:
-        payload = decode_token(token, get_jwt_secret())
-    except pyjwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Session expired")
-    except (pyjwt.InvalidTokenError, KeyError):
-        raise HTTPException(status_code=401, detail="Invalid session")
-
-    email = payload.get("email", "")
     admin_emails = get_admin_emails()
-    if email not in admin_emails:
+    if user.email not in admin_emails:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    return payload["sub"]
+    return user_id
 
 
 # --- Endpoints ---
