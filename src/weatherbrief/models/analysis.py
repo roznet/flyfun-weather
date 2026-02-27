@@ -230,6 +230,8 @@ class HourlyForecast(BaseModel):
     cloud_cover_high_pct: Optional[float] = None
     freezing_level_m: Optional[float] = None
     cape_jkg: Optional[float] = None
+    convective_inhibition_jkg: Optional[float] = None
+    lifted_index_raw: Optional[float] = None
     visibility_m: Optional[float] = None
 
     # GFS cloud layer diagnostics from GRIB2 enrichment
@@ -386,6 +388,12 @@ class ThermodynamicIndices(BaseModel):
     bulk_shear_0_1km_kt: Optional[float] = None
     sounding_ceiling_ft: Optional[float] = None
     nwp_ceiling_ft: Optional[float] = None
+    nwp_cape_jkg: Optional[float] = None
+    nwp_cape_type: Optional[str] = None  # "sb", "ml", "mu", "unknown"
+    nwp_cin_jkg: Optional[float] = None
+    nwp_lifted_index: Optional[float] = None
+    nwp_freezing_level_ft: Optional[float] = None
+    cape_raw_vs_calc_divergent: Optional[bool] = None
 
 
 class DerivedLevel(BaseModel):

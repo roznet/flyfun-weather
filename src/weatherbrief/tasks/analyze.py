@@ -87,7 +87,8 @@ def _run_point_analysis(
     comp: dict[str, dict[str, float]] = {
         "temperature_c": {}, "wind_speed_kt": {}, "wind_direction_deg": {},
         "cloud_cover_pct": {}, "precipitation_mm": {}, "freezing_level_m": {},
-        "freezing_level_ft": {}, "cape_surface_jkg": {}, "lcl_altitude_ft": {},
+        "freezing_level_ft": {}, "cape_surface_jkg": {}, "nwp_cape_jkg": {},
+        "lcl_altitude_ft": {},
         "k_index": {}, "total_totals": {}, "precipitable_water_mm": {},
         "lifted_index": {}, "bulk_shear_0_6km_kt": {}, "max_omega_pa_s": {},
         "snowfall_cm": {}, "rain_mm": {},
@@ -113,7 +114,7 @@ def _run_point_analysis(
             comp["wind_direction_deg"][model_key] = cruise_wind.wind_direction_deg
 
         # Sounding analysis
-        sounding = analyze_sounding(hourly.pressure_levels, hourly, icing_severity_enhance=icing_severity_enhance)
+        sounding = analyze_sounding(hourly.pressure_levels, hourly, icing_severity_enhance=icing_severity_enhance, model_key=model_key)
         if sounding is not None:
             soundings[model_key] = sounding
 
@@ -127,6 +128,7 @@ def _run_point_analysis(
                 _collect_opt(comp, "precipitable_water_mm", model_key, idx.precipitable_water_mm)
                 _collect_opt(comp, "lifted_index", model_key, idx.lifted_index)
                 _collect_opt(comp, "bulk_shear_0_6km_kt", model_key, idx.bulk_shear_0_6km_kt)
+                _collect_opt(comp, "nwp_cape_jkg", model_key, idx.nwp_cape_jkg)
 
             vm = sounding.vertical_motion
             if vm is not None and vm.max_omega_pa_s is not None:

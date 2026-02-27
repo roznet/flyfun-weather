@@ -17,6 +17,7 @@ DIVERGENCE_THRESHOLDS: dict[str, tuple[float, float]] = {
     # Sounding-derived metrics
     "freezing_level_ft": (500.0, 1500.0),
     "cape_surface_jkg": (200.0, 500.0),
+    "nwp_cape_jkg": (200.0, 500.0),
     "lcl_altitude_ft": (750.0, 2000.0),
     "k_index": (5.0, 15.0),
     "total_totals": (5.0, 12.0),
