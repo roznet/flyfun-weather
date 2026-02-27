@@ -64,7 +64,7 @@ export function renderVizControls(
 
   // Windy link placeholder (updated dynamically by updateWindyLink)
   html += `<span id="external-links" class="external-links" style="display: none;">`;
-  html += `Open Location in <a id="windy-link" href="#" target="_blank" rel="noopener">Windy</a>`;
+  html += `Open selected location in <a id="windy-link" href="#" target="_blank" rel="noopener">Windy</a>`;
   html += `</span>`;
 
   html += '</div>'; // .viz-toolbar-top
