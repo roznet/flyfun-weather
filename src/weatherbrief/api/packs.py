@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.auth_config import is_dev_mode
+from weatherbrief.api.throttle import generation_slot, pdf_limiter, plot_limiter
 
 # Input validation for path-sensitive parameters
 _ICAO_RE = re.compile(r"^[A-Z]{4}$", re.IGNORECASE)
@@ -929,6 +930,9 @@ def get_skewt(
     if skewt_path.exists():
         return FileResponse(skewt_path, media_type="image/png")
 
+    # Rate limit only uncached (expensive) generations
+    plot_limiter.check(user_id)
+
     # On-demand generation from split files (forecasts.json + briefing.json)
     from weatherbrief.tasks.artifacts import load_briefing, load_forecasts as load_forecasts_json
 
@@ -965,14 +969,15 @@ def get_skewt(
             hourly = wf.at_time(target_dt)
             if not hourly or not hourly.pressure_levels:
                 break
-            try:
-                from weatherbrief.digest.skewt import generate_skewt
-                generate_skewt(hourly, icao, model, skewt_path,
-                               analysis=sa, cruise_altitude_ft=cruise_altitude_ft)
-                return FileResponse(skewt_path, media_type="image/png")
-            except Exception as exc:
-                logger.warning("Skew-T generation failed for %s/%s: %s", icao, model, exc)
-                raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}" if is_dev_mode() else "Skew-T generation failed")
+            with generation_slot():
+                try:
+                    from weatherbrief.digest.skewt import generate_skewt
+                    generate_skewt(hourly, icao, model, skewt_path,
+                                   analysis=sa, cruise_altitude_ft=cruise_altitude_ft)
+                    return FileResponse(skewt_path, media_type="image/png")
+                except Exception as exc:
+                    logger.warning("Skew-T generation failed for %s/%s: %s", icao, model, exc)
+                    raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}" if is_dev_mode() else "Skew-T generation failed")
 
     raise HTTPException(status_code=404, detail="Skew-T not available")
 
@@ -989,6 +994,9 @@ def get_hodograph(
     hodo_path = pack_dir / "skewt" / f"{icao}_{model}_hodo.png"
     if hodo_path.exists():
         return FileResponse(hodo_path, media_type="image/png")
+
+    # Rate limit only uncached (expensive) generations
+    plot_limiter.check(user_id)
 
     # On-demand generation from forecasts file
     from weatherbrief.tasks.artifacts import load_briefing, load_forecasts as load_forecasts_json
@@ -1012,13 +1020,14 @@ def get_hodograph(
             hourly = wf.at_time(target_dt)
             if not hourly or not hourly.pressure_levels:
                 break
-            try:
-                from weatherbrief.digest.skewt import generate_hodograph
-                generate_hodograph(hourly, icao, model, hodo_path)
-                return FileResponse(hodo_path, media_type="image/png")
-            except Exception as exc:
-                logger.warning("Hodograph generation failed for %s/%s: %s", icao, model, exc)
-                raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}" if is_dev_mode() else "Hodograph generation failed")
+            with generation_slot():
+                try:
+                    from weatherbrief.digest.skewt import generate_hodograph
+                    generate_hodograph(hourly, icao, model, hodo_path)
+                    return FileResponse(hodo_path, media_type="image/png")
+                except Exception as exc:
+                    logger.warning("Hodograph generation failed for %s/%s: %s", icao, model, exc)
+                    raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}" if is_dev_mode() else "Hodograph generation failed")
 
     raise HTTPException(status_code=404, detail="Hodograph not available")
 
@@ -1224,6 +1233,9 @@ def get_route_skewt(
     if cache_path.exists():
         return FileResponse(cache_path, media_type="image/png")
 
+    # Rate limit only uncached (expensive) generations
+    plot_limiter.check(user_id)
+
     # Load route analyses to get the interpolated time
     import json
     ra_path = pack_dir / "route_analyses.json"
@@ -1271,18 +1283,19 @@ def get_route_skewt(
     cruise_altitude_ft = ra_data.get("cruise_altitude_ft")
 
     # Generate Skew-T
-    try:
-        from weatherbrief.digest.skewt import generate_skewt
-        dist = point_data.get("distance_from_origin_nm")
-        total = ra_data.get("total_distance_nm")
-        dist_label = f"{dist:.0f}nm/{total:.0f}nm" if dist is not None and total else None
-        icao = point_data.get("waypoint_icao")
-        label = f"{icao} ({dist_label})" if icao and dist_label else icao or dist_label or f"pt{point_index:02d}"
-        generate_skewt(hourly, label, model, cache_path,
-                       analysis=sa, cruise_altitude_ft=cruise_altitude_ft)
-    except Exception as exc:
-        logger.warning("Route Skew-T generation failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}" if is_dev_mode() else "Skew-T generation failed")
+    with generation_slot():
+        try:
+            from weatherbrief.digest.skewt import generate_skewt
+            dist = point_data.get("distance_from_origin_nm")
+            total = ra_data.get("total_distance_nm")
+            dist_label = f"{dist:.0f}nm/{total:.0f}nm" if dist is not None and total else None
+            icao = point_data.get("waypoint_icao")
+            label = f"{icao} ({dist_label})" if icao and dist_label else icao or dist_label or f"pt{point_index:02d}"
+            generate_skewt(hourly, label, model, cache_path,
+                           analysis=sa, cruise_altitude_ft=cruise_altitude_ft)
+        except Exception as exc:
+            logger.warning("Route Skew-T generation failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Skew-T generation failed: {exc}" if is_dev_mode() else "Skew-T generation failed")
 
     return FileResponse(cache_path, media_type="image/png")
 
@@ -1305,6 +1318,9 @@ def get_route_hodograph(
     cache_path = cache_dir / f"pt{point_index:02d}_{model}_hodo.png"
     if cache_path.exists():
         return FileResponse(cache_path, media_type="image/png")
+
+    # Rate limit only uncached (expensive) generations
+    plot_limiter.check(user_id)
 
     # Load route analyses to get the interpolated time
     import json
@@ -1342,17 +1358,18 @@ def get_route_hodograph(
         raise HTTPException(status_code=404, detail="No forecast data at this point/time")
 
     # Generate hodograph
-    try:
-        from weatherbrief.digest.skewt import generate_hodograph
-        dist = point_data.get("distance_from_origin_nm")
-        total = ra_data.get("total_distance_nm")
-        dist_label = f"{dist:.0f}nm/{total:.0f}nm" if dist is not None and total else None
-        icao = point_data.get("waypoint_icao")
-        label = f"{icao} ({dist_label})" if icao and dist_label else icao or dist_label or f"pt{point_index:02d}"
-        generate_hodograph(hourly, label, model, cache_path)
-    except Exception as exc:
-        logger.warning("Route hodograph generation failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}" if is_dev_mode() else "Hodograph generation failed")
+    with generation_slot():
+        try:
+            from weatherbrief.digest.skewt import generate_hodograph
+            dist = point_data.get("distance_from_origin_nm")
+            total = ra_data.get("total_distance_nm")
+            dist_label = f"{dist:.0f}nm/{total:.0f}nm" if dist is not None and total else None
+            icao = point_data.get("waypoint_icao")
+            label = f"{icao} ({dist_label})" if icao and dist_label else icao or dist_label or f"pt{point_index:02d}"
+            generate_hodograph(hourly, label, model, cache_path)
+        except Exception as exc:
+            logger.warning("Route hodograph generation failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Hodograph generation failed: {exc}" if is_dev_mode() else "Hodograph generation failed")
 
     return FileResponse(cache_path, media_type="image/png")
 
@@ -1417,11 +1434,14 @@ def get_report_pdf(
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
+    pdf_limiter.check(user_id)
+
     from weatherbrief.report.render import render_pdf
 
     import re
 
-    pdf_bytes = render_pdf(pack_dir, flight, meta)
+    with generation_slot():
+        pdf_bytes = render_pdf(pack_dir, flight, meta)
     route_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", flight.route_name or "-".join(flight.waypoints))[:80]
     filename = f"briefing_{route_slug}_{flight.target_date}_d{meta.days_out}.pdf"
     return Response(
