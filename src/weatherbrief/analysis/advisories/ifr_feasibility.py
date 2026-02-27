@@ -7,7 +7,7 @@ and convective activity into a single go/no-go style assessment for IFR flights.
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, has_relevant_icing
+from weatherbrief.analysis.advisories._helpers import format_extent, min_icing_clearance
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -94,6 +94,10 @@ def _check_enroute_hazards(
 ) -> tuple[int, int, int, int, ConvectiveRisk]:
     """Check en-route icing and convective hazards in a single pass.
 
+    Uses the same clearance-based icing check as the FIKI advisory:
+    a point counts as "icing affected" only when an icing zone is within
+    *icing_altitude_buffer_ft* of cruise altitude.
+
     Returns (total, affected, icing_count, conv_count, worst_conv_risk).
     - affected: number of unique points with icing OR convective risk
     - icing_count / conv_count: individual counts for detail messages
@@ -110,8 +114,10 @@ def _check_enroute_hazards(
             continue
         total += 1
 
-        has_icing = has_relevant_icing(
-            sounding.icing_zones, cruise_altitude_ft, icing_altitude_buffer_ft,
+        has_icing = (
+            bool(sounding.icing_zones)
+            and min_icing_clearance(sounding.icing_zones, cruise_altitude_ft)
+            < icing_altitude_buffer_ft
         )
         has_convective = False
 
@@ -184,10 +190,10 @@ class IFRFeasibilityEvaluator:
                 AdvisoryParameterDef(
                     key="icing_pct_amber",
                     label="Icing % (amber)",
-                    description="Route percentage with icing for amber",
+                    description="Route percentage with icing near cruise for amber",
                     type="percent",
                     unit="%",
-                    default=15,
+                    default=20,
                     min=5,
                     max=50,
                     step=5,
@@ -195,10 +201,10 @@ class IFRFeasibilityEvaluator:
                 AdvisoryParameterDef(
                     key="icing_pct_red",
                     label="Icing % (red)",
-                    description="Route percentage with icing for red",
+                    description="Route percentage with icing near cruise for red",
                     type="percent",
                     unit="%",
-                    default=30,
+                    default=50,
                     min=10,
                     max=80,
                     step=5,

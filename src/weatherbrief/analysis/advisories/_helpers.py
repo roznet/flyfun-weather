@@ -52,6 +52,25 @@ def has_relevant_icing(
     return bool(icing_zones_in_altitude_range(zones, 0, ceiling))
 
 
+def min_icing_clearance(
+    zones: list[IcingZone],
+    cruise_alt_ft: float,
+) -> float:
+    """Minimum vertical distance from cruise altitude to any icing zone.
+
+    Returns ``float('inf')`` when no icing zones exist.
+    """
+    min_dist = float("inf")
+    for zone in zones:
+        if zone.base_ft <= cruise_alt_ft <= zone.top_ft:
+            return 0.0
+        elif cruise_alt_ft < zone.base_ft:
+            min_dist = min(min_dist, zone.base_ft - cruise_alt_ft)
+        else:
+            min_dist = min(min_dist, cruise_alt_ft - zone.top_ft)
+    return min_dist
+
+
 def pct_above_threshold(
     affected: int,
     total: int,
