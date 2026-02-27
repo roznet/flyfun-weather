@@ -17,6 +17,7 @@ from weatherbrief.models import (
     EnhancedCloudLayer,
     IcingRisk,
     IcingType,
+    NWPCloudDiagnostics,
     SfipZone,
 )
 
@@ -175,23 +176,43 @@ def glaciation_factor(clw_g_kg: float, icmr_g_kg: float) -> float:
 # ── Per-level computation ────────────────────────────────────────────
 
 
-def _cloud_cover_for_pressure(
-    pressure_hpa: int,
+_NWP_CLOUD_ALTITUDE_MARGIN_FT = 500.0
+
+
+def _cloud_cover_for_level(
+    altitude_ft: float,
     nwp_cloud_low_pct: float | None,
     nwp_cloud_mid_pct: float | None,
     nwp_cloud_high_pct: float | None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
 ) -> float:
-    """Map pressure level to ICAO cloud band and return NWP cloud cover %.
+    """Return altitude-aware NWP cloud cover % for a level.
 
-    Low: SFC–6500 ft (~1013–800 hPa), Mid: 6500–20000 ft (~800–450 hPa),
-    High: above 20000 ft (~<450 hPa).
+    When *nwp_cloud_diagnostics* is provided, only returns the bulk
+    percentage if the level actually falls within the NWP cloud layer's
+    base/top range (with a margin).  Otherwise returns 0.
+
+    Falls back to bulk ICAO-band percentages when diagnostics are
+    unavailable.
     """
-    if pressure_hpa >= 800:
-        return nwp_cloud_low_pct or 0.0
-    elif pressure_hpa >= 450:
-        return nwp_cloud_mid_pct or 0.0
+    if altitude_ft < 6500:
+        bulk_pct = nwp_cloud_low_pct
+        diag_layer = nwp_cloud_diagnostics.low if nwp_cloud_diagnostics else None
+    elif altitude_ft < 20000:
+        bulk_pct = nwp_cloud_mid_pct
+        diag_layer = nwp_cloud_diagnostics.mid if nwp_cloud_diagnostics else None
     else:
-        return nwp_cloud_high_pct or 0.0
+        bulk_pct = nwp_cloud_high_pct
+        diag_layer = nwp_cloud_diagnostics.high if nwp_cloud_diagnostics else None
+
+    if diag_layer is None or diag_layer.base_ft is None or diag_layer.top_ft is None:
+        return bulk_pct or 0.0
+
+    margin = _NWP_CLOUD_ALTITUDE_MARGIN_FT
+    if (diag_layer.base_ft - margin) <= altitude_ft <= (diag_layer.top_ft + margin):
+        return bulk_pct or 0.0
+
+    return 0.0
 
 
 def compute_sfip_level(
@@ -310,6 +331,7 @@ def assess_sfip_zones(
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
     nwp_cloud_high_pct: float | None = None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
 ) -> list[SfipZone]:
     """Compute SFIP at each level and group into icing zones.
 
@@ -340,8 +362,9 @@ def assess_sfip_zones(
         if is_proxy and not _is_near_cloud(lv, clouds):
             continue
 
-        cloud_cover = _cloud_cover_for_pressure(
-            lv.pressure_hpa, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+        cloud_cover = _cloud_cover_for_level(
+            lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+            nwp_cloud_diagnostics=nwp_cloud_diagnostics,
         )
 
         sfip_raw, sfip_100, severity, variant = compute_sfip_level(

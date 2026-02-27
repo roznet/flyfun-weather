@@ -196,6 +196,7 @@ def analyze_sounding(
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
     # Enhanced icing assessment (Ogimet index with CAPE-based cloud split)
