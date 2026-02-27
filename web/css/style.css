@@ -1806,10 +1806,21 @@ label {
   gap: 1rem;
 }
 
-.viz-model-indicator {
+.viz-model-selector {
   display: flex;
   align-items: center;
   gap: 0.3rem;
+}
+
+.viz-model-select {
+  font-family: monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--primary);
 }
 
 .viz-model-name {
