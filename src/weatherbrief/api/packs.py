@@ -1576,7 +1576,22 @@ def _load_pack_meta_or_404(db: Session, flight_id: str, timestamp: str) -> Brief
 
 
 def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str | None = None):
-    """Resolve the pack directory for any flight. Uses the flight owner's user_id for the path."""
+    """Resolve the pack directory for any flight.
+
+    Uses the stored artifact_path from the DB (authoritative), falling back
+    to reconstructing the path from user_id/flight_id/timestamp if needed.
+    """
+    _load_flight_or_404(db, flight_id, viewer_id=viewer_id)
+    # Prefer the stored artifact_path — it always matches the real directory.
+    try:
+        meta = load_pack_meta(db, flight_id, timestamp)
+        if meta.artifact_path:
+            p = Path(meta.artifact_path)
+            if p.exists():
+                return p
+    except KeyError:
+        pass
+    # Fallback: reconstruct (works for new packs where timestamp has full precision)
     flight = _load_flight_or_404(db, flight_id, viewer_id=viewer_id)
     pack_path = pack_dir_for(flight.user_id, flight_id, timestamp)
     if not pack_path.exists():
