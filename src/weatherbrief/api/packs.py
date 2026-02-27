@@ -381,7 +381,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         # Service toggles from profile
         do_gramet = profile_settings.get("gramet_enabled", True)
         do_llm_digest = profile_settings.get("llm_digest_enabled", True)
-        do_icing_enhance = profile_settings.get("icing_severity_enhance", True)
+        do_icing_enhance = profile_settings.get("icing_severity_enhance", False)
         flight_rules = profile_settings.get("flight_rules")  # "vfr_only" or "vfr_ifr"
         adv_config = profile_settings.get("advisories", {})
 
@@ -1242,7 +1242,7 @@ def recalculate_advisories(
     if enabled_map:
         enabled_ids = {k for k, v in enabled_map.items() if v}
     user_params = adv_config.get("params") or {}
-    aggregation = AdvisoryAggregation(adv_config.get("aggregation", "worst"))
+    aggregation = AdvisoryAggregation(adv_config.get("aggregation", "majority"))
 
     profile_adv_models = profile_settings.get("advisory_models")
     db_path = getattr(request.app.state, "db_path", "")

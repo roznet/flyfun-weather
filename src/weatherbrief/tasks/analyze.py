@@ -62,7 +62,7 @@ def _run_point_analysis(
     track_deg: float,
     cruise_altitude_ft: int,
     flight_ceiling_ft: int,
-    icing_severity_enhance: bool = True,
+    icing_severity_enhance: bool = False,
 ) -> tuple[
     dict[str, WindComponent],
     dict[str, SoundingAnalysis],
@@ -177,7 +177,7 @@ def analyze_waypoint(
     track_deg: float,
     cruise_altitude_ft: int = 8000,
     flight_ceiling_ft: int = 18000,
-    icing_severity_enhance: bool = True,
+    icing_severity_enhance: bool = False,
 ) -> WaypointAnalysis:
     """Run all analysis on forecasts for a single waypoint."""
     if not forecasts:
@@ -259,7 +259,7 @@ def analyze_all_route_points(
     duration_hours: float,
     cruise_altitude_ft: int,
     flight_ceiling_ft: int,
-    icing_severity_enhance: bool = True,
+    icing_severity_enhance: bool = False,
 ) -> list[RoutePointAnalysis]:
     """Analyze all route points across all models.
 
@@ -331,7 +331,7 @@ def run_analysis(
     all_forecasts: list[WaypointForecast],
     cross_sections: list[RouteCrossSection],
     route_points: list[RoutePoint],
-    icing_severity_enhance: bool = True,
+    icing_severity_enhance: bool = False,
     pack_dir: Path | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
 ) -> AnalysisResult:
@@ -404,7 +404,7 @@ def run_analysis_from_pack(
     route: RouteConfig,
     target_date: str,
     target_hour: int,
-    icing_severity_enhance: bool = True,
+    icing_severity_enhance: bool = False,
 ) -> AnalysisResult:
     """Re-run analysis from persisted pack_dir artifacts.
 

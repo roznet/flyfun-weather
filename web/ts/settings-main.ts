@@ -152,12 +152,12 @@ function populateProfileForm(profile: ProfileResponse): void {
   const icingEnhanceToggle = document.getElementById('toggle-icing-enhance') as HTMLInputElement;
   if (grametToggle) grametToggle.checked = s.gramet_enabled ?? true;
   if (llmToggle) llmToggle.checked = s.llm_digest_enabled ?? true;
-  if (icingEnhanceToggle) icingEnhanceToggle.checked = s.icing_severity_enhance ?? true;
+  if (icingEnhanceToggle) icingEnhanceToggle.checked = s.icing_severity_enhance ?? false;
 
   // Advisories
   const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
-  if (aggSelect) aggSelect.value = advPrefs.aggregation ?? 'worst';
+  if (aggSelect) aggSelect.value = advPrefs.aggregation ?? 'majority';
   renderAdvisorySettings(catalog, advPrefs);
 }
 
@@ -547,7 +547,7 @@ async function handleSave(): Promise<void> {
   const flightRules = (document.getElementById('input-flight-rules') as HTMLSelectElement)?.value || 'vfr_ifr';
   const grametEnabled = (document.getElementById('toggle-gramet') as HTMLInputElement)?.checked ?? true;
   const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
-  const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? true;
+  const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? false;
   const advisories = collectAdvisoryPrefs();
 
   // Build profile settings

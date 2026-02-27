@@ -92,7 +92,7 @@ def _parse_service_toggles(raw: str) -> dict[str, bool]:
     return {
         "gramet_enabled": data.get("gramet_enabled", True),
         "llm_digest_enabled": data.get("llm_digest_enabled", True),
-        "icing_severity_enhance": data.get("icing_severity_enhance", True),
+        "icing_severity_enhance": data.get("icing_severity_enhance", False),
     }
 
 
@@ -248,11 +248,11 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
     """Load service toggle preferences for a user.
 
     Returns dict with ``gramet_enabled``, ``llm_digest_enabled``,
-    and ``icing_severity_enhance`` (all default True).
+    and ``icing_severity_enhance`` (gramet/llm default True, icing enhance default False).
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": True}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False}
     return _parse_service_toggles(row.defaults_json)
 
 

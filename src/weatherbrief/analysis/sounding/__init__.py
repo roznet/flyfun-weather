@@ -138,7 +138,7 @@ def _interpolate_cloud_water(derived_levels: list[DerivedLevel]) -> None:
 def analyze_sounding(
     levels: list[PressureLevelData],
     hourly: HourlyForecast | None = None,
-    icing_severity_enhance: bool = True,
+    icing_severity_enhance: bool = False,
     model_key: str | None = None,
 ) -> SoundingAnalysis | None:
     """Run full sounding analysis on pressure level data.
