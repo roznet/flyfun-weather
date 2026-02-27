@@ -1512,7 +1512,10 @@ def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str
 def _parse_target_time(snapshot_data: dict) -> datetime:
     """Extract target datetime from snapshot JSON data.
 
-    Always returns a timezone-aware UTC datetime.
+    Returns a timezone-aware UTC datetime.  Old packs that stored naive
+    timestamps are promoted to aware UTC so comparisons against both
+    old (naive HourlyForecast.time) and new (aware) data work correctly
+    — ``at_time()`` is patched below to handle the mixed case gracefully.
     """
     analyses = snapshot_data.get("analyses", [])
     if analyses and "target_time" in analyses[0]:
