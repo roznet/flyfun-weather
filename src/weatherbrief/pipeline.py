@@ -153,8 +153,7 @@ def _load_previous_digest(pack_dir: Path | None, days_out: int = -1):
 
 def execute_briefing(
     route: RouteConfig,
-    target_date: str,
-    target_hour: int = 9,
+    departure_time: datetime,
     options: BriefingOptions | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
 ) -> BriefingResult:
@@ -162,6 +161,9 @@ def execute_briefing(
 
     This is the single entry point shared by CLI and API.
     Does not print, does not call sys.exit — returns structured results.
+
+    Args:
+        departure_time: Aware UTC datetime for the flight departure.
 
     Raises:
         ValueError: If target_date is in the past.
@@ -174,11 +176,13 @@ def execute_briefing(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
+    # Derive target_date/target_hour for internal tasks
+    target_date = departure_time.strftime("%Y-%m-%d")
+    target_hour = departure_time.hour
+
     today_utc = datetime.now(timezone.utc).date()
     today = today_utc.isoformat()
-    target_dt = datetime(
-        *map(int, target_date.split("-")), target_hour, tzinfo=timezone.utc
-    )
+    target_dt = departure_time
     days_out = (date.fromisoformat(target_date) - today_utc).days
 
     if days_out < 0:

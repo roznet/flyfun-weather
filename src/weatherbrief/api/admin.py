@@ -311,8 +311,9 @@ def get_user_costs(
         {
             "flight_id": f.id,
             "route_name": f.route_name,
-            "target_date": f.target_date,
-            "target_time_utc": f.target_time_utc,
+            "departure_time": f.departure_time.isoformat() if f.departure_time else None,
+            "target_date": f.departure_time.strftime("%Y-%m-%d") if f.departure_time else "",
+            "target_time_utc": f.departure_time.hour if f.departure_time else 0,
             "cruise_altitude_ft": f.cruise_altitude_ft,
             "created_at": f.created_at.isoformat() if f.created_at else None,
         }

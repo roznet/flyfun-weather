@@ -179,8 +179,7 @@ class TestFlightOwnership:
             user_id=USER_A_ID,
             route_name="alice_route",
             waypoints=["EGTK", "LSGS"],
-            target_date="2026-03-01",
-            target_time_utc=9,
+            departure_time=datetime(2026, 3, 1, 9, tzinfo=timezone.utc),
             cruise_altitude_ft=8000,
             created_at=datetime(2026, 2, 20, tzinfo=timezone.utc),
         )
@@ -189,8 +188,7 @@ class TestFlightOwnership:
             user_id=USER_B_ID,
             route_name="bob_route",
             waypoints=["LFPB", "LFMT"],
-            target_date="2026-03-01",
-            target_time_utc=10,
+            departure_time=datetime(2026, 3, 1, 10, tzinfo=timezone.utc),
             cruise_altitude_ft=10000,
             created_at=datetime(2026, 2, 20, tzinfo=timezone.utc),
         )

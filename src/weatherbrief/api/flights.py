@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
@@ -34,27 +34,21 @@ class CreateFlightRequest(BaseModel):
 
     route_name: str = Field("", max_length=256)  # optional preset name
     waypoints: list[str] = Field(default_factory=list, max_length=20)  # ICAO codes
-    target_date: str  # YYYY-MM-DD
-    target_time_utc: int | None = None
+    departure_time: str  # ISO 8601 datetime with timezone (e.g. "2026-02-21T09:00:00Z")
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
     profile_id: int | None = None  # flight profile to associate
 
-    @field_validator("target_date")
+    @field_validator("departure_time")
     @classmethod
-    def validate_target_date(cls, v: str) -> str:
+    def validate_departure_time(cls, v: str) -> str:
         try:
-            date.fromisoformat(v)
+            dt = datetime.fromisoformat(v)
         except ValueError:
-            raise ValueError("target_date must be YYYY-MM-DD format")
-        return v
-
-    @field_validator("target_time_utc")
-    @classmethod
-    def validate_target_time(cls, v: int | None) -> int | None:
-        if v is not None and not (0 <= v <= 23):
-            raise ValueError("target_time_utc must be 0-23")
+            raise ValueError("departure_time must be a valid ISO 8601 datetime")
+        if dt.tzinfo is None:
+            raise ValueError("departure_time must include a timezone")
         return v
 
     @field_validator("waypoints")
@@ -76,8 +70,9 @@ class FlightResponse(BaseModel):
     profile_id: int | None = None
     route_name: str
     waypoints: list[str] = []
-    target_date: str
-    target_time_utc: int
+    departure_time: str
+    target_date: str  # backward compat (computed from departure_time)
+    target_time_utc: int  # backward compat (computed from departure_time)
     cruise_altitude_ft: int
     flight_ceiling_ft: int
     flight_duration_hours: float
@@ -94,6 +89,7 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
         profile_id=flight.profile_id,
         route_name=flight.route_name,
         waypoints=flight.waypoints,
+        departure_time=flight.departure_time.isoformat(),
         target_date=flight.target_date,
         target_time_utc=flight.target_time_utc,
         cruise_altitude_ft=flight.cruise_altitude_ft,
@@ -150,9 +146,17 @@ def create_flight(
             except KeyError as exc:
                 raise HTTPException(status_code=422, detail=exc.args[0])
 
+    # Parse departure_time
+    departure_time = datetime.fromisoformat(req.departure_time)
+    if departure_time.tzinfo is None:
+        departure_time = departure_time.replace(tzinfo=timezone.utc)
+
+    # Derive date string and hour for flight ID and hash (backward compat)
+    target_date_str = departure_time.strftime("%Y-%m-%d")
+    target_hour = departure_time.hour
+
     # Load defaults from the selected profile (or the user's default profile)
     profile_settings = load_profile_settings(db, req.profile_id, user_id)
-    target_time_utc = req.target_time_utc if req.target_time_utc is not None else 9
     cruise_altitude_ft = (
         req.cruise_altitude_ft
         if req.cruise_altitude_ft is not None
@@ -170,7 +174,7 @@ def create_flight(
     params_hash = hashlib.sha256(
         json.dumps(
             {
-                "time": target_time_utc,
+                "time": target_hour,
                 "alt": cruise_altitude_ft,
                 "ceil": flight_ceiling_ft,
                 "dur": flight_duration_hours,
@@ -178,7 +182,7 @@ def create_flight(
             sort_keys=True,
         ).encode()
     ).hexdigest()[:4]
-    flight_id = f"{safe_path_component(route_name)}-{req.target_date}-{params_hash}"
+    flight_id = f"{safe_path_component(route_name)}-{target_date_str}-{params_hash}"
 
     # Check if already exists
     try:
@@ -196,8 +200,7 @@ def create_flight(
         profile_id=req.profile_id,
         route_name=route_name,
         waypoints=waypoints,
-        target_date=req.target_date,
-        target_time_utc=target_time_utc,
+        departure_time=departure_time,
         cruise_altitude_ft=cruise_altitude_ft,
         flight_ceiling_ft=flight_ceiling_ft,
         flight_duration_hours=flight_duration_hours,

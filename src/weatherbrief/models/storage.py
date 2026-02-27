@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class FlightProfile(BaseModel):
@@ -23,13 +23,12 @@ class FlightProfile(BaseModel):
 class Flight(BaseModel):
     """A saved briefing target — route + date/time specifics."""
 
-    id: str  # slug: "{route_name}-{target_date}"
+    id: str  # slug: "{route_name}-{YYYY-MM-DD}-{hash}"
     user_id: str = ""  # owner; empty in single-user / dev mode
     profile_id: int | None = None  # associated flight profile
     route_name: str  # user-assigned name or derived from waypoints
     waypoints: list[str] = Field(default_factory=list)  # ICAO codes
-    target_date: str  # YYYY-MM-DD
-    target_time_utc: int = 9  # departure hour
+    departure_time: datetime  # aware UTC datetime
     cruise_altitude_ft: int = 8000
     flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
@@ -39,13 +38,25 @@ class Flight(BaseModel):
     last_auto_refresh_at: datetime | None = None
     created_at: datetime
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def target_date(self) -> str:
+        """YYYY-MM-DD derived from departure_time (backward compat)."""
+        return self.departure_time.strftime("%Y-%m-%d")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def target_time_utc(self) -> int:
+        """Departure hour derived from departure_time (backward compat)."""
+        return self.departure_time.hour
+
 
 class BriefingPackMeta(BaseModel):
     """Metadata for one fetch — lightweight index for history listing."""
 
     id: int | None = None  # DB primary key (auto-generated)
     flight_id: str
-    fetch_timestamp: str  # ISO datetime
+    fetch_timestamp: datetime  # aware UTC datetime
     days_out: int
     has_gramet: bool = False
     has_skewt: bool = False

@@ -213,7 +213,7 @@ def _meta_to_response(
 
     return PackMetaResponse(
         flight_id=meta.flight_id,
-        fetch_timestamp=meta.fetch_timestamp,
+        fetch_timestamp=meta.fetch_timestamp.isoformat(),
         days_out=meta.days_out,
         has_gramet=meta.has_gramet,
         has_skewt=meta.has_skewt,
@@ -351,7 +351,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         flight_duration_hours=flight.flight_duration_hours,
     )
 
-    fetch_ts = datetime.now(tz=timezone.utc).isoformat()
+    fetch_ts = datetime.now(tz=timezone.utc)
     pack_path = pack_dir_for(user_id, flight_id, fetch_ts)
     pack_path.mkdir(parents=True, exist_ok=True)
 
@@ -477,7 +477,7 @@ def _charge_briefing_cost(
 def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
                       user_id=None, model_metadata=None):
     """Shared finalization: build and save pack metadata, log usage, return response."""
-    days_out = (date.fromisoformat(flight.target_date) - datetime.now(timezone.utc).date()).days
+    days_out = (flight.departure_time.date() - datetime.now(timezone.utc).date()).days
 
     init_times = {}
     if model_metadata:
@@ -568,8 +568,7 @@ async def refresh_briefing(
             _refresh_executor,
             lambda: execute_briefing(
                 route=route,
-                target_date=flight.target_date,
-                target_hour=flight.target_time_utc,
+                departure_time=flight.departure_time,
                 options=options,
             ),
         )
@@ -707,8 +706,7 @@ async def refresh_briefing_stream(
 
             result = execute_briefing(
                 route=route,
-                target_date=flight.target_date,
-                target_hour=flight.target_time_utc,
+                departure_time=flight.departure_time,
                 options=options,
                 progress_callback=progress_callback,
             )

@@ -75,11 +75,14 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   createFlight: async (waypoints, targetDate, opts) => {
     set({ loading: true, error: null });
     try {
+      // Build ISO datetime from date + hour
+      const hour = (opts?.targetTimeUtc ?? 9).toString().padStart(2, '0');
+      const departureTime = `${targetDate}T${hour}:00:00Z`;
+
       const flight = await api.createFlight({
         waypoints,
         route_name: opts?.routeName,
-        target_date: targetDate,
-        target_time_utc: opts?.targetTimeUtc,
+        departure_time: departureTime,
         cruise_altitude_ft: opts?.cruiseAltitudeFt,
         flight_ceiling_ft: opts?.flightCeilingFt,
         flight_duration_hours: opts?.flightDurationHours,

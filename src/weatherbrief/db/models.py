@@ -98,8 +98,7 @@ class FlightRow(Base):
     )
     route_name: Mapped[str] = mapped_column(String(256), default="")
     waypoints_json: Mapped[str] = mapped_column(Text, default="[]")
-    target_date: Mapped[str] = mapped_column(String(10))
-    target_time_utc: Mapped[int] = mapped_column(Integer, default=9)
+    departure_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     cruise_altitude_ft: Mapped[int] = mapped_column(Integer, default=8000)
     flight_ceiling_ft: Mapped[int] = mapped_column(Integer, default=18000)
     flight_duration_hours: Mapped[float] = mapped_column(default=0.0)
@@ -127,7 +126,7 @@ class BriefingPackRow(Base):
     flight_id: Mapped[str] = mapped_column(
         String(256), ForeignKey("flights.id", ondelete="CASCADE"), index=True
     )
-    fetch_timestamp: Mapped[str] = mapped_column(String(64))
+    fetch_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     days_out: Mapped[int] = mapped_column(Integer)
     has_gramet: Mapped[bool] = mapped_column(Boolean, default=False)
     has_skewt: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -198,7 +197,9 @@ class FeedbackRow(Base):
         String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     flight_id: Mapped[str] = mapped_column(String(256), index=True)
-    pack_timestamp: Mapped[str] = mapped_column(String(64), default="")
+    pack_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
     category: Mapped[str] = mapped_column(String(32))
     comment: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
