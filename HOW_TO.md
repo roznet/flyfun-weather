@@ -253,6 +253,59 @@ Claude will read the design docs, find the relevant frontend files, and implemen
 
 **Compare with the real result:** see [commit 9e5450b](https://github.com/roznet/flyfun-weather/commit/9e5450b) which closed [issue #19](https://github.com/roznet/flyfun-weather/issues/19).
 
+### Example 2 — Add VFR/IFR feasibility advisories (backend, advanced)
+
+**Issue:** [#14 — VFR and IFR flight advisory](https://github.com/roznet/flyfun-weather/issues/14)
+
+This is a more involved example: adding two entirely new advisory evaluators to the analysis pipeline. It requires understanding the advisory framework, the weather data model (airport conditions, en-route cloud layers, icing, convective activity), and the `@register` pattern that makes advisories auto-discovered. The issue is deliberately written as a natural-language spec with some ambiguity — exactly the kind of prompt you'd give Claude in practice.
+
+**Try it:**
+
+```bash
+git checkout -b try/vfr-ifr-advisory example/advanced1
+```
+
+Start Claude Code and get the dev server running:
+
+```
+> /devserver
+```
+
+Create a test flight and refresh it (same as Example 1) so you have a briefing to test against. Then prompt Claude with the issue:
+
+```
+> Add two new advisories that indicate feasibility of a VFR and an IFR flight.
+>
+> These should be selectable in the profile, so different profiles may select
+> VFR, IFR, or both.
+>
+> VFR advisory: check that at origin and destination the field is predicted to
+> be VFR conditions and the selected cruising altitude is below the lowest
+> ceiling within XX nautical miles of both origin and destination, and that
+> altitude is in VMC for the en-route phase. XX should be a configurable
+> parameter. Another parameter is minimum distance to cloud (e.g. 1000ft):
+> ceiling and clouds should be at least that for origin, destination, and
+> en-route — otherwise AMBER. If clear-of-cloud conditions are not fulfilled
+> or IFR is reported at destination/origin, it should be RED.
+>
+> IFR advisory: GREEN as long as origin/destination are IFR or better. LIFR
+> makes it AMBER. If cruise is not in VMC it's AMBER. If in icing for more
+> than 30% of the route, RED. Crossing convective activity is RED; near
+> convective activity but not in it at cruise altitude is AMBER. Parameters:
+> % of cruise in icing, % of cruise in IMC, minimum ceiling for AMBER at
+> destination/origin.
+```
+
+This one is significantly more complex than Example 1. Claude will need to:
+1. Read the design docs to understand the advisory framework and `@register` pattern
+2. Study existing advisories (e.g., icing, turbulence) to follow established conventions
+3. Create two new evaluator modules with configurable parameters
+4. Write tests
+
+Once done, refresh your test flight and check the briefing — the new advisories should appear in the route analysis.
+
+**Compare with the real result:** see [PR #15](https://github.com/roznet/flyfun-weather/pull/15) which closed [issue #14](https://github.com/roznet/flyfun-weather/issues/14). The PR also received a code review that led to a follow-up [fix for double-counting in the IFR evaluator](https://github.com/roznet/flyfun-weather/commit/c3a6f6f) — a good example of the review-and-iterate workflow.
+
 ---
 
 ## Tips
