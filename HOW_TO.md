@@ -2,10 +2,27 @@
 
 This guide walks you through setting up the WeatherBrief project and using [Claude Code](https://docs.anthropic.com/en/docs/claude-code) to explore, run, debug, and contribute to the codebase.
 
+## Let Claude do the setup
+
+You can have Claude Code walk you through (and run) most of these steps automatically. After cloning the repo, start Claude Code and say:
+
+```
+> Read HOW_TO.md and help me set up this project from scratch
+```
+
+Claude will run through steps 1–5, then ask you to restart so the MCP server can connect. After restarting, say:
+
+```
+> Continue setup from HOW_TO.md — pick up from step 6
+```
+
+The only things you'll need to provide manually are API keys (step 4) and any missing system prerequisites.
+
 ## Prerequisites
 
 - Python 3.12+
 - Node.js 22+
+- [Git LFS](https://git-lfs.com/) (`brew install git-lfs && git lfs install` on macOS)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed (`npm install -g @anthropic-ai/claude-code`)
 - A GitHub account with access to the repository
 
@@ -36,6 +53,8 @@ claude mcp add library-docs -- python -m mcp_library_docs
 ```
 
 This creates a `.mcp.json` in the project that tells Claude Code to start the MCP server when you open a session here.
+
+> **Restart required:** If you're running these steps inside Claude Code, exit (`/exit`) and restart `claude` now. The MCP server only connects at session startup. After restarting, continue from step 4.
 
 ### 4. Set up environment variables
 
