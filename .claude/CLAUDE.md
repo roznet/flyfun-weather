@@ -8,6 +8,12 @@
 - always try to think of a few ways to implement and compare pros and cons before deciding
 - always consider maintainability, testability, readability and possible future extensions
 
+## Changing Function Signatures
+
+- When changing a function's signature (adding/removing/renaming parameters), grep for ALL callers across the codebase and update them — not just the obvious ones.
+- Pay special attention to FastAPI dependency functions (`Depends(fn)`) that are also called directly. `Depends()` default values silently become real values when called outside DI, causing runtime errors with no static warning.
+- Avoid functions used as both `Depends(fn)` and called directly. If unavoidable, split into a pure logic function (no `Depends` defaults) and a thin DI wrapper.
+
 ## Before implementing or planning new functionality, and before exploring the code by reading files, follow these steps to leverage existing resources and get overall big picture first.
 
   Check for existing utilities and patterns:
