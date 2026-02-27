@@ -990,7 +990,7 @@ label {
 .external-links {
   font-size: 0.8rem;
   color: var(--muted);
-  margin-left: auto;
+  margin-left: 0.5rem;
 }
 
 /* --- Refresh status --- */
