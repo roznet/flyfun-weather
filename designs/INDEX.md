@@ -54,6 +54,11 @@ D-0 METAR/TAF integration: fetch observations from route corridor airports, comp
 Key exports: `run_route_weather`, `run_observation_comparison`, `compute_wind_advisory`, `RouteObservations`, `AirportObservation`
 → Full doc: metar-taf-route-weather.md
 
+### time-alignment
+Time and spatial alignment in the data pipeline: aware-UTC datetime convention, per-hour GRIB enrichment across flight windows, spatial index consistency, hour-matching merge logic, old pack backward compatibility.
+Key exports: `compute_flight_window_hours`, `compute_icon_eu_flight_window_hours`, `_forecast_hour_to_utc`, `_merge_cloud_water_into_sections`
+→ Full doc: time-alignment-audit.md
+
 ### weather-engine-specs
 GRIB2 enrichment engine: GFS S3 (CLWMR/ICMR/cloud diagnostics), ICON-EU DWD (QC/QI/cloud cover/ceiling), data source registry with bucket paths, variable reference tables, implementation gotchas, future extensions.
 → Full doc: weather-engine-specs.md
