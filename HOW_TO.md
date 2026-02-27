@@ -304,7 +304,7 @@ This one is significantly more complex than Example 1. Claude will need to:
 
 Once done, refresh your test flight and check the briefing — the new advisories should appear in the route analysis.
 
-**Compare with the real result:** see [PR #15](https://github.com/roznet/flyfun-weather/pull/15) which closed [issue #14](https://github.com/roznet/flyfun-weather/issues/14). The PR also received a code review that led to a follow-up [fix for double-counting in the IFR evaluator](https://github.com/roznet/flyfun-weather/commit/c3a6f6f) — a good example of the review-and-iterate workflow.
+**Compare with the real result:** see [PR #15](https://github.com/roznet/flyfun-weather/pull/15) which closed [issue #14](https://github.com/roznet/flyfun-weather/issues/14). The PR was then automatically reviewed by a Gemini code-review bot (used as an independent validation agent), which caught a double-counting bug in the IFR evaluator. Claude addressed the feedback in a [follow-up commit](https://github.com/roznet/flyfun-weather/commit/c3a6f6f) — a good example of the AI-writes, AI-reviews, AI-fixes cycle.
 
 ---
 
