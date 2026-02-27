@@ -195,6 +195,105 @@ def test_boundary_layer_shear_not_merged_to_cruise():
     )
 
 
+def test_scattered_cat_not_merged_across_stable_gap():
+    """Qualifying levels separated by 3+ stable levels must not merge.
+
+    GFS-realistic 25 hPa spacing: low Ri at 975/950/925 and at 700, with
+    several stable levels in between.  The index gap is too large to merge.
+    """
+    levels = [
+        # Surface
+        DerivedLevel(pressure_hpa=1000, altitude_ft=300, omega_pa_s=-0.5),
+        # BL low-Ri cluster (indices 1, 2, 3)
+        DerivedLevel(pressure_hpa=975, altitude_ft=1100, omega_pa_s=-0.5,
+                     richardson_number=0.59),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1800, omega_pa_s=-0.5,
+                     richardson_number=0.96),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2500, omega_pa_s=-0.5,
+                     richardson_number=1.04),
+        # Stable gap (indices 4, 5, 6, 7)
+        DerivedLevel(pressure_hpa=900, altitude_ft=3200, omega_pa_s=-0.5,
+                     richardson_number=2.84),
+        DerivedLevel(pressure_hpa=875, altitude_ft=3900, omega_pa_s=-0.5,
+                     richardson_number=56.15),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.5,
+                     richardson_number=135.0),
+        DerivedLevel(pressure_hpa=800, altitude_ft=6200, omega_pa_s=-0.5,
+                     richardson_number=20.0),
+        # Upper low-Ri (index 8)
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.5,
+                     richardson_number=0.71),
+    ]
+    assessment = assess_vertical_motion(levels)
+    assert len(assessment.cat_risk_layers) == 2, (
+        f"Expected 2 separate layers, got {len(assessment.cat_risk_layers)}"
+    )
+    # BL layer stays low
+    assert assessment.cat_risk_layers[0].top_ft <= 3000
+    # Upper layer is separate
+    assert assessment.cat_risk_layers[1].base_ft >= 9000
+
+
+def test_cat_merges_across_single_stable_level():
+    """Two qualifying levels with exactly 1 stable level between them still merge.
+
+    Index gap = 2 (the default max_index_gap), so they should form one layer.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=800, altitude_ft=6200, omega_pa_s=-0.5,
+                     richardson_number=0.8),   # index 0, qualifying
+        DerivedLevel(pressure_hpa=775, altitude_ft=7100, omega_pa_s=-0.5,
+                     richardson_number=5.0),   # index 1, stable
+        DerivedLevel(pressure_hpa=750, altitude_ft=8000, omega_pa_s=-0.5,
+                     richardson_number=0.9),   # index 2, qualifying
+    ]
+    assessment = assess_vertical_motion(levels)
+    assert len(assessment.cat_risk_layers) == 1, (
+        f"Expected 1 merged layer, got {len(assessment.cat_risk_layers)}"
+    )
+    assert assessment.cat_risk_layers[0].base_ft == 6200
+    assert assessment.cat_risk_layers[0].top_ft == 8000
+
+
+def test_deep_layer_prevented_by_index_gap():
+    """Full GFS pressure range with qualifying levels at BL and tropopause.
+
+    No single layer should span more than 10,000 ft when the qualifying
+    levels are separated by many stable levels in between.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=300, omega_pa_s=-0.5),
+        # BL qualifying
+        DerivedLevel(pressure_hpa=975, altitude_ft=1100, omega_pa_s=-0.5,
+                     richardson_number=0.3),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1800, omega_pa_s=-0.5,
+                     richardson_number=0.4),
+        # Mid-level stable
+        DerivedLevel(pressure_hpa=900, altitude_ft=3200, omega_pa_s=-0.5,
+                     richardson_number=10.0),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.5,
+                     richardson_number=15.0),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.5,
+                     richardson_number=20.0),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-0.5,
+                     richardson_number=25.0),
+        # Tropopause qualifying
+        DerivedLevel(pressure_hpa=300, altitude_ft=30000, omega_pa_s=-0.5,
+                     richardson_number=0.2),
+        DerivedLevel(pressure_hpa=275, altitude_ft=31500, omega_pa_s=-0.5,
+                     richardson_number=0.35),
+    ]
+    assessment = assess_vertical_motion(levels)
+    for layer in assessment.cat_risk_layers:
+        span = layer.top_ft - layer.base_ft
+        assert span <= 10000, (
+            f"CAT layer {layer.base_ft}–{layer.top_ft} ft spans {span} ft, "
+            f"exceeding 10,000 ft limit"
+        )
+    # Should have exactly 2 layers (BL + tropopause)
+    assert len(assessment.cat_risk_layers) == 2
+
+
 # --- Convective contamination tests ---
 
 

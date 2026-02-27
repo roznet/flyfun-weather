@@ -171,38 +171,52 @@ def _classify_cat_risk(ri: float) -> CATRiskLevel:
     return CATRiskLevel.NONE
 
 
-def _build_cat_layers(derived_levels: list[DerivedLevel]) -> list[CATRiskLayer]:
+def _build_cat_layers(
+    derived_levels: list[DerivedLevel],
+    max_index_gap: int = 2,
+) -> list[CATRiskLayer]:
     """Group adjacent low-Ri levels into CAT risk layers.
 
-    Follows the same grouping pattern as icing.py: adjacent levels with
-    Ri < 1.0 are merged into bands.
+    Qualifying levels (Ri < 2.0) are merged when both the pressure gap
+    (≤ 100 hPa) **and** the original-index gap (≤ *max_index_gap*) are
+    small enough.  The index-gap check prevents chaining scattered low-Ri
+    levels across large stable gaps that the pressure-only check misses
+    (e.g. GFS 25 hPa spacing where stable levels are simply skipped).
     """
-    cat_levels: list[tuple[DerivedLevel, CATRiskLevel, float]] = []
-    for lv in derived_levels:
+    # Collect qualifying levels with their original index in derived_levels
+    cat_levels: list[tuple[int, DerivedLevel, CATRiskLevel, float]] = []
+    for idx, lv in enumerate(derived_levels):
         if lv.richardson_number is None or lv.altitude_ft is None:
             continue
         risk = _classify_cat_risk(lv.richardson_number)
         if risk == CATRiskLevel.NONE:
             continue
-        cat_levels.append((lv, risk, lv.richardson_number))
+        cat_levels.append((idx, lv, risk, lv.richardson_number))
 
     if not cat_levels:
         return []
 
-    # Group adjacent levels (pressure gap <= 100 hPa)
+    # Group adjacent levels (pressure gap <= 100 hPa AND index gap <= max_index_gap)
     layers: list[CATRiskLayer] = []
-    current: list[tuple[DerivedLevel, CATRiskLevel, float]] = [cat_levels[0]]
+    current: list[tuple[int, DerivedLevel, CATRiskLevel, float]] = [cat_levels[0]]
 
     for item in cat_levels[1:]:
-        prev_lv = current[-1][0]
-        this_lv = item[0]
-        if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 100:
+        prev_idx, prev_lv = current[-1][0], current[-1][1]
+        this_idx, this_lv = item[0], item[1]
+        if (
+            (this_idx - prev_idx) <= max_index_gap
+            and abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 100
+        ):
             current.append(item)
         else:
-            layers.append(_build_single_cat_layer(current))
+            layers.append(_build_single_cat_layer(
+                [(lv, risk, ri) for _, lv, risk, ri in current]
+            ))
             current = [item]
 
-    layers.append(_build_single_cat_layer(current))
+    layers.append(_build_single_cat_layer(
+        [(lv, risk, ri) for _, lv, risk, ri in current]
+    ))
     return layers
 
 
