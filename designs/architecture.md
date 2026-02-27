@@ -9,7 +9,7 @@ WeatherBrief produces daily aviation weather assessments for a planned European 
 ## Pipeline (`pipeline.py` + `tasks/`)
 
 ```
-RouteConfig + target_date + options
+RouteConfig + departure_time + options
     ↓
 interpolate_route()  → ~20 RoutePoint (airports + every 20nm)
     ↓
@@ -48,7 +48,7 @@ Optional outputs:
 ├→ LLM digest (LangGraph: text forecasts + quant → WeatherDigest → Markdown + JSON)
 ```
 
-**Entry point:** `execute_briefing(route, target_date, target_hour, options)` — called by the API. Returns `BriefingResult` with all paths and structured results. Never prints or exits.
+**Entry point:** `execute_briefing(route, departure_time, options)` — called by the API. Derives `target_date` and `target_hour` internally for downstream task modules. Returns `BriefingResult` with all paths and structured results. Never prints or exits.
 
 `BriefingOptions` controls what gets generated (models, gramet, skewt, llm_digest, enrich_grib, output_dir). `BriefingResult` carries snapshot, paths, digest object, and error list.
 
@@ -145,6 +145,7 @@ src/weatherbrief/
 │   ├── packs.py       # Packs: history, artifacts, refresh (with RefreshRegistry), report, email
 │   ├── profiles.py    # Flight parameter profiles CRUD (per-user named templates)
 │   ├── preferences.py # User preferences + autorouter credentials CRUD
+│   ├── throttle.py    # Concurrency limiters: generation_slot (5), pdf_limiter (3), plot_limiter (2)
 │   ├── usage.py       # Usage summary + daily rate limits
 │   ├── credits.py     # Credit balance, charge, admin cost config, transparency endpoint
 │   ├── feedback.py    # User feedback submission + admin listing
@@ -309,6 +310,7 @@ Authentication supports both JWT cookies (browser sessions) and API tokens (`Aut
 | `/api/feedback/admin` | GET | List all feedback (admin only) |
 | `/api/refresh/active` | GET | List all currently active refreshes |
 | `/api/flights/{id}/packs/refresh/status` | GET | Refresh status for a specific flight |
+| `/api/admin/metrics` | GET | Queue depth, active refreshes, timing stats (admin) |
 
 **Shareable briefing links**: any authenticated user can view any flight's briefings via direct URL. Only the flight owner can refresh, delete, or trigger email. The frontend conditionally shows action buttons based on ownership.
 
@@ -322,7 +324,7 @@ Static files served from `web/` at root.
 - **Pipeline as API entry point** — `pipeline.py` is the single entry point for the API. Stages extracted into `tasks/` modules for independent testability and re-run from artifacts.
 - **DB-backed metadata, file-based artifacts** — flight/pack metadata in SQLAlchemy (SQLite dev, MySQL prod); large files (snapshots, images) on disk in user-scoped directories. Snapshots are split into `briefing.json` (analyses, observations, metadata) and `forecasts.json` (raw forecasts) — see [data-models.md](./data-models.md) for details.
 - **Flight ID = route + date + params hash** — allows same route+date with different time/altitude.
-- **Naive datetimes in pipeline** — matches Open-Meteo's naive UTC timestamps.
+- **Timezone-aware UTC datetimes** — all datetimes are `datetime(..., tzinfo=timezone.utc)`. SQLite loses tzinfo on round-trip; `_ensure_utc()` in storage layer promotes naive datetimes back to UTC on read.
 - **Vanilla TS + Zustand** — no framework; esbuild for fast bundling.
 - **CSS custom property theming** — dark/light/system mode via `[data-theme]` on `<html>`, FOUC-prevention inline script, `theme-changed` custom event for canvas/map reactivity.
 - **ECMWF-only Skew-T in PDF/email** — PDF is concise; web UI allows model toggling.

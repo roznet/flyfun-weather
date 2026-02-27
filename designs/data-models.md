@@ -177,7 +177,7 @@ FlightProfile(
 
 ### Flight
 
-A saved briefing target — route + date/time specifics. ID is `{route_name}-{target_date}-{hash}` where hash encodes time/altitude/duration to allow same route+date with different params.
+A saved briefing target — route + departure time specifics. ID is `{route_name}-{target_date}-{hash}` where hash encodes time/altitude/duration to allow same route+date with different params.
 
 ```python
 Flight(
@@ -185,15 +185,20 @@ Flight(
     user_id="dev-user-001",
     route_name="egtk_lsgs",
     waypoints=["EGTK", "LFPB", "LSGS"],  # ICAO codes
-    target_date="2026-02-21",
-    target_time_utc=9,
+    departure_time=datetime(2026, 2, 21, 9, tzinfo=timezone.utc),
     cruise_altitude_ft=8000,
     flight_ceiling_ft=18000,
     flight_duration_hours=4.5,
     profile_id=1,  # optional FK → FlightProfile, SET NULL on delete
     created_at=datetime(...),
 )
+# Backward-compat computed fields (auto-derived from departure_time):
+flight.target_date      # → "2026-02-21"
+flight.target_time_utc  # → 9
 ```
+
+- `departure_time` is the canonical field — a single aware-UTC datetime
+- `target_date` and `target_time_utc` are `@computed_field` properties for backward compatibility (used by email, admin, digest, and frontend display code)
 
 ### BriefingPackMeta
 
@@ -202,7 +207,7 @@ Lightweight metadata for one fetch — used for history listing without loading 
 ```python
 BriefingPackMeta(
     flight_id="egtk_lsgs-2026-02-21",
-    fetch_timestamp="2026-02-19T18:00:00+00:00",
+    fetch_timestamp=datetime(2026, 2, 19, 18, 0, 0, tzinfo=timezone.utc),
     days_out=2,
     has_gramet=True, has_skewt=True, has_digest=True,
     assessment="GREEN",
@@ -212,7 +217,7 @@ BriefingPackMeta(
 )
 ```
 
-Stored in `pack.json` alongside artifacts. `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)".
+Stored in `pack.json` alongside artifacts. `fetch_timestamp` is a timezone-aware UTC datetime (stored as `DATETIME(6)` in MySQL, text in SQLite). `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)".
 
 ## Route Advisory Models (`models/advisories.py`)
 
