@@ -325,11 +325,13 @@ async function init(): Promise<void> {
     }
 
     // Render cross-section controls (above canvas)
+    const availableModels = state.routeAnalyses?.models ?? undefined;
     renderVizControls(controlsContainer, state.vizSettings, {
       onRenderModeChange: (mode) => store.getState().setRenderMode(mode),
       onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
       onLayoutChange: (layout) => store.getState().setLayout(layout),
-    }, state.selectedModel);
+      onModelChange: (model) => store.getState().setSelectedModel(model),
+    }, state.selectedModel, availableModels);
 
     // Render route graph controls (below graph)
     if (routeGraphControlsContainer && showCrossSection) {
@@ -567,13 +569,7 @@ async function init(): Promise<void> {
     commentEl.focus();
   }
 
-  // --- Wire model toggle ---
-  const modelSelect = document.getElementById('model-select') as HTMLSelectElement;
-  if (modelSelect) {
-    modelSelect.addEventListener('change', () => {
-      store.getState().setSelectedModel(modelSelect.value);
-    });
-  }
+  // Model selector is now in the cross-section controls panel (viz-model-select)
 
   // --- Wire display mode toggle ---
   const toggleContainer = document.getElementById('display-mode-toggle');

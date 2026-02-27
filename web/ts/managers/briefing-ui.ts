@@ -36,7 +36,7 @@ import {
 } from '../helpers/metrics-helper';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
-import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, allModelKeys, buildWindyUrl } from '../utils';
+import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, buildWindyUrl } from '../utils';
 
 // --- Header ---
 
@@ -1523,17 +1523,10 @@ function renderSinglePointSounding(
 
 // --- Skew-T ---
 
-/** Populate the model selector dropdown from available models. */
-function populateModelSelector(models: string[], selected: string): void {
-  const select = document.getElementById('model-select') as HTMLSelectElement | null;
-  if (!select || select.options.length > 0) return; // already populated
-  for (const m of models) {
-    const opt = document.createElement('option');
-    opt.value = m;
-    opt.textContent = modelLabel(m);
-    if (m === selected) opt.selected = true;
-    select.appendChild(opt);
-  }
+/** Update the Skew-T model label to show the currently selected model. */
+function updateSkewtModelLabel(selectedModel: string): void {
+  const el = document.getElementById('skewt-model-name');
+  if (el) el.textContent = modelLabel(selectedModel);
 }
 
 export function renderSkewTs(
@@ -1552,9 +1545,8 @@ export function renderSkewTs(
     return;
   }
 
-  // Populate model selector from available pack models (fallback to ALL_MODELS)
-  const models = routeAnalyses?.models ?? allModelKeys();
-  populateModelSelector(models, selectedModel);
+  // Update model label in Skew-T section
+  updateSkewtModelLabel(selectedModel);
 
   // Route-point mode: single Skew-T + Hodograph pair
   if (routeAnalyses && routeAnalyses.analyses.length > 0) {

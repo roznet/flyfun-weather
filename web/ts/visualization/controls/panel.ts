@@ -11,6 +11,7 @@ export interface VizControlCallbacks {
   onRenderModeChange: (mode: RenderMode) => void;
   onLayerToggle: (layerId: string) => void;
   onLayoutChange: (layout: VizLayout) => void;
+  onModelChange?: (model: string) => void;
 }
 
 export interface RouteGraphControlCallbacks {
@@ -28,6 +29,7 @@ export function renderVizControls(
   settings: VizSettings,
   callbacks: VizControlCallbacks,
   selectedModel?: string,
+  availableModels?: string[],
 ): void {
   const groups = getLayerGroups();
 
@@ -43,9 +45,19 @@ export function renderVizControls(
   html += `<button class="btn-toggle${settings.layout === 'map' ? ' active' : ''}" data-layout="map" title="Map only">Map</button>`;
   html += '</div>';
 
-  // Model indicator
-  if (selectedModel) {
-    html += `<div class="viz-model-indicator">`;
+  // Model selector
+  if (selectedModel && availableModels && availableModels.length > 0) {
+    html += `<div class="viz-model-selector">`;
+    html += `<span class="viz-toggle-label">Model:</span>`;
+    html += `<select id="viz-model-select" class="viz-model-select">`;
+    for (const m of availableModels) {
+      const selected = m === selectedModel ? ' selected' : '';
+      html += `<option value="${m}"${selected}>${modelLabel(m)}</option>`;
+    }
+    html += `</select>`;
+    html += `</div>`;
+  } else if (selectedModel) {
+    html += `<div class="viz-model-selector">`;
     html += `<span class="viz-toggle-label">Model:</span>`;
     html += `<span class="viz-model-name">${modelLabel(selectedModel)}</span>`;
     html += `</div>`;
@@ -109,6 +121,15 @@ export function renderVizControls(
       callbacks.onLayerToggle((checkbox as HTMLInputElement).dataset.layerId!);
     });
   });
+
+  // Wire model selector
+  const vizModelSelect = container.querySelector('#viz-model-select') as HTMLSelectElement | null;
+  if (vizModelSelect && callbacks.onModelChange) {
+    const cb = callbacks.onModelChange;
+    vizModelSelect.addEventListener('change', () => {
+      cb(vizModelSelect.value);
+    });
+  }
 
   // Wire info buttons
   container.querySelectorAll('[data-layer-info]').forEach((btn) => {
