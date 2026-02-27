@@ -379,6 +379,7 @@ async function init(): Promise<void> {
       ui.renderGramet(state.flight, state.currentPack);
       renderSliderSections(state);
       renderVisualization(state);
+      ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
     }
     if (
       state.freshness !== prev.freshness ||
@@ -417,11 +418,12 @@ async function init(): Promise<void> {
     }
     if (state.selectedModel !== prev.selectedModel) {
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
-      ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
       renderVisualization(state);
+      ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
     }
     if (state.vizSettings !== prev.vizSettings) {
       renderVisualization(state);
+      ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
       renderSliderSections(state);
     }
     if (state.loading !== prev.loading) {
