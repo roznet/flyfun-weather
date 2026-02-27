@@ -10,10 +10,10 @@ You can have Claude Code walk you through (and run) most of these steps automati
 > Read HOW_TO.md and help me set up this project from scratch
 ```
 
-Claude will run through steps 1–5, then ask you to restart so the MCP server can connect. After restarting, say:
+Claude will run through steps 1–3 (clone, create venv, install and register the MCP server), then ask you to restart so the MCP server can connect. After restarting, say:
 
 ```
-> Continue setup from HOW_TO.md — pick up from step 6
+> Continue setup from HOW_TO.md — pick up from step 4
 ```
 
 The only things you'll need to provide manually are API keys (step 4) and any missing system prerequisites.
@@ -35,24 +35,36 @@ git clone git@github.com:roznet/flyfun-weather.git
 cd flyfun-weather
 ```
 
-### 2. Install the mcp-library-docs MCP server
+### 2. Create the virtual environment
 
-The project uses an MCP server called [mcp-library-docs](https://github.com/roznet/mcp-library-docs) that gives Claude access to design documentation across the codebase and related libraries. This is what lets Claude quickly understand how the system is architected rather than having to grep through hundreds of files.
+Create the project venv early so you can install the MCP server into it:
+
+```bash
+python -m venv venv
+source venv/bin/activate
+```
+
+### 3. Install and register the mcp-library-docs MCP server
+
+This project follows a pattern of maintaining design docs alongside code and exposing them to Claude via an MCP server called [mcp-library-docs](https://github.com/roznet/mcp-library-docs). The server gives Claude access to design documentation across the codebase and related libraries, letting it quickly understand how the system is architected rather than having to grep through hundreds of files. This pattern is not specific to WeatherBrief — any project can adopt it by adding an `INDEX.md` and design docs (see the [mcp-library-docs README](https://github.com/roznet/mcp-library-docs) for details).
+
+Install it into the project venv:
 
 ```bash
 pip install mcp-library-docs
 ```
 
-### 3. Add the MCP server to Claude Code
+> **Tip:** If you work on multiple projects that use design docs, you may prefer to install `mcp-library-docs` somewhere more permanent (e.g., via `pipx install mcp-library-docs` or into a shared venv) and point the `claude mcp add` command to that Python instead. This is left to your preference and setup.
 
-From the project directory, register the server:
+Then register it with Claude Code, **using the venv's Python path explicitly**. This is important: Claude Code launches MCP servers outside your shell, so bare `python` would resolve to the system Python (which won't have the package installed). Use the full path to the venv interpreter instead:
 
 ```bash
-cd flyfun-weather
-claude mcp add library-docs -- python -m mcp_library_docs
+claude mcp add library-docs -- "$(pwd)/venv/bin/python" -m mcp_library_docs
 ```
 
 This creates a `.mcp.json` in the project that tells Claude Code to start the MCP server when you open a session here.
+
+> **Why the full path?** `claude mcp add` saves the command verbatim. When Claude Code later spawns the MCP server, it does so from its own process — not from your activated venv. If you use bare `python`, it will pick up the system Python, fail to find `mcp_library_docs`, and the MCP tools won't be available. Using the absolute path to `venv/bin/python` ensures it always works regardless of how the process is started.
 
 > **Restart required:** If you're running these steps inside Claude Code, exit (`/exit`) and restart `claude` now. The MCP server only connects at session startup. After restarting, continue from step 4.
 
@@ -85,10 +97,11 @@ rm -rf /tmp/flyfun-apps
 
 Then make sure `AIRPORTS_DB` in your `.env` points to it (e.g., `AIRPORTS_DB=./data/airports.db`).
 
-### 6. Create the virtual environment and install dependencies
+### 6. Install project dependencies
+
+The venv was already created in step 2. Activate it (if not already) and install the project:
 
 ```bash
-python -m venv venv
 source venv/bin/activate
 pip install -e ".[dev]"
 cd web && npm install && cd ..
