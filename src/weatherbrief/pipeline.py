@@ -76,6 +76,9 @@ class BriefingUsage:
     llm_output_tokens: int | None = None
     metar_taf_fetched: bool = False
     metar_taf_airports: int = 0
+    elapsed_seconds: float | None = None
+    queue_wait_seconds: float | None = None
+    triggered_by: str | None = None
 
 
 @dataclass

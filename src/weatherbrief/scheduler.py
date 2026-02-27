@@ -184,7 +184,9 @@ def _flight_start_dt(row: FlightRow) -> datetime | None:
 
 def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
     """Run the briefing pipeline for a single flight (called in a thread)."""
-    from weatherbrief.api.packs import _build_data_status, _finalize_refresh, _prepare_refresh
+    from weatherbrief.api.packs import (
+        _build_data_status, _finalize_refresh, _prepare_refresh, refresh_registry,
+    )
     from weatherbrief.storage.flights import _row_to_flight, list_packs
 
     db = SessionLocal()
@@ -217,6 +219,12 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
             target_hour=flight.target_time_utc,
             options=options,
         )
+
+        # Capture timing before unregister
+        queue_wait, total_elapsed = refresh_registry.get_timing(flight_row.id)
+        result.usage.elapsed_seconds = total_elapsed
+        result.usage.queue_wait_seconds = queue_wait
+        result.usage.triggered_by = "scheduler"
 
         meta = _finalize_refresh(
             flight_row.id, flight, fetch_ts, pack_path, result, db,

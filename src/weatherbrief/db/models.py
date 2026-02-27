@@ -160,6 +160,9 @@ class BriefingUsageRow(Base):
     llm_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     llm_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    elapsed_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    queue_wait_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    triggered_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     user: Mapped[UserRow] = relationship(back_populates="briefing_usage")
 

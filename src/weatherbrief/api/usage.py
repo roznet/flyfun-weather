@@ -146,6 +146,9 @@ def log_briefing_usage(
         llm_input_tokens=usage.llm_input_tokens,
         llm_output_tokens=usage.llm_output_tokens,
         result_size_bytes=result_size_bytes,
+        elapsed_seconds=usage.elapsed_seconds,
+        queue_wait_seconds=usage.queue_wait_seconds,
+        triggered_by=usage.triggered_by,
     )
     db.add(row)
     db.flush()
