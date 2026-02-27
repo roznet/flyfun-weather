@@ -9,7 +9,8 @@ All datetimes throughout the pipeline are **timezone-aware UTC** (`tzinfo=timezo
 | Layer | Where | How |
 |-------|-------|-----|
 | Open-Meteo | `open_meteo.py` | `datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)` |
-| Analysis | `analyze.py`, `pipeline.py` | `datetime(..., target_hour, tzinfo=timezone.utc)` |
+| DB / Flight model | `storage/flights.py` | `departure_time` stored as `DateTime(timezone=True)`; `_ensure_utc()` promotes naive on read |
+| Analysis | `analyze.py`, `pipeline.py` | `departure_time` passed through; `target_date`/`target_hour` derived internally |
 | GRIB | `grib/__init__.py` | `datetime.strptime(...).replace(tzinfo=timezone.utc)` |
 | Interpolated times | `compute_interpolated_time()` | Propagated from departure (aware in → aware out) |
 | Pack loading | `packs.py _parse_target_time()` | Promotes naive (old packs) to aware UTC |
@@ -17,6 +18,14 @@ All datetimes throughout the pipeline are **timezone-aware UTC** (`tzinfo=timezo
 ### Old Pack Compatibility
 
 Packs created before the aware-UTC migration store naive ISO strings (e.g. `"2026-02-27T09:00:00"`). Pydantic deserializes these as naive datetimes. `at_time()` in `WaypointForecast` normalizes both sides to aware UTC before comparing, so old packs load without error. New packs serialize with `+00:00`, which JS `new Date()` handles correctly (and more reliably — removes browser timezone ambiguity around bare ISO strings).
+
+### DB Datetime Storage
+
+`Flight.departure_time` and `BriefingPackMeta.fetch_timestamp` are stored as proper `DateTime(timezone=True)` columns (migration 014). Both SQLite and MySQL store datetimes as naive values internally:
+- **SQLite**: text like `2026-02-21 09:00:00` (no timezone suffix)
+- **MySQL**: `DATETIME(6)` with microsecond precision (migration 015)
+
+The storage layer uses `_ensure_utc()` to promote naive datetimes back to aware UTC on read. `load_pack_meta()` strips tzinfo before querying to match the naive stored format. `_get_pack_dir()` reads `artifact_path` from the DB rather than reconstructing from timestamp — avoids precision mismatches.
 
 ## Spatial Mapping
 

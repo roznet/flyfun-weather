@@ -88,20 +88,19 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 
 | Column | Type | Notes |
 |--------|------|-------|
-| id | VARCHAR(100) PK | `{user_id}_{route_slug}_{target_date}` |
+| id | VARCHAR(100) PK | `{route_slug}-{target_date}-{hash}` |
 | user_id | VARCHAR(36) FK | |
 | profile_id | INT FK NULL | → flight_profiles.id, SET NULL on delete |
 | route_name | VARCHAR(100) | |
 | waypoints | JSON | `["EGTK","LFPB","LSGS"]` |
-| target_date | DATE | |
-| target_time_utc | INT DEFAULT 9 | |
+| departure_time | DATETIME(6) NOT NULL | Aware UTC departure (replaces old target_date + target_time_utc) |
 | cruise_altitude_ft | INT DEFAULT 8000 | |
 | flight_ceiling_ft | INT DEFAULT 18000 | |
 | flight_duration_hours | FLOAT DEFAULT 0.0 | |
 | private | BOOLEAN DEFAULT FALSE | Hide from other users' shared briefing links |
 | auto_refresh | BOOLEAN DEFAULT FALSE | Enable background auto-refresh |
-| auto_refresh_hour | INT NULL | Preferred UTC hour for daily refresh (default: target_time − 1) |
-| last_auto_refresh_at | DATETIME NULL | Timestamp of last auto-refresh (for scheduling) |
+| auto_refresh_hour | INT NULL | Preferred UTC hour for daily refresh (default: departure_time.hour − 1) |
+| last_auto_refresh_at | DATETIME(6) NULL | Timestamp of last auto-refresh (for scheduling) |
 | created_at | DATETIME | |
 
 ### briefing_packs
@@ -110,7 +109,7 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 |--------|------|-------|
 | id | INT AUTO_INCREMENT PK | |
 | flight_id | VARCHAR(100) FK | |
-| fetch_timestamp | DATETIME | |
+| fetch_timestamp | DATETIME(6) NOT NULL | Aware UTC, microsecond precision |
 | days_out | INT | |
 | has_gramet | BOOLEAN DEFAULT FALSE | |
 | has_skewt | BOOLEAN DEFAULT FALSE | |
@@ -149,6 +148,9 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 | llm_input_tokens | INT NULL | LLM input token count |
 | llm_output_tokens | INT NULL | LLM output token count |
 | result_size_bytes | INT NULL | Total artifact size on disk |
+| elapsed_seconds | FLOAT NULL | Total time to complete refresh |
+| queue_wait_seconds | FLOAT NULL | Time spent waiting in queue before execution |
+| triggered_by | VARCHAR(16) NULL | `user`, `scheduler`, or `admin` |
 
 ### feedback
 
@@ -157,7 +159,7 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 | id | INT AUTO_INCREMENT PK | |
 | user_id | VARCHAR(64) FK | → users.id |
 | flight_id | VARCHAR(256) | |
-| pack_timestamp | VARCHAR(64) | Specific pack within the flight |
+| pack_timestamp | DATETIME(6) NULL | Specific pack within the flight |
 | category | VARCHAR(32) | `data_issue`, `too_conservative`, `too_optimistic`, `incorrect_interpretation`, `other` |
 | comment | TEXT | Required, non-empty |
 | created_at | DATETIME | |
@@ -199,13 +201,23 @@ Admin identity: `ADMIN_EMAILS` env var (comma-separated). Dev user is always adm
 | GRAMET calls | 10/day per user | Autorouter courtesy |
 | LLM digest calls | 20/day per user | Token cost |
 
-Every refresh logged to `briefing_usage`. Freshness check via `check_freshness()` in `fetch/model_status.py`.
+Every refresh logged to `briefing_usage` with timing metrics (`elapsed_seconds`, `queue_wait_seconds`, `triggered_by`). Freshness check via `check_freshness()` in `fetch/model_status.py`.
+
+### Refresh Queue & Concurrency
+
+| Resource | Limit | Notes |
+|----------|-------|-------|
+| Concurrent refreshes | 5 | Returns 503 when full; scheduler bypasses queue limit |
+| PDF generation | 3 concurrent | Semaphore in `api/throttle.py` |
+| Skew-T plot generation | 2 concurrent | Semaphore in `api/throttle.py` |
+
+`RefreshRegistry` (in-memory) tracks active refreshes, queue depth, and timing. `GET /api/admin/metrics` returns live queue state + 24h/7d/30d timing statistics.
 
 ## Auto-Refresh Scheduler
 
 Background scheduler (`scheduler.py`) polls every 10 minutes for flights with `auto_refresh=True` that are due.
 
-**Scheduling formula**: `next_due = min(next_regular, flight_start − 2h)` where `next_regular` is the next occurrence of the user's preferred hour (`auto_refresh_hour`, defaulting to `target_time_utc − 1`) after the last refresh.
+**Scheduling formula**: `next_due = min(next_regular, flight_start − 2h)` where `next_regular` is the next occurrence of the user's preferred hour (`auto_refresh_hour`, defaulting to `departure_time.hour − 1`) after the last refresh.
 
 **Behavior**:
 - Skips flights whose start time has passed
