@@ -218,6 +218,8 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 
 **Cloud cover override strategy:** When GRIB diagnostics are available, `_apply_cloud_diagnostics()` overwrites the Open-Meteo `cloud_cover_low/mid/high_pct` values with GRIB-native values. This ensures all cloud data for a given model comes from the same initialization run. GFS takes priority over ICON-EU for points where both provide data.
 
+**Cloud diagnostics propagation to interpolated hours:** Open-Meteo provides hourly data interpolated between native GFS steps (3h at longer lead times). GRIB enrichment only targets native steps, leaving interpolated hours without `nwp_cloud_diagnostics`. Without diagnostics, the icing fallback applies the bulk NWP cloud percentage across the full altitude band, causing false positives. `_propagate_cloud_diagnostics()` forward-fills diagnostics from the preceding enriched hour to each gap. Cloud layer geometry (base/top) changes slowly between 3-hour GFS steps, so the earlier step's diagnostics are a reasonable approximation.
+
 ### Key Choices
 - **GFS + ICON-EU** — GFS for global coverage, ICON-EU for higher-resolution European data (~6.5km vs ~27km)
 - **GFS takes priority** — if GFS already attached diagnostics, ICON-EU skips that point (avoids contradictory overrides)

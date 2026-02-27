@@ -71,3 +71,7 @@ Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google 
 Per-briefing cost computation from LLM tokens + infrastructure + storage + margin, credit balance with auto-reload, append-only ledger, versioned admin cost config, transparency endpoint.
 Key exports: `compute_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `get_active_cost_config`
 → Full doc: cost-attribution-design.md
+
+### companion-app
+iOS/iPad companion app design: offline briefing sync, in-flight condition reporting with forecast-driven prompting, PIREP filing, passive data collection, real-time sharing, and forecast verification. SwiftUI, Core Location, SwiftData. Phased roadmap from offline viewer through real-time sharing.
+→ Full doc: companion-app.md

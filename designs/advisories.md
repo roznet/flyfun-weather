@@ -68,8 +68,8 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 ### Aggregation Modes
 
-- **WORST** (default): If ANY model shows RED, the aggregate is RED. Conservative — pilots see the worst-case scenario.
-- **MAJORITY**: The most common status across models wins. Ties broken by worst status among the tied group. Example: 2 AMBER, 2 GREEN, 1 RED → tie between AMBER and GREEN → worst of tied = AMBER.
+- **WORST**: If ANY model shows RED, the aggregate is RED. Conservative — pilots see the worst-case scenario.
+- **MAJORITY** (default, changed from WORST): The most common status across models wins. Ties broken by worst status among the tied group. Example: 2 AMBER, 2 GREEN, 1 RED → tie between AMBER and GREEN → worst of tied = AMBER. Changed to default because WORST mode was too noisy — a single outlier model could make the whole route RED.
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
@@ -175,7 +175,7 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 
 - **Protocol over inheritance** — evaluators are peer classes, no hierarchy. Easier to test and extend.
 - **Immutable RouteContext** — frozen dataclass prevents accidental mutation across evaluators.
-- **Configurable aggregation** — WORST (default, conservative) or MAJORITY (most common status, ties→worst). Set per-profile in `advisories.aggregation`.
+- **Configurable aggregation** — MAJORITY (default, most common status, ties→worst) or WORST (conservative). Set per-profile in `advisories.aggregation`.
 - **Lazy evaluation** — advisories evaluated fresh each time, not cached. Enables fast parameter tuning.
 - **Altitude-aware icing** — IFR feasibility, icing escape, and FIKI all filter icing by altitude relevance. Icing above `cruise_altitude_ft + buffer` (default 2000ft) is ignored. Prevents false alerts from high-altitude icing a pilot will never encounter. Buffer is tunable per evaluator via `icing_altitude_buffer_ft`.
 - **Cloud top filtering** — only considers layers pilot would enter (base ≤ ceiling). High cirrus above ceiling is irrelevant.
