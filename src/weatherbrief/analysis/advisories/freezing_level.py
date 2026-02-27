@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, max_terrain_near_point
+from weatherbrief.analysis.advisories._helpers import (
+    format_extent,
+    max_terrain_near_point,
+    pct_above_threshold,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -53,6 +57,17 @@ class FreezingLevelEvaluator:
                     max=5000,
                     step=500,
                 ),
+                AdvisoryParameterDef(
+                    key="min_route_pct",
+                    label="Min route %",
+                    description="Minimum percentage of route affected to trigger advisory",
+                    type="percent",
+                    unit="%",
+                    default=15,
+                    min=5,
+                    max=50,
+                    step=5,
+                ),
             ],
         )
 
@@ -60,6 +75,7 @@ class FreezingLevelEvaluator:
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         margin_ft = params.get("margin_ft", 1000)
         tight_margin_ft = params.get("tight_margin_ft", 2000)
+        min_route_pct = params.get("min_route_pct", 15)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -99,15 +115,19 @@ class FreezingLevelEvaluator:
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "No data"
-            elif below_margin > 0:
+            elif below_margin > 0 and pct_above_threshold(
+                below_margin, total, min_route_pct
+            ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
                 ext = format_extent(below_margin, total, ctx.total_distance_nm)
                 detail = f"Freezing level below terrain + {margin_ft:.0f}ft over {ext}"
                 if min_clearance is not None:
                     detail += f" (min clearance {min_clearance:.0f}ft)"
-            elif below_tight > 0:
+            elif affected > 0 and pct_above_threshold(
+                affected, total, min_route_pct
+            ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.AMBER
-                ext = format_extent(below_tight, total, ctx.total_distance_nm)
+                ext = format_extent(affected, total, ctx.total_distance_nm)
                 detail = f"Tight freezing level margin over {ext}"
                 if min_clearance is not None:
                     detail += f" (min clearance {min_clearance:.0f}ft)"
