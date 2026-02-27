@@ -62,6 +62,11 @@ export function renderVizControls(
     html += `</div>`;
   }
 
+  // Windy link placeholder (updated dynamically by updateWindyLink)
+  html += `<span id="external-links" class="external-links" style="display: none;">`;
+  html += `Open Location in <a id="windy-link" href="#" target="_blank" rel="noopener">Windy</a>`;
+  html += `</span>`;
+
   html += '</div>'; // .viz-toolbar-top
 
   // Layer toggles — only when cross-section visible
