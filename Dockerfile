@@ -9,7 +9,7 @@ RUN npm run build
 # Stage 2: Python application
 FROM python:3.13-slim
 
-# System deps for weasyprint (PDF generation), git (euro-aip install),
+# System deps for weasyprint (PDF generation)
 # and eccodes (GRIB2 decoding via cfgrib)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
@@ -18,7 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libcairo2 \
     libeccodes-dev \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user (UID 2000 to match infra convention)
@@ -26,17 +25,10 @@ RUN groupadd -g 2000 app && useradd -u 2000 -g app -m app
 
 WORKDIR /app
 
-# Install euro-aip from GitHub (replaces local path in pyproject.toml)
-RUN pip install --no-cache-dir \
-    "euro-aip @ git+https://github.com/roznet/rzflight.git#subdirectory=euro_aip"
-
 # Install app dependencies (copy pyproject first for layer caching)
 COPY pyproject.toml .
-# Strip the local euro-aip path (already installed from GitHub above),
-# create minimal package structure, then install remaining deps
 RUN mkdir -p src/weatherbrief && \
     touch src/weatherbrief/__init__.py && \
-    sed -i '/euro-aip @/d' pyproject.toml && \
     pip install --no-cache-dir -e . && \
     rm -rf src/weatherbrief
 
