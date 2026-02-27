@@ -163,7 +163,45 @@ Claude will:
 3. Check for pending Alembic migrations
 4. Start a tmux session with the FastAPI backend (port 8000) and esbuild frontend watcher
 
-Once running, open http://localhost:8000 in your browser. Create a flight, trigger a refresh, and explore the briefing.
+Once running, open http://localhost:8000 in your browser.
+
+### Creating a flight and viewing the briefing
+
+If you're not familiar with aviation, here's a quick walkthrough to get a briefing on screen.
+
+**From the web UI:**
+
+1. Open http://localhost:8000
+2. Click **New Flight**
+3. In the **Waypoints** field, enter `LFAT LFMD` — these are [ICAO airport codes](https://en.wikipedia.org/wiki/ICAO_airport_code) for Le Touquet (northern France) and Cannes–Mandelieu (southern France), a scenic route across France
+4. Set the **Departure date** to a few days from now (weather data is only available for the near future)
+5. Set the **Duration** to `3h`
+6. Click **Create**
+
+Once the flight is created, click **Refresh** to fetch weather data. This takes a minute or two — it downloads forecasts from multiple weather models. When it's done, the briefing page shows the full weather analysis: route advisories, cross-sections, soundings, and a synopsis.
+
+**From the command line (curl):**
+
+You can also create flights via the API, which is handy for scripting or if you prefer the terminal:
+
+```bash
+# Create a flight from Le Touquet (LFAT) to Cannes (LFMD), departing in 2 days, 3h duration
+curl -s -X POST http://localhost:8000/api/flights \
+  -H "Content-Type: application/json" \
+  -d '{
+    "waypoints": ["LFAT", "LFMD"],
+    "departure_time": "'$(date -u -v+2d '+%Y-%m-%dT10:00:00Z')'",
+    "flight_duration_hours": 3.0
+  }'
+```
+
+This returns a JSON response with the flight's `id`. Use it to trigger a weather refresh:
+
+```bash
+curl -s -X POST http://localhost:8000/api/flights/FLIGHT_ID/packs/refresh
+```
+
+Then open the briefing URL from the response in your browser to see the full analysis.
 
 ### Investigating a flight briefing
 
