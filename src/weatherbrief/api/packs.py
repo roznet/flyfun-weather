@@ -285,13 +285,13 @@ def _build_data_status(stored_init_times: dict[str, int]) -> DataStatus:
     )
 
 
-def _can_force_refresh(request: Request) -> bool:
+def _can_force_refresh(request: Request, db: Session) -> bool:
     """Return True if the user is allowed to force-refresh (admin or dev mode)."""
     if is_dev_mode():
         return True
     try:
         from weatherbrief.api.admin import require_admin
-        require_admin(request)
+        require_admin(request, db=db)
         return True
     except HTTPException:
         return False
@@ -529,7 +529,7 @@ async def refresh_briefing(
     """
     flight = _load_owned_flight(db, flight_id, user_id)
 
-    if force and not _can_force_refresh(request):
+    if force and not _can_force_refresh(request, db):
         raise HTTPException(status_code=403, detail="Force refresh requires admin access")
 
     db_path = request.app.state.db_path
@@ -559,7 +559,7 @@ async def refresh_briefing(
 
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
-            is_privileged=_can_force_refresh(request),
+            is_privileged=_can_force_refresh(request, db),
         )
 
         refresh_registry.set_refreshing(flight_id)
@@ -618,7 +618,7 @@ async def refresh_briefing_stream(
     try:
         flight = _load_owned_flight(db, flight_id, user_id)
 
-        if force and not _can_force_refresh(request):
+        if force and not _can_force_refresh(request, db):
             raise HTTPException(status_code=403, detail="Force refresh requires admin access")
 
         db_path = request.app.state.db_path
@@ -674,7 +674,7 @@ async def refresh_briefing_stream(
 
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
-            is_privileged=_can_force_refresh(request),
+            is_privileged=_can_force_refresh(request, db),
         )
     except Exception:
         if registered:
