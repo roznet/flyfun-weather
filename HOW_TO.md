@@ -192,15 +192,6 @@ Claude will load the flight's pack data from disk and give you a summary of what
 
 Claude will write and execute Python scripts that load the pack artifacts, call the analysis functions, and show you intermediate results — the same code paths the production pipeline uses.
 
-### Investigating a production flight
-
-You can also investigate flights from the production server at `weather.flyfun.aero`. Claude will rsync the pack data locally and then work with it the same way:
-
-```
-> /investigateflight https://weather.flyfun.aero/briefing.html?flight=egtf_lfqa_lsgs-2026-03-15-1a52
-```
-
----
 
 ## Contributing Code
 
@@ -218,7 +209,34 @@ The briefing page had a compact/annotated toggle, but compact mode still showed 
 git checkout -b try/compact-mode example/simple1
 ```
 
-Then start Claude Code and paste the issue as your prompt:
+Start Claude Code and get the dev server running:
+
+```
+> /devserver
+```
+
+Once the server is up at http://localhost:8000, create a test flight so you can see the current behavior. You can do this from the UI, or with curl:
+
+```bash
+# Create a flight from Le Touquet to Cannes, departing in 2 days, 3h duration
+curl -s -X POST http://localhost:8000/api/flights \
+  -H "Content-Type: application/json" \
+  -d '{
+    "waypoints": ["LFAT", "LFMD"],
+    "departure_time": "'$(date -u -v+2d '+%Y-%m-%dT10:00:00Z')'",
+    "flight_duration_hours": 3.0
+  }'
+```
+
+Trigger a weather data refresh for it (replace `FLIGHT_ID` with the `id` from the response above):
+
+```bash
+curl -s -X POST http://localhost:8000/api/flights/FLIGHT_ID/packs/refresh
+```
+
+Open the briefing in your browser and click the compact/annotated toggle to see how it behaves _before_ the change. Note how compact mode still shows sounding analysis, model comparison, and secondary advisories.
+
+Now prompt Claude to implement the fix:
 
 ```
 > The briefing page has a compact/annotated toggle. Change it so that compact really only
@@ -231,9 +249,9 @@ Then start Claude Code and paste the issue as your prompt:
 >   - Hide sounding analysis and model comparison sections
 ```
 
-Claude will read the design docs, find the relevant frontend files, and implement the changes across the briefing UI.
+Claude will read the design docs, find the relevant frontend files, and implement the changes across the briefing UI. Once it's done, go back to your briefing in the browser and try the toggle again — the esbuild watcher will have rebuilt the frontend automatically so you can see the difference immediately.
 
-**Compare with the real result:** see [commit 9e5450b](https://github.com/roznet/flyfun-weather/commit/9e5450b) which closed the issue.
+**Compare with the real result:** see [commit 9e5450b](https://github.com/roznet/flyfun-weather/commit/9e5450b) which closed [issue #19](https://github.com/roznet/flyfun-weather/issues/19).
 
 ---
 
