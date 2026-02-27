@@ -6,7 +6,7 @@ import { fetchModelCatalog } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
-import { renderUserInfo, initModelCatalog } from './utils';
+import { escapeHtml, renderUserInfo, initModelCatalog } from './utils';
 import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
 
@@ -221,7 +221,7 @@ function populateProfileSelector(profiles: ProfileResponse[]): void {
   select.innerHTML = profiles.map(p => {
     const defaultTag = p.is_default ? ' (default)' : '';
     const selected = p.is_default ? ' selected' : '';
-    return `<option value="${p.id}"${selected}>${p.name}${defaultTag}</option>`;
+    return `<option value="${p.id}"${selected}>${escapeHtml(p.name)}${defaultTag}</option>`;
   }).join('');
 
   // Apply default profile's altitude/ceiling values
