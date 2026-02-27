@@ -28,17 +28,21 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.add_column(
-        "flights",
-        sa.Column(
-            "profile_id",
-            sa.Integer,
-            sa.ForeignKey("flight_profiles.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
-    )
+    with op.batch_alter_table("flights") as batch_op:
+        batch_op.add_column(
+            sa.Column("profile_id", sa.Integer, nullable=True),
+        )
+        batch_op.create_foreign_key(
+            "fk_flights_profile_id",
+            "flight_profiles",
+            ["profile_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("flights", "profile_id")
+    with op.batch_alter_table("flights") as batch_op:
+        batch_op.drop_constraint("fk_flights_profile_id", type_="foreignkey")
+        batch_op.drop_column("profile_id")
     op.drop_table("flight_profiles")
