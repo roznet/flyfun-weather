@@ -1512,14 +1512,12 @@ def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str
 def _parse_target_time(snapshot_data: dict) -> datetime:
     """Extract target datetime from snapshot JSON data.
 
-    Always returns a naive datetime (UTC by convention), consistent with
-    the pipeline's naive-UTC convention for Open-Meteo timestamps.
+    Always returns a timezone-aware UTC datetime.
     """
     analyses = snapshot_data.get("analyses", [])
     if analyses and "target_time" in analyses[0]:
         dt = datetime.fromisoformat(analyses[0]["target_time"])
-        # Strip tzinfo if present — pipeline works with naive-UTC convention
-        return dt.replace(tzinfo=None) if dt.tzinfo else dt
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
     target_date = snapshot_data.get("target_date", "")
     year, month, day = (int(x) for x in target_date.split("-"))
-    return datetime(year, month, day, 9)
+    return datetime(year, month, day, 9, tzinfo=timezone.utc)

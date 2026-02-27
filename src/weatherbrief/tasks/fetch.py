@@ -137,6 +137,7 @@ def run_fetch(
             grib_init_times = enrich_forecasts(
                 cross_sections, all_forecasts, route_points,
                 target_date, target_hour, data_dir=data_dir,
+                flight_duration_hours=route.flight_duration_hours,
                 progress_callback=progress_callback,
             )
             grib_enriched = True

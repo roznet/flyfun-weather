@@ -296,7 +296,7 @@ class OpenMeteoClient:
             )
 
         return HourlyForecast(
-            time=datetime.fromisoformat(timestamp),
+            time=datetime.fromisoformat(timestamp).replace(tzinfo=timezone.utc),
             temperature_2m_c=get("temperature_2m"),
             relative_humidity_2m_pct=get("relative_humidity_2m"),
             dewpoint_2m_c=get("dewpoint_2m"),

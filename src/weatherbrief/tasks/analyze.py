@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -341,8 +341,7 @@ def run_analysis(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
-    # Naive datetime matching Open-Meteo convention
-    target_dt = datetime(*map(int, target_date.split("-")), target_hour)
+    target_dt = datetime(*map(int, target_date.split("-")), target_hour, tzinfo=timezone.utc)
 
     # --- Waypoint analyses ---
     _notify("waypoint_analysis")
