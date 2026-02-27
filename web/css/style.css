@@ -1830,11 +1830,6 @@ label {
   color: var(--primary);
 }
 
-.viz-render-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
 
 .viz-toggle-label {
   color: var(--text-muted);

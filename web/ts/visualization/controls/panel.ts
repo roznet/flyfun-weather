@@ -1,6 +1,6 @@
-/** Visualization control panel: layout toggle, render mode, layer checkboxes, map controls. */
+/** Visualization control panel: layout toggle, model selector, layer checkboxes, map controls. */
 
-import type { RenderMode, VizLayout, VizSettings } from '../types';
+import type { VizLayout, VizSettings } from '../types';
 import { getLayerGroups } from '../cross-section/layer-registry';
 import { showLayerInfo } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
@@ -8,7 +8,6 @@ import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
 
 export interface VizControlCallbacks {
-  onRenderModeChange: (mode: RenderMode) => void;
   onLayerToggle: (layerId: string) => void;
   onLayoutChange: (layout: VizLayout) => void;
   onModelChange?: (model: string) => void;
@@ -63,17 +62,6 @@ export function renderVizControls(
     html += `</div>`;
   }
 
-  // Render mode toggle (only when cross-section visible)
-  if (settings.layout !== 'map') {
-    html += '<div class="viz-render-toggle">';
-    html += '<span class="viz-toggle-label">Render:</span>';
-    html += `<div class="display-mode-toggle">`;
-    html += `<button class="btn-toggle${settings.renderMode === 'smooth' ? ' active' : ''}" data-render-mode="smooth">Smooth</button>`;
-    html += `<button class="btn-toggle${settings.renderMode === 'columns' ? ' active' : ''}" data-render-mode="columns">Columns</button>`;
-    html += '</div>';
-    html += '</div>';
-  }
-
   html += '</div>'; // .viz-toolbar-top
 
   // Layer toggles — only when cross-section visible
@@ -105,13 +93,6 @@ export function renderVizControls(
   container.querySelectorAll('[data-layout]').forEach((btn) => {
     btn.addEventListener('click', () => {
       callbacks.onLayoutChange((btn as HTMLElement).dataset.layout as VizLayout);
-    });
-  });
-
-  // Wire render mode toggle
-  container.querySelectorAll('[data-render-mode]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      callbacks.onRenderModeChange((btn as HTMLElement).dataset.renderMode as RenderMode);
     });
   });
 

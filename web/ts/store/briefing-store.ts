@@ -4,7 +4,7 @@ import { createStore } from 'zustand/vanilla';
 import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { RouteAdvisoriesManifest } from '../types/advisories';
 import type { DisplayMode, Tier } from '../types/metrics';
-import type { RenderMode, VizLayout, VizSettings } from '../visualization/types';
+import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
 import { getDefaultEnabled } from '../visualization/cross-section/layer-registry';
 import { RefreshStreamError } from '../adapters/api-adapter';
@@ -32,7 +32,6 @@ function loadTierVisibility(): Record<Tier, boolean> {
 function loadVizSettings(): VizSettings {
   const defaults: VizSettings = {
     layout: 'cross-section',
-    renderMode: 'smooth',
     enabledLayers: getDefaultEnabled(),
     mapColorMetric: 'icing-risk-at-level',
     mapWidthMetric: 'cloud-cover-total',
@@ -100,7 +99,6 @@ export interface BriefingState {
   setSelectedPoint: (index: number) => void;
   setDisplayMode: (mode: DisplayMode) => void;
   toggleTier: (tier: Tier) => void;
-  setRenderMode: (mode: RenderMode) => void;
   toggleVizLayer: (layerId: string) => void;
   recalculateAdvisories: () => Promise<void>;
   refreshObservations: () => Promise<void>;
@@ -350,12 +348,6 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const updated = { ...current, [tier]: !current[tier] };
     set({ tierVisibility: updated });
     try { localStorage.setItem('wb_tierVisibility', JSON.stringify(updated)); } catch { /* ignore */ }
-  },
-
-  setRenderMode: (mode: RenderMode) => {
-    const updated = { ...get().vizSettings, renderMode: mode };
-    set({ vizSettings: updated });
-    saveVizSettings(updated);
   },
 
   toggleVizLayer: (layerId: string) => {

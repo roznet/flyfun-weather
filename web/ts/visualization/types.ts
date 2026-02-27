@@ -3,11 +3,9 @@
 // --- Settings ---
 
 export type VizLayout = 'cross-section' | 'map' | 'split';
-export type RenderMode = 'smooth' | 'columns';
 
 export interface VizSettings {
   layout: VizLayout;
-  renderMode: RenderMode;
   enabledLayers: Record<string, boolean>;
   mapColorMetric: string;
   mapWidthMetric: string;
@@ -46,7 +44,6 @@ export interface CrossSectionLayer {
     ctx: CanvasRenderingContext2D,
     transform: CoordTransform,
     data: VizRouteData,
-    mode: RenderMode,
   ): void;
 }
 

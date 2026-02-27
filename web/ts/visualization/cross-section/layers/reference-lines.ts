@@ -1,6 +1,6 @@
 /** Reference lines: cruise altitude and flight ceiling. */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode } from '../../types';
+import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 
 /** Shared helper: draw a horizontal reference line with a label. */
 function drawRefLine(
@@ -43,7 +43,7 @@ export const cruiseAltitudeLayer: CrossSectionLayer = {
   group: 'reference',
   defaultEnabled: true,
 
-  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, _mode: RenderMode) {
+  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     // Cruise altitude — always drawn
     const cruiseLabel = `Cruise ${data.cruiseAltitudeFt.toLocaleString()} ft`;
     drawRefLine(ctx, transform, data.cruiseAltitudeFt, cruiseLabel,

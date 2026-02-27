@@ -62,43 +62,6 @@ export function drawSmoothLine(
   ctx.setLineDash([]);
 }
 
-// --- Column (step) line ---
-
-export function drawColumnLine(
-  ctx: CanvasRenderingContext2D,
-  points: PointData[],
-  transform: CoordTransform,
-  style: { color: string; width: number; dash?: number[] },
-): void {
-  ctx.strokeStyle = style.color;
-  ctx.lineWidth = style.width;
-  ctx.setLineDash(style.dash ?? []);
-
-  const validPoints = points.filter((p) => p.value !== null);
-  if (validPoints.length === 0) return;
-
-  ctx.beginPath();
-  let started = false;
-
-  for (let i = 0; i < validPoints.length; i++) {
-    const p = validPoints[i];
-    const y = transform.altitudeToY(p.value!);
-    const xLeft = columnLeft(validPoints, i, transform);
-    const xRight = columnRight(validPoints, i, transform);
-
-    if (!started) {
-      ctx.moveTo(xLeft, y);
-      started = true;
-    } else {
-      ctx.lineTo(xLeft, y);
-    }
-    ctx.lineTo(xRight, y);
-  }
-
-  ctx.stroke();
-  ctx.setLineDash([]);
-}
-
 // --- Smooth band: filled area between two spline curves ---
 
 export function drawSmoothBand(
@@ -244,20 +207,6 @@ function splitNonNull(points: PointData[]): PointData[][] {
   if (current.length > 0) segments.push(current);
 
   return segments;
-}
-
-function columnLeft(points: PointData[], i: number, transform: CoordTransform): number {
-  const x = transform.distanceToX(points[i].distance);
-  if (i === 0) return x;
-  const prevX = transform.distanceToX(points[i - 1].distance);
-  return (prevX + x) / 2;
-}
-
-function columnRight(points: PointData[], i: number, transform: CoordTransform): number {
-  const x = transform.distanceToX(points[i].distance);
-  if (i === points.length - 1) return x;
-  const nextX = transform.distanceToX(points[i + 1].distance);
-  return (x + nextX) / 2;
 }
 
 function columnLeftBand(points: BandPointData[], i: number, transform: CoordTransform): number {

@@ -4,7 +4,7 @@
  * convective tower. Falls back to full-height column when altitude data is missing.
  */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint, RenderMode } from '../../types';
+import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint } from '../../types';
 
 // ---- Color palettes ----
 
@@ -100,7 +100,7 @@ export const convectiveBgLayer: CrossSectionLayer = {
   defaultEnabled: true,
   metricId: 'convective_risk',
 
-  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, _mode: RenderMode) {
+  render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     const { plotArea } = transform;
 
     for (let i = 0; i < data.points.length; i++) {

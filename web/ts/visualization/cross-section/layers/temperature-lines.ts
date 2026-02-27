@@ -1,7 +1,7 @@
 /** Temperature level lines: freezing (0°C), −10°C, −20°C. */
 
-import type { CrossSectionLayer, CoordTransform, VizRouteData, RenderMode } from '../../types';
-import { drawSmoothLine, drawColumnLine, type PointData } from './base';
+import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
+import { drawSmoothLine, type PointData } from './base';
 
 function makeTemperatureLayer(
   id: string,
@@ -18,14 +18,13 @@ function makeTemperatureLayer(
     group: 'temperature',
     defaultEnabled: true,
     metricId,
-    render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData, mode: RenderMode) {
+    render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
       const points: PointData[] = data.points.map((p) => ({
         distance: p.distanceNm,
         value: accessor(p),
       }));
 
-      const drawFn = mode === 'smooth' ? drawSmoothLine : drawColumnLine;
-      drawFn(ctx, points, transform, { color, width, dash });
+      drawSmoothLine(ctx, points, transform, { color, width, dash });
     },
   };
 }
