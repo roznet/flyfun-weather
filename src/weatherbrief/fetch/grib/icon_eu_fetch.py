@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import bz2
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
@@ -252,6 +253,46 @@ def bracket_icon_eu_forecast_hours(
     f_next = min(f_next, 120)
 
     return f_prev, f_next
+
+
+def _snap_to_icon_eu_grid(fhour: float) -> int:
+    """Snap a fractional forecast hour to the nearest ICON-EU grid point.
+
+    ICON-EU: 1-hourly for 0–78h, 3-hourly for 78–120h.
+    """
+    if fhour <= 78:
+        return round(fhour)
+    base = 78 + round((fhour - 78) / 3) * 3
+    return min(base, 120)
+
+
+def compute_icon_eu_flight_window_hours(
+    init_date: str,
+    init_hour: int,
+    target_date: str,
+    target_hour: int,
+    flight_duration_hours: float,
+) -> list[int]:
+    """Compute ICON-EU forecast hours covering a flight window.
+
+    Same logic as GFS but snapped to the ICON-EU temporal grid.
+    """
+    init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc,
+    )
+    dep_dt = datetime.strptime(
+        f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H",
+    ).replace(tzinfo=timezone.utc)
+
+    n_hours = max(1, math.ceil(flight_duration_hours) + 1)
+    fhours: set[int] = set()
+    for h in range(n_hours):
+        utc = dep_dt + timedelta(hours=h)
+        delta = (utc - init_dt).total_seconds() / 3600
+        delta = max(0.0, delta)
+        fhours.add(_snap_to_icon_eu_grid(delta))
+
+    return sorted(fhours)
 
 
 def _download_one_file(

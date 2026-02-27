@@ -12,6 +12,7 @@ Companion .idx files are at the same URL with .idx appended.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -121,6 +122,57 @@ def bracket_forecast_hours(
     f_next = min(f_next, 384)
 
     return f_prev, f_next
+
+
+def _snap_to_gfs_grid(fhour: float) -> int:
+    """Snap a fractional forecast hour to the nearest GFS grid point.
+
+    GFS: 1-hourly for f000–f120, 3-hourly for f120–f384.
+    """
+    if fhour <= 120:
+        return round(fhour)
+    base = 120 + round((fhour - 120) / 3) * 3
+    return min(base, 384)
+
+
+def compute_flight_window_hours(
+    init_date: str,
+    init_hour: int,
+    target_date: str,
+    target_hour: int,
+    flight_duration_hours: float,
+) -> list[int]:
+    """Compute GFS forecast hours covering a flight window.
+
+    Returns one forecast hour per UTC hour from departure through
+    departure + ceil(duration), snapped to the GFS temporal grid.
+
+    Args:
+        init_date: YYYYMMDD of model init.
+        init_hour: 0, 6, 12, or 18.
+        target_date: YYYY-MM-DD departure date.
+        target_hour: Departure hour (UTC).
+        flight_duration_hours: Flight duration in hours.
+
+    Returns:
+        Sorted deduplicated list of GFS forecast hours.
+    """
+    init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc,
+    )
+    dep_dt = datetime.strptime(
+        f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H",
+    ).replace(tzinfo=timezone.utc)
+
+    n_hours = max(1, math.ceil(flight_duration_hours) + 1)
+    fhours: set[int] = set()
+    for h in range(n_hours):
+        utc = dep_dt + timedelta(hours=h)
+        delta = (utc - init_dt).total_seconds() / 3600
+        delta = max(0.0, delta)
+        fhours.add(_snap_to_gfs_grid(delta))
+
+    return sorted(fhours)
 
 
 def fetch_idx(

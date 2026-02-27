@@ -173,9 +173,8 @@ def execute_briefing(
 
     today_utc = datetime.now(timezone.utc).date()
     today = today_utc.isoformat()
-    # Naive datetime — UTC by convention, matching Open-Meteo's naive timestamps
     target_dt = datetime(
-        *map(int, target_date.split("-")), target_hour
+        *map(int, target_date.split("-")), target_hour, tzinfo=timezone.utc
     )
     days_out = (date.fromisoformat(target_date) - today_utc).days
 

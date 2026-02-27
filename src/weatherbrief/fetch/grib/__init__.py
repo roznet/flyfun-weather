@@ -7,7 +7,7 @@ existing cross-section forecasts from GFS and ICON-EU GRIB2 data.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -22,7 +22,6 @@ from weatherbrief.fetch.grib.cache import (
 )
 from weatherbrief.fetch.grib.gfs_idx import plan_byte_ranges, plan_cloud_diag_byte_ranges
 from weatherbrief.fetch.grib.grib_fetch import (
-    bracket_forecast_hours,
     fetch_byte_ranges,
     fetch_cloud_diag_ranges,
     fetch_idx,
@@ -51,6 +50,14 @@ def _apply_cloud_diagnostics(hourly: HourlyForecast, diag: NWPCloudDiagnostics) 
         hourly.cloud_cover_high_pct = diag.high.cover_pct
 
 
+def _forecast_hour_to_utc(init_date: str, init_hour: int, fhour: int) -> datetime:
+    """Convert a GRIB run + forecast hour to an aware UTC datetime."""
+    init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc,
+    )
+    return init_dt + timedelta(hours=fhour)
+
+
 def _run_info_to_timestamp(init_date: str, init_hour: int) -> int:
     """Convert GRIB run info (date string + hour) to a Unix timestamp."""
     return int(
@@ -68,6 +75,7 @@ def enrich_forecasts(
     target_hour: int,
     *,
     data_dir: Path,
+    flight_duration_hours: float = 0.0,
     progress_callback: Callable[[str, str | None], None] | None = None,
 ) -> dict[str, int]:
     """Enrich cross-section forecasts with cloud water from GRIB2 sources.
@@ -84,6 +92,7 @@ def enrich_forecasts(
         target_date: ISO date string (YYYY-MM-DD).
         target_hour: Target hour (UTC).
         data_dir: Base data directory for caching.
+        flight_duration_hours: Flight duration for per-hour enrichment.
 
     Returns:
         Dict mapping model name to GRIB init Unix timestamp (only non-None).
@@ -95,6 +104,7 @@ def enrich_forecasts(
     gfs_ts = _enrich_gfs(
         cross_sections, all_forecasts, route_points,
         target_date, target_hour, data_dir=data_dir,
+        flight_duration_hours=flight_duration_hours,
     )
     if gfs_ts is not None:
         grib_init_times["gfs"] = gfs_ts
@@ -104,6 +114,7 @@ def enrich_forecasts(
     icon_ts = _enrich_icon_eu(
         cross_sections, all_forecasts, route_points,
         target_date, target_hour, data_dir=data_dir,
+        flight_duration_hours=flight_duration_hours,
     )
     if icon_ts is not None:
         grib_init_times["icon"] = icon_ts
@@ -124,11 +135,14 @@ def _enrich_gfs(
     target_hour: int,
     *,
     data_dir: Path,
+    flight_duration_hours: float = 0.0,
 ) -> int | None:
     """Enrich GFS cross-sections with CLWMR/ICMR and cloud diagnostics.
 
     Returns the GRIB init Unix timestamp, or None if enrichment was skipped.
     """
+    from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
     gfs_sections = [cs for cs in cross_sections if cs.model == ModelSource.GFS]
     if not gfs_sections:
         logger.info("No GFS cross-sections to enrich")
@@ -146,7 +160,9 @@ def _enrich_gfs(
         return None
 
     init_date, init_hour = run_info
-    f_prev, f_next = bracket_forecast_hours(init_date, init_hour, target_time)
+    forecast_hours = compute_flight_window_hours(
+        init_date, init_hour, target_date, target_hour, flight_duration_hours,
+    )
 
     # Route bounding box (rounded to nearest degree + 1° buffer)
     lats = [rp.lat for rp in route_points]
@@ -166,7 +182,7 @@ def _enrich_gfs(
 
     # Fetch .idx text (shared by both enrichment paths)
     idx_by_fhour: dict[int, str] = {}
-    for fhour in sorted({f_prev, f_next}):
+    for fhour in forecast_hours:
         try:
             idx_by_fhour[fhour] = fetch_idx(init_date, init_hour, fhour, session=session)
         except Exception:
@@ -179,16 +195,59 @@ def _enrich_gfs(
     # Run both enrichment paths
     _enrich_clwmr_icmr(
         gfs_sections, all_forecasts, route_points,
-        init_date, init_hour, f_prev, f_next, bbox,
+        init_date, init_hour, forecast_hours, bbox,
         run_dir, idx_by_fhour, point_lats, point_lons, session,
     )
     _enrich_cloud_diagnostics(
         gfs_sections, all_forecasts, route_points,
-        init_date, init_hour, f_prev, f_next, bbox,
+        init_date, init_hour, forecast_hours, bbox,
         run_dir, idx_by_fhour, point_lats, point_lons, session,
     )
 
     return _run_info_to_timestamp(init_date, init_hour)
+
+
+def _fetch_clwmr_icmr_for_fhour(
+    init_date: str,
+    init_hour: int,
+    fhour: int,
+    target_levels: list[int],
+    bbox: tuple[int, int, int, int],
+    run_dir: Path,
+    idx_by_fhour: dict[int, str],
+    point_lats: list[float],
+    point_lons: list[float],
+    session: requests.Session,
+) -> list[dict[int, dict[str, float]]] | None:
+    """Fetch, cache, decode CLWMR/ICMR for a single GFS forecast hour."""
+    from weatherbrief.fetch.grib.decode import decode_grib_per_point
+
+    ck = cache_key(fhour, "CLWMR_ICMR", bbox)
+    grib_bytes = get_cached(run_dir, ck)
+    if grib_bytes is None:
+        idx_text = idx_by_fhour.get(fhour)
+        if idx_text is None:
+            return None
+        try:
+            ranges = plan_byte_ranges(idx_text, target_levels=target_levels)
+            if not ranges:
+                logger.warning("No CLWMR/ICMR found in .idx for f%03d", fhour)
+                return None
+            grib_bytes = fetch_byte_ranges(
+                init_date, init_hour, fhour, ranges, session=session,
+            )
+            if not grib_bytes:
+                return None
+            put_cached(run_dir, ck, grib_bytes)
+            logger.info(
+                "Downloaded GRIB2 f%03d: %d ranges, %.1f KB",
+                fhour, len(ranges), len(grib_bytes) / 1024,
+            )
+        except Exception:
+            logger.warning("Failed to fetch GRIB2 f%03d", fhour, exc_info=True)
+            return None
+
+    return decode_grib_per_point(grib_bytes, point_lats, point_lons)
 
 
 def _enrich_clwmr_icmr(
@@ -197,8 +256,7 @@ def _enrich_clwmr_icmr(
     route_points: list[RoutePoint],
     init_date: str,
     init_hour: int,
-    f_prev: int,
-    f_next: int,
+    forecast_hours: list[int],
     bbox: tuple[int, int, int, int],
     run_dir: Path,
     idx_by_fhour: dict[int, str],
@@ -219,60 +277,120 @@ def _enrich_clwmr_icmr(
             break
     target_levels.sort(reverse=True)
 
-    # Download GRIB2 data for each bracketing forecast hour
-    grib_data_by_fhour: dict[int, bytes] = {}
-    for fhour in sorted({f_prev, f_next}):
-        ck = cache_key(fhour, "CLWMR_ICMR", bbox)
-        cached = get_cached(run_dir, ck)
-        if cached is not None:
-            grib_data_by_fhour[fhour] = cached
+    total_enriched = 0
+    for fhour in forecast_hours:
+        decoded_points = _fetch_clwmr_icmr_for_fhour(
+            init_date, init_hour, fhour, target_levels, bbox,
+            run_dir, idx_by_fhour, point_lats, point_lons, session,
+        )
+        if not decoded_points:
             continue
 
-        idx_text = idx_by_fhour.get(fhour)
-        if idx_text is None:
-            continue
-
-        try:
-            ranges = plan_byte_ranges(idx_text, target_levels=target_levels)
-            if not ranges:
-                logger.warning("No CLWMR/ICMR found in .idx for f%03d", fhour)
-                continue
-            grib_bytes = fetch_byte_ranges(
-                init_date, init_hour, fhour, ranges, session=session,
-            )
-            if grib_bytes:
-                put_cached(run_dir, ck, grib_bytes)
-                grib_data_by_fhour[fhour] = grib_bytes
-                logger.info(
-                    "Downloaded GRIB2 f%03d: %d ranges, %.1f KB",
-                    fhour, len(ranges), len(grib_bytes) / 1024,
-                )
-        except Exception:
-            logger.warning("Failed to fetch GRIB2 f%03d", fhour, exc_info=True)
-            continue
-
-    if not grib_data_by_fhour:
-        logger.warning("No GRIB2 CLWMR/ICMR data retrieved for enrichment")
-        return
-
-    # Decode and interpolate
-    from weatherbrief.fetch.grib.decode import decode_grib_per_point
-
-    decoded_by_fhour: dict[int, list[dict[int, dict[str, float]]]] = {}
-    for fhour, grib_bytes in grib_data_by_fhour.items():
-        decoded_by_fhour[fhour] = decode_grib_per_point(
-            grib_bytes, point_lats, point_lons,
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        total_enriched += _merge_cloud_water_into_sections(
+            gfs_sections, all_forecasts, route_points, decoded_points, "gfs",
+            valid_utc=valid_utc,
         )
 
-    # Merge into cross-section forecasts (nearest-neighbor in time)
-    primary_fhour = f_prev if f_prev in decoded_by_fhour else f_next
-    if primary_fhour not in decoded_by_fhour:
-        primary_fhour = next(iter(decoded_by_fhour))
-    decoded_points = decoded_by_fhour[primary_fhour]
+    if total_enriched:
+        logger.info(
+            "GRIB2 GFS enrichment: %d pressure levels enriched with cloud water",
+            total_enriched,
+        )
+    else:
+        logger.warning("No GRIB2 CLWMR/ICMR data retrieved for enrichment")
 
-    _merge_cloud_water_into_sections(
-        gfs_sections, all_forecasts, route_points, decoded_points, "gfs",
-    )
+
+def _fetch_cloud_diag_for_fhour(
+    init_date: str,
+    init_hour: int,
+    fhour: int,
+    bbox: tuple[int, int, int, int],
+    run_dir: Path,
+    idx_by_fhour: dict[int, str],
+    point_lats: list[float],
+    point_lons: list[float],
+    session: requests.Session,
+) -> list[dict[str, float]] | None:
+    """Fetch, cache, decode cloud diagnostics for a single GFS forecast hour."""
+    from weatherbrief.fetch.grib.decode import decode_cloud_diag_per_point
+
+    ck = cache_key(fhour, "CLOUD_DIAG", bbox)
+    grib_bytes = get_cached(run_dir, ck)
+    if grib_bytes is None:
+        idx_text = idx_by_fhour.get(fhour)
+        if idx_text is None:
+            return None
+        try:
+            ranges = plan_cloud_diag_byte_ranges(idx_text)
+            if not ranges:
+                logger.warning("No cloud diag found in .idx for f%03d", fhour)
+                return None
+            grib_bytes = fetch_cloud_diag_ranges(
+                init_date, init_hour, fhour, ranges, session=session,
+            )
+            if not grib_bytes:
+                return None
+            put_cached(run_dir, ck, grib_bytes)
+            logger.info(
+                "Downloaded cloud diag f%03d: %d ranges, %.1f KB",
+                fhour, len(ranges), len(grib_bytes) / 1024,
+            )
+        except Exception:
+            logger.warning("Failed to fetch cloud diag f%03d", fhour, exc_info=True)
+            return None
+
+    return decode_cloud_diag_per_point(grib_bytes, point_lats, point_lons)
+
+
+def _apply_cloud_diagnostics_to_sections(
+    sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    diagnostics_per_point: list[NWPCloudDiagnostics | None],
+    model_value: str,
+    valid_utc: datetime | None = None,
+) -> int:
+    """Merge cloud diagnostics into cross-section and waypoint forecasts.
+
+    Args:
+        valid_utc: If set, only enrich hourly entries matching this UTC hour.
+
+    Returns:
+        Number of hourly entries enriched.
+    """
+    enriched_count = 0
+    for cs in sections:
+        for point_idx, wf in enumerate(cs.point_forecasts):
+            if point_idx >= len(diagnostics_per_point):
+                break
+            diag = diagnostics_per_point[point_idx]
+            if diag is None:
+                continue
+            for hourly in wf.hourly:
+                if valid_utc is not None and hourly.time.hour != valid_utc.hour:
+                    continue
+                _apply_cloud_diagnostics(hourly, diag)
+                enriched_count += 1
+
+    # Also enrich waypoint-only forecasts
+    wp_diag_lookup: dict[str, NWPCloudDiagnostics] = {}
+    for rp, diag in zip(route_points, diagnostics_per_point):
+        if rp.waypoint_icao and diag is not None:
+            wp_diag_lookup[rp.waypoint_icao] = diag
+
+    for wf in all_forecasts:
+        if wf.model.value != model_value:
+            continue
+        diag = wp_diag_lookup.get(wf.waypoint.icao)
+        if diag is None:
+            continue
+        for hourly in wf.hourly:
+            if valid_utc is not None and hourly.time.hour != valid_utc.hour:
+                continue
+            _apply_cloud_diagnostics(hourly, diag)
+
+    return enriched_count
 
 
 def _enrich_cloud_diagnostics(
@@ -281,8 +399,7 @@ def _enrich_cloud_diagnostics(
     route_points: list[RoutePoint],
     init_date: str,
     init_hour: int,
-    f_prev: int,
-    f_next: int,
+    forecast_hours: list[int],
     bbox: tuple[int, int, int, int],
     run_dir: Path,
     idx_by_fhour: dict[int, str],
@@ -291,91 +408,28 @@ def _enrich_cloud_diagnostics(
     session: requests.Session,
 ) -> None:
     """Enrich forecasts with GFS cloud layer diagnostics."""
-    from weatherbrief.fetch.grib.decode import (
-        build_cloud_diagnostics,
-        decode_cloud_diag_per_point,
-    )
+    from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
 
-    # Download GRIB2 cloud diagnostic data
-    grib_data_by_fhour: dict[int, bytes] = {}
-    for fhour in sorted({f_prev, f_next}):
-        ck = cache_key(fhour, "CLOUD_DIAG", bbox)
-        cached = get_cached(run_dir, ck)
-        if cached is not None:
-            grib_data_by_fhour[fhour] = cached
+    total_enriched = 0
+    for fhour in forecast_hours:
+        decoded_points = _fetch_cloud_diag_for_fhour(
+            init_date, init_hour, fhour, bbox,
+            run_dir, idx_by_fhour, point_lats, point_lons, session,
+        )
+        if not decoded_points:
             continue
 
-        idx_text = idx_by_fhour.get(fhour)
-        if idx_text is None:
-            continue
-
-        try:
-            ranges = plan_cloud_diag_byte_ranges(idx_text)
-            if not ranges:
-                logger.warning("No cloud diag found in .idx for f%03d", fhour)
-                continue
-            grib_bytes = fetch_cloud_diag_ranges(
-                init_date, init_hour, fhour, ranges, session=session,
-            )
-            if grib_bytes:
-                put_cached(run_dir, ck, grib_bytes)
-                grib_data_by_fhour[fhour] = grib_bytes
-                logger.info(
-                    "Downloaded cloud diag f%03d: %d ranges, %.1f KB",
-                    fhour, len(ranges), len(grib_bytes) / 1024,
-                )
-        except Exception:
-            logger.warning("Failed to fetch cloud diag f%03d", fhour, exc_info=True)
-            continue
-
-    if not grib_data_by_fhour:
-        logger.warning("No cloud diagnostic GRIB2 data retrieved")
-        return
-
-    # Decode each forecast hour
-    decoded_by_fhour: dict[int, list[dict[str, float]]] = {}
-    for fhour, grib_bytes in grib_data_by_fhour.items():
-        decoded_by_fhour[fhour] = decode_cloud_diag_per_point(
-            grib_bytes, point_lats, point_lons,
+        diagnostics_per_point = [build_cloud_diagnostics(raw) for raw in decoded_points]
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        total_enriched += _apply_cloud_diagnostics_to_sections(
+            gfs_sections, all_forecasts, route_points,
+            diagnostics_per_point, "gfs", valid_utc=valid_utc,
         )
 
-    # Use closest forecast hour
-    primary_fhour = f_prev if f_prev in decoded_by_fhour else f_next
-    if primary_fhour not in decoded_by_fhour:
-        primary_fhour = next(iter(decoded_by_fhour))
-    decoded_points = decoded_by_fhour[primary_fhour]
-
-    # Build NWPCloudDiagnostics per point and merge into forecasts
-    diagnostics_per_point = [build_cloud_diagnostics(raw) for raw in decoded_points]
-
-    enriched_count = 0
-    for cs in gfs_sections:
-        for point_idx, wf in enumerate(cs.point_forecasts):
-            if point_idx >= len(diagnostics_per_point):
-                break
-            diag = diagnostics_per_point[point_idx]
-            if diag is None:
-                continue
-            for hourly in wf.hourly:
-                _apply_cloud_diagnostics(hourly, diag)
-                enriched_count += 1
-
-    # Also enrich waypoint-only forecasts
-    wp_diag_lookup: dict[str, object] = {}
-    for rp, diag in zip(route_points, diagnostics_per_point):
-        if rp.waypoint_icao and diag is not None:
-            wp_diag_lookup[rp.waypoint_icao] = diag
-
-    for wf in all_forecasts:
-        if wf.model.value != "gfs":
-            continue
-        diag = wp_diag_lookup.get(wf.waypoint.icao)
-        if diag is None:
-            continue
-        for hourly in wf.hourly:
-            _apply_cloud_diagnostics(hourly, diag)
-
-    logger.info("GRIB2 enrichment: %d hourly entries enriched with cloud diagnostics", enriched_count)
+    if total_enriched:
+        logger.info("GRIB2 enrichment: %d hourly entries enriched with cloud diagnostics", total_enriched)
+    else:
+        logger.warning("No cloud diagnostic GRIB2 data retrieved")
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +445,7 @@ def _enrich_icon_eu(
     target_hour: int,
     *,
     data_dir: Path,
+    flight_duration_hours: float = 0.0,
 ) -> int | None:
     """Enrich ICON cross-sections with QC/QI from ICON-EU GRIB2.
 
@@ -400,7 +455,7 @@ def _enrich_icon_eu(
         ICON_EU_MODEL_LEVEL_MAX,
         ICON_EU_MODEL_LEVEL_MIN,
         ICON_EU_VARIABLES,
-        bracket_icon_eu_forecast_hours,
+        compute_icon_eu_flight_window_hours,
         fetch_icon_eu_fields,
         find_latest_icon_eu_run,
         route_in_icon_eu_domain,
@@ -433,7 +488,9 @@ def _enrich_icon_eu(
         return None
 
     init_date, init_hour = run_info
-    f_prev, f_next = bracket_icon_eu_forecast_hours(init_date, init_hour, target_time)
+    forecast_hours = compute_icon_eu_flight_window_hours(
+        init_date, init_hour, target_date, target_hour, flight_duration_hours,
+    )
 
     purge_old_runs(data_dir, model="icon-eu")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
@@ -452,9 +509,8 @@ def _enrich_icon_eu(
     point_lons = [rp.lon for rp in route_points]
     levels = list(range(ICON_EU_MODEL_LEVEL_MIN, ICON_EU_MODEL_LEVEL_MAX + 1))
 
-    # Fetch and decode only the closest forecast hour to limit memory usage.
     # ICON-EU GRIB data is ~190MB per fhour; decoding via cfgrib/xarray
-    # expands to ~800MB+, so loading both fhours would exceed container limits.
+    # expands to ~800MB+. Process one fhour at a time to limit memory.
     import gc
 
     from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
@@ -482,26 +538,33 @@ def _enrich_icon_eu(
         gc.collect()
         return decoded
 
-    # Prefer f_prev (closest); fall back to f_next only if needed
-    preferred_order = [f_prev, f_next] if f_prev != f_next else [f_prev]
-    decoded_points = None
-    for fhour in preferred_order:
+    total_enriched = 0
+    for fhour in forecast_hours:
         decoded_points = _fetch_and_decode_fhour(fhour)
-        if decoded_points:
-            break
+        if not decoded_points:
+            continue
 
-    if not decoded_points:
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        total_enriched += _merge_cloud_water_into_sections(
+            icon_sections, all_forecasts, route_points, decoded_points, "icon",
+            valid_utc=valid_utc,
+        )
+        del decoded_points
+        gc.collect()
+
+    if not total_enriched:
         logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
         return None
 
-    _merge_cloud_water_into_sections(
-        icon_sections, all_forecasts, route_points, decoded_points, "icon",
+    logger.info(
+        "GRIB2 ICON enrichment: %d pressure levels enriched with cloud water",
+        total_enriched,
     )
 
     # Cloud diagnostics (ceiling, convective base/top) from single-level files
     _enrich_icon_eu_cloud_diagnostics(
         icon_sections, all_forecasts, route_points,
-        init_date, init_hour, f_prev, f_next, bbox,
+        init_date, init_hour, forecast_hours, bbox,
         run_dir, point_lats, point_lons, session,
     )
 
@@ -514,8 +577,7 @@ def _enrich_icon_eu_cloud_diagnostics(
     route_points: list[RoutePoint],
     init_date: str,
     init_hour: int,
-    f_prev: int,
-    f_next: int,
+    forecast_hours: list[int],
     bbox: tuple[int, int, int, int],
     run_dir: Path,
     point_lats: list[float],
@@ -529,13 +591,8 @@ def _enrich_icon_eu_cloud_diagnostics(
     )
     from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
 
-    # Fetch and decode only the closest forecast hour (same memory strategy
-    # as model-level enrichment above — single-level data is smaller but
-    # still benefits from processing only what's needed).
-    preferred_order = [f_prev, f_next] if f_prev != f_next else [f_prev]
-    decoded_points: list[dict[str, float]] | None = None
-
-    for fhour in preferred_order:
+    total_enriched = 0
+    for fhour in forecast_hours:
         ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG", bbox)
         grib_bytes = get_cached(run_dir, ck)
         if grib_bytes is None:
@@ -551,54 +608,57 @@ def _enrich_icon_eu_cloud_diagnostics(
                 continue
         if not grib_bytes:
             continue
+
         decoded_points = decode_icon_eu_cloud_diag_per_point(
             grib_bytes, point_lats, point_lons,
         )
         del grib_bytes
-        if decoded_points:
-            break
+        if not decoded_points:
+            continue
 
-    if not decoded_points:
-        logger.debug("No ICON-EU cloud diagnostic GRIB2 data retrieved")
-        return
+        diagnostics_per_point = [build_icon_cloud_diagnostics(raw) for raw in decoded_points]
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
 
-    # Build NWPCloudDiagnostics per point and merge into forecasts
-    diagnostics_per_point = [build_icon_cloud_diagnostics(raw) for raw in decoded_points]
+        # Use _apply_cloud_diagnostics_to_sections with GFS-priority guard
+        for cs in icon_sections:
+            for point_idx, wf in enumerate(cs.point_forecasts):
+                if point_idx >= len(diagnostics_per_point):
+                    break
+                diag = diagnostics_per_point[point_idx]
+                if diag is None:
+                    continue
+                for hourly in wf.hourly:
+                    if hourly.time.hour != valid_utc.hour:
+                        continue
+                    if hourly.nwp_cloud_diagnostics is None:
+                        _apply_cloud_diagnostics(hourly, diag)
+                        total_enriched += 1
 
-    enriched_count = 0
-    for cs in icon_sections:
-        for point_idx, wf in enumerate(cs.point_forecasts):
-            if point_idx >= len(diagnostics_per_point):
-                break
-            diag = diagnostics_per_point[point_idx]
+        # Also enrich waypoint-only forecasts
+        wp_diag_lookup: dict[str, NWPCloudDiagnostics] = {}
+        for rp, diag in zip(route_points, diagnostics_per_point):
+            if rp.waypoint_icao and diag is not None:
+                wp_diag_lookup[rp.waypoint_icao] = diag
+
+        for wf in all_forecasts:
+            if wf.model.value != "icon":
+                continue
+            diag = wp_diag_lookup.get(wf.waypoint.icao)
             if diag is None:
                 continue
             for hourly in wf.hourly:
-                # Only set if not already populated (GFS takes priority)
+                if hourly.time.hour != valid_utc.hour:
+                    continue
                 if hourly.nwp_cloud_diagnostics is None:
                     _apply_cloud_diagnostics(hourly, diag)
-                    enriched_count += 1
 
-    # Also enrich waypoint-only forecasts
-    wp_diag_lookup: dict[str, object] = {}
-    for rp, diag in zip(route_points, diagnostics_per_point):
-        if rp.waypoint_icao and diag is not None:
-            wp_diag_lookup[rp.waypoint_icao] = diag
-
-    for wf in all_forecasts:
-        if wf.model.value != "icon":
-            continue
-        diag = wp_diag_lookup.get(wf.waypoint.icao)
-        if diag is None:
-            continue
-        for hourly in wf.hourly:
-            if hourly.nwp_cloud_diagnostics is None:
-                _apply_cloud_diagnostics(hourly, diag)
-
-    logger.info(
-        "ICON-EU enrichment: %d hourly entries enriched with cloud diagnostics",
-        enriched_count,
-    )
+    if total_enriched:
+        logger.info(
+            "ICON-EU enrichment: %d hourly entries enriched with cloud diagnostics",
+            total_enriched,
+        )
+    else:
+        logger.debug("No ICON-EU cloud diagnostic GRIB2 data retrieved")
 
 
 # ---------------------------------------------------------------------------
@@ -612,10 +672,18 @@ def _merge_cloud_water_into_sections(
     route_points: list[RoutePoint],
     decoded_points: list[dict[int, dict[str, float]]],
     model_value: str,
-) -> None:
+    valid_utc: datetime | None = None,
+) -> int:
     """Merge decoded cloud water data into cross-section and waypoint forecasts.
 
     Shared between GFS and ICON-EU enrichment paths.
+
+    Args:
+        valid_utc: If set, only enrich hourly entries whose time matches
+            this UTC hour. None enriches all hours (backward-compatible).
+
+    Returns:
+        Number of pressure levels enriched.
     """
     enriched_count = 0
     for cs in sections:
@@ -627,6 +695,8 @@ def _merge_cloud_water_into_sections(
                 continue
 
             for hourly in wf.hourly:
+                if valid_utc is not None and hourly.time.hour != valid_utc.hour:
+                    continue
                 for pl in hourly.pressure_levels:
                     level_data = point_data.get(pl.pressure_hpa)
                     if level_data is None:
@@ -655,6 +725,8 @@ def _merge_cloud_water_into_sections(
         if not point_data:
             continue
         for hourly in wf.hourly:
+            if valid_utc is not None and hourly.time.hour != valid_utc.hour:
+                continue
             for pl in hourly.pressure_levels:
                 level_data = point_data.get(pl.pressure_hpa)
                 if level_data is None:
@@ -666,7 +738,4 @@ def _merge_cloud_water_into_sections(
                 if icmr is not None:
                     pl.ice_mixing_ratio_kg_kg = icmr
 
-    logger.info(
-        "GRIB2 %s enrichment: %d pressure levels enriched with cloud water",
-        model_value.upper(), enriched_count,
-    )
+    return enriched_count

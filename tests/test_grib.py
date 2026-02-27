@@ -1142,3 +1142,183 @@ class TestCloudCoverOverride:
         assert hourly.cloud_cover_low_pct == 50.0
         assert hourly.cloud_cover_mid_pct == 25.0
         assert hourly.cloud_cover_high_pct == 0.0
+
+
+# --- Per-hour GRIB enrichment tests ---
+
+
+class TestForecastHourToUtc:
+    """Tests for _forecast_hour_to_utc helper."""
+
+    def test_basic(self):
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib import _forecast_hour_to_utc
+
+        result = _forecast_hour_to_utc("20260227", 0, 9)
+        assert result == datetime(2026, 2, 27, 9, 0, tzinfo=timezone.utc)
+
+    def test_crosses_midnight(self):
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib import _forecast_hour_to_utc
+
+        result = _forecast_hour_to_utc("20260227", 18, 12)
+        assert result == datetime(2026, 2, 28, 6, 0, tzinfo=timezone.utc)
+
+    def test_f000(self):
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib import _forecast_hour_to_utc
+
+        result = _forecast_hour_to_utc("20260227", 12, 0)
+        assert result == datetime(2026, 2, 27, 12, 0, tzinfo=timezone.utc)
+
+
+class TestComputeFlightWindowHours:
+    """Tests for compute_flight_window_hours (GFS)."""
+
+    def test_zero_duration(self):
+        """Duration=0 produces single forecast hour."""
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        hours = compute_flight_window_hours("20260227", 0, "2026-02-27", 9, 0.0)
+        assert len(hours) == 1
+
+    def test_short_flight(self):
+        """2-hour flight produces 3 forecast hours (dep, dep+1, dep+2)."""
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        hours = compute_flight_window_hours("20260227", 0, "2026-02-27", 9, 2.0)
+        # dep at f9, +1h at f10, +2h at f11 → 3 unique hours
+        assert len(hours) == 3
+        assert hours == [9, 10, 11]
+
+    def test_fractional_duration(self):
+        """1.5-hour flight → ceil(1.5)+1 = 3 hours."""
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        hours = compute_flight_window_hours("20260227", 0, "2026-02-27", 9, 1.5)
+        assert len(hours) == 3
+        assert hours == [9, 10, 11]
+
+    def test_3hourly_region(self):
+        """Flight in >120h region snaps to 3-hourly grid."""
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        # Departure 130h after init → 3-hourly region
+        hours = compute_flight_window_hours("20260221", 0, "2026-02-26", 10, 2.0)
+        # All should be multiples of 3 past 120
+        for h in hours:
+            if h > 120:
+                assert (h - 120) % 3 == 0
+
+    def test_sorted_and_deduped(self):
+        """Output is sorted and deduplicated."""
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        hours = compute_flight_window_hours("20260227", 0, "2026-02-27", 9, 4.0)
+        assert hours == sorted(set(hours))
+
+
+class TestComputeIconEuFlightWindowHours:
+    """Tests for compute_icon_eu_flight_window_hours."""
+
+    def test_short_flight(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import compute_icon_eu_flight_window_hours
+
+        hours = compute_icon_eu_flight_window_hours("20260227", 0, "2026-02-27", 9, 2.0)
+        assert hours == [9, 10, 11]
+
+    def test_clamp_to_120(self):
+        """Forecast hours clamped to max 120."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import compute_icon_eu_flight_window_hours
+
+        # Very far out → all clamped to 120
+        hours = compute_icon_eu_flight_window_hours("20260220", 0, "2026-02-27", 9, 2.0)
+        assert all(h <= 120 for h in hours)
+
+
+class TestMergeValidHourFilter:
+    """Tests for valid_utc filtering in _merge_cloud_water_into_sections."""
+
+    @staticmethod
+    def _make_cross_section(hourlies):
+        """Helper to build a cross-section with the given hourly entries."""
+        from datetime import datetime, timezone
+        from weatherbrief.models import (
+            PressureLevelData,
+            RouteCrossSection,
+            RoutePoint,
+            WaypointForecast,
+        )
+
+        rp = RoutePoint(lat=51.0, lon=-0.5, distance_from_origin_nm=0)
+        wf = WaypointForecast(
+            waypoint={"icao": "EGTF", "name": "Test", "lat": 51.0, "lon": -0.5},
+            model="gfs",
+            fetched_at=datetime(2026, 2, 27, 8, tzinfo=timezone.utc),
+            hourly=hourlies,
+        )
+        cs = RouteCrossSection(
+            model="gfs",
+            route_points=[rp],
+            fetched_at=datetime(2026, 2, 27, 8, tzinfo=timezone.utc),
+            point_forecasts=[wf],
+        )
+        return cs, rp
+
+    def test_valid_hour_filters_correctly(self):
+        """Only matching hour gets enriched."""
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib import _merge_cloud_water_into_sections
+        from weatherbrief.models import PressureLevelData
+
+        hourlies = []
+        for h in (9, 10, 11):
+            hourlies.append(HourlyForecast(
+                time=datetime(2026, 2, 27, h, tzinfo=timezone.utc),
+                pressure_levels=[
+                    PressureLevelData(pressure_hpa=700, temperature_c=-7.0),
+                ],
+            ))
+
+        cs, rp = self._make_cross_section(hourlies)
+        decoded = [
+            {700: {"cloud_liquid_water_kg_kg": 0.0003, "ice_mixing_ratio_kg_kg": 0.0001}},
+        ]
+
+        valid_utc = datetime(2026, 2, 27, 10, tzinfo=timezone.utc)
+        count = _merge_cloud_water_into_sections(
+            [cs], [], [rp], decoded, "gfs", valid_utc=valid_utc,
+        )
+
+        assert count == 1
+        assert hourlies[0].pressure_levels[0].cloud_liquid_water_kg_kg is None  # hour 9
+        assert hourlies[1].pressure_levels[0].cloud_liquid_water_kg_kg == 0.0003  # hour 10
+        assert hourlies[2].pressure_levels[0].cloud_liquid_water_kg_kg is None  # hour 11
+
+    def test_valid_hour_none_enriches_all(self):
+        """valid_utc=None enriches all hours (backward compat)."""
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib import _merge_cloud_water_into_sections
+        from weatherbrief.models import PressureLevelData
+
+        hourlies = []
+        for h in (9, 10, 11):
+            hourlies.append(HourlyForecast(
+                time=datetime(2026, 2, 27, h, tzinfo=timezone.utc),
+                pressure_levels=[
+                    PressureLevelData(pressure_hpa=700, temperature_c=-7.0),
+                ],
+            ))
+
+        cs, rp = self._make_cross_section(hourlies)
+        decoded = [
+            {700: {"cloud_liquid_water_kg_kg": 0.0003}},
+        ]
+
+        count = _merge_cloud_water_into_sections(
+            [cs], [], [rp], decoded, "gfs", valid_utc=None,
+        )
+
+        assert count == 3
+        for h in hourlies:
+            assert h.pressure_levels[0].cloud_liquid_water_kg_kg == 0.0003
