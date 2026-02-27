@@ -106,6 +106,48 @@ for hourly in wf.hourly:
 
 `valid_utc=None` enriches all hours (unused in practice, preserved for backward compatibility).
 
+### Interpolated-Hour Gap and Propagation
+
+Open-Meteo provides **hourly** forecast data for the full 24h cross-section, including hours interpolated between the underlying NWP model's native temporal resolution. At longer lead times, GFS outputs 3-hourly (f120–f384) and ICON-EU 3-hourly (78–120h). GRIB enrichment only targets native model steps (matching by `valid_utc.hour`), leaving interpolated hours **without GRIB-derived data**.
+
+**What's affected on interpolated hours:**
+
+| Field | Native hours | Interpolated hours | Impact |
+|-------|-------------|-------------------|--------|
+| `nwp_cloud_diagnostics` | GRIB base/top/cover | Was `None` → **now propagated** | Was critical — see below |
+| `cloud_cover_low/mid/high_pct` | Overridden by GRIB | Was Open-Meteo → **now propagated** | Consistent source |
+| `cloud_liquid_water_g_m3` | GRIB CLWMR per level | `None` | Low impact — see below |
+| `ice_mixing_ratio_g_m3` | GRIB ICMR per level | `None` | Low impact — see below |
+
+**Cloud diagnostics propagation** (`_propagate_cloud_diagnostics` in `grib/__init__.py`):
+
+After all GRIB enrichment completes, `enrich_forecasts()` forward-fills `nwp_cloud_diagnostics` (and the associated `cloud_cover_*_pct` overrides) from each native hour to subsequent interpolated hours. Cloud layer geometry (base/top) changes slowly between 3h GFS steps, making this meteorologically sound.
+
+```
+Hour 06 (native) → diagnostics from GRIB
+Hour 07 (interp) → copied from 06
+Hour 08 (interp) → copied from 06
+Hour 09 (native) → diagnostics from GRIB (replaces 06's)
+Hour 10 (interp) → copied from 09
+...
+```
+
+Hours before the first native step (e.g., 00–05 when the first GRIB hour is 06) remain without diagnostics — bulk NWP percentages apply as fallback.
+
+**Why this was critical**: Without `nwp_cloud_diagnostics`, multiple downstream consumers fall back to applying the bulk NWP cloud percentage across the full ICAO altitude band (6500–20000ft for mid cloud). When the actual cloud is at 18000ft but the bulk percentage is 89%, this triggers false icing and inflated SFIP scores at 8000ft in bone-dry air (DD > 8°C).
+
+**Consumers that use altitude-aware diagnostics:**
+
+| Consumer | Field used | Fallback without diagnostics |
+|----------|-----------|------------------------------|
+| Ogimet icing NWP fallback (`icing.py`) | `nwp_cloud_diagnostics` | Bulk % across full band → **false icing** |
+| SFIP cloud cover input (`sfip.py`) | `nwp_cloud_diagnostics` | Bulk % by pressure band → **inflated scores** |
+| Altitude advisories VMC/IMC (`advisories.py`) | `nwp_cloud_diagnostics` | Bulk % by ICAO band → **wrong regime labels** |
+| NWP ceiling (`__init__.py`) | `nwp_cloud_diagnostics.ceiling_ft` | `None` → no NWP ceiling |
+| Cross-section NWP cloud layer viz (frontend) | `nwp_cloud_diagnostics` | `null` → no layer rendering |
+
+**CLWMR/ICMR gap**: Not propagated. At lead times where the gap exists (>120h for GFS), CLWMR is often unavailable entirely. When present only at native hours, interpolated hours fall through to the Ogimet path (the standard icing method) instead of the LWC-direct path — acceptable since Ogimet is the primary assessment and the cloud diagnostics propagation ensures the NWP fallback works correctly regardless.
+
 ### Why This Matters for Icing
 
 For a 3-hour flight departing 09:00 UTC, a route point near the destination is analyzed at ~12:00 UTC:
@@ -118,6 +160,7 @@ For a 3-hour flight departing 09:00 UTC, a route point near the destination is a
 | CLWMR (cloud liquid water) | GRIB f012 | 12:00 UTC |
 | ICMR (ice mixing ratio) | GRIB f012 | 12:00 UTC |
 | Cloud cover (low/mid/high) | GRIB f012 override | 12:00 UTC |
+| Cloud diagnostics (base/top) | GRIB f012 (or propagated from nearest native) | 12:00 UTC |
 
 All variables are time-aligned at 12:00 UTC. Cloud water matches the cloud cover which matches the temperature — icing zones align with actual cloud areas.
 
