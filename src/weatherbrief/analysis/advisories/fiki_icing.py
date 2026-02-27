@@ -9,6 +9,7 @@ Evaluates three flight phases:
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories._helpers import min_icing_clearance
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -50,20 +51,7 @@ def _transit_icing(
     return thickness, worst, sld
 
 
-def _min_icing_clearance(zones: list[IcingZone], cruise_alt_ft: float) -> float:
-    """Minimum vertical distance from cruise altitude to any icing zone.
-
-    Returns float('inf') if no icing zones exist.
-    """
-    min_dist = float("inf")
-    for zone in zones:
-        if zone.base_ft <= cruise_alt_ft <= zone.top_ft:
-            return 0.0
-        elif cruise_alt_ft < zone.base_ft:
-            min_dist = min(min_dist, zone.base_ft - cruise_alt_ft)
-        else:
-            min_dist = min(min_dist, cruise_alt_ft - zone.top_ft)
-    return min_dist
+_min_icing_clearance = min_icing_clearance  # local alias for backward compat
 
 
 @register
