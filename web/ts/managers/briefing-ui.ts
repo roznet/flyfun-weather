@@ -139,6 +139,7 @@ export function renderFreshnessBar(
   pack: PackMeta | null,
   isAdmin: boolean,
   refreshing: boolean,
+  refreshStatus: 'queued' | 'refreshing' | null,
   refreshStage: string | null,
   refreshDetail: string | null,
   onForceRefresh: () => void,
@@ -157,6 +158,10 @@ export function renderFreshnessBar(
   // Refreshing state takes priority — show pipeline progress
   if (refreshing) {
     el.className = 'freshness-bar freshness-refreshing';
+    if (refreshStatus === 'queued') {
+      el.innerHTML = `<span class="refresh-prefix">Queued</span> · Waiting for other refreshes to complete<span class="dots-spinner"></span>`;
+      return;
+    }
     const detailSuffix = refreshDetail ? ` (${escapeHtml(refreshDetail)})` : '';
     const label = refreshStage ? escapeHtml(refreshStage) : 'Starting refresh';
     el.innerHTML = `<span class="refresh-prefix">Refreshing (may take a minute)</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>`;

@@ -80,6 +80,7 @@ export interface BriefingState {
   vizSettings: VizSettings;
   loading: boolean;
   refreshing: boolean;
+  refreshStatus: 'queued' | 'refreshing' | null;
   refreshStage: string | null;
   refreshDetail: string | null;
   refreshProgress: number;
@@ -132,6 +133,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   vizSettings: loadVizSettings(),
   loading: false,
   refreshing: false,
+  refreshStatus: null,
   refreshStage: null,
   refreshDetail: null,
   refreshProgress: 0,
@@ -211,11 +213,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refresh: async () => {
     const flight = get().flight;
     if (!flight) return;
-    set({ refreshing: true, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
+    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
     try {
       const newPack = await api.refreshBriefingStream(flight.id, (event) => {
         if (event.type === 'progress') {
           set({
+            refreshStatus: 'refreshing',
             refreshStage: event.label || event.stage || null,
             refreshDetail: event.detail || null,
             refreshProgress: event.progress || 0,
@@ -228,7 +231,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       }
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
-      set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
       // Re-check freshness after a real refresh
       if (!newPack.data_status) {
         get().checkFreshness();
@@ -239,18 +242,19 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         get().checkActiveRefresh();
         return;
       }
-      set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
     }
   },
 
   forceRefresh: async () => {
     const flight = get().flight;
     if (!flight) return;
-    set({ refreshing: true, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
+    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
     try {
       const newPack = await api.refreshBriefingStream(flight.id, (event) => {
         if (event.type === 'progress') {
           set({
+            refreshStatus: 'refreshing',
             refreshStage: event.label || event.stage || null,
             refreshDetail: event.detail || null,
             refreshProgress: event.progress || 0,
@@ -259,14 +263,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       }, true);
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
-      set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
       get().checkFreshness();
     } catch (err) {
       if (err instanceof RefreshStreamError && /already in progress/i.test(err.message)) {
         get().checkActiveRefresh();
         return;
       }
-      set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
     }
   },
 
@@ -280,6 +284,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       // A refresh is active — show its progress and poll until done
       set({
         refreshing: true,
+        refreshStatus: (status.status as 'queued' | 'refreshing') ?? 'refreshing',
         refreshStage: status.label ?? status.stage ?? null,
         refreshDetail: status.detail ?? null,
         refreshProgress: 0,
@@ -289,20 +294,21 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       const MAX_POLL_ATTEMPTS = 100; // ~5 minutes at 3s intervals
       const poll = async (attempt = 0): Promise<void> => {
         if (attempt >= MAX_POLL_ATTEMPTS) {
-          set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: 'Refresh timed out' });
+          set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: 'Refresh timed out' });
           return;
         }
         await new Promise(r => setTimeout(r, 3000));
         const s = await api.fetchRefreshStatus(flight.id);
         if (!s.active) {
           // Done — reload packs and select latest
-          set({ refreshing: false, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+          set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
           await get().loadPacks();
           await get().selectLatest();
           get().checkFreshness();
           return;
         }
         set({
+          refreshStatus: (s.status as 'queued' | 'refreshing') ?? 'refreshing',
           refreshStage: s.label ?? s.stage ?? null,
           refreshDetail: s.detail ?? null,
         });

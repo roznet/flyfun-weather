@@ -385,6 +385,7 @@ async function init(): Promise<void> {
       state.freshnessLoading !== prev.freshnessLoading ||
       state.currentPack !== prev.currentPack ||
       state.refreshing !== prev.refreshing ||
+      state.refreshStatus !== prev.refreshStatus ||
       state.refreshStage !== prev.refreshStage ||
       state.refreshDetail !== prev.refreshDetail
     ) {
@@ -394,6 +395,7 @@ async function init(): Promise<void> {
         state.currentPack,
         user.is_admin,
         state.refreshing,
+        state.refreshStatus,
         state.refreshStage,
         state.refreshDetail,
         () => store.getState().forceRefresh(),
