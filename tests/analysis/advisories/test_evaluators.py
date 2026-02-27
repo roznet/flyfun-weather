@@ -108,6 +108,23 @@ class TestFreezingLevel:
         )
         assert result.aggregate_status == AdvisoryStatus.RED
 
+    def test_green_below_min_route_pct(self, icing_no_escape_context: RouteContext):
+        """Even with tight clearance, stays GREEN if below min_route_pct."""
+        result = FreezingLevelEvaluator.evaluate(
+            icing_no_escape_context,
+            {"margin_ft": 1000, "tight_margin_ft": 2000, "min_route_pct": 99},
+        )
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_amber_tight_margin_above_min_pct(self, icing_no_escape_context: RouteContext):
+        """Tight margin triggers AMBER when above min_route_pct threshold."""
+        # Use a very large margin so all points are "below tight" but none "below margin"
+        result = FreezingLevelEvaluator.evaluate(
+            icing_no_escape_context,
+            {"margin_ft": -10000, "tight_margin_ft": 10000, "min_route_pct": 5},
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+
 
 class TestCloudTop:
     def test_green_no_clouds(self, clear_context: RouteContext):
