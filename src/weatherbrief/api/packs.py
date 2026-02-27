@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -71,25 +72,40 @@ class RefreshEntry(BaseModel):
     stage: str | None = None
     detail: str | None = None
     queued_at: str = ""  # ISO timestamp
+    queued_at_mono: float = 0.0  # monotonic clock for accurate elapsed measurement
+    refreshing_at_mono: float | None = None
 
 
 class _RefreshRegistry:
     """Thread-safe in-memory registry of active refreshes."""
 
+    MAX_QUEUE_DEPTH = 5
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._entries: dict[str, RefreshEntry] = {}
 
-    def try_register(self, flight_id: str, triggered_by: str = "user") -> RefreshEntry | None:
-        """Atomically register a refresh.  Returns the entry, or None if already active."""
+    def try_register(
+        self, flight_id: str, triggered_by: str = "user",
+    ) -> RefreshEntry | None:
+        """Atomically register a refresh.
+
+        Returns the entry on success, or None if the flight is already active.
+        Raises ``QueueFullError`` when the queue depth exceeds the cap
+        (scheduler bypasses the cap).
+        """
         with self._lock:
             if flight_id in self._entries:
                 return None
+            if triggered_by != "scheduler" and len(self._entries) >= self.MAX_QUEUE_DEPTH:
+                raise QueueFullError(len(self._entries))
+            now_mono = time.monotonic()
             entry = RefreshEntry(
                 flight_id=flight_id,
                 status="queued",
                 triggered_by=triggered_by,
                 queued_at=datetime.now(tz=timezone.utc).isoformat(),
+                queued_at_mono=now_mono,
             )
             self._entries[flight_id] = entry
             return entry
@@ -98,6 +114,25 @@ class _RefreshRegistry:
         with self._lock:
             if flight_id in self._entries:
                 self._entries[flight_id].status = "refreshing"
+                self._entries[flight_id].refreshing_at_mono = time.monotonic()
+
+    def get_timing(self, flight_id: str) -> tuple[float, float]:
+        """Return (queue_wait_seconds, total_elapsed_seconds) for a flight.
+
+        Must be called before unregister().
+        """
+        with self._lock:
+            entry = self._entries.get(flight_id)
+            if entry is None:
+                return (0.0, 0.0)
+            now = time.monotonic()
+            total_elapsed = now - entry.queued_at_mono
+            queue_wait = (
+                (entry.refreshing_at_mono - entry.queued_at_mono)
+                if entry.refreshing_at_mono is not None
+                else total_elapsed
+            )
+            return (round(queue_wait, 2), round(total_elapsed, 2))
 
     def update_progress(self, flight_id: str, stage: str, detail: str | None = None) -> None:
         with self._lock:
@@ -117,6 +152,21 @@ class _RefreshRegistry:
     def get_all_active(self) -> list[RefreshEntry]:
         with self._lock:
             return [e.model_copy() for e in self._entries.values()]
+
+    def queue_snapshot(self) -> dict[str, int]:
+        """Return counts of queued vs refreshing entries (for metrics)."""
+        with self._lock:
+            queued = sum(1 for e in self._entries.values() if e.status == "queued")
+            refreshing = sum(1 for e in self._entries.values() if e.status == "refreshing")
+            return {"queued": queued, "refreshing": refreshing}
+
+
+class QueueFullError(Exception):
+    """Raised when the refresh queue is at capacity."""
+
+    def __init__(self, current_depth: int) -> None:
+        self.current_depth = current_depth
+        super().__init__(f"Refresh queue full ({current_depth} active)")
 
 
 refresh_registry = _RefreshRegistry()
@@ -496,8 +546,11 @@ async def refresh_briefing(
                 logger.info("Data is fresh for %s, skipping pipeline", flight_id)
                 return _meta_to_response(latest, data_status=status)
 
-    # Duplicate check
-    entry = refresh_registry.try_register(flight_id, triggered_by="user")
+    # Duplicate / queue-depth check
+    try:
+        entry = refresh_registry.try_register(flight_id, triggered_by="user")
+    except QueueFullError:
+        raise HTTPException(status_code=503, detail="Server busy, too many queued refreshes")
     if entry is None:
         raise HTTPException(status_code=409, detail="Refresh already in progress")
 
@@ -520,6 +573,12 @@ async def refresh_briefing(
                 options=options,
             ),
         )
+        # Capture timing before unregister
+        queue_wait, total_elapsed = refresh_registry.get_timing(flight_id)
+        result.usage.elapsed_seconds = total_elapsed
+        result.usage.queue_wait_seconds = queue_wait
+        result.usage.triggered_by = "user"
+
         meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
                                  user_id=user_id, model_metadata=model_metadata)
         return _meta_to_response(meta)
@@ -587,9 +646,21 @@ async def refresh_briefing_stream(
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                     )
 
-        # Duplicate check — return SSE error instead of HTTP 409 so clients
+        # Duplicate / queue-depth check — return SSE error so clients
         # that already opened the stream can handle it gracefully.
-        entry = refresh_registry.try_register(flight_id, triggered_by="user")
+        try:
+            entry = refresh_registry.try_register(flight_id, triggered_by="user")
+        except QueueFullError:
+            async def busy_generator() -> AsyncGenerator[str, None]:
+                event = {"type": "error", "message": "Server busy, too many queued refreshes"}
+                yield f"event: error\ndata: {json_mod.dumps(event)}\n\n"
+
+            return StreamingResponse(
+                busy_generator(),
+                media_type="text/event-stream",
+                status_code=503,
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
         if entry is None:
             async def duplicate_generator() -> AsyncGenerator[str, None]:
                 event = {"type": "error", "message": "Refresh already in progress"}
@@ -641,6 +712,12 @@ async def refresh_briefing_stream(
                 options=options,
                 progress_callback=progress_callback,
             )
+            # Capture timing before unregister
+            queue_wait, total_elapsed = refresh_registry.get_timing(flight_id)
+            result.usage.elapsed_seconds = total_elapsed
+            result.usage.queue_wait_seconds = queue_wait
+            result.usage.triggered_by = "user"
+
             # Use a dedicated DB session — the request-scoped one isn't thread-safe
             thread_db = SessionLocal()
             try:

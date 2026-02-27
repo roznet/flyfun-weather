@@ -600,6 +600,89 @@ def revoke_agent(
     return {"status": "revoked", "user_id": user_id}
 
 
+@router.get("/metrics")
+def get_metrics(
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Return refresh timing metrics and live queue state."""
+    from weatherbrief.api.packs import refresh_registry
+
+    # Live queue state
+    snapshot = refresh_registry.queue_snapshot()
+    current = {
+        "active_refreshes": snapshot["refreshing"],
+        "queued_refreshes": snapshot["queued"],
+    }
+
+    # Helper to build metrics for a time window
+    def _window_metrics(since: datetime) -> dict:
+        rows = (
+            db.query(
+                func.count().label("total"),
+                func.avg(BriefingUsageRow.elapsed_seconds).label("avg_elapsed"),
+                func.max(BriefingUsageRow.elapsed_seconds).label("max_elapsed"),
+                func.avg(BriefingUsageRow.queue_wait_seconds).label("avg_queue_wait"),
+                func.max(BriefingUsageRow.queue_wait_seconds).label("max_queue_wait"),
+            )
+            .filter(
+                BriefingUsageRow.timestamp >= since,
+                BriefingUsageRow.elapsed_seconds.isnot(None),
+            )
+            .one()
+        )
+
+        # p95 approximation: get the value at the 95th percentile position
+        total = rows.total or 0
+        p95_elapsed = None
+        if total > 0:
+            offset_95 = max(0, int(total * 0.95) - 1)
+            p95_row = (
+                db.query(BriefingUsageRow.elapsed_seconds)
+                .filter(
+                    BriefingUsageRow.timestamp >= since,
+                    BriefingUsageRow.elapsed_seconds.isnot(None),
+                )
+                .order_by(BriefingUsageRow.elapsed_seconds.asc())
+                .offset(offset_95)
+                .limit(1)
+                .first()
+            )
+            if p95_row:
+                p95_elapsed = round(p95_row[0], 1)
+
+        # by_trigger breakdown
+        trigger_rows = (
+            db.query(
+                BriefingUsageRow.triggered_by,
+                func.count().label("cnt"),
+            )
+            .filter(BriefingUsageRow.timestamp >= since)
+            .group_by(BriefingUsageRow.triggered_by)
+            .all()
+        )
+        by_trigger = {(r.triggered_by or "unknown"): r.cnt for r in trigger_rows}
+
+        return {
+            "total_refreshes": total,
+            "avg_elapsed_seconds": round(float(rows.avg_elapsed), 1) if rows.avg_elapsed else None,
+            "p95_elapsed_seconds": p95_elapsed,
+            "avg_queue_wait_seconds": round(float(rows.avg_queue_wait), 1) if rows.avg_queue_wait else None,
+            "max_queue_wait_seconds": round(float(rows.max_queue_wait), 1) if rows.max_queue_wait else None,
+            "by_trigger": by_trigger,
+        }
+
+    now = datetime.now(timezone.utc)
+    from datetime import timedelta
+
+    return {
+        "current": current,
+        "last_24h": _window_metrics(now - timedelta(hours=24)),
+        "last_7d": _window_metrics(now - timedelta(days=7)),
+        "last_30d": _window_metrics(now - timedelta(days=30)),
+    }
+
+
 @router.delete("/agents/{user_id}/tokens/{token_id}")
 def revoke_agent_token(
     user_id: str,
