@@ -351,7 +351,7 @@ Static files served from `web/` at root.
 | `jinja2`, `weasyprint` | PDF/HTML report rendering |
 | `srtm.py` | SRTM terrain elevation data (90m resolution) |
 | `PyMuPDF` (`fitz`) | GRAMET PDF → PNG conversion for reports |
-| `euro-aip` (local / GitHub) | Airport DB, Autorouter credentials |
+| `euro-aip` (PyPI) | Airport DB, Autorouter credentials |
 
 ## Phase Roadmap
 

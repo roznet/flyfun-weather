@@ -189,6 +189,10 @@ Admin identity: `ADMIN_EMAILS` env var (comma-separated). Dev user is always adm
 
 **Admin endpoints**: `POST /api/admin/agents` (create agent + token), `POST .../tokens` (add token), `DELETE .../tokens/{id}` (revoke).
 
+### Admin Auth Unification
+
+Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens. The `_decode_user_id()` dependency checks for a `Bearer` token first, then falls back to the JWT cookie. This allows admin endpoints to be used both from the web UI and from API agents/bots.
+
 ### Dev mode bypass
 
 `ENVIRONMENT=development` → auth middleware injects dev user, skips JWT.

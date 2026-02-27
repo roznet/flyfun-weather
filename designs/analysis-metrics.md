@@ -293,6 +293,8 @@ A second icing index computed alongside Ogimet, based on fuzzy-logic membership 
 
 **Gating:** Temperature [0, −25]°C. Full variant also gates on CLW > 0; proxy variant requires cloud proximity (DD < 3°C or within 500ft of detected cloud layer).
 
+**Altitude-aware NWP cloud check:** `_cloud_cover_for_level()` uses `NWPCloudDiagnostics` base/top boundaries (±500ft margin) when available. Returns 0 if the level falls outside the NWP cloud layer, preventing false positives from bulk ICAO-band percentages. Falls back to bulk band values when diagnostics are unavailable.
+
 **Severity mapping** (GA-tuned thresholds matching IcingRisk enum):
 
 | SFIP_100 | Risk |

@@ -131,7 +131,7 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity
 **NWP cloud cover fallback** (pass 2): Levels in the 0 to −20°C band that pass 1 skipped (dry DD, not near sounding cloud) are re-assessed if NWP cloud cover > 50% at the corresponding altitude band. This prevents false-negative icing when NWP sub-grid microphysics detects cloud the coarse pressure-level sounding missed.
 
 - Each `IcingZone` includes `mean_icing_index` for transparency in the assessment
-- **Severity enhancement** (`severity_enhance=True` default): RH/moisture-based upgrades to icing severity. Can upgrade LIGHT → MODERATE (deep saturation: ≥3 levels with RH > 95% + NWP cloud corroboration ≥50%) or MODERATE → SEVERE (same + mean T ≤ -5°C). User-toggleable via `icing_severity_enhance` profile setting.
+- **Severity enhancement** (`severity_enhance=False` default, changed from True): RH/moisture-based upgrades to icing severity. Can upgrade LIGHT → MODERATE (deep saturation: ≥3 levels with RH > 95% + NWP cloud corroboration ≥50%) or MODERATE → SEVERE (same + mean T ≤ -5°C). User-toggleable via `icing_severity_enhance` profile setting. Default changed to off because the enhancement was producing too-conservative results for typical GA operations.
 - SLD detection: **currently disabled** — heuristics too sensitive for available data resolution
 - Adjacent levels grouped into `IcingZone` bands (gap ≤ 100hPa)
 - **Minimum zone thickness**: single-level zones expanded to ±500ft (1000ft total) to match GFS vertical resolution (~25 hPa) and ensure visibility on the cross-section canvas
@@ -142,6 +142,7 @@ zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity
 - **Three variants**: SFIP_O (full, GFS — has real CLW from GRIB) uses `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; SFIP_4 (proxy, other models — uses DD+cloud cover proxy for CLW) uses `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; SFIP_interp (same formula as full, but CLW was spatially interpolated from neighbors — see below)
 - **Glaciation factor** (GFS only): reduces icing potential when ICMR >> CLWMR (cloud is glaciated)
 - **Temperature gating**: only 0°C to −25°C (same as Ogimet)
+- **Altitude-aware NWP cloud check**: `_cloud_cover_for_level()` uses `NWPCloudDiagnostics` (when available) to check whether the level actually falls within the NWP cloud layer's base/top range (±500ft margin). Falls back to bulk ICAO-band percentages when diagnostics are unavailable. This prevents false positives from applying e.g. 80% low-cloud cover to levels above the actual cloud top.
 - Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (`"full"`, `"interp"`, or `"proxy"`)
 - Based on Belo-Pereira (2015) and Morcrette et al. (2019)
 
