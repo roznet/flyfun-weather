@@ -46,7 +46,11 @@ def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
     connectable = create_engine(_get_url())
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=True,
+        )
         with context.begin_transaction():
             context.run_migrations()
 
