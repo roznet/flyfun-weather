@@ -7,6 +7,7 @@ from weatherbrief.analysis.sounding.icing import (
     assess_icing_zones,
 )
 from weatherbrief.models import (
+    CloudCoverage,
     DerivedLevel,
     EnhancedCloudLayer,
     IcingRisk,
@@ -16,9 +17,9 @@ from weatherbrief.models import (
 )
 
 
-def _cloud(base_ft, top_ft):
-    """Helper to create a cloud layer."""
-    return EnhancedCloudLayer(base_ft=base_ft, top_ft=top_ft)
+def _cloud(base_ft, top_ft, coverage=CloudCoverage.BKN):
+    """Helper to create a cloud layer (defaults to BKN — icing-relevant)."""
+    return EnhancedCloudLayer(base_ft=base_ft, top_ft=top_ft, coverage=coverage)
 
 
 def test_no_icing_warm():

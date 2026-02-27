@@ -84,6 +84,17 @@ class IcingEscapeEvaluator:
                     max=80,
                     step=5,
                 ),
+                AdvisoryParameterDef(
+                    key="min_route_pct",
+                    label="Min route %",
+                    description="Minimum percentage of route affected to trigger red",
+                    type="percent",
+                    unit="%",
+                    default=15,
+                    min=5,
+                    max=50,
+                    step=5,
+                ),
             ],
         )
 
@@ -93,6 +104,7 @@ class IcingEscapeEvaluator:
         tight_margin = params.get("tight_margin_ft", 2000)
         icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
         route_pct_amber = params.get("route_pct_amber", 20)
+        min_route_pct = params.get("min_route_pct", 15)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -139,8 +151,14 @@ class IcingEscapeEvaluator:
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "No data"
-            elif no_escape_count > 0:
+            elif no_escape_count > 0 and pct_above_threshold(
+                no_escape_count, total, min_route_pct,
+            ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
+                ext = format_extent(affected, total, ctx.total_distance_nm)
+                detail = f"Icing over {ext}; no warm escape at {no_escape_count} point{'s' if no_escape_count != 1 else ''}"
+            elif no_escape_count > 0:
+                status = AdvisoryStatus.AMBER
                 ext = format_extent(affected, total, ctx.total_distance_nm)
                 detail = f"Icing over {ext}; no warm escape at {no_escape_count} point{'s' if no_escape_count != 1 else ''}"
             elif affected == 0:

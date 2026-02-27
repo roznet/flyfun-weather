@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 
 from weatherbrief.models import (
+    CloudCoverage,
     DerivedLevel,
     EnhancedCloudLayer,
     IcingRisk,
@@ -164,14 +165,31 @@ def _lwc_to_icing_severity(lwc_g_m3: float) -> IcingRisk:
 # --- Cloud proximity check ---
 
 
+# Dewpoint depression below which a level is unconditionally in-cloud
+# (BKN-equivalent moisture, DD < 2°C).  DD 2–3°C corresponds to SCT
+# coverage — avoidable in VMC — so those levels only count when a
+# BKN/OVC cloud layer is nearby.
+_IN_CLOUD_DD_BKN = 2.0
+
+
 def _is_near_cloud(level: DerivedLevel, clouds: list[EnhancedCloudLayer]) -> bool:
-    """Check if a level is within or very near a cloud layer."""
+    """Check if a level is in or near unavoidable (BKN/OVC) cloud.
+
+    Returns True when:
+    * The level's own DD < 2°C  (broken/overcast moisture — definitely in cloud).
+    * The level is within 500 ft of a BKN or OVC cloud layer.
+
+    Scattered clouds (DD 2-3°C, coverage=SCT) are flyable in VMC — pilots
+    can see and avoid them — so they do not gate icing assessment.
+    """
     if level.altitude_ft is None:
         return False
-    if level.dewpoint_depression_c is not None and level.dewpoint_depression_c < IN_CLOUD_DD_THRESHOLD:
+    if level.dewpoint_depression_c is not None and level.dewpoint_depression_c < _IN_CLOUD_DD_BKN:
         return True
     margin = 500.0
     for cl in clouds:
+        if cl.coverage == CloudCoverage.SCT:
+            continue
         if (cl.base_ft - margin) <= level.altitude_ft <= (cl.top_ft + margin):
             return True
     return False
