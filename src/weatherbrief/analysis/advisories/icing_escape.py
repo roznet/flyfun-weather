@@ -28,11 +28,12 @@ class IcingEscapeEvaluator:
         return AdvisoryCatalogEntry(
             id="icing_escape",
             name="Icing Escape (non-FIKI)",
-            short_description="Can escape icing by descending to warm air",
+            short_description="Icing at cruise and warm-air escape viability",
             description=(
-                "For non-FIKI aircraft. Checks if the freezing level is above terrain "
-                "plus a safety margin at each point with icing, so warm air below is "
-                "reachable as an escape route."
+                "For non-FIKI aircraft. First detects icing at or below cruise "
+                "altitude, then checks whether descending to warm air above terrain "
+                "is viable as an escape route. The reported percentage reflects "
+                "icing coverage along the route."
             ),
             category="icing",
             parameters=[
@@ -140,7 +141,8 @@ class IcingEscapeEvaluator:
                 detail = "No data"
             elif no_escape_count > 0:
                 status = AdvisoryStatus.RED
-                detail = f"No warm escape over {format_extent(no_escape_count, total, ctx.total_distance_nm)}"
+                ext = format_extent(affected, total, ctx.total_distance_nm)
+                detail = f"Icing over {ext}; no warm escape at {no_escape_count} point{'s' if no_escape_count != 1 else ''}"
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 detail = "No icing along route"
@@ -153,7 +155,7 @@ class IcingEscapeEvaluator:
                 elif status == AdvisoryStatus.GREEN:
                     detail = f"Icing over {ext}, warm escape available"
                 else:
-                    detail = f"Icing over {ext}"
+                    detail = f"Icing over {ext}; warm escape available"
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
