@@ -204,11 +204,36 @@ You can also investigate flights from the production server at `weather.flyfun.a
 
 ## Contributing Code
 
-_This section is a work in progress — check back for guided examples with tagged starting points._
+The examples below are taken from real development of this app. Each one started as a GitHub issue, was implemented by prompting Claude Code, and merged. We've tagged the codebase just before each change so you can try it yourself and compare your result with what actually shipped.
 
-<!-- Future plan: create git tags before features, give people example prompts to implement them
-     e.g. git checkout -b test/add-visibility-advisory v0.x-before-visibility
-     then prompt Claude: "Add a new visibility advisory that checks..." -->
+### Example 1 — Improve compact mode (frontend, simple)
+
+**Issue:** [#19 — Make a better compact mode for briefing](https://github.com/roznet/flyfun-weather/issues/19)
+
+The briefing page had a compact/annotated toggle, but compact mode still showed too much detail. The issue asked to rename the toggle, hide secondary advisories, trim the synopsis, and remove sounding analysis in compact mode.
+
+**Try it:**
+
+```bash
+git checkout -b try/compact-mode example/simple1
+```
+
+Then start Claude Code and paste the issue as your prompt:
+
+```
+> The briefing page has a compact/annotated toggle. Change it so that compact really only
+> shows key information:
+> - Rename the toggle to "Compact | Full Details"
+> - Full Details shows everything
+> - Compact should only show:
+>   - Route advisories, except secondary ones (for now only "model confidence" is secondary)
+>   - For the synopsis, only synoptic and trend
+>   - Hide sounding analysis and model comparison sections
+```
+
+Claude will read the design docs, find the relevant frontend files, and implement the changes across the briefing UI.
+
+**Compare with the real result:** see [commit 9e5450b](https://github.com/roznet/flyfun-weather/commit/9e5450b) which closed the issue.
 
 ---
 
