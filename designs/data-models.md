@@ -97,16 +97,17 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | Model | Purpose | Key fields |
 |-------|---------|------------|
 | `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km. **Raw NWP values:** nwp_cape_jkg, nwp_cape_type (sb/ml/mu/unknown), nwp_cin_jkg, nwp_lifted_index, nwp_freezing_level_ft, cape_raw_vs_calc_divergent |
-| `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3 |
+| `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3, cloud_liquid_water_g_kg, ice_mixing_ratio_g_kg, icing_index (Ogimet 0–100), sfip_raw, sfip_100, sfip_severity, sfip_variant, clw_interpolated |
 | `EnhancedCloudLayer` | Cloud layer from dewpoint depression | base/top (ft + hPa), thickness, mean_temperature_c, coverage (SCT/BKN/OVC) |
 | `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |
-| `IcingZone` | Grouped icing zone from wet-bulb | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_wet_bulb_c, mean_rh_pct, mean_icing_index |
+| `IcingZone` | Grouped icing zone (Ogimet-DD or Ogimet-NWP) | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_temperature_c, mean_wet_bulb_c, mean_rh_pct, mean_icing_index |
+| `SfipZone` | Grouped SFIP icing zone | base/top (ft + hPa), risk, icing_type, mean_sfip_100, mean_temperature_c, mean_rh_pct, variant ("full"/"interp"/"proxy") |
 | `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list |
 | `VerticalMotionClass` | Enum: vertical motion profile type | QUIESCENT, SYNOPTIC_ASCENT, SYNOPTIC_SUBSIDENCE, CONVECTIVE, OSCILLATING, UNAVAILABLE |
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
 | `CATRiskLayer` | CAT risk identified by Richardson number | base_ft, top_ft, base/top_pressure_hpa, richardson_number, risk |
 | `VerticalMotionAssessment` | Vertical motion + turbulence | classification, max_omega_pa_s, max_w_fpm, max_w_level_ft, cat_risk_layers, convective_contamination |
-| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, icing_zones, inversion_layers, convective, vertical_motion, cloud_cover_{low,mid,high}_pct |
+| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, nwp_cloud_layers, icing_zones, icing_ogimet_nwp_zones, sfip_zones, inversion_layers, convective, vertical_motion, cloud_cover_{low,mid,high}_pct |
 
 ### Altitude Advisories
 
@@ -165,8 +166,14 @@ FlightProfile(
         "advisory_models": ["gfs", "ecmwf"],
         "gramet_enabled": True,
         "llm_digest_enabled": False,
-        "icing_severity_enhance": True,
-        "advisories": {"enabled": {"icing_escape": True}, "params": {"icing_escape": {"terrain_margin_ft": 1000}}}
+        "icing_severity_enhance": False,
+        "icing_method": "ogimet_dd",       # "ogimet_dd" | "ogimet_nwp" | "sfip_nwp"
+        "cloud_method": "dd",              # "dd" | "nwp"
+        "advisories": {
+            "enabled": {"icing_escape": True},
+            "params": {"icing_escape": {"terrain_margin_ft": 1000}},
+            "aggregation": "majority"      # "worst" | "majority"
+        }
     },
 )
 ```

@@ -41,7 +41,7 @@ data-extract.ts  → extractVizData() → VizRouteData
         ↓                       ↓                       ↓
        Hover sync (via callbacks in briefing-main.ts)
         ↓
-controls/panel.ts  (layer toggles, model selector, render mode, layout, map metric selectors)
+controls/panel.ts  (layer toggles, model selector, layout, map metric selectors, Windy link)
 scales.ts          (shared color/opacity functions for all three renderers)
 ```
 
@@ -53,29 +53,41 @@ Rendered back-to-front in this order:
 
 Rendering order: **bands → terrain (covers below-surface artifacts) → lines → reference**.
 
-| Layer | Group | File | Default | Description |
-|-------|-------|------|---------|-------------|
-| Convective BG | convection | `convective-bg.ts` | on | Tower columns LCL→EL, hatching, CB labels, anvil strip |
-| Cloud bands | clouds | `cloud-bands.ts` | on | Opacity from coverage (SCT/BKN/OVC) |
-| NWP cloud bands | clouds | `nwp-cloud-bands.ts` | on | NWP cloud cover at ICAO altitude bands (low/mid), terrain-aware |
-| Icing bands | icing | `icing-bands.ts` | on | Colored by risk (light→severe) |
-| CAT bands | turbulence | `cat-bands.ts` | on | Orange-red bands by Richardson number |
-| Inversion bands | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
-| Terrain fill | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient (drawn after bands to mask below-surface artifacts) |
-| Freezing level | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
-| −10°C level | temperature | `temperature-lines.ts` | off | Cyan dashed line |
-| −20°C level | temperature | `temperature-lines.ts` | off | Navy dashed line |
-| LCL | stability | `stability-lines.ts` | off | Green dotted (lifting condensation) |
-| LFC | stability | `stability-lines.ts` | off | Orange dotted (level of free convection) |
-| EL | stability | `stability-lines.ts` | off | Red dotted (equilibrium level) |
-| Cruise altitude | reference | `reference-lines.ts` | on | Dark gray dashed + flight ceiling (purple) |
+| Layer | Name | Group | File | Default | Description |
+|-------|------|-------|------|---------|-------------|
+| Convective BG | Convective | convection | `convective-bg.ts` | on | Tower columns LCL→EL, hatching, CB labels, anvil strip |
+| Cloud bands | DD Layers | clouds | `cloud-bands.ts` | on | Opacity from coverage (SCT/BKN/OVC) |
+| NWP cloud bands | NWP Layers | clouds | `nwp-cloud-bands.ts` | on | NWP cloud cover at ICAO altitude bands (low/mid), terrain-aware |
+| Icing bands | Ogimet-DD | icing | `icing-bands.ts` | on | Colored by risk (light→severe), DD-attenuated Ogimet index |
+| Ogimet-NWP bands | Ogimet-NWP | icing | `icing-ogimet-nwp-bands.ts` | off | NWP cloud-scaled Ogimet index |
+| SFIP bands | SFIP-NWP | icing | `sfip-bands.ts` | off | Fuzzy-logic SFIP icing index |
+| CAT bands | CAT | turbulence | `cat-bands.ts` | on | Orange-red bands by Richardson number |
+| Inversion bands | Inversions | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
+| Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient (drawn after bands to mask below-surface artifacts) |
+| Freezing level | 0°C | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
+| −10°C level | −10°C | temperature | `temperature-lines.ts` | off | Cyan dashed line |
+| −20°C level | −20°C | temperature | `temperature-lines.ts` | off | Navy dashed line |
+| LCL | LCL | stability | `stability-lines.ts` | off | Green dotted (lifting condensation) |
+| LFC | LFC | stability | `stability-lines.ts` | off | Orange dotted (level of free convection) |
+| EL | EL | stability | `stability-lines.ts` | off | Red dotted (equilibrium level) |
+| Cruise altitude | Cruise | reference | `reference-lines.ts` | on | Dark gray dashed + flight ceiling (purple) |
 
-## Render Modes
+## Render Mode
 
-- **Smooth**: Monotone cubic spline (Fritsch-Carlson) interpolation between route points. Used for terrain fill and altitude lines.
-- **Columns**: Step function — each route point's data extends halfway to neighbors. Used for bands (clouds, icing, CAT).
+All layers use **smooth** rendering: monotone cubic spline (Fritsch-Carlson) interpolation between route points. The columns render mode was removed — smooth rendering is always used for terrain, bands, and lines alike.
 
-Controlled via `VizSettings.renderMode`, toggled from the control panel.
+## Layer Groups & Compact Mode
+
+The **clouds** and **icing** groups support multiple methods with a preferred method setting:
+
+```typescript
+PREFERRED_METHOD_LAYER = {
+  clouds: { dd: 'cloud-bands', nwp: 'nwp-cloud-bands' },
+  icing:  { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands' }
+}
+```
+
+**Compact mode** (`VizSettings.compactLayers`): When enabled, only the user's preferred method layer is shown per group; alternative layers are hidden. In full mode, all layers remain toggleable. Group headers show an info button (ⓘ) explaining the methods available.
 
 ## Data Flow
 
@@ -173,7 +185,6 @@ The NWP cloud bands layer (`nwp-cloud-bands.ts`) renders numerical weather predi
 - **Sounding-corroborated collapse**: For mid/high bands without diagnostic boundaries, if the sounding finds NO cloud layers in that altitude range, the band collapses to zero height (prevents false fills from NWP-only coverage)
 - **Heuristic narrowing** (when diagnostics unavailable): LCL raises band floor, inversions (≥2°C strength) cap band top, sounding cloud envelopes constrain bounds
 - **Terrain-aware**: Interpolates terrain elevation at each point to set low band base dynamically
-- **Dual render modes**: Columns (discrete NWP grid) or Smooth (interpolated trapezoids)
 - **Opacity capping**: Cloud cover % converted to opacity with `min(0.7, pct/100 * 0.8)` for readability
 - **Model-run consistency**: When GRIB diagnostics are available, they override Open-Meteo cloud cover values so all cloud data comes from the same model run
 - Renders on sky-blue background (set in `axes.ts`)
@@ -218,7 +229,7 @@ Info popups include buttons for Claude, ChatGPT, and Gemini that copy a context-
 
 ### Layer Control Panel
 
-`controls/panel.ts` renders checkboxes grouped by category (terrain, temperature, clouds, icing, stability, turbulence, convection, reference). Layers with a `metricId` get an info button (ⓘ) that opens the layer info popup.
+`controls/panel.ts` renders checkboxes grouped by category (terrain, temperature, clouds, icing, stability, turbulence, convection, reference). Layers with a `metricId` get an info button (ⓘ) that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods.
 
 ## Unified Atmospheric Profile Table
 
@@ -239,12 +250,12 @@ The briefing UI renders a single "Atmospheric Profile" table (`renderAtmospheric
 
 ## Windy Meteogram Link
 
-The briefing page includes a dynamic Windy link that opens the meteogram for the currently selected route point and model:
+The cross-section toolbar includes a dynamic Windy link ("Open selected location") for the currently selected route point and model:
 
 - **URL builder** (`utils.ts: buildWindyUrl()`): constructs `https://www.windy.com/{lat}/{lon}/{model}/meteogram?...` URLs
 - **Model mapping**: GFS → `gfs`, ICON → `icon`, others → ECMWF (Windy's default)
 - **Updates dynamically** when the user changes route point or model selection
-- Displayed as inline text in the external links area of the briefing
+- Placed next to the model selector in the cross-section toolbar
 
 ## Display Mode (Compact / Full Details)
 
