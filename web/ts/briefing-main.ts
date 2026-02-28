@@ -10,7 +10,7 @@ import { renderUserInfo, initModelCatalog, isFlightPast } from './utils';
 import { initInfoPopup, showMetricInfo } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
-import { getAllLayers } from './visualization/cross-section/layer-registry';
+import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
 import { renderVizControls, renderRouteGraphControls, renderMapControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { RouteGraphRenderer } from './visualization/route-graph/renderer';
@@ -33,10 +33,16 @@ async function init(): Promise<void> {
   initTheme();
   renderUserInfo(user, 'briefing');
 
-  // Load model catalog (non-blocking — modelLabel() has uppercase fallback)
-  import('./adapters/preferences-adapter').then(({ fetchModelCatalog }) =>
-    fetchModelCatalog().then(initModelCatalog).catch(() => {}),
-  );
+  // Load model catalog + preferred methods (non-blocking)
+  let preferredMethods: Record<string, string> = {};
+  import('./adapters/preferences-adapter').then(({ fetchModelCatalog, fetchPreferences }) => {
+    fetchModelCatalog().then(initModelCatalog).catch(() => {});
+    fetchPreferences().then((prefs) => {
+      preferredMethods = { clouds: prefs.cloud_method, icing: prefs.icing_method };
+      // Re-render controls so compact mode picks up the preferred methods
+      renderVisualization(store.getState());
+    }).catch(() => {});
+  });
 
   // Initialize metric info popup
   initInfoPopup();
@@ -342,7 +348,7 @@ async function init(): Promise<void> {
       onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
       onLayoutChange: (layout) => store.getState().setLayout(layout),
       onModelChange: (model) => store.getState().setSelectedModel(model),
-    }, state.selectedModel, availableModels);
+    }, state.selectedModel, availableModels, state.displayMode, preferredMethods);
 
     // Render route graph controls (below graph)
     if (routeGraphControlsContainer && showCrossSection) {
@@ -428,6 +434,13 @@ async function init(): Promise<void> {
       if (state.displayMode !== prev.displayMode) {
         renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state));
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
+        // Entering compact: enforce preferred-only layers for clouds/icing
+        // (triggers vizSettings change → renderVisualization runs via that subscriber)
+        if (state.displayMode === 'compact' && Object.keys(preferredMethods).length > 0) {
+          store.getState().setLayersBatch(getCompactLayerOverrides(preferredMethods));
+        } else {
+          renderVisualization(state);
+        }
       }
     }
     if (state.selectedModel !== prev.selectedModel) {
