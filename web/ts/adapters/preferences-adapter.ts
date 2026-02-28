@@ -30,6 +30,7 @@ export interface PreferencesResponse {
   gramet_enabled: boolean;
   llm_digest_enabled: boolean;
   icing_severity_enhance: boolean;
+  icing_method: string;
 }
 
 export interface PreferencesUpdate {

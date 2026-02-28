@@ -16,6 +16,7 @@ from weatherbrief.models import (
     AdvisoryAggregation,
     AirportConditions,
     ElevationProfile,
+    IcingZone,
     RouteAdvisoriesManifest,
     RouteConfig,
     RouteCrossSection,
@@ -32,6 +33,41 @@ class AdvisoryResult:
     manifest: RouteAdvisoriesManifest | None
     airport_conditions: AirportConditions | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Icing method swap
+# ---------------------------------------------------------------------------
+
+
+def _apply_icing_method(rp_analyses: list[RoutePointAnalysis], method: str) -> None:
+    """Swap the chosen icing method's zones into icing_zones for advisory use.
+
+    Ogimet-DD is the default (already in icing_zones), so nothing to do.
+    Ogimet-NWP: copy icing_ogimet_nwp_zones into icing_zones.
+    SFIP-NWP: convert sfip_zones into IcingZone format and copy into icing_zones.
+    """
+    if method == "ogimet_dd":
+        return
+    for rpa in rp_analyses:
+        for sounding in rpa.sounding.values():
+            if method == "ogimet_nwp":
+                sounding.icing_zones = list(sounding.icing_ogimet_nwp_zones)
+            elif method == "sfip_nwp":
+                sounding.icing_zones = [
+                    IcingZone(
+                        base_ft=z.base_ft,
+                        top_ft=z.top_ft,
+                        base_pressure_hpa=z.base_pressure_hpa,
+                        top_pressure_hpa=z.top_pressure_hpa,
+                        risk=z.risk,
+                        icing_type=z.icing_type,
+                        mean_temperature_c=z.mean_temperature_c,
+                        mean_rh_pct=z.mean_rh_pct,
+                        mean_icing_index=z.mean_sfip_100,
+                    )
+                    for z in sounding.sfip_zones
+                ]
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +137,7 @@ def run_advisories(
     aggregation: AdvisoryAggregation | None = None,
     pack_dir: Path | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
+    icing_method: str | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
 
@@ -109,6 +146,9 @@ def run_advisories(
     def _notify(stage: str, detail: str | None = None) -> None:
         if progress_callback is not None:
             progress_callback(stage, detail)
+
+    if icing_method and icing_method != "ogimet_dd":
+        _apply_icing_method(rp_analyses, icing_method)
 
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
 
@@ -170,6 +210,7 @@ def run_advisories_from_pack(
     aggregation: AdvisoryAggregation | None = None,
     airports_db_path: str | None = None,
     airport_conditions_recompute: Callable | None = None,
+    icing_method: str | None = None,
 ) -> AdvisoryResult:
     """Re-evaluate advisories from persisted pack_dir artifacts.
 
@@ -193,6 +234,9 @@ def run_advisories_from_pack(
     manifest = load_route_analyses(pack_dir)
     cross_sections = load_cross_sections(pack_dir)
     elevation = load_elevation_profile(pack_dir)
+
+    if icing_method and icing_method != "ogimet_dd":
+        _apply_icing_method(manifest.analyses, icing_method)
 
     # Resolve flight_ceiling_ft from route or explicit param
     effective_ceiling = flight_ceiling_ft

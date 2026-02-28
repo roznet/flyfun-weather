@@ -189,6 +189,7 @@ export interface SoundingAnalysis {
   indices: ThermodynamicIndices | null;
   cloud_layers: EnhancedCloudLayer[];
   icing_zones: IcingZone[];
+  icing_ogimet_nwp_zones: IcingZone[];
   sfip_zones: SfipZone[];
   inversion_layers: InversionLayer[];
   convective: ConvectiveAssessment | null;

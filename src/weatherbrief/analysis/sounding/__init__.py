@@ -151,7 +151,10 @@ def analyze_sounding(
         enrich_cloud_top_uncertainty,
     )
     from weatherbrief.analysis.sounding.convective import assess_convective
-    from weatherbrief.analysis.sounding.icing import assess_icing_zones
+    from weatherbrief.analysis.sounding.icing import (
+        assess_icing_zones_ogimet_dd,
+        assess_icing_zones_ogimet_nwp,
+    )
     from weatherbrief.analysis.sounding.inversions import detect_inversions
     from weatherbrief.analysis.sounding.prepare import prepare_profile
     from weatherbrief.analysis.sounding.thermodynamics import (
@@ -199,16 +202,21 @@ def analyze_sounding(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
-    # Enhanced icing assessment (Ogimet index with CAPE-based cloud split)
-    icing_zones = assess_icing_zones(
+    # Ogimet-DD icing: continuous DD attenuation (primary method)
+    icing_zones = assess_icing_zones_ogimet_dd(
         derived_levels,
         cloud_layers,
-        precipitable_water_mm=indices.precipitable_water_mm,
+        cape_jkg=indices.cape_surface_jkg,
+    )
+
+    # Ogimet-NWP icing: NWP cloud cover scaling (Autorouter-style)
+    icing_ogimet_nwp_zones = assess_icing_zones_ogimet_nwp(
+        derived_levels,
+        cloud_layers,
         cape_jkg=indices.cape_surface_jkg,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
-        severity_enhance=icing_severity_enhance,
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
@@ -284,6 +292,7 @@ def analyze_sounding(
         derived_levels=derived_levels,
         cloud_layers=cloud_layers,
         icing_zones=icing_zones,
+        icing_ogimet_nwp_zones=icing_ogimet_nwp_zones,
         sfip_zones=sfip_zones,
         inversion_layers=inversion_layers,
         convective=convective,

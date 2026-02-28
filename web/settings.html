@@ -108,6 +108,17 @@
           </div>
           <div class="form-row">
             <div class="form-group">
+              <label for="input-icing-method">Icing method for advisories</label>
+              <select id="input-icing-method" class="input-select">
+                <option value="ogimet_dd">Ogimet-DD (dewpoint depression)</option>
+                <option value="ogimet_nwp">Ogimet-NWP (NWP cloud cover)</option>
+                <option value="sfip_nwp">SFIP-NWP (fuzzy-logic)</option>
+              </select>
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which icing method feeds the advisory evaluators. All three are always visible on the cross-section.</span>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
               <label for="input-flight-rules">Flight Rules Capability</label>
               <select id="input-flight-rules" class="input-select">
                 <option value="vfr_ifr">VFR + IFR capable</option>

@@ -37,6 +37,7 @@ class ProfileSettings(BaseModel):
     gramet_enabled: bool | None = None
     llm_digest_enabled: bool | None = None
     icing_severity_enhance: bool | None = None
+    icing_method: str | None = None  # "ogimet_dd", "ogimet_nwp", or "sfip_nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     advisories: dict | None = None  # {enabled: {}, params: {}}
 

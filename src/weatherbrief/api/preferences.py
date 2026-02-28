@@ -50,6 +50,7 @@ class PreferencesResponse(BaseModel):
     gramet_enabled: bool
     llm_digest_enabled: bool
     icing_severity_enhance: bool
+    icing_method: str
 
 
 class PreferencesUpdate(BaseModel):
@@ -63,6 +64,7 @@ class PreferencesUpdate(BaseModel):
     gramet_enabled: bool | None = None
     llm_digest_enabled: bool | None = None
     icing_severity_enhance: bool | None = None
+    icing_method: str | None = None
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -93,6 +95,7 @@ def _parse_service_toggles(raw: str) -> dict[str, bool]:
         "gramet_enabled": data.get("gramet_enabled", True),
         "llm_digest_enabled": data.get("llm_digest_enabled", True),
         "icing_severity_enhance": data.get("icing_severity_enhance", False),
+        "icing_method": data.get("icing_method", "ogimet_dd"),
     }
 
 
@@ -177,6 +180,8 @@ def update_preferences(
         data["llm_digest_enabled"] = body.llm_digest_enabled
     if body.icing_severity_enhance is not None:
         data["icing_severity_enhance"] = body.icing_severity_enhance
+    if body.icing_method is not None:
+        data["icing_method"] = body.icing_method
 
     row.defaults_json = json.dumps(data)
 
@@ -252,7 +257,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_dd"}
     return _parse_service_toggles(row.defaults_json)
 
 
