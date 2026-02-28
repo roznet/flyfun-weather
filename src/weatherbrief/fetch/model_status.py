@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -147,7 +147,7 @@ def compute_next_update(
             candidate = now.replace(hour=h, minute=0, second=0, microsecond=0)
             if candidate <= now:
                 # next occurrence is tomorrow
-                candidate = candidate.replace(day=candidate.day + 1)
+                candidate += timedelta(days=1)
             candidates.append((candidate, source))
 
     if not candidates:
