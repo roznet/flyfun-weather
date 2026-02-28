@@ -162,6 +162,14 @@
               </select>
               <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which icing method feeds the advisory evaluators. All three are always visible on the cross-section.</span>
             </div>
+            <div class="form-group">
+              <label for="input-cloud-method">Cloud Method</label>
+              <select id="input-cloud-method" class="input-select">
+                <option value="dd">DD (dewpoint depression)</option>
+                <option value="nwp">NWP (model cloud layers)</option>
+              </select>
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which cloud detection method feeds advisory evaluators (Cloud Tops, VFR Feasibility, VMC Cruise). NWP falls back to DD when model lacks cloud layer boundaries.</span>
+            </div>
           </div>
           <div class="form-row model-checkboxes">
             <label class="checkbox-label">

@@ -147,6 +147,7 @@ def analyze_sounding(
     Returns None if profile preparation fails (insufficient data).
     """
     from weatherbrief.analysis.sounding.clouds import (
+        build_nwp_cloud_layers,
         detect_cloud_layers,
         enrich_cloud_top_uncertainty,
     )
@@ -186,6 +187,14 @@ def analyze_sounding(
 
     # Cloud top uncertainty enrichment
     enrich_cloud_top_uncertainty(cloud_layers, indices, indices.cape_surface_jkg)
+
+    # NWP cloud layers from model diagnostics
+    nwp_cloud_layers = build_nwp_cloud_layers(
+        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+        nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+        nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+        nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+    )
 
     # Temperature inversion detection
     inversion_layers = detect_inversions(derived_levels)
@@ -291,6 +300,7 @@ def analyze_sounding(
         indices=indices,
         derived_levels=derived_levels,
         cloud_layers=cloud_layers,
+        nwp_cloud_layers=nwp_cloud_layers,
         icing_zones=icing_zones,
         icing_ogimet_nwp_zones=icing_ogimet_nwp_zones,
         sfip_zones=sfip_zones,

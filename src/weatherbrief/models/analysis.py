@@ -552,6 +552,7 @@ class SoundingAnalysis(BaseModel):
     indices: Optional[ThermodynamicIndices] = None
     derived_levels: list[DerivedLevel] = Field(default_factory=list)
     cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
+    nwp_cloud_layers: list[EnhancedCloudLayer] | None = None
     icing_zones: list[IcingZone] = Field(default_factory=list)
     icing_ogimet_nwp_zones: list[IcingZone] = Field(default_factory=list)
     sfip_zones: list[SfipZone] = Field(default_factory=list)

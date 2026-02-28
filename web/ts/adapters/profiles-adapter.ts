@@ -13,6 +13,7 @@ export interface ProfileSettings {
   llm_digest_enabled: boolean | null;
   icing_severity_enhance: boolean | null;
   icing_method: string | null;
+  cloud_method: string | null;
   flight_rules: string | null;
   advisories: AdvisoryPreferences | null;
 }
