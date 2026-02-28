@@ -2,10 +2,41 @@
 
 import type { VizLayout, VizSettings } from '../types';
 import { getLayerGroups } from '../cross-section/layer-registry';
-import { showLayerInfo } from '../../components/info-popup';
+import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
+
+/** Explanatory text for layer group info buttons. */
+const GROUP_INFO: Record<string, string> = {
+  clouds: `<h3>Cloud Detection Methods</h3>
+<p>Clouds can be detected two ways on the cross-section:</p>
+<ul>
+  <li><strong>NWP Layers</strong> — derived from the numerical weather prediction model's cloud cover parameterisation (low / mid / high bands). Shows where the model itself predicts clouds.</li>
+  <li><strong>DD Layers</strong> — derived from dewpoint depression in the sounding profile. When the gap between temperature and dewpoint is small (DD &lt; 2°C), air is near saturation and cloud is likely. This is a sounding-based signal independent of the model's cloud scheme.</li>
+</ul>
+<p>Both methods can be enabled simultaneously for comparison. They often agree in moist layers but may differ where NWP sub-grid clouds or local moisture are present.</p>`,
+
+  icing: `<h3>Icing Methods</h3>
+<p>The cross-section offers three icing overlays, each combining an <strong>icing formula</strong> with a <strong>cloud detection method</strong>:</p>
+<h4>Formulas</h4>
+<ul>
+  <li><strong>Ogimet</strong> — continuous parabolic index peaking at −7°C. Maps temperature to an icing severity index across the 0 to −14°C range (layered) or 0 to −20°C (convective). Simple, well-proven in European GA.</li>
+  <li><strong>SFIP</strong> — fuzzy-logic algorithm combining temperature, relative humidity, cloud liquid water, and vertical velocity via membership functions. More complex, uses direct NWP moisture data when available.</li>
+</ul>
+<h4>Cloud Signals</h4>
+<ul>
+  <li><strong>DD</strong> (dewpoint depression) — sounding-based. Uses a continuous cosine taper: full icing index at DD = 0, zero at DD ≥ 2°C. No NWP cloud data needed.</li>
+  <li><strong>NWP</strong> (model cloud cover) — uses the NWP model's cloud cover percentage at each altitude. 50% cloud → 50% of icing index. This is the approach used by Autorouter GRAMET.</li>
+</ul>
+<h4>The Three Methods</h4>
+<ul>
+  <li><strong>Ogimet-DD</strong> — Ogimet formula + DD cloud signal</li>
+  <li><strong>Ogimet-NWP</strong> — Ogimet formula + NWP cloud signal</li>
+  <li><strong>SFIP-NWP</strong> — SFIP fuzzy-logic (inherently uses NWP moisture inputs)</li>
+</ul>
+<p>Enable multiple methods to compare them side-by-side. The advisory system uses whichever method you select in your profile settings.</p>`,
+};
 
 export interface VizControlCallbacks {
   onLayerToggle: (layerId: string) => void;
@@ -75,6 +106,9 @@ export function renderVizControls(
     for (const group of groups) {
       html += `<div class="viz-layer-group">`;
       html += `<span class="viz-group-label">${group.label}:</span>`;
+      if (GROUP_INFO[group.group]) {
+        html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${group.group}" title="About ${group.label}" aria-label="About ${group.label}">\u24d8</button>`;
+      }
       for (const layer of group.layers) {
         const checked = settings.enabledLayers[layer.id] !== false ? 'checked' : '';
         html += `<label class="viz-layer-checkbox">`;
@@ -126,6 +160,17 @@ export function renderVizControls(
       const layerId = el.dataset.layerInfo!;
       const metricId = el.dataset.metricId!;
       showLayerInfo(layerId, metricId);
+    });
+  });
+
+  // Wire group info buttons
+  container.querySelectorAll('[data-group-info]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const groupKey = (btn as HTMLElement).dataset.groupInfo!;
+      const html = GROUP_INFO[groupKey];
+      if (html) showPopupContent(html);
     });
   });
 }

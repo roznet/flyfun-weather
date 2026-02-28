@@ -518,7 +518,7 @@
     "primary_goal": "Classify icing severity using NWP model cloud cover percentage as the cloud signal.",
     "best_used_for": "Comparing against Ogimet-DD. This is the same approach used by Autorouter GRAMET — when cloud cover is 50%, the icing index is halved.",
     "limitations": "Does not account for droplet size (SLD). Relies on NWP cloud cover which may differ between models. Not available for ECMWF (no cloud layer data from Open-Meteo).",
-    "theory": "Same Ogimet parabolic icing formula peaking at −7°C, but the cloud signal comes from NWP model cloud cover percentage at the level's altitude — 50% cloud = 50% of index. This matches the approach used by Autorouter GRAMET. No dewpoint depression gating. Same thresholds: effective index >0 = light, ≥30 = moderate, ≥80 = severe.",
+    "theory": "Uses the Ogimet continuous icing index — a parabolic formula peaking at −7°C that maps temperature to icing severity across the 0 to −14°C range (layered) or 0 to −20°C (convective). The cloud signal comes from NWP model cloud cover percentage at the level's altitude — 50% cloud = 50% of index. This is the same approach used by Autorouter GRAMET. No dewpoint depression gating. Thresholds: effective index >0 = light, ≥30 = moderate, ≥80 = severe.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
     "llm_prompt": "explain how the Ogimet-NWP icing method scales the icing index by NWP cloud cover percentage, and how it compares to the DD-attenuation approach",
     "thresholds": [

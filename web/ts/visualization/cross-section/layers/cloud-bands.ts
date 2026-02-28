@@ -6,7 +6,7 @@ import { drawSmoothBand, drawColumnBand, type BandPointData } from './base';
 
 export const cloudBandsLayer: CrossSectionLayer = {
   id: 'cloud-bands',
-  name: 'Cloud Layers',
+  name: 'DD Layers',
   group: 'clouds',
   defaultEnabled: true,
   metricId: 'cloud_coverage',
