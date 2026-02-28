@@ -6,6 +6,7 @@ Pure computation module in the analysis layer. Does NOT import from tasks/.
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from weatherbrief.models import (
     AdvisoryAggregation,
@@ -146,13 +147,13 @@ def compute_altitude_table(
 
 def _find_best(
     rows: list[AltitudeAdvisoryRow],
-    predicate: object,
+    predicate: Callable[[AltitudeAdvisoryRow], bool],
 ) -> int | None:
     """Find the altitude with the best score among rows matching predicate.
 
     Best = fewest reds, then fewest ambers. Ties broken by lower altitude.
     """
-    candidates = [r for r in rows if predicate(r)]  # type: ignore[operator]
+    candidates = [r for r in rows if predicate(r)]
     if not candidates:
         return None
     candidates.sort(key=lambda r: (r.red_count, r.amber_count, r.altitude_ft))
