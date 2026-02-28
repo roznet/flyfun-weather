@@ -364,6 +364,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     do_gramet = True
     do_llm_digest = True
     do_icing_enhance = True
+    icing_method = None
     if db is not None:
         from weatherbrief.api.preferences import load_autorouter_credentials
         from weatherbrief.api.profiles import load_profile_settings
@@ -382,6 +383,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         do_gramet = profile_settings.get("gramet_enabled", True)
         do_llm_digest = profile_settings.get("llm_digest_enabled", True)
         do_icing_enhance = profile_settings.get("icing_severity_enhance", False)
+        icing_method = profile_settings.get("icing_method")
         flight_rules = profile_settings.get("flight_rules")  # "vfr_only" or "vfr_ifr"
         adv_config = profile_settings.get("advisories", {})
 
@@ -411,6 +413,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         airports_db_path=db_path,
         icing_severity_enhance=do_icing_enhance,
     )
+    if icing_method:
+        options.icing_method = icing_method
     if models:
         options.models = models
     if advisory_models:
@@ -1245,6 +1249,7 @@ def recalculate_advisories(
     aggregation = AdvisoryAggregation(adv_config.get("aggregation", "majority"))
 
     profile_adv_models = profile_settings.get("advisory_models")
+    profile_icing_method = profile_settings.get("icing_method")
     db_path = getattr(request.app.state, "db_path", "")
 
     def _recompute_conds(rp_analyses, cross_sections, advisory_model_names):
@@ -1266,6 +1271,7 @@ def recalculate_advisories(
         user_params=user_params,
         aggregation=aggregation,
         airport_conditions_recompute=_recompute_conds,
+        icing_method=profile_icing_method,
     )
 
     if advisory_result.manifest is None:

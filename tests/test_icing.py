@@ -3,8 +3,11 @@
 from weatherbrief.analysis.sounding.icing import (
     _cape_to_cloud_split,
     _compute_layered_index,
+    _dd_attenuation_factor,
     _index_to_risk,
     assess_icing_zones,
+    assess_icing_zones_ogimet_dd,
+    assess_icing_zones_ogimet_nwp,
 )
 from weatherbrief.models import (
     CloudCoverage,
@@ -440,3 +443,198 @@ def test_nwp_cloud_fallback_bulk_pct_when_no_diagnostics():
     )
     assert len(zones) == 1
     assert zones[0].risk != IcingRisk.NONE
+
+
+# --- DD attenuation tests ---
+
+
+def test_dd_attenuation_at_zero():
+    """DD=0 → factor=1.0 (fully in cloud)."""
+    assert _dd_attenuation_factor(0.0) == 1.0
+
+
+def test_dd_attenuation_at_cutoff():
+    """DD=cutoff → factor=0.0 (no cloud signal)."""
+    assert _dd_attenuation_factor(2.0) == 0.0
+
+
+def test_dd_attenuation_above_cutoff():
+    """DD above cutoff → factor=0.0."""
+    assert _dd_attenuation_factor(3.0) == 0.0
+
+
+def test_dd_attenuation_at_half():
+    """DD=cutoff/2 → factor=0.5 (midpoint of cosine taper)."""
+    assert abs(_dd_attenuation_factor(1.0) - 0.5) < 0.001
+
+
+def test_dd_attenuation_negative():
+    """DD<0 → factor=1.0 (supersaturated)."""
+    assert _dd_attenuation_factor(-0.5) == 1.0
+
+
+# --- Ogimet-DD assessment tests ---
+
+
+def test_ogimet_dd_reduces_severity_at_high_dd():
+    """High DD should reduce effective icing compared to low DD."""
+    levels_low_dd = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-7.3, dewpoint_depression_c=0.3),
+    ]
+    zones_low = assess_icing_zones_ogimet_dd(levels_low_dd, [_cloud(9000, 11000)])
+
+    levels_high_dd = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.8, dewpoint_depression_c=1.8),
+    ]
+    zones_high = assess_icing_zones_ogimet_dd(levels_high_dd, [_cloud(9000, 11000)])
+
+    assert len(zones_low) == 1
+    assert len(zones_high) == 1
+    # Low DD (0.3) should have higher severity than high DD (1.8)
+    risk_order = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
+    assert risk_order.index(zones_low[0].risk) >= risk_order.index(zones_high[0].risk)
+
+
+def test_ogimet_dd_no_icing_above_cutoff():
+    """DD above 2.0 → no icing (factor=0)."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-9.5, dewpoint_depression_c=2.5),
+    ]
+    zones = assess_icing_zones_ogimet_dd(levels, [_cloud(9000, 11000)])
+    assert len(zones) == 0
+
+
+def test_ogimet_dd_empty_input():
+    """Empty levels returns empty list."""
+    assert assess_icing_zones_ogimet_dd([], []) == []
+
+
+def test_ogimet_dd_warm_no_icing():
+    """No icing above 0C."""
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, temperature_c=3.0,
+                     dewpoint_c=1.0, dewpoint_depression_c=2.0),
+    ]
+    zones = assess_icing_zones_ogimet_dd(levels, [])
+    assert len(zones) == 0
+
+
+# --- Ogimet-NWP assessment tests ---
+
+
+def test_ogimet_nwp_scales_by_cloud_pct():
+    """NWP cloud % scales the icing index: 50% cloud → reduced severity."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.0, dewpoint_depression_c=1.0),
+    ]
+    # Full cloud cover
+    zones_full = assess_icing_zones_ogimet_nwp(
+        levels, [_cloud(9000, 11000)], nwp_cloud_mid_pct=100.0,
+    )
+    # Reset icing_index
+    levels[0].icing_index = None
+
+    # Half cloud cover
+    zones_half = assess_icing_zones_ogimet_nwp(
+        levels, [_cloud(9000, 11000)], nwp_cloud_mid_pct=50.0,
+    )
+
+    assert len(zones_full) == 1
+    assert len(zones_half) == 1
+
+
+def test_ogimet_nwp_no_cloud_no_icing():
+    """0% NWP cloud → no icing."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.0, dewpoint_depression_c=1.0),
+    ]
+    zones = assess_icing_zones_ogimet_nwp(
+        levels, [_cloud(9000, 11000)], nwp_cloud_mid_pct=0.0,
+    )
+    assert len(zones) == 0
+
+
+def test_ogimet_nwp_no_nwp_data_no_icing():
+    """No NWP cloud data (None) → no icing."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.0, dewpoint_depression_c=1.0),
+    ]
+    zones = assess_icing_zones_ogimet_nwp(levels, [_cloud(9000, 11000)])
+    assert len(zones) == 0
+
+
+def test_ogimet_nwp_empty_input():
+    """Empty levels returns empty list."""
+    assert assess_icing_zones_ogimet_nwp([], []) == []
+
+
+# --- _apply_icing_method tests ---
+
+
+def test_apply_icing_method_ogimet_dd_noop():
+    """ogimet_dd is the default — should not modify icing_zones."""
+    from weatherbrief.tasks.advise import _apply_icing_method
+    from weatherbrief.models import RoutePointAnalysis, SoundingAnalysis, IcingZone
+    from datetime import datetime, timezone
+
+    zone = IcingZone(base_ft=5000, top_ft=10000, risk=IcingRisk.MODERATE, icing_type=IcingType.MIXED)
+    sa = SoundingAnalysis(icing_zones=[zone])
+    rpa = RoutePointAnalysis(
+        point_index=0, lat=0, lon=0, distance_from_origin_nm=0,
+        interpolated_time=datetime.now(timezone.utc),
+        forecast_hour=datetime.now(timezone.utc), track_deg=0,
+        sounding={"gfs": sa},
+    )
+    _apply_icing_method([rpa], "ogimet_dd")
+    assert rpa.sounding["gfs"].icing_zones[0].risk == IcingRisk.MODERATE
+
+
+def test_apply_icing_method_ogimet_nwp_swaps():
+    """ogimet_nwp should swap icing_ogimet_nwp_zones into icing_zones."""
+    from weatherbrief.tasks.advise import _apply_icing_method
+    from weatherbrief.models import RoutePointAnalysis, SoundingAnalysis, IcingZone
+    from datetime import datetime, timezone
+
+    dd_zone = IcingZone(base_ft=5000, top_ft=10000, risk=IcingRisk.MODERATE, icing_type=IcingType.MIXED)
+    nwp_zone = IcingZone(base_ft=6000, top_ft=9000, risk=IcingRisk.LIGHT, icing_type=IcingType.RIME)
+    sa = SoundingAnalysis(icing_zones=[dd_zone], icing_ogimet_nwp_zones=[nwp_zone])
+    rpa = RoutePointAnalysis(
+        point_index=0, lat=0, lon=0, distance_from_origin_nm=0,
+        interpolated_time=datetime.now(timezone.utc),
+        forecast_hour=datetime.now(timezone.utc), track_deg=0,
+        sounding={"gfs": sa},
+    )
+    _apply_icing_method([rpa], "ogimet_nwp")
+    assert rpa.sounding["gfs"].icing_zones[0].risk == IcingRisk.LIGHT
+    assert rpa.sounding["gfs"].icing_zones[0].base_ft == 6000
+
+
+def test_apply_icing_method_sfip_nwp_converts():
+    """sfip_nwp should convert sfip_zones into IcingZone format."""
+    from weatherbrief.tasks.advise import _apply_icing_method
+    from weatherbrief.models import RoutePointAnalysis, SoundingAnalysis, IcingZone, SfipZone
+    from datetime import datetime, timezone
+
+    sfip_zone = SfipZone(
+        base_ft=7000, top_ft=12000, risk=IcingRisk.MODERATE,
+        icing_type=IcingType.MIXED, mean_sfip_100=45.0, variant="full",
+    )
+    sa = SoundingAnalysis(sfip_zones=[sfip_zone])
+    rpa = RoutePointAnalysis(
+        point_index=0, lat=0, lon=0, distance_from_origin_nm=0,
+        interpolated_time=datetime.now(timezone.utc),
+        forecast_hour=datetime.now(timezone.utc), track_deg=0,
+        sounding={"gfs": sa},
+    )
+    _apply_icing_method([rpa], "sfip_nwp")
+    assert len(rpa.sounding["gfs"].icing_zones) == 1
+    converted = rpa.sounding["gfs"].icing_zones[0]
+    assert converted.base_ft == 7000
+    assert converted.risk == IcingRisk.MODERATE
+    assert converted.mean_icing_index == 45.0

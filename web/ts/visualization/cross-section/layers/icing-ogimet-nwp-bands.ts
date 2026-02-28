@@ -1,15 +1,15 @@
-/** Icing zone bands: colored fills by risk level. */
+/** Ogimet-NWP icing zone bands: colored fills by risk level, scaled by NWP cloud %. */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { icingRiskColor } from '../../scales';
 import { drawSmoothBand, type BandPointData } from './base';
 
-export const icingBandsLayer: CrossSectionLayer = {
-  id: 'icing-bands',
-  name: 'Ogimet-DD',
+export const icingOgimetNwpBandsLayer: CrossSectionLayer = {
+  id: 'icing-ogimet-nwp-bands',
+  name: 'Ogimet-NWP',
   group: 'icing',
-  defaultEnabled: true,
-  metricId: 'icing_risk',
+  defaultEnabled: false,
+  metricId: 'icing_ogimet_nwp_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     // Draw matched bands between adjacent points
@@ -18,22 +18,21 @@ export const icingBandsLayer: CrossSectionLayer = {
       const next = data.points[i + 1];
       const usedNext = new Set<number>();
 
-      for (const iz of curr.icingZones) {
+      for (const iz of curr.icingOgimetNwpZones) {
         if (iz.risk === 'none') continue;
 
         let bestIdx = -1;
         let bestOverlap = 0;
-        for (let j = 0; j < next.icingZones.length; j++) {
-          if (usedNext.has(j) || next.icingZones[j].risk === 'none') continue;
-          const nz = next.icingZones[j];
+        for (let j = 0; j < next.icingOgimetNwpZones.length; j++) {
+          if (usedNext.has(j) || next.icingOgimetNwpZones[j].risk === 'none') continue;
+          const nz = next.icingOgimetNwpZones[j];
           const overlap = Math.min(iz.topFt, nz.topFt) - Math.max(iz.baseFt, nz.baseFt);
           if (overlap > bestOverlap) { bestOverlap = overlap; bestIdx = j; }
         }
 
         if (bestIdx >= 0) {
           usedNext.add(bestIdx);
-          const nz = next.icingZones[bestIdx];
-          // Use the higher risk color
+          const nz = next.icingOgimetNwpZones[bestIdx];
           const riskOrder = ['none', 'light', 'moderate', 'severe'];
           const maxRisk = riskOrder.indexOf(iz.risk) >= riskOrder.indexOf(nz.risk) ? iz.risk : nz.risk;
           drawSmoothBand(ctx, [
@@ -51,9 +50,9 @@ export const icingBandsLayer: CrossSectionLayer = {
       }
 
       // Unmatched next zones
-      for (let j = 0; j < next.icingZones.length; j++) {
-        if (usedNext.has(j) || next.icingZones[j].risk === 'none') continue;
-        const nz = next.icingZones[j];
+      for (let j = 0; j < next.icingOgimetNwpZones.length; j++) {
+        if (usedNext.has(j) || next.icingOgimetNwpZones[j].risk === 'none') continue;
+        const nz = next.icingOgimetNwpZones[j];
         const midDist = (curr.distanceNm + next.distanceNm) / 2;
         const midAlt = (nz.baseFt + nz.topFt) / 2;
         drawSmoothBand(ctx, [
