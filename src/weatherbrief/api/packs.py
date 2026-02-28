@@ -1216,6 +1216,42 @@ def _recompute_airport_conditions(
     return None
 
 
+def _load_advisory_profile(db, flight, user_id, request, pack_dir):
+    """Load advisory profile settings and build a recompute-conditions callback.
+
+    Shared by recalculate_advisories and altitude_table endpoints.
+    Returns (enabled_ids, user_params, aggregation, adv_models, icing_method,
+    cloud_method, recompute_conds_callback).
+    """
+    from weatherbrief.api.profiles import load_profile_settings
+    from weatherbrief.models import AdvisoryAggregation
+
+    profile_settings = load_profile_settings(db, flight.profile_id, user_id)
+    adv_config = profile_settings.get("advisories", {})
+    enabled_map = adv_config.get("enabled")
+    enabled_ids = None
+    if enabled_map:
+        enabled_ids = {k for k, v in enabled_map.items() if v}
+    user_params = adv_config.get("params") or {}
+    aggregation = AdvisoryAggregation(adv_config.get("aggregation", "majority"))
+
+    adv_models = profile_settings.get("advisory_models")
+    icing_method = profile_settings.get("icing_method")
+    cloud_method = profile_settings.get("cloud_method")
+    db_path = getattr(request.app.state, "db_path", "")
+
+    def recompute_conds(rp_analyses, cross_sections, advisory_model_names):
+        from types import SimpleNamespace
+
+        proxy = SimpleNamespace(analyses=rp_analyses, models=advisory_model_names)
+        return _recompute_airport_conditions(
+            pack_dir, flight, proxy, cross_sections,
+            db_path=db_path, models=advisory_model_names,
+        )
+
+    return enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, recompute_conds
+
+
 @router.post("/{timestamp}/advisories/recalculate")
 def recalculate_advisories(
     flight_id: str,
@@ -1231,7 +1267,6 @@ def recalculate_advisories(
     re-running the full analysis pipeline. Useful when advisory logic
     or user parameters change.
     """
-    from weatherbrief.models import AdvisoryAggregation
     from weatherbrief.tasks.advise import run_advisories_from_pack
 
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -1241,45 +1276,20 @@ def recalculate_advisories(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available for recalculation")
 
-    # Load advisory preferences from the flight's profile
-    from weatherbrief.api.profiles import load_profile_settings
-
-    profile_settings = load_profile_settings(db, flight.profile_id, user_id)
-    adv_config = profile_settings.get("advisories", {})
-    enabled_map = adv_config.get("enabled")
-    enabled_ids = None
-    if enabled_map:
-        enabled_ids = {k for k, v in enabled_map.items() if v}
-    user_params = adv_config.get("params") or {}
-    aggregation = AdvisoryAggregation(adv_config.get("aggregation", "majority"))
-
-    profile_adv_models = profile_settings.get("advisory_models")
-    profile_icing_method = profile_settings.get("icing_method")
-    profile_cloud_method = profile_settings.get("cloud_method")
-    db_path = getattr(request.app.state, "db_path", "")
-
-    def _recompute_conds(rp_analyses, cross_sections, advisory_model_names):
-        """Callback: recompute airport conditions using DB-dependent helper."""
-        from types import SimpleNamespace
-
-        # _recompute_airport_conditions expects manifest.analyses and manifest.models
-        proxy = SimpleNamespace(analyses=rp_analyses, models=advisory_model_names)
-        return _recompute_airport_conditions(
-            pack_dir, flight, proxy, cross_sections,
-            db_path=db_path, models=advisory_model_names,
-        )
+    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, recompute_conds = \
+        _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     advisory_result = run_advisories_from_pack(
         pack_dir,
         cruise_altitude_ft=cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
-        advisory_models=profile_adv_models,
+        advisory_models=adv_models,
         enabled_ids=enabled_ids,
         user_params=user_params,
         aggregation=aggregation,
-        airport_conditions_recompute=_recompute_conds,
-        icing_method=profile_icing_method,
-        cloud_method=profile_cloud_method,
+        airport_conditions_recompute=recompute_conds,
+        icing_method=icing_method,
+        cloud_method=cloud_method,
     )
 
     if advisory_result.manifest is None:
@@ -1298,8 +1308,10 @@ def altitude_table(
     db: Session = Depends(get_db),
 ):
     """Compute altitude advisory table — sweep altitude-dependent advisories across altitudes."""
-    from weatherbrief.models import AdvisoryAggregation
     from weatherbrief.tasks.advise import run_altitude_table_from_pack
+
+    if step_ft < 500 or step_ft > 5000:
+        raise HTTPException(status_code=422, detail="step_ft must be between 500 and 5000")
 
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -1308,44 +1320,21 @@ def altitude_table(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
 
-    # Load advisory preferences from the flight's profile
-    from weatherbrief.api.profiles import load_profile_settings
-
-    profile_settings = load_profile_settings(db, flight.profile_id, user_id)
-    adv_config = profile_settings.get("advisories", {})
-    enabled_map = adv_config.get("enabled")
-    enabled_ids = None
-    if enabled_map:
-        enabled_ids = {k for k, v in enabled_map.items() if v}
-    user_params = adv_config.get("params") or {}
-    aggregation = AdvisoryAggregation(adv_config.get("aggregation", "majority"))
-
-    profile_adv_models = profile_settings.get("advisory_models")
-    profile_icing_method = profile_settings.get("icing_method")
-    profile_cloud_method = profile_settings.get("cloud_method")
-    db_path = getattr(request.app.state, "db_path", "")
-
-    def _recompute_conds(rp_analyses, cross_sections, advisory_model_names):
-        from types import SimpleNamespace
-
-        proxy = SimpleNamespace(analyses=rp_analyses, models=advisory_model_names)
-        return _recompute_airport_conditions(
-            pack_dir, flight, proxy, cross_sections,
-            db_path=db_path, models=advisory_model_names,
-        )
+    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, recompute_conds = \
+        _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     result = run_altitude_table_from_pack(
         pack_dir,
         cruise_altitude_ft=flight.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         step_ft=step_ft,
-        advisory_models=profile_adv_models,
+        advisory_models=adv_models,
         enabled_ids=enabled_ids,
         user_params=user_params,
         aggregation=aggregation,
-        airport_conditions_recompute=_recompute_conds,
-        icing_method=profile_icing_method,
-        cloud_method=profile_cloud_method,
+        airport_conditions_recompute=recompute_conds,
+        icing_method=icing_method,
+        cloud_method=cloud_method,
     )
 
     return result.model_dump()
