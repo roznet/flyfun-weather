@@ -145,7 +145,7 @@
         <div class="section">
           <h3>Advisories</h3>
           <p class="muted section-hint">Enable or disable advisories and configure their parameters. Changes apply on next recalculation.</p>
-          <div class="form-row">
+          <div class="advisory-method-grid">
             <div class="form-group">
               <label for="advisory-aggregation">Summary Rating</label>
               <select id="advisory-aggregation" class="input-select">
@@ -168,7 +168,7 @@
                 <option value="dd">DD (dewpoint depression)</option>
                 <option value="nwp">NWP (model cloud layers)</option>
               </select>
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which cloud detection method feeds advisory evaluators (Cloud Tops, VFR Feasibility, VMC Cruise). NWP falls back to DD when model lacks cloud layer boundaries.</span>
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which cloud detection feeds Cloud Tops, VFR Feasibility, VMC Cruise advisories. NWP falls back to DD when model lacks cloud layer boundaries.</span>
             </div>
           </div>
           <div class="form-row model-checkboxes">
