@@ -170,21 +170,24 @@ result = run_advisories_from_pack(
 # result is a RouteAdvisoriesManifest
 ```
 
-### B. Inspect sounding analysis at a specific point
+### C. Inspect sounding analysis at a specific point
 
 ```python
 manifest = load_route_analyses(pack_dir)
 
-# Pick a route point (by index or location name)
+# Pick a route point (by index or waypoint name)
 for rpa in manifest.analyses:
-    print(f"Point {rpa.route_point_index}: {rpa.location_name}")
-    for model, sounding in rpa.soundings.items():
-        print(f"  {model}: CAPE={sounding.cape_j_per_kg} CIN={sounding.cin_j_per_kg}")
+    name = rpa.waypoint_icao or rpa.waypoint_name or f"pt{rpa.point_index}"
+    print(f"Point {rpa.point_index}: {name}")
+    for model, sounding in rpa.sounding.items():
+        print(f"  {model}:")
         print(f"    Cloud layers: {[(c.base_ft, c.top_ft) for c in sounding.cloud_layers]}")
-        print(f"    Icing layers: {[(i.base_ft, i.top_ft, i.severity) for i in sounding.icing_layers]}")
+        print(f"    Icing zones:  {[(i.base_ft, i.top_ft, i.risk) for i in sounding.icing_zones]}")
         if sounding.vertical_motion:
             vm = sounding.vertical_motion
             print(f"    CAT: {[(c.base_ft, c.top_ft, c.severity) for c in vm.cat_layers]}")
+        if sounding.indices:
+            print(f"    Freezing lvl: {sounding.indices.freezing_level_ft}")
 ```
 
 ### D. Recompute altitude advisories from a sounding
@@ -294,6 +297,117 @@ evaluator = get_evaluator("icing_escape")
 result = evaluator.evaluate(context, model="gfs", params={"threshold_ft": 4000})
 print(f"Severity: {result.severity}, message: {result.message}")
 ```
+
+## Step 7 — Compare with GRAMET cross-section
+
+The pack includes `gramet.pdf` — the Autorouter GRAMET cross-section image (same GFS data).
+Use this for a broad visual sanity check of our computed cloud, icing, and convection bands.
+
+### Verify GFS reference times match (MANDATORY first step)
+
+The GRAMET and our analysis must use the **same GFS model run** for any comparison to be valid.
+Three times must be consistent:
+
+1. **GRAMET GFS RefTime** — printed at the bottom of the GRAMET PDF (e.g., "GFS RefTime 2026-02-27 18:00Z")
+2. **Our Open-Meteo GFS init time** — `model_init_times.gfs` in the pack metadata (unix timestamp)
+3. **Our GRIB GFS init time** — `grib_init_times.gfs` in the pack metadata (unix timestamp, if GRIB was fetched)
+
+```python
+from datetime import datetime, timezone
+
+# Get init times from the API (if server running) or DB
+# API: curl -s http://localhost:8000/api/flights/{flight_id}/packs/latest
+# Fields: model_init_times.gfs, grib_init_times.gfs (unix timestamps)
+
+om_gfs_init = 1772193600   # from model_init_times.gfs
+grib_gfs_init = 1772193600  # from grib_init_times.gfs (may be absent)
+
+print("Open-Meteo GFS init:", datetime.fromtimestamp(om_gfs_init, tz=timezone.utc))
+print("GRIB GFS init:     ", datetime.fromtimestamp(grib_gfs_init, tz=timezone.utc))
+# Compare with GRAMET's "GFS RefTime" from the PDF bottom line
+```
+
+**If any of the three times differ, STOP — the comparison is not valid.** Different GFS runs
+produce different forecasts, so mismatched runs would lead to misleading false negatives
+(real discrepancies that aren't bugs). Note this to the user and skip the comparison.
+
+### Read the GRAMET
+
+Use the `Read` tool on `{pack_dir}/gramet.pdf` (with `pages: "1"`). The PDF renders as
+a visual cross-section showing:
+- **White cloud masses** — cloud coverage by altitude along route
+- **Cyan/turquoise dashed contours** — icing zones
+- **Brown dashed isotherms** — temperature lines (0°C, -10°C, -20°C, etc.)
+- **Magenta horizontal line** — freezing level
+- **Grey/brown terrain profile** — along the bottom
+- **Wind barbs** — at regular grid points
+- **Waypoint labels** — along the x-axis with distance (nm) and time (UTC)
+
+Note approximate FL/altitude positions from the y-axis (left side shows FL, right shows hPa).
+
+### Extract our computed data
+
+```python
+from pathlib import Path
+from weatherbrief.tasks.artifacts import load_route_analyses
+
+pack_dir = Path("data/packs/{user_id}/{flight_id}/{timestamp}")
+manifest = load_route_analyses(pack_dir)
+
+last_dist = -40
+for rpa in manifest.analyses:
+    dist_nm = rpa.distance_from_origin_nm or 0
+    name = rpa.waypoint_icao or rpa.waypoint_name or f"pt{rpa.point_index}"
+    is_waypoint = rpa.waypoint_icao is not None
+
+    # Sample every ~40nm or at waypoints
+    if not is_waypoint and (dist_nm - last_dist) < 40:
+        continue
+    last_dist = dist_nm
+
+    print(f"=== {name} @ {dist_nm:.0f} nm ===")
+
+    for model, s in rpa.sounding.items():
+        if model != "gfs":
+            continue
+        clouds = [(c.base_ft, c.top_ft) for c in s.cloud_layers]
+        icing = [(i.base_ft, i.top_ft, i.risk, i.icing_type) for i in s.icing_zones]
+        conv = s.convective
+        nwp = s.nwp_cloud_diagnostics
+
+        print(f"  Clouds: {clouds}")
+        if icing:
+            print(f"  Icing:  {icing}")
+        if conv and "NONE" not in str(conv.risk_level):
+            print(f"  Conv: risk={conv.risk_level}")
+        if nwp:
+            for ln in ['low', 'mid', 'high']:
+                layer = getattr(nwp, ln, None)
+                if layer and layer.cover_pct and layer.cover_pct > 5:
+                    base_fl = round(layer.base_ft / 100)
+                    top_fl = round(layer.top_ft / 100)
+                    print(f"  NWP-{ln}: {layer.cover_pct:.0f}% FL{base_fl}-FL{top_fl}")
+        if s.indices and s.indices.freezing_level_ft:
+            fz = s.indices.freezing_level_ft
+            print(f"  Fz lvl: FL{round(fz/100)} ({fz:.0f} ft)")
+    print()
+```
+
+### Compare
+
+Produce a side-by-side comparison table covering these areas:
+
+| Area | GRAMET (visual) | Our analysis |
+|------|----------------|--------------|
+| **Freezing level** | Read from magenta line / 0°C isotherm | `indices.freezing_level_ft` |
+| **Cloud layers** | White masses — note approximate FL bands at key distances | `cloud_layers` base/top + `nwp_cloud_diagnostics` low/mid/high |
+| **Icing** | Cyan contour positions | `icing_zones` base/top/risk |
+| **Convection** | CB symbols or convective markers | `convective.risk_level` |
+
+Precision expectation: both use the same GFS data, so broad patterns should match.
+Differences of ~500-1000ft in altitude or ~20nm along route are normal given visual
+reading precision. Flag significant discrepancies (e.g., our analysis misses a cloud
+layer the GRAMET clearly shows, or icing zones at very different altitudes).
 
 ## Appendix — API endpoints (quick checks only)
 
