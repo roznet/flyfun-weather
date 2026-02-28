@@ -136,6 +136,7 @@ class BriefingPackRow(Base):
     artifact_path: Mapped[str] = mapped_column(Text, default="")
     model_init_times_json: Mapped[str] = mapped_column(Text, default="{}")
     grib_init_times_json: Mapped[str] = mapped_column(Text, default="{}")
+    models_skipped_region_json: Mapped[str] = mapped_column(Text, default="[]")
 
     flight: Mapped[FlightRow] = relationship(back_populates="packs")
 

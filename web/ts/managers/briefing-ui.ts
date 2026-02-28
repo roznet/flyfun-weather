@@ -182,15 +182,17 @@ export function renderFreshnessBar(
   // Model basis line from the pack's init times, with GRIB annotation when different
   const packTimes = pack?.model_init_times || {};
   const gribTimes = pack?.grib_init_times || {};
-  const basisParts = Object.entries(packTimes)
+  const fetchedParts = Object.entries(packTimes)
     .map(([m, t]) => {
       const gribTs = gribTimes[m];
       if (gribTs && gribTs !== t) {
         return `${modelLabel(m)} ${formatModelRunTime(t)} (GRIB ${formatModelRunTime(gribTs)})`;
       }
       return `${modelLabel(m)} ${formatModelRunTime(t)}`;
-    })
-    .join(', ');
+    });
+  const skippedParts = (pack?.models_skipped_region || [])
+    .map(m => `${modelLabel(m)} <span class="model-skipped">skipped</span>`);
+  const basisParts = [...fetchedParts, ...skippedParts].join(', ');
   const basisLine = basisParts ? `<span class="freshness-basis">Based on ${basisParts}</span>` : '';
 
   const forceLink = isAdmin
