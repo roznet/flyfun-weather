@@ -11,6 +11,7 @@ from weatherbrief.models import (
     CloudCoverage,
     DerivedLevel,
     EnhancedCloudLayer,
+    NWPCloudDiagnostics,
     ThermodynamicIndices,
 )
 
@@ -110,6 +111,87 @@ def _build_layer(cloud_levels: list[DerivedLevel]) -> EnhancedCloudLayer | None:
         coverage=_classify_coverage(mean_dd),
         mean_dewpoint_depression_c=round(mean_dd, 1),
     )
+
+
+# Coverage mapping from NWP cloud cover percentage (standard METAR oktas)
+_NWP_COVERAGE_THRESHOLDS = [
+    (87.5, CloudCoverage.OVC),  # 7-8 oktas
+    (50.0, CloudCoverage.BKN),  # 5-6 oktas
+    (25.0, CloudCoverage.SCT),  # 3-4 oktas
+]
+
+
+def _nwp_pct_to_coverage(pct: float) -> CloudCoverage:
+    """Map NWP cloud cover percentage to METAR coverage category."""
+    for threshold, coverage in _NWP_COVERAGE_THRESHOLDS:
+        if pct >= threshold:
+            return coverage
+    return CloudCoverage.SCT
+
+
+def build_nwp_cloud_layers(
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None,
+    nwp_cloud_low_pct: float | None = None,
+    nwp_cloud_mid_pct: float | None = None,
+    nwp_cloud_high_pct: float | None = None,
+) -> list[EnhancedCloudLayer] | None:
+    """Build cloud layers from NWP diagnostics.
+
+    Returns None if insufficient data (no diagnostics, or no band has
+    both base_ft and top_ft). Returns an empty list if diagnostics exist
+    but all bands report zero coverage.
+    """
+    if nwp_cloud_diagnostics is None:
+        return None
+
+    layers: list[EnhancedCloudLayer] = []
+    has_usable_band = False
+
+    # Map band names to their diagnostics and fallback cover percentages
+    bands = [
+        (nwp_cloud_diagnostics.low, nwp_cloud_low_pct),
+        (nwp_cloud_diagnostics.mid, nwp_cloud_mid_pct),
+        (nwp_cloud_diagnostics.high, nwp_cloud_high_pct),
+    ]
+
+    for diag, fallback_pct in bands:
+        if diag.base_ft is None or diag.top_ft is None:
+            continue
+        has_usable_band = True
+
+        # Use the diagnostics cover_pct if available, else fall back to Open-Meteo
+        cover_pct = diag.cover_pct if diag.cover_pct is not None else fallback_pct
+        if cover_pct is None or cover_pct <= 0:
+            continue
+
+        layers.append(EnhancedCloudLayer(
+            base_ft=round(diag.base_ft),
+            top_ft=round(diag.top_ft),
+            coverage=_nwp_pct_to_coverage(cover_pct),
+            mean_temperature_c=diag.top_temp_c,
+            mean_dewpoint_depression_c=None,
+        ))
+
+    # Convective layer
+    diag_root = nwp_cloud_diagnostics
+    if (diag_root.convective_base_ft is not None
+            and diag_root.convective_top_ft is not None):
+        has_usable_band = True
+        conv_pct = diag_root.convective_cover_pct
+        if conv_pct is not None and conv_pct > 0:
+            layers.append(EnhancedCloudLayer(
+                base_ft=round(diag_root.convective_base_ft),
+                top_ft=round(diag_root.convective_top_ft),
+                coverage=_nwp_pct_to_coverage(conv_pct),
+                mean_dewpoint_depression_c=None,
+            ))
+
+    if not has_usable_band:
+        return None  # Insufficient diagnostics (e.g. ICON-EU pattern)
+
+    # Sort by base altitude
+    layers.sort(key=lambda lyr: lyr.base_ft)
+    return layers
 
 
 def enrich_cloud_top_uncertainty(

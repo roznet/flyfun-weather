@@ -71,6 +71,22 @@ def _apply_icing_method(rp_analyses: list[RoutePointAnalysis], method: str) -> N
 
 
 # ---------------------------------------------------------------------------
+# Cloud method swap
+# ---------------------------------------------------------------------------
+
+
+def _apply_cloud_method(rp_analyses: list[RoutePointAnalysis], method: str) -> None:
+    """Swap cloud layers based on preferred method. Falls back to DD if NWP unavailable."""
+    if method == "dd":
+        return
+    for rpa in rp_analyses:
+        for sounding in rpa.sounding.values():
+            if method == "nwp" and sounding.nwp_cloud_layers is not None:
+                sounding.cloud_layers = list(sounding.nwp_cloud_layers)
+            # else: keep DD cloud_layers (fallback)
+
+
+# ---------------------------------------------------------------------------
 # Core advisory logic
 # ---------------------------------------------------------------------------
 
@@ -138,6 +154,7 @@ def run_advisories(
     pack_dir: Path | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
     icing_method: str | None = None,
+    cloud_method: str | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
 
@@ -149,6 +166,8 @@ def run_advisories(
 
     if icing_method and icing_method != "ogimet_dd":
         _apply_icing_method(rp_analyses, icing_method)
+    if cloud_method and cloud_method != "dd":
+        _apply_cloud_method(rp_analyses, cloud_method)
 
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
 
@@ -211,6 +230,7 @@ def run_advisories_from_pack(
     airports_db_path: str | None = None,
     airport_conditions_recompute: Callable | None = None,
     icing_method: str | None = None,
+    cloud_method: str | None = None,
 ) -> AdvisoryResult:
     """Re-evaluate advisories from persisted pack_dir artifacts.
 
@@ -237,6 +257,8 @@ def run_advisories_from_pack(
 
     if icing_method and icing_method != "ogimet_dd":
         _apply_icing_method(manifest.analyses, icing_method)
+    if cloud_method and cloud_method != "dd":
+        _apply_cloud_method(manifest.analyses, cloud_method)
 
     # Resolve flight_ceiling_ft from route or explicit param
     effective_ceiling = flight_ceiling_ft

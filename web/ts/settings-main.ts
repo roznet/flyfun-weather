@@ -158,6 +158,10 @@ function populateProfileForm(profile: ProfileResponse): void {
   const icingMethodSelect = document.getElementById('input-icing-method') as HTMLSelectElement;
   if (icingMethodSelect) icingMethodSelect.value = s.icing_method ?? 'ogimet_dd';
 
+  // Cloud method selector
+  const cloudMethodSelect = document.getElementById('input-cloud-method') as HTMLSelectElement;
+  if (cloudMethodSelect) cloudMethodSelect.value = s.cloud_method ?? 'dd';
+
   // Advisories
   const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
@@ -553,6 +557,7 @@ async function handleSave(): Promise<void> {
   const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? false;
   const icingMethod = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd';
+  const cloudMethod = (document.getElementById('input-cloud-method') as HTMLSelectElement)?.value || 'dd';
   const advisories = collectAdvisoryPrefs();
 
   // Build profile settings
@@ -567,6 +572,7 @@ async function handleSave(): Promise<void> {
     llm_digest_enabled: llmDigestEnabled,
     icing_severity_enhance: icingSeverityEnhance,
     icing_method: icingMethod,
+    cloud_method: cloudMethod,
     advisories,
   };
 

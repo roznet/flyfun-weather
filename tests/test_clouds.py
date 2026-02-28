@@ -1,7 +1,9 @@
 """Tests for enhanced cloud layer detection (sounding/clouds.py)."""
 
-from weatherbrief.analysis.sounding.clouds import detect_cloud_layers
-from weatherbrief.models import DerivedLevel
+from weatherbrief.analysis.sounding.clouds import build_nwp_cloud_layers, detect_cloud_layers
+from weatherbrief.models import DerivedLevel, NWPCloudDiagnostics, NWPCloudLayerDiag
+from weatherbrief.models.analysis import CloudCoverage, EnhancedCloudLayer, SoundingAnalysis
+from weatherbrief.tasks.advise import _apply_cloud_method
 
 
 def test_single_cloud_layer():
@@ -104,3 +106,191 @@ def test_missing_dd_skipped():
 def test_empty_levels():
     """Empty input returns empty list."""
     assert detect_cloud_layers([]) == []
+
+
+# --- NWP cloud layer tests ---
+
+
+def test_build_nwp_cloud_layers_full_diagnostics():
+    """GFS-style diagnostics with full base/top produce layers."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=90.0, base_ft=2000.0, top_ft=5000.0),
+        mid=NWPCloudLayerDiag(cover_pct=60.0, base_ft=10000.0, top_ft=18000.0),
+        high=NWPCloudLayerDiag(cover_pct=30.0, base_ft=25000.0, top_ft=35000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers is not None
+    assert len(layers) == 3
+    # Check coverage mapping
+    assert layers[0].coverage == CloudCoverage.OVC  # 90% >= 87.5
+    assert layers[1].coverage == CloudCoverage.BKN  # 60% >= 50
+    assert layers[2].coverage == CloudCoverage.SCT  # 30% >= 25
+    # Check altitudes
+    assert layers[0].base_ft == 2000
+    assert layers[0].top_ft == 5000
+    assert layers[2].base_ft == 25000
+
+
+def test_build_nwp_cloud_layers_none_diagnostics():
+    """None diagnostics returns None."""
+    assert build_nwp_cloud_layers(None) is None
+
+
+def test_build_nwp_cloud_layers_no_base_top():
+    """Diagnostics without base_ft/top_ft (ICON-EU pattern) returns None."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=80.0),
+        mid=NWPCloudLayerDiag(cover_pct=50.0),
+        high=NWPCloudLayerDiag(cover_pct=20.0),
+    )
+    assert build_nwp_cloud_layers(diag) is None
+
+
+def test_build_nwp_cloud_layers_zero_cover_skipped():
+    """Bands with zero coverage are not included."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=0.0, base_ft=2000.0, top_ft=5000.0),
+        mid=NWPCloudLayerDiag(cover_pct=70.0, base_ft=10000.0, top_ft=18000.0),
+        high=NWPCloudLayerDiag(cover_pct=0.0, base_ft=25000.0, top_ft=35000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers is not None
+    assert len(layers) == 1
+    assert layers[0].base_ft == 10000
+
+
+def test_build_nwp_cloud_layers_all_zero_cover():
+    """All bands zero coverage returns empty list (not None — diagnostics exist)."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=0.0, base_ft=2000.0, top_ft=5000.0),
+        mid=NWPCloudLayerDiag(cover_pct=0.0, base_ft=10000.0, top_ft=18000.0),
+        high=NWPCloudLayerDiag(cover_pct=0.0, base_ft=25000.0, top_ft=35000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers is not None
+    assert len(layers) == 0
+
+
+def test_build_nwp_cloud_layers_coverage_thresholds():
+    """Verify coverage percentage mapping to METAR categories."""
+    # 87.5% -> OVC
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=87.5, base_ft=1000.0, top_ft=3000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers[0].coverage == CloudCoverage.OVC
+
+    # 50% -> BKN
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=50.0, base_ft=1000.0, top_ft=3000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers[0].coverage == CloudCoverage.BKN
+
+    # 25% -> SCT
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=25.0, base_ft=1000.0, top_ft=3000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers[0].coverage == CloudCoverage.SCT
+
+    # 10% -> SCT (below lowest threshold, falls to SCT)
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=10.0, base_ft=1000.0, top_ft=3000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers[0].coverage == CloudCoverage.SCT
+
+
+def test_build_nwp_cloud_layers_convective():
+    """Convective layer is included when present."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=80.0, base_ft=2000.0, top_ft=5000.0),
+        convective_cover_pct=60.0,
+        convective_base_ft=3000.0,
+        convective_top_ft=35000.0,
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers is not None
+    assert len(layers) == 2
+    # Sorted by base_ft
+    assert layers[0].base_ft == 2000
+    assert layers[1].base_ft == 3000
+    assert layers[1].top_ft == 35000
+
+
+def test_build_nwp_cloud_layers_fallback_cover_pct():
+    """When diag.cover_pct is None, falls back to Open-Meteo nwp_cloud_*_pct."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=None, base_ft=2000.0, top_ft=5000.0),
+    )
+    # Without fallback, no coverage -> skipped
+    layers = build_nwp_cloud_layers(diag, nwp_cloud_low_pct=None)
+    assert layers is not None
+    assert len(layers) == 0
+
+    # With fallback coverage
+    layers = build_nwp_cloud_layers(diag, nwp_cloud_low_pct=75.0)
+    assert layers is not None
+    assert len(layers) == 1
+    assert layers[0].coverage == CloudCoverage.BKN
+
+
+def test_build_nwp_cloud_layers_dd_none():
+    """NWP layers have mean_dewpoint_depression_c = None."""
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=90.0, base_ft=2000.0, top_ft=5000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers[0].mean_dewpoint_depression_c is None
+
+
+# --- _apply_cloud_method tests ---
+
+
+def _make_rpa_with_clouds():
+    """Create a minimal RoutePointAnalysis with DD and NWP cloud layers."""
+    from datetime import datetime, timezone
+    from weatherbrief.models import RoutePointAnalysis
+
+    dd_layers = [EnhancedCloudLayer(base_ft=3000, top_ft=8000, coverage=CloudCoverage.BKN)]
+    nwp_layers = [EnhancedCloudLayer(base_ft=5000, top_ft=12000, coverage=CloudCoverage.OVC)]
+
+    sounding = SoundingAnalysis(
+        cloud_layers=list(dd_layers),
+        nwp_cloud_layers=list(nwp_layers),
+    )
+    rpa = RoutePointAnalysis(
+        point_index=0,
+        lat=48.0,
+        lon=11.0,
+        distance_from_origin_nm=0.0,
+        interpolated_time=datetime.now(timezone.utc),
+        forecast_hour=datetime.now(timezone.utc),
+        track_deg=90.0,
+        sounding={"gfs": sounding},
+    )
+    return rpa, dd_layers, nwp_layers
+
+
+def test_apply_cloud_method_dd_no_change():
+    """DD method leaves cloud_layers unchanged."""
+    rpa, dd_layers, _ = _make_rpa_with_clouds()
+    _apply_cloud_method([rpa], "dd")
+    assert rpa.sounding["gfs"].cloud_layers[0].base_ft == 3000
+
+
+def test_apply_cloud_method_nwp_swaps():
+    """NWP method swaps cloud_layers to nwp_cloud_layers."""
+    rpa, _, nwp_layers = _make_rpa_with_clouds()
+    _apply_cloud_method([rpa], "nwp")
+    assert rpa.sounding["gfs"].cloud_layers[0].base_ft == 5000
+    assert rpa.sounding["gfs"].cloud_layers[0].coverage == CloudCoverage.OVC
+
+
+def test_apply_cloud_method_nwp_fallback():
+    """NWP method with None nwp_cloud_layers keeps DD (fallback)."""
+    rpa, dd_layers, _ = _make_rpa_with_clouds()
+    rpa.sounding["gfs"].nwp_cloud_layers = None
+    _apply_cloud_method([rpa], "nwp")
+    assert rpa.sounding["gfs"].cloud_layers[0].base_ft == 3000

@@ -31,6 +31,7 @@ export interface PreferencesResponse {
   llm_digest_enabled: boolean;
   icing_severity_enhance: boolean;
   icing_method: string;
+  cloud_method: string;
 }
 
 export interface PreferencesUpdate {
