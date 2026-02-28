@@ -743,6 +743,7 @@ def assess_icing_zones_ogimet_nwp(
             continue
 
         risk = _index_to_risk(effective)
+        lv.icing_index = round(effective, 1)
         icing_levels.append((lv, icing_type, risk, effective))
 
     return _group_into_zones(icing_levels)
