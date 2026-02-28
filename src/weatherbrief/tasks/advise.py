@@ -15,6 +15,7 @@ from typing import Callable
 from weatherbrief.models import (
     AdvisoryAggregation,
     AirportConditions,
+    AltitudeTableResult,
     ElevationProfile,
     IcingZone,
     RouteAdvisoriesManifest,
@@ -322,3 +323,66 @@ def run_advisories_from_pack(
     except Exception as exc:
         logger.warning("Advisory re-evaluation from pack failed", exc_info=True)
         return AdvisoryResult(manifest=None, error=str(exc))
+
+
+def run_altitude_table_from_pack(
+    pack_dir: Path,
+    *,
+    cruise_altitude_ft: int,
+    flight_ceiling_ft: int,
+    step_ft: int = 2000,
+    advisory_models: list[str] | None = None,
+    enabled_ids: set[str] | None = None,
+    user_params: dict | None = None,
+    aggregation: AdvisoryAggregation | None = None,
+    airport_conditions_recompute: Callable | None = None,
+    icing_method: str | None = None,
+    cloud_method: str | None = None,
+) -> AltitudeTableResult:
+    """Compute altitude advisory table from persisted pack artifacts.
+
+    Loads analyses, cross-sections, and elevation once, then sweeps
+    all altitude-dependent advisories across the altitude range.
+    """
+    from weatherbrief.analysis.advisories.altitude_table import compute_altitude_table
+    from weatherbrief.tasks.artifacts import (
+        load_cross_sections,
+        load_elevation_profile,
+        load_route_analyses,
+    )
+
+    manifest = load_route_analyses(pack_dir)
+    cross_sections = load_cross_sections(pack_dir)
+    elevation = load_elevation_profile(pack_dir)
+
+    if icing_method and icing_method != "ogimet_dd":
+        _apply_icing_method(manifest.analyses, icing_method)
+    if cloud_method and cloud_method != "dd":
+        _apply_cloud_method(manifest.analyses, cloud_method)
+
+    model_names = manifest.models
+    advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
+
+    # Airport conditions
+    airport_conds: AirportConditions | None = None
+    if airport_conditions_recompute is not None:
+        airport_conds = airport_conditions_recompute(
+            manifest.analyses, cross_sections, advisory_model_names,
+        )
+
+    effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
+
+    return compute_altitude_table(
+        analyses=manifest.analyses,
+        cross_sections=cross_sections,
+        elevation=elevation,
+        models=advisory_model_names,
+        cruise_altitude_ft=cruise_altitude_ft,
+        flight_ceiling_ft=flight_ceiling_ft,
+        total_distance_nm=manifest.total_distance_nm,
+        airport_conditions=airport_conds,
+        step_ft=step_ft,
+        enabled_ids=enabled_ids,
+        user_params=user_params,
+        aggregation=effective_aggregation,
+    )

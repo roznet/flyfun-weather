@@ -4,10 +4,10 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
-import { renderAdvisories, type AltitudeOverrideConfig } from './managers/advisories-ui';
+import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig } from './managers/advisories-ui';
 import type { DisplayMode } from './types/metrics';
 import { renderUserInfo, initModelCatalog, isFlightPast } from './utils';
-import { initInfoPopup, showMetricInfo } from './components/info-popup';
+import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
@@ -107,6 +107,15 @@ async function init(): Promise<void> {
       ceilingFt,
       onChange: (alt) => store.getState().setAdvisoryAltitudeOverride(alt === defaultAlt ? null : alt),
     };
+  }
+
+  /** Fetch altitude table and show popup. */
+  async function handleAltitudeTable(): Promise<void> {
+    await store.getState().fetchAltitudeTable();
+    const result = store.getState().altitudeTable;
+    if (result) {
+      showPopupContent(renderAltitudeTablePopup(result));
+    }
   }
 
   // Apply initial display mode
@@ -393,7 +402,7 @@ async function init(): Promise<void> {
       state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride
     ) {
       ui.renderAssessment(state.currentPack);
-      renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state));
+      renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
       ui.renderGramet(state.flight, state.currentPack);
@@ -432,7 +441,7 @@ async function init(): Promise<void> {
       updateToggleButtons(state.displayMode);
       renderSliderSections(state);
       if (state.displayMode !== prev.displayMode) {
-        renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state));
+        renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable);
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
         // Entering compact: enforce preferred-only layers for clouds/icing
         // (triggers vizSettings change → renderVisualization runs via that subscriber)
@@ -687,7 +696,7 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack);
-    renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s));
+    renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode);
     ui.renderGramet(s.flight, s.currentPack);

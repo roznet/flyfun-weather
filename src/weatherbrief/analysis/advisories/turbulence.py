@@ -30,6 +30,7 @@ class TurbulenceEvaluator:
                 "Any severe CAT triggers RED regardless of route percentage."
             ),
             category="turbulence",
+            altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(
                     key="route_pct_amber",

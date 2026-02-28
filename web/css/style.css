@@ -2204,6 +2204,83 @@ label {
   font-size: 0.75rem;
 }
 
+/* --- Altitude Advisory Table --- */
+
+.alt-table-scroll {
+  overflow-x: auto;
+  margin-top: 0.5rem;
+}
+
+.alt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.alt-table th,
+.alt-table td {
+  padding: 0.3rem 0.45rem;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.alt-table thead th {
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.alt-table-alt-header,
+.alt-table-alt {
+  text-align: left;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.alt-table-col-header {
+  max-width: 5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.alt-table-score {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.alt-table-cruise td {
+  font-weight: 700;
+  background: rgba(var(--blue-rgb, 59, 130, 246), 0.08);
+}
+
+.alt-table-best td {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+}
+
+.alt-table-cruise-marker {
+  color: var(--blue, #3b82f6);
+  font-size: 0.75rem;
+}
+
+.alt-table-best-marker {
+  color: var(--green);
+  font-size: 0.7rem;
+}
+
+/* Wider popup for altitude table */
+.metric-popup:has(.alt-table) {
+  max-width: 700px;
+}
+
 /* --- Airport Conditions Cards --- */
 
 .airport-cards {

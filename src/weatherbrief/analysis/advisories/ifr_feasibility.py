@@ -164,6 +164,7 @@ class IFRFeasibilityEvaluator:
                 "triggers RED."
             ),
             category="flight_rules",
+            altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(
                     key="min_dep_ceiling_ft",

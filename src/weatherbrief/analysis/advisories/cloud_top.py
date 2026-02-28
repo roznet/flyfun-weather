@@ -31,6 +31,7 @@ class CloudTopEvaluator:
                 "means the pilot cannot get on top."
             ),
             category="cloud",
+            altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(
                     key="margin_ft",

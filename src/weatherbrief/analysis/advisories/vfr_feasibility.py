@@ -135,6 +135,7 @@ class VFRFeasibilityEvaluator:
                 "portion of the route."
             ),
             category="flight_rules",
+            altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(
                     key="cloud_clearance_ft",
