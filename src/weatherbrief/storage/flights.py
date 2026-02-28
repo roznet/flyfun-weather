@@ -104,6 +104,32 @@ def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
     )
 
 
+def _resolve_artifact_path(raw: str) -> str:
+    """Resolve artifact_path against the current DATA_DIR.
+
+    Stored paths are relative to DATA_DIR (e.g. ``data/packs/...`` when
+    DATA_DIR was ``data``).  When the process CWD differs from where the
+    path was created (e.g. running from a worktree), the relative path
+    won't resolve.  Fix by locating the ``packs/`` component and
+    re-rooting it under the current ``_data_dir()``.
+    """
+    if not raw:
+        return raw
+    p = Path(raw)
+    if p.exists():
+        return raw
+    # Find the "packs/" component and re-root under current DATA_DIR
+    parts = p.parts
+    try:
+        idx = parts.index("packs")
+        resolved = _data_dir().joinpath(*parts[idx:])
+        if resolved.exists():
+            return str(resolved)
+    except ValueError:
+        pass
+    return raw
+
+
 def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
     return BriefingPackMeta(
         id=row.id,
@@ -115,7 +141,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         has_digest=row.has_digest,
         assessment=row.assessment,
         assessment_reason=row.assessment_reason,
-        artifact_path=row.artifact_path,
+        artifact_path=_resolve_artifact_path(row.artifact_path),
         model_init_times=json.loads(row.model_init_times_json) if row.model_init_times_json else {},
         grib_init_times=json.loads(row.grib_init_times_json) if row.grib_init_times_json else {},
     )

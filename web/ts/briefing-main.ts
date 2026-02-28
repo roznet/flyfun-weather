@@ -4,7 +4,7 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
-import { renderAdvisories } from './managers/advisories-ui';
+import { renderAdvisories, type AltitudeOverrideConfig } from './managers/advisories-ui';
 import type { DisplayMode } from './types/metrics';
 import { renderUserInfo, initModelCatalog, isFlightPast } from './utils';
 import { initInfoPopup, showMetricInfo } from './components/info-popup';
@@ -88,6 +88,19 @@ async function init(): Promise<void> {
     ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
     ui.renderModelComparison(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
     ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
+  }
+
+  /** Build altitude override config from current state, or undefined if no flight. */
+  function getAltitudeOverrideConfig(state: BriefingState): AltitudeOverrideConfig | undefined {
+    if (!state.flight) return undefined;
+    const defaultAlt = state.flight.cruise_altitude_ft;
+    const ceilingFt = state.flight.flight_ceiling_ft;
+    return {
+      currentAlt: state.advisoryAltitudeOverride ?? defaultAlt,
+      defaultAlt,
+      ceilingFt,
+      onChange: (alt) => store.getState().setAdvisoryAltitudeOverride(alt === defaultAlt ? null : alt),
+    };
   }
 
   // Apply initial display mode
@@ -370,10 +383,11 @@ async function init(): Promise<void> {
       state.digest !== prev.digest ||
       state.routeAnalyses !== prev.routeAnalyses ||
       state.routeAdvisories !== prev.routeAdvisories ||
-      state.elevationProfile !== prev.elevationProfile
+      state.elevationProfile !== prev.elevationProfile ||
+      state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride
     ) {
       ui.renderAssessment(state.currentPack);
-      renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode);
+      renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state));
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
       ui.renderGramet(state.flight, state.currentPack);
@@ -412,7 +426,7 @@ async function init(): Promise<void> {
       updateToggleButtons(state.displayMode);
       renderSliderSections(state);
       if (state.displayMode !== prev.displayMode) {
-        renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode);
+        renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state));
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
       }
     }
@@ -660,7 +674,7 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack);
-    renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories(), s.displayMode);
+    renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s));
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode);
     ui.renderGramet(s.flight, s.currentPack);

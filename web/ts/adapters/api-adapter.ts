@@ -236,9 +236,11 @@ export async function fetchRouteAdvisories(
 export async function recalculateAdvisories(
   flightId: string,
   timestamp: string,
+  cruiseAltitudeFt?: number,
 ): Promise<RouteAdvisoriesManifest> {
+  const qs = cruiseAltitudeFt != null ? `?cruise_altitude_ft=${cruiseAltitudeFt}` : '';
   return apiFetch<RouteAdvisoriesManifest>(
-    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/recalculate`,
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/recalculate${qs}`,
     { method: 'POST' },
   );
 }

@@ -2079,6 +2079,37 @@ label {
   flex-wrap: wrap;
 }
 
+.advisory-altitude-slider {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.advisory-altitude-slider input[type="range"] {
+  width: 120px;
+  cursor: pointer;
+}
+
+.alt-slider-label {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  min-width: 4.5em;
+  text-align: right;
+  color: var(--text);
+}
+
+.alt-slider-label.alt-label-overridden {
+  color: var(--amber);
+}
+
+.alt-reset-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
 .advisory-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

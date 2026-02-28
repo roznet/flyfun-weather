@@ -4,7 +4,7 @@ import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, Mode
 import type { DisplayMode } from '../types/metrics';
 import { showPopupContent } from '../components/info-popup';
 import { renderAdvisoryPopup } from '../helpers/advisory-popup';
-import { $, escapeHtml, modelLabel } from '../utils';
+import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 
 /** Advisory categories hidden in compact mode (informational, not actionable). */
 const COMPACT_HIDDEN_CATEGORIES = new Set(['model']);
@@ -154,6 +154,13 @@ function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, Advis
   `;
 }
 
+export interface AltitudeOverrideConfig {
+  currentAlt: number;    // current slider value or flight default
+  defaultAlt: number;    // flight's cruise_altitude_ft
+  ceilingFt: number;     // flight_ceiling_ft for slider max
+  onChange: (alt: number) => void;
+}
+
 /**
  * Render the advisory dashboard into the #advisories-section element.
  * onRecalculate callback wires up the recalculate button.
@@ -162,6 +169,7 @@ export function renderAdvisories(
   manifest: RouteAdvisoriesManifest | null,
   onRecalculate?: () => void,
   displayMode: DisplayMode = 'full',
+  altitudeOverride?: AltitudeOverrideConfig,
 ): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
@@ -213,6 +221,23 @@ export function renderAdvisories(
     ? '<button class="btn btn-secondary btn-sm" id="recalc-advisories-btn">Recalculate</button>'
     : '';
 
+  // Altitude slider
+  let sliderHtml = '';
+  if (altitudeOverride) {
+    const { currentAlt, defaultAlt, ceilingFt } = altitudeOverride;
+    const isOverridden = currentAlt !== defaultAlt;
+    const labelClass = isOverridden ? 'alt-label-overridden' : '';
+    const resetBtn = isOverridden
+      ? '<button class="btn btn-sm alt-reset-btn" id="advisory-alt-reset" title="Reset to flight altitude">Reset</button>'
+      : '';
+    sliderHtml = `
+      <div class="advisory-altitude-slider">
+        <label class="alt-slider-label ${labelClass}" id="advisory-alt-label">${formatAlt(currentAlt)}</label>
+        <input type="range" id="advisory-alt-slider" min="2000" max="${ceilingFt}" step="1000" value="${currentAlt}">
+        ${resetBtn}
+      </div>`;
+  }
+
   // Airport conditions cards (above advisory grid)
   const airportHtml = manifest.airport_conditions
     ? renderAirportConditions(manifest.airport_conditions)
@@ -223,6 +248,7 @@ export function renderAdvisories(
   el.innerHTML = `
     <div class="advisory-toolbar">
       ${summary}
+      ${sliderHtml}
       ${recalcBtn}
     </div>
     ${airportHtml}
@@ -237,6 +263,28 @@ export function renderAdvisories(
         btn.setAttribute('disabled', 'true');
         btn.textContent = 'Recalculating...';
         onRecalculate();
+      });
+    }
+  }
+
+  // Wire altitude slider
+  if (altitudeOverride) {
+    const slider = document.getElementById('advisory-alt-slider') as HTMLInputElement | null;
+    const label = document.getElementById('advisory-alt-label');
+    const resetBtn = document.getElementById('advisory-alt-reset');
+    if (slider) {
+      slider.addEventListener('input', () => {
+        const val = parseInt(slider.value, 10);
+        if (label) {
+          label.textContent = formatAlt(val);
+          label.classList.toggle('alt-label-overridden', val !== altitudeOverride.defaultAlt);
+        }
+        altitudeOverride.onChange(val);
+      });
+    }
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        altitudeOverride.onChange(altitudeOverride.defaultAlt);
       });
     }
   }
