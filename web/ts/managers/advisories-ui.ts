@@ -165,7 +165,7 @@ export function renderAltitudeTablePopup(result: AltitudeTableResult): string {
   // Column headers: abbreviated advisory names
   const headerCells = advisory_ids.map(id => {
     const name = advisory_names[id] || id;
-    // Abbreviate: take first word or first 8 chars
+    // Abbreviate: take first word or first 10 chars
     const abbrev = name.length > 10 ? name.split(/[\s(]/)[0].slice(0, 10) : name;
     return `<th class="alt-table-col-header" title="${escapeHtml(name)}">${escapeHtml(abbrev)}</th>`;
   }).join('');
