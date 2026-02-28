@@ -103,7 +103,7 @@ export function allModelKeys(): string[] {
 }
 
 export function defaultModelKeys(): string[] {
-  return _catalog.filter(m => m.default).map(m => m.key);
+  return _catalog.filter(m => m.default && m.key !== 'best_match').map(m => m.key);
 }
 
 /** Get display name for a model key (falls back to uppercase). */
