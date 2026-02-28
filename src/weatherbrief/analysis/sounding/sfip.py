@@ -12,6 +12,8 @@ References:
 
 from __future__ import annotations
 
+import math
+
 from weatherbrief.models import (
     DerivedLevel,
     EnhancedCloudLayer,
@@ -49,7 +51,12 @@ _SFIP_MODERATE = 55.0
 def membership_temperature(t_celsius: float) -> float:
     """Temperature membership function for SFIP.
 
-    Piecewise linear: peaks 1.0 in [-5, -14]°C, tapers to 0 at 0°C and -25°C.
+    Piecewise linear ramp to peak 1.0 in [-5, -14]°C, then exponential
+    decay below -14°C.  SLW concentration drops roughly exponentially
+    with decreasing temperature as ice nucleation dominates.
+
+    Decay constant ``_TEMP_DECAY_K`` controls steepness:
+      k=0.4 → -15°C: 0.67, -17°C: 0.30, -20°C: 0.09
     """
     if t_celsius >= 0.0:
         return 0.0
@@ -59,13 +66,14 @@ def membership_temperature(t_celsius: float) -> float:
         return 0.8 + 0.2 * (-t_celsius - 2.0) / 3.0
     elif t_celsius >= -14.0:
         return 1.0
-    elif t_celsius >= -20.0:
-        return 0.8 + 0.2 * (-t_celsius - 20.0) / 6.0
     elif t_celsius >= -25.0:
-        # Ramp down from 0.8 at -20°C to 0.0 at -25°C
-        return 0.8 * (t_celsius + 25.0) / 5.0
+        return math.exp(_TEMP_DECAY_K * (t_celsius + 14.0))
     else:
         return 0.0
+
+
+# Exponential decay rate for m_T below -14°C.  Higher = steeper drop.
+_TEMP_DECAY_K = 0.4
 
 
 def membership_rh(rh_percent: float) -> float:

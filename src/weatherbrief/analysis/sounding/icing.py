@@ -705,10 +705,19 @@ def assess_icing_zones_ogimet_nwp(
     For every level in the icing temperature range, computes:
         effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)
 
-    Uses NWP model cloud cover as the cloud signal — no DD gating.
+    Uses NWP model cloud cover as the cloud signal.  When NWP cloud
+    diagnostics with base/top boundaries are available (GFS, ICON-EU),
+    the altitude check is precise.  When diagnostics are absent (ECMWF,
+    etc.), the bulk band percentage is gated by DD cloud proximity to
+    prevent smearing cloud across the entire ICAO band.
     """
     if not levels:
         return []
+
+    # When diagnostics are missing, bulk NWP percentages cover entire ICAO
+    # bands (SFC-6500, 6500-20000, 20000+).  Use DD cloud proximity as a
+    # vertical constraint to avoid false positives at cloud-free altitudes.
+    need_dd_gate = nwp_cloud_diagnostics is None
 
     layered_frac, convective_frac = _cape_to_cloud_split(cape_jkg)
     vd_base = _cloud_base_vapor_density(clouds, levels)
@@ -731,6 +740,11 @@ def assess_icing_zones_ogimet_nwp(
             nwp_cloud_diagnostics=nwp_cloud_diagnostics,
         )
         if nwp_cloud is None or nwp_cloud <= 0:
+            continue
+
+        # Without precise NWP layer boundaries, require DD cloud proximity
+        # so we don't apply e.g. 15% low-cloud to the entire SFC-6500ft band.
+        if need_dd_gate and not _is_near_cloud(lv, clouds):
             continue
 
         cloud_fraction = nwp_cloud / 100.0
