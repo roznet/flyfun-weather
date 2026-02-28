@@ -182,7 +182,7 @@ function terrainElevationAt(data: VizRouteData, distanceNm: number): number {
 
 export const nwpCloudBandsLayer: CrossSectionLayer = {
   id: 'nwp-cloud-bands',
-  name: 'NWP Cloud Cover',
+  name: 'NWP Layers',
   group: 'clouds',
   defaultEnabled: true,
   metricId: 'nwp_cloud_cover',
