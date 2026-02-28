@@ -139,15 +139,19 @@ Same Ogimet index but uses NWP model cloud cover as the cloud signal instead of 
 
 Altitude-aware: `_nwp_cloud_for_altitude()` maps NWP cloud coverage to specific altitude bands (low <6500ft, mid 6500–20000ft, high >20000ft) with ±500ft margin. Falls back to bulk band percentages when diagnostics unavailable.
 
+**DD cloud proximity gate (no-diagnostics fallback):** When `NWPCloudDiagnostics` are absent (ECMWF, GEM, etc.), bulk NWP band percentages cover entire ICAO altitude bands — e.g. 15% low cloud is applied uniformly from SFC to 6500ft regardless of where the cloud actually is. To prevent false-positive icing at cloud-free altitudes, levels are gated by `_is_near_cloud()`: the level must have DD < 2°C or be within 500ft of a detected BKN/OVC cloud layer. Models with GRIB2 diagnostics (GFS, ICON-EU) use precise base/top boundaries instead and skip this gate.
+
 #### SFIP-NWP — `sounding/sfip.py`
 
 Simplified Forecast Icing Potential — fuzzy-logic index (Belo-Pereira 2015, Morcrette et al. 2019). Same family used by Windy.com and European met services.
 
-- **Fuzzy logic** — four membership functions (T, RH, CLW, vertical velocity) each return 0.0–1.0, combined with weights
+- **Fuzzy logic** — four membership functions (T, RH, CLW, vertical velocity) combined with weights
 - **Three variants**: SFIP_O (full, GFS/ICON-EU — has real CLW from GRIB) `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; SFIP_4 (proxy, other models) `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; SFIP_interp (same as full but CLW spatially interpolated)
 - **Glaciation factor** (GFS/ICON-EU only): `CLW/(CLW+ICMR)` reduces icing when cloud is glaciated
 - **Altitude-aware NWP cloud check**: `_cloud_cover_for_level()` uses `NWPCloudDiagnostics` base/top boundaries (±500ft margin) when available; prevents false positives from bulk ICAO-band percentages
 - Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (`"full"`, `"interp"`, or `"proxy"`)
+
+**Temperature membership (M_T):** Piecewise linear ramp to peak 1.0 in [−5, −14]°C, then exponential decay below −14°C: `exp(−k × (|T| − 14))` with `k=0.4` (`_TEMP_DECAY_K`). SLW concentration drops roughly exponentially with decreasing temperature as ice nucleation dominates. This aligns SFIP's effective range with the Ogimet layered formula (which cuts off at −14°C) while maintaining a smooth tail for mixed-phase icing. Reference values: −15°C → 0.67, −17°C → 0.30, −20°C → 0.09. Temperature gating: [0, −25]°C.
 
 #### Shared Ogimet Index Formulas
 

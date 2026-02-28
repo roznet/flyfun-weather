@@ -27,8 +27,9 @@ def test_mt_zero_above_0c():
     assert membership_temperature(5.0) == 0.0
 
 
-def test_mt_zero_at_minus25():
-    assert membership_temperature(-25.0) == pytest.approx(0.0, abs=1e-9)
+def test_mt_near_zero_at_minus25():
+    # Exponential decay: exp(-0.4 * 11) ≈ 0.012 — negligible
+    assert membership_temperature(-25.0) < 0.02
 
 
 def test_mt_zero_below_minus25():
@@ -46,9 +47,9 @@ def test_mt_ramp_at_minus2():
     assert membership_temperature(-2.0) == pytest.approx(0.8)
 
 
-def test_mt_ramp_at_minus20():
-    # At -20°C: 0.8 + 0.2 * (20 - 20)/6 = 0.8
-    assert membership_temperature(-20.0) == pytest.approx(0.8)
+def test_mt_exponential_decay_minus20():
+    # exp(-0.4 * 6) ≈ 0.091 — steep drop from 1.0 at -14
+    assert membership_temperature(-20.0) == pytest.approx(0.091, abs=0.01)
 
 
 def test_mt_intermediate_minus3():
@@ -56,9 +57,18 @@ def test_mt_intermediate_minus3():
     assert membership_temperature(-3.0) == pytest.approx(0.8 + 0.2 / 3.0, abs=1e-6)
 
 
-def test_mt_intermediate_minus22():
-    # Between -20 and -25: 0.8 * (25 - 22) / 5 = 0.8 * 3/5 = 0.48
-    assert membership_temperature(-22.0) == pytest.approx(0.48, abs=1e-6)
+def test_mt_exponential_decay_monotonic():
+    # Verify monotonic decrease from -14 to -25
+    temps = [-14, -15, -16, -17, -18, -19, -20, -22, -25]
+    values = [membership_temperature(t) for t in temps]
+    for i in range(len(values) - 1):
+        assert values[i] > values[i + 1], f"Not monotonic at {temps[i]}→{temps[i+1]}"
+
+
+def test_mt_continuous_at_minus14():
+    # No discontinuity at the -14°C boundary
+    assert membership_temperature(-14.0) == pytest.approx(1.0)
+    assert membership_temperature(-14.01) > 0.99
 
 
 # ── membership_rh ────────────────────────────────────────────────────

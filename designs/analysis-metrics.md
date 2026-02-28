@@ -275,7 +275,9 @@ Same Ogimet index but uses NWP model cloud cover as cloud signal.
 
 **Formula:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)`
 
-Altitude-aware: maps NWP coverage to ICAO bands (low <6500ft, mid 6500–20000ft, high >20000ft) with ±500ft margin around layer boundaries. Falls back to bulk band percentages when diagnostics unavailable.
+Altitude-aware: maps NWP coverage to ICAO bands (low <6500ft, mid 6500–20000ft, high >20000ft) with ±500ft margin around layer boundaries when `NWPCloudDiagnostics` are available (GFS, ICON-EU).
+
+**DD cloud proximity gate:** When diagnostics are absent (ECMWF, GEM, etc.), bulk NWP band percentages would smear cloud across entire ICAO bands (e.g. 15% low cloud applied uniformly SFC–6500ft). To prevent false-positive icing at cloud-free altitudes, levels without diagnostics are additionally gated by `_is_near_cloud()`: the level must have DD < 2°C or be within 500ft of a BKN/OVC cloud layer. This uses the DD-derived cloud layers as a vertical constraint when precise NWP boundaries are unavailable.
 
 #### 3.2c SFIP-NWP
 
@@ -322,7 +324,7 @@ A second icing index computed alongside Ogimet, based on fuzzy-logic membership 
 | Proxy | SFIP_4 | Other models (no CLW) | T, RH, DD+cloud proxy, ω | 0.40, 0.25, 0.25, 0.10 |
 
 **Membership functions** (all return 0.0–1.0 except VV which returns −0.3 to +0.5):
-- **M_T:** Piecewise linear, peaks 1.0 in [−5, −14]°C, tapers to 0 at 0°C and −25°C
+- **M_T:** Piecewise linear ramp peaking 1.0 in [−5, −14]°C, then **exponential decay** below −14°C: `exp(−k × (|T| − 14))` with `k=0.4` (`_TEMP_DECAY_K`). SLW concentration drops roughly exponentially as ice nucleation dominates at colder temperatures. This aligns SFIP's effective range with the Ogimet layered formula (which cuts off at −14°C) while maintaining a smooth tail for residual mixed-phase icing. Reference values: −15°C → 0.67, −17°C → 0.30, −20°C → 0.09.
 - **M_RH:** Ramp from 0 at 50% to 1.0 at 100%, steeper near saturation
 - **M_CLW:** Ramp from 0 to 1.0 over [0, 0.2] g/kg (requires GRIB2 CLW data)
 - **M_CLW_proxy:** Combines sounding DD score + NWP cloud cover factor (max of both)
@@ -332,7 +334,7 @@ A second icing index computed alongside Ogimet, based on fuzzy-logic membership 
 
 **Gating:** Temperature [0, −25]°C. Full variant also gates on CLW > 0; proxy variant requires cloud proximity (DD < 3°C or within 500ft of detected cloud layer).
 
-**Altitude-aware NWP cloud check:** `_cloud_cover_for_level()` uses `NWPCloudDiagnostics` base/top boundaries (±500ft margin) when available. Returns 0 if the level falls outside the NWP cloud layer, preventing false positives from bulk ICAO-band percentages. Falls back to bulk band values when diagnostics are unavailable.
+**Altitude-aware NWP cloud check:** `_cloud_cover_for_level()` uses `NWPCloudDiagnostics` base/top boundaries (±500ft margin) when available. Returns 0 if the level falls outside the NWP cloud layer, preventing false positives from bulk ICAO-band percentages. Falls back to bulk band values when diagnostics are unavailable (same pattern as Ogimet-NWP: proxy variant then requires DD cloud proximity to gate).
 
 **Severity mapping** (GA-tuned thresholds matching IcingRisk enum):
 
