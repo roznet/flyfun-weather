@@ -22,6 +22,25 @@ Figure out the correct project root (`PROJECT_ROOT`):
 
 Store the resolved path as `VENV_PATH`.
 
+### Ensure editable install points to current directory
+
+When using a shared venv (especially `../main/venv/`), the `weatherbrief` package is installed in editable mode (`pip install -e .`) and the `.egg-link` / `__editable__` path points to whichever directory last ran that command. This means:
+- If the venv was set up in `../main/`, the server will use `../main/` source code, **not** the current worktree's code — changes here won't be picked up.
+- Conversely, if a worktree ran `pip install -e .` last, going back to `../main/` will have the same problem.
+
+**Always verify and fix this:**
+
+1. Activate the venv and check where the package currently points:
+   ```bash
+   source $VENV_PATH/bin/activate
+   pip show weatherbrief | grep Location
+   ```
+2. If the `Location` (or editable path) does **not** match `$PROJECT_ROOT`, re-install:
+   ```bash
+   pip install -e "$PROJECT_ROOT"
+   ```
+3. Tell the user that the editable install was re-pointed to the current directory.
+
 ## Step 3 — Check for .env file
 
 - If `$PROJECT_ROOT/.env` exists, good — nothing to do
