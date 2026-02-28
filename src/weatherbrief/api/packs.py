@@ -1217,6 +1217,7 @@ def recalculate_advisories(
     flight_id: str,
     timestamp: str,
     request: Request,
+    cruise_altitude_ft: int | None = None,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -1265,6 +1266,7 @@ def recalculate_advisories(
 
     advisory_result = run_advisories_from_pack(
         pack_dir,
+        cruise_altitude_ft=cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         advisory_models=profile_adv_models,
         enabled_ids=enabled_ids,

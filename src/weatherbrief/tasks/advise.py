@@ -203,6 +203,7 @@ def run_advisories_from_pack(
     pack_dir: Path,
     route: RouteConfig | None = None,
     *,
+    cruise_altitude_ft: int | None = None,
     flight_ceiling_ft: int | None = None,
     advisory_models: list[str] | None = None,
     enabled_ids: set[str] | None = None,
@@ -245,6 +246,9 @@ def run_advisories_from_pack(
     if effective_ceiling is None:
         effective_ceiling = manifest.cruise_altitude_ft  # fallback
 
+    # Resolve effective cruise altitude from override or manifest
+    effective_cruise = cruise_altitude_ft if cruise_altitude_ft is not None else manifest.cruise_altitude_ft
+
     model_names = manifest.models
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
 
@@ -269,7 +273,7 @@ def run_advisories_from_pack(
             cross_sections=cross_sections,
             elevation=elevation,
             models=advisory_model_names,
-            cruise_altitude_ft=manifest.cruise_altitude_ft,
+            cruise_altitude_ft=effective_cruise,
             flight_ceiling_ft=effective_ceiling,
             total_distance_nm=manifest.total_distance_nm,
             airport_conditions=airport_conds,
@@ -280,7 +284,7 @@ def run_advisories_from_pack(
             advisories=advisory_results,
             catalog=get_catalog(),
             route_name=manifest.route_name,
-            cruise_altitude_ft=manifest.cruise_altitude_ft,
+            cruise_altitude_ft=effective_cruise,
             flight_ceiling_ft=effective_ceiling,
             total_distance_nm=manifest.total_distance_nm,
             models=advisory_model_names,

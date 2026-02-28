@@ -83,6 +83,7 @@ export interface BriefingState {
   refreshStage: string | null;
   refreshDetail: string | null;
   refreshProgress: number;
+  advisoryAltitudeOverride: number | null;
   emailing: boolean;
   error: string | null;
 
@@ -100,6 +101,7 @@ export interface BriefingState {
   setDisplayMode: (mode: DisplayMode) => void;
   toggleTier: (tier: Tier) => void;
   toggleVizLayer: (layerId: string) => void;
+  setAdvisoryAltitudeOverride: (alt: number | null) => void;
   recalculateAdvisories: () => Promise<void>;
   refreshObservations: () => Promise<void>;
   sendEmail: () => Promise<void>;
@@ -135,6 +137,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refreshStage: null,
   refreshDetail: null,
   refreshProgress: 0,
+  advisoryAltitudeOverride: null,
   emailing: false,
   error: null,
 
@@ -358,11 +361,19 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     saveVizSettings(updated);
   },
 
+  setAdvisoryAltitudeOverride: (alt: number | null) => {
+    set({ advisoryAltitudeOverride: alt });
+  },
+
   recalculateAdvisories: async () => {
-    const { flight, currentPack } = get();
+    const { flight, currentPack, advisoryAltitudeOverride } = get();
     if (!flight || !currentPack) return;
     try {
-      const result = await api.recalculateAdvisories(flight.id, currentPack.fetch_timestamp);
+      const result = await api.recalculateAdvisories(
+        flight.id,
+        currentPack.fetch_timestamp,
+        advisoryAltitudeOverride ?? undefined,
+      );
       set({ routeAdvisories: result });
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });
