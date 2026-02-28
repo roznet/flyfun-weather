@@ -52,6 +52,44 @@ export interface LayerGroupInfo {
   layers: CrossSectionLayer[];
 }
 
+/** Maps preference values to layer IDs for groups that collapse in compact mode. */
+const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
+  clouds: { dd: 'cloud-bands', nwp: 'nwp-cloud-bands' },
+  icing: { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands' },
+};
+
+/** Return the preferred layer for a group based on the user's preference method. */
+export function getPreferredLayerForGroup(
+  group: LayerGroup,
+  layers: CrossSectionLayer[],
+  preferredMethod: string | undefined,
+): CrossSectionLayer {
+  const map = PREFERRED_METHOD_LAYER[group];
+  if (map && preferredMethod) {
+    const layerId = map[preferredMethod];
+    const found = layers.find(l => l.id === layerId);
+    if (found) return found;
+  }
+  return layers.find(l => l.defaultEnabled) ?? layers[0];
+}
+
+/**
+ * Return layer overrides for entering compact mode: enable only the preferred
+ * layer in each compact group, disable the rest.
+ */
+export function getCompactLayerOverrides(
+  preferredMethods: Record<string, string>,
+): Record<string, boolean> {
+  const overrides: Record<string, boolean> = {};
+  for (const [group, methodMap] of Object.entries(PREFERRED_METHOD_LAYER)) {
+    const preferredId = methodMap[preferredMethods[group]];
+    for (const layerId of Object.values(methodMap)) {
+      overrides[layerId] = layerId === preferredId;
+    }
+  }
+  return overrides;
+}
+
 export function getLayerGroups(): LayerGroupInfo[] {
   const groupMap = new Map<LayerGroup, CrossSectionLayer[]>();
   for (const layer of ALL_LAYERS) {

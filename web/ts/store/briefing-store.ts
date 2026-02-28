@@ -101,6 +101,7 @@ export interface BriefingState {
   setDisplayMode: (mode: DisplayMode) => void;
   toggleTier: (tier: Tier) => void;
   toggleVizLayer: (layerId: string) => void;
+  setLayersBatch: (overrides: Record<string, boolean>) => void;
   setAdvisoryAltitudeOverride: (alt: number | null) => void;
   recalculateAdvisories: () => Promise<void>;
   refreshObservations: () => Promise<void>;
@@ -356,6 +357,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   toggleVizLayer: (layerId: string) => {
     const current = get().vizSettings;
     const enabled = { ...current.enabledLayers, [layerId]: !(current.enabledLayers[layerId] !== false) };
+    const updated = { ...current, enabledLayers: enabled };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setLayersBatch: (overrides: Record<string, boolean>) => {
+    const current = get().vizSettings;
+    const enabled = { ...current.enabledLayers, ...overrides };
     const updated = { ...current, enabledLayers: enabled };
     set({ vizSettings: updated });
     saveVizSettings(updated);

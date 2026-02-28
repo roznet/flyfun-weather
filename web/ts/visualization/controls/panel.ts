@@ -1,11 +1,15 @@
 /** Visualization control panel: layout toggle, model selector, layer checkboxes, map controls. */
 
 import type { VizLayout, VizSettings } from '../types';
-import { getLayerGroups } from '../cross-section/layer-registry';
+import type { DisplayMode } from '../../types/metrics';
+import { getLayerGroups, getPreferredLayerForGroup } from '../cross-section/layer-registry';
 import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
+
+/** Groups that collapse to a single preferred-method toggle in compact mode. */
+const COMPACT_GROUPS = new Set(['clouds', 'icing']);
 
 /** Explanatory text for layer group info buttons. */
 const GROUP_INFO: Record<string, string> = {
@@ -60,6 +64,8 @@ export function renderVizControls(
   callbacks: VizControlCallbacks,
   selectedModel?: string,
   availableModels?: string[],
+  displayMode?: DisplayMode,
+  preferredMethods?: Record<string, string>,
 ): void {
   const groups = getLayerGroups();
 
@@ -104,16 +110,21 @@ export function renderVizControls(
   if (settings.layout !== 'map') {
     html += '<div class="viz-layer-toggles">';
     for (const group of groups) {
+      const isCompactCollapse = displayMode === 'compact' && COMPACT_GROUPS.has(group.group);
+      const layersToRender = isCompactCollapse
+        ? [getPreferredLayerForGroup(group.group, group.layers, preferredMethods?.[group.group])]
+        : group.layers;
+
       html += `<div class="viz-layer-group">`;
       html += `<span class="viz-group-label">${group.label}:</span>`;
       if (GROUP_INFO[group.group]) {
         html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${group.group}" title="About ${group.label}" aria-label="About ${group.label}">\u24d8</button>`;
       }
-      for (const layer of group.layers) {
+      for (const layer of layersToRender) {
         const checked = settings.enabledLayers[layer.id] !== false ? 'checked' : '';
         html += `<label class="viz-layer-checkbox">`;
         html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked}>`;
-        html += `<span>${layer.name}</span>`;
+        html += `<span>${isCompactCollapse ? group.label : layer.name}</span>`;
         html += `</label>`;
         if (layer.metricId) {
           html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="More info" aria-label="More info">\u24d8</button>`;
