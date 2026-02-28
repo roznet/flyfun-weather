@@ -36,6 +36,7 @@ class IcingEscapeEvaluator:
                 "icing coverage along the route."
             ),
             category="icing",
+            altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(
                     key="terrain_margin_ft",

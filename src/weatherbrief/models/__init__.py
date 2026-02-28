@@ -56,6 +56,8 @@ from weatherbrief.models.advisories import (  # noqa: F401
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    AltitudeAdvisoryRow,
+    AltitudeTableResult,
     ModelAdvisoryResult,
     RouteAdvisoriesManifest,
     RouteAdvisoryResult,

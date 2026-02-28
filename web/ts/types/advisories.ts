@@ -21,6 +21,7 @@ export interface AdvisoryCatalogEntry {
   description: string;
   category: string;
   default_enabled: boolean;
+  altitude_dependent: boolean;
   parameters: AdvisoryParameterDef[];
 }
 
@@ -90,4 +91,23 @@ export interface RouteAdvisoriesManifest {
   total_distance_nm: number;
   models: string[];
   airport_conditions: AirportConditions | null;
+}
+
+export interface AltitudeAdvisoryRow {
+  altitude_ft: number;
+  statuses: Record<string, AdvisoryStatus>;
+  red_count: number;
+  amber_count: number;
+  green_count: number;
+}
+
+export interface AltitudeTableResult {
+  rows: AltitudeAdvisoryRow[];
+  advisory_ids: string[];
+  advisory_names: Record<string, string>;
+  cruise_altitude_ft: number;
+  flight_ceiling_ft: number;
+  step_ft: number;
+  best_below_cruise: number | null;
+  best_above_cruise: number | null;
 }
