@@ -10,7 +10,7 @@ import type {
   RouteAnalysesManifest,
   RouteObservations,
 } from '../store/types';
-import type { RouteAdvisoriesManifest } from '../types/advisories';
+import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import { API_BASE, apiFetch } from '../utils';
 
 /** Typed error for refresh stream failures — avoids fragile string matching. */
@@ -241,6 +241,18 @@ export async function recalculateAdvisories(
   const qs = cruiseAltitudeFt != null ? `?cruise_altitude_ft=${cruiseAltitudeFt}` : '';
   return apiFetch<RouteAdvisoriesManifest>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/recalculate${qs}`,
+    { method: 'POST' },
+  );
+}
+
+export async function fetchAltitudeTable(
+  flightId: string,
+  timestamp: string,
+  stepFt: number = 2000,
+): Promise<AltitudeTableResult> {
+  const qs = `?step_ft=${stepFt}`;
+  return apiFetch<AltitudeTableResult>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/altitude-table${qs}`,
     { method: 'POST' },
   );
 }

@@ -28,6 +28,12 @@ def get_catalog() -> list[AdvisoryCatalogEntry]:
     return [cls.catalog_entry() for cls in _EVALUATORS.values()]
 
 
+def get_altitude_dependent_ids() -> set[str]:
+    """Return IDs of evaluators that depend on cruise altitude."""
+    _ensure_loaded()
+    return {aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().altitude_dependent}
+
+
 def evaluate_all(
     ctx: RouteContext,
     enabled_ids: set[str] | None = None,

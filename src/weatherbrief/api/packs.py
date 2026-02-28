@@ -1288,6 +1288,69 @@ def recalculate_advisories(
     return advisory_result.manifest.model_dump()
 
 
+@router.post("/{timestamp}/advisories/altitude-table")
+def altitude_table(
+    flight_id: str,
+    timestamp: str,
+    request: Request,
+    step_ft: int = 2000,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Compute altitude advisory table — sweep altitude-dependent advisories across altitudes."""
+    from weatherbrief.models import AdvisoryAggregation
+    from weatherbrief.tasks.advise import run_altitude_table_from_pack
+
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available")
+
+    # Load advisory preferences from the flight's profile
+    from weatherbrief.api.profiles import load_profile_settings
+
+    profile_settings = load_profile_settings(db, flight.profile_id, user_id)
+    adv_config = profile_settings.get("advisories", {})
+    enabled_map = adv_config.get("enabled")
+    enabled_ids = None
+    if enabled_map:
+        enabled_ids = {k for k, v in enabled_map.items() if v}
+    user_params = adv_config.get("params") or {}
+    aggregation = AdvisoryAggregation(adv_config.get("aggregation", "majority"))
+
+    profile_adv_models = profile_settings.get("advisory_models")
+    profile_icing_method = profile_settings.get("icing_method")
+    profile_cloud_method = profile_settings.get("cloud_method")
+    db_path = getattr(request.app.state, "db_path", "")
+
+    def _recompute_conds(rp_analyses, cross_sections, advisory_model_names):
+        from types import SimpleNamespace
+
+        proxy = SimpleNamespace(analyses=rp_analyses, models=advisory_model_names)
+        return _recompute_airport_conditions(
+            pack_dir, flight, proxy, cross_sections,
+            db_path=db_path, models=advisory_model_names,
+        )
+
+    result = run_altitude_table_from_pack(
+        pack_dir,
+        cruise_altitude_ft=flight.cruise_altitude_ft,
+        flight_ceiling_ft=flight.flight_ceiling_ft,
+        step_ft=step_ft,
+        advisory_models=profile_adv_models,
+        enabled_ids=enabled_ids,
+        user_params=user_params,
+        aggregation=aggregation,
+        airport_conditions_recompute=_recompute_conds,
+        icing_method=profile_icing_method,
+        cloud_method=profile_cloud_method,
+    )
+
+    return result.model_dump()
+
+
 @router.get("/{timestamp}/elevation")
 def get_elevation(
     flight_id: str,

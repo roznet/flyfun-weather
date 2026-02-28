@@ -1,6 +1,6 @@
 /** Advisory dashboard renderer — compact grid of advisory cards with per-model badges. */
 
-import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AirportConditions, AirportConditionsSummary, AirportModelCondition, FlightCategory, RunwayWind } from '../types/advisories';
+import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AirportConditions, AirportConditionsSummary, AirportModelCondition, FlightCategory, RunwayWind, AltitudeTableResult } from '../types/advisories';
 import type { DisplayMode } from '../types/metrics';
 import { showPopupContent } from '../components/info-popup';
 import { renderAdvisoryPopup } from '../helpers/advisory-popup';
@@ -154,6 +154,70 @@ function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, Advis
   `;
 }
 
+/** Render the altitude table popup HTML from an AltitudeTableResult. */
+export function renderAltitudeTablePopup(result: AltitudeTableResult): string {
+  const { rows, advisory_ids, advisory_names, cruise_altitude_ft, best_below_cruise, best_above_cruise } = result;
+
+  if (rows.length === 0) {
+    return '<div class="popup-header"><h3>Altitude Table</h3></div><p class="muted">No altitude-dependent advisories available.</p>';
+  }
+
+  // Column headers: abbreviated advisory names
+  const headerCells = advisory_ids.map(id => {
+    const name = advisory_names[id] || id;
+    // Abbreviate: take first word or first 8 chars
+    const abbrev = name.length > 10 ? name.split(/[\s(]/)[0].slice(0, 10) : name;
+    return `<th class="alt-table-col-header" title="${escapeHtml(name)}">${escapeHtml(abbrev)}</th>`;
+  }).join('');
+
+  const bodyRows = rows.map(row => {
+    const isCruise = row.altitude_ft === cruise_altitude_ft;
+    const isBestBelow = row.altitude_ft === best_below_cruise;
+    const isBestAbove = row.altitude_ft === best_above_cruise;
+
+    let rowClass = '';
+    if (isCruise) rowClass += ' alt-table-cruise';
+    if (isBestBelow || isBestAbove) rowClass += ' alt-table-best';
+
+    const altLabel = formatAlt(row.altitude_ft);
+    const cruiseMarker = isCruise ? ' <span class="alt-table-cruise-marker">\u2190</span>' : '';
+    const bestMarker = (isBestBelow || isBestAbove) ? ' <span class="alt-table-best-marker">\u2605</span>' : '';
+
+    const statusCells = advisory_ids.map(id => {
+      const status = row.statuses[id] || 'unavailable';
+      return `<td><span class="badge ${statusBadgeClass(status)}">${statusLabel(status)}</span></td>`;
+    }).join('');
+
+    return `<tr class="${rowClass}">
+      <td class="alt-table-alt">${altLabel}${cruiseMarker}${bestMarker}</td>
+      ${statusCells}
+      <td class="alt-table-score">${row.red_count}R ${row.amber_count}A</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="popup-header"><h3>Altitude Advisory Table</h3></div>
+    <p class="muted" style="margin:0 0 0.5rem;font-size:0.8rem;">
+      Sweeps altitude-dependent advisories from 2000ft to FL${Math.round(result.flight_ceiling_ft / 100)},
+      step ${result.step_ft}ft.
+      <span class="alt-table-cruise-marker">\u2190</span> = cruise,
+      <span class="alt-table-best-marker">\u2605</span> = best altitude.
+    </p>
+    <div class="alt-table-scroll">
+      <table class="alt-table">
+        <thead>
+          <tr>
+            <th class="alt-table-alt-header">Alt</th>
+            ${headerCells}
+            <th>Score</th>
+          </tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 export interface AltitudeOverrideConfig {
   currentAlt: number;    // current slider value or flight default
   defaultAlt: number;    // flight's cruise_altitude_ft
@@ -170,6 +234,7 @@ export function renderAdvisories(
   onRecalculate?: () => void,
   displayMode: DisplayMode = 'full',
   altitudeOverride?: AltitudeOverrideConfig,
+  onAltitudeTable?: () => Promise<void>,
 ): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
@@ -221,6 +286,10 @@ export function renderAdvisories(
     ? '<button class="btn btn-secondary btn-sm" id="recalc-advisories-btn">Recalculate</button>'
     : '';
 
+  const altTableBtn = onAltitudeTable
+    ? '<button class="btn btn-secondary btn-sm" id="alt-table-btn">Altitude Table</button>'
+    : '';
+
   // Altitude slider
   let sliderHtml = '';
   if (altitudeOverride) {
@@ -250,6 +319,7 @@ export function renderAdvisories(
       ${summary}
       ${sliderHtml}
       ${recalcBtn}
+      ${altTableBtn}
     </div>
     ${airportHtml}
     <div class="advisory-grid">${cards}</div>
@@ -263,6 +333,23 @@ export function renderAdvisories(
         btn.setAttribute('disabled', 'true');
         btn.textContent = 'Recalculating...';
         onRecalculate();
+      });
+    }
+  }
+
+  // Wire altitude table button
+  if (onAltitudeTable) {
+    const altBtn = $('alt-table-btn');
+    if (altBtn) {
+      altBtn.addEventListener('click', async () => {
+        altBtn.setAttribute('disabled', 'true');
+        altBtn.textContent = 'Loading...';
+        try {
+          await onAltitudeTable();
+        } finally {
+          altBtn.removeAttribute('disabled');
+          altBtn.textContent = 'Altitude Table';
+        }
       });
     }
   }

@@ -77,6 +77,7 @@ class FIKIIcingEvaluator:
             ),
             category="icing",
             default_enabled=False,  # opt-in for FIKI operators
+            altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(
                     key="proximity_nm",

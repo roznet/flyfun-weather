@@ -2,7 +2,7 @@
 
 import { createStore } from 'zustand/vanilla';
 import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
-import type { RouteAdvisoriesManifest } from '../types/advisories';
+import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { DisplayMode, Tier } from '../types/metrics';
 import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
@@ -84,6 +84,8 @@ export interface BriefingState {
   refreshDetail: string | null;
   refreshProgress: number;
   advisoryAltitudeOverride: number | null;
+  altitudeTable: AltitudeTableResult | null;
+  altitudeTableLoading: boolean;
   emailing: boolean;
   error: string | null;
 
@@ -104,6 +106,7 @@ export interface BriefingState {
   setLayersBatch: (overrides: Record<string, boolean>) => void;
   setAdvisoryAltitudeOverride: (alt: number | null) => void;
   recalculateAdvisories: () => Promise<void>;
+  fetchAltitudeTable: () => Promise<void>;
   refreshObservations: () => Promise<void>;
   sendEmail: () => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
@@ -139,6 +142,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refreshDetail: null,
   refreshProgress: 0,
   advisoryAltitudeOverride: null,
+  altitudeTable: null,
+  altitudeTableLoading: false,
   emailing: false,
   error: null,
 
@@ -386,6 +391,21 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       set({ routeAdvisories: result });
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });
+    }
+  },
+
+  fetchAltitudeTable: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    set({ altitudeTableLoading: true, altitudeTable: null });
+    try {
+      const result = await api.fetchAltitudeTable(
+        flight.id,
+        currentPack.fetch_timestamp,
+      );
+      set({ altitudeTable: result, altitudeTableLoading: false });
+    } catch (err) {
+      set({ altitudeTableLoading: false, error: `Altitude table failed: ${err}` });
     }
   },
 

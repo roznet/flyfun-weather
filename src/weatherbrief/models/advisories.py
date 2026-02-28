@@ -80,6 +80,7 @@ class AdvisoryCatalogEntry(BaseModel):
     description: str
     category: str  # e.g. "icing", "cloud", "turbulence", "convective", "model"
     default_enabled: bool = True
+    altitude_dependent: bool = False
     parameters: list[AdvisoryParameterDef] = Field(default_factory=list)
 
 
@@ -172,3 +173,26 @@ class RouteAdvisoriesManifest(BaseModel):
     models: list[str] = Field(default_factory=list)
     aggregation: str = "worst"
     airport_conditions: AirportConditions | None = None
+
+
+class AltitudeAdvisoryRow(BaseModel):
+    """One row in the altitude table — advisory statuses at a single altitude."""
+
+    altitude_ft: int
+    statuses: dict[str, AdvisoryStatus]  # advisory_id → aggregate status
+    red_count: int = 0
+    amber_count: int = 0
+    green_count: int = 0
+
+
+class AltitudeTableResult(BaseModel):
+    """Result of sweeping altitude-dependent advisories across an altitude range."""
+
+    rows: list[AltitudeAdvisoryRow]  # sorted by altitude descending
+    advisory_ids: list[str]  # column order
+    advisory_names: dict[str, str]  # advisory_id → display name
+    cruise_altitude_ft: int
+    flight_ceiling_ft: int
+    step_ft: int
+    best_below_cruise: int | None = None  # altitude_ft with best score below cruise
+    best_above_cruise: int | None = None  # altitude_ft with best score at/above cruise
