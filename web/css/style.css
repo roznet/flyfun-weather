@@ -1316,6 +1316,23 @@ label {
   color: var(--text);
 }
 
+/* Advisory method selectors — compact 3-column grid */
+.advisory-method-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  align-items: start;
+}
+.advisory-method-grid .input-select {
+  width: 100%;
+}
+@media (max-width: 700px) {
+  .advisory-method-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 #profile-select {
   padding: 0.35rem 0.5rem;
   border: 1px solid var(--border);
