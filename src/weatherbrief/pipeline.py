@@ -98,6 +98,7 @@ class BriefingResult:
     digest: object | None = None  # WeatherDigest (lazy import avoids hard dep)
     text_digest: str | None = None
     grib_init_times: dict[str, int] = field(default_factory=dict)
+    models_skipped_region: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     usage: BriefingUsage = field(default_factory=BriefingUsage)
 
@@ -322,6 +323,7 @@ def execute_briefing(
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
     result.grib_init_times = fetch_result.grib_init_times
+    result.models_skipped_region = fetch_result.models_skipped_region
     result.usage.open_meteo_calls = len(fetch_result.cross_sections)
     result.usage.grib_enrichment = fetch_result.grib_enriched
     result.usage.grib_enrichment_failed = fetch_result.grib_enrichment_failed

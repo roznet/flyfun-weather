@@ -48,6 +48,7 @@ export interface PackMeta {
   assessment_reason: string | null;
   model_init_times?: Record<string, number>;
   grib_init_times?: Record<string, number>;
+  models_skipped_region?: string[];
   data_status?: DataStatus | null;
 }
 

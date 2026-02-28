@@ -368,6 +368,11 @@ label {
   font-size: 0.8rem;
 }
 
+.model-skipped {
+  font-style: italic;
+  opacity: 0.6;
+}
+
 .freshness-link {
   font-size: 0.8rem;
   margin-left: 0.5rem;
