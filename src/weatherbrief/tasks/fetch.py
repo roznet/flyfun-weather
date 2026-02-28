@@ -14,7 +14,7 @@ from typing import Callable
 
 from weatherbrief.fetch.open_meteo import OpenMeteoClient
 from weatherbrief.fetch.route_points import interpolate_route
-from weatherbrief.fetch.variables import MODEL_ENDPOINTS
+from weatherbrief.fetch.variables import MODEL_ENDPOINTS, ModelRegion, detect_model_region
 from weatherbrief.models import (
     ElevationProfile,
     ModelSource,
@@ -27,6 +27,13 @@ from weatherbrief.models import (
 logger = logging.getLogger(__name__)
 
 
+def _should_skip_for_region(endpoint, route_region: ModelRegion) -> bool:
+    """Return True if a model's coverage region doesn't match the route."""
+    if endpoint.region == ModelRegion.GLOBAL or route_region == ModelRegion.GLOBAL:
+        return False
+    return endpoint.region != route_region
+
+
 @dataclass
 class FetchResult:
     """Output of the fetch stage."""
@@ -36,6 +43,7 @@ class FetchResult:
     cross_sections: list[RouteCrossSection]
     elevation_profile: ElevationProfile | None
     models_fetched: list[str]
+    models_skipped_region: list[str] = field(default_factory=list)
     grib_enriched: bool = False
     grib_enrichment_failed: bool = False
     grib_init_times: dict[str, int] = field(default_factory=dict)
@@ -89,7 +97,10 @@ def run_fetch(
     all_forecasts: list[WaypointForecast] = []
     cross_sections: list[RouteCrossSection] = []
     models_fetched_names: list[str] = []
+    models_skipped_region: list[str] = []
     models_fetched_count = 0
+
+    route_region = detect_model_region(route)
 
     for model in models:
         endpoint = MODEL_ENDPOINTS[model.value]
@@ -98,6 +109,13 @@ def run_fetch(
                 "Skipping %s: %d days out exceeds %d-day range",
                 model.value, days_out, endpoint.max_days,
             )
+            continue
+        if _should_skip_for_region(endpoint, route_region):
+            logger.info(
+                "Skipping %s: %s model not relevant for %s route",
+                model.value, endpoint.region.value, route_region.value,
+            )
+            models_skipped_region.append(model.value)
             continue
         # Delay between model fetches to avoid Open-Meteo rate limiting
         if models_fetched_count > 0:
@@ -164,6 +182,7 @@ def run_fetch(
         cross_sections=cross_sections,
         elevation_profile=elevation_profile,
         models_fetched=models_fetched_names,
+        models_skipped_region=models_skipped_region,
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
         grib_init_times=grib_init_times,

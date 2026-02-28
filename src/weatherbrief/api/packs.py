@@ -198,6 +198,7 @@ class PackMetaResponse(BaseModel):
     assessment_reason: str | None
     model_init_times: dict[str, int] = Field(default_factory=dict)
     grib_init_times: dict[str, int] = Field(default_factory=dict)
+    models_skipped_region: list[str] = Field(default_factory=list)
     data_status: DataStatus | None = None
 
 
@@ -223,6 +224,7 @@ def _meta_to_response(
         assessment_reason=meta.assessment_reason,
         model_init_times=meta.model_init_times,
         grib_init_times=meta.grib_init_times,
+        models_skipped_region=meta.models_skipped_region,
         data_status=data_status,
     )
 
@@ -503,6 +505,7 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
         artifact_path=str(pack_path),
         model_init_times=init_times,
         grib_init_times=result.grib_init_times,
+        models_skipped_region=result.models_skipped_region,
     )
 
     save_pack_meta(db, meta)

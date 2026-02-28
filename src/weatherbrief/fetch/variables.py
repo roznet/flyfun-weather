@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 BASE_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
 
@@ -94,6 +95,14 @@ PRESSURE_LEVEL_VARIABLES = [
 ]
 
 
+class ModelRegion(Enum):
+    """Geographic coverage region for a weather model."""
+
+    GLOBAL = "global"
+    NORTH_AMERICA = "north_america"
+    EUROPE = "europe"
+
+
 @dataclass
 class ModelEndpoint:
     """Open-Meteo model endpoint configuration."""
@@ -108,6 +117,8 @@ class ModelEndpoint:
     pressure_levels: list[int] = field(default_factory=lambda: list(BASE_PRESSURE_LEVELS))
     # Whether this model is included in the default selection for new users
     default: bool = False
+    # Geographic coverage region — used to skip irrelevant models for a route
+    region: ModelRegion = ModelRegion.GLOBAL
 
 
 MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
@@ -143,6 +154,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(ICON_PRESSURE_LEVELS),
         default=True,
+        region=ModelRegion.EUROPE,
     ),
     "ukmo": ModelEndpoint(
         name="UK Met Office",
@@ -152,6 +164,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         unavailable_surface=["precipitation_probability",
                              "convective_inhibition", "lifted_index"],
         pressure_levels=list(UKMO_PRESSURE_LEVELS),
+        region=ModelRegion.EUROPE,
     ),
     "meteofrance": ModelEndpoint(
         name="Météo-France",
@@ -162,6 +175,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
                              "convective_inhibition", "lifted_index"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(METEOFRANCE_PRESSURE_LEVELS),
+        region=ModelRegion.EUROPE,
     ),
     "gem": ModelEndpoint(
         name="GEM",
@@ -171,6 +185,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
                              "convective_inhibition", "lifted_index"],
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(GEM_PRESSURE_LEVELS),
+        region=ModelRegion.NORTH_AMERICA,
     ),
 }
 
@@ -189,3 +204,34 @@ def build_hourly_params(endpoint: ModelEndpoint) -> str:
             pressure.append(f"{var}_{level}hPa")
 
     return ",".join(surface + pressure)
+
+
+# ICAO prefixes that indicate North American airspace
+_NORTH_AMERICA_PREFIXES = ("K", "C", "P")
+
+
+def detect_model_region(route) -> ModelRegion:
+    """Classify a route's region for model coverage filtering.
+
+    Checks ALL waypoint ICAO prefixes:
+    - K, C, P prefixes → NORTH_AMERICA
+    - Everything else → EUROPE
+
+    If mixed, defaults to GLOBAL (no filtering — safe fallback).
+
+    Takes a RouteConfig but declared untyped to avoid circular imports.
+    """
+    if not route or not route.waypoints:
+        return ModelRegion.GLOBAL
+
+    regions: set[ModelRegion] = set()
+    for wp in route.waypoints:
+        icao = wp.icao.upper()
+        if any(icao.startswith(p) for p in _NORTH_AMERICA_PREFIXES):
+            regions.add(ModelRegion.NORTH_AMERICA)
+        else:
+            regions.add(ModelRegion.EUROPE)
+
+    if len(regions) == 1:
+        return regions.pop()
+    return ModelRegion.GLOBAL
