@@ -79,9 +79,9 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
-| `IcingEscapeEvaluator` | icing | Non-FIKI: can we descend below freezing to escape icing? Checks FZ level vs terrain + margin. Altitude-aware: ignores icing above cruise + buffer | `terrain_margin_ft`, `tight_margin_ft`, `icing_altitude_buffer_ft`, `route_pct_amber` |
+| `IcingEscapeEvaluator` | icing | Non-FIKI: can we descend below freezing to escape icing? Checks FZ level vs terrain + margin. Altitude-aware: ignores icing above cruise + buffer. `min_route_pct` suppresses alerts when only a tiny fraction of route is affected | `terrain_margin_ft`, `tight_margin_ft`, `icing_altitude_buffer_ft`, `route_pct_amber`, `min_route_pct` (15%) |
 | `FIKIIcingEvaluator` | icing | FIKI-equipped: evaluates icing layer thickness and severity (transit OK, loiter not) | `thickness_amber_ft`, `thickness_red_ft`, `severe_is_red` |
-| `FreezingLevelEvaluator` | icing | Freezing level vs max terrain height (mountain icing risk) | `margin_ft`, `tight_margin_ft` |
+| `FreezingLevelEvaluator` | icing | Freezing level vs max terrain height (mountain icing risk). `min_route_pct` suppresses alerts when only isolated points are affected | `margin_ft`, `tight_margin_ft`, `min_route_pct` (15%) |
 
 ### Cloud
 
@@ -116,13 +116,14 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `VFRFeasibilityEvaluator` | feasibility | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage). Worst of sub-assessments wins | `cloud_base_margin_ft`, `bkn_pct_amber`, `ovc_pct_red` |
-| `IFRFeasibilityEvaluator` | feasibility | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (altitude-aware), convective risk along route | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `icing_pct_amber`, `icing_pct_red`, `icing_altitude_buffer_ft` |
+| `IFRFeasibilityEvaluator` | feasibility | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (uses shared `has_relevant_icing()` helper aligned with FIKI advisory), convective risk along route | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `icing_pct_amber`, `icing_pct_red`, `icing_altitude_buffer_ft` |
 
 ## Shared Helpers (`_helpers.py`)
 
 - **`format_extent(affected, total, total_distance_nm)`** → `"30nm/55nm (55%)"` — human-readable spatial extent
 - **`icing_zones_in_altitude_range(zones, floor_ft, ceiling_ft)`** → filter zones overlapping an altitude band
-- **`has_relevant_icing(zones, cruise_altitude_ft, buffer_ft=2000)`** → True if any zone overlaps `[0, cruise + buffer]`. Used by IFR feasibility and icing escape to ignore icing far above cruise altitude
+- **`has_relevant_icing(zones, cruise_altitude_ft, buffer_ft=2000)`** → True if any zone overlaps `[0, cruise + buffer]`. Used by IFR feasibility, icing escape, and FIKI evaluators to ignore icing far above cruise altitude
+- **`min_icing_clearance(zones, cruise_altitude_ft)`** → minimum vertical distance (ft) from cruise to nearest icing zone. Used by FIKI evaluator
 - **`pct_above_threshold(affected, total, amber_pct, red_pct)`** → common GREEN/AMBER/RED from percentage
 - **`terrain_at_distance(elevation, distance_nm)`** → binary search + linear interpolation for terrain altitude
 - **`max_terrain_near_point(elevation, distance_nm, radius_nm=5)`** → peak elevation within radius
@@ -142,9 +143,11 @@ User overrides stored in `flight_profiles.settings_json` under `advisories: {ena
 ## Pipeline Integration
 
 In `tasks/advise.py` via `run_advisories()`:
-1. Build `RouteContext` from existing route analyses, cross-sections, elevation, airport conditions
-2. Call `evaluate_all(ctx)` → `list[RouteAdvisoryResult]`
-3. Save `RouteAdvisoriesManifest` to `route_advisories.json`
+1. **Method swapping**: `_apply_icing_method(rp_analyses, method)` and `_apply_cloud_method(rp_analyses, method)` replace active icing zones and cloud layers based on user preference before evaluation. See [analysis.md](./analysis.md) for method details.
+2. **Model filtering**: `advisory_models` preference selects which models to evaluate (default excludes `best_match`)
+3. Build `RouteContext` from existing route analyses, cross-sections, elevation, airport conditions
+4. Call `evaluate_all(ctx)` → `list[RouteAdvisoryResult]`
+5. Save `RouteAdvisoriesManifest` to `route_advisories.json`
 
 Also supports `run_advisories_from_pack()` for re-evaluation from saved artifacts without re-fetching.
 
@@ -163,6 +166,7 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - Summary bar: badge counts per severity (e.g., "3 RED 2 AMBER 5 GREEN")
 - Advisory cards sorted RED → AMBER → GREEN → UNAVAILABLE
 - Each card: aggregate status badge + name + info button + per-model badges + detail text
+- **Altitude slider**: allows evaluating advisories at different cruise altitudes without recalculating the full pipeline
 - Recalculate button triggers POST endpoint and re-renders
 
 **Info popup** (`components/info-popup.ts`):

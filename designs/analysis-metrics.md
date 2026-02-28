@@ -205,7 +205,11 @@ Computed in `thermodynamics.compute_indices()` — one value per sounding profil
 
 **Module:** `sounding/clouds.py`
 
-**Method:** Consecutive pressure levels where dewpoint depression < 3°C are grouped into cloud layers. This is a **sounding-derived** estimate independent of NWP cloud cover parameterization.
+Two named methods — both always computed, user selects which drives advisories via `cloud_method` setting:
+
+#### DD (Dewpoint Depression) — default
+
+Consecutive pressure levels where dewpoint depression < 3°C are grouped into cloud layers. Sounding-derived, independent of NWP cloud cover parameterization.
 
 **Coverage classification** from mean dewpoint depression within layer:
 
@@ -215,21 +219,41 @@ Computed in `thermodynamics.compute_indices()` — one value per sounding profil
 | 1–2°C | BKN (broken) | 5–7/8 |
 | 2–3°C | SCT (scattered) | 3–4/8 |
 
-**Dual cloud data sources** — a known inconsistency:
-- **Sounding-derived:** from dewpoint depression at pressure levels (8 levels, coarse vertical resolution)
-- **NWP grid-scale:** `cloud_cover_low/mid/high` from model parameterization (sub-grid cloud physics, finer)
+#### NWP (Model Diagnostics) — alternative
 
-These can disagree. The NWP cloud cover includes sub-grid processes the sounding approach misses. Currently both are reported independently, leading to confusing labels like "Clear (cloud 100%)" — see §5 Known Issues.
+Uses GFS/ICON cloud layer diagnostics (base/top boundaries + coverage %) when available.
+
+**NWP coverage classification:**
+
+| Cover % | Coverage |
+|---------|----------|
+| ≥ 87.5% | OVC |
+| ≥ 50% | BKN |
+| ≥ 25% | SCT |
+
+Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000ft+). Falls back to DD method when diagnostics unavailable.
+
+**Dual cloud data sources** — a known inconsistency:
+- **DD (sounding-derived):** from dewpoint depression at pressure levels (8–28 levels, coarse vertical resolution)
+- **NWP (grid-scale):** `cloud_cover_low/mid/high` from model parameterization (sub-grid cloud physics, finer)
+
+These can disagree. The NWP cloud cover includes sub-grid processes the sounding approach misses. The `cloud_method` setting lets users choose which source drives advisory evaluators — see §5 Known Issues.
 
 ### 3.2 Icing Assessment
 
 **Module:** `sounding/icing.py`
 
-**Current method:** Ogimet/Autorouter continuous icing index with cloud proximity check.
+Three named methods — all computed per sounding, user selects which drives advisories:
 
-Only levels near/in cloud are assessed (DD < 3°C or within 500ft of a cloud layer).
+#### 3.2a Ogimet-DD (default)
 
-**Continuous icing index formulas** (peak near −7°C, matching observed supercooled liquid water distribution):
+Continuous Ogimet icing index with dewpoint depression (DD) attenuation as cloud signal.
+
+**Formula:** `effective_index = ogimet_index(T) × dd_attenuation_factor(DD)`
+
+DD attenuation: cosine taper from 1.0 at DD=0°C to 0.0 at DD≥2°C — smooth, no binary gate.
+
+**Ogimet index formulas** (shared with Ogimet-NWP):
 
 ```
 Combined = (layered% × layered_index + convective% × convective_index) / 200
@@ -241,16 +265,34 @@ Convective:  200 × (ρv_base − ρv_cell) / ρv_20sat × √((T − 253.15)/20
 
 Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`. The stratiform/convective cloud split is estimated from CAPE (see §4.4).
 
-**Index-to-risk mapping:**
+**2-pass cloud gating (for zone formation):**
+- **Pass 1:** LWC-direct (CLWMR > 0), DD-based (DD < 2°C), or cloud proximity (within 500ft of BKN/OVC). Scattered clouds (DD 2–3°C) skipped — avoidable in VMC.
+- **Pass 2 (NWP fallback):** Levels in 0 to −20°C that pass 1 missed → if NWP cloud > 50% at corresponding altitude band → assess. Catches sub-grid microphysics the sounding missed.
 
-| Index | Risk |
-|-------|------|
-| 0 | None |
-| > 0 | Light |
-| ≥ 30 | Moderate |
-| ≥ 80 | Severe |
+#### 3.2b Ogimet-NWP (alternative)
 
-**Icing type classification** from wet-bulb temperature (dry-bulb fallback). The accretion surface temperature is closer to wet-bulb than dry-bulb in cloud/precipitating conditions; thresholds are shifted ~1°C colder than dry-bulb equivalents:
+Same Ogimet index but uses NWP model cloud cover as cloud signal.
+
+**Formula:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)`
+
+Altitude-aware: maps NWP coverage to ICAO bands (low <6500ft, mid 6500–20000ft, high >20000ft) with ±500ft margin around layer boundaries. Falls back to bulk band percentages when diagnostics unavailable.
+
+#### 3.2c SFIP-NWP
+
+See §3.2d below for full SFIP algorithm details.
+
+#### Shared: Index-to-Risk Mapping
+
+| Ogimet Index | Risk | | SFIP_100 | Risk |
+|------|------|-|----------|------|
+| ≤ 0 | None | | < 15 | None |
+| 0–30 | Light | | 15–30 | Light |
+| 30–80 | Moderate | | 30–55 | Moderate |
+| ≥ 80 | Severe | | ≥ 55 | Severe |
+
+#### Shared: Icing Type Classification
+
+From wet-bulb temperature (dry-bulb fallback). Accretion surface temperature is closer to wet-bulb; thresholds shifted ~1°C colder than dry-bulb equivalents:
 
 | Wet-bulb range | Type | Physics |
 |----------------|------|---------|
@@ -258,17 +300,14 @@ Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`. The str
 | −11°C to −4°C | Mixed | Mix of supercooled droplets and ice crystals. Irregular accretion. |
 | < −11°C | Rime | Smaller droplets freeze instantly as rough, opaque ice. Less aerodynamic penalty than clear. |
 
-**NWP cloud cover fallback** (pass 2): Levels in the 0 to −20°C icing band that pass 1 skipped (dry DD, not near sounding cloud) are re-assessed if NWP cloud cover > 50% at the corresponding ICAO altitude band. Prevents false-negative icing when NWP sub-grid microphysics detects cloud the coarse pressure-level sounding missed.
+#### Shared: Severity Enhancement
 
-**Severity modifiers:**
-- RH > 95% → upgrade by one level (more moisture = faster accretion)
-- Precipitable water > 25mm → upgrade light→moderate (moisture-rich column)
+Optional (`icing_severity_enhance=False` default):
+- ≥3 levels with RH > 95% + NWP cloud ≥50% → LIGHT → MODERATE
+- Same + mean T ≤ −5°C → MODERATE → SEVERE
+- Precipitable water > 25mm → LIGHT → MODERATE
 
-**Advantages over previous wet-bulb band method:** continuous severity, physically peaks at −7°C (matches observations), inherently cloud-aware, accounts for moisture content and cloud type.
-
-**Historical note:** An earlier implementation used fixed wet-bulb temperature bands (−3 to 0°C = SEVERE, −10 to −3°C = MODERATE, etc.). This was replaced by the Ogimet index because the fixed bands over-flagged near 0°C and under-flagged in the −5°C to −10°C zone where observed SLW content actually peaks.
-
-### 3.2b SFIP Icing Index
+### 3.2d SFIP Icing Index
 
 **Module:** `sounding/sfip.py` — See [analysis.md](./analysis.md) for algorithm summary.
 

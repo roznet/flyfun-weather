@@ -32,7 +32,7 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → enrich_lwc → clouds → icing → inversions → convective → vertical_motion → ceiling`
+Pipeline: `prepare → thermodynamics → enrich_lwc → clouds → nwp_clouds → cloud_top_uncertainty → inversions → sfip → ogimet_dd → ogimet_nwp → precipitation → convective → vertical_motion → ceiling`
 
 ### Prepare (`sounding/prepare.py`)
 
@@ -67,16 +67,33 @@ Every MetPy call is wrapped in try/except — returns None for fields that fail.
 
 ### Clouds (`sounding/clouds.py`)
 
-Enhanced cloud detection from dewpoint depression profiles.
+Two cloud detection methods, selectable via `cloud_method` user setting:
+
+**DD (Dewpoint Depression) — default.** Sounding-derived cloud layers from dewpoint depression profiles.
 
 ```python
 layers = detect_cloud_layers(derived_levels, lcl_altitude_ft=idx.lcl_altitude_ft)
 ```
 
-- Threshold: dewpoint depression < 3°C = "in cloud" (configurable)
+- Threshold: dewpoint depression < 3°C = "in cloud"
 - Groups consecutive levels into `EnhancedCloudLayer`
 - Coverage from mean dewpoint depression: < 1°C → OVC, 1-2°C → BKN, 2-3°C → SCT
 - Records base/top altitudes, thickness, mean temperature
+
+**NWP (Model Diagnostics) — alternative.** Uses GFS/ICON cloud layer diagnostics when available.
+
+```python
+nwp_layers = build_nwp_cloud_layers(diagnostics, cloud_cover_low, cloud_cover_mid, cloud_cover_high)
+```
+
+- Uses NWP cloud base/top boundaries and coverage percentages from GRIB2 diagnostics
+- NWP coverage mapping: ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT
+- Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000ft+)
+- Falls back to DD method when diagnostics unavailable
+
+**Cloud top uncertainty enrichment:** For convective (CAPE > 500): `theoretical_max_top_ft = EL`. For stratiform: `theoretical_max_top_ft = -20°C level`. Only set when exceeding sounding-derived cloud top.
+
+Both methods always computed; `cloud_method` controls which is used by advisory evaluators (method swapping in `tasks/advise.py`).
 
 ### Inversions (`sounding/inversions.py`)
 
@@ -94,57 +111,88 @@ layers = detect_inversions(derived_levels)
 - `surface_based=True` if the inversion starts at the lowest valid level
 - Used in cross-section visualization as an inversion band layer
 
-### Icing (`sounding/icing.py`)
+### Icing (`sounding/icing.py`, `sounding/sfip.py`)
 
-Two-path icing assessment: direct LWC when GRIB2 data available, Ogimet index as fallback.
+Three icing methods, selectable via `icing_method` user setting. All three are always computed and stored; the selected method determines which `icing_zones` are used by advisory evaluators.
+
+#### Ogimet-DD (default) — `assess_icing_zones_ogimet_dd()`
+
+Continuous Ogimet icing index with dewpoint depression (DD) attenuation as the cloud signal.
 
 ```python
-zones = assess_icing_zones(derived_levels, cloud_layers, cape_jkg=cape, severity_enhance=True)
+zones = assess_icing_zones_ogimet_dd(derived_levels, cloud_layers, cape_jkg=cape, ...)
 ```
 
-**Path 1: Direct LWC** (when `cloud_liquid_water_g_m3` populated via GRIB2 enrichment):
-- Bypasses cloud proximity check — LWC directly measures supercooled liquid water
-- Only at freezing temperatures (0°C to −20°C)
-- Severity from LWC thresholds (aviation meteorology literature):
+**Formula:** `effective_index = ogimet_index(T) × dd_attenuation_factor(DD)`
 
-| LWC (g/m³) | Risk |
-|-------------|------|
-| > 0 | LIGHT |
-| ≥ 0.1 | MODERATE |
-| ≥ 0.6 | SEVERE |
+The DD attenuation provides a smooth cloud signal: cosine taper from 1.0 at DD=0°C to 0.0 at DD≥2°C. No binary cloud gate — severity degrades smoothly as DD increases.
 
-**Path 2: Ogimet index** (fallback when LWC unavailable):
-- **Only assesses levels near/in cloud** (DD < 3°C or within 500ft of a cloud layer)
-- Physically-based continuous index peaking at −7°C. Two components:
-  - **Stratiform**: parabolic profile peaking at −7°C, zero at 0°C and −20°C
-  - **Convective**: Gaussian centered on −10°C, broader range to −25°C
-  - Components blended by CAPE (higher CAPE → more convective weight)
+**2-pass cloud gating (for zone formation):**
+- **Pass 1 (standard):** Three conditions for icing — (a) LWC-direct: CLWMR > 0 in icing-temp range; (b) DD-based: DD < 2°C (BKN/OVC equivalent); (c) cloud proximity: within 500ft of BKN/OVC layer. Scattered (DD 2–3°C) skipped — avoidable in VMC.
+- **Pass 2 (NWP fallback):** Re-checks levels in 0 to −20°C that pass 1 missed. If NWP cloud cover > 50% at the corresponding altitude band → assess. Catches sub-grid microphysics the sounding missed.
+
+#### Ogimet-NWP (alternative) — `assess_icing_zones_ogimet_nwp()`
+
+Same Ogimet index but uses NWP model cloud cover as the cloud signal instead of DD.
+
+**Formula:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)`
+
+Altitude-aware: `_nwp_cloud_for_altitude()` maps NWP cloud coverage to specific altitude bands (low <6500ft, mid 6500–20000ft, high >20000ft) with ±500ft margin. Falls back to bulk band percentages when diagnostics unavailable.
+
+#### SFIP-NWP — `sounding/sfip.py`
+
+Simplified Forecast Icing Potential — fuzzy-logic index (Belo-Pereira 2015, Morcrette et al. 2019). Same family used by Windy.com and European met services.
+
+- **Fuzzy logic** — four membership functions (T, RH, CLW, vertical velocity) each return 0.0–1.0, combined with weights
+- **Three variants**: SFIP_O (full, GFS/ICON-EU — has real CLW from GRIB) `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; SFIP_4 (proxy, other models) `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; SFIP_interp (same as full but CLW spatially interpolated)
+- **Glaciation factor** (GFS/ICON-EU only): `CLW/(CLW+ICMR)` reduces icing when cloud is glaciated
+- **Altitude-aware NWP cloud check**: `_cloud_cover_for_level()` uses `NWPCloudDiagnostics` base/top boundaries (±500ft margin) when available; prevents false positives from bulk ICAO-band percentages
+- Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (`"full"`, `"interp"`, or `"proxy"`)
+
+#### Shared Ogimet Index Formulas
+
+Physically-based continuous index peaking at −7°C, matching observed supercooled liquid water distribution:
+- **Stratiform (layered):** `100 × (−T) × (T + 14) / 49` — parabola peaking at −7°C, zero at 0°C and −14°C
+- **Convective:** `200 × moisture_term × √(temp_term)` — temperature-gated [−20°C, 0°C], moisture-dependent
+- **CAPE-based split:** CAPE < 100 → 100% layered; 100–500 → 80/20; 500–1500 → 50/50; > 1500 → 20/80
 
 | Index range | Risk |
 |-------------|------|
-| < 30 | LIGHT |
-| 30-80 | MODERATE |
-| > 80 | SEVERE |
+| ≤ 0 | NONE |
+| 0–30 | LIGHT |
+| 30–80 | MODERATE |
+| ≥ 80 | SEVERE |
 
-**Icing type** determined by wet-bulb temperature (dry-bulb fallback): CLEAR (−4°C to 0°C), MIXED (−11°C to −4°C), RIME (< −11°C). Thresholds are shifted ~1°C colder than dry-bulb equivalents because the accretion surface temperature is closer to wet-bulb in cloud/precipitating conditions.
+**SFIP severity thresholds** (GA-tuned, lower than Ogimet):
 
-**NWP cloud cover fallback** (pass 2): Levels in the 0 to −20°C band that pass 1 skipped (dry DD, not near sounding cloud) are re-assessed if NWP cloud cover > 50% at the corresponding altitude band. This prevents false-negative icing when NWP sub-grid microphysics detects cloud the coarse pressure-level sounding missed.
+| SFIP_100 | Risk |
+|----------|------|
+| < 15 | NONE |
+| 15–30 | LIGHT |
+| 30–55 | MODERATE |
+| ≥ 55 | SEVERE |
 
-- Each `IcingZone` includes `mean_icing_index` for transparency in the assessment
-- **Severity enhancement** (`severity_enhance=False` default, changed from True): RH/moisture-based upgrades to icing severity. Can upgrade LIGHT → MODERATE (deep saturation: ≥3 levels with RH > 95% + NWP cloud corroboration ≥50%) or MODERATE → SEVERE (same + mean T ≤ -5°C). User-toggleable via `icing_severity_enhance` profile setting. Default changed to off because the enhancement was producing too-conservative results for typical GA operations.
-- SLD detection: **currently disabled** — heuristics too sensitive for available data resolution
-- Adjacent levels grouped into `IcingZone` bands (gap ≤ 100hPa)
-- **Minimum zone thickness**: single-level zones expanded to ±500ft (1000ft total) to match GFS vertical resolution (~25 hPa) and ensure visibility on the cross-section canvas
+#### Icing Type Classification
 
-**Path 3: SFIP index** (`sounding/sfip.py`) — Simplified Forecast Icing Potential, the algorithm used by Windy.com and European met services. Computed per-level alongside Ogimet; both indices stored for comparison.
+From wet-bulb temperature (dry-bulb fallback). Thresholds shifted ~1°C colder than dry-bulb equivalents because accretion surface temperature is closer to wet-bulb in cloud:
+- CLEAR: −4°C to 0°C
+- MIXED: −11°C to −4°C
+- RIME: < −11°C
 
-- **Fuzzy logic** — four membership functions (temperature, RH, CLW, vertical velocity) each return 0.0–1.0, combined with weights
-- **Three variants**: SFIP_O (full, GFS — has real CLW from GRIB) uses `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; SFIP_4 (proxy, other models — uses DD+cloud cover proxy for CLW) uses `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; SFIP_interp (same formula as full, but CLW was spatially interpolated from neighbors — see below)
-- **Glaciation factor** (GFS only): reduces icing potential when ICMR >> CLWMR (cloud is glaciated)
-- **Temperature gating**: only 0°C to −25°C (same as Ogimet)
-- **Altitude-aware NWP cloud check**: `_cloud_cover_for_level()` uses `NWPCloudDiagnostics` (when available) to check whether the level actually falls within the NWP cloud layer's base/top range (±500ft margin). Falls back to bulk ICAO-band percentages when diagnostics are unavailable. This prevents false positives from applying e.g. 80% low-cloud cover to levels above the actual cloud top.
-- Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (`"full"`, `"interp"`, or `"proxy"`)
-- Based on Belo-Pereira (2015) and Morcrette et al. (2019)
+#### Severity Enhancement
+
+Optional (`icing_severity_enhance=False` default). RH/moisture-based upgrades:
+- ≥3 levels with RH > 95% + NWP cloud ≥50% → LIGHT → MODERATE
+- Same + mean T ≤ −5°C → MODERATE → SEVERE
+- Precipitable water > 25mm → LIGHT → MODERATE
+
+Default changed from True to False — was producing too-conservative results for typical GA.
+
+#### Zone Formation
+
+- Adjacent levels grouped into zones (gap ≤ 100 hPa / 30 hPa pressure gap between levels)
+- Minimum zone thickness: single-level zones expanded to ±500ft (1000ft total) for cross-section visibility
+- SLD detection: **disabled** — heuristics too sensitive for available data resolution
 
 ### Spatial CLW/ICMR Interpolation (`analysis/spatial_interpolation.py`)
 
@@ -200,6 +248,8 @@ vm = assess_vertical_motion(derived_levels)
 - `compute_stability_indicators(derived_levels)` — computes Brunt-Vaisala frequency (N²) and Richardson number per layer from wind shear and temperature gradients
 - `classify_vertical_motion(derived_levels)` — classifies omega profile into `VerticalMotionClass` (QUIESCENT, SYNOPTIC_ASCENT/SUBSIDENCE, CONVECTIVE, OSCILLATING)
 - `assess_vertical_motion(derived_levels)` — combines classification with CAT risk layer identification
+
+**CAT layer merging:** `_build_cat_layers()` groups adjacent low-Ri levels using dual-gap adjacency: BOTH pressure gap ≤ 100 hPa AND original-index gap ≤ 2. Prevents chaining scattered low-Ri levels across large stable gaps (e.g., GFS 25 hPa spacing where stable levels are simply skipped).
 
 **CAT risk from Richardson number** (loosened from classical 0.25/0.5/1.0 to compensate for NWP vertical resolution bias — 25-50 hPa between levels is too coarse to resolve thin shear layers where KH instability develops, so computed Ri is systematically too high):
 
@@ -286,12 +336,21 @@ div.agreement  # → AgreementLevel.GOOD
 
 In `pipeline.py`, shared analysis via `_run_point_analysis()` (used by both waypoint and route-point paths):
 1. Find closest pressure level to cruise altitude for wind analysis
-2. Run `analyze_sounding()` per model → store in `soundings[model_key]`
+2. Run `analyze_sounding()` per model → store in `soundings[model_key]` — computes all three icing methods and both cloud methods per sounding
 3. Extract indices for cross-model comparison (9 sounding-derived metrics + 6 surface metrics)
 4. After all models: `compute_altitude_advisories()` → altitude advisories
 5. Compute cross-model divergence for all 15 metrics
 
 Route-point analysis (`analyze_all_route_points()`) adds interpolated time based on distance/speed and per-point track bearing (`compute_route_tracks()`).
+
+**Method selection for advisories** (`tasks/advise.py`): Before advisory evaluation, `_apply_icing_method()` and `_apply_cloud_method()` swap the active data based on user preference:
+- `icing_method="ogimet_dd"`: uses `sounding.icing_zones` (default, no change)
+- `icing_method="ogimet_nwp"`: copies `sounding.icing_ogimet_nwp_zones` → `sounding.icing_zones`
+- `icing_method="sfip_nwp"`: converts `SfipZone` → `IcingZone` and replaces `sounding.icing_zones`
+- `cloud_method="dd"`: uses `sounding.cloud_layers` (default, no change)
+- `cloud_method="nwp"`: copies `sounding.nwp_cloud_layers` → `sounding.cloud_layers` (falls back to DD if NWP unavailable)
+
+Advisory model filtering: `advisory_models` preference excludes `best_match` by default, as it duplicates the underlying model.
 
 ## Gotchas
 

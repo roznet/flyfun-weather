@@ -22,12 +22,12 @@ Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `Au
 → Full doc: fetch.md
 
 ### analysis
-Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, clouds, icing with Ogimet + SFIP indices, inversions, convective, vertical motion/CAT), altitude advisories, model divergence scoring.
+Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, DD/NWP cloud methods, three icing methods — Ogimet-DD/Ogimet-NWP/SFIP-NWP, inversions, convective, vertical motion/CAT), altitude advisories, model divergence scoring. Icing and cloud methods selectable via user preferences.
 Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`, `assess_vertical_motion`, `detect_inversions`
 → Full doc: analysis.md
 
 ### advisories
-Route advisory system: 13 deterministic evaluators across 5 categories (icing, cloud, turbulence, airport conditions, feasibility) with per-model severity grading, user-tunable parameters, registry auto-discovery, aggregation modes (worst/majority), and recalculation without re-fetching.
+Route advisory system: 13 deterministic evaluators across 5 categories (icing, cloud, turbulence, airport conditions, feasibility) with per-model severity grading, user-tunable parameters, registry auto-discovery, aggregation modes (worst/majority), icing/cloud method swapping, and recalculation without re-fetching.
 Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`
 → Full doc: advisories.md
 
@@ -36,7 +36,7 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Three synchronized visualizations: canvas cross-section (13 weather layers), canvas route graph (7 scalar metrics), and Leaflet route map (14 metric-colored segment types with altitude slider). Three layout modes, shared color scales, hover sync across all views.
+Three synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (7 scalar metrics), and Leaflet route map (14 metric-colored segment types with altitude slider). Three layout modes, shared color scales, hover sync, compact/full layer mode, icing/cloud method groups.
 Key exports: `CrossSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
 → Full doc: visualization.md
 
