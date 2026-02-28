@@ -479,15 +479,15 @@
     ]
   },
   "icing_risk": {
-    "name": "Icing Risk",
+    "name": "Icing Risk (Ogimet-DD)",
     "unit": "",
     "vibe": "How fast ice will build on your airframe",
-    "primary_goal": "Classify the icing severity in a cloud layer.",
-    "best_used_for": "Deciding whether to enter, avoid, or exit a cloud layer.",
-    "limitations": "Does not account for droplet size (SLD). Only valid in the 0 to −14°C range (layered) or 0 to −20°C (convective). When NWP cloud liquid water data is available (GFS GRIB2), severity is derived directly from LWC instead.",
-    "theory": "Uses the Ogimet continuous icing index, which peaks at −7°C matching where supercooled liquid water is most abundant. Only levels near or inside cloud (dewpoint depression < 3°C or within 500 ft of a cloud layer) are assessed. The index blends a stratiform component (parabola over −14 to 0°C) with a convective component (vapor density difference from cloud base), weighted by CAPE. Index thresholds: >0 = light, ≥30 = moderate, ≥80 = severe. Icing type is classified by temperature: 0 to −3°C = clear ice, −3 to −10°C = mixed, below −10°C = rime. Optional severity upgrades: RH > 95% at multiple levels or precipitable water > 25 mm can increase severity by one step.",
+    "primary_goal": "Classify the icing severity in a cloud layer using dewpoint depression as the cloud signal.",
+    "best_used_for": "Deciding whether to enter, avoid, or exit a cloud layer. Uses sounding-derived moisture (no NWP model cloud data needed).",
+    "limitations": "Does not account for droplet size (SLD). Only valid in the 0 to −14°C range (layered) or 0 to −20°C (convective). Relies on dewpoint depression which can miss sub-grid clouds that NWP models detect.",
+    "theory": "Uses the Ogimet continuous icing index, which peaks at −7°C matching where supercooled liquid water is most abundant. Cloud signal via continuous dewpoint depression attenuation — cosine taper from DD=0 (full index) to DD=2.0°C (zero). No NWP data used. The index blends a stratiform component (parabola over −14 to 0°C) with a convective component (vapor density difference from cloud base), weighted by CAPE. Index thresholds: >0 = light, ≥30 = moderate, ≥80 = severe.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
-    "llm_prompt": "explain how the Ogimet continuous icing index works, why it peaks at −7°C, and how temperature bands classify icing type (clear, mixed, rime)",
+    "llm_prompt": "explain how the Ogimet continuous icing index works with DD attenuation, why it peaks at −7°C, and how temperature bands classify icing type (clear, mixed, rime)",
     "thresholds": [
       { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No icing concern." },
       { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
@@ -511,8 +511,25 @@
       { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Emergency action — exit cloud now." }
     ]
   },
+  "icing_ogimet_nwp_risk": {
+    "name": "Icing Risk (Ogimet-NWP)",
+    "unit": "",
+    "vibe": "Ogimet icing scaled by NWP cloud cover",
+    "primary_goal": "Classify icing severity using NWP model cloud cover percentage as the cloud signal.",
+    "best_used_for": "Comparing against Ogimet-DD. This is the same approach used by Autorouter GRAMET — when cloud cover is 50%, the icing index is halved.",
+    "limitations": "Does not account for droplet size (SLD). Relies on NWP cloud cover which may differ between models. Not available for ECMWF (no cloud layer data from Open-Meteo).",
+    "theory": "Same Ogimet parabolic icing formula peaking at −7°C, but the cloud signal comes from NWP model cloud cover percentage at the level's altitude — 50% cloud = 50% of index. This matches the approach used by Autorouter GRAMET. No dewpoint depression gating. Same thresholds: effective index >0 = light, ≥30 = moderate, ≥80 = severe.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain how the Ogimet-NWP icing method scales the icing index by NWP cloud cover percentage, and how it compares to the DD-attenuation approach",
+    "thresholds": [
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No icing concern." },
+      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
+    ]
+  },
   "sfip_risk": {
-    "name": "SFIP Icing Index",
+    "name": "Icing Risk (SFIP-NWP)",
     "unit": "0–100",
     "vibe": "The fuzzy-logic ice detector",
     "primary_goal": "Forecast icing potential using fuzzy-logic membership functions, the algorithm family behind Windy.com and European met service icing products.",

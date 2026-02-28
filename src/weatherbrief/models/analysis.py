@@ -553,6 +553,7 @@ class SoundingAnalysis(BaseModel):
     derived_levels: list[DerivedLevel] = Field(default_factory=list)
     cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
     icing_zones: list[IcingZone] = Field(default_factory=list)
+    icing_ogimet_nwp_zones: list[IcingZone] = Field(default_factory=list)
     sfip_zones: list[SfipZone] = Field(default_factory=list)
     inversion_layers: list[InversionLayer] = Field(default_factory=list)
     convective: Optional[ConvectiveAssessment] = None

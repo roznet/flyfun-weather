@@ -5,6 +5,7 @@ import { freezingLevelLayer, minus10cLayer, minus20cLayer } from './layers/tempe
 import { cruiseAltitudeLayer } from './layers/reference-lines';
 import { cloudBandsLayer } from './layers/cloud-bands';
 import { icingBandsLayer } from './layers/icing-bands';
+import { icingOgimetNwpBandsLayer } from './layers/icing-ogimet-nwp-bands';
 import { sfipBandsLayer } from './layers/sfip-bands';
 import { lclLayer, lfcLayer, elLayer } from './layers/stability-lines';
 import { catBandsLayer } from './layers/cat-bands';
@@ -19,6 +20,7 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   convectiveBgLayer,
   cloudBandsLayer,
   icingBandsLayer,
+  icingOgimetNwpBandsLayer,
   sfipBandsLayer,
   catBandsLayer,
   inversionBandsLayer,

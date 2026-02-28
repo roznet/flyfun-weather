@@ -17,7 +17,7 @@ function sfipRiskColor(risk: string): string {
 
 export const sfipBandsLayer: CrossSectionLayer = {
   id: 'sfip-bands',
-  name: 'SFIP Icing Index',
+  name: 'SFIP-NWP',
   group: 'icing',
   defaultEnabled: false,
   metricId: 'sfip_risk',

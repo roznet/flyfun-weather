@@ -81,6 +81,13 @@ function extractPoint(
     type: iz.icing_type,
   }));
 
+  const icingOgimetNwpZones: VizIcingZone[] = (sounding?.icing_ogimet_nwp_zones ?? []).map((iz) => ({
+    baseFt: iz.base_ft,
+    topFt: iz.top_ft,
+    risk: iz.risk,
+    type: iz.icing_type,
+  }));
+
   const sfipZones: VizSfipZone[] = (sounding?.sfip_zones ?? []).map((sz) => ({
     baseFt: sz.base_ft,
     topFt: sz.top_ft,
@@ -136,6 +143,7 @@ function extractPoint(
     altitudeLines,
     cloudLayers,
     icingZones,
+    icingOgimetNwpZones,
     sfipZones,
     catLayers,
     inversions,

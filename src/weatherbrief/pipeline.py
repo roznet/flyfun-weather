@@ -53,6 +53,7 @@ class BriefingOptions:
     user_id: str | None = None  # for per-user token cache isolation
     airports_db_path: str | None = None  # euro_aip database for runway data
     icing_severity_enhance: bool = False  # enable RH/PW icing severity upgrades
+    icing_method: str | None = None  # "ogimet_dd", "ogimet_nwp", "sfip_nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     metar_taf_corridor_nm: float = 30  # corridor width for METAR/TAF search
     # Advisory preferences (from user profile)
@@ -246,6 +247,7 @@ def execute_briefing(
             aggregation=adv_aggregation,
             pack_dir=pack_dir,
             progress_callback=progress_callback,
+            icing_method=options.icing_method,
         )
         route_advisories_manifest = advisory_result.manifest
 

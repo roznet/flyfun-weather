@@ -108,6 +108,7 @@ export interface VizPoint {
   altitudeLines: AltitudeLines;
   cloudLayers: VizCloudLayer[];
   icingZones: VizIcingZone[];
+  icingOgimetNwpZones: VizIcingZone[];
   sfipZones: VizSfipZone[];
   catLayers: VizCATLayer[];
   inversions: VizInversionLayer[];

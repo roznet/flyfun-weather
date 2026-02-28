@@ -154,6 +154,10 @@ function populateProfileForm(profile: ProfileResponse): void {
   if (llmToggle) llmToggle.checked = s.llm_digest_enabled ?? true;
   if (icingEnhanceToggle) icingEnhanceToggle.checked = s.icing_severity_enhance ?? false;
 
+  // Icing method selector
+  const icingMethodSelect = document.getElementById('input-icing-method') as HTMLSelectElement;
+  if (icingMethodSelect) icingMethodSelect.value = s.icing_method ?? 'ogimet_dd';
+
   // Advisories
   const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
@@ -548,6 +552,7 @@ async function handleSave(): Promise<void> {
   const grametEnabled = (document.getElementById('toggle-gramet') as HTMLInputElement)?.checked ?? true;
   const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? false;
+  const icingMethod = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd';
   const advisories = collectAdvisoryPrefs();
 
   // Build profile settings
@@ -561,6 +566,7 @@ async function handleSave(): Promise<void> {
     gramet_enabled: grametEnabled,
     llm_digest_enabled: llmDigestEnabled,
     icing_severity_enhance: icingSeverityEnhance,
+    icing_method: icingMethod,
     advisories,
   };
 

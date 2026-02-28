@@ -22,6 +22,19 @@ from weatherbrief.models import (
 # Dewpoint depression threshold — level must be near/in cloud
 IN_CLOUD_DD_THRESHOLD = 3.0
 
+# --- DD attenuation ---
+
+_DD_ATTENUATION_CUTOFF = 2.0  # DD above this → factor = 0
+
+
+def _dd_attenuation_factor(dewpoint_depression_c: float) -> float:
+    """Cosine taper: 1.0 at DD=0, 0.0 at DD>=cutoff."""
+    if dewpoint_depression_c <= 0:
+        return 1.0
+    if dewpoint_depression_c >= _DD_ATTENUATION_CUTOFF:
+        return 0.0
+    return 0.5 * (1.0 + math.cos(math.pi * dewpoint_depression_c / _DD_ATTENUATION_CUTOFF))
+
 # SLD thick-cloud threshold (kept for reference, currently disabled)
 SLD_THICK_CLOUD_FT = 3000
 SLD_WARM_TOP_C = -12.0
@@ -594,3 +607,142 @@ def _build_zone(
         mean_icing_index=round(sum(indices) / len(indices), 1) if indices else None,
         mean_rh_pct=round(sum(rh_vals) / len(rh_vals), 0) if rh_vals else None,
     )
+
+
+# --- Clean single-pass Ogimet-DD assessment ---
+
+
+def _build_zone_simple(
+    items: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
+) -> IcingZone:
+    """Build an IcingZone without severity enhancement (for clean methods)."""
+    return _build_zone(items, sld_risk=False, severity_enhance=False)
+
+
+def _group_into_zones(
+    icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
+) -> list[IcingZone]:
+    """Group adjacent icing levels into zones (no severity enhancement)."""
+    if not icing_levels:
+        return []
+
+    zones: list[IcingZone] = []
+    current: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = [icing_levels[0]]
+
+    for item in icing_levels[1:]:
+        prev_lv = current[-1][0]
+        this_lv = item[0]
+        if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 100:
+            current.append(item)
+        else:
+            zones.append(_build_zone_simple(current))
+            current = [item]
+
+    zones.append(_build_zone_simple(current))
+    return zones
+
+
+def assess_icing_zones_ogimet_dd(
+    levels: list[DerivedLevel],
+    clouds: list[EnhancedCloudLayer],
+    cape_jkg: float | None = None,
+) -> list[IcingZone]:
+    """Ogimet index with continuous DD attenuation (no binary cloud gate).
+
+    For every level in the icing temperature range, computes:
+        effective_index = ogimet_index(T) × dd_attenuation_factor(DD)
+
+    The DD factor IS the cloud signal — no NWP fallback, no binary gate.
+    """
+    if not levels:
+        return []
+
+    layered_frac, convective_frac = _cape_to_cloud_split(cape_jkg)
+    vd_base = _cloud_base_vapor_density(clouds, levels)
+
+    icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = []
+
+    for lv in levels:
+        if lv.temperature_c is None or lv.altitude_ft is None or lv.dewpoint_c is None:
+            continue
+        if lv.dewpoint_depression_c is None:
+            continue
+
+        raw_index = _compute_icing_index(
+            lv.temperature_c, lv.dewpoint_c,
+            layered_frac, convective_frac, vd_base,
+        )
+        if raw_index <= 0:
+            continue
+
+        dd_factor = _dd_attenuation_factor(lv.dewpoint_depression_c)
+        effective = raw_index * dd_factor
+        if effective <= 0:
+            continue
+
+        icing_type = _classify_icing_type(lv.temperature_c, lv.wet_bulb_c)
+        if icing_type == IcingType.NONE:
+            continue
+
+        risk = _index_to_risk(effective)
+        lv.icing_index = round(effective, 1)
+        icing_levels.append((lv, icing_type, risk, effective))
+
+    return _group_into_zones(icing_levels)
+
+
+def assess_icing_zones_ogimet_nwp(
+    levels: list[DerivedLevel],
+    clouds: list[EnhancedCloudLayer],
+    cape_jkg: float | None = None,
+    nwp_cloud_low_pct: float | None = None,
+    nwp_cloud_mid_pct: float | None = None,
+    nwp_cloud_high_pct: float | None = None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
+) -> list[IcingZone]:
+    """Ogimet index scaled by NWP cloud fraction (Autorouter-style).
+
+    For every level in the icing temperature range, computes:
+        effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)
+
+    Uses NWP model cloud cover as the cloud signal — no DD gating.
+    """
+    if not levels:
+        return []
+
+    layered_frac, convective_frac = _cape_to_cloud_split(cape_jkg)
+    vd_base = _cloud_base_vapor_density(clouds, levels)
+
+    icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = []
+
+    for lv in levels:
+        if lv.temperature_c is None or lv.altitude_ft is None or lv.dewpoint_c is None:
+            continue
+
+        raw_index = _compute_icing_index(
+            lv.temperature_c, lv.dewpoint_c,
+            layered_frac, convective_frac, vd_base,
+        )
+        if raw_index <= 0:
+            continue
+
+        nwp_cloud = _nwp_cloud_for_altitude(
+            lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+            nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+        )
+        if nwp_cloud is None or nwp_cloud <= 0:
+            continue
+
+        cloud_fraction = nwp_cloud / 100.0
+        effective = raw_index * cloud_fraction
+        if effective <= 0:
+            continue
+
+        icing_type = _classify_icing_type(lv.temperature_c, lv.wet_bulb_c)
+        if icing_type == IcingType.NONE:
+            continue
+
+        risk = _index_to_risk(effective)
+        icing_levels.append((lv, icing_type, risk, effective))
+
+    return _group_into_zones(icing_levels)
