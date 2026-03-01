@@ -347,12 +347,14 @@ In `pipeline.py`, shared analysis via `_run_point_analysis()` (used by both wayp
 
 Route-point analysis (`analyze_all_route_points()`) adds interpolated time based on distance/speed and per-point track bearing (`compute_route_tracks()`).
 
-**Method selection for advisories** (`tasks/advise.py`): Before advisory evaluation, `_apply_icing_method()` and `_apply_cloud_method()` swap the active data based on user preference:
-- `icing_method="ogimet_dd"`: uses `sounding.icing_zones` (default, no change)
-- `icing_method="ogimet_nwp"`: copies `sounding.icing_ogimet_nwp_zones` → `sounding.icing_zones`
-- `icing_method="sfip_nwp"`: converts `SfipZone` → `IcingZone` and replaces `sounding.icing_zones`
-- `cloud_method="dd"`: uses `sounding.cloud_layers` (default, no change)
-- `cloud_method="nwp"`: copies `sounding.nwp_cloud_layers` → `sounding.cloud_layers` (falls back to DD if NWP unavailable)
+**Method resolution for advisories** (`tasks/advise.py`): Before advisory evaluation, `_resolve_analyses()` returns new `RoutePointAnalysis` objects with the user's preferred method resolved into the active slots — originals are never mutated (uses `model_copy()`). Returns the original list unchanged when no swap is needed.
+- `icing_method="ogimet_dd"`: no swap needed (default in `icing_zones`)
+- `icing_method="ogimet_nwp"`: resolves `icing_ogimet_nwp_zones` → `icing_zones`
+- `icing_method="sfip_nwp"`: converts `SfipZone` → `IcingZone` into `icing_zones`
+- `cloud_method="dd"`: no swap needed (default in `cloud_layers`)
+- `cloud_method="nwp"`: resolves `nwp_cloud_layers` → `cloud_layers` (falls back to `dd_cloud_layers` if NWP unavailable)
+
+**Immutable DD source fields**: `SoundingAnalysis` stores `dd_cloud_layers` and `icing_ogimet_dd_zones` at construction. These preserve the original DD data so resolution can always fall back. Excluded from serialization (redundant in default state); a `model_validator` reconstructs them from `cloud_layers`/`icing_zones` when loading old JSON.
 
 Advisory model filtering: `advisory_models` preference excludes `best_match` by default, as it duplicates the underlying model.
 

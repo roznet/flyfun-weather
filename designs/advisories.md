@@ -143,7 +143,7 @@ User overrides stored in `flight_profiles.settings_json` under `advisories: {ena
 ## Pipeline Integration
 
 In `tasks/advise.py` via `run_advisories()`:
-1. **Method swapping**: `_apply_icing_method(rp_analyses, method)` and `_apply_cloud_method(rp_analyses, method)` replace active icing zones and cloud layers based on user preference before evaluation. See [analysis.md](./analysis.md) for method details.
+1. **Method resolution**: `_resolve_analyses(rp_analyses, icing_method, cloud_method)` returns new objects with the user's preferred icing/cloud method resolved into the active `icing_zones`/`cloud_layers` slots via `model_copy()` — originals are never mutated. Returns the original list unchanged when no swap is needed. See [analysis.md](./analysis.md) for method details.
 2. **Model filtering**: `advisory_models` preference selects which models to evaluate (default excludes `best_match`)
 3. Build `RouteContext` from existing route analyses, cross-sections, elevation, airport conditions
 4. Call `evaluate_all(ctx)` → `list[RouteAdvisoryResult]`

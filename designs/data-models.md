@@ -107,7 +107,7 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
 | `CATRiskLayer` | CAT risk identified by Richardson number | base_ft, top_ft, base/top_pressure_hpa, richardson_number, risk |
 | `VerticalMotionAssessment` | Vertical motion + turbulence | classification, max_omega_pa_s, max_w_fpm, max_w_level_ft, cat_risk_layers, convective_contamination |
-| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, nwp_cloud_layers, icing_zones, icing_ogimet_nwp_zones, sfip_zones, inversion_layers, convective, vertical_motion, cloud_cover_{low,mid,high}_pct |
+| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, dd_cloud_layers, nwp_cloud_layers, icing_zones, icing_ogimet_dd_zones, icing_ogimet_nwp_zones, sfip_zones, inversion_layers, convective, vertical_motion, cloud_cover_{low,mid,high}_pct. **Field semantics:** `cloud_layers`/`icing_zones` are the "active" slots (resolved per user preference by `_resolve_analyses()`). `dd_cloud_layers`/`icing_ogimet_dd_zones` are immutable DD sources (excluded from JSON, reconstructed by validator on load). All downstream consumers read only the active slots. |
 
 ### Altitude Advisories
 
