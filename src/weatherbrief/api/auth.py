@@ -29,12 +29,15 @@ oauth = create_oauth()
 
 
 @router.get("/login/google")
-async def login_google(request: Request):
+async def login_google(request: Request, platform: str | None = None):
     """Redirect to Google OAuth consent screen."""
     redirect_uri = request.url_for("callback_google")
     # In production behind a reverse proxy, ensure the scheme is https
     if not is_dev_mode():
         redirect_uri = str(redirect_uri).replace("http://", "https://")
+    # Store platform in session so it survives the Google OAuth round-trip
+    if platform:
+        request.session["oauth_platform"] = platform
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
@@ -104,8 +107,18 @@ async def callback_google(request: Request, db: Session = Depends(get_db)):
         response = RedirectResponse(url="/login.html?status=pending", status_code=302)
         return response
 
-    # Issue JWT cookie
+    # Issue JWT
     jwt_token = create_token(user.id, user.email, user.display_name, get_jwt_secret())
+
+    # iOS app: redirect to custom URL scheme with token instead of setting cookie
+    platform = request.session.pop("oauth_platform", None)
+    if platform == "ios":
+        from urllib.parse import quote
+
+        redirect_url = f"weatherbrief://auth/callback?token={quote(jwt_token)}"
+        return RedirectResponse(url=redirect_url, status_code=302)
+
+    # Web: set cookie and redirect to homepage
     response = RedirectResponse(url="/", status_code=302)
     _set_session_cookie(response, jwt_token)
     return response
