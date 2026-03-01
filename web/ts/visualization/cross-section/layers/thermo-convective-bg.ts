@@ -1,7 +1,7 @@
 /** Thermo convective risk visualization: tower columns from LFC to EL + hatching + CB labels.
  *
  * Uses thermodynamic base_ft (LFC or LCL fallback) and top_ft (EL) from the
- * ConvectiveAssessment. Falls back to full-height column when bounds are missing.
+ * ConvectiveAssessment. Skips points where bounds are missing.
  */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint } from '../../types';
@@ -117,13 +117,10 @@ export const thermoConvectiveBgLayer: CrossSectionLayer = {
         : (x + transform.distanceToX(data.points[i + 1].distanceNm)) / 2;
       const colWidth = xRight - xLeft;
 
-      const hasTowerBounds = p.convectiveBaseFt != null && p.convectiveTopFt != null;
+      // Skip if no tower bounds — don't draw misleading full-height columns
+      if (p.convectiveBaseFt == null || p.convectiveTopFt == null) continue;
 
-      if (hasTowerBounds) {
-        drawTower(ctx, transform, p, xLeft, xRight, colWidth, plotArea);
-      } else {
-        drawFullHeightColumn(ctx, p, xLeft, colWidth, plotArea);
-      }
+      drawTower(ctx, transform, p, xLeft, xRight, colWidth, plotArea);
     }
   },
 };
@@ -194,36 +191,6 @@ function drawTower(
     const cx = (xLeft + xRight) / 2;
     const cy = yTop + towerHeight * 0.3; // Upper third of tower
     drawCBLabel(ctx, cx, cy, risk);
-  }
-}
-
-/** Fallback: full-height column when base/top not available. */
-function drawFullHeightColumn(
-  ctx: CanvasRenderingContext2D,
-  p: VizPoint,
-  xLeft: number,
-  colWidth: number,
-  plotArea: { left: number; top: number; width: number; height: number },
-): void {
-  const risk = p.convectiveRisk;
-
-  // Lighter fill for the unbounded case
-  const fill = TOWER_FILL[risk];
-  if (fill) {
-    ctx.fillStyle = fill;
-    ctx.fillRect(xLeft, plotArea.top, colWidth, plotArea.height);
-  }
-
-  const hatchColor = HATCH_COLOR[risk];
-  if (hatchColor) {
-    drawHatching(ctx, xLeft, plotArea.top, colWidth, plotArea.height, hatchColor);
-  }
-
-  // Top strip at plot top
-  const stripColor = STRIP_COLOR[risk];
-  if (stripColor) {
-    ctx.fillStyle = stripColor;
-    ctx.fillRect(xLeft, plotArea.top, colWidth, STRIP_HEIGHT);
   }
 }
 
