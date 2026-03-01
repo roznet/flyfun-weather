@@ -104,10 +104,11 @@ def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:
     """Extract ceiling: lowest BKN or OVC cloud layer base (LCL-corrected)."""
     if sounding.indices and sounding.indices.sounding_ceiling_ft is not None:
         return sounding.indices.sounding_ceiling_ft
-    # Fallback for data without pre-computed ceiling
+    # Fallback: always use DD source so reconcile_ceiling() compares
+    # independent estimates (sounding-derived vs NWP-derived).
     ceilings = [
         cl.base_ft
-        for cl in sounding.cloud_layers
+        for cl in sounding.dd_cloud_layers
         if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
     ]
     return min(ceilings) if ceilings else None
