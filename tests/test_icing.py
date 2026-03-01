@@ -574,12 +574,12 @@ def test_ogimet_nwp_empty_input():
     assert assess_icing_zones_ogimet_nwp([], []) == []
 
 
-# --- _apply_icing_method tests ---
+# --- _resolve_analyses icing tests ---
 
 
-def test_apply_icing_method_ogimet_dd_noop():
-    """ogimet_dd is the default — should not modify icing_zones."""
-    from weatherbrief.tasks.advise import _apply_icing_method
+def test_resolve_analyses_ogimet_dd_returns_original():
+    """ogimet_dd (default) returns the original list unchanged."""
+    from weatherbrief.tasks.advise import _resolve_analyses
     from weatherbrief.models import RoutePointAnalysis, SoundingAnalysis, IcingZone
     from datetime import datetime, timezone
 
@@ -591,13 +591,15 @@ def test_apply_icing_method_ogimet_dd_noop():
         forecast_hour=datetime.now(timezone.utc), track_deg=0,
         sounding={"gfs": sa},
     )
-    _apply_icing_method([rpa], "ogimet_dd")
-    assert rpa.sounding["gfs"].icing_zones[0].risk == IcingRisk.MODERATE
+    original = [rpa]
+    result = _resolve_analyses(original, "ogimet_dd", None)
+    assert result is original  # identity — no copy
+    assert result[0].sounding["gfs"].icing_zones[0].risk == IcingRisk.MODERATE
 
 
-def test_apply_icing_method_ogimet_nwp_swaps():
-    """ogimet_nwp should swap icing_ogimet_nwp_zones into icing_zones."""
-    from weatherbrief.tasks.advise import _apply_icing_method
+def test_resolve_analyses_ogimet_nwp_swaps_without_mutation():
+    """ogimet_nwp resolves icing_zones from NWP; original is untouched."""
+    from weatherbrief.tasks.advise import _resolve_analyses
     from weatherbrief.models import RoutePointAnalysis, SoundingAnalysis, IcingZone
     from datetime import datetime, timezone
 
@@ -610,31 +612,38 @@ def test_apply_icing_method_ogimet_nwp_swaps():
         forecast_hour=datetime.now(timezone.utc), track_deg=0,
         sounding={"gfs": sa},
     )
-    _apply_icing_method([rpa], "ogimet_nwp")
-    assert rpa.sounding["gfs"].icing_zones[0].risk == IcingRisk.LIGHT
-    assert rpa.sounding["gfs"].icing_zones[0].base_ft == 6000
+    result = _resolve_analyses([rpa], "ogimet_nwp", None)
+    # Resolved has NWP zones
+    assert result[0].sounding["gfs"].icing_zones[0].risk == IcingRisk.LIGHT
+    assert result[0].sounding["gfs"].icing_zones[0].base_ft == 6000
+    # Original is NOT mutated
+    assert rpa.sounding["gfs"].icing_zones[0].risk == IcingRisk.MODERATE
+    assert rpa.sounding["gfs"].icing_zones[0].base_ft == 5000
 
 
-def test_apply_icing_method_sfip_nwp_converts():
-    """sfip_nwp should convert sfip_zones into IcingZone format."""
-    from weatherbrief.tasks.advise import _apply_icing_method
+def test_resolve_analyses_sfip_nwp_converts_without_mutation():
+    """sfip_nwp converts sfip_zones to IcingZone; original is untouched."""
+    from weatherbrief.tasks.advise import _resolve_analyses
     from weatherbrief.models import RoutePointAnalysis, SoundingAnalysis, IcingZone, SfipZone
     from datetime import datetime, timezone
 
+    dd_zone = IcingZone(base_ft=5000, top_ft=10000, risk=IcingRisk.LIGHT, icing_type=IcingType.RIME)
     sfip_zone = SfipZone(
         base_ft=7000, top_ft=12000, risk=IcingRisk.MODERATE,
         icing_type=IcingType.MIXED, mean_sfip_100=45.0, variant="full",
     )
-    sa = SoundingAnalysis(sfip_zones=[sfip_zone])
+    sa = SoundingAnalysis(icing_zones=[dd_zone], sfip_zones=[sfip_zone])
     rpa = RoutePointAnalysis(
         point_index=0, lat=0, lon=0, distance_from_origin_nm=0,
         interpolated_time=datetime.now(timezone.utc),
         forecast_hour=datetime.now(timezone.utc), track_deg=0,
         sounding={"gfs": sa},
     )
-    _apply_icing_method([rpa], "sfip_nwp")
-    assert len(rpa.sounding["gfs"].icing_zones) == 1
-    converted = rpa.sounding["gfs"].icing_zones[0]
+    result = _resolve_analyses([rpa], "sfip_nwp", None)
+    assert len(result[0].sounding["gfs"].icing_zones) == 1
+    converted = result[0].sounding["gfs"].icing_zones[0]
     assert converted.base_ft == 7000
     assert converted.risk == IcingRisk.MODERATE
     assert converted.mean_icing_index == 45.0
+    # Original is NOT mutated
+    assert rpa.sounding["gfs"].icing_zones[0].risk == IcingRisk.LIGHT

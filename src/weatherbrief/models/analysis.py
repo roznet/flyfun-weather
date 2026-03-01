@@ -567,6 +567,21 @@ class SoundingAnalysis(BaseModel):
     # GFS cloud layer diagnostics from GRIB2 enrichment
     nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
 
+    # Immutable DD source fields — populated at construction, excluded from
+    # serialization.  The validator reconstructs them from cloud_layers /
+    # icing_zones when loading old JSON that lacks these fields.
+    dd_cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
+    icing_ogimet_dd_zones: list[IcingZone] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _sync_dd_sources(self) -> "SoundingAnalysis":
+        """Backward compat: populate DD source fields from resolved fields when absent."""
+        if not self.dd_cloud_layers and self.cloud_layers:
+            self.dd_cloud_layers = list(self.cloud_layers)
+        if not self.icing_ogimet_dd_zones and self.icing_zones:
+            self.icing_ogimet_dd_zones = list(self.icing_zones)
+        return self
+
 
 class VerticalRegime(BaseModel):
     """A vertical slice with uniform conditions, derived from weather data."""

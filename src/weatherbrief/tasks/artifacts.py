@@ -96,7 +96,9 @@ def save_analysis_artifacts(
         ra_path.write_text(
             route_analyses_manifest.model_dump_json(
                 indent=2,
-                exclude={"analyses": {"__all__": {"sounding": {"__all__": {"derived_levels"}}}}},
+                exclude={"analyses": {"__all__": {"sounding": {"__all__": {
+                    "derived_levels", "dd_cloud_layers", "icing_ogimet_dd_zones",
+                }}}}},
             )
         )
 

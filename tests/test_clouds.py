@@ -3,7 +3,7 @@
 from weatherbrief.analysis.sounding.clouds import build_nwp_cloud_layers, detect_cloud_layers
 from weatherbrief.models import DerivedLevel, NWPCloudDiagnostics, NWPCloudLayerDiag
 from weatherbrief.models.analysis import CloudCoverage, EnhancedCloudLayer, SoundingAnalysis
-from weatherbrief.tasks.advise import _apply_cloud_method
+from weatherbrief.tasks.advise import _resolve_analyses
 
 
 def test_single_cloud_layer():
@@ -245,7 +245,7 @@ def test_build_nwp_cloud_layers_dd_none():
     assert layers[0].mean_dewpoint_depression_c is None
 
 
-# --- _apply_cloud_method tests ---
+# --- _resolve_analyses cloud tests ---
 
 
 def _make_rpa_with_clouds():
@@ -273,24 +273,29 @@ def _make_rpa_with_clouds():
     return rpa, dd_layers, nwp_layers
 
 
-def test_apply_cloud_method_dd_no_change():
-    """DD method leaves cloud_layers unchanged."""
+def test_resolve_analyses_dd_returns_original():
+    """DD method returns the original list unchanged (identity)."""
     rpa, dd_layers, _ = _make_rpa_with_clouds()
-    _apply_cloud_method([rpa], "dd")
+    original = [rpa]
+    result = _resolve_analyses(original, None, "dd")
+    assert result is original
+    assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000
+
+
+def test_resolve_analyses_nwp_swaps_without_mutation():
+    """NWP method resolves cloud_layers from NWP; original is untouched."""
+    rpa, _, nwp_layers = _make_rpa_with_clouds()
+    result = _resolve_analyses([rpa], None, "nwp")
+    # Resolved has NWP layers
+    assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 5000
+    assert result[0].sounding["gfs"].cloud_layers[0].coverage == CloudCoverage.OVC
+    # Original is NOT mutated
     assert rpa.sounding["gfs"].cloud_layers[0].base_ft == 3000
 
 
-def test_apply_cloud_method_nwp_swaps():
-    """NWP method swaps cloud_layers to nwp_cloud_layers."""
-    rpa, _, nwp_layers = _make_rpa_with_clouds()
-    _apply_cloud_method([rpa], "nwp")
-    assert rpa.sounding["gfs"].cloud_layers[0].base_ft == 5000
-    assert rpa.sounding["gfs"].cloud_layers[0].coverage == CloudCoverage.OVC
-
-
-def test_apply_cloud_method_nwp_fallback():
-    """NWP method with None nwp_cloud_layers keeps DD (fallback)."""
+def test_resolve_analyses_nwp_fallback():
+    """NWP method with None nwp_cloud_layers falls back to DD source."""
     rpa, dd_layers, _ = _make_rpa_with_clouds()
     rpa.sounding["gfs"].nwp_cloud_layers = None
-    _apply_cloud_method([rpa], "nwp")
-    assert rpa.sounding["gfs"].cloud_layers[0].base_ft == 3000
+    result = _resolve_analyses([rpa], None, "nwp")
+    assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000
