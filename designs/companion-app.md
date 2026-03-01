@@ -126,6 +126,49 @@ The pilot can always file a report proactively via the persistent "Report" butto
 | **Temperature** | OAT if available from avionics | Numeric input, optional |
 | **Free text** | Short note | Voice-to-text or keyboard, optional |
 
+#### Voice PIREP via Siri Shortcut (Phase 3a)
+
+The pilot can file a PIREP entirely by voice — hands-free, eyes on the sky. Aviation PIREP language is a near-ideal candidate for speech-to-structured-data because the vocabulary is small, standardized, and unambiguous.
+
+**Trigger**: "Hey Siri, FlyFun PIREP" (registered via App Shortcuts / `AppShortcutsProvider`)
+
+**Flow**:
+1. Siri activates the app in recording mode
+2. App uses `SFSpeechRecognizer` (on-device, works offline since iOS 17) for real-time transcription
+3. A pattern-based parser extracts structured fields from the transcript
+4. The report card appears pre-filled with voice-extracted values (highlighted to show what was parsed)
+5. Pilot confirms with one tap — or edits any field before saving
+
+**Example utterances and parsing**:
+
+| Spoken | Parsed |
+|--------|--------|
+| "flight level 120" / "FL120" | Altitude: FL120 |
+| "eight thousand feet" / "8000'" | Altitude: 8000 ft |
+| "IMC" / "in cloud" / "in the clouds" | Flight rules: IMC |
+| "light icing" / "trace icing" / "no icing" | Icing: light / trace / none |
+| "moderate turbulence" / "light chop" / "smooth" | Turbulence: moderate / light / none |
+| "tops at 8000" / "cloud tops eight thousand" | Cloud top: 8000 ft |
+| "broken" / "overcast" / "scattered" | Cloud coverage |
+| "visibility 3 miles" | Visibility: 1-5km |
+| "moderate rain" / "snow" | Precipitation |
+
+**Parser approach**: Keyword/regex matching, not ML. The aviation vocabulary is finite — all valid icing severities, cloud coverages, and altitude formats can be enumerated. Pattern examples:
+
+```swift
+// Altitude: "flight level 120", "FL065", "8000 feet"
+/(?:flight level|FL)\s*(\d{2,3})/i
+/(\d{3,5})\s*(?:feet|ft|foot|')/i
+
+// Icing: "light icing", "no icing"
+/(no|none|trace|light|moderate|severe)\s*icing/i
+
+// Cloud tops/bases: "tops at 8000", "bases 4500"
+/(tops?|bases?)\s*(?:at\s*)?(\d{3,5})/i
+```
+
+**Graceful fallback**: Anything the parser doesn't extract stays at the forecast-prepopulated default. The pilot always sees the result before confirming — voice is an input method, not an auto-submit path. This layers on top of the existing report card UI; it's just a different way to populate the same fields.
+
 #### Passive Data Collection
 
 Beyond explicit observations (prompted or manual), the app silently records data that requires no pilot input at all:
@@ -1068,6 +1111,13 @@ The pilot can file PIREPs at any time during flight. Reports are stored locally 
   - Retry with exponential backoff on failure
   - Batch in chunks of 50 if queue is large (extended offline)
   - Mark `.synced` on success
+
+- **Voice PIREP (Siri shortcut)**
+  - Register App Shortcut "FlyFun PIREP" via `AppShortcutsProvider` + `AppIntent`
+  - `SFSpeechRecognizer` for on-device transcription (works offline)
+  - `PIREPParser` module: regex/keyword extraction for altitude, icing, turbulence, cloud, visibility, precipitation, flight rules
+  - Voice-extracted values populate the same report card UI — highlighted fields show what was parsed from voice vs forecast default
+  - Observation saved with `source = .manual` (same as tap-based manual reports)
 
 - **Passive data collection**
   - Track log: GPS breadcrumbs at 30–60 second intervals
