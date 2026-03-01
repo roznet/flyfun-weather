@@ -481,8 +481,61 @@ async function init(): Promise<void> {
   if (refreshBtn) {
     refreshBtn.style.display = 'none'; // hidden until flight loads
     refreshBtn.addEventListener('click', () => {
-      store.getState().refresh();
+      const { flight } = store.getState();
+      if (!flight) return;
+      if (isFlightPast(flight.target_date, flight.target_time_utc, flight.flight_duration_hours)) {
+        showHistoricalRefreshModal(flight);
+      } else {
+        store.getState().refresh();
+      }
     });
+  }
+
+  function showHistoricalRefreshModal(flight: { target_date: string; id: string }): void {
+    // Remove existing modal if any
+    document.getElementById('historical-modal')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'historical-modal';
+    overlay.className = 'feedback-modal-overlay';
+    overlay.innerHTML = `
+      <div class="feedback-modal">
+        <h3>Historical Refresh</h3>
+        <p class="muted" style="margin:0 0 0.75rem;">Retrieve the forecast as it was on this date.</p>
+        <label for="historical-as-of-date" style="font-weight:500;font-size:0.85rem;">As-of date</label>
+        <input type="date" id="historical-as-of-date"
+          value="${flight.target_date}"
+          max="${flight.target_date}"
+          style="width:100%;padding:0.4rem;margin:0.25rem 0 0.75rem;border:1px solid var(--border);border-radius:4px;font-family:inherit;background:var(--surface);color:var(--text);" />
+        <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem;">
+          <button class="btn" id="historical-cancel">Cancel</button>
+          <button class="btn btn-primary" id="historical-refresh">Refresh</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+    const dateInput = document.getElementById('historical-as-of-date') as HTMLInputElement;
+
+    function dismiss(): void {
+      overlay.remove();
+    }
+
+    document.getElementById('historical-cancel')!.addEventListener('click', dismiss);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss(); });
+
+    function onEsc(e: KeyboardEvent): void {
+      if (e.key === 'Escape') { dismiss(); document.removeEventListener('keydown', onEsc); }
+    }
+    document.addEventListener('keydown', onEsc);
+
+    document.getElementById('historical-refresh')!.addEventListener('click', () => {
+      const asOfDate = dateInput.value;
+      dismiss();
+      store.getState().refresh(asOfDate);
+    });
+
+    dateInput.focus();
   }
 
   // --- Wire PDF download button ---

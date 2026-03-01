@@ -62,6 +62,7 @@ class BriefingOptions:
     advisory_enabled: dict[str, bool] | None = None  # {advisory_id: enabled}
     advisory_params: dict[str, dict[str, float]] | None = None  # {advisory_id: {param: value}}
     historical_mode: bool = False  # Use archived NWP data for past departure times
+    as_of_time: datetime | None = None  # For historical: the date "as of" which to fetch data
 
 
 @dataclass
@@ -186,7 +187,10 @@ def execute_briefing(
     today_utc = datetime.now(timezone.utc).date()
     today = today_utc.isoformat()
     target_dt = departure_time
-    days_out = (date.fromisoformat(target_date) - today_utc).days
+    if options.as_of_time:
+        days_out = (date.fromisoformat(target_date) - options.as_of_time.date()).days
+    else:
+        days_out = (date.fromisoformat(target_date) - today_utc).days
 
     if days_out < 0 and not options.historical_mode:
         raise ValueError(f"Target date {target_date} is in the past")
@@ -196,6 +200,7 @@ def execute_briefing(
     logger.info("Models: %s", ", ".join(m.value for m in options.models))
 
     # === 1. Fetch ===
+    as_of_time = options.as_of_time or (departure_time if options.historical_mode else None)
     fetch_result = run_fetch(
         route=route,
         departure_time=departure_time,
@@ -206,6 +211,7 @@ def execute_briefing(
         user_id=options.user_id,
         progress_callback=progress_callback,
         historical_mode=options.historical_mode,
+        as_of_time=as_of_time,
     )
 
     # === 2. Analyze ===

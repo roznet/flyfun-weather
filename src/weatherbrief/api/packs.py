@@ -334,7 +334,7 @@ _STAGE_PROGRESS: dict[str, float] = {
 }
 
 
-def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privileged=False):
+def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privileged=False, as_of_time=None):
     """Shared setup for both sync and streaming refresh endpoints.
 
     If a DB session is provided, loads user preferences (models, autorouter
@@ -426,6 +426,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         icing_severity_enhance=do_icing_enhance,
         historical_mode=is_historical,
     )
+    if as_of_time:
+        options.as_of_time = as_of_time
     if icing_method:
         options.icing_method = icing_method
     if cloud_method:
@@ -494,9 +496,12 @@ def _charge_briefing_cost(
 
 
 def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
-                      user_id=None, model_metadata=None):
+                      user_id=None, model_metadata=None, as_of_time=None):
     """Shared finalization: build and save pack metadata, log usage, return response."""
-    days_out = (flight.departure_time.date() - datetime.now(timezone.utc).date()).days
+    if as_of_time:
+        days_out = (flight.departure_time.date() - as_of_time.date()).days
+    else:
+        days_out = (flight.departure_time.date() - datetime.now(timezone.utc).date()).days
 
     init_times = {}
     if model_metadata:
@@ -538,6 +543,7 @@ async def refresh_briefing(
     flight_id: str,
     request: Request,
     force: bool = False,
+    as_of_date: str | None = None,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -545,11 +551,23 @@ async def refresh_briefing(
 
     Checks model freshness first and skips the pipeline if data
     hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
+    Pass ``?as_of_date=YYYY-MM-DD`` for historical flights to fetch
+    forecasts as they were on that date.
     Returns 409 if a refresh is already in progress for this flight.
     """
     flight = _load_owned_flight(db, flight_id, user_id)
 
     is_historical = flight.departure_time < datetime.now(timezone.utc)
+
+    # Parse and validate as_of_date for historical refreshes
+    as_of_time = None
+    if as_of_date:
+        try:
+            as_of_time = datetime.fromisoformat(as_of_date + "T23:59:00+00:00")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid as_of_date format (expected YYYY-MM-DD)")
+        if as_of_time.date() > flight.departure_time.date():
+            raise HTTPException(status_code=400, detail="as_of_date must be on or before the departure date")
 
     if force and not _can_force_refresh(request, db):
         raise HTTPException(status_code=403, detail="Force refresh requires admin access")
@@ -586,6 +604,7 @@ async def refresh_briefing(
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=_can_force_refresh(request, db),
+            as_of_time=as_of_time,
         )
 
         refresh_registry.set_refreshing(flight_id)
@@ -605,7 +624,8 @@ async def refresh_briefing(
         result.usage.triggered_by = "user"
 
         meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
-                                 user_id=user_id, model_metadata=model_metadata)
+                                 user_id=user_id, model_metadata=model_metadata,
+                                 as_of_time=as_of_time)
         return _meta_to_response(meta)
 
     except ImportError as exc:
@@ -629,12 +649,15 @@ async def refresh_briefing_stream(
     flight_id: str,
     request: Request,
     force: bool = False,
+    as_of_date: str | None = None,
     user_id: str = Depends(current_user_id),
 ):
     """Stream briefing refresh progress via Server-Sent Events.
 
     Checks model freshness first and returns immediately if data
     hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
+    Pass ``?as_of_date=YYYY-MM-DD`` for historical flights to fetch
+    forecasts as they were on that date.
     Returns an SSE error event if a refresh is already in progress.
     """
     # Manage our own DB session — FastAPI's Depends(get_db) cleanup
@@ -645,6 +668,16 @@ async def refresh_briefing_stream(
         flight = _load_owned_flight(db, flight_id, user_id)
 
         is_historical = flight.departure_time < datetime.now(timezone.utc)
+
+        # Parse and validate as_of_date for historical refreshes
+        as_of_time = None
+        if as_of_date:
+            try:
+                as_of_time = datetime.fromisoformat(as_of_date + "T23:59:00+00:00")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid as_of_date format (expected YYYY-MM-DD)")
+            if as_of_time.date() > flight.departure_time.date():
+                raise HTTPException(status_code=400, detail="as_of_date must be on or before the departure date")
 
         if force and not _can_force_refresh(request, db):
             raise HTTPException(status_code=403, detail="Force refresh requires admin access")
@@ -707,6 +740,7 @@ async def refresh_briefing_stream(
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=_can_force_refresh(request, db),
+            as_of_time=as_of_time,
         )
     except Exception:
         if registered:
@@ -752,7 +786,8 @@ async def refresh_briefing_stream(
             thread_db = SessionLocal()
             try:
                 meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, thread_db,
-                                         user_id=user_id, model_metadata=model_metadata)
+                                         user_id=user_id, model_metadata=model_metadata,
+                                         as_of_time=as_of_time)
                 thread_db.commit()
             finally:
                 thread_db.close()

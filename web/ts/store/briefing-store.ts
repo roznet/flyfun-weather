@@ -94,7 +94,7 @@ export interface BriefingState {
   loadPacks: () => Promise<void>;
   selectPack: (timestamp: string) => Promise<void>;
   selectLatest: () => Promise<void>;
-  refresh: () => Promise<void>;
+  refresh: (asOfDate?: string) => Promise<void>;
   forceRefresh: () => Promise<void>;
   checkActiveRefresh: () => Promise<void>;
   checkFreshness: () => Promise<void>;
@@ -217,7 +217,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     }
   },
 
-  refresh: async () => {
+  refresh: async (asOfDate?: string) => {
     const flight = get().flight;
     if (!flight) return;
     set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
@@ -231,7 +231,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
             refreshProgress: event.progress || 0,
           });
         }
-      });
+      }, false, asOfDate);
       // If the server returned a data_status (fresh skip), update freshness
       if (newPack.data_status) {
         set({ freshness: newPack.data_status });

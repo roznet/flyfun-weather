@@ -59,6 +59,7 @@ def run_fetch(
     user_id: str | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
     historical_mode: bool = False,
+    as_of_time: "datetime | None" = None,
 ) -> FetchResult:
     """Execute the fetch stage of the briefing pipeline.
 
@@ -165,7 +166,7 @@ def run_fetch(
                 departure_time, data_dir=data_dir,
                 flight_duration_hours=route.flight_duration_hours,
                 progress_callback=progress_callback,
-                as_of_time=departure_time if historical_mode else None,
+                as_of_time=as_of_time if historical_mode else None,
             )
             grib_enriched = True
             logger.info("GRIB2 enrichment applied")
