@@ -16,11 +16,11 @@ import { terrainFillLayer } from './layers/terrain-fill';
 import { nwpCloudBandsLayer } from './layers/nwp-cloud-bands';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
-  // Rendering order: bands → terrain (covers below-surface) → lines → reference
+  // Rendering order: clouds → convection → icing → other bands → terrain → lines → reference
   nwpCloudBandsLayer,
+  cloudBandsLayer,
   thermoConvectiveBgLayer,
   nwpConvectiveBgLayer,
-  cloudBandsLayer,
   icingBandsLayer,
   icingOgimetNwpBandsLayer,
   sfipBandsLayer,
