@@ -90,6 +90,15 @@ def _decode_user_id(request: Request, db: Session) -> str:
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         bearer_token = auth_header[7:]
+        # If not an API token (wb_ prefix), try decoding as JWT first
+        if not bearer_token.startswith(TOKEN_PREFIX):
+            try:
+                payload = decode_token(bearer_token, get_jwt_secret())
+                return payload["sub"]
+            except jwt.ExpiredSignatureError:
+                raise HTTPException(status_code=401, detail="Token expired")
+            except (jwt.InvalidTokenError, KeyError):
+                raise HTTPException(status_code=401, detail="Invalid token")
         return _authenticate_bearer(bearer_token, db)
 
     raise HTTPException(status_code=401, detail="Not authenticated")
