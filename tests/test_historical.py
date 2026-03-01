@@ -12,6 +12,7 @@ from weatherbrief.fetch.open_meteo import (
     OpenMeteoClient,
     _FREE_HOST,
     _HISTORICAL_HOST,
+    _HISTORICAL_MODEL_MAP,
 )
 from weatherbrief.fetch.grib.grib_fetch import find_latest_run, GFS_PUBLISH_DELAY_HOURS
 from weatherbrief.fetch.grib.icon_eu_fetch import (
@@ -54,6 +55,29 @@ def test_non_historical_client_keeps_host():
     new_url, _ = client._prepare_request(url, {})
     assert _FREE_HOST in new_url
     assert _HISTORICAL_HOST not in new_url
+
+
+def test_historical_client_rewrites_model_path():
+    """Historical client should rewrite model-specific paths to /v1/forecast + models param."""
+    client = OpenMeteoClient(historical=True)
+
+    # GFS: /v1/gfs → /v1/forecast + models=gfs_seamless
+    url = f"https://{_FREE_HOST}/v1/gfs"
+    new_url, params = client._prepare_request(url, {})
+    assert new_url == f"https://{_HISTORICAL_HOST}/v1/forecast"
+    assert params["models"] == "gfs_seamless"
+
+    # ICON: /v1/dwd-icon → /v1/forecast + models=icon_seamless
+    url = f"https://{_FREE_HOST}/v1/dwd-icon"
+    new_url, params = client._prepare_request(url, {})
+    assert new_url == f"https://{_HISTORICAL_HOST}/v1/forecast"
+    assert params["models"] == "icon_seamless"
+
+    # Best match: /v1/forecast stays as /v1/forecast, no models param added
+    url = f"https://{_FREE_HOST}/v1/forecast"
+    new_url, params = client._prepare_request(url, {})
+    assert new_url == f"https://{_HISTORICAL_HOST}/v1/forecast"
+    assert "models" not in params
 
 
 def test_historical_client_with_api_key():
