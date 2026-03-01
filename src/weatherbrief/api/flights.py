@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from weatherbrief.api.auth_config import is_dev_mode
 from weatherbrief.db.deps import current_user_id, get_db
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
@@ -82,6 +83,18 @@ class FlightResponse(BaseModel):
     created_at: str
 
 
+def _is_admin_or_dev(request: Request, db: Session) -> bool:
+    """Return True if the request comes from an admin user or dev mode is active."""
+    if is_dev_mode():
+        return True
+    try:
+        from weatherbrief.api.admin import require_admin
+        require_admin(request, db=db)
+        return True
+    except HTTPException:
+        return False
+
+
 def _flight_to_response(flight: Flight) -> FlightResponse:
     return FlightResponse(
         id=flight.id,
@@ -150,6 +163,14 @@ def create_flight(
     departure_time = datetime.fromisoformat(req.departure_time)
     if departure_time.tzinfo is None:
         departure_time = departure_time.replace(tzinfo=timezone.utc)
+
+    # Only admins can create historical flights with past departure times
+    if departure_time < datetime.now(timezone.utc):
+        if not _is_admin_or_dev(request, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Only admins can create flights with past departure times",
+            )
 
     # Derive date string and hour for flight ID and hash (backward compat)
     target_date_str = departure_time.strftime("%Y-%m-%d")

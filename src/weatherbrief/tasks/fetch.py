@@ -58,6 +58,7 @@ def run_fetch(
     pack_dir: Path | None = None,
     user_id: str | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
+    historical_mode: bool = False,
 ) -> FetchResult:
     """Execute the fetch stage of the briefing pipeline.
 
@@ -74,10 +75,12 @@ def run_fetch(
     target_date = departure_time.strftime("%Y-%m-%d")
     today_utc = datetime.now(timezone.utc).date()
     days_out = (date.fromisoformat(target_date) - today_utc).days
+    # Historical mode: archived API serves same-day forecasts, don't skip models
+    days_out_for_range = 0 if historical_mode else days_out
 
     # --- Route interpolation ---
     _notify("route_interpolation")
-    client = OpenMeteoClient()
+    client = OpenMeteoClient(historical=historical_mode)
     route_points = interpolate_route(route, spacing_nm=10.0)
     logger.info("Route interpolated: %d points along %.0f nm",
                 len(route_points), route_points[-1].distance_from_origin_nm)
@@ -105,10 +108,10 @@ def run_fetch(
 
     for model in models:
         endpoint = MODEL_ENDPOINTS[model.value]
-        if days_out is not None and days_out >= endpoint.max_days:
+        if days_out_for_range is not None and days_out_for_range >= endpoint.max_days:
             logger.info(
                 "Skipping %s: %d days out exceeds %d-day range",
-                model.value, days_out, endpoint.max_days,
+                model.value, days_out_for_range, endpoint.max_days,
             )
             continue
         if _should_skip_for_region(endpoint, route_region):
@@ -162,6 +165,7 @@ def run_fetch(
                 departure_time, data_dir=data_dir,
                 flight_duration_hours=route.flight_duration_hours,
                 progress_callback=progress_callback,
+                as_of_time=departure_time if historical_mode else None,
             )
             grib_enriched = True
             logger.info("GRIB2 enrichment applied")

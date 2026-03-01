@@ -61,6 +61,7 @@ class BriefingOptions:
     advisory_aggregation: str | None = None  # "worst" or "majority"
     advisory_enabled: dict[str, bool] | None = None  # {advisory_id: enabled}
     advisory_params: dict[str, dict[str, float]] | None = None  # {advisory_id: {param: value}}
+    historical_mode: bool = False  # Use archived NWP data for past departure times
 
 
 @dataclass
@@ -187,7 +188,7 @@ def execute_briefing(
     target_dt = departure_time
     days_out = (date.fromisoformat(target_date) - today_utc).days
 
-    if days_out < 0:
+    if days_out < 0 and not options.historical_mode:
         raise ValueError(f"Target date {target_date} is in the past")
 
     logger.info("Route: %s", route.name)
@@ -204,6 +205,7 @@ def execute_briefing(
         pack_dir=pack_dir,
         user_id=options.user_id,
         progress_callback=progress_callback,
+        historical_mode=options.historical_mode,
     )
 
     # === 2. Analyze ===
@@ -253,7 +255,7 @@ def execute_briefing(
 
     # === 3.5 Route weather observations (D-0 only) ===
     route_observations = None
-    if days_out == 0 and options.airports_db_path:
+    if days_out == 0 and options.airports_db_path and not options.historical_mode:
         _notify("route_weather")
         try:
             from weatherbrief.tasks.route_weather import (

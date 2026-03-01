@@ -76,6 +76,7 @@ def enrich_forecasts(
     data_dir: Path,
     flight_duration_hours: float = 0.0,
     progress_callback: Callable[[str, str | None], None] | None = None,
+    as_of_time: datetime | None = None,
 ) -> dict[str, int]:
     """Enrich cross-section forecasts with cloud water from GRIB2 sources.
 
@@ -91,6 +92,7 @@ def enrich_forecasts(
         departure_time: Aware UTC datetime of flight departure.
         data_dir: Base data directory for caching.
         flight_duration_hours: Flight duration for per-hour enrichment.
+        as_of_time: If set, only use model runs initialized before this time.
 
     Returns:
         Dict mapping model name to GRIB init Unix timestamp (only non-None).
@@ -103,6 +105,7 @@ def enrich_forecasts(
         cross_sections, all_forecasts, route_points,
         departure_time, data_dir=data_dir,
         flight_duration_hours=flight_duration_hours,
+        as_of_time=as_of_time,
     )
     if gfs_ts is not None:
         grib_init_times["gfs"] = gfs_ts
@@ -113,6 +116,7 @@ def enrich_forecasts(
         cross_sections, all_forecasts, route_points,
         departure_time, data_dir=data_dir,
         flight_duration_hours=flight_duration_hours,
+        as_of_time=as_of_time,
     )
     if icon_ts is not None:
         grib_init_times["icon"] = icon_ts
@@ -136,6 +140,7 @@ def _enrich_gfs(
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
 ) -> int | None:
     """Enrich GFS cross-sections with CLWMR/ICMR and cloud diagnostics.
 
@@ -150,7 +155,7 @@ def _enrich_gfs(
 
     session = requests.Session()
 
-    run_info = find_latest_run(departure_time, session=session)
+    run_info = find_latest_run(departure_time, session=session, as_of_time=as_of_time)
     if run_info is None:
         logger.warning("No GFS model run found for enrichment")
         return None
@@ -482,6 +487,7 @@ def _enrich_icon_eu(
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
 ) -> int | None:
     """Enrich ICON cross-sections with QC/QI from ICON-EU GRIB2.
 
@@ -510,7 +516,9 @@ def _enrich_icon_eu(
     session = requests.Session()
 
     try:
-        run_info = find_latest_icon_eu_run(departure_time, session=session)
+        run_info = find_latest_icon_eu_run(
+            departure_time, session=session, as_of_time=as_of_time,
+        )
     except Exception:
         logger.warning("Failed to find ICON-EU model run", exc_info=True)
         return None
