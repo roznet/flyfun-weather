@@ -45,7 +45,7 @@ def save_snapshot(
     forecasts_path.write_text(
         snapshot.model_dump_json(
             indent=2,
-            include={"route", "target_date", "fetch_date", "days_out", "forecasts"},
+            include={"route", "target_date", "fetch_date", "days_out", "departure_time", "forecasts"},
         )
     )
 

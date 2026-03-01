@@ -326,8 +326,7 @@ def analyze_all_route_points(
 
 def run_analysis(
     route: RouteConfig,
-    target_date: str,
-    target_hour: int,
+    departure_time: datetime,
     all_forecasts: list[WaypointForecast],
     cross_sections: list[RouteCrossSection],
     route_points: list[RoutePoint],
@@ -343,7 +342,7 @@ def run_analysis(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
-    target_dt = datetime(*map(int, target_date.split("-")), target_hour, tzinfo=timezone.utc)
+    target_dt = departure_time
 
     # --- Waypoint analyses ---
     _notify("waypoint_analysis")
@@ -379,8 +378,8 @@ def run_analysis(
             )
             route_analyses_manifest = RouteAnalysesManifest(
                 route_name=route.name,
-                target_date=target_date,
-                departure_time=target_dt,
+                target_date=departure_time.strftime("%Y-%m-%d"),
+                departure_time=departure_time,
                 flight_duration_hours=route.flight_duration_hours,
                 total_distance_nm=total_distance,
                 cruise_altitude_ft=route.cruise_altitude_ft,
@@ -402,8 +401,7 @@ def run_analysis(
 def run_analysis_from_pack(
     pack_dir: Path,
     route: RouteConfig,
-    target_date: str,
-    target_hour: int,
+    departure_time: datetime,
     icing_severity_enhance: bool = False,
 ) -> AnalysisResult:
     """Re-run analysis from persisted pack_dir artifacts.
@@ -428,8 +426,7 @@ def run_analysis_from_pack(
 
     return run_analysis(
         route=route,
-        target_date=target_date,
-        target_hour=target_hour,
+        departure_time=departure_time,
         all_forecasts=all_forecasts,
         cross_sections=cross_sections,
         route_points=route_points,

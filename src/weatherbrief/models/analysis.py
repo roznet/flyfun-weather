@@ -708,6 +708,7 @@ class ForecastSnapshot(BaseModel):
     target_date: str  # ISO date string YYYY-MM-DD
     fetch_date: str  # ISO date string
     days_out: int  # D-N
+    departure_time: Optional[datetime] = None  # aware UTC; None for old packs
     forecasts: list[WaypointForecast] = Field(default_factory=list)
     analyses: list[WaypointAnalysis] = Field(default_factory=list)
     cross_sections: list[RouteCrossSection] = Field(default_factory=list)

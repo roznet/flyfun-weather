@@ -135,6 +135,7 @@ changed analysis logic (cloud layers, icing, vertical motion, etc.) and want to 
 against an existing briefing.
 
 ```python
+from datetime import datetime, timezone
 from weatherbrief.tasks.analyze import run_analysis_from_pack
 from weatherbrief.models import RouteConfig
 
@@ -144,8 +145,7 @@ route = RouteConfig.model_validate(briefing_data["route"])
 result = run_analysis_from_pack(
     pack_dir=pack_dir,
     route=route,
-    target_date="2026-02-27",
-    target_hour=9,
+    departure_time=datetime(2026, 2, 27, 9, tzinfo=timezone.utc),
     icing_severity_enhance=True,
 )
 # result.waypoint_analyses — per-waypoint sounding analyses

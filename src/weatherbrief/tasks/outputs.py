@@ -51,8 +51,7 @@ class DigestResult:
 
 def run_gramet(
     route,  # RouteConfig
-    target_date: str,
-    target_hour: int,
+    departure_time: datetime,
     pack_dir: Path | None = None,
     data_dir: Path | None = None,
     days_out: int = 0,
@@ -63,11 +62,6 @@ def run_gramet(
     """Fetch GRAMET cross-section PDF from the Autorouter API."""
     try:
         from weatherbrief.fetch.gramet import AutorouterGramet
-
-        # UTC-aware for correct Unix timestamp in GRAMET API call
-        departure_time = datetime(
-            *map(int, target_date.split("-")), target_hour, tzinfo=timezone.utc
-        )
         icao_codes = [wp.icao for wp in route.waypoints]
         duration_hours = route.flight_duration_hours or 2.0
 
@@ -88,7 +82,8 @@ def run_gramet(
         if pack_dir:
             out_path = pack_dir / "gramet.pdf"
         elif data_dir:
-            out_dir = data_dir / "gramet" / target_date / f"d-{days_out}_{fetch_date}"
+            target_date_str = departure_time.strftime("%Y-%m-%d")
+            out_dir = data_dir / "gramet" / target_date_str / f"d-{days_out}_{fetch_date}"
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / "gramet.pdf"
         else:
@@ -115,9 +110,6 @@ def run_skewt(
     target_time: datetime,
     pack_dir: Path | None = None,
     data_dir: Path | None = None,
-    target_date: str = "",
-    days_out: int = 0,
-    fetch_date: str = "",
 ) -> SkewtResult:
     """Generate Skew-T plots for all waypoints."""
     try:
@@ -126,7 +118,10 @@ def run_skewt(
         if pack_dir:
             out_dir = pack_dir / "skewt"
         elif data_dir:
-            out_dir = data_dir / "skewt" / target_date / f"d-{days_out}_{fetch_date}"
+            out_dir = (
+                data_dir / "skewt" / snapshot.target_date
+                / f"d-{snapshot.days_out}_{snapshot.fetch_date}"
+            )
         else:
             return SkewtResult(error="No output directory specified")
 
@@ -154,9 +149,6 @@ def run_llm_digest(
     digest_config_name: str | None = None,
     pack_dir: Path | None = None,
     data_dir: Path | None = None,
-    target_date: str = "",
-    days_out: int = 0,
-    fetch_date: str = "",
     route_advisories=None,  # RouteAdvisoriesManifest | None
     flight_rules: str | None = None,
     previous_digest=None,  # WeatherDigest | None
@@ -190,7 +182,10 @@ def run_llm_digest(
             md_path = pack_dir / "digest.md"
             json_path = pack_dir / "digest.json"
         elif data_dir:
-            out_dir = data_dir / "digests" / target_date / f"d-{days_out}_{fetch_date}"
+            out_dir = (
+                data_dir / "digests" / snapshot.target_date
+                / f"d-{snapshot.days_out}_{snapshot.fetch_date}"
+            )
             out_dir.mkdir(parents=True, exist_ok=True)
             md_path = out_dir / "digest.md"
             json_path = out_dir / "digest.json"

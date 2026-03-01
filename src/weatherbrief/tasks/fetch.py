@@ -51,8 +51,7 @@ class FetchResult:
 
 def run_fetch(
     route: RouteConfig,
-    target_date: str,
-    target_hour: int,
+    departure_time: "datetime",
     models: list[ModelSource],
     enrich_grib: bool = False,
     data_dir: Path | None = None,
@@ -65,12 +64,14 @@ def run_fetch(
     Interpolates route → fetches elevation → fetches forecasts per model
     → optional GRIB enrichment.  If *pack_dir* is set, persists artifacts.
     """
-    from datetime import date, datetime, timezone
+    import math
+    from datetime import date, datetime, timedelta, timezone
 
     def _notify(stage: str, detail: str | None = None) -> None:
         if progress_callback is not None:
             progress_callback(stage, detail)
 
+    target_date = departure_time.strftime("%Y-%m-%d")
     today_utc = datetime.now(timezone.utc).date()
     days_out = (date.fromisoformat(target_date) - today_utc).days
 
@@ -122,9 +123,13 @@ def run_fetch(
             time.sleep(5)
         _notify("fetch_forecasts", model.value)
         try:
+            end_date = (
+                departure_time
+                + timedelta(hours=math.ceil(route.flight_duration_hours or 0))
+            ).strftime("%Y-%m-%d")
             point_forecasts = client.fetch_multi_point(
                 route_points, model,
-                start_date=target_date, end_date=target_date,
+                start_date=target_date, end_date=end_date,
             )
             # Extract waypoint-only forecasts for analysis
             for rp, fc in zip(route_points, point_forecasts):
@@ -154,7 +159,7 @@ def run_fetch(
 
             grib_init_times = enrich_forecasts(
                 cross_sections, all_forecasts, route_points,
-                target_date, target_hour, data_dir=data_dir,
+                departure_time, data_dir=data_dir,
                 flight_duration_hours=route.flight_duration_hours,
                 progress_callback=progress_callback,
             )

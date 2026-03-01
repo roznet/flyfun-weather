@@ -138,8 +138,7 @@ def _snap_to_gfs_grid(fhour: float) -> int:
 def compute_flight_window_hours(
     init_date: str,
     init_hour: int,
-    target_date: str,
-    target_hour: int,
+    departure_time: datetime,
     flight_duration_hours: float,
 ) -> list[int]:
     """Compute GFS forecast hours covering a flight window.
@@ -150,8 +149,7 @@ def compute_flight_window_hours(
     Args:
         init_date: YYYYMMDD of model init.
         init_hour: 0, 6, 12, or 18.
-        target_date: YYYY-MM-DD departure date.
-        target_hour: Departure hour (UTC).
+        departure_time: Aware UTC datetime of flight departure.
         flight_duration_hours: Flight duration in hours.
 
     Returns:
@@ -160,9 +158,7 @@ def compute_flight_window_hours(
     init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
-    dep_dt = datetime.strptime(
-        f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H",
-    ).replace(tzinfo=timezone.utc)
+    dep_dt = departure_time
 
     n_hours = max(1, math.ceil(flight_duration_hours) + 1)
     fhours: set[int] = set()

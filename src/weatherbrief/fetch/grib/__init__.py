@@ -71,8 +71,7 @@ def enrich_forecasts(
     cross_sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
     route_points: list[RoutePoint],
-    target_date: str,
-    target_hour: int,
+    departure_time: datetime,
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
@@ -89,8 +88,7 @@ def enrich_forecasts(
         cross_sections: Route cross-sections to enrich (modified in-place).
         all_forecasts: Waypoint forecasts (also enriched in-place).
         route_points: Route points for spatial interpolation.
-        target_date: ISO date string (YYYY-MM-DD).
-        target_hour: Target hour (UTC).
+        departure_time: Aware UTC datetime of flight departure.
         data_dir: Base data directory for caching.
         flight_duration_hours: Flight duration for per-hour enrichment.
 
@@ -103,7 +101,7 @@ def enrich_forecasts(
         progress_callback("grib_enrichment", "GFS")
     gfs_ts = _enrich_gfs(
         cross_sections, all_forecasts, route_points,
-        target_date, target_hour, data_dir=data_dir,
+        departure_time, data_dir=data_dir,
         flight_duration_hours=flight_duration_hours,
     )
     if gfs_ts is not None:
@@ -113,7 +111,7 @@ def enrich_forecasts(
         progress_callback("grib_enrichment", "ICON-EU")
     icon_ts = _enrich_icon_eu(
         cross_sections, all_forecasts, route_points,
-        target_date, target_hour, data_dir=data_dir,
+        departure_time, data_dir=data_dir,
         flight_duration_hours=flight_duration_hours,
     )
     if icon_ts is not None:
@@ -134,8 +132,7 @@ def _enrich_gfs(
     cross_sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
     route_points: list[RoutePoint],
-    target_date: str,
-    target_hour: int,
+    departure_time: datetime,
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
@@ -151,20 +148,16 @@ def _enrich_gfs(
         logger.info("No GFS cross-sections to enrich")
         return None
 
-    target_time = datetime.strptime(
-        f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H"
-    ).replace(tzinfo=timezone.utc)
-
     session = requests.Session()
 
-    run_info = find_latest_run(target_time, session=session)
+    run_info = find_latest_run(departure_time, session=session)
     if run_info is None:
         logger.warning("No GFS model run found for enrichment")
         return None
 
     init_date, init_hour = run_info
     forecast_hours = compute_flight_window_hours(
-        init_date, init_hour, target_date, target_hour, flight_duration_hours,
+        init_date, init_hour, departure_time, flight_duration_hours,
     )
 
     # Route bounding box (rounded to nearest degree + 1° buffer)
@@ -485,8 +478,7 @@ def _enrich_icon_eu(
     cross_sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
     route_points: list[RoutePoint],
-    target_date: str,
-    target_hour: int,
+    departure_time: datetime,
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
@@ -515,14 +507,10 @@ def _enrich_icon_eu(
         logger.info("Route outside ICON-EU domain, skipping ICON-EU enrichment")
         return None
 
-    target_time = datetime.strptime(
-        f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H"
-    ).replace(tzinfo=timezone.utc)
-
     session = requests.Session()
 
     try:
-        run_info = find_latest_icon_eu_run(target_time, session=session)
+        run_info = find_latest_icon_eu_run(departure_time, session=session)
     except Exception:
         logger.warning("Failed to find ICON-EU model run", exc_info=True)
         return None
@@ -533,7 +521,7 @@ def _enrich_icon_eu(
 
     init_date, init_hour = run_info
     forecast_hours = compute_icon_eu_flight_window_hours(
-        init_date, init_hour, target_date, target_hour, flight_duration_hours,
+        init_date, init_hour, departure_time, flight_duration_hours,
     )
 
     purge_old_runs(data_dir, model="icon-eu")

@@ -179,9 +179,8 @@ def execute_briefing(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
-    # Derive target_date/target_hour for internal tasks
+    # Derive target_date for snapshot metadata and logging
     target_date = departure_time.strftime("%Y-%m-%d")
-    target_hour = departure_time.hour
 
     today_utc = datetime.now(timezone.utc).date()
     today = today_utc.isoformat()
@@ -198,8 +197,7 @@ def execute_briefing(
     # === 1. Fetch ===
     fetch_result = run_fetch(
         route=route,
-        target_date=target_date,
-        target_hour=target_hour,
+        departure_time=departure_time,
         models=options.models,
         enrich_grib=options.enrich_grib,
         data_dir=data_dir,
@@ -211,8 +209,7 @@ def execute_briefing(
     # === 2. Analyze ===
     analysis_result = run_analysis(
         route=route,
-        target_date=target_date,
-        target_hour=target_hour,
+        departure_time=departure_time,
         all_forecasts=fetch_result.all_forecasts,
         cross_sections=fetch_result.cross_sections,
         route_points=fetch_result.route_points,
@@ -303,6 +300,7 @@ def execute_briefing(
         target_date=target_date,
         fetch_date=today,
         days_out=days_out,
+        departure_time=departure_time,
         forecasts=fetch_result.all_forecasts,
         analyses=analysis_result.waypoint_analyses,
         cross_sections=fetch_result.cross_sections,
@@ -339,8 +337,7 @@ def execute_briefing(
         _notify("fetch_gramet")
         gramet_result = run_gramet(
             route=route,
-            target_date=target_date,
-            target_hour=target_hour,
+            departure_time=departure_time,
             pack_dir=pack_dir,
             data_dir=data_dir,
             days_out=days_out,
@@ -364,9 +361,6 @@ def execute_briefing(
             target_time=target_dt,
             pack_dir=pack_dir,
             data_dir=data_dir,
-            target_date=target_date,
-            days_out=days_out,
-            fetch_date=today,
         )
         if skewt_result.paths:
             result.skewt_paths = skewt_result.paths
@@ -383,9 +377,6 @@ def execute_briefing(
             digest_config_name=options.digest_config_name,
             pack_dir=pack_dir,
             data_dir=data_dir,
-            target_date=target_date,
-            days_out=days_out,
-            fetch_date=today,
             route_advisories=route_advisories_manifest,
             flight_rules=options.flight_rules,
             previous_digest=previous_digest,
