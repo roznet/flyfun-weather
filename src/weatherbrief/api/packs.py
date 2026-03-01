@@ -1676,6 +1676,12 @@ def _parse_target_time(snapshot_data: dict) -> datetime:
     old (naive HourlyForecast.time) and new (aware) data work correctly
     — ``at_time()`` is patched below to handle the mixed case gracefully.
     """
+    # Prefer departure_time (new packs)
+    dt_str = snapshot_data.get("departure_time")
+    if dt_str:
+        dt = datetime.fromisoformat(dt_str)
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    # Fallback: first analysis target_time
     analyses = snapshot_data.get("analyses", [])
     if analyses and "target_time" in analyses[0]:
         dt = datetime.fromisoformat(analyses[0]["target_time"])

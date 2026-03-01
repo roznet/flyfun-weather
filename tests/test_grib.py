@@ -1177,34 +1177,42 @@ class TestComputeFlightWindowHours:
 
     def test_zero_duration(self):
         """Duration=0 produces single forecast hour."""
+        from datetime import datetime, timezone
         from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
 
-        hours = compute_flight_window_hours("20260227", 0, "2026-02-27", 9, 0.0)
+        dep = datetime(2026, 2, 27, 9, tzinfo=timezone.utc)
+        hours = compute_flight_window_hours("20260227", 0, dep, 0.0)
         assert len(hours) == 1
 
     def test_short_flight(self):
         """2-hour flight produces 3 forecast hours (dep, dep+1, dep+2)."""
+        from datetime import datetime, timezone
         from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
 
-        hours = compute_flight_window_hours("20260227", 0, "2026-02-27", 9, 2.0)
+        dep = datetime(2026, 2, 27, 9, tzinfo=timezone.utc)
+        hours = compute_flight_window_hours("20260227", 0, dep, 2.0)
         # dep at f9, +1h at f10, +2h at f11 → 3 unique hours
         assert len(hours) == 3
         assert hours == [9, 10, 11]
 
     def test_fractional_duration(self):
         """1.5-hour flight → ceil(1.5)+1 = 3 hours."""
+        from datetime import datetime, timezone
         from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
 
-        hours = compute_flight_window_hours("20260227", 0, "2026-02-27", 9, 1.5)
+        dep = datetime(2026, 2, 27, 9, tzinfo=timezone.utc)
+        hours = compute_flight_window_hours("20260227", 0, dep, 1.5)
         assert len(hours) == 3
         assert hours == [9, 10, 11]
 
     def test_3hourly_region(self):
         """Flight in >120h region snaps to 3-hourly grid."""
+        from datetime import datetime, timezone
         from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
 
         # Departure 130h after init → 3-hourly region
-        hours = compute_flight_window_hours("20260221", 0, "2026-02-26", 10, 2.0)
+        dep = datetime(2026, 2, 26, 10, tzinfo=timezone.utc)
+        hours = compute_flight_window_hours("20260221", 0, dep, 2.0)
         # All should be multiples of 3 past 120
         for h in hours:
             if h > 120:
@@ -1212,9 +1220,11 @@ class TestComputeFlightWindowHours:
 
     def test_sorted_and_deduped(self):
         """Output is sorted and deduplicated."""
+        from datetime import datetime, timezone
         from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
 
-        hours = compute_flight_window_hours("20260227", 0, "2026-02-27", 9, 4.0)
+        dep = datetime(2026, 2, 27, 9, tzinfo=timezone.utc)
+        hours = compute_flight_window_hours("20260227", 0, dep, 4.0)
         assert hours == sorted(set(hours))
 
 
@@ -1222,17 +1232,21 @@ class TestComputeIconEuFlightWindowHours:
     """Tests for compute_icon_eu_flight_window_hours."""
 
     def test_short_flight(self):
+        from datetime import datetime, timezone
         from weatherbrief.fetch.grib.icon_eu_fetch import compute_icon_eu_flight_window_hours
 
-        hours = compute_icon_eu_flight_window_hours("20260227", 0, "2026-02-27", 9, 2.0)
+        dep = datetime(2026, 2, 27, 9, tzinfo=timezone.utc)
+        hours = compute_icon_eu_flight_window_hours("20260227", 0, dep, 2.0)
         assert hours == [9, 10, 11]
 
     def test_clamp_to_120(self):
         """Forecast hours clamped to max 120."""
+        from datetime import datetime, timezone
         from weatherbrief.fetch.grib.icon_eu_fetch import compute_icon_eu_flight_window_hours
 
         # Very far out → all clamped to 120
-        hours = compute_icon_eu_flight_window_hours("20260220", 0, "2026-02-27", 9, 2.0)
+        dep = datetime(2026, 2, 27, 9, tzinfo=timezone.utc)
+        hours = compute_icon_eu_flight_window_hours("20260220", 0, dep, 2.0)
         assert all(h <= 120 for h in hours)
 
 

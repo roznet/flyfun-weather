@@ -218,6 +218,39 @@ def test_snapshot_cross_section_roundtrip(sample_route):
     assert len(cs.point_forecasts) == 2
 
 
+def test_snapshot_departure_time_optional(sample_route):
+    """ForecastSnapshot without departure_time defaults to None (backward compat)."""
+    snapshot = ForecastSnapshot(
+        route=sample_route,
+        target_date="2026-02-21",
+        fetch_date="2026-02-14",
+        days_out=7,
+    )
+    assert snapshot.departure_time is None
+
+    # Roundtrip — old packs without departure_time still load
+    json_str = snapshot.model_dump_json()
+    restored = ForecastSnapshot.model_validate_json(json_str)
+    assert restored.departure_time is None
+
+
+def test_snapshot_departure_time_roundtrip(sample_route):
+    """ForecastSnapshot with departure_time roundtrips correctly."""
+    dep_time = datetime(2026, 2, 21, 9, 0, tzinfo=timezone.utc)
+    snapshot = ForecastSnapshot(
+        route=sample_route,
+        target_date="2026-02-21",
+        fetch_date="2026-02-14",
+        days_out=7,
+        departure_time=dep_time,
+    )
+    assert snapshot.departure_time == dep_time
+
+    json_str = snapshot.model_dump_json()
+    restored = ForecastSnapshot.model_validate_json(json_str)
+    assert restored.departure_time == dep_time
+
+
 def test_save_cross_section_separate_file(sample_route, tmp_path):
     """save_cross_section writes cross_section.json alongside snapshot."""
     from weatherbrief.storage.snapshots import save_cross_section, save_snapshot

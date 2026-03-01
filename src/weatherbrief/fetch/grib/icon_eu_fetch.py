@@ -269,8 +269,7 @@ def _snap_to_icon_eu_grid(fhour: float) -> int:
 def compute_icon_eu_flight_window_hours(
     init_date: str,
     init_hour: int,
-    target_date: str,
-    target_hour: int,
+    departure_time: datetime,
     flight_duration_hours: float,
 ) -> list[int]:
     """Compute ICON-EU forecast hours covering a flight window.
@@ -280,9 +279,7 @@ def compute_icon_eu_flight_window_hours(
     init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
-    dep_dt = datetime.strptime(
-        f"{target_date}T{target_hour:02d}", "%Y-%m-%dT%H",
-    ).replace(tzinfo=timezone.utc)
+    dep_dt = departure_time
 
     n_hours = max(1, math.ceil(flight_duration_hours) + 1)
     fhours: set[int] = set()
