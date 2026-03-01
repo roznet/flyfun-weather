@@ -16,3 +16,9 @@ venv/
 web/test-results
 
 tmp
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+*.xcscmblueprint

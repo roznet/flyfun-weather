@@ -1,0 +1,689 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		42B8963E2F5471ED00C5AF7B /* RZFlight in Frameworks */ = {isa = PBXBuildFile; productRef = 42B8963D2F5471ED00C5AF7B /* RZFlight */; };
+		42B896412F54720900C5AF7B /* RZUtils in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896402F54720900C5AF7B /* RZUtils */; };
+		42B896432F54720900C5AF7B /* RZUtilsSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896422F54720900C5AF7B /* RZUtilsSwift */; };
+		42B896452F54720900C5AF7B /* RZUtilsSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896442F54720900C5AF7B /* RZUtilsSwiftUI */; };
+		42B896472F54720900C5AF7B /* RZUtilsUniversal in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896462F54720900C5AF7B /* RZUtilsUniversal */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		42269E5C2F546D2100EFA5E4 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 42269E442F546D2000EFA5E4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 42269E4B2F546D2000EFA5E4;
+			remoteInfo = "flyfun-weather";
+		};
+		42269E662F546D2100EFA5E4 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 42269E442F546D2000EFA5E4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 42269E4B2F546D2000EFA5E4;
+			remoteInfo = "flyfun-weather";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		42269E4C2F546D2000EFA5E4 /* flyfun-weather.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "flyfun-weather.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		42269E5B2F546D2100EFA5E4 /* flyfun-weatherTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "flyfun-weatherTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		42269E652F546D2100EFA5E4 /* flyfun-weatherUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "flyfun-weatherUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		42269E4E2F546D2000EFA5E4 /* flyfun-weather */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "flyfun-weather";
+			sourceTree = "<group>";
+		};
+		42269E5E2F546D2100EFA5E4 /* flyfun-weatherTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "flyfun-weatherTests";
+			sourceTree = "<group>";
+		};
+		42269E682F546D2100EFA5E4 /* flyfun-weatherUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "flyfun-weatherUITests";
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		42269E492F546D2000EFA5E4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				42B896412F54720900C5AF7B /* RZUtils in Frameworks */,
+				42B896472F54720900C5AF7B /* RZUtilsUniversal in Frameworks */,
+				42B8963E2F5471ED00C5AF7B /* RZFlight in Frameworks */,
+				42B896452F54720900C5AF7B /* RZUtilsSwiftUI in Frameworks */,
+				42B896432F54720900C5AF7B /* RZUtilsSwift in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		42269E582F546D2100EFA5E4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		42269E622F546D2100EFA5E4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		42269E432F546D2000EFA5E4 = {
+			isa = PBXGroup;
+			children = (
+				42269E4E2F546D2000EFA5E4 /* flyfun-weather */,
+				42269E5E2F546D2100EFA5E4 /* flyfun-weatherTests */,
+				42269E682F546D2100EFA5E4 /* flyfun-weatherUITests */,
+				42269E4D2F546D2000EFA5E4 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		42269E4D2F546D2000EFA5E4 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				42269E4C2F546D2000EFA5E4 /* flyfun-weather.app */,
+				42269E5B2F546D2100EFA5E4 /* flyfun-weatherTests.xctest */,
+				42269E652F546D2100EFA5E4 /* flyfun-weatherUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		42269E4B2F546D2000EFA5E4 /* flyfun-weather */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 42269E6F2F546D2100EFA5E4 /* Build configuration list for PBXNativeTarget "flyfun-weather" */;
+			buildPhases = (
+				42269E482F546D2000EFA5E4 /* Sources */,
+				42269E492F546D2000EFA5E4 /* Frameworks */,
+				42269E4A2F546D2000EFA5E4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				42269E4E2F546D2000EFA5E4 /* flyfun-weather */,
+			);
+			name = "flyfun-weather";
+			packageProductDependencies = (
+				42B8963D2F5471ED00C5AF7B /* RZFlight */,
+				42B896402F54720900C5AF7B /* RZUtils */,
+				42B896422F54720900C5AF7B /* RZUtilsSwift */,
+				42B896442F54720900C5AF7B /* RZUtilsSwiftUI */,
+				42B896462F54720900C5AF7B /* RZUtilsUniversal */,
+			);
+			productName = "flyfun-weather";
+			productReference = 42269E4C2F546D2000EFA5E4 /* flyfun-weather.app */;
+			productType = "com.apple.product-type.application";
+		};
+		42269E5A2F546D2100EFA5E4 /* flyfun-weatherTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 42269E722F546D2100EFA5E4 /* Build configuration list for PBXNativeTarget "flyfun-weatherTests" */;
+			buildPhases = (
+				42269E572F546D2100EFA5E4 /* Sources */,
+				42269E582F546D2100EFA5E4 /* Frameworks */,
+				42269E592F546D2100EFA5E4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				42269E5D2F546D2100EFA5E4 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				42269E5E2F546D2100EFA5E4 /* flyfun-weatherTests */,
+			);
+			name = "flyfun-weatherTests";
+			packageProductDependencies = (
+			);
+			productName = "flyfun-weatherTests";
+			productReference = 42269E5B2F546D2100EFA5E4 /* flyfun-weatherTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		42269E642F546D2100EFA5E4 /* flyfun-weatherUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 42269E752F546D2100EFA5E4 /* Build configuration list for PBXNativeTarget "flyfun-weatherUITests" */;
+			buildPhases = (
+				42269E612F546D2100EFA5E4 /* Sources */,
+				42269E622F546D2100EFA5E4 /* Frameworks */,
+				42269E632F546D2100EFA5E4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				42269E672F546D2100EFA5E4 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				42269E682F546D2100EFA5E4 /* flyfun-weatherUITests */,
+			);
+			name = "flyfun-weatherUITests";
+			packageProductDependencies = (
+			);
+			productName = "flyfun-weatherUITests";
+			productReference = 42269E652F546D2100EFA5E4 /* flyfun-weatherUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		42269E442F546D2000EFA5E4 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					42269E4B2F546D2000EFA5E4 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					42269E5A2F546D2100EFA5E4 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 42269E4B2F546D2000EFA5E4;
+					};
+					42269E642F546D2100EFA5E4 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 42269E4B2F546D2000EFA5E4;
+					};
+				};
+			};
+			buildConfigurationList = 42269E472F546D2000EFA5E4 /* Build configuration list for PBXProject "flyfun-weather" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 42269E432F546D2000EFA5E4;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				42B8963C2F5471ED00C5AF7B /* XCRemoteSwiftPackageReference "rzflight" */,
+				42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 42269E4D2F546D2000EFA5E4 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				42269E4B2F546D2000EFA5E4 /* flyfun-weather */,
+				42269E5A2F546D2100EFA5E4 /* flyfun-weatherTests */,
+				42269E642F546D2100EFA5E4 /* flyfun-weatherUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		42269E4A2F546D2000EFA5E4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		42269E592F546D2100EFA5E4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		42269E632F546D2100EFA5E4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		42269E482F546D2000EFA5E4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		42269E572F546D2100EFA5E4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		42269E612F546D2100EFA5E4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		42269E5D2F546D2100EFA5E4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 42269E4B2F546D2000EFA5E4 /* flyfun-weather */;
+			targetProxy = 42269E5C2F546D2100EFA5E4 /* PBXContainerItemProxy */;
+		};
+		42269E672F546D2100EFA5E4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 42269E4B2F546D2000EFA5E4 /* flyfun-weather */;
+			targetProxy = 42269E662F546D2100EFA5E4 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		42269E6D2F546D2100EFA5E4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = M7QSSF3624;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		42269E6E2F546D2100EFA5E4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = M7QSSF3624;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		42269E702F546D2100EFA5E4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7QSSF3624;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.ro-z.flyfun-weather";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		42269E712F546D2100EFA5E4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7QSSF3624;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.ro-z.flyfun-weather";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
+		42269E732F546D2100EFA5E4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7QSSF3624;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.ro-z.flyfun-weatherTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/flyfun-weather.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/flyfun-weather";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		42269E742F546D2100EFA5E4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7QSSF3624;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.ro-z.flyfun-weatherTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/flyfun-weather.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/flyfun-weather";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
+		42269E762F546D2100EFA5E4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7QSSF3624;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.ro-z.flyfun-weatherUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_TARGET_NAME = "flyfun-weather";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		42269E772F546D2100EFA5E4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M7QSSF3624;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.ro-z.flyfun-weatherUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_TARGET_NAME = "flyfun-weather";
+				XROS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		42269E472F546D2000EFA5E4 /* Build configuration list for PBXProject "flyfun-weather" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				42269E6D2F546D2100EFA5E4 /* Debug */,
+				42269E6E2F546D2100EFA5E4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		42269E6F2F546D2100EFA5E4 /* Build configuration list for PBXNativeTarget "flyfun-weather" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				42269E702F546D2100EFA5E4 /* Debug */,
+				42269E712F546D2100EFA5E4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		42269E722F546D2100EFA5E4 /* Build configuration list for PBXNativeTarget "flyfun-weatherTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				42269E732F546D2100EFA5E4 /* Debug */,
+				42269E742F546D2100EFA5E4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		42269E752F546D2100EFA5E4 /* Build configuration list for PBXNativeTarget "flyfun-weatherUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				42269E762F546D2100EFA5E4 /* Debug */,
+				42269E772F546D2100EFA5E4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		42B8963C2F5471ED00C5AF7B /* XCRemoteSwiftPackageReference "rzflight" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/roznet/rzflight";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+		42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/roznet/rzutils";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.29;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		42B8963D2F5471ED00C5AF7B /* RZFlight */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 42B8963C2F5471ED00C5AF7B /* XCRemoteSwiftPackageReference "rzflight" */;
+			productName = RZFlight;
+		};
+		42B896402F54720900C5AF7B /* RZUtils */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */;
+			productName = RZUtils;
+		};
+		42B896422F54720900C5AF7B /* RZUtilsSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */;
+			productName = RZUtilsSwift;
+		};
+		42B896442F54720900C5AF7B /* RZUtilsSwiftUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */;
+			productName = RZUtilsSwiftUI;
+		};
+		42B896462F54720900C5AF7B /* RZUtilsUniversal */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */;
+			productName = RZUtilsUniversal;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 42269E442F546D2000EFA5E4 /* Project object */;
+}
