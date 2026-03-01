@@ -84,6 +84,35 @@
       width: 90%;
       box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
+    .period-toggle {
+      display: flex;
+      gap: 0;
+      margin-bottom: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      width: fit-content;
+    }
+    .period-toggle .toggle-btn {
+      padding: 0.4rem 1rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+      background: var(--bg);
+      border: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: background 0.15s, color 0.15s;
+    }
+    .period-toggle .toggle-btn:not(:last-child) {
+      border-right: 1px solid var(--border);
+    }
+    .period-toggle .toggle-btn.active {
+      background: var(--accent, #2563eb);
+      color: #fff;
+    }
+    .period-toggle .toggle-btn:hover:not(.active) {
+      background: var(--surface, #e9ecef);
+    }
     .token-display {
       background: var(--bg, #f8f9fa);
       border: 1px solid var(--border);
@@ -121,6 +150,12 @@
 
     <!-- Usage tab -->
     <div id="tab-usage" class="tab-panel">
+      <!-- Period toggle -->
+      <div id="period-toggle" class="period-toggle">
+        <button class="toggle-btn active" data-period="30d">Last 30 days</button>
+        <button class="toggle-btn" data-period="all">All Time</button>
+      </div>
+
       <!-- Summary stats -->
       <div id="summary-bar" class="summary-bar" style="display:none;"></div>
 
@@ -145,8 +180,8 @@
                 <th style="text-align:center;">Tokens (active/total)</th>
                 <th>Created</th>
                 <th>Last Used</th>
-                <th style="text-align:center;">Briefings (Mo)</th>
-                <th style="text-align:center;">LLM Tokens (Mo)</th>
+                <th style="text-align:center;">Briefings</th>
+                <th style="text-align:center;">LLM Tokens</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -168,10 +203,10 @@
                 <th>Email</th>
                 <th>Status</th>
                 <th>Last Active</th>
-                <th style="text-align:center;">Briefings (Mo)</th>
-                <th style="text-align:center;">GRAMET (Mo)</th>
-                <th style="text-align:center;">LLM (Mo)</th>
-                <th style="text-align:center;">Tokens (Mo)</th>
+                <th style="text-align:center;">Briefings</th>
+                <th style="text-align:center;">GRAMET</th>
+                <th style="text-align:center;">LLM</th>
+                <th style="text-align:center;">Tokens</th>
                 <th style="text-align:center;">Disk</th>
               </tr>
             </thead>

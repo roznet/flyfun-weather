@@ -85,14 +85,19 @@ def _user_disk_bytes(data_dir: Path, user_id: str) -> int:
 
 @router.get("/users")
 def list_users(
+    period: str = Query(default="30d", pattern="^(30d|all)$"),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """List all users with monthly usage summaries and disk usage."""
-    from datetime import datetime, timezone
+    """List all users with usage summaries and disk usage.
+
+    ``period`` controls the usage window: ``30d`` (last 30 days, default)
+    or ``all`` (all time).
+    """
+    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    usage_since = (now - timedelta(days=30)) if period == "30d" else None
 
     users = db.query(UserRow).all()
 
@@ -113,39 +118,38 @@ def list_users(
 
     users.sort(key=_sort_key, reverse=True)
 
-    # Batch-query month usage grouped by user_id
-    month_rows = (
-        db.query(
-            BriefingUsageRow.user_id,
-            func.count().label("briefings"),
-            func.coalesce(
-                func.sum(func.cast(BriefingUsageRow.gramet_fetched, Integer)), 0
-            ).label("gramet"),
-            func.coalesce(
-                func.sum(func.cast(BriefingUsageRow.llm_digest, Integer)), 0
-            ).label("llm_digest"),
-            func.coalesce(
-                func.sum(BriefingUsageRow.llm_input_tokens), 0
-            ).label("input_tokens"),
-            func.coalesce(
-                func.sum(BriefingUsageRow.llm_output_tokens), 0
-            ).label("output_tokens"),
-        )
-        .filter(BriefingUsageRow.timestamp >= month_start)
-        .group_by(BriefingUsageRow.user_id)
-        .all()
+    # Batch-query usage grouped by user_id (filtered by period)
+    usage_query = db.query(
+        BriefingUsageRow.user_id,
+        func.count().label("briefings"),
+        func.coalesce(
+            func.sum(func.cast(BriefingUsageRow.gramet_fetched, Integer)), 0
+        ).label("gramet"),
+        func.coalesce(
+            func.sum(func.cast(BriefingUsageRow.llm_digest, Integer)), 0
+        ).label("llm_digest"),
+        func.coalesce(
+            func.sum(BriefingUsageRow.llm_input_tokens), 0
+        ).label("input_tokens"),
+        func.coalesce(
+            func.sum(BriefingUsageRow.llm_output_tokens), 0
+        ).label("output_tokens"),
     )
-    month_map = {
+    if usage_since is not None:
+        usage_query = usage_query.filter(BriefingUsageRow.timestamp >= usage_since)
+    usage_rows = usage_query.group_by(BriefingUsageRow.user_id).all()
+
+    usage_map = {
         r.user_id: {
             "briefings": r.briefings,
             "gramet": int(r.gramet),
             "llm_digest": int(r.llm_digest),
             "total_tokens": int(r.input_tokens) + int(r.output_tokens),
         }
-        for r in month_rows
+        for r in usage_rows
     }
 
-    default_month = {"briefings": 0, "gramet": 0, "llm_digest": 0, "total_tokens": 0}
+    default_usage = {"briefings": 0, "gramet": 0, "llm_digest": 0, "total_tokens": 0}
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
 
     # Batch-query active token count and last-used per agent user
@@ -184,7 +188,7 @@ def list_users(
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
             "last_active_at": last_active_map[u.id].isoformat() if u.id in last_active_map else None,
-            "usage_month": month_map.get(u.id, default_month),
+            "usage": usage_map.get(u.id, default_usage),
             "disk_usage_bytes": disk,
         }
         if is_agent:
@@ -194,11 +198,12 @@ def list_users(
             entry["token_last_used"] = ts["token_last_used"].isoformat() if ts["token_last_used"] else None
         user_list.append(entry)
 
-    # Aggregate summary from per-user month stats
-    total_briefings = sum(u["usage_month"]["briefings"] for u in user_list)
-    total_tokens = sum(u["usage_month"]["total_tokens"] for u in user_list)
+    # Aggregate summary from per-user usage stats
+    total_briefings = sum(u["usage"]["briefings"] for u in user_list)
+    total_tokens = sum(u["usage"]["total_tokens"] for u in user_list)
 
     return {
+        "period": period,
         "summary": {
             "total_users": len(user_list),
             "total_briefings": total_briefings,
