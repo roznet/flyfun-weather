@@ -4,10 +4,12 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
   revokeAgent, fetchAdminFeedback,
-  type AdminUser, type AdminSummary, type FeedbackEntry,
+  type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 import { initTheme } from './theme';
+
+let currentPeriod: AdminPeriod = '30d';
 
 async function init(): Promise<void> {
   const user = await fetchCurrentUser();
@@ -20,8 +22,22 @@ async function init(): Promise<void> {
 
   setupAgentCreateButton();
   setupTabs();
+  setupPeriodToggle();
   // Load both tabs in parallel
   await Promise.all([loadUsers(), loadFeedback()]);
+}
+
+function setupPeriodToggle(): void {
+  document.querySelectorAll('#period-toggle .toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const period = (btn as HTMLElement).dataset.period as AdminPeriod;
+      if (period === currentPeriod) return;
+      currentPeriod = period;
+      document.querySelectorAll('#period-toggle .toggle-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadUsers();
+    });
+  });
 }
 
 function setupTabs(): void {
@@ -110,7 +126,7 @@ async function loadUsers(): Promise<void> {
   const errorEl = document.getElementById('error-message')!;
 
   try {
-    const response = await fetchAdminUsers();
+    const response = await fetchAdminUsers(currentPeriod);
     const { summary, users } = response;
 
     const humans = users.filter(u => u.type !== 'agent');
@@ -268,15 +284,20 @@ function showTokenModal(token: string, name: string): void {
   });
 }
 
+function periodLabel(): string {
+  return currentPeriod === '30d' ? '30d' : 'All';
+}
+
 function renderSummaryBar(el: HTMLElement, s: AdminSummary): void {
   const tokens = s.total_tokens >= 1000
     ? `~${Math.round(s.total_tokens / 1000)}K`
     : String(s.total_tokens);
+  const pl = periodLabel();
   el.style.display = '';
   el.innerHTML = `
     <div class="summary-card"><div class="value">${s.total_users}</div><div class="label">Users</div></div>
-    <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Briefings (Mo)</div></div>
-    <div class="summary-card"><div class="value">${tokens}</div><div class="label">Tokens (Mo)</div></div>
+    <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Briefings (${pl})</div></div>
+    <div class="summary-card"><div class="value">${tokens}</div><div class="label">Tokens (${pl})</div></div>
     <div class="summary-card"><div class="value">${formatBytes(s.total_disk_bytes)}</div><div class="label">Disk</div></div>
   `;
 }
@@ -302,7 +323,7 @@ function renderAgentRow(u: AdminUser): string {
     : '<span class="badge badge-amber">Revoked</span>';
   const lastUsed = u.token_last_used ? formatDate(u.token_last_used) : (u.last_active_at ? formatDate(u.last_active_at) : '-');
   const created = u.created_at ? formatDate(u.created_at) : '-';
-  const m = u.usage_month;
+  const m = u.usage;
   const tokens = m.total_tokens >= 1000
     ? `~${Math.round(m.total_tokens / 1000)}K`
     : String(m.total_tokens);
@@ -331,7 +352,7 @@ function renderUserRow(u: AdminUser): string {
     : '<span class="badge badge-amber">Pending</span>';
   const lastActive = u.last_active_at ?? u.last_login_at;
   const lastActiveLabel = lastActive ? formatDate(lastActive) : '-';
-  const m = u.usage_month;
+  const m = u.usage;
   const tokens = m.total_tokens >= 1000
     ? `~${Math.round(m.total_tokens / 1000)}K`
     : String(m.total_tokens);

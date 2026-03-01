@@ -19,7 +19,7 @@ export interface AdminUser {
   created_at: string | null;
   last_login_at: string | null;
   last_active_at: string | null;
-  usage_month: AdminUserUsage;
+  usage: AdminUserUsage;
   disk_usage_bytes: number;
   // Agent-only fields
   token_count?: number;
@@ -34,7 +34,10 @@ export interface AdminSummary {
   total_disk_bytes: number;
 }
 
+export type AdminPeriod = '30d' | 'all';
+
 export interface AdminUsersResponse {
+  period: AdminPeriod;
   summary: AdminSummary;
   users: AdminUser[];
 }
@@ -50,8 +53,8 @@ export interface CreateTokenResponse {
   token_id: number;
 }
 
-export async function fetchAdminUsers(): Promise<AdminUsersResponse> {
-  return apiFetch<AdminUsersResponse>('/admin/users');
+export async function fetchAdminUsers(period: AdminPeriod = '30d'): Promise<AdminUsersResponse> {
+  return apiFetch<AdminUsersResponse>(`/admin/users?period=${period}`);
 }
 
 export async function approveUser(userId: string): Promise<void> {
