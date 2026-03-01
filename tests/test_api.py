@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+# Dynamic future dates so tests don't break as time passes
+_NOW = datetime.now(timezone.utc)
+_FUTURE_DEPARTURE = _NOW + timedelta(days=3)
+_FUTURE_DEPARTURE_DATE = _FUTURE_DEPARTURE.strftime("%Y-%m-%d")
+_FUTURE_DEPARTURE_ISO = _FUTURE_DEPARTURE.replace(
+    hour=9, minute=0, second=0, microsecond=0,
+).isoformat()
+_FUTURE_DEPARTURE_DT = _FUTURE_DEPARTURE.replace(
+    hour=9, minute=0, second=0, microsecond=0,
+)
 
 import pytest
 from fastapi.testclient import TestClient
@@ -82,14 +93,14 @@ def sample_flight(app_db):
     """Create and save a sample flight."""
     session = app_db()
     flight = Flight(
-        id="egtk_lsgs-2026-02-21-8823",
+        id=f"egtk_lsgs-{_FUTURE_DEPARTURE_DATE}-8823",
         user_id=DEV_USER_ID,
         route_name="egtk_lsgs",
         waypoints=["EGTK", "LFPB", "LSGS"],
-        departure_time=datetime(2026, 2, 21, 9, tzinfo=timezone.utc),
+        departure_time=_FUTURE_DEPARTURE_DT,
         cruise_altitude_ft=8000,
         flight_duration_hours=4.5,
-        created_at=datetime(2026, 2, 19, 12, 0, 0, tzinfo=timezone.utc),
+        created_at=_NOW - timedelta(days=1),
     )
     save_flight(session, flight, DEV_USER_ID)
     session.commit()
@@ -103,8 +114,8 @@ def sample_pack(app_db, sample_flight):
     session = app_db()
     meta = BriefingPackMeta(
         flight_id=sample_flight.id,
-        fetch_timestamp=datetime(2026, 2, 19, 18, 0, 0, tzinfo=timezone.utc),
-        days_out=2,
+        fetch_timestamp=_NOW - timedelta(hours=6),
+        days_out=3,
         has_gramet=True,
         has_skewt=True,
         has_digest=False,
@@ -141,22 +152,25 @@ class TestFlightsAPI:
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
-            "departure_time": "2026-02-21T09:00:00Z",
+            "departure_time": _FUTURE_DEPARTURE_ISO,
             "cruise_altitude_ft": 8000,
             "flight_duration_hours": 4.5,
         })
         assert resp.status_code == 201
         data = resp.json()
-        assert data["id"] == "egtk_lsgs-2026-02-21-8823"
+        assert data["id"].startswith(f"egtk_lsgs-{_FUTURE_DEPARTURE_DATE}-")
         assert data["route_name"] == "egtk_lsgs"
         assert data["waypoints"] == ["EGTK", "LFPB", "LSGS"]
-        assert data["target_date"] == "2026-02-21"
-        assert data["departure_time"] == "2026-02-21T09:00:00+00:00"
+        assert data["target_date"] == _FUTURE_DEPARTURE_DATE
+        assert data["departure_time"].startswith(f"{_FUTURE_DEPARTURE_DATE}T09:00:00")
 
     def test_create_flight_defaults(self, client):
+        _alt_future = (_NOW + timedelta(days=5)).replace(
+            hour=9, minute=0, second=0, microsecond=0,
+        )
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LSGS"],
-            "departure_time": "2026-03-01T09:00:00Z",
+            "departure_time": _alt_future.isoformat(),
         })
         assert resp.status_code == 201
         data = resp.json()
@@ -169,7 +183,7 @@ class TestFlightsAPI:
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
-            "departure_time": "2026-02-21T09:00:00Z",
+            "departure_time": _FUTURE_DEPARTURE_ISO,
             "cruise_altitude_ft": 8000,
             "flight_ceiling_ft": 18000,
             "flight_duration_hours": 4.5,
@@ -202,17 +216,18 @@ class TestFlightsAPI:
 
     def test_same_route_date_different_params(self, client, sample_flight):
         """Same route+date with different time/altitude creates a new flight."""
+        _afternoon = _FUTURE_DEPARTURE_DT.replace(hour=14)
         resp = client.post("/api/flights", json={
             "waypoints": ["EGTK", "LFPB", "LSGS"],
             "route_name": "egtk_lsgs",
-            "departure_time": "2026-02-21T14:00:00Z",  # afternoon instead of morning
+            "departure_time": _afternoon.isoformat(),
             "cruise_altitude_ft": 8000,
             "flight_ceiling_ft": 18000,
             "flight_duration_hours": 4.5,
         })
         assert resp.status_code == 201
         assert resp.json()["id"] != sample_flight.id
-        assert resp.json()["id"].startswith("egtk_lsgs-2026-02-21-")
+        assert resp.json()["id"].startswith(f"egtk_lsgs-{_FUTURE_DEPARTURE_DATE}-")
 
     def test_delete_flight_not_found(self, client):
         resp = client.delete("/api/flights/nonexistent")
@@ -233,7 +248,7 @@ class TestPacksAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["fetch_timestamp"] == "2026-02-19T18:00:00+00:00"  # serialized as ISO str
+        assert data[0]["fetch_timestamp"] == sample_pack.fetch_timestamp.isoformat()
         assert data[0]["has_gramet"] is True
 
     def test_list_packs_flight_not_found(self, client):
@@ -244,7 +259,7 @@ class TestPacksAPI:
         resp = client.get(f"/api/flights/{sample_pack.flight_id}/packs/latest")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["fetch_timestamp"] == "2026-02-19T18:00:00+00:00"
+        assert data["fetch_timestamp"] == sample_pack.fetch_timestamp.isoformat()
 
     def test_get_latest_pack_none(self, client, sample_flight):
         resp = client.get(f"/api/flights/{sample_flight.id}/packs/latest")
@@ -256,7 +271,7 @@ class TestPacksAPI:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["days_out"] == 2
+        assert data["days_out"] == sample_pack.days_out
         assert data["assessment"] == "GREEN"
 
     def test_get_pack_not_found(self, client, sample_flight):

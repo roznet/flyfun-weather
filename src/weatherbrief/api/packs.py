@@ -190,6 +190,7 @@ class PackMetaResponse(BaseModel):
     flight_id: str
     fetch_timestamp: str
     days_out: int
+    is_historical: bool = False
     has_gramet: bool
     has_skewt: bool
     has_digest: bool
@@ -216,6 +217,7 @@ def _meta_to_response(
         flight_id=meta.flight_id,
         fetch_timestamp=meta.fetch_timestamp.isoformat(),
         days_out=meta.days_out,
+        is_historical=meta.is_historical,
         has_gramet=meta.has_gramet,
         has_skewt=meta.has_skewt,
         has_digest=meta.has_digest,
@@ -406,6 +408,12 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
             logger.info("LLM digest daily limit reached for %s — skipping", user_id)
             do_llm_digest = False
 
+    # Detect historical mode: flight departure is in the past
+    is_historical = flight.departure_time < datetime.now(timezone.utc)
+    if is_historical:
+        do_gramet = False
+        do_llm_digest = False
+
     options = BriefingOptions(
         enrich_grib=True,
         fetch_gramet=do_gramet,
@@ -416,6 +424,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         user_id=user_id,
         airports_db_path=db_path,
         icing_severity_enhance=do_icing_enhance,
+        historical_mode=is_historical,
     )
     if icing_method:
         options.icing_method = icing_method
@@ -434,8 +443,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     if adv_config.get("params"):
         options.advisory_params = adv_config["params"]
 
-    # Fetch current model metadata to record in the pack
-    model_metadata = fetch_model_metadata()
+    # Fetch current model metadata to record in the pack (skip for historical)
+    model_metadata = None if is_historical else fetch_model_metadata()
 
     return route, fetch_ts, pack_path, options, model_metadata
 
@@ -540,15 +549,21 @@ async def refresh_briefing(
     """
     flight = _load_owned_flight(db, flight_id, user_id)
 
+    is_historical = flight.departure_time < datetime.now(timezone.utc)
+
     if force and not _can_force_refresh(request, db):
         raise HTTPException(status_code=403, detail="Force refresh requires admin access")
+
+    # Historical flights require admin access
+    if is_historical and not _can_force_refresh(request, db):
+        raise HTTPException(status_code=403, detail="Historical flight refresh requires admin access")
 
     db_path = request.app.state.db_path
     if not db_path:
         raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
-    # Smart check: skip pipeline if data is fresh
-    if not force:
+    # Smart check: skip pipeline if data is fresh (skip for historical flights)
+    if not force and not is_historical:
         packs = list_packs(db, flight_id)
         if packs:
             latest = packs[0]
@@ -629,15 +644,21 @@ async def refresh_briefing_stream(
     try:
         flight = _load_owned_flight(db, flight_id, user_id)
 
+        is_historical = flight.departure_time < datetime.now(timezone.utc)
+
         if force and not _can_force_refresh(request, db):
             raise HTTPException(status_code=403, detail="Force refresh requires admin access")
+
+        # Historical flights require admin access
+        if is_historical and not _can_force_refresh(request, db):
+            raise HTTPException(status_code=403, detail="Historical flight refresh requires admin access")
 
         db_path = request.app.state.db_path
         if not db_path:
             raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
-        # Smart check: skip pipeline if data is fresh
-        if not force:
+        # Smart check: skip pipeline if data is fresh (skip for historical flights)
+        if not force and not is_historical:
             packs = list_packs(db, flight_id)
             if packs:
                 latest = packs[0]

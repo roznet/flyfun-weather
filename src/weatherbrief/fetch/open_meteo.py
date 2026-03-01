@@ -55,21 +55,32 @@ _RETRY_BACKOFF = [10, 30, 60, 90]  # seconds — generous for expanded pressure 
 
 _FREE_HOST = "api.open-meteo.com"
 _CUSTOMER_HOST = "customer-api.open-meteo.com"
+_HISTORICAL_HOST = "historical-forecast-api.open-meteo.com"
 
 
 class OpenMeteoClient:
     """Client for fetching forecasts from the Open-Meteo API."""
 
-    def __init__(self, timeout: int = 30):
+    def __init__(self, timeout: int = 30, historical: bool = False):
         self.timeout = timeout
+        self._historical = historical
         self.session = requests.Session()
         self._api_key = os.environ.get("OPENMETEO_API_KEY")
         if self._api_key:
             logger.info("Using Open-Meteo customer API (paid plan)")
+        if historical:
+            logger.info("Using Open-Meteo historical forecast API")
 
     def _prepare_request(self, url: str, params: dict) -> tuple[str, dict]:
-        """Swap to customer API host and add apikey if configured."""
-        if self._api_key:
+        """Swap to historical or customer API host as needed.
+
+        Historical mode always uses the free historical host (the paid API key
+        is not applied) because the customer-API endpoint does not serve
+        archived forecasts.
+        """
+        if self._historical:
+            url = url.replace(_FREE_HOST, _HISTORICAL_HOST)
+        elif self._api_key:
             url = url.replace(_FREE_HOST, _CUSTOMER_HOST)
             params = {**params, "apikey": self._api_key}
         return url, params

@@ -67,3 +67,9 @@ class BriefingPackMeta(BaseModel):
     model_init_times: dict[str, int] = Field(default_factory=dict)
     grib_init_times: dict[str, int] = Field(default_factory=dict)
     models_skipped_region: list[str] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_historical(self) -> bool:
+        """True when the briefing was generated for a past departure date."""
+        return self.days_out < 0

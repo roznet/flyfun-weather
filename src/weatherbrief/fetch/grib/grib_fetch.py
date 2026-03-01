@@ -49,30 +49,37 @@ def gfs_idx_url(init_date: str, init_hour: int, forecast_hour: int) -> str:
 def find_latest_run(
     target_time: datetime,
     session: requests.Session | None = None,
+    as_of_time: datetime | None = None,
 ) -> tuple[str, int] | None:
     """Find the latest available GFS model run for a target time.
 
     Tries model cycles (00z, 06z, 12z, 18z) in reverse chronological order,
     checking that enough time has passed for publication.
 
+    Args:
+        target_time: The forecast target time.
+        session: Optional requests session.
+        as_of_time: If set, only consider runs initialized before this time
+            (for historical "as-of" briefings). Uses ``now`` if None.
+
     Returns:
         (init_date_YYYYMMDD, init_hour) or None if no run available.
     """
     sess = session or requests.Session()
-    now = datetime.now(timezone.utc)
+    reference_time = as_of_time or datetime.now(timezone.utc)
     cycles = [18, 12, 6, 0]
 
     # Check up to 2 days back
     for days_back in range(3):
-        check_date = now - timedelta(days=days_back)
+        check_date = reference_time - timedelta(days=days_back)
         date_str = check_date.strftime("%Y%m%d")
         for cycle in cycles:
             init_time = check_date.replace(
                 hour=cycle, minute=0, second=0, microsecond=0,
             )
-            if init_time > now:
+            if init_time > reference_time:
                 continue
-            hours_since_init = (now - init_time).total_seconds() / 3600
+            hours_since_init = (reference_time - init_time).total_seconds() / 3600
             if hours_since_init < GFS_PUBLISH_DELAY_HOURS:
                 continue
 

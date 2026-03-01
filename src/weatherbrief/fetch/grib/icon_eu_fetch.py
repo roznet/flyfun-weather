@@ -182,28 +182,35 @@ def fetch_icon_eu_single_level(
 def find_latest_icon_eu_run(
     target_time: datetime,
     session: requests.Session | None = None,
+    as_of_time: datetime | None = None,
 ) -> tuple[str, int] | None:
     """Find the latest available ICON-EU model run.
 
     Tries cycles in reverse chronological order, checking that enough time
     has passed for publication. Probes with HEAD request on a known file.
 
+    Args:
+        target_time: The forecast target time.
+        session: Optional requests session.
+        as_of_time: If set, only consider runs initialized before this time
+            (for historical "as-of" briefings). Uses ``now`` if None.
+
     Returns:
         (init_date_YYYYMMDD, init_hour) or None if no run available.
     """
     sess = session or requests.Session()
-    now = datetime.now(timezone.utc)
+    reference_time = as_of_time or datetime.now(timezone.utc)
 
     for days_back in range(2):
-        check_date = now - timedelta(days=days_back)
+        check_date = reference_time - timedelta(days=days_back)
         date_str = check_date.strftime("%Y%m%d")
         for cycle in ICON_EU_CYCLES:
             init_time = check_date.replace(
                 hour=cycle, minute=0, second=0, microsecond=0,
             )
-            if init_time > now:
+            if init_time > reference_time:
                 continue
-            hours_since_init = (now - init_time).total_seconds() / 3600
+            hours_since_init = (reference_time - init_time).total_seconds() / 3600
             if hours_since_init < ICON_EU_PUBLISH_DELAY_HOURS:
                 continue
 
