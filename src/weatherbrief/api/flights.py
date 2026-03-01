@@ -191,7 +191,7 @@ def create_flight(
     flight_duration_hours = req.flight_duration_hours if req.flight_duration_hours is not None else 0.0
 
     # Build a short hash from distinguishing parameters so the same route+date
-    # can have multiple flights with different time/altitude/etc.
+    # can have multiple flights with different time/altitude/user.
     params_hash = hashlib.sha256(
         json.dumps(
             {
@@ -199,6 +199,7 @@ def create_flight(
                 "alt": cruise_altitude_ft,
                 "ceil": flight_ceiling_ft,
                 "dur": flight_duration_hours,
+                "user": user_id,
             },
             sort_keys=True,
         ).encode()
