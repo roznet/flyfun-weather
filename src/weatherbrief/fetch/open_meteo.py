@@ -57,6 +57,16 @@ _FREE_HOST = "api.open-meteo.com"
 _CUSTOMER_HOST = "customer-api.open-meteo.com"
 _HISTORICAL_HOST = "historical-forecast-api.open-meteo.com"
 
+# Mapping from model-specific API paths to the models= param value
+# used by the historical forecast API (which only supports /v1/forecast).
+_HISTORICAL_MODEL_MAP: dict[str, str] = {
+    "/v1/ecmwf": "ecmwf_ifs025",
+    "/v1/gfs": "gfs_seamless",
+    "/v1/dwd-icon": "icon_seamless",
+    "/v1/meteofrance": "meteofrance_seamless",
+    "/v1/gem": "gem_seamless",
+}
+
 
 class OpenMeteoClient:
     """Client for fetching forecasts from the Open-Meteo API."""
@@ -76,10 +86,18 @@ class OpenMeteoClient:
 
         Historical mode always uses the free historical host (the paid API key
         is not applied) because the customer-API endpoint does not serve
-        archived forecasts.
+        archived forecasts.  Model-specific paths (e.g. ``/v1/gfs``) are
+        rewritten to ``/v1/forecast`` with a ``models=`` parameter because the
+        historical API only supports the generic forecast endpoint.
         """
         if self._historical:
             url = url.replace(_FREE_HOST, _HISTORICAL_HOST)
+            # Rewrite model-specific paths to /v1/forecast + models= param
+            for path, model_name in _HISTORICAL_MODEL_MAP.items():
+                if path in url:
+                    url = url.replace(path, "/v1/forecast")
+                    params = {**params, "models": model_name}
+                    break
         elif self._api_key:
             url = url.replace(_FREE_HOST, _CUSTOMER_HOST)
             params = {**params, "apikey": self._api_key}
