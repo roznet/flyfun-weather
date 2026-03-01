@@ -370,6 +370,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     do_icing_enhance = True
     icing_method = None
     cloud_method = None
+    convective_method = None
     if db is not None:
         from weatherbrief.api.preferences import load_autorouter_credentials
         from weatherbrief.api.profiles import load_profile_settings
@@ -390,6 +391,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         do_icing_enhance = profile_settings.get("icing_severity_enhance", False)
         icing_method = profile_settings.get("icing_method")
         cloud_method = profile_settings.get("cloud_method")
+        convective_method = profile_settings.get("convective_method")
         flight_rules = profile_settings.get("flight_rules")  # "vfr_only" or "vfr_ifr"
         adv_config = profile_settings.get("advisories", {})
 
@@ -432,6 +434,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         options.icing_method = icing_method
     if cloud_method:
         options.cloud_method = cloud_method
+    if convective_method:
+        options.convective_method = convective_method
     if models:
         options.models = models
     if advisory_models:
@@ -1280,7 +1284,7 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
 
     Shared by recalculate_advisories and altitude_table endpoints.
     Returns (enabled_ids, user_params, aggregation, adv_models, icing_method,
-    cloud_method, recompute_conds_callback).
+    cloud_method, convective_method, recompute_conds_callback).
     """
     from weatherbrief.api.profiles import load_profile_settings
     from weatherbrief.models import AdvisoryAggregation
@@ -1297,6 +1301,7 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
     adv_models = profile_settings.get("advisory_models")
     icing_method = profile_settings.get("icing_method")
     cloud_method = profile_settings.get("cloud_method")
+    convective_method = profile_settings.get("convective_method")
     db_path = getattr(request.app.state, "db_path", "")
 
     def recompute_conds(rp_analyses, cross_sections, advisory_model_names):
@@ -1308,7 +1313,7 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
             db_path=db_path, models=advisory_model_names,
         )
 
-    return enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, recompute_conds
+    return enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds
 
 
 @router.post("/{timestamp}/advisories/recalculate")
@@ -1335,7 +1340,7 @@ def recalculate_advisories(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available for recalculation")
 
-    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, recompute_conds = \
+    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     advisory_result = run_advisories_from_pack(
@@ -1349,6 +1354,7 @@ def recalculate_advisories(
         airport_conditions_recompute=recompute_conds,
         icing_method=icing_method,
         cloud_method=cloud_method,
+        convective_method=convective_method,
     )
 
     if advisory_result.manifest is None:
@@ -1379,7 +1385,7 @@ def altitude_table(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
 
-    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, recompute_conds = \
+    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     result = run_altitude_table_from_pack(
@@ -1394,6 +1400,7 @@ def altitude_table(
         airport_conditions_recompute=recompute_conds,
         icing_method=icing_method,
         cloud_method=cloud_method,
+        convective_method=convective_method,
     )
 
     return result.model_dump()

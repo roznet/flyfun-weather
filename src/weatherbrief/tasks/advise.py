@@ -45,8 +45,9 @@ def _resolve_analyses(
     rp_analyses: list[RoutePointAnalysis],
     icing_method: str | None,
     cloud_method: str | None,
+    convective_method: str | None = None,
 ) -> list[RoutePointAnalysis]:
-    """Return analyses with cloud/icing layers resolved per user preference.
+    """Return analyses with cloud/icing/convective layers resolved per user preference.
 
     Returns the original list unchanged (no copy) when no swap is needed.
     Otherwise builds new objects via ``model_copy()`` — the originals are
@@ -57,10 +58,13 @@ def _resolve_analyses(
     Icing resolution (``icing_method``):
         ``"ogimet_nwp"`` → use ``icing_ogimet_nwp_zones``.
         ``"sfip_nwp"``   → convert ``sfip_zones`` to ``IcingZone`` list.
+    Convective resolution (``convective_method``):
+        ``"nwp"`` → use ``convective_nwp`` (fall back to ``convective_thermo``).
     """
     swap_icing = icing_method and icing_method != "ogimet_dd"
     swap_cloud = cloud_method and cloud_method != "dd"
-    if not swap_icing and not swap_cloud:
+    swap_convective = convective_method and convective_method != "thermo"
+    if not swap_icing and not swap_cloud and not swap_convective:
         return rp_analyses
 
     resolved: list[RoutePointAnalysis] = []
@@ -97,6 +101,11 @@ def _resolve_analyses(
                         )
                         for z in sounding.sfip_zones
                     ]
+
+            # --- convective resolution ---
+            if swap_convective:
+                nwp = sounding.convective_nwp
+                updates["convective"] = nwp if nwp is not None else sounding.convective_thermo
 
             if updates:
                 new_soundings[key] = sounding.model_copy(update=updates)
@@ -180,6 +189,7 @@ def run_advisories(
     progress_callback: Callable[[str, str | None], None] | None = None,
     icing_method: str | None = None,
     cloud_method: str | None = None,
+    convective_method: str | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
 
@@ -189,7 +199,7 @@ def run_advisories(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
-    rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_method)
+    rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_method, convective_method)
 
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
 
@@ -254,6 +264,7 @@ def run_advisories_from_pack(
     airport_conditions_recompute: Callable | None = None,
     icing_method: str | None = None,
     cloud_method: str | None = None,
+    convective_method: str | None = None,
 ) -> AdvisoryResult:
     """Re-evaluate advisories from persisted pack_dir artifacts.
 
@@ -278,7 +289,7 @@ def run_advisories_from_pack(
     cross_sections = load_cross_sections(pack_dir)
     elevation = load_elevation_profile(pack_dir)
 
-    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_method)
+    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_method, convective_method)
 
     # Resolve flight_ceiling_ft from route or explicit param
     effective_ceiling = flight_ceiling_ft
@@ -356,6 +367,7 @@ def run_altitude_table_from_pack(
     airport_conditions_recompute: Callable | None = None,
     icing_method: str | None = None,
     cloud_method: str | None = None,
+    convective_method: str | None = None,
 ) -> AltitudeTableResult:
     """Compute altitude advisory table from persisted pack artifacts.
 
@@ -373,7 +385,7 @@ def run_altitude_table_from_pack(
     cross_sections = load_cross_sections(pack_dir)
     elevation = load_elevation_profile(pack_dir)
 
-    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_method)
+    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_method, convective_method)
 
     model_names = manifest.models
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)

@@ -14,6 +14,7 @@ export interface ProfileSettings {
   icing_severity_enhance: boolean | null;
   icing_method: string | null;
   cloud_method: string | null;
+  convective_method: string | null;
   flight_rules: string | null;
   advisories: AdvisoryPreferences | null;
 }

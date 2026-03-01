@@ -55,6 +55,7 @@ class BriefingOptions:
     icing_severity_enhance: bool = False  # enable RH/PW icing severity upgrades
     icing_method: str | None = None  # "ogimet_dd", "ogimet_nwp", "sfip_nwp"
     cloud_method: str | None = None  # "dd" or "nwp"
+    convective_method: str | None = None  # "thermo" or "nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     metar_taf_corridor_nm: float = 30  # corridor width for METAR/TAF search
     # Advisory preferences (from user profile)
@@ -256,6 +257,7 @@ def execute_briefing(
             progress_callback=progress_callback,
             icing_method=options.icing_method,
             cloud_method=options.cloud_method,
+            convective_method=options.convective_method,
         )
         route_advisories_manifest = advisory_result.manifest
 

@@ -136,6 +136,10 @@ export interface ConvectiveAssessment {
   k_index: number | null;
   total_totals: number | null;
   severe_modifiers: string[];
+  base_ft: number | null;
+  top_ft: number | null;
+  cover_pct: number | null;
+  method: string;
 }
 
 export interface CATRiskLayer {
@@ -194,6 +198,7 @@ export interface SoundingAnalysis {
   sfip_zones: SfipZone[];
   inversion_layers: InversionLayer[];
   convective: ConvectiveAssessment | null;
+  convective_nwp: ConvectiveAssessment | null;
   vertical_motion: VerticalMotionAssessment | null;
   cloud_cover_low_pct: number | null;
   cloud_cover_mid_pct: number | null;

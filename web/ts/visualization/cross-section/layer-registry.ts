@@ -10,14 +10,16 @@ import { sfipBandsLayer } from './layers/sfip-bands';
 import { lclLayer, lfcLayer, elLayer } from './layers/stability-lines';
 import { catBandsLayer } from './layers/cat-bands';
 import { inversionBandsLayer } from './layers/inversion-bands';
-import { convectiveBgLayer } from './layers/convective-bg';
+import { thermoConvectiveBgLayer } from './layers/thermo-convective-bg';
+import { nwpConvectiveBgLayer } from './layers/nwp-convective-bg';
 import { terrainFillLayer } from './layers/terrain-fill';
 import { nwpCloudBandsLayer } from './layers/nwp-cloud-bands';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
   // Rendering order: bands → terrain (covers below-surface) → lines → reference
   nwpCloudBandsLayer,
-  convectiveBgLayer,
+  thermoConvectiveBgLayer,
+  nwpConvectiveBgLayer,
   cloudBandsLayer,
   icingBandsLayer,
   icingOgimetNwpBandsLayer,
@@ -56,6 +58,7 @@ export interface LayerGroupInfo {
 const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
   clouds: { dd: 'cloud-bands', nwp: 'nwp-cloud-bands' },
   icing: { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands' },
+  convection: { thermo: 'thermo-convective-bg', nwp: 'nwp-convective-bg' },
 };
 
 /** Return the preferred layer for a group based on the user's preference method. */

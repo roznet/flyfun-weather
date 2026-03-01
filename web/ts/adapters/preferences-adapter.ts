@@ -32,6 +32,7 @@ export interface PreferencesResponse {
   icing_severity_enhance: boolean;
   icing_method: string;
   cloud_method: string;
+  convective_method: string;
 }
 
 export interface PreferencesUpdate {

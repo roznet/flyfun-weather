@@ -52,6 +52,7 @@ class PreferencesResponse(BaseModel):
     icing_severity_enhance: bool
     icing_method: str
     cloud_method: str
+    convective_method: str
 
 
 class PreferencesUpdate(BaseModel):
@@ -67,6 +68,7 @@ class PreferencesUpdate(BaseModel):
     icing_severity_enhance: bool | None = None
     icing_method: str | None = None
     cloud_method: str | None = None
+    convective_method: str | None = None
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -99,6 +101,7 @@ def _parse_service_toggles(raw: str) -> dict[str, bool]:
         "icing_severity_enhance": data.get("icing_severity_enhance", False),
         "icing_method": data.get("icing_method", "ogimet_dd"),
         "cloud_method": data.get("cloud_method", "dd"),
+        "convective_method": data.get("convective_method", "thermo"),
     }
 
 
@@ -187,6 +190,8 @@ def update_preferences(
         data["icing_method"] = body.icing_method
     if body.cloud_method is not None:
         data["cloud_method"] = body.cloud_method
+    if body.convective_method is not None:
+        data["convective_method"] = body.convective_method
 
     row.defaults_json = json.dumps(data)
 
@@ -262,7 +267,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_dd", "cloud_method": "dd"}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_dd", "cloud_method": "dd", "convective_method": "thermo"}
     return _parse_service_toggles(row.defaults_json)
 
 

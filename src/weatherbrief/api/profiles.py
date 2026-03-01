@@ -39,6 +39,7 @@ class ProfileSettings(BaseModel):
     icing_severity_enhance: bool | None = None
     icing_method: str | None = None  # "ogimet_dd", "ogimet_nwp", or "sfip_nwp"
     cloud_method: str | None = None  # "dd" or "nwp"
+    convective_method: str | None = None  # "thermo" or "nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     advisories: dict | None = None  # {enabled: {}, params: {}}
 

@@ -182,14 +182,26 @@ export function attachInteraction(
       if (lines.length > 0) sections.push(`Inversion<br>${lines.join('<br>')}`);
     }
 
-    // --- Convective ---
-    if (en('convective-bg') && point.convectiveRisk !== 'none') {
-      const alt = point.altitudeLines;
-      const baseFt = alt.lfcAltitudeFt ?? alt.lclAltitudeFt;
-      const topFt = alt.elAltitudeFt;
+    // --- Thermo Convective ---
+    if (en('thermo-convective-bg') && point.convectiveRisk !== 'none') {
+      const baseFt = point.convectiveBaseFt;
+      const topFt = point.convectiveTopFt;
       if (baseFt !== null && topFt !== null && altInBand(hoverAltFt, baseFt, topFt)) {
-        let line = `Convective: ${point.convectiveRisk}`;
+        let line = `Thermo Convective: ${point.convectiveRisk}`;
         if (point.capeSurfaceJkg > 0) line += ` (CAPE ${Math.round(point.capeSurfaceJkg)})`;
+        line += `<br>Tower: ${fmtFL(baseFt)}–${fmtFL(topFt)}`;
+        sections.push(line);
+      }
+    }
+
+    // --- NWP Convective ---
+    if (en('nwp-convective-bg') && point.nwpConvectiveRisk !== 'none') {
+      const baseFt = point.nwpConvectiveBaseFt;
+      const topFt = point.nwpConvectiveTopFt;
+      const coverPct = point.nwpConvectiveCoverPct;
+      if (baseFt !== null && topFt !== null && altInBand(hoverAltFt, baseFt, topFt)) {
+        let line = `NWP Convective: ${point.nwpConvectiveRisk}`;
+        if (coverPct !== null) line += ` (${Math.round(coverPct)}% cover)`;
         line += `<br>Tower: ${fmtFL(baseFt)}–${fmtFL(topFt)}`;
         sections.push(line);
       }
