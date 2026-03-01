@@ -239,11 +239,19 @@ class TestUsageSummary:
 
     def test_month_includes_older_today_does_not(self, db_session):
         """Month summary includes older data, today does not."""
-        three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
+        # Use yesterday at noon — always within the current month and not today,
+        # unless today is the 1st. In that case, fall back to 1 hour ago
+        # (still today but before _today_start() won't work).  Instead,
+        # pick a timestamp that is: (a) within this month, (b) before today.
+        # If today is the 1st, there IS no such timestamp — skip gracefully.
+        now = datetime.now(timezone.utc)
+        if now.day == 1:
+            pytest.skip("Cannot test month-vs-today on the 1st of the month")
+        yesterday = now - timedelta(days=1)
         row = BriefingUsageRow(
             user_id=DEV_USER_ID,
             flight_id="old-flight",
-            timestamp=three_days_ago,
+            timestamp=yesterday,
             open_meteo_calls=3,
             gramet_fetched=True,
             llm_digest=True,
