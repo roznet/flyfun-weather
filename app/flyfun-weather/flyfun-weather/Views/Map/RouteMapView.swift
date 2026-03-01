@@ -1,0 +1,70 @@
+import SwiftUI
+import MapKit
+
+/// Native map showing route polyline and waypoint annotations.
+struct RouteMapView: View {
+    let viewModel: BriefingViewModel
+    @State private var mapVM = RouteMapViewModel()
+
+    var body: some View {
+        Group {
+            if mapVM.routeCoordinates.isEmpty {
+                switch viewModel.snapshotState {
+                case .loading:
+                    ProgressView("Loading map data...")
+                case .error(let error):
+                    ContentUnavailableView("Map Unavailable", systemImage: "map", description: Text(error.localizedDescription))
+                default:
+                    ProgressView()
+                }
+            } else {
+                Map(initialPosition: .region(mapVM.mapRegion)) {
+                    MapPolyline(coordinates: mapVM.routeCoordinates)
+                        .stroke(.blue, lineWidth: 3)
+
+                    ForEach(mapVM.waypoints) { wp in
+                        Annotation(wp.id, coordinate: wp.coordinate) {
+                            VStack(spacing: 2) {
+                                Text(wp.id)
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                Circle()
+                                    .fill(.blue)
+                                    .frame(width: 8, height: 8)
+                            }
+                        }
+                    }
+                }
+                .mapStyle(.standard(elevation: .realistic))
+            }
+        }
+        .onChange(of: viewModel.snapshotState.isLoaded) {
+            if case .loaded(let snapshot) = viewModel.snapshotState {
+                mapVM.update(from: snapshot)
+            }
+        }
+        .onChange(of: viewModel.routeAnalysesState.isLoaded) {
+            if case .loaded(let analyses) = viewModel.routeAnalysesState {
+                mapVM.update(from: analyses)
+            }
+        }
+        .task {
+            // Immediate update if data already loaded
+            if case .loaded(let analyses) = viewModel.routeAnalysesState {
+                mapVM.update(from: analyses)
+            } else if case .loaded(let snapshot) = viewModel.snapshotState {
+                mapVM.update(from: snapshot)
+            }
+        }
+    }
+}
+
+// Helper to detect state changes
+extension LoadingState {
+    var isLoaded: Bool {
+        if case .loaded = self { return true }
+        return false
+    }
+}
