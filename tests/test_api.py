@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -88,17 +90,27 @@ def client(app_db, tmp_path, monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
+def _make_flight_id(route_name, date_str, *, time=9, alt=8000, ceil=18000, dur=4.5, user=DEV_USER_ID):
+    """Compute flight ID the same way as the API endpoint."""
+    h = hashlib.sha256(json.dumps(
+        {"alt": alt, "ceil": ceil, "dur": dur, "time": time, "user": user},
+        sort_keys=True,
+    ).encode()).hexdigest()[:4]
+    return f"{route_name}-{date_str}-{h}"
+
+
 @pytest.fixture
 def sample_flight(app_db):
     """Create and save a sample flight."""
     session = app_db()
     flight = Flight(
-        id=f"egtk_lsgs-{_FUTURE_DEPARTURE_DATE}-8823",
+        id=_make_flight_id("egtk_lsgs", _FUTURE_DEPARTURE_DATE),
         user_id=DEV_USER_ID,
         route_name="egtk_lsgs",
         waypoints=["EGTK", "LFPB", "LSGS"],
         departure_time=_FUTURE_DEPARTURE_DT,
         cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
         flight_duration_hours=4.5,
         created_at=_NOW - timedelta(days=1),
     )
