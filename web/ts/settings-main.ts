@@ -162,6 +162,10 @@ function populateProfileForm(profile: ProfileResponse): void {
   const cloudMethodSelect = document.getElementById('input-cloud-method') as HTMLSelectElement;
   if (cloudMethodSelect) cloudMethodSelect.value = s.cloud_method ?? 'dd';
 
+  // Convective method selector
+  const convectiveMethodSelect = document.getElementById('input-convective-method') as HTMLSelectElement;
+  if (convectiveMethodSelect) convectiveMethodSelect.value = s.convective_method ?? 'thermo';
+
   // Advisories
   const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
@@ -558,6 +562,7 @@ async function handleSave(): Promise<void> {
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? false;
   const icingMethod = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd';
   const cloudMethod = (document.getElementById('input-cloud-method') as HTMLSelectElement)?.value || 'dd';
+  const convectiveMethod = (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || 'thermo';
   const advisories = collectAdvisoryPrefs();
 
   // Build profile settings
@@ -573,6 +578,7 @@ async function handleSave(): Promise<void> {
     icing_severity_enhance: icingSeverityEnhance,
     icing_method: icingMethod,
     cloud_method: cloudMethod,
+    convective_method: convectiveMethod,
     advisories,
   };
 

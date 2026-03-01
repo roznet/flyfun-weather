@@ -1,15 +1,15 @@
-/** Convective risk visualization: tower columns from LCL to EL + hatching + CB labels.
+/** Thermo convective risk visualization: tower columns from LFC to EL + hatching + CB labels.
  *
- * When LCL (cloud base) and EL (cloud top) are available, draws a bounded
- * convective tower. Falls back to full-height column when altitude data is missing.
+ * Uses thermodynamic base_ft (LFC or LCL fallback) and top_ft (EL) from the
+ * ConvectiveAssessment. Falls back to full-height column when bounds are missing.
  */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint } from '../../types';
 
-// ---- Color palettes ----
+// ---- Color palettes (shared with NWP layer for visual consistency) ----
 
 /** Light background wash (full column) */
-const BG_WASH: Record<string, string> = {
+export const BG_WASH: Record<string, string> = {
   marginal: 'rgba(200, 200, 200, 0.04)',
   low: 'rgba(255, 235, 59, 0.06)',
   moderate: 'rgba(255, 152, 0, 0.08)',
@@ -17,8 +17,8 @@ const BG_WASH: Record<string, string> = {
   extreme: 'rgba(183, 28, 28, 0.14)',
 };
 
-/** Tower fill color (LCL→EL column) */
-const TOWER_FILL: Record<string, string> = {
+/** Tower fill color (base→top column) */
+export const TOWER_FILL: Record<string, string> = {
   marginal: 'rgba(180, 180, 180, 0.15)',
   low: 'rgba(255, 235, 59, 0.18)',
   moderate: 'rgba(255, 152, 0, 0.25)',
@@ -27,7 +27,7 @@ const TOWER_FILL: Record<string, string> = {
 };
 
 /** Hatching line color */
-const HATCH_COLOR: Record<string, string> = {
+export const HATCH_COLOR: Record<string, string> = {
   marginal: 'rgba(140, 140, 140, 0.15)',
   low: 'rgba(180, 160, 0, 0.20)',
   moderate: 'rgba(200, 100, 0, 0.35)',
@@ -36,7 +36,7 @@ const HATCH_COLOR: Record<string, string> = {
 };
 
 /** Top-of-tower strip color */
-const STRIP_COLOR: Record<string, string> = {
+export const STRIP_COLOR: Record<string, string> = {
   marginal: 'rgba(160, 160, 160, 0.4)',
   low: 'rgba(255, 235, 59, 0.5)',
   moderate: 'rgba(255, 152, 0, 0.75)',
@@ -45,7 +45,7 @@ const STRIP_COLOR: Record<string, string> = {
 };
 
 /** Tower outline/edge stroke */
-const EDGE_COLOR: Record<string, string> = {
+export const EDGE_COLOR: Record<string, string> = {
   marginal: 'rgba(140, 140, 140, 0.25)',
   low: 'rgba(180, 160, 0, 0.3)',
   moderate: 'rgba(200, 100, 0, 0.5)',
@@ -53,7 +53,7 @@ const EDGE_COLOR: Record<string, string> = {
   extreme: 'rgba(150, 20, 20, 0.7)',
 };
 
-const STRIP_HEIGHT = 5;
+export const STRIP_HEIGHT = 5;
 
 /** Minimum tower height in feet to consider the thermodynamic EL reliable. */
 const MIN_RELIABLE_TOWER_FT = 3000;
@@ -93,9 +93,9 @@ function estimateTowerTop(p: VizPoint, baseFt: number, thermodynamicElFt: number
   return Math.max(thermodynamicElFt, baseFt + 4000);
 }
 
-export const convectiveBgLayer: CrossSectionLayer = {
-  id: 'convective-bg',
-  name: 'Convective Risk',
+export const thermoConvectiveBgLayer: CrossSectionLayer = {
+  id: 'thermo-convective-bg',
+  name: 'Thermo Convective',
   group: 'convection',
   defaultEnabled: true,
   metricId: 'convective_risk',
@@ -117,7 +117,7 @@ export const convectiveBgLayer: CrossSectionLayer = {
         : (x + transform.distanceToX(data.points[i + 1].distanceNm)) / 2;
       const colWidth = xRight - xLeft;
 
-      const hasTowerBounds = p.altitudeLines.lclAltitudeFt != null && p.altitudeLines.elAltitudeFt != null;
+      const hasTowerBounds = p.convectiveBaseFt != null && p.convectiveTopFt != null;
 
       if (hasTowerBounds) {
         drawTower(ctx, transform, p, xLeft, xRight, colWidth, plotArea);
@@ -128,7 +128,7 @@ export const convectiveBgLayer: CrossSectionLayer = {
   },
 };
 
-/** Draw a bounded convective tower from LCL (base) to EL (top). */
+/** Draw a bounded convective tower from base to top. */
 function drawTower(
   ctx: CanvasRenderingContext2D,
   transform: CoordTransform,
@@ -139,15 +139,13 @@ function drawTower(
   plotArea: { left: number; top: number; width: number; height: number },
 ): void {
   const risk = p.convectiveRisk;
-  const lclFt = p.altitudeLines.lclAltitudeFt!;
-  const elFt = p.altitudeLines.elAltitudeFt!;
+  const rawBaseFt = p.convectiveBaseFt!;
+  const rawTopFt = p.convectiveTopFt!;
 
-  // Use LFC if available (free convection base), otherwise LCL
-  const baseFt = p.altitudeLines.lfcAltitudeFt ?? lclFt;
   // Estimate visual top — MetPy EL can be unreliably shallow on coarse levels
-  const topFt = estimateTowerTop(p, baseFt, elFt);
+  const topFt = estimateTowerTop(p, rawBaseFt, rawTopFt);
 
-  const yBase = transform.altitudeToY(baseFt);
+  const yBase = transform.altitudeToY(rawBaseFt);
   const yTop = transform.altitudeToY(topFt);
   const towerHeight = yBase - yTop; // Y is inverted (top < base)
 
@@ -199,7 +197,7 @@ function drawTower(
   }
 }
 
-/** Fallback: full-height column when LCL/EL not available. */
+/** Fallback: full-height column when base/top not available. */
 function drawFullHeightColumn(
   ctx: CanvasRenderingContext2D,
   p: VizPoint,
@@ -230,7 +228,7 @@ function drawFullHeightColumn(
 }
 
 /** Draw diagonal hatching lines within a rectangular region. */
-function drawHatching(
+export function drawHatching(
   ctx: CanvasRenderingContext2D,
   x: number, y: number,
   w: number, h: number,
@@ -259,7 +257,7 @@ function drawHatching(
 }
 
 /** Draw a "CB" marker label with risk-colored pill. */
-function drawCBLabel(
+export function drawCBLabel(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,

@@ -522,6 +522,11 @@ class ConvectiveAssessment(BaseModel):
     k_index: Optional[float] = None
     total_totals: Optional[float] = None
     severe_modifiers: list[str] = Field(default_factory=list)
+    # Unified interface fields (populated by both thermo and NWP methods)
+    base_ft: Optional[float] = None  # thermo: lfc_altitude_ft (or lcl fallback); NWP: convective_base_ft
+    top_ft: Optional[float] = None  # thermo: el_altitude_ft; NWP: convective_top_ft
+    cover_pct: Optional[float] = None  # NWP only; thermo: None
+    method: str = "thermo"  # "thermo" or "nwp"
 
 
 class CATRiskLayer(BaseModel):
@@ -558,6 +563,8 @@ class SoundingAnalysis(BaseModel):
     sfip_zones: list[SfipZone] = Field(default_factory=list)
     inversion_layers: list[InversionLayer] = Field(default_factory=list)
     convective: Optional[ConvectiveAssessment] = None
+    convective_thermo: Optional[ConvectiveAssessment] = None
+    convective_nwp: Optional[ConvectiveAssessment] = None
     precipitation: Optional[PrecipitationAssessment] = None
     vertical_motion: Optional[VerticalMotionAssessment] = None
     # NWP 3-level cloud cover from Open-Meteo (None for ECMWF)
@@ -575,11 +582,13 @@ class SoundingAnalysis(BaseModel):
 
     @model_validator(mode="after")
     def _sync_dd_sources(self) -> "SoundingAnalysis":
-        """Backward compat: populate DD source fields from resolved fields when absent."""
+        """Backward compat: populate source fields from resolved fields when absent."""
         if not self.dd_cloud_layers and self.cloud_layers:
             self.dd_cloud_layers = list(self.cloud_layers)
         if not self.icing_ogimet_dd_zones and self.icing_zones:
             self.icing_ogimet_dd_zones = list(self.icing_zones)
+        if self.convective_thermo is None and self.convective is not None:
+            self.convective_thermo = self.convective
         return self
 
 

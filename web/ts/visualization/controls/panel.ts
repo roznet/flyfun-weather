@@ -9,7 +9,7 @@ import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
 
 /** Groups that collapse to a single preferred-method toggle in compact mode. */
-const COMPACT_GROUPS = new Set(['clouds', 'icing']);
+const COMPACT_GROUPS = new Set(['clouds', 'icing', 'convection']);
 
 /** Explanatory text for layer group info buttons. */
 const GROUP_INFO: Record<string, string> = {
@@ -20,6 +20,14 @@ const GROUP_INFO: Record<string, string> = {
   <li><strong>DD Layers</strong> — derived from dewpoint depression in the sounding profile. When the gap between temperature and dewpoint is small (DD &lt; 2°C), air is near saturation and cloud is likely. This is a sounding-based signal independent of the model's cloud scheme.</li>
 </ul>
 <p>Both methods can be enabled simultaneously for comparison. They often agree in moist layers but may differ where NWP sub-grid clouds or local moisture are present.</p>`,
+
+  convection: `<h3>Convective Methods</h3>
+<p>The cross-section offers two convective risk overlays:</p>
+<ul>
+  <li><strong>Thermo</strong> — risk from thermodynamic indices (CAPE, CIN). Tower bounds from LFC/LCL (base) and EL (top). Zero risk when CAPE is zero, even if the NWP model parameterises convective clouds.</li>
+  <li><strong>NWP</strong> — risk from the NWP model's native convective cloud parameterisation (GFS convective cover %). Tower bounds are model-computed convective base/top. This typically matches what GRAMET shows.</li>
+</ul>
+<p>Enable both to compare. The advisory system uses whichever method you select in your profile settings.</p>`,
 
   icing: `<h3>Icing Methods</h3>
 <p>The cross-section offers three icing overlays, each combining an <strong>icing formula</strong> with a <strong>cloud detection method</strong>:</p>

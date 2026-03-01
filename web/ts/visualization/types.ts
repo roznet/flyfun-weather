@@ -113,6 +113,13 @@ export interface VizPoint {
   catLayers: VizCATLayer[];
   inversions: VizInversionLayer[];
   convectiveRisk: string;
+  convectiveBaseFt: number | null;
+  convectiveTopFt: number | null;
+  // NWP convective fields (null when GRIB2 unavailable)
+  nwpConvectiveRisk: string;
+  nwpConvectiveBaseFt: number | null;
+  nwpConvectiveTopFt: number | null;
+  nwpConvectiveCoverPct: number | null;
   // Map-specific scalars
   cloudCoverTotalPct: number;
   cloudCoverLowPct: number;

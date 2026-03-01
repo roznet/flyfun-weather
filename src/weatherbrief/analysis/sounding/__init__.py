@@ -151,7 +151,7 @@ def analyze_sounding(
         detect_cloud_layers,
         enrich_cloud_top_uncertainty,
     )
-    from weatherbrief.analysis.sounding.convective import assess_convective
+    from weatherbrief.analysis.sounding.convective import assess_convective_nwp, assess_convective_thermo
     from weatherbrief.analysis.sounding.icing import (
         assess_icing_zones_ogimet_dd,
         assess_icing_zones_ogimet_nwp,
@@ -237,8 +237,11 @@ def analyze_sounding(
         freezing_level_ft=indices.freezing_level_ft,
     )
 
-    # Convective assessment
-    convective = assess_convective(indices)
+    # Convective assessment (thermo + NWP)
+    convective = assess_convective_thermo(indices)
+    convective_nwp = assess_convective_nwp(
+        indices, hourly.nwp_cloud_diagnostics if hourly else None,
+    )
 
     # Vertical motion and turbulence assessment
     compute_stability_indicators(profile, derived_levels)
@@ -308,6 +311,8 @@ def analyze_sounding(
         sfip_zones=sfip_zones,
         inversion_layers=inversion_layers,
         convective=convective,
+        convective_thermo=convective,
+        convective_nwp=convective_nwp,
         precipitation=precipitation,
         vertical_motion=vertical_motion,
         cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,

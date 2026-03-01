@@ -170,6 +170,14 @@
               </select>
               <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which cloud detection feeds Cloud Tops, VFR Feasibility, VMC Cruise advisories. NWP falls back to DD when model lacks cloud layer boundaries.</span>
             </div>
+            <div class="form-group">
+              <label for="input-convective-method">Convective Method</label>
+              <select id="input-convective-method" class="input-select">
+                <option value="thermo">Thermo (thermodynamic indices)</option>
+                <option value="nwp">NWP (model convective cloud)</option>
+              </select>
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which convective risk assessment feeds advisories. Thermo uses CAPE/CIN; NWP uses the model's convective cloud cover parameterisation (matches GRAMET).</span>
+            </div>
           </div>
           <div class="form-row model-checkboxes">
             <label class="checkbox-label">

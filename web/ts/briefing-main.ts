@@ -38,7 +38,7 @@ async function init(): Promise<void> {
   import('./adapters/preferences-adapter').then(({ fetchModelCatalog, fetchPreferences }) => {
     fetchModelCatalog().then(initModelCatalog).catch(() => {});
     fetchPreferences().then((prefs) => {
-      preferredMethods = { clouds: prefs.cloud_method, icing: prefs.icing_method };
+      preferredMethods = { clouds: prefs.cloud_method, icing: prefs.icing_method, convection: prefs.convective_method };
       // Re-render controls so compact mode picks up the preferred methods
       renderVisualization(store.getState());
     }).catch(() => {});
