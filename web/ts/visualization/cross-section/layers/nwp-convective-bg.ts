@@ -35,12 +35,12 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
         : (x + transform.distanceToX(data.points[i + 1].distanceNm)) / 2;
       const colWidth = xRight - xLeft;
 
-      const hasTowerBounds = p.nwpConvectiveBaseFt != null && p.nwpConvectiveTopFt != null;
+      // NWP bounds are model-computed — skip if absent (no full-height fallback)
+      if (p.nwpConvectiveBaseFt == null || p.nwpConvectiveTopFt == null) continue;
 
-      if (hasTowerBounds) {
-        // NWP bounds are model-computed — trust them directly
-        const baseFt = p.nwpConvectiveBaseFt!;
-        const topFt = p.nwpConvectiveTopFt!;
+      {
+        const baseFt = p.nwpConvectiveBaseFt;
+        const topFt = p.nwpConvectiveTopFt;
         const yBase = transform.altitudeToY(baseFt);
         const yTop = transform.altitudeToY(topFt);
         const towerHeight = yBase - yTop;
@@ -89,22 +89,6 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
           const cx = (xLeft + xRight) / 2;
           const cy = yTop + towerHeight * 0.3;
           drawCBLabel(ctx, cx, cy, risk);
-        }
-      } else {
-        // Full-height column fallback
-        const fill = TOWER_FILL[risk];
-        if (fill) {
-          ctx.fillStyle = fill;
-          ctx.fillRect(xLeft, plotArea.top, colWidth, plotArea.height);
-        }
-        const hatchColor = HATCH_COLOR[risk];
-        if (hatchColor) {
-          drawHatching(ctx, xLeft, plotArea.top, colWidth, plotArea.height, hatchColor);
-        }
-        const stripColor = STRIP_COLOR[risk];
-        if (stripColor) {
-          ctx.fillStyle = stripColor;
-          ctx.fillRect(xLeft, plotArea.top, colWidth, STRIP_HEIGHT);
         }
       }
     }
