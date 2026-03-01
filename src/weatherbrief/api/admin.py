@@ -86,13 +86,15 @@ def _user_disk_bytes(data_dir: Path, user_id: str) -> int:
 @router.get("/users")
 def list_users(
     period: str = Query(default="30d", pattern="^(30d|all)$"),
+    limit: int = Query(default=25, ge=0),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """List all users with usage summaries and disk usage.
 
     ``period`` controls the usage window: ``30d`` (last 30 days, default)
-    or ``all`` (all time).
+    or ``all`` (all time).  ``limit`` caps the number of human users
+    returned (0 = unlimited).  Agents are always included.
     """
     from datetime import datetime, timedelta, timezone
 
@@ -198,9 +200,16 @@ def list_users(
             entry["token_last_used"] = ts["token_last_used"].isoformat() if ts["token_last_used"] else None
         user_list.append(entry)
 
-    # Aggregate summary from per-user usage stats
+    # Aggregate summary from ALL users (before limiting)
     total_briefings = sum(u["usage"]["briefings"] for u in user_list)
     total_tokens = sum(u["usage"]["total_tokens"] for u in user_list)
+
+    # Split humans / agents; limit humans only
+    humans = [u for u in user_list if u["type"] != "agent"]
+    agents = [u for u in user_list if u["type"] == "agent"]
+    total_humans = len(humans)
+    if limit > 0:
+        humans = humans[:limit]
 
     return {
         "period": period,
@@ -210,7 +219,8 @@ def list_users(
             "total_tokens": total_tokens,
             "total_disk_bytes": total_disk,
         },
-        "users": user_list,
+        "total_humans": total_humans,
+        "users": humans + agents,
     }
 
 

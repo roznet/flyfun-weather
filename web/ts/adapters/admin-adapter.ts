@@ -39,6 +39,7 @@ export type AdminPeriod = '30d' | 'all';
 export interface AdminUsersResponse {
   period: AdminPeriod;
   summary: AdminSummary;
+  total_humans: number;
   users: AdminUser[];
 }
 
@@ -53,8 +54,8 @@ export interface CreateTokenResponse {
   token_id: number;
 }
 
-export async function fetchAdminUsers(period: AdminPeriod = '30d'): Promise<AdminUsersResponse> {
-  return apiFetch<AdminUsersResponse>(`/admin/users?period=${period}`);
+export async function fetchAdminUsers(period: AdminPeriod = '30d', limit = 25): Promise<AdminUsersResponse> {
+  return apiFetch<AdminUsersResponse>(`/admin/users?period=${period}&limit=${limit}`);
 }
 
 export async function approveUser(userId: string): Promise<void> {

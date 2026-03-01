@@ -116,6 +116,8 @@ function setupAgentCreateButton(): void {
   document.getElementById('btn-create-agent')?.addEventListener('click', handleCreateAgent);
 }
 
+let currentLimit = 25;
+
 async function loadUsers(): Promise<void> {
   const summaryBar = document.getElementById('summary-bar')!;
   const pendingSection = document.getElementById('pending-section')!;
@@ -126,8 +128,8 @@ async function loadUsers(): Promise<void> {
   const errorEl = document.getElementById('error-message')!;
 
   try {
-    const response = await fetchAdminUsers(currentPeriod);
-    const { summary, users } = response;
+    const response = await fetchAdminUsers(currentPeriod, currentLimit);
+    const { summary, total_humans, users } = response;
 
     const humans = users.filter(u => u.type !== 'agent');
     const agents = users.filter(u => u.type === 'agent');
@@ -166,6 +168,28 @@ async function loadUsers(): Promise<void> {
     usersBody.querySelectorAll('.btn-approve').forEach(btn => {
       btn.addEventListener('click', handleApprove);
     });
+
+    // "Showing X of Y" footer
+    const footer = document.getElementById('users-footer')!;
+    if (currentLimit > 0 && humans.length < total_humans) {
+      footer.innerHTML = `Showing ${humans.length} of ${total_humans} users — <a href="#" id="btn-show-all">Show all</a>`;
+      footer.style.display = '';
+      document.getElementById('btn-show-all')!.addEventListener('click', (e) => {
+        e.preventDefault();
+        currentLimit = 0;
+        loadUsers();
+      });
+    } else if (currentLimit === 0 && total_humans > 25) {
+      footer.innerHTML = `Showing all ${total_humans} users — <a href="#" id="btn-show-less">Show less</a>`;
+      footer.style.display = '';
+      document.getElementById('btn-show-less')!.addEventListener('click', (e) => {
+        e.preventDefault();
+        currentLimit = 25;
+        loadUsers();
+      });
+    } else {
+      footer.style.display = 'none';
+    }
   } catch (err) {
     errorEl.textContent = `Failed to load users: ${err}`;
     errorEl.style.display = 'block';
