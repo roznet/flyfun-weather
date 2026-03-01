@@ -705,14 +705,18 @@ async function init(): Promise<void> {
     ui.renderLoading(s.loading);
 
     // Show refresh button only for the flight owner; disable for past flights
+    // (admins can still refresh past flights for historical briefings)
     const past = s.flight
       ? isFlightPast(s.flight.target_date, s.flight.target_time_utc, s.flight.flight_duration_hours)
       : false;
     if (refreshBtn && s.flight?.user_id === user.id) {
       refreshBtn.style.display = '';
-      if (past) {
+      if (past && !user.is_admin) {
         refreshBtn.disabled = true;
         refreshBtn.title = 'Flight is in the past';
+      } else if (past && user.is_admin) {
+        refreshBtn.disabled = false;
+        refreshBtn.title = 'Historical refresh (admin)';
       }
     }
 
