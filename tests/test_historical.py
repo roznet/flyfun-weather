@@ -11,7 +11,6 @@ import responses
 from weatherbrief.fetch.open_meteo import (
     OpenMeteoClient,
     _FREE_HOST,
-    _CUSTOMER_HISTORICAL_HOST,
     _HISTORICAL_HOST,
     _HISTORICAL_MODEL_MAP,
 )
@@ -85,34 +84,14 @@ def test_historical_client_rewrites_model_path():
 
 
 def test_historical_client_with_api_key():
-    """Historical + paid API key: uses customer historical host with API key."""
+    """Historical + paid API key: always uses free historical host (customer
+    historical requires Professional/Enterprise plan), API key not applied."""
     with patch.dict("os.environ", {"OPENMETEO_API_KEY": "test-key"}):
-        client = OpenMeteoClient(historical=True)
-    url = f"https://{_FREE_HOST}/v1/forecast"
-    new_url, params = client._prepare_request(url, {})
-    assert new_url == f"https://{_CUSTOMER_HISTORICAL_HOST}/v1/forecast"
-    assert params["apikey"] == "test-key"
-
-
-def test_historical_client_without_api_key():
-    """Historical without API key: uses free historical host, no API key."""
-    with patch.dict("os.environ", {}, clear=True):
         client = OpenMeteoClient(historical=True)
     url = f"https://{_FREE_HOST}/v1/forecast"
     new_url, params = client._prepare_request(url, {})
     assert new_url == f"https://{_HISTORICAL_HOST}/v1/forecast"
     assert "apikey" not in params
-
-
-def test_historical_client_with_api_key_rewrites_model_path():
-    """Historical + API key: customer historical host + model path rewrite + API key."""
-    with patch.dict("os.environ", {"OPENMETEO_API_KEY": "test-key"}):
-        client = OpenMeteoClient(historical=True)
-    url = f"https://{_FREE_HOST}/v1/dwd-icon"
-    new_url, params = client._prepare_request(url, {})
-    assert new_url == f"https://{_CUSTOMER_HISTORICAL_HOST}/v1/forecast"
-    assert params["models"] == "icon_seamless"
-    assert params["apikey"] == "test-key"
 
 
 # --- GFS find_latest_run with as_of_time ---

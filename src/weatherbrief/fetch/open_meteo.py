@@ -80,25 +80,19 @@ class OpenMeteoClient:
         if self._api_key:
             logger.info("Using Open-Meteo customer API (paid plan)")
         if historical:
-            host = _CUSTOMER_HISTORICAL_HOST if self._api_key else _HISTORICAL_HOST
-            logger.info("Using Open-Meteo historical forecast API (%s)", host)
+            logger.info("Using Open-Meteo historical forecast API (free tier)")
 
     def _prepare_request(self, url: str, params: dict) -> tuple[str, dict]:
         """Swap to historical or customer API host as needed.
 
-        Historical mode uses the historical forecast host.  When a paid API key
-        is available, the customer historical host is used for better
-        performance and higher rate limits.  Model-specific paths
-        (e.g. ``/v1/gfs``) are rewritten to ``/v1/forecast`` with a
-        ``models=`` parameter because the historical API only supports the
-        generic forecast endpoint.
+        Historical mode uses the free historical forecast host (the customer
+        historical endpoint requires a Professional/Enterprise plan).
+        Model-specific paths (e.g. ``/v1/gfs``) are rewritten to
+        ``/v1/forecast`` with a ``models=`` parameter because the historical
+        API only supports the generic forecast endpoint.
         """
         if self._historical:
-            if self._api_key:
-                url = url.replace(_FREE_HOST, _CUSTOMER_HISTORICAL_HOST)
-                params = {**params, "apikey": self._api_key}
-            else:
-                url = url.replace(_FREE_HOST, _HISTORICAL_HOST)
+            url = url.replace(_FREE_HOST, _HISTORICAL_HOST)
             # Rewrite model-specific paths to /v1/forecast + models= param
             for path, model_name in _HISTORICAL_MODEL_MAP.items():
                 if path in url:
