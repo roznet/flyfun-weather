@@ -7,7 +7,6 @@ or from persisted pack_dir artifacts.
 
 from __future__ import annotations
 
-import copy
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,54 +37,78 @@ class AdvisoryResult:
 
 
 # ---------------------------------------------------------------------------
-# Icing method swap
+# Non-mutating method resolution
 # ---------------------------------------------------------------------------
 
 
-def _apply_icing_method(rp_analyses: list[RoutePointAnalysis], method: str) -> None:
-    """Swap the chosen icing method's zones into icing_zones for advisory use.
+def _resolve_analyses(
+    rp_analyses: list[RoutePointAnalysis],
+    icing_method: str | None,
+    cloud_method: str | None,
+) -> list[RoutePointAnalysis]:
+    """Return analyses with cloud/icing layers resolved per user preference.
 
-    Ogimet-DD is the default (already in icing_zones), so nothing to do.
-    Ogimet-NWP: copy icing_ogimet_nwp_zones into icing_zones.
-    SFIP-NWP: convert sfip_zones into IcingZone format and copy into icing_zones.
+    Returns the original list unchanged (no copy) when no swap is needed.
+    Otherwise builds new objects via ``model_copy()`` — the originals are
+    never mutated.
+
+    Cloud resolution (``cloud_method``):
+        ``"nwp"`` → use ``nwp_cloud_layers`` (fall back to DD source if None).
+    Icing resolution (``icing_method``):
+        ``"ogimet_nwp"`` → use ``icing_ogimet_nwp_zones``.
+        ``"sfip_nwp"``   → convert ``sfip_zones`` to ``IcingZone`` list.
     """
-    if method == "ogimet_dd":
-        return
+    swap_icing = icing_method and icing_method != "ogimet_dd"
+    swap_cloud = cloud_method and cloud_method != "dd"
+    if not swap_icing and not swap_cloud:
+        return rp_analyses
+
+    resolved: list[RoutePointAnalysis] = []
     for rpa in rp_analyses:
-        for sounding in rpa.sounding.values():
-            if method == "ogimet_nwp":
-                sounding.icing_zones = list(sounding.icing_ogimet_nwp_zones)
-            elif method == "sfip_nwp":
-                sounding.icing_zones = [
-                    IcingZone(
-                        base_ft=z.base_ft,
-                        top_ft=z.top_ft,
-                        base_pressure_hpa=z.base_pressure_hpa,
-                        top_pressure_hpa=z.top_pressure_hpa,
-                        risk=z.risk,
-                        icing_type=z.icing_type,
-                        mean_temperature_c=z.mean_temperature_c,
-                        mean_rh_pct=z.mean_rh_pct,
-                        mean_icing_index=z.mean_sfip_100,
-                    )
-                    for z in sounding.sfip_zones
-                ]
+        new_soundings: dict = {}
+        changed = False
+        for key, sounding in rpa.sounding.items():
+            updates: dict = {}
 
+            # --- cloud resolution ---
+            if swap_cloud:
+                if cloud_method == "nwp" and sounding.nwp_cloud_layers is not None:
+                    updates["cloud_layers"] = list(sounding.nwp_cloud_layers)
+                else:
+                    # Fallback: restore DD source
+                    updates["cloud_layers"] = list(sounding.dd_cloud_layers)
 
-# ---------------------------------------------------------------------------
-# Cloud method swap
-# ---------------------------------------------------------------------------
+            # --- icing resolution ---
+            if swap_icing:
+                if icing_method == "ogimet_nwp":
+                    updates["icing_zones"] = list(sounding.icing_ogimet_nwp_zones)
+                elif icing_method == "sfip_nwp":
+                    updates["icing_zones"] = [
+                        IcingZone(
+                            base_ft=z.base_ft,
+                            top_ft=z.top_ft,
+                            base_pressure_hpa=z.base_pressure_hpa,
+                            top_pressure_hpa=z.top_pressure_hpa,
+                            risk=z.risk,
+                            icing_type=z.icing_type,
+                            mean_temperature_c=z.mean_temperature_c,
+                            mean_rh_pct=z.mean_rh_pct,
+                            mean_icing_index=z.mean_sfip_100,
+                        )
+                        for z in sounding.sfip_zones
+                    ]
 
+            if updates:
+                new_soundings[key] = sounding.model_copy(update=updates)
+                changed = True
+            else:
+                new_soundings[key] = sounding
 
-def _apply_cloud_method(rp_analyses: list[RoutePointAnalysis], method: str) -> None:
-    """Swap cloud layers based on preferred method. Falls back to DD if NWP unavailable."""
-    if method == "dd":
-        return
-    for rpa in rp_analyses:
-        for sounding in rpa.sounding.values():
-            if method == "nwp" and sounding.nwp_cloud_layers is not None:
-                sounding.cloud_layers = list(sounding.nwp_cloud_layers)
-            # else: keep DD cloud_layers (fallback)
+        if changed:
+            resolved.append(rpa.model_copy(update={"sounding": new_soundings}))
+        else:
+            resolved.append(rpa)
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -166,21 +189,7 @@ def run_advisories(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
-    # Deep-copy before method swaps so the caller's original analyses
-    # (and the manifest that shares them) are not mutated.  Without this,
-    # saving route_analyses.json after advisory evaluation would bake in
-    # the swapped icing/cloud data, making the DD vs NWP layer toggle in
-    # the frontend ineffective.
-    needs_swap = (
-        (icing_method and icing_method != "ogimet_dd")
-        or (cloud_method and cloud_method != "dd")
-    )
-    if needs_swap:
-        rp_analyses = copy.deepcopy(rp_analyses)
-        if icing_method and icing_method != "ogimet_dd":
-            _apply_icing_method(rp_analyses, icing_method)
-        if cloud_method and cloud_method != "dd":
-            _apply_cloud_method(rp_analyses, cloud_method)
+    rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_method)
 
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
 
@@ -269,10 +278,7 @@ def run_advisories_from_pack(
     cross_sections = load_cross_sections(pack_dir)
     elevation = load_elevation_profile(pack_dir)
 
-    if icing_method and icing_method != "ogimet_dd":
-        _apply_icing_method(manifest.analyses, icing_method)
-    if cloud_method and cloud_method != "dd":
-        _apply_cloud_method(manifest.analyses, cloud_method)
+    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_method)
 
     # Resolve flight_ceiling_ft from route or explicit param
     effective_ceiling = flight_ceiling_ft
@@ -291,11 +297,11 @@ def run_advisories_from_pack(
     airport_conds: AirportConditions | None = None
     if airport_conditions_recompute is not None:
         airport_conds = airport_conditions_recompute(
-            manifest.analyses, cross_sections, advisory_model_names,
+            analyses, cross_sections, advisory_model_names,
         )
     elif route and airports_db_path:
         airport_conds = _compute_airport_conditions(
-            manifest.analyses, cross_sections, advisory_model_names,
+            analyses, cross_sections, advisory_model_names,
             route, airports_db_path,
         )
 
@@ -304,7 +310,7 @@ def run_advisories_from_pack(
         from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
 
         ctx = RouteContext(
-            analyses=manifest.analyses,
+            analyses=analyses,
             cross_sections=cross_sections,
             elevation=elevation,
             models=advisory_model_names,
@@ -367,10 +373,7 @@ def run_altitude_table_from_pack(
     cross_sections = load_cross_sections(pack_dir)
     elevation = load_elevation_profile(pack_dir)
 
-    if icing_method and icing_method != "ogimet_dd":
-        _apply_icing_method(manifest.analyses, icing_method)
-    if cloud_method and cloud_method != "dd":
-        _apply_cloud_method(manifest.analyses, cloud_method)
+    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_method)
 
     model_names = manifest.models
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
@@ -379,13 +382,13 @@ def run_altitude_table_from_pack(
     airport_conds: AirportConditions | None = None
     if airport_conditions_recompute is not None:
         airport_conds = airport_conditions_recompute(
-            manifest.analyses, cross_sections, advisory_model_names,
+            analyses, cross_sections, advisory_model_names,
         )
 
     effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
 
     return compute_altitude_table(
-        analyses=manifest.analyses,
+        analyses=analyses,
         cross_sections=cross_sections,
         elevation=elevation,
         models=advisory_model_names,
