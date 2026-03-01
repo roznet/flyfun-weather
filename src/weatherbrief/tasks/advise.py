@@ -7,6 +7,7 @@ or from persisted pack_dir artifacts.
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -165,10 +166,21 @@ def run_advisories(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
-    if icing_method and icing_method != "ogimet_dd":
-        _apply_icing_method(rp_analyses, icing_method)
-    if cloud_method and cloud_method != "dd":
-        _apply_cloud_method(rp_analyses, cloud_method)
+    # Deep-copy before method swaps so the caller's original analyses
+    # (and the manifest that shares them) are not mutated.  Without this,
+    # saving route_analyses.json after advisory evaluation would bake in
+    # the swapped icing/cloud data, making the DD vs NWP layer toggle in
+    # the frontend ineffective.
+    needs_swap = (
+        (icing_method and icing_method != "ogimet_dd")
+        or (cloud_method and cloud_method != "dd")
+    )
+    if needs_swap:
+        rp_analyses = copy.deepcopy(rp_analyses)
+        if icing_method and icing_method != "ogimet_dd":
+            _apply_icing_method(rp_analyses, icing_method)
+        if cloud_method and cloud_method != "dd":
+            _apply_cloud_method(rp_analyses, cloud_method)
 
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
 
