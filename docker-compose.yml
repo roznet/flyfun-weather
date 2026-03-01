@@ -11,7 +11,7 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       DATA_DIR: /app/data
     volumes:
-      - ./data:/app/data
+      - ${HOST_DATA_DIR:-./data}:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
       interval: 30s
