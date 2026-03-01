@@ -4,9 +4,11 @@
 
 ## Vision
 
-The WeatherBrief Companion App turns every flight into a two-way weather conversation: before departure, you sync your briefing and carry it offline; in flight, you mark actual conditions with a few taps; after landing, those observations feed back into forecast verification and (if online) stream as PIREPs to other pilots.
+The WeatherBrief Companion App turns every flight into a two-way weather conversation: before departure, you sync your briefing and carry it offline; in flight, you mark actual conditions with a few taps; after landing, those observations feed back into forecast verification and stream as PIREPs to other pilots.
 
-The app is designed for the cockpit: one-handed operation, large tap targets, GPS-prepopulated fields, and a UI that assumes the pilot is busy. It works fully offline (most GA pilots have no connectivity) but lights up with real-time sharing when a Starlink or cellular connection is available.
+PIREPs are first-class — you don't need a planned flight to contribute. Just landed after local pattern work? Open the app, file a PIREP for the airport, and every pilot checking conditions there sees it. The community PIREP feed builds a real-time weather picture that complements official reports.
+
+The app is designed for the cockpit: one-handed operation, large tap targets, GPS-prepopulated fields, voice input via Siri, and a UI that assumes the pilot is busy. It works fully offline (most GA pilots have no connectivity) but lights up with real-time sharing when a Starlink or cellular connection is available.
 
 On the ground, the app doubles as a primary briefing viewer — with push notifications when briefings auto-refresh, native cross-section rendering, and a mobile-optimized UI that's better than the web on a phone or tablet.
 
@@ -59,12 +61,17 @@ The offline payload is lightweight — it contains derived analysis results, not
 - **Push notifications**: When the server auto-refreshes a briefing (scheduler detects new model data), send a push notification to the app so the pilot knows updated data is available. This makes the app a natural primary viewer for flight planning on the phone — check your briefing, get notified when it updates, review changes.
 - **Briefing viewer**: Native cross-section, advisory dashboard, route graph, and digest — optimized for tablet and phone display
 
-### 2. In-Flight Condition Reporting
+### 2. PIREP Reporting
 
-The design goal is to **maximize data collected while minimizing pilot effort**. There are two complementary modes:
+PIREPs are **first-class entities** — they exist independently of flights. A pilot doesn't need a planned flight in WeatherBrief to file a PIREP. You just landed after local pattern work? Open the app, tap "File PIREP", select the airport, report conditions. That PIREP goes into the database and is visible to every other user.
 
-1. **Proactive prompting**: The app watches the forecast, tracks position along the route, and prompts at transition points with pre-populated observations. The pilot's job reduces to: confirm, edit, or dismiss.
-2. **Pilot-initiated PIREPs**: The pilot can file a report at any time — to flag something unexpected, report conditions the app didn't prompt about, or simply because they want to share. The manual report is always one tap away and still comes pre-populated from the forecast for speed.
+When a PIREP *is* filed during an active flight session, it's linked to the flight for forecast verification — but the link is optional. The observation data model has `flight_id` and `session_id` as nullable fields.
+
+**Three ways to file a PIREP:**
+
+1. **Proactive prompting** (in-flight, with active flight session): The app watches the forecast, tracks position along the route, and prompts at transition points with pre-populated observations. The pilot's job reduces to: confirm, edit, or dismiss.
+2. **Pilot-initiated in-flight**: The pilot taps "Report" during a flight session. All fields pre-populated from the forecast at the current position.
+3. **Standalone PIREP** (no flight required): The pilot opens the app anytime — on the ground after landing, in the pattern, wherever — taps "File PIREP", picks the airport or uses current GPS location, and reports conditions. No flight plan, no session, no forecast context needed.
 
 #### Proactive Forecast-Driven Prompts
 
@@ -187,16 +194,26 @@ A scrollable timeline of all observations made during the flight, shown on the r
 - Post-flight: review of the entire flight's weather experience
 - Data source for forecast verification
 
-### 4. Online Sharing (Starlink / Cellular)
+### 4. Community PIREP Feed
 
-When connectivity is available, observations stream in real-time:
+All shared PIREPs form a community weather picture visible to every user, regardless of whether they have a flight planned.
+
+- **PIREP map**: A map view showing recent PIREPs as markers, color-coded by severity. Available from the app's main screen — no flight required. Filter by recency, distance from current location, or specific airport.
+- **Airport PIREPs**: Tap any airport to see recent PIREPs filed there or nearby. "What are conditions like at EGTF right now?"
+- **Route-aware**: When viewing a briefing, PIREPs near the route are highlighted automatically (same as today's METAR/TAF corridor display on the web).
+
+### 5. Online Sharing (Starlink / Cellular)
+
+When connectivity is available during an active flight, observations stream in real-time:
 
 - **Outbound**: Your observations are pushed to the WeatherBrief server as they're created
-- **Inbound**: You receive other pilots' observations along or near your route
+- **Inbound**: You receive other pilots' recent observations along or near your route
 - **Display**: Other pilots' reports appear as markers on your route view, color-coded by severity
 - **Graceful degradation**: If connection drops, queue locally and sync when reconnected. The app never blocks on network.
 
-### 5. Post-Flight: Forecast Verification
+Standalone PIREPs (filed on the ground) sync immediately if online, or queue for upload like in-flight observations.
+
+### 6. Post-Flight: Forecast Verification
 
 After landing, the app (or web UI) can compare the briefing forecast against actual observations:
 
@@ -454,8 +471,11 @@ struct AdvisoryResult: Codable {
 
 #### Phase 3 Models — Observations & Flight Sessions
 
+PIREPs are first-class entities. An observation can exist standalone (no flight, no session) or be linked to a flight session for forecast verification.
+
 ```swift
-/// A single weather observation made by the pilot
+/// A single weather observation (PIREP) made by a pilot.
+/// Can be standalone (no flight/session) or linked to an active flight session.
 @Model
 class Observation {
     let id: UUID
@@ -465,15 +485,18 @@ class Observation {
     var coordinate: CLLocationCoordinate2D {  // computed, not stored
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
-    let gpsAltitudeFt: Double
+    let gpsAltitudeFt: Double?            // nil for ground-based PIREPs without GPS alt
     let pressureAltitudeFt: Double?       // if pilot has set altimeter
     let groundSpeedKt: Double?
     let track: Double?
 
+    // Location context
+    var airportIcao: String?              // for ground-based or airport-referenced PIREPs (e.g. "EGTF")
+
     // How this observation was created
-    var source: ObservationSource          // .prompted / .manual / .passive
+    var source: ObservationSource          // .prompted / .manual / .passive / .standalone
     var promptTrigger: PromptTrigger?      // what triggered the prompt (if .prompted)
-    var forecastAtPoint: ForecastSummary?  // what the forecast predicted here (for verification)
+    var forecastAtPoint: ForecastSummary?  // what the forecast predicted here (nil for standalone PIREPs)
 
     // Reported conditions (all optional — only notable items)
     var flightRules: FlightRules?         // VMC / marginal / IMC
@@ -481,28 +504,31 @@ class Observation {
     var turbulence: TurbulenceSeverity?   // none → extreme (PIREP scale)
     var cloudCoverage: CloudCoverage?     // CLR / SCT / BKN / OVC
     var cloudBaseFt: Int?                 // estimated
+    var cloudTopFt: Int?                  // estimated (e.g. "tops around 1500'")
     var precipitation: PrecipitationType? // none / rain / snow / mixed / TS
     var visibility: VisibilityRange?      // >10km, 5–10, 1–5, <1
     var windComparison: WindComparison?   // as forecast / stronger / weaker / different
     var oatCelsius: Double?
     var notes: String?
 
-    // Pilot response to the prompt
-    var response: ObservationResponse     // .confirmed / .edited / .denied / .dismissed
+    // Pilot response to the prompt (nil for standalone PIREPs)
+    var response: ObservationResponse?    // .confirmed / .edited / .denied / .dismissed
 
     // Sync state
     var syncStatus: SyncStatus            // .local / .synced / .failed
     var isShared: Bool                    // whether pilot opted to share this PIREP
 
-    // Relationships
-    var session: FlightSession?           // SwiftData relationship
+    // Relationships — all optional (standalone PIREPs have none)
+    var session: FlightSession?           // SwiftData relationship (nil for standalone)
+    var flightId: String?                 // WeatherBrief flight ID (nil for standalone)
     var routePointIndex: Int?             // nearest route point at time of report
 }
 
 enum ObservationSource: String, Codable {
-    case prompted   // app proactively asked based on forecast
-    case manual     // pilot initiated via Report button
+    case prompted   // app proactively asked based on forecast (in-flight)
+    case manual     // pilot initiated via Report button (in-flight)
     case passive    // auto-recorded (track log, deviation, etc.)
+    case standalone // filed outside a flight session (ground-based, pattern work, etc.)
 }
 
 enum ObservationResponse: String, Codable {
@@ -594,6 +620,23 @@ The companion endpoint is a curated subset of the snapshot — derived analysis 
 
 #### Phase 3 — Observation & Flight Session Endpoints
 
+Observations (PIREPs) are **top-level entities** — they can be filed with or without a flight. The API reflects this: primary PIREP endpoints live at `/api/observations`, with convenience accessors under flights.
+
+**Observations (PIREPs) — top-level:**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/observations` | POST | Submit observations (batch). Accepts array of observations with offline UUIDs. Idempotent — re-submitting the same UUID is a no-op. Each observation may optionally include `flight_id` and `session_id`. |
+| `/api/observations` | GET | List recent shared observations. Params: `lat`, `lon`, `radius_nm` (default 30), `since` (timestamp), `airport_icao`. For the community PIREP feed. |
+| `/api/observations/nearby` | GET | Observations near a point or route. Params: `lat`, `lon`, `radius_nm`, `since`, or `flight_id` (uses the flight's route geometry for spatial matching). |
+| `/api/observations/mine` | GET | Current user's own observations (all, including unshared). |
+
+**Flight-scoped accessors (convenience):**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/flights/{id}/observations` | GET | Observations linked to this flight (own observations, all sessions). |
+
 **Flight sessions:**
 
 | Endpoint | Method | Purpose |
@@ -602,14 +645,6 @@ The companion endpoint is a curated subset of the snapshot — derived analysis 
 | `/api/flights/{id}/sessions/{sid}` | PATCH | End session (set end_time), update track summary |
 | `/api/flights/{id}/sessions` | GET | List sessions for a flight |
 | `/api/flights/{id}/sessions/{sid}` | GET | Session detail with observation summary |
-
-**Observations (PIREPs):**
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/flights/{id}/observations` | POST | Submit observations (batch). Accepts array of observations with offline UUIDs. Idempotent — re-submitting the same UUID is a no-op. |
-| `/api/flights/{id}/observations` | GET | List observations for a flight (own observations, all sessions) |
-| `/api/flights/{id}/observations/nearby` | GET | Other pilots' observations near this route. Params: `radius_nm` (default 30), `since` (timestamp). Server performs spatial query against active sessions on overlapping routes. |
 
 **Real-time (Phase 3c):**
 
@@ -637,23 +672,29 @@ class FlightSession(Base):
     track_summary: dict | None             # JSON: simplified track for route display
     created_at: datetime
 
-class FlightObservation(Base):
-    """Pilot weather observation during flight."""
+class Observation(Base):
+    """Pilot weather observation (PIREP). First-class entity — can exist
+    standalone or linked to a flight session."""
     id: UUID                               # client-generated, enables idempotent sync
-    flight_id: str
     user_id: int
-    session_id: UUID
     timestamp: datetime                   # UTC
     latitude: float
     longitude: float
-    gps_altitude_ft: float
+    gps_altitude_ft: float | None          # nil for ground-based PIREPs
     pressure_altitude_ft: float | None
 
+    # Location context
+    airport_icao: str | None               # for ground-based / airport-referenced PIREPs
+
+    # Optional flight linkage (null for standalone PIREPs)
+    flight_id: str | None
+    session_id: UUID | None
+
     # How this observation was created
-    source: str                           # prompted / manual / passive
+    source: str                           # prompted / manual / passive / standalone
     prompt_trigger: str | None            # what triggered it (if prompted)
-    response: str                         # confirmed / edited / denied / dismissed
-    forecast_summary: dict | None         # JSON: what the forecast predicted here
+    response: str | None                  # confirmed / edited / denied / dismissed (nil for standalone)
+    forecast_summary: dict | None         # JSON: what the forecast predicted here (nil for standalone)
 
     # Reported conditions
     flight_rules: str | None              # VMC / MVFR / IMC
@@ -661,25 +702,31 @@ class FlightObservation(Base):
     turbulence: str | None                # none / light / moderate / severe / extreme
     cloud_coverage: str | None            # CLR / SCT / BKN / OVC
     cloud_base_ft: int | None
+    cloud_top_ft: int | None              # e.g. "tops around 1500'"
     precipitation: str | None
     visibility: str | None
     wind_comparison: str | None
     oat_celsius: float | None
     notes: str | None
 
-    route_point_index: int | None         # snapped to nearest route point
+    route_point_index: int | None         # snapped to nearest route point (flight-linked only)
     is_shared: bool                       # whether pilot opted to share this PIREP
     created_at: datetime
 ```
 
-#### Spatial Query Design (Phase 3c)
+#### Spatial Query Design (Phase 3)
 
-For "nearby PIREPs" the server needs to efficiently find observations near a route. At expected scale (hundreds of concurrent flights, not thousands), a simple approach works:
+The server needs spatial queries for two use cases:
 
-1. **Active session registry**: In-memory dict of `session_id → (flight_id, route_bbox, route_points)`, populated when sessions start, removed when they end
-2. **Spatial filter**: For each new observation, iterate active sessions and check if the observation falls within `radius_nm` of any route point (great-circle distance). With hundreds of active sessions, this is sub-millisecond
-3. **WebSocket broadcast**: Push matching observations to the relevant session's WebSocket connection
-4. **Scaling**: If usage grows beyond ~1000 concurrent sessions, add a spatial index (R-tree via `shapely` or PostGIS). The in-memory approach avoids infrastructure dependencies initially
+1. **Community PIREP feed** (Phase 3a): "Show me recent PIREPs near EGTF" or "near lat/lon within 30nm". Simple DB query with great-circle distance filter. Index on `(timestamp, latitude, longitude)` is sufficient — the query is `WHERE timestamp > since AND haversine(lat, lon, obs.lat, obs.lon) < radius`. At expected data volumes this is fast without specialized spatial indexing.
+
+2. **Live in-flight push** (Phase 3c): "Push new PIREPs to active flight sessions whose routes pass nearby". This requires:
+   - **Active session registry**: In-memory dict of `session_id → (flight_id, route_bbox, route_points)`, populated when sessions start, removed when they end
+   - **Spatial filter**: For each new observation (from any source — in-flight or standalone), iterate active sessions and check if the observation falls within `radius_nm` of any route point (great-circle distance). With hundreds of active sessions, this is sub-millisecond
+   - **WebSocket broadcast**: Push matching observations to the relevant session's WebSocket connection
+   - **Scaling**: If usage grows beyond ~1000 concurrent sessions, add a spatial index (R-tree via `shapely` or PostGIS). The in-memory approach avoids infrastructure dependencies initially
+
+Note: standalone PIREPs filed on the ground also trigger the spatial broadcast — a pilot reporting "EGTF, base at 800'" immediately appears on any active flight session whose route passes near EGTF.
 
 ### Sync Engine (Phase 3a — Detailed Spec)
 
@@ -1072,13 +1119,21 @@ The renderer uses the same cross-section data structure as the web — the data 
 
 This phase has three sub-phases, each delivering incremental value:
 
-#### Phase 3a — Manual PIREP Filing + Offline Sync
+#### Phase 3a — PIREP Filing + Offline Sync
 
-The pilot can file PIREPs at any time during flight. Reports are stored locally and synced to the server when connectivity is available.
+Pilots can file PIREPs in two contexts: during an active flight session (linked to a flight) or standalone (no flight required). Both share the same observation model, report UI, and sync engine.
 
-**Server-side work**: Build flight session and observation endpoints (POST/GET). Observation storage in DB.
+**Server-side work**: Build top-level observation endpoints (`POST/GET /api/observations`), flight session endpoints, observation storage in DB.
 
 **App work**:
+
+- **Standalone PIREP filing** (no flight required)
+  - "File PIREP" button accessible from the app's main screen (always available, not just during flights)
+  - Location: airport ICAO picker (using RZFlight's `KnownAirports` for search/autocomplete) or current GPS location
+  - Simplified report sheet: flight rules, cloud base/tops, icing, turbulence, visibility, precipitation, free text
+  - No forecast pre-population (no flight context) — fields start blank or at common defaults
+  - Observation saved with `source = .standalone`, `flightId = nil`, `session = nil`
+  - Syncs to server via the same offline queue as in-flight observations
 
 - **Flight session lifecycle**
   - "Start Flight" button transitions the app from planning mode to flight mode
@@ -1091,7 +1146,7 @@ The pilot can file PIREPs at any time during flight. Reports are stored locally 
   - Current position, altitude, ground speed, track
   - Route progress tracking: snap GPS position to nearest route point
 
-- **Manual report UI**
+- **In-flight report UI**
   - Persistent "Report" button always visible during flight session
   - Full report sheet (all fields from "Full Report Sheet" UI mockup)
   - All fields pre-populated from forecast at current position (from synced cross-section data)
@@ -1119,7 +1174,15 @@ The pilot can file PIREPs at any time during flight. Reports are stored locally 
   - Voice-extracted values populate the same report card UI — highlighted fields show what was parsed from voice vs forecast default
   - Observation saved with `source = .manual` (same as tap-based manual reports)
 
-- **Passive data collection**
+- **Community PIREP feed**
+  - "PIREPs" tab accessible from main screen (no flight required)
+  - Map view with recent shared PIREPs as markers, color-coded by severity
+  - Filter by: airport ICAO, radius from current location, recency
+  - Tap a PIREP marker for details (who, what, when, where)
+  - When viewing a briefing, PIREPs near the route are shown alongside the route map
+  - Data source: `GET /api/observations?lat=&lon=&radius_nm=&since=`
+
+- **Passive data collection** (in-flight only)
   - Track log: GPS breadcrumbs at 30–60 second intervals
   - Route deviation detection: flag significant deviations from planned route (weather avoidance signal)
 
@@ -1200,6 +1263,7 @@ These are ideas from the original brainstorm, to be designed when Phase 3 is com
 - **3-phase roadmap**: (1) Online viewer → (2) Offline viewer → (3) PIREP system (3a manual + sync, 3b prompting, 3c live sharing).
 - **Real-time architecture**: WebSocket during active flight sessions for bidirectional PIREP flow. APNS for background notifications (briefing refreshes). Simple in-memory spatial matching on server, upgrade to PostGIS/R-tree if scale demands.
 - **Privacy**: PIREP sharing is opt-in with `is_shared` flag. Position broadcasting requires consent at session start.
+- **PIREPs are first-class**: Observations exist independently of flights. `flight_id` and `session_id` are optional. Pilots can file standalone PIREPs from the main screen without a planned flight. All shared PIREPs feed a community PIREP map visible to every user.
 
 ## Open Questions
 
