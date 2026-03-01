@@ -41,11 +41,12 @@ struct DigestView: View {
         }
 
         // Watch items
-        if let items = digest.watchItems, !items.isEmpty {
+        let watchItems = digest.watchItemsList
+        if !watchItems.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Watch Items")
                     .font(.headline)
-                ForEach(items, id: \.self) { item in
+                ForEach(watchItems, id: \.self) { item in
                     Label(item, systemImage: "exclamationmark.circle")
                         .font(.subheadline)
                         .foregroundStyle(.orange)
