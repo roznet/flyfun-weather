@@ -82,7 +82,8 @@ export function renderHistoryDropdown(
     ? '<option>No briefings yet</option>'
     : packs.map((p) => {
         const date = new Date(p.fetch_timestamp);
-        const label = `D-${p.days_out} (${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)`;
+        const dLabel = p.days_out >= 0 ? `D-${p.days_out}` : `D${p.days_out}`;
+        const label = `${dLabel} (${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)`;
         const selected = p.fetch_timestamp === currentTimestamp ? ' selected' : '';
         return `<option value="${p.fetch_timestamp}"${selected}>${label}</option>`;
       }).join('');

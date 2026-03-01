@@ -129,9 +129,13 @@ export async function refreshBriefingStream(
   flightId: string,
   onEvent: (event: RefreshStreamEvent) => void,
   force?: boolean,
+  asOfDate?: string,
 ): Promise<PackMeta> {
-  const forceParam = force ? '?force=true' : '';
-  const url = `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/refresh/stream${forceParam}`;
+  const params = new URLSearchParams();
+  if (force) params.set('force', 'true');
+  if (asOfDate) params.set('as_of_date', asOfDate);
+  const qs = params.toString();
+  const url = `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/refresh/stream${qs ? '?' + qs : ''}`;
   const resp = await fetch(url, {
     method: 'POST',
     credentials: 'same-origin',
