@@ -1533,6 +1533,10 @@ label {
 .display-compact [data-section="comparison"] {
   display: none;
 }
+.display-compact .advisory-models,
+.display-compact .advisory-desc {
+  display: none;
+}
 
 /* Metric hint for band sections */
 .metric-hint {
