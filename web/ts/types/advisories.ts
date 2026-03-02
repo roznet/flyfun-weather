@@ -90,6 +90,7 @@ export interface RouteAdvisoriesManifest {
   flight_ceiling_ft: number;
   total_distance_nm: number;
   models: string[];
+  aggregation?: 'worst' | 'majority';
   airport_conditions: AirportConditions | null;
 }
 
