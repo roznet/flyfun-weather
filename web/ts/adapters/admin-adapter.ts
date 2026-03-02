@@ -163,3 +163,25 @@ export interface FeedbackEntry {
 export async function fetchAdminFeedback(): Promise<FeedbackEntry[]> {
   return apiFetch<FeedbackEntry[]>('/feedback/admin');
 }
+
+// --- Performance Metrics ---
+
+export interface AdminMetricsWindow {
+  total_refreshes: number;
+  avg_elapsed_seconds: number | null;
+  p95_elapsed_seconds: number | null;
+  avg_queue_wait_seconds: number | null;
+  max_queue_wait_seconds: number | null;
+  by_trigger: Record<string, number>;
+}
+
+export interface AdminMetrics {
+  current: { active_refreshes: number; queued_refreshes: number };
+  last_24h: AdminMetricsWindow;
+  last_7d: AdminMetricsWindow;
+  last_30d: AdminMetricsWindow;
+}
+
+export async function fetchAdminMetrics(): Promise<AdminMetrics> {
+  return apiFetch<AdminMetrics>('/admin/metrics');
+}
