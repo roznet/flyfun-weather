@@ -1537,6 +1537,9 @@ label {
 .display-compact .advisory-desc {
   display: none;
 }
+.display-compact .airport-conditions-table {
+  display: none;
+}
 
 /* Metric hint for band sections */
 .metric-hint {
@@ -2357,6 +2360,20 @@ label {
   cursor: pointer;
   text-decoration: underline dotted;
   opacity: 0.9;
+}
+
+.airport-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.airport-summary-detail {
+  color: var(--text-muted);
+  font-size: 0.78rem;
 }
 
 .flight-cat-badge {

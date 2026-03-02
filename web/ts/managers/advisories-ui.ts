@@ -81,6 +81,117 @@ function formatRunwayComponents(rwy: RunwayWind, windDir: number): string {
   return `RW${rwy.runway_id} ${hwArrow}${hwVal} ${xwArrow}${xwVal}`;
 }
 
+/** Severity rank for flight categories — higher = worse. */
+const FLIGHT_CAT_SEVERITY: Record<FlightCategory, number> = {
+  vfr: 0, mvfr: 1, ifr: 2, lifr: 3,
+};
+
+/**
+ * Compute a summary condition from per-model conditions using the user's aggregation mode.
+ *
+ * - **majority**: find the most common flight category (ties broken by worst),
+ *   then pick the worst ceiling/vis/wind from that winning group.
+ * - **worst**: pick the worst category and worst values across all models.
+ */
+function computeSummaryCondition(
+  conditions: AirportModelCondition[],
+  aggregation: 'worst' | 'majority',
+): AirportModelCondition | null {
+  if (conditions.length === 0) return null;
+
+  let winningCat: FlightCategory;
+  let pool: AirportModelCondition[];
+
+  if (aggregation === 'majority') {
+    // Count votes per category
+    const counts = new Map<FlightCategory, number>();
+    for (const c of conditions) {
+      counts.set(c.flight_category, (counts.get(c.flight_category) ?? 0) + 1);
+    }
+    // Pick category with most votes; ties broken by worst severity
+    let bestCount = 0;
+    let bestSeverity = -1;
+    winningCat = conditions[0].flight_category;
+    for (const [cat, count] of counts) {
+      const sev = FLIGHT_CAT_SEVERITY[cat];
+      if (count > bestCount || (count === bestCount && sev > bestSeverity)) {
+        bestCount = count;
+        bestSeverity = sev;
+        winningCat = cat;
+      }
+    }
+    pool = conditions.filter(c => c.flight_category === winningCat);
+  } else {
+    // Worst: pick the worst category across all
+    winningCat = conditions[0].flight_category;
+    for (const c of conditions) {
+      if (FLIGHT_CAT_SEVERITY[c.flight_category] > FLIGHT_CAT_SEVERITY[winningCat]) {
+        winningCat = c.flight_category;
+      }
+    }
+    pool = conditions;
+  }
+
+  // Pick worst values from the pool (lowest ceiling/vis, highest wind)
+  let worstCeiling: number | null = null;
+  let worstVis: number | null = null;
+  let worstWindSpd: number | null = null;
+  let worstWindDir: number | null = null;
+  let worstGust: number | null = null;
+  let worstRwy: RunwayWind | null = null;
+  let allRwysCombined: RunwayWind[] = [];
+
+  for (const c of pool) {
+    if (c.ceiling_ft !== null) {
+      worstCeiling = worstCeiling === null ? c.ceiling_ft : Math.min(worstCeiling, c.ceiling_ft);
+    }
+    if (c.visibility_sm !== null) {
+      worstVis = worstVis === null ? c.visibility_sm : Math.min(worstVis, c.visibility_sm);
+    }
+    if (c.wind_speed_kt !== null) {
+      if (worstWindSpd === null || c.wind_speed_kt > worstWindSpd) {
+        worstWindSpd = c.wind_speed_kt;
+        worstWindDir = c.wind_direction_deg;
+        worstGust = c.wind_gust_kt;
+        worstRwy = c.best_runway;
+      }
+    }
+    allRwysCombined = allRwysCombined.concat(c.all_runways);
+  }
+
+  return {
+    model: 'Summary',
+    flight_category: winningCat,
+    ceiling_ft: worstCeiling,
+    visibility_sm: worstVis,
+    wind_speed_kt: worstWindSpd,
+    wind_direction_deg: worstWindDir,
+    wind_gust_kt: worstGust,
+    best_runway: worstRwy,
+    all_runways: allRwysCombined,
+  };
+}
+
+function renderSummaryRow(cond: AirportModelCondition): string {
+  const catLabel = cond.flight_category.toUpperCase();
+  const catClass = flightCatBadgeClass(cond.flight_category);
+  const vis = cond.visibility_sm !== null ? `vis ${cond.visibility_sm}sm` : '';
+  const ceil = cond.ceiling_ft !== null ? `ceil ${cond.ceiling_ft}ft` : 'CLR';
+  const wind = formatWind(cond);
+  const rwyComp = cond.best_runway && cond.wind_direction_deg != null
+    ? formatRunwayComponents(cond.best_runway, cond.wind_direction_deg)
+    : '';
+
+  const parts = [ceil, vis, wind !== '\u2014' ? wind : '', rwyComp].filter(Boolean).join(' \u00b7 ');
+
+  return `
+    <div class="airport-summary">
+      <span class="flight-cat-badge ${catClass}">${catLabel}</span>
+      <span class="airport-summary-detail">${parts}</span>
+    </div>
+  `;
+}
+
 function renderConditionRow(cond: AirportModelCondition): string {
   const catLabel = cond.flight_category.toUpperCase();
   const catClass = flightCatBadgeClass(cond.flight_category);
@@ -104,13 +215,20 @@ function renderConditionRow(cond: AirportModelCondition): string {
   `;
 }
 
-function renderAirportCard(summary: AirportConditionsSummary, role: 'Departure' | 'Arrival'): string {
+function renderAirportCard(
+  summary: AirportConditionsSummary,
+  role: 'Departure' | 'Arrival',
+  aggregation: 'worst' | 'majority',
+): string {
   if (summary.conditions.length === 0) return '';
 
+  const summaryCond = computeSummaryCondition(summary.conditions, aggregation);
+  const summaryHtml = summaryCond ? renderSummaryRow(summaryCond) : '';
   const rows = summary.conditions.map(renderConditionRow).join('');
   return `
     <div class="airport-card">
       <div class="airport-card-header">${role}: ${escapeHtml(summary.icao)}</div>
+      ${summaryHtml}
       <table class="airport-conditions-table">
         <tbody>${rows}</tbody>
       </table>
@@ -118,9 +236,9 @@ function renderAirportCard(summary: AirportConditionsSummary, role: 'Departure' 
   `;
 }
 
-function renderAirportConditions(conditions: AirportConditions): string {
-  const dep = renderAirportCard(conditions.departure, 'Departure');
-  const arr = renderAirportCard(conditions.arrival, 'Arrival');
+function renderAirportConditions(conditions: AirportConditions, aggregation: 'worst' | 'majority'): string {
+  const dep = renderAirportCard(conditions.departure, 'Departure', aggregation);
+  const arr = renderAirportCard(conditions.arrival, 'Arrival', aggregation);
   if (!dep && !arr) return '';
   return `<div class="airport-cards">${dep}${arr}</div>`;
 }
@@ -308,8 +426,9 @@ export function renderAdvisories(
   }
 
   // Airport conditions cards (above advisory grid)
+  const aggregation = manifest.aggregation ?? 'majority';
   const airportHtml = manifest.airport_conditions
-    ? renderAirportConditions(manifest.airport_conditions)
+    ? renderAirportConditions(manifest.airport_conditions, aggregation)
     : '';
 
   const cards = sorted.map(adv => renderAdvisoryCard(adv, catalog)).join('');
