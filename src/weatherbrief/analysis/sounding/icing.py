@@ -329,36 +329,45 @@ def _nwp_cloud_for_altitude(
 ) -> float | None:
     """Return the NWP cloud cover percentage for a given altitude.
 
-    When *nwp_cloud_diagnostics* is provided, the bulk cloud percentage is
-    only returned if the level actually falls within the NWP cloud layer's
-    base/top range (with a margin).  This prevents, e.g., 72% mid-cloud at
-    22,000ft from triggering icing at 10,000ft.
+    When *nwp_cloud_diagnostics* is provided, checks **all** diagnostic
+    layers (low/mid/high) and returns the highest cloud cover for any layer
+    whose base/top range (with margin) contains the altitude.  This handles
+    NWP cloud layers that extend beyond ICAO band boundaries — e.g. a low
+    cloud layer topping at 11,000 ft is correctly detected at 8,000 ft even
+    though 8,000 ft falls in the ICAO "mid" band.
 
-    When diagnostics are ``None`` or the layer lacks base/top, fall back to
+    When diagnostics are ``None`` or no layer has base/top, fall back to
     the existing bulk percentage behavior (backward compatible).
     """
-    # Determine the band and its bulk percentage + diagnostics layer
-    if altitude_ft < 6500:
-        bulk_pct = nwp_cloud_low_pct
-        diag_layer = nwp_cloud_diagnostics.low if nwp_cloud_diagnostics else None
-    elif altitude_ft < 20000:
-        bulk_pct = nwp_cloud_mid_pct
-        diag_layer = nwp_cloud_diagnostics.mid if nwp_cloud_diagnostics else None
-    else:
-        bulk_pct = nwp_cloud_high_pct
-        diag_layer = nwp_cloud_diagnostics.high if nwp_cloud_diagnostics else None
-
-    # If no diagnostics or layer lacks base/top, fall back to bulk %
-    if diag_layer is None or diag_layer.base_ft is None or diag_layer.top_ft is None:
-        return bulk_pct
-
-    # Altitude-aware check: only confirm cloud if level is within the layer
     margin = _NWP_CLOUD_ALTITUDE_MARGIN_FT
-    if (diag_layer.base_ft - margin) <= altitude_ft <= (diag_layer.top_ft + margin):
-        return bulk_pct
 
-    # NWP cloud exists in this band but not at this altitude
-    return 0.0
+    # When diagnostics are available, check all layers regardless of ICAO band
+    if nwp_cloud_diagnostics is not None:
+        candidates: list[tuple[float | None, object | None]] = [
+            (nwp_cloud_low_pct, nwp_cloud_diagnostics.low),
+            (nwp_cloud_mid_pct, nwp_cloud_diagnostics.mid),
+            (nwp_cloud_high_pct, nwp_cloud_diagnostics.high),
+        ]
+        best: float | None = None
+        any_diag = False
+        for bulk_pct, diag_layer in candidates:
+            if diag_layer is None or diag_layer.base_ft is None or diag_layer.top_ft is None:
+                continue
+            any_diag = True
+            if (diag_layer.base_ft - margin) <= altitude_ft <= (diag_layer.top_ft + margin):
+                pct = bulk_pct or 0.0
+                if best is None or pct > best:
+                    best = pct
+        if any_diag:
+            return best if best is not None else 0.0
+
+    # No diagnostics available — fall back to bulk ICAO band percentages
+    if altitude_ft < 6500:
+        return nwp_cloud_low_pct
+    elif altitude_ft < 20000:
+        return nwp_cloud_mid_pct
+    else:
+        return nwp_cloud_high_pct
 
 
 # NWP cloud cover threshold for the fallback icing pass — when the NWP model
