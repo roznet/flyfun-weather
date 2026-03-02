@@ -2,7 +2,7 @@
 
 // --- Settings ---
 
-export type VizLayout = 'cross-section' | 'map' | 'split';
+export type VizLayout = 'cross-section' | 'map' | 'split' | 'compare';
 
 export interface VizSettings {
   layout: VizLayout;
@@ -13,6 +13,8 @@ export interface VizSettings {
   routeGraphVisible: boolean;
   routeGraphLeftMetric: string;
   routeGraphRightMetric: string;  // 'none' to disable right axis
+  compareLayer: string;
+  compareModels: Record<string, boolean>;
 }
 
 // --- Coordinate Transform ---

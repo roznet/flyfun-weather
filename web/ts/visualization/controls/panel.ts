@@ -3,6 +3,7 @@
 import type { VizLayout, VizSettings } from '../types';
 import type { DisplayMode } from '../../types/metrics';
 import { getLayerGroups, getPreferredLayerForGroup } from '../cross-section/layer-registry';
+import { getComparableLayerGroups } from '../cross-section/compare-layers';
 import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
@@ -85,6 +86,7 @@ export function renderVizControls(
   // Layout toggle
   html += '<div class="viz-layout-toggle">';
   html += `<button class="btn-toggle${settings.layout === 'cross-section' ? ' active' : ''}" data-layout="cross-section" title="Cross-section only">X-Section</button>`;
+  html += `<button class="btn-toggle${settings.layout === 'compare' ? ' active' : ''}" data-layout="compare" title="Compare one layer across all models">Compare</button>`;
   html += `<button class="btn-toggle${settings.layout === 'split' ? ' active' : ''}" data-layout="split" title="Side-by-side">Split</button>`;
   html += `<button class="btn-toggle${settings.layout === 'map' ? ' active' : ''}" data-layout="map" title="Map only">Map</button>`;
   html += '</div>';
@@ -313,4 +315,93 @@ export function renderMapControls(
       callbacks.onWidthMetricChange(widthSelect.value);
     });
   }
+}
+
+// --- Compare mode controls ---
+
+export interface CompareControlCallbacks {
+  onLayoutChange: (layout: VizLayout) => void;
+  onCompareLayerChange: (layerId: string) => void;
+  onCompareModelToggle: (model: string, enabled: boolean) => void;
+}
+
+/** Render compare-mode controls: layout toggle, layer dropdown, model chips. */
+export function renderCompareControls(
+  container: HTMLElement,
+  settings: VizSettings,
+  callbacks: CompareControlCallbacks,
+  availableModels: string[],
+): void {
+  const layerGroups = getComparableLayerGroups();
+
+  let html = '<div class="viz-toolbar">';
+
+  // Top row: Layout toggle
+  html += '<div class="viz-toolbar-top">';
+
+  // Layout toggle (same 4 buttons, Compare active)
+  html += '<div class="viz-layout-toggle">';
+  html += `<button class="btn-toggle" data-layout="cross-section" title="Cross-section only">X-Section</button>`;
+  html += `<button class="btn-toggle active" data-layout="compare" title="Compare one layer across all models">Compare</button>`;
+  html += `<button class="btn-toggle" data-layout="split" title="Side-by-side">Split</button>`;
+  html += `<button class="btn-toggle" data-layout="map" title="Map only">Map</button>`;
+  html += '</div>';
+
+  // Layer selector
+  html += '<div class="viz-compare-layer-selector">';
+  html += '<span class="viz-toggle-label">Layer:</span>';
+  html += '<select id="compare-layer-select" class="viz-model-select">';
+  for (const group of layerGroups) {
+    html += `<optgroup label="${group.group}">`;
+    for (const layer of group.layers) {
+      const selected = layer.id === settings.compareLayer ? ' selected' : '';
+      html += `<option value="${layer.id}"${selected}>${layer.name}</option>`;
+    }
+    html += '</optgroup>';
+  }
+  html += '</select>';
+  html += '</div>';
+
+  html += '</div>'; // .viz-toolbar-top
+
+  // Model chips
+  if (availableModels.length > 0) {
+    html += '<div class="viz-compare-model-chips">';
+    html += '<span class="viz-toggle-label">Models:</span>';
+    for (const m of availableModels) {
+      const enabled = settings.compareModels[m] !== false;
+      const activeClass = enabled ? ' active' : '';
+      html += `<button class="btn-chip${activeClass}" data-compare-model="${m}">${modelLabel(m)}</button>`;
+    }
+    html += '</div>';
+  }
+
+  html += '</div>'; // .viz-toolbar
+
+  container.innerHTML = html;
+
+  // Wire layout toggle
+  container.querySelectorAll('[data-layout]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      callbacks.onLayoutChange((btn as HTMLElement).dataset.layout as VizLayout);
+    });
+  });
+
+  // Wire layer selector
+  const layerSelect = container.querySelector('#compare-layer-select') as HTMLSelectElement | null;
+  if (layerSelect) {
+    layerSelect.addEventListener('change', () => {
+      callbacks.onCompareLayerChange(layerSelect.value);
+    });
+  }
+
+  // Wire model chips
+  container.querySelectorAll('[data-compare-model]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const el = btn as HTMLElement;
+      const model = el.dataset.compareModel!;
+      const currentlyActive = el.classList.contains('active');
+      callbacks.onCompareModelToggle(model, !currentlyActive);
+    });
+  });
 }
