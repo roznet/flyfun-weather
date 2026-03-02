@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from euro_aip.storage.database_storage import DatabaseStorage
+from timezonefinder import TimezoneFinder
 
 from weatherbrief.models import RunwayEnd, Waypoint
+
+
+@lru_cache(maxsize=1)
+def _timezone_finder() -> TimezoneFinder:
+    return TimezoneFinder()
+
+
+def get_timezone(lat: float, lon: float) -> str | None:
+    """Return the IANA timezone name for a lat/lon, or None if unknown."""
+    return _timezone_finder().timezone_at(lat=lat, lng=lon)
 
 
 def resolve_waypoints(icao_codes: list[str], db_path: str) -> list[Waypoint]:

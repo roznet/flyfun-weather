@@ -36,7 +36,7 @@ import {
 } from '../helpers/metrics-helper';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
-import { $, escapeHtml, formatAlt, formatDate, formatTime, modelLabel, buildWindyUrl } from '../utils';
+import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl } from '../utils';
 
 // --- Header ---
 
@@ -58,7 +58,7 @@ export function renderHeader(
   }
 
   const dateStr = formatDate(flight.target_date);
-  const timeStr = formatTime(flight.target_time_utc);
+  const timeStr = formatDepartureTime(flight.departure_time);
   const alt = formatAlt(flight.cruise_altitude_ft);
 
   el.innerHTML = `

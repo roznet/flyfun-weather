@@ -220,6 +220,26 @@ label {
 
 .form-group.grow { flex: 1; }
 
+.time-input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.time-input-group select {
+  padding: 0.35rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.time-input-group .time-separator {
+  font-weight: bold;
+  color: var(--text-muted);
+}
+
 /* --- Page header --- */
 
 .page-header {

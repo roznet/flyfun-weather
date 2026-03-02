@@ -90,7 +90,7 @@ def client(app_db, tmp_path, monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _make_flight_id(route_name, date_str, *, time=9, alt=8000, ceil=18000, dur=4.5, user=DEV_USER_ID):
+def _make_flight_id(route_name, date_str, *, time="09:00", alt=8000, ceil=18000, dur=4.5, user=DEV_USER_ID):
     """Compute flight ID the same way as the API endpoint."""
     h = hashlib.sha256(json.dumps(
         {"alt": alt, "ceil": ceil, "dur": dur, "time": time, "user": user},

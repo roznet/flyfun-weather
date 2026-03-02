@@ -66,9 +66,19 @@ export function formatDate(iso: string): string {
   }
 }
 
-/** Format time as 4-digit UTC (e.g. "0800Z"). */
-export function formatTime(hour: number): string {
-  return `${hour.toString().padStart(2, '0')}00Z`;
+/** Format time as 4-digit UTC (e.g. "0800Z" or "0930Z"). */
+export function formatTime(hour: number, minute: number = 0): string {
+  return `${hour.toString().padStart(2, '0')}${minute.toString().padStart(2, '0')}Z`;
+}
+
+/** Extract hours+minutes from an ISO datetime string and format as "0930Z". */
+export function formatDepartureTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return formatTime(d.getUTCHours(), d.getUTCMinutes());
+  } catch {
+    return iso;
+  }
 }
 
 /** Format altitude for display (e.g. "FL085" or "5000ft"). */

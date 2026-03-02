@@ -266,7 +266,8 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   // Fill in the flight creation form
   await page.fill('#input-waypoints', 'EGTF EGLF');
   await page.fill('#input-date', '2026-02-25');
-  await page.fill('#input-time', '17');
+  await page.selectOption('#input-hour', '17');
+  await page.selectOption('#input-minute', '0');
   await page.fill('#input-altitude', '2000');
 
   // Submit the form — triggers POST and navigates to briefing
