@@ -2639,6 +2639,47 @@ label {
   flex: 1;
 }
 
+/* Compare layout: same as cross-section — show cross-section pane, hide map */
+.viz-layout-wrapper.layout-compare .viz-pane-map {
+  display: none;
+}
+
+/* Model chip toggles */
+.viz-compare-model-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.btn-chip {
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-chip.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.btn-chip:hover:not(.active) {
+  background: var(--bg);
+}
+
+/* Compare layer selector inline with toolbar */
+.viz-compare-layer-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
 .map-container {
   width: 100%;
   height: 450px;

@@ -39,6 +39,8 @@ function loadVizSettings(): VizSettings {
     routeGraphVisible: true,
     routeGraphLeftMetric: 'headwind',
     routeGraphRightMetric: 'temperature',
+    compareLayer: 'icing-bands',
+    compareModels: {},
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
@@ -48,6 +50,7 @@ function loadVizSettings(): VizSettings {
         ...defaults,
         ...saved,
         enabledLayers: { ...defaults.enabledLayers, ...saved.enabledLayers },
+        compareModels: { ...defaults.compareModels, ...saved.compareModels },
       };
     }
   } catch { /* ignore */ }
@@ -117,6 +120,9 @@ export interface BriefingState {
   setMapAltitude: (altitudeFt: number | null) => void;
   setRouteGraphVisible: (visible: boolean) => void;
   setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => void;
+  setCompareLayer: (layerId: string) => void;
+  setCompareModel: (model: string, enabled: boolean) => void;
+  initCompareModels: (models: string[]) => void;
 }
 
 export const briefingStore = createStore<BriefingState>((set, get) => ({
@@ -477,6 +483,30 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => {
     const key = axis === 'left' ? 'routeGraphLeftMetric' : 'routeGraphRightMetric';
     const updated = { ...get().vizSettings, [key]: metricId };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setCompareLayer: (layerId: string) => {
+    const updated = { ...get().vizSettings, compareLayer: layerId };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setCompareModel: (model: string, enabled: boolean) => {
+    const current = get().vizSettings;
+    const compareModels = { ...current.compareModels, [model]: enabled };
+    const updated = { ...current, compareModels };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  initCompareModels: (models: string[]) => {
+    const current = get().vizSettings;
+    if (Object.keys(current.compareModels).length > 0) return;
+    const compareModels: Record<string, boolean> = {};
+    for (const m of models) compareModels[m] = true;
+    const updated = { ...current, compareModels };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
