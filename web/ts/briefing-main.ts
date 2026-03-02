@@ -11,8 +11,11 @@ import { initInfoPopup, showMetricInfo, showPopupContent } from './components/in
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
-import { renderVizControls, renderRouteGraphControls, renderMapControls } from './visualization/controls/panel';
+import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
+import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
+import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
+import { getComparableLayer } from './visualization/cross-section/compare-layers';
 import { RouteGraphRenderer } from './visualization/route-graph/renderer';
 import { getMetricById, METRIC_NONE } from './visualization/route-graph/metrics';
 import { attachRouteGraphInteraction, type RouteGraphInteractionHandle } from './visualization/route-graph/interaction';
@@ -129,12 +132,14 @@ async function init(): Promise<void> {
   let routeGraphInteraction: RouteGraphInteractionHandle | null = null;
   let mapRenderer: RouteMapRenderer | null = null;
   let mapInteraction: MapInteractionHandle | null = null;
+  let compareRenderer: CompareSectionRenderer | null = null;
+  let compareInteraction: CompareInteractionHandle | null = null;
 
   /** Apply the CSS layout class to the layout wrapper. */
   function applyLayoutClass(layout: string): void {
     const wrapper = document.getElementById('viz-layout-wrapper');
     if (wrapper) {
-      wrapper.classList.remove('layout-cross-section', 'layout-map', 'layout-split');
+      wrapper.classList.remove('layout-cross-section', 'layout-map', 'layout-split', 'layout-compare');
       wrapper.classList.add(`layout-${layout}`);
     }
   }
@@ -162,8 +167,76 @@ async function init(): Promise<void> {
 
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile);
     const allLayers = getAllLayers();
-    const showCrossSection = layout !== 'map';
-    const showMap = layout !== 'cross-section';
+    const showCrossSection = layout === 'cross-section' || layout === 'split';
+    const showCompare = layout === 'compare';
+    const showMap = layout === 'map' || layout === 'split';
+    const availableModels = state.routeAnalyses?.models ?? [];
+
+    // --- Compare mode ---
+    if (showCompare) {
+      // Destroy cross-section renderer if exists
+      if (vizInteraction) { vizInteraction.destroy(); vizInteraction = null; }
+      if (vizRenderer) { vizRenderer.destroy(); vizRenderer = null; }
+      if (routeGraphInteraction) { routeGraphInteraction.destroy(); routeGraphInteraction = null; }
+      if (routeGraphRenderer) { routeGraphRenderer.destroy(); routeGraphRenderer = null; }
+
+      // Init compare models if empty
+      store.getState().initCompareModels(availableModels);
+      const compareModels = store.getState().vizSettings.compareModels;
+
+      // Extract VizRouteData for each active model
+      const datasets: CompareModelData[] = [];
+      for (const m of availableModels) {
+        if (compareModels[m] !== false) {
+          datasets.push({
+            model: m,
+            data: extractVizData(state.routeAnalyses!, m, state.flight?.flight_ceiling_ft, state.elevationProfile),
+          });
+        }
+      }
+
+      if (datasets.length > 0) {
+        // Create/reuse compare renderer
+        if (!compareRenderer) {
+          compareRenderer = new CompareSectionRenderer(canvasContainer);
+        }
+
+        const layer = getComparableLayer(state.vizSettings.compareLayer) ?? null;
+        compareRenderer.setModelData(datasets);
+        compareRenderer.setCompareLayer(layer);
+        compareRenderer.setSelectedPointIndex(state.selectedPointIndex);
+        compareRenderer.render();
+
+        // Attach or update compare interaction
+        if (compareInteraction) {
+          compareInteraction.update(datasets, layer);
+        } else {
+          compareInteraction = attachCompareInteraction(
+            compareRenderer, datasets, layer, {
+              onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
+            },
+          );
+        }
+      }
+
+      // Hide route graph in compare mode
+      if (routeGraphContainer) routeGraphContainer.style.display = 'none';
+
+      // Render compare controls
+      renderCompareControls(controlsContainer, state.vizSettings, {
+        onLayoutChange: (l) => store.getState().setLayout(l),
+        onCompareLayerChange: (layerId) => store.getState().setCompareLayer(layerId),
+        onCompareModelToggle: (model, enabled) => store.getState().setCompareModel(model, enabled),
+      }, availableModels);
+
+      // Hide route graph controls in compare mode
+      if (routeGraphControlsContainer) routeGraphControlsContainer.innerHTML = '';
+
+    } else {
+      // Not compare — destroy compare renderer if exists
+      if (compareInteraction) { compareInteraction.destroy(); compareInteraction = null; }
+      if (compareRenderer) { compareRenderer.destroy(); compareRenderer = null; }
+    }
 
     // --- Cross-section ---
     if (showCrossSection) {
@@ -351,26 +424,30 @@ async function init(): Promise<void> {
       if (mapRenderer) { mapRenderer.destroy(); mapRenderer = null; }
     }
 
-    // Render cross-section controls (above canvas)
-    const availableModels = state.routeAnalyses?.models ?? undefined;
-    renderVizControls(controlsContainer, state.vizSettings, {
-      onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
-      onLayoutChange: (layout) => store.getState().setLayout(layout),
-      onModelChange: (model) => store.getState().setSelectedModel(model),
-    }, state.selectedModel, availableModels, state.displayMode, preferredMethods);
+    // Render cross-section controls (above canvas) — skip in compare mode (rendered above)
+    if (!showCompare) {
+      renderVizControls(controlsContainer, state.vizSettings, {
+        onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
+        onLayoutChange: (l) => store.getState().setLayout(l),
+        onModelChange: (model) => store.getState().setSelectedModel(model),
+      }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods);
 
-    // Render route graph controls (below graph)
-    if (routeGraphControlsContainer && showCrossSection) {
-      renderRouteGraphControls(routeGraphControlsContainer, state.vizSettings, {
-        onRouteGraphToggle: (visible) => store.getState().setRouteGraphVisible(visible),
-        onRouteGraphMetricChange: (axis, metricId) => store.getState().setRouteGraphMetric(axis, metricId),
-      });
+      // Render route graph controls (below graph)
+      if (routeGraphControlsContainer && showCrossSection) {
+        renderRouteGraphControls(routeGraphControlsContainer, state.vizSettings, {
+          onRouteGraphToggle: (visible) => store.getState().setRouteGraphVisible(visible),
+          onRouteGraphMetricChange: (axis, metricId) => store.getState().setRouteGraphMetric(axis, metricId),
+        });
+      }
     }
   }
 
   function updateVizOverlay(state: BriefingState): void {
     if (vizRenderer && state.routeAnalyses) {
       vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
+    }
+    if (compareRenderer && state.routeAnalyses) {
+      compareRenderer.setSelectedPointIndex(state.selectedPointIndex);
     }
     if (routeGraphRenderer && state.routeAnalyses && state.vizSettings.routeGraphVisible) {
       routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
@@ -718,6 +795,7 @@ async function init(): Promise<void> {
     // Re-render viz canvases if cross-section was just expanded (canvas needs size)
     if (key === 'cross-section' && !section.classList.contains('collapsed')) {
       if (vizRenderer) vizRenderer.render();
+      if (compareRenderer) compareRenderer.render();
       if (routeGraphRenderer && store.getState().vizSettings.routeGraphVisible) routeGraphRenderer.render();
       if (mapRenderer) {
         mapRenderer.invalidateSize();
