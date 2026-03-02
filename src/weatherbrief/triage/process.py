@@ -91,12 +91,11 @@ def _run_claude(
     When *log_file* is set, stdout and stderr are streamed to that file
     in real time (suitable for ``tail -f``).
     """
-    output_format = "stream-json" if log_file else "json"
     cmd = [
         "claude",
         "-p",
         prompt,
-        "--output-format", output_format,
+        "--output-format", "json",
         "--json-schema", json.dumps(TRIAGE_SCHEMA),
         "--tools", "Read,Grep,Glob,Agent",
         "--model", "sonnet",
@@ -107,64 +106,31 @@ def _run_claude(
 
     t0 = time.monotonic()
 
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=worktree_path,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial = (exc.stdout or "") + "\n" + (exc.stderr or "")
+        if log_file:
+            _write_log(log_file, partial)
+        raise _TimeoutWithOutput(timeout, partial.strip()) from None
+
+    elapsed = time.monotonic() - t0
+    stdout = result.stdout
+
     if log_file:
-        fh = open(log_file, "w", buffering=1)  # noqa: SIM115  # line-buffered for tail -f
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=worktree_path,
-            )
-            # Stream lines to log file in real time, keep last result line
-            result_line = None
-            try:
-                for line in proc.stdout:  # type: ignore[union-attr]
-                    fh.write(line)
-                    fh.flush()
-                    stripped = line.strip()
-                    if stripped:
-                        result_line = stripped
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                partial = _read_partial(log_file)
-                raise _TimeoutWithOutput(timeout, partial) from None
-        finally:
-            fh.close()
+        _write_log(log_file, stdout)
 
-        elapsed = time.monotonic() - t0
-
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"claude CLI exited {proc.returncode} (see {log_file})"
-            )
-
-        # The last line of stream-json is the result event
-        stdout = result_line or _read_partial(log_file)
-    else:
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=worktree_path,
-            )
-        except subprocess.TimeoutExpired as exc:
-            partial = (exc.stdout or "") + "\n" + (exc.stderr or "")
-            raise _TimeoutWithOutput(timeout, partial.strip()) from None
-
-        elapsed = time.monotonic() - t0
-        stdout = result.stdout
-
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"claude CLI exited {result.returncode}: "
-                f"{result.stderr[:500] if result.stderr else '(no stderr)'}"
-            )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"claude CLI exited {result.returncode}: "
+            f"{result.stderr[:500] if result.stderr else '(no stderr)'}"
+        )
 
     return _parse_claude_output(stdout, elapsed)
 
@@ -179,6 +145,12 @@ def _read_partial(path: str, max_bytes: int = 50_000) -> str:
         return content
     except OSError:
         return ""
+
+
+def _write_log(path: str, content: str) -> None:
+    """Write content to a log file."""
+    with open(path, "w") as f:
+        f.write(content)
 
 
 class _TimeoutWithOutput(Exception):
