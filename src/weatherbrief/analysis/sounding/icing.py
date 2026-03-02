@@ -709,16 +709,19 @@ def assess_icing_zones_ogimet_nwp(
     nwp_cloud_high_pct: float | None = None,
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
 ) -> list[IcingZone]:
-    """Ogimet index scaled by NWP cloud fraction (Autorouter-style).
+    """Ogimet index scaled by all available NWP data.
 
-    For every level in the icing temperature range, computes:
-        effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)
+    Uses the full set of NWP outputs to modulate the Ogimet temperature-based
+    icing index:
 
-    Uses NWP model cloud cover as the cloud signal.  When NWP cloud
-    diagnostics with base/top boundaries are available (GFS, ICON-EU),
-    the altitude check is precise.  When diagnostics are absent (ECMWF,
-    etc.), the bulk band percentage is gated by DD cloud proximity to
-    prevent smearing cloud across the entire ICAO band.
+      effective = ogimet(T) × cloud_fraction(alt) × glaciation(CLW, ICMR)
+
+    - **Cloud fraction**: NWP cloud cover (%) at the level's altitude, using
+      diagnostic base/top boundaries when available (GFS, ICON-EU) or bulk
+      ICAO band percentages gated by DD cloud proximity otherwise.
+    - **Glaciation factor**: When GFS CLW and ICMR fields are available,
+      reduces the index for glaciated cloud (CLW → 0, ICMR dominant).
+      Falls back to 1.0 (no reduction) when microphysics data is absent.
     """
     if not levels:
         return []
@@ -758,6 +761,17 @@ def assess_icing_zones_ogimet_nwp(
 
         cloud_fraction = nwp_cloud / 100.0
         effective = raw_index * cloud_fraction
+
+        # Apply glaciation factor when CLW/ICMR microphysics are available.
+        # In glaciated cloud (CLW ≈ 0, all ice crystals) there is no
+        # supercooled liquid water and therefore no structural icing.
+        clw = lv.cloud_liquid_water_g_kg
+        icmr = lv.ice_mixing_ratio_g_kg
+        if clw is not None and icmr is not None:
+            total = clw + icmr
+            glac = (clw / total) if total > 0 else 0.0
+            effective *= glac
+
         if effective <= 0:
             continue
 
