@@ -33,6 +33,7 @@ def save_fetch_artifacts(
     route_points: list[RoutePoint],
     *,
     models_fetched: list[str] | None = None,
+    diagnostics: list[dict] | None = None,
 ) -> None:
     """Persist fetch-stage artifacts to *pack_dir*."""
     pack_dir.mkdir(parents=True, exist_ok=True)
@@ -56,6 +57,7 @@ def save_fetch_artifacts(
     meta = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "models_fetched": models_fetched or [],
+        "diagnostics": diagnostics or [],
     }
     meta_path = pack_dir / "fetch_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2))

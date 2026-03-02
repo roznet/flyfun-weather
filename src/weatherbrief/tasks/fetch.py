@@ -47,6 +47,59 @@ class FetchResult:
     grib_enriched: bool = False
     grib_enrichment_failed: bool = False
     grib_init_times: dict[str, int] = field(default_factory=dict)
+    diagnostics: list[dict] = field(default_factory=list)
+
+
+def _build_fetch_diagnostics(
+    *,
+    requested_models: list[str],
+    models_fetched: list[str],
+    models_skipped_region: list[str],
+    enrich_grib: bool,
+    grib_enriched: bool,
+    grib_enrichment_failed: bool,
+    grib_init_times: dict[str, int],
+) -> list[dict]:
+    """Build user-facing diagnostic messages from the completed fetch state."""
+    diags: list[dict] = []
+
+    # Models that failed to fetch (requested but neither fetched nor region-skipped)
+    fetched_or_skipped = set(models_fetched) | set(models_skipped_region)
+    for m in requested_models:
+        if m not in fetched_or_skipped:
+            diags.append({"level": "warn", "message": f"{m.upper()} forecast fetch failed"})
+
+    # Models skipped for region
+    for m in models_skipped_region:
+        diags.append({
+            "level": "info",
+            "message": f"{m.upper()} skipped (not available for this route region)",
+        })
+
+    # GRIB enrichment diagnostics
+    if enrich_grib:
+        if grib_enrichment_failed:
+            diags.append({
+                "level": "warn",
+                "message": "GRIB enrichment failed — cloud microphysics (CLW/ICMR) and cloud diagnostics not available",
+            })
+        elif grib_enriched:
+            # Per-model GRIB status
+            enriched_models = set(grib_init_times.keys())
+            grib_capable = {"gfs", "icon"}
+            for m in models_fetched:
+                if m in grib_capable and m not in enriched_models:
+                    diags.append({
+                        "level": "warn",
+                        "message": f"{m.upper()} GRIB enrichment unavailable — cloud microphysics and diagnostics not available for this model",
+                    })
+            for m in sorted(enriched_models):
+                diags.append({
+                    "level": "info",
+                    "message": f"{m.upper()} GRIB enrichment applied (cloud water + cloud diagnostics)",
+                })
+
+    return diags
 
 
 def run_fetch(
@@ -177,6 +230,17 @@ def run_fetch(
                 exc_info=True,
             )
 
+    # --- Build diagnostics ---
+    diagnostics = _build_fetch_diagnostics(
+        requested_models=[m.value for m in models],
+        models_fetched=models_fetched_names,
+        models_skipped_region=models_skipped_region,
+        enrich_grib=enrich_grib,
+        grib_enriched=grib_enriched,
+        grib_enrichment_failed=grib_enrichment_failed,
+        grib_init_times=grib_init_times,
+    )
+
     # --- Persist artifacts ---
     if pack_dir:
         from weatherbrief.tasks.artifacts import save_fetch_artifacts
@@ -184,6 +248,7 @@ def run_fetch(
         save_fetch_artifacts(
             pack_dir, cross_sections, elevation_profile, route_points,
             models_fetched=models_fetched_names,
+            diagnostics=diagnostics,
         )
 
     return FetchResult(
@@ -196,4 +261,5 @@ def run_fetch(
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
         grib_init_times=grib_init_times,
+        diagnostics=diagnostics,
     )

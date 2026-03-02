@@ -196,6 +196,14 @@ export function renderFreshnessBar(
   const basisParts = [...fetchedParts, ...skippedParts].join(', ');
   const basisLine = basisParts ? `<span class="freshness-basis">Based on ${basisParts}</span>` : '';
 
+  // Build diagnostics HTML (warn entries only — info is too noisy for the bar)
+  const diagEntries = (pack?.diagnostics || []).filter(d => d.level === 'warn');
+  const diagHtml = diagEntries.length > 0
+    ? `<span class="freshness-diagnostics">${diagEntries.map(d =>
+        `<span class="diag-${d.level}">${escapeHtml(d.message)}</span>`
+      ).join('')}</span>`
+    : '';
+
   const forceLink = isAdmin
     ? ' <a href="#" class="freshness-link" id="freshness-force-refresh">Force refresh</a>'
     : '';
@@ -208,11 +216,11 @@ export function renderFreshnessBar(
     }
     const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">Check again</a>`;
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}${forceLink}</span>${basisLine}`;
+    el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}${forceLink}</span>${basisLine}${diagHtml}`;
   } else {
     const staleStr = freshness.stale_models.map((m) => modelLabel(m)).join(', ');
     el.className = 'freshness-bar freshness-stale';
-    el.innerHTML = `<span>Updates available: ${staleStr}${forceLink}</span>${basisLine}`;
+    el.innerHTML = `<span>Updates available: ${staleStr}${forceLink}</span>${basisLine}${diagHtml}`;
   }
 
   // Wire event handlers
