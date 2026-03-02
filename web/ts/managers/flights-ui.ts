@@ -2,7 +2,7 @@
 
 import type { FlightResponse, PackMeta } from '../store/types';
 import type { RefreshEntry } from '../adapters/api-adapter';
-import { $, escapeHtml, formatDate, formatTime, formatAlt, isFlightPast } from '../utils';
+import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast } from '../utils';
 
 /** Assessment badge color class. */
 function assessmentClass(assessment: string | null): string {
@@ -42,7 +42,7 @@ export function renderFlightList(
     const waypoints = f.waypoints.length > 0
       ? f.waypoints.join(' → ')
       : f.route_name.replace(/_/g, ' → ').toUpperCase();
-    const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours);
+    const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
     const pastBadge = past ? '<span class="badge badge-past">Past</span> ' : '';
 
     let refreshBadge = '';
@@ -61,7 +61,7 @@ export function renderFlightList(
       <div class="flight-card" data-id="${escapeHtml(f.id)}">
         <div class="flight-header">
           ${pastBadge}<span class="flight-route">${escapeHtml(waypoints)}</span>
-          <span class="flight-date">${formatDate(f.target_date)} ${formatTime(f.target_time_utc)}</span>
+          <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
           <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
         </div>
         <div class="flight-status">

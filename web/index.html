@@ -38,8 +38,20 @@
             <input type="date" id="input-date" required>
           </div>
           <div class="form-group">
-            <label for="input-time">Time (UTC)</label>
-            <input type="number" id="input-time" value="9" min="0" max="23" step="1" style="width:60px">
+            <label for="input-hour">Time</label>
+            <div class="time-input-group">
+              <select id="input-hour"></select>
+              <span class="time-separator">:</span>
+              <select id="input-minute">
+                <option value="0">00</option>
+                <option value="15">15</option>
+                <option value="30">30</option>
+                <option value="45">45</option>
+              </select>
+              <select id="input-timezone">
+                <option value="UTC">UTC</option>
+              </select>
+            </div>
           </div>
           <div class="form-group">
             <label for="input-altitude">Altitude (ft)</label>

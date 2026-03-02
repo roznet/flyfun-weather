@@ -195,7 +195,7 @@ def create_flight(
     params_hash = hashlib.sha256(
         json.dumps(
             {
-                "time": target_hour,
+                "time": departure_time.strftime("%H:%M"),
                 "alt": cruise_altitude_ft,
                 "ceil": flight_ceiling_ft,
                 "dur": flight_duration_hours,
@@ -252,10 +252,21 @@ class RouteDistanceRequest(BaseModel):
         return normalized
 
 
+class WaypointInfo(BaseModel):
+    """Resolved waypoint with coordinates and timezone."""
+
+    icao: str
+    name: str
+    lat: float
+    lon: float
+    timezone: str | None = None
+
+
 class RouteDistanceResponse(BaseModel):
     """Route distance computed from waypoints."""
 
     total_distance_nm: float
+    waypoints: list[WaypointInfo] = []
 
 
 @router.post("/route-distance", response_model=RouteDistanceResponse)
@@ -266,7 +277,7 @@ def compute_route_distance(
 ):
     """Compute total great-circle distance for a list of waypoints."""
     from euro_aip.models.navpoint import NavPoint
-    from weatherbrief.airports import resolve_waypoints
+    from weatherbrief.airports import get_timezone, resolve_waypoints
 
     db_path = getattr(request.app.state, "db_path", "")
     if not db_path:
@@ -284,7 +295,21 @@ def compute_route_distance(
         _, leg_distance = nav_a.haversine_distance(nav_b)
         total_nm += leg_distance
 
-    return RouteDistanceResponse(total_distance_nm=round(total_nm, 1))
+    waypoint_infos = [
+        WaypointInfo(
+            icao=wp.icao,
+            name=wp.name,
+            lat=wp.lat,
+            lon=wp.lon,
+            timezone=get_timezone(wp.lat, wp.lon),
+        )
+        for wp in resolved
+    ]
+
+    return RouteDistanceResponse(
+        total_distance_nm=round(total_nm, 1),
+        waypoints=waypoint_infos,
+    )
 
 
 @router.get("/{flight_id}", response_model=FlightResponse)

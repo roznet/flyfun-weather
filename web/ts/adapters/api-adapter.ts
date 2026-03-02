@@ -70,8 +70,17 @@ export async function updatePrivacy(
   );
 }
 
+export interface WaypointInfo {
+  icao: string;
+  name: string;
+  lat: number;
+  lon: number;
+  timezone: string | null;
+}
+
 export interface RouteDistanceResponse {
   total_distance_nm: number;
+  waypoints: WaypointInfo[];
 }
 
 export async function fetchRouteDistance(waypoints: string[]): Promise<RouteDistanceResponse> {

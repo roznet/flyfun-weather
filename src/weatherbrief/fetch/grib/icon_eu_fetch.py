@@ -288,13 +288,21 @@ def compute_icon_eu_flight_window_hours(
     )
     dep_dt = departure_time
 
-    n_hours = max(1, math.ceil(flight_duration_hours) + 1)
+    extra = 1 if dep_dt.minute > 0 else 0
+    n_hours = max(1, math.ceil(flight_duration_hours) + 1 + extra)
     fhours: set[int] = set()
     for h in range(n_hours):
         utc = dep_dt + timedelta(hours=h)
         delta = (utc - init_dt).total_seconds() / 3600
         delta = max(0.0, delta)
         fhours.add(_snap_to_icon_eu_grid(delta))
+
+    # Include the floor hour so non-round departure times get coverage
+    if dep_dt.minute > 0:
+        floor_utc = dep_dt.replace(minute=0, second=0, microsecond=0)
+        floor_delta = (floor_utc - init_dt).total_seconds() / 3600
+        if floor_delta >= 0:
+            fhours.add(_snap_to_icon_eu_grid(floor_delta))
 
     return sorted(fhours)
 
