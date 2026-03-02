@@ -378,6 +378,23 @@ label {
   margin-left: 0.5rem;
 }
 
+.freshness-diagnostics {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+
+.diag-warn {
+  color: var(--amber);
+}
+
+.diag-info {
+  color: var(--text-muted);
+}
+
 /* --- Auto-refresh (inline in toolbar) --- */
 
 .auto-refresh-inline {
