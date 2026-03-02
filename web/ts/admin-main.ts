@@ -3,8 +3,9 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
-  revokeAgent, fetchAdminFeedback,
+  revokeAgent, fetchAdminFeedback, fetchAdminMetrics,
   type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
+  type AdminMetrics, type AdminMetricsWindow,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 import { initTheme } from './theme';
@@ -40,6 +41,8 @@ function setupPeriodToggle(): void {
   });
 }
 
+let perfLoaded = false;
+
 function setupTabs(): void {
   document.querySelectorAll('.settings-tabs .tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -51,6 +54,11 @@ function setupTabs(): void {
       // Show selected panel, hide others
       document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
       document.getElementById(tabId)?.classList.add('active');
+      // Lazy-load performance tab
+      if (tabId === 'tab-performance' && !perfLoaded) {
+        perfLoaded = true;
+        loadPerformance();
+      }
     });
   });
 }
@@ -396,6 +404,74 @@ function renderUserRow(u: AdminUser): string {
       <td class="num">${tokens}</td>
       <td class="num">${formatBytes(u.disk_usage_bytes)}</td>
     </tr>`;
+}
+
+function fmtSec(v: number | null): string {
+  if (v == null) return '-';
+  if (v < 60) return `${v.toFixed(1)}s`;
+  const mins = Math.floor(v / 60);
+  const secs = Math.round(v % 60);
+  return `${String(mins).padStart(2, '0')}m${String(secs).padStart(2, '0')}s`;
+}
+
+async function loadPerformance(): Promise<void> {
+  const container = document.getElementById('perf-content')!;
+  container.innerHTML = '<p class="muted" style="text-align:center;padding:2rem;">Loading metrics...</p>';
+  try {
+    const m = await fetchAdminMetrics();
+    container.innerHTML = renderPerformance(m);
+  } catch (err) {
+    container.innerHTML = `<p style="color:#dc3545;text-align:center;padding:1rem;">Failed to load metrics: ${err}</p>`;
+  }
+}
+
+function renderPerformance(m: AdminMetrics): string {
+  const windowRow = (label: string, w: AdminMetricsWindow): string => `
+    <tr>
+      <td>${label}</td>
+      <td class="num">${w.total_refreshes}</td>
+      <td class="num">${fmtSec(w.avg_elapsed_seconds)}</td>
+      <td class="num">${fmtSec(w.p95_elapsed_seconds)}</td>
+      <td class="num">${fmtSec(w.avg_queue_wait_seconds)}</td>
+      <td class="num">${fmtSec(w.max_queue_wait_seconds)}</td>
+    </tr>`;
+
+  const triggerCells = Object.entries(m.last_24h.by_trigger)
+    .map(([k, v]) => `<div class="summary-card"><div class="value">${v}</div><div class="label">${escapeHtml(k)}</div></div>`)
+    .join('');
+
+  return `
+    <h3>Live Queue</h3>
+    <div class="summary-bar">
+      <div class="summary-card"><div class="value">${m.current.active_refreshes}</div><div class="label">Active</div></div>
+      <div class="summary-card"><div class="value">${m.current.queued_refreshes}</div><div class="label">Queued</div></div>
+    </div>
+
+    <h3>Refresh Timing</h3>
+    <div style="overflow-x:auto;">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Window</th>
+            <th style="text-align:center;">Refreshes</th>
+            <th style="text-align:center;">Avg Time</th>
+            <th style="text-align:center;">P95 Time</th>
+            <th style="text-align:center;">Avg Queue Wait</th>
+            <th style="text-align:center;">Max Queue Wait</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${windowRow('Last 24h', m.last_24h)}
+          ${windowRow('Last 7d', m.last_7d)}
+          ${windowRow('Last 30d', m.last_30d)}
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:1.5rem;">By Trigger (24h)</h3>
+    <div class="summary-bar">
+      ${triggerCells || '<p class="muted">No refreshes in the last 24 hours.</p>'}
+    </div>`;
 }
 
 function formatBytes(bytes: number): string {
