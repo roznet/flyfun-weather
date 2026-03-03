@@ -16,7 +16,7 @@ async function init(): Promise<void> {
     return;
   }
   initTheme();
-  renderUserInfo(user, 'flights');
+  renderUserInfo(user);
 
   const store = flightDetailStore;
 
