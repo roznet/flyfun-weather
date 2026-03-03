@@ -43,7 +43,6 @@ import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, 
 export function renderHeader(
   flight: FlightResponse | null,
   snapshot: ForecastSnapshot | null,
-  flightId?: string,
 ): void {
   const el = $('briefing-header');
   if (!el || !flight) return;
@@ -68,12 +67,7 @@ export function renderHeader(
     ? `<span class="briefing-route">${escapeHtml(route)}</span>`
     : '';
 
-  const backLink = flightId
-    ? `<a href="/flight.html?id=${encodeURIComponent(flightId)}" class="breadcrumb-link">\u2190 Flight</a>`
-    : '';
-
   el.innerHTML = `
-    ${backLink}
     <div class="briefing-header-lines">
       <div class="briefing-header-line1">
         <span class="route-summary">${escapeHtml(title)}</span>
