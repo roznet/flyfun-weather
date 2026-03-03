@@ -377,6 +377,7 @@ def update_privacy(
 class UpdateFlightRequest(BaseModel):
     """Request body for updating editable flight parameters."""
 
+    profile_id: int | None = None  # switch aircraft profile (applies its altitude/ceiling)
     departure_time: str | None = None  # ISO 8601 (time-of-day change only; date must match)
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
@@ -420,6 +421,23 @@ def update_flight(
 
     time_changed = False
     altitude_changed = False
+    profile_changed = False
+
+    # Profile change — apply the new profile's altitude/ceiling to the flight
+    if req.profile_id is not None and req.profile_id != original_flight.profile_id:
+        from weatherbrief.api.profiles import load_profile_settings
+
+        profile_settings = load_profile_settings(db, req.profile_id, user_id)
+        row.profile_id = req.profile_id
+        profile_changed = True
+
+        # Apply profile's altitude/ceiling unless explicitly overridden in this request
+        if req.cruise_altitude_ft is None and profile_settings.get("cruise_altitude_ft"):
+            row.cruise_altitude_ft = profile_settings["cruise_altitude_ft"]
+            altitude_changed = True
+        if req.flight_ceiling_ft is None and profile_settings.get("flight_ceiling_ft"):
+            row.flight_ceiling_ft = profile_settings["flight_ceiling_ft"]
+            altitude_changed = True
 
     if req.departure_time is not None:
         new_dt = datetime.fromisoformat(req.departure_time)
@@ -452,7 +470,7 @@ def update_flight(
 
     if time_changed:
         invalidation = "refetch_needed"
-    elif altitude_changed:
+    elif altitude_changed or profile_changed:
         invalidation = "advisories_only"
     else:
         invalidation = "none"
