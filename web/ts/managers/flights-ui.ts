@@ -68,7 +68,7 @@ export function renderFlightList(
           ${refreshBadge}${packInfo}
         </div>
         <div class="flight-actions">
-          <button class="btn btn-primary btn-view" data-id="${escapeHtml(f.id)}">View Briefing</button>
+          <button class="btn btn-primary btn-view" data-id="${escapeHtml(f.id)}">View</button>
           <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">Delete</button>
         </div>
       </div>

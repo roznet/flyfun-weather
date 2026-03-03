@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeatherBrief — Flight</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/leaflet.css">
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <div id="flight-header"></div>
+      <div class="header-right">
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
+
+    <div id="error-message"></div>
+    <div id="invalidation-banner" class="invalidation-banner" style="display: none;"></div>
+
+    <!-- Flight info + map layout -->
+    <div class="flight-detail-layout">
+      <div id="flight-info" class="flight-info-panel">
+        <p class="muted">Loading...</p>
+      </div>
+      <div id="route-map-inset" class="route-map-inset"></div>
+    </div>
+
+    <!-- Latest assessment -->
+    <div class="section">
+      <h3>Latest Assessment</h3>
+      <div id="latest-assessment">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <!-- Briefing history -->
+    <div class="section">
+      <h3>Briefing History</h3>
+      <div id="briefing-history">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
+    <div id="loading-spinner" style="display: none;">Loading flight...</div>
+  </div>
+
+  <script src="/dist/flight.js"></script>
+</body>
+</html>

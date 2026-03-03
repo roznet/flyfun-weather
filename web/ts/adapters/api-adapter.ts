@@ -44,6 +44,30 @@ export async function deleteFlight(id: string): Promise<void> {
   });
 }
 
+export interface UpdateFlightRequest {
+  departure_time?: string;
+  cruise_altitude_ft?: number;
+  flight_ceiling_ft?: number;
+  flight_duration_hours?: number;
+}
+
+export interface UpdateFlightResponse extends FlightResponse {
+  invalidation: 'none' | 'advisories_only' | 'refetch_needed';
+}
+
+export async function updateFlight(
+  flightId: string,
+  req: UpdateFlightRequest,
+): Promise<UpdateFlightResponse> {
+  return apiFetch<UpdateFlightResponse>(
+    `/flights/${encodeURIComponent(flightId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(req),
+    },
+  );
+}
+
 export async function updateAutoRefresh(
   flightId: string,
   req: { auto_refresh: boolean; auto_refresh_hour?: number | null },
