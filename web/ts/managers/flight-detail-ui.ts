@@ -191,7 +191,6 @@ export function renderHeader(
 
   el.innerHTML = `
     <div class="flight-detail-title">
-      <a href="/" class="breadcrumb-link">\u2190 Flights</a>
       <h1>${escapeHtml(title)} ${editBtn}</h1>
       ${routeLine}
     </div>

@@ -15,6 +15,59 @@ function assessmentClass(assessment: string | null): string {
   }
 }
 
+/** Track whether the past-flights section is expanded. */
+let pastExpanded = false;
+
+/** Render a single flight card. */
+function renderFlightCard(
+  f: FlightResponse,
+  pack: PackMeta | null,
+  refreshEntry: RefreshEntry | undefined,
+): string {
+  const wps = f.waypoints.length > 0
+    ? f.waypoints
+    : f.route_name.split('_').map(w => w.toUpperCase());
+  const title = flightTitle(wps);
+  const route = wps.length > 2 ? flightRoute(wps) : '';
+  const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
+  const pastBadge = past ? '<span class="badge badge-past">Past</span> ' : '';
+
+  let refreshBadge = '';
+  if (refreshEntry) {
+    const label = refreshEntry.status === 'queued' ? 'Queued' : 'Refreshing';
+    const spinner = refreshEntry.status === 'refreshing' ? '<span class="dots-spinner"></span>' : '';
+    refreshBadge = `<span class="badge badge-refreshing">${label}${spinner}</span> `;
+  }
+
+  const packInfo = pack
+    ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
+       <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
+    : '<span class="pack-info">No briefings yet</span>';
+
+  const routeLine = route
+    ? `<div class="flight-route-detail">${escapeHtml(route)}</div>`
+    : '';
+
+  return `
+    <div class="flight-card" data-id="${escapeHtml(f.id)}">
+      <div class="flight-header">
+        ${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
+        <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
+        <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
+      </div>
+      ${routeLine}
+      <div class="flight-status">
+        ${refreshBadge}${packInfo}
+      </div>
+      <div class="flight-actions">
+        <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">Briefing</button>
+        <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">Edit</button>
+        <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
 // --- Render functions ---
 
 export function renderFlightList(
@@ -37,52 +90,46 @@ export function renderFlightList(
     return;
   }
 
-  container.innerHTML = flights.map((f) => {
-    const pack = latestPacks[f.id];
-    const refreshEntry = activeRefreshes[f.id];
-    const wps = f.waypoints.length > 0
-      ? f.waypoints
-      : f.route_name.split('_').map(w => w.toUpperCase());
-    const title = flightTitle(wps);
-    const route = wps.length > 2 ? flightRoute(wps) : '';
-    const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
-    const pastBadge = past ? '<span class="badge badge-past">Past</span> ' : '';
-
-    let refreshBadge = '';
-    if (refreshEntry) {
-      const label = refreshEntry.status === 'queued' ? 'Queued' : 'Refreshing';
-      const spinner = refreshEntry.status === 'refreshing' ? '<span class="dots-spinner"></span>' : '';
-      refreshBadge = `<span class="badge badge-refreshing">${label}${spinner}</span> `;
+  // Split into active and past flights
+  const active: FlightResponse[] = [];
+  const past: FlightResponse[] = [];
+  for (const f of flights) {
+    if (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time)) {
+      past.push(f);
+    } else {
+      active.push(f);
     }
+  }
 
-    const packInfo = pack
-      ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
-         <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
-      : '<span class="pack-info">No briefings yet</span>';
+  const activeCards = active.map(f =>
+    renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id]),
+  ).join('');
 
-    const routeLine = route
-      ? `<div class="flight-route-detail">${escapeHtml(route)}</div>`
-      : '';
-
-    return `
-      <div class="flight-card" data-id="${escapeHtml(f.id)}">
-        <div class="flight-header">
-          ${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
-          <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
-          <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
-        </div>
-        ${routeLine}
-        <div class="flight-status">
-          ${refreshBadge}${packInfo}
-        </div>
-        <div class="flight-actions">
-          <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">Briefing</button>
-          <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">Edit</button>
-          <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">Delete</button>
-        </div>
+  let pastSection = '';
+  if (past.length > 0) {
+    const expandedClass = pastExpanded ? '' : ' collapsed';
+    const pastCards = past.map(f =>
+      renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id]),
+    ).join('');
+    pastSection = `
+      <div class="past-flights-section${expandedClass}">
+        <button class="past-flights-toggle" id="past-flights-toggle">
+          Past flights (${past.length})
+        </button>
+        <div class="past-flights-list">${pastCards}</div>
       </div>
     `;
-  }).join('');
+  }
+
+  container.innerHTML = activeCards + pastSection;
+
+  // Wire toggle
+  const toggleBtn = document.getElementById('past-flights-toggle');
+  toggleBtn?.addEventListener('click', () => {
+    pastExpanded = !pastExpanded;
+    const section = toggleBtn.closest('.past-flights-section');
+    section?.classList.toggle('collapsed', !pastExpanded);
+  });
 
   // Wire up event listeners
   container.querySelectorAll('.btn-briefing').forEach((btn) => {
@@ -119,4 +166,3 @@ export function renderError(error: string | null): void {
     el.style.display = error ? 'block' : 'none';
   }
 }
-

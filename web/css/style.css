@@ -291,6 +291,42 @@ label {
   margin-bottom: 0.3rem;
 }
 
+/* Past flights collapsible */
+.past-flights-section {
+  margin-top: 1rem;
+}
+
+.past-flights-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.4rem 0;
+  margin-bottom: 0.5rem;
+}
+
+.past-flights-toggle::before {
+  content: '\25BC';
+  font-size: 0.6rem;
+  transition: transform 0.15s;
+}
+
+.past-flights-section.collapsed .past-flights-toggle::before {
+  transform: rotate(-90deg);
+}
+
+.past-flights-toggle:hover {
+  color: var(--text);
+}
+
+.past-flights-section.collapsed .past-flights-list {
+  display: none;
+}
+
 .flight-status {
   display: flex;
   gap: 0.5rem;

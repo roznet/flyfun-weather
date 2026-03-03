@@ -68,8 +68,6 @@ async function init(): Promise<void> {
     return;
   }
 
-  // flightId is passed to renderHeader for breadcrumb
-
   // --- Apply display mode CSS class ---
   function applyDisplayModeClass(mode: string): void {
     const container = document.querySelector('.container');
@@ -463,7 +461,7 @@ async function init(): Promise<void> {
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
-      ui.renderHeader(state.flight, state.snapshot, flightId!);
+      ui.renderHeader(state.flight, state.snapshot);
     }
     if (state.packs !== prev.packs || state.currentPack !== prev.currentPack) {
       ui.renderHistoryDropdown(
@@ -836,7 +834,7 @@ async function init(): Promise<void> {
     }
   }).then(() => {
     const s = store.getState();
-    ui.renderHeader(s.flight, s.snapshot, flightId!);
+    ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack);
     renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable);
