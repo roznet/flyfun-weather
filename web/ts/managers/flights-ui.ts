@@ -2,7 +2,7 @@
 
 import type { FlightResponse, PackMeta } from '../store/types';
 import type { RefreshEntry } from '../adapters/api-adapter';
-import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast } from '../utils';
+import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRoute } from '../utils';
 
 /** Assessment badge color class. */
 function assessmentClass(assessment: string | null): string {
@@ -21,7 +21,8 @@ export function renderFlightList(
   flights: FlightResponse[],
   latestPacks: Record<string, PackMeta | null>,
   activeRefreshes: Record<string, RefreshEntry>,
-  onView: (id: string) => void,
+  onBriefing: (id: string) => void,
+  onEdit: (id: string) => void,
   onDelete: (id: string) => void,
 ): void {
   const container = $('flight-list');
@@ -39,9 +40,11 @@ export function renderFlightList(
   container.innerHTML = flights.map((f) => {
     const pack = latestPacks[f.id];
     const refreshEntry = activeRefreshes[f.id];
-    const waypoints = f.waypoints.length > 0
-      ? f.waypoints.join(' → ')
-      : f.route_name.replace(/_/g, ' → ').toUpperCase();
+    const wps = f.waypoints.length > 0
+      ? f.waypoints
+      : f.route_name.split('_').map(w => w.toUpperCase());
+    const title = flightTitle(wps);
+    const route = wps.length > 2 ? flightRoute(wps) : '';
     const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
     const pastBadge = past ? '<span class="badge badge-past">Past</span> ' : '';
 
@@ -57,18 +60,24 @@ export function renderFlightList(
          <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
       : '<span class="pack-info">No briefings yet</span>';
 
+    const routeLine = route
+      ? `<div class="flight-route-detail">${escapeHtml(route)}</div>`
+      : '';
+
     return `
       <div class="flight-card" data-id="${escapeHtml(f.id)}">
         <div class="flight-header">
-          ${pastBadge}<span class="flight-route">${escapeHtml(waypoints)}</span>
+          ${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
           <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
           <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
         </div>
+        ${routeLine}
         <div class="flight-status">
           ${refreshBadge}${packInfo}
         </div>
         <div class="flight-actions">
-          <button class="btn btn-primary btn-view" data-id="${escapeHtml(f.id)}">View</button>
+          <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">Briefing</button>
+          <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">Edit</button>
           <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">Delete</button>
         </div>
       </div>
@@ -76,9 +85,14 @@ export function renderFlightList(
   }).join('');
 
   // Wire up event listeners
-  container.querySelectorAll('.btn-view').forEach((btn) => {
+  container.querySelectorAll('.btn-briefing').forEach((btn) => {
     btn.addEventListener('click', () => {
-      onView((btn as HTMLElement).dataset.id!);
+      onBriefing((btn as HTMLElement).dataset.id!);
+    });
+  });
+  container.querySelectorAll('.btn-edit').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      onEdit((btn as HTMLElement).dataset.id!);
     });
   });
   container.querySelectorAll('.btn-delete').forEach((btn) => {
