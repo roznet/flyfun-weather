@@ -2,6 +2,7 @@
 
 import type { FlightResponse, PackMeta } from '../store/types';
 import type { WaypointInfo } from '../adapters/api-adapter';
+import type { ProfileResponse } from '../adapters/profiles-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt } from '../utils';
 
 // --- Assessment badge ---
@@ -29,13 +30,10 @@ function assessmentDot(assessment: string | null): string {
 export function renderFlightInfo(
   flight: FlightResponse | null,
   editing: boolean,
+  profiles: ProfileResponse[] = [],
 ): void {
   const container = $('flight-info');
   if (!container || !flight) return;
-
-  const waypointDisplay = flight.waypoints.length > 0
-    ? flight.waypoints.join(' \u2192 ')
-    : flight.route_name.replace(/_/g, ' \u2192 ').toUpperCase();
 
   // Parse departure time for edit form defaults
   const dt = new Date(flight.departure_time);
@@ -43,6 +41,10 @@ export function renderFlightInfo(
   const utcMinute = dt.getUTCMinutes();
   const endTime = new Date(dt.getTime() + flight.flight_duration_hours * 3600_000);
   const endTimeStr = `${endTime.getUTCHours().toString().padStart(2, '0')}:${endTime.getUTCMinutes().toString().padStart(2, '0')}Z`;
+
+  // Profile display name
+  const currentProfile = profiles.find(p => p.id === flight.profile_id);
+  const profileName = currentProfile ? currentProfile.name : '\u2014';
 
   if (editing) {
     // Build hour options
@@ -56,9 +58,20 @@ export function renderFlightInfo(
       const sel = m === nearestMinute(utcMinute) ? ' selected' : '';
       return `<option value="${m}"${sel}>${m.toString().padStart(2, '0')}</option>`;
     }).join('');
+    // Build profile options
+    const profileOptions = profiles.map(p => {
+      const sel = p.id === flight.profile_id ? ' selected' : '';
+      return `<option value="${p.id}"${sel}>${escapeHtml(p.name)}</option>`;
+    }).join('');
 
     container.innerHTML = `
       <div class="flight-info-grid editing">
+        <div class="info-row">
+          <span class="info-label">Profile</span>
+          <span class="info-value">
+            <select id="edit-profile" class="edit-input">${profileOptions}</select>
+          </span>
+        </div>
         <div class="info-row">
           <span class="info-label">Date</span>
           <span class="info-value">${formatDate(flight.target_date)}</span>
@@ -95,9 +108,30 @@ export function renderFlightInfo(
         </div>
       </div>
     `;
+
+    // When profile changes, update altitude/ceiling to match the selected profile
+    const profileSelect = document.getElementById('edit-profile') as HTMLSelectElement;
+    profileSelect?.addEventListener('change', () => {
+      const id = parseInt(profileSelect.value, 10);
+      const profile = profiles.find(p => p.id === id);
+      if (profile?.settings) {
+        const altInput = document.getElementById('edit-altitude') as HTMLInputElement;
+        const ceilInput = document.getElementById('edit-ceiling') as HTMLInputElement;
+        if (altInput && profile.settings.cruise_altitude_ft != null) {
+          altInput.value = String(profile.settings.cruise_altitude_ft);
+        }
+        if (ceilInput && profile.settings.flight_ceiling_ft != null) {
+          ceilInput.value = String(profile.settings.flight_ceiling_ft);
+        }
+      }
+    });
   } else {
     container.innerHTML = `
       <div class="flight-info-grid">
+        <div class="info-row">
+          <span class="info-label">Profile</span>
+          <span class="info-value">${escapeHtml(profileName)}</span>
+        </div>
         <div class="info-row">
           <span class="info-label">Date</span>
           <span class="info-value">${formatDate(flight.target_date)}</span>
@@ -232,7 +266,7 @@ export function renderInvalidationBanner(invalidation: string | null, flightId: 
 
   if (invalidation === 'advisories_only') {
     el.className = 'invalidation-banner invalidation-info';
-    el.innerHTML = `Altitude/ceiling changed. Advisories can be recalculated from saved data on the <a href="${briefingUrl}">briefing page</a>.`;
+    el.innerHTML = `Profile or altitude changed. Advisories can be recalculated from saved data on the <a href="${briefingUrl}">briefing page</a>.`;
   } else if (invalidation === 'refetch_needed') {
     el.className = 'invalidation-banner invalidation-warning';
     el.innerHTML = `Time or duration changed. A new briefing refresh is needed on the <a href="${briefingUrl}">briefing page</a> for updated forecasts.`;

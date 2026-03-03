@@ -1,6 +1,7 @@
 /** Flight detail page entry point — wires store, UI manager, map inset, and edit mode. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
+import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightDetailStore } from './store/flight-detail-store';
 import * as ui from './managers/flight-detail-ui';
 import { RouteMapInset } from './components/route-map-inset';
@@ -27,6 +28,14 @@ async function init(): Promise<void> {
     return;
   }
 
+  // Load profiles for the selector
+  let profiles: ProfileResponse[] = [];
+  try {
+    profiles = await fetchProfiles();
+  } catch {
+    // Profile selector stays empty; editing still works without it
+  }
+
   // --- Route map inset ---
   const mapContainer = document.getElementById('route-map-inset');
   let mapInset: RouteMapInset | null = null;
@@ -50,12 +59,14 @@ async function init(): Promise<void> {
       const flight = store.getState().flight;
       if (!flight) return;
 
+      const profileEl = document.getElementById('edit-profile') as HTMLSelectElement;
       const hourEl = document.getElementById('edit-hour') as HTMLSelectElement;
       const minuteEl = document.getElementById('edit-minute') as HTMLSelectElement;
       const altEl = document.getElementById('edit-altitude') as HTMLInputElement;
       const ceilEl = document.getElementById('edit-ceiling') as HTMLInputElement;
       const durEl = document.getElementById('edit-duration') as HTMLInputElement;
 
+      const profileId = profileEl ? parseInt(profileEl.value, 10) : undefined;
       const hour = parseInt(hourEl.value, 10);
       const minute = parseInt(minuteEl.value, 10);
       const altitude = parseInt(altEl.value, 10);
@@ -66,6 +77,7 @@ async function init(): Promise<void> {
       const departureTime = `${flight.target_date}T${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}:00Z`;
 
       await store.getState().saveFlight({
+        profile_id: profileId,
         departure_time: departureTime,
         cruise_altitude_ft: altitude,
         flight_ceiling_ft: ceiling,
@@ -82,7 +94,7 @@ async function init(): Promise<void> {
   store.subscribe((state, prev) => {
     if (state.flight !== prev.flight || state.editing !== prev.editing) {
       ui.renderHeader(state.flight, state.editing);
-      ui.renderFlightInfo(state.flight, state.editing);
+      ui.renderFlightInfo(state.flight, state.editing, profiles);
       if (state.editing) {
         wireEditForm();
       } else {
@@ -116,7 +128,7 @@ async function init(): Promise<void> {
   // Initial render (subscriptions don't fire on first load for existing data)
   const s = store.getState();
   ui.renderHeader(s.flight, s.editing);
-  ui.renderFlightInfo(s.flight, s.editing);
+  ui.renderFlightInfo(s.flight, s.editing, profiles);
   wireEditButtons();
 
   if (s.waypoints.length > 0 && mapInset) {
