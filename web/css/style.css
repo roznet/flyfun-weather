@@ -3116,3 +3116,169 @@ label {
   .wizard-modal { padding: 1.25rem; }
   .wizard-form-row { flex-direction: column; }
 }
+
+/* ========================================
+   Flight Detail Page
+   ======================================== */
+
+.breadcrumb-link {
+  color: var(--primary);
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+
+.breadcrumb-link:hover {
+  text-decoration: underline;
+}
+
+.flight-detail-title h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* Info + map side-by-side layout */
+.flight-detail-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+@media (max-width: 768px) {
+  .flight-detail-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Flight info panel */
+.flight-info-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+}
+
+.flight-info-grid {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.info-label {
+  font-weight: 500;
+  color: var(--text-muted);
+  min-width: 80px;
+  font-size: 0.85rem;
+}
+
+.info-value {
+  color: var(--text);
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Edit mode */
+.edit-input {
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.edit-actions {
+  margin-top: 0.5rem;
+  gap: 0.5rem;
+}
+
+.btn-sm {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+/* Route map inset */
+.route-map-inset {
+  height: 280px;
+  min-height: 200px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* Latest assessment section */
+.assessment-reason {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* Briefing history list */
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.5rem;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--surface);
+  transition: background 0.15s;
+}
+
+.history-row:hover {
+  background: var(--bg);
+}
+
+.history-days-out {
+  font-weight: 600;
+  min-width: 36px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.history-date {
+  flex: 1;
+  font-size: 0.85rem;
+}
+
+.history-arrow {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* Invalidation banners */
+.invalidation-banner {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.invalidation-banner a {
+  color: inherit;
+  font-weight: 500;
+}
+
+.invalidation-info {
+  background: var(--green-bg);
+  color: var(--green);
+  border: 1px solid var(--green);
+}
+
+.invalidation-warning {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid var(--amber);
+}

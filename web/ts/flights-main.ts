@@ -215,7 +215,7 @@ async function init(): Promise<void> {
         state.flights,
         state.latestPacks,
         state.activeRefreshes,
-        (id) => navigateToBriefing(id),
+        (id) => navigateToFlight(id),
         (id) => store.getState().deleteFlight(id),
       );
     }
@@ -306,7 +306,7 @@ async function init(): Promise<void> {
           profileId: !isNaN(profileId!) ? profileId : undefined,
         });
         // Navigate to briefing page for the new flight
-        navigateToBriefing(flight.id);
+        navigateToFlight(flight.id);
       } catch {
         // Error already set in store via API response
       }
@@ -411,8 +411,8 @@ function populateProfileSelector(profiles: ProfileResponse[]): void {
   }
 }
 
-function navigateToBriefing(flightId: string): void {
-  window.location.href = `/briefing.html?flight=${encodeURIComponent(flightId)}`;
+function navigateToFlight(flightId: string): void {
+  window.location.href = `/flight.html?id=${encodeURIComponent(flightId)}`;
 }
 
 // Boot

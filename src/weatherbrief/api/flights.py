@@ -374,6 +374,93 @@ def update_privacy(
     return _flight_to_response(updated)
 
 
+class UpdateFlightRequest(BaseModel):
+    """Request body for updating editable flight parameters."""
+
+    departure_time: str | None = None  # ISO 8601 (time-of-day change only; date must match)
+    cruise_altitude_ft: int | None = None
+    flight_ceiling_ft: int | None = None
+    flight_duration_hours: float | None = None
+
+    @field_validator("departure_time")
+    @classmethod
+    def validate_departure_time(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            dt = datetime.fromisoformat(v)
+        except ValueError:
+            raise ValueError("departure_time must be a valid ISO 8601 datetime")
+        if dt.tzinfo is None:
+            raise ValueError("departure_time must include a timezone")
+        return v
+
+
+class UpdateFlightResponse(FlightResponse):
+    """Flight response with invalidation hint after an update."""
+
+    invalidation: str  # "none" | "advisories_only" | "refetch_needed"
+
+
+@router.patch("/{flight_id}", response_model=UpdateFlightResponse)
+def update_flight(
+    flight_id: str,
+    req: UpdateFlightRequest,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Update editable flight parameters (time, altitude, ceiling, duration).
+
+    The date portion of the flight cannot change — only time-of-day.
+    Returns an invalidation hint so the frontend knows whether existing
+    briefings need a refetch or just an advisory recalculation.
+    """
+    row = _load_owned_row(db, flight_id, user_id)
+    original_flight = load_flight(db, flight_id)
+
+    time_changed = False
+    altitude_changed = False
+
+    if req.departure_time is not None:
+        new_dt = datetime.fromisoformat(req.departure_time)
+        if new_dt.tzinfo is None:
+            new_dt = new_dt.replace(tzinfo=timezone.utc)
+        # Enforce same date
+        if new_dt.strftime("%Y-%m-%d") != original_flight.target_date:
+            raise HTTPException(
+                status_code=422,
+                detail="Cannot change the flight date. Create a new flight instead.",
+            )
+        if new_dt != original_flight.departure_time:
+            row.departure_time = new_dt
+            time_changed = True
+
+    if req.cruise_altitude_ft is not None and req.cruise_altitude_ft != original_flight.cruise_altitude_ft:
+        row.cruise_altitude_ft = req.cruise_altitude_ft
+        altitude_changed = True
+
+    if req.flight_ceiling_ft is not None and req.flight_ceiling_ft != original_flight.flight_ceiling_ft:
+        row.flight_ceiling_ft = req.flight_ceiling_ft
+        altitude_changed = True
+
+    if req.flight_duration_hours is not None and req.flight_duration_hours != original_flight.flight_duration_hours:
+        row.flight_duration_hours = req.flight_duration_hours
+        time_changed = True
+
+    db.flush()
+    updated = load_flight(db, flight_id)
+
+    if time_changed:
+        invalidation = "refetch_needed"
+    elif altitude_changed:
+        invalidation = "advisories_only"
+    else:
+        invalidation = "none"
+
+    resp = _flight_to_response(updated)
+    return UpdateFlightResponse(**resp.model_dump(), invalidation=invalidation)
+
+
 @router.delete("/{flight_id}", status_code=204)
 def remove_flight(
     flight_id: str,

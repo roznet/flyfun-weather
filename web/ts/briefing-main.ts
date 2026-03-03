@@ -59,12 +59,23 @@ async function init(): Promise<void> {
 
   const store = briefingStore;
 
-  // Get flight ID from URL
+  // Get flight ID and optional pack timestamp from URL
   const params = new URLSearchParams(window.location.search);
   const flightId = params.get('flight');
+  const packTimestamp = params.get('pack');
   if (!flightId) {
     ui.renderError('No flight specified. Go back to flights list.');
     return;
+  }
+
+  // Add back-to-flight breadcrumb
+  const headerEl = document.getElementById('briefing-header');
+  if (headerEl) {
+    const backLink = document.createElement('a');
+    backLink.href = `/flight.html?id=${encodeURIComponent(flightId)}`;
+    backLink.className = 'breadcrumb-link';
+    backLink.textContent = '\u2190 Flight';
+    headerEl.prepend(backLink);
   }
 
   // --- Apply display mode CSS class ---
@@ -822,7 +833,16 @@ async function init(): Promise<void> {
   }
 
   // --- Load flight data, then render even if no packs exist ---
-  store.getState().loadFlight(flightId).then(() => {
+  store.getState().loadFlight(flightId).then(async () => {
+    // If a specific pack timestamp was requested via URL, select it
+    if (packTimestamp) {
+      const s = store.getState();
+      const matchingPack = s.packs.find(p => p.fetch_timestamp === packTimestamp);
+      if (matchingPack && s.currentPack?.fetch_timestamp !== packTimestamp) {
+        await store.getState().selectPack(packTimestamp);
+      }
+    }
+  }).then(() => {
     const s = store.getState();
     ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
