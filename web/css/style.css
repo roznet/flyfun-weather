@@ -285,6 +285,12 @@ label {
   font-family: monospace;
 }
 
+.flight-route-detail {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-bottom: 0.3rem;
+}
+
 .flight-status {
   display: flex;
   gap: 0.5rem;
@@ -484,9 +490,29 @@ label {
   flex: 1;
 }
 
+.briefing-header-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1;
+}
+
+.briefing-header-line1 {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.briefing-header-line2 {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
 .route-summary { font-weight: 600; }
 .date-summary { color: var(--text-muted); font-size: 0.9rem; }
 .alt-summary { color: var(--text-muted); font-size: 0.9rem; font-family: monospace; }
+.briefing-route { color: var(--text-muted); font-size: 0.8rem; }
 
 .toolbar-end-group {
   display: flex;
@@ -3136,6 +3162,12 @@ label {
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
+}
+
+.flight-detail-route {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-top: -0.25rem;
 }
 
 /* Info + map side-by-side layout */

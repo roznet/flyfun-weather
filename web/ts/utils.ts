@@ -153,6 +153,20 @@ export function buildWindyUrl(
   return `https://www.windy.com/${latStr}/${lonStr}/${pathModel}meteogram?${queryModel}${timePart},${latStr},${lonStr},${zoom},i:pressure,p:metars`;
 }
 
+// --- Flight title helpers ---
+
+/** Build a short title from waypoints: origin → destination. */
+export function flightTitle(waypoints: string[]): string {
+  if (waypoints.length === 0) return '';
+  if (waypoints.length === 1) return waypoints[0];
+  return `${waypoints[0]} \u2192 ${waypoints[waypoints.length - 1]}`;
+}
+
+/** Full route string from waypoints (all joined with →). */
+export function flightRoute(waypoints: string[]): string {
+  return waypoints.join(' \u2192 ');
+}
+
 /** Auto-dismiss timeout for status messages (ms). */
 export const STATUS_DISMISS_MS = 3000;
 

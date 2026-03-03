@@ -3,7 +3,7 @@
 import type { FlightResponse, PackMeta } from '../store/types';
 import type { WaypointInfo } from '../adapters/api-adapter';
 import type { ProfileResponse } from '../adapters/profiles-adapter';
-import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt } from '../utils';
+import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRoute } from '../utils';
 
 // --- Assessment badge ---
 
@@ -175,18 +175,25 @@ export function renderHeader(
     return;
   }
 
-  const waypointDisplay = flight.waypoints.length > 0
-    ? flight.waypoints.join(' \u2192 ')
-    : flight.route_name.replace(/_/g, ' \u2192 ').toUpperCase();
+  const wps = flight.waypoints.length > 0
+    ? flight.waypoints
+    : flight.route_name.split('_').map(w => w.toUpperCase());
+  const title = flightTitle(wps);
+  const route = wps.length > 2 ? flightRoute(wps) : '';
 
   const editBtn = editing
     ? ''
     : '<button class="btn btn-sm" id="btn-edit-flight">Edit</button>';
 
+  const routeLine = route
+    ? `<div class="flight-detail-route">${escapeHtml(route)}</div>`
+    : '';
+
   el.innerHTML = `
     <div class="flight-detail-title">
       <a href="/" class="breadcrumb-link">\u2190 Flights</a>
-      <h1>Flight: ${escapeHtml(waypointDisplay)} ${editBtn}</h1>
+      <h1>${escapeHtml(title)} ${editBtn}</h1>
+      ${routeLine}
     </div>
   `;
 }

@@ -36,35 +36,54 @@ import {
 } from '../helpers/metrics-helper';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
-import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl } from '../utils';
+import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl, flightTitle, flightRoute } from '../utils';
 
 // --- Header ---
 
 export function renderHeader(
   flight: FlightResponse | null,
   snapshot: ForecastSnapshot | null,
+  flightId?: string,
 ): void {
   const el = $('briefing-header');
   if (!el || !flight) return;
 
-  // Use snapshot waypoints if available, otherwise derive from route name
-  let routeStr: string;
+  // Build waypoint list from snapshot or flight data
+  let wps: string[];
   if (snapshot?.route?.waypoints) {
-    routeStr = snapshot.route.waypoints.map((w) => w.icao).join(' \u2192 ');
+    wps = snapshot.route.waypoints.map((w) => w.icao);
   } else if (flight.waypoints?.length) {
-    routeStr = flight.waypoints.join(' \u2192 ');
+    wps = flight.waypoints;
   } else {
-    routeStr = flight.route_name.replace(/_/g, ' \u2192 ').toUpperCase();
+    wps = flight.route_name.split('_').map(w => w.toUpperCase());
   }
 
+  const title = flightTitle(wps);
+  const route = wps.length > 2 ? flightRoute(wps) : '';
   const dateStr = formatDate(flight.target_date);
   const timeStr = formatDepartureTime(flight.departure_time);
   const alt = formatAlt(flight.cruise_altitude_ft);
 
+  const routeHtml = route
+    ? `<span class="briefing-route">${escapeHtml(route)}</span>`
+    : '';
+
+  const backLink = flightId
+    ? `<a href="/flight.html?id=${encodeURIComponent(flightId)}" class="breadcrumb-link">\u2190 Flight</a>`
+    : '';
+
   el.innerHTML = `
-    <span class="route-summary">${escapeHtml(routeStr)}</span>
-    <span class="date-summary">${escapeHtml(dateStr)} ${escapeHtml(timeStr)}</span>
-    <span class="alt-summary">${escapeHtml(alt)}</span>
+    ${backLink}
+    <div class="briefing-header-lines">
+      <div class="briefing-header-line1">
+        <span class="route-summary">${escapeHtml(title)}</span>
+        <span class="date-summary">${escapeHtml(dateStr)} ${escapeHtml(timeStr)}</span>
+      </div>
+      <div class="briefing-header-line2">
+        ${routeHtml}
+        <span class="alt-summary">${escapeHtml(alt)}</span>
+      </div>
+    </div>
   `;
 }
 
