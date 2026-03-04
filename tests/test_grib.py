@@ -1076,11 +1076,11 @@ class TestCacheModelParam:
 # --- Cloud cover override tests ---
 
 
-class TestCloudCoverOverride:
-    """Tests for GRIB cloud cover overriding Open-Meteo values."""
+class TestCloudCoverPreservation:
+    """Tests that Open-Meteo cloud_cover_*_pct values are preserved by _apply_cloud_diagnostics."""
 
-    def test_cloud_cover_override_from_grib(self):
-        """After _apply_cloud_diagnostics, cloud_cover_*_pct match GRIB values."""
+    def test_open_meteo_values_preserved(self):
+        """Open-Meteo cloud_cover_*_pct are NOT overwritten by GRIB diagnostics."""
         from datetime import datetime, timezone
 
         hourly = HourlyForecast(
@@ -1098,34 +1098,13 @@ class TestCloudCoverOverride:
         _apply_cloud_diagnostics(hourly, diag)
 
         assert hourly.nwp_cloud_diagnostics is diag
-        assert hourly.cloud_cover_low_pct == 80.0
-        assert hourly.cloud_cover_mid_pct == 96.0
-        assert hourly.cloud_cover_high_pct == 5.0
+        # Open-Meteo values preserved, NOT replaced by GRIB values
+        assert hourly.cloud_cover_low_pct == 10.0
+        assert hourly.cloud_cover_mid_pct == 0.0
+        assert hourly.cloud_cover_high_pct == 50.0
 
-    def test_cloud_cover_override_partial(self):
-        """Only non-None GRIB values override; others are left unchanged."""
-        from datetime import datetime, timezone
-
-        hourly = HourlyForecast(
-            time=datetime(2026, 2, 22, 12, tzinfo=timezone.utc),
-            cloud_cover_low_pct=10.0,
-            cloud_cover_mid_pct=20.0,
-            cloud_cover_high_pct=30.0,
-        )
-        diag = NWPCloudDiagnostics(
-            low=NWPCloudLayerDiag(cover_pct=80.0),
-            # mid and high left as defaults (None)
-        )
-
-        _apply_cloud_diagnostics(hourly, diag)
-
-        assert hourly.cloud_cover_low_pct == 80.0
-        # Mid and high unchanged (GRIB had None)
-        assert hourly.cloud_cover_mid_pct == 20.0
-        assert hourly.cloud_cover_high_pct == 30.0
-
-    def test_cloud_cover_override_no_original(self):
-        """Override works when hourly had no original cloud cover values."""
+    def test_diagnostics_attached_without_original_cloud_cover(self):
+        """Diagnostics are attached even when hourly has no cloud cover values."""
         from datetime import datetime, timezone
 
         hourly = HourlyForecast(
@@ -1139,9 +1118,11 @@ class TestCloudCoverOverride:
 
         _apply_cloud_diagnostics(hourly, diag)
 
-        assert hourly.cloud_cover_low_pct == 50.0
-        assert hourly.cloud_cover_mid_pct == 25.0
-        assert hourly.cloud_cover_high_pct == 0.0
+        assert hourly.nwp_cloud_diagnostics is diag
+        # Scalar fields remain None (not set from GRIB)
+        assert hourly.cloud_cover_low_pct is None
+        assert hourly.cloud_cover_mid_pct is None
+        assert hourly.cloud_cover_high_pct is None
 
 
 # --- Per-hour GRIB enrichment tests ---
