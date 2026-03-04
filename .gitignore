@@ -17,6 +17,8 @@ web/test-results
 
 tmp
 
+.claude/worktrees
+
 # Xcode
 xcuserdata/
 *.xcuserstate
