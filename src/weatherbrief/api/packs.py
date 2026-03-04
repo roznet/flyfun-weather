@@ -195,8 +195,11 @@ class PackMetaResponse(BaseModel):
     has_skewt: bool
     has_digest: bool
     has_advisories: bool = False
+    has_alt_advisories: bool = False
     assessment: str | None
     assessment_reason: str | None
+    alt_assessment: str | None = None
+    alt_assessment_reason: str | None = None
     model_init_times: dict[str, int] = Field(default_factory=dict)
     grib_init_times: dict[str, int] = Field(default_factory=dict)
     models_skipped_region: list[str] = Field(default_factory=list)
@@ -223,8 +226,11 @@ def _meta_to_response(
         has_skewt=meta.has_skewt,
         has_digest=meta.has_digest,
         has_advisories=has_advisories,
+        has_alt_advisories=meta.has_alt_advisories,
         assessment=meta.assessment,
         assessment_reason=meta.assessment_reason,
+        alt_assessment=meta.alt_assessment,
+        alt_assessment_reason=meta.alt_assessment_reason,
         model_init_times=meta.model_init_times,
         grib_init_times=meta.grib_init_times,
         models_skipped_region=meta.models_skipped_region,
@@ -313,6 +319,7 @@ _STAGE_LABELS: dict[str, str] = {
     "waypoint_analysis": "Analyzing waypoints",
     "route_analysis": "Analyzing route points",
     "route_advisories": "Evaluating route advisories",
+    "alt_advisories": "Evaluating alt-time advisories",
     "route_weather": "Fetching METAR/TAF observations",
     "save_snapshot": "Saving snapshot",
     "fetch_gramet": "Fetching GRAMET",
@@ -328,6 +335,7 @@ _STAGE_PROGRESS: dict[str, float] = {
     "waypoint_analysis": 0.50,
     "route_analysis": 0.58,
     "route_advisories": 0.62,
+    "alt_advisories": 0.63,
     "route_weather": 0.64,
     "save_snapshot": 0.65,
     "fetch_gramet": 0.75,
@@ -432,6 +440,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     )
     if as_of_time:
         options.as_of_time = as_of_time
+    if flight.alt_departure_time:
+        options.alt_departure_time = flight.alt_departure_time
     if icing_method:
         options.icing_method = icing_method
     if cloud_method:
@@ -513,6 +523,17 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
     if model_metadata:
         init_times = {m: meta.last_init_time for m, meta in model_metadata.items()}
 
+    # Derive alt assessment from alt advisory result if available
+    alt_assessment = None
+    alt_assessment_reason = None
+    has_alt_advisories = False
+    if result.alt_advisory_result and result.alt_advisory_result.manifest:
+        has_alt_advisories = True
+        from weatherbrief.tasks.advise import derive_assessment_from_advisories
+        alt_assessment, alt_assessment_reason = derive_assessment_from_advisories(
+            result.alt_advisory_result.manifest,
+        )
+
     meta = BriefingPackMeta(
         flight_id=flight_id,
         fetch_timestamp=fetch_ts,
@@ -527,6 +548,9 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
         grib_init_times=result.grib_init_times,
         models_skipped_region=result.models_skipped_region,
         diagnostics=result.diagnostics,
+        alt_assessment=alt_assessment,
+        alt_assessment_reason=alt_assessment_reason,
+        has_alt_advisories=has_alt_advisories,
     )
 
     save_pack_meta(db, meta)
@@ -1209,6 +1233,101 @@ def get_advisories(
     if not adv_path.exists():
         raise HTTPException(status_code=404, detail="Route advisories not available")
     return FileResponse(adv_path, media_type="application/json")
+
+
+@router.get("/{timestamp}/advisories/alt")
+def get_alt_advisories(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get the alt-departure route advisories JSON for a pack."""
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    adv_path = pack_dir / "route_advisories_alt.json"
+    if not adv_path.exists():
+        raise HTTPException(status_code=404, detail="Alt advisories not available")
+    return FileResponse(adv_path, media_type="application/json")
+
+
+@router.post("/{timestamp}/advisories/alt/compute")
+def compute_alt_advisories(
+    flight_id: str,
+    timestamp: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Compute alt-departure advisories on-demand from existing pack data.
+
+    Uses the flight's ``alt_departure_time`` to re-run analysis and
+    advisories against the already-fetched forecast data.  Updates
+    the pack meta with the alt assessment.
+    """
+    from weatherbrief.tasks.advise import derive_assessment_from_advisories, run_alt_from_pack
+
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    if not flight.alt_departure_time:
+        raise HTTPException(status_code=422, detail="Flight has no alt departure time set")
+
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available for alt computation")
+
+    # Resolve route for advisory evaluation
+    db_path = getattr(request.app.state, "db_path", "")
+    from weatherbrief.airports import resolve_waypoints
+    from weatherbrief.models import RouteConfig
+
+    waypoint_objs = resolve_waypoints(flight.waypoints, db_path)
+    route = RouteConfig(
+        name=flight.route_name or " → ".join(flight.waypoints),
+        waypoints=waypoint_objs,
+        cruise_altitude_ft=flight.cruise_altitude_ft,
+        flight_ceiling_ft=flight.flight_ceiling_ft,
+        flight_duration_hours=flight.flight_duration_hours,
+    )
+
+    # Load advisory profile
+    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds = \
+        _load_advisory_profile(db, flight, user_id, request, pack_dir)
+
+    advisory_result = run_alt_from_pack(
+        pack_dir=pack_dir,
+        alt_departure_time=flight.alt_departure_time,
+        route=route,
+        advisory_models=adv_models,
+        enabled_ids=enabled_ids,
+        user_params=user_params,
+        aggregation=aggregation,
+        airport_conditions_recompute=recompute_conds,
+        icing_method=icing_method,
+        cloud_method=cloud_method,
+        convective_method=convective_method,
+    )
+
+    if advisory_result.manifest is None:
+        raise HTTPException(status_code=500, detail=advisory_result.error or "Alt advisory evaluation failed")
+
+    # Update pack meta with alt assessment
+    alt_assessment, alt_assessment_reason = derive_assessment_from_advisories(advisory_result.manifest)
+    from weatherbrief.db.models import BriefingPackRow
+    from sqlalchemy import select
+
+    naive_ts = datetime.fromisoformat(timestamp).replace(tzinfo=None)
+    stmt = select(BriefingPackRow).where(
+        BriefingPackRow.flight_id == flight_id,
+        BriefingPackRow.fetch_timestamp == naive_ts,
+    )
+    pack_row = db.execute(stmt).scalar_one_or_none()
+    if pack_row:
+        pack_row.alt_assessment = alt_assessment
+        pack_row.alt_assessment_reason = alt_assessment_reason
+        pack_row.has_alt_advisories = True
+        db.flush()
+
+    return advisory_result.manifest.model_dump()
 
 
 def _recompute_airport_conditions(

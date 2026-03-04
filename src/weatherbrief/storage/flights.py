@@ -40,6 +40,7 @@ def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
         cruise_altitude_ft=flight.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
+        alt_departure_time=flight.alt_departure_time,
         private=flight.private,
         auto_refresh=flight.auto_refresh,
         auto_refresh_hour=flight.auto_refresh_hour,
@@ -59,6 +60,7 @@ def _row_to_flight(row: FlightRow) -> Flight:
         cruise_altitude_ft=row.cruise_altitude_ft,
         flight_ceiling_ft=row.flight_ceiling_ft,
         flight_duration_hours=row.flight_duration_hours,
+        alt_departure_time=_ensure_utc(row.alt_departure_time) if row.alt_departure_time else None,
         private=row.private,
         auto_refresh=row.auto_refresh,
         auto_refresh_hour=row.auto_refresh_hour,
@@ -103,6 +105,9 @@ def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
         grib_init_times_json=json.dumps(meta.grib_init_times),
         models_skipped_region_json=json.dumps(meta.models_skipped_region),
         diagnostics_json=json.dumps(meta.diagnostics),
+        alt_assessment=meta.alt_assessment,
+        alt_assessment_reason=meta.alt_assessment_reason,
+        has_alt_advisories=meta.has_alt_advisories,
     )
 
 
@@ -148,6 +153,9 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         grib_init_times=json.loads(row.grib_init_times_json) if row.grib_init_times_json else {},
         models_skipped_region=json.loads(row.models_skipped_region_json) if row.models_skipped_region_json else [],
         diagnostics=json.loads(row.diagnostics_json) if row.diagnostics_json else [],
+        alt_assessment=row.alt_assessment,
+        alt_assessment_reason=row.alt_assessment_reason,
+        has_alt_advisories=row.has_alt_advisories,
     )
 
 
@@ -165,6 +173,7 @@ def save_flight(session: Session, flight: Flight, user_id: str) -> None:
         existing.cruise_altitude_ft = flight.cruise_altitude_ft
         existing.flight_ceiling_ft = flight.flight_ceiling_ft
         existing.flight_duration_hours = flight.flight_duration_hours
+        existing.alt_departure_time = flight.alt_departure_time
         existing.private = flight.private
         existing.auto_refresh = flight.auto_refresh
         existing.auto_refresh_hour = flight.auto_refresh_hour

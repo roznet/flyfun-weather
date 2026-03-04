@@ -4,9 +4,9 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
-import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig } from './managers/advisories-ui';
+import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig, type AltTimeToggleConfig } from './managers/advisories-ui';
 import type { DisplayMode } from './types/metrics';
-import { renderUserInfo, initModelCatalog, isFlightPast } from './utils';
+import { renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData } from './visualization/data-extract';
@@ -130,6 +130,24 @@ async function init(): Promise<void> {
     if (result) {
       showPopupContent(renderAltitudeTablePopup(result));
     }
+  }
+
+  /** Build alt time toggle config if alt advisories are available. */
+  function getAltTimeToggleConfig(state: BriefingState): AltTimeToggleConfig | undefined {
+    if (!state.flight?.alt_departure_time || !state.altAdvisories) return undefined;
+    const primaryTime = formatDepartureTime(state.flight.departure_time);
+    const altTime = formatDepartureTime(state.flight.alt_departure_time);
+    return {
+      primaryLabel: primaryTime,
+      altLabel: altTime,
+      showingAlt: state.showingAlt,
+      onToggle: () => store.getState().toggleAltView(),
+    };
+  }
+
+  /** Get the effective advisory manifest based on primary/alt toggle state. */
+  function getEffectiveAdvisories(state: BriefingState): import('./types/advisories').RouteAdvisoriesManifest | null {
+    return state.showingAlt && state.altAdvisories ? state.altAdvisories : state.routeAdvisories;
   }
 
   // Apply initial display mode
@@ -486,11 +504,13 @@ async function init(): Promise<void> {
       state.digest !== prev.digest ||
       state.routeAnalyses !== prev.routeAnalyses ||
       state.routeAdvisories !== prev.routeAdvisories ||
+      state.altAdvisories !== prev.altAdvisories ||
+      state.showingAlt !== prev.showingAlt ||
       state.elevationProfile !== prev.elevationProfile ||
       state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride
     ) {
-      ui.renderAssessment(state.currentPack);
-      renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable);
+      ui.renderAssessment(state.currentPack, state.flight);
+      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state));
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
       ui.renderGramet(state.flight, state.currentPack);
@@ -529,7 +549,7 @@ async function init(): Promise<void> {
       updateToggleButtons(state.displayMode);
       renderSliderSections(state);
       if (state.displayMode !== prev.displayMode) {
-        renderAdvisories(state.routeAdvisories, () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable);
+        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state));
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
         // Entering compact: enforce preferred-only layers for clouds/icing
         // (triggers vizSettings change → renderVisualization runs via that subscriber)
@@ -846,8 +866,8 @@ async function init(): Promise<void> {
     const s = store.getState();
     ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
-    ui.renderAssessment(s.currentPack);
-    renderAdvisories(s.routeAdvisories, () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable);
+    ui.renderAssessment(s.currentPack, s.flight);
+    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s));
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode);
     ui.renderGramet(s.flight, s.currentPack);

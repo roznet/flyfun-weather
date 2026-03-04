@@ -183,3 +183,25 @@ def load_briefing(pack_dir: Path) -> dict | None:
 def load_forecasts(pack_dir: Path) -> dict | None:
     """Load forecasts.json (route + metadata + raw forecasts), fallback to snapshot.json."""
     return _load_json_with_fallback(pack_dir, "forecasts.json")
+
+
+# ---------------------------------------------------------------------------
+# Alt advisory artifacts
+# ---------------------------------------------------------------------------
+
+def save_alt_advisory_artifacts(
+    pack_dir: Path,
+    manifest: RouteAdvisoriesManifest,
+) -> None:
+    """Persist alt-departure advisory artifacts to *pack_dir*."""
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    adv_path = pack_dir / "route_advisories_alt.json"
+    adv_path.write_text(manifest.model_dump_json(indent=2))
+
+
+def load_alt_advisory_artifacts(pack_dir: Path) -> RouteAdvisoriesManifest | None:
+    """Load alt-departure advisories, returning *None* if missing."""
+    adv_path = pack_dir / "route_advisories_alt.json"
+    if not adv_path.exists():
+        return None
+    return RouteAdvisoriesManifest.model_validate_json(adv_path.read_text())

@@ -47,6 +47,7 @@ export async function deleteFlight(id: string): Promise<void> {
 export interface UpdateFlightRequest {
   profile_id?: number;
   departure_time?: string;
+  alt_departure_time?: string | null;
   cruise_altitude_ft?: number;
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
@@ -268,6 +269,25 @@ export async function fetchRouteAdvisories(
 ): Promise<RouteAdvisoriesManifest> {
   return apiFetch<RouteAdvisoriesManifest>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories`
+  );
+}
+
+export async function fetchAltAdvisories(
+  flightId: string,
+  timestamp: string,
+): Promise<RouteAdvisoriesManifest> {
+  return apiFetch<RouteAdvisoriesManifest>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/alt`
+  );
+}
+
+export async function computeAltAdvisories(
+  flightId: string,
+  timestamp: string,
+): Promise<RouteAdvisoriesManifest> {
+  return apiFetch<RouteAdvisoriesManifest>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/alt/compute`,
+    { method: 'POST' },
   );
 }
 

@@ -33,6 +33,7 @@ class Flight(BaseModel):
     flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
     private: bool = False
+    alt_departure_time: datetime | None = None  # optional same-day alt departure
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
     last_auto_refresh_at: datetime | None = None
@@ -68,6 +69,9 @@ class BriefingPackMeta(BaseModel):
     grib_init_times: dict[str, int] = Field(default_factory=dict)
     models_skipped_region: list[str] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
+    alt_assessment: Optional[str] = None  # GREEN/AMBER/RED for alt departure
+    alt_assessment_reason: Optional[str] = None
+    has_alt_advisories: bool = False
 
     @computed_field  # type: ignore[prop-decorator]
     @property

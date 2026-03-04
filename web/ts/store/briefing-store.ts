@@ -70,6 +70,8 @@ export interface BriefingState {
   digest: WeatherDigest | null;
   routeAnalyses: RouteAnalysesManifest | null;
   routeAdvisories: RouteAdvisoriesManifest | null;
+  altAdvisories: RouteAdvisoriesManifest | null;
+  showingAlt: boolean;
   elevationProfile: ElevationProfile | null;
   freshness: DataStatus | null;
   freshnessLoading: boolean;
@@ -112,6 +114,9 @@ export interface BriefingState {
   fetchAltitudeTable: () => Promise<void>;
   refreshObservations: () => Promise<void>;
   sendEmail: () => Promise<void>;
+  loadAltAdvisories: () => Promise<void>;
+  computeAltAdvisories: () => Promise<void>;
+  toggleAltView: () => void;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   updateFlightPrivacy: (isPrivate: boolean) => void;
   setLayout: (layout: VizLayout) => void;
@@ -133,6 +138,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   digest: null,
   routeAnalyses: null,
   routeAdvisories: null,
+  altAdvisories: null,
+  showingAlt: false,
   elevationProfile: null,
   freshness: null,
   freshnessLoading: false,
@@ -210,7 +217,11 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       if (raResult.status === 'fulfilled') routeAnalyses = raResult.value;
       if (epResult.status === 'fulfilled') elevationProfile = epResult.value;
       if (advResult.status === 'fulfilled') routeAdvisories = advResult.value;
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, selectedPointIndex: 0, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, altAdvisories: null, showingAlt: false, selectedPointIndex: 0, loading: false });
+      // Auto-load alt advisories if available
+      if (pack.has_alt_advisories) {
+        get().loadAltAdvisories();
+      }
     } catch (err) {
       set({ loading: false, error: `Failed to load pack: ${err}` });
     }
@@ -436,6 +447,34 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     } catch (err) {
       set({ emailing: false, error: `Email failed: ${err}` });
     }
+  },
+
+  loadAltAdvisories: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    try {
+      const altAdv = await api.fetchAltAdvisories(flight.id, currentPack.fetch_timestamp);
+      set({ altAdvisories: altAdv });
+    } catch {
+      // Non-critical — alt advisories may not exist
+    }
+  },
+
+  computeAltAdvisories: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    try {
+      const altAdv = await api.computeAltAdvisories(flight.id, currentPack.fetch_timestamp);
+      // Re-fetch pack meta to get updated alt_assessment fields
+      const updatedPack = await api.fetchPack(flight.id, currentPack.fetch_timestamp);
+      set({ altAdvisories: altAdv, currentPack: updatedPack });
+    } catch (err) {
+      set({ error: `Alt advisories computation failed: ${err}` });
+    }
+  },
+
+  toggleAltView: () => {
+    set({ showingAlt: !get().showingAlt });
   },
 
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => {

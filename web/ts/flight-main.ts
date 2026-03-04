@@ -62,6 +62,8 @@ async function init(): Promise<void> {
       const profileEl = document.getElementById('edit-profile') as HTMLSelectElement;
       const hourEl = document.getElementById('edit-hour') as HTMLSelectElement;
       const minuteEl = document.getElementById('edit-minute') as HTMLSelectElement;
+      const altHourEl = document.getElementById('edit-alt-hour') as HTMLSelectElement;
+      const altMinuteEl = document.getElementById('edit-alt-minute') as HTMLSelectElement;
       const altEl = document.getElementById('edit-altitude') as HTMLInputElement;
       const ceilEl = document.getElementById('edit-ceiling') as HTMLInputElement;
       const durEl = document.getElementById('edit-duration') as HTMLInputElement;
@@ -76,9 +78,17 @@ async function init(): Promise<void> {
       // Build ISO datetime using the same date
       const departureTime = `${flight.target_date}T${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}:00Z`;
 
+      // Build alt departure time (or empty string to clear)
+      const altHour = altHourEl ? parseInt(altHourEl.value, 10) : -1;
+      const altMinute = altMinuteEl ? parseInt(altMinuteEl.value, 10) : 0;
+      const altDepartureTime = altHour >= 0
+        ? `${flight.target_date}T${altHour.toString().padStart(2, '0')}:${altMinute.toString().padStart(2, '0')}:00Z`
+        : '';
+
       await store.getState().saveFlight({
         profile_id: profileId,
         departure_time: departureTime,
+        alt_departure_time: altDepartureTime,
         cruise_altitude_ft: altitude,
         flight_ceiling_ft: ceiling,
         flight_duration_hours: duration,

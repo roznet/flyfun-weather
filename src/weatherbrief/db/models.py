@@ -105,6 +105,9 @@ class FlightRow(Base):
     private: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_refresh_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    alt_departure_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
     last_auto_refresh_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -138,6 +141,9 @@ class BriefingPackRow(Base):
     grib_init_times_json: Mapped[str] = mapped_column(Text, default="{}")
     models_skipped_region_json: Mapped[str] = mapped_column(Text, default="[]")
     diagnostics_json: Mapped[str] = mapped_column(Text, default="[]")
+    alt_assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    alt_assessment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    has_alt_advisories: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     flight: Mapped[FlightRow] = relationship(back_populates="packs")
 

@@ -46,6 +46,11 @@ export function renderFlightInfo(
   const currentProfile = profiles.find(p => p.id === flight.profile_id);
   const profileName = currentProfile ? currentProfile.name : '\u2014';
 
+  // Alt departure time parsing
+  const altDt = flight.alt_departure_time ? new Date(flight.alt_departure_time) : null;
+  const altUtcHour = altDt ? altDt.getUTCHours() : -1;
+  const altUtcMinute = altDt ? altDt.getUTCMinutes() : 0;
+
   if (editing) {
     // Build hour options
     let hourOptions = '';
@@ -56,6 +61,17 @@ export function renderFlightInfo(
     // Build minute options
     const minuteOptions = [0, 15, 30, 45].map(m => {
       const sel = m === nearestMinute(utcMinute) ? ' selected' : '';
+      return `<option value="${m}"${sel}>${m.toString().padStart(2, '0')}</option>`;
+    }).join('');
+    // Build alt hour options (with "None" option)
+    let altHourOptions = `<option value="-1"${altUtcHour === -1 ? ' selected' : ''}>None</option>`;
+    for (let h = 0; h < 24; h++) {
+      const sel = h === altUtcHour ? ' selected' : '';
+      altHourOptions += `<option value="${h}"${sel}>${h.toString().padStart(2, '0')}</option>`;
+    }
+    // Build alt minute options
+    const altMinuteOptions = [0, 15, 30, 45].map(m => {
+      const sel = m === nearestMinute(altUtcMinute) ? ' selected' : '';
       return `<option value="${m}"${sel}>${m.toString().padStart(2, '0')}</option>`;
     }).join('');
     // Build profile options
@@ -85,6 +101,14 @@ export function renderFlightInfo(
           </span>
         </div>
         <div class="info-row">
+          <span class="info-label">Alt Time (UTC)</span>
+          <span class="info-value">
+            <select id="edit-alt-hour" class="edit-input">${altHourOptions}</select>
+            <span class="time-separator" id="alt-time-sep">:</span>
+            <select id="edit-alt-minute" class="edit-input">${altMinuteOptions}</select>
+          </span>
+        </div>
+        <div class="info-row">
           <span class="info-label">Altitude</span>
           <span class="info-value">
             <input type="number" id="edit-altitude" class="edit-input" value="${flight.cruise_altitude_ft}" min="1000" max="45000" step="500" style="width:80px"> ft
@@ -109,6 +133,18 @@ export function renderFlightInfo(
       </div>
     `;
 
+    // Toggle alt minute visibility based on alt hour selection
+    const altHourSelect = document.getElementById('edit-alt-hour') as HTMLSelectElement;
+    const altMinuteSelect = document.getElementById('edit-alt-minute') as HTMLSelectElement;
+    const altTimeSep = document.getElementById('alt-time-sep');
+    function updateAltMinuteVisibility(): void {
+      const hidden = altHourSelect?.value === '-1';
+      if (altMinuteSelect) altMinuteSelect.style.display = hidden ? 'none' : '';
+      if (altTimeSep) altTimeSep.style.display = hidden ? 'none' : '';
+    }
+    updateAltMinuteVisibility();
+    altHourSelect?.addEventListener('change', updateAltMinuteVisibility);
+
     // When profile changes, update altitude/ceiling to match the selected profile
     const profileSelect = document.getElementById('edit-profile') as HTMLSelectElement;
     profileSelect?.addEventListener('change', () => {
@@ -126,6 +162,20 @@ export function renderFlightInfo(
       }
     });
   } else {
+    // Alt time display with delta
+    let altTimeHtml = '';
+    if (altDt) {
+      const deltaMs = altDt.getTime() - dt.getTime();
+      const deltaH = deltaMs / 3600_000;
+      const sign = deltaH >= 0 ? '+' : '';
+      const deltaStr = Number.isInteger(deltaH) ? `${sign}${deltaH}h` : `${sign}${deltaH.toFixed(1)}h`;
+      altTimeHtml = `
+        <div class="info-row">
+          <span class="info-label">Alt Time</span>
+          <span class="info-value">${formatDepartureTime(flight.alt_departure_time!)} <span class="muted">(${deltaStr})</span></span>
+        </div>`;
+    }
+
     container.innerHTML = `
       <div class="flight-info-grid">
         <div class="info-row">
@@ -140,6 +190,7 @@ export function renderFlightInfo(
           <span class="info-label">Time</span>
           <span class="info-value">${formatDepartureTime(flight.departure_time)}</span>
         </div>
+        ${altTimeHtml}
         <div class="info-row">
           <span class="info-label">Altitude</span>
           <span class="info-value">${formatAlt(flight.cruise_altitude_ft)}</span>
