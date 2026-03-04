@@ -40,14 +40,10 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_cloud_diagnostics(hourly: HourlyForecast, diag: NWPCloudDiagnostics) -> None:
-    """Attach NWP cloud diagnostics and override Open-Meteo cloud cover for consistency."""
+    """Attach NWP cloud diagnostics. Open-Meteo cloud_cover_*_pct fields are
+    preserved — they provide hourly-interpolated coverage that is more temporally
+    accurate than forward-filled GRIB values on non-native hours."""
     hourly.nwp_cloud_diagnostics = diag
-    if diag.low.cover_pct is not None:
-        hourly.cloud_cover_low_pct = diag.low.cover_pct
-    if diag.mid.cover_pct is not None:
-        hourly.cloud_cover_mid_pct = diag.mid.cover_pct
-    if diag.high.cover_pct is not None:
-        hourly.cloud_cover_high_pct = diag.high.cover_pct
 
 
 def _forecast_hour_to_utc(init_date: str, init_hour: int, fhour: int) -> datetime:
