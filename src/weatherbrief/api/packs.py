@@ -344,26 +344,33 @@ _STAGE_PROGRESS: dict[str, float] = {
 }
 
 
-def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privileged=False, as_of_time=None):
-    """Shared setup for both sync and streaming refresh endpoints.
-
-    If a DB session is provided, loads user preferences (models, autorouter
-    credentials) and applies them to the BriefingOptions.
-    """
+def _build_route_config(flight, db_path):
+    """Build a RouteConfig from a flight, resolving waypoints."""
     from weatherbrief.airports import resolve_waypoints
-    from weatherbrief.models import ModelSource, RouteConfig
-    from weatherbrief.pipeline import BriefingOptions
+    from weatherbrief.models import RouteConfig
 
     if not flight.waypoints:
         raise ValueError("Flight has no waypoints defined")
     waypoint_objs = resolve_waypoints(flight.waypoints, db_path)
-    route = RouteConfig(
+    return RouteConfig(
         name=flight.route_name or " \u2192 ".join(flight.waypoints),
         waypoints=waypoint_objs,
         cruise_altitude_ft=flight.cruise_altitude_ft,
         flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
     )
+
+
+def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privileged=False, as_of_time=None):
+    """Shared setup for both sync and streaming refresh endpoints.
+
+    If a DB session is provided, loads user preferences (models, autorouter
+    credentials) and applies them to the BriefingOptions.
+    """
+    from weatherbrief.models import ModelSource
+    from weatherbrief.pipeline import BriefingOptions
+
+    route = _build_route_config(flight, db_path)
 
     fetch_ts = datetime.now(tz=timezone.utc)
     pack_path = pack_dir_for(user_id, flight_id, fetch_ts)
@@ -1266,7 +1273,7 @@ def compute_alt_advisories(
     """
     from weatherbrief.tasks.advise import derive_assessment_from_advisories, run_alt_from_pack
 
-    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    flight = _load_owned_flight(db, flight_id, user_id)
     if not flight.alt_departure_time:
         raise HTTPException(status_code=422, detail="Flight has no alt departure time set")
 
@@ -1275,19 +1282,8 @@ def compute_alt_advisories(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available for alt computation")
 
-    # Resolve route for advisory evaluation
     db_path = getattr(request.app.state, "db_path", "")
-    from weatherbrief.airports import resolve_waypoints
-    from weatherbrief.models import RouteConfig
-
-    waypoint_objs = resolve_waypoints(flight.waypoints, db_path)
-    route = RouteConfig(
-        name=flight.route_name or " → ".join(flight.waypoints),
-        waypoints=waypoint_objs,
-        cruise_altitude_ft=flight.cruise_altitude_ft,
-        flight_ceiling_ft=flight.flight_ceiling_ft,
-        flight_duration_hours=flight.flight_duration_hours,
-    )
+    route = _build_route_config(flight, db_path)
 
     # Load advisory profile
     enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds = \
