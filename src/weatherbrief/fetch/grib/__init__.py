@@ -77,7 +77,7 @@ def enrich_forecasts(
     flight_duration_hours: float = 0.0,
     progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict[str, str]]:
     """Enrich cross-section forecasts with cloud water from GRIB2 sources.
 
     Enriches GFS cross-sections with CLWMR/ICMR and cloud diagnostics.
@@ -95,9 +95,12 @@ def enrich_forecasts(
         as_of_time: If set, only use model runs initialized before this time.
 
     Returns:
-        Dict mapping model name to GRIB init Unix timestamp (only non-None).
+        Tuple of (grib_init_times, grib_skip_reasons):
+        - grib_init_times: model name → GRIB init Unix timestamp.
+        - grib_skip_reasons: model name → skip reason string (e.g. "out_of_range").
     """
     grib_init_times: dict[str, int] = {}
+    grib_skip_reasons: dict[str, str] = {}
 
     if progress_callback is not None:
         progress_callback("grib_enrichment", "GFS")
@@ -121,12 +124,12 @@ def enrich_forecasts(
     if icon_ts is not None:
         grib_init_times["icon"] = icon_ts
     elif icon_skip is not None:
-        grib_init_times["icon_skip"] = icon_skip
+        grib_skip_reasons["icon"] = icon_skip
 
     # Fill interpolated hours that lack GRIB diagnostics from nearest native step
     _propagate_cloud_diagnostics(cross_sections, all_forecasts)
 
-    return grib_init_times
+    return grib_init_times, grib_skip_reasons
 
 
 # ---------------------------------------------------------------------------
