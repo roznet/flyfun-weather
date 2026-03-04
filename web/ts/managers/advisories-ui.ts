@@ -343,6 +343,13 @@ export interface AltitudeOverrideConfig {
   onChange: (alt: number) => void;
 }
 
+export interface AltTimeToggleConfig {
+  primaryLabel: string;   // e.g. "09:00Z"
+  altLabel: string;       // e.g. "15:00Z"
+  showingAlt: boolean;
+  onToggle: () => void;
+}
+
 /**
  * Render the advisory dashboard into the #advisories-section element.
  * onRecalculate callback wires up the recalculate button.
@@ -353,6 +360,7 @@ export function renderAdvisories(
   displayMode: DisplayMode = 'full',
   altitudeOverride?: AltitudeOverrideConfig,
   onAltitudeTable?: () => Promise<void>,
+  altTimeToggle?: AltTimeToggleConfig,
 ): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
@@ -431,9 +439,22 @@ export function renderAdvisories(
     ? renderAirportConditions(manifest.airport_conditions, aggregation)
     : '';
 
+  // Alt time toggle
+  let toggleHtml = '';
+  if (altTimeToggle) {
+    const primaryActive = !altTimeToggle.showingAlt ? ' active' : '';
+    const altActive = altTimeToggle.showingAlt ? ' active' : '';
+    toggleHtml = `
+      <div class="advisory-time-toggle">
+        <button class="btn btn-sm btn-toggle${primaryActive}" data-alt-toggle="primary">${escapeHtml(altTimeToggle.primaryLabel)}</button>
+        <button class="btn btn-sm btn-toggle${altActive}" data-alt-toggle="alt">Alt ${escapeHtml(altTimeToggle.altLabel)}</button>
+      </div>`;
+  }
+
   const cards = sorted.map(adv => renderAdvisoryCard(adv, catalog)).join('');
 
   el.innerHTML = `
+    ${toggleHtml}
     <div class="advisory-toolbar">
       ${summary}
       ${sliderHtml}
@@ -493,6 +514,13 @@ export function renderAdvisories(
         altitudeOverride.onChange(altitudeOverride.defaultAlt);
       });
     }
+  }
+
+  // Wire alt time toggle
+  if (altTimeToggle) {
+    el.querySelectorAll('[data-alt-toggle]').forEach((btn) => {
+      btn.addEventListener('click', () => altTimeToggle.onToggle());
+    });
   }
 
   // Wire advisory info buttons (event delegation)

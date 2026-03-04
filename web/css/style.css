@@ -507,6 +507,58 @@ label {
 .assessment-red { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
 .assessment-none { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
 
+.assessment-dual {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.assessment-separator {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.assessment-green-text { color: var(--green); }
+.assessment-amber-text { color: var(--amber); }
+.assessment-red-text { color: var(--red); }
+
+/* --- Advisory time toggle --- */
+
+.advisory-time-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0.75rem;
+}
+
+.advisory-time-toggle .btn-toggle {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.advisory-time-toggle .btn-toggle:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.advisory-time-toggle .btn-toggle:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+  border-left: none;
+}
+
+.advisory-time-toggle .btn-toggle.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.advisory-time-toggle .btn-toggle:hover:not(.active) {
+  background: var(--bg);
+}
+
 /* --- Briefing header --- */
 
 .briefing-toolbar {

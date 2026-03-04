@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from weatherbrief.models import (
     AdvisoryAggregation,
+    AdvisoryStatus,
     AirportConditions,
     AltitudeTableResult,
     ElevationProfile,
@@ -413,3 +415,141 @@ def run_altitude_table_from_pack(
         user_params=user_params,
         aggregation=effective_aggregation,
     )
+
+
+# ---------------------------------------------------------------------------
+# Alt departure time helpers
+# ---------------------------------------------------------------------------
+
+
+def derive_assessment_from_advisories(
+    manifest: RouteAdvisoriesManifest,
+) -> tuple[str, str]:
+    """Derive an overall assessment (GREEN/AMBER/RED) from an advisories manifest.
+
+    Returns ``(assessment, reason)`` where assessment is the worst aggregate
+    status across all advisories and reason summarises the RED/AMBER ones.
+    """
+    statuses = [
+        AdvisoryStatus(adv.aggregate_status)
+        for adv in manifest.advisories
+        if adv.aggregate_status != "unavailable"
+    ]
+    if not statuses:
+        return ("GREEN", "No advisory data available")
+
+    worst = AdvisoryStatus.worst(statuses)
+    assessment = worst.value.upper()
+
+    # Build reason from the non-green advisories
+    concern_parts: list[str] = []
+    for adv in manifest.advisories:
+        if adv.aggregate_status in ("red", "amber"):
+            concern_parts.append(f"{adv.advisory_id}={adv.aggregate_status.upper()}")
+    reason = ", ".join(concern_parts) if concern_parts else "All clear"
+    return (assessment, reason)
+
+
+def run_alt_from_pack(
+    pack_dir: Path,
+    alt_departure_time: datetime,
+    route: RouteConfig,
+    *,
+    advisory_models: list[str] | None = None,
+    enabled_ids: set[str] | None = None,
+    user_params: dict | None = None,
+    aggregation: AdvisoryAggregation | None = None,
+    airports_db_path: str | None = None,
+    airport_conditions_recompute: Callable | None = None,
+    icing_method: str | None = None,
+    cloud_method: str | None = None,
+    convective_method: str | None = None,
+) -> AdvisoryResult:
+    """Re-run analysis + advisories at an alt departure time using existing pack data.
+
+    Loads cross-sections and route points from disk, calls
+    ``analyze_all_route_points`` with the alt departure time (which picks
+    different hourly forecasts via ``at_time()``), then evaluates advisories.
+    Saves the result as ``route_advisories_alt.json``.
+    """
+    from weatherbrief.tasks.analyze import analyze_all_route_points
+    from weatherbrief.tasks.artifacts import (
+        load_cross_sections,
+        load_elevation_profile,
+        load_route_points,
+        save_alt_advisory_artifacts,
+    )
+
+    cross_sections = load_cross_sections(pack_dir)
+    route_points = load_route_points(pack_dir)
+    elevation = load_elevation_profile(pack_dir)
+
+    if not cross_sections or route_points is None:
+        return AdvisoryResult(manifest=None, error="Missing cross-section or route-point data")
+
+    # Re-run analysis at the alt departure time
+    rp_analyses = analyze_all_route_points(
+        cross_sections=cross_sections,
+        route_points=route_points,
+        departure_time=alt_departure_time,
+        duration_hours=route.flight_duration_hours,
+        cruise_altitude_ft=route.cruise_altitude_ft,
+        flight_ceiling_ft=route.flight_ceiling_ft,
+    )
+
+    if not rp_analyses:
+        return AdvisoryResult(manifest=None, error="Alt analysis produced no results")
+
+    rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_method, convective_method)
+
+    total_distance = route_points[-1].distance_from_origin_nm
+    model_names = list(rp_analyses[0].sounding.keys()) if rp_analyses else []
+    advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
+
+    # Airport conditions
+    airport_conds: AirportConditions | None = None
+    if airport_conditions_recompute is not None:
+        airport_conds = airport_conditions_recompute(
+            rp_analyses, cross_sections, advisory_model_names,
+        )
+    elif airports_db_path:
+        airport_conds = _compute_airport_conditions(
+            rp_analyses, cross_sections, advisory_model_names,
+            route, airports_db_path,
+        )
+
+    # Evaluate advisories
+    try:
+        from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
+
+        ctx = RouteContext(
+            analyses=rp_analyses,
+            cross_sections=cross_sections,
+            elevation=elevation,
+            models=advisory_model_names,
+            cruise_altitude_ft=route.cruise_altitude_ft,
+            flight_ceiling_ft=route.flight_ceiling_ft,
+            total_distance_nm=total_distance,
+            airport_conditions=airport_conds,
+        )
+        effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
+        advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
+        manifest = RouteAdvisoriesManifest(
+            advisories=advisory_results,
+            catalog=get_catalog(),
+            route_name=route.name,
+            cruise_altitude_ft=route.cruise_altitude_ft,
+            flight_ceiling_ft=route.flight_ceiling_ft,
+            total_distance_nm=total_distance,
+            models=advisory_model_names,
+            aggregation=effective_aggregation.value,
+            airport_conditions=airport_conds,
+        )
+
+        save_alt_advisory_artifacts(pack_dir, manifest)
+        logger.info("Alt advisory evaluation complete: %d advisories", len(advisory_results))
+
+        return AdvisoryResult(manifest=manifest, airport_conditions=airport_conds)
+    except Exception as exc:
+        logger.warning("Alt advisory evaluation failed", exc_info=True)
+        return AdvisoryResult(manifest=None, error=str(exc))

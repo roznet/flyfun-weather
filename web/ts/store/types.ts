@@ -7,6 +7,7 @@ export interface FlightResponse {
   route_name: string;
   waypoints: string[];
   departure_time: string;
+  alt_departure_time: string | null;
   target_date: string;        // backward compat (computed from departure_time)
   target_time_utc: number;    // backward compat (computed from departure_time)
   cruise_altitude_ft: number;
@@ -44,8 +45,11 @@ export interface PackMeta {
   has_skewt: boolean;
   has_digest: boolean;
   has_advisories?: boolean;
+  has_alt_advisories?: boolean;
   assessment: string | null;
   assessment_reason: string | null;
+  alt_assessment?: string | null;
+  alt_assessment_reason?: string | null;
   model_init_times?: Record<string, number>;
   grib_init_times?: Record<string, number>;
   models_skipped_region?: string[];
