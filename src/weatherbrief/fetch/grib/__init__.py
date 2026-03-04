@@ -112,7 +112,7 @@ def enrich_forecasts(
 
     if progress_callback is not None:
         progress_callback("grib_enrichment", "ICON-EU")
-    icon_ts = _enrich_icon_eu(
+    icon_ts, icon_skip = _enrich_icon_eu(
         cross_sections, all_forecasts, route_points,
         departure_time, data_dir=data_dir,
         flight_duration_hours=flight_duration_hours,
@@ -120,6 +120,8 @@ def enrich_forecasts(
     )
     if icon_ts is not None:
         grib_init_times["icon"] = icon_ts
+    elif icon_skip is not None:
+        grib_init_times["icon_skip"] = icon_skip
 
     # Fill interpolated hours that lack GRIB diagnostics from nearest native step
     _propagate_cloud_diagnostics(cross_sections, all_forecasts)
@@ -488,10 +490,14 @@ def _enrich_icon_eu(
     data_dir: Path,
     flight_duration_hours: float = 0.0,
     as_of_time: datetime | None = None,
-) -> int | None:
+) -> tuple[int | None, str | None]:
     """Enrich ICON cross-sections with QC/QI from ICON-EU GRIB2.
 
-    Returns the GRIB init Unix timestamp, or None if enrichment was skipped.
+    Returns:
+        (init_timestamp, skip_reason) — init_timestamp is the GRIB init Unix
+        timestamp when enrichment succeeded, None otherwise. skip_reason is a
+        short string when enrichment was skipped for a known reason (e.g.
+        ``"out_of_range"``), None otherwise.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_MODEL_LEVEL_MAX,
@@ -506,12 +512,12 @@ def _enrich_icon_eu(
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
     if not icon_sections:
         logger.debug("No ICON cross-sections to enrich")
-        return None
+        return None, None
 
     # Domain check — skip silently if route is outside ICON-EU bounds
     if not route_in_icon_eu_domain(route_points):
         logger.info("Route outside ICON-EU domain, skipping ICON-EU enrichment")
-        return None
+        return None, None
 
     session = requests.Session()
 
@@ -521,13 +527,21 @@ def _enrich_icon_eu(
         )
     except Exception:
         logger.warning("Failed to find ICON-EU model run", exc_info=True)
-        return None
+        return None, None
 
     if run_info is None:
         logger.warning("No ICON-EU model run found for enrichment")
-        return None
+        return None, None
 
     init_date, init_hour = run_info
+
+    # Check if departure exceeds ICON-EU's 120h forecast range
+    init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc,
+    )
+    if (departure_time - init_dt).total_seconds() / 3600 > 120:
+        logger.info("ICON-EU: departure exceeds 120h range, skipping")
+        return None, "out_of_range"
     forecast_hours = compute_icon_eu_flight_window_hours(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
@@ -594,7 +608,7 @@ def _enrich_icon_eu(
 
     if not total_enriched:
         logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
-        return None
+        return None, None
 
     logger.info(
         "GRIB2 ICON enrichment: %d pressure levels enriched with cloud water",
@@ -608,7 +622,7 @@ def _enrich_icon_eu(
         run_dir, point_lats, point_lons, session,
     )
 
-    return _run_info_to_timestamp(init_date, init_hour)
+    return _run_info_to_timestamp(init_date, init_hour), None
 
 
 def _enrich_icon_eu_cloud_diagnostics(

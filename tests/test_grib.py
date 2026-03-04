@@ -1227,6 +1227,49 @@ class TestComputeFlightWindowHours:
         hours = compute_flight_window_hours("20260227", 0, dep, 4.0)
         assert hours == sorted(set(hours))
 
+    def test_3hourly_floor_included(self):
+        """Floor native hour is included for forward-fill in the 3-hourly region.
+
+        Departure at ~f140 should include f138 (floor) so forward-fill can
+        propagate diagnostics to the departure hour.
+        """
+        from datetime import datetime, timedelta, timezone
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        init_dt = datetime(2026, 3, 1, 0, tzinfo=timezone.utc)
+        # Departure 140h after init → in the 3-hourly region
+        dep = init_dt + timedelta(hours=140)
+        hours = compute_flight_window_hours("20260301", 0, dep, 2.0)
+        # f138 = 120 + 6*3 = floor of 140 in 3-hourly grid
+        assert 138 in hours
+        # f141 = 120 + 7*3 = nearest round of 140
+        assert 141 in hours
+
+
+class TestSnapToGfsGridFloor:
+    """Tests for _snap_to_gfs_grid_floor."""
+
+    def test_hourly_region(self):
+        from weatherbrief.fetch.grib.grib_fetch import _snap_to_gfs_grid_floor
+
+        assert _snap_to_gfs_grid_floor(50.7) == 50
+        assert _snap_to_gfs_grid_floor(120.0) == 120
+
+    def test_3hourly_region(self):
+        from weatherbrief.fetch.grib.grib_fetch import _snap_to_gfs_grid_floor
+
+        # 140 → 120 + int((140-120)/3)*3 = 120 + 6*3 = 138
+        assert _snap_to_gfs_grid_floor(140.0) == 138
+        # 141 → same as 140
+        assert _snap_to_gfs_grid_floor(141.0) == 141
+        # 142.9 → 120 + int(22.9/3)*3 = 120 + 7*3 = 141
+        assert _snap_to_gfs_grid_floor(142.9) == 141
+
+    def test_clamp_to_384(self):
+        from weatherbrief.fetch.grib.grib_fetch import _snap_to_gfs_grid_floor
+
+        assert _snap_to_gfs_grid_floor(500.0) == 384
+
 
 class TestComputeIconEuFlightWindowHours:
     """Tests for compute_icon_eu_flight_window_hours."""
@@ -1248,6 +1291,45 @@ class TestComputeIconEuFlightWindowHours:
         dep = datetime(2026, 2, 27, 9, tzinfo=timezone.utc)
         hours = compute_icon_eu_flight_window_hours("20260220", 0, dep, 2.0)
         assert all(h <= 120 for h in hours)
+
+    def test_3hourly_floor_included(self):
+        """Floor native hour is included for forward-fill in the 3-hourly region.
+
+        Departure at ~f80 should include f78 (floor) so forward-fill can
+        propagate diagnostics to the departure hour.
+        """
+        from datetime import datetime, timedelta, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import compute_icon_eu_flight_window_hours
+
+        init_dt = datetime(2026, 3, 1, 0, tzinfo=timezone.utc)
+        # Departure 80h after init → just into the 3-hourly region
+        dep = init_dt + timedelta(hours=80)
+        hours = compute_icon_eu_flight_window_hours("20260301", 0, dep, 2.0)
+        # f78 = floor of 80 in the 3-hourly grid
+        assert 78 in hours
+
+
+class TestSnapToIconEuGridFloor:
+    """Tests for _snap_to_icon_eu_grid_floor."""
+
+    def test_hourly_region(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import _snap_to_icon_eu_grid_floor
+
+        assert _snap_to_icon_eu_grid_floor(50.7) == 50
+        assert _snap_to_icon_eu_grid_floor(78.0) == 78
+
+    def test_3hourly_region(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import _snap_to_icon_eu_grid_floor
+
+        # 80 → 78 + int((80-78)/3)*3 = 78 + 0 = 78
+        assert _snap_to_icon_eu_grid_floor(80.0) == 78
+        # 81 → 78 + int(3/3)*3 = 78 + 3 = 81
+        assert _snap_to_icon_eu_grid_floor(81.0) == 81
+
+    def test_clamp_to_120(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import _snap_to_icon_eu_grid_floor
+
+        assert _snap_to_icon_eu_grid_floor(200.0) == 120
 
 
 class TestMergeValidHourFilter:

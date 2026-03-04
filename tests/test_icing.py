@@ -89,8 +89,11 @@ def test_icing_at_peak_temperature():
 
 
 def test_severity_thresholds():
-    """Index-to-risk mapping follows 30/80 thresholds."""
+    """Index-to-risk mapping follows 10/30/80 thresholds."""
     assert _index_to_risk(0.0) == IcingRisk.NONE
+    assert _index_to_risk(5.0) == IcingRisk.NONE
+    assert _index_to_risk(9.9) == IcingRisk.NONE
+    assert _index_to_risk(10.0) == IcingRisk.LIGHT
     assert _index_to_risk(15.0) == IcingRisk.LIGHT
     assert _index_to_risk(30.0) == IcingRisk.MODERATE
     assert _index_to_risk(50.0) == IcingRisk.MODERATE

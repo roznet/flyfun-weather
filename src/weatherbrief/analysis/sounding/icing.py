@@ -44,6 +44,7 @@ SLD_WARM_TOP_C = -12.0
 _MIN_ZONE_HALF_THICKNESS_FT = 500
 
 # Ogimet icing index severity thresholds
+_INDEX_LIGHT = 10.0
 _INDEX_MODERATE = 30.0
 _INDEX_SEVERE = 80.0
 
@@ -156,7 +157,7 @@ def _index_to_risk(index: float) -> IcingRisk:
         return IcingRisk.SEVERE
     if index >= _INDEX_MODERATE:
         return IcingRisk.MODERATE
-    if index > 0:
+    if index >= _INDEX_LIGHT:
         return IcingRisk.LIGHT
     return IcingRisk.NONE
 

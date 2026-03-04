@@ -142,6 +142,17 @@ def _snap_to_gfs_grid(fhour: float) -> int:
     return min(base, 384)
 
 
+def _snap_to_gfs_grid_floor(fhour: float) -> int:
+    """Snap DOWN to nearest GFS grid point (floor, not round).
+
+    GFS: 1-hourly for f000–f120, 3-hourly for f120–f384.
+    """
+    if fhour <= 120:
+        return int(fhour)
+    base = 120 + int((fhour - 120) / 3) * 3
+    return min(base, 384)
+
+
 def compute_flight_window_hours(
     init_date: str,
     init_hour: int,
@@ -184,6 +195,13 @@ def compute_flight_window_hours(
         floor_delta = (floor_utc - init_dt).total_seconds() / 3600
         if floor_delta >= 0:
             fhours.add(_snap_to_gfs_grid(floor_delta))
+
+    # Include the floor native hour before departure for forward-fill coverage.
+    # In the 3-hourly region (>120h), rounding may skip the preceding native
+    # hour, leaving interpolated hours without GRIB diagnostics.
+    dep_delta = (dep_dt - init_dt).total_seconds() / 3600
+    if dep_delta > 0:
+        fhours.add(_snap_to_gfs_grid_floor(dep_delta))
 
     return sorted(fhours)
 
