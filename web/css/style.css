@@ -3322,6 +3322,24 @@ label {
   gap: 0.5rem;
 }
 
+.alt-time-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-bottom: 0.25rem;
+}
+
+.alt-time-toggle input[type="checkbox"] {
+  margin: 0;
+}
+
+.info-value .time-input-group {
+  gap: 0.25rem;
+}
+
 .btn-sm {
   padding: 0.25rem 0.75rem;
   font-size: 0.8rem;
