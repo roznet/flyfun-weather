@@ -72,6 +72,7 @@ class FlightResponse(BaseModel):
     route_name: str
     waypoints: list[str] = []
     departure_time: str
+    alt_departure_time: str | None = None
     target_date: str  # backward compat (computed from departure_time)
     target_time_utc: int  # backward compat (computed from departure_time)
     cruise_altitude_ft: int
@@ -103,6 +104,7 @@ def _flight_to_response(flight: Flight) -> FlightResponse:
         route_name=flight.route_name,
         waypoints=flight.waypoints,
         departure_time=flight.departure_time.isoformat(),
+        alt_departure_time=flight.alt_departure_time.isoformat() if flight.alt_departure_time else None,
         target_date=flight.target_date,
         target_time_utc=flight.target_time_utc,
         cruise_altitude_ft=flight.cruise_altitude_ft,
@@ -379,6 +381,7 @@ class UpdateFlightRequest(BaseModel):
 
     profile_id: int | None = None  # switch aircraft profile (applies its altitude/ceiling)
     departure_time: str | None = None  # ISO 8601 (time-of-day change only; date must match)
+    alt_departure_time: str | None = None  # ISO 8601 or "" to clear
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
@@ -394,6 +397,19 @@ class UpdateFlightRequest(BaseModel):
             raise ValueError("departure_time must be a valid ISO 8601 datetime")
         if dt.tzinfo is None:
             raise ValueError("departure_time must include a timezone")
+        return v
+
+    @field_validator("alt_departure_time")
+    @classmethod
+    def validate_alt_departure_time(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        try:
+            dt = datetime.fromisoformat(v)
+        except ValueError:
+            raise ValueError("alt_departure_time must be a valid ISO 8601 datetime or empty string")
+        if dt.tzinfo is None:
+            raise ValueError("alt_departure_time must include a timezone")
         return v
 
 
@@ -464,6 +480,29 @@ def update_flight(
     if req.flight_duration_hours is not None and req.flight_duration_hours != original_flight.flight_duration_hours:
         row.flight_duration_hours = req.flight_duration_hours
         time_changed = True
+
+    # Alt departure time: "" clears, ISO string sets, None = no change
+    if req.alt_departure_time is not None:
+        if req.alt_departure_time == "":
+            row.alt_departure_time = None
+        else:
+            alt_dt = datetime.fromisoformat(req.alt_departure_time)
+            if alt_dt.tzinfo is None:
+                alt_dt = alt_dt.replace(tzinfo=timezone.utc)
+            # Validate same-day constraint
+            effective_departure = row.departure_time
+            if alt_dt.strftime("%Y-%m-%d") != effective_departure.strftime("%Y-%m-%d"):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Alt departure time must be on the same day as the primary departure.",
+                )
+            # Validate alt ≠ primary
+            if alt_dt == effective_departure:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Alt departure time must differ from the primary departure time.",
+                )
+            row.alt_departure_time = alt_dt
 
     db.flush()
     updated = load_flight(db, flight_id)

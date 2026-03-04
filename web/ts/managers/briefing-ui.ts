@@ -111,7 +111,7 @@ export function renderHistoryDropdown(
 
 // --- Assessment banner ---
 
-export function renderAssessment(pack: PackMeta | null): void {
+export function renderAssessment(pack: PackMeta | null, flight?: FlightResponse | null): void {
   const el = $('assessment-banner');
   if (!el) return;
 
@@ -122,10 +122,33 @@ export function renderAssessment(pack: PackMeta | null): void {
   }
 
   const level = pack.assessment.toUpperCase();
-  el.className = `assessment-banner assessment-${level.toLowerCase()}`;
-  el.innerHTML = `
-    <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : ''}
-  `;
+
+  // Show alt assessment alongside primary if available
+  if (pack.alt_assessment && flight?.alt_departure_time) {
+    const altLevel = pack.alt_assessment.toUpperCase();
+    const primaryTime = formatDepartureTime(flight.departure_time);
+    const altTime = formatDepartureTime(flight.alt_departure_time);
+    const altReason = pack.alt_assessment_reason ? ` \u2014 ${escapeHtml(pack.alt_assessment_reason)}` : '';
+    const primaryReason = pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : '';
+
+    el.className = `assessment-banner assessment-${level.toLowerCase()}`;
+    el.innerHTML = `
+      <span class="assessment-dual">
+        <span class="assessment-primary">
+          <strong>${primaryTime}: ${level}</strong>${primaryReason}
+        </span>
+        <span class="assessment-separator">\u2502</span>
+        <span class="assessment-alt assessment-${altLevel.toLowerCase()}-text">
+          <strong>Alt ${altTime}: ${altLevel}</strong>${altReason}
+        </span>
+      </span>
+    `;
+  } else {
+    el.className = `assessment-banner assessment-${level.toLowerCase()}`;
+    el.innerHTML = `
+      <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : ''}
+    `;
+  }
 }
 
 // --- Freshness bar ---

@@ -28,7 +28,7 @@ from weatherbrief.tasks.analyze import (  # noqa: F401  — backward compat re-e
 )
 from weatherbrief.tasks.fetch import run_fetch
 from weatherbrief.tasks.analyze import run_analysis
-from weatherbrief.tasks.advise import run_advisories
+from weatherbrief.tasks.advise import AdvisoryResult, run_advisories
 from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ class BriefingOptions:
     advisory_params: dict[str, dict[str, float]] | None = None  # {advisory_id: {param: value}}
     historical_mode: bool = False  # Use archived NWP data for past departure times
     as_of_time: datetime | None = None  # For historical: the date "as of" which to fetch data
+    alt_departure_time: datetime | None = None  # optional same-day alt departure for lite advisory re-run
 
 
 @dataclass
@@ -103,6 +104,7 @@ class BriefingResult:
     grib_init_times: dict[str, int] = field(default_factory=dict)
     models_skipped_region: list[str] = field(default_factory=list)
     diagnostics: list[dict] = field(default_factory=list)
+    alt_advisory_result: AdvisoryResult | None = None
     errors: list[str] = field(default_factory=list)
     usage: BriefingUsage = field(default_factory=BriefingUsage)
 
@@ -229,18 +231,19 @@ def execute_briefing(
     )
 
     # === 3. Advisories ===
+    # Build advisory preference args from options (shared by primary + alt)
+    adv_aggregation = None
+    if options.advisory_aggregation:
+        from weatherbrief.models import AdvisoryAggregation
+        adv_aggregation = AdvisoryAggregation(options.advisory_aggregation)
+
+    adv_enabled_ids = None
+    if options.advisory_enabled is not None:
+        adv_enabled_ids = {k for k, v in options.advisory_enabled.items() if v}
+
     route_advisories_manifest = None
     if analysis_result.route_analyses_manifest and analysis_result.route_analyses:
         total_distance = fetch_result.route_points[-1].distance_from_origin_nm
-        # Build advisory preference args from options
-        adv_aggregation = None
-        if options.advisory_aggregation:
-            from weatherbrief.models import AdvisoryAggregation
-            adv_aggregation = AdvisoryAggregation(options.advisory_aggregation)
-
-        adv_enabled_ids = None
-        if options.advisory_enabled is not None:
-            adv_enabled_ids = {k for k, v in options.advisory_enabled.items() if v}
 
         advisory_result = run_advisories(
             rp_analyses=analysis_result.route_analyses,
@@ -261,6 +264,33 @@ def execute_briefing(
             convective_method=options.convective_method,
         )
         route_advisories_manifest = advisory_result.manifest
+
+    # === 3.1 Alt departure advisories (lite re-run) ===
+    alt_advisory_result: AdvisoryResult | None = None
+    if (
+        options.alt_departure_time is not None
+        and analysis_result.route_analyses_manifest
+        and pack_dir
+    ):
+        _notify("alt_advisories")
+        try:
+            from weatherbrief.tasks.advise import run_alt_from_pack
+
+            alt_advisory_result = run_alt_from_pack(
+                pack_dir=pack_dir,
+                alt_departure_time=options.alt_departure_time,
+                route=route,
+                advisory_models=options.advisory_models,
+                enabled_ids=adv_enabled_ids,
+                user_params=options.advisory_params,
+                aggregation=adv_aggregation,
+                airports_db_path=options.airports_db_path,
+                icing_method=options.icing_method,
+                cloud_method=options.cloud_method,
+                convective_method=options.convective_method,
+            )
+        except Exception:
+            logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)
 
     # === 3.5 Route weather observations (D-0 only) ===
     route_observations = None
@@ -343,6 +373,8 @@ def execute_briefing(
         result.elevation_profile_path = pack_dir / "elevation_profile.json"
     if route_advisories_manifest and pack_dir:
         result.route_advisories_path = pack_dir / "route_advisories.json"
+    if alt_advisory_result is not None:
+        result.alt_advisory_result = alt_advisory_result
 
     # === 5. Optional: GRAMET ===
     if options.fetch_gramet:
