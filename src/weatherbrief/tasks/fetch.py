@@ -59,6 +59,7 @@ def _build_fetch_diagnostics(
     grib_enriched: bool,
     grib_enrichment_failed: bool,
     grib_init_times: dict[str, int],
+    grib_skip_reasons: dict[str, str] | None = None,
 ) -> list[dict]:
     """Build user-facing diagnostic messages from the completed fetch state."""
     diags: list[dict] = []
@@ -84,12 +85,13 @@ def _build_fetch_diagnostics(
                 "message": "GRIB enrichment failed — cloud microphysics (CLW/ICMR) and cloud diagnostics not available",
             })
         elif grib_enriched:
-            # Per-model GRIB status (exclude _skip meta-keys)
-            enriched_models = {k for k in grib_init_times if not k.endswith("_skip")}
+            # Per-model GRIB status
+            enriched_models = set(grib_init_times.keys())
+            skip_reasons = grib_skip_reasons or {}
             grib_capable = {"gfs", "icon"}
             for m in models_fetched:
                 if m in grib_capable and m not in enriched_models:
-                    skip_reason = grib_init_times.get(f"{m}_skip")
+                    skip_reason = skip_reasons.get(m)
                     if skip_reason == "out_of_range":
                         diags.append({
                             "level": "info",
@@ -216,12 +218,13 @@ def run_fetch(
     grib_enriched = False
     grib_enrichment_failed = False
     grib_init_times: dict[str, int] = {}
+    grib_skip_reasons: dict[str, str] = {}
     if enrich_grib and cross_sections:
         _notify("grib_enrichment")
         try:
             from weatherbrief.fetch.grib import enrich_forecasts
 
-            grib_init_times = enrich_forecasts(
+            grib_init_times, grib_skip_reasons = enrich_forecasts(
                 cross_sections, all_forecasts, route_points,
                 departure_time, data_dir=data_dir,
                 flight_duration_hours=route.flight_duration_hours,
@@ -246,6 +249,7 @@ def run_fetch(
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
         grib_init_times=grib_init_times,
+        grib_skip_reasons=grib_skip_reasons,
     )
 
     # --- Persist artifacts ---
