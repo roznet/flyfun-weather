@@ -4,6 +4,7 @@ import type { FlightResponse, PackMeta } from '../store/types';
 import type { WaypointInfo } from '../adapters/api-adapter';
 import type { ProfileResponse } from '../adapters/profiles-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRoute } from '../utils';
+import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
 
 // --- Assessment badge ---
 
@@ -31,6 +32,7 @@ export function renderFlightInfo(
   flight: FlightResponse | null,
   editing: boolean,
   profiles: ProfileResponse[] = [],
+  waypoints: WaypointInfo[] = [],
 ): void {
   const container = $('flight-info');
   if (!container || !flight) return;
@@ -50,30 +52,49 @@ export function renderFlightInfo(
   const altDt = flight.alt_departure_time ? new Date(flight.alt_departure_time) : null;
   const altUtcHour = altDt ? altDt.getUTCHours() : -1;
   const altUtcMinute = altDt ? altDt.getUTCMinutes() : 0;
+  const hasAlt = altUtcHour >= 0;
 
   if (editing) {
-    // Build hour options
+    // Reference date for TZ calculations
+    const refDate = new Date(`${flight.target_date}T12:00:00Z`);
+
+    // Build timezone options from route waypoints
+    const tzOptions = buildTimezoneOptions(waypoints, refDate);
+    let tzHtml = '<option value="UTC">UTC</option>';
+    for (const opt of tzOptions) {
+      if (opt.tz === 'UTC') continue;
+      tzHtml += `<option value="${escapeHtml(opt.tz)}">${escapeHtml(opt.label)}</option>`;
+    }
+
+    // Display the primary time in the first route TZ (or UTC if no waypoints)
+    const defaultTz = tzOptions.length > 0 ? tzOptions[0].tz : 'UTC';
+    const localTime = utcToLocal(utcHour, utcMinute, defaultTz, refDate);
+    const altLocalTime = hasAlt ? utcToLocal(altUtcHour, altUtcMinute, defaultTz, refDate) : { hour: 9, minute: 0 };
+
+    // Build hour options for primary time
     let hourOptions = '';
     for (let h = 0; h < 24; h++) {
-      const sel = h === utcHour ? ' selected' : '';
+      const sel = h === localTime.hour ? ' selected' : '';
       hourOptions += `<option value="${h}"${sel}>${h.toString().padStart(2, '0')}</option>`;
     }
-    // Build minute options
+    // Build minute options for primary time
     const minuteOptions = [0, 15, 30, 45].map(m => {
-      const sel = m === nearestMinute(utcMinute) ? ' selected' : '';
+      const sel = m === localTime.minute ? ' selected' : '';
       return `<option value="${m}"${sel}>${m.toString().padStart(2, '0')}</option>`;
     }).join('');
-    // Build alt hour options (with "None" option)
-    let altHourOptions = `<option value="-1"${altUtcHour === -1 ? ' selected' : ''}>None</option>`;
+
+    // Build hour options for alt time
+    let altHourOptions = '';
     for (let h = 0; h < 24; h++) {
-      const sel = h === altUtcHour ? ' selected' : '';
+      const sel = h === altLocalTime.hour ? ' selected' : '';
       altHourOptions += `<option value="${h}"${sel}>${h.toString().padStart(2, '0')}</option>`;
     }
     // Build alt minute options
     const altMinuteOptions = [0, 15, 30, 45].map(m => {
-      const sel = m === nearestMinute(altUtcMinute) ? ' selected' : '';
+      const sel = m === altLocalTime.minute ? ' selected' : '';
       return `<option value="${m}"${sel}>${m.toString().padStart(2, '0')}</option>`;
     }).join('');
+
     // Build profile options
     const profileOptions = profiles.map(p => {
       const sel = p.id === flight.profile_id ? ' selected' : '';
@@ -93,19 +114,28 @@ export function renderFlightInfo(
           <span class="info-value">${formatDate(flight.target_date)}</span>
         </div>
         <div class="info-row">
-          <span class="info-label">Time (UTC)</span>
+          <span class="info-label">Time</span>
           <span class="info-value">
-            <select id="edit-hour" class="edit-input">${hourOptions}</select>
-            <span class="time-separator">:</span>
-            <select id="edit-minute" class="edit-input">${minuteOptions}</select>
+            <div class="time-input-group">
+              <select id="edit-hour" class="edit-input">${hourOptions}</select>
+              <span class="time-separator">:</span>
+              <select id="edit-minute" class="edit-input">${minuteOptions}</select>
+              <select id="edit-timezone" class="edit-input">${tzHtml}</select>
+            </div>
           </span>
         </div>
         <div class="info-row">
-          <span class="info-label">Alt Time (UTC)</span>
+          <span class="info-label">Alt Time</span>
           <span class="info-value">
-            <select id="edit-alt-hour" class="edit-input">${altHourOptions}</select>
-            <span class="time-separator" id="alt-time-sep">:</span>
-            <select id="edit-alt-minute" class="edit-input">${altMinuteOptions}</select>
+            <label class="alt-time-toggle">
+              <input type="checkbox" id="edit-alt-enabled" ${hasAlt ? 'checked' : ''}>
+              <span>Alternate departure</span>
+            </label>
+            <div class="time-input-group" id="edit-alt-time-group" style="${hasAlt ? '' : 'display:none'}">
+              <select id="edit-alt-hour" class="edit-input">${altHourOptions}</select>
+              <span class="time-separator">:</span>
+              <select id="edit-alt-minute" class="edit-input">${altMinuteOptions}</select>
+            </div>
           </span>
         </div>
         <div class="info-row">
@@ -133,17 +163,18 @@ export function renderFlightInfo(
       </div>
     `;
 
-    // Toggle alt minute visibility based on alt hour selection
-    const altHourSelect = document.getElementById('edit-alt-hour') as HTMLSelectElement;
-    const altMinuteSelect = document.getElementById('edit-alt-minute') as HTMLSelectElement;
-    const altTimeSep = document.getElementById('alt-time-sep');
-    function updateAltMinuteVisibility(): void {
-      const hidden = altHourSelect?.value === '-1';
-      if (altMinuteSelect) altMinuteSelect.style.display = hidden ? 'none' : '';
-      if (altTimeSep) altTimeSep.style.display = hidden ? 'none' : '';
+    // Select the default timezone in the dropdown
+    const tzSelect = document.getElementById('edit-timezone') as HTMLSelectElement;
+    if (tzSelect && defaultTz !== 'UTC') {
+      tzSelect.value = defaultTz;
     }
-    updateAltMinuteVisibility();
-    altHourSelect?.addEventListener('change', updateAltMinuteVisibility);
+
+    // Toggle alt time group visibility
+    const altCheckbox = document.getElementById('edit-alt-enabled') as HTMLInputElement;
+    const altTimeGroup = document.getElementById('edit-alt-time-group');
+    altCheckbox?.addEventListener('change', () => {
+      if (altTimeGroup) altTimeGroup.style.display = altCheckbox.checked ? '' : 'none';
+    });
 
     // When profile changes, update altitude/ceiling to match the selected profile
     const profileSelect = document.getElementById('edit-profile') as HTMLSelectElement;
@@ -347,9 +378,3 @@ export function renderError(error: string | null): void {
   }
 }
 
-// --- Helpers ---
-
-function nearestMinute(m: number): number {
-  const options = [0, 15, 30, 45];
-  return options.reduce((best, o) => Math.abs(o - m) < Math.abs(best - m) ? o : best);
-}
