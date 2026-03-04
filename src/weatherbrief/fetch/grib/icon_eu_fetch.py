@@ -273,6 +273,17 @@ def _snap_to_icon_eu_grid(fhour: float) -> int:
     return min(base, 120)
 
 
+def _snap_to_icon_eu_grid_floor(fhour: float) -> int:
+    """Snap DOWN to nearest ICON-EU grid point (floor, not round).
+
+    ICON-EU: 1-hourly for 0–78h, 3-hourly for 78–120h.
+    """
+    if fhour <= 78:
+        return int(fhour)
+    base = 78 + int((fhour - 78) / 3) * 3
+    return min(base, 120)
+
+
 def compute_icon_eu_flight_window_hours(
     init_date: str,
     init_hour: int,
@@ -303,6 +314,13 @@ def compute_icon_eu_flight_window_hours(
         floor_delta = (floor_utc - init_dt).total_seconds() / 3600
         if floor_delta >= 0:
             fhours.add(_snap_to_icon_eu_grid(floor_delta))
+
+    # Include the floor native hour before departure for forward-fill coverage.
+    # In the 3-hourly region (>78h), rounding may skip the preceding native
+    # hour, leaving interpolated hours without GRIB diagnostics.
+    dep_delta = (dep_dt - init_dt).total_seconds() / 3600
+    if dep_delta > 0:
+        fhours.add(_snap_to_icon_eu_grid_floor(dep_delta))
 
     return sorted(fhours)
 

@@ -84,15 +84,22 @@ def _build_fetch_diagnostics(
                 "message": "GRIB enrichment failed — cloud microphysics (CLW/ICMR) and cloud diagnostics not available",
             })
         elif grib_enriched:
-            # Per-model GRIB status
-            enriched_models = set(grib_init_times.keys())
+            # Per-model GRIB status (exclude _skip meta-keys)
+            enriched_models = {k for k in grib_init_times if not k.endswith("_skip")}
             grib_capable = {"gfs", "icon"}
             for m in models_fetched:
                 if m in grib_capable and m not in enriched_models:
-                    diags.append({
-                        "level": "warn",
-                        "message": f"{m.upper()} GRIB enrichment unavailable — cloud microphysics and diagnostics not available for this model",
-                    })
+                    skip_reason = grib_init_times.get(f"{m}_skip")
+                    if skip_reason == "out_of_range":
+                        diags.append({
+                            "level": "info",
+                            "message": f"{m.upper()} GRIB skipped — flight exceeds forecast range",
+                        })
+                    else:
+                        diags.append({
+                            "level": "warn",
+                            "message": f"{m.upper()} GRIB enrichment unavailable — cloud microphysics and diagnostics not available for this model",
+                        })
             for m in sorted(enriched_models):
                 diags.append({
                     "level": "info",
