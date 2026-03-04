@@ -487,11 +487,9 @@ def update_flight(
             row.alt_departure_time = None
         else:
             alt_dt = datetime.fromisoformat(req.alt_departure_time)
-            if alt_dt.tzinfo is None:
-                alt_dt = alt_dt.replace(tzinfo=timezone.utc)
             # Validate same-day constraint
             effective_departure = row.departure_time
-            if alt_dt.strftime("%Y-%m-%d") != effective_departure.strftime("%Y-%m-%d"):
+            if alt_dt.date() != effective_departure.date():
                 raise HTTPException(
                     status_code=422,
                     detail="Alt departure time must be on the same day as the primary departure.",
