@@ -2,9 +2,7 @@
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData, TerrainPoint } from '../../types';
 import { drawSmoothLine, type PointData } from './base';
-
-const FILL_COLOR = '#8B7355';
-const OUTLINE_COLOR = '#6B5B45';
+import { getActiveTheme } from '../theme';
 
 export const terrainFillLayer: CrossSectionLayer = {
   id: 'terrain',
@@ -26,7 +24,7 @@ export const terrainFillLayer: CrossSectionLayer = {
       value: p.elevationFt,
     }));
     drawSmoothLine(ctx, linePoints, transform, {
-      color: OUTLINE_COLOR,
+      color: getActiveTheme().terrain.outlineColor,
       width: 1.5,
     });
   },
@@ -43,7 +41,7 @@ function drawSmoothTerrain(
   const ys = profile.map((p) => transform.altitudeToY(p.elevationFt));
   const tangents = monotoneCubicTangents(xs, ys);
 
-  ctx.fillStyle = FILL_COLOR;
+  ctx.fillStyle = getActiveTheme().terrain.fillColor;
   ctx.beginPath();
 
   // Start at bottom-left

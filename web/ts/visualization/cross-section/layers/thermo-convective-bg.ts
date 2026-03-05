@@ -5,53 +5,15 @@
  */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint } from '../../types';
+import { getActiveTheme } from '../theme';
 
-// ---- Color palettes (shared with NWP layer for visual consistency) ----
+// ---- Color palette getters (shared with NWP layer for visual consistency) ----
 
-/** Light background wash (full column) */
-export const BG_WASH: Record<string, string> = {
-  marginal: 'rgba(200, 200, 200, 0.04)',
-  low: 'rgba(255, 235, 59, 0.06)',
-  moderate: 'rgba(255, 152, 0, 0.08)',
-  high: 'rgba(220, 53, 69, 0.10)',
-  extreme: 'rgba(183, 28, 28, 0.14)',
-};
-
-/** Tower fill color (base→top column) */
-export const TOWER_FILL: Record<string, string> = {
-  marginal: 'rgba(180, 180, 180, 0.15)',
-  low: 'rgba(255, 235, 59, 0.18)',
-  moderate: 'rgba(255, 152, 0, 0.25)',
-  high: 'rgba(220, 53, 69, 0.30)',
-  extreme: 'rgba(183, 28, 28, 0.35)',
-};
-
-/** Hatching line color */
-export const HATCH_COLOR: Record<string, string> = {
-  marginal: 'rgba(140, 140, 140, 0.15)',
-  low: 'rgba(180, 160, 0, 0.20)',
-  moderate: 'rgba(200, 100, 0, 0.35)',
-  high: 'rgba(200, 40, 40, 0.40)',
-  extreme: 'rgba(150, 20, 20, 0.50)',
-};
-
-/** Top-of-tower strip color */
-export const STRIP_COLOR: Record<string, string> = {
-  marginal: 'rgba(160, 160, 160, 0.4)',
-  low: 'rgba(255, 235, 59, 0.5)',
-  moderate: 'rgba(255, 152, 0, 0.75)',
-  high: 'rgba(220, 53, 69, 0.85)',
-  extreme: 'rgba(183, 28, 28, 0.9)',
-};
-
-/** Tower outline/edge stroke */
-export const EDGE_COLOR: Record<string, string> = {
-  marginal: 'rgba(140, 140, 140, 0.25)',
-  low: 'rgba(180, 160, 0, 0.3)',
-  moderate: 'rgba(200, 100, 0, 0.5)',
-  high: 'rgba(200, 40, 40, 0.6)',
-  extreme: 'rgba(150, 20, 20, 0.7)',
-};
+export function getBgWash(): Record<string, string> { return getActiveTheme().convective.bgWash; }
+export function getTowerFill(): Record<string, string> { return getActiveTheme().convective.towerFill; }
+export function getHatchColor(): Record<string, string> { return getActiveTheme().convective.hatchColor; }
+export function getStripColor(): Record<string, string> { return getActiveTheme().convective.stripColor; }
+export function getEdgeColor(): Record<string, string> { return getActiveTheme().convective.edgeColor; }
 
 export const STRIP_HEIGHT = 5;
 
@@ -148,28 +110,30 @@ function drawTower(
 
   if (towerHeight <= 0) return;
 
+  const theme = getActiveTheme().convective;
+
   // 1. Very subtle full-height background wash
-  const bgWash = BG_WASH[risk];
+  const bgWash = theme.bgWash[risk];
   if (bgWash) {
     ctx.fillStyle = bgWash;
     ctx.fillRect(xLeft, plotArea.top, colWidth, plotArea.height);
   }
 
   // 2. Tower body fill
-  const towerFill = TOWER_FILL[risk];
+  const towerFill = theme.towerFill[risk];
   if (towerFill) {
     ctx.fillStyle = towerFill;
     ctx.fillRect(xLeft, yTop, colWidth, towerHeight);
   }
 
   // 3. Diagonal hatching within tower bounds
-  const hatchColor = HATCH_COLOR[risk];
+  const hatchColor = theme.hatchColor[risk];
   if (hatchColor) {
     drawHatching(ctx, xLeft, yTop, colWidth, towerHeight, hatchColor);
   }
 
   // 4. Tower edge outline
-  const edgeColor = EDGE_COLOR[risk];
+  const edgeColor = theme.edgeColor[risk];
   if (edgeColor) {
     ctx.strokeStyle = edgeColor;
     ctx.lineWidth = 1.5;
@@ -178,7 +142,7 @@ function drawTower(
   }
 
   // 5. Anvil top indicator strip at EL
-  const stripColor = STRIP_COLOR[risk];
+  const stripColor = theme.stripColor[risk];
   if (stripColor) {
     // Draw wider anvil at top (extends 20% beyond column on each side)
     const anvilExtend = Math.min(colWidth * 0.2, 8);
@@ -230,11 +194,7 @@ export function drawCBLabel(
   cy: number,
   risk: string,
 ): void {
-  const colors: Record<string, string> = {
-    moderate: 'rgba(200, 100, 0, 0.8)',
-    high: 'rgba(200, 40, 40, 0.9)',
-    extreme: 'rgba(150, 20, 20, 0.95)',
-  };
+  const colors = getActiveTheme().convective.cbLabelColor;
 
   ctx.save();
   ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';

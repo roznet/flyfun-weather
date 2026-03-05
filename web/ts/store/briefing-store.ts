@@ -7,6 +7,7 @@ import type { DisplayMode, Tier } from '../types/metrics';
 import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
 import { getDefaultEnabled } from '../visualization/cross-section/layer-registry';
+import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-section/theme';
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 
@@ -128,6 +129,7 @@ export interface BriefingState {
   setCompareLayer: (layerId: string) => void;
   setCompareModel: (model: string, enabled: boolean) => void;
   initCompareModels: (models: string[]) => void;
+  setVizTheme: (themeId: string) => void;
 }
 
 export const briefingStore = createStore<BriefingState>((set, get) => ({
@@ -549,4 +551,22 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
+
+  setVizTheme: (themeId: string) => {
+    if (themeId in THEMES) {
+      setActiveTheme(themeId as ThemeId);
+      const updated = { ...get().vizSettings, vizTheme: themeId };
+      set({ vizSettings: updated });
+      saveVizSettings(updated);
+      window.dispatchEvent(new Event('theme-changed'));
+    }
+  },
 }));
+
+// Initialize cross-section theme from saved settings
+{
+  const saved = briefingStore.getState().vizSettings.vizTheme;
+  if (saved && saved in THEMES) {
+    setActiveTheme(saved as ThemeId);
+  }
+}

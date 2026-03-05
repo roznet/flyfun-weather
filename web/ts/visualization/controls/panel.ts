@@ -8,6 +8,8 @@ import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
+import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
+import { showThemePreview } from '../cross-section/theme-preview';
 
 /** Groups that collapse to a single preferred-method toggle in compact mode. */
 const COMPACT_GROUPS = new Set(['clouds', 'icing', 'convection']);
@@ -55,6 +57,7 @@ export interface VizControlCallbacks {
   onLayerToggle: (layerId: string) => void;
   onLayoutChange: (layout: VizLayout) => void;
   onModelChange?: (model: string) => void;
+  onThemeChange?: (themeId: string) => void;
 }
 
 export interface RouteGraphControlCallbacks {
@@ -106,6 +109,21 @@ export function renderVizControls(
     html += `<div class="viz-model-selector">`;
     html += `<span class="viz-toggle-label">Model:</span>`;
     html += `<span class="viz-model-name">${modelLabel(selectedModel)}</span>`;
+    html += `</div>`;
+  }
+
+  // Theme selector
+  if (settings.layout !== 'map') {
+    const currentTheme = getActiveThemeId();
+    html += `<div class="viz-theme-selector">`;
+    html += `<span class="viz-toggle-label">Theme:</span>`;
+    html += `<select id="viz-theme-select" class="viz-model-select">`;
+    for (const [id, theme] of Object.entries(THEMES)) {
+      const selected = id === currentTheme ? ' selected' : '';
+      html += `<option value="${id}"${selected}>${theme.label}</option>`;
+    }
+    html += `</select>`;
+    html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="Preview theme">\u{1f441}</button>`;
     html += `</div>`;
   }
 
@@ -169,6 +187,24 @@ export function renderVizControls(
     const cb = callbacks.onModelChange;
     vizModelSelect.addEventListener('change', () => {
       cb(vizModelSelect.value);
+    });
+  }
+
+  // Wire theme selector
+  const vizThemeSelect = container.querySelector('#viz-theme-select') as HTMLSelectElement | null;
+  if (vizThemeSelect && callbacks.onThemeChange) {
+    const cb = callbacks.onThemeChange;
+    vizThemeSelect.addEventListener('change', () => {
+      cb(vizThemeSelect.value);
+    });
+  }
+  const themePreviewBtn = container.querySelector('#viz-theme-preview') as HTMLButtonElement | null;
+  if (themePreviewBtn) {
+    themePreviewBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const themeId = vizThemeSelect?.value ?? getActiveThemeId();
+      showThemePreview(themeId as ThemeId);
     });
   }
 

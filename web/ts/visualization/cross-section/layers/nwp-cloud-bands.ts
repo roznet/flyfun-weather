@@ -10,6 +10,7 @@ import type {
   VizCloudDiag,
 } from '../../types';
 import { drawColumnBand, type BandPointData } from './base';
+import { getActiveTheme } from '../theme';
 
 /** Low cloud band: terrain surface → 6500ft. Mid band: 6500ft → 20000ft. */
 const LOW_TOP_FT = 6500;
@@ -18,20 +19,18 @@ const MID_TOP_FT = 20000;
 /** Inversions weaker than this don't reliably cap clouds. */
 const INVERSION_STRENGTH_THRESHOLD_C = 2.0;
 
-/** Convert cloud cover percentage to opacity with visible floor. */
-function cloudOpacity(pct: number): number {
-  // Floor at 0.25 so even 25% cover is visible; cap at 0.75
-  return Math.min(0.75, 0.25 + (pct / 100) * 0.50);
-}
-
 /** Blue-tinted white-to-gray fill — distinct from sounding cloud layers. */
 function nwpCloudFill(pct: number): string {
-  // Low cover → bright blue-white, high cover → cool gray
+  const theme = getActiveTheme().nwpClouds;
   const t = Math.min(1, Math.max(0, pct / 100));
-  const r = Math.round(230 - 65 * t);
-  const g = Math.round(233 - 63 * t);
-  const b = Math.round(245 - 60 * t);
-  return `rgba(${r}, ${g}, ${b}, ${cloudOpacity(pct)})`;
+  const [br, bg, bb] = theme.brightRgb;
+  const [dr, dg, db] = theme.deltaRgb;
+  const r = Math.round(br - dr * t);
+  const g = Math.round(bg - dg * t);
+  const b = Math.round(bb - db * t);
+  const [opFloor, opScale] = theme.opacityRange;
+  const opacity = Math.min(opFloor + opScale + 0.001, opFloor + opScale * t);
+  return `rgba(${r}, ${g}, ${b}, ${opacity.toFixed(2)})`;
 }
 
 /** Find the lowest inversion within [floor, ceiling] that exceeds the strength threshold. */

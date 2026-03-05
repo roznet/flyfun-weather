@@ -7,6 +7,7 @@ import { terrainFillLayer } from './layers/terrain-fill';
 import { cruiseAltitudeLayer } from './layers/reference-lines';
 import { getAllLayers } from './layer-registry';
 import { drawSmoothBand, drawSmoothLine, type BandPointData, type PointData } from './layers/base';
+import { getActiveTheme } from './theme';
 
 const MARGIN = { left: 60, right: 50, top: 20, bottom: 50 };
 
@@ -110,7 +111,7 @@ export class CompareSectionRenderer {
 
     // Sky-blue background
     const { plotArea } = transform;
-    ctx.fillStyle = '#87CEEB';
+    ctx.fillStyle = getActiveTheme().sky.background;
     ctx.fillRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
 
     // Axes (using first dataset for waypoints/distance)

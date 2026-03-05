@@ -449,6 +449,7 @@ async function init(): Promise<void> {
         onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
         onLayoutChange: (l) => store.getState().setLayout(l),
         onModelChange: (model) => store.getState().setSelectedModel(model),
+        onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
       }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods);
 
       // Render route graph controls (below graph)

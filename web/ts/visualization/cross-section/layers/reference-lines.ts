@@ -1,6 +1,7 @@
 /** Reference lines: cruise altitude and flight ceiling. */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
+import { getActiveTheme } from '../theme';
 
 /** Shared helper: draw a horizontal reference line with a label. */
 function drawRefLine(
@@ -44,17 +45,19 @@ export const cruiseAltitudeLayer: CrossSectionLayer = {
   defaultEnabled: true,
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
+    const theme = getActiveTheme();
+
     // Cruise altitude — always drawn
     const cruiseLabel = `Cruise ${data.cruiseAltitudeFt.toLocaleString()} ft`;
     drawRefLine(ctx, transform, data.cruiseAltitudeFt, cruiseLabel,
-      '#374151', 2.5, [8, 4], -4);
+      theme.reference.cruiseColor, 2.5, [8, 4], -4);
 
     // Flight ceiling — only when meaningfully different from cruise
     const separation = Math.abs(data.ceilingAltitudeFt - data.cruiseAltitudeFt);
     if (separation >= 1000) {
       const ceilingLabel = `Ceiling ${data.ceilingAltitudeFt.toLocaleString()} ft`;
       drawRefLine(ctx, transform, data.ceilingAltitudeFt, ceilingLabel,
-        '#9467bd', 1.5, [4, 4], -4);
+        theme.reference.ceilingColor, 1.5, [4, 4], -4);
     }
   },
 };
