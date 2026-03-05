@@ -2,17 +2,10 @@
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { drawSmoothBand, type BandPointData } from './base';
-
-/** SFIP risk colors — higher opacity than Ogimet to stand out when toggled on. */
-const SFIP_RISK_COLORS: Record<string, string> = {
-  none: 'transparent',
-  light: 'rgba(100, 149, 237, 0.50)',
-  moderate: 'rgba(255, 165, 0, 0.55)',
-  severe: 'rgba(220, 53, 69, 0.65)',
-};
+import { getActiveTheme } from '../theme';
 
 function sfipRiskColor(risk: string): string {
-  return SFIP_RISK_COLORS[risk] ?? 'transparent';
+  return getActiveTheme().sfipIcing[risk] ?? 'transparent';
 }
 
 export const sfipBandsLayer: CrossSectionLayer = {

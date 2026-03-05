@@ -15,6 +15,7 @@ export interface VizSettings {
   routeGraphRightMetric: string;  // 'none' to disable right axis
   compareLayer: string;
   compareModels: Record<string, boolean>;
+  vizTheme?: string;
 }
 
 // --- Coordinate Transform ---

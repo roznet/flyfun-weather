@@ -2,12 +2,12 @@
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { drawSmoothLine, type PointData } from './base';
+import { getActiveTheme, type LineStyle } from '../theme';
 
 function makeStabilityLayer(
   id: string,
   name: string,
-  color: string,
-  width: number,
+  styleKey: 'lcl' | 'lfc' | 'el',
   accessor: (p: VizRouteData['points'][0]) => number | null,
   metricId?: string,
 ): CrossSectionLayer {
@@ -18,27 +18,32 @@ function makeStabilityLayer(
     defaultEnabled: true,
     metricId,
     render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
+      const style: LineStyle = getActiveTheme().stability[styleKey];
       const points: PointData[] = data.points.map((p) => ({
         distance: p.distanceNm,
         value: accessor(p),
       }));
 
-      drawSmoothLine(ctx, points, transform, { color, width, dash: [6, 4] });
+      drawSmoothLine(ctx, points, transform, {
+        color: style.color,
+        width: style.width,
+        dash: style.dash,
+      });
     },
   };
 }
 
 export const lclLayer = makeStabilityLayer(
-  'lcl', 'LCL', '#4caf50', 2,
+  'lcl', 'LCL', 'lcl',
   (p) => p.altitudeLines.lclAltitudeFt, 'lcl_altitude_ft',
 );
 
 export const lfcLayer = makeStabilityLayer(
-  'lfc', 'LFC', '#ff9800', 1.5,
+  'lfc', 'LFC', 'lfc',
   (p) => p.altitudeLines.lfcAltitudeFt, 'lfc_altitude_ft',
 );
 
 export const elLayer = makeStabilityLayer(
-  'el', 'EL', '#f44336', 1.5,
+  'el', 'EL', 'el',
   (p) => p.altitudeLines.elAltitudeFt, 'el_altitude_ft',
 );

@@ -1,62 +1,32 @@
-/** Color and opacity scale functions for visualization layers. */
+/** Color and opacity scale functions for visualization layers.
+ *
+ * Cross-section colors are read from the active theme (see cross-section/theme.ts).
+ * Map colors remain hardcoded here (separate scope, not themed).
+ */
 
-// --- Risk-based colors ---
+import { getActiveTheme } from './cross-section/theme';
 
-const ICING_RISK_COLORS: Record<string, string> = {
-  none: 'transparent',
-  light: 'rgba(100, 149, 237, 0.35)',   // cornflower blue
-  moderate: 'rgba(255, 165, 0, 0.45)',   // orange
-  severe: 'rgba(220, 53, 69, 0.55)',     // red
-};
-
-const CAT_RISK_COLORS: Record<string, string> = {
-  none: 'transparent',
-  light: 'rgba(255, 193, 7, 0.20)',      // amber light
-  moderate: 'rgba(255, 152, 0, 0.40)',   // amber
-  severe: 'rgba(220, 53, 69, 0.55)',     // red
-};
-
-const CONVECTIVE_RISK_COLORS: Record<string, string> = {
-  none: 'transparent',
-  marginal: 'rgba(160, 160, 160, 0.08)', // faint gray (shallow convection)
-  low: 'rgba(255, 235, 59, 0.10)',       // faint yellow
-  moderate: 'rgba(255, 152, 0, 0.15)',   // faint orange
-  high: 'rgba(220, 53, 69, 0.20)',       // faint red
-  extreme: 'rgba(183, 28, 28, 0.25)',    // dark red
-};
-
-const COVERAGE_OPACITY: Record<string, number> = {
-  sct: 0.25,
-  bkn: 0.50,
-  ovc: 0.75,
-};
+// --- Risk-based colors (theme-aware) ---
 
 export function icingRiskColor(risk: string): string {
-  return ICING_RISK_COLORS[risk] ?? 'transparent';
+  return getActiveTheme().icing[risk] ?? 'transparent';
 }
 
 export function catRiskColor(risk: string): string {
-  return CAT_RISK_COLORS[risk] ?? 'transparent';
+  return getActiveTheme().cat[risk] ?? 'transparent';
 }
 
 export function convectiveRiskColor(risk: string): string {
-  return CONVECTIVE_RISK_COLORS[risk] ?? 'transparent';
+  return getActiveTheme().convective.riskColors[risk] ?? 'transparent';
 }
 
 export function coverageOpacity(coverage: string): number {
-  return COVERAGE_OPACITY[coverage] ?? 0.3;
+  return getActiveTheme().coverageOpacity[coverage] ?? 0.3;
 }
 
-/** Coverage multiplier: SCT layers render more transparent than BKN/OVC. */
-/** Coverage alpha range: [min, max] opacity for each coverage class. */
-const COVERAGE_ALPHA: Record<string, [number, number]> = {
-  sct: [0.40, 0.55],
-  bkn: [0.50, 0.80],
-  ovc: [0.60, 0.92],
-};
-
 function coverageAlpha(coverage: string, t: number): number {
-  const [lo, hi] = COVERAGE_ALPHA[coverage] ?? [0.30, 0.65];
+  const theme = getActiveTheme();
+  const [lo, hi] = theme.clouds.coverageAlpha[coverage] ?? [0.30, 0.65];
   return hi - (hi - lo) * t;
 }
 
@@ -67,23 +37,25 @@ function coverageAlpha(coverage: string, t: number): number {
  * Falls back to coverage-based fill when DD unavailable.
  */
 export function cloudFillFromDD(dd: number | undefined, coverage: string): string {
+  const theme = getActiveTheme();
   if (dd === undefined) {
-    const [, hi] = COVERAGE_ALPHA[coverage] ?? [0.30, 0.65];
-    return `rgba(190, 190, 195, ${hi.toFixed(2)})`;
+    const [, hi] = theme.clouds.coverageAlpha[coverage] ?? [0.30, 0.65];
+    const [fr, fg, fb] = theme.clouds.fallbackGray;
+    return `rgba(${fr}, ${fg}, ${fb}, ${hi.toFixed(2)})`;
   }
   const t = Math.min(1, Math.max(0, dd / 3));
-  // White (245) at DD=3 → medium gray (170) at DD=0
-  const r = Math.round(170 + 75 * t);
-  const g = Math.round(170 + 75 * t);
-  const b = Math.round(175 + 73 * t);
+  const [dr, dg, db] = theme.clouds.denseRgb;
+  const [tr, tg, tb] = theme.clouds.thinRgb;
+  const r = Math.round(dr + (tr - dr) * t);
+  const g = Math.round(dg + (tg - dg) * t);
+  const b = Math.round(db + (tb - db) * t);
   const a = coverageAlpha(coverage, t);
   return `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
 }
 
 export function inversionOpacity(strengthC: number): number {
-  // NWP inversions are typically 0.1–3°C at standard pressure levels.
-  // Scale so even a 0.5°C inversion is visible (0.25) and 3°C saturates (0.65).
-  return Math.min(0.65, 0.15 + 0.5 * Math.min(strengthC / 3, 1));
+  const { floor, scale, maxStrengthC, cap } = getActiveTheme().inversion.opacityParams;
+  return Math.min(cap, floor + scale * Math.min(strengthC / maxStrengthC, 1));
 }
 
 // --- Map color scales (opaque, for polyline coloring) ---

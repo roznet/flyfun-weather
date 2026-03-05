@@ -3,6 +3,7 @@
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { inversionOpacity } from '../../scales';
 import { drawSmoothBand, type BandPointData } from './base';
+import { getActiveTheme } from '../theme';
 
 export const inversionBandsLayer: CrossSectionLayer = {
   id: 'inversion-bands',
@@ -31,7 +32,8 @@ export const inversionBandsLayer: CrossSectionLayer = {
           ? (inv.strengthC + next.inversions[bestIdx].strengthC) / 2
           : inv.strengthC;
         const opacity = inversionOpacity(avgStrength);
-        const fill = `rgba(233, 30, 99, ${opacity})`;
+        const [ir, ig, ib] = getActiveTheme().inversion.baseRgb;
+        const fill = `rgba(${ir}, ${ig}, ${ib}, ${opacity})`;
 
         if (bestIdx >= 0) {
           usedNext.add(bestIdx);
@@ -56,10 +58,11 @@ export const inversionBandsLayer: CrossSectionLayer = {
         const midDist = (curr.distanceNm + next.distanceNm) / 2;
         const midAlt = (ni.baseFt + ni.topFt) / 2;
         const opacity = inversionOpacity(ni.strengthC);
+        const [ir, ig, ib] = getActiveTheme().inversion.baseRgb;
         drawSmoothBand(ctx, [
           { distance: midDist, base: midAlt, top: midAlt },
           { distance: next.distanceNm, base: ni.baseFt, top: ni.topFt },
-        ], transform, `rgba(233, 30, 99, ${opacity})`);
+        ], transform, `rgba(${ir}, ${ig}, ${ib}, ${opacity})`);
       }
     }
   },

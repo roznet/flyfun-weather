@@ -7,7 +7,7 @@
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import {
-  BG_WASH, TOWER_FILL, HATCH_COLOR, STRIP_COLOR, EDGE_COLOR, STRIP_HEIGHT,
+  getBgWash, getTowerFill, getHatchColor, getStripColor, getEdgeColor, STRIP_HEIGHT,
   drawHatching, drawCBLabel,
 } from './thermo-convective-bg';
 
@@ -48,27 +48,27 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
         if (towerHeight <= 0) continue;
 
         // 1. Full-height background wash
-        const bgWash = BG_WASH[risk];
+        const bgWash = getBgWash()[risk];
         if (bgWash) {
           ctx.fillStyle = bgWash;
           ctx.fillRect(xLeft, plotArea.top, colWidth, plotArea.height);
         }
 
         // 2. Tower body fill
-        const towerFill = TOWER_FILL[risk];
+        const towerFill = getTowerFill()[risk];
         if (towerFill) {
           ctx.fillStyle = towerFill;
           ctx.fillRect(xLeft, yTop, colWidth, towerHeight);
         }
 
         // 3. Diagonal hatching
-        const hatchColor = HATCH_COLOR[risk];
+        const hatchColor = getHatchColor()[risk];
         if (hatchColor) {
           drawHatching(ctx, xLeft, yTop, colWidth, towerHeight, hatchColor);
         }
 
         // 4. Tower edge outline
-        const edgeColor = EDGE_COLOR[risk];
+        const edgeColor = getEdgeColor()[risk];
         if (edgeColor) {
           ctx.strokeStyle = edgeColor;
           ctx.lineWidth = 1.5;
@@ -77,7 +77,7 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
         }
 
         // 5. Anvil top strip
-        const stripColor = STRIP_COLOR[risk];
+        const stripColor = getStripColor()[risk];
         if (stripColor) {
           const anvilExtend = Math.min(colWidth * 0.2, 8);
           ctx.fillStyle = stripColor;

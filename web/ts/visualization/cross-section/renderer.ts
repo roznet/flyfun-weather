@@ -3,6 +3,7 @@
 import type { CoordTransform, PlotArea, VizRouteData, CrossSectionLayer } from '../types';
 import { drawAxes } from './axes';
 import { isDarkTheme } from '../interaction-utils';
+import { getActiveTheme } from './theme';
 
 const MARGIN = { left: 60, right: 50, top: 20, bottom: 50 };
 
@@ -101,7 +102,7 @@ export class CrossSectionRenderer {
 
     // Sky-blue plot background
     const { plotArea } = transform;
-    ctx.fillStyle = '#87CEEB';
+    ctx.fillStyle = getActiveTheme().sky.background;
     ctx.fillRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
 
     // Draw axes first (background grid)

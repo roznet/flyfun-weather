@@ -3,8 +3,7 @@
 import type { CoordTransform, VizRouteData } from '../types';
 import { altitudeToPressureHpa } from '../scales';
 import { chooseDistanceTickInterval, findNearestPointIndex, isDarkTheme } from '../interaction-utils';
-
-const GRID_COLOR = 'rgba(255, 255, 255, 0.35)';
+import { getActiveTheme } from './theme';
 function labelColor(): string { return isDarkTheme() ? '#9ca3af' : '#6c757d'; }
 function waypointLabelColor(): string { return isDarkTheme() ? '#d1d5db' : '#495057'; }
 function borderColor(): string { return isDarkTheme() ? '#4a4a5a' : '#adb5bd'; }
@@ -42,7 +41,7 @@ function drawAltitudeAxis(
     const y = transform.altitudeToY(alt);
 
     // Horizontal grid line
-    ctx.strokeStyle = GRID_COLOR;
+    ctx.strokeStyle = getActiveTheme().axes.gridColor;
     ctx.lineWidth = 0.5;
     ctx.setLineDash([]);
     ctx.beginPath();
@@ -116,7 +115,7 @@ function drawDistanceAxis(
     const x = transform.distanceToX(d);
 
     // Vertical grid line (light)
-    ctx.strokeStyle = GRID_COLOR;
+    ctx.strokeStyle = getActiveTheme().axes.gridColor;
     ctx.lineWidth = 0.5;
     ctx.setLineDash([]);
     ctx.beginPath();
@@ -154,7 +153,7 @@ function drawWaypointLines(
     const x = transform.distanceToX(wp.distanceNm);
 
     // Vertical dashed line
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.strokeStyle = getActiveTheme().axes.waypointLineColor;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
