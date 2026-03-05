@@ -23,7 +23,7 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
     for (let i = 0; i < data.points.length; i++) {
       const p = data.points[i];
       const risk = p.nwpConvectiveRisk;
-      if (risk === 'none' || risk === 'marginal') continue;
+      if (risk === 'none') continue;
 
       // Column x-bounds (midpoint between neighbors)
       const x = transform.distanceToX(p.distanceNm);
