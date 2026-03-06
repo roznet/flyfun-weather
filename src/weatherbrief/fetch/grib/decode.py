@@ -78,6 +78,7 @@ _CLOUD_DIAG_FIELD_MAP: dict[tuple[str, str], str] = {
 # cfgrib shortName → internal field name
 _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "ceiling": "ceiling_m",
+    "ceil": "ceiling_m",       # cfgrib shortName alias
     "hbas_con": "convective_cloud_base_m",
     "htop_con": "convective_cloud_top_m",
     "clcl": "low_cover_pct",
@@ -460,7 +461,9 @@ def decode_icon_eu_per_point(
                 name_lower = str(var_name).lower()
 
                 # Map ICON-EU variable names
-                if name_lower == "p":
+                # cfgrib may decode the P field as "p" or "pres" depending
+                # on the GRIB shortName mapping.
+                if name_lower in ("p", "pres"):
                     field_key = "pressure_pa"
                 elif name_lower in _VAR_MAP:
                     field_key = _VAR_MAP[name_lower]
