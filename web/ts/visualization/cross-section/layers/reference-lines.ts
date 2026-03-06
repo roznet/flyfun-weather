@@ -16,6 +16,7 @@ function drawRefLine(
 ): void {
   const y = transform.altitudeToY(altitudeFt);
   const { plotArea } = transform;
+  const theme = getActiveTheme();
 
   ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth;
@@ -29,7 +30,8 @@ function drawRefLine(
   ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
   const textWidth = ctx.measureText(label).width;
 
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+  const bgColor = theme.sky.background;
+  ctx.fillStyle = bgColor + 'dd';
   ctx.fillRect(plotArea.left + 4, y + labelYOffset - 12, textWidth + 8, 14);
 
   ctx.fillStyle = color;
