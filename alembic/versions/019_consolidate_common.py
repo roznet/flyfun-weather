@@ -28,9 +28,13 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # --- Rename columns on user_preferences ---
     with op.batch_alter_table("user_preferences") as batch_op:
-        batch_op.alter_column("defaults_json", new_column_name="app_prefs_json")
         batch_op.alter_column(
-            "encrypted_autorouter_creds", new_column_name="encrypted_creds_json"
+            "defaults_json", new_column_name="app_prefs_json", existing_type=sa.Text
+        )
+        batch_op.alter_column(
+            "encrypted_autorouter_creds",
+            new_column_name="encrypted_creds_json",
+            existing_type=sa.Text,
         )
 
     # --- Merge digest_config_json into app_prefs_json ---
@@ -65,7 +69,9 @@ def upgrade() -> None:
 
     # --- Rename credit_balance → spending_limit on users ---
     with op.batch_alter_table("users") as batch_op:
-        batch_op.alter_column("credit_balance", new_column_name="spending_limit")
+        batch_op.alter_column(
+            "credit_balance", new_column_name="spending_limit", existing_type=sa.Float
+        )
 
     # --- Create cost_ledger table ---
     op.create_table(
@@ -90,7 +96,9 @@ def downgrade() -> None:
     op.drop_table("cost_ledger")
 
     with op.batch_alter_table("users") as batch_op:
-        batch_op.alter_column("spending_limit", new_column_name="credit_balance")
+        batch_op.alter_column(
+            "spending_limit", new_column_name="credit_balance", existing_type=sa.Float
+        )
 
     # Re-add digest_config_json column
     with op.batch_alter_table("user_preferences") as batch_op:
@@ -119,7 +127,11 @@ def downgrade() -> None:
         )
 
     with op.batch_alter_table("user_preferences") as batch_op:
-        batch_op.alter_column("app_prefs_json", new_column_name="defaults_json")
         batch_op.alter_column(
-            "encrypted_creds_json", new_column_name="encrypted_autorouter_creds"
+            "app_prefs_json", new_column_name="defaults_json", existing_type=sa.Text
+        )
+        batch_op.alter_column(
+            "encrypted_creds_json",
+            new_column_name="encrypted_autorouter_creds",
+            existing_type=sa.Text,
         )
