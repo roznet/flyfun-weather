@@ -359,6 +359,7 @@ export interface CompareControlCallbacks {
   onLayoutChange: (layout: VizLayout) => void;
   onCompareLayerChange: (layerId: string) => void;
   onCompareModelToggle: (model: string, enabled: boolean) => void;
+  onThemeChange?: (themeId: string) => void;
 }
 
 /** Render compare-mode controls: layout toggle, layer dropdown, model chips. */
@@ -397,6 +398,19 @@ export function renderCompareControls(
   }
   html += '</select>';
   html += '</div>';
+
+  // Theme selector
+  const currentTheme = getActiveThemeId();
+  html += `<div class="viz-theme-selector">`;
+  html += `<span class="viz-toggle-label">Theme:</span>`;
+  html += `<select id="viz-theme-select" class="viz-model-select">`;
+  for (const [id, theme] of Object.entries(THEMES)) {
+    const selected = id === currentTheme ? ' selected' : '';
+    html += `<option value="${id}"${selected}>${theme.label}</option>`;
+  }
+  html += `</select>`;
+  html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="Preview theme">\u{1f441}</button>`;
+  html += `</div>`;
 
   html += '</div>'; // .viz-toolbar-top
 
@@ -440,4 +454,22 @@ export function renderCompareControls(
       callbacks.onCompareModelToggle(model, !currentlyActive);
     });
   });
+
+  // Wire theme selector
+  const vizThemeSelect = container.querySelector('#viz-theme-select') as HTMLSelectElement | null;
+  if (vizThemeSelect && callbacks.onThemeChange) {
+    const cb = callbacks.onThemeChange;
+    vizThemeSelect.addEventListener('change', () => {
+      cb(vizThemeSelect.value);
+    });
+  }
+  const themePreviewBtn = container.querySelector('#viz-theme-preview') as HTMLButtonElement | null;
+  if (themePreviewBtn) {
+    themePreviewBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const themeId = vizThemeSelect?.value ?? getActiveThemeId();
+      showThemePreview(themeId as ThemeId);
+    });
+  }
 }

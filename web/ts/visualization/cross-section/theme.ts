@@ -61,6 +61,12 @@ export interface CrossSectionTheme {
     coverageAlpha: Record<string, [number, number]>;
     /** Fallback opacity when DD is undefined. */
     fallbackGray: [number, number, number];
+    /** Fixed grid spacing in pixels for hatch lines. */
+    hatchGridPx: number;
+    /** Hatch line width per coverage class (pixels). At gridPx = solid. */
+    hatchLineWidth: Record<string, number>;
+    /** Hatch line color. */
+    hatchColor: string;
   };
 
   nwpClouds: {
@@ -106,7 +112,7 @@ const STANDARD_THEME: CrossSectionTheme = {
   label: 'Standard',
 
   sky: {
-    background: '#87CEEB',
+    background: '#7395DB',
   },
 
   axes: {
@@ -137,20 +143,23 @@ const STANDARD_THEME: CrossSectionTheme = {
   },
 
   clouds: {
-    denseRgb: [170, 170, 175],
-    thinRgb: [245, 245, 248],
+    denseRgb: [200, 200, 210],
+    thinRgb: [250, 250, 255],
     coverageAlpha: {
-      sct: [0.40, 0.55],
-      bkn: [0.50, 0.80],
-      ovc: [0.60, 0.92],
+      sct: [0.50, 0.65],
+      bkn: [0.60, 0.88],
+      ovc: [0.70, 0.95],
     },
-    fallbackGray: [190, 190, 195],
+    fallbackGray: [220, 220, 225],
+    hatchGridPx: 8,
+    hatchLineWidth: { sct: 2, bkn: 5, ovc: 8 },
+    hatchColor: 'rgba(255, 255, 255, 0.5)',
   },
 
   nwpClouds: {
-    brightRgb: [230, 233, 245],
-    deltaRgb: [65, 63, 60],
-    opacityRange: [0.25, 0.50],
+    brightRgb: [245, 245, 255],
+    deltaRgb: [55, 55, 50],
+    opacityRange: [0.30, 0.55],
   },
 
   icing: {
@@ -284,6 +293,9 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
       ovc: [0.65, 0.95],
     },
     fallbackGray: [144, 144, 144],
+    hatchGridPx: 8,
+    hatchLineWidth: { sct: 2, bkn: 5, ovc: 8 },
+    hatchColor: 'rgba(180, 180, 180, 0.45)',
   },
 
   nwpClouds: {

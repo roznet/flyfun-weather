@@ -160,8 +160,9 @@ export class CrossSectionRenderer {
     }
 
     // Draw hover crosshair (vertical)
+    const crosshairColor = getActiveTheme().axes.waypointLineColor;
     if (hoverX !== undefined && hoverX >= plotArea.left && hoverX <= plotArea.left + plotArea.width) {
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.strokeStyle = crosshairColor;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
@@ -173,7 +174,7 @@ export class CrossSectionRenderer {
 
     // Draw hover crosshair (horizontal)
     if (hoverY !== undefined && hoverY >= plotArea.top && hoverY <= plotArea.top + plotArea.height) {
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+      ctx.strokeStyle = crosshairColor;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();

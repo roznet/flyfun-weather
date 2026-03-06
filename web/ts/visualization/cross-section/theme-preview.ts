@@ -51,6 +51,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
   const plotT = 20;
   const plotW = W - PAD * 2;
   const plotH = H - 50;
+  const bg = theme.sky.background;
 
   // Sky background
   ctx.fillStyle = theme.sky.background;
@@ -94,7 +95,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
     const bandW = plotW / 3;
     ctx.fillRect(plotL + bandW * i, plotT + 10, bandW, 35);
   }
-  drawLabel(ctx, 'NWP Clouds', plotL + plotW / 2, plotT + 30);
+  drawLabel(ctx, 'NWP Clouds', plotL + plotW / 2, plotT + 30, bg);
 
   // DD cloud band
   const cloudY = plotT + 50;
@@ -110,7 +111,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
     const bandW = plotW / 3;
     ctx.fillRect(plotL + bandW * i, cloudY, bandW, 25);
   }
-  drawLabel(ctx, 'DD Clouds', plotL + plotW / 2, cloudY + 14);
+  drawLabel(ctx, 'DD Clouds', plotL + plotW / 2, cloudY + 14, bg);
 
   // Icing bands
   const icingY = cloudY + 30;
@@ -120,7 +121,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
     ctx.fillStyle = theme.icing[risks[i]] ?? 'transparent';
     ctx.fillRect(plotL + bandW * i, icingY, bandW, 22);
   }
-  drawLabel(ctx, 'Icing', plotL + plotW / 2, icingY + 13);
+  drawLabel(ctx, 'Icing', plotL + plotW / 2, icingY + 13, bg);
 
   // CAT bands
   const catY = icingY + 25;
@@ -128,7 +129,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
     ctx.fillStyle = theme.cat[risks[i]] ?? 'transparent';
     ctx.fillRect(plotL + bandW * i, catY, bandW, 22);
   }
-  drawLabel(ctx, 'CAT', plotL + plotW / 2, catY + 13);
+  drawLabel(ctx, 'CAT', plotL + plotW / 2, catY + 13, bg);
 
   // Convective tower
   const towerX = plotL + plotW * 0.75;
@@ -156,7 +157,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
   ctx.strokeStyle = theme.convective.edgeColor['moderate'] ?? 'rgba(200,100,0,0.5)';
   ctx.lineWidth = 1.5;
   ctx.strokeRect(towerX, towerTop, towerW, towerH);
-  drawLabel(ctx, 'CB', towerX + towerW / 2, towerTop + towerH / 2);
+  drawLabel(ctx, 'CB', towerX + towerW / 2, towerTop + towerH / 2, bg);
 
   // Inversion band
   const invY = catY + 28;
@@ -165,21 +166,21 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
   const invOpacity = Math.min(cap, floor + scale * 0.7);
   ctx.fillStyle = `rgba(${ir}, ${ig}, ${ib}, ${invOpacity})`;
   ctx.fillRect(plotL, invY, plotW * 0.6, 20);
-  drawLabel(ctx, 'Inversion', plotL + plotW * 0.3, invY + 12);
+  drawLabel(ctx, 'Inversion', plotL + plotW * 0.3, invY + 12, bg);
 
   // Temperature lines
   const tempY = plotT + plotH * 0.35;
   drawThemeLine(ctx, theme.temperature.freezingLevel, plotL, plotL + plotW, tempY);
   drawThemeLine(ctx, theme.temperature.minus10c, plotL, plotL + plotW, tempY - 18);
   drawThemeLine(ctx, theme.temperature.minus20c, plotL, plotL + plotW, tempY - 36);
-  drawLabel(ctx, '0°C / -10°C / -20°C', plotL + plotW * 0.25, tempY - 44);
+  drawLabel(ctx, '0°C / -10°C / -20°C', plotL + plotW * 0.25, tempY - 44, bg);
 
   // Stability lines
   const stabY = plotT + plotH * 0.65;
   drawThemeLine(ctx, theme.stability.lcl, plotL, plotL + plotW * 0.5, stabY);
   drawThemeLine(ctx, theme.stability.lfc, plotL, plotL + plotW * 0.5, stabY - 15);
   drawThemeLine(ctx, theme.stability.el, plotL, plotL + plotW * 0.5, stabY - 30);
-  drawLabel(ctx, 'LCL / LFC / EL', plotL + plotW * 0.25, stabY - 38);
+  drawLabel(ctx, 'LCL / LFC / EL', plotL + plotW * 0.25, stabY - 38, bg);
 
   // Reference lines
   const refY = plotT + plotH * 0.82;
@@ -198,7 +199,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
   ctx.lineTo(plotL + plotW, refY + 12);
   ctx.stroke();
   ctx.setLineDash([]);
-  drawLabel(ctx, 'Cruise / Ceiling', plotL + plotW / 2, refY + 7);
+  drawLabel(ctx, 'Cruise / Ceiling', plotL + plotW / 2, refY + 7, bg);
 
   // Terrain (sine wave hill)
   const terrainBaseY = plotT + plotH;
@@ -243,13 +244,20 @@ function drawThemeLine(
   ctx.setLineDash([]);
 }
 
-function drawLabel(ctx: CanvasRenderingContext2D, text: string, x: number, y: number): void {
+function hexLuminance(hex: string): number {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+function drawLabel(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, bgColor: string): void {
   ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const m = ctx.measureText(text);
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillStyle = bgColor + 'dd';
   ctx.fillRect(x - m.width / 2 - 2, y - 6, m.width + 4, 12);
-  ctx.fillStyle = '#333';
+  ctx.fillStyle = hexLuminance(bgColor) < 0.5 ? '#ddd' : '#333';
   ctx.fillText(text, x, y);
 }

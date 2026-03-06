@@ -246,6 +246,7 @@ async function init(): Promise<void> {
         onLayoutChange: (l) => store.getState().setLayout(l),
         onCompareLayerChange: (layerId) => store.getState().setCompareLayer(layerId),
         onCompareModelToggle: (model, enabled) => store.getState().setCompareModel(model, enabled),
+        onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
       }, availableModels);
 
       // Hide route graph controls in compare mode
