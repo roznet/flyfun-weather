@@ -36,8 +36,8 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Three synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (7 scalar metrics), and Leaflet route map (14 metric-colored segment types with altitude slider). Three layout modes, shared color scales, hover sync, compact/full layer mode, icing/cloud method groups.
-Key exports: `CrossSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`
+Three synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (7 scalar metrics), and Leaflet route map (14 metric-colored segment types with altitude slider). Switchable cross-section themes (standard, high-contrast) with cloud hatch patterns, theme preview, and theme-aware legends. Three layout modes, shared color scales, hover sync, compact/full layer mode, icing/cloud method groups.
+Key exports: `CrossSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
 
 ### route-graph
@@ -64,7 +64,7 @@ GRIB2 enrichment engine: GFS S3 (CLWMR/ICMR/cloud diagnostics), ICON-EU DWD (QC/
 → Full doc: weather-engine-specs.md
 
 ### multi-user-deployment
-Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, Google OAuth + API token auth, MySQL/SQLite DB schema, rate limiting, encrypted credentials, deploy commands, env vars.
+Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth via flyfun-common (OAuth, JWT, cross-subdomain SSO), MySQL/SQLite DB schema, rate limiting, encrypted credentials, deploy commands, env vars.
 → Full doc: multi-user-deployment.md
 
 ### cost-attribution
