@@ -2,7 +2,7 @@
  *
  * Centralizes all color values used by cross-section layers into a single
  * typed theme object. Supports multiple built-in themes (standard,
- * high-contrast, colorblind-safe) switchable at runtime.
+ * high-contrast) switchable at runtime.
  *
  * Usage: import { getActiveTheme } from './theme';
  *        const t = getActiveTheme();
@@ -103,7 +103,7 @@ export interface CrossSectionTheme {
 
 // --- Theme IDs ---
 
-export type ThemeId = 'standard' | 'high-contrast' | 'colorblind';
+export type ThemeId = 'standard' | 'high-contrast';
 
 // --- Standard theme (current production values) ---
 
@@ -382,109 +382,11 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
   },
 };
 
-// --- Colorblind-safe theme (blue/orange, no red/green) ---
-
-const COLORBLIND_SAFE_THEME: CrossSectionTheme = {
-  ...STANDARD_THEME,
-  id: 'colorblind',
-  label: 'Colorblind Safe',
-
-  temperature: {
-    freezingLevel: { color: '#0077bb', width: 2 },
-    minus10c: { color: '#33bbee', width: 1.5 },
-    minus20c: { color: '#004488', width: 1, dash: [6, 4] },
-  },
-
-  stability: {
-    lcl: { color: '#009988', width: 2, dash: [6, 4] },
-    lfc: { color: '#ee7733', width: 1.5, dash: [6, 4] },
-    el: { color: '#cc3311', width: 1.5, dash: [4, 2, 1, 2] },
-  },
-
-  icing: {
-    none: 'transparent',
-    light: 'rgba(51, 187, 238, 0.35)',
-    moderate: 'rgba(238, 119, 51, 0.45)',
-    severe: 'rgba(204, 51, 17, 0.55)',
-  },
-
-  sfipIcing: {
-    none: 'transparent',
-    light: 'rgba(51, 187, 238, 0.50)',
-    moderate: 'rgba(238, 119, 51, 0.55)',
-    severe: 'rgba(204, 51, 17, 0.65)',
-  },
-
-  cat: {
-    none: 'transparent',
-    light: 'rgba(238, 119, 51, 0.20)',
-    moderate: 'rgba(238, 119, 51, 0.40)',
-    severe: 'rgba(204, 51, 17, 0.55)',
-  },
-
-  convective: {
-    riskColors: {
-      none: 'transparent',
-      marginal: 'rgba(160, 160, 160, 0.08)',
-      low: 'rgba(238, 204, 51, 0.10)',
-      moderate: 'rgba(238, 119, 51, 0.15)',
-      high: 'rgba(204, 51, 17, 0.20)',
-      extreme: 'rgba(136, 34, 85, 0.25)',
-    },
-    bgWash: {
-      marginal: 'rgba(200, 200, 200, 0.04)',
-      low: 'rgba(238, 204, 51, 0.06)',
-      moderate: 'rgba(238, 119, 51, 0.08)',
-      high: 'rgba(204, 51, 17, 0.10)',
-      extreme: 'rgba(136, 34, 85, 0.14)',
-    },
-    towerFill: {
-      marginal: 'rgba(180, 180, 180, 0.15)',
-      low: 'rgba(238, 204, 51, 0.18)',
-      moderate: 'rgba(238, 119, 51, 0.25)',
-      high: 'rgba(204, 51, 17, 0.30)',
-      extreme: 'rgba(136, 34, 85, 0.35)',
-    },
-    hatchColor: {
-      marginal: 'rgba(140, 140, 140, 0.15)',
-      low: 'rgba(180, 160, 0, 0.20)',
-      moderate: 'rgba(200, 100, 20, 0.35)',
-      high: 'rgba(180, 40, 15, 0.40)',
-      extreme: 'rgba(120, 30, 70, 0.50)',
-    },
-    stripColor: {
-      marginal: 'rgba(160, 160, 160, 0.4)',
-      low: 'rgba(238, 204, 51, 0.5)',
-      moderate: 'rgba(238, 119, 51, 0.75)',
-      high: 'rgba(204, 51, 17, 0.85)',
-      extreme: 'rgba(136, 34, 85, 0.9)',
-    },
-    edgeColor: {
-      marginal: 'rgba(140, 140, 140, 0.25)',
-      low: 'rgba(180, 160, 0, 0.3)',
-      moderate: 'rgba(200, 100, 20, 0.5)',
-      high: 'rgba(180, 40, 15, 0.6)',
-      extreme: 'rgba(120, 30, 70, 0.7)',
-    },
-    cbLabelColor: {
-      moderate: 'rgba(200, 100, 20, 0.8)',
-      high: 'rgba(180, 40, 15, 0.9)',
-      extreme: 'rgba(120, 30, 70, 0.95)',
-    },
-  },
-
-  inversion: {
-    baseRgb: [170, 51, 119],
-    opacityParams: { floor: 0.15, scale: 0.5, maxStrengthC: 3, cap: 0.65 },
-  },
-};
-
 // --- Theme registry ---
 
 export const THEMES: Record<ThemeId, CrossSectionTheme> = {
   'standard': STANDARD_THEME,
   'high-contrast': HIGH_CONTRAST_THEME,
-  'colorblind': COLORBLIND_SAFE_THEME,
 };
 
 // --- Module-level getter/setter ---
