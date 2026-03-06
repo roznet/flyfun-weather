@@ -18,9 +18,10 @@ from weatherbrief.api.usage import (
     get_usage_summary,
     log_briefing_usage,
 )
-from weatherbrief.db.deps import current_user_id, get_db
-from weatherbrief.db.engine import DEV_USER_ID
-from weatherbrief.db.models import Base, BriefingUsageRow, UserPreferencesRow, UserRow
+from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
+from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
+import weatherbrief.db.models  # noqa: F401  — register app tables on Base
+from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.pipeline import BriefingUsage
 
 
@@ -38,6 +39,7 @@ def app_db():
         cursor.close()
 
     Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
     TestSession = sessionmaker(bind=engine)
 
     session = TestSession()
@@ -45,6 +47,7 @@ def app_db():
         id=DEV_USER_ID, provider="local", provider_sub="dev",
         email="dev@localhost", display_name="Dev User", approved=True,
     ))
+    session.flush()
     session.add(UserPreferencesRow(user_id=DEV_USER_ID))
     session.commit()
     session.close()

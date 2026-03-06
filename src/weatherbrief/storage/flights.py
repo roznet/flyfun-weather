@@ -326,7 +326,7 @@ def delete_profile(session: Session, profile_id: int) -> None:
 def ensure_default_profile(session: Session, user_id: str) -> FlightProfile:
     """Ensure a default profile exists for a user, creating one if needed.
 
-    If the user has existing preferences in defaults_json, migrates them
+    If the user has existing preferences in app_prefs_json, migrates them
     to the default profile's settings.
     """
     from weatherbrief.db.models import UserPreferencesRow
@@ -342,9 +342,9 @@ def ensure_default_profile(session: Session, user_id: str) -> FlightProfile:
     # Migrate existing preferences if available
     settings: dict = {}
     prefs_row = session.get(UserPreferencesRow, user_id)
-    if prefs_row and prefs_row.defaults_json:
+    if prefs_row and prefs_row.app_prefs_json:
         try:
-            data = json.loads(prefs_row.defaults_json)
+            data = json.loads(prefs_row.app_prefs_json)
             # Extract profile-relevant fields
             for key in (
                 "cruise_altitude_ft", "flight_ceiling_ft",

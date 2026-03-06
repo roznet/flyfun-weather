@@ -22,8 +22,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from weatherbrief.db.engine import SessionLocal
-from weatherbrief.db.models import FlightRow, UserRow
+from flyfun_common.db import SessionLocal
+from flyfun_common.db.models import UserRow
+from weatherbrief.db.models import FlightRow
 
 logger = logging.getLogger(__name__)
 

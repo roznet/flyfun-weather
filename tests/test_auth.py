@@ -11,11 +11,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from weatherbrief.api.app import create_app
-from weatherbrief.api.auth_config import COOKIE_NAME
-from weatherbrief.api.jwt_utils import create_token
-from weatherbrief.db.deps import current_user_id, get_db
-from weatherbrief.db.engine import DEV_USER_ID
-from weatherbrief.db.models import Base, UserPreferencesRow, UserRow
+from flyfun_common.auth import COOKIE_NAME, create_token
+from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
+from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
+import weatherbrief.db.models  # noqa: F401  — register app tables on Base
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import save_flight
 
@@ -38,6 +37,7 @@ def auth_db():
         cursor.close()
 
     Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
     TestSession = sessionmaker(bind=engine)
 
     session = TestSession()
@@ -46,12 +46,13 @@ def auth_db():
         id=USER_A_ID, provider="google", provider_sub="goog-a",
         email="alice@test.com", display_name="Alice", approved=True,
     ))
-    session.add(UserPreferencesRow(user_id=USER_A_ID))
     # User B — approved
     session.add(UserRow(
         id=USER_B_ID, provider="google", provider_sub="goog-b",
         email="bob@test.com", display_name="Bob", approved=True,
     ))
+    session.flush()
+    session.add(UserPreferencesRow(user_id=USER_A_ID))
     session.add(UserPreferencesRow(user_id=USER_B_ID))
     session.commit()
     session.close()

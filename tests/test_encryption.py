@@ -1,4 +1,4 @@
-"""Tests for Fernet encryption utilities."""
+"""Tests for Fernet encryption utilities (now in flyfun_common)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class TestEncryption:
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
 
-        from weatherbrief.api.encryption import decrypt, encrypt
+        from flyfun_common.encryption import decrypt, encrypt
 
         plaintext = '{"username": "alice", "password": "s3cret!"}'
         ciphertext = encrypt(plaintext)
@@ -27,7 +27,7 @@ class TestEncryption:
         key = Fernet.generate_key().decode()
         monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", key)
 
-        from weatherbrief.api.encryption import decrypt, encrypt
+        from flyfun_common.encryption import decrypt, encrypt
 
         plaintext = "test-data"
         ciphertext = encrypt(plaintext)
@@ -39,7 +39,7 @@ class TestEncryption:
         monkeypatch.setenv("JWT_SECRET", "some-jwt-secret")
         monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
 
-        from weatherbrief.api.encryption import encrypt
+        from flyfun_common.encryption import encrypt
 
         with pytest.raises(ValueError, match="CREDENTIAL_ENCRYPTION_KEY must be set"):
             encrypt("test")
@@ -50,7 +50,7 @@ class TestEncryption:
         monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
         monkeypatch.setenv("JWT_SECRET", "my-dev-secret")
 
-        from weatherbrief.api.encryption import decrypt, encrypt
+        from flyfun_common.encryption import decrypt, encrypt
 
         ct = encrypt("hello")
         assert decrypt(ct) == "hello"
@@ -63,12 +63,12 @@ class TestEncryption:
         key2 = Fernet.generate_key().decode()
 
         monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", key1)
-        from weatherbrief.api.encryption import encrypt
+        from flyfun_common.encryption import encrypt
 
         ciphertext = encrypt("secret")
 
         monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", key2)
-        from weatherbrief.api.encryption import decrypt
+        from flyfun_common.encryption import decrypt
 
         with pytest.raises(InvalidToken):
             decrypt(ciphertext)

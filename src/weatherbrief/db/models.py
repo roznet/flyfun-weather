@@ -1,66 +1,25 @@
-"""SQLAlchemy ORM models for all persistent tables."""
+"""SQLAlchemy ORM models for weather-specific tables.
+
+Shared models (UserRow, ApiTokenRow, UserPreferencesRow, CostLedgerRow) come
+from flyfun_common.db.models. All models share the same Base so that cross-table
+ForeignKey references work correctly.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-
-class Base(DeclarativeBase):
-    pass
-
-
-class UserRow(Base):
-    __tablename__ = "users"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    provider: Mapped[str] = mapped_column(String(32), default="local")
-    provider_sub: Mapped[str] = mapped_column(String(256), default="")
-    email: Mapped[str] = mapped_column(String(256), default="")
-    display_name: Mapped[str] = mapped_column(String(256), default="")
-    approved: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    last_login_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
-    )
-
-    preferences: Mapped[UserPreferencesRow | None] = relationship(
-        back_populates="user", uselist=False, cascade="all, delete-orphan"
-    )
-    profiles: Mapped[list[FlightProfileRow]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-    flights: Mapped[list[FlightRow]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-    briefing_usage: Mapped[list[BriefingUsageRow]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-    api_tokens: Mapped[list[ApiTokenRow]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-    credit_balance: Mapped[float] = mapped_column(Float, default=500.0, server_default="500.0")
-    credit_ledger: Mapped[list[CreditLedgerRow]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-
-
-class UserPreferencesRow(Base):
-    __tablename__ = "user_preferences"
-
-    user_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    defaults_json: Mapped[str] = mapped_column(Text, default="{}")
-    encrypted_autorouter_creds: Mapped[str] = mapped_column(Text, default="")
-    digest_config_json: Mapped[str] = mapped_column(Text, default="{}")
-    setup_completed: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    user: Mapped[UserRow] = relationship(back_populates="preferences")
+# Re-export shared models so existing imports from weatherbrief.db.models still work
+from flyfun_common.db.models import (  # noqa: F401
+    Base,
+    UserRow,
+    ApiTokenRow,
+    UserPreferencesRow,
+    CostLedgerRow,
+)
 
 
 class FlightProfileRow(Base):
@@ -82,7 +41,7 @@ class FlightProfileRow(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    user: Mapped[UserRow] = relationship(back_populates="profiles")
+    user: Mapped[UserRow] = relationship(UserRow)
     flights: Mapped[list[FlightRow]] = relationship(back_populates="profile")
 
 
@@ -115,7 +74,7 @@ class FlightRow(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    user: Mapped[UserRow] = relationship(back_populates="flights")
+    user: Mapped[UserRow] = relationship(UserRow)
     profile: Mapped[FlightProfileRow | None] = relationship(back_populates="flights")
     packs: Mapped[list[BriefingPackRow]] = relationship(
         back_populates="flight", cascade="all, delete-orphan"
@@ -171,30 +130,7 @@ class BriefingUsageRow(Base):
     queue_wait_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     triggered_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
-    user: Mapped[UserRow] = relationship(back_populates="briefing_usage")
-
-
-class ApiTokenRow(Base):
-    __tablename__ = "api_tokens"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(256), default="")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
-    )
-    last_used_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
-    )
-    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    user: Mapped[UserRow] = relationship(back_populates="api_tokens")
+    user: Mapped[UserRow] = relationship(UserRow)
 
 
 class FeedbackRow(Base):
@@ -213,7 +149,7 @@ class FeedbackRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
-    user: Mapped[UserRow] = relationship()
+    user: Mapped[UserRow] = relationship(UserRow)
 
 
 class CostConfigRow(Base):
@@ -221,7 +157,8 @@ class CostConfigRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     active_from: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), index=True,
+        DateTime(timezone=True),
+        index=True,
         default=lambda: datetime.now(timezone.utc),
     )
     active_until: Mapped[datetime | None] = mapped_column(
@@ -242,6 +179,11 @@ class CostConfigRow(Base):
 
 
 class CreditLedgerRow(Base):
+    """Legacy credit ledger — kept for migration compatibility.
+
+    New code should use flyfun_common.db.models.CostLedgerRow instead.
+    """
+
     __tablename__ = "credit_ledger"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -263,4 +205,4 @@ class CreditLedgerRow(Base):
         Integer, ForeignKey("cost_config.id", ondelete="SET NULL"), nullable=True,
     )
 
-    user: Mapped[UserRow] = relationship(back_populates="credit_ledger")
+    user: Mapped[UserRow] = relationship(UserRow)

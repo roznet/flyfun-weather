@@ -54,7 +54,7 @@ def send_new_user_notification(
 
     In dev mode (no ADMIN_EMAILS set), logs instead.
     """
-    from weatherbrief.api.auth_config import is_dev_mode
+    from flyfun_common.auth import is_dev_mode
 
     admin_emails = get_admin_emails()
 
@@ -115,7 +115,7 @@ def send_welcome_email(
 
     In dev mode or if SMTP is not configured, logs instead of sending.
     """
-    from weatherbrief.api.auth_config import is_dev_mode
+    from flyfun_common.auth import is_dev_mode
 
     if is_dev_mode():
         logger.info("Welcome email (dev mode, not sent): %s", email)
@@ -204,7 +204,7 @@ def send_feedback_notification(
 
     In dev mode (no ADMIN_EMAILS set), logs instead.
     """
-    from weatherbrief.api.auth_config import is_dev_mode
+    from flyfun_common.auth import is_dev_mode
 
     admin_emails = get_admin_emails()
 

@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from weatherbrief.api.auth_config import is_dev_mode
-from weatherbrief.db.deps import current_user_id, get_db
+from flyfun_common.auth import is_dev_mode
+from flyfun_common.db import current_user_id, get_db
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
     safe_path_component,

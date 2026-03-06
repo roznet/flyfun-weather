@@ -1,4 +1,4 @@
-"""Tests for JWT token creation and validation."""
+"""Tests for JWT token creation and validation (now in flyfun_common)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 import jwt as pyjwt
 import pytest
 
-from weatherbrief.api.jwt_utils import JWT_ALGORITHM, create_token, decode_token
+from flyfun_common.auth.jwt_utils import JWT_ALGORITHM, create_token, decode_token
 
 SECRET = "test-secret-key"
 

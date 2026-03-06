@@ -18,8 +18,9 @@ from weatherbrief.costs import (
     compute_cost,
     config_from_row,
 )
-from weatherbrief.db.deps import current_user_id, get_db
-from weatherbrief.db.models import CostConfigRow, CreditLedgerRow, UserRow
+from flyfun_common.db import current_user_id, get_db
+from flyfun_common.db.models import UserRow
+from weatherbrief.db.models import CostConfigRow, CreditLedgerRow
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,8 @@ def charge_briefing(
     if not user:
         raise ValueError(f"User {user_id} not found")
 
-    new_balance = user.credit_balance - breakdown.credits_charged
-    user.credit_balance = new_balance
+    new_balance = user.spending_limit - breakdown.credits_charged
+    user.spending_limit = new_balance
 
     entry = CreditLedgerRow(
         user_id=user_id,
@@ -75,7 +76,7 @@ def charge_briefing(
 
 def _auto_reload(db: Session, user: UserRow) -> None:
     """Reset user's balance to AUTO_RELOAD_CREDITS and log a topup entry."""
-    user.credit_balance = AUTO_RELOAD_CREDITS
+    user.spending_limit = AUTO_RELOAD_CREDITS
     topup = CreditLedgerRow(
         user_id=user.id,
         amount=AUTO_RELOAD_CREDITS,
@@ -266,7 +267,7 @@ def get_credits(
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    balance = user.credit_balance
+    balance = user.spending_limit
 
     transactions = get_recent_transactions(db, user_id)
 

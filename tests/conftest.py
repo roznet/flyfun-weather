@@ -16,8 +16,8 @@ def _clean_env_leaks(monkeypatch):
     """Prevent load_dotenv() side-effects from leaking between test modules."""
     monkeypatch.delenv("OPENMETEO_API_KEY", raising=False)
 
-from weatherbrief.db.engine import DEV_USER_ID
-from weatherbrief.db.models import Base, UserPreferencesRow, UserRow
+from flyfun_common.db import DEV_USER_ID
+from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
 from weatherbrief.models import (
     HourlyForecast,
     ModelSource,
@@ -41,6 +41,8 @@ def db_engine():
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
+    # Import app models to register them on Base before create_all
+    import weatherbrief.db.models  # noqa: F401
     Base.metadata.create_all(engine)
     yield engine
     engine.dispose()
@@ -67,6 +69,7 @@ def dev_user(db_session):
         approved=True,
     )
     db_session.add(user)
+    db_session.flush()
     db_session.add(UserPreferencesRow(user_id=DEV_USER_ID))
     db_session.flush()
     return DEV_USER_ID

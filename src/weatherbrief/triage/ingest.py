@@ -7,8 +7,9 @@ import sqlite3
 
 from sqlalchemy.orm import Session
 
-from weatherbrief.db import SessionLocal, get_engine
-from weatherbrief.db.models import FeedbackRow, UserRow
+from flyfun_common.db import SessionLocal, get_engine
+from flyfun_common.db.models import UserRow
+from weatherbrief.db.models import FeedbackRow
 
 from weatherbrief.triage.db import connect, log_action
 

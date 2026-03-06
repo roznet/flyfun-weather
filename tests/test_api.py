@@ -26,9 +26,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from weatherbrief.api.app import create_app
-from weatherbrief.db.deps import current_user_id, get_db
-from weatherbrief.db.engine import DEV_USER_ID
-from weatherbrief.db.models import Base, UserPreferencesRow, UserRow
+from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
+from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
+import weatherbrief.db.models  # noqa: F401  — register app tables on Base
 from weatherbrief.models import BriefingPackMeta, Flight
 from weatherbrief.storage.flights import pack_dir_for, save_flight, save_pack_meta
 
@@ -47,6 +47,7 @@ def app_db():
         cursor.close()
 
     Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
     TestSession = sessionmaker(bind=engine)
 
     # Seed dev user
@@ -55,6 +56,7 @@ def app_db():
         id=DEV_USER_ID, provider="local", provider_sub="dev",
         email="dev@localhost", display_name="Dev User", approved=True,
     ))
+    session.flush()
     session.add(UserPreferencesRow(user_id=DEV_USER_ID))
     session.commit()
     session.close()

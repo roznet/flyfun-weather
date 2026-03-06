@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from weatherbrief.db.deps import current_user_id, get_db
+from flyfun_common.db import current_user_id, get_db
 from weatherbrief.db.models import FlightProfileRow
 from weatherbrief.storage.flights import (
     delete_profile,
