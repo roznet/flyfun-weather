@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libcairo2 \
     libeccodes-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user (UID 2000 to match infra convention)
