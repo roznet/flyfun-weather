@@ -80,6 +80,66 @@ export function drawSmoothBand(
     return;
   }
 
+  ctx.fillStyle = fillStyle;
+  buildBandPath(ctx, valid, transform);
+  ctx.fill();
+}
+
+/**
+ * Draw horizontal line hatching inside a smooth band shape on a fixed grid.
+ * Lines are placed at multiples of `gridPx` so they align across adjacent bands.
+ * @param gridPx fixed vertical spacing between line centers.
+ * @param lineWidth stroke width — at gridPx the lines merge into solid fill.
+ * @param lineColor stroke color for the hatch lines.
+ */
+export function drawBandHatch(
+  ctx: CanvasRenderingContext2D,
+  bandPoints: BandPointData[],
+  transform: CoordTransform,
+  gridPx: number,
+  lineWidth: number,
+  lineColor: string,
+): void {
+  if (lineWidth >= gridPx) return; // solid — no gaps to draw
+
+  const valid = bandPoints.filter((p) => p.base !== null && p.top !== null);
+  if (valid.length < 2) return;
+
+  // Compute bounding box in pixel space
+  const topYs = valid.map((p) => transform.altitudeToY(p.top!));
+  const baseYs = valid.map((p) => transform.altitudeToY(p.base!));
+  const minY = Math.min(...topYs);
+  const maxY = Math.max(...baseYs);
+  const xs = valid.map((p) => transform.distanceToX(p.distance));
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+
+  ctx.save();
+  buildBandPath(ctx, valid, transform);
+  ctx.clip();
+
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([]);
+
+  // Snap to global grid so lines align across cloud segments
+  const startY = Math.ceil(minY / gridPx) * gridPx;
+  for (let y = startY; y <= maxY; y += gridPx) {
+    ctx.beginPath();
+    ctx.moveTo(minX, y);
+    ctx.lineTo(maxX, y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+/** Build the closed spline band path (top curve L→R, base curve R→L). Does not fill or stroke. */
+function buildBandPath(
+  ctx: CanvasRenderingContext2D,
+  valid: BandPointData[],
+  transform: CoordTransform,
+): void {
   const xs = valid.map((p) => transform.distanceToX(p.distance));
   const baseYs = valid.map((p) => transform.altitudeToY(p.base!));
   const topYs = valid.map((p) => transform.altitudeToY(p.top!));
@@ -87,7 +147,6 @@ export function drawSmoothBand(
   const baseTangents = monotoneCubicTangents(xs, baseYs);
   const topTangents = monotoneCubicTangents(xs, topYs);
 
-  ctx.fillStyle = fillStyle;
   ctx.beginPath();
 
   // Top curve (left to right)
@@ -113,7 +172,6 @@ export function drawSmoothBand(
   }
 
   ctx.closePath();
-  ctx.fill();
 }
 
 // --- Column band: filled rectangles per point ---

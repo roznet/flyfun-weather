@@ -165,6 +165,8 @@ export class CompareSectionRenderer {
     const { plotArea } = transform;
     const data = this.datasets[0].data;
 
+    const theme = getActiveTheme();
+
     // Selected point indicator
     if (this.selectedPointIndex >= 0 && this.selectedPointIndex < data.points.length) {
       const pt = data.points[this.selectedPointIndex];
@@ -179,8 +181,9 @@ export class CompareSectionRenderer {
     }
 
     // Hover crosshair (vertical)
+    const crosshairColor = theme.axes.waypointLineColor;
     if (hoverX !== undefined && hoverX >= plotArea.left && hoverX <= plotArea.left + plotArea.width) {
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.strokeStyle = crosshairColor;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
@@ -192,7 +195,7 @@ export class CompareSectionRenderer {
 
     // Hover crosshair (horizontal)
     if (hoverY !== undefined && hoverY >= plotArea.top && hoverY <= plotArea.top + plotArea.height) {
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+      ctx.strokeStyle = crosshairColor;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
@@ -232,14 +235,12 @@ export class CompareSectionRenderer {
     const { plotArea } = transform;
 
     for (const dataset of this.datasets) {
-      // Clear offscreen and fill plot area with white so semi-transparent
-      // layer fills (e.g. cloud grays) resolve against an opaque background
-      // rather than compositing transparency-on-transparency.
+      // Clear offscreen to transparent — each layer's semi-transparent fills
+      // will composite against the opaque sky on the main canvas via
+      // source-over blending at reduced alpha.
       offCtx.save();
       offCtx.scale(dpr, dpr);
       offCtx.clearRect(0, 0, cssW, cssH);
-      offCtx.fillStyle = '#ffffff';
-      offCtx.fillRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
 
       // Clip offscreen to plot area
       offCtx.beginPath();
@@ -250,11 +251,9 @@ export class CompareSectionRenderer {
       crossSectionLayer.render(offCtx, transform, dataset.data);
       offCtx.restore();
 
-      // Composite offscreen onto main canvas with multiply blend so the
-      // white background becomes transparent while the colored layer content
-      // darkens the sky-blue underneath.
+      // Composite offscreen onto main canvas with source-over at reduced
+      // alpha so all models are visible and blend naturally on any background.
       ctx.save();
-      ctx.globalCompositeOperation = 'multiply';
       ctx.globalAlpha = alpha;
       ctx.drawImage(this.offscreenCanvas, 0, 0, cssW * dpr, cssH * dpr, 0, 0, cssW, cssH);
       ctx.restore();
@@ -268,8 +267,7 @@ export class CompareSectionRenderer {
     if (!this.compareLayer || !this.compareLayer.lineAccessor) return;
 
     const accessor = this.compareLayer.lineAccessor;
-    const style = this.compareLayer.lineStyle ?? { color: '#2563eb', width: 2 };
-    const fillColor = this.compareLayer.envelopeFill ?? 'rgba(37, 99, 235, 0.15)';
+    const { style, fillColor } = this.resolveLineStyle(this.compareLayer);
 
     // Use first dataset's points as the distance reference
     const refPoints = this.datasets[0].data.points;
@@ -310,6 +308,26 @@ export class CompareSectionRenderer {
 
     // Draw mean line
     drawSmoothLine(ctx, meanPoints, transform, style);
+  }
+
+  /** Resolve line style from theme when possible, falling back to static definition. */
+  private resolveLineStyle(layer: ComparableLayer): {
+    style: { color: string; width: number; dash?: number[] };
+    fillColor: string;
+  } {
+    const theme = getActiveTheme();
+    const themeMap: Record<string, { style: { color: string; width: number; dash?: number[] }; fillColor: string }> = {
+      'freezing-level': { style: theme.temperature.freezingLevel, fillColor: `${theme.temperature.freezingLevel.color}26` },
+      'minus-10c-level': { style: theme.temperature.minus10c, fillColor: `${theme.temperature.minus10c.color}20` },
+      'minus-20c-level': { style: theme.temperature.minus20c, fillColor: `${theme.temperature.minus20c.color}20` },
+      'lcl-line': { style: theme.stability.lcl, fillColor: `${theme.stability.lcl.color}20` },
+      'lfc-line': { style: theme.stability.lfc, fillColor: `${theme.stability.lfc.color}20` },
+      'el-line': { style: theme.stability.el, fillColor: `${theme.stability.el.color}20` },
+    };
+    return themeMap[layer.id] ?? {
+      style: layer.lineStyle ?? { color: '#2563eb', width: 2 },
+      fillColor: layer.envelopeFill ?? 'rgba(37, 99, 235, 0.15)',
+    };
   }
 
   private setupCanvas(canvas: HTMLCanvasElement, cssW: number, cssH: number, dpr: number): void {

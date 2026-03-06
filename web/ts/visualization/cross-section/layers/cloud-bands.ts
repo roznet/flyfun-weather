@@ -2,7 +2,8 @@
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint, VizCloudLayer } from '../../types';
 import { cloudFillFromDD } from '../../scales';
-import { drawSmoothBand, drawColumnBand, type BandPointData } from './base';
+import { drawSmoothBand, drawBandHatch, drawColumnBand, type BandPointData } from './base';
+import { getActiveTheme } from '../theme';
 
 export const cloudBandsLayer: CrossSectionLayer = {
   id: 'cloud-bands',
@@ -16,11 +17,14 @@ export const cloudBandsLayer: CrossSectionLayer = {
     const maxLayers = data.points.reduce((max, p) => Math.max(max, p.cloudLayers.length), 0);
     if (maxLayers === 0) return;
 
+    const theme = getActiveTheme();
+    const hatch = theme.clouds;
+
     // Match cloud layers between adjacent points by altitude overlap
     for (let i = 0; i < data.points.length - 1; i++) {
       const curr = data.points[i];
       const next = data.points[i + 1];
-      drawMatchedCloudSegment(ctx, transform, curr, next);
+      drawMatchedCloudSegment(ctx, transform, curr, next, hatch);
     }
 
     if (data.points.length === 1) {
@@ -42,11 +46,29 @@ function avgDD(a: VizCloudLayer, b: VizCloudLayer): number | undefined {
   return a.meanDewpointDepressionC ?? b.meanDewpointDepressionC;
 }
 
+interface CloudHatchConfig {
+  hatchGridPx: number;
+  hatchLineWidth: Record<string, number>;
+  hatchColor: string;
+}
+
+function hatchBand(
+  ctx: CanvasRenderingContext2D,
+  bandPoints: BandPointData[],
+  transform: CoordTransform,
+  coverage: string,
+  hatch: CloudHatchConfig,
+): void {
+  const lw = hatch.hatchLineWidth[coverage] ?? hatch.hatchGridPx;
+  drawBandHatch(ctx, bandPoints, transform, hatch.hatchGridPx, lw, hatch.hatchColor);
+}
+
 function drawMatchedCloudSegment(
   ctx: CanvasRenderingContext2D,
   transform: CoordTransform,
   curr: VizPoint,
   next: VizPoint,
+  hatch: CloudHatchConfig,
 ): void {
   const usedNext = new Set<number>();
 
@@ -75,6 +97,7 @@ function drawMatchedCloudSegment(
         { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
       ];
       drawSmoothBand(ctx, bandPoints, transform, fill);
+      hatchBand(ctx, bandPoints, transform, cl.coverage, hatch);
     } else {
       const midDist = (curr.distanceNm + next.distanceNm) / 2;
       const midAlt = (cl.baseFt + cl.topFt) / 2;
@@ -84,6 +107,7 @@ function drawMatchedCloudSegment(
         { distance: midDist, base: midAlt, top: midAlt },
       ];
       drawSmoothBand(ctx, bandPoints, transform, fill);
+      hatchBand(ctx, bandPoints, transform, cl.coverage, hatch);
     }
   }
 
@@ -98,5 +122,6 @@ function drawMatchedCloudSegment(
       { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
     ];
     drawSmoothBand(ctx, bandPoints, transform, fill);
+    hatchBand(ctx, bandPoints, transform, nl.coverage, hatch);
   }
 }

@@ -226,7 +226,7 @@ function renderSmooth(
   }
 }
 
-/** Draw a single band trapezoid between two points. */
+/** Draw a single band trapezoid between two points with optional hatching. */
 function drawBandTrapezoid(
   ctx: CanvasRenderingContext2D,
   transform: CoordTransform,
@@ -238,14 +238,50 @@ function drawBandTrapezoid(
   if (coverPct <= 0) return;
   if (currBase >= currTop && nextBase >= nextTop) return;
 
+  const y1Top = transform.altitudeToY(currTop);
+  const y2Top = transform.altitudeToY(nextTop);
+  const y2Base = transform.altitudeToY(nextBase);
+  const y1Base = transform.altitudeToY(currBase);
+
+  // Color fill
   ctx.fillStyle = nwpCloudFill(coverPct);
   ctx.beginPath();
-  ctx.moveTo(x1, transform.altitudeToY(currTop));
-  ctx.lineTo(x2, transform.altitudeToY(nextTop));
-  ctx.lineTo(x2, transform.altitudeToY(nextBase));
-  ctx.lineTo(x1, transform.altitudeToY(currBase));
+  ctx.moveTo(x1, y1Top);
+  ctx.lineTo(x2, y2Top);
+  ctx.lineTo(x2, y2Base);
+  ctx.lineTo(x1, y1Base);
   ctx.closePath();
   ctx.fill();
+
+  // Hatch pattern — line width proportional to cover percentage on fixed grid
+  const theme = getActiveTheme();
+  const gridPx = theme.clouds.hatchGridPx;
+  const lineWidth = gridPx * (coverPct / 100);
+  if (lineWidth >= gridPx) return; // solid
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x1, y1Top);
+  ctx.lineTo(x2, y2Top);
+  ctx.lineTo(x2, y2Base);
+  ctx.lineTo(x1, y1Base);
+  ctx.closePath();
+  ctx.clip();
+
+  ctx.strokeStyle = theme.clouds.hatchColor;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([]);
+
+  const minY = Math.min(y1Top, y2Top);
+  const maxY = Math.max(y1Base, y2Base);
+  const startY = Math.ceil(minY / gridPx) * gridPx;
+  for (let y = startY; y <= maxY; y += gridPx) {
+    ctx.beginPath();
+    ctx.moveTo(x1, y);
+    ctx.lineTo(x2, y);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawSegment(
