@@ -14,8 +14,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from weatherbrief.api.auth import router as auth_router
-from weatherbrief.api.auth_config import get_jwt_secret, is_dev_mode
+from flyfun_common.auth import create_auth_router, get_jwt_secret, is_dev_mode
+from flyfun_common.db import (
+    SessionLocal,
+    ensure_dev_user,
+    get_engine,
+    init_shared_db,
+)
+from flyfun_common.db.models import UserPreferencesRow
+
 from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import refresh_router, router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
@@ -29,14 +36,28 @@ from weatherbrief.api.credits import (
 from weatherbrief.api.feedback import router as feedback_router
 from weatherbrief.api.models import router as models_router
 from weatherbrief.api.usage import router as usage_router
-from weatherbrief.db.engine import (
-    SessionLocal,
-    ensure_dev_user,
-    get_engine,
-    init_db,
-)
 
 logger = logging.getLogger(__name__)
+
+
+def _on_new_user(user, request, db):
+    """Callback for new user registration: create prefs row + send emails."""
+    db.add(UserPreferencesRow(user_id=user.id))
+    db.flush()
+
+    try:
+        from weatherbrief.notify.admin_email import (
+            send_new_user_notification,
+            send_welcome_email,
+        )
+
+        base_url = str(request.base_url).rstrip("/")
+        if not is_dev_mode():
+            base_url = base_url.replace("http://", "https://")
+        send_new_user_notification(user.email, user.display_name, user.id, base_url)
+        send_welcome_email(user.email, user.display_name, base_url)
+    except Exception:
+        logger.warning("Failed to send emails for new user %s", user.email, exc_info=True)
 
 
 @asynccontextmanager
@@ -46,8 +67,10 @@ async def lifespan(app: FastAPI):
     engine = get_engine()
 
     if env == "development":
-        init_db(engine)
-        logger.info("Dev mode: tables created via init_db")
+        # Import app models to register them on Base before create_all
+        import weatherbrief.db.models  # noqa: F401
+        init_shared_db(engine)
+        logger.info("Dev mode: tables created")
 
     if is_dev_mode():
         with SessionLocal() as session:
@@ -111,8 +134,36 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
-    # Auth routes first (before API and static)
+    # Auth router from flyfun-common (with weather-specific on_new_user callback)
+    auth_router = create_auth_router(on_new_user=_on_new_user)
     app.include_router(auth_router)
+
+    # Override /auth/me with weather-specific version (adds is_admin, setup_completed)
+    from fastapi import Depends
+    from flyfun_common.db import current_user_id, get_db as _get_db
+    from flyfun_common.db.models import UserRow as _UserRow
+    from fastapi import HTTPException as _HTTPException
+
+    @app.get("/auth/me", tags=["auth"])
+    async def get_me(
+        user_id: str = Depends(current_user_id),
+        db=Depends(_get_db),
+    ):
+        from weatherbrief.notify.admin_email import get_admin_emails
+
+        user = db.get(_UserRow, user_id)
+        if not user:
+            raise _HTTPException(status_code=401, detail="User not found")
+        prefs = db.get(UserPreferencesRow, user_id)
+        return {
+            "id": user.id,
+            "email": user.email,
+            "name": user.display_name,
+            "approved": user.approved,
+            "is_admin": is_dev_mode() or user.email in get_admin_emails(),
+            "setup_completed": prefs.setup_completed if prefs else False,
+        }
+
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")

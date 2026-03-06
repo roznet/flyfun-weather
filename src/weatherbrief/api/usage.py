@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import Integer, func
 from sqlalchemy.orm import Session
 
-from weatherbrief.db.deps import current_user_id, get_db
+from flyfun_common.db import current_user_id, get_db
 from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.pipeline import BriefingUsage
 

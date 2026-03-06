@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from weatherbrief.api.auth_config import is_dev_mode
+from flyfun_common.auth import is_dev_mode
 from weatherbrief.api.throttle import generation_slot, pdf_limiter, plot_limiter
 
 # Input validation for path-sensitive parameters
@@ -40,8 +40,7 @@ def _validate_model(model: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid model name")
     return model
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
-from weatherbrief.db.deps import current_user_id, get_db
-from weatherbrief.db.engine import SessionLocal
+from flyfun_common.db import current_user_id, get_db, SessionLocal
 from weatherbrief.fetch.model_status import (
     check_freshness,
     compute_next_update,

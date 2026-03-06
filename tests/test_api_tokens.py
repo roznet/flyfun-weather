@@ -12,11 +12,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from weatherbrief.api.app import create_app
-from weatherbrief.api.auth_config import COOKIE_NAME
-from weatherbrief.api.jwt_utils import create_token
-from weatherbrief.db.deps import TOKEN_PREFIX, get_db
-from weatherbrief.db.engine import DEV_USER_ID
-from weatherbrief.db.models import ApiTokenRow, Base, UserPreferencesRow, UserRow
+from flyfun_common.auth import COOKIE_NAME, create_token
+from flyfun_common.admin import TOKEN_PREFIX
+from flyfun_common.db import get_db, DEV_USER_ID
+from flyfun_common.db.models import ApiTokenRow, Base, UserPreferencesRow, UserRow
+import weatherbrief.db.models  # noqa: F401  — register app tables on Base
 
 TEST_SECRET = "test-jwt-secret"
 ADMIN_EMAIL = "admin@test.com"
@@ -38,6 +38,7 @@ def db_session():
         cursor.close()
 
     Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
     TestSession = sessionmaker(bind=engine)
 
     session = TestSession()
@@ -45,11 +46,12 @@ def db_session():
         id=ADMIN_ID, provider="google", provider_sub="goog-admin",
         email=ADMIN_EMAIL, display_name="Admin", approved=True,
     ))
-    session.add(UserPreferencesRow(user_id=ADMIN_ID))
     session.add(UserRow(
         id=REGULAR_ID, provider="google", provider_sub="goog-reg",
         email="user@test.com", display_name="Regular User", approved=True,
     ))
+    session.flush()
+    session.add(UserPreferencesRow(user_id=ADMIN_ID))
     session.add(UserPreferencesRow(user_id=REGULAR_ID))
     session.commit()
     session.close()
@@ -140,7 +142,7 @@ class TestBearerAuth:
     def test_invalid_token_returns_401(self, client):
         resp = client.get(
             "/api/flights",
-            headers={"Authorization": "Bearer wb_bogustoken123456"},
+            headers={"Authorization": "Bearer ff_bogustoken123456"},
         )
         assert resp.status_code == 401
 

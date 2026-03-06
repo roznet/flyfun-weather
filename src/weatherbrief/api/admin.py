@@ -21,13 +21,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Integer, func
 from sqlalchemy.orm import Session
 
-from weatherbrief.api.auth_config import get_jwt_secret, is_dev_mode
-from weatherbrief.db.deps import TOKEN_PREFIX, _decode_user_id, get_db
-from weatherbrief.db.models import (
-    ApiTokenRow, BriefingUsageRow, CreditLedgerRow, FlightRow,
-    UserPreferencesRow, UserRow,
+from flyfun_common.auth import get_jwt_secret, is_dev_mode
+from flyfun_common.db import get_db, DEV_USER_ID
+from flyfun_common.db.deps import _decode_user_id
+from flyfun_common.db.models import ApiTokenRow, UserPreferencesRow, UserRow
+from flyfun_common.admin import (
+    generate_api_token,
+    hash_token,
+    TOKEN_PREFIX,
 )
-from weatherbrief.db.engine import DEV_USER_ID
+from weatherbrief.db.models import (
+    BriefingUsageRow, CreditLedgerRow, FlightRow,
+)
 from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails
 from weatherbrief.storage.flights import safe_path_component
 
@@ -374,7 +379,7 @@ def get_user_costs(
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "last_active_at": last_active_row.isoformat() if last_active_row else None,
         },
-        "credit_balance": round(user.credit_balance, 2),
+        "credit_balance": round(user.spending_limit, 2),
         "summary": {
             "credits_used_today": credits_today,
             "credits_used_month": credits_month,
@@ -511,13 +516,13 @@ def _approve_html(status_msg: str) -> str:
 
 
 def _generate_token() -> str:
-    """Generate a random API token with the wb_ prefix (~48 chars total)."""
-    return TOKEN_PREFIX + urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+    """Generate a random API token."""
+    return generate_api_token()
 
 
 def _hash_token(token: str) -> str:
     """SHA-256 hash a plaintext token for storage."""
-    return hashlib.sha256(token.encode()).hexdigest()
+    return hash_token(token)
 
 
 class CreateAgentRequest(BaseModel):
@@ -548,6 +553,7 @@ def create_agent(
         approved=True,
     )
     db.add(user)
+    db.flush()
     db.add(UserPreferencesRow(user_id=user_id))
 
     plaintext = _generate_token()

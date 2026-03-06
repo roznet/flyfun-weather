@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from weatherbrief.db.engine import DEV_USER_ID
+from flyfun_common.db import DEV_USER_ID
 from weatherbrief.models import BriefingPackMeta, Flight
 from weatherbrief.storage.flights import (
     delete_flight,

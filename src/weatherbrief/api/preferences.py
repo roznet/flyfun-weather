@@ -9,9 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from weatherbrief.api.encryption import decrypt, encrypt
-from weatherbrief.db.deps import current_user_id, get_db
-from weatherbrief.db.models import UserPreferencesRow
+from flyfun_common.credentials import (
+    load_encrypted_creds,
+    save_encrypted_creds,
+    clear_encrypted_creds,
+)
+from flyfun_common.db import current_user_id, get_db
+from flyfun_common.db.models import UserPreferencesRow
 
 logger = logging.getLogger(__name__)
 
@@ -122,14 +126,24 @@ def _parse_digest_config(raw: str) -> DigestConfig:
     return DigestConfig(**data)
 
 
+def _parse_digest_config_from_prefs(raw: str) -> DigestConfig:
+    """Extract digest_config from the app_prefs_json blob."""
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        data = {}
+    dc = data.get("digest_config", {})
+    return DigestConfig(**dc)
+
+
 def _build_response(row: UserPreferencesRow) -> PreferencesResponse:
     """Build a PreferencesResponse from a DB row."""
-    toggles = _parse_service_toggles(row.defaults_json)
+    toggles = _parse_service_toggles(row.app_prefs_json)
     return PreferencesResponse(
-        defaults=_parse_defaults(row.defaults_json),
-        digest_config=_parse_digest_config(row.digest_config_json),
-        advisories=_parse_advisory_prefs(row.defaults_json),
-        has_autorouter_creds=bool(row.encrypted_autorouter_creds),
+        defaults=_parse_defaults(row.app_prefs_json),
+        digest_config=_parse_digest_config_from_prefs(row.app_prefs_json),
+        advisories=_parse_advisory_prefs(row.app_prefs_json),
+        has_autorouter_creds=bool(row.encrypted_creds_json),
         **toggles,
     )
 
@@ -153,9 +167,9 @@ def update_preferences(
     """Update the current user's preferences."""
     row = _load_prefs(db, user_id)
 
-    # Merge into existing defaults_json to preserve sibling keys
+    # Merge into existing app_prefs_json to preserve sibling keys
     try:
-        data = json.loads(row.defaults_json) if row.defaults_json else {}
+        data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
     except json.JSONDecodeError:
         data = {}
 
@@ -193,17 +207,16 @@ def update_preferences(
     if body.convective_method is not None:
         data["convective_method"] = body.convective_method
 
-    row.defaults_json = json.dumps(data)
-
     if body.digest_config is not None:
-        row.digest_config_json = body.digest_config.model_dump_json(exclude_none=True)
+        data["digest_config"] = body.digest_config.model_dump(exclude_none=True)
+
+    row.app_prefs_json = json.dumps(data)
 
     if body.autorouter_username and body.autorouter_password:
-        payload = json.dumps({
+        save_encrypted_creds(db, user_id, {
             "username": body.autorouter_username,
             "password": body.autorouter_password,
         })
-        row.encrypted_autorouter_creds = encrypt(payload)
 
     return _build_response(row)
 
@@ -214,8 +227,7 @@ def clear_autorouter_credentials(
     db: Session = Depends(get_db),
 ):
     """Clear the user's stored autorouter credentials."""
-    row = _load_prefs(db, user_id)
-    row.encrypted_autorouter_creds = ""
+    clear_encrypted_creds(db, user_id)
 
 
 def load_autorouter_credentials(db: Session, user_id: str) -> tuple[str, str] | None:
@@ -224,14 +236,13 @@ def load_autorouter_credentials(db: Session, user_id: str) -> tuple[str, str] | 
     Returns (username, password) tuple or None if not configured.
     Used by packs.py when preparing a refresh.
     """
-    row = db.get(UserPreferencesRow, user_id)
-    if not row or not row.encrypted_autorouter_creds:
+    creds = load_encrypted_creds(db, user_id)
+    if not creds:
         return None
     try:
-        data = json.loads(decrypt(row.encrypted_autorouter_creds))
-        return data["username"], data["password"]
-    except Exception:
-        logger.warning("Failed to decrypt autorouter credentials for user %s", user_id)
+        return creds["username"], creds["password"]
+    except KeyError:
+        logger.warning("Invalid autorouter credentials format for user %s", user_id)
         return None
 
 
@@ -244,7 +255,7 @@ def load_advisory_prefs(db: Session, user_id: str) -> AdvisoryPreferences:
     row = db.get(UserPreferencesRow, user_id)
     if not row:
         return AdvisoryPreferences()
-    return _parse_advisory_prefs(row.defaults_json)
+    return _parse_advisory_prefs(row.app_prefs_json)
 
 
 def load_user_defaults(db: Session, user_id: str) -> FlightDefaults:
@@ -256,7 +267,7 @@ def load_user_defaults(db: Session, user_id: str) -> FlightDefaults:
     row = db.get(UserPreferencesRow, user_id)
     if not row:
         return FlightDefaults()
-    return _parse_defaults(row.defaults_json)
+    return _parse_defaults(row.app_prefs_json)
 
 
 def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
@@ -268,7 +279,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
     row = db.get(UserPreferencesRow, user_id)
     if not row:
         return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_dd", "cloud_method": "dd", "convective_method": "thermo"}
-    return _parse_service_toggles(row.defaults_json)
+    return _parse_service_toggles(row.app_prefs_json)
 
 
 @router.post("/setup-complete", status_code=204)

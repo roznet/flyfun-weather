@@ -25,6 +25,9 @@ RUN groupadd -g 2000 app && useradd -u 2000 -g app -m app
 
 WORKDIR /app
 
+# Install flyfun-common from GitHub (must come before app deps)
+RUN pip install --no-cache-dir "flyfun-common @ git+https://github.com/roznet/flyfun-common.git@main"
+
 # Install app dependencies (copy pyproject first for layer caching)
 COPY pyproject.toml .
 RUN mkdir -p src/weatherbrief && \

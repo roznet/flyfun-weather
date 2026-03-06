@@ -9,7 +9,8 @@ from alembic import context
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
-from weatherbrief.db.models import Base
+from flyfun_common.db.models import Base
+import weatherbrief.db.models  # noqa: F401 — register app tables on Base
 
 load_dotenv()
 

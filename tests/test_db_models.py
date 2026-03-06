@@ -6,13 +6,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from weatherbrief.db.engine import DEV_USER_ID
+from flyfun_common.db import DEV_USER_ID
+from flyfun_common.db.models import UserPreferencesRow, UserRow
 from weatherbrief.db.models import (
     BriefingPackRow,
     BriefingUsageRow,
     FlightRow,
-    UserPreferencesRow,
-    UserRow,
 )
 
 
@@ -34,14 +33,13 @@ class TestUserModel:
         assert loaded.approved is True
         assert loaded.created_at is not None
 
-    def test_user_preferences_relationship(self, db_session, dev_user):
-        user = db_session.get(UserRow, dev_user)
-        assert user.preferences is not None
-        assert user.preferences.user_id == dev_user
+    def test_user_preferences_exist(self, db_session, dev_user):
+        prefs = db_session.get(UserPreferencesRow, dev_user)
+        assert prefs is not None
+        assert prefs.user_id == dev_user
 
     def test_delete_user_cascades_preferences(self, db_session, dev_user):
-        user = db_session.get(UserRow, dev_user)
-        db_session.delete(user)
+        db_session.delete(db_session.get(UserRow, dev_user))
         db_session.flush()
 
         prefs = db_session.get(UserPreferencesRow, dev_user)
@@ -77,9 +75,9 @@ class TestFlightModel:
         db_session.add(flight)
         db_session.flush()
 
-        user = db_session.get(UserRow, dev_user)
-        assert len(user.flights) == 1
-        assert user.flights[0].id == "owned-flight"
+        flights = db_session.query(FlightRow).filter_by(user_id=dev_user).all()
+        assert len(flights) == 1
+        assert flights[0].id == "owned-flight"
 
 
 class TestBriefingPackModel:
@@ -187,5 +185,6 @@ class TestBriefingUsageModel:
         user = db_session.get(UserRow, dev_user)
         db_session.delete(user)
         db_session.flush()
+        db_session.expire_all()
 
         assert db_session.get(BriefingUsageRow, row_id) is None

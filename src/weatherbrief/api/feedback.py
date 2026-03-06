@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.admin import require_admin
-from weatherbrief.api.auth_config import is_dev_mode
-from weatherbrief.db.deps import current_user_id, get_db
-from weatherbrief.db.models import FeedbackRow, UserRow
+from flyfun_common.auth import is_dev_mode
+from flyfun_common.db import current_user_id, get_db
+from flyfun_common.db.models import UserRow
+from weatherbrief.db.models import FeedbackRow
 
 logger = logging.getLogger(__name__)
 
