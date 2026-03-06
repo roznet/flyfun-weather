@@ -10,6 +10,15 @@ export interface LegendEntry {
   label: string;
   color: string;
   meaning: string;
+  /** Optional CSS for a hatch overlay on the swatch (e.g. repeating-linear-gradient). */
+  hatchStyle?: string;
+}
+
+/** CSS repeating-linear-gradient for horizontal hatch lines on a fixed grid. */
+function hatchGradient(gridPx: number, lineWidth: number, color: string): string {
+  if (lineWidth >= gridPx) return ''; // solid — no hatch
+  // Build a gradient: line color for lineWidth px, then transparent for the gap
+  return `repeating-linear-gradient(0deg, ${color} 0px, ${color} ${lineWidth}px, transparent ${lineWidth}px, transparent ${gridPx}px)`;
 }
 
 // --- Dynamic legend builders ---
@@ -42,15 +51,24 @@ function convectiveLegend(): LegendEntry[] {
 }
 
 function cloudBandsLegend(): LegendEntry[] {
+  const t = getActiveTheme().clouds;
+  const grid = t.hatchGridPx;
+  const hColor = t.hatchColor;
   return [
-    { label: 'Dense (DD < 1\u00b0C)', color: cloudFillFromDD(0.5, 'ovc'), meaning: 'Near-saturated, OVC-like' },
-    { label: 'Moderate (DD 1\u20132\u00b0C)', color: cloudFillFromDD(1.5, 'bkn'), meaning: 'BKN-like coverage' },
-    { label: 'Thin (DD 2\u20133\u00b0C)', color: cloudFillFromDD(2.5, 'sct'), meaning: 'Scattered, wispy' },
+    { label: 'OVC (DD < 1\u00b0C)', color: cloudFillFromDD(0.5, 'ovc'), meaning: 'Overcast — solid fill',
+      hatchStyle: hatchGradient(grid, t.hatchLineWidth['ovc'] ?? grid, hColor) },
+    { label: 'BKN (DD 1\u20132\u00b0C)', color: cloudFillFromDD(1.5, 'bkn'), meaning: 'Broken — thick lines',
+      hatchStyle: hatchGradient(grid, t.hatchLineWidth['bkn'] ?? grid, hColor) },
+    { label: 'SCT (DD 2\u20133\u00b0C)', color: cloudFillFromDD(2.5, 'sct'), meaning: 'Scattered — thin lines',
+      hatchStyle: hatchGradient(grid, t.hatchLineWidth['sct'] ?? grid, hColor) },
   ];
 }
 
 function nwpCloudLegend(): LegendEntry[] {
-  const nwp = getActiveTheme().nwpClouds;
+  const theme = getActiveTheme();
+  const nwp = theme.nwpClouds;
+  const grid = theme.clouds.hatchGridPx;
+  const hColor = theme.clouds.hatchColor;
   const [br, bg, bb] = nwp.brightRgb;
   const [dr, dg, db] = nwp.deltaRgb;
   const [opFloor, opScale] = nwp.opacityRange;
@@ -62,10 +80,17 @@ function nwpCloudLegend(): LegendEntry[] {
     const a = Math.min(opFloor + opScale + 0.001, opFloor + opScale * t);
     return `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
   }
+  function nwpHatch(pct: number): string {
+    const lw = grid * (pct / 100);
+    return hatchGradient(grid, lw, hColor);
+  }
   return [
-    { label: '25% cover', color: fill(25), meaning: 'Scattered' },
-    { label: '50% cover', color: fill(50), meaning: 'Broken' },
-    { label: '75%+ cover', color: fill(75), meaning: 'Overcast' },
+    { label: '25% cover', color: fill(25), meaning: 'Scattered',
+      hatchStyle: nwpHatch(25) },
+    { label: '50% cover', color: fill(50), meaning: 'Broken',
+      hatchStyle: nwpHatch(50) },
+    { label: '75%+ cover', color: fill(75), meaning: 'Overcast',
+      hatchStyle: nwpHatch(75) },
   ];
 }
 

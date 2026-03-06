@@ -81,26 +81,36 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
 
   // NWP cloud band (top area)
   const nwp = theme.nwpClouds;
+  const grid = theme.clouds.hatchGridPx;
+  const hColor = theme.clouds.hatchColor;
+  const nwpPcts = [25, 50, 75];
+  const nwpLabels = ['25%', '50%', '75%'];
   for (let i = 0; i < 3; i++) {
-    const pct = 25 + i * 25;
+    const pct = nwpPcts[i];
     const t = pct / 100;
-    const [br, bg, bb] = nwp.brightRgb;
-    const [dr, dg, db] = nwp.deltaRgb;
-    const r = Math.round(br - dr * t);
-    const g = Math.round(bg - dg * t);
-    const b = Math.round(bb - db * t);
+    const [nbr, nbg, nbb] = nwp.brightRgb;
+    const [ndr, ndg, ndb] = nwp.deltaRgb;
+    const r = Math.round(nbr - ndr * t);
+    const g = Math.round(nbg - ndg * t);
+    const b = Math.round(nbb - ndb * t);
     const [opFloor, opScale] = nwp.opacityRange;
     const a = Math.min(opFloor + opScale, opFloor + opScale * t);
     ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
     const bandW = plotW / 3;
-    ctx.fillRect(plotL + bandW * i, plotT + 10, bandW, 35);
+    const bx = plotL + bandW * i;
+    ctx.fillRect(bx, plotT + 10, bandW, 35);
+    drawRectHatch(ctx, bx, plotT + 10, bandW, 35, grid, grid * t, hColor);
+    drawLabel(ctx, nwpLabels[i], bx + bandW / 2, plotT + 30, bg);
   }
-  drawLabel(ctx, 'NWP Clouds', plotL + plotW / 2, plotT + 30, bg);
+  drawLabel(ctx, 'NWP Clouds', plotL + plotW / 2, plotT + 5, bg);
 
   // DD cloud band
   const cloudY = plotT + 50;
+  const ddCoverages = ['ovc', 'bkn', 'sct'];
+  const ddLabels = ['OVC', 'BKN', 'SCT'];
+  const ddValues = [0, 1.5, 3]; // dewpoint depression
   for (let i = 0; i < 3; i++) {
-    const dd = i * 1.5;
+    const dd = ddValues[i];
     const ct = Math.min(1, dd / 3);
     const [ddr, ddg, ddb] = theme.clouds.denseRgb;
     const [ttr, ttg, ttb] = theme.clouds.thinRgb;
@@ -109,9 +119,13 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
     const b = Math.round(ddb + (ttb - ddb) * ct);
     ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.7 - 0.2 * ct})`;
     const bandW = plotW / 3;
-    ctx.fillRect(plotL + bandW * i, cloudY, bandW, 25);
+    const bx = plotL + bandW * i;
+    ctx.fillRect(bx, cloudY, bandW, 25);
+    const lw = theme.clouds.hatchLineWidth[ddCoverages[i]] ?? grid;
+    drawRectHatch(ctx, bx, cloudY, bandW, 25, grid, lw, hColor);
+    drawLabel(ctx, ddLabels[i], bx + bandW / 2, cloudY + 14, bg);
   }
-  drawLabel(ctx, 'DD Clouds', plotL + plotW / 2, cloudY + 14, bg);
+  drawLabel(ctx, 'DD Clouds', plotL + plotW / 2, cloudY - 4, bg);
 
   // Icing bands
   const icingY = cloudY + 30;
@@ -242,6 +256,30 @@ function drawThemeLine(
   ctx.lineTo(x2, y);
   ctx.stroke();
   ctx.setLineDash([]);
+}
+
+/** Draw horizontal hatch lines inside a rectangle on a fixed grid. */
+function drawRectHatch(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  gridPx: number, lineWidth: number, color: string,
+): void {
+  if (lineWidth >= gridPx) return; // solid
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([]);
+  const startY = Math.ceil(y / gridPx) * gridPx;
+  for (let ly = startY; ly <= y + h; ly += gridPx) {
+    ctx.beginPath();
+    ctx.moveTo(x, ly);
+    ctx.lineTo(x + w, ly);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function hexLuminance(hex: string): number {
