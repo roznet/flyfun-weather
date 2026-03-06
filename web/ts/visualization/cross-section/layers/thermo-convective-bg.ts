@@ -206,8 +206,9 @@ export function drawCBLabel(
   const pw = metrics.width + 6;
   const ph = 14;
 
-  // White background pill
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  // Background pill matching sky
+  const theme = getActiveTheme();
+  ctx.fillStyle = theme.sky.background + 'e6';
   ctx.beginPath();
   ctx.roundRect(cx - pw / 2, cy - ph / 2, pw, ph, 3);
   ctx.fill();

@@ -245,72 +245,127 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
   label: 'High Contrast',
 
   sky: {
-    background: '#b5dcf0',
+    background: '#1B3060',
   },
 
   axes: {
-    gridColor: 'rgba(255, 255, 255, 0.50)',
-    waypointLineColor: 'rgba(255, 255, 255, 0.60)',
+    gridColor: 'rgba(255, 255, 255, 0.30)',
+    waypointLineColor: 'rgba(255, 255, 255, 0.40)',
   },
 
   terrain: {
-    fillColor: '#7a6040',
-    outlineColor: '#524028',
+    fillColor: '#4A3A28',
+    outlineColor: '#6B5B45',
   },
 
   temperature: {
-    freezingLevel: { color: '#00acc1', width: 2.5 },
-    minus10c: { color: '#1e88e5', width: 2 },
-    minus20c: { color: '#0d1b5e', width: 1.5, dash: [6, 4] },
+    freezingLevel: { color: '#00e5ff', width: 2.5 },
+    minus10c: { color: '#42a5f5', width: 2 },
+    minus20c: { color: '#7c4dff', width: 1.5, dash: [6, 4] },
   },
 
   stability: {
-    lcl: { color: '#388e3c', width: 2.5, dash: [6, 4] },
-    lfc: { color: '#ef6c00', width: 2, dash: [6, 4] },
-    el: { color: '#d32f2f', width: 2, dash: [6, 4] },
+    lcl: { color: '#69f0ae', width: 2.5, dash: [6, 4] },
+    lfc: { color: '#ffab40', width: 2, dash: [6, 4] },
+    el: { color: '#ff5252', width: 2, dash: [6, 4] },
+  },
+
+  reference: {
+    cruiseColor: '#e0e0e0',
+    ceilingColor: '#ce93d8',
+  },
+
+  clouds: {
+    denseRgb: [102, 102, 102],
+    thinRgb: [216, 216, 216],
+    coverageAlpha: {
+      sct: [0.45, 0.60],
+      bkn: [0.55, 0.85],
+      ovc: [0.65, 0.95],
+    },
+    fallbackGray: [144, 144, 144],
+  },
+
+  nwpClouds: {
+    brightRgb: [216, 216, 216],
+    deltaRgb: [106, 106, 106],
+    opacityRange: [0.30, 0.55],
   },
 
   icing: {
     none: 'transparent',
-    light: 'rgba(100, 149, 237, 0.50)',
-    moderate: 'rgba(255, 165, 0, 0.60)',
-    severe: 'rgba(220, 53, 69, 0.70)',
+    light: 'rgba(91, 184, 232, 0.55)',
+    moderate: 'rgba(24, 120, 184, 0.65)',
+    severe: 'rgba(26, 24, 80, 0.75)',
   },
 
   sfipIcing: {
     none: 'transparent',
-    light: 'rgba(100, 149, 237, 0.65)',
-    moderate: 'rgba(255, 165, 0, 0.70)',
-    severe: 'rgba(220, 53, 69, 0.80)',
+    light: 'rgba(91, 184, 232, 0.65)',
+    moderate: 'rgba(24, 120, 184, 0.75)',
+    severe: 'rgba(26, 24, 80, 0.85)',
   },
 
   cat: {
     none: 'transparent',
-    light: 'rgba(255, 193, 7, 0.35)',
-    moderate: 'rgba(255, 152, 0, 0.55)',
-    severe: 'rgba(220, 53, 69, 0.70)',
+    light: 'rgba(24, 136, 72, 0.40)',
+    moderate: 'rgba(152, 184, 48, 0.55)',
+    severe: 'rgba(200, 208, 16, 0.70)',
   },
 
   convective: {
-    ...STANDARD_THEME.convective,
+    riskColors: {
+      none: 'transparent',
+      marginal: 'rgba(248, 160, 32, 0.10)',
+      low: 'rgba(248, 160, 32, 0.18)',
+      moderate: 'rgba(240, 120, 32, 0.25)',
+      high: 'rgba(216, 80, 32, 0.32)',
+      extreme: 'rgba(232, 24, 24, 0.40)',
+    },
+    bgWash: {
+      marginal: 'rgba(248, 160, 32, 0.06)',
+      low: 'rgba(248, 160, 32, 0.10)',
+      moderate: 'rgba(240, 120, 32, 0.14)',
+      high: 'rgba(216, 80, 32, 0.18)',
+      extreme: 'rgba(232, 24, 24, 0.22)',
+    },
     towerFill: {
-      marginal: 'rgba(180, 180, 180, 0.25)',
-      low: 'rgba(255, 235, 59, 0.28)',
-      moderate: 'rgba(255, 152, 0, 0.38)',
-      high: 'rgba(220, 53, 69, 0.45)',
-      extreme: 'rgba(183, 28, 28, 0.50)',
+      marginal: 'rgba(248, 160, 32, 0.20)',
+      low: 'rgba(248, 160, 32, 0.28)',
+      moderate: 'rgba(240, 120, 32, 0.38)',
+      high: 'rgba(216, 80, 32, 0.48)',
+      extreme: 'rgba(232, 24, 24, 0.55)',
     },
     hatchColor: {
-      marginal: 'rgba(140, 140, 140, 0.25)',
-      low: 'rgba(180, 160, 0, 0.30)',
-      moderate: 'rgba(200, 100, 0, 0.50)',
-      high: 'rgba(200, 40, 40, 0.55)',
-      extreme: 'rgba(150, 20, 20, 0.65)',
+      marginal: 'rgba(248, 160, 32, 0.25)',
+      low: 'rgba(248, 160, 32, 0.35)',
+      moderate: 'rgba(240, 120, 32, 0.50)',
+      high: 'rgba(216, 80, 32, 0.60)',
+      extreme: 'rgba(232, 24, 24, 0.70)',
+    },
+    stripColor: {
+      marginal: 'rgba(248, 160, 32, 0.45)',
+      low: 'rgba(248, 160, 32, 0.55)',
+      moderate: 'rgba(240, 120, 32, 0.75)',
+      high: 'rgba(216, 80, 32, 0.85)',
+      extreme: 'rgba(232, 24, 24, 0.92)',
+    },
+    edgeColor: {
+      marginal: 'rgba(248, 160, 32, 0.30)',
+      low: 'rgba(248, 160, 32, 0.40)',
+      moderate: 'rgba(240, 120, 32, 0.55)',
+      high: 'rgba(216, 80, 32, 0.65)',
+      extreme: 'rgba(232, 24, 24, 0.75)',
+    },
+    cbLabelColor: {
+      moderate: 'rgba(240, 120, 32, 0.85)',
+      high: 'rgba(216, 80, 32, 0.92)',
+      extreme: 'rgba(232, 24, 24, 0.95)',
     },
   },
 
   inversion: {
-    baseRgb: [233, 30, 99],
+    baseRgb: [255, 82, 82],
     opacityParams: { floor: 0.25, scale: 0.55, maxStrengthC: 3, cap: 0.80 },
   },
 };
