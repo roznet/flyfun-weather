@@ -3,6 +3,7 @@
 import catalog from '../data/metrics-catalog.json';
 import displayConfig from '../data/metrics-display.json';
 import { getLayerLegend, type LegendEntry } from '../visualization/layer-legends';
+import { getActiveTheme } from '../visualization/cross-section/theme';
 import type {
   DisplayMode,
   MetricCatalog,
@@ -254,11 +255,17 @@ export function renderLayerLegend(layerId: string): string {
 
   const rows = entries.map((e: LegendEntry) => {
     // For line layers, draw a line swatch; for bands, draw a filled rectangle on sky-blue bg
-    const swatchStyle = isLineLegend
-      ? `background: transparent; border-bottom: 3px solid ${e.color};`
-      : `background: ${e.color};`;
+    let swatchStyle: string;
+    if (isLineLegend) {
+      swatchStyle = `background: transparent; border-bottom: 3px solid ${e.color};`;
+    } else if (e.hatchStyle) {
+      swatchStyle = `background: ${e.hatchStyle}, ${e.color};`;
+    } else {
+      swatchStyle = `background: ${e.color};`;
+    }
+    const skyBg = getActiveTheme().sky.background;
     return `<div class="legend-entry">
-      <span class="legend-swatch-bg"><span class="legend-swatch" style="${swatchStyle}"></span></span>
+      <span class="legend-swatch-bg" style="background: ${skyBg}"><span class="legend-swatch" style="${swatchStyle}"></span></span>
       <span class="legend-label">${e.label}</span>
       <span class="legend-meaning">${e.meaning}</span>
     </div>`;
