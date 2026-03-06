@@ -56,8 +56,8 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 | Layer | Name | Group | File | Default | Description |
 |-------|------|-------|------|---------|-------------|
 | Convective BG | Convective | convection | `convective-bg.ts` | on | Tower columns LCL→EL, hatching, CB labels, anvil strip |
-| Cloud bands | DD Layers | clouds | `cloud-bands.ts` | on | Opacity from coverage (SCT/BKN/OVC) |
-| NWP cloud bands | NWP Layers | clouds | `nwp-cloud-bands.ts` | on | NWP cloud cover at ICAO altitude bands (low/mid), terrain-aware |
+| Cloud bands | DD Layers | clouds | `cloud-bands.ts` | on | Hatch lines by coverage (SCT/BKN/OVC line widths) |
+| NWP cloud bands | NWP Layers | clouds | `nwp-cloud-bands.ts` | on | NWP cloud cover with proportional hatching, terrain-aware |
 | Icing bands | Ogimet-DD | icing | `icing-bands.ts` | on | Colored by risk (light→severe), DD-attenuated Ogimet index |
 | Ogimet-NWP bands | Ogimet-NWP | icing | `icing-ogimet-nwp-bands.ts` | off | NWP cloud-scaled Ogimet index |
 | SFIP bands | SFIP-NWP | icing | `sfip-bands.ts` | off | Fuzzy-logic SFIP icing index |
@@ -130,21 +130,45 @@ interface CoordTransform {
 - **ResizeObserver** — responsive sizing with device pixel ratio handling for crisp rendering
 - **Clip to plot area** — all layer renders are clipped so bands/fills don't overflow axes
 - **Monotone cubic for terrain** — Fritsch-Carlson tangents prevent overshoot (important for elevation data)
-- **Theme-aware canvas colors** — axes, grid lines, borders, and backgrounds read from `isDarkTheme()` / `cssVar()` at render time; both renderers listen for `theme-changed` events to re-render automatically
+- **Theme-aware canvas colors** — all cross-section colors (sky, clouds, icing, lines, terrain) come from the active `CrossSectionTheme` via `getActiveTheme()`; renderers listen for `theme-changed` events to re-render automatically
 
-## Dark / Light / System Theme
+## Cross-Section Theme System
 
-Three-way theme support via `web/ts/theme.ts`:
+Switchable visual themes for the cross-section via `cross-section/theme.ts`. Separate from the page-level dark/light theme.
+
+**Architecture:**
+- `CrossSectionTheme` interface controls all visualization colors: sky background, axes, terrain, temperature/stability/reference line styles, cloud colors + hatch config, icing/CAT/convective risk colors, inversion appearance
+- Themes registered in `THEMES` map, accessed via `getActiveTheme()` / `setActiveTheme(id)`
+- Theme selector dropdown + preview button in the controls panel (both standard and compare mode)
+- `'theme-changed'` window event triggers re-renders in all renderers
+
+**Available themes:**
+- `'standard'` — Light blue sky (#7395DB), default, designed for readability
+- `'high-contrast'` — Dark navy sky (#1B3060), optimized for visibility in varying lighting
+
+**Cloud hatch patterns:**
+- Clouds rendered with horizontal hatch lines instead of solid fills, improving readability
+- Fixed-grid alignment (`hatchGridPx = 8px`) so hatching aligns across adjacent bands
+- DD clouds: line width per coverage class (`sct: 2, bkn: 5, ovc: 8` — solid at full grid width)
+- NWP clouds: line width proportional to coverage percentage (`gridPx * coverPct/100`)
+- Core drawing primitive: `drawBandHatch()` in `layers/base.ts` clips hatch lines to band shape
+
+**Theme preview:** `theme-preview.ts` renders a popup canvas showing all visual elements (NWP clouds, DD clouds, icing, CAT, convective tower, inversion, temperature/stability/reference lines, terrain) for the selected theme.
+
+**Theme-aware legends:** `layer-legends.ts` generates legend entries dynamically from the active theme. Cloud legend swatches use CSS `repeating-linear-gradient` to replicate canvas hatch patterns.
+
+## Dark / Light / System Theme (Page-Level)
+
+Three-way page theme support via `web/ts/theme.ts` (separate from cross-section themes):
 
 - **Persistence**: `localStorage('wb_theme')` → `'light' | 'dark' | 'system'` (default: `system`)
 - **Resolution**: `system` checks `matchMedia('(prefers-color-scheme: dark)')` with a live listener
 - **Application**: sets `document.documentElement.dataset.theme` to `'light'` or `'dark'`; CSS custom properties in `[data-theme="dark"]` override all colors
 - **FOUC prevention**: inline `<script>` in every HTML `<head>` (before stylesheets) reads localStorage and sets `data-theme` before first paint
-- **Toggle UI**: 3-segment button (☀ ◐ ☾) injected into `.header-right` by `initTheme()`
+- **Toggle UI**: 3-segment button injected into `.header-right` by `initTheme()`
 - **Canvas re-rendering**: `CrossSectionRenderer` and `RouteGraphRenderer` listen for `theme-changed` custom event to re-render with updated colors
 - **Map tiles**: `RouteMapRenderer` switches between OSM (light) and CartoDB Dark Matter (dark) tiles on theme change
-- **Server-generated images**: Skew-T and hodograph PNGs get CSS `filter: invert(0.88) hue-rotate(180deg)` in dark mode; GRAMET images are left unchanged (work on both backgrounds)
-- **Cross-section sky background**: stays `#87CEEB` in both themes (contextual sky color); grid lines on it remain white
+- **Server-generated images**: Skew-T and hodograph PNGs get CSS `filter: invert(0.88) hue-rotate(180deg)` in dark mode; GRAMET images are left unchanged
 
 ## Convective Tower Rendering
 
@@ -193,8 +217,9 @@ The NWP cloud bands layer (`nwp-cloud-bands.ts`) renders numerical weather predi
 
 `visualization/layer-legends.ts` provides a unified legend system for all layers:
 
-- `LegendEntry`: `{ label, color, meaning }` — human-readable, visual, and contextual
-- Colors imported from `scales.ts` (single source of truth, not duplicated)
+- `LegendEntry`: `{ label, color, meaning, hatchStyle? }` — human-readable, visual, and contextual
+- Colors pulled dynamically from `getActiveTheme()` at render time (theme-aware, not cached)
+- Cloud legend swatches include CSS `repeating-linear-gradient` hatch overlay matching canvas rendering
 - Risk-based legends for icing, CAT, convective bands; METAR-style for cloud bands; percentage-based for NWP clouds
 - `getLayerLegend(layerId)` returns legend or null
 - Displayed in info popups via `renderLayerLegend()` in metrics-helper.ts
@@ -229,7 +254,7 @@ Info popups include buttons for Claude, ChatGPT, and Gemini that copy a context-
 
 ### Layer Control Panel
 
-`controls/panel.ts` renders checkboxes grouped by category (terrain, temperature, clouds, icing, stability, turbulence, convection, reference). Layers with a `metricId` get an info button (ⓘ) that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods.
+`controls/panel.ts` renders checkboxes grouped by category (terrain, temperature, clouds, icing, stability, turbulence, convection, reference). Layers with a `metricId` get an info button that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods. A **theme selector dropdown** and **preview button** appear in the toolbar (both standard and compare mode) for switching cross-section themes.
 
 ## Unified Atmospheric Profile Table
 

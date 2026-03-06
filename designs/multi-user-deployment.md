@@ -48,7 +48,7 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 
 ## Database Schema (MySQL / SQLite via SQLAlchemy)
 
-### users
+### users (from flyfun-common)
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -58,18 +58,17 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 | email | VARCHAR(255) | From OAuth profile |
 | display_name | VARCHAR(255) | |
 | approved | BOOLEAN DEFAULT TRUE | Auto-approved on signup; admin can revoke |
-| credit_balance | FLOAT DEFAULT 500.0 | Cached credit balance (derived from ledger) |
+| spending_limit | FLOAT DEFAULT 500.0 | Spending limit (was `credit_balance`) |
 | created_at | DATETIME | |
 | last_login_at | DATETIME | |
 
-### user_preferences
+### user_preferences (from flyfun-common)
 
 | Column | Type | Notes |
 |--------|------|-------|
 | user_id | VARCHAR(36) PK FK | |
-| defaults_json | TEXT | JSON: `{"cruise_altitude_ft": 8000, "flight_ceiling_ft": 18000, "models": ["gfs","ecmwf","icon"]}` |
-| encrypted_autorouter_creds | TEXT | Fernet-encrypted JSON: `{"username": "...", "password": "..."}` |
-| digest_config_json | TEXT | JSON: `{"config_name": "default"}` |
+| app_prefs_json | TEXT | JSON: defaults, service toggles, advisory prefs, digest config (was `defaults_json`; digest_config merged in) |
+| encrypted_creds_json | TEXT | Fernet-encrypted JSON: `{"username": "...", "password": "..."}` (was `encrypted_autorouter_creds`) |
 | setup_completed | BOOLEAN DEFAULT FALSE | True after user completes first-login wizard |
 
 ### flight_profiles
@@ -125,7 +124,7 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 |--------|------|-------|
 | id | INT AUTO_INCREMENT PK | |
 | user_id | VARCHAR(36) FK | Cascade delete with user |
-| token_hash | VARCHAR(64) UNIQUE | SHA-256 hex digest of `wb_...` token |
+| token_hash | VARCHAR(64) UNIQUE | SHA-256 hex digest of `ff_...` token (legacy `wb_` accepted) |
 | name | VARCHAR(100) | Human-readable label (e.g., "CI bot") |
 | created_at | DATETIME | |
 | expires_at | DATETIME NULL | Optional expiry |
@@ -164,34 +163,40 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 | comment | TEXT | Required, non-empty |
 | created_at | DATETIME | |
 
-### cost_config & credit_ledger
+### cost_ledger (from flyfun-common)
+
+Append-only cost tracking table (replaces old credit_ledger for new transactions): `id`, `user_id`, `service`, `action`, `cost`, `metadata_json`, `created_at`.
+
+### cost_config & credit_ledger (app-specific)
 
 See [cost-attribution-design.md](./cost-attribution-design.md) for full schema.
 
-## Authentication
+## Authentication (via flyfun-common)
+
+Auth, JWT, encryption, DB engine, and user models are provided by `flyfun-common` (shared across flyfun apps). WeatherBrief mounts the common auth router and extends it with a custom `/auth/me` endpoint (registered first for priority).
 
 ### OAuth flow
 
-Google Sign-In via `authlib`. JWT (HS256, 7-day expiry) in httpOnly secure cookie.
+Google Sign-In via `authlib`. JWT (HS256, 7-day expiry) in httpOnly secure cookie (`flyfun_auth`, cross-subdomain on `.flyfun.aero`).
 
 1. User clicks "Sign in with Google" → Google consent screen
 2. Callback exchanges code for ID token → lookup/create user (auto-approved)
-3. On first login: welcome email to user + notification email to admins
-4. Issue JWT cookie; all `/api/*` routes validate via FastAPI dependency
+3. `on_new_user` callback creates `UserPreferencesRow` + sends welcome/admin emails
+4. Issue JWT cookie; all `/api/*` routes validate via `current_user_id()` dependency from flyfun-common
 
-Admin identity: `ADMIN_EMAILS` env var (comma-separated). Dev user is always admin.
+Admin identity: `ADMIN_EMAILS` env var (comma-separated). Dev user is always admin. Custom `/auth/me` adds `is_admin` and `setup_completed` fields.
 
 ### API Token Authentication (bot/agent users)
 
-**Token format**: `wb_` prefix + 48 random characters. SHA-256 hashed before storage.
+**Token format**: `ff_` prefix + 48 random characters (legacy `wb_` prefix still accepted). SHA-256 hashed before storage.
 
-**Auth flow**: `Authorization: Bearer wb_...` header → hash lookup → user resolution. Falls through to JWT cookie if no Bearer token.
+**Auth flow**: `Authorization: Bearer ff_...` header → hash lookup → user resolution. Falls through to JWT cookie if no Bearer token.
 
 **Admin endpoints**: `POST /api/admin/agents` (create agent + token), `POST .../tokens` (add token), `DELETE .../tokens/{id}` (revoke).
 
 ### Admin Auth Unification
 
-Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens. The `_decode_user_id()` dependency checks for a `Bearer` token first, then falls back to the JWT cookie. This allows admin endpoints to be used both from the web UI and from API agents/bots.
+Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens. The `current_user_id()` dependency checks for a `Bearer` token first, then falls back to the JWT cookie.
 
 ### Dev mode bypass
 

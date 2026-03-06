@@ -128,19 +128,13 @@ src/weatherbrief/
 │   ├── llm_digest.py  # LangGraph digest pipeline
 │   └── prompt_builder.py  # Context assembly for LLM
 ├── db/
-│   ├── __init__.py    # Package exports (Base, SessionLocal, get_engine, init_db)
-│   ├── models.py      # SQLAlchemy ORM models (User, Flight, BriefingPack, etc.)
-│   ├── engine.py      # Singleton engine, init_db(), ensure_dev_user()
-│   └── deps.py        # FastAPI deps: get_db() session, current_user_id()
+│   ├── __init__.py    # Re-exports from flyfun-common (Base, SessionLocal, get_engine, etc.)
+│   └── models.py      # Re-exports shared models (UserRow, ApiTokenRow, etc.) + app-specific tables
 ├── storage/
 │   ├── snapshots.py   # Snapshot + cross-section save/load/list (file-based)
 │   └── flights.py     # Flight + BriefingPack CRUD (DB-backed)
 ├── api/
-│   ├── app.py         # FastAPI app, lifespan (DB init), static files, CORS
-│   ├── auth.py        # OAuth login/callback/logout, JWT cookie
-│   ├── auth_config.py # JWT secret, dev mode detection, admin emails
-│   ├── jwt_utils.py   # JWT encode/decode helpers
-│   ├── encryption.py  # Fernet encrypt/decrypt for credentials
+│   ├── app.py         # FastAPI app, lifespan (DB init), mounts flyfun-common auth router
 │   ├── flights.py     # CRUD /api/flights (DB sessions via Depends)
 │   ├── packs.py       # Packs: history, artifacts, refresh (with RefreshRegistry), report, email
 │   ├── profiles.py    # Flight parameter profiles CRUD (per-user named templates)
@@ -187,6 +181,9 @@ web/
 │   │   │   ├── axes.ts          # Distance/altitude axis rendering
 │   │   │   ├── interaction.ts   # Hover crosshair + click-to-select
 │   │   │   ├── layer-registry.ts # Central layer toggle registry
+│   │   │   ├── theme.ts         # Switchable cross-section themes (standard, high-contrast)
+│   │   │   ├── theme-preview.ts  # Theme preview popup canvas
+│   │   │   ├── compare-renderer.ts # Compare mode with theme support
 │   │   │   └── layers/          # Individual layers (terrain, clouds, icing, etc.)
 │   │   ├── route-graph/
 │   │   │   ├── renderer.ts      # Scalar metric chart below cross-section
@@ -222,12 +219,12 @@ web/
 
 ### Database (SQLAlchemy — SQLite dev / MySQL prod)
 
-Flight and pack metadata are stored in a relational database via SQLAlchemy ORM. The `db/` package manages engine, models, and FastAPI session dependency.
+Flight and pack metadata are stored in a relational database via SQLAlchemy ORM. Shared tables (users, user_preferences, api_tokens, cost_ledger) are defined in `flyfun-common`; app-specific tables (flights, briefing_packs, etc.) are in `weatherbrief.db.models`. All share the same `Base` from flyfun-common.
 
 - **Dev mode** (`ENVIRONMENT=development`): SQLite at `data/weatherbrief.db`, tables auto-created on startup, dev user auto-inserted.
 - **Production** (`ENVIRONMENT=production`): MySQL via `DATABASE_URL` env var, schema managed by Alembic migrations.
 
-Tables: `users`, `user_preferences`, `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `api_tokens`, `feedback`, `cost_config`, `credit_ledger`. See [multi-user-deployment.md](./multi-user-deployment.md) for user/flight schema, [cost-attribution-design.md](./cost-attribution-design.md) for cost/credit schema.
+Tables: `users`, `user_preferences`, `api_tokens`, `cost_ledger` (from flyfun-common) + `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `feedback`, `cost_config`, `credit_ledger` (app-specific). See [multi-user-deployment.md](./multi-user-deployment.md) for user/flight schema, [cost-attribution-design.md](./cost-attribution-design.md) for cost/credit schema.
 
 ### File artifacts (disk)
 
@@ -267,7 +264,7 @@ FastAPI app at `api/app.py`, served by uvicorn.
 | `/auth/logout` | POST | Clear JWT cookie |
 | `/auth/me` | GET | Current user info (incl. is_admin) |
 
-Authentication supports both JWT cookies (browser sessions) and API tokens (`Authorization: Bearer wb_...`) for bot/agent users. See [multi-user-deployment.md](./multi-user-deployment.md) for API token details.
+Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cross-subdomain on `.flyfun.aero`) and API tokens (`Authorization: Bearer ff_...`, legacy `wb_` accepted). See [multi-user-deployment.md](./multi-user-deployment.md) for details.
 | `/api/flights` | GET/POST | List/create flights |
 | `/api/flights/{id}` | GET/DELETE | Get/delete (any user can view, only owner can delete) |
 | `/api/flights/{id}/packs` | GET | List pack history |
@@ -333,6 +330,7 @@ Static files served from `web/` at root.
 
 | Package | Purpose |
 |---------|---------|
+| `flyfun-common` | Shared auth (OAuth, JWT, API tokens), DB engine, user models, encryption (from GitHub) |
 | `pydantic>=2.0` | Data models |
 | `sqlalchemy>=2.0` | ORM (SQLite + MySQL) |
 | `alembic>=1.13` | Database migrations |
@@ -395,6 +393,8 @@ Static files served from `web/` at root.
 | 11.9 | Done | Auto-refresh scheduler: background polling, freshness check, pre-flight lead time, email notification |
 | 11.10 | Done | Flight privacy: private flag hides flights from shared briefing links |
 | 11.11 | Done | Compact/full display mode: compact hides sounding analysis, model comparison, secondary advisories |
+| 12.1 | Done | Cross-section theme system: switchable themes (standard, high-contrast), theme preview, cloud hatch patterns, theme-aware legends |
+| 12.2 | Done | Auth consolidation: OAuth, JWT, DB engine, encryption moved to flyfun-common; cross-subdomain SSO via `flyfun_auth` cookie |
 
 ## Docker
 
