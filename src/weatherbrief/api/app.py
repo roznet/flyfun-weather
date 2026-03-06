@@ -134,11 +134,8 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
-    # Auth router from flyfun-common (with weather-specific on_new_user callback)
-    auth_router = create_auth_router(on_new_user=_on_new_user)
-    app.include_router(auth_router)
-
-    # Override /auth/me with weather-specific version (adds is_admin, setup_completed)
+    # Weather-specific /auth/me (adds is_admin, setup_completed) — must be
+    # registered BEFORE common's auth router so it takes priority.
     from fastapi import Depends
     from flyfun_common.db import current_user_id, get_db as _get_db
     from flyfun_common.db.models import UserRow as _UserRow
@@ -163,6 +160,10 @@ def create_app() -> FastAPI:
             "is_admin": is_dev_mode() or user.email in get_admin_emails(),
             "setup_completed": prefs.setup_completed if prefs else False,
         }
+
+    # Auth router from flyfun-common (with weather-specific on_new_user callback)
+    auth_router = create_auth_router(on_new_user=_on_new_user)
+    app.include_router(auth_router)
 
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
