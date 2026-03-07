@@ -181,6 +181,7 @@ export function renderFreshnessBar(
   refreshDetail: string | null,
   onForceRefresh: () => void,
   onCheckAgain: () => void,
+  refreshElapsed?: number | null,
 ): void {
   const el = $('freshness-bar');
   if (!el) return;
@@ -240,6 +241,15 @@ export function renderFreshnessBar(
       ).join('')}</span>`
     : '';
 
+  // "Refreshed in ..." badge (shown briefly after refresh completes)
+  let elapsedBadge = '';
+  if (refreshElapsed && refreshElapsed > 0) {
+    const mins = Math.floor(refreshElapsed / 60);
+    const secs = Math.round(refreshElapsed % 60);
+    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+    elapsedBadge = `<span class="freshness-elapsed">Refreshed in ${timeStr}</span>`;
+  }
+
   const forceLink = isAdmin
     ? ' <a href="#" class="freshness-link" id="freshness-force-refresh">Force refresh</a>'
     : '';
@@ -252,11 +262,11 @@ export function renderFreshnessBar(
     }
     const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">Check again</a>`;
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}${forceLink}</span>${basisLine}${diagHtml}`;
+    el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}`;
   } else {
     const staleStr = freshness.stale_models.map((m) => modelLabel(m)).join(', ');
     el.className = 'freshness-bar freshness-stale';
-    el.innerHTML = `<span>Updates available: ${staleStr}${forceLink}</span>${basisLine}${diagHtml}`;
+    el.innerHTML = `<span>Updates available: ${staleStr}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}`;
   }
 
   // Wire event handlers

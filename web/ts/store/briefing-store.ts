@@ -89,6 +89,7 @@ export interface BriefingState {
   refreshStage: string | null;
   refreshDetail: string | null;
   refreshProgress: number;
+  refreshElapsed: number | null;
   advisoryAltitudeOverride: number | null;
   altitudeTable: AltitudeTableResult | null;
   altitudeTableLoading: boolean;
@@ -156,6 +157,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refreshStage: null,
   refreshDetail: null,
   refreshProgress: 0,
+  refreshElapsed: null,
   advisoryAltitudeOverride: null,
   altitudeTable: null,
   altitudeTableLoading: false,
@@ -239,8 +241,9 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refresh: async (asOfDate?: string) => {
     const flight = get().flight;
     if (!flight) return;
-    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
+    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: null });
     try {
+      let elapsed: number | null = null;
       const newPack = await api.refreshBriefingStream(flight.id, (event) => {
         if (event.type === 'progress') {
           set({
@@ -249,6 +252,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
             refreshDetail: event.detail || null,
             refreshProgress: event.progress || 0,
           });
+        } else if (event.type === 'complete' && event.elapsed_seconds) {
+          elapsed = event.elapsed_seconds;
         }
       }, false, asOfDate);
       // If the server returned a data_status (fresh skip), update freshness
@@ -257,26 +262,29 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       }
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: elapsed });
       // Re-check freshness after a real refresh
       if (!newPack.data_status) {
         get().checkFreshness();
       }
+      // Clear elapsed message after 15 seconds
+      if (elapsed) setTimeout(() => set({ refreshElapsed: null }), 15_000);
     } catch (err) {
       // If another refresh is already in progress, poll for its completion
       if (err instanceof RefreshStreamError && /already in progress/i.test(err.message)) {
         get().checkActiveRefresh();
         return;
       }
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: `Refresh failed: ${err}` });
     }
   },
 
   forceRefresh: async () => {
     const flight = get().flight;
     if (!flight) return;
-    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, error: null });
+    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: null });
     try {
+      let elapsed: number | null = null;
       const newPack = await api.refreshBriefingStream(flight.id, (event) => {
         if (event.type === 'progress') {
           set({
@@ -285,18 +293,21 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
             refreshDetail: event.detail || null,
             refreshProgress: event.progress || 0,
           });
+        } else if (event.type === 'complete' && event.elapsed_seconds) {
+          elapsed = event.elapsed_seconds;
         }
       }, true);
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: elapsed });
       get().checkFreshness();
+      if (elapsed) setTimeout(() => set({ refreshElapsed: null }), 15_000);
     } catch (err) {
       if (err instanceof RefreshStreamError && /already in progress/i.test(err.message)) {
         get().checkActiveRefresh();
         return;
       }
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: `Refresh failed: ${err}` });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: `Refresh failed: ${err}` });
     }
   },
 

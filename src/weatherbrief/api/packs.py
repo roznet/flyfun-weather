@@ -831,6 +831,7 @@ async def refresh_briefing_stream(
             complete_event = {
                 "type": "complete",
                 "pack": _meta_to_response(meta).model_dump(),
+                "elapsed_seconds": total_elapsed,
             }
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
         except Exception as exc:
