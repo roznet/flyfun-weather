@@ -1,9 +1,17 @@
-"""Spatial interpolation of cloud liquid water and ice mixing ratio across route points.
+"""Spatial interpolation of GRIB-enriched fields across route points.
 
-Some GFS grid cells return None for CLW/ICMR via Open-Meteo, which forces the
-SFIP icing index to fall back to a "proxy" variant that overestimates icing
-extent.  This module fills those gaps by linearly interpolating per-pressure-level
-from neighboring route points that do have data.
+Fills gaps where a route point's GRIB grid cell returned None by linearly
+interpolating from neighboring route points that have data.  Both neighbors
+must exist (no edge extrapolation) and the gap must be within ``max_gap_nm``.
+
+Interpolation rules (see also fetch/grib/fill.py for the time axis):
+
+    Time axis  — forward-fill from preceding native GRIB hour (fill.py)
+    Spatial axis — linear interpolation between neighboring route points (here)
+    Vertical axis — linear in pressure, handled in sounding analysis
+
+When adding new GRIB-enriched fields, add a spatial interpolation function
+here and call it from ``interpolate_all_spatially``.
 """
 
 from __future__ import annotations
@@ -12,10 +20,38 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from weatherbrief.models import PressureLevelData, RouteCrossSection, RoutePoint
+    from weatherbrief.models import (
+        NWPCloudDiagnostics,
+        NWPCloudLayerDiag,
+        PressureLevelData,
+        RouteCrossSection,
+        RoutePoint,
+    )
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def interpolate_all_spatially(
+    cross_sections: list[RouteCrossSection],
+    route_points: list[RoutePoint],
+    max_gap_nm: float = 100.0,
+) -> None:
+    """Run spatial interpolation for all GRIB-enriched fields.
+
+    Called once before sounding analysis.  Fills gaps in both CLW/ICMR
+    (per-pressure-level) and cloud diagnostics (per-point scalar).
+    """
+    interpolate_cloud_water_spatially(cross_sections, route_points, max_gap_nm)
+    interpolate_diagnostics_spatially(cross_sections, route_points, max_gap_nm)
+
+
+# ---------------------------------------------------------------------------
+# Cloud liquid water / ice mixing ratio (per-pressure-level)
+# ---------------------------------------------------------------------------
 
 def interpolate_cloud_water_spatially(
     cross_sections: list[RouteCrossSection],
@@ -32,12 +68,6 @@ def interpolate_cloud_water_spatially(
     Filled ``PressureLevelData`` objects get ``clw_interpolated = True`` so
     downstream SFIP computation can report variant="interp" instead of "proxy".
 
-    Args:
-        cross_sections: Model cross-sections with per-point forecasts.
-        route_points: Route points with distance_from_origin_nm.
-        max_gap_nm: Maximum distance (nautical miles) between bounding data
-            points for interpolation to apply.
-
     Returns:
         Total count of (point, level) pairs that were filled.
     """
@@ -52,9 +82,7 @@ def interpolate_cloud_water_spatially(
         if len(cs.point_forecasts) != n_points:
             continue
 
-        # Iterate over each hourly time slot
         for hour_idx in range(_max_hourly_len(cs)):
-            # Collect pressure levels present across all points at this hour
             all_pressures = _collect_pressures(cs, hour_idx, n_points)
 
             for pressure in all_pressures:
@@ -68,6 +96,147 @@ def interpolate_cloud_water_spatially(
 
     return total_filled
 
+
+# ---------------------------------------------------------------------------
+# Cloud diagnostics (NWPCloudDiagnostics on HourlyForecast)
+# ---------------------------------------------------------------------------
+
+def interpolate_diagnostics_spatially(
+    cross_sections: list[RouteCrossSection],
+    route_points: list[RoutePoint],
+    max_gap_nm: float = 100.0,
+) -> int:
+    """Fill cloud diagnostics gaps by linear interpolation along the route.
+
+    For each model cross-section and hourly time slot: if a route point has
+    ``nwp_cloud_diagnostics=None``, find the nearest left and right neighbors
+    with diagnostics and linearly interpolate all numeric sub-fields
+    (cover_pct, base_ft, top_ft, ceiling_ft, etc.) in distance-space.
+
+    Returns:
+        Total count of points that were filled.
+    """
+    if not cross_sections or not route_points:
+        return 0
+
+    distances = [rp.distance_from_origin_nm for rp in route_points]
+    n_points = len(route_points)
+    total_filled = 0
+
+    for cs in cross_sections:
+        if len(cs.point_forecasts) != n_points:
+            continue
+
+        for hour_idx in range(_max_hourly_len(cs)):
+            # Classify points as having diagnostics or not
+            has_data: list[int] = []
+            needs_fill: list[int] = []
+
+            for pt_idx in range(n_points):
+                hourly_list = cs.point_forecasts[pt_idx].hourly
+                if hour_idx >= len(hourly_list):
+                    continue
+                if hourly_list[hour_idx].nwp_cloud_diagnostics is not None:
+                    has_data.append(pt_idx)
+                else:
+                    needs_fill.append(pt_idx)
+
+            if not needs_fill or not has_data:
+                continue
+
+            for pt_idx in needs_fill:
+                left_idx = _find_neighbor(has_data, pt_idx, direction=-1)
+                right_idx = _find_neighbor(has_data, pt_idx, direction=+1)
+
+                if left_idx is None or right_idx is None:
+                    continue
+
+                gap_nm = distances[right_idx] - distances[left_idx]
+                if gap_nm > max_gap_nm:
+                    continue
+
+                left_h = cs.point_forecasts[left_idx].hourly[hour_idx]
+                right_h = cs.point_forecasts[right_idx].hourly[hour_idx]
+                target_h = cs.point_forecasts[pt_idx].hourly[hour_idx]
+
+                left_diag = left_h.nwp_cloud_diagnostics
+                right_diag = right_h.nwp_cloud_diagnostics
+                if left_diag is None or right_diag is None:
+                    continue
+
+                if gap_nm <= 0:
+                    frac = 0.5
+                else:
+                    frac = (distances[pt_idx] - distances[left_idx]) / gap_nm
+
+                target_h.nwp_cloud_diagnostics = _lerp_diagnostics(
+                    left_diag, right_diag, frac,
+                )
+                total_filled += 1
+
+    if total_filled > 0:
+        logger.info(
+            "Spatial interpolation filled %d cloud diagnostics gaps",
+            total_filled,
+        )
+
+    return total_filled
+
+
+# ---------------------------------------------------------------------------
+# Linear interpolation helpers for NWPCloudDiagnostics
+# ---------------------------------------------------------------------------
+
+def _lerp_optional(a: float | None, b: float | None, frac: float) -> float | None:
+    """Linearly interpolate two optional floats.  Returns None if both are None."""
+    if a is not None and b is not None:
+        return a * (1 - frac) + b * frac
+    # One-sided: use whichever is available (nearest-neighbor fallback)
+    return a if a is not None else b
+
+
+def _lerp_layer(
+    a: NWPCloudLayerDiag, b: NWPCloudLayerDiag, frac: float,
+) -> NWPCloudLayerDiag:
+    from weatherbrief.models import NWPCloudLayerDiag as Cls
+    return Cls(
+        cover_pct=_lerp_optional(a.cover_pct, b.cover_pct, frac),
+        base_ft=_lerp_optional(a.base_ft, b.base_ft, frac),
+        top_ft=_lerp_optional(a.top_ft, b.top_ft, frac),
+        top_temp_c=_lerp_optional(a.top_temp_c, b.top_temp_c, frac),
+    )
+
+
+def _lerp_diagnostics(
+    a: NWPCloudDiagnostics, b: NWPCloudDiagnostics, frac: float,
+) -> NWPCloudDiagnostics:
+    from weatherbrief.models import NWPCloudDiagnostics as Cls
+    return Cls(
+        low=_lerp_layer(a.low, b.low, frac),
+        mid=_lerp_layer(a.mid, b.mid, frac),
+        high=_lerp_layer(a.high, b.high, frac),
+        convective_cover_pct=_lerp_optional(
+            a.convective_cover_pct, b.convective_cover_pct, frac,
+        ),
+        convective_base_ft=_lerp_optional(
+            a.convective_base_ft, b.convective_base_ft, frac,
+        ),
+        convective_top_ft=_lerp_optional(
+            a.convective_top_ft, b.convective_top_ft, frac,
+        ),
+        total_cover_pct=_lerp_optional(
+            a.total_cover_pct, b.total_cover_pct, frac,
+        ),
+        boundary_cover_pct=_lerp_optional(
+            a.boundary_cover_pct, b.boundary_cover_pct, frac,
+        ),
+        ceiling_ft=_lerp_optional(a.ceiling_ft, b.ceiling_ft, frac),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def _max_hourly_len(cs: RouteCrossSection) -> int:
     """Return the maximum number of hourly entries across all points."""
@@ -113,7 +282,6 @@ def _interpolate_level(
 
     Returns the number of (point, level) pairs filled.
     """
-    # Gather indices where CLW data exists vs is None
     has_data: list[int] = []
     needs_fill: list[int] = []
 
@@ -131,9 +299,7 @@ def _interpolate_level(
 
     filled = 0
     for pt_idx in needs_fill:
-        # Find nearest left neighbor with data
         left_idx = _find_neighbor(has_data, pt_idx, direction=-1)
-        # Find nearest right neighbor with data
         right_idx = _find_neighbor(has_data, pt_idx, direction=+1)
 
         if left_idx is None or right_idx is None:
@@ -183,7 +349,6 @@ def _find_neighbor(
 ) -> int | None:
     """Find nearest index in sorted_indices that is < target (direction=-1) or > target (direction=+1)."""
     if direction < 0:
-        # Find largest index < target
         best = None
         for idx in sorted_indices:
             if idx < target:
@@ -192,7 +357,6 @@ def _find_neighbor(
                 break
         return best
     else:
-        # Find smallest index > target
         for idx in sorted_indices:
             if idx > target:
                 return idx

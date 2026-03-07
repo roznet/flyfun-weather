@@ -19,7 +19,7 @@ function loadDisplayMode(): DisplayMode {
     if (v === 'compact') return v;
     if (v === 'full' || v === 'annotated') return 'full';
   } catch { /* ignore */ }
-  return 'full';
+  return 'compact';
 }
 
 function loadTierVisibility(): Record<Tier, boolean> {

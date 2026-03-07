@@ -218,7 +218,15 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 
 **Cloud cover override strategy:** When GRIB diagnostics are available, `_apply_cloud_diagnostics()` overwrites the Open-Meteo `cloud_cover_low/mid/high_pct` values with GRIB-native values. This ensures all cloud data for a given model comes from the same initialization run. GFS takes priority over ICON-EU for points where both provide data.
 
-**Cloud diagnostics propagation to interpolated hours:** Open-Meteo provides hourly data interpolated between native GFS steps (3h at longer lead times). GRIB enrichment only targets native steps, leaving interpolated hours without `nwp_cloud_diagnostics`. Without diagnostics, the icing fallback applies the bulk NWP cloud percentage across the full altitude band, causing false positives. `_propagate_cloud_diagnostics()` forward-fills diagnostics from the preceding enriched hour to each gap. Cloud layer geometry (base/top) changes slowly between 3-hour GFS steps, so the earlier step's diagnostics are a reasonable approximation.
+**Gap-filling for GRIB-enriched fields:** GRIB enrichment only targets native model forecast hours (e.g. every 3h for GFS at longer lead times), and some grid cells may return None. Two gap-filling passes ensure all route points and hours have data:
+
+1. **Time axis — forward-fill** (`fetch/grib/fill.py`): After all GRIB enrichment completes, `propagate_all()` forward-fills from the preceding native hour for both cloud diagnostics (`nwp_cloud_diagnostics`) and microphysics (`cloud_liquid_water_kg_kg`, `ice_mixing_ratio_kg_kg`). Cloud geometry and microphysics change slowly between 3h GFS steps.
+
+2. **Spatial axis — linear interpolation** (`analysis/spatial_interpolation.py`): Before sounding analysis, `interpolate_all_spatially()` fills gaps where a route point's GRIB grid cell returned None by linearly interpolating in distance-space from left/right neighbors. Applies to both CLW/ICMR (per-pressure-level) and cloud diagnostics (all numeric sub-fields). Requires both neighbors; max gap 100 nm; edge gaps skipped.
+
+3. **Vertical axis — linear in pressure** (`analysis/sounding/__init__.py`): During sounding analysis, `_interpolate_cloud_water()` fills intermediate pressure levels (25-hPa spacing) between native GRIB levels (50-hPa spacing) by linear interpolation in pressure-space. Only applies to CLW/ICMR.
+
+**When adding new GRIB-enriched fields:** add a forward-fill in `fill.py` (time axis) and a spatial interpolation function in `spatial_interpolation.py` (spatial axis). If the field is per-pressure-level, also add vertical interpolation in the sounding analysis.
 
 ### Key Choices
 - **GFS + ICON-EU** — GFS for global coverage, ICON-EU for higher-resolution European data (~6.5km vs ~27km)

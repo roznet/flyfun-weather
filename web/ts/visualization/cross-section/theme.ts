@@ -143,14 +143,14 @@ const STANDARD_THEME: CrossSectionTheme = {
   },
 
   clouds: {
-    denseRgb: [200, 200, 210],
+    denseRgb: [140, 140, 150],
     thinRgb: [250, 250, 255],
     coverageAlpha: {
       sct: [0.50, 0.65],
       bkn: [0.60, 0.88],
       ovc: [0.70, 0.95],
     },
-    fallbackGray: [220, 220, 225],
+    fallbackGray: [180, 180, 185],
     hatchGridPx: 8,
     hatchLineWidth: { sct: 2, bkn: 5, ovc: 8 },
     hatchColor: 'rgba(255, 255, 255, 0.5)',
@@ -158,7 +158,7 @@ const STANDARD_THEME: CrossSectionTheme = {
 
   nwpClouds: {
     brightRgb: [245, 245, 255],
-    deltaRgb: [55, 55, 50],
+    deltaRgb: [105, 105, 100],
     opacityRange: [0.30, 0.55],
   },
 
@@ -285,22 +285,22 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
   },
 
   clouds: {
-    denseRgb: [102, 102, 102],
-    thinRgb: [216, 216, 216],
+    denseRgb: [70, 70, 70],
+    thinRgb: [230, 230, 230],
     coverageAlpha: {
       sct: [0.45, 0.60],
       bkn: [0.55, 0.85],
       ovc: [0.65, 0.95],
     },
-    fallbackGray: [144, 144, 144],
+    fallbackGray: [120, 120, 120],
     hatchGridPx: 8,
     hatchLineWidth: { sct: 2, bkn: 5, ovc: 8 },
     hatchColor: 'rgba(180, 180, 180, 0.45)',
   },
 
   nwpClouds: {
-    brightRgb: [216, 216, 216],
-    deltaRgb: [106, 106, 106],
+    brightRgb: [230, 230, 230],
+    deltaRgb: [150, 150, 150],
     opacityRange: [0.30, 0.55],
   },
 

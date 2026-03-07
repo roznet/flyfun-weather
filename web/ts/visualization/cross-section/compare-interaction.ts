@@ -218,6 +218,9 @@ function bandHitTest(point: VizPoint, layerId: string, hoverAltFt: number): stri
             return `${label} ${Math.round(layer.coverPct)}%`;
           }
         }
+      } else {
+        if (point.cloudCoverLowPct > 0) return `Low ${Math.round(point.cloudCoverLowPct)}%`;
+        if (point.cloudCoverMidPct > 0) return `Mid ${Math.round(point.cloudCoverMidPct)}%`;
       }
       return null;
 
