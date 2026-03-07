@@ -154,6 +154,7 @@ export interface RefreshStreamEvent {
   progress?: number;
   pack?: PackMeta;
   message?: string;
+  elapsed_seconds?: number;
 }
 
 /**

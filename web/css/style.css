@@ -430,6 +430,12 @@ label {
   font-size: 0.8rem;
 }
 
+.freshness-elapsed {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
 .model-skipped {
   font-style: italic;
   opacity: 0.6;
