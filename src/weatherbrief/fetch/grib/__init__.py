@@ -7,6 +7,7 @@ existing cross-section forecasts from GFS and ICON-EU GRIB2 data.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -98,25 +99,37 @@ def enrich_forecasts(
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
 
+    # Run GFS and ICON-EU enrichment in parallel — they target different
+    # cross-sections (GFS vs ICON) and different model forecasts, so no
+    # data conflicts.  The ICON-EU diagnostic priority guard (is None check)
+    # is per-model and doesn't interact with GFS writes.
     if progress_callback is not None:
-        progress_callback("grib_enrichment", "GFS")
-    gfs_ts = _enrich_gfs(
-        cross_sections, all_forecasts, route_points,
-        departure_time, data_dir=data_dir,
-        flight_duration_hours=flight_duration_hours,
-        as_of_time=as_of_time,
-    )
+        progress_callback("grib_enrichment", "GFS + ICON-EU")
+
+    gfs_ts: int | None = None
+    icon_ts: int | None = None
+    icon_skip: str | None = None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        gfs_future = pool.submit(
+            _enrich_gfs,
+            cross_sections, all_forecasts, route_points,
+            departure_time, data_dir=data_dir,
+            flight_duration_hours=flight_duration_hours,
+            as_of_time=as_of_time,
+        )
+        icon_future = pool.submit(
+            _enrich_icon_eu,
+            cross_sections, all_forecasts, route_points,
+            departure_time, data_dir=data_dir,
+            flight_duration_hours=flight_duration_hours,
+            as_of_time=as_of_time,
+        )
+        gfs_ts = gfs_future.result()
+        icon_ts, icon_skip = icon_future.result()
+
     if gfs_ts is not None:
         grib_init_times["gfs"] = gfs_ts
-
-    if progress_callback is not None:
-        progress_callback("grib_enrichment", "ICON-EU")
-    icon_ts, icon_skip = _enrich_icon_eu(
-        cross_sections, all_forecasts, route_points,
-        departure_time, data_dir=data_dir,
-        flight_duration_hours=flight_duration_hours,
-        as_of_time=as_of_time,
-    )
     if icon_ts is not None:
         grib_init_times["icon"] = icon_ts
     elif icon_skip is not None:
@@ -194,17 +207,22 @@ def _enrich_gfs(
         logger.warning("No .idx files retrieved for enrichment")
         return None
 
-    # Run both enrichment paths
-    _enrich_clwmr_icmr(
-        gfs_sections, all_forecasts, route_points,
-        init_date, init_hour, forecast_hours, bbox,
-        run_dir, idx_by_fhour, point_lats, point_lons, session,
-    )
-    _enrich_cloud_diagnostics(
-        gfs_sections, all_forecasts, route_points,
-        init_date, init_hour, forecast_hours, bbox,
-        run_dir, idx_by_fhour, point_lats, point_lons, session,
-    )
+    # Run both enrichment paths in parallel — they write to different fields
+    # (CLWMR/ICMR on PressureLevelData vs nwp_cloud_diagnostics on HourlyForecast)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pool.submit(
+            _enrich_clwmr_icmr,
+            gfs_sections, all_forecasts, route_points,
+            init_date, init_hour, forecast_hours, bbox,
+            run_dir, idx_by_fhour, point_lats, point_lons, session,
+        )
+        pool.submit(
+            _enrich_cloud_diagnostics,
+            gfs_sections, all_forecasts, route_points,
+            init_date, init_hour, forecast_hours, bbox,
+            run_dir, idx_by_fhour, point_lats, point_lons, session,
+        )
+        # ThreadPoolExecutor.__exit__ waits for all futures to complete
 
     return _run_info_to_timestamp(init_date, init_hour)
 

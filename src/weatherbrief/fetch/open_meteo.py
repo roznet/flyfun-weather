@@ -77,6 +77,7 @@ class OpenMeteoClient:
         self.timeout = 60 if historical else timeout  # historical API is slower
         self.session = requests.Session()
         self._api_key = os.environ.get("OPENMETEO_API_KEY")
+        self.has_api_key = bool(self._api_key)
         if self._api_key:
             logger.info("Using Open-Meteo customer API (paid plan)")
         if historical:

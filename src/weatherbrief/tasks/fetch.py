@@ -15,6 +15,11 @@ from typing import Callable
 from weatherbrief.fetch.open_meteo import OpenMeteoClient
 from weatherbrief.fetch.route_points import interpolate_route
 from weatherbrief.fetch.variables import MODEL_ENDPOINTS, ModelRegion, detect_model_region
+
+# Delay between Open-Meteo API calls to avoid rate limiting.
+# Paid API key has generous limits; free tier allows 600/min but be polite.
+_INTER_MODEL_DELAY_PAID = 0.0
+_INTER_MODEL_DELAY_FREE = 1.0
 from weatherbrief.models import (
     ElevationProfile,
     ModelSource,
@@ -186,7 +191,9 @@ def run_fetch(
             continue
         # Delay between model fetches to avoid Open-Meteo rate limiting
         if models_fetched_count > 0:
-            time.sleep(5)
+            delay = _INTER_MODEL_DELAY_PAID if client.has_api_key else _INTER_MODEL_DELAY_FREE
+            if delay > 0:
+                time.sleep(delay)
         _notify("fetch_forecasts", model.value)
         try:
             end_date = (
