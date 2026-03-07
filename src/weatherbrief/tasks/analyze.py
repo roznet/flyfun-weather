@@ -344,23 +344,7 @@ def run_analysis(
 
     target_dt = departure_time
 
-    # --- Waypoint analyses ---
-    _notify("waypoint_analysis")
-    waypoint_analyses: list[WaypointAnalysis] = []
-    for waypoint in route.waypoints:
-        wp_forecasts = [
-            f for f in all_forecasts if f.waypoint.icao == waypoint.icao
-        ]
-        track_deg = route.waypoint_track(waypoint.icao)
-        analysis = analyze_waypoint(
-            wp_forecasts, target_dt, track_deg,
-            cruise_altitude_ft=route.cruise_altitude_ft,
-            flight_ceiling_ft=route.flight_ceiling_ft,
-            icing_severity_enhance=icing_severity_enhance,
-        )
-        waypoint_analyses.append(analysis)
-
-    # --- Route-point analyses ---
+    # --- Route-point analyses (includes waypoints) ---
     rp_analyses: list[RoutePointAnalysis] = []
     model_names: list[str] = []
     route_analyses_manifest: RouteAnalysesManifest | None = None
@@ -389,6 +373,56 @@ def run_analysis(
             logger.info("Route analyses: %d points", len(rp_analyses))
         except Exception:
             logger.warning("Route-point analysis failed", exc_info=True)
+
+    # --- Waypoint analyses: extract from route-point results to avoid
+    # running _run_point_analysis twice for the same data ---
+    _notify("waypoint_analysis")
+    waypoint_analyses: list[WaypointAnalysis] = []
+    if rp_analyses:
+        # Build lookup of route-point analyses by waypoint ICAO
+        rpa_by_icao: dict[str, RoutePointAnalysis] = {}
+        for rpa in rp_analyses:
+            if rpa.waypoint_icao and rpa.waypoint_icao not in rpa_by_icao:
+                rpa_by_icao[rpa.waypoint_icao] = rpa
+
+        for waypoint in route.waypoints:
+            rpa = rpa_by_icao.get(waypoint.icao)
+            if rpa is not None:
+                waypoint_analyses.append(WaypointAnalysis(
+                    waypoint=waypoint,
+                    target_time=rpa.interpolated_time,
+                    wind_components=rpa.wind_components,
+                    sounding=rpa.sounding,
+                    altitude_advisories=rpa.altitude_advisories,
+                    model_divergence=rpa.model_divergence,
+                ))
+            else:
+                # Fallback: compute from forecasts (waypoint not in route points)
+                wp_forecasts = [
+                    f for f in all_forecasts if f.waypoint.icao == waypoint.icao
+                ]
+                track_deg = route.waypoint_track(waypoint.icao)
+                analysis = analyze_waypoint(
+                    wp_forecasts, target_dt, track_deg,
+                    cruise_altitude_ft=route.cruise_altitude_ft,
+                    flight_ceiling_ft=route.flight_ceiling_ft,
+                    icing_severity_enhance=icing_severity_enhance,
+                )
+                waypoint_analyses.append(analysis)
+    else:
+        # No route-point analyses — compute waypoint analyses directly
+        for waypoint in route.waypoints:
+            wp_forecasts = [
+                f for f in all_forecasts if f.waypoint.icao == waypoint.icao
+            ]
+            track_deg = route.waypoint_track(waypoint.icao)
+            analysis = analyze_waypoint(
+                wp_forecasts, target_dt, track_deg,
+                cruise_altitude_ft=route.cruise_altitude_ft,
+                flight_ceiling_ft=route.flight_ceiling_ft,
+                icing_severity_enhance=icing_severity_enhance,
+            )
+            waypoint_analyses.append(analysis)
 
     return AnalysisResult(
         waypoint_analyses=waypoint_analyses,

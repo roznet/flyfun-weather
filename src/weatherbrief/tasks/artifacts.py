@@ -40,9 +40,9 @@ def save_fetch_artifacts(
 
     if cross_sections:
         cs_path = pack_dir / "cross_section.json"
-        # Match existing format: {"cross_sections": [...]}
+        # Compact JSON — this file is large (multi-MB) and machine-read only
         cs_data = [cs.model_dump(mode="json") for cs in cross_sections]
-        cs_path.write_text(json.dumps({"cross_sections": cs_data}, indent=2))
+        cs_path.write_text(json.dumps({"cross_sections": cs_data}))
 
     if elevation_profile:
         ep_path = pack_dir / "elevation_profile.json"
@@ -84,20 +84,19 @@ def save_analysis_artifacts(
         )
     )
 
-    # forecasts.json: route + metadata + forecasts only
+    # forecasts.json: route + metadata + forecasts only (compact — large file)
     forecasts_path = pack_dir / "forecasts.json"
     forecasts_path.write_text(
         snapshot.model_dump_json(
-            indent=2,
             include={"route", "target_date", "fetch_date", "days_out", "forecasts"},
         )
     )
 
     if route_analyses_manifest:
         ra_path = pack_dir / "route_analyses.json"
+        # Compact JSON — large file with per-point sounding data
         ra_path.write_text(
             route_analyses_manifest.model_dump_json(
-                indent=2,
                 exclude={"analyses": {"__all__": {"sounding": {"__all__": {
                     "derived_levels", "dd_cloud_layers", "icing_ogimet_dd_zones",
                 }}}}},

@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
 import requests
 
 from weatherbrief.fetch.grib.gfs_idx import ByteRange, CloudDiagByteRange
+
+MAX_DOWNLOAD_WORKERS = 8
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +224,32 @@ def fetch_idx(
     return resp.text
 
 
+def _fetch_one_byte_range(
+    url: str,
+    br: ByteRange,
+    session: requests.Session,
+) -> tuple[int, bytes | None]:
+    """Download a single byte range. Returns (index, data) for ordered reassembly."""
+    range_end = br.end if br.end is not None else ""
+    range_header = f"bytes={br.start}-{range_end}"
+    try:
+        resp = session.get(
+            url,
+            headers={"Range": range_header},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        if resp.status_code not in (200, 206):
+            logger.warning(
+                "Failed to fetch range %s for %s %d hPa: HTTP %d",
+                range_header, br.variable, br.level_hpa, resp.status_code,
+            )
+            return (br.start, None)
+        return (br.start, resp.content)
+    except requests.RequestException:
+        logger.warning("Request failed for %s %d hPa", br.variable, br.level_hpa, exc_info=True)
+        return (br.start, None)
+
+
 def fetch_byte_ranges(
     init_date: str,
     init_hour: int,
@@ -228,10 +257,10 @@ def fetch_byte_ranges(
     ranges: list[ByteRange],
     session: requests.Session | None = None,
 ) -> bytes:
-    """Download specific byte ranges from a GFS GRIB2 file and concatenate them.
+    """Download specific byte ranges from a GFS GRIB2 file in parallel.
 
     Each ByteRange specifies a GRIB2 message. The messages are downloaded
-    individually via HTTP Range requests and concatenated into a single
+    concurrently via HTTP Range requests and concatenated into a single
     valid GRIB2 file (GRIB2 files are simply concatenated messages).
 
     Args:
@@ -249,57 +278,36 @@ def fetch_byte_ranges(
 
     sess = session or requests.Session()
     url = gfs_grib2_url(init_date, init_hour, forecast_hour)
-    result = bytearray()
 
-    for br in ranges:
-        range_end = br.end if br.end is not None else ""
-        range_header = f"bytes={br.start}-{range_end}"
-        logger.debug(
-            "Fetching %s %d hPa: %s (%s)",
-            br.variable, br.level_hpa, url.split("/")[-1], range_header,
-        )
-        resp = sess.get(
-            url,
-            headers={"Range": range_header},
-            timeout=_REQUEST_TIMEOUT,
-        )
-        if resp.status_code not in (200, 206):
-            logger.warning(
-                "Failed to fetch range %s for %s %d hPa: HTTP %d",
-                range_header, br.variable, br.level_hpa, resp.status_code,
-            )
-            continue
-        result.extend(resp.content)
+    # Download all ranges in parallel
+    results: list[tuple[int, bytes | None]] = []
+    with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+        futures = {
+            pool.submit(_fetch_one_byte_range, url, br, sess): br
+            for br in ranges
+        }
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    # Reassemble in original byte-offset order (GRIB2 messages are concatenated)
+    result = bytearray()
+    for _offset, data in sorted(results, key=lambda r: r[0]):
+        if data is not None:
+            result.extend(data)
 
     return bytes(result)
 
 
-def fetch_cloud_diag_ranges(
-    init_date: str,
-    init_hour: int,
-    forecast_hour: int,
-    ranges: list[CloudDiagByteRange],
-    session: requests.Session | None = None,
-) -> bytes:
-    """Download cloud diagnostic byte ranges from a GFS GRIB2 file.
-
-    Same logic as fetch_byte_ranges() but for CloudDiagByteRange type.
-    """
-    if not ranges:
-        return b""
-
-    sess = session or requests.Session()
-    url = gfs_grib2_url(init_date, init_hour, forecast_hour)
-    result = bytearray()
-
-    for br in ranges:
-        range_end = br.end if br.end is not None else ""
-        range_header = f"bytes={br.start}-{range_end}"
-        logger.debug(
-            "Fetching cloud diag %s [%s]: %s (%s)",
-            br.variable, br.level_str, url.split("/")[-1], range_header,
-        )
-        resp = sess.get(
+def _fetch_one_cloud_diag_range(
+    url: str,
+    br: CloudDiagByteRange,
+    session: requests.Session,
+) -> tuple[int, bytes | None]:
+    """Download a single cloud diagnostic byte range."""
+    range_end = br.end if br.end is not None else ""
+    range_header = f"bytes={br.start}-{range_end}"
+    try:
+        resp = session.get(
             url,
             headers={"Range": range_header},
             timeout=_REQUEST_TIMEOUT,
@@ -309,7 +317,42 @@ def fetch_cloud_diag_ranges(
                 "Failed to fetch cloud diag range %s for %s [%s]: HTTP %d",
                 range_header, br.variable, br.level_str, resp.status_code,
             )
-            continue
-        result.extend(resp.content)
+            return (br.start, None)
+        return (br.start, resp.content)
+    except requests.RequestException:
+        logger.warning("Request failed for cloud diag %s [%s]", br.variable, br.level_str, exc_info=True)
+        return (br.start, None)
+
+
+def fetch_cloud_diag_ranges(
+    init_date: str,
+    init_hour: int,
+    forecast_hour: int,
+    ranges: list[CloudDiagByteRange],
+    session: requests.Session | None = None,
+) -> bytes:
+    """Download cloud diagnostic byte ranges from a GFS GRIB2 file in parallel.
+
+    Same logic as fetch_byte_ranges() but for CloudDiagByteRange type.
+    """
+    if not ranges:
+        return b""
+
+    sess = session or requests.Session()
+    url = gfs_grib2_url(init_date, init_hour, forecast_hour)
+
+    results: list[tuple[int, bytes | None]] = []
+    with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+        futures = {
+            pool.submit(_fetch_one_cloud_diag_range, url, br, sess): br
+            for br in ranges
+        }
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    result = bytearray()
+    for _offset, data in sorted(results, key=lambda r: r[0]):
+        if data is not None:
+            result.extend(data)
 
     return bytes(result)
