@@ -159,7 +159,7 @@ def test_bracket_3hourly_region():
 def test_cache_roundtrip(tmp_path):
     """Data written to cache can be retrieved."""
     run_dir = cache_dir_for_run(tmp_path, "20231027", 0)
-    ck = cache_key(6, "CLWMR", (45, 55, -5, 10))
+    ck = cache_key(6, "CLWMR")
     data = b"fake grib2 data"
 
     put_cached(run_dir, ck, data)
@@ -181,10 +181,9 @@ def test_cache_dir_structure(tmp_path):
 
 
 def test_cache_key_format():
-    """Cache key has expected format."""
-    ck = cache_key(6, "CLWMR", (45, 55, -5, 10))
-    assert ck.startswith("f006_CLWMR_")
-    assert ck.endswith(".grib2")
+    """Cache key is route-independent (no bbox hash)."""
+    ck = cache_key(6, "CLWMR")
+    assert ck == "f006_CLWMR.grib2"
 
 
 # --- LWC-based icing severity tests ---
@@ -342,11 +341,11 @@ def test_gfs_endpoint_uses_extended_levels():
 
 
 def test_icon_endpoint_uses_icon_levels():
-    """ICON endpoint uses its own 12-level set."""
+    """ICON endpoint uses its own level set (19 levels verified Mar 2026)."""
     from weatherbrief.fetch.variables import ICON_PRESSURE_LEVELS, MODEL_ENDPOINTS
     icon = MODEL_ENDPOINTS["icon"]
     assert icon.pressure_levels == ICON_PRESSURE_LEVELS
-    assert len(icon.pressure_levels) == 12
+    assert len(icon.pressure_levels) == 19
 
 
 def test_build_hourly_params_uses_endpoint_levels():
@@ -808,8 +807,8 @@ class TestIconEuLevels:
         from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
         from weatherbrief.fetch.variables import ICON_PRESSURE_LEVELS
 
-        # Wide pressure range covering all ICON levels
-        model_p = [30000.0, 100000.0]  # 300–1000 hPa
+        # Wide pressure range covering all ICON levels (down to 30 hPa)
+        model_p = [3000.0, 100000.0]  # 30–1000 hPa
         model_v = [0.0001, 0.0010]
 
         result = interpolate_model_to_pressure_levels(model_p, model_v)
@@ -1054,7 +1053,7 @@ class TestCacheModelParam:
     def test_cache_roundtrip_icon_eu(self, tmp_path):
         """Cache works for icon-eu model."""
         run_dir = cache_dir_for_run(tmp_path, "20260221", 0, model="icon-eu")
-        ck = cache_key(3, "ICON_EU_QC_QI_P", (45, 55, -5, 10))
+        ck = cache_key(3, "ICON_EU_QC_QI_P")
         data = b"fake icon-eu grib2"
 
         put_cached(run_dir, ck, data)

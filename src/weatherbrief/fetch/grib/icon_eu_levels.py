@@ -16,8 +16,9 @@ from weatherbrief.fetch.variables import ICON_PRESSURE_LEVELS
 
 logger = logging.getLogger(__name__)
 
-# Target pressure levels for interpolation (hPa), from the ICON
-# pressure level set used by Open-Meteo.
+# Target pressure levels for interpolation (hPa).
+# Matches the ICON levels from Open-Meteo so GRIB cloud water data lands
+# on levels that already have temperature/RH/wind from the API.
 TARGET_PRESSURE_LEVELS_HPA = ICON_PRESSURE_LEVELS
 
 

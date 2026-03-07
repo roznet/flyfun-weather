@@ -16,7 +16,7 @@ import requests
 
 from weatherbrief.fetch.grib.cache import (
     cache_dir_for_run,
-    cache_key,
+    cache_key,  # route-independent: keyed by (fhour, variable) only
     get_cached,
     purge_old_runs,
     put_cached,
@@ -179,16 +179,6 @@ def _enrich_gfs(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
 
-    # Route bounding box (rounded to nearest degree + 1° buffer)
-    lats = [rp.lat for rp in route_points]
-    lons = [rp.lon for rp in route_points]
-    bbox = (
-        int(min(lats)) - 1,
-        int(max(lats)) + 2,
-        int(min(lons)) - 1,
-        int(max(lons)) + 2,
-    )
-
     purge_old_runs(data_dir, model="gfs")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
 
@@ -213,13 +203,13 @@ def _enrich_gfs(
         pool.submit(
             _enrich_clwmr_icmr,
             gfs_sections, all_forecasts, route_points,
-            init_date, init_hour, forecast_hours, bbox,
+            init_date, init_hour, forecast_hours,
             run_dir, idx_by_fhour, point_lats, point_lons, session,
         )
         pool.submit(
             _enrich_cloud_diagnostics,
             gfs_sections, all_forecasts, route_points,
-            init_date, init_hour, forecast_hours, bbox,
+            init_date, init_hour, forecast_hours,
             run_dir, idx_by_fhour, point_lats, point_lons, session,
         )
         # ThreadPoolExecutor.__exit__ waits for all futures to complete
@@ -232,7 +222,6 @@ def _fetch_clwmr_icmr_for_fhour(
     init_hour: int,
     fhour: int,
     target_levels: list[int],
-    bbox: tuple[int, int, int, int],
     run_dir: Path,
     idx_by_fhour: dict[int, str],
     point_lats: list[float],
@@ -242,7 +231,7 @@ def _fetch_clwmr_icmr_for_fhour(
     """Fetch, cache, decode CLWMR/ICMR for a single GFS forecast hour."""
     from weatherbrief.fetch.grib.decode import decode_grib_per_point
 
-    ck = cache_key(fhour, "CLWMR_ICMR", bbox)
+    ck = cache_key(fhour, "CLWMR_ICMR")
     grib_bytes = get_cached(run_dir, ck)
     if grib_bytes is None:
         idx_text = idx_by_fhour.get(fhour)
@@ -277,7 +266,6 @@ def _enrich_clwmr_icmr(
     init_date: str,
     init_hour: int,
     forecast_hours: list[int],
-    bbox: tuple[int, int, int, int],
     run_dir: Path,
     idx_by_fhour: dict[int, str],
     point_lats: list[float],
@@ -300,7 +288,7 @@ def _enrich_clwmr_icmr(
     total_enriched = 0
     for fhour in forecast_hours:
         decoded_points = _fetch_clwmr_icmr_for_fhour(
-            init_date, init_hour, fhour, target_levels, bbox,
+            init_date, init_hour, fhour, target_levels,
             run_dir, idx_by_fhour, point_lats, point_lons, session,
         )
         if not decoded_points:
@@ -325,7 +313,6 @@ def _fetch_cloud_diag_for_fhour(
     init_date: str,
     init_hour: int,
     fhour: int,
-    bbox: tuple[int, int, int, int],
     run_dir: Path,
     idx_by_fhour: dict[int, str],
     point_lats: list[float],
@@ -335,7 +322,7 @@ def _fetch_cloud_diag_for_fhour(
     """Fetch, cache, decode cloud diagnostics for a single GFS forecast hour."""
     from weatherbrief.fetch.grib.decode import decode_cloud_diag_per_point
 
-    ck = cache_key(fhour, "CLOUD_DIAG", bbox)
+    ck = cache_key(fhour, "CLOUD_DIAG")
     grib_bytes = get_cached(run_dir, ck)
     if grib_bytes is None:
         idx_text = idx_by_fhour.get(fhour)
@@ -461,7 +448,6 @@ def _enrich_cloud_diagnostics(
     init_date: str,
     init_hour: int,
     forecast_hours: list[int],
-    bbox: tuple[int, int, int, int],
     run_dir: Path,
     idx_by_fhour: dict[int, str],
     point_lats: list[float],
@@ -474,7 +460,7 @@ def _enrich_cloud_diagnostics(
     total_enriched = 0
     for fhour in forecast_hours:
         decoded_points = _fetch_cloud_diag_for_fhour(
-            init_date, init_hour, fhour, bbox,
+            init_date, init_hour, fhour,
             run_dir, idx_by_fhour, point_lats, point_lons, session,
         )
         if not decoded_points:
@@ -566,16 +552,6 @@ def _enrich_icon_eu(
     purge_old_runs(data_dir, model="icon-eu")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
 
-    # Route bounding box for cache key
-    lats = [rp.lat for rp in route_points]
-    lons = [rp.lon for rp in route_points]
-    bbox = (
-        int(min(lats)) - 1,
-        int(max(lats)) + 2,
-        int(min(lons)) - 1,
-        int(max(lons)) + 2,
-    )
-
     point_lats = [rp.lat for rp in route_points]
     point_lons = [rp.lon for rp in route_points]
     levels = list(range(ICON_EU_MODEL_LEVEL_MIN, ICON_EU_MODEL_LEVEL_MAX + 1))
@@ -587,7 +563,7 @@ def _enrich_icon_eu(
     from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
 
     def _fetch_and_decode_fhour(fhour: int) -> list[dict[int, dict[str, float]]] | None:
-        ck = cache_key(fhour, "ICON_EU_QC_QI_P", bbox)
+        ck = cache_key(fhour, "ICON_EU_QC_QI_P")
         grib_bytes = get_cached(run_dir, ck)
         if grib_bytes is None:
             try:
@@ -635,7 +611,7 @@ def _enrich_icon_eu(
     # Cloud diagnostics (ceiling, convective base/top) from single-level files
     _enrich_icon_eu_cloud_diagnostics(
         icon_sections, all_forecasts, route_points,
-        init_date, init_hour, forecast_hours, bbox,
+        init_date, init_hour, forecast_hours,
         run_dir, point_lats, point_lons, session,
     )
 
@@ -649,7 +625,6 @@ def _enrich_icon_eu_cloud_diagnostics(
     init_date: str,
     init_hour: int,
     forecast_hours: list[int],
-    bbox: tuple[int, int, int, int],
     run_dir: Path,
     point_lats: list[float],
     point_lons: list[float],
@@ -664,7 +639,7 @@ def _enrich_icon_eu_cloud_diagnostics(
 
     total_enriched = 0
     for fhour in forecast_hours:
-        ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG", bbox)
+        ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
         grib_bytes = get_cached(run_dir, ck)
         if grib_bytes is None:
             try:

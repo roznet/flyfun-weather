@@ -16,15 +16,19 @@ EXTENDED_PRESSURE_LEVELS = [
     500, 450, 400, 350, 300, 250, 200, 150,
 ]
 
-# ECMWF IFS: 13 levels on Open-Meteo (verified Feb 2025).
+# ECMWF IFS: 13 levels on Open-Meteo (verified Mar 2026).
 # All pressure-level variables available including vertical_velocity.
+# No intermediate levels (975/950/900/800/750 etc.) — Open-Meteo limitation.
 ECMWF_PRESSURE_LEVELS = [
-    1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150,
+    1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50,
 ]
 
-# DWD ICON: 12 levels (verified via API; 250/200/150 return null).
+# DWD ICON: 19 levels on Open-Meteo (verified Mar 2026).
+# Still no intermediate levels between 800–300 hPa from API.
+# GRIB enrichment interpolates to EXTENDED_PRESSURE_LEVELS for CLW/ICMR.
 ICON_PRESSURE_LEVELS = [
     1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300,
+    250, 200, 150, 100, 70, 50, 30,
 ]
 
 # Météo-France ARPEGE: 19 levels (verified Feb 2025).
@@ -161,8 +165,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/forecast",
         max_days=7,
         model_param="ukmo_seamless",
-        unavailable_surface=["precipitation_probability",
-                             "convective_inhibition", "lifted_index"],
+        unavailable_surface=["precipitation_probability", "lifted_index"],
         pressure_levels=list(UKMO_PRESSURE_LEVELS),
         region=ModelRegion.EUROPE,
     ),
