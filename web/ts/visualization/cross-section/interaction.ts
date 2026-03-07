@@ -123,15 +123,21 @@ export function attachInteraction(
     }
 
     // --- NWP Cloud bands ---
-    if (en('nwp-cloud-bands') && point.nwpCloudDiag) {
-      const diag = point.nwpCloudDiag;
+    if (en('nwp-cloud-bands')) {
       const nwpLines: string[] = [];
-      for (const [label, layer] of nwpDiagLayers(diag)) {
-        if (layer.coverPct !== null && layer.coverPct > 0 &&
-            layer.baseFt !== null && layer.topFt !== null &&
-            altInBand(hoverAltFt, layer.baseFt, layer.topFt)) {
-          nwpLines.push(`NWP ${label}: ${Math.round(layer.coverPct)}% (${fmtFL(layer.baseFt)}–${fmtFL(layer.topFt)})`);
+      if (point.nwpCloudDiag) {
+        const diag = point.nwpCloudDiag;
+        for (const [label, layer] of nwpDiagLayers(diag)) {
+          if (layer.coverPct !== null && layer.coverPct > 0 &&
+              layer.baseFt !== null && layer.topFt !== null &&
+              altInBand(hoverAltFt, layer.baseFt, layer.topFt)) {
+            nwpLines.push(`NWP ${label}: ${Math.round(layer.coverPct)}% (${fmtFL(layer.baseFt)}–${fmtFL(layer.topFt)})`);
+          }
         }
+      } else {
+        // Fallback: show Open-Meteo low/mid cover when GRIB diagnostics are missing
+        if (point.cloudCoverLowPct > 0) nwpLines.push(`NWP low: ${Math.round(point.cloudCoverLowPct)}%`);
+        if (point.cloudCoverMidPct > 0) nwpLines.push(`NWP mid: ${Math.round(point.cloudCoverMidPct)}%`);
       }
       if (nwpLines.length > 0) sections.push(nwpLines.join('<br>'));
     }

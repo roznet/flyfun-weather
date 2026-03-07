@@ -160,6 +160,27 @@ In current WAFS products, CATEDR and MWTURB are combined into **MaxEDR (MXEDPRM)
 
 **Practical alternative:** Compute turbulence indices from raw GFS fields we already have access to (see Future Extensions §6 Ellrod index, §1 VVEL fetch).
 
+## Gap-Filling Strategy
+
+GRIB enrichment targets native model forecast hours only (e.g. every 3h for GFS at longer lead times), and some GRIB grid cells may return None. Three axes of gap-filling ensure consistent data for all route points, all hours, and all pressure levels:
+
+| Axis | Strategy | Module | Applies to |
+|------|----------|--------|------------|
+| **Time** | Forward-fill from preceding native GRIB hour | `fetch/grib/fill.py` | Cloud diagnostics, CLW, ICMR |
+| **Spatial** | Linear interpolation between neighboring route points (max 100 nm gap, both neighbors required) | `analysis/spatial_interpolation.py` | Cloud diagnostics, CLW, ICMR |
+| **Vertical** | Linear interpolation in pressure-space between native GRIB pressure levels | `analysis/sounding/__init__.py` | CLW, ICMR only |
+
+**Pipeline order:**
+1. GRIB enrichment assigns values at native hours for all route points
+2. `propagate_all()` forward-fills all fields to interpolated hours (time axis)
+3. `interpolate_all_spatially()` fills remaining gaps along the route (spatial axis)
+4. `_interpolate_cloud_water()` fills intermediate pressure levels during sounding analysis (vertical axis)
+
+**When adding new GRIB-enriched fields:**
+1. Add a forward-fill call in `fill.py` → `propagate_all()`
+2. Add a spatial interpolation function in `spatial_interpolation.py` → `interpolate_all_spatially()`
+3. If per-pressure-level, add vertical interpolation in sounding analysis
+
 ## Future Extensions
 
 ### Near-term (high value, moderate effort)
@@ -170,7 +191,7 @@ In current WAFS products, CATEDR and MWTURB are combined into **MaxEDR (MXEDPRM)
 - `VIS` — visibility at surface, useful for airport condition assessment
 - Full temperature/wind column — could replace Open-Meteo for GFS entirely, removing API dependency
 
-**2. Time interpolation** — Currently uses single forecast hour closest to target. Bracketing with linear interpolation between F_prev and F_next would improve accuracy for mid-hour targets. Infrastructure is already in place (`bracket_forecast_hours()` finds both hours).
+**2. Time interpolation (linear)** — Forward-fill from the preceding native hour is implemented for all GRIB fields (see Gap-Filling Strategy above). A future improvement would be to fetch *both* bracketing forecast hours and linearly interpolate between them for mid-hour targets. Infrastructure is already in place (`bracket_forecast_hours()` finds both hours). This would improve accuracy over forward-fill but doubles GRIB download volume.
 
 **3. Concurrent downloads** — `fetch_byte_ranges()` currently downloads messages sequentially. `asyncio` or `concurrent.futures.ThreadPoolExecutor` would parallelize the ~50 HTTP Range requests.
 
