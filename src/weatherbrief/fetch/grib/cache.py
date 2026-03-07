@@ -9,7 +9,6 @@ TTL: 48 hours (model runs every 6h, but keep for comparison).
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
 from pathlib import Path
@@ -43,21 +42,20 @@ def cache_dir_for_run(
 def cache_key(
     forecast_hour: int,
     variable: str,
-    bbox: tuple[float, float, float, float],
 ) -> str:
     """Generate a cache filename for a specific GRIB2 download.
+
+    Route-independent: GRIB files cover the full model domain (GFS global,
+    ICON-EU all-Europe), so the same cached file serves any route.
 
     Args:
         forecast_hour: Forecast hour (e.g. 6).
         variable: Variable name (e.g. "CLWMR").
-        bbox: Bounding box (lat_min, lat_max, lon_min, lon_max).
 
     Returns:
-        Filename like "f006_CLWMR_a1b2c3d4.grib2"
+        Filename like "f006_CLWMR.grib2"
     """
-    bbox_str = f"{bbox[0]:.0f}_{bbox[1]:.0f}_{bbox[2]:.0f}_{bbox[3]:.0f}"
-    bbox_hash = hashlib.md5(bbox_str.encode()).hexdigest()[:8]
-    return f"f{forecast_hour:03d}_{variable}_{bbox_hash}.grib2"
+    return f"f{forecast_hour:03d}_{variable}.grib2"
 
 
 def get_cached(
