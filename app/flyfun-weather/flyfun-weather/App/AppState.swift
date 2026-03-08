@@ -46,7 +46,7 @@ final class AppState {
     // MARK: - Auth
 
     func handleAuthCallback(url: URL) {
-        guard url.scheme == "weatherbrief",
+        guard url.scheme == "flyfunweather",
               url.host == "auth",
               url.path == "/callback" || url.pathComponents.contains("callback"),
               let token = url.queryParam("token"), !token.isEmpty

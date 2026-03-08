@@ -9,7 +9,7 @@
 			<string>aero.flyfun.weather</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>weatherbrief</string>
+				<string>flyfunweather</string>
 			</array>
 		</dict>
 	</array>
