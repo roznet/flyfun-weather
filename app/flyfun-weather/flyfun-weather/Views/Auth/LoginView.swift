@@ -65,7 +65,7 @@ struct LoginView: View {
         do {
             let token = try await authService.signIn(baseURL: AppState.defaultBaseURL)
             // Build a callback URL and pass through the standard handler
-            let callbackURL = URL(string: "weatherbrief://auth/callback?token=\(token)")!
+            let callbackURL = URL(string: "flyfunweather://auth/callback?token=\(token)")!
             appState.handleAuthCallback(url: callbackURL)
         } catch {
             if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {

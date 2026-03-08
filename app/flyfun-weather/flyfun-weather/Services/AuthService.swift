@@ -27,7 +27,10 @@ final class AuthService: NSObject, ASWebAuthenticationPresentationContextProvidi
     func signIn(baseURL: URL) async throws -> String {
         let loginURL = baseURL.appendingPathComponent("auth/login/google")
         var components = URLComponents(url: loginURL, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "platform", value: "ios")]
+        components.queryItems = [
+            URLQueryItem(name: "platform", value: "ios"),
+            URLQueryItem(name: "scheme", value: "flyfunweather"),
+        ]
 
         guard let url = components.url else {
             throw URLError(.badURL)
@@ -38,7 +41,7 @@ final class AuthService: NSObject, ASWebAuthenticationPresentationContextProvidi
         let callbackURL = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
             let session = ASWebAuthenticationSession(
                 url: url,
-                callback: .customScheme("weatherbrief")
+                callback: .customScheme("flyfunweather")
             ) { url, error in
                 if let error {
                     Self.logger.error("OAuth error: \(error)")
