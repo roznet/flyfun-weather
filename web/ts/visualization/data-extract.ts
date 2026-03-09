@@ -167,6 +167,26 @@ function extractPoint(
   };
 }
 
+/**
+ * Determine which cross-section layers lack data for the current model.
+ * Returns layer IDs that should be disabled in the UI.
+ */
+export function getUnavailableLayers(data: VizRouteData): Set<string> {
+  const unavailable = new Set<string>();
+
+  const hasNwpCloudDiag = data.points.some((p) => p.nwpCloudDiag !== null);
+  const hasOgimetNwp = data.points.some((p) => p.icingOgimetNwpZones.length > 0);
+  const hasSfip = data.points.some((p) => p.sfipZones.length > 0);
+  const hasNwpConvective = data.points.some((p) => p.nwpConvectiveBaseFt !== null);
+
+  if (!hasNwpCloudDiag) unavailable.add('nwp-cloud-bands');
+  if (!hasOgimetNwp) unavailable.add('icing-ogimet-nwp-bands');
+  if (!hasSfip) unavailable.add('sfip-bands');
+  if (!hasNwpConvective) unavailable.add('nwp-convective-bg');
+
+  return unavailable;
+}
+
 /** Look up a per-model value from the model_divergence comparison data. */
 function divergenceValue(rpa: RoutePointAnalysis, variable: string, model: string): number | null {
   for (const d of rpa.model_divergence) {
