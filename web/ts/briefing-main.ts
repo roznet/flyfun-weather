@@ -9,7 +9,7 @@ import type { DisplayMode } from './types/metrics';
 import { renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
-import { extractVizData } from './visualization/data-extract';
+import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
@@ -185,6 +185,7 @@ async function init(): Promise<void> {
     applyLayoutClass(layout);
 
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile);
+    const unavailable = getUnavailableLayers(data);
     const allLayers = getAllLayers();
     const showCrossSection = layout === 'cross-section' || layout === 'split';
     const showCompare = layout === 'compare';
@@ -265,7 +266,11 @@ async function init(): Promise<void> {
       }
 
       vizRenderer.setData(data);
-      vizRenderer.setLayers(allLayers, state.vizSettings.enabledLayers);
+      // Merge unavailable layers as disabled so they don't render,
+      // without modifying the stored user preference.
+      const effectiveEnabled = { ...state.vizSettings.enabledLayers };
+      for (const id of unavailable) effectiveEnabled[id] = false;
+      vizRenderer.setLayers(allLayers, effectiveEnabled);
       vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
       vizRenderer.render();
 
@@ -451,7 +456,7 @@ async function init(): Promise<void> {
         onLayoutChange: (l) => store.getState().setLayout(l),
         onModelChange: (model) => store.getState().setSelectedModel(model),
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
-      }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods);
+      }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable);
 
       // Render route graph controls (below graph)
       if (routeGraphControlsContainer && showCrossSection) {

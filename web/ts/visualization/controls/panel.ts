@@ -78,6 +78,7 @@ export function renderVizControls(
   availableModels?: string[],
   displayMode?: DisplayMode,
   preferredMethods?: Record<string, string>,
+  unavailableLayers?: Set<string>,
 ): void {
   const groups = getLayerGroups();
 
@@ -149,9 +150,13 @@ export function renderVizControls(
         html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${group.group}" title="About ${group.label}" aria-label="About ${group.label}">\u24d8</button>`;
       }
       for (const layer of layersToRender) {
-        const checked = settings.enabledLayers[layer.id] !== false ? 'checked' : '';
-        html += `<label class="viz-layer-checkbox">`;
-        html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked}>`;
+        const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
+        const checked = !isUnavailable && settings.enabledLayers[layer.id] !== false ? 'checked' : '';
+        const disabled = isUnavailable ? 'disabled' : '';
+        const dimClass = isUnavailable ? ' viz-layer-unavailable' : '';
+        const tooltip = isUnavailable ? ` title="Not available for this model"` : '';
+        html += `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
+        html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
         html += `<span>${isCompactCollapse ? group.label : layer.name}</span>`;
         html += `</label>`;
         if (layer.metricId) {

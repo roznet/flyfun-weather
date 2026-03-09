@@ -2080,6 +2080,15 @@ label {
   margin: 0;
 }
 
+.viz-layer-unavailable {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.viz-layer-unavailable input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
 .viz-tooltip {
   display: none;
   position: absolute;
