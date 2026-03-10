@@ -618,12 +618,7 @@ export function renderRouteObservations(
 
 const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; label: string; icon: string }> = [
   { key: 'synoptic', label: 'Synoptic', icon: '\uD83C\uDF0D' },
-  { key: 'winds', label: 'Winds', icon: '\uD83D\uDCA8' },
-  { key: 'cloud_visibility', label: 'Cloud & Visibility', icon: '\u2601\uFE0F' },
-  { key: 'precipitation_convection', label: 'Precipitation & Convection', icon: '\uD83C\uDF27\uFE0F' },
-  { key: 'icing', label: 'Icing', icon: '\u2744\uFE0F' },
   { key: 'specific_concerns', label: 'Specific Concerns', icon: '\u26A0\uFE0F' },
-  { key: 'model_agreement', label: 'Model Agreement', icon: '\uD83D\uDCCA' },
   { key: 'trend', label: 'Trend', icon: '\uD83D\uDCC8' },
   { key: 'watch_items', label: 'Watch Items', icon: '\uD83D\uDC41\uFE0F' },
 ];

@@ -262,14 +262,15 @@ export interface WeatherDigest {
   assessment: 'GREEN' | 'AMBER' | 'RED';
   assessment_reason: string;
   synoptic: string;
-  winds: string;
-  cloud_visibility: string;
-  precipitation_convection: string;
-  icing: string;
   specific_concerns: string;
-  model_agreement: string;
   trend: string;
   watch_items: string;
+  // Legacy fields (may be present in older digests)
+  winds?: string;
+  cloud_visibility?: string;
+  precipitation_convection?: string;
+  icing?: string;
+  model_agreement?: string;
 }
 
 export interface AirportObservation {

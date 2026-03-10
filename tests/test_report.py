@@ -82,12 +82,7 @@ def pack_dir(tmp_path, sample_pack):
         "assessment": "GREEN",
         "assessment_reason": "Conditions favorable",
         "synoptic": "High pressure over Western Europe.",
-        "winds": "Light westerlies at cruise level.",
-        "cloud_visibility": "Mostly clear above 3000ft.",
-        "precipitation_convection": "None expected.",
-        "icing": "Negligible risk.",
         "specific_concerns": "None.",
-        "model_agreement": "Good agreement across all models.",
         "trend": "Stable conditions expected.",
         "watch_items": "Monitor fog risk at EGTK.",
     }
@@ -124,7 +119,6 @@ class TestRenderHtml:
     def test_contains_synopsis_sections(self, pack_dir, sample_flight, sample_pack):
         html = render_html(pack_dir, sample_flight, sample_pack)
         assert "High pressure over Western Europe" in html
-        assert "Light westerlies" in html
         assert "Monitor fog risk" in html
 
     def test_contains_gramet_data_uri(self, pack_dir, sample_flight, sample_pack):

@@ -65,12 +65,7 @@ def sample_digest():
         "assessment": "GREEN",
         "assessment_reason": "Conditions favorable",
         "synoptic": "High pressure dominant.",
-        "winds": "Light.",
-        "cloud_visibility": "Clear.",
-        "precipitation_convection": "None.",
-        "icing": "None.",
         "specific_concerns": "None.",
-        "model_agreement": "Good.",
         "trend": "Stable.",
         "watch_items": "Monitor EGTK fog.",
     }

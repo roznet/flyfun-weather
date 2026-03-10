@@ -35,12 +35,7 @@ def sample_digest():
         assessment="GREEN",
         assessment_reason="Ridge firmly established, models converging",
         synoptic="High pressure centered over Bay of Biscay.",
-        winds="Light and variable at FL080.",
-        cloud_visibility="Scattered high cloud only.",
-        precipitation_convection="No precipitation expected.",
-        icing="Negligible risk at FL080.",
         specific_concerns="Morning valley fog at LSGS.",
-        model_agreement="GFS and ECMWF in strong agreement.",
         trend="Improving since D-5.",
         watch_items="Sion valley fog — check 0600Z TAF.",
     )
@@ -77,8 +72,7 @@ def test_format_digest_markdown(sample_digest, sample_route):
     assert "GREEN" in text
     assert "Ridge firmly established" in text
     assert "SYNOPTIC:" in text
-    assert "WINDS:" in text
-    assert "ICING:" in text
+    assert "SPECIFIC CONCERNS:" in text
     assert "WATCH:" in text
 
 
@@ -219,12 +213,7 @@ def test_weather_digest_model():
         assessment="AMBER",
         assessment_reason="Frontal passage uncertain",
         synoptic="Low from west.",
-        winds="25kt headwind.",
-        cloud_visibility="BKN 3000ft.",
-        precipitation_convection="Light rain.",
-        icing="Moderate at 5000ft.",
         specific_concerns="Alpine foehn.",
-        model_agreement="Models diverge.",
         trend="Deteriorating.",
         watch_items="TAF updates.",
     )
@@ -236,12 +225,7 @@ def test_weather_digest_model():
             assessment="BLUE",
             assessment_reason="test",
             synoptic="test",
-            winds="test",
-            cloud_visibility="test",
-            precipitation_convection="test",
-            icing="test",
             specific_concerns="test",
-            model_agreement="test",
             trend="test",
             watch_items="test",
         )
