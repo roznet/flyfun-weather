@@ -271,9 +271,6 @@ def _build_html_body(
     if digest:
         sections = [
             ("synoptic", "Synoptic"),
-            ("winds", "Winds"),
-            ("icing", "Icing"),
-            ("cloud_visibility", "Cloud & Visibility"),
             ("specific_concerns", "Specific Concerns"),
             ("watch_items", "Watch Items"),
         ]

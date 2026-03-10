@@ -35,32 +35,20 @@ Structure your response as JSON with these exact fields:
 2. **assessment_reason**: One sentence explaining the assessment.
 
 3. **synoptic**: 2-3 sentences on the large-scale pattern (pressure systems,
-   fronts, air mass) and how it's expected to evolve.
+   fronts, air mass) and how it's expected to evolve. Include the key
+   hazards: winds, cloud/visibility, precipitation, icing — but only what
+   matters for this flight. Don't repeat what the advisories already say.
 
-4. **winds**: Headwind/tailwind at cruise altitude, significant wind at
-   other levels, any notable shear or jet stream influence.
-
-5. **cloud_visibility**: Expected bases/tops, layers, any low IMC risk,
-   visibility concerns including fog or haze.
-
-6. **precipitation_convection**: Rain/snow probability, thunderstorm risk
-   (CAPE context), frontal precipitation timing.
-
-7. **icing**: Altitude bands at risk, severity, freezing level. Reference
-   temperature and humidity profiles from the quantitative data.
-
-8. **specific_concerns**: Route-specific hazards — Alpine weather for Swiss
+4. **specific_concerns**: Route-specific hazards — Alpine weather for Swiss
    destinations, foehn, valley fog, orographic effects, Channel weather
-   for UK-France crossings, etc.
+   for UK-France crossings, etc. Say "None" if nothing beyond the
+   advisories.
 
-9. **model_agreement**: Where models agree/disagree. What depends on resolving
-   current uncertainty.
+5. **trend**: How today's outlook compares to yesterday's (if previous digest
+   data is provided). Is it converging toward a clear picture?
 
-10. **trend**: How today's outlook compares to yesterday's (if previous digest
-    data is provided). Is it converging toward a clear picture?
-
-11. **watch_items**: What to monitor in the next 24h that could change the
-    assessment.
+6. **watch_items**: What to monitor in the next 24h that could change the
+   assessment.
 
 ## Important Notes
 

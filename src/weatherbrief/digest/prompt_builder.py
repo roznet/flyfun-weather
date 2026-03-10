@@ -6,8 +6,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from weatherbrief.models import (
+    AgreementLevel,
     ConvectiveRisk,
     ForecastSnapshot,
+    ModelDivergence,
     PrecipPhase,
     RouteAdvisoriesManifest,
     RouteObservations,
@@ -34,11 +36,10 @@ def build_digest_context(
 
     Sections:
     1. Route / date / altitude metadata + pilot capability
-    2. Quantitative data per waypoint
+    2. Quantitative data per waypoint (includes model divergence)
     3. Route advisories (deterministic hazard assessments)
-    4. Model comparison
-    5. Text forecasts (NWS AFD or DWD, region-dependent)
-    6. Trend from previous digest
+    4. Text forecasts (NWS AFD or DWD, region-dependent)
+    5. Trend from previous digest
     """
     sections: list[str] = []
 
@@ -149,29 +150,17 @@ def build_digest_context(
         if wp_analysis.sounding:
             quant_lines.extend(_format_sounding_context(wp_analysis.sounding))
 
+        # Model divergence (only moderate/poor — good agreement is implicit)
+        if wp_analysis.model_divergence:
+            quant_lines.extend(
+                _format_divergence_context(wp_analysis.model_divergence)
+            )
+
     sections.append("\n".join(quant_lines))
 
     # --- Route advisories ---
     if route_advisories:
         sections.append(_format_route_advisories_context(route_advisories))
-
-    # --- Model comparison ---
-    comp_lines: list[str] = ["=== MODEL COMPARISON ==="]
-    has_comparison = False
-    for analysis in snapshot.analyses:
-        if not analysis.model_divergence:
-            continue
-        has_comparison = True
-        comp_lines.append(f"\n{analysis.waypoint.icao}:")
-        for div in analysis.model_divergence:
-            values_str = ", ".join(f"{k}={v:.1f}" for k, v in div.model_values.items())
-            comp_lines.append(
-                f"  {div.variable}: {div.agreement.value} agreement "
-                f"(spread={div.spread:.1f}, {values_str})"
-            )
-    if not has_comparison:
-        comp_lines.append("No multi-model comparison available.")
-    sections.append("\n".join(comp_lines))
 
     # --- METAR/TAF observations (D-0 only) ---
     if snapshot.route_observations:
@@ -198,6 +187,20 @@ def build_digest_context(
         sections.append("\n".join(trend_lines))
 
     return "\n\n".join(sections)
+
+
+def _format_divergence_context(divergences: list[ModelDivergence]) -> list[str]:
+    """Format model divergence as compact lines — only moderate/poor agreement."""
+    noteworthy = [
+        d for d in divergences if d.agreement != AgreementLevel.GOOD
+    ]
+    if not noteworthy:
+        return []
+
+    parts = []
+    for d in noteworthy:
+        parts.append(f"{d.variable} {d.agreement.value}(spread={d.spread:.1f})")
+    return [f"  Divergence: {'; '.join(parts)}"]
 
 
 def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str]:

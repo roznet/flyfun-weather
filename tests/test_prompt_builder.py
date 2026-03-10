@@ -120,7 +120,6 @@ def test_build_context_basic(sample_snapshot):
     assert "D-7" in context
     assert "8000ft" in context
     assert "QUANTITATIVE DATA" in context
-    assert "MODEL COMPARISON" in context
 
 
 def test_build_context_with_text_forecasts(sample_snapshot):
@@ -169,12 +168,7 @@ def test_build_context_with_previous_digest(sample_snapshot):
         assessment="AMBER",
         assessment_reason="Frontal passage timing uncertain",
         synoptic="Low pressure approaching from the west.",
-        winds="20kt headwind at FL080.",
-        cloud_visibility="BKN at 3000ft.",
-        precipitation_convection="Light rain likely.",
-        icing="Moderate risk at 5000ft.",
         specific_concerns="Foehn possible in valleys.",
-        model_agreement="GFS and ECMWF diverge on timing.",
         trend="Deteriorating from yesterday.",
         watch_items="Check updated TAFs tomorrow.",
     )
@@ -214,11 +208,33 @@ def test_build_context_quantitative_detail(sample_snapshot):
     assert "6000" in context
 
 
-def test_build_context_model_comparison(sample_snapshot):
-    """Model comparison section includes divergence data."""
+def test_build_context_divergence_good_omitted(sample_snapshot):
+    """Good-agreement divergence is omitted from context (noise reduction)."""
     target_time = datetime(2026, 2, 17, 9, 0, 0)
     context = build_digest_context(sample_snapshot, target_time)
 
-    assert "temperature_c" in context
-    assert "good agreement" in context
-    assert "spread=1.0" in context
+    # The fixture has only good agreement — should not appear
+    assert "Divergence:" not in context
+
+
+def test_build_context_divergence_poor_included(sample_snapshot):
+    """Moderate/poor divergence appears inline in quantitative section."""
+    from weatherbrief.models import AgreementLevel, ModelDivergence
+
+    # Add a poor-agreement divergence to the analysis
+    sample_snapshot.analyses[0].model_divergence.append(
+        ModelDivergence(
+            variable="cloud_cover_pct",
+            model_values={"gfs": 100.0, "ecmwf": 30.0},
+            mean=65.0,
+            spread=70.0,
+            agreement=AgreementLevel.POOR,
+        )
+    )
+
+    target_time = datetime(2026, 2, 17, 9, 0, 0)
+    context = build_digest_context(sample_snapshot, target_time)
+
+    assert "Divergence:" in context
+    assert "cloud_cover_pct poor" in context
+    assert "spread=70.0" in context

@@ -32,12 +32,7 @@ class WeatherDigest(BaseModel):
     assessment: Literal["GREEN", "AMBER", "RED"]
     assessment_reason: str
     synoptic: str
-    winds: str
-    cloud_visibility: str
-    precipitation_convection: str
-    icing: str
     specific_concerns: str
-    model_agreement: str
     trend: str
     watch_items: str
 
@@ -188,17 +183,7 @@ def format_digest_markdown(
         "",
         f"SYNOPTIC: {digest.synoptic}",
         "",
-        f"WINDS: {digest.winds}",
-        "",
-        f"CLOUD & VISIBILITY: {digest.cloud_visibility}",
-        "",
-        f"PRECIPITATION & CONVECTION: {digest.precipitation_convection}",
-        "",
-        f"ICING: {digest.icing}",
-        "",
         f"SPECIFIC CONCERNS: {digest.specific_concerns}",
-        "",
-        f"MODELS: {digest.model_agreement}",
         "",
         f"TREND: {digest.trend}",
         "",
