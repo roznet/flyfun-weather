@@ -68,3 +68,7 @@ Structure your response as JSON with these exact fields:
   at flight time.
 - All wind speeds should be in knots, altitudes in feet, temperatures in
   Celsius.
+- The DATE header includes the day-of-week — use it for the flight date.
+  Do NOT calculate day names from dates or dates from day names yourself,
+  as LLMs frequently get this wrong. When referencing other dates (e.g.
+  from text forecasts), quote them as-is without adding a computed day name.

@@ -47,9 +47,15 @@ def build_digest_context(
     waypoints_str = " -> ".join(wp.icao for wp in snapshot.route.waypoints)
     days_label = f"D-{snapshot.days_out}" if snapshot.days_out > 0 else "D-0 (today)"
     capability = "VFR only" if flight_rules == "vfr_only" else "VFR + IFR"
+    # Include day-of-week so the LLM doesn't miscalculate from the date
+    target_dt = datetime.fromisoformat(snapshot.target_date)
+    day_name = target_dt.strftime("%A")
+    fetch_dt = datetime.fromisoformat(snapshot.fetch_date)
+    fetch_day = fetch_dt.strftime("%A")
     sections.append(
         f"ROUTE: {waypoints_str}\n"
-        f"DATE: {snapshot.target_date} ({days_label})\n"
+        f"DATE: {day_name} {snapshot.target_date} ({days_label})\n"
+        f"BRIEFING ISSUED: {fetch_day} {snapshot.fetch_date}\n"
         f"ALTITUDE: {snapshot.route.cruise_altitude_ft}ft "
         f"(~{snapshot.route.cruise_pressure_hpa}hPa)\n"
         f"PILOT CAPABILITY: {capability}"
