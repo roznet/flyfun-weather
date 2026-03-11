@@ -7,7 +7,7 @@ and regional text forecasts (NWS AFD or DWD) via an LLM briefer.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
@@ -17,6 +17,7 @@ from typing_extensions import TypedDict
 
 from weatherbrief.digest.llm_config import DigestConfig, create_llm
 from weatherbrief.digest.prompt_builder import build_digest_context
+from weatherbrief.fetch.dwd_text import DWDDayBlock
 from weatherbrief.fetch.text_forecasts import TextForecasts, fetch_text_forecasts
 from weatherbrief.models import ForecastSnapshot
 
@@ -48,6 +49,7 @@ class DigestState(TypedDict, total=False):
     route_advisories: object | None  # RouteAdvisoriesManifest
     flight_rules: str | None
     text_forecasts: TextForecasts | None
+    dwd_translated: list[tuple[DWDDayBlock, str]] | None
     context: str
     digest: WeatherDigest | None
     digest_text: str
@@ -70,6 +72,46 @@ def fetch_text_node(state: DigestState) -> dict:
         return {"text_forecasts": None}
 
 
+def translate_text_node(state: DigestState) -> dict:
+    """Extract and translate DWD day blocks for European routes."""
+    text_forecasts = state.get("text_forecasts")
+    if text_forecasts is None or text_forecasts.region.value != "europe":
+        return {"dwd_translated": None}
+
+    try:
+        from weatherbrief.digest.dwd_translate import translate_dwd_blocks
+        from weatherbrief.fetch.dwd_text import DWDTextForecasts, get_dwd_day_blocks
+
+        target_date = date.fromisoformat(state["snapshot"].target_date)
+        config = state["config"]
+
+        # Build a DWDTextForecasts from the entries already fetched
+        dwd_text = DWDTextForecasts(
+            short_range=next(
+                (e.text for e in text_forecasts.entries if "Kurzfrist" in e.label),
+                None,
+            ),
+            medium_range=next(
+                (e.text for e in text_forecasts.entries if "Mittelfrist" in e.label),
+                None,
+            ),
+            fetched_at=text_forecasts.fetched_at,
+        )
+
+        # Extract day blocks relevant to flight date
+        blocks = get_dwd_day_blocks(dwd_text, target_date)
+        if not blocks:
+            return {"dwd_translated": None}
+
+        # Translate
+        translated = translate_dwd_blocks(blocks, config)
+        return {"dwd_translated": translated}
+
+    except Exception:
+        logger.warning("DWD translation failed, falling back to raw text", exc_info=True)
+        return {"dwd_translated": None}
+
+
 def assemble_context_node(state: DigestState) -> dict:
     """Combine quantitative snapshot + text forecasts into LLM context string."""
     context = build_digest_context(
@@ -79,6 +121,7 @@ def assemble_context_node(state: DigestState) -> dict:
         previous_digest=state.get("previous_digest"),
         route_advisories=state.get("route_advisories"),
         flight_rules=state.get("flight_rules"),
+        dwd_translated=state.get("dwd_translated"),
     )
     return {"context": context}
 
@@ -118,14 +161,19 @@ def briefer_node(state: DigestState) -> dict:
 
 
 def build_digest_graph(config: DigestConfig) -> CompiledStateGraph:
-    """Build the LangGraph digest pipeline."""
+    """Build the LangGraph digest pipeline.
+
+    Flow: fetch_text -> translate_text -> assemble -> briefer -> END
+    """
     graph = StateGraph(DigestState)
     graph.add_node("fetch_text", fetch_text_node)
+    graph.add_node("translate_text", translate_text_node)
     graph.add_node("assemble", assemble_context_node)
     graph.add_node("briefer", briefer_node)
 
     graph.add_edge(START, "fetch_text")
-    graph.add_edge("fetch_text", "assemble")
+    graph.add_edge("fetch_text", "translate_text")
+    graph.add_edge("translate_text", "assemble")
     graph.add_edge("assemble", "briefer")
     graph.add_edge("briefer", END)
 

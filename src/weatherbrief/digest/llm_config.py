@@ -33,6 +33,11 @@ class DigestConfig(BaseModel):
     version: str = "1.0"
     name: str = "default"
     llm: LLMConfig = LLMConfig()
+    translator: LLMConfig = LLMConfig(
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        temperature=0.0,
+    )
     prompts: PromptsConfig = PromptsConfig()
 
     def load_prompt(self, key: str) -> str:
