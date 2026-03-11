@@ -1729,6 +1729,21 @@ def get_digest_json(
     return FileResponse(json_path, media_type="application/json")
 
 
+@router.get("/{timestamp}/dwd-overview")
+def get_dwd_overview(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get the translated DWD synoptic overview for this pack."""
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    path = pack_dir / "dwd_overview.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="DWD overview not available")
+    return FileResponse(path, media_type="application/json")
+
+
 @router.get("/{timestamp}/report.html")
 def get_report_html(
     flight_id: str,

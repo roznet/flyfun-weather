@@ -393,6 +393,12 @@ export function digestJsonUrl(flightId: string, timestamp: string): string {
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest/json`;
 }
 
+// --- DWD Overview ---
+
+export function dwdOverviewUrl(flightId: string, timestamp: string): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/dwd-overview`;
+}
+
 // --- Report ---
 
 export function reportPdfUrl(flightId: string, timestamp: string): string {

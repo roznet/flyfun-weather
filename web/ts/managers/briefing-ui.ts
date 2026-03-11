@@ -684,6 +684,80 @@ async function fetchAndRenderDigestJson(
   }
 }
 
+// --- DWD Synoptic Overview ---
+
+export function renderDWDOverview(
+  flight: FlightResponse | null,
+  pack: PackMeta | null,
+): void {
+  const wrapper = $('dwd-overview-wrapper');
+  const el = $('dwd-overview-section');
+  if (!el || !wrapper) return;
+
+  if (!flight || !pack) {
+    wrapper.style.display = 'none';
+    return;
+  }
+
+  // Try to load the DWD overview (may not exist for non-EU routes or old packs)
+  fetchAndRenderDWDOverview(flight.id, pack.fetch_timestamp, el, wrapper);
+}
+
+interface DWDOverviewEntry {
+  day_name_de: string;
+  date_iso: string | null;
+  source: string;
+  text_en: string;
+  text_de: string;
+}
+
+interface DWDOverview {
+  source: string;
+  coverage: string;
+  entries: DWDOverviewEntry[];
+}
+
+async function fetchAndRenderDWDOverview(
+  flightId: string, timestamp: string, el: HTMLElement, wrapper: HTMLElement,
+): Promise<void> {
+  try {
+    const url = api.dwdOverviewUrl(flightId, timestamp);
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      wrapper.style.display = 'none';
+      return;
+    }
+    const overview: DWDOverview = await resp.json();
+    if (!overview.entries || overview.entries.length === 0) {
+      wrapper.style.display = 'none';
+      return;
+    }
+
+    wrapper.style.display = '';
+    const entriesHtml = overview.entries.map(entry => {
+      const sourceTag = entry.source === 'kurzfrist' ? 'short-range' : 'medium-range';
+      const dateLabel = entry.date_iso || '?';
+      return `
+        <div class="dwd-entry">
+          <h5>${escapeHtml(entry.day_name_de)} (${escapeHtml(dateLabel)}) — ${sourceTag}</h5>
+          <p>${escapeHtml(entry.text_en)}</p>
+          <details class="dwd-original">
+            <summary>Original German</summary>
+            <p class="muted">${escapeHtml(entry.text_de)}</p>
+          </details>
+        </div>
+      `;
+    }).join('');
+
+    el.innerHTML = `
+      <h4>🌍 DWD Synoptic Overview — ${escapeHtml(overview.coverage)}</h4>
+      ${entriesHtml}
+    `;
+  } catch {
+    wrapper.style.display = 'none';
+  }
+}
+
 // --- GRAMET ---
 
 export function renderGramet(

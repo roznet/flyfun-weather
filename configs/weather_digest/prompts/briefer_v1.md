@@ -57,9 +57,12 @@ Structure your response as JSON with these exact fields:
   everything.
 - If the ensemble says it's clearly fine, say so. If it's clearly unflyable,
   say that too.
-- Text forecasts may be from NWS (Area Forecast Discussions, in English — synthesize
-  the synoptic and aviation sections) or DWD (German — translate and synthesize the
-  relevant meteorological information). The header indicates the source and language.
+- Text forecasts may be from NWS (Area Forecast Discussions, in English) or
+  DWD (pre-translated from German). The DWD text covers Germany/Central
+  Europe. For routes outside Germany, use DWD text only for large-scale
+  synoptic pattern context — do NOT apply German regional timing or details
+  to non-German route segments. When citing DWD information, attribute it
+  clearly as "DWD synoptic overview" to distinguish from model data.
 - On D-0 (day of flight), a METAR/TAF OBSERVATIONS section may be present.
   When available, cross-reference actual observations against model predictions.
   Flag any SIGNIFICANT or CONFLICTING discrepancies between observed and

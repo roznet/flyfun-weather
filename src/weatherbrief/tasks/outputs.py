@@ -6,6 +6,7 @@ independent result dataclass instead of mutating ``BriefingResult``.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -205,6 +206,11 @@ def run_llm_digest(
         digest_path = md_path
         logger.info("LLM digest saved: %s", md_path)
 
+        # Save translated DWD overview if available
+        dwd_translated = digest_result.get("dwd_translated")
+        if dwd_translated and pack_dir:
+            _save_dwd_overview(pack_dir, dwd_translated)
+
         return DigestResult(
             path=digest_path,
             text=digest_result["digest_text"],
@@ -217,3 +223,27 @@ def run_llm_digest(
     except Exception as exc:
         logger.warning("LLM digest generation failed: %s", exc, exc_info=True)
         return DigestResult(error=f"LLM digest: {exc}")
+
+
+def _save_dwd_overview(pack_dir: Path, translated: list) -> None:
+    """Save translated DWD overview to pack directory for frontend display."""
+    try:
+        entries = []
+        for block, english in translated:
+            entries.append({
+                "day_name_de": block.day_name_de,
+                "date_iso": block.date_iso.isoformat() if block.date_iso else None,
+                "source": block.source,
+                "text_en": english,
+                "text_de": block.text,
+            })
+        overview = {
+            "source": "DWD Synoptic Overview",
+            "coverage": "Germany / Central Europe",
+            "entries": entries,
+        }
+        path = pack_dir / "dwd_overview.json"
+        path.write_text(json.dumps(overview, ensure_ascii=False, indent=2))
+        logger.info("DWD overview saved: %s", path)
+    except Exception:
+        logger.warning("Failed to save DWD overview", exc_info=True)

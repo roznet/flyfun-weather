@@ -18,6 +18,7 @@ from weatherbrief.models import (
 
 if TYPE_CHECKING:
     from weatherbrief.digest.llm_digest import WeatherDigest
+    from weatherbrief.fetch.dwd_text import DWDDayBlock
     from weatherbrief.fetch.text_forecasts import TextForecasts
 
 # Advisory IDs excluded from digest context (meta-level, not useful for LLM)
@@ -31,6 +32,7 @@ def build_digest_context(
     previous_digest: WeatherDigest | None = None,
     route_advisories: RouteAdvisoriesManifest | None = None,
     flight_rules: str | None = None,
+    dwd_translated: list[tuple[DWDDayBlock, str]] | None = None,
 ) -> str:
     """Build the full context string for the LLM briefer.
 
@@ -38,7 +40,7 @@ def build_digest_context(
     1. Route / date / altitude metadata + pilot capability
     2. Quantitative data per waypoint (includes model divergence)
     3. Route advisories (deterministic hazard assessments)
-    4. Text forecasts (NWS AFD or DWD, region-dependent)
+    4. Text forecasts (NWS AFD or translated DWD, region-dependent)
     5. Trend from previous digest
     """
     sections: list[str] = []
@@ -173,7 +175,9 @@ def build_digest_context(
         sections.append(_format_observations_context(snapshot.route_observations))
 
     # --- Text forecasts ---
-    if text_forecasts and text_forecasts.entries:
+    if dwd_translated:
+        sections.append(_format_dwd_translated_context(dwd_translated, snapshot))
+    elif text_forecasts and text_forecasts.entries:
         header = (
             f"=== TEXT FORECASTS ({text_forecasts.source_label}, "
             f"{text_forecasts.language_note}) ==="
@@ -193,6 +197,44 @@ def build_digest_context(
         sections.append("\n".join(trend_lines))
 
     return "\n\n".join(sections)
+
+
+def _format_dwd_translated_context(
+    translated: list[tuple[DWDDayBlock, str]],
+    snapshot: ForecastSnapshot,
+) -> str:
+    """Format translated DWD text with geographic framing for LLM context."""
+    lines: list[str] = [
+        "=== TEXT FORECASTS (DWD Synoptic Overview, translated from German) ===",
+        "SOURCE: DWD (Deutscher Wetterdienst) — covers Germany and Central Europe.",
+    ]
+
+    # Simple geographic overlap check using waypoint coordinates
+    # Germany approximate bounding box: lat 47-55, lon 5.5-15.5
+    in_germany = any(
+        47.0 <= wp.lat <= 55.0 and 5.5 <= wp.lon <= 15.5
+        for wp in snapshot.route.waypoints
+        if wp.lat is not None and wp.lon is not None
+    )
+    if in_germany:
+        lines.append(
+            "NOTE: Your route partially crosses Germany — this forecast "
+            "is directly relevant for those segments."
+        )
+    else:
+        lines.append(
+            "NOTE: Your route does not cross Germany. Use this text for "
+            "large-scale synoptic pattern context only — timing and local "
+            "details may not apply to your route."
+        )
+
+    for block, english in translated:
+        date_str = block.date_iso.isoformat() if block.date_iso else "?"
+        label = f"{block.day_name_de} ({date_str})"
+        source_tag = "short-range" if block.source == "kurzfrist" else "medium-range"
+        lines.append(f"\n--- {label}, {source_tag} ---\n{english}")
+
+    return "\n".join(lines)
 
 
 def _format_divergence_context(divergences: list[ModelDivergence]) -> list[str]:
