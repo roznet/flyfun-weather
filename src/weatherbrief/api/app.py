@@ -123,7 +123,14 @@ def create_app() -> FastAPI:
     app.state.data_dir = Path(os.environ.get("DATA_DIR", "data"))
 
     # SessionMiddleware required by authlib for OAuth CSRF state
-    app.add_middleware(SessionMiddleware, secret_key=get_jwt_secret())
+    # Apple OAuth uses response_mode=form_post (cross-origin POST),
+    # so SameSite must be "none" + https_only for the cookie to survive.
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=get_jwt_secret(),
+        same_site="none",
+        https_only=not is_dev_mode(),
+    )
 
     if is_dev_mode():
         app.add_middleware(
