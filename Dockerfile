@@ -18,16 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libcairo2 \
     libeccodes-dev \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user (UID 2000 to match infra convention)
 RUN groupadd -g 2000 app && useradd -u 2000 -g app -m app
 
 WORKDIR /app
-
-# Install flyfun-common from GitHub (must come before app deps)
-RUN pip install --no-cache-dir "flyfun-common @ git+https://github.com/roznet/flyfun-common.git@main"
 
 # Install app dependencies (copy pyproject first for layer caching)
 COPY pyproject.toml .
