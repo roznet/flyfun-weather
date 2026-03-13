@@ -33,6 +33,7 @@ export interface PreferencesResponse {
   icing_method: string;
   cloud_method: string;
   convective_method: string;
+  locale: string;
 }
 
 export interface PreferencesUpdate {
@@ -44,6 +45,7 @@ export interface PreferencesUpdate {
   gramet_enabled?: boolean;
   llm_digest_enabled?: boolean;
   icing_severity_enhance?: boolean;
+  locale?: string;
 }
 
 export async function fetchPreferences(): Promise<PreferencesResponse> {
