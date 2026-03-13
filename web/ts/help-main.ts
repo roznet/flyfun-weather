@@ -8,6 +8,9 @@ import { initI18n, t } from './i18n/i18n';
 async function init(): Promise<void> {
   await initI18n();
   initTheme();
+  // Translate the page title
+  const h1 = document.querySelector('h1');
+  if (h1) h1.textContent = t('nav.help');
   const user = await fetchCurrentUser();
   if (user) {
     renderUserInfo(user, 'help');

@@ -1,6 +1,7 @@
 /** Registry of all available cross-section layers. */
 
 import type { CrossSectionLayer, LayerGroup } from '../types';
+import { t } from '../../i18n/i18n';
 import { freezingLevelLayer, minus10cLayer, minus20cLayer } from './layers/temperature-lines';
 import { cruiseAltitudeLayer } from './layers/reference-lines';
 import { cloudBandsLayer } from './layers/cloud-bands';
@@ -102,14 +103,14 @@ export function getLayerGroups(): LayerGroupInfo[] {
   }
 
   const groupLabels: Record<LayerGroup, string> = {
-    terrain: 'Terrain',
-    temperature: 'Temperature',
-    clouds: 'Clouds',
-    icing: 'Icing',
-    stability: 'Stability',
-    turbulence: 'Turbulence',
-    convection: 'Convection',
-    reference: 'Reference',
+    terrain: t('viz.group.terrain'),
+    temperature: t('viz.group.temperature'),
+    clouds: t('viz.group.clouds'),
+    icing: t('viz.group.icing'),
+    stability: t('viz.group.stability'),
+    turbulence: t('viz.group.turbulence'),
+    convection: t('viz.group.convection'),
+    reference: t('viz.group.reference'),
   };
 
   const order: LayerGroup[] = ['terrain', 'reference', 'temperature', 'clouds', 'icing', 'stability', 'turbulence', 'convection'];
