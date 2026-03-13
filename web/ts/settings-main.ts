@@ -26,7 +26,7 @@ import {
   type ProfileSettings,
 } from './adapters/profiles-adapter';
 import { initTheme } from './theme';
-import { initI18n, t, setLocale, getLocale } from './i18n/i18n';
+import { initI18n, t, setLocale, getLocale, getDateLocale } from './i18n/i18n';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
 
@@ -683,7 +683,7 @@ function renderCredits(credits: CreditSummary): void {
     const rows = credits.recent_transactions.slice(0, 10).map(tx => {
       const sign = tx.amount >= 0 ? '+' : '';
       const cls = tx.amount >= 0 ? 'credit-positive' : 'credit-negative';
-      const ts = new Date(tx.timestamp).toLocaleDateString('en-GB', {
+      const ts = new Date(tx.timestamp).toLocaleDateString(getDateLocale(), {
         day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
       });
       return `<tr>
@@ -712,10 +712,10 @@ function renderUsage(usage: UsageSummary): void {
   const todayGrid = document.getElementById('usage-today-grid');
   if (todayGrid) {
     todayGrid.innerHTML = [
-      renderUsageBar('Briefings', usage.today.briefings, null),
-      renderUsageBar('Open-Meteo', usage.today.open_meteo.used, usage.today.open_meteo.limit),
-      renderUsageBar('GRAMET', usage.today.gramet.used, usage.today.gramet.limit),
-      renderUsageBar('AI Digest', usage.today.llm_digest.used, usage.today.llm_digest.limit),
+      renderUsageBar(t('usage.briefings'), usage.today.briefings, null),
+      renderUsageBar(t('usage.openMeteo'), usage.today.open_meteo.used, usage.today.open_meteo.limit),
+      renderUsageBar(t('usage.gramet'), usage.today.gramet.used, usage.today.gramet.limit),
+      renderUsageBar(t('usage.aiDigest'), usage.today.llm_digest.used, usage.today.llm_digest.limit),
     ].join('');
   }
 
@@ -725,9 +725,12 @@ function renderUsage(usage: UsageSummary): void {
     const tokens = usage.month.total_tokens >= KILO
       ? `~${Math.round(usage.month.total_tokens / KILO)}K tokens`
       : `${usage.month.total_tokens} tokens`;
-    monthSummary.textContent =
-      `${usage.month.briefings} briefings / ${usage.month.gramet} GRAMET / ` +
-      `${usage.month.llm_digest} AI digests / ${tokens}`;
+    monthSummary.textContent = t('usage.monthSummary', {
+      briefings: String(usage.month.briefings),
+      gramet: String(usage.month.gramet),
+      digests: String(usage.month.llm_digest),
+      tokens,
+    });
   }
 }
 

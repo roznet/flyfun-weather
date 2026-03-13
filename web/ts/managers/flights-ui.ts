@@ -3,7 +3,7 @@
 import type { FlightResponse, PackMeta } from '../store/types';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRoute } from '../utils';
-import { t } from '../i18n/i18n';
+import { t, getDateLocale } from '../i18n/i18n';
 
 /** Assessment badge color class. */
 function assessmentClass(assessment: string | null): string {
@@ -41,7 +41,7 @@ function renderFlightCard(
   }
 
   const packInfo = pack
-    ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
+    ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
        <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
     : `<span class="pack-info">${t('flights.noBriefings')}</span>`;
 

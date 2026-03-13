@@ -48,9 +48,11 @@ def _check_airport_vfr(
     parts: list[str] = []
     worst = AdvisoryStatus.GREEN
 
-    for label, icao, cond in [("Dep", dep.icao, dep_cond), ("Arr", arr.icao, arr_cond)]:
+    loc = ctx.locale
+    for label_key, icao, cond in [("airport.dep", dep.icao, dep_cond), ("airport.arr", arr.icao, arr_cond)]:
         if cond is None:
             continue
+        label = adv_t(label_key, loc)
         cat = cond.flight_category
         if cat in (FlightCategory.IFR, FlightCategory.LIFR):
             worst = _worst_status(worst, AdvisoryStatus.RED)

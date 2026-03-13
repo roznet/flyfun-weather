@@ -100,6 +100,18 @@ async function loadMessages(locale: Locale): Promise<void> {
   }
 }
 
+/** Get a locale string suitable for Intl.DateTimeFormat / toLocaleDateString.
+ *  Maps our short locale codes to region-specific variants for better formatting. */
+export function getDateLocale(): string {
+  const map: Record<string, string> = {
+    en: 'en-GB',  // day-first format
+    fr: 'fr-FR',
+    de: 'de-DE',
+    es: 'es-ES',
+  };
+  return map[currentLocale] ?? currentLocale;
+}
+
 /** Get the Accept-Language header value for API requests. */
 export function getAcceptLanguage(): string {
   if (currentLocale === 'en') return 'en';

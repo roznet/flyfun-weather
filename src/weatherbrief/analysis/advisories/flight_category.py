@@ -136,9 +136,9 @@ class FlightCategoryEvaluator:
 
             parts = []
             worst = AdvisoryStatus.GREEN
-            for label, icao, cond in [
-                ("Dep", dep.icao, dep_cond),
-                ("Arr", arr.icao, arr_cond),
+            for label_key, icao, cond in [
+                ("airport.dep", dep.icao, dep_cond),
+                ("airport.arr", arr.icao, arr_cond),
             ]:
                 if cond is None:
                     continue
@@ -147,6 +147,7 @@ class FlightCategoryEvaluator:
                     red_ceiling_ft, red_vis_sm,
                 )
                 cat_label = cond.flight_category.value.upper()
+                label = adv_t(label_key, loc)
                 parts.append(f"{label} {icao}: {cat_label}")
                 worst = AdvisoryStatus.worst([worst, status])
 

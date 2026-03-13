@@ -4,6 +4,7 @@ import type { FlightResponse, PackMeta } from '../store/types';
 import type { WaypointInfo } from '../adapters/api-adapter';
 import type { ProfileResponse } from '../adapters/profiles-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRoute } from '../utils';
+import { getDateLocale } from '../i18n/i18n';
 import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
 
 // --- Assessment badge ---
@@ -319,10 +320,10 @@ export function renderBriefingHistory(
 
   container.innerHTML = packs.map((pack) => {
     const ts = new Date(pack.fetch_timestamp);
-    const dateStr = ts.toLocaleDateString('en-GB', {
+    const dateStr = ts.toLocaleDateString(getDateLocale(), {
       day: 'numeric', month: 'short', timeZone: 'UTC',
     });
-    const timeStr = ts.toLocaleTimeString('en-GB', {
+    const timeStr = ts.toLocaleTimeString(getDateLocale(), {
       hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
     });
     const briefingUrl = `/briefing.html?flight=${encodeURIComponent(flightId)}&pack=${encodeURIComponent(pack.fetch_timestamp)}`;
