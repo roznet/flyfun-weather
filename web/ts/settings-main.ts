@@ -26,7 +26,7 @@ import {
   type ProfileSettings,
 } from './adapters/profiles-adapter';
 import { initTheme } from './theme';
-import { initI18n, t } from './i18n/i18n';
+import { initI18n, t, setLocale, getLocale } from './i18n/i18n';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
 
@@ -368,6 +368,12 @@ function switchTab(tabId: string): void {
 
 function populateAccountForm(prefs: PreferencesResponse): void {
   updateAutorouterStatus(prefs.has_autorouter_creds);
+
+  // Locale picker — reflect server-stored preference
+  const localeSelect = document.getElementById('input-locale') as HTMLSelectElement;
+  if (localeSelect) {
+    localeSelect.value = prefs.locale || getLocale();
+  }
 }
 
 // --- Advisory settings rendering ---
@@ -584,9 +590,10 @@ async function handleSave(): Promise<void> {
     advisories,
   };
 
-  // Save autorouter creds (account-level)
+  // Account-level settings
   const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement).value.trim();
   const arPassword = (document.getElementById('input-ar-password') as HTMLInputElement).value.trim();
+  const selectedLocale = (document.getElementById('input-locale') as HTMLSelectElement)?.value || 'en';
 
   try {
     // Save profile settings
@@ -596,16 +603,25 @@ async function handleSave(): Promise<void> {
       if (idx >= 0) profiles[idx] = updated;
     }
 
-    // Save account-level preferences (autorouter creds only)
-    if (arUsername || arPassword) {
-      const result = await savePreferences({
-        autorouter_username: arUsername || undefined,
-        autorouter_password: arPassword || undefined,
-      });
-      updateAutorouterStatus(result.has_autorouter_creds);
-      if (arPassword) {
-        (document.getElementById('input-ar-password') as HTMLInputElement).value = '';
-      }
+    // Save account-level preferences (locale + autorouter creds)
+    const accountUpdate: import('./adapters/preferences-adapter').PreferencesUpdate = {
+      locale: selectedLocale,
+    };
+    if (arUsername) accountUpdate.autorouter_username = arUsername;
+    if (arPassword) accountUpdate.autorouter_password = arPassword;
+
+    const result = await savePreferences(accountUpdate);
+    updateAutorouterStatus(result.has_autorouter_creds);
+    if (arPassword) {
+      (document.getElementById('input-ar-password') as HTMLInputElement).value = '';
+    }
+
+    // Apply locale change to UI (triggers reload of translation strings)
+    if (selectedLocale !== getLocale()) {
+      await setLocale(selectedLocale as any);
+      // Reload page to apply translations to all static HTML
+      window.location.reload();
+      return;
     }
 
     showStatus(t('settings.saved'));
