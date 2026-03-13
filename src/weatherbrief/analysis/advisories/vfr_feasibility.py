@@ -9,6 +9,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -190,10 +191,11 @@ class VFRFeasibilityEvaluator:
                 ctx, model, cloud_clearance_ft
             )
 
+            loc = ctx.locale
             if total == 0 and airport_status == AdvisoryStatus.GREEN and not airport_detail:
                 per_model.append(ModelAdvisoryResult.build(
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail="No data", affected=0, total=0,
+                    detail=adv_t("no_data", loc), affected=0, total=0,
                     total_distance_nm=ctx.total_distance_nm,
                 ))
                 continue
@@ -211,20 +213,17 @@ class VFRFeasibilityEvaluator:
 
                 if imc_pct >= imc_pct_red:
                     enroute_status = AdvisoryStatus.RED
-                    enroute_detail = f"IMC over {ext}"
+                    enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
                 elif affected_pct >= imc_pct_amber:
                     enroute_status = AdvisoryStatus.AMBER
                     if marginal_count > 0 and imc_count > 0:
-                        enroute_detail = f"IMC/marginal clearance over {ext}"
+                        enroute_detail = adv_t("vfr.imc_marginal", loc, extent=ext)
                     elif imc_count > 0:
-                        enroute_detail = f"IMC over {ext}"
+                        enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
                     else:
-                        enroute_detail = f"Marginal cloud clearance over {ext}"
+                        enroute_detail = adv_t("vfr.marginal", loc, extent=ext)
                 elif affected > 0:
-                    enroute_detail = (
-                        f"Minor clearance issues over "
-                        f"{format_extent(affected, total, ctx.total_distance_nm)}"
-                    )
+                    enroute_detail = adv_t("vfr.minor", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
 
             # 4. Combine airport + en-route
             status = _worst_status(airport_status, enroute_status)
@@ -237,9 +236,9 @@ class VFRFeasibilityEvaluator:
 
             if not detail_parts:
                 if total > 0:
-                    detail = "VFR conditions throughout"
+                    detail = adv_t("vfr.throughout", loc)
                 else:
-                    detail = "Airports VFR, no en-route data"
+                    detail = adv_t("vfr.airports_ok", loc)
             else:
                 detail = " | ".join(detail_parts)
 

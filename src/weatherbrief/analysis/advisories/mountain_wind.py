@@ -9,6 +9,7 @@ from weatherbrief.analysis.advisories._helpers import (
     wind_at_altitude,
 )
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -117,20 +118,21 @@ class MountainWindEvaluator:
                 if speed_kt >= wind_red or speed_kt >= wind_amber:
                     affected += 1
 
+            loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.GREEN
-                detail = "No significant terrain along route"
+                detail = adv_t("mountain_wind.no_terrain", loc)
             elif max_wind >= wind_red:
                 status = AdvisoryStatus.RED
                 ext = format_extent(affected, total, ctx.total_distance_nm)
-                detail = f"Severe mountain wind ({max_wind:.0f}kt near terrain) over {ext}"
+                detail = adv_t("mountain_wind.severe", loc, speed=f"{max_wind:.0f}", extent=ext)
             elif max_wind >= wind_amber:
                 status = AdvisoryStatus.AMBER
                 ext = format_extent(affected, total, ctx.total_distance_nm)
-                detail = f"Mountain wave risk ({max_wind:.0f}kt near terrain) over {ext}"
+                detail = adv_t("mountain_wind.wave_risk", loc, speed=f"{max_wind:.0f}", extent=ext)
             else:
                 status = AdvisoryStatus.GREEN
-                detail = f"Light winds near terrain ({max_wind:.0f}kt)"
+                detail = adv_t("mountain_wind.light", loc, speed=f"{max_wind:.0f}")
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,

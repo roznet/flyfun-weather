@@ -6,6 +6,7 @@ import math
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -17,11 +18,11 @@ from weatherbrief.models import (
 from weatherbrief.models.airport_conditions import AirportModelCondition
 
 
-def _format_wind_detail(cond: AirportModelCondition, rwy_id: str) -> str:
+def _format_wind_detail(cond: AirportModelCondition, rwy_id: str, locale: str | None = None) -> str:
     """Format wind like: 230@11G25 RW24 ↓11 →5."""
     wind_text = format_wind_string(cond.wind_direction_deg, cond.wind_speed_kt, cond.wind_gust_kt)
     if not wind_text:
-        return "calm"
+        return adv_t("airport_wind.calm", locale)
 
     if cond.best_runway is None:
         return wind_text
@@ -131,10 +132,11 @@ class AirportWindEvaluator:
             dep_cond = dep.condition_for_model(model)
             arr_cond = arr.condition_for_model(model)
 
+            loc = ctx.locale
             if dep_cond is None and arr_cond is None:
                 per_model.append(ModelAdvisoryResult.build(
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail="No data", affected=0, total=0,
+                    detail=adv_t("no_data", loc), affected=0, total=0,
                     total_distance_nm=ctx.total_distance_nm,
                 ))
                 continue
@@ -152,7 +154,7 @@ class AirportWindEvaluator:
                 s = _wind_status(xwind, cond.wind_gust_kt, xwind_green, xwind_red, gust_green, gust_red)
                 statuses.append(s)
 
-                wind_str = _format_wind_detail(cond, rwy_id)
+                wind_str = _format_wind_detail(cond, rwy_id, loc)
                 parts.append(f"{label} {icao}: {wind_str}")
 
             status = AdvisoryStatus.worst(statuses) if statuses else AdvisoryStatus.UNAVAILABLE

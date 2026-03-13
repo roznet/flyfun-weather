@@ -192,6 +192,7 @@ def run_advisories(
     icing_method: str | None = None,
     cloud_method: str | None = None,
     convective_method: str | None = None,
+    locale: str | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
 
@@ -224,6 +225,7 @@ def run_advisories(
             flight_ceiling_ft=route.flight_ceiling_ft,
             total_distance_nm=total_distance_nm,
             airport_conditions=airport_conds,
+            locale=locale,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -267,6 +269,7 @@ def run_advisories_from_pack(
     icing_method: str | None = None,
     cloud_method: str | None = None,
     convective_method: str | None = None,
+    locale: str | None = None,
 ) -> AdvisoryResult:
     """Re-evaluate advisories from persisted pack_dir artifacts.
 
@@ -331,6 +334,7 @@ def run_advisories_from_pack(
             flight_ceiling_ft=effective_ceiling,
             total_distance_nm=manifest.total_distance_nm,
             airport_conditions=airport_conds,
+            locale=locale,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -370,6 +374,7 @@ def run_altitude_table_from_pack(
     icing_method: str | None = None,
     cloud_method: str | None = None,
     convective_method: str | None = None,
+    locale: str | None = None,
 ) -> AltitudeTableResult:
     """Compute altitude advisory table from persisted pack artifacts.
 
@@ -414,6 +419,7 @@ def run_altitude_table_from_pack(
         enabled_ids=enabled_ids,
         user_params=user_params,
         aggregation=effective_aggregation,
+        locale=locale,
     )
 
 
@@ -464,6 +470,7 @@ def run_alt_from_pack(
     icing_method: str | None = None,
     cloud_method: str | None = None,
     convective_method: str | None = None,
+    locale: str | None = None,
 ) -> AdvisoryResult:
     """Re-run analysis + advisories at an alt departure time using existing pack data.
 
@@ -531,6 +538,7 @@ def run_alt_from_pack(
             flight_ceiling_ft=route.flight_ceiling_ft,
             total_distance_nm=total_distance,
             airport_conditions=airport_conds,
+            locale=locale,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)

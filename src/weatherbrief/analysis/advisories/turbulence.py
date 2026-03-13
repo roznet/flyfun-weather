@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -98,19 +99,20 @@ class TurbulenceEvaluator:
                     affected += 1
 
             ext = format_extent(affected, total, ctx.total_distance_nm)
+            loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
-                detail = "No data"
+                detail = adv_t("no_data", loc)
             elif has_severe:
                 status = AdvisoryStatus.RED
-                detail = f"Severe CAT over {ext}"
+                detail = adv_t("turbulence.severe_over", loc, extent=ext)
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
-                detail = "Smooth ride expected"
+                detail = adv_t("turbulence.smooth", loc)
             else:
                 status = pct_above_threshold(affected, total, route_pct_amber, red_pct=50)
                 risk_label = worst_cat.value.upper() if worst_cat != CATRiskLevel.NONE else "Turbulence"
-                detail = f"{risk_label} over {ext}"
+                detail = adv_t("turbulence.risk_over", loc, risk=risk_label, extent=ext)
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,

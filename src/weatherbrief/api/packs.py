@@ -1290,7 +1290,7 @@ def compute_alt_advisories(
     route = _build_route_config(flight, db_path)
 
     # Load advisory profile
-    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds = \
+    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     advisory_result = run_alt_from_pack(
@@ -1305,6 +1305,7 @@ def compute_alt_advisories(
         icing_method=icing_method,
         cloud_method=cloud_method,
         convective_method=convective_method,
+        locale=locale,
     )
 
     if advisory_result.manifest is None:
@@ -1406,8 +1407,9 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
 
     Shared by recalculate_advisories and altitude_table endpoints.
     Returns (enabled_ids, user_params, aggregation, adv_models, icing_method,
-    cloud_method, convective_method, recompute_conds_callback).
+    cloud_method, convective_method, recompute_conds_callback, locale).
     """
+    from weatherbrief.api.preferences import load_user_locale
     from weatherbrief.api.profiles import load_profile_settings
     from weatherbrief.models import AdvisoryAggregation
 
@@ -1425,6 +1427,7 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
     cloud_method = profile_settings.get("cloud_method")
     convective_method = profile_settings.get("convective_method")
     db_path = getattr(request.app.state, "db_path", "")
+    locale = load_user_locale(db, user_id)
 
     def recompute_conds(rp_analyses, cross_sections, advisory_model_names):
         from types import SimpleNamespace
@@ -1435,7 +1438,7 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
             db_path=db_path, models=advisory_model_names,
         )
 
-    return enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds
+    return enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale
 
 
 @router.post("/{timestamp}/advisories/recalculate")
@@ -1462,7 +1465,7 @@ def recalculate_advisories(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available for recalculation")
 
-    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds = \
+    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     advisory_result = run_advisories_from_pack(
@@ -1477,6 +1480,7 @@ def recalculate_advisories(
         icing_method=icing_method,
         cloud_method=cloud_method,
         convective_method=convective_method,
+        locale=locale,
     )
 
     if advisory_result.manifest is None:
@@ -1507,7 +1511,7 @@ def altitude_table(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
 
-    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds = \
+    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     result = run_altitude_table_from_pack(
@@ -1523,6 +1527,7 @@ def altitude_table(
         icing_method=icing_method,
         cloud_method=cloud_method,
         convective_method=convective_method,
+        locale=locale,
     )
 
     return result.model_dump()

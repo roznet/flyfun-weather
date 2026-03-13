@@ -9,6 +9,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, min_icing_clearance
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -57,6 +58,7 @@ def _check_airport_ifr(
     dep_cond = dep.condition_for_model(model)
     arr_cond = arr.condition_for_model(model)
 
+    loc = ctx.locale
     parts: list[str] = []
     worst = AdvisoryStatus.GREEN
 
@@ -73,13 +75,14 @@ def _check_airport_ifr(
             # Check against minimum ceiling
             if cond.ceiling_ft is not None and cond.ceiling_ft < min_ceil:
                 worst = _worst_status(worst, AdvisoryStatus.RED)
-                parts.append(
-                    f"{label} {icao} LIFR ceiling {cond.ceiling_ft}ft "
-                    f"< {int(min_ceil)}ft min"
-                )
+                parts.append(adv_t(
+                    "ifr.lifr_below_min", loc,
+                    label=label, icao=icao,
+                    ceiling=cond.ceiling_ft, min=int(min_ceil),
+                ))
             else:
                 worst = _worst_status(worst, AdvisoryStatus.AMBER)
-                parts.append(f"{label} {icao} LIFR")
+                parts.append(adv_t("ifr.lifr", loc, label=label, icao=icao))
 
     detail = " | ".join(parts) if parts else ""
     return worst, detail
@@ -277,6 +280,7 @@ class IFRFeasibilityEvaluator:
                 )
             )
 
+            loc = ctx.locale
             if (
                 total == 0
                 and airport_status == AdvisoryStatus.GREEN
@@ -284,7 +288,7 @@ class IFRFeasibilityEvaluator:
             ):
                 per_model.append(ModelAdvisoryResult.build(
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail="No data", affected=0, total=0,
+                    detail=adv_t("no_data", loc), affected=0, total=0,
                     total_distance_nm=ctx.total_distance_nm,
                 ))
                 continue
@@ -299,9 +303,9 @@ class IFRFeasibilityEvaluator:
                 elif icing_pct >= icing_pct_amber:
                     icing_status = AdvisoryStatus.AMBER
                 if icing_status != AdvisoryStatus.GREEN:
-                    icing_detail = (
-                        f"Icing over "
-                        f"{format_extent(icing_count, total, ctx.total_distance_nm)}"
+                    icing_detail = adv_t(
+                        "ifr.icing_over", loc,
+                        extent=format_extent(icing_count, total, ctx.total_distance_nm),
                     )
 
             # 4. Determine convective status
@@ -316,9 +320,10 @@ class IFRFeasibilityEvaluator:
                     conv_status = AdvisoryStatus.RED
                 else:
                     conv_status = AdvisoryStatus.AMBER
-                conv_detail = (
-                    f"{worst_conv_risk.value.upper()} convective over "
-                    f"{format_extent(conv_count, total, ctx.total_distance_nm)}"
+                conv_detail = adv_t(
+                    "ifr.conv_over", loc,
+                    risk=worst_conv_risk.value.upper(),
+                    extent=format_extent(conv_count, total, ctx.total_distance_nm),
                 )
 
             # 5. Combine all factors
@@ -333,7 +338,7 @@ class IFRFeasibilityEvaluator:
                 detail_parts.append(conv_detail)
 
             if not detail_parts:
-                detail = "IFR conditions acceptable throughout"
+                detail = adv_t("ifr.acceptable", loc)
             else:
                 detail = " | ".join(detail_parts)
 

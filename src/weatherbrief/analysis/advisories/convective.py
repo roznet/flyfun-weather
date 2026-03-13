@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -112,18 +113,19 @@ class ConvectiveEvaluator:
                     has_high = True
 
             ext = format_extent(affected, total, ctx.total_distance_nm)
+            loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
-                detail = "No data"
+                detail = adv_t("no_data", loc)
             elif has_high:
                 status = AdvisoryStatus.RED
-                detail = f"{worst_risk.value.upper()} convective risk over {ext}"
+                detail = adv_t("convective.risk_over", loc, risk=worst_risk.value.upper(), extent=ext)
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
-                detail = "No significant convective activity"
+                detail = adv_t("convective.none", loc)
             else:
                 status = pct_above_threshold(affected, total, affected_pct_amber, affected_pct_red)
-                detail = f"{worst_risk.value.upper()} convective risk over {ext}"
+                detail = adv_t("convective.risk_over", loc, risk=worst_risk.value.upper(), extent=ext)
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,

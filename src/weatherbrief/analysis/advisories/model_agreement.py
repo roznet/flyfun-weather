@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AgreementLevel,
     AdvisoryCatalogEntry,
@@ -93,18 +94,19 @@ class ModelAgreementEvaluator:
             elif has_moderate:
                 moderate_count += 1
 
+        loc = ctx.locale
         if total == 0:
             status = AdvisoryStatus.UNAVAILABLE
-            detail = "No model comparison data"
+            detail = adv_t("model_agreement.no_data", loc)
         elif poor_count == 0 and moderate_count == 0:
             status = AdvisoryStatus.GREEN
-            detail = "Good agreement across all models"
+            detail = adv_t("model_agreement.good", loc)
         else:
             status = pct_above_threshold(poor_count, total, poor_pct_amber, poor_pct_red)
             if status == AdvisoryStatus.GREEN and moderate_count > 0:
-                detail = f"Mostly good agreement, moderate divergence over {format_extent(moderate_count, total, ctx.total_distance_nm)}"
+                detail = adv_t("model_agreement.mostly_good", loc, extent=format_extent(moderate_count, total, ctx.total_distance_nm))
             else:
-                detail = f"Poor model agreement over {format_extent(poor_count, total, ctx.total_distance_nm)}"
+                detail = adv_t("model_agreement.poor", loc, extent=format_extent(poor_count, total, ctx.total_distance_nm))
 
         per_model = [ModelAdvisoryResult.build(
             model="all", status=status, detail=detail,

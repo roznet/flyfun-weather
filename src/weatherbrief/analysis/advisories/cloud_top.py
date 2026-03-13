@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -89,19 +90,20 @@ class CloudTopEvaluator:
                 if highest_top + margin_ft > ceiling:
                     above_ceiling += 1
 
+            loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
-                detail = "No data"
+                detail = adv_t("no_data", loc)
             elif above_ceiling == 0:
                 status = AdvisoryStatus.GREEN
                 if max_top is not None:
-                    detail = f"Cloud tops reachable (max {max_top:.0f}ft, ceiling {ceiling}ft)"
+                    detail = adv_t("cloud_top.reachable", loc, top=f"{max_top:.0f}", ceiling=ceiling)
                 else:
-                    detail = "No significant cloud layers"
+                    detail = adv_t("cloud_top.no_layers", loc)
             else:
                 status = pct_above_threshold(above_ceiling, total, pct_amber, red_pct=60)
                 ext = format_extent(above_ceiling, total, ctx.total_distance_nm)
-                detail = f"Cloud tops above ceiling over {ext} (max {max_top:.0f}ft)"
+                detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,

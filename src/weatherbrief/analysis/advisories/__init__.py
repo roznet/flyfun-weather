@@ -37,6 +37,7 @@ class RouteContext:
     flight_ceiling_ft: int
     total_distance_nm: float
     airport_conditions: AirportConditions | None = None
+    locale: str | None = None
 
 
 @runtime_checkable

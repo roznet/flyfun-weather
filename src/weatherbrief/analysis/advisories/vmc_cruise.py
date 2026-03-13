@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -93,24 +94,25 @@ class VMCCruiseEvaluator:
                     bkn_count += 1
 
             affected = bkn_count + ovc_count
+            loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
-                detail = "No data"
+                detail = adv_t("no_data", loc)
             else:
                 ovc_pct = 100 * ovc_count / total
 
                 if ovc_pct >= ovc_pct_red:
                     status = AdvisoryStatus.RED
-                    detail = f"OVC at cruise over {format_extent(ovc_count, total, ctx.total_distance_nm)}"
+                    detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_count, total, ctx.total_distance_nm))
                 elif 100 * affected / total >= bkn_pct_amber:
                     status = AdvisoryStatus.AMBER
-                    detail = f"IMC at cruise over {format_extent(affected, total, ctx.total_distance_nm)}"
+                    detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
                 elif affected > 0:
                     status = AdvisoryStatus.GREEN
-                    detail = f"Mostly clear at cruise, IMC over {format_extent(affected, total, ctx.total_distance_nm)}"
+                    detail = adv_t("vmc_cruise.mostly_clear", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
                 else:
                     status = AdvisoryStatus.GREEN
-                    detail = "Clear at cruise altitude"
+                    detail = adv_t("vmc_cruise.clear", loc)
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,

@@ -9,6 +9,7 @@ from weatherbrief.analysis.advisories._helpers import (
     pct_above_threshold,
 )
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -112,31 +113,32 @@ class FreezingLevelEvaluator:
                     below_tight += 1
 
             affected = below_margin + below_tight
+            loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
-                detail = "No data"
+                detail = adv_t("no_data", loc)
             elif below_margin > 0 and pct_above_threshold(
                 below_margin, total, min_route_pct
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
                 ext = format_extent(below_margin, total, ctx.total_distance_nm)
-                detail = f"Freezing level below terrain + {margin_ft:.0f}ft over {ext}"
+                detail = adv_t("freezing_level.below_margin", loc, margin=f"{margin_ft:.0f}", extent=ext)
                 if min_clearance is not None:
-                    detail += f" (min clearance {min_clearance:.0f}ft)"
+                    detail += adv_t("freezing_level.min_clearance", loc, clearance=f"{min_clearance:.0f}")
             elif affected > 0 and pct_above_threshold(
                 affected, total, min_route_pct
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.AMBER
                 ext = format_extent(affected, total, ctx.total_distance_nm)
-                detail = f"Tight freezing level margin over {ext}"
+                detail = adv_t("freezing_level.tight_margin", loc, extent=ext)
                 if min_clearance is not None:
-                    detail += f" (min clearance {min_clearance:.0f}ft)"
+                    detail += adv_t("freezing_level.min_clearance", loc, clearance=f"{min_clearance:.0f}")
             else:
                 status = AdvisoryStatus.GREEN
                 if min_clearance is not None:
-                    detail = f"Freezing level well above terrain (min clearance {min_clearance:.0f}ft)"
+                    detail = adv_t("freezing_level.well_above", loc, clearance=f"{min_clearance:.0f}")
                 else:
-                    detail = "Freezing level above terrain"
+                    detail = adv_t("freezing_level.above_terrain", loc)
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,

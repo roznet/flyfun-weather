@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -124,10 +125,11 @@ class FlightCategoryEvaluator:
             dep_cond = dep.condition_for_model(model)
             arr_cond = arr.condition_for_model(model)
 
+            loc = ctx.locale
             if dep_cond is None and arr_cond is None:
                 per_model.append(ModelAdvisoryResult.build(
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail="No data", affected=0, total=0,
+                    detail=adv_t("no_data", loc), affected=0, total=0,
                     total_distance_nm=ctx.total_distance_nm,
                 ))
                 continue

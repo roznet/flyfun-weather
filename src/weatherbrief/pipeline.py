@@ -263,6 +263,7 @@ def execute_briefing(
             icing_method=options.icing_method,
             cloud_method=options.cloud_method,
             convective_method=options.convective_method,
+            locale=options.locale,
         )
         route_advisories_manifest = advisory_result.manifest
 
@@ -289,6 +290,7 @@ def execute_briefing(
                 icing_method=options.icing_method,
                 cloud_method=options.cloud_method,
                 convective_method=options.convective_method,
+                locale=options.locale,
             )
         except Exception:
             logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)

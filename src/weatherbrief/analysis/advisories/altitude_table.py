@@ -35,6 +35,7 @@ def compute_altitude_table(
     enabled_ids: set[str] | None = None,
     user_params: dict[str, dict[str, float]] | None = None,
     aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
+    locale: str | None = None,
 ) -> AltitudeTableResult:
     """Sweep altitude-dependent advisories across a range of altitudes.
 
@@ -102,6 +103,7 @@ def compute_altitude_table(
             flight_ceiling_ft=flight_ceiling_ft,
             total_distance_nm=total_distance_nm,
             airport_conditions=airport_conditions,
+            locale=locale,
         )
         results = evaluate_all(ctx, enabled_ids=alt_dep_ids, user_params=user_params, aggregation=aggregation)
 
