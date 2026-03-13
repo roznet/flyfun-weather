@@ -11,6 +11,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import min_icing_clearance
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -226,12 +227,13 @@ class FIKIIcingEvaluator:
                 100.0 * cruise_clear / cruise_total if cruise_total > 0 else 100.0
             )
 
+            loc = ctx.locale
             if total == 0:
                 per_model.append(
                     ModelAdvisoryResult.build(
                         model=model,
                         status=AdvisoryStatus.UNAVAILABLE,
-                        detail="No data",
+                        detail=adv_t("no_data", loc),
                         affected=0,
                         total=0,
                         total_distance_nm=total_dist,
@@ -248,7 +250,7 @@ class FIKIIcingEvaluator:
                 where = " & ".join(
                     [x for x in ["dep" if dep_sld else "", "arr" if arr_sld else ""] if x]
                 )
-                detail_parts.append(f"SLD risk ({where})")
+                detail_parts.append(adv_t("fiki.sld_risk", loc, where=where))
 
             # Severe icing in transit
             if severe_is_red and (
@@ -265,7 +267,7 @@ class FIKIIcingEvaluator:
                         if x
                     ]
                 )
-                detail_parts.append(f"severe icing ({where})")
+                detail_parts.append(adv_t("fiki.severe_icing", loc, where=where))
 
             # Transit thickness (worst of departure / arrival)
             worst_transit = max(dep_max_thickness, arr_max_thickness)
@@ -278,11 +280,11 @@ class FIKIIcingEvaluator:
 
             transit_parts = []
             if dep_max_thickness > 0:
-                transit_parts.append(f"dep {dep_max_thickness:.0f}ft")
+                transit_parts.append(adv_t("fiki.dep_transit", loc, thickness=f"{dep_max_thickness:.0f}"))
             if arr_max_thickness > 0:
-                transit_parts.append(f"arr {arr_max_thickness:.0f}ft")
+                transit_parts.append(adv_t("fiki.arr_transit", loc, thickness=f"{arr_max_thickness:.0f}"))
             if transit_parts:
-                detail_parts.append(f"transit: {', '.join(transit_parts)}")
+                detail_parts.append(adv_t("fiki.transit", loc, parts=", ".join(transit_parts)))
 
             # Clear cruise
             if clear_pct < clear_red:
@@ -291,7 +293,7 @@ class FIKIIcingEvaluator:
                 statuses.append(AdvisoryStatus.AMBER)
             else:
                 statuses.append(AdvisoryStatus.GREEN)
-            detail_parts.append(f"cruise {clear_pct:.0f}% clear")
+            detail_parts.append(adv_t("fiki.cruise_clear", loc, pct=f"{clear_pct:.0f}"))
 
             status = AdvisoryStatus.worst(statuses)
             if (
@@ -299,7 +301,7 @@ class FIKIIcingEvaluator:
                 and worst_transit == 0
                 and clear_pct >= 100
             ):
-                detail = "No icing along route"
+                detail = adv_t("fiki.no_icing", loc)
             else:
                 detail = " | ".join(detail_parts)
 

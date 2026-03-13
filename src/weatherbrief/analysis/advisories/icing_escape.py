@@ -10,6 +10,7 @@ from weatherbrief.analysis.advisories._helpers import (
     pct_above_threshold,
 )
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -149,32 +150,33 @@ class IcingEscapeEvaluator:
                     has_tight_margin = True
 
             # Determine model status
+            loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
-                detail = "No data"
+                detail = adv_t("no_data", loc)
             elif no_escape_count > 0 and pct_above_threshold(
                 no_escape_count, total, min_route_pct,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
                 ext = format_extent(affected, total, ctx.total_distance_nm)
-                detail = f"Icing over {ext}; no warm escape at {no_escape_count} point{'s' if no_escape_count != 1 else ''}"
+                detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
             elif no_escape_count > 0:
                 status = AdvisoryStatus.AMBER
                 ext = format_extent(affected, total, ctx.total_distance_nm)
-                detail = f"Icing over {ext}; no warm escape at {no_escape_count} point{'s' if no_escape_count != 1 else ''}"
+                detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
-                detail = "No icing along route"
+                detail = adv_t("icing_escape.no_icing", loc)
             else:
                 status = pct_above_threshold(affected, total, route_pct_amber)
                 ext = format_extent(affected, total, ctx.total_distance_nm)
                 if status == AdvisoryStatus.GREEN and has_tight_margin:
                     status = AdvisoryStatus.AMBER
-                    detail = f"Icing over {ext}, tight escape margin"
+                    detail = adv_t("icing_escape.tight_margin", loc, extent=ext)
                 elif status == AdvisoryStatus.GREEN:
-                    detail = f"Icing over {ext}, warm escape available"
+                    detail = adv_t("icing_escape.warm_escape", loc, extent=ext)
                 else:
-                    detail = f"Icing over {ext}; warm escape available"
+                    detail = adv_t("icing_escape.warm_escape", loc, extent=ext)
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
