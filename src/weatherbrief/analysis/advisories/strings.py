@@ -340,6 +340,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "IFR-Bedingungen auf gesamter Strecke akzeptabel",
         "es": "Condiciones IFR aceptables en toda la ruta",
     },
+
+    # --- shared airport labels ---
+    "airport.dep": {
+        "en": "Dep",
+        "fr": "Dép",
+        "de": "Abfl",
+        "es": "Sal",
+    },
+    "airport.arr": {
+        "en": "Arr",
+        "fr": "Arr",
+        "de": "Ank",
+        "es": "Lleg",
+    },
 }
 # fmt: on
 

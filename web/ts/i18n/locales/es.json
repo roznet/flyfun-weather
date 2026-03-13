@@ -310,6 +310,12 @@
   "settings.creditsToday": "Hoy: {used} usados",
   "settings.creditsMonth": "Mes: {used} usados",
 
+  "usage.briefings": "Briefings",
+  "usage.openMeteo": "Open-Meteo",
+  "usage.gramet": "GRAMET",
+  "usage.aiDigest": "Digest IA",
+  "usage.monthSummary": "{briefings} briefings / {gramet} GRAMET / {digests} digests IA / {tokens}",
+
   "privacy.failedUpdate": "Error al actualizar la privacidad: {error}",
   "autoRefresh.failedUpdate": "Error al actualizar la auto-actualización: {error}",
 

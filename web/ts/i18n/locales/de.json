@@ -310,6 +310,12 @@
   "settings.creditsToday": "Heute: {used} verbraucht",
   "settings.creditsMonth": "Monat: {used} verbraucht",
 
+  "usage.briefings": "Briefings",
+  "usage.openMeteo": "Open-Meteo",
+  "usage.gramet": "GRAMET",
+  "usage.aiDigest": "KI-Digest",
+  "usage.monthSummary": "{briefings} Briefings / {gramet} GRAMET / {digests} KI-Digests / {tokens}",
+
   "privacy.failedUpdate": "Datenschutz-Aktualisierung fehlgeschlagen: {error}",
   "autoRefresh.failedUpdate": "Auto-Aktualisierung fehlgeschlagen: {error}",
 

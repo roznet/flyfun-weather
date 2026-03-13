@@ -62,12 +62,13 @@ def _check_airport_ifr(
     parts: list[str] = []
     worst = AdvisoryStatus.GREEN
 
-    for label, icao, cond, min_ceil in [
-        ("Dep", dep.icao, dep_cond, min_dep_ceiling_ft),
-        ("Arr", arr.icao, arr_cond, min_arr_ceiling_ft),
+    for label_key, icao, cond, min_ceil in [
+        ("airport.dep", dep.icao, dep_cond, min_dep_ceiling_ft),
+        ("airport.arr", arr.icao, arr_cond, min_arr_ceiling_ft),
     ]:
         if cond is None:
             continue
+        label = adv_t(label_key, loc)
         cat = cond.flight_category
 
         # LIFR is concerning for IFR

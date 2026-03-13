@@ -144,7 +144,7 @@ class AirportWindEvaluator:
             statuses = []
             parts = []
 
-            for label, icao, cond in [("Dep", dep.icao, dep_cond), ("Arr", arr.icao, arr_cond)]:
+            for label_key, icao, cond in [("airport.dep", dep.icao, dep_cond), ("airport.arr", arr.icao, arr_cond)]:
                 if cond is None:
                     continue
 
@@ -155,6 +155,7 @@ class AirportWindEvaluator:
                 statuses.append(s)
 
                 wind_str = _format_wind_detail(cond, rwy_id, loc)
+                label = adv_t(label_key, loc)
                 parts.append(f"{label} {icao}: {wind_str}")
 
             status = AdvisoryStatus.worst(statuses) if statuses else AdvisoryStatus.UNAVAILABLE
