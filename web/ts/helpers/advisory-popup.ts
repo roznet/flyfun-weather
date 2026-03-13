@@ -2,6 +2,7 @@
 
 import type { AdvisoryCatalogEntry, AdvisoryParameterDef } from '../types/advisories';
 import { escapeHtml } from '../utils';
+import { t } from '../i18n/i18n';
 
 /**
  * Render advisory info popup HTML content.
@@ -11,7 +12,7 @@ import { escapeHtml } from '../utils';
 export function renderAdvisoryPopup(entry: AdvisoryCatalogEntry, paramsUsed: Record<string, number>): string {
   const paramsHtml = entry.parameters.length > 0
     ? `<table class="advisory-params-table">
-        <thead><tr><th>Parameter</th><th>Value</th><th>Description</th></tr></thead>
+        <thead><tr><th>${t('advisories.parameter')}</th><th>${t('advisories.value')}</th><th>${t('advisories.description')}</th></tr></thead>
         <tbody>${entry.parameters.map((p: AdvisoryParameterDef) => {
           const val = paramsUsed[p.key] ?? p.default;
           return `<tr>

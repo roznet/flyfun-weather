@@ -45,6 +45,7 @@ class DigestState(TypedDict, total=False):
     snapshot: ForecastSnapshot
     target_time: datetime
     config: DigestConfig
+    locale: str | None
     previous_digest: WeatherDigest | None
     route_advisories: object | None  # RouteAdvisoriesManifest
     flight_rules: str | None
@@ -132,7 +133,8 @@ def briefer_node(state: DigestState) -> dict:
     try:
         llm = create_llm(config)
         structured_llm = llm.with_structured_output(WeatherDigest, include_raw=True)
-        system_prompt = config.load_prompt("briefer")
+        locale = state.get("locale")
+        system_prompt = config.load_prompt("briefer", locale=locale)
 
         raw_result = structured_llm.invoke([
             {"role": "system", "content": system_prompt},
@@ -187,6 +189,7 @@ def run_digest(
     previous_digest: WeatherDigest | None = None,
     route_advisories=None,  # RouteAdvisoriesManifest | None
     flight_rules: str | None = None,
+    locale: str | None = None,
 ) -> DigestState:
     """Run the full digest pipeline and return final state."""
     graph = build_digest_graph(config)
@@ -194,6 +197,7 @@ def run_digest(
         "snapshot": snapshot,
         "target_time": target_time,
         "config": config,
+        "locale": locale,
         "previous_digest": previous_digest,
         "route_advisories": route_advisories,
         "flight_rules": flight_rules,

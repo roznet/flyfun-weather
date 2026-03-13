@@ -9,6 +9,7 @@ import * as ui from './managers/flights-ui';
 import { escapeHtml, renderUserInfo, initModelCatalog } from './utils';
 import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
+import { initI18n, t } from './i18n/i18n';
 import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';
@@ -124,6 +125,7 @@ async function fetchRouteAndUpdateUI(): Promise<void> {
 }
 
 async function init(): Promise<void> {
+  await initI18n();
   // Auth check — redirect to login if not authenticated
   const user = await fetchCurrentUser();
   if (!user) {
@@ -213,17 +215,17 @@ async function init(): Promise<void> {
 
       const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map((w) => w.toUpperCase());
       if (!targetDate) {
-        ui.renderError('Please enter a date.');
+        ui.renderError(t('flights.form.errorDate'));
         return;
       }
       if (waypoints.length < 2) {
-        ui.renderError('Route must be a list of at least 2 ICAO airport codes separated by spaces (e.g. EGTK LFQA LSGS).');
+        ui.renderError(t('flights.form.errorWaypoints'));
         return;
       }
       const invalidCodes = waypoints.filter((w) => !/^[A-Z]{4}$/.test(w));
       if (invalidCodes.length > 0) {
         ui.renderError(
-          `Each waypoint must be a 4-letter ICAO airport code separated by spaces. Invalid: ${invalidCodes.join(', ')}`,
+          t('flights.form.errorInvalidCodes', { codes: invalidCodes.join(', ') }),
         );
         return;
       }
@@ -324,7 +326,7 @@ function populateProfileSelector(profiles: ProfileResponse[]): void {
   if (!select) return;
 
   select.innerHTML = profiles.map(p => {
-    const defaultTag = p.is_default ? ' (default)' : '';
+    const defaultTag = p.is_default ? t('flights.form.defaultTag') : '';
     const selected = p.is_default ? ' selected' : '';
     return `<option value="${p.id}"${selected}>${escapeHtml(p.name)}${defaultTag}</option>`;
   }).join('');

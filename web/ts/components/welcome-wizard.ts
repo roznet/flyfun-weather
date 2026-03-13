@@ -13,6 +13,7 @@ import { updateProfile, type ProfileResponse, type ProfileSettings } from '../ad
 import { completeSetup } from '../adapters/preferences-adapter';
 import { escapeHtml, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from '../utils';
 import type { ModelCatalogEntry } from '../utils';
+import { t } from '../i18n/i18n';
 
 type StepId = 'welcome' | 'aircraft' | 'tour';
 
@@ -88,8 +89,8 @@ function renderStep(): void {
 
   const backBtn = isFirst
     ? ''
-    : `<button type="button" class="btn btn-secondary wizard-btn-back">Back</button>`;
-  const nextLabel = isLast ? 'Get Started' : 'Next';
+    : `<button type="button" class="btn btn-secondary wizard-btn-back">${t('wizard.back')}</button>`;
+  const nextLabel = isLast ? t('wizard.getStarted') : t('wizard.next');
   const nextClass = isLast ? 'btn btn-primary wizard-btn-finish' : 'btn btn-primary wizard-btn-next';
 
   wizardEl.innerHTML = `
@@ -136,37 +137,37 @@ function wireStepHandlers(): void {
 function renderWelcomeStep(): string {
   return `
     <div class="wizard-step wizard-welcome">
-      <h2>Welcome to WeatherBrief</h2>
+      <h2>${t('wizard.welcomeTitle')}</h2>
       <p class="wizard-subtitle">
-        Aviation weather assessment for cross-country GA flights
+        ${t('wizard.welcomeSubtitle')}
       </p>
       <p class="wizard-beta-notice">
-        WeatherBrief is currently in <strong>beta</strong>. We appreciate your time trying the tool — please help us improve by sending feedback when a briefing appears suspicious or you encounter any issues.
+        ${t('wizard.betaNotice')}
       </p>
       <div class="wizard-features">
         <div class="wizard-feature">
-          <strong>AI synopsis &amp; advisories</strong>
-          <span>An AI-generated overview plus go/no-go factors for your route</span>
+          <strong>${t('wizard.featureAiTitle')}</strong>
+          <span>${t('wizard.featureAiDesc')}</span>
         </div>
         <div class="wizard-feature">
-          <strong>Route advisories</strong>
-          <span>Icing, turbulence, clouds and airport conditions rated GREEN/AMBER/RED</span>
+          <strong>${t('wizard.featureAdvisoriesTitle')}</strong>
+          <span>${t('wizard.featureAdvisoriesDesc')}</span>
         </div>
         <div class="wizard-feature">
-          <strong>Multi-model comparison</strong>
-          <span>See where GFS, ECMWF, ICON and others agree or diverge</span>
+          <strong>${t('wizard.featureModelsTitle')}</strong>
+          <span>${t('wizard.featureModelsDesc')}</span>
         </div>
         <div class="wizard-feature">
-          <strong>Interactive cross-section</strong>
-          <span>Vertical weather layers along your route with terrain profile</span>
+          <strong>${t('wizard.featureCrossSectionTitle')}</strong>
+          <span>${t('wizard.featureCrossSectionDesc')}</span>
         </div>
         <div class="wizard-feature">
-          <strong>Sounding analysis</strong>
-          <span>Skew-T diagrams, thermodynamic indices and stability at every waypoint</span>
+          <strong>${t('wizard.featureSoundingTitle')}</strong>
+          <span>${t('wizard.featureSoundingDesc')}</span>
         </div>
       </div>
       <p class="wizard-hint">
-        Let's set up your aircraft defaults — you can always change these later in Settings.
+        ${t('wizard.setupHint')}
       </p>
     </div>
   `;
@@ -189,38 +190,38 @@ function renderAircraftStep(): string {
 
   return `
     <div class="wizard-step wizard-aircraft">
-      <h2>Aircraft Defaults</h2>
-      <p class="wizard-subtitle">These defaults apply when creating new flights.</p>
-      <p class="wizard-hint">You can edit these or create multiple profiles later in the <strong>Settings</strong> page.</p>
+      <h2>${t('wizard.aircraftTitle')}</h2>
+      <p class="wizard-subtitle">${t('wizard.aircraftSubtitle')}</p>
+      <p class="wizard-hint">${t('wizard.aircraftHint')}</p>
 
       <div class="wizard-form">
         <div class="wizard-form-row">
           <div class="wizard-form-group">
-            <label for="wiz-flight-rules">Flight Rules</label>
+            <label for="wiz-flight-rules">${t('wizard.flightRules')}</label>
             <select id="wiz-flight-rules" class="input-select">
-              <option value="vfr_ifr"${rules === 'vfr_ifr' ? ' selected' : ''}>VFR + IFR capable</option>
-              <option value="vfr_only"${rules === 'vfr_only' ? ' selected' : ''}>VFR only</option>
+              <option value="vfr_ifr"${rules === 'vfr_ifr' ? ' selected' : ''}>${t('wizard.vfrIfr')}</option>
+              <option value="vfr_only"${rules === 'vfr_only' ? ' selected' : ''}>${t('wizard.vfrOnly')}</option>
             </select>
           </div>
         </div>
         <div class="wizard-form-row">
           <div class="wizard-form-group">
-            <label for="wiz-altitude">Cruise Altitude (ft)</label>
+            <label for="wiz-altitude">${t('wizard.cruiseAltitude')}</label>
             <input type="number" id="wiz-altitude" value="${altitude}" min="1000" max="45000" step="500">
           </div>
           <div class="wizard-form-group">
-            <label for="wiz-ceiling">Flight Ceiling (ft)</label>
+            <label for="wiz-ceiling">${t('wizard.flightCeiling')}</label>
             <input type="number" id="wiz-ceiling" value="${ceiling}" min="1000" max="45000" step="500">
           </div>
           <div class="wizard-form-group">
-            <label for="wiz-speed">Speed (kt)</label>
-            <input type="number" id="wiz-speed" value="${speed}" placeholder="e.g. 120" min="10" max="500" step="1">
+            <label for="wiz-speed">${t('wizard.speed')}</label>
+            <input type="number" id="wiz-speed" value="${speed}" placeholder="${t('wizard.speedPlaceholder')}" min="10" max="500" step="1">
           </div>
         </div>
 
         <div class="wizard-models-section">
-          <label>Forecast Models</label>
-          <p class="muted wizard-model-hint">Select which NWP models to include in your briefings.</p>
+          <label>${t('wizard.forecastModels')}</label>
+          <p class="muted wizard-model-hint">${t('wizard.modelHint')}</p>
           <div class="wizard-model-checkboxes">${modelHtml}</div>
         </div>
       </div>
@@ -231,50 +232,50 @@ function renderAircraftStep(): string {
 function renderTourStep(): string {
   return `
     <div class="wizard-step wizard-tour">
-      <h2>Quick Overview</h2>
-      <p class="wizard-subtitle">Here's how to get started with WeatherBrief.</p>
+      <h2>${t('wizard.tourTitle')}</h2>
+      <p class="wizard-subtitle">${t('wizard.tourSubtitle')}</p>
 
       <div class="wizard-tour-items">
         <div class="wizard-tour-item">
           <div class="wizard-tour-number">1</div>
           <div class="wizard-tour-text">
-            <strong>Create a flight</strong>
-            <span>Enter your waypoints (airport ICAO codes), date and time. Your aircraft defaults are pre-filled from the profile you just set up.</span>
+            <strong>${t('wizard.step1Title')}</strong>
+            <span>${t('wizard.step1Desc')}</span>
           </div>
         </div>
         <div class="wizard-tour-item">
           <div class="wizard-tour-number">2</div>
           <div class="wizard-tour-text">
-            <strong>Read the briefing</strong>
-            <span>The briefing opens automatically. It shows <em>red/amber/green advisories</em>, an <em>AI synopsis</em>, <em>interactive cross-section</em>, and <em>sounding analysis</em> for each waypoint.</span>
+            <strong>${t('wizard.step2Title')}</strong>
+            <span>${t('wizard.step2Desc')}</span>
           </div>
         </div>
         <div class="wizard-tour-item">
           <div class="wizard-tour-number">3</div>
           <div class="wizard-tour-text">
-            <strong>Refresh for updates</strong>
-            <span>Come back and refresh the briefing as the flight date approaches — each refresh captures a new snapshot you can compare. You can also set up an auto-refresh at a given time to receive an update by email each day.</span>
-            <span class="wizard-tour-hint">Note: a refresh can take around 1 minute.</span>
+            <strong>${t('wizard.step3Title')}</strong>
+            <span>${t('wizard.step3Desc')}</span>
+            <span class="wizard-tour-hint">${t('wizard.step3Hint')}</span>
           </div>
         </div>
         <div class="wizard-tour-item">
           <div class="wizard-tour-number">4</div>
           <div class="wizard-tour-text">
-            <strong>Explore the briefing</strong>
-            <span>Use <em>Compact</em> mode for a summary or <em>Full Details</em> to explore every metric. Click on any point in the cross-section to see all metrics and Skew-T for all models. This can be used on the day of the flight but is most useful to form an early picture of the feasibility of a flight.</span>
+            <strong>${t('wizard.step4Title')}</strong>
+            <span>${t('wizard.step4Desc')}</span>
           </div>
         </div>
         <div class="wizard-tour-item">
           <div class="wizard-tour-number">5</div>
           <div class="wizard-tour-text">
-            <strong>Look for <span class="wizard-info-icon">(i)</span> buttons</strong>
-            <span>Click them anywhere in the briefing to learn what a metric means and how to interpret it.</span>
+            <strong>${t('wizard.step5Title')}</strong>
+            <span>${t('wizard.step5Desc')}</span>
           </div>
         </div>
       </div>
 
       <p class="wizard-hint">
-        You can revisit these settings any time from the <strong>Settings</strong> page, and learn more on the <strong>Help</strong> page.
+        ${t('wizard.tourHint')}
       </p>
     </div>
   `;

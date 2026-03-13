@@ -9,6 +9,7 @@ import {
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt } from './utils';
 import { initTheme } from './theme';
+import { initI18n } from './i18n/i18n';
 
 // Cost breakdown keys that map to numeric fields on UserCostBreakdown
 type CostKey = 'token_cost_usd' | 'infra_share_usd' | 'subscription_share_usd' | 'storage_cost_usd' | 'margin_usd';
@@ -31,6 +32,7 @@ const COST_LABELS: Record<CostKey, string> = {
 };
 
 async function init(): Promise<void> {
+  await initI18n();
   const user = await fetchCurrentUser();
   if (!user) {
     window.location.href = '/login.html';

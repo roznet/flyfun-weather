@@ -153,6 +153,7 @@ def run_llm_digest(
     route_advisories=None,  # RouteAdvisoriesManifest | None
     flight_rules: str | None = None,
     previous_digest=None,  # WeatherDigest | None
+    locale: str | None = None,
 ) -> DigestResult:
     """Generate LLM-powered weather digest."""
     try:
@@ -167,6 +168,7 @@ def run_llm_digest(
             previous_digest=previous_digest,
             route_advisories=route_advisories,
             flight_rules=flight_rules,
+            locale=locale,
         )
 
         if digest_result.get("error"):

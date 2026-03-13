@@ -1,6 +1,7 @@
 /** Shared utilities for the WeatherBrief web app. */
 
 import { logout, type CurrentUser } from './adapters/auth-adapter';
+import { t, getLocale } from './i18n/i18n';
 
 // --- HTML escaping ---
 
@@ -20,10 +21,10 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
   if (!container) return;
 
   const navItems: { label: string; href: string; page: string; adminOnly?: boolean }[] = [
-    { label: 'Flights', href: '/',               page: 'flights' },
-    { label: 'Settings', href: '/settings.html',  page: 'settings' },
-    { label: 'Help',     href: '/help.html',      page: 'help' },
-    { label: 'Admin',    href: '/admin.html',     page: 'admin', adminOnly: true },
+    { label: t('nav.flights'),  href: '/',               page: 'flights' },
+    { label: t('nav.settings'), href: '/settings.html',  page: 'settings' },
+    { label: t('nav.help'),     href: '/help.html',      page: 'help' },
+    { label: t('nav.admin'),    href: '/admin.html',     page: 'admin', adminOnly: true },
   ];
 
   const links = navItems
@@ -39,7 +40,7 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
   container.innerHTML = `
     ${links}
     <span class="user-name">${escapeHtml(user.name)}</span>
-    <button class="btn-logout" id="logout-btn">Sign out</button>
+    <button class="btn-logout" id="logout-btn">${t('nav.signOut')}</button>
   `;
   document.getElementById('logout-btn')?.addEventListener('click', () => logout());
 }
@@ -57,7 +58,8 @@ export function $(id: string): HTMLElement {
 export function formatDate(iso: string): string {
   try {
     const d = new Date(iso.includes('T') ? iso : iso + 'T00:00:00Z');
-    return d.toLocaleDateString('en-GB', {
+    const locale = getLocale() === 'en' ? 'en-GB' : getLocale();
+    return d.toLocaleDateString(locale, {
       weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
       timeZone: 'UTC',
     });

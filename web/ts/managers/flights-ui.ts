@@ -3,6 +3,7 @@
 import type { FlightResponse, PackMeta } from '../store/types';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRoute } from '../utils';
+import { t } from '../i18n/i18n';
 
 /** Assessment badge color class. */
 function assessmentClass(assessment: string | null): string {
@@ -30,11 +31,11 @@ function renderFlightCard(
   const title = flightTitle(wps);
   const route = wps.length > 2 ? flightRoute(wps) : '';
   const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
-  const pastBadge = past ? '<span class="badge badge-past">Past</span> ' : '';
+  const pastBadge = past ? `<span class="badge badge-past">${t('flights.pastBadge')}</span> ` : '';
 
   let refreshBadge = '';
   if (refreshEntry) {
-    const label = refreshEntry.status === 'queued' ? 'Queued' : 'Refreshing';
+    const label = refreshEntry.status === 'queued' ? t('flights.queuedBadge') : t('flights.refreshingBadge');
     const spinner = refreshEntry.status === 'refreshing' ? '<span class="dots-spinner"></span>' : '';
     refreshBadge = `<span class="badge badge-refreshing">${label}${spinner}</span> `;
   }
@@ -42,7 +43,7 @@ function renderFlightCard(
   const packInfo = pack
     ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
        <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
-    : '<span class="pack-info">No briefings yet</span>';
+    : `<span class="pack-info">${t('flights.noBriefings')}</span>`;
 
   const routeLine = route
     ? `<div class="flight-route-detail">${escapeHtml(route)}</div>`
@@ -60,9 +61,9 @@ function renderFlightCard(
         ${refreshBadge}${packInfo}
       </div>
       <div class="flight-actions">
-        <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">Briefing</button>
-        <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">Edit</button>
-        <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">Delete</button>
+        <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>
+        <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">${t('flights.btnEdit')}</button>
+        <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">${t('flights.btnDelete')}</button>
       </div>
     </div>
   `;
@@ -84,7 +85,7 @@ export function renderFlightList(
   if (flights.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
-        <p>No flights yet. Create one to get started.</p>
+        <p>${t('flights.empty')}</p>
       </div>
     `;
     return;
@@ -114,7 +115,7 @@ export function renderFlightList(
     pastSection = `
       <div class="past-flights-section${expandedClass}">
         <button class="past-flights-toggle" id="past-flights-toggle">
-          Past flights (${past.length})
+          ${t('flights.past', { count: past.length })}
         </button>
         <div class="past-flights-list">${pastCards}</div>
       </div>
@@ -145,7 +146,7 @@ export function renderFlightList(
   container.querySelectorAll('.btn-delete').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = (btn as HTMLElement).dataset.id!;
-      if (confirm(`Delete flight ${id}? This removes all briefing history.`)) {
+      if (confirm(t('flights.deleteConfirm', { id }))) {
         onDelete(id);
       }
     });

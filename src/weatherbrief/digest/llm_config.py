@@ -40,9 +40,19 @@ class DigestConfig(BaseModel):
     )
     prompts: PromptsConfig = PromptsConfig()
 
-    def load_prompt(self, key: str) -> str:
-        """Load prompt markdown from configs/weather_digest/{path}."""
+    def load_prompt(self, key: str, locale: str | None = None) -> str:
+        """Load prompt markdown from configs/weather_digest/{path}.
+
+        If a locale is provided (e.g. 'fr'), looks for a locale-specific
+        variant first (e.g. prompts/briefer_v1.fr.md). Falls back to the
+        default prompt if no locale variant exists.
+        """
         rel_path = getattr(self.prompts, key)
+        if locale and locale != "en":
+            base, ext = rel_path.rsplit(".", 1)
+            locale_path = _CONFIGS_DIR / f"{base}.{locale}.{ext}"
+            if locale_path.exists():
+                return locale_path.read_text()
         prompt_path = _CONFIGS_DIR / rel_path
         return prompt_path.read_text()
 

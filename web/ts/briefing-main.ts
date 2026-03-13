@@ -25,8 +25,10 @@ import { attachMapInteraction, type MapInteractionHandle } from './visualization
 import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
 import { initTheme } from './theme';
+import { initI18n, t } from './i18n/i18n';
 
 async function init(): Promise<void> {
+  await initI18n();
   // Auth check — redirect to login if not authenticated
   const user = await fetchCurrentUser();
   if (!user) {
@@ -64,7 +66,7 @@ async function init(): Promise<void> {
   const flightId = params.get('flight');
   const packTimestamp = params.get('pack');
   if (!flightId) {
-    ui.renderError('No flight specified. Go back to flights list.');
+    ui.renderError(t('briefing.noFlightSpecified'));
     return;
   }
 
@@ -608,16 +610,16 @@ async function init(): Promise<void> {
     overlay.className = 'feedback-modal-overlay';
     overlay.innerHTML = `
       <div class="feedback-modal">
-        <h3>Historical Refresh</h3>
-        <p class="muted" style="margin:0 0 0.75rem;">Retrieve the forecast as it was on this date.</p>
-        <label for="historical-as-of-date" style="font-weight:500;font-size:0.85rem;">As-of date</label>
+        <h3>${t('historical.title')}</h3>
+        <p class="muted" style="margin:0 0 0.75rem;">${t('historical.subtitle')}</p>
+        <label for="historical-as-of-date" style="font-weight:500;font-size:0.85rem;">${t('historical.asOfDate')}</label>
         <input type="date" id="historical-as-of-date"
           value="${flight.target_date}"
           max="${flight.target_date}"
           style="width:100%;padding:0.4rem;margin:0.25rem 0 0.75rem;border:1px solid var(--border);border-radius:4px;font-family:inherit;background:var(--surface);color:var(--text);" />
         <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem;">
-          <button class="btn" id="historical-cancel">Cancel</button>
-          <button class="btn btn-primary" id="historical-refresh">Refresh</button>
+          <button class="btn" id="historical-cancel">${t('historical.cancel')}</button>
+          <button class="btn btn-primary" id="historical-refresh">${t('historical.refresh')}</button>
         </div>
       </div>`;
 
@@ -683,11 +685,11 @@ async function init(): Promise<void> {
     document.getElementById('feedback-modal')?.remove();
 
     const categories = [
-      ['data_issue', 'Briefing Data Issue'],
-      ['too_conservative', 'Briefing Too Conservative'],
-      ['too_optimistic', 'Briefing Too Optimistic'],
-      ['incorrect_interpretation', 'Briefing Incorrect Interpretation'],
-      ['other', 'Other Bug/Issue'],
+      ['data_issue', t('feedback.cat.dataIssue')],
+      ['too_conservative', t('feedback.cat.tooConservative')],
+      ['too_optimistic', t('feedback.cat.tooOptimistic')],
+      ['incorrect_interpretation', t('feedback.cat.incorrectInterpretation')],
+      ['other', t('feedback.cat.other')],
     ];
     const optionsHtml = categories
       .map(([val, label]) => `<option value="${val}">${label}</option>`)
@@ -698,18 +700,18 @@ async function init(): Promise<void> {
     overlay.className = 'feedback-modal-overlay';
     overlay.innerHTML = `
       <div class="feedback-modal">
-        <h3>Send Feedback</h3>
-        <p class="muted" style="margin:0 0 0.75rem;">Report an issue or suggest an improvement for this briefing.</p>
-        <label for="feedback-category" style="font-weight:500;font-size:0.85rem;">Category</label>
+        <h3>${t('feedback.title')}</h3>
+        <p class="muted" style="margin:0 0 0.75rem;">${t('feedback.subtitle')}</p>
+        <label for="feedback-category" style="font-weight:500;font-size:0.85rem;">${t('feedback.categoryLabel')}</label>
         <select id="feedback-category" style="width:100%;padding:0.4rem;margin:0.25rem 0 0.75rem;border:1px solid var(--border);border-radius:4px;">
           ${optionsHtml}
         </select>
-        <label for="feedback-comment" style="font-weight:500;font-size:0.85rem;">Comment</label>
-        <textarea id="feedback-comment" rows="4" style="width:100%;padding:0.4rem;margin:0.25rem 0 0;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit;" placeholder="Describe the issue or suggestion..."></textarea>
+        <label for="feedback-comment" style="font-weight:500;font-size:0.85rem;">${t('feedback.commentLabel')}</label>
+        <textarea id="feedback-comment" rows="4" style="width:100%;padding:0.4rem;margin:0.25rem 0 0;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit;" placeholder="${t('feedback.commentPlaceholder')}"></textarea>
         <div id="feedback-error" style="color:#dc3545;font-size:0.8rem;min-height:1.2em;margin-top:0.25rem;"></div>
         <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem;">
-          <button class="btn" id="feedback-cancel">Cancel</button>
-          <button class="btn btn-primary" id="feedback-submit">Submit</button>
+          <button class="btn" id="feedback-cancel">${t('feedback.cancel')}</button>
+          <button class="btn btn-primary" id="feedback-submit">${t('feedback.submit')}</button>
         </div>
       </div>`;
 
@@ -735,12 +737,12 @@ async function init(): Promise<void> {
     submitBtn.addEventListener('click', async () => {
       const comment = commentEl.value.trim();
       if (!comment) {
-        errorEl.textContent = 'Please enter a comment.';
+        errorEl.textContent = t('feedback.errorEmpty');
         return;
       }
       errorEl.textContent = '';
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Submitting...';
+      submitBtn.textContent = t('feedback.submitting');
 
       try {
         await api.submitFeedback({
@@ -752,13 +754,13 @@ async function init(): Promise<void> {
         // Show success state
         const modal = overlay.querySelector('.feedback-modal')!;
         modal.innerHTML = `
-          <h3>Thanks for your feedback!</h3>
-          <p class="muted">Your report has been submitted.</p>`;
+          <h3>${t('feedback.thanks')}</h3>
+          <p class="muted">${t('feedback.submitted')}</p>`;
         setTimeout(dismiss, 1500);
       } catch (err) {
-        errorEl.textContent = `Failed to submit: ${err}`;
+        errorEl.textContent = t('feedback.failedSubmit', { error: String(err) });
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Submit';
+        submitBtn.textContent = t('feedback.submit');
       }
     });
 
@@ -885,10 +887,10 @@ async function init(): Promise<void> {
       refreshBtn.style.display = '';
       if (past && !user.is_admin) {
         refreshBtn.disabled = true;
-        refreshBtn.title = 'Flight is in the past';
+        refreshBtn.title = t('briefing.flightPastTitle');
       } else if (past && user.is_admin) {
         refreshBtn.disabled = false;
-        refreshBtn.title = 'Historical refresh (admin)';
+        refreshBtn.title = t('briefing.historicalRefreshTitle');
       }
     }
 
@@ -899,7 +901,7 @@ async function init(): Promise<void> {
         const updated = await api.updatePrivacy(s.flight.id, isPrivate);
         store.getState().updateFlightPrivacy(updated.private);
       } catch (err) {
-        ui.renderError(`Failed to update privacy: ${err}`);
+        ui.renderError(t('privacy.failedUpdate', { error: String(err) }));
       }
     });
 
@@ -914,7 +916,7 @@ async function init(): Promise<void> {
         // Update the flight in store with new auto-refresh fields
         store.getState().updateFlightAutoRefresh(updated.auto_refresh, updated.auto_refresh_hour);
       } catch (err) {
-        ui.renderError(`Failed to update auto-refresh: ${err}`);
+        ui.renderError(t('autoRefresh.failedUpdate', { error: String(err) }));
       }
     });
 

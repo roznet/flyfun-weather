@@ -10,47 +10,16 @@ import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
 import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
 import { showThemePreview } from '../cross-section/theme-preview';
+import { t } from '../../i18n/i18n';
 
 /** Groups that collapse to a single preferred-method toggle in compact mode. */
 const COMPACT_GROUPS = new Set(['clouds', 'icing', 'convection']);
 
 /** Explanatory text for layer group info buttons. */
-const GROUP_INFO: Record<string, string> = {
-  clouds: `<h3>Cloud Detection Methods</h3>
-<p>Clouds can be detected two ways on the cross-section:</p>
-<ul>
-  <li><strong>NWP Layers</strong> — derived from the numerical weather prediction model's cloud cover parameterisation (low / mid / high bands). Shows where the model itself predicts clouds.</li>
-  <li><strong>DD Layers</strong> — derived from dewpoint depression in the sounding profile. When the gap between temperature and dewpoint is small (DD &lt; 2°C), air is near saturation and cloud is likely. This is a sounding-based signal independent of the model's cloud scheme.</li>
-</ul>
-<p>Both methods can be enabled simultaneously for comparison. They often agree in moist layers but may differ where NWP sub-grid clouds or local moisture are present.</p>`,
-
-  convection: `<h3>Convective Methods</h3>
-<p>The cross-section offers two convective risk overlays:</p>
-<ul>
-  <li><strong>Thermo</strong> — risk from thermodynamic indices (CAPE, CIN). Tower bounds from LFC/LCL (base) and EL (top). Zero risk when CAPE is zero, even if the NWP model parameterises convective clouds.</li>
-  <li><strong>NWP</strong> — risk from the NWP model's native convective cloud parameterisation (GFS convective cover %). Tower bounds are model-computed convective base/top. This typically matches what GRAMET shows.</li>
-</ul>
-<p>Enable both to compare. The advisory system uses whichever method you select in your profile settings.</p>`,
-
-  icing: `<h3>Icing Methods</h3>
-<p>The cross-section offers three icing overlays, each combining an <strong>icing formula</strong> with a <strong>cloud detection method</strong>:</p>
-<h4>Formulas</h4>
-<ul>
-  <li><strong>Ogimet</strong> — continuous parabolic index peaking at −7°C. Maps temperature to an icing severity index across the 0 to −14°C range (layered) or 0 to −20°C (convective). Simple, well-proven in European GA.</li>
-  <li><strong>SFIP</strong> — fuzzy-logic algorithm combining temperature, relative humidity, cloud liquid water, and vertical velocity via membership functions. More complex, uses direct NWP moisture data when available.</li>
-</ul>
-<h4>Cloud Signals</h4>
-<ul>
-  <li><strong>DD</strong> (dewpoint depression) — sounding-based. Uses a continuous cosine taper: full icing index at DD = 0, zero at DD ≥ 2°C. No NWP cloud data needed.</li>
-  <li><strong>NWP</strong> (model cloud cover) — uses the NWP model's cloud cover percentage at each altitude. 50% cloud → 50% of icing index. This is the approach used by Autorouter GRAMET.</li>
-</ul>
-<h4>The Three Methods</h4>
-<ul>
-  <li><strong>Ogimet-DD</strong> — Ogimet formula + DD cloud signal</li>
-  <li><strong>Ogimet-NWP</strong> — Ogimet formula + NWP cloud signal</li>
-  <li><strong>SFIP-NWP</strong> — SFIP fuzzy-logic (inherently uses NWP moisture inputs)</li>
-</ul>
-<p>Enable multiple methods to compare them side-by-side. The advisory system uses whichever method you select in your profile settings.</p>`,
+const GROUP_INFO: Record<string, () => string> = {
+  clouds: () => t('viz.cloudMethods'),
+  convection: () => t('viz.convectionMethods'),
+  icing: () => t('viz.icingMethods'),
 };
 
 export interface VizControlCallbacks {
@@ -89,16 +58,16 @@ export function renderVizControls(
 
   // Layout toggle
   html += '<div class="viz-layout-toggle">';
-  html += `<button class="btn-toggle${settings.layout === 'cross-section' ? ' active' : ''}" data-layout="cross-section" title="Cross-section only">X-Section</button>`;
-  html += `<button class="btn-toggle${settings.layout === 'compare' ? ' active' : ''}" data-layout="compare" title="Compare one layer across all models">Compare</button>`;
-  html += `<button class="btn-toggle${settings.layout === 'split' ? ' active' : ''}" data-layout="split" title="Side-by-side">Split</button>`;
-  html += `<button class="btn-toggle${settings.layout === 'map' ? ' active' : ''}" data-layout="map" title="Map only">Map</button>`;
+  html += `<button class="btn-toggle${settings.layout === 'cross-section' ? ' active' : ''}" data-layout="cross-section" title="Cross-section only">${t('viz.xSection')}</button>`;
+  html += `<button class="btn-toggle${settings.layout === 'compare' ? ' active' : ''}" data-layout="compare" title="Compare one layer across all models">${t('viz.compare')}</button>`;
+  html += `<button class="btn-toggle${settings.layout === 'split' ? ' active' : ''}" data-layout="split" title="Side-by-side">${t('viz.split')}</button>`;
+  html += `<button class="btn-toggle${settings.layout === 'map' ? ' active' : ''}" data-layout="map" title="Map only">${t('viz.map')}</button>`;
   html += '</div>';
 
   // Model selector
   if (selectedModel && availableModels && availableModels.length > 0) {
     html += `<div class="viz-model-selector">`;
-    html += `<span class="viz-toggle-label">Model:</span>`;
+    html += `<span class="viz-toggle-label">${t('viz.model')}</span>`;
     html += `<select id="viz-model-select" class="viz-model-select">`;
     for (const m of availableModels) {
       const selected = m === selectedModel ? ' selected' : '';
@@ -108,7 +77,7 @@ export function renderVizControls(
     html += `</div>`;
   } else if (selectedModel) {
     html += `<div class="viz-model-selector">`;
-    html += `<span class="viz-toggle-label">Model:</span>`;
+    html += `<span class="viz-toggle-label">${t('viz.model')}</span>`;
     html += `<span class="viz-model-name">${modelLabel(selectedModel)}</span>`;
     html += `</div>`;
   }
@@ -117,20 +86,20 @@ export function renderVizControls(
   if (settings.layout !== 'map') {
     const currentTheme = getActiveThemeId();
     html += `<div class="viz-theme-selector">`;
-    html += `<span class="viz-toggle-label">Theme:</span>`;
+    html += `<span class="viz-toggle-label">${t('viz.theme')}</span>`;
     html += `<select id="viz-theme-select" class="viz-model-select">`;
     for (const [id, theme] of Object.entries(THEMES)) {
       const selected = id === currentTheme ? ' selected' : '';
       html += `<option value="${id}"${selected}>${theme.label}</option>`;
     }
     html += `</select>`;
-    html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="Preview theme">\u{1f441}</button>`;
+    html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="${t('viz.previewTheme')}">\u{1f441}</button>`;
     html += `</div>`;
   }
 
   // Windy link placeholder (updated dynamically by updateWindyLink)
   html += `<span id="external-links" class="external-links" style="display: none;">`;
-  html += `Open selected location in <a id="windy-link" href="#" target="_blank" rel="noopener">Windy</a>`;
+  html += `${t('viz.externalLinks')}<a id="windy-link" href="#" target="_blank" rel="noopener">${t('viz.windy')}</a>`;
   html += `</span>`;
 
   html += '</div>'; // .viz-toolbar-top
@@ -154,13 +123,13 @@ export function renderVizControls(
         const checked = !isUnavailable && settings.enabledLayers[layer.id] !== false ? 'checked' : '';
         const disabled = isUnavailable ? 'disabled' : '';
         const dimClass = isUnavailable ? ' viz-layer-unavailable' : '';
-        const tooltip = isUnavailable ? ` title="Not available for this model"` : '';
+        const tooltip = isUnavailable ? ` title="${t('viz.notAvailableModel')}"` : '';
         html += `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
         html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
         html += `<span>${isCompactCollapse ? group.label : layer.name}</span>`;
         html += `</label>`;
         if (layer.metricId) {
-          html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="More info" aria-label="More info">\u24d8</button>`;
+          html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">\u24d8</button>`;
         }
       }
       html += '</div>';
@@ -231,8 +200,8 @@ export function renderVizControls(
       e.preventDefault();
       e.stopPropagation();
       const groupKey = (btn as HTMLElement).dataset.groupInfo!;
-      const html = GROUP_INFO[groupKey];
-      if (html) showPopupContent(html);
+      const infoFn = GROUP_INFO[groupKey];
+      if (infoFn) showPopupContent(infoFn());
     });
   });
 }
@@ -251,7 +220,7 @@ export function renderRouteGraphControls(
 
   // Toggle button
   html += `<button id="route-graph-toggle" class="route-graph-toggle-btn" title="Show/hide route graph">`;
-  html += `<span class="route-graph-arrow">${arrow}</span> Route Graph`;
+  html += `<span class="route-graph-arrow">${arrow}</span> ${t('viz.routeGraph')}`;
   html += `</button>`;
 
   // Metric selectors (only shown when visible)
@@ -259,7 +228,7 @@ export function renderRouteGraphControls(
     html += '<div class="route-graph-selectors">';
 
     html += '<label class="route-graph-select-label">';
-    html += '<span class="viz-toggle-label">Left:</span>';
+    html += `<span class="viz-toggle-label">${t('viz.left')}</span>`;
     html += '<select id="route-graph-left-metric" class="route-graph-select">';
     for (const opt of leftOptions) {
       const selected = opt.id === settings.routeGraphLeftMetric ? ' selected' : '';
@@ -269,7 +238,7 @@ export function renderRouteGraphControls(
     html += '</label>';
 
     html += '<label class="route-graph-select-label">';
-    html += '<span class="viz-toggle-label">Right:</span>';
+    html += `<span class="viz-toggle-label">${t('viz.right')}</span>`;
     html += '<select id="route-graph-right-metric" class="route-graph-select">';
     for (const opt of rightOptions) {
       const selected = opt.id === settings.routeGraphRightMetric ? ' selected' : '';
@@ -320,7 +289,7 @@ export function renderMapControls(
   let html = '<div class="map-controls">';
 
   html += '<label class="map-control-label">';
-  html += '<span class="viz-toggle-label">Color:</span>';
+  html += `<span class="viz-toggle-label">${t('viz.color')}</span>`;
   html += '<select id="map-color-metric" class="map-control-select">';
   for (const opt of colorOptions) {
     const selected = opt.id === settings.mapColorMetric ? ' selected' : '';
@@ -330,7 +299,7 @@ export function renderMapControls(
   html += '</label>';
 
   html += '<label class="map-control-label">';
-  html += '<span class="viz-toggle-label">Width:</span>';
+  html += `<span class="viz-toggle-label">${t('viz.width')}</span>`;
   html += '<select id="map-width-metric" class="map-control-select">';
   for (const opt of widthOptions) {
     const selected = opt.id === settings.mapWidthMetric ? ' selected' : '';
@@ -383,15 +352,15 @@ export function renderCompareControls(
 
   // Layout toggle (same 4 buttons, Compare active)
   html += '<div class="viz-layout-toggle">';
-  html += `<button class="btn-toggle" data-layout="cross-section" title="Cross-section only">X-Section</button>`;
-  html += `<button class="btn-toggle active" data-layout="compare" title="Compare one layer across all models">Compare</button>`;
-  html += `<button class="btn-toggle" data-layout="split" title="Side-by-side">Split</button>`;
-  html += `<button class="btn-toggle" data-layout="map" title="Map only">Map</button>`;
+  html += `<button class="btn-toggle" data-layout="cross-section" title="Cross-section only">${t('viz.xSection')}</button>`;
+  html += `<button class="btn-toggle active" data-layout="compare" title="Compare one layer across all models">${t('viz.compare')}</button>`;
+  html += `<button class="btn-toggle" data-layout="split" title="Side-by-side">${t('viz.split')}</button>`;
+  html += `<button class="btn-toggle" data-layout="map" title="Map only">${t('viz.map')}</button>`;
   html += '</div>';
 
   // Layer selector
   html += '<div class="viz-compare-layer-selector">';
-  html += '<span class="viz-toggle-label">Layer:</span>';
+  html += `<span class="viz-toggle-label">${t('viz.layer')}</span>`;
   html += '<select id="compare-layer-select" class="viz-model-select">';
   for (const group of layerGroups) {
     html += `<optgroup label="${group.group}">`;
@@ -407,14 +376,14 @@ export function renderCompareControls(
   // Theme selector
   const currentTheme = getActiveThemeId();
   html += `<div class="viz-theme-selector">`;
-  html += `<span class="viz-toggle-label">Theme:</span>`;
+  html += `<span class="viz-toggle-label">${t('viz.theme')}</span>`;
   html += `<select id="viz-theme-select" class="viz-model-select">`;
   for (const [id, theme] of Object.entries(THEMES)) {
     const selected = id === currentTheme ? ' selected' : '';
     html += `<option value="${id}"${selected}>${theme.label}</option>`;
   }
   html += `</select>`;
-  html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="Preview theme">\u{1f441}</button>`;
+  html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="${t('viz.previewTheme')}">\u{1f441}</button>`;
   html += `</div>`;
 
   html += '</div>'; // .viz-toolbar-top
@@ -422,7 +391,7 @@ export function renderCompareControls(
   // Model chips
   if (availableModels.length > 0) {
     html += '<div class="viz-compare-model-chips">';
-    html += '<span class="viz-toggle-label">Models:</span>';
+    html += `<span class="viz-toggle-label">${t('viz.models')}</span>`;
     for (const m of availableModels) {
       const enabled = settings.compareModels[m] !== false;
       const activeClass = enabled ? ' active' : '';
