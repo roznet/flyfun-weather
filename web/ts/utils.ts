@@ -1,7 +1,7 @@
 /** Shared utilities for the WeatherBrief web app. */
 
 import { logout, type CurrentUser } from './adapters/auth-adapter';
-import { t, getLocale } from './i18n/i18n';
+import { t, getAcceptLanguage, getLocale } from './i18n/i18n';
 
 // --- HTML escaping ---
 
@@ -178,7 +178,11 @@ export const API_BASE = '/api';
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept-Language': getAcceptLanguage(),
+      ...init?.headers,
+    },
     ...init,
   });
   if (!resp.ok) {
