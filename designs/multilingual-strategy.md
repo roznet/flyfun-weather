@@ -234,9 +234,9 @@ Ask the LLM to output both languages in one call (structured output with `synopt
 ```
 configs/weather_digest/prompts/
 ├── briefer_v1.md        # English (existing)
-├── briefer_v1_fr.md     # French variant
-├── briefer_v1_de.md     # German variant
-└── briefer_v1_es.md     # Spanish variant
+├── briefer_v1.fr.md     # French variant
+├── briefer_v1.de.md     # German variant
+└── briefer_v1.es.md     # Spanish variant
 ```
 
 The prompt variants are mostly identical — only the output language instruction and any language-specific terminology guidance differ. Consider a template approach where the base prompt is shared and only the language block varies.
