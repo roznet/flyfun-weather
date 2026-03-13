@@ -1,6 +1,7 @@
 /** Metric info popup — modal overlay showing detailed metric explanations. */
 
 import { renderInfoPopupContent, renderLayerLegend } from '../helpers/metrics-helper';
+import { t } from '../i18n/i18n';
 
 let popupEl: HTMLElement | null = null;
 let backdropEl: HTMLElement | null = null;
@@ -33,7 +34,7 @@ export function showMetricInfo(metricId: string, value?: string): void {
 
   const numValue = value != null && value !== '' ? parseFloat(value) : undefined;
   popupEl.innerHTML = `
-    <button class="metric-popup-close" aria-label="Close">\u00d7</button>
+    <button class="metric-popup-close" aria-label="${t('popup.close')}">\u00d7</button>
     ${renderInfoPopupContent(metricId, numValue)}
   `;
 
@@ -46,7 +47,7 @@ export function showLayerInfo(layerId: string, metricId: string): void {
 
   const legendHtml = renderLayerLegend(layerId);
   popupEl.innerHTML = `
-    <button class="metric-popup-close" aria-label="Close">\u00d7</button>
+    <button class="metric-popup-close" aria-label="${t('popup.close')}">\u00d7</button>
     ${renderInfoPopupContent(metricId)}
     ${legendHtml}
   `;
@@ -60,7 +61,7 @@ export function showPopupContent(html: string): void {
   if (!popupEl || !backdropEl) return;
 
   popupEl.innerHTML = `
-    <button class="metric-popup-close" aria-label="Close">\u00d7</button>
+    <button class="metric-popup-close" aria-label="${t('popup.close')}">\u00d7</button>
     ${html}
   `;
 
@@ -93,9 +94,7 @@ function wirePopupButtons(): void {
   const metricName = discussSection.dataset.metricName ?? 'this metric';
   const llmContext = discussSection.dataset.llmPrompt;
   const contextStr = llmContext ? ` In particular, ${llmContext}.` : '';
-  const prompt = `Tell me more about ${metricName} in the context of aviation weather.${contextStr} `
-    + `How should a VFR or IFR pilot interpret it, what are the key thresholds, `
-    + `and how does it interact with other weather parameters for flight safety?`;
+  const prompt = t('popup.discussAi', { metric: metricName }) + contextStr;
 
   const aiButtons = discussSection.querySelectorAll('.popup-ai-btn');
   const toast = discussSection.querySelector('.popup-discuss-toast') as HTMLElement | null;

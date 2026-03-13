@@ -37,6 +37,7 @@ import {
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
 import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl, flightTitle, flightRoute } from '../utils';
+import { t } from '../i18n/i18n';
 
 // --- Header ---
 
@@ -92,7 +93,7 @@ export function renderHistoryDropdown(
   if (!select) return;
 
   select.innerHTML = packs.length === 0
-    ? '<option>No briefings yet</option>'
+    ? `<option>${t('briefing.noBriefings')}</option>`
     : packs.map((p) => {
         const date = new Date(p.fetch_timestamp);
         const dLabel = p.days_out >= 0 ? `D-${p.days_out}` : `D${p.days_out}`;
@@ -117,7 +118,7 @@ export function renderAssessment(pack: PackMeta | null, flight?: FlightResponse 
 
   if (!pack || !pack.assessment) {
     el.className = 'assessment-banner assessment-none';
-    el.textContent = 'No assessment available';
+    el.textContent = t('briefing.noAssessment');
     return;
   }
 
@@ -139,7 +140,7 @@ export function renderAssessment(pack: PackMeta | null, flight?: FlightResponse 
         </span>
         <span class="assessment-separator">\u2502</span>
         <span class="assessment-alt assessment-${altLevel.toLowerCase()}-text">
-          <strong>Alt ${altTime}: ${altLevel}</strong>${altReason}
+          <strong>${t('briefing.alt', { time: altTime })}: ${altLevel}</strong>${altReason}
         </span>
       </span>
     `;
@@ -197,18 +198,18 @@ export function renderFreshnessBar(
   if (refreshing) {
     el.className = 'freshness-bar freshness-refreshing';
     if (refreshStatus === 'queued') {
-      el.innerHTML = `<span class="refresh-prefix">Queued</span> · Waiting for other refreshes to complete<span class="dots-spinner"></span>`;
+      el.innerHTML = `<span class="refresh-prefix">${t('freshness.queued')}</span> · ${t('freshness.queuedWaiting')}<span class="dots-spinner"></span>`;
       return;
     }
     const detailSuffix = refreshDetail ? ` (${escapeHtml(refreshDetail)})` : '';
-    const label = refreshStage ? escapeHtml(refreshStage) : 'Starting refresh';
-    el.innerHTML = `<span class="refresh-prefix">Refreshing (may take a minute)</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>`;
+    const label = refreshStage ? escapeHtml(refreshStage) : t('freshness.starting');
+    el.innerHTML = `<span class="refresh-prefix">${t('freshness.inProgress')}</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>`;
     return;
   }
 
   if (freshnessLoading && !freshness) {
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = 'Checking for updates...';
+    el.innerHTML = t('freshness.checking');
     return;
   }
 
@@ -229,9 +230,9 @@ export function renderFreshnessBar(
       return `${modelLabel(m)} ${formatModelRunTime(t)}`;
     });
   const skippedParts = (pack?.models_skipped_region || [])
-    .map(m => `${modelLabel(m)} <span class="model-skipped">skipped</span>`);
+    .map(m => `${modelLabel(m)} <span class="model-skipped">${t('freshness.skipped')}</span>`);
   const basisParts = [...fetchedParts, ...skippedParts].join(', ');
-  const basisLine = basisParts ? `<span class="freshness-basis">Based on ${basisParts}</span>` : '';
+  const basisLine = basisParts ? `<span class="freshness-basis">${t('freshness.basedOn')}${basisParts}</span>` : '';
 
   // Build diagnostics HTML (warn entries only — info is too noisy for the bar)
   const diagEntries = (pack?.diagnostics || []).filter(d => d.level === 'warn');
@@ -246,27 +247,26 @@ export function renderFreshnessBar(
   if (refreshElapsed && refreshElapsed > 0) {
     const mins = Math.floor(refreshElapsed / 60);
     const secs = Math.round(refreshElapsed % 60);
-    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-    elapsedBadge = `<span class="freshness-elapsed">Refreshed in ${timeStr}</span>`;
+    elapsedBadge = `<span class="freshness-elapsed">${t('freshness.refreshedIn', { m: mins, s: secs })}</span>`;
   }
 
   const forceLink = isAdmin
-    ? ' <a href="#" class="freshness-link" id="freshness-force-refresh">Force refresh</a>'
+    ? ` <a href="#" class="freshness-link" id="freshness-force-refresh">${t('freshness.forceRefresh')}</a>`
     : '';
 
   if (freshness.fresh) {
     let nextInfo = '';
     if (freshness.next_expected_update && freshness.next_expected_model) {
       const timeStr = formatTimeUntil(freshness.next_expected_update);
-      nextInfo = `, next update ${modelLabel(freshness.next_expected_model)} in ~${timeStr}`;
+      nextInfo = t('freshness.nextUpdate', { time: `${modelLabel(freshness.next_expected_model)} ${timeStr}` });
     }
-    const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">Check again</a>`;
+    const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">${t('freshness.checkAgain')}</a>`;
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>Up to date${nextInfo} ${checkLink}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}`;
+    el.innerHTML = `<span>${t('freshness.upToDate')}${nextInfo} ${checkLink}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}`;
   } else {
     const staleStr = freshness.stale_models.map((m) => modelLabel(m)).join(', ');
     el.className = 'freshness-bar freshness-stale';
-    el.innerHTML = `<span>Updates available: ${staleStr}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}`;
+    el.innerHTML = `<span>${t('freshness.updatesAvailable')}${staleStr}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}`;
   }
 
   // Wire event handlers
@@ -302,7 +302,7 @@ export function renderPrivacyToggle(
   el.innerHTML = `
     <label class="auto-refresh-toggle">
       <input type="checkbox" id="privacy-check" ${isPrivate ? 'checked' : ''}>
-      <span>Private</span>
+      <span>${t('privacy.label')}</span>
     </label>
   `;
 
@@ -339,17 +339,17 @@ export function renderAutoRefreshBar(
     const label = `${h.toString().padStart(2, '0')}:00Z`;
     const isDefault = h === defaultHour && flight.auto_refresh_hour === null;
     const selected = h === effectiveHour ? ' selected' : '';
-    const suffix = isDefault ? ' (auto)' : '';
+    const suffix = isDefault ? t('freshness.auto') : '';
     return `<option value="${h}"${selected}>${label}${suffix}</option>`;
   }).join('');
 
   el.innerHTML = `
     <label class="auto-refresh-toggle">
       <input type="checkbox" id="auto-refresh-check" ${enabled ? 'checked' : ''}>
-      <span>Auto-refresh</span>
+      <span>${t('autoRefresh.label')}</span>
     </label>
     <span class="auto-refresh-hour-group" ${enabled ? '' : 'style="display:none;"'}>
-      at <select id="auto-refresh-hour">${hourOptions}</select>
+      ${t('autoRefresh.at')}<select id="auto-refresh-hour">${hourOptions}</select>
     </span>
   `;
 
@@ -424,8 +424,8 @@ function formatWindStr(dir: number | null, speed: number | null, gust: number | 
 function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | undefined): string {
   // METAR raw
   const metarBlock = apt.metar_raw
-    ? `<h4>METAR</h4><code class="obs-popup-metar">${escapeHtml(apt.metar_raw)}</code>`
-    : '<h4>METAR</h4><p class="muted">Not available</p>';
+    ? `<h4>${t('observations.metar')}</h4><code class="obs-popup-metar">${escapeHtml(apt.metar_raw)}</code>`
+    : `<h4>${t('observations.metar')}</h4><p class="muted">${t('observations.notAvailable')}</p>`;
 
   // TAF raw with applicable lines highlighted
   let tafBlock: string;
@@ -436,9 +436,9 @@ function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | u
       const escaped = escapeHtml(line);
       return applicable.has(i) ? `<mark>${escaped}</mark>` : escaped;
     }).join('\n');
-    tafBlock = `<h4>TAF</h4><code class="obs-popup-taf">${tafHtml}</code>`;
+    tafBlock = `<h4>${t('observations.taf')}</h4><code class="obs-popup-taf">${tafHtml}</code>`;
   } else {
-    tafBlock = '<h4>TAF</h4><p class="muted">Not available</p>';
+    tafBlock = `<h4>${t('observations.taf')}</h4><p class="muted">${t('observations.notAvailable')}</p>`;
   }
 
   // Wind summary
@@ -468,7 +468,7 @@ function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | u
   }
 
   const windBlock = windLines.length > 0
-    ? `<h4>Wind Summary</h4><pre class="obs-wind-summary">${windLines.join('\n')}</pre>`
+    ? `<h4>${t('observations.windSummary')}</h4><pre class="obs-wind-summary">${windLines.join('\n')}</pre>`
     : '';
 
   return `
@@ -512,22 +512,22 @@ export function renderRouteObservations(
 
   // Refresh button (D-0 only, when callback provided)
   const refreshBtn = (onRefresh && snapshot?.days_out === 0)
-    ? `<button class="obs-refresh-btn" title="Re-fetch METAR/TAF observations">Refresh</button>`
+    ? `<button class="obs-refresh-btn" title="${t('observations.refreshTitle')}">${t('observations.refresh')}</button>`
     : '';
 
   // Summary header
   const worstBadge = obs.worst_metar_category
-    ? ` \u2014 Worst: ${flightCatBadge(obs.worst_metar_category)}`
+    ? `${t('observations.worst')}${flightCatBadge(obs.worst_metar_category)}`
     : '';
   const phenomena = obs.phenomena_along_route.length > 0
-    ? ` \u2014 Phenomena: ${escapeHtml(obs.phenomena_along_route.join(', '))}`
+    ? `${t('observations.phenomena')}${escapeHtml(obs.phenomena_along_route.join(', '))}`
     : '';
-  const fetchInfo = fetchLabel ? `<span class="obs-fetch-time">Fetched ${fetchLabel}</span>` : '';
-  const summaryHtml = `<p class="obs-summary">${obs.airports_with_metar} METAR, ${obs.airports_with_taf} TAF within ${Math.round(obs.corridor_nm)}nm corridor${worstBadge}${phenomena} ${fetchInfo}${refreshBtn}</p>`;
+  const fetchInfo = fetchLabel ? `<span class="obs-fetch-time">${t('observations.fetched')}${fetchLabel}</span>` : '';
+  const summaryHtml = `<p class="obs-summary">${obs.airports_with_metar}${t('observations.metarCount')}${obs.airports_with_taf}${t('observations.tafCount')}${Math.round(obs.corridor_nm)}${t('observations.corridor')}${worstBadge}${phenomena} ${fetchInfo}${refreshBtn}</p>`;
 
   // Conflict banner
   const conflictHtml = obs.has_conflicts
-    ? '<div class="obs-conflict-banner">Observation/model conflicts detected</div>'
+    ? `<div class="obs-conflict-banner">${t('observations.conflictsDetected')}</div>`
     : '';
 
   // Table rows — only airports with METAR or TAF
@@ -545,7 +545,7 @@ export function renderRouteObservations(
 
       return `
         <tr${rowClass}>
-          <td class="obs-icao">${escapeHtml(apt.icao)} <button class="obs-info-btn" data-icao="${escapeHtml(apt.icao)}" title="Show METAR/TAF details" aria-label="Info">i</button></td>
+          <td class="obs-icao">${escapeHtml(apt.icao)} <button class="obs-info-btn" data-icao="${escapeHtml(apt.icao)}" title="${t('observations.showDetails')}" aria-label="${t('observations.info')}">i</button></td>
           <td>${Math.round(apt.distance_from_route_nm)}nm</td>
           <td>${apt.eta_hour_offset != null ? `+${apt.eta_hour_offset}h` : '\u2014'}</td>
           <td class="obs-group-start">${flightCatBadge(apt.metar_flight_category)}</td>
@@ -568,15 +568,15 @@ export function renderRouteObservations(
       <table class="band-table obs-table">
         <thead>
           <tr>
-            <th rowspan="2" style="text-align:left;">ICAO</th>
-            <th rowspan="2">Dist</th>
-            <th rowspan="2">ETA</th>
-            <th colspan="4" class="obs-group-header">Condition</th>
-            <th colspan="4" class="obs-group-header">Wind</th>
+            <th rowspan="2" style="text-align:left;">${t('observations.tableIcao')}</th>
+            <th rowspan="2">${t('observations.tableDist')}</th>
+            <th rowspan="2">${t('observations.tableEta')}</th>
+            <th colspan="4" class="obs-group-header">${t('observations.tableCondition')}</th>
+            <th colspan="4" class="obs-group-header">${t('observations.tableWind')}</th>
           </tr>
           <tr>
-            <th class="obs-group-start">METAR</th><th>TAF</th><th>Model</th><th></th>
-            <th class="obs-group-start">METAR</th><th>TAF</th><th>Model</th><th></th>
+            <th class="obs-group-start">${t('observations.tableMetar')}</th><th>${t('observations.tableTaf')}</th><th>${t('observations.tableModel')}</th><th></th>
+            <th class="obs-group-start">${t('observations.tableMetar')}</th><th>${t('observations.tableTaf')}</th><th>${t('observations.tableModel')}</th><th></th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -604,11 +604,11 @@ export function renderRouteObservations(
     const refreshBtn = target.closest('.obs-refresh-btn') as HTMLButtonElement | null;
     if (refreshBtn && onRefresh) {
       refreshBtn.disabled = true;
-      refreshBtn.textContent = 'Refreshing...';
+      refreshBtn.textContent = t('observations.refreshing');
       onRefresh().finally(() => {
         // Re-render will replace the button, but just in case:
         refreshBtn.disabled = false;
-        refreshBtn.textContent = 'Refresh';
+        refreshBtn.textContent = t('observations.refresh');
       });
     }
   });
@@ -616,11 +616,11 @@ export function renderRouteObservations(
 
 // --- Synopsis (structured digest) ---
 
-const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; label: string; icon: string }> = [
-  { key: 'synoptic', label: 'Synoptic', icon: '\uD83C\uDF0D' },
-  { key: 'specific_concerns', label: 'Specific Concerns', icon: '\u26A0\uFE0F' },
-  { key: 'trend', label: 'Trend', icon: '\uD83D\uDCC8' },
-  { key: 'watch_items', label: 'Watch Items', icon: '\uD83D\uDC41\uFE0F' },
+const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; labelKey: string; icon: string }> = [
+  { key: 'synoptic', labelKey: 'digest.synoptic', icon: '\uD83C\uDF0D' },
+  { key: 'specific_concerns', labelKey: 'digest.concerns', icon: '\u26A0\uFE0F' },
+  { key: 'trend', labelKey: 'digest.trend', icon: '\uD83D\uDCC8' },
+  { key: 'watch_items', labelKey: 'digest.watchItems', icon: '\uD83D\uDC41\uFE0F' },
 ];
 
 /** Digest section keys shown in compact mode (synoptic overview + trend only). */
@@ -630,12 +630,12 @@ function renderDigestHtml(digest: WeatherDigest, displayMode: DisplayMode): stri
   const sections = displayMode === 'compact'
     ? DIGEST_SECTIONS.filter(s => COMPACT_DIGEST_KEYS.has(s.key))
     : DIGEST_SECTIONS;
-  return sections.map(({ key, label, icon }) => {
+  return sections.map(({ key, labelKey, icon }) => {
     const text = digest[key];
     if (!text) return '';
     return `
       <div class="digest-section">
-        <h4>${icon} ${label}</h4>
+        <h4>${icon} ${t(labelKey)}</h4>
         <p>${escapeHtml(text as string)}</p>
       </div>
     `;
@@ -652,7 +652,7 @@ export function renderSynopsis(
   if (!el) return;
 
   if (!flight || !pack) {
-    el.innerHTML = '<p class="muted">No briefing loaded.</p>';
+    el.innerHTML = `<p class="muted">${t('digest.noBriefing')}</p>`;
     return;
   }
 
@@ -662,12 +662,12 @@ export function renderSynopsis(
   }
 
   if (pack.has_digest) {
-    el.innerHTML = '<p class="muted">Loading digest...</p>';
+    el.innerHTML = `<p class="muted">${t('digest.loading')}</p>`;
     fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el, displayMode);
     return;
   }
 
-  el.innerHTML = '<p class="muted">Synopsis not available. Trigger a refresh to generate.</p>';
+  el.innerHTML = `<p class="muted">${t('digest.notAvailable')}</p>`;
 }
 
 async function fetchAndRenderDigestJson(
@@ -680,7 +680,7 @@ async function fetchAndRenderDigestJson(
     const digest: WeatherDigest = await resp.json();
     el.innerHTML = renderDigestHtml(digest, displayMode);
   } catch {
-    el.innerHTML = '<p class="muted">Failed to load digest.</p>';
+    el.innerHTML = `<p class="muted">${t('digest.failed')}</p>`;
   }
 }
 
@@ -742,7 +742,7 @@ async function fetchAndRenderDWDOverview(
           <h5>${escapeHtml(entry.day_name_de)} (${escapeHtml(dateLabel)}) — ${sourceTag}</h5>
           <p>${escapeHtml(entry.text_en)}</p>
           <details class="dwd-original">
-            <summary>Original German</summary>
+            <summary>${t('dwd.originalGerman')}</summary>
             <p class="muted">${escapeHtml(entry.text_de)}</p>
           </details>
         </div>
@@ -750,7 +750,7 @@ async function fetchAndRenderDWDOverview(
     }).join('');
 
     el.innerHTML = `
-      <h4>🌍 DWD Synoptic Overview — ${escapeHtml(overview.coverage)}</h4>
+      <h4>🌍 ${t('dwd.header')}${escapeHtml(overview.coverage)}</h4>
       ${entriesHtml}
     `;
   } catch {
@@ -774,15 +774,13 @@ export function renderGramet(
         .then((prefs) => {
           if (!prefs.has_autorouter_creds) {
             el.innerHTML =
-              '<p class="muted">No GRAMET available. To enable, enter your ' +
-              '<a href="https://www.autorouter.aero" target="_blank">autorouter.aero</a> ' +
-              'credentials in <a href="settings.html">Account Settings</a>.</p>';
+              `<p class="muted">${t('gramet.noCreds')}</p>`;
           } else {
-            el.innerHTML = '<p class="muted">GRAMET not available for this briefing.</p>';
+            el.innerHTML = `<p class="muted">${t('gramet.notAvailable')}</p>`;
           }
         })
         .catch(() => {
-          el.innerHTML = '<p class="muted">GRAMET not available for this briefing.</p>';
+          el.innerHTML = `<p class="muted">${t('gramet.notAvailable')}</p>`;
         }),
     );
     return;
@@ -791,9 +789,9 @@ export function renderGramet(
   const pngUrl = api.grametPngUrl(flight.id, pack.fetch_timestamp);
   const pdfUrl = api.grametUrl(flight.id, pack.fetch_timestamp);
   el.innerHTML = `
-    <img src="${pngUrl}" alt="GRAMET Cross-Section" class="gramet-img" />
+    <img src="${pngUrl}" alt="${t('gramet.altText')}" class="gramet-img" />
     <div class="gramet-actions">
-      <a href="${pdfUrl}" download class="btn btn-sm">Download GRAMET PDF</a>
+      <a href="${pdfUrl}" download class="btn btn-sm">${t('gramet.downloadPdf')}</a>
     </div>
   `;
 }
@@ -821,13 +819,13 @@ export function renderModelComparison(
       el.innerHTML = renderComparisonTable(label, point.model_divergence, displayMode, tierVisibility);
       return;
     }
-    el.innerHTML = '<p class="muted">No model comparison data for this point.</p>';
+    el.innerHTML = `<p class="muted">${t('comparison.noDataPoint')}</p>`;
     return;
   }
 
   // Fallback: stacked waypoint view
   if (!snapshot || snapshot.analyses.length === 0) {
-    el.innerHTML = '<p class="muted">No model comparison data available.</p>';
+    el.innerHTML = `<p class="muted">${t('comparison.noDataAvailable')}</p>`;
     return;
   }
 
@@ -896,10 +894,10 @@ function renderComparisonTable(
       <table class="comparison-table">
         <thead>
           <tr>
-            <th>Variable</th>
+            <th>${t('comparison.variable')}</th>
             ${headerCells}
-            <th>Spread</th>
-            <th>Agree</th>
+            <th>${t('comparison.spread')}</th>
+            <th>${t('comparison.agree')}</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -910,24 +908,25 @@ function renderComparisonTable(
 }
 
 function formatVarName(name: string): string {
-  const labels: Record<string, string> = {
-    'temperature_c': 'Temp (\u00B0C)',
-    'wind_speed_kt': 'Wind (kt)',
-    'wind_direction_deg': 'Wind dir (\u00B0)',
-    'cloud_cover_pct': 'Cloud (%)',
-    'precipitation_mm': 'Precip (mm)',
-    'freezing_level_m': 'Freezing (m)',
-    'freezing_level_ft': 'Freezing (ft)',
-    'cape_surface_jkg': 'CAPE (J/kg)',
-    'lcl_altitude_ft': 'LCL (ft)',
-    'k_index': 'K-index',
-    'total_totals': 'Total Totals',
-    'precipitable_water_mm': 'PW (mm)',
-    'lifted_index': 'Lifted Index',
-    'bulk_shear_0_6km_kt': 'Shear 0-6km (kt)',
-    'max_omega_pa_s': 'Max Omega (Pa/s)',
+  const labelKeys: Record<string, string> = {
+    'temperature_c': 'comparison.temp',
+    'wind_speed_kt': 'comparison.windSpeed',
+    'wind_direction_deg': 'comparison.windDir',
+    'cloud_cover_pct': 'comparison.cloud',
+    'precipitation_mm': 'comparison.precip',
+    'freezing_level_m': 'comparison.freezingM',
+    'freezing_level_ft': 'comparison.freezingFt',
+    'cape_surface_jkg': 'comparison.cape',
+    'lcl_altitude_ft': 'comparison.lcl',
+    'k_index': 'comparison.kIndex',
+    'total_totals': 'comparison.totalTotals',
+    'precipitable_water_mm': 'comparison.pw',
+    'lifted_index': 'comparison.liftedIndex',
+    'bulk_shear_0_6km_kt': 'comparison.shear',
+    'max_omega_pa_s': 'comparison.maxOmega',
   };
-  return labels[name] || name;
+  const key = labelKeys[name];
+  return key ? t(key) : name;
 }
 
 // --- Sounding Analysis ---
@@ -976,7 +975,7 @@ export function renderSoundingAnalysis(
 
   // Fallback: stacked waypoint view
   if (!snapshot || snapshot.analyses.length === 0) {
-    el.innerHTML = '<p class="muted">No sounding analysis available.</p>';
+    el.innerHTML = `<p class="muted">${t('sounding.noAnalysis')}</p>`;
     return;
   }
 
@@ -984,7 +983,7 @@ export function renderSoundingAnalysis(
     (a) => a.sounding && Object.keys(a.sounding).length > 0,
   );
   if (!hasSounding) {
-    el.innerHTML = '<p class="muted">Sounding analysis not available for this briefing.</p>';
+    el.innerHTML = `<p class="muted">${t('sounding.notAvailable')}</p>`;
     return;
   }
 
@@ -1056,7 +1055,7 @@ function renderConvectiveBanner(
     }
   }
   const modsSummary = allMods.size > 0
-    ? `<p class="convective-modifiers"><strong>Severe modifiers:</strong> ${escapeHtml([...allMods].join(', '))}</p>`
+    ? `<p class="convective-modifiers"><strong>${t('sounding.severeModifiers')}</strong> ${escapeHtml([...allMods].join(', '))}</p>`
     : '';
 
   // Tier toggle button
@@ -1064,7 +1063,7 @@ function renderConvectiveBanner(
 
   return `
     <div class="convective-section">
-      <h5>Convective</h5>
+      <h5>${t('sounding.convective')}</h5>
       <table class="band-table">
         <thead><tr><th></th>${headerCells}</tr></thead>
         <tbody>${rows}</tbody>
@@ -1116,12 +1115,12 @@ function renderTierToggle(
   const hasAdvanced = config.metrics.some((m) => m.tier === 'advanced');
   if (!hasAdvanced) return '';
 
-  const label = tierVisibility.advanced ? 'Hide advanced' : 'Show advanced';
+  const label = tierVisibility.advanced ? t('sounding.hideAdvanced') : t('sounding.showAdvanced');
   return `<button class="tier-toggle-btn" data-section="${sectionId}" data-tier="advanced">${label}</button>`;
 }
 
 function formatClassification(cls: string): string {
-  if (cls === 'unavailable') return 'N/A';
+  if (cls === 'unavailable') return t('sounding.na');
   // Look up display label from metrics catalog thresholds
   const metric = getMetric('vertical_motion_class');
   if (metric) {
@@ -1146,11 +1145,11 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
   // Summary rows
   const rowSpecs: Array<{ label: string; metricId?: string; render: (m: string) => string }> = [
     {
-      label: 'Classification',
+      label: t('sounding.classification'),
       metricId: 'vertical_motion_class',
       render: (m) => {
         const vm = soundings[m].vertical_motion;
-        if (!vm || vm.classification === 'unavailable') return '<td class="muted">N/A</td>';
+        if (!vm || vm.classification === 'unavailable') return `<td class="muted">${t('sounding.na')}</td>`;
         const cls = vm.classification === 'convective' ? 'risk-severe'
           : vm.classification === 'synoptic_ascent' ? 'risk-moderate'
           : '';
@@ -1158,7 +1157,7 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
       },
     },
     {
-      label: 'Max W (ft/min)',
+      label: t('sounding.maxW'),
       render: (m) => {
         const vm = soundings[m].vertical_motion;
         if (!vm || vm.max_w_fpm == null) return '<td>\u2014</td>';
@@ -1175,13 +1174,13 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
   );
   if (hasContamination) {
     rowSpecs.push({
-      label: 'Contamination',
+      label: t('sounding.contamination'),
       render: (m) => {
         const vm = soundings[m].vertical_motion;
         if (!vm) return '<td>\u2014</td>';
         return vm.convective_contamination
-          ? '<td class="risk-moderate">Mid-level convective</td>'
-          : '<td>None</td>';
+          ? `<td class="risk-moderate">${t('sounding.midLevelConvective')}</td>`
+          : `<td>${t('sounding.contaminationNone')}</td>`;
       },
     });
   }
@@ -1247,9 +1246,9 @@ function renderVerticalMotion(soundings: Record<string, SoundingAnalysis>, displ
 
       const catInfoBtn = renderInfoButton('cat_risk');
       catSection = `
-        <h6>CAT Risk Layers <span class="section-info-btn">${catInfoBtn}</span></h6>
+        <h6>${t('sounding.catRiskLayers')}<span class="section-info-btn">${catInfoBtn}</span></h6>
         <table class="band-table">
-          <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
+          <thead><tr><th>${t('sounding.altitude')}</th>${headerCells}</tr></thead>
           <tbody>${catRows}</tbody>
         </table>
       `;
@@ -1307,7 +1306,7 @@ function renderAltitudeMarkers(
 
   return `
     <div class="altitude-markers">
-      <h5>Key Altitudes</h5>
+      <h5>${t('sounding.keyAltitudes')}</h5>
       <table class="band-table">
         <thead><tr><th></th>${headerCells}</tr></thead>
         <tbody>${rows}</tbody>
@@ -1318,9 +1317,9 @@ function renderAltitudeMarkers(
 }
 
 function inversionStrengthLabel(strengthC: number): string {
-  if (strengthC >= 3) return 'strong';
-  if (strengthC >= 1) return 'moderate';
-  return 'weak';
+  if (strengthC >= 3) return t('sounding.inversionStrong');
+  if (strengthC >= 1) return t('sounding.inversionModerate');
+  return t('sounding.inversionWeak');
 }
 
 const COVERAGE_OKTAS: Record<string, string> = {
@@ -1362,16 +1361,16 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[], enabl
       if (regime.mean_temperature_c != null)
         params.push(`T=${regime.mean_temperature_c.toFixed(0)}\u00b0C`);
       if (regime.cloud_cover_pct != null && layerOn('nwp-cloud-bands'))
-        params.push(`NWP\u00a0${regime.cloud_cover_pct.toFixed(0)}%`);
+        params.push(`${t('sounding.nwpLabel')}${regime.cloud_cover_pct.toFixed(0)}%`);
       if (params.length > 0)
         lines.push(`<div class="regime-params">${params.join(' ')}</div>`);
     } else {
       // Old data: no coverage detail
-      lines.push(`<div class="regime-cloud">In cloud</div>`);
+      lines.push(`<div class="regime-cloud">${t('sounding.inCloud')}</div>`);
     }
   } else if (!layerOn('cloud-bands') && layerOn('nwp-cloud-bands') && regime.cloud_cover_pct != null && regime.cloud_cover_pct > 0) {
     // Cloud-bands OFF but NWP ON: show minimal NWP line
-    lines.push(`<div class="regime-cloud">NWP\u00a0${regime.cloud_cover_pct.toFixed(0)}%</div>`);
+    lines.push(`<div class="regime-cloud">${t('sounding.nwpLabel')}${regime.cloud_cover_pct.toFixed(0)}%</div>`);
   }
 
   // Icing: headline + params subtitle
@@ -1423,8 +1422,8 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[], enabl
   // Clear band
   if (lines.length === 0) {
     const nwp = layerOn('nwp-cloud-bands') && regime.cloud_cover_pct != null && regime.cloud_cover_pct > 0
-      ? ` <span class="regime-nwp">NWP\u00a0${regime.cloud_cover_pct.toFixed(0)}%</span>` : '';
-    lines.push(`<span class="regime-clear">Clear${nwp}</span>`);
+      ? ` <span class="regime-nwp">${t('sounding.nwpLabel')}${regime.cloud_cover_pct.toFixed(0)}%</span>` : '';
+    lines.push(`<span class="regime-clear">${t('sounding.clear')}${nwp}</span>`);
   }
 
   return lines.join('');
@@ -1450,7 +1449,7 @@ function renderAtmosphericProfile(
   if (adv.cruise_in_icing) {
     parts.push(
       `<div class="cruise-icing-banner ${riskClass(adv.cruise_icing_risk)}">` +
-      `Cruise in icing: ${adv.cruise_icing_risk.toUpperCase()}</div>`,
+      `${t('sounding.cruiseInIcing')}${adv.cruise_icing_risk.toUpperCase()}</div>`,
     );
   }
 
@@ -1489,10 +1488,10 @@ function renderAtmosphericProfile(
 
     parts.push(`
       <div class="atmospheric-profile">
-        <h5>Atmospheric Profile</h5>
+        <h5>${t('sounding.atmosphericProfile')}</h5>
         <div class="table-scroll">
           <table class="band-table">
-            <thead><tr><th>Altitude</th>${headerCells}</tr></thead>
+            <thead><tr><th>${t('sounding.altitude')}</th>${headerCells}</tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
@@ -1515,7 +1514,7 @@ function renderAdvisoriesTable(adv: AltitudeAdvisories | null): string {
 
     let label: string;
     if (isDescentToZero) {
-      label = 'Unable to descend below freezing' + infeasibleBadge;
+      label = t('sounding.unableDescend') + infeasibleBadge;
     } else {
       label = escapeHtml(a.reason) + infeasibleBadge;
     }
@@ -1524,7 +1523,7 @@ function renderAdvisoriesTable(adv: AltitudeAdvisories | null): string {
       const v = a.per_model_ft[m];
       if (v == null) return '<td>\u2014</td>';
       if (a.advisory_type === 'descend_below_icing' && v === 0) {
-        return '<td>SFC</td>';
+        return `<td>${t('sounding.surface')}</td>`;
       }
       return `<td>${v.toFixed(0)}ft</td>`;
     }).join('');
@@ -1535,7 +1534,7 @@ function renderAdvisoriesTable(adv: AltitudeAdvisories | null): string {
 
   return `
     <div class="advisories-section">
-      <h5>Advisories</h5>
+      <h5>${t('sounding.advisories')}</h5>
       <table class="band-table">
         <thead><tr><th></th>${advHeaderCells}</tr></thead>
         <tbody>${advisoryRows}</tbody>
@@ -1606,8 +1605,8 @@ export function renderRouteSlider(
       <div class="slider-waypoint-labels">${waypointLabels}</div>
     </div>
     <div class="slider-endpoints">
-      <span>${escapeHtml(analyses[0].waypoint_icao || 'Origin')}</span>
-      <span>${escapeHtml(analyses[maxIdx].waypoint_icao || 'Destination')}</span>
+      <span>${escapeHtml(analyses[0].waypoint_icao || t('sounding.origin'))}</span>
+      <span>${escapeHtml(analyses[maxIdx].waypoint_icao || t('sounding.destination'))}</span>
     </div>
   `;
 
@@ -1628,7 +1627,7 @@ function renderSinglePointSounding(
   enabledLayers?: Record<string, boolean>,
 ): string {
   if (!point.sounding || Object.keys(point.sounding).length === 0) {
-    return '<p class="muted">No sounding data for this point.</p>';
+    return `<p class="muted">${t('sounding.noDataPoint')}</p>`;
   }
 
   const label = point.waypoint_icao
@@ -1667,7 +1666,7 @@ export function renderSkewTs(
   if (!el) return;
 
   if (!flight || !pack) {
-    el.innerHTML = '<p class="muted">Skew-T diagrams not available.</p>';
+    el.innerHTML = `<p class="muted">${t('skewt.notAvailable')}</p>`;
     return;
   }
 
@@ -1693,7 +1692,7 @@ export function renderSkewTs(
               <img src="${hodoUrlStr}" alt="Hodograph ${label} ${selectedModel}"
                    class="skewt-hodo-img" loading="lazy">
             </div>
-            <div class="skewt-fallback">Not available</div>
+            <div class="skewt-fallback">${t('skewt.tabNotAvailable')}</div>
           </div>
         </div>
       `;
@@ -1703,7 +1702,7 @@ export function renderSkewTs(
 
   // Fallback: waypoint gallery
   if (!pack.has_skewt || !snapshot) {
-    el.innerHTML = '<p class="muted">Skew-T diagrams not available.</p>';
+    el.innerHTML = `<p class="muted">${t('skewt.notAvailable')}</p>`;
     return;
   }
 
@@ -1723,7 +1722,7 @@ export function renderSkewTs(
               <img src="${hodoUrlStr}" alt="Hodograph ${wp.icao} ${selectedModel}"
                    class="skewt-hodo-img" loading="lazy">
             </div>
-            <div class="skewt-fallback">Not available</div>
+            <div class="skewt-fallback">${t('skewt.tabNotAvailable')}</div>
           </div>
         `;
       }).join('')}
@@ -1742,7 +1741,7 @@ export function renderRefreshing(refreshing: boolean): void {
   const btn = $('refresh-btn') as HTMLButtonElement;
   if (btn) {
     btn.disabled = refreshing;
-    btn.textContent = refreshing ? 'Refreshing...' : 'Refresh';
+    btn.textContent = refreshing ? t('btn.refreshing') : t('btn.refresh');
   }
 }
 
@@ -1750,7 +1749,7 @@ export function renderEmailing(emailing: boolean): void {
   const btn = $('email-btn') as HTMLButtonElement;
   if (btn) {
     btn.disabled = emailing;
-    btn.textContent = emailing ? 'Sending...' : 'Send Email';
+    btn.textContent = emailing ? t('btn.sending') : t('btn.sendEmail');
   }
 }
 

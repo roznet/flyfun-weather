@@ -9,10 +9,12 @@ import {
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 import { initTheme } from './theme';
+import { initI18n } from './i18n/i18n';
 
 let currentPeriod: AdminPeriod = '30d';
 
 async function init(): Promise<void> {
+  await initI18n();
   const user = await fetchCurrentUser();
   if (!user) {
     window.location.href = '/login.html';

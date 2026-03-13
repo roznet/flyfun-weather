@@ -57,6 +57,7 @@ class PreferencesResponse(BaseModel):
     icing_method: str
     cloud_method: str
     convective_method: str
+    locale: str
 
 
 class PreferencesUpdate(BaseModel):
@@ -73,6 +74,7 @@ class PreferencesUpdate(BaseModel):
     icing_method: str | None = None
     cloud_method: str | None = None
     convective_method: str | None = None
+    locale: str | None = None
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -93,8 +95,8 @@ def _parse_defaults(raw: str) -> FlightDefaults:
     return FlightDefaults(**data)
 
 
-def _parse_service_toggles(raw: str) -> dict[str, bool]:
-    """Extract gramet_enabled and llm_digest_enabled from the defaults blob."""
+def _parse_service_toggles(raw: str) -> dict:
+    """Extract service toggles and locale from the app_prefs_json blob."""
     try:
         data = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
@@ -106,6 +108,7 @@ def _parse_service_toggles(raw: str) -> dict[str, bool]:
         "icing_method": data.get("icing_method", "ogimet_dd"),
         "cloud_method": data.get("cloud_method", "dd"),
         "convective_method": data.get("convective_method", "thermo"),
+        "locale": data.get("locale", "en"),
     }
 
 
@@ -206,6 +209,8 @@ def update_preferences(
         data["cloud_method"] = body.cloud_method
     if body.convective_method is not None:
         data["convective_method"] = body.convective_method
+    if body.locale is not None:
+        data["locale"] = body.locale
 
     if body.digest_config is not None:
         data["digest_config"] = body.digest_config.model_dump(exclude_none=True)
@@ -243,6 +248,22 @@ def load_autorouter_credentials(db: Session, user_id: str) -> tuple[str, str] | 
         return creds["username"], creds["password"]
     except KeyError:
         logger.warning("Invalid autorouter credentials format for user %s", user_id)
+        return None
+
+
+def load_user_locale(db: Session, user_id: str) -> str | None:
+    """Load the user's preferred locale (en/fr/de/es).
+
+    Returns the locale string or None if not set.
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    if not row or not row.app_prefs_json:
+        return None
+    try:
+        data = json.loads(row.app_prefs_json)
+        locale = data.get("locale")
+        return locale if locale and locale != "en" else None
+    except json.JSONDecodeError:
         return None
 
 

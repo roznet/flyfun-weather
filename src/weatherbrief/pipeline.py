@@ -65,6 +65,7 @@ class BriefingOptions:
     historical_mode: bool = False  # Use archived NWP data for past departure times
     as_of_time: datetime | None = None  # For historical: the date "as of" which to fetch data
     alt_departure_time: datetime | None = None  # optional same-day alt departure for lite advisory re-run
+    locale: str | None = None  # user locale for LLM digest language (en/fr/de/es)
 
 
 @dataclass
@@ -424,6 +425,7 @@ def execute_briefing(
             route_advisories=route_advisories_manifest,
             flight_rules=options.flight_rules,
             previous_digest=previous_digest,
+            locale=options.locale,
         )
         if digest_result.digest is not None:
             result.digest = digest_result.digest

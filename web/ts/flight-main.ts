@@ -7,9 +7,11 @@ import * as ui from './managers/flight-detail-ui';
 import { RouteMapInset } from './components/route-map-inset';
 import { renderUserInfo } from './utils';
 import { initTheme } from './theme';
+import { initI18n } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
 
 async function init(): Promise<void> {
+  await initI18n();
   // Auth check
   const user = await fetchCurrentUser();
   if (!user) {

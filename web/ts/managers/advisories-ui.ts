@@ -5,6 +5,7 @@ import type { DisplayMode } from '../types/metrics';
 import { showPopupContent } from '../components/info-popup';
 import { renderAdvisoryPopup } from '../helpers/advisory-popup';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
+import { t } from '../i18n/i18n';
 
 /** Advisory categories hidden in compact mode (informational, not actionable). */
 const COMPACT_HIDDEN_CATEGORIES = new Set(['model']);
@@ -45,9 +46,9 @@ function formatRunwayPopup(allRunways: RunwayWind[]): string {
     `<td>${r.crosswind_kt.toFixed(0)}kt</td><td>${r.headwind_kt > 0 ? '+' : ''}${r.headwind_kt.toFixed(0)}kt</td></tr>`
   ).join('');
   return `
-    <div class="popup-header"><h3>All Runways</h3></div>
+    <div class="popup-header"><h3>${t('advisories.allRunways')}</h3></div>
     <table class="advisory-params-table">
-      <thead><tr><th>Runway</th><th>Heading</th><th>Crosswind</th><th>Headwind</th></tr></thead>
+      <thead><tr><th>${t('advisories.runway')}</th><th>${t('advisories.heading')}</th><th>${t('advisories.crosswind')}</th><th>${t('advisories.headwind')}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
@@ -217,7 +218,7 @@ function renderConditionRow(cond: AirportModelCondition): string {
 
 function renderAirportCard(
   summary: AirportConditionsSummary,
-  role: 'Departure' | 'Arrival',
+  role: string,
   aggregation: 'worst' | 'majority',
 ): string {
   if (summary.conditions.length === 0) return '';
@@ -237,8 +238,8 @@ function renderAirportCard(
 }
 
 function renderAirportConditions(conditions: AirportConditions, aggregation: 'worst' | 'majority'): string {
-  const dep = renderAirportCard(conditions.departure, 'Departure', aggregation);
-  const arr = renderAirportCard(conditions.arrival, 'Arrival', aggregation);
+  const dep = renderAirportCard(conditions.departure, t('advisories.departure'), aggregation);
+  const arr = renderAirportCard(conditions.arrival, t('advisories.arrival'), aggregation);
   if (!dep && !arr) return '';
   return `<div class="airport-cards">${dep}${arr}</div>`;
 }
@@ -255,7 +256,7 @@ function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, Advis
 
   const aggClass = statusBadgeClass(adv.aggregate_status);
   const infoBtn = entry
-    ? `<button class="metric-info-btn advisory-info-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="Advisory info" aria-label="Advisory info">i</button>`
+    ? `<button class="metric-info-btn advisory-info-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.advisoryInfo')}" aria-label="${t('advisories.advisoryInfo')}">i</button>`
     : '';
 
   return `
@@ -277,7 +278,7 @@ export function renderAltitudeTablePopup(result: AltitudeTableResult): string {
   const { rows, advisory_ids, advisory_names, cruise_altitude_ft, best_below_cruise, best_above_cruise } = result;
 
   if (rows.length === 0) {
-    return '<div class="popup-header"><h3>Altitude Table</h3></div><p class="muted">No altitude-dependent advisories available.</p>';
+    return `<div class="popup-header"><h3>${t('advisories.altTableTitle')}</h3></div><p class="muted">${t('advisories.altTableEmpty')}</p>`;
   }
 
   // Column headers: abbreviated advisory names
@@ -314,20 +315,19 @@ export function renderAltitudeTablePopup(result: AltitudeTableResult): string {
   }).join('');
 
   return `
-    <div class="popup-header"><h3>Altitude Advisory Table</h3></div>
+    <div class="popup-header"><h3>${t('advisories.altTableTitle')}</h3></div>
     <p class="muted" style="margin:0 0 0.5rem;font-size:0.8rem;">
-      Sweeps altitude-dependent advisories from 2000ft to FL${Math.round(result.flight_ceiling_ft / 100)},
-      step ${result.step_ft}ft.
-      <span class="alt-table-cruise-marker">\u2190</span> = cruise,
-      <span class="alt-table-best-marker">\u2605</span> = best altitude.
+      ${t('advisories.altTableDesc', { ceiling: String(Math.round(result.flight_ceiling_ft / 100)), step: String(result.step_ft) })}
+      <span class="alt-table-cruise-marker">\u2190</span> ${t('advisories.altTableCruise')},
+      <span class="alt-table-best-marker">\u2605</span> ${t('advisories.altTableBest')}.
     </p>
     <div class="alt-table-scroll">
       <table class="alt-table">
         <thead>
           <tr>
-            <th class="alt-table-alt-header">Alt</th>
+            <th class="alt-table-alt-header">${t('advisories.altTableAlt')}</th>
             ${headerCells}
-            <th>Score</th>
+            <th>${t('advisories.altTableScore')}</th>
           </tr>
         </thead>
         <tbody>${bodyRows}</tbody>
@@ -367,7 +367,7 @@ export function renderAdvisories(
   if (!el) return;
 
   if (!manifest || manifest.advisories.length === 0) {
-    el.innerHTML = '<p class="muted">No advisories available</p>';
+    el.innerHTML = `<p class="muted">${t('advisories.noAdvisories')}</p>`;
     if (section) section.style.display = 'none';
     return;
   }
@@ -409,11 +409,11 @@ export function renderAdvisories(
     : '';
 
   const recalcBtn = onRecalculate
-    ? '<button class="btn btn-secondary btn-sm" id="recalc-advisories-btn">Recalculate</button>'
+    ? `<button class="btn btn-secondary btn-sm" id="recalc-advisories-btn">${t('advisories.recalculate')}</button>`
     : '';
 
   const altTableBtn = onAltitudeTable
-    ? '<button class="btn btn-secondary btn-sm" id="alt-table-btn">Altitude Table</button>'
+    ? `<button class="btn btn-secondary btn-sm" id="alt-table-btn">${t('advisories.altitudeTable')}</button>`
     : '';
 
   // Altitude slider
@@ -423,7 +423,7 @@ export function renderAdvisories(
     const isOverridden = currentAlt !== defaultAlt;
     const labelClass = isOverridden ? 'alt-label-overridden' : '';
     const resetBtn = isOverridden
-      ? '<button class="btn btn-sm alt-reset-btn" id="advisory-alt-reset" title="Reset to flight altitude">Reset</button>'
+      ? `<button class="btn btn-sm alt-reset-btn" id="advisory-alt-reset" title="${t('advisories.resetTitle')}">${t('advisories.reset')}</button>`
       : '';
     sliderHtml = `
       <div class="advisory-altitude-slider">
@@ -471,7 +471,7 @@ export function renderAdvisories(
     if (btn) {
       btn.addEventListener('click', () => {
         btn.setAttribute('disabled', 'true');
-        btn.textContent = 'Recalculating...';
+        btn.textContent = t('advisories.recalculating');
         onRecalculate();
       });
     }
@@ -483,12 +483,12 @@ export function renderAdvisories(
     if (altBtn) {
       altBtn.addEventListener('click', async () => {
         altBtn.setAttribute('disabled', 'true');
-        altBtn.textContent = 'Loading...';
+        altBtn.textContent = t('advisories.loading');
         try {
           await onAltitudeTable();
         } finally {
           altBtn.removeAttribute('disabled');
-          altBtn.textContent = 'Altitude Table';
+          altBtn.textContent = t('advisories.altitudeTable');
         }
       });
     }
@@ -548,7 +548,7 @@ export function renderAdvisories(
       const card = cell.closest('.airport-card');
       if (!card) return;
       const header = card.querySelector('.airport-card-header')?.textContent || '';
-      const isDep = header.startsWith('Departure');
+      const isDep = header.startsWith(t('advisories.departure'));
       const summary = isDep ? ac.departure : ac.arrival;
       const cond = summary.conditions.find(c => c.model === model);
       if (cond && cond.all_runways.length > 0) {

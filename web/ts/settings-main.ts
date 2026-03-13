@@ -26,18 +26,19 @@ import {
   type ProfileSettings,
 } from './adapters/profiles-adapter';
 import { initTheme } from './theme';
+import { initI18n, t } from './i18n/i18n';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
 
 /** Category display order and labels.
  *  Any categories not listed here will appear at the end under their raw key. */
-const CATEGORY_ORDER: [string, string][] = [
-  ['icing', 'Icing'],
-  ['cloud', 'Cloud'],
-  ['turbulence', 'Turbulence'],
-  ['convective', 'Convective'],
-  ['airport', 'Airport'],
-  ['model', 'Forecast'],
+const CATEGORY_KEYS: [string, string][] = [
+  ['icing', 'settings.cat.icing'],
+  ['cloud', 'settings.cat.cloud'],
+  ['turbulence', 'settings.cat.turbulence'],
+  ['convective', 'settings.cat.convective'],
+  ['airport', 'settings.cat.airport'],
+  ['model', 'settings.cat.model'],
 ];
 
 let catalog: AdvisoryCatalogEntry[] = [];
@@ -114,7 +115,7 @@ function renderProfileSelector(): void {
   if (!select) return;
 
   select.innerHTML = profiles.map(p => {
-    const defaultTag = p.is_default ? ' (default)' : '';
+    const defaultTag = p.is_default ? t('flights.form.defaultTag') : '';
     return `<option value="${p.id}"${p.id === activeProfileId ? ' selected' : ''}>${escapeHtml(p.name)}${defaultTag}</option>`;
   }).join('');
 
@@ -183,7 +184,7 @@ function switchProfile(profileId: number): void {
 }
 
 async function handleNewProfile(): Promise<void> {
-  const name = prompt('Enter profile name:');
+  const name = prompt(t('settings.enterProfileName'));
   if (!name?.trim()) return;
 
   try {
@@ -192,7 +193,7 @@ async function handleNewProfile(): Promise<void> {
     activeProfileId = newProfile.id;
     renderProfileSelector();
     populateProfileForm(newProfile);
-    showStatus(`Profile "${name.trim()}" created.`);
+    showStatus(t('settings.profileCreated', { name: name.trim() }));
   } catch (err) {
     showStatus(`Failed to create profile: ${err}`, true);
   }
@@ -202,7 +203,7 @@ async function handleDuplicateProfile(): Promise<void> {
   if (!activeProfileId) return;
   const source = profiles.find(p => p.id === activeProfileId);
   const defaultName = source ? `${source.name} (copy)` : 'Copy';
-  const name = prompt('Enter name for the duplicate:', defaultName);
+  const name = prompt(t('settings.enterDuplicateName'), defaultName);
   if (!name?.trim()) return;
 
   try {
@@ -211,7 +212,7 @@ async function handleDuplicateProfile(): Promise<void> {
     activeProfileId = dup.id;
     renderProfileSelector();
     populateProfileForm(dup);
-    showStatus(`Profile duplicated as "${name.trim()}".`);
+    showStatus(t('settings.profileDuplicated', { name: name.trim() }));
   } catch (err) {
     showStatus(`Failed to duplicate profile: ${err}`, true);
   }
@@ -220,7 +221,7 @@ async function handleDuplicateProfile(): Promise<void> {
 async function handleRenameProfile(): Promise<void> {
   if (!activeProfileId) return;
   const current = profiles.find(p => p.id === activeProfileId);
-  const name = prompt('Enter new name:', current?.name);
+  const name = prompt(t('settings.enterNewName'), current?.name);
   if (!name?.trim() || name.trim() === current?.name) return;
 
   try {
@@ -228,7 +229,7 @@ async function handleRenameProfile(): Promise<void> {
     const idx = profiles.findIndex(p => p.id === activeProfileId);
     if (idx >= 0) profiles[idx] = updated;
     renderProfileSelector();
-    showStatus(`Profile renamed to "${name.trim()}".`);
+    showStatus(t('settings.profileRenamed', { name: name.trim() }));
   } catch (err) {
     showStatus(`Failed to rename profile: ${err}`, true);
   }
@@ -238,10 +239,10 @@ async function handleDeleteProfile(): Promise<void> {
   if (!activeProfileId) return;
   const current = profiles.find(p => p.id === activeProfileId);
   if (current?.is_default) {
-    showStatus('Cannot delete the default profile.', true);
+    showStatus(t('settings.cannotDeleteDefault'), true);
     return;
   }
-  if (!confirm(`Delete profile "${current?.name}"?`)) return;
+  if (!confirm(t('settings.deleteProfileConfirm', { name: current?.name ?? '' }))) return;
 
   try {
     await deleteProfile(activeProfileId);
@@ -251,7 +252,7 @@ async function handleDeleteProfile(): Promise<void> {
     if (defaultProfile) {
       switchProfile(defaultProfile.id);
     }
-    showStatus('Profile deleted.');
+    showStatus(t('settings.profileDeleted'));
   } catch (err) {
     showStatus(`Failed to delete profile: ${err}`, true);
   }
@@ -260,6 +261,7 @@ async function handleDeleteProfile(): Promise<void> {
 // --- Init ---
 
 async function init(): Promise<void> {
+  await initI18n();
   const user = await fetchCurrentUser();
   if (!user) {
     window.location.href = '/login.html';
@@ -277,19 +279,19 @@ async function init(): Promise<void> {
   // Load profiles, preferences, advisory catalog, and model catalog in parallel
   const [profilesResult, prefs, catalogResult, modelCatalog] = await Promise.all([
     fetchProfiles().catch(err => {
-      showStatus(`Failed to load profiles: ${err}`, true);
+      showStatus(t('settings.failedLoad', { what: 'profiles', error: String(err) }), true);
       return [] as ProfileResponse[];
     }),
     fetchPreferences().catch(err => {
-      showStatus(`Failed to load preferences: ${err}`, true);
+      showStatus(t('settings.failedLoad', { what: 'preferences', error: String(err) }), true);
       return null;
     }),
     fetchAdvisoryCatalog().catch(err => {
-      showStatus(`Failed to load advisory catalog: ${err}`, true);
+      showStatus(t('settings.failedLoad', { what: 'advisory catalog', error: String(err) }), true);
       return [] as AdvisoryCatalogEntry[];
     }),
     fetchModelCatalog().catch(err => {
-      showStatus(`Failed to load model catalog: ${err}`, true);
+      showStatus(t('settings.failedLoad', { what: 'model catalog', error: String(err) }), true);
       return [];
     }),
   ]);
@@ -348,9 +350,9 @@ async function init(): Promise<void> {
       (document.getElementById('input-ar-username') as HTMLInputElement).value = '';
       (document.getElementById('input-ar-password') as HTMLInputElement).value = '';
       updateAutorouterStatus(false);
-      showStatus('Autorouter credentials cleared.');
+      showStatus(t('settings.credentialsCleared'));
     } catch (err) {
-      showStatus(`Failed to clear credentials: ${err}`, true);
+      showStatus(t('settings.failedClearCreds', { error: String(err) }), true);
     }
   });
 }
@@ -389,8 +391,8 @@ function renderAdvisorySettings(
   const paramsMap = userAdvisories.params ?? {};
 
   // Build ordered list of categories: known order first, then any extras
-  const knownKeys = new Set(CATEGORY_ORDER.map(([k]) => k));
-  const allCategories: [string, string][] = [...CATEGORY_ORDER];
+  const knownKeys = new Set(CATEGORY_KEYS.map(([k]) => k));
+  const allCategories: [string, string][] = CATEGORY_KEYS.map(([k, tKey]) => [k, t(tKey)]);
   for (const catKey of grouped.keys()) {
     if (!knownKeys.has(catKey)) {
       // Unknown category — capitalize key as label
@@ -543,7 +545,7 @@ async function handleSave(): Promise<void> {
     if (cb?.checked) models.push(m);
   }
   if (models.length === 0) {
-    showStatus('Select at least one forecast model.', true);
+    showStatus(t('settings.selectOneModel'), true);
     return;
   }
 
@@ -606,9 +608,9 @@ async function handleSave(): Promise<void> {
       }
     }
 
-    showStatus('Settings saved.');
+    showStatus(t('settings.saved'));
   } catch (err) {
-    showStatus(`Failed to save: ${err}`, true);
+    showStatus(t('settings.failedSave', { error: String(err) }), true);
   }
 }
 
@@ -618,10 +620,10 @@ function updateAutorouterStatus(hasCreds: boolean): void {
   const badge = document.getElementById('ar-status-badge');
   if (!badge) return;
   if (hasCreds) {
-    badge.textContent = 'Configured';
+    badge.textContent = t('settings.configured');
     badge.className = 'badge badge-green';
   } else {
-    badge.textContent = 'Not set';
+    badge.textContent = t('settings.notSet');
     badge.className = 'badge badge-none';
   }
   const clearBtn = document.getElementById('clear-autorouter-btn') as HTMLButtonElement;
@@ -654,8 +656,8 @@ function renderCredits(credits: CreditSummary): void {
     const cls = bal > 200 ? 'badge-green' : bal > 50 ? 'badge-amber' : 'badge-red';
     balanceEl.innerHTML = `
       <div class="credits-summary">
-        <span class="badge ${cls}">${bal.toFixed(0)} credits</span>
-        <span class="muted credits-detail">Today: ${credits.credits_used_today.toFixed(1)} used &middot; Month: ${credits.credits_used_month.toFixed(1)} used</span>
+        <span class="badge ${cls}">${t('settings.credits', { count: bal.toFixed(0) })}</span>
+        <span class="muted credits-detail">${t('settings.creditsToday', { used: credits.credits_used_today.toFixed(1) })} &middot; ${t('settings.creditsMonth', { used: credits.credits_used_month.toFixed(1) })}</span>
       </div>`;
   }
 
@@ -676,9 +678,9 @@ function renderCredits(credits: CreditSummary): void {
       </tr>`;
     }).join('');
     txEl.innerHTML = `
-      <h4 class="subsection-heading">Recent Transactions</h4>
+      <h4 class="subsection-heading">${t('settings.recentTransactions')}</h4>
       <table class="credits-table">
-        <thead><tr><th>Date</th><th>Amount</th><th>Balance</th><th>Type</th></tr></thead>
+        <thead><tr><th>${t('settings.txDate')}</th><th>${t('settings.txAmount')}</th><th>${t('settings.txBalance')}</th><th>${t('settings.txType')}</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
   }
