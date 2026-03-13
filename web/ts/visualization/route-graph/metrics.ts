@@ -1,6 +1,7 @@
 /** Route graph metric registry — extensible definitions for plottable values. */
 
 import type { VizPoint } from '../types';
+import { t } from '../../i18n/i18n';
 
 export type RenderType = 'line' | 'bar';
 
@@ -39,7 +40,7 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     renderType: 'line',
     color: '#2563eb',
     showZeroLine: true,
-    zeroLineLabels: ['Headwind \u2191', 'Tailwind \u2193'],
+    get zeroLineLabels(): [string, string] { return [t('graph.headwindUp'), t('graph.tailwindDown')]; },
     getValue: (p) => p.headwindKt,
     formatValue: (v) => {
       const abs = Math.abs(v).toFixed(0);
@@ -120,10 +121,10 @@ export function getMetricById(id: string): RouteGraphMetric | undefined {
 export function getMetricOptions(includeNone: boolean): Array<{ id: string; label: string }> {
   const options: Array<{ id: string; label: string }> = [];
   if (includeNone) {
-    options.push({ id: METRIC_NONE, label: 'None' });
+    options.push({ id: METRIC_NONE, label: t('graph.none') });
   }
   for (const m of ROUTE_GRAPH_METRICS) {
-    options.push({ id: m.id, label: m.label });
+    options.push({ id: m.id, label: t('graph.' + m.id) });
   }
   return options;
 }

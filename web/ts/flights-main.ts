@@ -124,8 +124,29 @@ async function fetchRouteAndUpdateUI(): Promise<void> {
   }
 }
 
+/** Translate static HTML elements on the flights page. */
+function translateStaticElements(): void {
+  const set = (sel: string, key: string) => {
+    const el = document.querySelector(sel);
+    if (el) el.textContent = t(key);
+  };
+  set('h1', 'page.flights.title');
+  set('.create-panel h3', 'page.flights.newFlight');
+  set('label[for="input-waypoints"]', 'page.flights.waypoints');
+  set('label[for="input-profile"]', 'page.flights.profile');
+  set('label[for="input-date"]', 'page.flights.date');
+  set('label[for="input-hour"]', 'page.flights.time');
+  set('label[for="input-altitude"]', 'page.flights.altitude');
+  set('label[for="input-ceiling"]', 'page.flights.ceiling');
+  set('label[for="input-duration"]', 'page.flights.duration');
+  set('#loading-spinner', 'page.flights.loading');
+  const submitBtn = document.querySelector('#create-flight-form button[type="submit"]');
+  if (submitBtn) submitBtn.textContent = t('page.flights.createFlight');
+}
+
 async function init(): Promise<void> {
   await initI18n();
+  translateStaticElements();
   // Auth check — redirect to login if not authenticated
   const user = await fetchCurrentUser();
   if (!user) {

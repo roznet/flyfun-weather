@@ -260,8 +260,90 @@ async function handleDeleteProfile(): Promise<void> {
 
 // --- Init ---
 
+/** Translate static HTML elements on the settings page. */
+function translateStaticElements(): void {
+  const set = (sel: string, key: string) => {
+    const el = document.querySelector(sel);
+    if (el) el.textContent = t(key);
+  };
+  const setHtml = (sel: string, key: string) => {
+    const el = document.querySelector(sel);
+    if (el) el.innerHTML = t(key);
+  };
+  set('h1', 'page.settings.title');
+  set('button[type="submit"].btn-primary', 'page.settings.save');
+  set('a.btn-secondary[href="/"]', 'page.settings.backToFlights');
+  set('.tab-btn[data-tab="flight"]', 'page.settings.tabProfiles');
+  set('.tab-btn[data-tab="services"]', 'page.settings.tabAccount');
+  // Account tab
+  set('#tab-services .section:nth-child(1) h3', 'page.settings.language');
+  set('#tab-services .section:nth-child(1) .section-hint', 'page.settings.languageHint');
+  set('label[for="input-locale"]', 'page.settings.displayLanguage');
+  set('#tab-services .section:nth-child(2) h3', 'page.settings.autorouterTitle');
+  set('label[for="input-ar-username"]', 'page.settings.username');
+  set('label[for="input-ar-password"]', 'page.settings.password');
+  set('#clear-autorouter-btn', 'page.settings.clear');
+  set('#usage-section h3', 'page.settings.usageTitle');
+  set('#credits-section h3', 'page.settings.creditsTitle');
+  // Flight tab
+  set('.profile-section h3', 'page.settings.flightProfiles');
+  set('.profile-section .section-hint', 'page.settings.profilesHint');
+  set('label[for="profile-select"]', 'page.settings.activeProfile');
+  set('#btn-new-profile', 'page.settings.new');
+  set('#btn-duplicate-profile', 'page.settings.duplicate');
+  set('#btn-rename-profile', 'page.settings.rename');
+  set('#btn-delete-profile', 'page.settings.delete');
+  // Flight defaults section
+  const sections = document.querySelectorAll('#tab-flight > .section');
+  if (sections[1]) {
+    const h3 = sections[1].querySelector('h3');
+    if (h3) h3.textContent = t('page.settings.flightDefaults');
+    const hint = sections[1].querySelector('.section-hint');
+    if (hint) hint.textContent = t('page.settings.flightDefaultsHint');
+  }
+  set('label[for="input-flight-rules"]', 'page.settings.flightRules');
+  set('label[for="input-altitude"]', 'page.settings.cruiseAltitude');
+  set('label[for="input-ceiling"]', 'page.settings.flightCeiling');
+  set('label[for="input-speed"]', 'page.settings.speed');
+  // Forecast models section
+  if (sections[2]) {
+    const h3 = sections[2].querySelector('h3');
+    if (h3) h3.textContent = t('page.settings.forecastModels');
+    const hint = sections[2].querySelector('.section-hint');
+    if (hint) hint.textContent = t('page.settings.forecastModelsHint');
+  }
+  // Advisories section
+  if (sections[3]) {
+    const h3 = sections[3].querySelector('h3');
+    if (h3) h3.textContent = t('page.settings.advisories');
+    const hint = sections[3].querySelector('.section-hint');
+    if (hint) hint.textContent = t('page.settings.advisoriesHint');
+  }
+  set('label[for="advisory-aggregation"]', 'page.settings.summaryRating');
+  set('label[for="input-icing-method"]', 'page.settings.icingMethod');
+  set('label[for="input-cloud-method"]', 'page.settings.cloudMethod');
+  set('label[for="input-convective-method"]', 'page.settings.convectiveMethod');
+  // Translate select options for flight rules
+  const frSelect = document.getElementById('input-flight-rules') as HTMLSelectElement;
+  if (frSelect) {
+    for (const opt of frSelect.options) {
+      if (opt.value === 'vfr_ifr') opt.textContent = t('page.settings.vfrIfr');
+      if (opt.value === 'vfr_only') opt.textContent = t('page.settings.vfrOnly');
+    }
+  }
+  // Translate aggregation options
+  const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
+  if (aggSelect) {
+    for (const opt of aggSelect.options) {
+      if (opt.value === 'worst') opt.textContent = t('page.settings.worstModel');
+      if (opt.value === 'majority') opt.textContent = t('page.settings.majorityModel');
+    }
+  }
+}
+
 async function init(): Promise<void> {
   await initI18n();
+  translateStaticElements();
   const user = await fetchCurrentUser();
   if (!user) {
     window.location.href = '/login.html';

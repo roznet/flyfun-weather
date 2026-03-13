@@ -126,7 +126,7 @@ export function renderVizControls(
         const tooltip = isUnavailable ? ` title="${t('viz.notAvailableModel')}"` : '';
         html += `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
         html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
-        html += `<span>${isCompactCollapse ? group.label : layer.name}</span>`;
+        html += `<span>${isCompactCollapse ? group.label : t('viz.layer.' + layer.id)}</span>`;
         html += `</label>`;
         if (layer.metricId) {
           html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">\u24d8</button>`;
@@ -366,7 +366,7 @@ export function renderCompareControls(
     html += `<optgroup label="${group.group}">`;
     for (const layer of group.layers) {
       const selected = layer.id === settings.compareLayer ? ' selected' : '';
-      html += `<option value="${layer.id}"${selected}>${layer.name}</option>`;
+      html += `<option value="${layer.id}"${selected}>${t('viz.layer.' + layer.id)}</option>`;
     }
     html += '</optgroup>';
   }

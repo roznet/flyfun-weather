@@ -5,6 +5,7 @@
 
 import { icingRiskColor, catRiskColor, cloudFillFromDD, inversionOpacity } from './scales';
 import { getActiveTheme } from './cross-section/theme';
+import { t } from '../i18n/i18n';
 
 export interface LegendEntry {
   label: string;
@@ -25,42 +26,42 @@ function hatchGradient(gridPx: number, lineWidth: number, color: string): string
 
 function icingLegend(): LegendEntry[] {
   return [
-    { label: 'Light', color: icingRiskColor('light'), meaning: 'Manageable for equipped aircraft' },
-    { label: 'Moderate', color: icingRiskColor('moderate'), meaning: 'Exit clouds if ice persists' },
-    { label: 'Severe', color: icingRiskColor('severe'), meaning: 'Rapid buildup — exit now' },
+    { label: t('legend.icing.light'), color: icingRiskColor('light'), meaning: t('legend.icing.lightDesc') },
+    { label: t('legend.icing.moderate'), color: icingRiskColor('moderate'), meaning: t('legend.icing.moderateDesc') },
+    { label: t('legend.icing.severe'), color: icingRiskColor('severe'), meaning: t('legend.icing.severeDesc') },
   ];
 }
 
 function catLegend(): LegendEntry[] {
   return [
-    { label: 'Light', color: catRiskColor('light'), meaning: 'Intermittent bumps' },
-    { label: 'Moderate', color: catRiskColor('moderate'), meaning: 'Unsecured items will move' },
-    { label: 'Severe', color: catRiskColor('severe'), meaning: 'Avoid this layer' },
+    { label: t('legend.cat.light'), color: catRiskColor('light'), meaning: t('legend.cat.lightDesc') },
+    { label: t('legend.cat.moderate'), color: catRiskColor('moderate'), meaning: t('legend.cat.moderateDesc') },
+    { label: t('legend.cat.severe'), color: catRiskColor('severe'), meaning: t('legend.cat.severeDesc') },
   ];
 }
 
 function convectiveLegend(): LegendEntry[] {
-  const t = getActiveTheme().convective.towerFill;
+  const theme = getActiveTheme().convective.towerFill;
   return [
-    { label: 'Marginal', color: t['marginal'] ?? 'transparent', meaning: 'Shallow convection possible' },
-    { label: 'Low', color: t['low'] ?? 'transparent', meaning: 'Weak showers, manageable' },
-    { label: 'Moderate', color: t['moderate'] ?? 'transparent', meaning: 'Thunderstorms with trigger' },
-    { label: 'High', color: t['high'] ?? 'transparent', meaning: 'Vigorous storms likely' },
-    { label: 'Extreme', color: t['extreme'] ?? 'transparent', meaning: 'Severe weather — delay or cancel' },
+    { label: t('legend.convective.marginal'), color: theme['marginal'] ?? 'transparent', meaning: t('legend.convective.marginalDesc') },
+    { label: t('legend.convective.low'), color: theme['low'] ?? 'transparent', meaning: t('legend.convective.lowDesc') },
+    { label: t('legend.convective.moderate'), color: theme['moderate'] ?? 'transparent', meaning: t('legend.convective.moderateDesc') },
+    { label: t('legend.convective.high'), color: theme['high'] ?? 'transparent', meaning: t('legend.convective.highDesc') },
+    { label: t('legend.convective.extreme'), color: theme['extreme'] ?? 'transparent', meaning: t('legend.convective.extremeDesc') },
   ];
 }
 
 function cloudBandsLegend(): LegendEntry[] {
-  const t = getActiveTheme().clouds;
-  const grid = t.hatchGridPx;
-  const hColor = t.hatchColor;
+  const theme = getActiveTheme().clouds;
+  const grid = theme.hatchGridPx;
+  const hColor = theme.hatchColor;
   return [
-    { label: 'OVC (DD < 1\u00b0C)', color: cloudFillFromDD(0.5, 'ovc'), meaning: 'Overcast — solid fill',
-      hatchStyle: hatchGradient(grid, t.hatchLineWidth['ovc'] ?? grid, hColor) },
-    { label: 'BKN (DD 1\u20132\u00b0C)', color: cloudFillFromDD(1.5, 'bkn'), meaning: 'Broken — thick lines',
-      hatchStyle: hatchGradient(grid, t.hatchLineWidth['bkn'] ?? grid, hColor) },
-    { label: 'SCT (DD 2\u20133\u00b0C)', color: cloudFillFromDD(2.5, 'sct'), meaning: 'Scattered — thin lines',
-      hatchStyle: hatchGradient(grid, t.hatchLineWidth['sct'] ?? grid, hColor) },
+    { label: t('legend.cloud.ovc'), color: cloudFillFromDD(0.5, 'ovc'), meaning: t('legend.cloud.ovcDesc'),
+      hatchStyle: hatchGradient(grid, theme.hatchLineWidth['ovc'] ?? grid, hColor) },
+    { label: t('legend.cloud.bkn'), color: cloudFillFromDD(1.5, 'bkn'), meaning: t('legend.cloud.bknDesc'),
+      hatchStyle: hatchGradient(grid, theme.hatchLineWidth['bkn'] ?? grid, hColor) },
+    { label: t('legend.cloud.sct'), color: cloudFillFromDD(2.5, 'sct'), meaning: t('legend.cloud.sctDesc'),
+      hatchStyle: hatchGradient(grid, theme.hatchLineWidth['sct'] ?? grid, hColor) },
   ];
 }
 
@@ -85,11 +86,11 @@ function nwpCloudLegend(): LegendEntry[] {
     return hatchGradient(grid, lw, hColor);
   }
   return [
-    { label: '25% cover', color: fill(25), meaning: 'Scattered',
+    { label: t('legend.nwpCloud.25'), color: fill(25), meaning: t('legend.nwpCloud.25Desc'),
       hatchStyle: nwpHatch(25) },
-    { label: '50% cover', color: fill(50), meaning: 'Broken',
+    { label: t('legend.nwpCloud.50'), color: fill(50), meaning: t('legend.nwpCloud.50Desc'),
       hatchStyle: nwpHatch(50) },
-    { label: '75%+ cover', color: fill(75), meaning: 'Overcast',
+    { label: t('legend.nwpCloud.75'), color: fill(75), meaning: t('legend.nwpCloud.75Desc'),
       hatchStyle: nwpHatch(75) },
   ];
 }
@@ -97,21 +98,21 @@ function nwpCloudLegend(): LegendEntry[] {
 function inversionLegend(): LegendEntry[] {
   const [r, g, b] = getActiveTheme().inversion.baseRgb;
   return [
-    { label: 'Weak (<1\u00b0C)', color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(0.5)})`, meaning: 'Mild haze trapping' },
-    { label: 'Moderate (1\u20133\u00b0C)', color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(2)})`, meaning: 'Reduced visibility below' },
-    { label: 'Strong (>3\u00b0C)', color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(4)})`, meaning: 'Dense haze/fog trapped' },
+    { label: t('legend.inversion.weak'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(0.5)})`, meaning: t('legend.inversion.weakDesc') },
+    { label: t('legend.inversion.moderate'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(2)})`, meaning: t('legend.inversion.moderateDesc') },
+    { label: t('legend.inversion.strong'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(4)})`, meaning: t('legend.inversion.strongDesc') },
   ];
 }
 
 function lineLegends(): Record<string, LegendEntry[]> {
-  const t = getActiveTheme();
+  const theme = getActiveTheme();
   return {
-    'freezing-level': [{ label: 'Freezing Level (0\u00b0C)', color: t.temperature.freezingLevel.color, meaning: 'Solid line' }],
-    'minus-10c': [{ label: '\u221210\u00b0C Level', color: t.temperature.minus10c.color, meaning: 'Solid line' }],
-    'minus-20c': [{ label: '\u221220\u00b0C Level', color: t.temperature.minus20c.color, meaning: 'Dashed line' }],
-    'lcl': [{ label: 'LCL', color: t.stability.lcl.color, meaning: 'Dashed line — cloud base' }],
-    'lfc': [{ label: 'LFC', color: t.stability.lfc.color, meaning: 'Dashed line — free convection' }],
-    'el': [{ label: 'EL', color: t.stability.el.color, meaning: 'Dashed line — storm top' }],
+    'freezing-level': [{ label: t('legend.line.freezingLevel'), color: theme.temperature.freezingLevel.color, meaning: t('legend.line.solidLine') }],
+    'minus-10c': [{ label: t('legend.line.minus10'), color: theme.temperature.minus10c.color, meaning: t('legend.line.solidLine') }],
+    'minus-20c': [{ label: t('legend.line.minus20'), color: theme.temperature.minus20c.color, meaning: t('legend.line.dashedLine') }],
+    'lcl': [{ label: t('legend.line.lcl'), color: theme.stability.lcl.color, meaning: t('legend.line.dashedCloudBase') }],
+    'lfc': [{ label: t('legend.line.lfc'), color: theme.stability.lfc.color, meaning: t('legend.line.dashedFreeConvection') }],
+    'el': [{ label: t('legend.line.el'), color: theme.stability.el.color, meaning: t('legend.line.dashedStormTop') }],
   };
 }
 

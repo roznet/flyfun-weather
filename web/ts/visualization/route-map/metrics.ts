@@ -6,6 +6,7 @@ import {
   capeMapColor, freezingLevelMapColor, ceilingMapColor, temperatureMapColor,
   agreementMapColor, linearWidth,
 } from '../scales';
+import { t } from '../../i18n/i18n';
 
 export interface MapMetric {
   readonly id: string;
@@ -246,9 +247,9 @@ const modelAgreement: MapMetric = {
   },
   getWidth: defaultWidth,
   formatValue: (v) => {
-    if (v >= 2) return 'Poor';
-    if (v >= 1) return 'Moderate';
-    return 'Good';
+    if (v >= 2) return t('map.formatPoor');
+    if (v >= 1) return t('map.formatModerate');
+    return t('map.formatGood');
   },
   legendStops: [
     { value: 0, label: 'Good', color: agreementMapColor('good') },
@@ -350,10 +351,10 @@ export const MAP_METRIC_NONE = 'none';
 export function getMapMetricOptions(includeNone: boolean): Array<{ id: string; label: string }> {
   const options: Array<{ id: string; label: string }> = [];
   if (includeNone) {
-    options.push({ id: MAP_METRIC_NONE, label: 'None' });
+    options.push({ id: MAP_METRIC_NONE, label: t('map.none') });
   }
   for (const m of MAP_METRICS) {
-    options.push({ id: m.id, label: m.label });
+    options.push({ id: m.id, label: t('map.' + m.id) });
   }
   return options;
 }

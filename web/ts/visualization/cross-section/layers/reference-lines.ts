@@ -2,6 +2,7 @@
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { getActiveTheme } from '../theme';
+import { t } from '../../../i18n/i18n';
 
 /** Shared helper: draw a horizontal reference line with a label. */
 function drawRefLine(
@@ -50,14 +51,14 @@ export const cruiseAltitudeLayer: CrossSectionLayer = {
     const theme = getActiveTheme();
 
     // Cruise altitude — always drawn
-    const cruiseLabel = `Cruise ${data.cruiseAltitudeFt.toLocaleString()} ft`;
+    const cruiseLabel = t('viz.refCruise', { alt: data.cruiseAltitudeFt.toLocaleString() });
     drawRefLine(ctx, transform, data.cruiseAltitudeFt, cruiseLabel,
       theme.reference.cruiseColor, 2.5, [8, 4], -4);
 
     // Flight ceiling — only when meaningfully different from cruise
     const separation = Math.abs(data.ceilingAltitudeFt - data.cruiseAltitudeFt);
     if (separation >= 1000) {
-      const ceilingLabel = `Ceiling ${data.ceilingAltitudeFt.toLocaleString()} ft`;
+      const ceilingLabel = t('viz.refCeiling', { alt: data.ceilingAltitudeFt.toLocaleString() });
       drawRefLine(ctx, transform, data.ceilingAltitudeFt, ceilingLabel,
         theme.reference.ceilingColor, 1.5, [4, 4], -4);
     }
