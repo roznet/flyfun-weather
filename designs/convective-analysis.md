@@ -94,7 +94,7 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 `convective.py:assess_convective_thermo()` → `ConvectiveAssessment`
 
 - **Input:** `ThermodynamicIndices` (MetPy-derived from pressure levels)
-- **Primary driver:** `_effective_cape()` = `max(SB-CAPE, MU-CAPE)` — catches elevated convection
+- **Primary driver:** `_effective_cape()` = `max(SB-CAPE, MU-CAPE, ML-CAPE, NWP-CAPE)` — catches elevated convection, mixed-layer instability, and model-native CAPE
 - **Risk thresholds** (European-calibrated):
 
 | CAPE (J/kg) | Risk |
@@ -115,8 +115,10 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 `convective.py:assess_convective_nwp()` → `ConvectiveAssessment | None`
 
 - **Input:** `ThermodynamicIndices` + `NWPCloudDiagnostics`
-- **Returns None when:** no diagnostics, or `convective_cover_pct` is None
-- **Primary driver:** `convective_cover_pct` thresholds:
+- **Returns None when:** no diagnostics, or neither `convective_cover_pct` nor both base/top are available
+- **Two paths:**
+
+**Full NWP path** (GFS — has `convective_cover_pct`):
 
 | Cover % | Risk |
 |---------|------|
@@ -125,14 +127,21 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 | ≥ 25% | LOW |
 | ≥ 10% | MARGINAL |
 
-- **Tower bounds:** `convective_base_ft`, `convective_top_ft` from GRIB2
-- **Severity modifiers:** same as thermo (computed from same indices)
 - **Output:** `method="nwp"`, `cover_pct` set
+
+**Hybrid NWP path** (ICON-EU — has base/top but no cover_pct):
+- Risk derived from `_effective_cape()` using the same CAPE thresholds as thermo
+- MARGINAL: any CAPE > 0 with defined base/top
+- Tower bounds from GRIB2 `convective_base_ft`/`convective_top_ft`
+- **Output:** `method="nwp_hybrid"`, `cover_pct=None`
+
+- **Tower bounds:** `convective_base_ft`, `convective_top_ft` from GRIB2 (both paths)
+- **Severity modifiers:** same as thermo (computed from same indices)
 
 | Model | NWP Convective Result | Notes |
 |-------|----------------------|-------|
-| **GFS** | Full (risk from cover %, base/top from GRIB) | Only model with convective cover % |
-| **ICON-EU** | None | Has base/top but no cover_pct → returns None |
+| **GFS** | Full NWP (risk from cover %, base/top from GRIB) | Only model with convective cover % |
+| **ICON-EU** | Hybrid NWP (CAPE risk + GRIB base/top) | `method="nwp_hybrid"` |
 | **Others** | None | No diagnostics at all |
 
 ### Stage 5: Resolution
@@ -170,7 +179,7 @@ Both layers share the same color palette (via exports from `thermo-convective-bg
 
 ## Bugs Found
 
-### 1. ICON-EU convective NWP assessment always returns None
+### 1. ~~ICON-EU convective NWP assessment always returns None~~ ✅ FIXED
 
 **Problem:** ICON-EU GRIB2 provides `convective_base_ft` and `convective_top_ft` (from `hbas_con`/`htop_con`) but **not** `convective_cover_pct`. The NWP assessment (`assess_convective_nwp`) returns None when `cover_pct is None`:
 
@@ -188,7 +197,7 @@ Yet ICON-EU's convective base/top are valuable model outputs (from the convectiv
 1. **Hybrid approach:** When cover_pct is absent but base/top exist, derive risk from `_effective_cape()` (thermo) but use GRIB base/top bounds. This gives the best of both: MetPy risk classification + model-native tower geometry.
 2. **Synthesize cover from CAPE:** Map effective CAPE to an approximate convective cover percentage using the thermo risk thresholds, then use the NWP flow.
 
-### 2. `_effective_cape()` ignores ML-CAPE
+### 2. ~~`_effective_cape()` ignores ML-CAPE~~ ✅ FIXED
 
 **Problem:** The function uses `max(SB-CAPE, MU-CAPE)`:
 
@@ -220,7 +229,7 @@ The divergence can be significant: NWP models compute CAPE internally with 50–
 - Display a "CAPE disagreement" warning in the UI
 - Use it to modulate risk confidence
 
-### 4. Thermo method CAPE is always MetPy-derived, ignores raw NWP CAPE
+### 4. ~~Thermo method CAPE is always MetPy-derived, ignores raw NWP CAPE~~ ✅ FIXED
 
 **Problem:** `_effective_cape()` uses `cape_surface_jkg` (MetPy) and `cape_most_unstable_jkg` (MetPy). The raw NWP CAPE (`nwp_cape_jkg`) is stored but **not considered** for the thermo risk classification.
 
@@ -246,13 +255,11 @@ Comparing GFS SB-CAPE = 200 J/kg against ECMWF MU-CAPE = 600 J/kg would show "po
 
 **Fix:** Filter `nwp_cape_jkg` comparison to only compare models with the same `nwp_cape_type`. Or better: don't compare raw NWP CAPE across models at all — it's not an apples-to-apples comparison.
 
-### 6. NWP convective layer boundary inconsistency: visualization vs assessment
+### 6. ~~NWP convective layer boundary inconsistency: visualization vs assessment~~ ✅ FIXED (by bug #1 fix)
 
-**Problem:** The NWP convective visualization (`nwp-convective-bg.ts`) uses `nwpConvectiveBaseFt`/`nwpConvectiveTopFt` which come from `sounding.convective_nwp.base_ft/top_ft`. But `convective_nwp` is None for ICON-EU (bug #1), so the visualization shows nothing — even though `nwpCloudDiagnostics.convective_base_ft/top_ft` exist and are used for cloud layer synthesis.
+**Problem:** The NWP convective visualization (`nwp-convective-bg.ts`) uses `nwpConvectiveBaseFt`/`nwpConvectiveTopFt` which come from `sounding.convective_nwp.base_ft/top_ft`. Previously `convective_nwp` was None for ICON-EU, so the visualization showed nothing.
 
-There's a disconnect: ICON-EU convective boundaries flow to NWP cloud layers (via `build_nwp_cloud_layers`) but NOT to the NWP convective visualization layer.
-
-**Impact:** ICON-EU has convective tower geometry but it's only visible in the NWP cloud bands layer (as a synthesized layer), never as an actual convective tower.
+**Fix:** The hybrid NWP path (bug #1 fix) now returns a `ConvectiveAssessment` with `method="nwp_hybrid"` for ICON-EU, populating `base_ft`/`top_ft` from GRIB data. The NWP visualization layer now renders ICON-EU convective towers.
 
 ### 7. Advisory evaluator reads resolved `convective` slot — NWP fallback is silent
 
@@ -311,7 +318,7 @@ Open-Meteo → cape_jkg (SB), convective_inhibition_jkg, lifted_index_raw
 GRIB2      → NWPCloudDiagnostics.convective_{cover_pct,base_ft,top_ft}
 MetPy      → SB/MU/ML CAPE, CIN, LCL/LFC/EL, shear, K, TT, LI
 Analysis:
-  Thermo assessment  → risk from max(SB,MU) CAPE, CIN suppression, severity modifiers
+  Thermo assessment  → risk from max(SB,MU,ML,NWP) CAPE, CIN suppression, severity modifiers
   NWP assessment     → risk from cover_pct thresholds, GRIB base/top
 Visualization:
   Thermo towers      → LFC→EL (estimated if shallow), always available
@@ -320,20 +327,20 @@ Advisory:
   ConvectiveEvaluator → reads active slot (user choice)
 ```
 
-### ICON-EU (Partial GRIB)
+### ICON-EU (Partial GRIB — Hybrid NWP)
 
 ```
 Open-Meteo → cape_jkg (ML)
-GRIB2      → NWPCloudDiagnostics.convective_{base_ft,top_ft}  (no cover_pct!)
+GRIB2      → NWPCloudDiagnostics.convective_{base_ft,top_ft}  (no cover_pct)
 MetPy      → SB/MU/ML CAPE, CIN, LCL/LFC/EL, shear, K, TT
 Analysis:
-  Thermo assessment  → risk from max(SB,MU) CAPE, CIN suppression
-  NWP assessment     → None (cover_pct is None → returns None)
+  Thermo assessment  → risk from max(SB,MU,ML,NWP) CAPE, CIN suppression
+  NWP assessment     → Hybrid: CAPE-based risk + GRIB base/top (method="nwp_hybrid")
 Visualization:
   Thermo towers      → LFC→EL (estimated if shallow), always available
-  NWP towers         → NOT rendered (convective_nwp is None)
+  NWP towers         → GRIB convective base/top, available via hybrid path
 Advisory:
-  ConvectiveEvaluator → always uses thermo (NWP fallback)
+  ConvectiveEvaluator → reads active slot (user choice, both methods available)
 ```
 
 ### ECMWF (Open-Meteo Only, MU-CAPE)
@@ -380,7 +387,7 @@ Note: Entirely dependent on MetPy quality from 8-28 pressure levels.
 
 ## Recommendations
 
-### 1. Use NWP raw CAPE when available (Priority: High)
+### 1. ~~Use NWP raw CAPE when available~~ ✅ IMPLEMENTED
 
 The model's own CAPE computation uses full vertical resolution (50–140 levels) vs MetPy's 8–28 levels. When `nwp_cape_jkg` is available, it should at minimum participate in `_effective_cape()`:
 
@@ -400,7 +407,7 @@ def _effective_cape(indices: ThermodynamicIndices) -> float | None:
 
 This is conservative (never underestimates) and handles the CAPE type heterogeneity by taking the maximum.
 
-### 2. Enable ICON-EU NWP convective assessment (Priority: Medium)
+### 2. ~~Enable ICON-EU NWP convective assessment~~ ✅ IMPLEMENTED
 
 ICON-EU has convective base/top from GRIB but no cover_pct. A hybrid approach would use CAPE-based risk + GRIB base/top:
 
