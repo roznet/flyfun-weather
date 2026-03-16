@@ -32,7 +32,9 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → enrich_lwc → clouds → nwp_clouds → cloud_top_uncertainty → inversions → sfip → ogimet_dd → ogimet_nwp → precipitation → convective → vertical_motion → ceiling`
+Pipeline: `prepare → thermodynamics → enrich_lwc → clouds → inversions → nwp_clouds → cloud_top_uncertainty → sfip → ogimet_dd → ogimet_nwp → precipitation → convective → vertical_motion → ceiling`
+
+Note: inversions are detected **before** NWP cloud building because the synthesis tier uses inversion layers for cloud top capping.
 
 ### Prepare (`sounding/prepare.py`)
 
@@ -80,16 +82,22 @@ layers = detect_cloud_layers(derived_levels, lcl_altitude_ft=idx.lcl_altitude_ft
 - Coverage from mean dewpoint depression: < 1°C → OVC, 1-2°C → BKN, 2-3°C → SCT
 - Records base/top altitudes, thickness, mean temperature
 
-**NWP (Model Diagnostics) — alternative.** Uses GFS/ICON cloud layer diagnostics when available.
+**NWP (Model Diagnostics) — alternative.** Three-tier approach ensures all models produce NWP layers.
 
 ```python
-nwp_layers = build_nwp_cloud_layers(diagnostics, cloud_cover_low, cloud_cover_mid, cloud_cover_high)
+nwp_layers = build_nwp_cloud_layers(
+    diagnostics, cloud_cover_low, cloud_cover_mid, cloud_cover_high,
+    dd_cloud_layers=cloud_layers, inversion_layers=inversions, lcl_altitude_ft=lcl_ft,
+)
 ```
 
-- Uses NWP cloud base/top boundaries and coverage percentages from GRIB2 diagnostics
+- **Tier 1 (GRIB):** GFS — uses native model boundaries, tagged `source="grib"`
+- **Tier 2 (Synthesized):** All other models — narrows ICAO bands using DD cloud envelope + inversion capping (≥2°C) + LCL floor, tagged `source="synthesized"`. Minimum cover threshold: 25%.
+- **Tier 3:** Returns None only when no cloud cover data at all
 - NWP coverage mapping: ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT
-- Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000ft+)
-- Falls back to DD method when diagnostics unavailable
+- Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000–45000ft)
+- Each `EnhancedCloudLayer` carries `source` field ("dd"/"grib"/"synthesized")
+- `SoundingAnalysis.cloud_method_effective` tracks what method was actually used ("dd", "nwp", "nwp_synthesized")
 
 **Cloud top uncertainty enrichment:** For convective (CAPE > 500): `theoretical_max_top_ft = EL`. For stratiform: `theoretical_max_top_ft = -20°C level`. Only set when exceeding sounding-derived cloud top.
 
@@ -362,7 +370,7 @@ Route-point analysis (`analyze_all_route_points()`) adds interpolated time based
 - `icing_method="ogimet_nwp"`: resolves `icing_ogimet_nwp_zones` → `icing_zones`
 - `icing_method="sfip_nwp"`: converts `SfipZone` → `IcingZone` into `icing_zones`
 - `cloud_method="dd"`: no swap needed (default in `cloud_layers`)
-- `cloud_method="nwp"`: resolves `nwp_cloud_layers` → `cloud_layers` (falls back to `dd_cloud_layers` if NWP unavailable)
+- `cloud_method="nwp"`: resolves `nwp_cloud_layers` → `cloud_layers` (falls back to `dd_cloud_layers` if NWP unavailable). Sets `cloud_method_effective` to "nwp" (grib sources), "nwp_synthesized" (synthesized sources), or "dd" (fallback)
 
 **Immutable DD source fields**: `SoundingAnalysis` stores `dd_cloud_layers` and `icing_ogimet_dd_zones` at construction. These preserve the original DD data so resolution can always fall back. Excluded from serialization (redundant in default state); a `model_validator` reconstructs them from `cloud_layers`/`icing_zones` when loading old JSON.
 

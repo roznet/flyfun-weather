@@ -57,7 +57,7 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 |-------|------|-------|------|---------|-------------|
 | Convective BG | Convective | convection | `convective-bg.ts` | on | Tower columns LCL→EL, hatching, CB labels, anvil strip |
 | Cloud bands | DD Layers | clouds | `cloud-bands.ts` | on | Hatch lines by coverage (SCT/BKN/OVC line widths) |
-| NWP cloud bands | NWP Layers | clouds | `nwp-cloud-bands.ts` | on | NWP cloud cover with proportional hatching, terrain-aware |
+| NWP cloud bands | NWP Layers | clouds | `nwp-cloud-bands.ts` | on | Server-computed NWP cloud layers (GRIB or synthesized), blue-tinted with proportional hatching |
 | Icing bands | Ogimet-DD | icing | `icing-bands.ts` | on | Colored by risk (light→severe), DD-attenuated Ogimet index |
 | Ogimet-NWP bands | Ogimet-NWP | icing | `icing-ogimet-nwp-bands.ts` | off | NWP cloud-scaled Ogimet index |
 | SFIP bands | SFIP-NWP | icing | `sfip-bands.ts` | off | Fuzzy-logic SFIP icing index |
@@ -202,15 +202,14 @@ Both cross-section and route-graph interaction modules import from this shared u
 
 ## NWP Cloud Bands
 
-The NWP cloud bands layer (`nwp-cloud-bands.ts`) renders numerical weather prediction cloud cover:
+The NWP cloud bands layer (`nwp-cloud-bands.ts`) renders pre-computed NWP cloud layers from the backend:
 
-- **Three-tier altitude model**: Low (terrain → 6500ft), mid (6500ft → 20000ft), high (20000ft+)
-- **Per-band hybrid rendering**: Each band independently uses model diagnostics (GFS base/top) when available, or falls back to sounding-derived heuristics (LCL, inversions, cloud envelope) when boundaries are missing (e.g. ICON-EU provides cover % but not base/top)
-- **Sounding-corroborated collapse**: For mid/high bands without diagnostic boundaries, if the sounding finds NO cloud layers in that altitude range, the band collapses to zero height (prevents false fills from NWP-only coverage)
-- **Heuristic narrowing** (when diagnostics unavailable): LCL raises band floor, inversions (≥2°C strength) cap band top, sounding cloud envelopes constrain bounds
-- **Terrain-aware**: Interpolates terrain elevation at each point to set low band base dynamically
-- **Opacity capping**: Cloud cover % converted to opacity with `min(0.7, pct/100 * 0.8)` for readability
-- **Model-run consistency**: When GRIB diagnostics are available, they override Open-Meteo cloud cover values so all cloud data comes from the same model run
+- **Server-computed layers**: All heuristic narrowing (DD envelope, inversion capping, LCL) now happens in Python (`clouds.py:_synthesize_nwp_layers()`). The frontend receives ready-to-render `EnhancedCloudLayer` objects with base/top boundaries for all models.
+- **Layer matching**: Adjacent points' NWP cloud layers are matched by altitude overlap (same approach as DD cloud bands). Matched pairs are rendered as smooth bands; unmatched layers taper to midpoint.
+- **Coverage-proportional fill**: Blue-tinted fill with opacity proportional to coverage (OVC→90%, BKN→65%, SCT→35%) via `coverageToPct()`.
+- **Hatching**: Horizontal hatch lines with width proportional to coverage percentage, matching DD cloud band style.
+- **Source tagging**: Tooltip shows source context — "(synth)" for synthesized layers, no tag for GRIB layers.
+- **Single-point fallback**: When only one route point exists, draws column bands instead of smooth bands.
 - Renders on sky-blue background (set in `axes.ts`)
 
 ## Layer Legends
