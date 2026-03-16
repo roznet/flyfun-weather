@@ -111,9 +111,9 @@ layers = detect_inversions(derived_levels)
 - `surface_based=True` if the inversion starts at the lowest valid level
 - Used in cross-section visualization as an inversion band layer
 
-### Icing (`sounding/icing.py`, `sounding/sfip.py`)
+### Icing (`sounding/icing.py`, `sounding/sfip.py`, `sounding/icing_common.py`)
 
-Three icing methods, selectable via `icing_method` user setting. All three are always computed and stored; the selected method determines which `icing_zones` are used by advisory evaluators.
+Three icing methods, selectable via `icing_method` user setting. All three are always computed and stored; the selected method determines which `icing_zones` are used by advisory evaluators. Shared utilities (cloud-proximity checks, NWP cloud altitude lookup, icing type classification, zone grouping) live in `icing_common.py`.
 
 #### Ogimet-DD (default) — `assess_icing_zones_ogimet_dd()`
 
@@ -137,19 +137,22 @@ Same Ogimet index but uses NWP model cloud cover as the cloud signal instead of 
 
 **Formula:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)`
 
-Altitude-aware: `_nwp_cloud_for_altitude()` maps NWP cloud coverage to specific altitude bands (low <6500ft, mid 6500–20000ft, high >20000ft) with ±500ft margin. Falls back to bulk band percentages when diagnostics unavailable.
+Altitude-aware: `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) checks **all** diagnostic layers regardless of ICAO band and returns the highest matching cloud cover. Falls back to bulk band percentages when diagnostics unavailable.
 
-**DD cloud proximity gate (no-diagnostics fallback):** When `NWPCloudDiagnostics` are absent (ECMWF, GEM, etc.), bulk NWP band percentages cover entire ICAO altitude bands — e.g. 15% low cloud is applied uniformly from SFC to 6500ft regardless of where the cloud actually is. To prevent false-positive icing at cloud-free altitudes, levels are gated by `_is_near_cloud()`: the level must have DD < 2°C or be within 500ft of a detected BKN/OVC cloud layer. Models with GRIB2 diagnostics (GFS, ICON-EU) use precise base/top boundaries instead and skip this gate.
+**DD cloud proximity gate (no-diagnostics fallback):** When `NWPCloudDiagnostics` are absent (ECMWF, GEM, etc.), bulk NWP band percentages cover entire ICAO altitude bands — e.g. 15% low cloud is applied uniformly from SFC to 6500ft regardless of where the cloud actually is. To prevent false-positive icing at cloud-free altitudes, levels are gated by `is_near_cloud()` (shared in `icing_common.py`): the level must have DD < 2°C or be within 500ft of a detected BKN/OVC cloud layer. Models with GRIB2 diagnostics (GFS, ICON-EU) use precise base/top boundaries instead and skip this gate.
+
+Per-level index stored in `icing_index_nwp` on DerivedLevel (separate from `icing_index` used by Ogimet-DD).
 
 #### SFIP-NWP — `sounding/sfip.py`
 
 Simplified Forecast Icing Potential — fuzzy-logic index (Belo-Pereira 2015, Morcrette et al. 2019). Same family used by Windy.com and European met services.
 
 - **Fuzzy logic** — four membership functions (T, RH, CLW, vertical velocity) combined with weights
-- **Three variants**: SFIP_O (full, GFS/ICON-EU — has real CLW from GRIB) `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; SFIP_4 (proxy, other models) `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; SFIP_interp (same as full but CLW spatially interpolated)
+- **Six variants**: `full`/`full_no_vv` (SFIP_O, GFS/ICON-EU — has real CLW from GRIB) `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; `proxy`/`proxy_no_vv` (SFIP_4, other models) `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; `interp`/`interp_no_vv` (same as full but CLW spatially/vertically interpolated). The `_no_vv` suffix indicates omega is unavailable (M_VV = 0).
 - **Glaciation factor** (GFS/ICON-EU only): `CLW/(CLW+ICMR)` reduces icing when cloud is glaciated
-- **Altitude-aware NWP cloud check**: `_cloud_cover_for_level()` uses `NWPCloudDiagnostics` base/top boundaries (±500ft margin) when available; prevents false positives from bulk ICAO-band percentages
-- Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (`"full"`, `"interp"`, or `"proxy"`)
+- **Altitude-aware NWP cloud check**: `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) checks all diagnostic layers regardless of ICAO band; prevents false positives from bulk ICAO-band percentages
+- **Icing type**: uses shared `classify_icing_type()` with wet-bulb temperature (same thresholds as Ogimet)
+- Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (one of six above)
 
 **Temperature membership (M_T):** Piecewise linear ramp to peak 1.0 in [−5, −14]°C, then exponential decay below −14°C: `exp(−k × (|T| − 14))` with `k=0.4` (`_TEMP_DECAY_K`). SLW concentration drops roughly exponentially with decreasing temperature as ice nucleation dominates. This aligns SFIP's effective range with the Ogimet layered formula (which cuts off at −14°C) while maintaining a smooth tail for mixed-phase icing. Reference values: −15°C → 0.67, −17°C → 0.30, −20°C → 0.09. Temperature gating: [0, −25]°C.
 
@@ -178,7 +181,7 @@ Physically-based continuous index peaking at −7°C, matching observed supercoo
 
 #### Icing Type Classification
 
-From wet-bulb temperature (dry-bulb fallback). Thresholds shifted ~1°C colder than dry-bulb equivalents because accretion surface temperature is closer to wet-bulb in cloud:
+All three methods use `classify_icing_type()` from `icing_common.py`. Uses wet-bulb temperature (dry-bulb fallback). Thresholds shifted ~1°C colder than dry-bulb equivalents because accretion surface temperature is closer to wet-bulb in cloud:
 - CLEAR: −4°C to 0°C
 - MIXED: −11°C to −4°C
 - RIME: < −11°C
@@ -198,7 +201,11 @@ Default changed from True to False — was producing too-conservative results fo
 - Minimum zone thickness: single-level zones expanded to ±500ft (1000ft total) for cross-section visibility
 - SLD detection: **disabled** — heuristics too sensitive for available data resolution
 
-### Spatial CLW/ICMR Interpolation (`analysis/spatial_interpolation.py`)
+### CLW/ICMR Interpolation
+
+Two-stage interpolation fills gaps in GRIB2 CLW/ICMR data. Both stages set `clw_interpolated=True` → SFIP reports variant containing `"interp"` → tooltip shows `(INTERP)`.
+
+#### Stage 1: Spatial (`analysis/spatial_interpolation.py`)
 
 Some GFS grid cells return `None` for CLW/ICMR via Open-Meteo, which forces SFIP to use the proxy variant. The proxy variant overestimates icing extent (e.g. 13,400ft SEVERE zone vs 2,400ft MODERATE at neighboring data points).
 
@@ -209,7 +216,10 @@ Some GFS grid cells return `None` for CLW/ICMR via Open-Meteo, which forces SFIP
 - **Max gap**: 100 nm default (`max_gap_nm`). Wider gaps are left unfilled → proxy fallback
 - **Edge gaps**: first/last point with no data on one side → not interpolated
 - **CLW=0.0 preserved**: treated as real "measured zero", not a gap
-- **Flag**: `PressureLevelData.clw_interpolated = True` → propagated to `DerivedLevel.clw_interpolated` → SFIP reports variant=`"interp"` → tooltip shows `(INTERP)`
+
+#### Stage 2: Vertical (`sounding/__init__.py`)
+
+After `_enrich_lwc()` direct-matches GRIB 50hPa levels to derived levels, `_interpolate_cloud_water()` fills intermediate 25hPa levels by linear interpolation in pressure-space between enriched neighbors. Only interpolates when both neighbors have data.
 
 Called in `analyze_all_route_points()` between `compute_route_tracks()` and the per-point analysis loop.
 
