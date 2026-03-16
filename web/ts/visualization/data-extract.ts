@@ -74,6 +74,13 @@ function extractPoint(
     meanDewpointDepressionC: cl.mean_dewpoint_depression_c ?? undefined,
   }));
 
+  const nwpCloudLayers: VizCloudLayer[] = (sounding?.nwp_cloud_layers ?? []).map((cl) => ({
+    baseFt: cl.base_ft,
+    topFt: cl.top_ft,
+    coverage: cl.coverage,
+    source: cl.source ?? 'dd',
+  }));
+
   const icingZones: VizIcingZone[] = (sounding?.icing_zones ?? []).map((iz) => ({
     baseFt: iz.base_ft,
     topFt: iz.top_ft,
@@ -142,6 +149,7 @@ function extractPoint(
     time: rpa.interpolated_time,
     altitudeLines,
     cloudLayers,
+    nwpCloudLayers,
     icingZones,
     icingOgimetNwpZones,
     sfipZones,
@@ -174,12 +182,12 @@ function extractPoint(
 export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const unavailable = new Set<string>();
 
-  const hasNwpCloudDiag = data.points.some((p) => p.nwpCloudDiag !== null);
+  const hasNwpCloudLayers = data.points.some((p) => p.nwpCloudLayers.length > 0);
   const hasOgimetNwp = data.points.some((p) => p.icingOgimetNwpZones.length > 0);
   const hasSfip = data.points.some((p) => p.sfipZones.length > 0);
   const hasNwpConvective = data.points.some((p) => p.nwpConvectiveBaseFt !== null);
 
-  if (!hasNwpCloudDiag) unavailable.add('nwp-cloud-bands');
+  if (!hasNwpCloudLayers) unavailable.add('nwp-cloud-bands');
   if (!hasOgimetNwp) unavailable.add('icing-ogimet-nwp-bands');
   if (!hasSfip) unavailable.add('sfip-bands');
   if (!hasNwpConvective) unavailable.add('nwp-convective-bg');

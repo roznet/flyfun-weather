@@ -3,7 +3,6 @@
 from weatherbrief.analysis.sounding.clouds import build_nwp_cloud_layers, detect_cloud_layers
 from weatherbrief.models import DerivedLevel, NWPCloudDiagnostics, NWPCloudLayerDiag
 from weatherbrief.models.analysis import CloudCoverage, EnhancedCloudLayer, SoundingAnalysis
-from weatherbrief.tasks.advise import _resolve_analyses
 
 
 def test_single_cloud_layer():
@@ -275,6 +274,7 @@ def _make_rpa_with_clouds():
 
 def test_resolve_analyses_dd_returns_original():
     """DD method returns the original list unchanged (identity)."""
+    from weatherbrief.tasks.advise import _resolve_analyses
     rpa, dd_layers, _ = _make_rpa_with_clouds()
     original = [rpa]
     result = _resolve_analyses(original, None, "dd")
@@ -284,6 +284,7 @@ def test_resolve_analyses_dd_returns_original():
 
 def test_resolve_analyses_nwp_swaps_without_mutation():
     """NWP method resolves cloud_layers from NWP; original is untouched."""
+    from weatherbrief.tasks.advise import _resolve_analyses
     rpa, _, nwp_layers = _make_rpa_with_clouds()
     result = _resolve_analyses([rpa], None, "nwp")
     # Resolved has NWP layers
@@ -295,6 +296,7 @@ def test_resolve_analyses_nwp_swaps_without_mutation():
 
 def test_resolve_analyses_nwp_fallback():
     """NWP method with None nwp_cloud_layers falls back to DD source."""
+    from weatherbrief.tasks.advise import _resolve_analyses
     rpa, dd_layers, _ = _make_rpa_with_clouds()
     rpa.sounding["gfs"].nwp_cloud_layers = None
     result = _resolve_analyses([rpa], None, "nwp")

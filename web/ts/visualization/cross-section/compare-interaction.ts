@@ -210,17 +210,10 @@ function bandHitTest(point: VizPoint, layerId: string, hoverAltFt: number): stri
       return null;
 
     case 'nwp-cloud-bands':
-      if (point.nwpCloudDiag) {
-        for (const [label, layer] of [['Low', point.nwpCloudDiag.low], ['Mid', point.nwpCloudDiag.mid], ['High', point.nwpCloudDiag.high]] as const) {
-          if (layer.coverPct !== null && layer.coverPct > 0 &&
-              layer.baseFt !== null && layer.topFt !== null &&
-              altInBand(hoverAltFt, layer.baseFt, layer.topFt)) {
-            return `${label} ${Math.round(layer.coverPct)}%`;
-          }
+      for (const cl of point.nwpCloudLayers) {
+        if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
+          return `${cl.coverage} ${fmtFL(cl.baseFt)}\u2013${fmtFL(cl.topFt)}`;
         }
-      } else {
-        if (point.cloudCoverLowPct > 0) return `Low ${Math.round(point.cloudCoverLowPct)}%`;
-        if (point.cloudCoverMidPct > 0) return `Mid ${Math.round(point.cloudCoverMidPct)}%`;
       }
       return null;
 
