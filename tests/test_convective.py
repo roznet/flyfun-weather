@@ -4,6 +4,7 @@ from weatherbrief.analysis.sounding.convective import (
     _effective_cape,
     assess_convective_nwp,
     assess_convective_thermo,
+    effective_cape,
 )
 from weatherbrief.models import (
     ConvectiveAssessment,
@@ -45,24 +46,29 @@ def test_effective_cape_ml_only():
     assert _effective_cape(indices) == 600.0
 
 
-def test_effective_cape_nwp_raw():
-    """Uses NWP raw CAPE when it exceeds other variants."""
+def test_effective_cape_nwp_raw_fallback_only():
+    """NWP raw CAPE is only used when no MetPy variant is available."""
+    # When SB-CAPE exists, NWP should NOT override it even if higher
     indices = ThermodynamicIndices(
         cape_surface_jkg=200.0,
         nwp_cape_jkg=900.0,
     )
-    assert _effective_cape(indices) == 900.0
+    assert effective_cape(indices) == 200.0
+
+    # When no MetPy variants exist, NWP is used as fallback
+    indices_nwp_only = ThermodynamicIndices(nwp_cape_jkg=900.0)
+    assert effective_cape(indices_nwp_only) == 900.0
 
 
-def test_effective_cape_all_variants():
-    """Max across all four CAPE variants."""
+def test_effective_cape_all_metpy_variants():
+    """Max across MetPy CAPE variants (NWP excluded from max pool)."""
     indices = ThermodynamicIndices(
         cape_surface_jkg=100.0,
         cape_most_unstable_jkg=300.0,
         cape_mixed_layer_jkg=500.0,
-        nwp_cape_jkg=400.0,
+        nwp_cape_jkg=400.0,  # ignored because MetPy variants exist
     )
-    assert _effective_cape(indices) == 500.0
+    assert effective_cape(indices) == 500.0
 
 
 def test_effective_cape_none():
