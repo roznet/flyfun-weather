@@ -155,9 +155,9 @@ def analyze_sounding(
         enrich_cloud_top_uncertainty,
     )
     from weatherbrief.analysis.sounding.convective import (
-        _effective_cape,
         assess_convective_nwp,
         assess_convective_thermo,
+        effective_cape,
     )
     from weatherbrief.analysis.sounding.icing import (
         assess_icing_zones_ogimet_dd,
@@ -218,7 +218,7 @@ def analyze_sounding(
 
     # Cloud top uncertainty enrichment — use effective CAPE (max of all variants)
     # so elevated/ML convection triggers EL-based cloud tops correctly
-    effective_cape = _effective_cape(indices)
+    effective_cape = effective_cape(indices)
     enrich_cloud_top_uncertainty(cloud_layers, indices, effective_cape)
 
     # Temperature inversion detection (before NWP synthesis — used for cloud top capping)

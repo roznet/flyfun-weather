@@ -1340,6 +1340,11 @@ function findOverlappingSfip(sfipZones: SfipZone[], floorFt: number, ceilingFt: 
 }
 
 /** Build the multi-line HTML content for a single regime cell. */
+/** Map SFIP variant string to a display badge: "CLW" when actual cloud liquid water data was used, "proxy" otherwise. */
+function sfipVariantBadge(variant: string): string {
+  return variant.startsWith('full') || variant.startsWith('interp') ? 'CLW' : 'proxy';
+}
+
 function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[], enabledLayers?: Record<string, boolean>): string {
   const layerOn = (id: string) => !enabledLayers || enabledLayers[id] !== false;
   const lines: string[] = [];
@@ -1386,7 +1391,7 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[], enabl
     if (regime.mean_icing_index != null)
       params.push(`Ix=${regime.mean_icing_index.toFixed(0)} ${renderInfoButton('ogimet_index', regime.mean_icing_index)}`);
     if (layerOn('sfip-bands') && sfipMatch && sfipMatch.mean_sfip_100 != null) {
-      const variantBadge = `<span class="sfip-variant">${sfipMatch.variant.startsWith('full') || sfipMatch.variant.startsWith('interp') ? 'CLW' : 'proxy'}</span>`;
+      const variantBadge = `<span class="sfip-variant">${sfipVariantBadge(sfipMatch.variant)}</span>`;
       params.push(`SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100)} ${variantBadge}`);
     }
     if (regime.mean_rh_pct != null)
@@ -1398,7 +1403,7 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[], enabl
     const risk = sfipMatch.risk.toUpperCase();
     const infoBtn = renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100);
     lines.push(`<div class="regime-icing">${risk} ${infoBtn}</div>`);
-    const variantBadge = `<span class="sfip-variant">${sfipMatch.variant.startsWith('full') || sfipMatch.variant.startsWith('interp') ? 'CLW' : 'proxy'}</span>`;
+    const variantBadge = `<span class="sfip-variant">${sfipVariantBadge(sfipMatch.variant)}</span>`;
     lines.push(`<div class="regime-params">SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100)} ${variantBadge}</div>`);
   }
 
