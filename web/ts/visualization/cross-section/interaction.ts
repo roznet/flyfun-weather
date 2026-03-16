@@ -1,6 +1,6 @@
 /** Cross-section interaction: hover crosshair, click-to-select, tooltip. */
 
-import type { VizRouteData, VizPoint, VizCloudDiag } from '../types';
+import type { VizRouteData, VizPoint } from '../types';
 import type { CrossSectionRenderer } from './renderer';
 import {
   getCanvasX, getCanvasY, findNearestPointIndex, ensureTooltip as ensureTooltipEl,
@@ -125,19 +125,11 @@ export function attachInteraction(
     // --- NWP Cloud bands ---
     if (en('nwp-cloud-bands')) {
       const nwpLines: string[] = [];
-      if (point.nwpCloudDiag) {
-        const diag = point.nwpCloudDiag;
-        for (const [label, layer] of nwpDiagLayers(diag)) {
-          if (layer.coverPct !== null && layer.coverPct > 0 &&
-              layer.baseFt !== null && layer.topFt !== null &&
-              altInBand(hoverAltFt, layer.baseFt, layer.topFt)) {
-            nwpLines.push(`NWP ${label}: ${Math.round(layer.coverPct)}% (${fmtFL(layer.baseFt)}–${fmtFL(layer.topFt)})`);
-          }
+      for (const cl of point.nwpCloudLayers) {
+        if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
+          const tag = cl.source === 'synthesized' ? ' (synth)' : cl.source === 'grib' ? '' : '';
+          nwpLines.push(`NWP: ${cl.coverage} ${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)}${tag}`);
         }
-      } else {
-        // Fallback: show Open-Meteo low/mid cover when GRIB diagnostics are missing
-        if (point.cloudCoverLowPct > 0) nwpLines.push(`NWP low: ${Math.round(point.cloudCoverLowPct)}%`);
-        if (point.cloudCoverMidPct > 0) nwpLines.push(`NWP mid: ${Math.round(point.cloudCoverMidPct)}%`);
       }
       if (nwpLines.length > 0) sections.push(nwpLines.join('<br>'));
     }
@@ -302,7 +294,3 @@ function terrainElevationAt(data: VizRouteData, distanceNm: number): number {
   return 0;
 }
 
-/** Iterate NWP cloud diagnostic layers as [label, layer] pairs. */
-function nwpDiagLayers(diag: VizCloudDiag): [string, { coverPct: number | null; baseFt: number | null; topFt: number | null }][] {
-  return [['Low', diag.low], ['Mid', diag.mid], ['High', diag.high]];
-}

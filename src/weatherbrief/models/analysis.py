@@ -426,7 +426,7 @@ class DerivedLevel(BaseModel):
 
 
 class EnhancedCloudLayer(BaseModel):
-    """Cloud layer detected from dewpoint depression analysis."""
+    """Cloud layer detected from dewpoint depression or NWP diagnostics."""
 
     base_ft: float
     top_ft: float
@@ -437,6 +437,11 @@ class EnhancedCloudLayer(BaseModel):
     coverage: CloudCoverage = CloudCoverage.SCT
     mean_dewpoint_depression_c: Optional[float] = None
     theoretical_max_top_ft: Optional[float] = None  # EL (convective) or −20°C (stratiform)
+    # How this layer was derived:
+    #   "dd"          — dewpoint depression sounding analysis (default)
+    #   "grib"        — GRIB2 model diagnostics with explicit base/top
+    #   "synthesized" — Open-Meteo cloud %, narrowed by DD envelope + inversions
+    source: str = "dd"
 
 
 class InversionLayer(BaseModel):
@@ -574,6 +579,11 @@ class SoundingAnalysis(BaseModel):
     cloud_cover_high_pct: Optional[float] = None
     # GFS cloud layer diagnostics from GRIB2 enrichment
     nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
+
+    # Which cloud method was actually applied by _resolve_analyses.
+    # "dd" (default or fallback), "nwp" (GRIB diagnostics available),
+    # "nwp_synthesized" (synthesized from Open-Meteo + DD heuristics).
+    cloud_method_effective: Optional[str] = None
 
     # Immutable DD source fields — populated at construction, excluded from
     # serialization.  The validator reconstructs them from cloud_layers /
