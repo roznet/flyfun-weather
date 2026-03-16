@@ -408,7 +408,8 @@ class DerivedLevel(BaseModel):
     dewpoint_depression_c: Optional[float] = None
     theta_e_k: Optional[float] = None
     lapse_rate_c_per_km: Optional[float] = None
-    icing_index: Optional[float] = None  # Ogimet continuous icing index (0–100)
+    icing_index: Optional[float] = None  # Ogimet-DD continuous icing index (0–100)
+    icing_index_nwp: Optional[float] = None  # Ogimet-NWP icing index (0–100)
     omega_pa_s: Optional[float] = None  # raw model omega (Pa/s)
     w_fpm: Optional[float] = None  # vertical velocity (ft/min)
     richardson_number: Optional[float] = None  # Ri for layer below

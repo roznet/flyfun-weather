@@ -327,7 +327,7 @@ def test_zones_with_clw():
     ]
     zones = assess_sfip_zones(levels)
     assert len(zones) >= 1
-    assert zones[0].variant == "full"
+    assert zones[0].variant.startswith("full")
     assert zones[0].risk != IcingRisk.NONE
 
 
@@ -343,7 +343,7 @@ def test_zones_without_clw():
         nwp_cloud_mid_pct=80.0,
     )
     assert len(zones) >= 1
-    assert zones[0].variant == "proxy"
+    assert zones[0].variant.startswith("proxy")
 
 
 def test_zones_temperature_gating_warm():
@@ -397,7 +397,7 @@ def test_per_level_fields_stored():
     assert levels[0].sfip_raw is not None
     assert levels[0].sfip_100 is not None
     assert levels[0].sfip_100 > 0
-    assert levels[0].sfip_variant == "full"
+    assert levels[0].sfip_variant.startswith("full")
     assert levels[0].sfip_severity is not None
 
 
@@ -474,7 +474,7 @@ def test_full_variant_clw_positive_not_gated():
     ]
     zones = assess_sfip_zones(levels)
     assert len(zones) >= 1
-    assert all(z.variant == "full" for z in zones)
+    assert all(z.variant.startswith("full") for z in zones)
 
 
 def test_level_full_variant_clw_zero_returns_none():
@@ -506,7 +506,7 @@ def test_proxy_near_cloud_by_dd():
     ]
     zones = assess_sfip_zones(levels, nwp_cloud_mid_pct=80.0)
     assert len(zones) >= 1
-    assert all(z.variant == "proxy" for z in zones)
+    assert all(z.variant.startswith("proxy") for z in zones)
 
 
 def test_proxy_near_cloud_by_layer_proximity():
@@ -519,7 +519,7 @@ def test_proxy_near_cloud_by_layer_proximity():
     ]
     zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
     assert len(zones) >= 1
-    assert all(z.variant == "proxy" for z in zones)
+    assert all(z.variant.startswith("proxy") for z in zones)
 
 
 def test_proxy_far_from_cloud_layer_gated():

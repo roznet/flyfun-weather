@@ -1386,7 +1386,7 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[], enabl
     if (regime.mean_icing_index != null)
       params.push(`Ix=${regime.mean_icing_index.toFixed(0)} ${renderInfoButton('ogimet_index', regime.mean_icing_index)}`);
     if (layerOn('sfip-bands') && sfipMatch && sfipMatch.mean_sfip_100 != null) {
-      const variantBadge = `<span class="sfip-variant">${sfipMatch.variant === 'full' ? 'CLW' : 'proxy'}</span>`;
+      const variantBadge = `<span class="sfip-variant">${sfipMatch.variant.startsWith('full') || sfipMatch.variant.startsWith('interp') ? 'CLW' : 'proxy'}</span>`;
       params.push(`SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100)} ${variantBadge}`);
     }
     if (regime.mean_rh_pct != null)
@@ -1398,7 +1398,7 @@ function regimeCellContent(regime: VerticalRegime, sfipZones?: SfipZone[], enabl
     const risk = sfipMatch.risk.toUpperCase();
     const infoBtn = renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100);
     lines.push(`<div class="regime-icing">${risk} ${infoBtn}</div>`);
-    const variantBadge = `<span class="sfip-variant">${sfipMatch.variant === 'full' ? 'CLW' : 'proxy'}</span>`;
+    const variantBadge = `<span class="sfip-variant">${sfipMatch.variant.startsWith('full') || sfipMatch.variant.startsWith('interp') ? 'CLW' : 'proxy'}</span>`;
     lines.push(`<div class="regime-params">SFIP=${sfipMatch.mean_sfip_100.toFixed(0)} ${renderInfoButton('sfip_risk', sfipMatch.mean_sfip_100)} ${variantBadge}</div>`);
   }
 
