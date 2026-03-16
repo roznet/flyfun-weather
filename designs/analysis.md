@@ -239,7 +239,7 @@ Called in `analyze_all_route_points()` between `compute_route_tracks()` and the 
 
 Pure threshold logic from `ThermodynamicIndices` — no MetPy dependency.
 
-**Effective CAPE** = max(SB-CAPE, MU-CAPE). Uses MU-CAPE to catch elevated convection common in European maritime environments where SB-CAPE is near zero while a warm layer aloft is unstable.
+**Effective CAPE** = max(SB-CAPE, MU-CAPE, ML-CAPE, NWP raw CAPE). Includes all available CAPE variants: MU-CAPE catches elevated convection, ML-CAPE captures mixed-layer instability (ICON), and NWP raw CAPE uses the model's full vertical resolution (50–140 levels vs MetPy's 8–28).
 
 European-calibrated thresholds (lower than US values — European convection produces severe weather at lower CAPE):
 
