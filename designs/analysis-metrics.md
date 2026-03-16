@@ -221,7 +221,13 @@ Consecutive pressure levels where dewpoint depression < 3°C are grouped into cl
 
 #### NWP (Model Diagnostics) — alternative
 
-Uses GFS/ICON cloud layer diagnostics (base/top boundaries + coverage %) when available.
+Three-tier approach ensures all models produce NWP cloud layers:
+
+**Tier 1 — GRIB (GFS):** Uses native model boundaries (base_ft, top_ft) and coverage from GRIB2. Tagged `source="grib"`.
+
+**Tier 2 — Synthesized (all others):** When GRIB boundaries absent but Open-Meteo cloud_cover_{low,mid,high} exist, synthesizes layers by narrowing ICAO bands with DD cloud envelope + inversion capping (≥2°C) + LCL floor. Tagged `source="synthesized"`. Minimum cover threshold: 25%.
+
+**Tier 3:** Returns None only when no cloud cover data at all.
 
 **NWP coverage classification:**
 
@@ -231,7 +237,9 @@ Uses GFS/ICON cloud layer diagnostics (base/top boundaries + coverage %) when av
 | ≥ 50% | BKN |
 | ≥ 25% | SCT |
 
-Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000ft+). Falls back to DD method when diagnostics unavailable.
+Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000–45000ft).
+
+**Source tracking:** Each `EnhancedCloudLayer` carries `source` ("dd"/"grib"/"synthesized"). `SoundingAnalysis.cloud_method_effective` records what was actually used: "dd", "nwp" (GRIB sources), or "nwp_synthesized" (synthesized sources).
 
 **Dual cloud data sources** — a known inconsistency:
 - **DD (sounding-derived):** from dewpoint depression at pressure levels (8–28 levels, coarse vertical resolution)
