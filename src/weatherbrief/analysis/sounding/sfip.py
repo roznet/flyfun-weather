@@ -172,15 +172,10 @@ def membership_vv(omega_pa_s: float | None) -> float:
         return -0.3
 
 
-def glaciation_factor(clw_g_kg: float, icmr_g_kg: float) -> float:
-    """Liquid fraction multiplier — reduces icing when cloud is glaciated.
-
-    Both inputs in g/kg. Returns 0.0 (all ice) to 1.0 (all liquid).
-    """
-    total = clw_g_kg + icmr_g_kg
-    if total <= 0:
-        return 0.0
-    return clw_g_kg / total
+def glaciation_factor(clw_g_kg: float, icmr_g_kg: float, temperature_c: float | None = None) -> float:
+    """Liquid fraction multiplier — delegates to ``icing_common.glaciation_factor``."""
+    from weatherbrief.analysis.sounding.icing_common import glaciation_factor as _glac
+    return _glac(clw_g_kg, icmr_g_kg, temperature_c)
 
 
 # ── Per-level computation ────────────────────────────────────────────
@@ -254,7 +249,7 @@ def compute_sfip_level(
         m_clw = membership_clw(clw_g_kg)
         # Apply glaciation factor when ice data available
         if icmr_g_kg is not None and icmr_g_kg > 0:
-            m_clw *= glaciation_factor(clw_g_kg, icmr_g_kg)
+            m_clw *= glaciation_factor(clw_g_kg, icmr_g_kg, temperature_c)
         sfip_value = (
             _W_T_FULL * m_t
             + _W_RH_FULL * m_rh

@@ -13,6 +13,7 @@ from weatherbrief.analysis.sounding.icing_common import (
     DD_BKN_THRESHOLD,
     MIN_ZONE_HALF_THICKNESS_FT as _MIN_ZONE_HALF_THICKNESS_FT,
     classify_icing_type,
+    glaciation_factor,
     group_icing_levels,
     is_near_cloud,
     nwp_cloud_cover_at_altitude,
@@ -685,14 +686,12 @@ def assess_icing_zones_ogimet_nwp(
         effective = raw_index * cloud_fraction
 
         # Apply glaciation factor when CLW/ICMR microphysics are available.
-        # In glaciated cloud (CLW ≈ 0, all ice crystals) there is no
-        # supercooled liquid water and therefore no structural icing.
+        # Temperature-dependent floor prevents grid-scale CLW=0 from
+        # completely zeroing out icing at warm temps where SLW is expected.
         clw = lv.cloud_liquid_water_g_kg
         icmr = lv.ice_mixing_ratio_g_kg
         if clw is not None and icmr is not None:
-            total = clw + icmr
-            glac = (clw / total) if total > 0 else 0.0
-            effective *= glac
+            effective *= glaciation_factor(clw, icmr, lv.temperature_c)
 
         if effective <= 0:
             continue

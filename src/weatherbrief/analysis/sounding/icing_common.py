@@ -122,6 +122,48 @@ def nwp_cloud_cover_at_altitude(
         return nwp_cloud_high_pct
 
 
+# ── Glaciation floor ───────────────────────────────────────────────
+
+
+# GFS often reports CLW=0 at grid scale even when sub-grid SLW exists,
+# especially at warmer temperatures where SLW is physically expected.
+# A temperature-dependent floor prevents CLW=0 from completely zeroing
+# out icing when NWP cloud cover confirms cloud exists.
+_GLAC_FLOOR_WARM = 0.8   # above -10°C — SLW very likely despite CLW=0
+_GLAC_FLOOR_COLD = 0.15  # below -20°C — glaciation is physically plausible
+
+
+def glaciation_factor(
+    clw_g_kg: float,
+    icmr_g_kg: float,
+    temperature_c: float | None = None,
+) -> float:
+    """Liquid-fraction multiplier — reduces icing when cloud is glaciated.
+
+    Returns CLW / (CLW + ICE) floored by a temperature-dependent minimum.
+    At warm temperatures (> −10 °C) the floor is high (0.8) because SLW
+    is physically expected even when the model's grid-scale CLW is zero.
+    At cold temperatures (< −20 °C) the floor drops to 0.15.
+
+    When *temperature_c* is None, no floor is applied (backward compat).
+    """
+    total = clw_g_kg + icmr_g_kg
+    if total <= 0:
+        return 0.0
+    raw = clw_g_kg / total
+    if temperature_c is None:
+        return raw
+    # Temperature-dependent floor
+    if temperature_c >= -10.0:
+        floor = _GLAC_FLOOR_WARM
+    elif temperature_c <= -20.0:
+        floor = _GLAC_FLOOR_COLD
+    else:
+        frac = (temperature_c - (-10.0)) / (-20.0 - (-10.0))
+        floor = _GLAC_FLOOR_WARM + frac * (_GLAC_FLOOR_COLD - _GLAC_FLOOR_WARM)
+    return max(raw, floor)
+
+
 # ── Icing type classification ───────────────────────────────────────
 
 
