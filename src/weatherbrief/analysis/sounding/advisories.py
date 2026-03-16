@@ -689,17 +689,10 @@ def _cloud_top_uncertainty_advisory(
             worst_gap = gap
             worst_top = highest.top_ft
             worst_max = highest.theoretical_max_top_ft
-            # Determine source label — check all CAPE variants (same as
-            # _effective_cape) so the label matches the enrichment logic.
-            cape_values = [
-                v for v in (
-                    analysis.indices.cape_surface_jkg if analysis.indices else None,
-                    analysis.indices.cape_most_unstable_jkg if analysis.indices else None,
-                    analysis.indices.cape_mixed_layer_jkg if analysis.indices else None,
-                    analysis.indices.nwp_cape_jkg if analysis.indices else None,
-                ) if v is not None
-            ]
-            eff_cape = max(cape_values) if cape_values else None
+            # Determine source label using the shared effective_cape function
+            # so the label matches the enrichment logic in __init__.py.
+            from weatherbrief.analysis.sounding.convective import effective_cape
+            eff_cape = effective_cape(analysis.indices) if analysis.indices else None
             if (
                 eff_cape is not None
                 and eff_cape > 500

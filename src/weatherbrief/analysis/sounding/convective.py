@@ -35,24 +35,32 @@ _NWP_COVER_THRESHOLDS = [
 CIN_CAP_THRESHOLD = -200  # J/kg (strong cap)
 
 
-def _effective_cape(indices: ThermodynamicIndices) -> float | None:
+def effective_cape(indices: ThermodynamicIndices) -> float | None:
     """Return the most relevant CAPE for convective risk.
 
-    Uses max of all available CAPE variants: SB-CAPE, MU-CAPE, ML-CAPE,
-    and NWP raw CAPE.  This catches elevated convection (MU), mixed-layer
-    instability (ML / ICON), and model-native CAPE that may differ from
-    MetPy recalculations (NWP raw).
+    Uses max of MetPy-computed variants (SB-CAPE, MU-CAPE, ML-CAPE).
+    Falls back to NWP raw CAPE only when no MetPy variant is available,
+    because model-native CAPE can diverge significantly from sounding-
+    derived values (different parcel selection, virtual temperature
+    corrections, etc.) and including it in the max pool could inflate
+    convective risk when the sounding doesn't support it.
     """
-    values = [
+    metpy_values = [
         v for v in (
             indices.cape_surface_jkg,
             indices.cape_most_unstable_jkg,
             indices.cape_mixed_layer_jkg,
-            indices.nwp_cape_jkg,
         )
         if v is not None
     ]
-    return max(values) if values else None
+    if metpy_values:
+        return max(metpy_values)
+    # Fallback: NWP raw CAPE when no MetPy variants available
+    return indices.nwp_cape_jkg
+
+
+# Backward-compatible alias (private name used by callers during transition)
+_effective_cape = effective_cape
 
 
 def _severity_modifiers(indices: ThermodynamicIndices, cape: float | None) -> list[str]:

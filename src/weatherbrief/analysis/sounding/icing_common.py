@@ -7,6 +7,8 @@ icing methods behave consistently.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from weatherbrief.models import (
     CloudCoverage,
     DerivedLevel,
@@ -160,7 +162,7 @@ MIN_ZONE_HALF_THICKNESS_FT = 500
 
 def group_icing_levels(
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
-    build_zone_fn: callable,
+    build_zone_fn: Callable,
 ) -> list:
     """Group adjacent icing levels into zones using shared adjacency logic.
 

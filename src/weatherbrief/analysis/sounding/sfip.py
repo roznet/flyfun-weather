@@ -16,7 +16,6 @@ import math
 
 from weatherbrief.analysis.sounding.icing_common import (
     DD_SCT_THRESHOLD,
-    classify_icing_type,
     group_icing_levels,
     is_near_cloud,
     nwp_cloud_cover_at_altitude,
@@ -293,13 +292,25 @@ def sfip_to_risk(sfip_100: float) -> IcingRisk:
     return IcingRisk.NONE
 
 
-def _classify_icing_type(temperature_c: float, wet_bulb_c: float | None = None) -> IcingType:
-    """Classify icing type — delegates to ``icing_common.classify_icing_type``.
+def _classify_icing_type(temperature_c: float) -> IcingType:
+    """Classify icing type from dry-bulb temperature per SFIP literature.
 
-    Now uses wet-bulb temperature when available (same thresholds as Ogimet)
-    for consistent icing type classification across all methods.
+    Uses dry-bulb thresholds from Belo-Pereira (2015) and Morcrette et al.
+    (2019), which differ from the Ogimet wet-bulb thresholds in
+    ``icing_common.classify_icing_type``.
+
+    Thresholds (dry-bulb):
+        CLEAR:  −3°C to 0°C
+        MIXED: −10°C to −3°C
+        RIME:  < −10°C
     """
-    return classify_icing_type(temperature_c, wet_bulb_c)
+    if -3.0 <= temperature_c <= 0.0:
+        return IcingType.CLEAR
+    if -10.0 <= temperature_c < -3.0:
+        return IcingType.MIXED
+    if temperature_c < -10.0:
+        return IcingType.RIME
+    return IcingType.NONE
 
 
 # ── Cloud proximity (proxy variant gating) ───────────────────────────
@@ -384,7 +395,7 @@ def assess_sfip_zones(
         if risk == IcingRisk.NONE:
             continue
 
-        icing_type = _classify_icing_type(lv.temperature_c, lv.wet_bulb_c)
+        icing_type = _classify_icing_type(lv.temperature_c)
         sfip_levels.append((lv, icing_type, risk, sfip_100))
 
     if not sfip_levels:

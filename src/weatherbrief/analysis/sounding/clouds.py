@@ -236,8 +236,10 @@ _LOW_TOP_FT = 6500
 _MID_TOP_FT = 20000
 _HIGH_TOP_FT = 45000
 
-# Minimum NWP cloud cover (%) to produce a layer
-_MIN_COVER_PCT = 25.0
+# Minimum NWP cloud cover (%) to produce a synthesized layer.
+# 12.5% ≈ FEW (1-2 oktas).  Lower than this is trace cloud that adds
+# noise to the cross-section without actionable icing/visibility info.
+_MIN_COVER_PCT = 12.5
 
 # Minimum inversion strength (°C) to cap cloud top
 _INVERSION_CAP_THRESHOLD_C = 2.0
