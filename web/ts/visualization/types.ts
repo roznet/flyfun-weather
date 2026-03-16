@@ -131,6 +131,8 @@ export interface VizPoint {
   crosswindKt: number;
   capeSurfaceJkg: number;
   worstModelAgreement: string;
+  // NWP cloud layers (from GRIB diagnostics or synthesized from Open-Meteo + DD)
+  nwpCloudLayers: VizCloudLayer[];
   // GFS cloud diagnostics (null when not available)
   nwpCloudDiag: VizCloudDiag | null;
   // Route graph scalars (extracted from model_divergence)
@@ -153,6 +155,8 @@ export interface VizCloudLayer {
   coverage: string;
   /** Mean dewpoint depression in °C (0–3). Lower = denser cloud. */
   meanDewpointDepressionC?: number;
+  /** How this layer was derived: "dd", "grib", "synthesized". */
+  source?: string;
 }
 
 export interface VizIcingZone {

@@ -80,9 +80,18 @@ def _resolve_analyses(
             if swap_cloud:
                 if cloud_method == "nwp" and sounding.nwp_cloud_layers is not None:
                     updates["cloud_layers"] = list(sounding.nwp_cloud_layers)
+                    # Determine effective method from layer source tags
+                    sources = {cl.source for cl in sounding.nwp_cloud_layers}
+                    if "grib" in sources:
+                        updates["cloud_method_effective"] = "nwp"
+                    elif sources:
+                        updates["cloud_method_effective"] = "nwp_synthesized"
+                    else:
+                        updates["cloud_method_effective"] = "nwp"
                 else:
                     # Fallback: restore DD source
                     updates["cloud_layers"] = list(sounding.dd_cloud_layers)
+                    updates["cloud_method_effective"] = "dd"
 
             # --- icing resolution ---
             if swap_icing:

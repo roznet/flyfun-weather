@@ -191,16 +191,19 @@ def analyze_sounding(
     # Cloud top uncertainty enrichment
     enrich_cloud_top_uncertainty(cloud_layers, indices, indices.cape_surface_jkg)
 
-    # NWP cloud layers from model diagnostics
+    # Temperature inversion detection (before NWP synthesis — used for cloud top capping)
+    inversion_layers = detect_inversions(derived_levels)
+
+    # NWP cloud layers from model diagnostics (or synthesized from Open-Meteo + DD)
     nwp_cloud_layers = build_nwp_cloud_layers(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+        dd_cloud_layers=cloud_layers,
+        inversion_layers=inversion_layers,
+        lcl_altitude_ft=indices.lcl_altitude_ft,
     )
-
-    # Temperature inversion detection
-    inversion_layers = detect_inversions(derived_levels)
 
     # SFIP icing index (fuzzy-logic, parallel to Ogimet)
     from weatherbrief.analysis.sounding.sfip import assess_sfip_zones

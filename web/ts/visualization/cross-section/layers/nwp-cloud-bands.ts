@@ -1,25 +1,31 @@
-/** NWP cloud cover bands: gray fills at ICAO altitude bands from model cloud parameterization. */
+/** NWP cloud layers: blue-tinted fills from model cloud parameterization.
+ *
+ * Renders server-computed NWP cloud layers (from GRIB diagnostics or
+ * synthesized from Open-Meteo cloud % narrowed by DD envelope + inversions).
+ * No client-side heuristic narrowing — boundaries come from the backend.
+ */
 
 import type {
   CrossSectionLayer,
   CoordTransform,
   VizRouteData,
   VizPoint,
-  VizInversionLayer,
   VizCloudLayer,
-  VizCloudDiag,
 } from '../../types';
-import { drawColumnBand, type BandPointData } from './base';
+import { drawSmoothBand, drawBandHatch, drawColumnBand, type BandPointData } from './base';
 import { getActiveTheme } from '../theme';
 
-/** Low cloud band: terrain surface → 6500ft. Mid band: 6500ft → 20000ft. */
-const LOW_TOP_FT = 6500;
-const MID_TOP_FT = 20000;
+/** Map coverage category to a representative percentage for fill opacity. */
+function coverageToPct(coverage: string): number {
+  switch (coverage) {
+    case 'OVC': return 90;
+    case 'BKN': return 65;
+    case 'SCT': return 35;
+    default: return 35;
+  }
+}
 
-/** Inversions weaker than this don't reliably cap clouds. */
-const INVERSION_STRENGTH_THRESHOLD_C = 2.0;
-
-/** Blue-tinted white-to-gray fill — distinct from sounding cloud layers. */
+/** Blue-tinted fill from coverage percentage — distinct from DD cloud layers. */
 function nwpCloudFill(pct: number): string {
   const theme = getActiveTheme().nwpClouds;
   const t = Math.min(1, Math.max(0, pct / 100));
@@ -33,152 +39,6 @@ function nwpCloudFill(pct: number): string {
   return `rgba(${r}, ${g}, ${b}, ${opacity.toFixed(2)})`;
 }
 
-/** Find the lowest inversion within [floor, ceiling] that exceeds the strength threshold. */
-function findCappingInversion(
-  inversions: VizInversionLayer[],
-  floorFt: number,
-  ceilingFt: number,
-): number | null {
-  let lowest: number | null = null;
-  for (const inv of inversions) {
-    if (inv.strengthC >= INVERSION_STRENGTH_THRESHOLD_C &&
-        inv.baseFt > floorFt &&
-        inv.baseFt < ceilingFt) {
-      if (lowest === null || inv.baseFt < lowest) {
-        lowest = inv.baseFt;
-      }
-    }
-  }
-  return lowest;
-}
-
-/** Compute the envelope (lowest base, highest top) of cloud layers overlapping [floor, ceiling]. */
-function cloudEnvelopeInBand(
-  layers: VizCloudLayer[],
-  floor: number,
-  ceiling: number,
-): { base: number; top: number } | null {
-  let minBase = ceiling;
-  let maxTop = floor;
-  for (const cl of layers) {
-    if (cl.topFt > floor && cl.baseFt < ceiling) {
-      minBase = Math.min(minBase, Math.max(cl.baseFt, floor));
-      maxTop = Math.max(maxTop, Math.min(cl.topFt, ceiling));
-    }
-  }
-  return maxTop > minBase ? { base: minBase, top: maxTop } : null;
-}
-
-interface BandLimits {
-  lowBase: number;
-  lowTop: number;
-  midBase: number;
-  midTop: number;
-  highBase: number;
-  highTop: number;
-  highCoverPct: number;
-}
-
-/**
- * Compute band limits for NWP cloud rendering.
- *
- * Hybrid approach: uses actual GFS base/top boundaries when available for
- * each band, and falls back to heuristic narrowing (sounding cloud envelopes,
- * inversions, LCL) for bands where boundaries are missing (ICON-EU, or GFS
- * with NaN boundaries for a specific layer).
- */
-function computeBandLimits(point: VizPoint, terrainFt: number): BandLimits {
-  const diag = point.nwpCloudDiag;
-  const lcl = point.altitudeLines.lclAltitudeFt;
-
-  // --- Low band ---
-  let lowBase: number;
-  let lowTop: number;
-  if (diag?.low.baseFt != null && diag?.low.topFt != null) {
-    lowBase = diag.low.baseFt;
-    lowTop = diag.low.topFt;
-  } else {
-    lowBase = terrainFt;
-    if (lcl !== null && lcl > terrainFt && lcl < LOW_TOP_FT) {
-      lowBase = lcl;
-    }
-    const lowCap = findCappingInversion(point.inversions, lowBase, LOW_TOP_FT);
-    lowTop = lowCap ?? LOW_TOP_FT;
-    const lowEnvelope = cloudEnvelopeInBand(point.cloudLayers, lowBase, lowTop);
-    if (lowEnvelope) {
-      lowBase = Math.max(lowBase, lowEnvelope.base);
-      lowTop = Math.min(lowTop, lowEnvelope.top);
-    }
-  }
-
-  // --- Mid band ---
-  let midBase: number;
-  let midTop: number;
-  if (diag?.mid.baseFt != null && diag?.mid.topFt != null) {
-    midBase = diag.mid.baseFt;
-    midTop = diag.mid.topFt;
-  } else {
-    // Heuristic: narrow using sounding cloud layers in the mid band.
-    // If no sounding evidence exists, collapse the band — the NWP cover %
-    // has no vertical placement so painting the full ICAO band is misleading.
-    const midEnvelope = cloudEnvelopeInBand(point.cloudLayers, LOW_TOP_FT, MID_TOP_FT);
-    if (midEnvelope) {
-      midBase = midEnvelope.base;
-      midTop = midEnvelope.top;
-      // Further narrow with inversions within the envelope
-      const midCap = findCappingInversion(point.inversions, midBase, midTop);
-      if (midCap !== null) {
-        midTop = midCap;
-      }
-    } else {
-      // No sounding cloud layers in mid band — collapse (don't render)
-      midBase = LOW_TOP_FT;
-      midTop = LOW_TOP_FT;
-    }
-  }
-
-  // --- High band ---
-  let highBase: number;
-  let highTop: number;
-  let highCoverPct: number;
-  if (diag?.high.baseFt != null && diag?.high.topFt != null) {
-    highBase = diag.high.baseFt;
-    highTop = diag.high.topFt;
-    highCoverPct = diag.high.coverPct ?? 0;
-  } else {
-    // Same logic: only render if sounding finds cloud layers in high band
-    const highEnvelope = cloudEnvelopeInBand(point.cloudLayers, MID_TOP_FT, 45000);
-    if (highEnvelope) {
-      highBase = highEnvelope.base;
-      highTop = highEnvelope.top;
-    } else {
-      highBase = MID_TOP_FT;
-      highTop = MID_TOP_FT;
-    }
-    highCoverPct = diag?.high.coverPct ?? 0;
-  }
-
-  return { lowBase, lowTop, midBase, midTop, highBase, highTop, highCoverPct };
-}
-
-/** Get terrain elevation at a point, falling back to 0. */
-function terrainElevationAt(data: VizRouteData, distanceNm: number): number {
-  if (!data.terrainProfile || data.terrainProfile.length === 0) return 0;
-
-  // Find the two surrounding terrain points and interpolate
-  const profile = data.terrainProfile;
-  if (distanceNm <= profile[0].distanceNm) return profile[0].elevationFt;
-  if (distanceNm >= profile[profile.length - 1].distanceNm) return profile[profile.length - 1].elevationFt;
-
-  for (let i = 0; i < profile.length - 1; i++) {
-    if (distanceNm >= profile[i].distanceNm && distanceNm <= profile[i + 1].distanceNm) {
-      const t = (distanceNm - profile[i].distanceNm) / (profile[i + 1].distanceNm - profile[i].distanceNm);
-      return profile[i].elevationFt + t * (profile[i + 1].elevationFt - profile[i].elevationFt);
-    }
-  }
-  return 0;
-}
-
 export const nwpCloudBandsLayer: CrossSectionLayer = {
   id: 'nwp-cloud-bands',
   name: 'NWP Layers',
@@ -187,162 +47,111 @@ export const nwpCloudBandsLayer: CrossSectionLayer = {
   metricId: 'nwp_cloud_cover',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
-    // Check if any point has NWP cloud data (from Open-Meteo or GFS diagnostics)
-    const hasData = data.points.some((p) =>
-      p.cloudCoverLowPct > 0 || p.cloudCoverMidPct > 0 || p.nwpCloudDiag !== null);
+    const hasData = data.points.some((p) => p.nwpCloudLayers.length > 0);
     if (!hasData) return;
 
-    renderSmooth(ctx, transform, data);
+    const theme = getActiveTheme();
+    const hatch = theme.clouds;
+
+    // Match NWP cloud layers between adjacent points (same approach as DD bands)
+    for (let i = 0; i < data.points.length - 1; i++) {
+      drawMatchedNwpSegment(ctx, transform, data.points[i], data.points[i + 1], hatch);
+    }
+
+    // Single point fallback
+    if (data.points.length === 1) {
+      const p = data.points[0];
+      for (const cl of p.nwpCloudLayers) {
+        const pct = coverageToPct(cl.coverage);
+        const fill = nwpCloudFill(pct);
+        const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: cl.baseFt, top: cl.topFt }];
+        drawColumnBand(ctx, bandPoints, transform, fill);
+      }
+    }
   },
 };
 
-/** Get cloud cover % for a band, using GFS diagnostics when available. */
-function bandCoverPct(point: VizPoint, band: 'low' | 'mid' | 'high'): number {
-  const diag = point.nwpCloudDiag;
-  if (diag) {
-    return diag[band].coverPct ?? 0;
-  }
-  if (band === 'low') return point.cloudCoverLowPct;
-  if (band === 'mid') return point.cloudCoverMidPct;
-  return 0; // No high-cloud data without diagnostics
+interface CloudHatchConfig {
+  hatchGridPx: number;
+  hatchLineWidth: Record<string, number>;
+  hatchColor: string;
 }
 
-function renderSmooth(
+function drawMatchedNwpSegment(
   ctx: CanvasRenderingContext2D,
   transform: CoordTransform,
-  data: VizRouteData,
-): void {
-  for (let i = 0; i < data.points.length - 1; i++) {
-    const curr = data.points[i];
-    const next = data.points[i + 1];
-    drawSegment(ctx, transform, data, curr, next);
-  }
-
-  // Single point fallback
-  if (data.points.length === 1) {
-    const p = data.points[0];
-    const terrainFt = terrainElevationAt(data, p.distanceNm);
-    drawSinglePointBands(ctx, transform, p, terrainFt);
-  }
-}
-
-/** Draw a single band trapezoid between two points with optional hatching. */
-function drawBandTrapezoid(
-  ctx: CanvasRenderingContext2D,
-  transform: CoordTransform,
-  x1: number, x2: number,
-  currBase: number, currTop: number,
-  nextBase: number, nextTop: number,
-  coverPct: number,
-): void {
-  if (coverPct <= 0) return;
-  if (currBase >= currTop && nextBase >= nextTop) return;
-
-  const y1Top = transform.altitudeToY(currTop);
-  const y2Top = transform.altitudeToY(nextTop);
-  const y2Base = transform.altitudeToY(nextBase);
-  const y1Base = transform.altitudeToY(currBase);
-
-  // Color fill
-  ctx.fillStyle = nwpCloudFill(coverPct);
-  ctx.beginPath();
-  ctx.moveTo(x1, y1Top);
-  ctx.lineTo(x2, y2Top);
-  ctx.lineTo(x2, y2Base);
-  ctx.lineTo(x1, y1Base);
-  ctx.closePath();
-  ctx.fill();
-
-  // Hatch pattern — line width proportional to cover percentage on fixed grid
-  const theme = getActiveTheme();
-  const gridPx = theme.clouds.hatchGridPx;
-  const lineWidth = gridPx * (coverPct / 100);
-  if (lineWidth >= gridPx) return; // solid
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(x1, y1Top);
-  ctx.lineTo(x2, y2Top);
-  ctx.lineTo(x2, y2Base);
-  ctx.lineTo(x1, y1Base);
-  ctx.closePath();
-  ctx.clip();
-
-  ctx.strokeStyle = theme.clouds.hatchColor;
-  ctx.lineWidth = lineWidth;
-  ctx.setLineDash([]);
-
-  const minY = Math.min(y1Top, y2Top);
-  const maxY = Math.max(y1Base, y2Base);
-  const startY = Math.ceil(minY / gridPx) * gridPx;
-  for (let y = startY; y <= maxY; y += gridPx) {
-    ctx.beginPath();
-    ctx.moveTo(x1, y);
-    ctx.lineTo(x2, y);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function drawSegment(
-  ctx: CanvasRenderingContext2D,
-  transform: CoordTransform,
-  data: VizRouteData,
   curr: VizPoint,
   next: VizPoint,
+  hatch: CloudHatchConfig,
 ): void {
-  const x1 = transform.distanceToX(curr.distanceNm);
-  const x2 = transform.distanceToX(next.distanceNm);
-  const terrainCurr = terrainElevationAt(data, curr.distanceNm);
-  const terrainNext = terrainElevationAt(data, next.distanceNm);
-  const limitsCurr = computeBandLimits(curr, terrainCurr);
-  const limitsNext = computeBandLimits(next, terrainNext);
+  const usedNext = new Set<number>();
 
-  // Low band
-  const avgLowPct = (bandCoverPct(curr, 'low') + bandCoverPct(next, 'low')) / 2;
-  drawBandTrapezoid(ctx, transform, x1, x2,
-    limitsCurr.lowBase, limitsCurr.lowTop,
-    limitsNext.lowBase, limitsNext.lowTop, avgLowPct);
+  for (const cl of curr.nwpCloudLayers) {
+    let bestIdx = -1;
+    let bestOverlap = 0;
 
-  // Mid band
-  const avgMidPct = (bandCoverPct(curr, 'mid') + bandCoverPct(next, 'mid')) / 2;
-  drawBandTrapezoid(ctx, transform, x1, x2,
-    limitsCurr.midBase, limitsCurr.midTop,
-    limitsNext.midBase, limitsNext.midTop, avgMidPct);
+    for (let j = 0; j < next.nwpCloudLayers.length; j++) {
+      if (usedNext.has(j)) continue;
+      const nl = next.nwpCloudLayers[j];
+      const overlapBase = Math.max(cl.baseFt, nl.baseFt);
+      const overlapTop = Math.min(cl.topFt, nl.topFt);
+      const overlap = overlapTop - overlapBase;
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap;
+        bestIdx = j;
+      }
+    }
 
-  // High band (only with GFS diagnostics)
-  const avgHighPct = (bandCoverPct(curr, 'high') + bandCoverPct(next, 'high')) / 2;
-  drawBandTrapezoid(ctx, transform, x1, x2,
-    limitsCurr.highBase, limitsCurr.highTop,
-    limitsNext.highBase, limitsNext.highTop, avgHighPct);
+    if (bestIdx >= 0) {
+      usedNext.add(bestIdx);
+      const nl = next.nwpCloudLayers[bestIdx];
+      const avgPct = (coverageToPct(cl.coverage) + coverageToPct(nl.coverage)) / 2;
+      const fill = nwpCloudFill(avgPct);
+      const bandPoints: BandPointData[] = [
+        { distance: curr.distanceNm, base: cl.baseFt, top: cl.topFt },
+        { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
+      ];
+      drawSmoothBand(ctx, bandPoints, transform, fill);
+      hatchBand(ctx, bandPoints, transform, cl.coverage, hatch);
+    } else {
+      // Cloud layer disappears between points — taper to midpoint
+      const midDist = (curr.distanceNm + next.distanceNm) / 2;
+      const midAlt = (cl.baseFt + cl.topFt) / 2;
+      const pct = coverageToPct(cl.coverage);
+      const fill = nwpCloudFill(pct);
+      const bandPoints: BandPointData[] = [
+        { distance: curr.distanceNm, base: cl.baseFt, top: cl.topFt },
+        { distance: midDist, base: midAlt, top: midAlt },
+      ];
+      drawSmoothBand(ctx, bandPoints, transform, fill);
+      hatchBand(ctx, bandPoints, transform, cl.coverage, hatch);
+    }
+  }
+
+  // Unmatched next-point layers (appear between points)
+  for (let j = 0; j < next.nwpCloudLayers.length; j++) {
+    if (usedNext.has(j)) continue;
+    const nl = next.nwpCloudLayers[j];
+    const midDist = (curr.distanceNm + next.distanceNm) / 2;
+    const midAlt = (nl.baseFt + nl.topFt) / 2;
+    const pct = coverageToPct(nl.coverage);
+    const fill = nwpCloudFill(pct);
+    const bandPoints: BandPointData[] = [
+      { distance: midDist, base: midAlt, top: midAlt },
+      { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
+    ];
+    drawSmoothBand(ctx, bandPoints, transform, fill);
+    hatchBand(ctx, bandPoints, transform, nl.coverage, hatch);
+  }
 }
 
-function drawSinglePointBands(
+function hatchBand(
   ctx: CanvasRenderingContext2D,
+  bandPoints: BandPointData[],
   transform: CoordTransform,
-  p: VizPoint,
-  terrainFt: number,
+  coverage: string,
+  hatch: CloudHatchConfig,
 ): void {
-  const limits = computeBandLimits(p, terrainFt);
-
-  const lowPct = bandCoverPct(p, 'low');
-  if (lowPct > 0 && limits.lowBase < limits.lowTop) {
-    const fill = nwpCloudFill(lowPct);
-    const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.lowBase, top: limits.lowTop }];
-    drawColumnBand(ctx, bandPoints, transform, fill);
-  }
-
-  const midPct = bandCoverPct(p, 'mid');
-  if (midPct > 0 && limits.midBase < limits.midTop) {
-    const fill = nwpCloudFill(midPct);
-    const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.midBase, top: limits.midTop }];
-    drawColumnBand(ctx, bandPoints, transform, fill);
-  }
-
-  const highPct = bandCoverPct(p, 'high');
-  if (highPct > 0 && limits.highBase < limits.highTop) {
-    const fill = nwpCloudFill(highPct);
-    const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: limits.highBase, top: limits.highTop }];
-    drawColumnBand(ctx, bandPoints, transform, fill);
-  }
+  const lw = hatch.hatchLineWidth[coverage] ?? hatch.hatchGridPx;
+  drawBandHatch(ctx, bandPoints, transform, hatch.hatchGridPx, lw, hatch.hatchColor);
 }
