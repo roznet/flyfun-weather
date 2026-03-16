@@ -45,7 +45,7 @@ All evaluators (`ConvectiveEvaluator`, `IcingEscapeEvaluator`, etc.) read the **
 
 ## Inconsistencies Found
 
-### 1. Icing CAPE uses only `cape_surface_jkg`, not `_effective_cape()` ⚠️ Medium
+### 1. ~~Icing CAPE uses only `cape_surface_jkg`, not `_effective_cape()`~~ ✅ FIXED
 
 **Problem:** The layered/convective icing split (`_cape_to_cloud_split`) receives `indices.cape_surface_jkg` (MetPy SB-CAPE only):
 
@@ -108,7 +108,7 @@ The convective `method` field partially covers this (set at construction: "therm
 
 **Fix:** Add `icing_method_effective` and `convective_method_effective` to `SoundingAnalysis`, populated during `_resolve_analyses()`.
 
-### 5. Cloud top uncertainty uses `cape_surface_jkg` not `_effective_cape()` ⚠️ Low
+### 5. ~~Cloud top uncertainty uses `cape_surface_jkg` not `_effective_cape()`~~ ✅ FIXED
 
 **Problem:** In both `clouds.py:385` and `advisories.py:695`, cloud top uncertainty logic checks `cape_surface_jkg > 500` to determine if a cloud is convective:
 
@@ -121,7 +121,7 @@ Same issue as #1 — for elevated convection with low SB-CAPE, this misses the c
 
 **Fix:** Use `_effective_cape()` consistently.
 
-### 6. `cape_raw_vs_calc_divergent` set AFTER convective assessment uses CAPE ⚠️ Low
+### 6. ~~`cape_raw_vs_calc_divergent` set AFTER convective assessment uses CAPE~~ ✅ FIXED
 
 **Problem:** In `__init__.py`, the pipeline order is:
 1. Line 247: `assess_convective_thermo(indices)` — uses `indices.nwp_cape_jkg` (still None)
@@ -183,12 +183,12 @@ Move it to right after `compute_indices()` (after line 180).
 
 | # | Issue | Severity | Effort |
 |---|-------|----------|--------|
-| **6** | NWP CAPE attached after convective reads it → `_effective_cape()` always sees None for nwp_cape_jkg | **High (bug)** | Low |
-| **1** | Icing CAPE uses SB only, not effective CAPE | Medium | Low |
+| **6** | ~~NWP CAPE attached after convective reads it~~ | ~~**High (bug)**~~ | ✅ FIXED |
+| **1** | ~~Icing CAPE uses SB only, not effective CAPE~~ | ~~Medium~~ | ✅ FIXED |
 | **2** | Altitude advisories use pre-resolution data | Medium | Medium |
-| **5** | Cloud top uncertainty uses SB-CAPE only | Low | Low |
+| **5** | ~~Cloud top uncertainty uses SB-CAPE only~~ | ~~Low~~ | ✅ FIXED |
 | **3** | ICON-EU convective transitions skipped in regimes | Low | Low |
 | **4** | No icing/convective method_effective tracking | Low | Low |
-| **B** | Move NWP enrichment earlier (fixes #6, enables #1 and #5) | **High** | Low |
-| **A** | Unify CAPE selection | Medium | Low |
+| **B** | ~~Move NWP enrichment earlier (fixes #6, enables #1 and #5)~~ | ~~**High**~~ | ✅ FIXED |
+| **A** | ~~Unify CAPE selection~~ (done via `_effective_cape()`) | ~~Medium~~ | ✅ FIXED |
 | **C** | Deduplicate `_is_near_cloud` wrappers | Low | Trivial |
