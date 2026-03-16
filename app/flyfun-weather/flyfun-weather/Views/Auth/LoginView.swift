@@ -1,6 +1,7 @@
+import AuthenticationServices
 import SwiftUI
 
-/// Sign-in screen with Google OAuth.
+/// Sign-in screen with Apple and Google OAuth.
 struct LoginView: View {
     @Environment(AppState.self) private var appState
 
@@ -34,8 +35,18 @@ struct LoginView: View {
                     .padding(.horizontal)
             }
 
+            SignInWithAppleButton(.signIn) { request in
+                request.requestedScopes = [.fullName, .email]
+            } onCompletion: { result in
+                Task { await handleAppleSignIn(result) }
+            }
+            .signInWithAppleButtonStyle(.black)
+            .frame(maxWidth: 280, minHeight: 50)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .disabled(isSigningIn)
+
             Button {
-                Task { await signIn() }
+                Task { await signIn(provider: "google") }
             } label: {
                 HStack {
                     if isSigningIn {
@@ -59,23 +70,41 @@ struct LoginView: View {
         .padding()
     }
 
-    private func signIn() async {
+    private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) async {
         isSigningIn = true
         errorMessage = nil
+        defer { isSigningIn = false }
         do {
-            let token = try await authService.signIn(baseURL: AppState.defaultBaseURL)
-            // Build a callback URL and pass through the standard handler
-            let callbackURL = URL(string: "flyfunweather://auth/callback?token=\(token)")!
+            let authorization = try result.get()
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                errorMessage = String(localized: "Unexpected credential type.")
+                return
+            }
+            let token = try await authService.exchangeAppleCredential(credential, baseURL: AppState.defaultBaseURL)
+            guard let callbackURL = URL(string: "flyfunweather://auth/callback?token=\(token)") else {
+                errorMessage = String(localized: "Failed to create authentication URL.")
+                return
+            }
             appState.handleAuthCallback(url: callbackURL)
         } catch {
-            if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
-                // User cancelled — not an error
-            } else {
+            if (error as? ASAuthorizationError)?.code != .canceled {
                 errorMessage = error.localizedDescription
             }
         }
-        isSigningIn = false
+    }
+
+    private func signIn(provider: String) async {
+        isSigningIn = true
+        errorMessage = nil
+        defer { isSigningIn = false }
+        do {
+            let token = try await authService.signIn(baseURL: AppState.defaultBaseURL, provider: provider)
+            let callbackURL = URL(string: "flyfunweather://auth/callback?token=\(token)")!
+            appState.handleAuthCallback(url: callbackURL)
+        } catch {
+            if (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 }
-
-import AuthenticationServices
