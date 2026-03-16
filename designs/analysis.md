@@ -32,7 +32,9 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → enrich_lwc → clouds → inversions → nwp_clouds → cloud_top_uncertainty → sfip → ogimet_dd → ogimet_nwp → precipitation → convective → vertical_motion → ceiling`
+Pipeline: `prepare → thermodynamics → nwp_value_preservation → enrich_lwc → clouds → cloud_top_uncertainty → inversions → nwp_clouds → sfip → ogimet_dd → ogimet_nwp → precipitation → convective → vertical_motion → ceiling`
+
+Note: NWP value preservation (attaching `nwp_cape_jkg` etc. to indices) must run before any consumer of `_effective_cape()` — i.e. before icing, cloud top uncertainty, and convective assessment.
 
 Note: inversions are detected **before** NWP cloud building because the synthesis tier uses inversion layers for cloud top capping.
 

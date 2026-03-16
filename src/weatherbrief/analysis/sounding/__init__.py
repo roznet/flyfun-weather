@@ -154,7 +154,11 @@ def analyze_sounding(
         detect_cloud_layers,
         enrich_cloud_top_uncertainty,
     )
-    from weatherbrief.analysis.sounding.convective import assess_convective_nwp, assess_convective_thermo
+    from weatherbrief.analysis.sounding.convective import (
+        _effective_cape,
+        assess_convective_nwp,
+        assess_convective_thermo,
+    )
     from weatherbrief.analysis.sounding.icing import (
         assess_icing_zones_ogimet_dd,
         assess_icing_zones_ogimet_nwp,
@@ -179,6 +183,30 @@ def analyze_sounding(
     indices = compute_indices(profile)
     derived_levels = compute_derived_levels(profile)
 
+    # --- Raw NWP value preservation (before any consumer reads nwp_cape_jkg) ---
+    # Attach raw model-computed values alongside MetPy-derived equivalents
+    # for validation and divergence detection.  Must run before convective
+    # assessment and icing (which use _effective_cape / nwp_cape_jkg).
+    if hourly is not None:
+        from weatherbrief.fetch.variables import NWP_CAPE_TYPE
+
+        indices.nwp_cape_jkg = hourly.cape_jkg
+        indices.nwp_cape_type = NWP_CAPE_TYPE.get(model_key, "unknown") if model_key else None
+        indices.nwp_cin_jkg = hourly.convective_inhibition_jkg
+        indices.nwp_lifted_index = hourly.lifted_index_raw
+        if hourly.freezing_level_m is not None:
+            indices.nwp_freezing_level_ft = round(hourly.freezing_level_m * 3.28084)
+
+        # Divergence flag: raw CAPE vs computed CAPE differ significantly
+        raw = indices.nwp_cape_jkg
+        calc = indices.cape_surface_jkg
+        if raw is not None and calc is not None:
+            abs_diff = abs(raw - calc)
+            larger = max(abs(raw), abs(calc), 1.0)  # avoid division by zero
+            indices.cape_raw_vs_calc_divergent = (
+                abs_diff > 200.0 or abs_diff / larger > 1.0
+            )
+
     # Enrich derived levels with CLWMR/ICMR from raw pressure level data
     _enrich_lwc(derived_levels, levels)
 
@@ -188,8 +216,10 @@ def analyze_sounding(
         lcl_altitude_ft=indices.lcl_altitude_ft,
     )
 
-    # Cloud top uncertainty enrichment
-    enrich_cloud_top_uncertainty(cloud_layers, indices, indices.cape_surface_jkg)
+    # Cloud top uncertainty enrichment — use effective CAPE (max of all variants)
+    # so elevated/ML convection triggers EL-based cloud tops correctly
+    effective_cape = _effective_cape(indices)
+    enrich_cloud_top_uncertainty(cloud_layers, indices, effective_cape)
 
     # Temperature inversion detection (before NWP synthesis — used for cloud top capping)
     inversion_layers = detect_inversions(derived_levels)
@@ -221,14 +251,14 @@ def analyze_sounding(
     icing_zones = assess_icing_zones_ogimet_dd(
         derived_levels,
         cloud_layers,
-        cape_jkg=indices.cape_surface_jkg,
+        cape_jkg=effective_cape,
     )
 
     # Ogimet-NWP icing: NWP cloud cover scaling (Autorouter-style)
     icing_ogimet_nwp_zones = assess_icing_zones_ogimet_nwp(
         derived_levels,
         cloud_layers,
-        cape_jkg=indices.cape_surface_jkg,
+        cape_jkg=effective_cape,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
@@ -281,29 +311,6 @@ def analyze_sounding(
 
     indices.sounding_ceiling_ft = sounding_ceiling_ft
     indices.nwp_ceiling_ft = nwp_ceiling_ft
-
-    # --- Raw NWP value preservation ---
-    # Attach raw model-computed values alongside MetPy-derived equivalents
-    # for validation and divergence detection.
-    if hourly is not None:
-        from weatherbrief.fetch.variables import NWP_CAPE_TYPE
-
-        indices.nwp_cape_jkg = hourly.cape_jkg
-        indices.nwp_cape_type = NWP_CAPE_TYPE.get(model_key, "unknown") if model_key else None
-        indices.nwp_cin_jkg = hourly.convective_inhibition_jkg
-        indices.nwp_lifted_index = hourly.lifted_index_raw
-        if hourly.freezing_level_m is not None:
-            indices.nwp_freezing_level_ft = round(hourly.freezing_level_m * 3.28084)
-
-        # Divergence flag: raw CAPE vs computed CAPE differ significantly
-        raw = indices.nwp_cape_jkg
-        calc = indices.cape_surface_jkg
-        if raw is not None and calc is not None:
-            abs_diff = abs(raw - calc)
-            larger = max(abs(raw), abs(calc), 1.0)  # avoid division by zero
-            indices.cape_raw_vs_calc_divergent = (
-                abs_diff > 200.0 or abs_diff / larger > 1.0
-            )
 
     return SoundingAnalysis(
         indices=indices,
