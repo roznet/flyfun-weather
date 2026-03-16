@@ -103,20 +103,34 @@ Open-Meteo `cloud_cover_*_pct` values are NOT spatially interpolated — each po
 
 `clouds.py:build_nwp_cloud_layers()` → `list[EnhancedCloudLayer] | None`
 
-- **Input:** `NWPCloudDiagnostics` + Open-Meteo cloud cover percentages
-- **Requires:** At least one ICAO band with both `base_ft` and `top_ft` (returns None otherwise)
-- **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT
-- **Includes convective layer** when base/top are available
-- **Output:** Stored in `SoundingAnalysis.nwp_cloud_layers`
+Three-tier approach ensures all models produce NWP cloud layers when cloud cover data exists:
 
-| Model | NWP Cloud Layers Result | Notes |
-|-------|------------------------|-------|
-| **GFS** | Full layer list with boundaries | All 3 bands + convective |
-| **ICON-EU** | Convective only (or None) | Low/mid/high bands lack boundaries → skipped |
-| **ECMWF** | None | No diagnostics at all |
-| **MétéoFr** | None | No diagnostics at all |
-| **UKMO** | None | No diagnostics at all |
-| **GEM** | None | No diagnostics at all |
+**Tier 1 — GRIB diagnostics (GFS):** Uses native model boundaries (base_ft, top_ft) and coverage from GRIB2. Each layer tagged `source="grib"`.
+
+**Tier 2 — Synthesized layers (ICON-EU, ECMWF, MétéoFr, UKMO, GEM):** When GRIB boundaries are absent but Open-Meteo cloud cover percentages exist, synthesizes layers by narrowing ICAO bands using:
+- DD cloud envelope (sounding cloud layers overlapping the ICAO band constrain base/top)
+- Inversion capping (strong inversions ≥2°C cap cloud tops within the band)
+- LCL floor (low band base raised to LCL when available)
+- Minimum cloud cover threshold: 25% (bands below this are skipped)
+Each layer tagged `source="synthesized"`.
+
+**Tier 3 — No data:** Returns None only when no cloud cover data exists at all.
+
+- **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT
+- **Includes convective layer** when base/top are available (both tiers)
+- **Output:** Stored in `SoundingAnalysis.nwp_cloud_layers`
+- **Source tracking:** Each `EnhancedCloudLayer` carries a `source` field ("dd", "grib", or "synthesized")
+- **Method tracking:** `SoundingAnalysis.cloud_method_effective` records what was actually used ("dd", "nwp", or "nwp_synthesized")
+
+| Model | NWP Cloud Layers Result | Source Tag | Notes |
+|-------|------------------------|------------|-------|
+| **GFS** | Full layer list with boundaries | `grib` | All 3 bands + convective from GRIB2 |
+| **Best Match** | Full layer list (via GFS) | `grib` | Same as GFS |
+| **ICON-EU** | Synthesized bands + convective | `synthesized` | Low/mid/high narrowed by DD+inversions; convective from GRIB |
+| **ECMWF** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
+| **MétéoFr** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
+| **UKMO** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
+| **GEM** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
 
 ### Stage 5: Cloud Top Uncertainty
 
@@ -318,11 +332,12 @@ GRIB2      → NWPCloudDiagnostics (partial)
              └─ total_cover_pct
 Analysis:
   DD cloud layers     → always available
-  NWP cloud layers    → convective layer only (or None)
+  NWP cloud layers    → synthesized from Open-Meteo + DD envelope + inversions (source="synthesized")
+                         + convective layer from GRIB (when available)
   nwp_cloud_at_alt    → ICAO-band bulk fallback (no layer boundaries)
 Visualization:
   DD cloud bands      → gray gradient (always)
-  NWP cloud bands     → heuristic narrowing using sounding envelope + inversions
+  NWP cloud bands     → server-computed synthesized layers (blue tint)
 ```
 
 ### ECMWF / MétéoFr / UKMO / GEM (Open-Meteo Only)
@@ -332,11 +347,11 @@ Open-Meteo → cloud_cover_{low,mid,high}_pct (hourly)
              No GRIB enrichment
 Analysis:
   DD cloud layers     → always available
-  NWP cloud layers    → None (no diagnostics → returns None)
+  NWP cloud layers    → synthesized from Open-Meteo + DD envelope + inversions (source="synthesized")
   nwp_cloud_at_alt    → ICAO-band bulk fallback
 Visualization:
   DD cloud bands      → gray gradient (always)
-  NWP cloud bands     → low + mid only (heuristic narrowing), no high
+  NWP cloud bands     → server-computed synthesized layers (blue tint, all 3 bands)
 ```
 
 ---
@@ -392,9 +407,9 @@ SFIP proxy uses a wider gate (3°C, includes SCT) because it has no pass-2 NWP f
 
 ## Future Considerations
 
-### 1. ICON-EU boundary estimation
+### 1. ~~ICON-EU boundary estimation~~ ✓ DONE
 
-ICON-EU provides cover_pct per band but no layer boundaries. The visualization already uses sounding cloud envelope + inversion capping as heuristics. The same approach could be applied in `nwp_cloud_cover_at_altitude` to provide better-than-ICAO-bulk resolution for ICON-EU.
+ICON-EU (and all models without GRIB boundaries) now get synthesized NWP cloud layers via `_synthesize_nwp_layers()` in `clouds.py`. The heuristic narrowing logic (DD envelope + inversion capping + LCL) was moved from the TypeScript frontend to the Python backend, producing `EnhancedCloudLayer` objects with `source="synthesized"`. This provides consistent cloud layers across all models for both visualization and advisory evaluation.
 
 ### 2. Weight redistribution for missing high cloud in severity enhancement
 
