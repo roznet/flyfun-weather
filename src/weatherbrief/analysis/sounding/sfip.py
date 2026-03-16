@@ -14,6 +14,13 @@ from __future__ import annotations
 
 import math
 
+from weatherbrief.analysis.sounding.icing_common import (
+    DD_SCT_THRESHOLD,
+    classify_icing_type,
+    group_icing_levels,
+    is_near_cloud,
+    nwp_cloud_cover_at_altitude,
+)
 from weatherbrief.models import (
     DerivedLevel,
     EnhancedCloudLayer,
@@ -22,10 +29,6 @@ from weatherbrief.models import (
     NWPCloudDiagnostics,
     SfipZone,
 )
-
-# Cloud proximity threshold for proxy variant (same as Ogimet)
-_IN_CLOUD_DD_THRESHOLD = 3.0
-_CLOUD_MARGIN_FT = 500.0
 
 # --- SFIP_O weights (full variant, with CLW) ---
 _W_T_FULL = 0.35
@@ -184,9 +187,6 @@ def glaciation_factor(clw_g_kg: float, icmr_g_kg: float) -> float:
 # ── Per-level computation ────────────────────────────────────────────
 
 
-_NWP_CLOUD_ALTITUDE_MARGIN_FT = 500.0
-
-
 def _cloud_cover_for_level(
     altitude_ft: float,
     nwp_cloud_low_pct: float | None,
@@ -196,31 +196,15 @@ def _cloud_cover_for_level(
 ) -> float:
     """Return altitude-aware NWP cloud cover % for a level.
 
-    When *nwp_cloud_diagnostics* is provided, only returns the bulk
-    percentage if the level actually falls within the NWP cloud layer's
-    base/top range (with a margin).  Otherwise returns 0.
-
-    Falls back to bulk ICAO-band percentages when diagnostics are
-    unavailable.
+    Delegates to ``icing_common.nwp_cloud_cover_at_altitude`` which checks
+    **all** diagnostic layers (not just the ICAO band matching the altitude),
+    correctly handling cross-band cloud layers.
     """
-    if altitude_ft < 6500:
-        bulk_pct = nwp_cloud_low_pct
-        diag_layer = nwp_cloud_diagnostics.low if nwp_cloud_diagnostics else None
-    elif altitude_ft < 20000:
-        bulk_pct = nwp_cloud_mid_pct
-        diag_layer = nwp_cloud_diagnostics.mid if nwp_cloud_diagnostics else None
-    else:
-        bulk_pct = nwp_cloud_high_pct
-        diag_layer = nwp_cloud_diagnostics.high if nwp_cloud_diagnostics else None
-
-    if diag_layer is None or diag_layer.base_ft is None or diag_layer.top_ft is None:
-        return bulk_pct or 0.0
-
-    margin = _NWP_CLOUD_ALTITUDE_MARGIN_FT
-    if (diag_layer.base_ft - margin) <= altitude_ft <= (diag_layer.top_ft + margin):
-        return bulk_pct or 0.0
-
-    return 0.0
+    result = nwp_cloud_cover_at_altitude(
+        altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+        nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+    )
+    return result or 0.0
 
 
 def compute_sfip_level(
@@ -237,13 +221,22 @@ def compute_sfip_level(
 
     Returns (sfip_raw, sfip_100, severity_str, variant_str).
     Temperature gating: returns zeros outside [0, -25]°C.
+
+    Variant values:
+      - ``"full"``: CLW from GRIB2, omega available
+      - ``"full_no_vv"``: CLW from GRIB2 but omega unavailable (e.g. ICON)
+      - ``"interp"``: CLW spatially interpolated from neighbors
+      - ``"interp_no_vv"``: interpolated CLW, no omega
+      - ``"proxy"``: no CLW data, uses DD+cloud proxy
+      - ``"proxy_no_vv"``: proxy without omega
     """
+    has_vv = omega_pa_s is not None
     if clw_g_kg is not None and clw_interpolated:
-        variant = "interp"
+        variant = "interp" if has_vv else "interp_no_vv"
     elif clw_g_kg is not None:
-        variant = "full"
+        variant = "full" if has_vv else "full_no_vv"
     else:
-        variant = "proxy"
+        variant = "proxy" if has_vv else "proxy_no_vv"
 
     # Temperature gating
     if temperature_c >= 0.0 or temperature_c < -25.0:
@@ -300,15 +293,13 @@ def sfip_to_risk(sfip_100: float) -> IcingRisk:
     return IcingRisk.NONE
 
 
-def _classify_icing_type(temperature_c: float) -> IcingType:
-    """Classify icing type from temperature (same as Ogimet)."""
-    if -3.0 <= temperature_c <= 0.0:
-        return IcingType.CLEAR
-    if -10.0 <= temperature_c < -3.0:
-        return IcingType.MIXED
-    if temperature_c < -10.0:
-        return IcingType.RIME
-    return IcingType.NONE
+def _classify_icing_type(temperature_c: float, wet_bulb_c: float | None = None) -> IcingType:
+    """Classify icing type — delegates to ``icing_common.classify_icing_type``.
+
+    Now uses wet-bulb temperature when available (same thresholds as Ogimet)
+    for consistent icing type classification across all methods.
+    """
+    return classify_icing_type(temperature_c, wet_bulb_c)
 
 
 # ── Cloud proximity (proxy variant gating) ───────────────────────────
@@ -317,17 +308,11 @@ def _classify_icing_type(temperature_c: float) -> IcingType:
 def _is_near_cloud(level: DerivedLevel, clouds: list[EnhancedCloudLayer]) -> bool:
     """Check if a level is within or very near a cloud layer.
 
-    Same logic as Ogimet: DD < 3°C or altitude within 500ft of a cloud layer.
-    Used to gate the proxy variant only — full variant gates on CLW > 0 instead.
+    Delegates to ``icing_common.is_near_cloud`` with DD < 3°C threshold
+    (wider than Ogimet's 2°C) and SCT layers included (skip_sct=False).
+    The proxy variant needs a wider net since it has no pass-2 NWP fallback.
     """
-    if level.altitude_ft is None:
-        return False
-    if level.dewpoint_depression_c is not None and level.dewpoint_depression_c < _IN_CLOUD_DD_THRESHOLD:
-        return True
-    for cl in clouds:
-        if (cl.base_ft - _CLOUD_MARGIN_FT) <= level.altitude_ft <= (cl.top_ft + _CLOUD_MARGIN_FT):
-            return True
-    return False
+    return is_near_cloud(level, clouds, dd_threshold=DD_SCT_THRESHOLD, skip_sct=False)
 
 
 # ── Zone builder ─────────────────────────────────────────────────────
@@ -399,27 +384,14 @@ def assess_sfip_zones(
         if risk == IcingRisk.NONE:
             continue
 
-        icing_type = _classify_icing_type(lv.temperature_c)
+        icing_type = _classify_icing_type(lv.temperature_c, lv.wet_bulb_c)
         sfip_levels.append((lv, icing_type, risk, sfip_100))
 
     if not sfip_levels:
         return []
 
-    # Group adjacent levels into zones (same 100 hPa adjacency rule as Ogimet)
-    zones: list[SfipZone] = []
-    current: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = [sfip_levels[0]]
-
-    for item in sfip_levels[1:]:
-        prev_lv = current[-1][0]
-        this_lv = item[0]
-        if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 100:
-            current.append(item)
-        else:
-            zones.append(_build_sfip_zone(current))
-            current = [item]
-
-    zones.append(_build_sfip_zone(current))
-    return zones
+    # Group adjacent levels into zones (shared adjacency logic)
+    return group_icing_levels(sfip_levels, _build_sfip_zone)
 
 
 def _build_sfip_zone(

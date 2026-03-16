@@ -126,6 +126,9 @@ def _interpolate_cloud_water(derived_levels: list[DerivedLevel]) -> None:
                 above.cloud_liquid_water_g_kg * (1 - frac) + below.cloud_liquid_water_g_kg * frac,
                 6,
             )
+            # Mark vertically interpolated levels so SFIP reports
+            # variant="interp" (same treatment as spatially interpolated).
+            dl.clw_interpolated = True
 
         # ICMR
         if above.ice_mixing_ratio_g_kg is not None and below.ice_mixing_ratio_g_kg is not None:
