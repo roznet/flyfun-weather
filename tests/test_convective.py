@@ -39,6 +39,32 @@ def test_effective_cape_mu_only():
     assert _effective_cape(indices) == 800.0
 
 
+def test_effective_cape_ml_only():
+    """Uses ML-CAPE when other variants are None (ICON model)."""
+    indices = ThermodynamicIndices(cape_mixed_layer_jkg=600.0)
+    assert _effective_cape(indices) == 600.0
+
+
+def test_effective_cape_nwp_raw():
+    """Uses NWP raw CAPE when it exceeds other variants."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=200.0,
+        nwp_cape_jkg=900.0,
+    )
+    assert _effective_cape(indices) == 900.0
+
+
+def test_effective_cape_all_variants():
+    """Max across all four CAPE variants."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=100.0,
+        cape_most_unstable_jkg=300.0,
+        cape_mixed_layer_jkg=500.0,
+        nwp_cape_jkg=400.0,
+    )
+    assert _effective_cape(indices) == 500.0
+
+
 def test_effective_cape_none():
     """Returns None when no CAPE is available."""
     assert _effective_cape(ThermodynamicIndices()) is None
@@ -141,8 +167,8 @@ def test_nwp_returns_none_when_no_diagnostics():
     assert assess_convective_nwp(indices, None) is None
 
 
-def test_nwp_returns_none_when_no_cover():
-    """Returns None when convective_cover_pct is None."""
+def test_nwp_returns_none_when_no_cover_no_bounds():
+    """Returns None when cover_pct, base, and top are all None."""
     indices = ThermodynamicIndices(cape_surface_jkg=500.0)
     diag = NWPCloudDiagnostics()  # all None
     assert assess_convective_nwp(indices, diag) is None
@@ -238,6 +264,88 @@ def test_nwp_severity_modifiers():
     assert result is not None
     assert any("strong shear" in m for m in result.severe_modifiers)
     assert any("K-index" in m for m in result.severe_modifiers)
+
+
+# ---------------------------------------------------------------------------
+# assess_convective_nwp — hybrid path (no cover_pct, has base/top)
+# ---------------------------------------------------------------------------
+
+
+def test_nwp_hybrid_uses_cape_risk():
+    """Hybrid path: CAPE-based risk when cover_pct absent but base/top exist."""
+    indices = ThermodynamicIndices(cape_surface_jkg=500.0)
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=5000.0,
+        convective_top_ft=35000.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_hybrid"
+    assert result.risk_level == ConvectiveRisk.MODERATE  # 500 >= 300
+    assert result.base_ft == 5000.0
+    assert result.top_ft == 35000.0
+    assert result.cover_pct is None
+
+
+def test_nwp_hybrid_marginal_low_cape():
+    """Hybrid path: small positive CAPE → MARGINAL."""
+    indices = ThermodynamicIndices(cape_surface_jkg=20.0)
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=3000.0,
+        convective_top_ft=15000.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.MARGINAL
+
+
+def test_nwp_hybrid_no_cape_no_risk():
+    """Hybrid path: no CAPE data → NONE risk but still returns assessment."""
+    indices = ThermodynamicIndices()
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=3000.0,
+        convective_top_ft=25000.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.NONE
+    assert result.method == "nwp_hybrid"
+
+
+def test_nwp_hybrid_returns_none_partial_bounds():
+    """Returns None when only base exists (no top) and no cover."""
+    indices = ThermodynamicIndices(cape_surface_jkg=500.0)
+    diag = NWPCloudDiagnostics(convective_base_ft=5000.0)
+    assert assess_convective_nwp(indices, diag) is None
+
+
+def test_nwp_hybrid_preserves_modifiers():
+    """Hybrid path computes severity modifiers from thermo indices."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=1500.0,
+        bulk_shear_0_6km_kt=45.0,
+    )
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=4000.0,
+        convective_top_ft=40000.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert any("strong shear" in m for m in result.severe_modifiers)
+
+
+def test_nwp_full_path_preferred_over_hybrid():
+    """When cover_pct is present, full NWP path is used even if base/top exist."""
+    indices = ThermodynamicIndices(cape_surface_jkg=2000.0)
+    diag = NWPCloudDiagnostics(
+        convective_cover_pct=30.0,
+        convective_base_ft=5000.0,
+        convective_top_ft=35000.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp"  # not "nwp_hybrid"
+    assert result.cover_pct == 30.0
 
 
 # ---------------------------------------------------------------------------

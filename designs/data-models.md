@@ -102,7 +102,7 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |
 | `IcingZone` | Grouped icing zone (Ogimet-DD or Ogimet-NWP) | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_temperature_c, mean_wet_bulb_c, mean_rh_pct, mean_icing_index |
 | `SfipZone` | Grouped SFIP icing zone | base/top (ft + hPa), risk, icing_type, mean_sfip_100, mean_temperature_c, mean_rh_pct, variant ("full"/"full_no_vv"/"interp"/"interp_no_vv"/"proxy"/"proxy_no_vv") |
-| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list |
+| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list, base_ft/top_ft (unified bounds), cover_pct (NWP only), method ("thermo"/"nwp"/"nwp_hybrid") |
 | `VerticalMotionClass` | Enum: vertical motion profile type | QUIESCENT, SYNOPTIC_ASCENT, SYNOPTIC_SUBSIDENCE, CONVECTIVE, OSCILLATING, UNAVAILABLE |
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
 | `CATRiskLayer` | CAT risk identified by Richardson number | base_ft, top_ft, base/top_pressure_hpa, richardson_number, risk |

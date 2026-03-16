@@ -38,12 +38,18 @@ CIN_CAP_THRESHOLD = -200  # J/kg (strong cap)
 def _effective_cape(indices: ThermodynamicIndices) -> float | None:
     """Return the most relevant CAPE for convective risk.
 
-    Uses max(SB-CAPE, MU-CAPE) to catch elevated convection common in
-    European maritime environments where SB-CAPE can be near zero while
-    a warm layer aloft is unstable.
+    Uses max of all available CAPE variants: SB-CAPE, MU-CAPE, ML-CAPE,
+    and NWP raw CAPE.  This catches elevated convection (MU), mixed-layer
+    instability (ML / ICON), and model-native CAPE that may differ from
+    MetPy recalculations (NWP raw).
     """
     values = [
-        v for v in (indices.cape_surface_jkg, indices.cape_most_unstable_jkg)
+        v for v in (
+            indices.cape_surface_jkg,
+            indices.cape_most_unstable_jkg,
+            indices.cape_mixed_layer_jkg,
+            indices.nwp_cape_jkg,
+        )
         if v is not None
     ]
     return max(values) if values else None
@@ -155,18 +161,36 @@ def assess_convective_nwp(
         return None
 
     cover = nwp_diagnostics.convective_cover_pct
-    if cover is None:
-        return None
-
-    # Risk from NWP convective cover
-    risk = ConvectiveRisk.NONE
-    for threshold, level in _NWP_COVER_THRESHOLDS:
-        if cover >= threshold:
-            risk = level
-            break
-
     cape = _effective_cape(indices)
     modifiers = _severity_modifiers(indices, cape)
+
+    if cover is not None:
+        # Full NWP path: risk from convective cover percentage
+        risk = ConvectiveRisk.NONE
+        for threshold, level in _NWP_COVER_THRESHOLDS:
+            if cover >= threshold:
+                risk = level
+                break
+        method = "nwp"
+    elif (
+        nwp_diagnostics.convective_base_ft is not None
+        and nwp_diagnostics.convective_top_ft is not None
+    ):
+        # Hybrid path (e.g. ICON-EU): no cover_pct but GRIB base/top exist.
+        # Derive risk from CAPE thresholds (same as thermo) and pair with
+        # NWP geometric bounds for a more accurate convective envelope.
+        risk = ConvectiveRisk.NONE
+        if cape is not None:
+            for threshold, level in _CAPE_THRESHOLDS:
+                if cape >= threshold:
+                    risk = level
+                    break
+            # Marginal: any CAPE > 0 with defined base/top
+            if risk == ConvectiveRisk.NONE and cape > 0:
+                risk = ConvectiveRisk.MARGINAL
+        method = "nwp_hybrid"
+    else:
+        return None
 
     return ConvectiveAssessment(
         risk_level=risk,
@@ -183,5 +207,5 @@ def assess_convective_nwp(
         base_ft=nwp_diagnostics.convective_base_ft,
         top_ft=nwp_diagnostics.convective_top_ft,
         cover_pct=cover,
-        method="nwp",
+        method=method,
     )
