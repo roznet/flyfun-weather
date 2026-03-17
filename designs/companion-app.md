@@ -2,6 +2,46 @@
 
 > iOS/iPad app for in-flight condition reporting, offline briefing access, and collaborative PIREPs
 
+## Current Implementation Status (as of 2026-03-17)
+
+Phase 1 is complete. Most of Phase 2 is implemented. Phase 3 (PIREPs) is not started.
+
+### What's built
+
+**Authentication**: Google OAuth + native Sign in with Apple (via `SignInWithAppleButton`, token exchange with `/auth/apple/token` from flyfun-common). JWT stored in Keychain.
+
+**Flight list**: `NavigationSplitView` — sidebar flight list + detail briefing pane on iPad (collapsible). Flight titles show "ORIGIN → DEST" format. Pull-to-refresh.
+
+**Briefing viewer** (tab-based: Advisories, Cross-Section, Map, Digest):
+- Advisory dashboard with 3-column grid on iPad, model status badges as colored capsules, short model names (MF for Météo-France)
+- Airport conditions: departure/arrival side-by-side on iPad
+- Cross-section: Canvas renderer with cloud bands, icing, CAT, inversions, terrain, temperature lines, reference lines. Model selector. Layer toggle chips.
+- Native Skew-T: tap cross-section point → `SkewTView` (RZSkewT package) renders below with full thermodynamics, wind barbs, CAPE/CIN shading, LCL/LFC/EL markers, FL labels
+- Route map, digest view
+
+**Pack management**:
+- Pack history picker (toolbar dropdown with D-N labels and assessment badges)
+- Server refresh with SSE streaming progress bar (stage name, percentage)
+- Active refresh detection (polls for refreshes started from web/other device)
+
+**Offline caching**:
+- `CachingBriefingRepository` wraps `OnlineBriefingRepository`
+- Explicit download button per pack (not automatic)
+- Caches 5 endpoints to `Application Support/BriefingCache/` as raw JSON
+- Cache status indicators in pack history picker (green dot)
+- Download/delete UI in toolbar
+- `BriefingCacheStore` actor with JSON index
+
+**Backend endpoints added**:
+- `GET /sounding-profile/{point_index}/{model}` — raw T/Td/wind at pressure levels for client-side Skew-T
+
+### What's NOT built yet
+- Push notifications for briefing updates
+- SwiftData persistence (current cache is file-based, not SwiftData)
+- Auto-sync / background refresh
+- Sounding profiles in offline download (online-only for now)
+- Phase 3: PIREPs, flight sessions, observations, prompting engine
+
 ## Vision
 
 The WeatherBrief Companion App turns every flight into a two-way weather conversation: before departure, you sync your briefing and carry it offline; in flight, you mark actual conditions with a few taps; after landing, those observations feed back into forecast verification and stream as PIREPs to other pilots.
@@ -311,7 +351,9 @@ class CachingBriefingRepository: BriefingRepository { ... }
 
 ### Authentication Flow
 
-The app uses native Google OAuth via `ASWebAuthenticationSession` — the same Google login as the web app, no token pasting.
+The app supports two auth methods:
+1. **Sign in with Apple**: Native `SignInWithAppleButton` → identity token exchanged with server via `POST /auth/apple/token` (flyfun-common). Bundle ID must be in `APPLE_APP_IDS` env var.
+2. **Google OAuth**: `ASWebAuthenticationSession` → server redirects to `flyfunweather://auth/callback?token=<jwt>`.
 
 ```
 ┌─────────┐                    ┌─────────────┐                ┌────────┐
@@ -601,14 +643,19 @@ These already exist and the companion app uses them directly:
 | `/api/flights/{id}/packs/{ts}/elevation` | GET | Phase 1 | Elevation profile |
 | `/api/flights/{id}/packs/{ts}/skewt/{icao}/{model}.png` | GET | Phase 1 | Skew-T image |
 | `/api/flights/{id}/packs/{ts}/gramet.png` | GET | Phase 1 | GRAMET image |
+| `/api/flights/{id}/packs` | GET | Implemented | List all packs (history) |
 | `/api/flights/{id}/packs/freshness` | GET | Phase 2 | Data freshness check |
-| `/api/flights/{id}/packs/refresh` | POST | Phase 2 | Trigger briefing refresh |
+| `/api/flights/{id}/packs/refresh/stream` | POST | Implemented | SSE streaming refresh with progress |
+| `/api/flights/{id}/packs/refresh/status` | GET | Implemented | Check active refresh status |
+| `/api/flights/{id}/packs/{ts}/sounding-profile/{pt}/{model}` | GET | Implemented | Raw sounding profile for Skew-T |
+| `/auth/apple/token` | POST | Implemented | Native Apple Sign In token exchange |
 
-#### Phase 1 — Auth Extension
+#### Phase 1 — Auth Extension (DONE)
 
 | Endpoint | Method | Change |
 |----------|--------|--------|
-| `/auth/login/google?platform=ios` | GET | When `platform=ios`, callback redirects to `weatherbrief://auth/callback?token=<jwt>` instead of web UI |
+| `/auth/login/google?platform=ios` | GET | Callback redirects to `flyfunweather://auth/callback?token=<jwt>` |
+| `/auth/apple/token` | POST | Native Apple identity token → flyfun JWT |
 
 #### Phase 2 — Companion Sync Endpoint
 
