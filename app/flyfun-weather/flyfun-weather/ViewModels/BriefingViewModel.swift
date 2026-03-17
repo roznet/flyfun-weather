@@ -42,6 +42,10 @@ final class BriefingViewModel {
     // Refresh state
     private(set) var refreshState: RefreshState = .idle
 
+    // Download/cache state
+    private(set) var downloadState: DownloadState = .notDownloaded
+    private(set) var packCacheStatus: [String: Bool] = [:] // timestamp -> isCached
+
     // UI state
     var selectedTab: BriefingTab = .advisories
     var selectedModel: String = "gfs"
@@ -49,9 +53,9 @@ final class BriefingViewModel {
     var selectedPackTimestamp: String = "" {
         didSet {
             guard oldValue != selectedPackTimestamp, !selectedPackTimestamp.isEmpty else { return }
-            // Update pack from history
             if let newPack = packHistory.first(where: { $0.fetchTimestamp == selectedPackTimestamp }) {
                 pack = newPack
+                downloadState = (packCacheStatus[selectedPackTimestamp] == true) ? .downloaded : .notDownloaded
                 Task { await loadPackData(timestamp: selectedPackTimestamp) }
             }
         }
@@ -77,6 +81,7 @@ final class BriefingViewModel {
             async let historyTask: () = loadPackHistory()
             async let dataTask: () = loadPackData(timestamp: pack.fetchTimestamp)
             _ = await (historyTask, dataTask)
+            await checkCacheStatus()
         } catch {
             Self.logger.error("Failed to load pack meta: \(error)")
             advisoriesState = .error(error)
@@ -107,6 +112,53 @@ final class BriefingViewModel {
             return "\(prefix) · \(fmt.string(from: date)) UTC"
         }
         return prefix
+    }
+
+    // MARK: - Download / Cache
+
+    /// Check which packs in history are cached.
+    func checkCacheStatus() async {
+        guard let caching = repository as? CachingBriefingRepository else { return }
+        var status: [String: Bool] = [:]
+        for pack in packHistory {
+            status[pack.fetchTimestamp] = await caching.isPackCached(flightId: flight.id, timestamp: pack.fetchTimestamp)
+        }
+        packCacheStatus = status
+        // Update download state for current pack
+        if let ts = pack?.fetchTimestamp {
+            downloadState = (packCacheStatus[ts] == true) ? .downloaded : .notDownloaded
+        }
+    }
+
+    /// Download the current pack for offline access.
+    func downloadCurrentPack() async {
+        guard let pack, let caching = repository as? CachingBriefingRepository else { return }
+        downloadState = .downloading(progress: 0)
+        do {
+            try await caching.downloadPack(
+                flightId: flight.id,
+                timestamp: pack.fetchTimestamp,
+                flightTitle: flight.shortTitle,
+                assessment: pack.assessment
+            ) { [weak self] progress in
+                Task { @MainActor in
+                    self?.downloadState = .downloading(progress: progress)
+                }
+            }
+            downloadState = .downloaded
+            packCacheStatus[pack.fetchTimestamp] = true
+        } catch {
+            downloadState = .error(error.localizedDescription)
+            Self.logger.error("Download failed: \(error)")
+        }
+    }
+
+    /// Delete the current pack from the cache.
+    func deleteCurrentPack() async {
+        guard let pack, let caching = repository as? CachingBriefingRepository else { return }
+        await caching.deletePack(flightId: flight.id, timestamp: pack.fetchTimestamp)
+        downloadState = .notDownloaded
+        packCacheStatus[pack.fetchTimestamp] = false
     }
 
     // MARK: - Refresh

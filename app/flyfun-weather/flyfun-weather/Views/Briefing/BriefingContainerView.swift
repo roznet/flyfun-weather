@@ -51,11 +51,13 @@ private struct BriefingToolbarView: View {
                         } label: {
                             HStack {
                                 Text(viewModel.packLabel(for: pack))
+                                if viewModel.packCacheStatus[pack.fetchTimestamp] == true {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .font(.caption2)
+                                }
                                 if pack.fetchTimestamp == viewModel.selectedPackTimestamp {
                                     Image(systemName: "checkmark")
-                                }
-                                if let assessment = pack.assessment {
-                                    AssessmentStringBadge(status: assessment)
                                 }
                             }
                         }
@@ -63,6 +65,39 @@ private struct BriefingToolbarView: View {
                 } label: {
                     Label(currentPackLabel, systemImage: "clock.arrow.circlepath")
                         .font(.caption)
+                }
+            }
+
+            // Download / cache button
+            switch viewModel.downloadState {
+            case .notDownloaded:
+                Button {
+                    Task { await viewModel.downloadCurrentPack() }
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                }
+            case .downloading(let progress):
+                ProgressView(value: progress)
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                    .frame(width: 20, height: 20)
+            case .downloaded:
+                Menu {
+                    Button(role: .destructive) {
+                        Task { await viewModel.deleteCurrentPack() }
+                    } label: {
+                        Label("Remove Download", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(.green)
+                }
+            case .error:
+                Button {
+                    Task { await viewModel.downloadCurrentPack() }
+                } label: {
+                    Image(systemName: "exclamationmark.arrow.circlepath")
+                        .foregroundStyle(.red)
                 }
             }
 
