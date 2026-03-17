@@ -82,10 +82,9 @@ struct SkewTDetailView: View {
                     .padding(.horizontal)
                     .padding(.vertical, 4)
 
-                    // Skew-T plot
+                    // Skew-T plot — MetPy uses roughly 1:1 aspect ratio
                     SkewTView(profile: response.toSoundingProfile())
-                        .frame(minHeight: 300)
-                        .aspectRatio(0.8, contentMode: .fit)
+                        .aspectRatio(1.0, contentMode: .fit)
                 }
             case .error(let error):
                 ContentUnavailableView("Sounding Unavailable",
