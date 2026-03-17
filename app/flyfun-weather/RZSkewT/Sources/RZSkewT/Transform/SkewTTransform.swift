@@ -83,7 +83,7 @@ public struct SkewTTransform: Sendable {
 
     /// Standard pressure levels for axis labels.
     public static let standardPressureLevels: [Double] = [
-        1000, 925, 850, 700, 500, 400, 300, 250, 200
+        1000, 925, 850, 700, 500, 400, 300, 250, 200, 150, 100
     ]
 
     /// Pressure levels that fall within the configured range.

@@ -44,9 +44,9 @@ public struct SkewTConfiguration: Sendable {
 
     public init(
         pBottom: Double = 1050,
-        pTop: Double = 200,
-        tMin: Double = -60,
-        tMax: Double = 40,
+        pTop: Double = 100,
+        tMin: Double = -40,
+        tMax: Double = 50,
         skewAngle: Double = 45,
         margins: Margins = .default,
         backgroundColor: Color = Color(.sRGB, red: 0.98, green: 0.98, blue: 1.0),
