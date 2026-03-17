@@ -4,6 +4,8 @@ import Testing
 @Suite("Thermodynamics")
 struct ThermodynamicsTests {
 
+    // MARK: - Saturation vapor pressure
+
     @Test("Saturation vapor pressure at 0°C ≈ 6.112 hPa")
     func saturationVaporPressureAtZero() {
         let es = Thermodynamics.saturationVaporPressure(tempC: 0)
@@ -21,6 +23,15 @@ struct ThermodynamicsTests {
         let es = Thermodynamics.saturationVaporPressure(tempC: 100)
         #expect(es > 900 && es < 1100)
     }
+
+    @Test("Saturation vapor pressure at -40°C ≈ 0.189 hPa (icing-relevant cold temps)")
+    func saturationVaporPressureAtMinus40() {
+        let es = Thermodynamics.saturationVaporPressure(tempC: -40)
+        // Literature value ~0.189 hPa at -40°C
+        #expect(abs(es - 0.189) < 0.02)
+    }
+
+    // MARK: - Potential temperature & dry adiabats
 
     @Test("Potential temperature at surface (15°C, 1000hPa) ≈ 288K")
     func potentialTemperatureAtSurface() {
@@ -46,6 +57,8 @@ struct ThermodynamicsTests {
         #expect(t700 > -15)
     }
 
+    // MARK: - Mixing ratio
+
     @Test("Saturation mixing ratio at 20°C, 1000hPa ≈ 14.7 g/kg")
     func saturationMixingRatioAt20() {
         let ws = Thermodynamics.saturationMixingRatio(tempC: 20, pressureHPa: 1000) * 1000
@@ -61,16 +74,43 @@ struct ThermodynamicsTests {
         #expect(abs(tdBack - td) < 0.1)
     }
 
-    @Test("LCL computation: 25°C/15°C at 1000 hPa")
+    // MARK: - LCL
+
+    @Test("LCL computation: 25°C/15°C at 1000 hPa ≈ 860 hPa")
     func lclComputation() {
         let lcl = Thermodynamics.liftingCondensationLevel(tempC: 25, dewpointC: 15, pressureHPa: 1000)
         #expect(lcl != nil)
         if let lcl {
-            // LCL should be around 850-900 hPa
-            #expect(lcl.pressureHPa < 950)
-            #expect(lcl.pressureHPa > 750)
+            // Literature: LCL ~860 hPa for 25/15 at 1000
+            #expect(abs(lcl.pressureHPa - 860) < 20)
         }
     }
+
+    @Test("LCL when already saturated (T == Td) returns near surface pressure")
+    func lclAlreadySaturated() {
+        let lcl = Thermodynamics.liftingCondensationLevel(
+            tempC: 15, dewpointC: 15, pressureHPa: 1000)
+        #expect(lcl != nil)
+        #expect(lcl!.pressureHPa > 990) // should be at or very near surface
+    }
+
+    // MARK: - Moist vs dry adiabat invariant
+
+    @Test("Moist adiabat cools slower than dry adiabat from same starting point")
+    func moistCoolsSlowerThanDry() {
+        let startT = 20.0
+        let theta = Thermodynamics.potentialTemperature(tempC: startT, pressureHPa: 1000)
+        let tDry700 = Thermodynamics.dryAdiabatTemperature(theta: theta, pressureHPa: 700)
+
+        let moistCurves = Thermodynamics.moistAdiabats(startTemps: [startT])
+        let tMoist700 = moistCurves[0].first(where: { abs($0.pressureHPa - 700) < 15 })?.tempC
+
+        #expect(tMoist700 != nil)
+        // Moist adiabat always warmer than dry at same pressure (latent heat release)
+        #expect(tMoist700! > tDry700)
+    }
+
+    // MARK: - Parcel path
 
     @Test("Parcel path has reasonable number of points")
     func parcelPathGeneration() {
@@ -83,6 +123,120 @@ struct ThermodynamicsTests {
         // Temperature should decrease
         #expect(path.last!.tempC < path.first!.tempC)
     }
+
+    @Test("Parcel path has no temperature discontinuities at LCL")
+    func parcelPathContinuousAtLCL() {
+        let path = Thermodynamics.parcelPath(
+            surfaceTempC: 25, surfaceDewpointC: 15,
+            surfacePressureHPa: 1000)
+        for i in 1..<path.count {
+            let dT = abs(path[i].tempC - path[i - 1].tempC)
+            // No jump > 5°C between adjacent 5hPa levels
+            #expect(dT < 5.0, "Temperature jump of \(dT)°C at index \(i) (p=\(path[i].pressureHPa))")
+        }
+    }
+
+    @Test("Parcel path from high-altitude surface (e.g. 850 hPa)")
+    func parcelPathHighAltitude() {
+        let path = Thermodynamics.parcelPath(
+            surfaceTempC: 10, surfaceDewpointC: 5,
+            surfacePressureHPa: 850, topPressureHPa: 200
+        )
+        #expect(path.count > 100)
+        #expect(path.first?.pressureHPa == 850)
+        #expect(path.last!.tempC < path.first!.tempC)
+    }
+
+    // MARK: - CAPE / CIN
+
+    @Test("CAPE > 0 for unstable profile, CIN <= 0 below LFC")
+    func capeUnstableProfile() {
+        // Warm moist surface, cold aloft = obviously unstable
+        let levels = [
+            SoundingLevel(pressureHPa: 1000, temperatureC: 28, dewpointC: 20),
+            SoundingLevel(pressureHPa: 850, temperatureC: 10),
+            SoundingLevel(pressureHPa: 700, temperatureC: -5),
+            SoundingLevel(pressureHPa: 500, temperatureC: -20),
+            SoundingLevel(pressureHPa: 300, temperatureC: -45),
+        ]
+        let path = Thermodynamics.parcelPath(
+            surfaceTempC: 28, surfaceDewpointC: 20,
+            surfacePressureHPa: 1000)
+        let (cape, cin) = Thermodynamics.computeCAPECIN(
+            environmentLevels: levels, parcelPath: path)
+        #expect(cape > 0, "CAPE should be positive for unstable profile, got \(cape)")
+        #expect(cin <= 0, "CIN should be non-positive, got \(cin)")
+    }
+
+    @Test("CAPE is zero for stable isothermal profile")
+    func capeStableProfile() {
+        // Isothermal atmosphere: parcel always colder than environment above LCL
+        let levels = (0..<10).map { i in
+            SoundingLevel(pressureHPa: 1000 - Double(i) * 80, temperatureC: 15)
+        }
+        let path = Thermodynamics.parcelPath(
+            surfaceTempC: 15, surfaceDewpointC: 5,
+            surfacePressureHPa: 1000)
+        let (cape, _) = Thermodynamics.computeCAPECIN(
+            environmentLevels: levels, parcelPath: path)
+        #expect(cape == 0, "CAPE should be zero for stable isothermal profile, got \(cape)")
+    }
+
+    @Test("CAPE/CIN returns (0,0) for empty inputs")
+    func capeEmptyInputs() {
+        let (cape1, cin1) = Thermodynamics.computeCAPECIN(environmentLevels: [], parcelPath: [])
+        #expect(cape1 == 0 && cin1 == 0)
+
+        let (cape2, cin2) = Thermodynamics.computeCAPECIN(
+            environmentLevels: [SoundingLevel(pressureHPa: 1000, temperatureC: 20)],
+            parcelPath: [(25.0, 1000.0)])
+        #expect(cape2 == 0 && cin2 == 0) // single point, need >= 2
+    }
+
+    // MARK: - Pinned against known values (standard atmosphere / radiosonde reference)
+
+    @Test("Standard atmosphere: 15°C/15°C/1013.25 hPa LCL at surface")
+    func pinnedLCLSaturated() {
+        // Fully saturated surface → LCL at surface
+        let lcl = Thermodynamics.liftingCondensationLevel(
+            tempC: 15, dewpointC: 15, pressureHPa: 1013.25)
+        #expect(lcl != nil)
+        #expect(lcl!.pressureHPa > 1008, "Saturated LCL should be at surface")
+    }
+
+    @Test("Pinned LCL: 30°C/20°C at 1000 hPa ≈ 865 hPa (textbook value)")
+    func pinnedLCLTextbook() {
+        // Stull (2000) gives LCL ≈ 865 hPa for T=30, Td=20, p=1000
+        let lcl = Thermodynamics.liftingCondensationLevel(
+            tempC: 30, dewpointC: 20, pressureHPa: 1000)
+        #expect(lcl != nil)
+        #expect(abs(lcl!.pressureHPa - 865) < 15,
+                "LCL should be ~865 hPa, got \(lcl!.pressureHPa)")
+    }
+
+    @Test("Pinned CAPE: warm/moist tropical sounding has CAPE > 1000 J/kg")
+    func pinnedCAPETropical() {
+        // Simplified tropical sounding (warm moist surface, standard lapse rate)
+        let levels = [
+            SoundingLevel(pressureHPa: 1000, temperatureC: 30, dewpointC: 24),
+            SoundingLevel(pressureHPa: 925, temperatureC: 24, dewpointC: 20),
+            SoundingLevel(pressureHPa: 850, temperatureC: 18, dewpointC: 14),
+            SoundingLevel(pressureHPa: 700, temperatureC: 4, dewpointC: -4),
+            SoundingLevel(pressureHPa: 500, temperatureC: -12, dewpointC: -24),
+            SoundingLevel(pressureHPa: 300, temperatureC: -38, dewpointC: -50),
+            SoundingLevel(pressureHPa: 200, temperatureC: -55, dewpointC: -65),
+        ]
+        let path = Thermodynamics.parcelPath(
+            surfaceTempC: 30, surfaceDewpointC: 24,
+            surfacePressureHPa: 1000, topPressureHPa: 200)
+        let (cape, _) = Thermodynamics.computeCAPECIN(
+            environmentLevels: levels, parcelPath: path)
+        // Tropical soundings typically have CAPE 1000-4000 J/kg
+        #expect(cape > 1000, "Tropical CAPE should be > 1000 J/kg, got \(cape)")
+        #expect(cape < 5000, "Tropical CAPE should be < 5000 J/kg, got \(cape)")
+    }
+
+    // MARK: - Background line generation
 
     @Test("Dry adiabats produce reasonable curves")
     func dryAdiabatCurves() {
