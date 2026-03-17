@@ -2,7 +2,7 @@ import Foundation
 
 extension JSONDecoder {
     /// Shared decoder configured for the WeatherBrief API (snake_case keys, ISO 8601 dates).
-    static let weatherBrief: JSONDecoder = {
+    static nonisolated let weatherBrief: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         decoder.dateDecodingStrategy = .iso8601
@@ -25,6 +25,18 @@ extension DateFormatter {
         f.timeZone = TimeZone(identifier: "UTC")
         return f
     }()
+}
+
+extension String {
+    /// Short display name for weather models — used in compact badges where space is tight.
+    var shortModelName: String {
+        switch self.lowercased() {
+        case "meteofrance": "MF"
+        case "best_match": "BEST"
+        case "ecmwf": "ECMWF"
+        default: self.uppercased()
+        }
+    }
 }
 
 extension URL {

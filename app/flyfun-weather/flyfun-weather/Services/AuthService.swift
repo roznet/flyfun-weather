@@ -16,7 +16,12 @@ final class AuthService: NSObject, ASWebAuthenticationPresentationContextProvidi
             let scene = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
                 .first
-            return scene?.keyWindow ?? ASPresentationAnchor()
+            return scene?.keyWindow ?? {
+                guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+                    return ASPresentationAnchor()
+                }
+                return ASPresentationAnchor(windowScene: windowScene)
+            }()
             #else
             return NSApplication.shared.keyWindow ?? ASPresentationAnchor()
             #endif

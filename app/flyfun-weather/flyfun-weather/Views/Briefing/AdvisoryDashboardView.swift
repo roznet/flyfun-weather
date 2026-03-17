@@ -79,7 +79,7 @@ private struct ModelStatusBadge: View {
     }
 
     var body: some View {
-        Text(model.uppercased())
+        Text(model.shortModelName)
             .font(.caption2.bold())
             .foregroundStyle(.white)
             .padding(.horizontal, 6)

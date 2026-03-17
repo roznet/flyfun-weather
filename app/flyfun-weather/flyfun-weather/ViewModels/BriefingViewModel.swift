@@ -8,6 +8,19 @@ enum BriefingTab: String, Hashable {
     case digest
 }
 
+/// Refresh pipeline state.
+enum RefreshState: Equatable {
+    case idle
+    case refreshing(stage: String, detail: String?, progress: Double)
+    case completed(elapsedSeconds: Double)
+    case error(String)
+
+    var isRefreshing: Bool {
+        if case .refreshing = self { return true }
+        return false
+    }
+}
+
 /// View model for the full briefing viewer.
 @Observable
 @MainActor
@@ -17,6 +30,7 @@ final class BriefingViewModel {
 
     // Pack metadata
     private(set) var pack: PackMetaResponse?
+    private(set) var packHistory: [PackMetaResponse] = []
 
     // Section states
     private(set) var advisoriesState: LoadingState<AdvisoriesResponse> = .idle
@@ -25,10 +39,23 @@ final class BriefingViewModel {
     private(set) var routeAnalysesState: LoadingState<RouteAnalysesResponse> = .idle
     private(set) var elevationState: LoadingState<ElevationResponse> = .idle
 
+    // Refresh state
+    private(set) var refreshState: RefreshState = .idle
+
     // UI state
     var selectedTab: BriefingTab = .advisories
     var selectedModel: String = "gfs"
     var availableModels: [String] = []
+    var selectedPackTimestamp: String = "" {
+        didSet {
+            guard oldValue != selectedPackTimestamp, !selectedPackTimestamp.isEmpty else { return }
+            // Update pack from history
+            if let newPack = packHistory.first(where: { $0.fetchTimestamp == selectedPackTimestamp }) {
+                pack = newPack
+                Task { await loadPackData(timestamp: selectedPackTimestamp) }
+            }
+        }
+    }
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "Briefing")
 
@@ -37,36 +64,162 @@ final class BriefingViewModel {
         self.repository = repository
     }
 
+    // MARK: - Initial load
+
     func loadBriefing() async {
         do {
             let pack = try await repository.latestPack(flightId: flight.id)
             self.pack = pack
+            self.selectedPackTimestamp = pack.fetchTimestamp
+            updateModels(from: pack)
 
-            // Extract available models
-            let models = Array(pack.modelInitTimes.keys).sorted()
-            if !models.isEmpty {
-                availableModels = models
-                if !models.contains(selectedModel) {
-                    selectedModel = models.first ?? "gfs"
-                }
-            }
-
-            // Fire parallel requests — individual failures don't block others
-            await withTaskGroup(of: Void.self) { group in
-                let ts = pack.fetchTimestamp
-
-                group.addTask { await self.loadAdvisories(timestamp: ts) }
-                group.addTask { await self.loadDigest(timestamp: ts) }
-                group.addTask { await self.loadSnapshot(timestamp: ts) }
-                group.addTask { await self.loadRouteAnalyses(timestamp: ts) }
-                group.addTask { await self.loadElevation(timestamp: ts) }
-            }
+            // Load pack history in parallel with data
+            async let historyTask: () = loadPackHistory()
+            async let dataTask: () = loadPackData(timestamp: pack.fetchTimestamp)
+            _ = await (historyTask, dataTask)
         } catch {
             Self.logger.error("Failed to load pack meta: \(error)")
-            // Set all states to error since we can't proceed without pack
             advisoriesState = .error(error)
             digestState = .error(error)
             snapshotState = .error(error)
+        }
+    }
+
+    // MARK: - Pack history
+
+    private func loadPackHistory() async {
+        do {
+            packHistory = try await repository.packs(flightId: flight.id)
+        } catch {
+            Self.logger.error("Failed to load pack history: \(error)")
+        }
+    }
+
+    /// Label for a pack in the history picker.
+    func packLabel(for pack: PackMetaResponse) -> String {
+        let daysOut = pack.daysOut
+        let prefix = daysOut >= 0 ? "D-\(daysOut)" : "D+\(abs(daysOut))"
+        // Extract date/time from fetchTimestamp
+        if let date = ISO8601DateFormatter().date(from: pack.fetchTimestamp) {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "MMM d HH:mm"
+            fmt.timeZone = TimeZone(identifier: "UTC")
+            return "\(prefix) · \(fmt.string(from: date)) UTC"
+        }
+        return prefix
+    }
+
+    // MARK: - Refresh
+
+    func refresh() async {
+        guard !refreshState.isRefreshing else { return }
+        refreshState = .refreshing(stage: "Starting", detail: nil, progress: 0)
+
+        do {
+            let stream = await repository.refreshStream(flightId: flight.id)
+            for try await event in stream {
+                switch event.type {
+                case "progress":
+                    refreshState = .refreshing(
+                        stage: event.label ?? event.stage ?? "Working",
+                        detail: event.detail,
+                        progress: event.progress ?? 0
+                    )
+                case "complete":
+                    refreshState = .completed(elapsedSeconds: event.elapsedSeconds ?? 0)
+                    if let newPack = event.pack {
+                        pack = newPack
+                        selectedPackTimestamp = newPack.fetchTimestamp
+                        updateModels(from: newPack)
+                        await loadPackHistory()
+                        await loadPackData(timestamp: newPack.fetchTimestamp)
+                    }
+                    // Clear completed state after a delay
+                    try? await Task.sleep(for: .seconds(10))
+                    if case .completed = refreshState {
+                        refreshState = .idle
+                    }
+                case "error":
+                    refreshState = .error(event.message ?? "Refresh failed")
+                default:
+                    break
+                }
+            }
+        } catch {
+            refreshState = .error(error.localizedDescription)
+            Self.logger.error("Refresh stream error: \(error)")
+        }
+    }
+
+    /// Check if a refresh is already running (started from web or another device).
+    func checkActiveRefresh() async {
+        do {
+            let status = try await repository.refreshStatus(flightId: flight.id)
+            if status.active {
+                refreshState = .refreshing(
+                    stage: status.label ?? status.stage ?? "In progress",
+                    detail: status.detail,
+                    progress: 0
+                )
+                // Poll until complete
+                await pollRefreshStatus()
+            }
+        } catch {
+            // Status check failed — not critical
+            Self.logger.debug("Refresh status check failed: \(error)")
+        }
+    }
+
+    private func pollRefreshStatus() async {
+        for _ in 0..<100 {
+            try? await Task.sleep(for: .seconds(3))
+            do {
+                let status = try await repository.refreshStatus(flightId: flight.id)
+                if !status.active {
+                    refreshState = .completed(elapsedSeconds: 0)
+                    // Reload data
+                    let pack = try await repository.latestPack(flightId: flight.id)
+                    self.pack = pack
+                    selectedPackTimestamp = pack.fetchTimestamp
+                    updateModels(from: pack)
+                    await loadPackHistory()
+                    await loadPackData(timestamp: pack.fetchTimestamp)
+                    try? await Task.sleep(for: .seconds(10))
+                    if case .completed = refreshState {
+                        refreshState = .idle
+                    }
+                    return
+                }
+                refreshState = .refreshing(
+                    stage: status.label ?? status.stage ?? "In progress",
+                    detail: status.detail,
+                    progress: 0
+                )
+            } catch {
+                break
+            }
+        }
+    }
+
+    // MARK: - Data loading
+
+    private func loadPackData(timestamp: String) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.loadAdvisories(timestamp: timestamp) }
+            group.addTask { await self.loadDigest(timestamp: timestamp) }
+            group.addTask { await self.loadSnapshot(timestamp: timestamp) }
+            group.addTask { await self.loadRouteAnalyses(timestamp: timestamp) }
+            group.addTask { await self.loadElevation(timestamp: timestamp) }
+        }
+    }
+
+    private func updateModels(from pack: PackMetaResponse) {
+        let models = Array(pack.modelInitTimes.keys).sorted()
+        if !models.isEmpty {
+            availableModels = models
+            if !models.contains(selectedModel) {
+                selectedModel = models.first ?? "gfs"
+            }
         }
     }
 
@@ -107,7 +260,6 @@ final class BriefingViewModel {
         do {
             let response = try await repository.routeAnalyses(flightId: flight.id, timestamp: timestamp)
             routeAnalysesState = .loaded(response)
-            // Update available models from route analyses (authoritative for cross-section)
             if !response.models.isEmpty {
                 let raModels = response.models.sorted()
                 availableModels = raModels

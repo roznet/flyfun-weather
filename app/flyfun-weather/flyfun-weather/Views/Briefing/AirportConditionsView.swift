@@ -53,9 +53,9 @@ private struct AirportConditionCard: View {
 
             ForEach(summary.conditions) { condition in
                 HStack(spacing: 12) {
-                    Text(condition.model.uppercased())
+                    Text(condition.model.shortModelName)
                         .font(.caption.bold())
-                        .frame(width: 50, alignment: .leading)
+                        .frame(width: 60, alignment: .leading)
 
                     FlightCategoryBadge(category: condition.flightCategory)
 

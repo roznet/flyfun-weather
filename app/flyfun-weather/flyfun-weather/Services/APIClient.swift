@@ -55,6 +55,57 @@ actor APIClient {
         }
     }
 
+    /// Stream SSE events from the server.
+    func streamSSE(_ path: String, method: String = "POST") -> AsyncThrowingStream<RefreshEvent, Error> {
+        // Capture actor state before creating the stream
+        let url = baseURL.appendingPathComponent(path)
+        let currentJwt = jwt
+        let currentSession = session
+
+        return AsyncThrowingStream { continuation in
+            Task {
+                var request = URLRequest(url: url)
+                request.httpMethod = method
+                request.setValue("Bearer \(currentJwt)", forHTTPHeaderField: "Authorization")
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.timeoutInterval = 300
+
+                // Local decoder to avoid MainActor-isolated JSONDecoder.weatherBrief
+                let decoder = JSONDecoder()
+                decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+                do {
+                    let (bytes, response) = try await currentSession.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                        continuation.finish(throwing: APIError.serverError(code, "SSE stream failed"))
+                        return
+                    }
+
+                    var buffer = ""
+                    for try await line in bytes.lines {
+                        if line.hasPrefix("data: ") {
+                            buffer = String(line.dropFirst(6))
+                        } else if line.isEmpty && !buffer.isEmpty {
+                            if let data = buffer.data(using: .utf8),
+                               let event = try? decoder.decode(RefreshEvent.self, from: data) {
+                                continuation.yield(event)
+                                if event.type == "complete" || event.type == "error" {
+                                    continuation.finish()
+                                    return
+                                }
+                            }
+                            buffer = ""
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: APIError.networkError(error))
+                }
+            }
+        }
+    }
+
     /// Fetch raw data (for images, file downloads).
     func requestData(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         let url = baseURL.appendingPathComponent(path)

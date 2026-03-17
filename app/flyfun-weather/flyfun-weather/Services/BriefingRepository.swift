@@ -1,8 +1,9 @@
 import Foundation
 
-/// Abstraction over briefing data access. Phase 1 = online only; Phase 2 adds caching.
+/// Abstraction over briefing data access.
 protocol BriefingRepository: Sendable {
     func flights() async throws -> [FlightResponse]
+    func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse
@@ -11,6 +12,8 @@ protocol BriefingRepository: Sendable {
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data
     func grametImage(flightId: String, timestamp: String) async throws -> Data
+    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error>
+    func refreshStatus(flightId: String) async throws -> RefreshStatusResponse
 }
 
 /// Online-only implementation — every call hits the API.
@@ -23,6 +26,10 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func flights() async throws -> [FlightResponse] {
         try await client.request("/api/flights")
+    }
+
+    func packs(flightId: String) async throws -> [PackMetaResponse] {
+        try await client.request("/api/flights/\(flightId)/packs")
     }
 
     func latestPack(flightId: String) async throws -> PackMetaResponse {
@@ -55,5 +62,13 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func grametImage(flightId: String, timestamp: String) async throws -> Data {
         try await client.requestData("/api/flights/\(flightId)/packs/\(timestamp)/gramet.png")
+    }
+
+    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
+        await client.streamSSE("/api/flights/\(flightId)/packs/refresh/stream")
+    }
+
+    func refreshStatus(flightId: String) async throws -> RefreshStatusResponse {
+        try await client.request("/api/flights/\(flightId)/packs/refresh/status")
     }
 }

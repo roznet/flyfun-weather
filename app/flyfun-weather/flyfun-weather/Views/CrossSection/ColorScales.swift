@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Color functions for cross-section layers. Port of web's scales.ts.
-enum ColorScales {
+nonisolated enum ColorScales {
     // MARK: - Icing risk
 
     static func icingRiskColor(_ risk: String) -> Color {
