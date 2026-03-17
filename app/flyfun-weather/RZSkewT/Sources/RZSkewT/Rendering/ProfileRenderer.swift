@@ -32,7 +32,14 @@ public struct ProfileRenderer {
     ) {
         guard parcelPath.count >= 2 else { return }
 
-        // Draw parcel path as dashed black line
+        // Sort environment levels once for all interpolation calls
+        let sortedEnv = environmentLevels.sorted { $0.pressureHPa > $1.pressureHPa }
+
+        // Shade CAPE (parcel warmer than environment) and CIN (parcel cooler)
+        shadeBuoyancy(&context, transform: transform, parcelPath: parcelPath,
+                      sortedEnvironment: sortedEnv)
+
+        // Draw parcel path as dashed black line (on top of shading)
         var path = Path()
         let first = transform.point(tempC: parcelPath[0].tempC, pressureHPa: parcelPath[0].pressureHPa)
         path.move(to: first)
@@ -42,11 +49,6 @@ public struct ProfileRenderer {
         }
         context.stroke(path, with: .color(.black.opacity(0.7)),
                        style: StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
-
-        // Shade CAPE (parcel warmer than environment) and CIN (parcel cooler)
-        let sortedEnv = environmentLevels.sorted { $0.pressureHPa > $1.pressureHPa }
-        shadeBuoyancy(&context, transform: transform, parcelPath: parcelPath,
-                      environment: sortedEnv)
     }
 
     // MARK: - Private
@@ -82,17 +84,16 @@ public struct ProfileRenderer {
         _ context: inout GraphicsContext,
         transform: SkewTTransform,
         parcelPath: [(tempC: Double, pressureHPa: Double)],
-        environment: [SoundingLevel]
+        sortedEnvironment: [SoundingLevel]
     ) {
-        // Build CAPE/CIN shading between parcel and environment curves
         for i in 0..<(parcelPath.count - 1) {
             let p = parcelPath[i].pressureHPa
             let tParcel = parcelPath[i].tempC
-            guard let tEnv = interpolateEnvTemp(at: p, levels: environment) else { continue }
+            guard let tEnv = interpolateEnvTemp(at: p, sortedLevels: sortedEnvironment) else { continue }
 
             let pNext = parcelPath[i + 1].pressureHPa
             let tParcelNext = parcelPath[i + 1].tempC
-            let tEnvNext = interpolateEnvTemp(at: pNext, levels: environment) ?? tEnv
+            let tEnvNext = interpolateEnvTemp(at: pNext, sortedLevels: sortedEnvironment) ?? tEnv
 
             let isPositive = tParcel > tEnv
 
@@ -110,15 +111,16 @@ public struct ProfileRenderer {
         }
     }
 
-    private static func interpolateEnvTemp(at pressureHPa: Double, levels: [SoundingLevel]) -> Double? {
-        for i in 0..<(levels.count - 1) {
-            let pBelow = levels[i].pressureHPa
-            let pAbove = levels[i + 1].pressureHPa
+    /// Interpolate environment temperature from pre-sorted levels (decreasing pressure).
+    private static func interpolateEnvTemp(at pressureHPa: Double, sortedLevels: [SoundingLevel]) -> Double? {
+        for i in 0..<(sortedLevels.count - 1) {
+            let pBelow = sortedLevels[i].pressureHPa
+            let pAbove = sortedLevels[i + 1].pressureHPa
             if pressureHPa <= pBelow && pressureHPa >= pAbove {
                 let frac = log(pBelow / pressureHPa) / log(pBelow / pAbove)
-                return levels[i].temperatureC + frac * (levels[i + 1].temperatureC - levels[i].temperatureC)
+                return sortedLevels[i].temperatureC + frac * (sortedLevels[i + 1].temperatureC - sortedLevels[i].temperatureC)
             }
         }
-        return levels.min(by: { abs($0.pressureHPa - pressureHPa) < abs($1.pressureHPa - pressureHPa) })?.temperatureC
+        return sortedLevels.min(by: { abs($0.pressureHPa - pressureHPa) < abs($1.pressureHPa - pressureHPa) })?.temperatureC
     }
 }
