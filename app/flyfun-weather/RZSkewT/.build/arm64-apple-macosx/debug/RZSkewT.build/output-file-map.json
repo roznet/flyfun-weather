@@ -1,0 +1,68 @@
+{
+  "": {
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/master.swiftdeps"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Models/SkewTConfiguration.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTConfiguration.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTConfiguration.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTConfiguration~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTConfiguration.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTConfiguration.dia"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Models/SoundingProfile.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SoundingProfile.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SoundingProfile.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SoundingProfile~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SoundingProfile.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SoundingProfile.dia"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Rendering/BackgroundLinesRenderer.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/BackgroundLinesRenderer.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/BackgroundLinesRenderer.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/BackgroundLinesRenderer~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/BackgroundLinesRenderer.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/BackgroundLinesRenderer.dia"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Rendering/ProfileRenderer.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/ProfileRenderer.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/ProfileRenderer.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/ProfileRenderer~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/ProfileRenderer.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/ProfileRenderer.dia"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Rendering/SkewTRenderer.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTRenderer.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTRenderer.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTRenderer~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTRenderer.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTRenderer.dia"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Rendering/WindBarbRenderer.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/WindBarbRenderer.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/WindBarbRenderer.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/WindBarbRenderer~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/WindBarbRenderer.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/WindBarbRenderer.dia"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Transform/SkewTTransform.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTTransform.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTTransform.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTTransform~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTTransform.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTTransform.dia"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Transform/Thermodynamics.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/Thermodynamics.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/Thermodynamics.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/Thermodynamics~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/Thermodynamics.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/Thermodynamics.dia"
+  },
+  "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/Sources/RZSkewT/Views/SkewTView.swift": {
+    "dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTView.d",
+    "object": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTView.swift.o",
+    "swiftmodule": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTView~partial.swiftmodule",
+    "swift-dependencies": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTView.swiftdeps",
+    "diagnostics": "/Users/brice/Developer/public/flyfun-weather/main/app/flyfun-weather/RZSkewT/.build/arm64-apple-macosx/debug/RZSkewT.build/SkewTView.dia"
+  }
+}
