@@ -14,7 +14,7 @@ struct BriefingContainerView: View {
                 ProgressView("Loading briefing...")
             }
         }
-        .navigationTitle(flight.routeName)
+        .navigationTitle(flight.shortTitle)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             guard let repo = appState.repository else { return }
