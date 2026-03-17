@@ -73,5 +73,11 @@ Key exports: `compute_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `
 → Full doc: cost-attribution-design.md
 
 ### companion-app
-iOS/iPad companion app design: offline briefing sync, in-flight condition reporting with forecast-driven prompting, PIREP filing, passive data collection, real-time sharing, and forecast verification. SwiftUI, Core Location, SwiftData. Phased roadmap from offline viewer through real-time sharing.
+iOS/iPad companion app: Phase 1 (online viewer) complete, Phase 2 (offline) mostly done. Auth (Apple + Google), NavigationSplitView, advisory dashboard, cross-section Canvas renderer, native Skew-T (RZSkewT package), pack history picker, SSE refresh streaming, offline caching. Phase 3 (PIREPs) not started.
+Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `CrossSectionRenderer`, `SkewTDetailView`
 → Full doc: companion-app.md
+
+### rzskewt
+Swift package for Skew-T log-P diagrams. Local package at `app/flyfun-weather/RZSkewT/` (will be extracted to own repo). Full atmospheric thermodynamics, Canvas rendering, 31 unit tests.
+Key exports: `SkewTView`, `SkewTRenderer`, `SoundingProfile`, `Thermodynamics`
+→ Full doc: ../app/flyfun-weather/RZSkewT/designs/skewt-architecture.md
