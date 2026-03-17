@@ -45,6 +45,9 @@ public struct SkewTRenderer {
         BackgroundLinesRenderer.render(context: &clipped, transform: transform,
                                        lines: backgroundLines, config: config)
 
+        // LCL / LFC / EL marker lines (inside clip)
+        drawLevelMarkers(context: &clipped, transform: transform)
+
         // Parcel path with CAPE/CIN shading
         if !parcelPath.isEmpty {
             ProfileRenderer.renderParcelPath(context: &clipped, transform: transform,
@@ -78,11 +81,24 @@ public struct SkewTRenderer {
         context.stroke(Path(CGRect(x: plot.left, y: plot.top, width: plot.width, height: plot.height)),
                        with: .color(.gray.opacity(0.5)), lineWidth: 0.5)
 
-        // Pressure labels (left axis)
+        // Pressure labels (left axis) + FL labels (right axis)
         for p in transform.visiblePressureLevels {
             let y = transform.pressureToY(p)
-            let label = context.resolve(Text("\(Int(p))").font(.system(size: 9)).foregroundColor(textColor))
-            context.draw(label, at: CGPoint(x: plot.left - 4, y: y), anchor: .trailing)
+
+            // Left: pressure in hPa
+            let pLabel = context.resolve(Text("\(Int(p))").font(.system(size: 9)).foregroundColor(textColor))
+            context.draw(pLabel, at: CGPoint(x: plot.left - 4, y: y), anchor: .trailing)
+
+            // Right: flight level (approximate from standard atmosphere)
+            let altFt = pressureToAltitude(p)
+            let flLabel: String
+            if altFt >= 5000 {
+                flLabel = "FL\(Int(altFt / 100))"
+            } else {
+                flLabel = "\(Int(altFt))'"
+            }
+            let flText = context.resolve(Text(flLabel).font(.system(size: 8)).foregroundColor(.secondary))
+            context.draw(flText, at: CGPoint(x: plot.right + 4, y: y), anchor: .leading)
         }
 
         // Temperature labels (bottom axis)
@@ -94,11 +110,78 @@ public struct SkewTRenderer {
         }
 
         // Axis titles
-        let pLabel = context.resolve(Text("hPa").font(.system(size: 8)).foregroundColor(.secondary))
-        context.draw(pLabel, at: CGPoint(x: plot.left - 4, y: plot.top - 8), anchor: .trailing)
+        let hpaLabel = context.resolve(Text("hPa").font(.system(size: 8)).foregroundColor(.secondary))
+        context.draw(hpaLabel, at: CGPoint(x: plot.left - 4, y: plot.top - 8), anchor: .trailing)
 
-        let tLabel = context.resolve(Text("°C").font(.system(size: 8)).foregroundColor(.secondary))
-        context.draw(tLabel, at: CGPoint(x: plot.right + 4, y: plot.bottom + 4), anchor: .topLeading)
+        let flTitle = context.resolve(Text("FL").font(.system(size: 8)).foregroundColor(.secondary))
+        context.draw(flTitle, at: CGPoint(x: plot.right + 4, y: plot.top - 8), anchor: .leading)
+    }
+
+    // MARK: - LCL / LFC / EL marker lines
+
+    private func drawLevelMarkers(context: inout GraphicsContext, transform: SkewTTransform) {
+        guard let indices = profile.indices else { return }
+        let plot = transform.plotArea
+
+        // LCL
+        if let lcl = indices.lclPressureHPa {
+            drawMarkerLine(context: &context, transform: transform, pressureHPa: lcl,
+                          label: "LCL", color: .orange)
+        }
+
+        // LFC
+        if let lfc = indices.lfcPressureHPa {
+            drawMarkerLine(context: &context, transform: transform, pressureHPa: lfc,
+                          label: "LFC", color: .brown)
+        }
+
+        // EL
+        if let el = indices.elPressureHPa {
+            drawMarkerLine(context: &context, transform: transform, pressureHPa: el,
+                          label: "EL", color: .purple)
+        }
+
+        // Freezing level (from altitude, convert to approximate pressure)
+        if let fzFt = indices.freezingLevelFt {
+            let fzP = altitudeToPressure(fzFt)
+            if fzP >= config.pTop && fzP <= config.pBottom {
+                drawMarkerLine(context: &context, transform: transform, pressureHPa: fzP,
+                              label: "0°C", color: .cyan)
+            }
+        }
+    }
+
+    private func drawMarkerLine(
+        context: inout GraphicsContext,
+        transform: SkewTTransform,
+        pressureHPa: Double,
+        label: String,
+        color: Color
+    ) {
+        let plot = transform.plotArea
+        let y = transform.pressureToY(pressureHPa)
+        guard y >= plot.top && y <= plot.bottom else { return }
+
+        // Dashed horizontal line
+        var path = Path()
+        path.move(to: CGPoint(x: plot.left, y: y))
+        path.addLine(to: CGPoint(x: plot.right, y: y))
+        context.stroke(path, with: .color(color.opacity(0.6)),
+                       style: StrokeStyle(lineWidth: 1.0, dash: [6, 3]))
+
+        // Label pill on the left edge
+        let text = context.resolve(Text(label).font(.system(size: 7, weight: .bold)).foregroundColor(color))
+        let textSize = text.measure(in: CGSize(width: 60, height: 20))
+        let padding: CGFloat = 2
+        let pillRect = CGRect(
+            x: plot.left + 2,
+            y: y - textSize.height / 2 - padding,
+            width: textSize.width + padding * 2,
+            height: textSize.height + padding * 2
+        )
+        context.fill(Path(roundedRect: pillRect, cornerRadius: 2),
+                     with: .color(.white.opacity(0.85)))
+        context.draw(text, at: CGPoint(x: pillRect.midX, y: pillRect.midY), anchor: .center)
     }
 
     // MARK: - Indices panel
@@ -117,9 +200,6 @@ public struct SkewTRenderer {
         if let li = indices.liftedIndex {
             lines.append("LI: \(String(format: "%.1f", li))")
         }
-        if let lcl = indices.lclPressureHPa {
-            lines.append("LCL: \(Int(lcl)) hPa")
-        }
 
         guard !lines.isEmpty else { return }
 
@@ -132,7 +212,7 @@ public struct SkewTRenderer {
         let textSize = text.measure(in: CGSize(width: 200, height: 200))
         let padding: CGFloat = 6
         let boxRect = CGRect(
-            x: plot.left + 4,
+            x: plot.right - textSize.width - padding * 2 - 4,
             y: plot.top + 4,
             width: textSize.width + padding * 2,
             height: textSize.height + padding * 2
@@ -140,5 +220,20 @@ public struct SkewTRenderer {
         context.fill(Path(roundedRect: boxRect, cornerRadius: 4),
                      with: .color(.white.opacity(0.85)))
         context.draw(text, at: CGPoint(x: boxRect.midX, y: boxRect.midY), anchor: .center)
+    }
+
+    // MARK: - Standard atmosphere helpers
+
+    /// Approximate altitude (ft) from pressure using standard atmosphere.
+    private func pressureToAltitude(_ pHPa: Double) -> Double {
+        // Barometric formula: h = 44330 * (1 - (p/1013.25)^0.19026) meters
+        let h_m = 44330.0 * (1.0 - pow(pHPa / 1013.25, 0.19026))
+        return h_m * 3.28084
+    }
+
+    /// Approximate pressure (hPa) from altitude (ft) using standard atmosphere.
+    private func altitudeToPressure(_ altFt: Double) -> Double {
+        let h_m = altFt / 3.28084
+        return 1013.25 * pow(1.0 - h_m / 44330.0, 5.255)
     }
 }
