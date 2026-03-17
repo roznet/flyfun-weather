@@ -21,15 +21,12 @@ struct CrossSectionRenderer {
         )
         context.fill(Path(skyRect), with: .color(ColorScales.skyBlue))
 
-        // Clip to plot area for layer rendering
-        context.clipToLayer { ctx in
-            ctx.clip(to: Path(skyRect))
-
-            // Render layers in order
-            for layer in CrossSectionLayer.allLayers {
-                if enabledLayers[layer.id] ?? false {
-                    layer.render(context: &ctx, transform: transform, data: data)
-                }
+        // Render layers clipped to plot area
+        var clipped = context
+        clipped.clip(to: Path(skyRect))
+        for layer in CrossSectionLayer.allLayers {
+            if enabledLayers[layer.id] ?? false {
+                layer.render(context: &clipped, transform: transform, data: data)
             }
         }
 
