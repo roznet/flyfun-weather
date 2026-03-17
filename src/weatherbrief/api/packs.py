@@ -1634,6 +1634,114 @@ def get_route_skewt(
     return FileResponse(cache_path, media_type="image/png")
 
 
+class SoundingProfileLevel(BaseModel):
+    """A single pressure level in a sounding profile."""
+    pressure_hpa: int
+    altitude_ft: float | None = None
+    temperature_c: float
+    dewpoint_c: float | None = None
+    wind_speed_kt: float | None = None
+    wind_direction_deg: float | None = None
+
+
+class SoundingProfileResponse(BaseModel):
+    """Raw sounding profile data for client-side Skew-T rendering."""
+    point_index: int
+    lat: float
+    lon: float
+    distance_from_origin_nm: float
+    waypoint_icao: str | None = None
+    model: str
+    time: str
+    levels: list[SoundingProfileLevel]
+    cruise_altitude_ft: int | None = None
+    # Overlay data from sounding analysis
+    indices: dict | None = None
+    cloud_layers: list[dict] = Field(default_factory=list)
+    icing_zones: list[dict] = Field(default_factory=list)
+    inversion_layers: list[dict] = Field(default_factory=list)
+
+
+@router.get("/{timestamp}/sounding-profile/{point_index}/{model}")
+def get_sounding_profile(
+    flight_id: str, timestamp: str, point_index: int, model: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get raw sounding profile data (T, Td, wind at pressure levels) for a route point.
+
+    Used by iOS app for client-side Skew-T rendering.
+    """
+    import json
+
+    model = _validate_model(model)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    # Load route analyses for point metadata + sounding analysis
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available")
+    ra_data = json.loads(ra_path.read_text())
+    analyses = ra_data.get("analyses", [])
+    point_data = next((a for a in analyses if a["point_index"] == point_index), None)
+    if point_data is None:
+        raise HTTPException(status_code=404, detail=f"Point index {point_index} not found")
+
+    # Load cross-section for raw pressure level data
+    cs_path = pack_dir / "cross_section.json"
+    if not cs_path.exists():
+        raise HTTPException(status_code=404, detail="Cross-section data not available")
+    cs_data = json.loads(cs_path.read_text())
+    cross_sections = cs_data.get("cross_sections", [])
+    cs_match = next((cs for cs in cross_sections if cs["model"] == model), None)
+    if cs_match is None:
+        raise HTTPException(status_code=404, detail=f"Model {model} not found")
+    if point_index >= len(cs_match["point_forecasts"]):
+        raise HTTPException(status_code=404, detail=f"Point index {point_index} out of range")
+
+    # Extract raw profile at interpolated time
+    from weatherbrief.models import WaypointForecast
+    wf = WaypointForecast.model_validate(cs_match["point_forecasts"][point_index])
+    interp_time = datetime.fromisoformat(point_data["interpolated_time"])
+    hourly = wf.at_time(interp_time)
+    if not hourly or not hourly.pressure_levels:
+        raise HTTPException(status_code=404, detail="No forecast data at this point/time")
+
+    # Convert pressure levels to response format
+    levels = []
+    for pl in sorted(hourly.pressure_levels, key=lambda x: x.pressure_hpa, reverse=True):
+        if pl.temperature_c is None:
+            continue
+        alt_ft = pl.geopotential_height_m * 3.28084 if pl.geopotential_height_m is not None else None
+        levels.append(SoundingProfileLevel(
+            pressure_hpa=pl.pressure_hpa,
+            altitude_ft=alt_ft,
+            temperature_c=pl.temperature_c,
+            dewpoint_c=pl.dewpoint_c,
+            wind_speed_kt=pl.wind_speed_kt,
+            wind_direction_deg=pl.wind_direction_deg,
+        ))
+
+    # Extract overlay data from sounding analysis
+    sounding_data = point_data.get("sounding", {}).get(model, {})
+
+    return SoundingProfileResponse(
+        point_index=point_index,
+        lat=point_data["lat"],
+        lon=point_data["lon"],
+        distance_from_origin_nm=point_data["distance_from_origin_nm"],
+        waypoint_icao=point_data.get("waypoint_icao"),
+        model=model,
+        time=point_data["interpolated_time"],
+        levels=levels,
+        cruise_altitude_ft=ra_data.get("cruise_altitude_ft"),
+        indices=sounding_data.get("indices"),
+        cloud_layers=sounding_data.get("cloud_layers", []),
+        icing_zones=sounding_data.get("icing_zones", []),
+        inversion_layers=sounding_data.get("inversion_layers", []),
+    )
+
+
 @router.get("/{timestamp}/hodograph/route/{point_index}/{model}")
 def get_route_hodograph(
     flight_id: str, timestamp: str, point_index: int, model: str,

@@ -12,6 +12,7 @@ protocol BriefingRepository: Sendable {
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data
     func grametImage(flightId: String, timestamp: String) async throws -> Data
+    func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error>
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse
 }
@@ -62,6 +63,10 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func grametImage(flightId: String, timestamp: String) async throws -> Data {
         try await client.requestData("/api/flights/\(flightId)/packs/\(timestamp)/gramet.png")
+    }
+
+    func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse {
+        try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/sounding-profile/\(pointIndex)/\(model)")
     }
 
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {

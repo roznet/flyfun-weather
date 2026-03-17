@@ -77,6 +77,10 @@ final class CachingBriefingRepository: BriefingRepository {
         try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: "elevation")
     }
 
+    func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse {
+        try await online.soundingProfile(flightId: flightId, timestamp: timestamp, pointIndex: pointIndex, model: model)
+    }
+
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data {
         try await online.skewtImage(flightId: flightId, timestamp: timestamp, icao: icao, model: model)
     }

@@ -114,6 +114,19 @@ final class BriefingViewModel {
         return prefix
     }
 
+    // MARK: - Sounding profile
+
+    /// Fetch raw sounding profile for a route point (for Skew-T rendering).
+    func fetchSoundingProfile(pointIndex: Int) async throws -> SoundingProfileResponse {
+        guard let pack else { throw APIError.notFound }
+        return try await repository.soundingProfile(
+            flightId: flight.id,
+            timestamp: pack.fetchTimestamp,
+            pointIndex: pointIndex,
+            model: selectedModel
+        )
+    }
+
     // MARK: - Download / Cache
 
     /// Check which packs in history are cached.
