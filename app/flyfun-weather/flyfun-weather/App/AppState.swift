@@ -68,9 +68,16 @@ final class AppState {
 
     // MARK: - Private
 
+    /// Typed accessor for cache operations (download/delete).
+    var cachingRepository: CachingBriefingRepository? {
+        repository as? CachingBriefingRepository
+    }
+
     private func setupClient(jwt: String) {
         let client = APIClient(baseURL: Self.defaultBaseURL, jwt: jwt)
         apiClient = client
-        repository = OnlineBriefingRepository(client: client)
+        let online = OnlineBriefingRepository(client: client)
+        let cache = BriefingCacheStore()
+        repository = CachingBriefingRepository(client: client, online: online, cache: cache)
     }
 }
