@@ -84,14 +84,15 @@ public enum Thermodynamics {
 
     // MARK: - Moist adiabat curves
 
-    /// Moist adiabatic lapse rate: dT/dp for saturated ascent.
+    /// Moist adiabatic lapse rate dT/dp (K/hPa) for saturated ascent.
+    /// Derived from the first law of thermodynamics for a saturated parcel.
+    /// All inputs and output in hPa (no Pa conversion needed).
     private static func moistLapseRate(tempC: Double, pressureHPa: Double) -> Double {
         let T = tempC + 273.15
         let ws = saturationMixingRatio(tempC: tempC, pressureHPa: pressureHPa)
-        let numerator = (Rd * T + Lv * ws)
-        let denominator = (cp + Lv * Lv * ws * epsilon / (Rd * T * T))
-        // dT/dp in K/hPa (convert pressure from hPa to Pa: *100)
-        return numerator / (denominator * pressureHPa * 100.0) * 100.0
+        let numerator = Rd * T + Lv * ws
+        let denominator = cp + Lv * Lv * ws * epsilon / (Rd * T * T)
+        return numerator / (denominator * pressureHPa)
     }
 
     /// Generate moist (saturated) adiabat curves by integrating the moist lapse rate.
@@ -160,25 +161,40 @@ public enum Thermodynamics {
 
     // MARK: - Parcel analysis (CAPE/CIN)
 
-    /// LCL pressure and temperature by iterative lifting.
+    /// LCL pressure and temperature by iterative lifting with linear interpolation at the crossing.
     public static func liftingCondensationLevel(tempC: Double, dewpointC: Double, pressureHPa: Double) -> (pressureHPa: Double, tempC: Double)? {
         let theta = potentialTemperature(tempC: tempC, pressureHPa: pressureHPa)
         let w = saturationMixingRatio(tempC: dewpointC, pressureHPa: pressureHPa)
+        let dpStep: Double = 5
 
-        // Lift dry-adiabatically until saturation
+        // Lift dry-adiabatically until saturation, interpolate the crossing
         var p = pressureHPa
+        var prevDiff: Double? = nil
+        var prevP = p
         while p >= 100 {
             let tParcel = dryAdiabatTemperature(theta: theta, pressureHPa: p)
             let tdParcel = dewpointFromMixingRatio(w: w, pressureHPa: p)
-            if tParcel <= tdParcel {
+            let diff = tParcel - tdParcel // positive = unsaturated
+
+            if diff <= 0 {
+                // Crossed saturation — interpolate between previous and current level
+                if let pd = prevDiff, pd > 0 {
+                    let frac = pd / (pd - diff) // linear interpolation
+                    let lclP = prevP - frac * dpStep
+                    let lclT = dryAdiabatTemperature(theta: theta, pressureHPa: lclP)
+                    return (lclP, lclT)
+                }
                 return (p, tParcel)
             }
-            p -= 5
+            prevDiff = diff
+            prevP = p
+            p -= dpStep
         }
         return nil
     }
 
     /// Compute the parcel path from the surface through LCL and up to EL.
+    /// Uses `liftingCondensationLevel` for consistent LCL detection.
     /// Returns array of (tempC, pressureHPa) for the lifted parcel.
     public static func parcelPath(
         surfaceTempC: Double,
@@ -187,31 +203,37 @@ public enum Thermodynamics {
         topPressureHPa: Double = 200
     ) -> [(tempC: Double, pressureHPa: Double)] {
         let theta = potentialTemperature(tempC: surfaceTempC, pressureHPa: surfacePressureHPa)
-        let w = saturationMixingRatio(tempC: surfaceDewpointC, pressureHPa: surfacePressureHPa)
         let dpStep: Double = 5
+
+        // Find LCL using the shared function for consistency
+        let lcl = liftingCondensationLevel(tempC: surfaceTempC, dewpointC: surfaceDewpointC, pressureHPa: surfacePressureHPa)
+        let lclPressure = lcl?.pressureHPa ?? 100 // if no LCL, stay dry all the way
 
         var path: [(Double, Double)] = []
         var p = surfacePressureHPa
-        var reachedLCL = false
         var tParcel = surfaceTempC
 
         while p >= topPressureHPa {
-            if !reachedLCL {
-                // Dry adiabatic ascent
+            if p > lclPressure {
+                // Dry adiabatic ascent (above LCL pressure = below LCL altitude)
                 tParcel = dryAdiabatTemperature(theta: theta, pressureHPa: p)
-                let tdParcel = dewpointFromMixingRatio(w: w, pressureHPa: p)
                 path.append((tParcel, p))
-                if tParcel <= tdParcel {
-                    reachedLCL = true
-                }
             } else {
                 // Moist adiabatic ascent (RK2)
-                let dt1 = moistLapseRate(tempC: tParcel, pressureHPa: p) * (-dpStep)
-                let tMid = tParcel + dt1 / 2
-                let pMid = p - dpStep / 2
-                let dt2 = moistLapseRate(tempC: tMid, pressureHPa: pMid) * (-dpStep)
-                tParcel += dt2
-                path.append((tParcel, p))
+                if path.isEmpty || p == lclPressure {
+                    // First moist point — use LCL temperature for continuity
+                    if let lcl {
+                        tParcel = lcl.tempC
+                    }
+                    path.append((tParcel, p))
+                } else {
+                    let dt1 = moistLapseRate(tempC: tParcel, pressureHPa: p) * (-dpStep)
+                    let tMid = tParcel + dt1 / 2
+                    let pMid = p - dpStep / 2
+                    let dt2 = moistLapseRate(tempC: tMid, pressureHPa: pMid) * (-dpStep)
+                    tParcel += dt2
+                    path.append((tParcel, p))
+                }
             }
             p -= dpStep
             if tParcel < -100 { break }
@@ -220,7 +242,7 @@ public enum Thermodynamics {
     }
 
     /// Compute CAPE and CIN from environment profile and parcel path.
-    /// Returns (cape, cin) in J/kg.
+    /// Returns (cape, cin) in J/kg. Uses trapezoidal integration for accuracy.
     public static func computeCAPECIN(
         environmentLevels: [SoundingLevel],
         parcelPath: [(tempC: Double, pressureHPa: Double)]
@@ -229,46 +251,58 @@ public enum Thermodynamics {
             return (0, 0)
         }
 
+        // Sort environment levels once (decreasing pressure = surface to top)
+        let sortedEnv = environmentLevels.sorted { $0.pressureHPa > $1.pressureHPa }
+
         var cape: Double = 0
         var cin: Double = 0
 
         for i in 0..<(parcelPath.count - 1) {
             let (tParcel, pParcel) = parcelPath[i]
-            let pNext = parcelPath[i + 1].pressureHPa
+            let (tParcelNext, pNext) = parcelPath[i + 1]
 
-            // Interpolate environment temperature at this pressure
-            guard let tEnv = interpolateEnvironment(at: pParcel, levels: environmentLevels) else { continue }
+            guard let tEnv = interpolateEnvironment(at: pParcel, sortedLevels: sortedEnv),
+                  let tEnvNext = interpolateEnvironment(at: pNext, sortedLevels: sortedEnv)
+            else { continue }
 
+            // Trapezoidal buoyancy: average of start and end of layer
             let tParcelK = tParcel + 273.15
             let tEnvK = tEnv + 273.15
-            let buoyancy = (tParcelK - tEnvK) / tEnvK
+            let buoyancy1 = (tParcelK - tEnvK) / tEnvK
+
+            let tParcelNextK = tParcelNext + 273.15
+            let tEnvNextK = tEnvNext + 273.15
+            let buoyancy2 = (tParcelNextK - tEnvNextK) / tEnvNextK
+
+            let avgBuoyancy = (buoyancy1 + buoyancy2) / 2.0
 
             // Layer thickness in meters (hypsometric)
-            let dz = Rd * tEnvK / 9.81 * log(pParcel / pNext)
+            let avgTenvK = (tEnvK + tEnvNextK) / 2.0
+            let dz = Rd * avgTenvK / 9.81 * log(pParcel / pNext)
 
-            if buoyancy > 0 {
-                cape += buoyancy * 9.81 * dz
+            if avgBuoyancy > 0 {
+                cape += avgBuoyancy * 9.81 * dz
             } else {
-                cin += buoyancy * 9.81 * dz
+                cin += avgBuoyancy * 9.81 * dz
             }
         }
 
         return (cape, cin)
     }
 
-    private static func interpolateEnvironment(at pressureHPa: Double, levels: [SoundingLevel]) -> Double? {
-        // Find surrounding levels (sorted by decreasing pressure)
-        let sorted = levels.sorted { $0.pressureHPa > $1.pressureHPa }
-        for i in 0..<(sorted.count - 1) {
-            let pAbove = sorted[i + 1].pressureHPa
-            let pBelow = sorted[i].pressureHPa
+    /// Interpolate environment temperature at a given pressure from pre-sorted levels.
+    /// Levels must be sorted by decreasing pressure (surface first).
+    private static func interpolateEnvironment(at pressureHPa: Double, sortedLevels: [SoundingLevel]) -> Double? {
+        for i in 0..<(sortedLevels.count - 1) {
+            let pBelow = sortedLevels[i].pressureHPa
+            let pAbove = sortedLevels[i + 1].pressureHPa
             if pressureHPa <= pBelow && pressureHPa >= pAbove {
                 let logFrac = log(pBelow / pressureHPa) / log(pBelow / pAbove)
-                return sorted[i].temperatureC + logFrac * (sorted[i + 1].temperatureC - sorted[i].temperatureC)
+                return sortedLevels[i].temperatureC + logFrac * (sortedLevels[i + 1].temperatureC - sortedLevels[i].temperatureC)
             }
         }
         // Extrapolate from nearest level
-        if let closest = sorted.min(by: { abs($0.pressureHPa - pressureHPa) < abs($1.pressureHPa - pressureHPa) }) {
+        if let closest = sortedLevels.min(by: { abs($0.pressureHPa - pressureHPa) < abs($1.pressureHPa - pressureHPa) }) {
             return closest.temperatureC
         }
         return nil
