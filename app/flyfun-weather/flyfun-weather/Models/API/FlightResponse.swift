@@ -21,4 +21,12 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     var departureDate: Date? {
         ISO8601DateFormatter().date(from: departureTime)
     }
+
+    /// Short title: "ORIGIN → DEST" from waypoints.
+    var shortTitle: String {
+        guard let origin = waypoints.first, let dest = waypoints.last, origin != dest else {
+            return routeName
+        }
+        return "\(origin.uppercased()) → \(dest.uppercased())"
+    }
 }

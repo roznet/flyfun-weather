@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// Main screen showing the user's saved flights.
+/// Main screen showing the user's saved flights with sidebar/detail split on iPad.
 struct FlightListView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel: FlightListViewModel?
+    @State private var selectedFlight: FlightResponse?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
-        NavigationStack {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             Group {
                 if let viewModel {
                     LoadingStateView(state: viewModel.state, retryAction: viewModel.loadFlights) { flights in
@@ -17,7 +19,7 @@ struct FlightListView: View {
                                 description: Text("Create a flight on weather.flyfun.aero to see it here.")
                             )
                         } else {
-                            List(flights) { flight in
+                            List(flights, selection: $selectedFlight) { flight in
                                 NavigationLink(value: flight) {
                                     FlightCardView(flight: flight)
                                 }
@@ -39,8 +41,13 @@ struct FlightListView: View {
                     }
                 }
             }
-            .navigationDestination(for: FlightResponse.self) { flight in
-                BriefingContainerView(flight: flight)
+        } detail: {
+            if let selectedFlight {
+                BriefingContainerView(flight: selectedFlight)
+                    .id(selectedFlight.id)
+            } else {
+                ContentUnavailableView("Select a Flight", systemImage: "airplane",
+                                       description: Text("Choose a flight from the list to view its briefing."))
             }
         }
         .task {

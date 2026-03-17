@@ -7,7 +7,7 @@ struct FlightCardView: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(flight.routeName)
+                Text(flight.shortTitle)
                     .font(.headline)
 
                 Text(flight.waypoints.joined(separator: " - "))
