@@ -1,4 +1,7 @@
+import OSLog
 import SwiftUI
+
+private let logger = Logger(subsystem: "aero.flyfun.weather", category: "CrossSection")
 
 /// SwiftUI Canvas wrapper for the cross-section visualization.
 struct CrossSectionView: View {
@@ -22,6 +25,9 @@ struct CrossSectionView: View {
         .onChange(of: viewModel.routeAnalysesState.isLoaded) {
             updateVizData()
         }
+        .onChange(of: viewModel.elevationState.isLoaded) {
+            updateVizData()
+        }
         .task {
             updateVizData()
         }
@@ -38,15 +44,16 @@ struct CrossSectionView: View {
             .aspectRatio(2.0, contentMode: .fit)
         } else {
             switch viewModel.routeAnalysesState {
-            case .loading:
+            case .idle, .loading:
                 ProgressView("Loading cross-section...")
                     .frame(minHeight: 300)
             case .error(let error):
                 ContentUnavailableView("Cross-Section Unavailable", systemImage: "chart.xyaxis.line",
                                        description: Text(error.localizedDescription))
-            default:
-                ProgressView()
-                    .frame(minHeight: 300)
+            case .loaded:
+                // Data loaded but vizData is nil — extraction produced no points
+                ContentUnavailableView("No Data for Model", systemImage: "chart.xyaxis.line",
+                                       description: Text("No cross-section data available for \(viewModel.selectedModel). Try selecting a different model."))
             }
         }
     }
@@ -85,11 +92,25 @@ struct CrossSectionView: View {
     }
 
     private func updateVizData() {
-        guard case .loaded(let analyses) = viewModel.routeAnalysesState else { return }
-        var elevation: ElevationResponse? = nil
-        if case .loaded(let elev) = viewModel.elevationState {
-            elevation = elev
+        switch viewModel.routeAnalysesState {
+        case .idle:
+            logger.debug("updateVizData: routeAnalysesState is idle")
+        case .loading:
+            logger.debug("updateVizData: routeAnalysesState is loading")
+        case .error(let error):
+            logger.error("updateVizData: routeAnalysesState error: \(error)")
+        case .loaded(let analyses):
+            logger.info("updateVizData: loaded \(analyses.analyses.count) points, model=\(viewModel.selectedModel), models=\(analyses.models)")
+            var elevation: ElevationResponse? = nil
+            if case .loaded(let elev) = viewModel.elevationState {
+                elevation = elev
+            }
+            csVM.update(routeAnalyses: analyses, elevation: elevation, model: viewModel.selectedModel)
+            if let viz = csVM.vizData {
+                logger.info("vizData: \(viz.points.count) points, \(viz.totalDistanceNm)nm, ceiling=\(viz.flightCeilingFt)ft")
+            } else {
+                logger.warning("vizData is nil after update")
+            }
         }
-        csVM.update(routeAnalyses: analyses, elevation: elevation, model: viewModel.selectedModel)
     }
 }

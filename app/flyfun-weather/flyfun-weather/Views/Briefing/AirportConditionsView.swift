@@ -3,16 +3,27 @@ import SwiftUI
 /// Departure/arrival airport conditions from advisories response.
 struct AirportConditionsView: View {
     let viewModel: BriefingViewModel
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         switch viewModel.advisoriesState {
         case .loaded(let response):
             if let conditions = response.airportConditions {
-                VStack(spacing: 12) {
+                let cards = Group {
                     AirportConditionCard(title: "Departure", summary: conditions.departure)
                     AirportConditionCard(title: "Arrival", summary: conditions.arrival)
                 }
-                .padding(.horizontal)
+                if sizeClass == .regular {
+                    HStack(alignment: .top, spacing: 12) {
+                        cards
+                    }
+                    .padding(.horizontal)
+                } else {
+                    VStack(spacing: 12) {
+                        cards
+                    }
+                    .padding(.horizontal)
+                }
             }
         default:
             EmptyView()

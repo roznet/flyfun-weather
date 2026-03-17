@@ -105,7 +105,17 @@ final class BriefingViewModel {
     private func loadRouteAnalyses(timestamp: String) async {
         routeAnalysesState = .loading
         do {
-            routeAnalysesState = .loaded(try await repository.routeAnalyses(flightId: flight.id, timestamp: timestamp))
+            let response = try await repository.routeAnalyses(flightId: flight.id, timestamp: timestamp)
+            routeAnalysesState = .loaded(response)
+            // Update available models from route analyses (authoritative for cross-section)
+            if !response.models.isEmpty {
+                let raModels = response.models.sorted()
+                availableModels = raModels
+                if !raModels.contains(selectedModel) {
+                    selectedModel = raModels.first ?? selectedModel
+                    Self.logger.info("Switched model to \(self.selectedModel) (previous not in route analyses)")
+                }
+            }
         } catch {
             routeAnalysesState = .error(error)
             Self.logger.error("Failed to load route analyses: \(error)")

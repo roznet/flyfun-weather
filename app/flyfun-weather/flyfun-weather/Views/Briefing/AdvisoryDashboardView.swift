@@ -3,6 +3,7 @@ import SwiftUI
 /// Dashboard showing advisory cards sorted by severity.
 struct AdvisoryDashboardView: View {
     let viewModel: BriefingViewModel
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         ScrollView {
@@ -31,6 +32,14 @@ struct AdvisoryDashboardView: View {
         }
     }
 
+    private var gridColumns: [GridItem] {
+        if sizeClass == .regular {
+            Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
+        } else {
+            [GridItem(.flexible())]
+        }
+    }
+
     @ViewBuilder
     private var advisoryContent: some View {
         switch viewModel.advisoriesState {
@@ -39,10 +48,12 @@ struct AdvisoryDashboardView: View {
                 .padding()
         case .loaded(let response):
             let sorted = response.advisories.sorted { severityOrder($0.aggregateStatus) > severityOrder($1.aggregateStatus) }
-            ForEach(sorted) { advisory in
-                AdvisoryCardView(advisory: advisory, catalog: response.catalog)
-                    .padding(.horizontal)
+            LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 12) {
+                ForEach(sorted) { advisory in
+                    AdvisoryCardView(advisory: advisory, catalog: response.catalog)
+                }
             }
+            .padding(.horizontal)
         case .error(let error):
             ContentUnavailableView("Advisories Unavailable", systemImage: "exclamationmark.triangle", description: Text(error.localizedDescription))
         }
@@ -55,6 +66,25 @@ struct AdvisoryDashboardView: View {
         case "green": 1
         default: 0
         }
+    }
+}
+
+/// Model name inside a colored status bubble.
+private struct ModelStatusBadge: View {
+    let model: String
+    let status: String
+
+    private var color: Color {
+        (Assessment(rawValue: status.lowercased()) ?? .unavailable).color
+    }
+
+    var body: some View {
+        Text(model.uppercased())
+            .font(.caption2.bold())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color, in: Capsule())
     }
 }
 
@@ -91,13 +121,10 @@ private struct AdvisoryCardView: View {
 
             // Per-model badges
             if !advisory.perModel.isEmpty {
-                HStack(spacing: 6) {
+                let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: min(advisory.perModel.count, 4))
+                LazyVGrid(columns: columns, spacing: 4) {
                     ForEach(advisory.perModel) { modelResult in
-                        HStack(spacing: 3) {
-                            Text(modelResult.model.uppercased())
-                                .font(.caption2)
-                            AssessmentStringBadge(status: modelResult.status)
-                        }
+                        ModelStatusBadge(model: modelResult.model, status: modelResult.status)
                     }
                 }
             }
