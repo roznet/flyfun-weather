@@ -30,7 +30,7 @@ public struct SkewTConfiguration: Sendable {
         public let top: CGFloat
         public let bottom: CGFloat
 
-        public static let `default` = Margins(left: 50, right: 60, top: 20, bottom: 30)
+        public static let `default` = Margins(left: 40, right: 70, top: 20, bottom: 25)
 
         public init(left: CGFloat, right: CGFloat, top: CGFloat, bottom: CGFloat) {
             self.left = left

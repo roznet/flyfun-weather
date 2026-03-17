@@ -12,19 +12,22 @@ public struct BackgroundLines: Sendable {
     public static func compute(config: SkewTConfiguration) -> BackgroundLines {
         // Isotherms: every 10°C
         var isotherms: [[(Double, Double)]] = []
-        for t in stride(from: -80.0, through: 50.0, by: 10.0) {
+        for t in stride(from: -80.0, through: 60.0, by: 10.0) {
             isotherms.append([
                 (t, config.pBottom),
                 (t, config.pTop),
             ])
         }
 
+        // Dry adiabats: every 20K (MetPy-like density)
         let dryAdiabats = Thermodynamics.dryAdiabats(
-            thetaRange: 250...450, thetaStep: 10,
+            thetaRange: 250...450, thetaStep: 20,
             pRange: config.pTop...config.pBottom
         )
 
+        // Moist adiabats: every 5°C (MetPy-like density)
         let moistAdiabats = Thermodynamics.moistAdiabats(
+            startTemps: Array(stride(from: -30.0, through: 35.0, by: 5.0)),
             pRange: config.pTop...config.pBottom
         )
 
@@ -55,14 +58,12 @@ public struct BackgroundLinesRenderer {
         lines: BackgroundLines,
         config: SkewTConfiguration
     ) {
-        let plot = transform.plotArea
-
         // Isobars (horizontal lines at standard pressure levels)
         for p in lines.isobars {
             let y = transform.pressureToY(p)
             var path = Path()
-            path.move(to: CGPoint(x: plot.left, y: y))
-            path.addLine(to: CGPoint(x: plot.right, y: y))
+            path.move(to: CGPoint(x: transform.plotArea.left, y: y))
+            path.addLine(to: CGPoint(x: transform.plotArea.right, y: y))
             context.stroke(path, with: .color(config.isothermColor), lineWidth: config.gridLineWidth)
         }
 
@@ -71,6 +72,11 @@ public struct BackgroundLinesRenderer {
             drawCurve(&context, transform: transform, points: isotherm,
                       color: config.isothermColor, lineWidth: config.gridLineWidth)
         }
+
+        // 0°C isotherm — prominent cyan line
+        let zeroIsotherm = [(0.0, config.pBottom), (0.0, config.pTop)]
+        drawCurve(&context, transform: transform, points: zeroIsotherm,
+                  color: .cyan.opacity(0.6), lineWidth: 1.5)
 
         // Dry adiabats
         for adiabat in lines.dryAdiabats {
@@ -85,20 +91,25 @@ public struct BackgroundLinesRenderer {
                       dash: [4, 4])
         }
 
-        // Mixing ratio lines
+        // Mixing ratio lines with labels
         for line in lines.mixingRatioLines {
             drawCurve(&context, transform: transform, points: line.points,
                       color: config.mixingRatioColor, lineWidth: config.gridLineWidth,
                       dash: [2, 4])
-        }
 
-        // Highlight 0°C isotherm
-        let zeroIsotherm = [(0.0, config.pBottom), (0.0, config.pTop)]
-        drawCurve(&context, transform: transform, points: zeroIsotherm,
-                  color: .cyan.opacity(0.5), lineWidth: 1.0)
+            // Label at the bottom of the line
+            if let bottom = line.points.last {
+                let pt = transform.point(tempC: bottom.tempC, pressureHPa: bottom.pressureHPa)
+                let labelStr = line.w < 1 ? String(format: "%.1f", line.w) : "\(Int(line.w))"
+                let label = context.resolve(
+                    Text(labelStr).font(.system(size: 7)).foregroundColor(config.mixingRatioColor.opacity(2))
+                )
+                context.draw(label, at: CGPoint(x: pt.x, y: pt.y + 2), anchor: .top)
+            }
+        }
     }
 
-    private static func drawCurve(
+    static func drawCurve(
         _ context: inout GraphicsContext,
         transform: SkewTTransform,
         points: [(tempC: Double, pressureHPa: Double)],
