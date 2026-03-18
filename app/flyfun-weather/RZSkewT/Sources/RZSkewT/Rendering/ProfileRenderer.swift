@@ -26,7 +26,7 @@ public struct ProfileRenderer {
     public static func renderParcelPath(
         context: inout GraphicsContext,
         transform: SkewTTransform,
-        parcelPath: [(tempC: Double, pressureHPa: Double)],
+        parcelPath: [AtmosphericPoint],
         environmentLevels: [SoundingLevel],
         config: SkewTConfiguration
     ) {
@@ -83,17 +83,17 @@ public struct ProfileRenderer {
     private static func shadeBuoyancy(
         _ context: inout GraphicsContext,
         transform: SkewTTransform,
-        parcelPath: [(tempC: Double, pressureHPa: Double)],
+        parcelPath: [AtmosphericPoint],
         sortedEnvironment: [SoundingLevel]
     ) {
         for i in 0..<(parcelPath.count - 1) {
             let p = parcelPath[i].pressureHPa
             let tParcel = parcelPath[i].tempC
-            guard let tEnv = interpolateEnvTemp(at: p, sortedLevels: sortedEnvironment) else { continue }
+            guard let tEnv = Thermodynamics.interpolateEnvironment(at: p, sortedLevels: sortedEnvironment) else { continue }
 
             let pNext = parcelPath[i + 1].pressureHPa
             let tParcelNext = parcelPath[i + 1].tempC
-            let tEnvNext = interpolateEnvTemp(at: pNext, sortedLevels: sortedEnvironment) ?? tEnv
+            let tEnvNext = Thermodynamics.interpolateEnvironment(at: pNext, sortedLevels: sortedEnvironment) ?? tEnv
 
             let isPositive = tParcel > tEnv
 
@@ -109,18 +109,5 @@ public struct ProfileRenderer {
                 : .blue.opacity(0.12)  // CIN
             context.fill(region, with: .color(color))
         }
-    }
-
-    /// Interpolate environment temperature from pre-sorted levels (decreasing pressure).
-    private static func interpolateEnvTemp(at pressureHPa: Double, sortedLevels: [SoundingLevel]) -> Double? {
-        for i in 0..<(sortedLevels.count - 1) {
-            let pBelow = sortedLevels[i].pressureHPa
-            let pAbove = sortedLevels[i + 1].pressureHPa
-            if pressureHPa <= pBelow && pressureHPa >= pAbove {
-                let frac = log(pBelow / pressureHPa) / log(pBelow / pAbove)
-                return sortedLevels[i].temperatureC + frac * (sortedLevels[i + 1].temperatureC - sortedLevels[i].temperatureC)
-            }
-        }
-        return sortedLevels.min(by: { abs($0.pressureHPa - pressureHPa) < abs($1.pressureHPa - pressureHPa) })?.temperatureC
     }
 }

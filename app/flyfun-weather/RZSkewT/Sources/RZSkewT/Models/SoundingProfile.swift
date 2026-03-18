@@ -1,7 +1,42 @@
 import Foundation
 
+// MARK: - Atmospheric data point
+
+/// A point in temperature-pressure space on a Skew-T diagram.
+public struct AtmosphericPoint: Sendable, Equatable, Hashable, Codable {
+    public let tempC: Double
+    public let pressureHPa: Double
+
+    public init(tempC: Double, pressureHPa: Double) {
+        self.tempC = tempC
+        self.pressureHPa = pressureHPa
+    }
+}
+
+// MARK: - Computation result types
+
+/// Result of a Lifting Condensation Level computation.
+public struct LCLResult: Sendable, Equatable, Hashable {
+    public let pressureHPa: Double
+    public let tempC: Double
+}
+
+/// Result of CAPE and CIN computation (J/kg).
+public struct CAPECINResult: Sendable, Equatable, Hashable {
+    public let cape: Double
+    public let cin: Double
+}
+
+/// A constant-mixing-ratio line with its value (g/kg) and curve points.
+public struct MixingRatioLine: Sendable, Equatable, Hashable {
+    public let mixingRatioGkg: Double
+    public let points: [AtmosphericPoint]
+}
+
+// MARK: - Sounding data
+
 /// A single pressure level in a sounding profile.
-public struct SoundingLevel: Sendable {
+public struct SoundingLevel: Sendable, Equatable, Hashable, Codable {
     public let pressureHPa: Double
     public let altitudeFt: Double?
     public let temperatureC: Double
@@ -27,7 +62,7 @@ public struct SoundingLevel: Sendable {
 }
 
 /// Complete sounding data for a Skew-T plot.
-public struct SoundingProfile: Sendable {
+public struct SoundingProfile: Sendable, Equatable, Hashable, Codable {
     public let levels: [SoundingLevel]
     public let indices: SkewTIndices?
     public let overlays: SkewTOverlays
@@ -40,7 +75,7 @@ public struct SoundingProfile: Sendable {
 }
 
 /// Thermodynamic indices for annotation.
-public struct SkewTIndices: Sendable {
+public struct SkewTIndices: Sendable, Equatable, Hashable, Codable {
     public let lclPressureHPa: Double?
     public let lfcPressureHPa: Double?
     public let elPressureHPa: Double?
@@ -69,7 +104,7 @@ public struct SkewTIndices: Sendable {
 }
 
 /// Overlay data to draw on the Skew-T (cloud/icing/inversion bands).
-public struct SkewTOverlays: Sendable {
+public struct SkewTOverlays: Sendable, Equatable, Hashable, Codable {
     public let cloudLayers: [OverlayBand]
     public let icingZones: [OverlayBand]
     public let inversions: [InversionBand]
@@ -85,10 +120,11 @@ public struct SkewTOverlays: Sendable {
     }
 }
 
-public struct OverlayBand: Sendable {
+/// A vertical band (e.g. cloud layer or icing zone) defined by altitude.
+public struct OverlayBand: Sendable, Equatable, Hashable, Codable {
     public let baseFt: Double
     public let topFt: Double
-    public let label: String // coverage or risk level
+    public let label: String
 
     public init(baseFt: Double, topFt: Double, label: String) {
         self.baseFt = baseFt
@@ -97,7 +133,8 @@ public struct OverlayBand: Sendable {
     }
 }
 
-public struct InversionBand: Sendable {
+/// A temperature inversion band defined by altitude and strength.
+public struct InversionBand: Sendable, Equatable, Hashable, Codable {
     public let baseFt: Double
     public let topFt: Double
     public let strengthC: Double

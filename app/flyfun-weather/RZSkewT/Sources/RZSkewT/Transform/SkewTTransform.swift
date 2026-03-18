@@ -23,6 +23,7 @@ public struct SkewTTransform: Sendable {
     }
 
     public init(size: CGSize, config: SkewTConfiguration = .default) {
+        precondition(size.width > 0 && size.height > 0, "SkewTTransform requires positive dimensions")
         self.config = config
         self.plotArea = PlotArea(
             left: config.margins.left,
@@ -40,7 +41,7 @@ public struct SkewTTransform: Sendable {
     // MARK: - Forward transforms
 
     /// Convert pressure (hPa) to Y pixel coordinate.
-    /// Higher pressure (bottom of atmosphere) → bottom of plot; lower pressure → top.
+    /// Higher pressure (bottom of atmosphere) maps to bottom of plot; lower pressure maps to top.
     public func pressureToY(_ p: Double) -> CGFloat {
         let fraction = (logPBottom - log(p)) / logRange
         return plotArea.bottom - CGFloat(fraction) * plotArea.height
