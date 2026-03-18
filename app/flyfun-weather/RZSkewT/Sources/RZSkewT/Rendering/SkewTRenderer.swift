@@ -7,7 +7,7 @@ public struct SkewTRenderer {
     public let backgroundLines: BackgroundLines
 
     /// Precomputed parcel path (from surface level).
-    public let parcelPath: [(tempC: Double, pressureHPa: Double)]
+    public let parcelPath: [AtmosphericPoint]
 
     public init(profile: SoundingProfile, config: SkewTConfiguration = .default) {
         self.profile = profile
@@ -90,7 +90,7 @@ public struct SkewTRenderer {
             context.draw(pLabel, at: CGPoint(x: plot.left - 4, y: y), anchor: .trailing)
 
             // Right: flight level (approximate from standard atmosphere)
-            let altFt = pressureToAltitude(p)
+            let altFt = Thermodynamics.pressureToAltitude(p)
             let flLabel: String
             if altFt >= 5000 {
                 flLabel = "FL\(Int(altFt / 100))"
@@ -121,7 +121,6 @@ public struct SkewTRenderer {
 
     private func drawLevelMarkers(context: inout GraphicsContext, transform: SkewTTransform) {
         guard let indices = profile.indices else { return }
-        let plot = transform.plotArea
 
         // LCL
         if let lcl = indices.lclPressureHPa {
@@ -143,7 +142,7 @@ public struct SkewTRenderer {
 
         // Freezing level (from altitude, convert to approximate pressure)
         if let fzFt = indices.freezingLevelFt {
-            let fzP = altitudeToPressure(fzFt)
+            let fzP = Thermodynamics.altitudeToPressure(fzFt)
             if fzP >= config.pTop && fzP <= config.pBottom {
                 drawMarkerLine(context: &context, transform: transform, pressureHPa: fzP,
                               label: "0°C", color: .cyan)
@@ -180,7 +179,7 @@ public struct SkewTRenderer {
             height: textSize.height + padding * 2
         )
         context.fill(Path(roundedRect: pillRect, cornerRadius: 2),
-                     with: .color(.white.opacity(0.85)))
+                     with: .color(config.panelBackgroundColor))
         context.draw(text, at: CGPoint(x: pillRect.midX, y: pillRect.midY), anchor: .center)
     }
 
@@ -218,22 +217,7 @@ public struct SkewTRenderer {
             height: textSize.height + padding * 2
         )
         context.fill(Path(roundedRect: boxRect, cornerRadius: 4),
-                     with: .color(.white.opacity(0.85)))
+                     with: .color(config.panelBackgroundColor))
         context.draw(text, at: CGPoint(x: boxRect.midX, y: boxRect.midY), anchor: .center)
-    }
-
-    // MARK: - Standard atmosphere helpers
-
-    /// Approximate altitude (ft) from pressure using standard atmosphere.
-    private func pressureToAltitude(_ pHPa: Double) -> Double {
-        // Barometric formula: h = 44330 * (1 - (p/1013.25)^0.19026) meters
-        let h_m = 44330.0 * (1.0 - pow(pHPa / 1013.25, 0.19026))
-        return h_m * 3.28084
-    }
-
-    /// Approximate pressure (hPa) from altitude (ft) using standard atmosphere.
-    private func altitudeToPressure(_ altFt: Double) -> Double {
-        let h_m = altFt / 3.28084
-        return 1013.25 * pow(1.0 - h_m / 44330.0, 5.255)
     }
 }

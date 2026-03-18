@@ -102,7 +102,8 @@ struct ThermodynamicsTests {
         let theta = Thermodynamics.potentialTemperature(tempC: startT, pressureHPa: 1000)
         let tDry700 = Thermodynamics.dryAdiabatTemperature(theta: theta, pressureHPa: 700)
 
-        let moistCurves = Thermodynamics.moistAdiabats(startTemps: [startT])
+        let moistCurves = Thermodynamics.moistAdiabats(
+            startTemps: [startT], pRange: 200...1000)
         let tMoist700 = moistCurves[0].first(where: { abs($0.pressureHPa - 700) < 15 })?.tempC
 
         #expect(tMoist700 != nil)
@@ -162,10 +163,10 @@ struct ThermodynamicsTests {
         let path = Thermodynamics.parcelPath(
             surfaceTempC: 28, surfaceDewpointC: 20,
             surfacePressureHPa: 1000)
-        let (cape, cin) = Thermodynamics.computeCAPECIN(
+        let result = Thermodynamics.computeCAPECIN(
             environmentLevels: levels, parcelPath: path)
-        #expect(cape > 0, "CAPE should be positive for unstable profile, got \(cape)")
-        #expect(cin <= 0, "CIN should be non-positive, got \(cin)")
+        #expect(result.cape > 0, "CAPE should be positive for unstable profile, got \(result.cape)")
+        #expect(result.cin <= 0, "CIN should be non-positive, got \(result.cin)")
     }
 
     @Test("CAPE is zero for stable isothermal profile")
@@ -177,20 +178,21 @@ struct ThermodynamicsTests {
         let path = Thermodynamics.parcelPath(
             surfaceTempC: 15, surfaceDewpointC: 5,
             surfacePressureHPa: 1000)
-        let (cape, _) = Thermodynamics.computeCAPECIN(
+        let result = Thermodynamics.computeCAPECIN(
             environmentLevels: levels, parcelPath: path)
-        #expect(cape == 0, "CAPE should be zero for stable isothermal profile, got \(cape)")
+        // Virtual temperature correction may produce a tiny positive residual
+        #expect(result.cape < 10, "CAPE should be near-zero for stable isothermal profile, got \(result.cape)")
     }
 
     @Test("CAPE/CIN returns (0,0) for empty inputs")
     func capeEmptyInputs() {
-        let (cape1, cin1) = Thermodynamics.computeCAPECIN(environmentLevels: [], parcelPath: [])
-        #expect(cape1 == 0 && cin1 == 0)
+        let r1 = Thermodynamics.computeCAPECIN(environmentLevels: [], parcelPath: [])
+        #expect(r1.cape == 0 && r1.cin == 0)
 
-        let (cape2, cin2) = Thermodynamics.computeCAPECIN(
+        let r2 = Thermodynamics.computeCAPECIN(
             environmentLevels: [SoundingLevel(pressureHPa: 1000, temperatureC: 20)],
-            parcelPath: [(25.0, 1000.0)])
-        #expect(cape2 == 0 && cin2 == 0) // single point, need >= 2
+            parcelPath: [AtmosphericPoint(tempC: 25, pressureHPa: 1000)])
+        #expect(r2.cape == 0 && r2.cin == 0) // single point, need >= 2
     }
 
     // MARK: - Pinned against known values (standard atmosphere / radiosonde reference)
@@ -229,11 +231,12 @@ struct ThermodynamicsTests {
         let path = Thermodynamics.parcelPath(
             surfaceTempC: 30, surfaceDewpointC: 24,
             surfacePressureHPa: 1000, topPressureHPa: 200)
-        let (cape, _) = Thermodynamics.computeCAPECIN(
+        let result = Thermodynamics.computeCAPECIN(
             environmentLevels: levels, parcelPath: path)
         // Tropical soundings typically have CAPE 1000-4000 J/kg
-        #expect(cape > 1000, "Tropical CAPE should be > 1000 J/kg, got \(cape)")
-        #expect(cape < 5000, "Tropical CAPE should be < 5000 J/kg, got \(cape)")
+        // Virtual temperature correction may increase CAPE somewhat
+        #expect(result.cape > 1000, "Tropical CAPE should be > 1000 J/kg, got \(result.cape)")
+        #expect(result.cape < 6000, "Tropical CAPE should be < 6000 J/kg, got \(result.cape)")
     }
 
     // MARK: - Background line generation
@@ -259,12 +262,68 @@ struct ThermodynamicsTests {
     }
 
     @Test("Mixing ratio lines produce reasonable curves")
-    func mixingRatioLines() {
+    func mixingRatioLinesCurves() {
         let lines = Thermodynamics.mixingRatioLines()
         #expect(lines.count == 8) // default 8 values
         for line in lines {
             #expect(line.points.count > 5)
-            #expect(line.w > 0)
+            #expect(line.mixingRatioGkg > 0)
         }
+    }
+
+    // MARK: - Standard atmosphere helpers
+
+    @Test("Pressure to altitude: 1013.25 hPa → 0 ft (sea level)")
+    func pressureToAltitudeSeaLevel() {
+        let alt = Thermodynamics.pressureToAltitude(1013.25)
+        #expect(abs(alt) < 1)
+    }
+
+    @Test("Pressure to altitude: 500 hPa ≈ 18000 ft")
+    func pressureToAltitude500() {
+        let alt = Thermodynamics.pressureToAltitude(500)
+        #expect(abs(alt - 18300) < 500)
+    }
+
+    @Test("Altitude to pressure roundtrip")
+    func altitudePressureRoundtrip() {
+        let alt: Double = 10000
+        let p = Thermodynamics.altitudeToPressure(alt)
+        let altBack = Thermodynamics.pressureToAltitude(p)
+        #expect(abs(altBack - alt) < 5)
+    }
+
+    // MARK: - Gravity constant
+
+    @Test("Gravity constant matches standard value")
+    func gravityConstant() {
+        #expect(abs(Thermodynamics.g - 9.80665) < 0.00001)
+    }
+
+    // MARK: - Environment interpolation (public API)
+
+    @Test("Interpolate environment temperature between two levels")
+    func interpolateEnvironment() {
+        let levels = [
+            SoundingLevel(pressureHPa: 1000, temperatureC: 20),
+            SoundingLevel(pressureHPa: 500, temperatureC: -10),
+        ]
+        let sorted = levels.sorted { $0.pressureHPa > $1.pressureHPa }
+        let t = Thermodynamics.interpolateEnvironment(at: 700, sortedLevels: sorted)
+        #expect(t != nil)
+        // Should be between 20 and -10
+        #expect(t! > -10 && t! < 20)
+    }
+
+    @Test("Interpolate environment extrapolates from nearest when outside range")
+    func interpolateEnvironmentExtrapolation() {
+        let levels = [
+            SoundingLevel(pressureHPa: 850, temperatureC: 10),
+            SoundingLevel(pressureHPa: 500, temperatureC: -15),
+        ]
+        let sorted = levels.sorted { $0.pressureHPa > $1.pressureHPa }
+        // Below range: should return nearest (850 hPa → 10°C)
+        let t = Thermodynamics.interpolateEnvironment(at: 1000, sortedLevels: sorted)
+        #expect(t == 10)
     }
 }

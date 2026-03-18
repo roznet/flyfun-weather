@@ -3,19 +3,19 @@ import SwiftUI
 /// Precomputed background reference lines for the Skew-T diagram.
 /// Created once at init time and cached.
 public struct BackgroundLines: Sendable {
-    let isotherms: [[(tempC: Double, pressureHPa: Double)]]
-    let dryAdiabats: [[(tempC: Double, pressureHPa: Double)]]
-    let moistAdiabats: [[(tempC: Double, pressureHPa: Double)]]
-    let mixingRatioLines: [(w: Double, points: [(tempC: Double, pressureHPa: Double)])]
-    let isobars: [Double]
+    public let isotherms: [[AtmosphericPoint]]
+    public let dryAdiabats: [[AtmosphericPoint]]
+    public let moistAdiabats: [[AtmosphericPoint]]
+    public let mixingRatioLines: [MixingRatioLine]
+    public let isobars: [Double]
 
     public static func compute(config: SkewTConfiguration) -> BackgroundLines {
         // Isotherms: every 10°C
-        var isotherms: [[(Double, Double)]] = []
+        var isotherms: [[AtmosphericPoint]] = []
         for t in stride(from: -80.0, through: 60.0, by: 10.0) {
             isotherms.append([
-                (t, config.pBottom),
-                (t, config.pTop),
+                AtmosphericPoint(tempC: t, pressureHPa: config.pBottom),
+                AtmosphericPoint(tempC: t, pressureHPa: config.pTop),
             ])
         }
 
@@ -74,7 +74,10 @@ public struct BackgroundLinesRenderer {
         }
 
         // 0°C isotherm — prominent cyan line
-        let zeroIsotherm = [(0.0, config.pBottom), (0.0, config.pTop)]
+        let zeroIsotherm = [
+            AtmosphericPoint(tempC: 0, pressureHPa: config.pBottom),
+            AtmosphericPoint(tempC: 0, pressureHPa: config.pTop),
+        ]
         drawCurve(&context, transform: transform, points: zeroIsotherm,
                   color: .cyan.opacity(0.6), lineWidth: 1.5)
 
@@ -100,7 +103,9 @@ public struct BackgroundLinesRenderer {
             // Label at the bottom of the line
             if let bottom = line.points.last {
                 let pt = transform.point(tempC: bottom.tempC, pressureHPa: bottom.pressureHPa)
-                let labelStr = line.w < 1 ? String(format: "%.1f", line.w) : "\(Int(line.w))"
+                let labelStr = line.mixingRatioGkg < 1
+                    ? String(format: "%.1f", line.mixingRatioGkg)
+                    : "\(Int(line.mixingRatioGkg))"
                 let label = context.resolve(
                     Text(labelStr).font(.system(size: 7)).foregroundColor(config.mixingRatioColor.opacity(2))
                 )
@@ -112,7 +117,7 @@ public struct BackgroundLinesRenderer {
     static func drawCurve(
         _ context: inout GraphicsContext,
         transform: SkewTTransform,
-        points: [(tempC: Double, pressureHPa: Double)],
+        points: [AtmosphericPoint],
         color: Color,
         lineWidth: CGFloat,
         dash: [CGFloat]? = nil
