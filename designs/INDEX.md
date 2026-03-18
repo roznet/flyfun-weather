@@ -78,6 +78,5 @@ Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `Cros
 → Full doc: companion-app.md
 
 ### rzskewt
-Swift package for Skew-T log-P diagrams. Local package at `app/flyfun-weather/RZSkewT/` (will be extracted to own repo). Full atmospheric thermodynamics, Canvas rendering, 31 unit tests.
+Swift package for Skew-T log-P diagrams. Extracted to own repo: `github.com/roznet/rztskew`. Full atmospheric thermodynamics, Canvas rendering, 47 unit tests. Design docs live in that repo's `designs/` directory.
 Key exports: `SkewTView`, `SkewTRenderer`, `SoundingProfile`, `Thermodynamics`
-→ Full doc: ../app/flyfun-weather/RZSkewT/designs/skewt-architecture.md
