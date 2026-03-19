@@ -23,11 +23,16 @@ target_metadata = Base.metadata
 
 
 def _get_url() -> str:
-    """Resolve database URL from environment."""
+    """Resolve database URL from environment.
+
+    Prod: DATABASE_URL env var (required).
+    Dev:  sqlite:///{DATA_DIR}/flyfun.db  (matches get_engine() default).
+    """
     url = os.environ.get("DATABASE_URL")
     if url:
         return url
-    return config.get_main_option("sqlalchemy.url", "sqlite:///data/weatherbrief.db")
+    data_dir = os.environ.get("DATA_DIR", "data")
+    return f"sqlite:///{data_dir}/flyfun.db"
 
 
 def run_migrations_offline() -> None:
