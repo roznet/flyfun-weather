@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		424BB6482F69F29700023F98 /* RZSkewT in Frameworks */ = {isa = PBXBuildFile; productRef = 424BB6472F69F29700023F98 /* RZSkewT */; };
+		424BB64B2F6B3E2C00023F98 /* RZSkewT in Frameworks */ = {isa = PBXBuildFile; productRef = 424BB64A2F6B3E2C00023F98 /* RZSkewT */; };
 		42B8963E2F5471ED00C5AF7B /* RZFlight in Frameworks */ = {isa = PBXBuildFile; productRef = 42B8963D2F5471ED00C5AF7B /* RZFlight */; };
 		42B896412F54720900C5AF7B /* RZUtils in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896402F54720900C5AF7B /* RZUtils */; };
 		42B896432F54720900C5AF7B /* RZUtilsSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896422F54720900C5AF7B /* RZUtilsSwift */; };
@@ -77,7 +77,7 @@
 				42B896412F54720900C5AF7B /* RZUtils in Frameworks */,
 				42B896472F54720900C5AF7B /* RZUtilsUniversal in Frameworks */,
 				42B8963E2F5471ED00C5AF7B /* RZFlight in Frameworks */,
-				424BB6482F69F29700023F98 /* RZSkewT in Frameworks */,
+				424BB64B2F6B3E2C00023F98 /* RZSkewT in Frameworks */,
 				42B896452F54720900C5AF7B /* RZUtilsSwiftUI in Frameworks */,
 				42B896432F54720900C5AF7B /* RZUtilsSwift in Frameworks */,
 			);
@@ -153,7 +153,7 @@
 				42B896422F54720900C5AF7B /* RZUtilsSwift */,
 				42B896442F54720900C5AF7B /* RZUtilsSwiftUI */,
 				42B896462F54720900C5AF7B /* RZUtilsUniversal */,
-				424BB6472F69F29700023F98 /* RZSkewT */,
+				424BB64A2F6B3E2C00023F98 /* RZSkewT */,
 			);
 			productName = "flyfun-weather";
 			productReference = 42269E4C2F546D2000EFA5E4 /* flyfun-weather.app */;
@@ -240,7 +240,7 @@
 			packageReferences = (
 				42B8963C2F5471ED00C5AF7B /* XCRemoteSwiftPackageReference "rzflight" */,
 				42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */,
-				424BB6452F69F26700023F98 /* XCLocalSwiftPackageReference "RZSkewT" */,
+				424BB6492F6B3E1600023F98 /* XCRemoteSwiftPackageReference "rzskewt" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 42269E4D2F546D2000EFA5E4 /* Products */;
@@ -687,14 +687,15 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCLocalSwiftPackageReference section */
-		424BB6452F69F26700023F98 /* XCLocalSwiftPackageReference "RZSkewT" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = RZSkewT;
-		};
-/* End XCLocalSwiftPackageReference section */
-
 /* Begin XCRemoteSwiftPackageReference section */
+		424BB6492F6B3E1600023F98 /* XCRemoteSwiftPackageReference "rzskewt" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/roznet/rzskewt.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 		42B8963C2F5471ED00C5AF7B /* XCRemoteSwiftPackageReference "rzflight" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/roznet/rzflight";
@@ -714,9 +715,9 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		424BB6472F69F29700023F98 /* RZSkewT */ = {
+		424BB64A2F6B3E2C00023F98 /* RZSkewT */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 424BB6452F69F26700023F98 /* XCLocalSwiftPackageReference "RZSkewT" */;
+			package = 424BB6492F6B3E1600023F98 /* XCRemoteSwiftPackageReference "rzskewt" */;
 			productName = RZSkewT;
 		};
 		42B8963D2F5471ED00C5AF7B /* RZFlight */ = {
