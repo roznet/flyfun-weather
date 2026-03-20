@@ -23,15 +23,26 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Use naming_convention so batch mode can locate the unnamed FK that
-    # SQLite created in migration 019.
-    naming = {"fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s"}
-    with op.batch_alter_table(
-        "cost_ledger", naming_convention=naming
-    ) as batch_op:
-        batch_op.drop_constraint(
-            "fk_cost_ledger_user_id_users", type_="foreignkey"
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        # SQLite doesn't store FK names; use naming_convention so batch
+        # mode can locate the constraint created in migration 019.
+        naming = {"fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s"}
+        with op.batch_alter_table(
+            "cost_ledger", naming_convention=naming
+        ) as batch_op:
+            batch_op.drop_constraint(
+                "fk_cost_ledger_user_id_users", type_="foreignkey"
+            )
+    else:
+        # MySQL/PostgreSQL: introspect the actual FK name.
+        from sqlalchemy import inspect
+        fks = inspect(bind).get_foreign_keys("cost_ledger")
+        fk_name = next(
+            fk["name"] for fk in fks
+            if fk["constrained_columns"] == ["user_id"]
         )
+        op.drop_constraint(fk_name, "cost_ledger", type_="foreignkey")
 
 
 def downgrade() -> None:
