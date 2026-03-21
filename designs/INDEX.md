@@ -68,7 +68,7 @@ Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth vi
 → Full doc: multi-user-deployment.md
 
 ### cost-attribution
-Per-briefing cost computation from LLM tokens + infrastructure + storage + margin, credit balance with auto-reload, append-only ledger, versioned admin cost config, transparency endpoint.
+Per-briefing cost computation in USD (LLM tokens + infrastructure + storage + margin), shared cross-app cost_ledger via flyfun-common, versioned admin cost config, transparency endpoint. No credits abstraction — all values in positive USD.
 Key exports: `compute_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `get_active_cost_config`
 → Full doc: cost-attribution-design.md
 
