@@ -2,7 +2,7 @@
  * Welcome wizard — shown on first login to collect initial settings.
  *
  * Three steps:
- *   1. Welcome  — brief intro to WeatherBrief
+ *   1. Welcome  — brief intro to Flyfun Weather
  *   2. Aircraft — flight rules, cruise altitude, ceiling, speed
  *   3. Tour    — quick overview of key features
  *
