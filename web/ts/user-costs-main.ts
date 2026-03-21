@@ -84,9 +84,6 @@ function renderUserHeader(data: UserCostsResponse): void {
   const memberSince = u.created_at ? formatDate(u.created_at) : 'Unknown';
   const lastActive = u.last_active_at ? formatDate(u.last_active_at) : 'Never';
 
-  const balance = data.credit_balance;
-  const balClass = balance > 100 ? 'positive' : balance > 0 ? 'low' : 'negative';
-
   document.getElementById('user-card')!.innerHTML = `
     <div class="user-card-left">
       <div class="user-name-display">${escapeHtml(u.display_name)} ${status}</div>
@@ -94,17 +91,17 @@ function renderUserHeader(data: UserCostsResponse): void {
       <div class="user-meta">Member since ${memberSince} &middot; Last active ${lastActive}</div>
     </div>
     <div class="user-card-right">
-      <div class="credit-balance ${balClass}">${balance.toFixed(1)}</div>
-      <div class="credit-label">Credits</div>
+      <div class="credit-balance">$${data.summary.total_cost_usd.toFixed(2)}</div>
+      <div class="credit-label">Total Cost</div>
     </div>`;
 }
 
 function renderSummaryCards(data: UserCostsResponse): void {
   const s = data.summary;
   document.getElementById('summary-bar')!.innerHTML = `
-    <div class="summary-card"><div class="value">${s.credits_used_today.toFixed(1)}</div><div class="label">Credits Today</div></div>
-    <div class="summary-card"><div class="value">${s.credits_used_month.toFixed(1)}</div><div class="label">Credits This Month</div></div>
-    <div class="summary-card"><div class="value">${s.total_credits_charged.toFixed(1)}</div><div class="label">Total Charged</div></div>
+    <div class="summary-card"><div class="value">$${s.cost_this_week_usd.toFixed(2)}</div><div class="label">This Week</div></div>
+    <div class="summary-card"><div class="value">$${s.cost_this_month_usd.toFixed(2)}</div><div class="label">This Month</div></div>
+    <div class="summary-card"><div class="value">$${s.total_cost_usd.toFixed(2)}</div><div class="label">Total Cost</div></div>
     <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Total Briefings</div></div>`;
 }
 
@@ -161,7 +158,7 @@ function renderCostDistribution(bd: UserCostBreakdown, avgCost: number, totalBri
     <div class="cost-bar-container">
       <div class="cost-stacked-bar">${segments}</div>
       <div class="cost-legend">${legendItems}</div>
-      <div class="cost-avg">Total: <strong>$${total.toFixed(4)}</strong> USD across ${totalBriefings} briefings &middot; Average: <strong>${avgCost.toFixed(2)}</strong> credits / <strong>$${avgUsd}</strong> USD per briefing</div>
+      <div class="cost-avg">Total: <strong>$${total.toFixed(2)}</strong> across ${totalBriefings} briefings &middot; Average: <strong>$${avgUsd}</strong> per briefing</div>
     </div>`;
 }
 
@@ -171,10 +168,8 @@ function renderTransactions(transactions: UserCostTransaction[]): void {
     tbody.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;padding:1rem;">No transactions yet</td></tr>';
     return;
   }
-  tbody.innerHTML = transactions.map(tx => {
+  tbody.innerHTML = transactions.filter(tx => tx.cost_usd > 0).map(tx => {
     const date = tx.timestamp ? formatDate(tx.timestamp) : '-';
-    const amountClass = tx.amount < 0 ? 'amount-neg' : 'amount-pos';
-    const amountStr = tx.amount < 0 ? tx.amount.toFixed(2) : `+${tx.amount.toFixed(1)}`;
     const expandBtn = tx.breakdown
       ? `<button class="tx-expand-btn" data-tx-id="${tx.id}">details</button>`
       : '';
@@ -188,11 +183,10 @@ function renderTransactions(transactions: UserCostTransaction[]): void {
         ['Subscriptions', bd.subscription_share_usd],
         ['Storage', bd.storage_cost_usd],
         ['Margin', bd.margin_usd],
-        ['Total USD', bd.total_usd],
-        ['Credits', bd.credits_charged],
+        ['Total', bd.total_usd],
       ]
         .filter(([, v]) => v !== undefined)
-        .map(([label, v]) => `<div><span class="bd-label">${label}</span><br><span class="bd-value">${typeof v === 'number' ? (label === 'Credits' ? v.toFixed(2) : '$' + v.toFixed(4)) : v}</span></div>`)
+        .map(([label, v]) => `<div><span class="bd-label">${label}</span><br><span class="bd-value">${typeof v === 'number' ? '$' + v.toFixed(4) : v}</span></div>`)
         .join('');
       breakdownRow = `<tr class="tx-breakdown" data-tx-detail="${tx.id}"><td colspan="5"><div class="breakdown-grid">${items}</div></td></tr>`;
     }
@@ -206,7 +200,7 @@ function renderTransactions(transactions: UserCostTransaction[]): void {
         <td style="white-space:nowrap;">${date}</td>
         <td>${escapeHtml(tx.category)}</td>
         <td>${escapeHtml(tx.description)}${flightLink}</td>
-        <td class="num ${amountClass}">${amountStr}</td>
+        <td class="num">$${tx.cost_usd.toFixed(4)}</td>
         <td>${expandBtn}</td>
       </tr>${breakdownRow}`;
   }).join('');

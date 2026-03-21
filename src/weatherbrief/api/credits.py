@@ -1,10 +1,10 @@
-"""Credit system: balance tracking, cost charging, and transparency API."""
+"""Cost system: per-briefing cost tracking, transparency API, admin config."""
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
@@ -25,9 +25,8 @@ from weatherbrief.db.models import CostConfigRow
 
 logger = logging.getLogger(__name__)
 
-AUTO_RELOAD_CREDITS = 500.0
+AUTO_RELOAD_AMOUNT = 5.0  # USD — auto-reload threshold for spending_limit
 SERVICE = "flyfun-weather"
-USD_PER_CREDIT = 0.01  # stable conversion factor
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -50,13 +49,12 @@ def charge_briefing(
     usage_row_id: int,
     breakdown: CostBreakdown,
 ) -> CostLedgerRow:
-    """Deduct credits for a briefing, auto-reload if balance drops to 0 or below."""
+    """Record briefing cost. Auto-reload spending_limit if it drops to 0."""
     user = db.query(UserRow).filter(UserRow.id == user_id).with_for_update().first()
     if not user:
         raise ValueError(f"User {user_id} not found")
 
-    new_balance = user.spending_limit - breakdown.credits_charged
-    user.spending_limit = new_balance
+    user.spending_limit = user.spending_limit - breakdown.total_usd
 
     entry = record_cost(
         db,
@@ -65,20 +63,20 @@ def charge_briefing(
         action="briefing",
         cost=breakdown.total_usd,
         category="briefing",
-        description=f"Briefing cost ({breakdown.credits_charged:.2f} credits)",
+        description=f"Briefing (${breakdown.total_usd:.4f})",
         detail_json=json.dumps(breakdown_to_dict(breakdown)),
         reference_id=str(usage_row_id),
     )
 
-    if new_balance <= 0:
+    if user.spending_limit <= 0:
         _auto_reload(db, user)
 
     return entry
 
 
 def _auto_reload(db: Session, user: UserRow) -> None:
-    """Reset user's balance to AUTO_RELOAD_CREDITS and log a topup entry."""
-    user.spending_limit = AUTO_RELOAD_CREDITS
+    """Reset user's spending_limit and log a topup entry."""
+    user.spending_limit = AUTO_RELOAD_AMOUNT
     record_cost(
         db,
         user.id,
@@ -88,7 +86,7 @@ def _auto_reload(db: Session, user: UserRow) -> None:
         category="topup",
         description="Auto-reload (free tier)",
     )
-    logger.info("Auto-reloaded %s credits for user %s", AUTO_RELOAD_CREDITS, user.id)
+    logger.info("Auto-reloaded spending limit to $%.2f for user %s", AUTO_RELOAD_AMOUNT, user.id)
 
 
 def get_recent_transactions(
@@ -115,18 +113,18 @@ def get_recent_transactions(
 class TransactionResponse(BaseModel):
     id: int
     timestamp: str
-    amount: float
-    balance_after: float
+    cost_usd: float
     category: str
     description: str
     breakdown: dict | None = None
 
 
-class CreditSummaryResponse(BaseModel):
-    balance: float
+class CostSummaryResponse(BaseModel):
+    total_cost_usd: float
+    cost_this_month_usd: float
+    cost_this_week_usd: float
+    total_briefings: int
     recent_transactions: list[TransactionResponse]
-    credits_used_today: float
-    credits_used_month: float
 
 
 class CostConfigResponse(BaseModel):
@@ -231,24 +229,18 @@ def _transaction_to_response(row: CostLedgerRow) -> TransactionResponse:
             breakdown = json.loads(row.detail_json)
         except (json.JSONDecodeError, TypeError):
             pass
-    # Backward-compat: amount in credits (negative for charges)
-    if row.category == "topup":
-        amount = AUTO_RELOAD_CREDITS
-    else:
-        amount = -row.cost / USD_PER_CREDIT if USD_PER_CREDIT > 0 else 0.0
     return TransactionResponse(
         id=row.id,
         timestamp=row.created_at.isoformat() if row.created_at else "",
-        amount=round(amount, 2),
-        balance_after=0.0,  # deprecated — balance is on UserRow.spending_limit
+        cost_usd=round(row.cost, 4),
         category=row.category or row.action,
         description=row.description or "",
         breakdown=breakdown,
     )
 
 
-def _credits_used_since(db: Session, user_id: str, since: datetime) -> float:
-    """Sum of costs (converted to credits) since a given time."""
+def _cost_since(db: Session, user_id: str, since: datetime) -> float:
+    """Sum of USD costs since a given time."""
     result = (
         db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
         .filter(
@@ -259,38 +251,60 @@ def _credits_used_since(db: Session, user_id: str, since: datetime) -> float:
         )
         .scalar()
     )
-    return float(result) / USD_PER_CREDIT if USD_PER_CREDIT > 0 else 0.0
+    return float(result)
 
 
 # ---------------------------------------------------------------------------
-# Router: user credits
+# Router: user costs
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/user/credits", tags=["credits"])
+router = APIRouter(prefix="/user/credits", tags=["costs"])
 
 
-@router.get("", response_model=CreditSummaryResponse)
-def get_credits(
+@router.get("", response_model=CostSummaryResponse)
+def get_costs(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
-) -> CreditSummaryResponse:
-    """Return credit balance and recent transactions for the current user."""
+) -> CostSummaryResponse:
+    """Return cost summary and recent transactions for the current user."""
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    balance = user.spending_limit
 
     transactions = get_recent_transactions(db, user_id)
 
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    week_start = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
 
-    return CreditSummaryResponse(
-        balance=round(balance, 2),
+    total_cost = float(
+        db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
+        .filter(
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
+        )
+        .scalar()
+    )
+    total_briefings = (
+        db.query(func.count())
+        .select_from(CostLedgerRow)
+        .filter(
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
+        )
+        .scalar()
+    ) or 0
+
+    return CostSummaryResponse(
+        total_cost_usd=round(total_cost, 4),
+        cost_this_month_usd=round(_cost_since(db, user_id, month_start), 4),
+        cost_this_week_usd=round(_cost_since(db, user_id, week_start), 4),
+        total_briefings=total_briefings,
         recent_transactions=[_transaction_to_response(t) for t in transactions],
-        credits_used_today=round(_credits_used_since(db, user_id, today_start), 2),
-        credits_used_month=round(_credits_used_since(db, user_id, month_start), 2),
     )
 
 

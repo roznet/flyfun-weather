@@ -1,4 +1,4 @@
-/** Credits adapter — fetch balance, transactions, and transparency info. */
+/** Cost adapter — fetch cost summary and transparency info. */
 
 import { apiFetch } from '../utils';
 
@@ -17,18 +17,18 @@ export interface CostBreakdown {
 export interface Transaction {
   id: number;
   timestamp: string;
-  amount: number;
-  balance_after: number;
+  cost_usd: number;
   category: string;
   description: string;
   breakdown: CostBreakdown | null;
 }
 
-export interface CreditSummary {
-  balance: number;
+export interface CostSummary {
+  total_cost_usd: number;
+  cost_this_month_usd: number;
+  cost_this_week_usd: number;
+  total_briefings: number;
   recent_transactions: Transaction[];
-  credits_used_today: number;
-  credits_used_month: number;
 }
 
 export interface TransparencyInfo {
@@ -42,8 +42,8 @@ export interface TransparencyInfo {
   usd_per_credit: number;
 }
 
-export async function fetchCreditSummary(): Promise<CreditSummary> {
-  return apiFetch<CreditSummary>('/user/credits');
+export async function fetchCostSummary(): Promise<CostSummary> {
+  return apiFetch<CostSummary>('/user/credits');
 }
 
 export async function fetchTransparency(): Promise<TransparencyInfo | null> {
