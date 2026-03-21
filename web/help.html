@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WeatherBrief — Help</title>
+  <title>Flyfun Weather — Help</title>
   <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
   <link rel="stylesheet" href="/css/style.css">
 </head>
@@ -18,9 +18,9 @@
 
     <!-- About -->
     <div class="help-section">
-      <h3>About WeatherBrief</h3>
+      <h3>About Flyfun Weather</h3>
       <p>
-        WeatherBrief is an exploratory weather briefing tool for general aviation pilots.
+        Flyfun Weather is an exploratory weather briefing tool for general aviation pilots.
         Its goal is to help you form an early picture of how weather patterns are coming
         together by comparing multiple numerical weather prediction (NWP) models. It exposes
         the rich data that forecasting models provide &mdash; soundings, cross-sections,
@@ -35,13 +35,12 @@
         uncertainty and numbers behind any summary.
       </p>
       <p>
-        WeatherBrief is designed for <strong>longer-range planning</strong>, not for the
-        final go/no-go decision. It does not include METARs, TAFs, SIGMETs, AIRMETs, or
-        official weather synopses &mdash; for the day-of briefing you should always rely on
-        those official sources from your national aviation authority.
+        Flyfun Weather is designed for <strong>longer-range planning</strong>, not for the
+        final go/no-go decision. For the day-of briefing you should always rely on
+        official sources (METARs, TAFs, SIGMETs, AIRMETs) from your national aviation authority.
       </p>
       <p>
-        WeatherBrief is open-source and available on
+        Flyfun Weather is open-source and available on
         <a href="https://github.com/roznet/flyfun-weather" target="_blank" rel="noopener">GitHub</a>.
       </p>
     </div>
@@ -51,7 +50,7 @@
       <h3>Getting Started</h3>
       <ol>
         <li><strong>Create a flight</strong> on the Flights page by entering your waypoints (ICAO airport codes), date, time, altitude, and ceiling.</li>
-        <li><strong>Open the briefing</strong> by clicking the flight card. WeatherBrief will fetch forecast data from each enabled model, run thermodynamic analysis, compute advisories, and generate a synopsis.</li>
+        <li><strong>Open the briefing</strong> by clicking the flight card. Flyfun Weather will fetch forecast data from each enabled model, run thermodynamic analysis, compute advisories, and generate a synopsis.</li>
         <li><strong>Refresh</strong> the briefing at any time to pull the latest available forecasts. Each refresh creates a new snapshot you can compare via the history dropdown.</li>
       </ol>
       <div class="help-tip">
@@ -87,12 +86,25 @@
         advisory in <a href="/settings.html">Settings</a>.
       </p>
 
+      <h4>METAR/TAF Observations</h4>
+      <p>
+        Current METAR observations and TAF forecasts for your departure and arrival airports,
+        fetched from official aviation weather sources. Useful for cross-referencing the
+        NWP model output with real-time and near-term observations.
+      </p>
+
       <h4>Synopsis</h4>
       <p>
         An LLM-generated plain-language overview of the weather situation along your route.
         It summarizes the key findings from the numerical analysis in a concise narrative.
         This section requires the <strong>AI Digest</strong> service to be enabled in
         <a href="/settings.html">Settings</a>.
+      </p>
+
+      <h4>DWD Synoptic Overview</h4>
+      <p>
+        An optional synoptic weather discussion sourced from DWD (Deutscher Wetterdienst),
+        providing a broader meteorological context for European flights.
       </p>
 
       <h4>GRAMET Cross-Section</h4>
@@ -159,18 +171,19 @@
     <!-- Settings -->
     <div class="help-section">
       <h3>Settings</h3>
-      <h4>Services</h4>
+      <h4>Flight Profiles</h4>
       <ul>
+        <li><strong>Flight Defaults</strong> &mdash; set default cruise altitude, ceiling, speed, and flight-rules capability for new flights.</li>
         <li><strong>Forecast Models</strong> &mdash; choose which NWP models are fetched on each briefing refresh. By default, Best Match, GFS, ECMWF IFS, and DWD ICON are enabled.</li>
-        <li><strong>GRAMET</strong> &mdash; enable or disable Autorouter GRAMET cross-section charts.</li>
-        <li><strong>AI Digest</strong> &mdash; enable or disable the LLM-generated weather synopsis.</li>
-        <li><strong>Autorouter Credentials</strong> &mdash; enter your autorouter.aero username and password for GRAMET charts. Credentials are encrypted at rest.</li>
-      </ul>
-      <h4>Flight Parameters</h4>
-      <ul>
-        <li><strong>Flight Defaults</strong> &mdash; set default cruise altitude and ceiling for new flights.</li>
+        <li><strong>Optional Services</strong> &mdash; enable or disable GRAMET cross-section charts and the AI Digest synopsis.</li>
+        <li><strong>Advisories</strong> &mdash; configure summary rating aggregation (worst-case vs majority), analysis methods for icing, cloud, and convective advisories, enable/disable individual advisories, and fine-tune thresholds (e.g. icing temperature band, crosswind limits).</li>
         <li><strong>Advisory Models</strong> &mdash; select which models are used for advisory evaluation (must be a subset of your enabled forecast models).</li>
-        <li><strong>Advisory Parameters</strong> &mdash; enable/disable individual advisories and fine-tune their thresholds (e.g. icing temperature band, crosswind limits).</li>
+      </ul>
+      <h4>Account</h4>
+      <ul>
+        <li><strong>Language</strong> &mdash; choose the display language (English, French, German, Spanish).</li>
+        <li><strong>Autorouter Credentials</strong> &mdash; enter your autorouter.aero username and password for GRAMET charts. Credentials are encrypted at rest.</li>
+        <li><strong>Usage &amp; Credits</strong> &mdash; view your briefing usage (today and this month) and credit balance.</li>
       </ul>
     </div>
 
@@ -178,7 +191,7 @@
     <div class="help-section">
       <h3>Data Sources &amp; Models</h3>
       <p>
-        WeatherBrief fetches data from the following NWP models via
+        Flyfun Weather fetches data from the following NWP models via
         <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.
         Each model uses a <em>seamless</em> blend that automatically selects the highest-resolution
         variant available for the queried location.
@@ -222,7 +235,7 @@
             <td>Global</td>
             <td>0.25&deg; (~25 km)</td>
             <td>10 days</td>
-            <td>11</td>
+            <td>13</td>
             <td><a href="https://open-meteo.com/en/docs/ecmwf-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
@@ -231,7 +244,7 @@
             <td>Global</td>
             <td>11 km; 7 km over Europe</td>
             <td>7 days</td>
-            <td>12</td>
+            <td>19</td>
             <td><a href="https://open-meteo.com/en/docs/dwd-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
@@ -278,8 +291,8 @@
     <div class="help-section" id="getting-access">
       <h3>Getting Access</h3>
       <p>
-        WeatherBrief is currently in early preview. To request access,
-        <a href="/login.html">sign in with Google</a>
+        Flyfun Weather is currently in early preview. To request access,
+        <a href="/login.html">sign in</a>
         and wait for an email confirmation that your account has been enabled.
       </p>
     </div>
@@ -297,7 +310,7 @@
     <div class="help-section">
       <h3>Disclaimer</h3>
       <p>
-        WeatherBrief is an <strong>experimental, non-certified</strong> tool for educational
+        Flyfun Weather is an <strong>experimental, non-certified</strong> tool for educational
         and planning purposes. It is not a substitute for official weather briefings from
         your national aviation authority. Always cross-check with official sources (METARs,
         TAFs, SIGMETs, AIRMETs) before flying.

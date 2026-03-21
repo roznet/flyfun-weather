@@ -1,4 +1,4 @@
-/** Shared utilities for the WeatherBrief web app. */
+/** Shared utilities for the Flyfun Weather web app. */
 
 import { logout, type CurrentUser } from './adapters/auth-adapter';
 import { t, getAcceptLanguage, getLocale } from './i18n/i18n';
