@@ -18,13 +18,16 @@ from weatherbrief.costs import (
     compute_cost,
     config_from_row,
 )
+from flyfun_common.costs import record_cost
 from flyfun_common.db import current_user_id, get_db
-from flyfun_common.db.models import UserRow
-from weatherbrief.db.models import CostConfigRow, CreditLedgerRow
+from flyfun_common.db.models import CostLedgerRow, UserRow
+from weatherbrief.db.models import CostConfigRow
 
 logger = logging.getLogger(__name__)
 
 AUTO_RELOAD_CREDITS = 500.0
+SERVICE = "flyfun-weather"
+USD_PER_CREDIT = 0.01  # stable conversion factor
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -46,7 +49,7 @@ def charge_briefing(
     user_id: str,
     usage_row_id: int,
     breakdown: CostBreakdown,
-) -> CreditLedgerRow:
+) -> CostLedgerRow:
     """Deduct credits for a briefing, auto-reload if balance drops to 0 or below."""
     user = db.query(UserRow).filter(UserRow.id == user_id).with_for_update().first()
     if not user:
@@ -55,18 +58,17 @@ def charge_briefing(
     new_balance = user.spending_limit - breakdown.credits_charged
     user.spending_limit = new_balance
 
-    entry = CreditLedgerRow(
-        user_id=user_id,
-        amount=-breakdown.credits_charged,
-        balance_after=new_balance,
+    entry = record_cost(
+        db,
+        user_id,
+        service=SERVICE,
+        action="briefing",
+        cost=breakdown.total_usd,
         category="briefing",
         description=f"Briefing cost ({breakdown.credits_charged:.2f} credits)",
-        breakdown_json=json.dumps(breakdown_to_dict(breakdown)),
-        briefing_usage_id=usage_row_id,
-        cost_config_id=breakdown.config_id,
+        detail_json=json.dumps(breakdown_to_dict(breakdown)),
+        reference_id=str(usage_row_id),
     )
-    db.add(entry)
-    db.flush()
 
     if new_balance <= 0:
         _auto_reload(db, user)
@@ -77,26 +79,29 @@ def charge_briefing(
 def _auto_reload(db: Session, user: UserRow) -> None:
     """Reset user's balance to AUTO_RELOAD_CREDITS and log a topup entry."""
     user.spending_limit = AUTO_RELOAD_CREDITS
-    topup = CreditLedgerRow(
-        user_id=user.id,
-        amount=AUTO_RELOAD_CREDITS,
-        balance_after=AUTO_RELOAD_CREDITS,
+    record_cost(
+        db,
+        user.id,
+        service=SERVICE,
+        action="topup",
+        cost=0.0,
         category="topup",
         description="Auto-reload (free tier)",
     )
-    db.add(topup)
-    db.flush()
     logger.info("Auto-reloaded %s credits for user %s", AUTO_RELOAD_CREDITS, user.id)
 
 
 def get_recent_transactions(
     db: Session, user_id: str, limit: int = 20,
-) -> list[CreditLedgerRow]:
+) -> list[CostLedgerRow]:
     """Return the most recent ledger entries for a user."""
     return (
-        db.query(CreditLedgerRow)
-        .filter(CreditLedgerRow.user_id == user_id)
-        .order_by(CreditLedgerRow.timestamp.desc())
+        db.query(CostLedgerRow)
+        .filter(
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+        )
+        .order_by(CostLedgerRow.created_at.desc())
         .limit(limit)
         .all()
     )
@@ -219,36 +224,42 @@ def _config_to_response(row: CostConfigRow) -> CostConfigResponse:
     )
 
 
-def _transaction_to_response(row: CreditLedgerRow) -> TransactionResponse:
+def _transaction_to_response(row: CostLedgerRow) -> TransactionResponse:
     breakdown = None
-    if row.breakdown_json:
+    if row.detail_json:
         try:
-            breakdown = json.loads(row.breakdown_json)
+            breakdown = json.loads(row.detail_json)
         except (json.JSONDecodeError, TypeError):
             pass
+    # Backward-compat: amount in credits (negative for charges)
+    if row.category == "topup":
+        amount = AUTO_RELOAD_CREDITS
+    else:
+        amount = -row.cost / USD_PER_CREDIT if USD_PER_CREDIT > 0 else 0.0
     return TransactionResponse(
         id=row.id,
-        timestamp=row.timestamp.isoformat() if row.timestamp else "",
-        amount=row.amount,
-        balance_after=row.balance_after,
-        category=row.category,
-        description=row.description,
+        timestamp=row.created_at.isoformat() if row.created_at else "",
+        amount=round(amount, 2),
+        balance_after=0.0,  # deprecated — balance is on UserRow.spending_limit
+        category=row.category or row.action,
+        description=row.description or "",
         breakdown=breakdown,
     )
 
 
 def _credits_used_since(db: Session, user_id: str, since: datetime) -> float:
-    """Sum of negative ledger amounts (charges) since a given time."""
+    """Sum of costs (converted to credits) since a given time."""
     result = (
-        db.query(func.coalesce(func.sum(CreditLedgerRow.amount), 0.0))
+        db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
         .filter(
-            CreditLedgerRow.user_id == user_id,
-            CreditLedgerRow.amount < 0,
-            CreditLedgerRow.timestamp >= since,
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
+            CostLedgerRow.created_at >= since,
         )
         .scalar()
     )
-    return abs(float(result))
+    return float(result) / USD_PER_CREDIT if USD_PER_CREDIT > 0 else 0.0
 
 
 # ---------------------------------------------------------------------------
