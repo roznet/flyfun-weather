@@ -37,10 +37,12 @@ def upgrade() -> None:
     if dialect == "sqlite":
         json_extract = "json_extract(cl.breakdown_json, '$.total_usd')"
         cast_ref = "CAST(cl.briefing_usage_id AS TEXT)"
+        cast_type = "REAL"
     else:
         # MySQL
         json_extract = "JSON_UNQUOTE(JSON_EXTRACT(cl.breakdown_json, '$.total_usd'))"
         cast_ref = "CAST(cl.briefing_usage_id AS CHAR)"
+        cast_type = "DECIMAL(10,6)"
 
     bind.execute(
         sa.text(f"""
@@ -52,7 +54,7 @@ def upgrade() -> None:
                 'flyfun-weather',
                 cl.category,
                 COALESCE(
-                    CAST({json_extract} AS REAL),
+                    CAST({json_extract} AS {cast_type}),
                     ABS(cl.amount) * 0.01
                 ),
                 cl.category,
