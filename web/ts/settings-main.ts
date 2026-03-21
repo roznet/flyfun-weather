@@ -1,7 +1,7 @@
 /** Settings page entry point — tabbed preferences with profile-based advisory configuration. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { fetchCreditSummary, type CreditSummary } from './adapters/credits-adapter';
+import { fetchCostSummary, type CostSummary } from './adapters/credits-adapter';
 import { renderUserInfo, escapeHtml, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
 import {
   fetchPreferences,
@@ -402,9 +402,9 @@ async function init(): Promise<void> {
   fetchUsageSummary()
     .then(renderUsage)
     .catch(() => { /* usage section stays hidden */ });
-  fetchCreditSummary()
-    .then(renderCredits)
-    .catch(() => { /* credits section stays hidden */ });
+  fetchCostSummary()
+    .then(renderCosts)
+    .catch(() => { /* costs section stays hidden */ });
 
   // Profile controls
   const profileSelect = document.getElementById('profile-select') as HTMLSelectElement;
@@ -742,42 +742,45 @@ function showStatus(message: string, isError = false): void {
 
 // --- Credits rendering ---
 
-function renderCredits(credits: CreditSummary): void {
+function renderCosts(costs: CostSummary): void {
   const section = document.getElementById('credits-section');
   if (!section) return;
   section.classList.remove('hidden-section');
 
-  // Balance badge
+  // Cost summary
   const balanceEl = document.getElementById('credits-balance');
   if (balanceEl) {
-    const bal = credits.balance;
-    const cls = bal > 200 ? 'badge-green' : bal > 50 ? 'badge-amber' : 'badge-red';
     balanceEl.innerHTML = `
       <div class="credits-summary">
-        <span class="badge ${cls}">${t('settings.credits', { count: bal.toFixed(0) })}</span>
-        <span class="muted credits-detail">${t('settings.creditsToday', { used: credits.credits_used_today.toFixed(1) })} &middot; ${t('settings.creditsMonth', { used: credits.credits_used_month.toFixed(1) })}</span>
+        <span class="muted credits-detail">
+          ${t('settings.costThisWeek', { cost: '$' + costs.cost_this_week_usd.toFixed(2) })}
+          &middot; ${t('settings.costThisMonth', { cost: '$' + costs.cost_this_month_usd.toFixed(2) })}
+          &middot; ${t('settings.costTotal', { cost: '$' + costs.total_cost_usd.toFixed(2) })}
+          (${costs.total_briefings} briefings)
+        </span>
       </div>`;
   }
 
   // Recent transactions
   const txEl = document.getElementById('credits-transactions');
-  if (txEl && credits.recent_transactions.length > 0) {
-    const rows = credits.recent_transactions.slice(0, 10).map(tx => {
-      const sign = tx.amount >= 0 ? '+' : '';
-      const cls = tx.amount >= 0 ? 'credit-positive' : 'credit-negative';
-      const ts = new Date(tx.timestamp).toLocaleDateString(getDateLocale(), {
-        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-      });
-      return `<tr>
-        <td class="muted">${ts}</td>
-        <td class="${cls}">${sign}${tx.amount.toFixed(2)}</td>
-        <td class="muted">${tx.category}</td>
-      </tr>`;
-    }).join('');
+  if (txEl && costs.recent_transactions.length > 0) {
+    const rows = costs.recent_transactions
+      .filter(tx => tx.cost_usd > 0)
+      .slice(0, 10)
+      .map(tx => {
+        const ts = new Date(tx.timestamp).toLocaleDateString(getDateLocale(), {
+          day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+        });
+        return `<tr>
+          <td class="muted">${ts}</td>
+          <td>$${tx.cost_usd.toFixed(4)}</td>
+          <td class="muted">${tx.category}</td>
+        </tr>`;
+      }).join('');
     txEl.innerHTML = `
       <h4 class="subsection-heading">${t('settings.recentTransactions')}</h4>
       <table class="credits-table">
-        <thead><tr><th>${t('settings.txDate')}</th><th>${t('settings.txAmount')}</th><th>${t('settings.txType')}</th></tr></thead>
+        <thead><tr><th>${t('settings.txDate')}</th><th>${t('settings.txCost')}</th><th>${t('settings.txType')}</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
   }

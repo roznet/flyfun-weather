@@ -12,7 +12,7 @@ import secrets
 import time
 import uuid
 from base64 import urlsafe_b64encode
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -243,17 +243,19 @@ def get_user_costs(
         raise HTTPException(status_code=404, detail="User not found")
 
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    # --- Credits used today/month (reuse pattern from credits.py) ---
-    from weatherbrief.api.credits import SERVICE, USD_PER_CREDIT, _credits_used_since
+    from weatherbrief.api.credits import SERVICE, _cost_since
 
-    credits_today = round(_credits_used_since(db, user_id, today_start), 2)
-    credits_month = round(_credits_used_since(db, user_id, month_start), 2)
+    week_start = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
 
-    # --- Total credits charged (all time) + total briefings ---
-    total_cost_usd = float(
+    cost_this_month = round(_cost_since(db, user_id, month_start), 4)
+    cost_this_week = round(_cost_since(db, user_id, week_start), 4)
+
+    # --- Total cost (all time) + total briefings ---
+    total_cost_usd = round(float(
         db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
         .filter(
             CostLedgerRow.user_id == user_id,
@@ -261,8 +263,7 @@ def get_user_costs(
             CostLedgerRow.category == "briefing",
         )
         .scalar()
-    )
-    total_credits_charged = round(total_cost_usd / USD_PER_CREDIT, 2) if USD_PER_CREDIT > 0 else 0.0
+    ), 4)
 
     total_briefings = (
         db.query(func.count())
@@ -275,7 +276,7 @@ def get_user_costs(
         .scalar()
     ) or 0
 
-    avg_cost = round(total_credits_charged / total_briefings, 2) if total_briefings > 0 else 0.0
+    avg_cost_usd = round(total_cost_usd / total_briefings, 4) if total_briefings > 0 else 0.0
 
     # --- Last active ---
     last_active_row = (
@@ -307,16 +308,10 @@ def get_user_costs(
                 breakdown = json.loads(ledger_row.detail_json)
             except (json.JSONDecodeError, TypeError):
                 pass
-        # Backward-compat amount in credits
-        if ledger_row.category == "topup":
-            amount = 500.0
-        else:
-            amount = -ledger_row.cost / USD_PER_CREDIT if USD_PER_CREDIT > 0 else 0.0
         transactions.append({
             "id": ledger_row.id,
             "timestamp": ledger_row.created_at.isoformat() if ledger_row.created_at else "",
-            "amount": round(amount, 2),
-            "balance_after": 0.0,  # deprecated
+            "cost_usd": round(ledger_row.cost, 4),
             "category": ledger_row.category or ledger_row.action,
             "description": ledger_row.description or "",
             "breakdown": breakdown,
@@ -391,13 +386,12 @@ def get_user_costs(
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
             "last_active_at": last_active_row.isoformat() if last_active_row else None,
         },
-        "credit_balance": round(user.spending_limit, 2),
         "summary": {
-            "credits_used_today": credits_today,
-            "credits_used_month": credits_month,
-            "total_credits_charged": total_credits_charged,
+            "cost_this_week_usd": cost_this_week,
+            "cost_this_month_usd": cost_this_month,
+            "total_cost_usd": total_cost_usd,
             "total_briefings": total_briefings,
-            "avg_cost_per_briefing": avg_cost,
+            "avg_cost_per_briefing_usd": avg_cost_usd,
         },
         "transactions": transactions,
         "recent_flights": recent_flights,

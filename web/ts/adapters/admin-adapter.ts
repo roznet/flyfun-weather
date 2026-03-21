@@ -98,18 +98,17 @@ export interface UserCostUser {
 }
 
 export interface UserCostSummary {
-  credits_used_today: number;
-  credits_used_month: number;
-  total_credits_charged: number;
+  cost_this_week_usd: number;
+  cost_this_month_usd: number;
+  total_cost_usd: number;
   total_briefings: number;
-  avg_cost_per_briefing: number;
+  avg_cost_per_briefing_usd: number;
 }
 
 export interface UserCostTransaction {
   id: number;
   timestamp: string;
-  amount: number;
-  balance_after: number;
+  cost_usd: number;
   category: string;
   description: string;
   breakdown: Record<string, number> | null;
@@ -136,7 +135,6 @@ export interface UserCostBreakdown {
 
 export interface UserCostsResponse {
   user: UserCostUser;
-  credit_balance: number;
   summary: UserCostSummary;
   transactions: UserCostTransaction[];
   recent_flights: UserCostFlight[];
