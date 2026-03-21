@@ -32,6 +32,7 @@ class ModelAgreementEvaluator:
                 "on key variables, reducing forecast confidence."
             ),
             category="model",
+            default_enabled=False,
             parameters=[
                 AdvisoryParameterDef(
                     key="min_poor_vars",
