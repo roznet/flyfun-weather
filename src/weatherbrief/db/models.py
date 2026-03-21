@@ -178,31 +178,3 @@ class CostConfigRow(Base):
     usd_per_credit: Mapped[float] = mapped_column(Float, default=0.01)
 
 
-class CreditLedgerRow(Base):
-    """Legacy credit ledger — kept for migration compatibility.
-
-    New code should use flyfun_common.db.models.CostLedgerRow instead.
-    """
-
-    __tablename__ = "credit_ledger"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True,
-    )
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
-    )
-    amount: Mapped[float] = mapped_column(Float)
-    balance_after: Mapped[float] = mapped_column(Float)
-    category: Mapped[str] = mapped_column(String(32))
-    description: Mapped[str] = mapped_column(String(256), default="")
-    breakdown_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    briefing_usage_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("briefing_usage.id", ondelete="SET NULL"), nullable=True,
-    )
-    cost_config_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("cost_config.id", ondelete="SET NULL"), nullable=True,
-    )
-
-    user: Mapped[UserRow] = relationship(UserRow)

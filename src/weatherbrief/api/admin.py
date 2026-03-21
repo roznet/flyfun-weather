@@ -30,8 +30,9 @@ from flyfun_common.admin import (
     hash_token,
     TOKEN_PREFIX,
 )
+from flyfun_common.db.models import CostLedgerRow
 from weatherbrief.db.models import (
-    BriefingUsageRow, CreditLedgerRow, FlightRow,
+    BriefingUsageRow, FlightRow,
 )
 from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails
 from weatherbrief.storage.flights import safe_path_component
@@ -246,28 +247,30 @@ def get_user_costs(
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     # --- Credits used today/month (reuse pattern from credits.py) ---
-    from weatherbrief.api.credits import _credits_used_since
+    from weatherbrief.api.credits import SERVICE, USD_PER_CREDIT, _credits_used_since
 
     credits_today = round(_credits_used_since(db, user_id, today_start), 2)
     credits_month = round(_credits_used_since(db, user_id, month_start), 2)
 
     # --- Total credits charged (all time) + total briefings ---
-    total_charged_result = (
-        db.query(func.coalesce(func.sum(CreditLedgerRow.amount), 0.0))
+    total_cost_usd = float(
+        db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
         .filter(
-            CreditLedgerRow.user_id == user_id,
-            CreditLedgerRow.amount < 0,
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
         )
         .scalar()
     )
-    total_credits_charged = round(abs(float(total_charged_result)), 2)
+    total_credits_charged = round(total_cost_usd / USD_PER_CREDIT, 2) if USD_PER_CREDIT > 0 else 0.0
 
     total_briefings = (
         db.query(func.count())
-        .select_from(CreditLedgerRow)
+        .select_from(CostLedgerRow)
         .filter(
-            CreditLedgerRow.user_id == user_id,
-            CreditLedgerRow.category == "briefing",
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
         )
         .scalar()
     ) or 0
@@ -283,31 +286,39 @@ def get_user_costs(
 
     # --- Transactions with flight_id via briefing_usage join ---
     tx_query = (
-        db.query(CreditLedgerRow, BriefingUsageRow.flight_id)
+        db.query(CostLedgerRow, BriefingUsageRow.flight_id)
         .outerjoin(
             BriefingUsageRow,
-            CreditLedgerRow.briefing_usage_id == BriefingUsageRow.id,
+            func.cast(CostLedgerRow.reference_id, Integer) == BriefingUsageRow.id,
         )
-        .filter(CreditLedgerRow.user_id == user_id)
-        .order_by(CreditLedgerRow.timestamp.desc())
+        .filter(
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+        )
+        .order_by(CostLedgerRow.created_at.desc())
         .limit(limit)
         .all()
     )
     transactions = []
     for ledger_row, flight_id in tx_query:
         breakdown = None
-        if ledger_row.breakdown_json:
+        if ledger_row.detail_json:
             try:
-                breakdown = json.loads(ledger_row.breakdown_json)
+                breakdown = json.loads(ledger_row.detail_json)
             except (json.JSONDecodeError, TypeError):
                 pass
+        # Backward-compat amount in credits
+        if ledger_row.category == "topup":
+            amount = 500.0
+        else:
+            amount = -ledger_row.cost / USD_PER_CREDIT if USD_PER_CREDIT > 0 else 0.0
         transactions.append({
             "id": ledger_row.id,
-            "timestamp": ledger_row.timestamp.isoformat() if ledger_row.timestamp else "",
-            "amount": ledger_row.amount,
-            "balance_after": ledger_row.balance_after,
-            "category": ledger_row.category,
-            "description": ledger_row.description,
+            "timestamp": ledger_row.created_at.isoformat() if ledger_row.created_at else "",
+            "amount": round(amount, 2),
+            "balance_after": 0.0,  # deprecated
+            "category": ledger_row.category or ledger_row.action,
+            "description": ledger_row.description or "",
             "breakdown": breakdown,
             "flight_id": flight_id or None,
         })
@@ -335,11 +346,12 @@ def get_user_costs(
 
     # --- Aggregate cost breakdown from all briefing ledger entries ---
     briefing_entries = (
-        db.query(CreditLedgerRow.breakdown_json)
+        db.query(CostLedgerRow.detail_json)
         .filter(
-            CreditLedgerRow.user_id == user_id,
-            CreditLedgerRow.category == "briefing",
-            CreditLedgerRow.breakdown_json.isnot(None),
+            CostLedgerRow.user_id == user_id,
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
+            CostLedgerRow.detail_json.isnot(None),
         )
         .all()
     )

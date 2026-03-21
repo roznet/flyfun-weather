@@ -771,14 +771,13 @@ function renderCredits(credits: CreditSummary): void {
       return `<tr>
         <td class="muted">${ts}</td>
         <td class="${cls}">${sign}${tx.amount.toFixed(2)}</td>
-        <td>${tx.balance_after.toFixed(0)}</td>
         <td class="muted">${tx.category}</td>
       </tr>`;
     }).join('');
     txEl.innerHTML = `
       <h4 class="subsection-heading">${t('settings.recentTransactions')}</h4>
       <table class="credits-table">
-        <thead><tr><th>${t('settings.txDate')}</th><th>${t('settings.txAmount')}</th><th>${t('settings.txBalance')}</th><th>${t('settings.txType')}</th></tr></thead>
+        <thead><tr><th>${t('settings.txDate')}</th><th>${t('settings.txAmount')}</th><th>${t('settings.txType')}</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
   }

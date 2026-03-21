@@ -168,7 +168,7 @@ function renderCostDistribution(bd: UserCostBreakdown, avgCost: number, totalBri
 function renderTransactions(transactions: UserCostTransaction[]): void {
   const tbody = document.getElementById('tx-tbody')!;
   if (transactions.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="muted" style="text-align:center;padding:1rem;">No transactions yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;padding:1rem;">No transactions yet</td></tr>';
     return;
   }
   tbody.innerHTML = transactions.map(tx => {
@@ -194,7 +194,7 @@ function renderTransactions(transactions: UserCostTransaction[]): void {
         .filter(([, v]) => v !== undefined)
         .map(([label, v]) => `<div><span class="bd-label">${label}</span><br><span class="bd-value">${typeof v === 'number' ? (label === 'Credits' ? v.toFixed(2) : '$' + v.toFixed(4)) : v}</span></div>`)
         .join('');
-      breakdownRow = `<tr class="tx-breakdown" data-tx-detail="${tx.id}"><td colspan="6"><div class="breakdown-grid">${items}</div></td></tr>`;
+      breakdownRow = `<tr class="tx-breakdown" data-tx-detail="${tx.id}"><td colspan="5"><div class="breakdown-grid">${items}</div></td></tr>`;
     }
 
     const flightLink = tx.flight_id
@@ -207,7 +207,6 @@ function renderTransactions(transactions: UserCostTransaction[]): void {
         <td>${escapeHtml(tx.category)}</td>
         <td>${escapeHtml(tx.description)}${flightLink}</td>
         <td class="num ${amountClass}">${amountStr}</td>
-        <td class="num">${tx.balance_after.toFixed(1)}</td>
         <td>${expandBtn}</td>
       </tr>${breakdownRow}`;
   }).join('');
