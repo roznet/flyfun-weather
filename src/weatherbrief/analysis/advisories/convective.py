@@ -154,6 +154,9 @@ class ConvectiveEvaluator:
                     detail = adv_t("convective.none", loc)
             else:
                 status = pct_above_threshold(affected, total, affected_pct_amber, affected_pct_red)
+                # LOW risk alone can't escalate to RED — cap at AMBER
+                if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
+                    status = AdvisoryStatus.AMBER
                 detail = adv_t("convective.risk_over", loc, risk=worst_risk.value.upper(), extent=ext)
 
             per_model.append(ModelAdvisoryResult.build(
