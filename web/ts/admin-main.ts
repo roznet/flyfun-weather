@@ -46,6 +46,8 @@ function setupPeriodToggle(): void {
 let perfLoaded = false;
 let systemsLoaded = false;
 let systemsPeriod: AdminPeriod = '30d';
+let systemsSort: 'last_active' | 'total_cost' = 'last_active';
+let systemsData: HubResponse | null = null;
 
 function setupTabs(): void {
   document.querySelectorAll('.settings-tabs .tab-btn').forEach((btn) => {
@@ -516,14 +518,28 @@ async function loadSystems(): Promise<void> {
   const tbody = document.getElementById('systems-tbody')!;
   tbody.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>';
   try {
-    const data = await fetchHubUsers(systemsPeriod);
-    renderSystems(data);
+    systemsData = await fetchHubUsers(systemsPeriod);
+    renderSystems();
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--danger);">Failed to load: ${err}</td></tr>`;
   }
 }
 
-function renderSystems(data: HubResponse): void {
+function sortSystemsUsers(users: HubResponse['users']): HubResponse['users'] {
+  return [...users].sort((a, b) => {
+    if (systemsSort === 'last_active') {
+      const ta = a.last_active || '';
+      const tb = b.last_active || '';
+      return tb.localeCompare(ta);
+    }
+    return b.total_cost_usd - a.total_cost_usd;
+  });
+}
+
+function renderSystems(): void {
+  const data = systemsData;
+  if (!data) return;
+
   // Collect all service names across all users
   const allServices = new Set<string>();
   for (const u of data.users) {
@@ -545,28 +561,44 @@ function renderSystems(data: HubResponse): void {
       return `<div class="summary-card"><div class="value">$${total.toFixed(2)}</div><div class="label">${SERVICE_LABELS[svc] || svc}</div></div>`;
     }).join('')}`;
 
-  // Table header
+  const sortIcon = (col: string) => systemsSort === col ? ' ▼' : '';
+
+  // Table header with clickable sort columns
   const thead = document.getElementById('systems-thead')!;
   thead.innerHTML = `<tr>
     <th>Name</th>
     <th>Email</th>
+    <th class="sortable-th" data-sort-col="last_active" style="cursor:pointer;">Last Active${sortIcon('last_active')}</th>
     ${services.map(svc => `<th style="text-align:center;">${SERVICE_LABELS[svc] || svc}</th>`).join('')}
-    <th style="text-align:right;">Total</th>
+    <th class="sortable-th" data-sort-col="total_cost" style="text-align:right;cursor:pointer;">Total${sortIcon('total_cost')}</th>
     <th></th>
   </tr>`;
 
+  // Wire up sort clicks
+  thead.querySelectorAll('.sortable-th').forEach(th => {
+    th.addEventListener('click', () => {
+      systemsSort = (th as HTMLElement).dataset.sortCol as typeof systemsSort;
+      renderSystems();
+    });
+  });
+
   // Table body
   const tbody = document.getElementById('systems-tbody')!;
-  if (data.users.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="${3 + services.length + 1}" class="muted" style="text-align:center;padding:2rem;">No cost data for this period.</td></tr>`;
+  const sorted = sortSystemsUsers(data.users);
+  if (sorted.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="${4 + services.length + 1}" class="muted" style="text-align:center;padding:2rem;">No cost data for this period.</td></tr>`;
     return;
   }
-  tbody.innerHTML = data.users.map(u => {
+  tbody.innerHTML = sorted.map(u => {
     const svcCells = services.map(svc => {
       const s = u.services[svc];
       if (!s) return '<td class="num muted">-</td>';
       return `<td class="num">$${s.cost_usd.toFixed(2)} <span class="muted">(${s.count})</span></td>`;
     }).join('');
+
+    const lastActive = u.last_active
+      ? formatDate(u.last_active)
+      : '<span class="muted">-</span>';
 
     // Detail links
     const links = services
@@ -580,6 +612,7 @@ function renderSystems(data: HubResponse): void {
     return `<tr>
       <td>${escapeHtml(u.display_name)}</td>
       <td class="muted">${escapeHtml(u.email)}</td>
+      <td>${lastActive}</td>
       ${svcCells}
       <td style="text-align:right;font-weight:600;">$${u.total_cost_usd.toFixed(2)}</td>
       <td>${links}</td>

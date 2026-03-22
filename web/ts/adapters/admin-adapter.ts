@@ -160,6 +160,7 @@ export interface HubUser {
   services: Record<string, HubServiceCost>;
   total_cost_usd: number;
   total_actions: number;
+  last_active: string | null;
 }
 
 export interface HubResponse {
