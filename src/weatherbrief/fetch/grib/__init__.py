@@ -99,10 +99,9 @@ def enrich_forecasts(
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
 
-    # Run GFS and ICON-EU enrichment in parallel — they target different
-    # cross-sections (GFS vs ICON) and different model forecasts, so no
-    # data conflicts.  The ICON-EU diagnostic priority guard (is None check)
-    # is per-model and doesn't interact with GFS writes.
+    # Download GFS and ICON-EU in parallel (network-bound), but decode
+    # sequentially (memory-bound). ICON-EU decode peaks at ~270MB per
+    # variable; overlapping with GFS decode caused OOM.
     if progress_callback is not None:
         progress_callback("grib_enrichment", "GFS + ICON-EU")
 
@@ -110,6 +109,16 @@ def enrich_forecasts(
     icon_ts: int | None = None
     icon_skip: str | None = None
 
+    # Prepare ICON-EU context (run discovery, domain check, etc.)
+    icon_ctx = _prepare_icon_eu(
+        cross_sections, route_points, departure_time,
+        data_dir=data_dir,
+        flight_duration_hours=flight_duration_hours,
+        as_of_time=as_of_time,
+    )
+
+    # Phase 1: Download in parallel — GFS (download+decode, it's small)
+    # overlaps with ICON-EU download-only (cached to disk).
     with ThreadPoolExecutor(max_workers=2) as pool:
         gfs_future = pool.submit(
             _enrich_gfs,
@@ -118,15 +127,24 @@ def enrich_forecasts(
             flight_duration_hours=flight_duration_hours,
             as_of_time=as_of_time,
         )
-        icon_future = pool.submit(
-            _enrich_icon_eu,
-            cross_sections, all_forecasts, route_points,
-            departure_time, data_dir=data_dir,
-            flight_duration_hours=flight_duration_hours,
-            as_of_time=as_of_time,
-        )
+        if icon_ctx is not None:
+            icon_dl_future = pool.submit(
+                _prefetch_icon_eu_data, icon_ctx,
+            )
+        else:
+            icon_dl_future = None
+
         gfs_ts = gfs_future.result()
-        icon_ts, icon_skip = icon_future.result()
+        if icon_dl_future is not None:
+            icon_dl_future.result()  # ensure downloads are cached
+
+    # Phase 2: Decode ICON-EU sequentially (memory-heavy, GFS is done).
+    if icon_ctx is not None:
+        icon_ts, icon_skip = _decode_and_merge_icon_eu(
+            icon_ctx, cross_sections, all_forecasts, route_points,
+        )
+    else:
+        icon_skip = icon_ctx  # None
 
     if gfs_ts is not None:
         grib_init_times["gfs"] = gfs_ts
@@ -446,30 +464,44 @@ def _enrich_cloud_diagnostics(
 # ---------------------------------------------------------------------------
 
 
-def _enrich_icon_eu(
+class _IconEuContext:
+    """Holds resolved ICON-EU run info for split download/decode phases."""
+
+    __slots__ = (
+        "init_date", "init_hour", "forecast_hours", "run_dir",
+        "levels", "point_lats", "point_lons", "session",
+    )
+
+    def __init__(
+        self, init_date: str, init_hour: int, forecast_hours: list[int],
+        run_dir: Path, levels: list[int],
+        point_lats: list[float], point_lons: list[float],
+        session: requests.Session,
+    ):
+        self.init_date = init_date
+        self.init_hour = init_hour
+        self.forecast_hours = forecast_hours
+        self.run_dir = run_dir
+        self.levels = levels
+        self.point_lats = point_lats
+        self.point_lons = point_lons
+        self.session = session
+
+
+def _prepare_icon_eu(
     cross_sections: list[RouteCrossSection],
-    all_forecasts: list[WaypointForecast],
     route_points: list[RoutePoint],
     departure_time: datetime,
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
     as_of_time: datetime | None = None,
-) -> tuple[int | None, str | None]:
-    """Enrich ICON cross-sections with QC/QI from ICON-EU GRIB2.
-
-    Returns:
-        (init_timestamp, skip_reason) — init_timestamp is the GRIB init Unix
-        timestamp when enrichment succeeded, None otherwise. skip_reason is a
-        short string when enrichment was skipped for a known reason (e.g.
-        ``"out_of_range"``), None otherwise.
-    """
+) -> _IconEuContext | None:
+    """Resolve ICON-EU run info and check eligibility. Returns None to skip."""
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_MODEL_LEVEL_MAX,
         ICON_EU_MODEL_LEVEL_MIN,
-        ICON_EU_VARIABLES,
         compute_icon_eu_flight_window_hours,
-        fetch_icon_eu_fields,
         find_latest_icon_eu_run,
         route_in_icon_eu_domain,
     )
@@ -477,12 +509,11 @@ def _enrich_icon_eu(
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
     if not icon_sections:
         logger.debug("No ICON cross-sections to enrich")
-        return None, None
+        return None
 
-    # Domain check — skip silently if route is outside ICON-EU bounds
     if not route_in_icon_eu_domain(route_points):
         logger.info("Route outside ICON-EU domain, skipping ICON-EU enrichment")
-        return None, None
+        return None
 
     session = requests.Session()
 
@@ -492,68 +523,136 @@ def _enrich_icon_eu(
         )
     except Exception:
         logger.warning("Failed to find ICON-EU model run", exc_info=True)
-        return None, None
+        return None
 
     if run_info is None:
         logger.warning("No ICON-EU model run found for enrichment")
-        return None, None
+        return None
 
     init_date, init_hour = run_info
 
-    # Check if departure exceeds ICON-EU's 120h forecast range
     init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
     if (departure_time - init_dt).total_seconds() / 3600 > 120:
         logger.info("ICON-EU: departure exceeds 120h range, skipping")
-        return None, "out_of_range"
+        return None
+
     forecast_hours = compute_icon_eu_flight_window_hours(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
 
     purge_old_runs(data_dir, model="icon-eu")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
-
-    point_lats = [rp.lat for rp in route_points]
-    point_lons = [rp.lon for rp in route_points]
     levels = list(range(ICON_EU_MODEL_LEVEL_MIN, ICON_EU_MODEL_LEVEL_MAX + 1))
 
-    # ICON-EU GRIB data is ~190MB per fhour; decoding via cfgrib/xarray
-    # expands to ~800MB+. Process one fhour at a time to limit memory.
+    return _IconEuContext(
+        init_date=init_date, init_hour=init_hour,
+        forecast_hours=forecast_hours, run_dir=run_dir, levels=levels,
+        point_lats=[rp.lat for rp in route_points],
+        point_lons=[rp.lon for rp in route_points],
+        session=session,
+    )
+
+
+def _prefetch_icon_eu_data(ctx: _IconEuContext) -> None:
+    """Download ICON-EU GRIB2 data and cache to disk (no decode).
+
+    Runs in a background thread while GFS enrichment proceeds.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU_VARIABLES,
+        fetch_icon_eu_per_variable,
+        fetch_icon_eu_single_level,
+    )
+
+    for fhour in ctx.forecast_hours:
+        # Model-level data (P, QC, QI) — per variable
+        legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
+        if get_cached(ctx.run_dir, legacy_ck) is not None:
+            continue  # legacy cache hit, skip per-var download
+
+        for var in ICON_EU_VARIABLES:
+            ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
+            if get_cached(ctx.run_dir, ck) is not None:
+                continue
+            try:
+                per_var = fetch_icon_eu_per_variable(
+                    ctx.init_date, ctx.init_hour, fhour,
+                    levels=ctx.levels,
+                    variables=[var],
+                    session=ctx.session,
+                )
+                data = per_var.get(var)
+                if data:
+                    put_cached(ctx.run_dir, ck, data)
+            except Exception:
+                logger.warning("Prefetch ICON-EU f%03d %s failed", fhour, var, exc_info=True)
+
+        # Single-level cloud diagnostics
+        diag_ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
+        if get_cached(ctx.run_dir, diag_ck) is None:
+            try:
+                fetched = fetch_icon_eu_single_level(
+                    ctx.init_date, ctx.init_hour, [fhour], session=ctx.session,
+                )
+                grib_bytes = fetched.get(fhour)
+                if grib_bytes:
+                    put_cached(ctx.run_dir, diag_ck, grib_bytes)
+            except Exception:
+                logger.warning("Prefetch ICON-EU cloud diag f%03d failed", fhour, exc_info=True)
+
+
+def _decode_and_merge_icon_eu(
+    ctx: _IconEuContext,
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+) -> tuple[int | None, str | None]:
+    """Decode cached ICON-EU data and merge into cross-sections.
+
+    Called after prefetch has cached all data to disk.
+    """
     import gc
 
-    from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
+    from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point, decode_icon_eu_per_point_chunked
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
 
-    def _fetch_and_decode_fhour(fhour: int) -> list[dict[int, dict[str, float]]] | None:
-        ck = cache_key(fhour, "ICON_EU_QC_QI_P")
-        grib_bytes = get_cached(run_dir, ck)
-        if grib_bytes is None:
-            try:
-                grib_bytes = fetch_icon_eu_fields(
-                    init_date, init_hour, fhour,
-                    levels=levels,
-                    variables=list(ICON_EU_VARIABLES),
-                    session=session,
-                )
-                if grib_bytes:
-                    put_cached(run_dir, ck, grib_bytes)
-            except Exception:
-                logger.warning("Failed to fetch ICON-EU f%03d", fhour, exc_info=True)
-                return None
-        if not grib_bytes:
+    icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
+
+    def _decode_fhour(fhour: int) -> list[dict[int, dict[str, float]]] | None:
+        # Check for legacy combined cache first
+        legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
+        legacy_bytes = get_cached(ctx.run_dir, legacy_ck)
+        if legacy_bytes is not None:
+            decoded = decode_icon_eu_per_point(legacy_bytes, ctx.point_lats, ctx.point_lons)
+            del legacy_bytes
+            gc.collect()
+            return decoded
+
+        # Load per-variable data from cache (already downloaded by prefetch)
+        var_bytes: dict[str, bytes] = {}
+        for var in ICON_EU_VARIABLES:
+            ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
+            cached = get_cached(ctx.run_dir, ck)
+            if cached is not None:
+                var_bytes[var] = cached
+
+        if not var_bytes:
             return None
-        decoded = decode_icon_eu_per_point(grib_bytes, point_lats, point_lons)
-        del grib_bytes
+
+        decoded = decode_icon_eu_per_point_chunked(var_bytes, ctx.point_lats, ctx.point_lons)
+        del var_bytes
         gc.collect()
         return decoded
 
     total_enriched = 0
-    for fhour in forecast_hours:
-        decoded_points = _fetch_and_decode_fhour(fhour)
+    for fhour in ctx.forecast_hours:
+        decoded_points = _decode_fhour(fhour)
         if not decoded_points:
             continue
 
-        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        valid_utc = _forecast_hour_to_utc(ctx.init_date, ctx.init_hour, fhour)
         total_enriched += _merge_cloud_water_into_sections(
             icon_sections, all_forecasts, route_points, decoded_points, "icon",
             valid_utc=valid_utc,
@@ -573,11 +672,11 @@ def _enrich_icon_eu(
     # Cloud diagnostics (ceiling, convective base/top) from single-level files
     _enrich_icon_eu_cloud_diagnostics(
         icon_sections, all_forecasts, route_points,
-        init_date, init_hour, forecast_hours,
-        run_dir, point_lats, point_lons, session,
+        ctx.init_date, ctx.init_hour, ctx.forecast_hours,
+        ctx.run_dir, ctx.point_lats, ctx.point_lons, ctx.session,
     )
 
-    return _run_info_to_timestamp(init_date, init_hour), None
+    return _run_info_to_timestamp(ctx.init_date, ctx.init_hour), None
 
 
 def _enrich_icon_eu_cloud_diagnostics(

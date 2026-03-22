@@ -394,3 +394,59 @@ def fetch_icon_eu_fields(
         forecast_hour, downloaded, downloaded + failed, len(result) / 1024,
     )
     return bytes(result)
+
+
+def fetch_icon_eu_per_variable(
+    init_date: str,
+    init_hour: int,
+    forecast_hour: int,
+    levels: list[int],
+    variables: list[str],
+    session: requests.Session | None = None,
+) -> dict[str, bytes]:
+    """Download ICON-EU GRIB2 fields per variable for memory-efficient decoding.
+
+    Same as fetch_icon_eu_fields but returns separate bytes per variable,
+    so callers can decode one variable at a time and free memory between.
+
+    Returns:
+        {variable_name: concatenated_decompressed_grib2_bytes}.
+    """
+    sess = session or requests.Session()
+    result: dict[str, bytes] = {}
+
+    for var in variables:
+        urls = [
+            icon_eu_file_url(init_date, init_hour, forecast_hour, level, var)
+            for level in levels
+        ]
+
+        buf = bytearray()
+        downloaded = 0
+        failed = 0
+
+        with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+            futures = {
+                pool.submit(_download_one_file, url, sess): url
+                for url in urls
+            }
+            for future in as_completed(futures):
+                data = future.result()
+                if data is not None:
+                    buf.extend(data)
+                    downloaded += 1
+                else:
+                    failed += 1
+
+        if buf:
+            result[var] = bytes(buf)
+            logger.info(
+                "ICON-EU f%03d %s: downloaded %d/%d levels (%.1f KB)",
+                forecast_hour, var, downloaded, downloaded + failed, len(buf) / 1024,
+            )
+        else:
+            logger.warning(
+                "ICON-EU f%03d %s: all %d files failed", forecast_hour, var, failed,
+            )
+
+    return result

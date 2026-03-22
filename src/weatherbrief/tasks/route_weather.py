@@ -198,10 +198,10 @@ def run_route_weather(
     """
     from euro_aip.briefing.weather.analysis import WeatherAnalyzer
     from euro_aip.briefing.weather.route_weather import RouteWeatherService
-    from euro_aip.storage.database_storage import DatabaseStorage
 
-    storage = DatabaseStorage(airports_db_path)
-    model = storage.load_model()
+    from weatherbrief.airports import _load_airport_model
+
+    model = _load_airport_model(airports_db_path)
 
     route_icaos = [wp.icao for wp in route.waypoints]
     route_distances = _compute_route_distances(route)

@@ -31,14 +31,14 @@ def _mock_model(airports_dict: dict):
     return model
 
 
-@patch("weatherbrief.airports.DatabaseStorage")
-def test_resolve_waypoints(mock_storage_cls):
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints(mock_load):
     """Resolves ICAO codes to Waypoints."""
     airports = {
         "EGTK": _mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
         "LSGS": _mock_airport("LSGS", "Sion", 46.2192, 7.3267),
     }
-    mock_storage_cls.return_value.load_model.return_value = _mock_model(airports)
+    mock_load.return_value = _mock_model(airports)
 
     result = resolve_waypoints(["EGTK", "LSGS"], "/fake/db.sqlite")
 
@@ -49,24 +49,24 @@ def test_resolve_waypoints(mock_storage_cls):
     assert result[1].lon == 7.3267
 
 
-@patch("weatherbrief.airports.DatabaseStorage")
-def test_resolve_waypoints_missing(mock_storage_cls):
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints_missing(mock_load):
     """Raises KeyError for unknown ICAO codes."""
     airports = {
         "EGTK": _mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
     }
-    mock_storage_cls.return_value.load_model.return_value = _mock_model(airports)
+    mock_load.return_value = _mock_model(airports)
 
     with pytest.raises(KeyError, match="ZZZZ"):
         resolve_waypoints(["EGTK", "ZZZZ"], "/fake/db.sqlite")
 
 
-@patch("weatherbrief.airports.DatabaseStorage")
-def test_resolve_waypoints_no_coordinates(mock_storage_cls):
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints_no_coordinates(mock_load):
     """Raises KeyError when airport has no coordinates."""
     airport = _mock_airport("EGTK", "Oxford Kidlington", None, None)
     airports = {"EGTK": airport}
-    mock_storage_cls.return_value.load_model.return_value = _mock_model(airports)
+    mock_load.return_value = _mock_model(airports)
 
     with pytest.raises(KeyError, match="no coordinates"):
         resolve_waypoints(["EGTK"], "/fake/db.sqlite")

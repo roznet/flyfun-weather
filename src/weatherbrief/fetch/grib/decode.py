@@ -399,6 +399,163 @@ def decode_cloud_diag_per_point(
         tmp_path.unlink(missing_ok=True)
 
 
+def _decode_icon_eu_single_var(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> dict[int, list[float | None]]:
+    """Decode a single ICON-EU variable and spatially interpolate to route points.
+
+    Returns:
+        {model_level: [value_for_point_0, value_for_point_1, ...]}.
+        Empty dict on failure.
+    """
+    import cfgrib
+
+    if not grib_bytes:
+        return {}
+
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        datasets = cfgrib.open_datasets(str(tmp_path))
+        # ICON-EU uses -180 to +180 longitude convention
+        target_lons = list(longitudes)
+        level_values: dict[int, list[float | None]] = {}
+
+        for ds in datasets:
+            for var_name, xr_var in ds.data_vars.items():
+                # Find the model-level dimension
+                var_level_coord = None
+                for coord_name in ("generalVerticalLayer", "generalVertical", "level", "hybrid"):
+                    if coord_name in xr_var.dims:
+                        var_level_coord = coord_name
+                        break
+
+                if var_level_coord is not None:
+                    levels = ds.coords[var_level_coord].values
+                    for lev_val in levels:
+                        lev = int(float(lev_val))
+                        level_data = xr_var.sel({var_level_coord: lev_val})
+                        values = _interpolate_per_point(
+                            level_data, latitudes, target_lons,
+                        )
+                        level_values[lev] = values
+                else:
+                    lev = int(xr_var.attrs.get("level", xr_var.attrs.get("GRIB_level", 0)))
+                    if lev > 0:
+                        values = _interpolate_per_point(
+                            xr_var, latitudes, target_lons,
+                        )
+                        level_values[lev] = values
+
+            ds.close()
+        del datasets
+        return level_values
+    except Exception:
+        logger.warning("cfgrib failed to decode ICON-EU single-var GRIB2", exc_info=True)
+        return {}
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def decode_icon_eu_per_point_chunked(
+    var_bytes: dict[str, bytes],
+    latitudes: list[float],
+    longitudes: list[float],
+    target_pressures_hpa: list[int] | None = None,
+) -> list[dict[int, dict[str, float]]]:
+    """Decode ICON-EU model-level GRIB2 per-variable to limit peak memory.
+
+    Instead of decoding all variables at once (~800MB), this processes one
+    variable at a time (~270MB peak), keeping only the small interpolated
+    point values between steps.
+
+    Args:
+        var_bytes: {variable_name: grib_bytes} — one entry per variable
+            (e.g. "p", "qc", "qi"). Each is concatenated GRIB2 for all
+            model levels of that variable.
+        latitudes: Target latitudes for interpolation.
+        longitudes: Target longitudes for interpolation.
+        target_pressures_hpa: Target pressure levels in hPa.
+
+    Returns:
+        List of dicts (one per point): [{pressure_hpa: {field: value}}, ...].
+    """
+    import gc
+
+    from weatherbrief.fetch.grib.icon_eu_levels import (
+        TARGET_PRESSURE_LEVELS_HPA,
+        interpolate_model_to_pressure_levels,
+    )
+
+    if target_pressures_hpa is None:
+        target_pressures_hpa = TARGET_PRESSURE_LEVELS_HPA
+
+    n_points = len(latitudes)
+
+    # Step 1: Decode P (pressure) variable — needed for vertical interpolation
+    p_bytes = var_bytes.get("p", b"")
+    pressure_data = _decode_icon_eu_single_var(p_bytes, latitudes, longitudes)
+    del p_bytes
+    gc.collect()
+
+    if not pressure_data:
+        logger.warning("No pressure (P) data found in ICON-EU GRIB — cannot interpolate")
+        return [{} for _ in range(n_points)]
+
+    model_levels = sorted(pressure_data.keys())
+    results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+
+    # Step 2: Decode each cloud variable one at a time, interpolate, discard
+    for var_name, field_key in (
+        ("qc", "cloud_liquid_water_kg_kg"),
+        ("qi", "ice_mixing_ratio_kg_kg"),
+    ):
+        raw = var_bytes.get(var_name, b"")
+        if not raw:
+            continue
+        field_data = _decode_icon_eu_single_var(raw, latitudes, longitudes)
+        del raw
+        gc.collect()
+
+        if not field_data:
+            continue
+
+        for pt_idx in range(n_points):
+            model_pressures: list[float] = []
+            model_values: list[float] = []
+
+            for lev in model_levels:
+                p_vals = pressure_data.get(lev)
+                f_vals = field_data.get(lev)
+                if p_vals is None or f_vals is None:
+                    continue
+                if pt_idx >= len(p_vals) or pt_idx >= len(f_vals):
+                    continue
+                p_val = p_vals[pt_idx]
+                f_val = f_vals[pt_idx]
+                if p_val is not None and f_val is not None:
+                    model_pressures.append(p_val)
+                    model_values.append(f_val)
+
+            if len(model_pressures) < 2:
+                continue
+
+            interp_result = interpolate_model_to_pressure_levels(
+                model_pressures, model_values, target_pressures_hpa,
+            )
+            for p_hpa, val in interp_result.items():
+                results[pt_idx].setdefault(p_hpa, {})[field_key] = val
+
+        del field_data
+        gc.collect()
+
+    return results
+
+
 def decode_icon_eu_per_point(
     grib_bytes: bytes,
     latitudes: list[float],
@@ -407,10 +564,8 @@ def decode_icon_eu_per_point(
 ) -> list[dict[int, dict[str, float]]]:
     """Decode ICON-EU model-level GRIB2 and interpolate to pressure levels per point.
 
-    ICON-EU data is on model levels (not pressure levels). This function:
-    1. Decodes QC, QI, and P fields from the GRIB2 bytes
-    2. Spatially interpolates each field to route point coordinates
-    3. Vertically interpolates from model levels to pressure levels using P
+    Legacy interface — decodes all variables from a single concatenated blob.
+    Prefer decode_icon_eu_per_point_chunked() for lower peak memory.
 
     Args:
         grib_bytes: Concatenated GRIB2 messages from ICON-EU.
