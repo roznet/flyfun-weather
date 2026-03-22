@@ -145,6 +145,34 @@ export async function fetchUserCosts(userId: string, limit = 50): Promise<UserCo
   return apiFetch<UserCostsResponse>(`/admin/users/${encodeURIComponent(userId)}/costs?limit=${limit}`);
 }
 
+// --- Hub (cross-app) ---
+
+export interface HubServiceCost {
+  cost_usd: number;
+  count: number;
+}
+
+export interface HubUser {
+  id: string;
+  email: string;
+  display_name: string;
+  approved: boolean;
+  services: Record<string, HubServiceCost>;
+  total_cost_usd: number;
+  total_actions: number;
+}
+
+export interface HubResponse {
+  period: string;
+  app_registry: Record<string, string | null>;
+  users: HubUser[];
+  totals: { cost_usd: number; actions: number; users: number };
+}
+
+export async function fetchHubUsers(period = '30d'): Promise<HubResponse> {
+  return apiFetch<HubResponse>(`/admin/hub/users?period=${period}`);
+}
+
 // --- Feedback ---
 
 export interface FeedbackEntry {

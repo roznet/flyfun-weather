@@ -27,7 +27,7 @@ from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import refresh_router, router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
 from weatherbrief.api.profiles import router as profiles_router
-from weatherbrief.api.admin import router as admin_router
+from weatherbrief.api.admin import router as admin_router, require_admin
 from weatherbrief.api.credits import (
     admin_router as cost_config_router,
     router as credits_router,
@@ -36,6 +36,7 @@ from weatherbrief.api.credits import (
 from weatherbrief.api.feedback import router as feedback_router
 from weatherbrief.api.models import router as models_router
 from weatherbrief.api.usage import router as usage_router
+from flyfun_common.admin_hub import create_hub_router
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,16 @@ def create_app() -> FastAPI:
     app.include_router(models_router, prefix="/api")
     app.include_router(refresh_router, prefix="/api")
     app.include_router(transparency_router, prefix="/api")
+
+    hub_router = create_hub_router(
+        require_admin=require_admin,
+        app_registry={
+            "flyfun-weather": "/user-costs.html?user={user_id}",
+            "flyfun-maps": None,
+            "flyfun-forms": None,
+        },
+    )
+    app.include_router(hub_router, prefix="/api/admin")
 
     @app.get("/health")
     def health():

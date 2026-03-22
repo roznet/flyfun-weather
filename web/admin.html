@@ -149,6 +149,7 @@
     <div class="settings-tabs">
       <button class="tab-btn active" data-tab="tab-feedback">Feedback</button>
       <button class="tab-btn" data-tab="tab-usage">Usage</button>
+      <button class="tab-btn" data-tab="tab-systems">Systems</button>
       <button class="tab-btn" data-tab="tab-performance">Performance</button>
     </div>
 
@@ -227,6 +228,23 @@
           </table>
         </div>
         <div id="users-footer" class="users-footer muted" style="display:none;"></div>
+      </div>
+    </div>
+
+    <!-- Systems tab -->
+    <div id="tab-systems" class="tab-panel">
+      <div id="systems-period-toggle" class="period-toggle">
+        <button class="toggle-btn active" data-period="30d">Last 30 days</button>
+        <button class="toggle-btn" data-period="all">All Time</button>
+      </div>
+      <div id="systems-summary" class="summary-bar" style="display:none;"></div>
+      <div style="overflow-x:auto;">
+        <table class="admin-table">
+          <thead id="systems-thead"></thead>
+          <tbody id="systems-tbody">
+            <tr><td colspan="5" class="muted" style="text-align:center;padding:2rem;">Click to load cross-app usage...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
