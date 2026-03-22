@@ -3,9 +3,9 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
-  revokeAgent, fetchAdminFeedback, fetchAdminMetrics,
+  revokeAgent, fetchAdminFeedback, fetchAdminMetrics, fetchHubUsers,
   type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
-  type AdminMetrics, type AdminMetricsWindow,
+  type AdminMetrics, type AdminMetricsWindow, type HubResponse,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 import { initTheme } from './theme';
@@ -44,6 +44,8 @@ function setupPeriodToggle(): void {
 }
 
 let perfLoaded = false;
+let systemsLoaded = false;
+let systemsPeriod: AdminPeriod = '30d';
 
 function setupTabs(): void {
   document.querySelectorAll('.settings-tabs .tab-btn').forEach((btn) => {
@@ -56,10 +58,15 @@ function setupTabs(): void {
       // Show selected panel, hide others
       document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
       document.getElementById(tabId)?.classList.add('active');
-      // Lazy-load performance tab
+      // Lazy-load tabs
       if (tabId === 'tab-performance' && !perfLoaded) {
         perfLoaded = true;
         loadPerformance();
+      }
+      if (tabId === 'tab-systems' && !systemsLoaded) {
+        systemsLoaded = true;
+        setupSystemsPeriodToggle();
+        loadSystems();
       }
     });
   });
@@ -482,6 +489,102 @@ function formatBytes(bytes: number): string {
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / Math.pow(1024, i);
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
+}
+
+// --- Systems tab (cross-app hub) ---
+
+const SERVICE_LABELS: Record<string, string> = {
+  'flyfun-weather': 'Weather',
+  'flyfun-maps': 'Maps',
+  'flyfun-forms': 'Forms',
+};
+
+function setupSystemsPeriodToggle(): void {
+  document.querySelectorAll('#systems-period-toggle .toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const period = (btn as HTMLElement).dataset.period as AdminPeriod;
+      if (period === systemsPeriod) return;
+      systemsPeriod = period;
+      document.querySelectorAll('#systems-period-toggle .toggle-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadSystems();
+    });
+  });
+}
+
+async function loadSystems(): Promise<void> {
+  const tbody = document.getElementById('systems-tbody')!;
+  tbody.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>';
+  try {
+    const data = await fetchHubUsers(systemsPeriod);
+    renderSystems(data);
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--danger);">Failed to load: ${err}</td></tr>`;
+  }
+}
+
+function renderSystems(data: HubResponse): void {
+  // Collect all service names across all users
+  const allServices = new Set<string>();
+  for (const u of data.users) {
+    for (const svc of Object.keys(u.services)) {
+      allServices.add(svc);
+    }
+  }
+  const services = [...allServices].sort();
+
+  // Summary bar
+  const summaryEl = document.getElementById('systems-summary')!;
+  summaryEl.style.display = '';
+  summaryEl.innerHTML = `
+    <div class="summary-card"><div class="value">${data.totals.users}</div><div class="label">Users</div></div>
+    <div class="summary-card"><div class="value">$${data.totals.cost_usd.toFixed(2)}</div><div class="label">Total Cost</div></div>
+    <div class="summary-card"><div class="value">${data.totals.actions}</div><div class="label">Actions</div></div>
+    ${services.map(svc => {
+      const total = data.users.reduce((sum, u) => sum + (u.services[svc]?.cost_usd || 0), 0);
+      return `<div class="summary-card"><div class="value">$${total.toFixed(2)}</div><div class="label">${SERVICE_LABELS[svc] || svc}</div></div>`;
+    }).join('')}`;
+
+  // Table header
+  const thead = document.getElementById('systems-thead')!;
+  thead.innerHTML = `<tr>
+    <th>Name</th>
+    <th>Email</th>
+    ${services.map(svc => `<th style="text-align:center;">${SERVICE_LABELS[svc] || svc}</th>`).join('')}
+    <th style="text-align:right;">Total</th>
+    <th></th>
+  </tr>`;
+
+  // Table body
+  const tbody = document.getElementById('systems-tbody')!;
+  if (data.users.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="${3 + services.length + 1}" class="muted" style="text-align:center;padding:2rem;">No cost data for this period.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = data.users.map(u => {
+    const svcCells = services.map(svc => {
+      const s = u.services[svc];
+      if (!s) return '<td class="num muted">-</td>';
+      return `<td class="num">$${s.cost_usd.toFixed(2)} <span class="muted">(${s.count})</span></td>`;
+    }).join('');
+
+    // Detail links
+    const links = services
+      .filter(svc => data.app_registry[svc] && u.services[svc])
+      .map(svc => {
+        const url = data.app_registry[svc]!.replace('{user_id}', encodeURIComponent(u.id));
+        return `<a href="${url}" style="font-size:0.75rem;">${SERVICE_LABELS[svc] || svc}</a>`;
+      })
+      .join(' ');
+
+    return `<tr>
+      <td>${escapeHtml(u.display_name)}</td>
+      <td class="muted">${escapeHtml(u.email)}</td>
+      ${svcCells}
+      <td style="text-align:right;font-weight:600;">$${u.total_cost_usd.toFixed(2)}</td>
+      <td>${links}</td>
+    </tr>`;
+  }).join('');
 }
 
 if (document.readyState === 'loading') {
