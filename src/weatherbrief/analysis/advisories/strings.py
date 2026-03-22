@@ -94,6 +94,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Keine signifikante Konvektion",
         "es": "Sin actividad convectiva significativa",
     },
+    "convective.below_cruise": {
+        "en": "Convective tops below cruise altitude ({count} points)",
+        "fr": "Sommets convectifs sous l'altitude de croisière ({count} points)",
+        "de": "Konvektionsobergrenzen unter Reiseflughöhe ({count} Punkte)",
+        "es": "Topes convectivos bajo altitud de crucero ({count} puntos)",
+    },
 
     # --- airport_wind ---
     "airport_wind.calm": {
