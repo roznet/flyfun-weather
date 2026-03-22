@@ -35,9 +35,11 @@
         uncertainty and numbers behind any summary.
       </p>
       <p>
-        Flyfun Weather is designed for <strong>longer-range planning</strong>, not for the
-        final go/no-go decision. For the day-of briefing you should always rely on
-        official sources (METARs, TAFs, SIGMETs, AIRMETs) from your national aviation authority.
+        Flyfun Weather is designed primarily for <strong>longer-range planning</strong> &mdash;
+        helping you build a picture of weather trends days before a flight. As the flight date
+        approaches, it adds real-time METAR/TAF observations for a final cross-check, but
+        you should always verify against official sources (SIGMETs, AIRMETs, national
+        aviation authority briefings) before flying.
       </p>
       <p>
         Flyfun Weather is open-source and available on
@@ -88,9 +90,10 @@
 
       <h4>METAR/TAF Observations</h4>
       <p>
-        Current METAR observations and TAF forecasts for your departure and arrival airports,
-        fetched from official aviation weather sources. Useful for cross-referencing the
-        NWP model output with real-time and near-term observations.
+        On the day of the flight, a METAR/TAF section is shown with current observations and
+        TAF forecasts for your departure and arrival airports, fetched from official aviation
+        weather sources. Useful for cross-referencing the NWP model output with real-time
+        and near-term observations.
       </p>
 
       <h4>Synopsis</h4>
@@ -126,7 +129,17 @@
         <li><strong>Hover</strong> over the canvas to see values at a specific point.</li>
         <li><strong>Click</strong> to pin the readout at a location.</li>
         <li>Toggle individual <strong>layers</strong> to isolate specific phenomena.</li>
+        <li>Use the <strong>compare view</strong> to display a specific layer across all models
+          side by side, so you can see how their forecasts overlap and where they diverge.</li>
       </ul>
+
+      <h4>Route Map</h4>
+      <p>
+        An interactive map showing your route with segments colored by a selectable weather
+        metric (wind, icing risk, cloud cover, humidity, etc.). Use the altitude slider to
+        see how conditions change at different flight levels. Hover over a segment to see
+        the value at that point.
+      </p>
 
       <h4>Skew-T Soundings</h4>
       <p>
@@ -139,8 +152,10 @@
       <h4>Route Profile</h4>
       <p>
         A slider that lets you move along the route and view a Skew-T sounding and
-        key metrics at any interpolated point, not just the waypoints. Useful for
-        examining conditions between airports.
+        key metrics at any interpolated point (approximately every 10 km), not just the
+        named waypoints. Useful for examining conditions between airports &mdash; for
+        example, finding where a freezing level dips or where cloud cover thickens
+        along a mountain crossing.
       </p>
 
       <h4>Sounding Analysis</h4>
@@ -183,7 +198,7 @@
       <ul>
         <li><strong>Language</strong> &mdash; choose the display language (English, French, German, Spanish).</li>
         <li><strong>Autorouter Credentials</strong> &mdash; enter your autorouter.aero username and password for GRAMET charts. Credentials are encrypted at rest.</li>
-        <li><strong>Usage &amp; Credits</strong> &mdash; view your briefing usage (today and this month) and credit balance.</li>
+        <li><strong>Usage &amp; Costs</strong> &mdash; view your briefing usage (this week, this month, and total) and per-briefing cost breakdown.</li>
       </ul>
     </div>
 
@@ -303,6 +318,10 @@
       <p>
         To suggest improvements, report bugs, or give any feedback, please
         <a href="https://github.com/roznet/flyfun-weather/issues" target="_blank" rel="noopener">create an issue on GitHub</a>.
+      </p>
+      <p id="feedback-inline" style="display:none;">
+        Or submit feedback directly:
+        <button class="btn btn-primary" id="help-feedback-btn" style="margin-left:0.5rem;font-size:0.85rem;">Submit Feedback</button>
       </p>
     </div>
 

@@ -140,7 +140,7 @@ class FeedbackRow(Base):
     user_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    flight_id: Mapped[str] = mapped_column(String(256), index=True)
+    flight_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     pack_timestamp: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
