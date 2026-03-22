@@ -26,7 +26,7 @@ export function computeSegmentStyles(
     const p2 = points[i + 1];
 
     let color = '#2563eb'; // default blue
-    let weight = 4;
+    let weight = 15;
 
     if (colorMetric) {
       const v1 = colorMetric.getValue(p1, altitudeFt);
