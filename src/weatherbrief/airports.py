@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
 from euro_aip.storage.database_storage import DatabaseStorage
@@ -9,10 +10,23 @@ from timezonefinder import TimezoneFinder
 
 from weatherbrief.models import RunwayEnd, Waypoint
 
+logger = logging.getLogger(__name__)
+
 
 @lru_cache(maxsize=1)
 def _timezone_finder() -> TimezoneFinder:
     return TimezoneFinder()
+
+
+@lru_cache(maxsize=1)
+def _load_airport_model(db_path: str):
+    """Load the euro_aip model once and cache it for the process lifetime.
+
+    The model is read-only after loading, so safe to share across calls.
+    """
+    logger.info("Loading euro_aip airport model from %s", db_path)
+    storage = DatabaseStorage(db_path)
+    return storage.load_model()
 
 
 def get_timezone(lat: float, lon: float) -> str | None:
@@ -33,8 +47,7 @@ def resolve_waypoints(icao_codes: list[str], db_path: str) -> list[Waypoint]:
     Raises:
         KeyError: If any ICAO code is not found in the database.
     """
-    storage = DatabaseStorage(db_path)
-    model = storage.load_model()
+    model = _load_airport_model(db_path)
 
     waypoints: list[Waypoint] = []
     missing: list[str] = []
@@ -74,8 +87,7 @@ def get_runway_ends(icao_codes: list[str], db_path: str) -> dict[str, list[Runwa
     Returns:
         Dict mapping ICAO code to list of RunwayEnd objects.
     """
-    storage = DatabaseStorage(db_path)
-    model = storage.load_model()
+    model = _load_airport_model(db_path)
 
     result: dict[str, list[RunwayEnd]] = {}
     for icao in icao_codes:
