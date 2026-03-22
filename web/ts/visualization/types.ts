@@ -135,6 +135,10 @@ export interface VizPoint {
   nwpCloudLayers: VizCloudLayer[];
   // GFS cloud diagnostics (null when not available)
   nwpCloudDiag: VizCloudDiag | null;
+  // Ceiling values (ft MSL)
+  soundingCeilingFt: number | null;
+  /** Terrain elevation at this point (ft MSL), for AGL conversion. */
+  terrainElevationFt: number;
   // Route graph scalars (extracted from model_divergence)
   temperatureC: number | null;
   precipitationMm: number | null;
