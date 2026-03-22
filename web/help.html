@@ -22,17 +22,20 @@
       <p>
         Flyfun Weather is an exploratory weather briefing tool for general aviation pilots.
         Its goal is to help you form an early picture of how weather patterns are coming
-        together by comparing multiple numerical weather prediction (NWP) models. It exposes
-        the rich data that forecasting models provide &mdash; soundings, cross-sections,
-        thermodynamic indices, advisories &mdash; and lets you see where models agree and
-        where they diverge, so you can gauge confidence days before a planned flight.
+        together by comparing multiple numerical weather prediction (NWP) models. At its core,
+        the briefing translates model data into <strong>aviation-focused advisories</strong>
+        &mdash; icing risk, convective potential, cloud ceilings, turbulence, crosswinds &mdash;
+        rated green/amber/red so you can quickly see what matters for your route. An
+        <strong>altitude advisory</strong> even suggests the best flight level based on the
+        combined conditions.
       </p>
       <p>
-        While it provides digests and advisories that distil the data into a simple
-        green/amber/red system, the general philosophy is to <strong>expose all the raw
-        data</strong> &mdash; soundings, cross-sections, thermodynamic indices, per-model
-        values &mdash; with explanations, so you have full transparency into the underlying
-        uncertainty and numbers behind any summary.
+        Beyond the advisories, Flyfun Weather lets you see where models agree and where they
+        diverge, so you can gauge forecast confidence days before a planned flight. The
+        briefing offers two display modes: <strong>compact mode</strong> for a quick overview
+        of the essentials, and <strong>full detail mode</strong> that exposes all the raw
+        data &mdash; soundings, cross-sections, thermodynamic indices, per-model values &mdash;
+        with explanations, giving you full transparency into the numbers behind any summary.
       </p>
       <p>
         Flyfun Weather is designed primarily for <strong>longer-range planning</strong> &mdash;
@@ -68,10 +71,9 @@
 
       <h4>Route Advisories</h4>
       <p>
-        Advisories bring together the model data that informs key patterns a pilot may want
-        to consider when making an early decision around flying, cancelling, or adjusting
-        the timing of a flight. They look at conditions such as winds, icing, convection,
-        cloud ceilings, and turbulence that can be deduced from the NWP models along your route.
+        Advisories are the heart of the briefing. They translate raw NWP model data into
+        aviation-relevant assessments that help you make early decisions about flying,
+        cancelling, or adjusting the timing of a flight.
       </p>
       <p>
         Each advisory is rated
@@ -82,10 +84,19 @@
         can see whether models agree on a hazard or only one flags it. The summary rating
         shown for each advisory reflects the worst-case across all models.
       </p>
+      <p>Advisory categories include:</p>
+      <ul>
+        <li><strong>Icing</strong> &mdash; freezing level, icing intensity at cruise altitude, temperature/humidity overlap in the icing zone.</li>
+        <li><strong>Convection</strong> &mdash; CAPE, lifted index, convective inhibition, and storm potential along the route.</li>
+        <li><strong>Cloud &amp; Visibility</strong> &mdash; cloud base height relative to your ceiling, coverage, and visibility conditions at departure and arrival.</li>
+        <li><strong>Turbulence &amp; Wind</strong> &mdash; vertical wind shear, crosswind components at departure and arrival airports, headwind/tailwind along the route.</li>
+        <li><strong>Airport Conditions</strong> &mdash; surface wind, gusts, and crosswind at departure and arrival relative to available runways.</li>
+        <li><strong>Altitude Advisory</strong> &mdash; analyses conditions at multiple flight levels and suggests the best altitude considering winds, icing, turbulence, and cloud avoidance.</li>
+      </ul>
       <p>
-        Categories include icing, turbulence, cloud/visibility, convective activity, and
-        airport conditions. You can enable, disable, and tune the thresholds of each
-        advisory in <a href="/settings.html">Settings</a>.
+        You can enable, disable, and tune the thresholds of each advisory in
+        <a href="/settings.html">Settings</a>, as well as choose which analysis methods
+        are used for icing and cloud detection.
       </p>
 
       <h4>METAR/TAF Observations</h4>
