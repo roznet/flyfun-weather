@@ -23,7 +23,7 @@ ALLOWED_CATEGORIES = {"data_issue", "too_conservative", "too_optimistic", "incor
 
 
 class FeedbackRequest(BaseModel):
-    flight_id: str = Field(max_length=256)
+    flight_id: str = Field("", max_length=256)
     pack_timestamp: str = Field("", max_length=64)
     category: str = Field(max_length=32)
     comment: str = Field(max_length=2000)
@@ -68,7 +68,7 @@ def submit_feedback(
 
     row = FeedbackRow(
         user_id=user_id,
-        flight_id=body.flight_id,
+        flight_id=body.flight_id or None,
         pack_timestamp=pack_ts,
         category=body.category,
         comment=body.comment,
