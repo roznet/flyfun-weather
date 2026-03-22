@@ -106,6 +106,32 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     getValue: (p) => p.altitudeLines.freezingLevelFt,
     formatValue: (v) => `${Math.round(v).toLocaleString()} ft`,
   },
+  {
+    id: 'ceiling-dd',
+    label: 'Ceiling DD',
+    unit: 'ft AGL',
+    renderType: 'line',
+    color: '#8b5cf6',
+    getValue: (p) => {
+      if (p.soundingCeilingFt == null) return null;
+      const agl = Math.max(0, p.soundingCeilingFt - p.terrainElevationFt);
+      return agl > 5000 ? null : agl;
+    },
+    formatValue: (v) => `${Math.round(v).toLocaleString()} ft AGL`,
+  },
+  {
+    id: 'ceiling-nwp',
+    label: 'Ceiling NWP',
+    unit: 'ft AGL',
+    renderType: 'line',
+    color: '#d946ef',
+    getValue: (p) => {
+      if (p.nwpCloudDiag?.ceilingFt == null) return null;
+      const agl = Math.max(0, p.nwpCloudDiag.ceilingFt - p.terrainElevationFt);
+      return agl > 5000 ? null : agl;
+    },
+    formatValue: (v) => `${Math.round(v).toLocaleString()} ft AGL`,
+  },
 ];
 
 /** Sentinel value for "no metric selected" (used for the optional right Y-axis). */

@@ -12,11 +12,19 @@ export function extractVizData(
   const points: VizPoint[] = [];
   const waypointMarkers: WaypointMarker[] = [];
 
+  const terrainProfile: TerrainPoint[] | null = elevationProfile
+    ? elevationProfile.points.map((p) => ({
+        distanceNm: p.distance_nm,
+        elevationFt: p.elevation_ft,
+      }))
+    : null;
+
   for (const rpa of manifest.analyses) {
     const sounding = rpa.sounding[model] ?? null;
     const wind = rpa.wind_components[model] ?? null;
+    const terrainFt = interpolateTerrainElevation(terrainProfile, rpa.distance_from_origin_nm);
 
-    points.push(extractPoint(rpa, sounding, wind, model));
+    points.push(extractPoint(rpa, sounding, wind, model, terrainFt));
 
     if (rpa.waypoint_icao) {
       waypointMarkers.push({
@@ -29,13 +37,6 @@ export function extractVizData(
   }
 
   const actualCeiling = flightCeilingFt ?? manifest.cruise_altitude_ft;
-
-  const terrainProfile: TerrainPoint[] | null = elevationProfile
-    ? elevationProfile.points.map((p) => ({
-        distanceNm: p.distance_nm,
-        elevationFt: p.elevation_ft,
-      }))
-    : null;
 
   return {
     points,
@@ -55,6 +56,7 @@ function extractPoint(
   sounding: SoundingAnalysis | null,
   wind: { headwind_kt: number; crosswind_kt: number } | null,
   model: string,
+  terrainElevationFt: number,
 ): VizPoint {
   const indices = sounding?.indices ?? null;
 
@@ -170,6 +172,8 @@ function extractPoint(
     capeSurfaceJkg: indices?.cape_surface_jkg ?? 0,
     worstModelAgreement,
     nwpCloudDiag,
+    soundingCeilingFt: indices?.sounding_ceiling_ft ?? null,
+    terrainElevationFt,
     temperatureC,
     precipitationMm,
   };
@@ -193,6 +197,20 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   if (!hasNwpConvective) unavailable.add('nwp-convective-bg');
 
   return unavailable;
+}
+
+/** Interpolate terrain elevation at a given route distance from the terrain profile. */
+function interpolateTerrainElevation(profile: TerrainPoint[] | null, distanceNm: number): number {
+  if (!profile || profile.length === 0) return 0;
+  if (distanceNm <= profile[0].distanceNm) return profile[0].elevationFt;
+  if (distanceNm >= profile[profile.length - 1].distanceNm) return profile[profile.length - 1].elevationFt;
+  for (let i = 0; i < profile.length - 1; i++) {
+    if (distanceNm >= profile[i].distanceNm && distanceNm <= profile[i + 1].distanceNm) {
+      const t = (distanceNm - profile[i].distanceNm) / (profile[i + 1].distanceNm - profile[i].distanceNm);
+      return profile[i].elevationFt + t * (profile[i + 1].elevationFt - profile[i].elevationFt);
+    }
+  }
+  return 0;
 }
 
 /** Look up a per-model value from the model_divergence comparison data. */
