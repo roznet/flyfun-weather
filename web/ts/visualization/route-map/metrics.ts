@@ -2,7 +2,7 @@
 
 import type { VizPoint } from '../types';
 import {
-  riskMapColor, cloudCoverMapColor, headwindMapColor, crosswindMapColor,
+  riskMapColor, cloudCoverMapColor, headwindMapColor,
   capeMapColor, freezingLevelMapColor, ceilingMapColor, temperatureMapColor,
   agreementMapColor, linearWidth,
 } from '../scales';
@@ -72,8 +72,41 @@ function cloudAtAlt(
   return maxCov * 100;
 }
 
-// --- Default width (uniform 4px) for color-only metrics ---
-const DEFAULT_WIDTH = 4;
+/**
+ * Estimate temperature at a given altitude using known isotherm levels.
+ * Interpolates between 0°C, -10°C, -20°C levels; extrapolates with standard lapse rate.
+ */
+function tempAtAltitude(p: VizPoint, altFt: number): number | null {
+  const alt = p.altitudeLines;
+  const fz = alt.freezingLevelFt;
+  if (fz == null) return null;
+
+  // Build known (altitude, temperature) reference points
+  const refs: Array<[number, number]> = [[fz, 0]];
+  if (alt.minus10cLevelFt != null) refs.push([alt.minus10cLevelFt, -10]);
+  if (alt.minus20cLevelFt != null) refs.push([alt.minus20cLevelFt, -20]);
+  refs.sort((a, b) => a[0] - b[0]); // ascending by altitude
+
+  // Below lowest ref or above highest: extrapolate with ~2°C/1000ft lapse rate
+  if (altFt <= refs[0][0]) {
+    return refs[0][1] + (refs[0][0] - altFt) * 2 / 1000;
+  }
+  if (altFt >= refs[refs.length - 1][0]) {
+    return refs[refs.length - 1][1] - (altFt - refs[refs.length - 1][0]) * 2 / 1000;
+  }
+
+  // Interpolate between bracketing refs
+  for (let i = 0; i < refs.length - 1; i++) {
+    if (altFt >= refs[i][0] && altFt <= refs[i + 1][0]) {
+      const frac = (altFt - refs[i][0]) / (refs[i + 1][0] - refs[i][0]);
+      return refs[i][1] + frac * (refs[i + 1][1] - refs[i][1]);
+    }
+  }
+  return null;
+}
+
+// --- Default width (uniform) for metrics without meaningful width variation ---
+const DEFAULT_WIDTH = 15;
 const defaultWidth = () => DEFAULT_WIDTH;
 
 // --- Metric definitions ---
@@ -85,7 +118,7 @@ const cloudCoverTotal: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => p.cloudCoverTotalPct,
   getColor: (v) => cloudCoverMapColor(v),
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 100, 3, 25),
   formatValue: (v) => `${Math.round(v)}%`,
   legendStops: [
     { value: 0, label: 'Clear', color: cloudCoverMapColor(0) },
@@ -103,7 +136,7 @@ const cloudCoverLow: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => p.cloudCoverLowPct,
   getColor: (v) => cloudCoverMapColor(v),
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 100, 3, 25),
   formatValue: (v) => `${Math.round(v)}%`,
   legendStops: cloudCoverTotal.legendStops,
 };
@@ -117,7 +150,7 @@ const convectiveRisk: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => RISK_ORDER[p.convectiveRisk] ?? 0,
   getColor: (v) => riskMapColor(CONVECTIVE_LABELS[Math.min(Math.round(v), 4)] ?? 'none'),
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 4, 3, 25),
   formatValue: (v) => CONVECTIVE_LABELS[Math.min(Math.round(v), 4)] ?? 'none',
   legendStops: [
     { value: 0, label: 'None', color: riskMapColor('none') },
@@ -128,41 +161,37 @@ const convectiveRisk: MapMetric = {
   ],
 };
 
-const headwind: MapMetric = {
+const headwindOnly: MapMetric = {
   id: 'headwind',
-  label: 'Head/Tailwind',
+  label: 'Headwind',
   unit: 'kt',
   altitudeDependent: false,
-  getValue: (p) => p.headwindKt,
+  getValue: (p) => Math.max(0, p.headwindKt),
   getColor: (v) => headwindMapColor(v),
-  getWidth: (v) => linearWidth(v, 30, 3, 7),
-  formatValue: (v) => {
-    const abs = Math.abs(v).toFixed(0);
-    return v >= 0 ? `${abs} kt HW` : `${abs} kt TW`;
-  },
+  getWidth: (v) => linearWidth(v, 30, 3, 25),
+  formatValue: (v) => `${Math.round(v)} kt HW`,
   legendStops: [
-    { value: -30, label: '30 kt TW', color: headwindMapColor(-30) },
-    { value: -15, label: '15 kt TW', color: headwindMapColor(-15) },
     { value: 0, label: 'Calm', color: headwindMapColor(0) },
-    { value: 15, label: '15 kt HW', color: headwindMapColor(15) },
-    { value: 30, label: '30 kt HW', color: headwindMapColor(30) },
+    { value: 10, label: '10 kt', color: headwindMapColor(10) },
+    { value: 20, label: '20 kt', color: headwindMapColor(20) },
+    { value: 30, label: '30 kt', color: headwindMapColor(30) },
   ],
 };
 
-const crosswind: MapMetric = {
-  id: 'crosswind',
-  label: 'Crosswind',
+const tailwindOnly: MapMetric = {
+  id: 'tailwind',
+  label: 'Tailwind',
   unit: 'kt',
   altitudeDependent: false,
-  getValue: (p) => Math.abs(p.crosswindKt),
-  getColor: (v) => crosswindMapColor(v),
-  getWidth: (v) => linearWidth(v, 25, 3, 7),
-  formatValue: (v) => `${Math.round(v)} kt`,
+  getValue: (p) => Math.max(0, -p.headwindKt),
+  getColor: (v) => headwindMapColor(-v),
+  getWidth: (v) => linearWidth(v, 30, 3, 25),
+  formatValue: (v) => `${Math.round(v)} kt TW`,
   legendStops: [
-    { value: 0, label: 'Calm', color: crosswindMapColor(0) },
-    { value: 10, label: '10 kt', color: crosswindMapColor(10) },
-    { value: 20, label: '20 kt', color: crosswindMapColor(20) },
-    { value: 25, label: '25+ kt', color: crosswindMapColor(25) },
+    { value: 0, label: 'Calm', color: headwindMapColor(0) },
+    { value: 10, label: '10 kt', color: headwindMapColor(-10) },
+    { value: 20, label: '20 kt', color: headwindMapColor(-20) },
+    { value: 30, label: '30 kt', color: headwindMapColor(-30) },
   ],
 };
 
@@ -173,30 +202,13 @@ const cape: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => p.capeSurfaceJkg,
   getColor: (v) => capeMapColor(v),
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 2000, 3, 25),
   formatValue: (v) => `${Math.round(v)} J/kg`,
   legendStops: [
     { value: 0, label: '0', color: capeMapColor(0) },
     { value: 500, label: '500', color: capeMapColor(500) },
     { value: 1000, label: '1000', color: capeMapColor(1000) },
     { value: 2000, label: '2000+', color: capeMapColor(2000) },
-  ],
-};
-
-const freezingLevel: MapMetric = {
-  id: 'freezing-level',
-  label: 'Freezing Level',
-  unit: 'ft',
-  altitudeDependent: false,
-  getValue: (p) => p.altitudeLines.freezingLevelFt,
-  getColor: (v) => freezingLevelMapColor(v),
-  getWidth: defaultWidth,
-  formatValue: (v) => `${Math.round(v).toLocaleString()} ft`,
-  legendStops: [
-    { value: 0, label: 'SFC', color: freezingLevelMapColor(0) },
-    { value: 5000, label: '5000 ft', color: freezingLevelMapColor(5000) },
-    { value: 10000, label: '10000 ft', color: freezingLevelMapColor(10000) },
-    { value: 15000, label: '15000 ft', color: freezingLevelMapColor(15000) },
   ],
 };
 
@@ -207,7 +219,11 @@ const nwpCeiling: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => p.nwpCloudDiag?.ceilingFt ?? null,
   getColor: (v) => ceilingMapColor(v),
-  getWidth: defaultWidth,
+  // Inverted: low ceiling = thick (danger), high ceiling = thin
+  getWidth: (v) => {
+    const clamped = Math.max(0, Math.min(5000, v));
+    return 25 - (clamped / 5000) * 22; // 25px at 0ft → 3px at 5000ft
+  },
   formatValue: (v) => `${Math.round(v).toLocaleString()} ft`,
   legendStops: [
     { value: 200, label: 'LIFR <500', color: ceilingMapColor(200) },
@@ -217,20 +233,25 @@ const nwpCeiling: MapMetric = {
   ],
 };
 
-const temperature: MapMetric = {
-  id: 'temperature',
-  label: 'Temperature (2m)',
+const tempAtLevel: MapMetric = {
+  id: 'temp-at-level',
+  label: 'Temperature at FL',
   unit: '°C',
-  altitudeDependent: false,
-  getValue: (p) => p.temperatureC,
+  altitudeDependent: true,
+  getValue: (p, altFt) => tempAtAltitude(p, altFt ?? 0),
   getColor: (v) => temperatureMapColor(v),
-  getWidth: defaultWidth,
+  // Thick when cold (icing territory), thin when warm
+  getWidth: (v) => {
+    // 5°C → 3px, -20°C → 25px
+    const clamped = Math.max(-20, Math.min(5, v));
+    return 3 + (5 - clamped) / 25 * 22;
+  },
   formatValue: (v) => `${v.toFixed(1)}°C`,
   legendStops: [
+    { value: -20, label: '-20°C', color: temperatureMapColor(-20) },
     { value: -10, label: '-10°C', color: temperatureMapColor(-10) },
     { value: 0, label: '0°C', color: temperatureMapColor(0) },
-    { value: 15, label: '15°C', color: temperatureMapColor(15) },
-    { value: 30, label: '30°C', color: temperatureMapColor(30) },
+    { value: 10, label: '10°C', color: temperatureMapColor(10) },
   ],
 };
 
@@ -245,7 +266,7 @@ const modelAgreement: MapMetric = {
     if (v >= 1) return agreementMapColor('moderate');
     return agreementMapColor('good');
   },
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 2, 3, 25),
   formatValue: (v) => {
     if (v >= 2) return t('map.formatPoor');
     if (v >= 1) return t('map.formatModerate');
@@ -267,7 +288,7 @@ const icingRiskAtLevel: MapMetric = {
   altitudeDependent: true,
   getValue: (p, altFt) => RISK_ORDER[worstRiskAtAlt(p.icingZones, altFt ?? 0)] ?? 0,
   getColor: (v) => riskMapColor(RISK_LABELS[Math.min(v, 3)] ?? 'none'),
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 3, 3, 25),
   formatValue: (v) => RISK_LABELS[Math.min(Math.round(v), 3)] ?? 'none',
   legendStops: [
     { value: 0, label: 'None', color: riskMapColor('none') },
@@ -289,7 +310,7 @@ const sfipAtLevel: MapMetric = {
     if (v <= 80) return '#f97316';
     return '#ef4444';
   },
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 100, 3, 25),
   formatValue: (v) => `SFIP ${Math.round(v)}`,
   legendStops: [
     { value: 0, label: 'Low (0-20)', color: '#22c55e' },
@@ -306,7 +327,7 @@ const catRiskAtLevel: MapMetric = {
   altitudeDependent: true,
   getValue: (p, altFt) => RISK_ORDER[worstRiskAtAlt(p.catLayers, altFt ?? 0)] ?? 0,
   getColor: (v) => riskMapColor(RISK_LABELS[Math.min(v, 3)] ?? 'none'),
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 3, 3, 25),
   formatValue: (v) => RISK_LABELS[Math.min(Math.round(v), 3)] ?? 'none',
   legendStops: icingRiskAtLevel.legendStops,
 };
@@ -318,7 +339,7 @@ const cloudAtLevel: MapMetric = {
   altitudeDependent: true,
   getValue: (p, altFt) => cloudAtAlt(p.cloudLayers, altFt ?? 0),
   getColor: (v) => cloudCoverMapColor(v),
-  getWidth: defaultWidth,
+  getWidth: (v) => linearWidth(v, 100, 3, 25),
   formatValue: (v) => `${Math.round(v)}%`,
   legendStops: cloudCoverTotal.legendStops,
 };
@@ -329,12 +350,11 @@ export const MAP_METRICS: readonly MapMetric[] = [
   cloudCoverTotal,
   cloudCoverLow,
   convectiveRisk,
-  headwind,
-  crosswind,
+  headwindOnly,
+  tailwindOnly,
   cape,
-  freezingLevel,
   nwpCeiling,
-  temperature,
+  tempAtLevel,
   modelAgreement,
   icingRiskAtLevel,
   sfipAtLevel,
