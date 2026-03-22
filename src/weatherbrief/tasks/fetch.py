@@ -60,6 +60,7 @@ def _build_fetch_diagnostics(
     requested_models: list[str],
     models_fetched: list[str],
     models_skipped_region: list[str],
+    models_skipped_range: list[tuple[str, int, int]] | None = None,
     enrich_grib: bool,
     grib_enriched: bool,
     grib_enrichment_failed: bool,
@@ -69,11 +70,20 @@ def _build_fetch_diagnostics(
     """Build user-facing diagnostic messages from the completed fetch state."""
     diags: list[dict] = []
 
-    # Models that failed to fetch (requested but neither fetched nor region-skipped)
-    fetched_or_skipped = set(models_fetched) | set(models_skipped_region)
+    range_skipped_names = {m for m, _, _ in (models_skipped_range or [])}
+
+    # Models that failed to fetch (requested but neither fetched nor skipped)
+    fetched_or_skipped = set(models_fetched) | set(models_skipped_region) | range_skipped_names
     for m in requested_models:
         if m not in fetched_or_skipped:
             diags.append({"level": "warn", "message": f"{m.upper()} forecast fetch failed"})
+
+    # Models skipped for range (too many days out)
+    for m, days_out, max_days in (models_skipped_range or []):
+        diags.append({
+            "level": "info",
+            "message": f"{m.upper()} skipped ({days_out} days out exceeds {max_days}-day range)",
+        })
 
     # Models skipped for region
     for m in models_skipped_region:
@@ -170,6 +180,7 @@ def run_fetch(
     cross_sections: list[RouteCrossSection] = []
     models_fetched_names: list[str] = []
     models_skipped_region: list[str] = []
+    models_skipped_range: list[tuple[str, int, int]] = []
     models_fetched_count = 0
 
     route_region = detect_model_region(route)
@@ -180,6 +191,9 @@ def run_fetch(
             logger.info(
                 "Skipping %s: %d days out exceeds %d-day range",
                 model.value, days_out_for_range, endpoint.max_days,
+            )
+            models_skipped_range.append(
+                (model.value, days_out_for_range, endpoint.max_days),
             )
             continue
         if _should_skip_for_region(endpoint, route_region):
@@ -252,6 +266,7 @@ def run_fetch(
         requested_models=[m.value for m in models],
         models_fetched=models_fetched_names,
         models_skipped_region=models_skipped_region,
+        models_skipped_range=models_skipped_range,
         enrich_grib=enrich_grib,
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
@@ -269,13 +284,16 @@ def run_fetch(
             diagnostics=diagnostics,
         )
 
+    # Combine region-skipped and range-skipped into one list for the UI badge
+    all_skipped = models_skipped_region + [m for m, _, _ in models_skipped_range]
+
     return FetchResult(
         route_points=route_points,
         all_forecasts=all_forecasts,
         cross_sections=cross_sections,
         elevation_profile=elevation_profile,
         models_fetched=models_fetched_names,
-        models_skipped_region=models_skipped_region,
+        models_skipped_region=all_skipped,
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
         grib_init_times=grib_init_times,
