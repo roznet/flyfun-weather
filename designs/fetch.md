@@ -82,7 +82,7 @@ route_points = interpolate_route(route, spacing_nm=20.0)
 
 - **Wind in knots** — `wind_speed_unit=kn` for aviation
 - **Magnus dewpoint derivation** — when API doesn't provide dewpoint at pressure levels, derived from T + RH using `magnus_dewpoint(temp_c, rh_pct)` (b=17.67, c=243.5)
-- **Range filtering** — pipeline skips models where `days_out >= max_days`
+- **Range filtering** — pipeline skips models where `days_out >= max_days`. Skipped models shown as info-level "skipped" (not "fetch failed") in diagnostics
 - **Graceful failure** — individual model failures logged, others continue
 - **UKMO model_param** — uses generic `/v1/forecast` with `?models=ukmo_seamless` query param
 - **Multi-point over per-waypoint** — reduces API calls from N×M to M; trivially within free-tier rate limits (600/min, 5K/hour)
@@ -192,9 +192,10 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 |--------|---------|
 | `gfs_idx.py` | Parse `.idx` files, plan HTTP byte ranges for CLMR/ICMR and cloud diagnostic variables |
 | `grib_fetch.py` | Find latest GFS run, bracket forecast hours, download via HTTP Range from S3 |
-| `icon_eu_fetch.py` | Find latest ICON-EU run, download model-level (QC/QI/P) and single-level diagnostics from DWD |
+| `icon_eu_fetch.py` | Find latest ICON-EU run, download model-level (QC/QI/P) and single-level diagnostics from DWD. Per-variable download for memory-efficient chunked decode |
 | `icon_eu_levels.py` | Log-pressure interpolation from ICON-EU model levels to pressure levels |
-| `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points (GFS + ICON-EU) |
+| `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points. Chunked ICON-EU decoder (`decode_icon_eu_per_point_chunked()`) processes one variable at a time with explicit `gc.collect()` between — peak ~270MB vs ~800MB |
+| `fill.py` | Forward-fill GRIB-enriched fields across time axis (cloud diagnostics + microphysics) |
 | `cache.py` | Disk cache per model (`data/.cache/grib/{model}/{date}_{cycle}z/`) with 48h TTL |
 
 ### How It Works
@@ -208,11 +209,11 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 6. Merge CLWMR/ICMR into `PressureLevelData` objects in-place
 7. Attach `NWPCloudDiagnostics` and override Open-Meteo cloud cover with GRIB values
 
-**ICON-EU enrichment** (`_enrich_icon_eu()`):
+**ICON-EU enrichment** (two-phase sequential decode for memory safety):
 1. Check route is within ICON-EU domain (29.5–70.5°N, 23.5°W–62.5°E) — silently skip if outside
 2. Find latest ICON-EU run (3h cycles, ~3h publication delay)
-3. Fetch model-level QC/QI/P (levels 35–74) and single-level diagnostics (CEILING, CLCL/CLCM/CLCH/CLCT, HBAS_CON, HTOP_CON) in parallel
-4. Decode model-level data, log-pressure interpolate to ICON pressure levels
+3. **Phase 1 (parallel with GFS):** Download model-level files (QC/QI/P levels 35–74) and single-level diagnostics (CEILING, CLCL/CLCM/CLCH/CLCT, HBAS_CON, HTOP_CON) to disk cache
+4. **Phase 2 (after GFS completes):** Chunked decode — process one variable at a time via `decode_icon_eu_per_point_chunked()`, explicitly freeing memory between variables. Log-pressure interpolate to ICON pressure levels
 5. Merge QC→CLWMR, QI→ICMR into pressure-level data
 6. Attach `NWPCloudDiagnostics` and override cloud cover (only if GFS hasn't already enriched the point)
 
@@ -234,7 +235,8 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 - **Cloud cover override** — eliminates model-run mismatches between Open-Meteo (which may lag) and GRIB (latest run)
 - **Per-point interpolation** — `decode_grib_per_point()` / `decode_icon_eu_per_point()` return values per route point
 - **Graceful degradation** — enrichment failure logged but pipeline continues with Open-Meteo data only
-- **Init time tracking** — `enrich_forecasts()` returns `grib_init_times: dict[str, int]` mapping model names ("gfs", "icon") to Unix timestamps of the GRIB model run used. Stored in `BriefingPackMeta.grib_init_times` and displayed in the freshness bar when GRIB run differs from Open-Meteo (e.g., "GFS 12Z (GRIB 18Z)")
+- **Init time tracking** — `enrich_forecasts()` returns `(grib_init_times, grib_skip_reasons)`. `grib_init_times: dict[str, int]` maps model names to Unix timestamps. `grib_skip_reasons: dict[str, str]` explains why models were skipped (e.g., `"out_of_range"`). Stored in `BriefingPackMeta` and displayed in the freshness bar
+- **Two-phase sequential decode** — GFS download+decode runs in parallel with ICON-EU download-only. ICON-EU decode runs after GFS completes to prevent OOM (ICON-EU peaks at ~270MB per variable during cfgrib decode)
 
 ### Gotchas
 - **cfgrib uses lazy loading** — temp file must stay alive through interpolation, not just `open_datasets()`. Deleting too early causes `FileNotFoundError`.

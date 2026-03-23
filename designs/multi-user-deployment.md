@@ -157,17 +157,25 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 |--------|------|-------|
 | id | INT AUTO_INCREMENT PK | |
 | user_id | VARCHAR(64) FK | → users.id |
-| flight_id | VARCHAR(256) | |
+| flight_id | VARCHAR(256) NULL | Nullable — feedback can be submitted without a flight |
 | pack_timestamp | DATETIME(6) NULL | Specific pack within the flight |
 | category | VARCHAR(32) | `data_issue`, `too_conservative`, `too_optimistic`, `incorrect_interpretation`, `other` |
-| comment | TEXT | Required, non-empty |
+| comment | TEXT | Required, 1-5000 chars |
+| status | VARCHAR(16) DEFAULT 'pending' | Workflow: `pending` → `ready` → `replied` or `ignored` |
+| classification | VARCHAR(32) NULL | AI triage: `BUG_FIXABLE`, `RESPOND_ONLY`, `NEEDS_INVESTIGATION`, `DEFER_TO_HUMAN` |
+| ai_analysis | TEXT NULL | AI-generated reasoning |
+| admin_reply | TEXT NULL | Draft/sent reply text |
+| admin_notes | TEXT NULL | Internal admin notes |
+| confidence | FLOAT NULL | AI classification confidence (0-1) |
 | created_at | DATETIME | |
+| processed_at | DATETIME NULL | When AI triage completed |
+| replied_at | DATETIME NULL | When reply email sent to user |
 
 ### cost_ledger (from flyfun-common)
 
 Append-only cost tracking table (replaces old credit_ledger for new transactions): `id`, `user_id`, `service`, `action`, `cost`, `metadata_json`, `created_at`.
 
-### cost_config & credit_ledger (app-specific)
+### cost_config (app-specific)
 
 See [cost-attribution-design.md](./cost-attribution-design.md) for full schema.
 
@@ -197,6 +205,14 @@ Admin identity: `ADMIN_EMAILS` env var (comma-separated). Dev user is always adm
 ### Admin Auth Unification
 
 Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens. The `current_user_id()` dependency checks for a `Bearer` token first, then falls back to the JWT cookie.
+
+### Account Deletion
+
+`DELETE /auth/me/account` triggers `_on_delete_user()` callback: cascade-deletes all flights (which cascade-deletes packs), profiles, usage records, feedback, and removes artifact files from disk.
+
+### Admin Hub (Cross-App)
+
+`create_hub_router()` from `flyfun-common` provides cross-app admin endpoints at `/api/admin/hub/*`. Registers "flyfun-weather", "flyfun-maps", "flyfun-forms" with user cost view links. Powers the Systems tab on the admin page.
 
 ### Dev mode bypass
 
@@ -302,6 +318,10 @@ git pull && docker compose up -d --build
 | `AUTOROUTER_PASSWORD` | For GRAMET | — | Fallback; per-user creds preferred |
 | `CREDENTIAL_ENCRYPTION_KEY` | Prod only | derived from JWT_SECRET in dev | Fernet key |
 | `ADMIN_EMAILS` | Prod only | — | Comma-separated admin emails |
+| `RESEND_API_KEY` | No | — | Resend email API key (falls back to SMTP if absent) |
+| `RESEND_FROM` | No | — | Resend sender address |
+| `RESEND_REPLY_TO` | No | — | Resend reply-to address |
+| `HMAC_SECRET` | Prod only | derived from JWT_SECRET | HMAC key for pack integrity + admin approval links |
 
 ## References
 
