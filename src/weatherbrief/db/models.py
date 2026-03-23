@@ -103,6 +103,7 @@ class BriefingPackRow(Base):
     alt_assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     alt_assessment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     has_alt_advisories: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    integrity_hmac: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     flight: Mapped[FlightRow] = relationship(back_populates="packs")
 
