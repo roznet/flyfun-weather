@@ -65,6 +65,10 @@ interface RouteGraphMetric {
 | `cloud-cover` | Cloud Cover | % | bar | `#6b7280` (gray) | `VizPoint.cloudCoverTotalPct` |
 | `cape` | CAPE | J/kg | bar | `#f59e0b` (amber) | `VizPoint.capeSurfaceJkg` |
 | `freezing-level` | Freezing Level | ft | line | `#06b6d4` (cyan) | `altitudeLines.freezingLevelFt` |
+| `ceiling-dd` | Sounding Ceiling | ft AGL | line | `#8b5cf6` (violet) | `soundingCeilingFt` − terrain elevation |
+| `ceiling-nwp` | NWP Ceiling | ft AGL | line | `#6366f1` (indigo) | `nwpCloudDiag.ceilingFt` − terrain elevation |
+
+**Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion and cap display at 5000ft AGL.
 
 ### Future Metrics (no code changes to renderer needed)
 

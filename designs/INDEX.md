@@ -1,4 +1,4 @@
-# WeatherBrief
+# Flyfun Weather
 
 > Medium-range (D-7 to D-0) aviation weather assessment for cross-country GA flights
 
@@ -17,7 +17,7 @@ Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection
 → Full doc: data-models.md
 
 ### fetch
-Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD for US, DWD for Europe), Autorouter GRAMET, SRTM elevation, model freshness, GRIB2 enrichment (GFS + ICON-EU).
+Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD for US, DWD for Europe), Autorouter GRAMET, SRTM elevation, model freshness, GRIB2 enrichment (GFS + ICON-EU) with two-phase sequential decode for memory safety.
 Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `check_freshness`, `enrich_forecasts`
 → Full doc: fetch.md
 
@@ -27,7 +27,7 @@ Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_ad
 → Full doc: analysis.md
 
 ### advisories
-Route advisory system: 13 deterministic evaluators across 5 categories (icing, cloud, turbulence, airport conditions, feasibility) with per-model severity grading, user-tunable parameters, registry auto-discovery, aggregation modes (worst/majority), icing/cloud method swapping, and recalculation without re-fetching.
+Route advisory system: 13 deterministic evaluators across 5 categories (icing, cloud, turbulence, airport conditions, feasibility) with per-model severity grading, user-tunable parameters, registry auto-discovery, aggregation modes (worst/majority), icing/cloud method swapping, altitude-aware convective filtering, and recalculation without re-fetching.
 Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`
 → Full doc: advisories.md
 
@@ -36,12 +36,12 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Three synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (7 scalar metrics), and Leaflet route map (14 metric-colored segment types with altitude slider). Switchable cross-section themes (standard, high-contrast) with cloud hatch patterns, theme preview, and theme-aware legends. Three layout modes, shared color scales, hover sync, compact/full layer mode, icing/cloud method groups.
+Three synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (9 scalar metrics incl. ceiling-DD/NWP), and Leaflet route map (17 metric-colored segment types with altitude slider and width variation). Switchable cross-section themes (standard, high-contrast) with cloud hatch patterns, theme preview, and theme-aware legends. Three layout modes, shared color scales, hover sync, compact/full layer mode, icing/cloud method groups.
 Key exports: `CrossSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
 
 ### route-graph
-2D chart below cross-section for scalar weather values along route. Dual Y-axes, extensible metric registry, line and bar render types, hover sync with cross-section.
+2D chart below cross-section for scalar weather values along route. Dual Y-axes, extensible metric registry (9 metrics incl. ceiling-DD/NWP AGL), line and bar render types, hover sync with cross-section.
 → Full doc: route-graph.md
 
 ### digest
@@ -64,7 +64,7 @@ GRIB2 enrichment engine: GFS S3 (CLWMR/ICMR/cloud diagnostics), ICON-EU DWD (QC/
 → Full doc: weather-engine-specs.md
 
 ### multi-user-deployment
-Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth via flyfun-common (OAuth, JWT, cross-subdomain SSO), MySQL/SQLite DB schema, rate limiting, encrypted credentials, deploy commands, env vars.
+Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth via flyfun-common (OAuth, JWT, cross-subdomain SSO), MySQL/SQLite DB schema, rate limiting, encrypted credentials, account deletion, admin hub, Resend email, deploy commands, env vars.
 → Full doc: multi-user-deployment.md
 
 ### cost-attribution

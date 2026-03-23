@@ -101,8 +101,8 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
-| `ConvectiveEvaluator` | convective | Route points with convective risk ≥ threshold. HIGH/EXTREME → instant RED | `min_risk`, `affected_pct_amber`, `affected_pct_red` |
-| `ModelAgreementEvaluator` | model | Cross-model divergence (POOR/MODERATE agreement). Evaluated once, not per-model | `poor_pct_amber`, `poor_pct_red` |
+| `ConvectiveEvaluator` | convective | Route points with convective risk ≥ threshold. Altitude-aware: ignores convection whose tops are below `cruise_ft - top_clearance_ft`. HIGH/EXTREME → instant RED. LOW risk capped at AMBER (prevents false alarms for marginal instability) | `min_risk`, `affected_pct_amber`, `affected_pct_red`, `top_clearance_ft` (2000) |
+| `ModelAgreementEvaluator` | model | Cross-model divergence (POOR/MODERATE agreement). Evaluated once, not per-model. **Disabled by default** — user must enable via profile | `min_poor_vars` (3), `poor_pct_amber`, `poor_pct_red` |
 
 ### Airport
 

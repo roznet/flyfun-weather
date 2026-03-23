@@ -4,7 +4,7 @@
 
 ## Intent
 
-WeatherBrief produces daily aviation weather assessments for a planned European GA cross-country flight, tracking conditions from D-7 through D-0. It fetches quantitative data from multiple NWP models, performs aviation-specific analysis, and generates both human-readable text digests and LLM-powered briefings. A web UI and API serve the briefings with history, PDF reports, and email delivery.
+Flyfun Weather (package: weatherbrief) produces daily aviation weather assessments for a planned GA cross-country flight, tracking conditions from D-7 through D-0. It fetches quantitative data from multiple NWP models, performs aviation-specific analysis, and generates both human-readable text digests and LLM-powered briefings. A web UI and API serve the briefings with history, PDF reports, and email delivery.
 
 ## Pipeline (`pipeline.py` + `tasks/`)
 
@@ -89,8 +89,11 @@ src/weatherbrief/
 │       ├── __init__.py     # enrich_forecasts() public API
 │       ├── gfs_idx.py      # .idx parser + byte-range planner
 │       ├── grib_fetch.py   # HTTP Range downloads from S3
-│       ├── decode.py       # cfgrib decode + spatial interpolation
-│       └── cache.py        # Disk cache (48h TTL)
+│       ├── icon_eu_fetch.py # ICON-EU GRIB2 from DWD opendata
+│       ├── icon_eu_levels.py # Log-pressure interpolation from model levels
+│       ├── decode.py       # cfgrib decode + spatial interpolation (chunked for memory)
+│       ├── fill.py         # Forward-fill GRIB fields across time axis
+│       └── cache.py        # Disk cache per model (48h TTL)
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
 │   ├── comparison.py  # Multi-model divergence scoring (15 thresholds)
@@ -141,16 +144,20 @@ src/weatherbrief/
 │   ├── preferences.py # User preferences + autorouter credentials CRUD
 │   ├── throttle.py    # Concurrency limiters: generation_slot (5), pdf_limiter (3), plot_limiter (2)
 │   ├── usage.py       # Usage summary + daily rate limits
-│   ├── credits.py     # Credit balance, charge, admin cost config, transparency endpoint
-│   ├── feedback.py    # User feedback submission + admin listing
+│   ├── credits.py     # Cost summary, charge, admin cost config, transparency endpoint
+│   ├── feedback.py    # User feedback submission, admin workflow (status/reply/send/notes)
+│   ├── security.py    # Audit logging (admin actions, pack access), HMAC integrity helpers
 │   └── admin.py       # Admin: user list, approval, usage overview, per-user costs, API agent/token mgmt
 ├── costs.py           # Pure cost computation (no DB/IO): CostConfig, CostBreakdown, compute_cost()
 ├── report/
 │   ├── render.py      # render_html(), render_pdf() via Jinja2 + WeasyPrint
 │   └── templates/     # Jinja2 template for self-contained HTML report
-└── notify/
-    ├── email.py       # SMTP email with HTML body + PDF attachment
-    └── admin_email.py # Admin notifications: new user signup, feedback submission, welcome email
+├── notify/
+│   ├── email.py       # Email delivery: Resend API (primary) with SMTP fallback
+│   └── admin_email.py # Notifications: signup, feedback, welcome, feedback reply to user
+└── triage/
+    ├── __main__.py    # CLI entry point for feedback triage
+    └── process.py     # AI triage via Claude CLI: classify, analyze, suggest reply
 ```
 
 ## Web Frontend (`web/`)
@@ -224,7 +231,7 @@ Flight and pack metadata are stored in a relational database via SQLAlchemy ORM.
 - **Dev mode** (`ENVIRONMENT=development`): SQLite at `data/weatherbrief.db`, tables auto-created on startup, dev user auto-inserted.
 - **Production** (`ENVIRONMENT=production`): MySQL via `DATABASE_URL` env var, schema managed by Alembic migrations.
 
-Tables: `users`, `user_preferences`, `api_tokens`, `cost_ledger` (from flyfun-common) + `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `feedback`, `cost_config`, `credit_ledger` (app-specific). See [multi-user-deployment.md](./multi-user-deployment.md) for user/flight schema, [cost-attribution-design.md](./cost-attribution-design.md) for cost/credit schema.
+Tables: `users`, `user_preferences`, `api_tokens`, `cost_ledger` (from flyfun-common) + `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `feedback`, `cost_config` (app-specific). See [multi-user-deployment.md](./multi-user-deployment.md) for user/flight schema, [cost-attribution-design.md](./cost-attribution-design.md) for cost schema.
 
 ### File artifacts (disk)
 
@@ -304,7 +311,13 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/admin/cost-config/history` | GET | Cost config version history (admin) |
 | `/api/transparency` | GET | Public pricing structure (no auth) |
 | `/api/feedback` | POST | Submit user feedback on a briefing |
-| `/api/feedback/admin` | GET | List all feedback (admin only) |
+| `/api/feedback/admin` | GET | List all feedback with optional status filter (admin only) |
+| `/api/feedback/admin/{id}/status` | PUT | Update feedback workflow status (admin) |
+| `/api/feedback/admin/{id}/reply` | PUT | Save draft reply text (admin) |
+| `/api/feedback/admin/{id}/send` | POST | Send reply email to user + set status=replied (admin) |
+| `/api/feedback/admin/{id}/notes` | PUT | Save internal admin notes (admin) |
+| `/auth/me/account` | DELETE | Delete own account (cascades flights, profiles, artifacts) |
+| `/api/admin/hub/*` | various | Cross-app admin hub (users, costs) via flyfun-common |
 | `/api/refresh/active` | GET | List all currently active refreshes |
 | `/api/flights/{id}/packs/refresh/status` | GET | Refresh status for a specific flight |
 | `/api/admin/metrics` | GET | Queue depth, active refreshes, timing stats (admin) |
@@ -395,6 +408,14 @@ Static files served from `web/` at root.
 | 11.11 | Done | Compact/full display mode: compact hides sounding analysis, model comparison, secondary advisories |
 | 12.1 | Done | Cross-section theme system: switchable themes (standard, high-contrast), theme preview, cloud hatch patterns, theme-aware legends |
 | 12.2 | Done | Auth consolidation: OAuth, JWT, DB engine, encryption moved to flyfun-common; cross-subdomain SSO via `flyfun_auth` cookie |
+| 12.3 | Done | Cost unification: drop credits abstraction, USD everywhere, shared cost_ledger via flyfun-common |
+| 12.4 | Done | Admin hub: cross-app Systems tab via flyfun-common's create_hub_router |
+| 12.5 | Done | Feedback workflow: status tracking (pending/ready/replied/ignored), AI triage, admin reply email |
+| 12.6 | Done | Security hardening: HMAC pack integrity, audit logging (admin actions, pack access) |
+| 12.7 | Done | Account deletion: cascade delete flights/profiles/artifacts, auth callback |
+| 12.8 | Done | Email: Resend API provider with SMTP fallback |
+| 12.9 | Done | Convective advisory altitude-awareness, ceiling route graph metrics, route map width variation |
+| 12.10 | Done | GRIB2 memory optimization: two-phase sequential decode, chunked ICON-EU processing |
 
 ## Docker
 

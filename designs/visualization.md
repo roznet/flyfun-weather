@@ -304,7 +304,7 @@ A separate canvas-based chart rendered below the cross-section for scalar weathe
 
 - **X-axis aligned** with cross-section (same `distanceToX` transform and margins)
 - **Dual Y-axes**: left and right metrics independently selectable
-- **7 metrics**: headwind, crosswind, temperature, precipitation, cloud cover, CAPE, freezing level
+- **9 metrics**: headwind, crosswind, temperature, precipitation, cloud cover, CAPE, freezing level, ceiling-DD (sounding AGL), ceiling-NWP (NWP AGL)
 - **Render types**: line (monotone cubic spline) and bar charts
 - **State**: `VizSettings` extended with `routeGraphVisible`, `routeGraphLeftMetric`, `routeGraphRightMetric`, persisted to localStorage
 - **Controls**: dropdown selectors below the graph, integrated into the controls panel
@@ -324,26 +324,30 @@ Leaflet-based geographic visualization showing weather metrics as colored route 
 | `altitude-slider.ts` | Range input for level-dependent metrics (0 → ceiling, 500ft steps, FL labels) |
 | `legend.ts` | DOM gradient bar with color stops and labels |
 
-### Metric Registry (14 metrics)
+### Metric Registry (17 metrics)
 
-| Metric | Alt-Dependent | Color Scale |
-|--------|:---:|-------------|
-| cloud-cover-total | | Gray 0-100% |
-| cloud-cover-low | | Gray 0-100% |
-| convective-risk | | Green→Yellow→Red discrete |
-| headwind | | Green (tailwind) ↔ Red (headwind) diverging |
-| crosswind | | White→Purple |
-| cape | | Green→Yellow→Red continuous |
-| freezing-level | | Dark→Light blue |
-| nwp-ceiling | | Purple (LIFR)→Red (IFR)→Amber (MVFR)→Green (VFR) |
-| temperature | | Blue→White→Red diverging |
-| model-agreement | | Green/Orange/Red discrete |
-| icing-risk-at-level | Yes | Green→Yellow→Orange→Red |
-| sfip-at-level | Yes | Green→Yellow→Orange→Red |
-| cat-risk-at-level | Yes | Green→Yellow→Orange→Red |
-| cloud-at-level | Yes | Gray 0-100% |
+| Metric | Alt-Dependent | Color Scale | Width |
+|--------|:---:|-------------|-------|
+| cloud-cover-total | | Gray 0-100% | Linear 3–25px |
+| cloud-cover-low | | Gray 0-100% | Linear 3–25px |
+| convective-risk | | Green→Yellow→Red discrete | Fixed 15px |
+| headwind-only | | Green (tailwind) ↔ Red (headwind) | Linear 3–25px (0–30kt) |
+| tailwind-only | | Separate tailwind view | Linear 3–25px (0–30kt) |
+| crosswind | | White→Purple | Fixed 15px |
+| cape | | Green→Yellow→Red continuous | Linear 3–25px (0–2000 J/kg) |
+| freezing-level | | Dark→Light blue | Fixed 15px |
+| nwp-ceiling | | Purple (LIFR)→Red (IFR)→Amber (MVFR)→Green (VFR) | Inverted 25→3px (0–5000ft) |
+| temp-at-level | Yes | Blue→White→Red diverging | Inverted: thick=cold (icing) |
+| temperature | | Blue→White→Red diverging | Fixed 15px |
+| model-agreement | | Green/Orange/Red discrete | Fixed 15px |
+| icing-risk-at-level | Yes | Green→Yellow→Orange→Red | Fixed 15px |
+| sfip-at-level | Yes | Green→Yellow→Orange→Red | Fixed 15px |
+| cat-risk-at-level | Yes | Green→Yellow→Orange→Red | Fixed 15px |
+| cloud-at-level | Yes | Gray 0-100% | Fixed 15px |
 
-Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `cloudAtAlt()`) to find the relevant value at the slider's flight level.
+**Width variation**: Route map segments now vary in width as well as color. Each metric defines a `getWidth(point)` function. Width communicates a secondary dimension (e.g., nwp-ceiling uses inverted width so low ceilings appear thick/dangerous).
+
+Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `cloudAtAlt()`, `tempAtAlt()`) to find the relevant value at the slider's flight level.
 
 ### Rendering
 
