@@ -69,7 +69,7 @@ def send_new_user_notification(
 
     admin_page_url = f"{base_url}/admin.html"
 
-    subject = f"[WeatherBrief] New user joined: {email}"
+    subject = f"[FlyFun Weather] New user joined: {email}"
     html_body = f"""\
 <html>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a2e;">
@@ -130,18 +130,18 @@ def send_welcome_email(
     site_url = html.escape(base_url)
     help_url = html.escape(f"{base_url}/help.html")
 
-    subject = "[WeatherBrief] Your account has been approved"
+    subject = "[FlyFun Weather] Welcome!"
     html_body = f"""\
 <html>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a2e;max-width:560px;">
-  <h2 style="margin:0 0 12px;">Welcome to WeatherBrief, {esc_name}!</h2>
-  <p>Your account has been approved. You can now sign in and start using WeatherBrief
+  <h2 style="margin:0 0 12px;">Welcome to FlyFun Weather, {esc_name}!</h2>
+  <p>You can now sign in and start using FlyFun Weather
      for your flight weather planning.</p>
   <div style="margin:20px 0;">
     <a href="{site_url}"
        style="display:inline-block;padding:10px 24px;background:#2563eb;color:#fff;
               border-radius:6px;text-decoration:none;font-weight:600;">
-      Go to WeatherBrief
+      Go to FlyFun Weather
     </a>
   </div>
   <p>Before your first flight, we recommend reviewing the
@@ -149,7 +149,7 @@ def send_welcome_email(
      to get the most out of the briefings.</p>
   <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
   <p style="color:#6c757d;font-size:13px;">
-    <strong>Early preview</strong> &mdash; WeatherBrief is still in active development.
+    FlyFun Weather is still in active development.
     Please review your briefings carefully and don't hesitate to share feedback
     or report any issues you encounter.
   </p>
@@ -157,14 +157,14 @@ def send_welcome_email(
 </html>"""
 
     plain_body = (
-        f"Welcome to WeatherBrief, {name or 'there'}!\n\n"
-        f"Your account has been approved. You can now sign in and start\n"
-        f"using WeatherBrief for your flight weather planning.\n\n"
+        f"Welcome to FlyFun Weather, {name or 'there'}!\n\n"
+        f"You can now sign in and start using FlyFun Weather\n"
+        f"for your flight weather planning.\n\n"
         f"Sign in: {base_url}\n\n"
         f"We recommend reviewing the Help & Guide before your first flight:\n"
         f"{base_url}/help.html\n\n"
         f"---\n"
-        f"Early preview — WeatherBrief is still in active development.\n"
+        f"FlyFun Weather is still in active development.\n"
         f"Please review your briefings carefully and don't hesitate to\n"
         f"share feedback or report any issues you encounter.\n"
     )
@@ -226,7 +226,7 @@ def send_feedback_notification(
     else:
         briefing_url = f"{base_url}/briefing.html?flight={flight_id}"
 
-    subject = f"[WeatherBrief] Feedback: {category_label}"
+    subject = f"[FlyFun Weather] Feedback: {category_label}"
     html_body = f"""\
 <html>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a2e;">
