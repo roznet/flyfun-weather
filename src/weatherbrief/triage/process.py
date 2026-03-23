@@ -197,11 +197,13 @@ def _extract_json_fallback(text: str) -> dict:
 def _apply_result(fb: FeedbackRow, parsed: dict) -> None:
     """Write classification results back to the feedback row."""
     result = parsed["result"]
+    logger.debug("Triage result keys: %s", list(result.keys()) if isinstance(result, dict) else type(result))
+    logger.debug("Triage result: %.500s", result)
     fb.status = "ready"
-    fb.classification = result.get("classification")
-    fb.ai_analysis = result.get("analysis")
-    fb.admin_reply = result.get("suggested_response")
-    fb.confidence = result.get("confidence")
+    fb.classification = result.get("classification") if isinstance(result, dict) else None
+    fb.ai_analysis = result.get("analysis") if isinstance(result, dict) else str(result)
+    fb.admin_reply = result.get("suggested_response") if isinstance(result, dict) else None
+    fb.confidence = result.get("confidence") if isinstance(result, dict) else None
     fb.processed_at = datetime.now(timezone.utc)
 
 
