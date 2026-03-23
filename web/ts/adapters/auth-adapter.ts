@@ -23,3 +23,12 @@ export async function logout(): Promise<void> {
   await fetch('/auth/logout', { method: 'POST' });
   window.location.href = '/login.html';
 }
+
+export async function deleteAccount(): Promise<void> {
+  const resp = await fetch('/auth/account', { method: 'DELETE' });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(body.detail || `HTTP ${resp.status}`);
+  }
+  window.location.href = '/login.html';
+}

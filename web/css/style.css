@@ -172,6 +172,13 @@ a:hover { text-decoration: underline; }
 }
 .btn-danger:hover { background: var(--danger); color: #fff; }
 
+.danger-zone {
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-top: 2rem;
+}
+
 .btn-secondary {
   background: transparent;
   color: var(--text);

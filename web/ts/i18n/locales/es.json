@@ -308,6 +308,9 @@
   "settings.costThisWeek": "Esta semana: {cost}",
   "settings.costThisMonth": "Este mes: {cost}",
   "settings.costTotal": "Total: {cost}",
+  "settings.deleteAccountConfirm": "¿Está seguro de que desea eliminar su cuenta? Todos sus vuelos, briefings y configuraciones se eliminarán permanentemente.",
+  "settings.deleteAccountDoubleConfirm": "Esta acción no se puede deshacer. ¿Está seguro de que desea eliminar permanentemente su cuenta y todos los datos?",
+  "settings.deleteAccountFailed": "Error al eliminar la cuenta: {error}",
 
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
@@ -506,5 +509,8 @@
   "page.settings.icingEnhanceHint": "Incrementar la severidad del engelamiento cuando HR > 95% o agua precipitable > 25 mm.",
   "page.settings.advisoryModels": "Modelos",
   "page.settings.advisoryModelsHint": "Seleccione qué modelos del briefing se evalúan para avisos. Los modelos no seleccionados siguen disponibles para sección transversal y Skew-T.",
-  "page.settings.loadingAdvisories": "Cargando catálogo de avisos..."
+  "page.settings.loadingAdvisories": "Cargando catálogo de avisos...",
+  "page.settings.deleteAccountTitle": "Eliminar cuenta",
+  "page.settings.deleteAccountHint": "Elimina permanentemente su cuenta y todos los datos asociados (vuelos, briefings, perfiles). Esta acción no se puede deshacer.",
+  "page.settings.deleteAccount": "Eliminar cuenta"
 }
