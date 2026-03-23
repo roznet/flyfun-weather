@@ -12,6 +12,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from urllib.parse import quote
 
+import httpx
 from pydantic import BaseModel
 
 from weatherbrief.models import BriefingPackMeta, Flight
@@ -65,6 +66,71 @@ class SmtpConfig(BaseModel):
             from_address=from_address,
             use_tls=os.environ.get("WEATHERBRIEF_SMTP_TLS", "true").lower() != "false",
         )
+
+
+def _resend_send(api_key: str, msg: MIMEMultipart) -> None:
+    """Send an email via the Resend HTTP API.
+
+    Uses RESEND_FROM / RESEND_REPLY_TO env vars when set,
+    otherwise falls back to the From header already on *msg*.
+    """
+    from_addr = os.environ.get("RESEND_FROM") or msg["From"]
+    reply_to = os.environ.get("RESEND_REPLY_TO")
+
+    # Extract plain and HTML parts from the multipart/alternative message
+    text_body: str | None = None
+    html_body: str | None = None
+    for part in msg.get_payload():
+        ct = part.get_content_type()
+        if ct == "text/plain":
+            text_body = part.get_payload(decode=True).decode()
+        elif ct == "text/html":
+            html_body = part.get_payload(decode=True).decode()
+
+    payload: dict = {
+        "from": from_addr,
+        "to": [addr.strip() for addr in msg["To"].split(",")],
+        "subject": msg["Subject"],
+    }
+    if html_body:
+        payload["html"] = html_body
+    if text_body:
+        payload["text"] = text_body
+    if reply_to:
+        payload["reply_to"] = reply_to
+
+    resp = httpx.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json=payload,
+        timeout=30,
+    )
+    if not resp.is_success:
+        logger.error("Resend API error %d: %s", resp.status_code, resp.text)
+        raise RuntimeError(f"Resend API error {resp.status_code}: {resp.text}")
+    logger.info("Email sent via Resend (id=%s)", resp.json().get("id"))
+
+
+def send_message(msg: MIMEMultipart, smtp_config: SmtpConfig | None = None) -> None:
+    """Send an email, routing through Resend when RESEND_API_KEY is set.
+
+    Falls back to SMTP otherwise. *smtp_config* is only needed for the
+    SMTP path and will be loaded from env if not provided.
+    """
+    resend_key = os.environ.get("RESEND_API_KEY")
+    if resend_key:
+        _resend_send(resend_key, msg)
+        return
+
+    if smtp_config is None:
+        smtp_config = SmtpConfig.from_env()
+
+    with smtplib.SMTP(smtp_config.host, smtp_config.port) as server:
+        if smtp_config.use_tls:
+            server.starttls()
+        if smtp_config.user:
+            server.login(smtp_config.user, smtp_config.password)
+        server.send_message(msg)
 
 
 def _briefing_url(base_url: str, flight_id: str) -> str:
@@ -410,11 +476,6 @@ def send_briefing_email(
     ))
 
     # Send
-    logger.info("Sending briefing email to %s via %s:%d", recipients, smtp_config.host, smtp_config.port)
-    with smtplib.SMTP(smtp_config.host, smtp_config.port) as server:
-        if smtp_config.use_tls:
-            server.starttls()
-        if smtp_config.user:
-            server.login(smtp_config.user, smtp_config.password)
-        server.send_message(msg)
+    logger.info("Sending briefing email to %s", recipients)
+    send_message(msg, smtp_config)
     logger.info("Briefing email sent successfully")
