@@ -158,7 +158,7 @@ No personal information (name, email, routes) is sent to LLM providers — only 
 
 ## Open Source & Auditability
 
-The complete source code is open source. You can verify every claim in this document by reading the code yourself — or ask your favorite AI coding agent to review the code and my claims for you. Key areas:
+The complete source code is open source. You can verify every claim in this document by reading the code yourself — or ask your favorite AI coding agent to review the code and my claims for you. If you identify any issues, please raise a [GitHub issue](https://github.com/roznet/flyfun-weather/issues) and I will address it. Key areas:
 
 - Authentication: `src/weatherbrief/api/app.py`
 - Credential encryption: `flyfun_common.credentials`
