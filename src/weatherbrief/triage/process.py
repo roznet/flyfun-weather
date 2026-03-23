@@ -99,7 +99,7 @@ def _run_claude(
         "--json-schema", json.dumps(TRIAGE_SCHEMA),
         "--tools", "Read,Grep,Glob,Agent",
         "--model", "sonnet",
-        "--max-turns", "10",
+        "--max-turns", "20",
         "--max-budget-usd", "0.50",
         "--no-session-persistence",
     ]
@@ -157,6 +157,19 @@ def _parse_claude_output(raw: str, elapsed_s: float) -> dict:
     except json.JSONDecodeError:
         outer = _extract_json_fallback(raw)
 
+    # Check for max-turns or other errors with no structured output
+    subtype = outer.get("subtype", "")
+    if subtype == "error_max_turns":
+        logger.warning("Claude hit max turns — no structured output")
+        return {
+            "result": {},
+            "cost_usd": outer.get("total_cost_usd") or outer.get("cost_usd"),
+            "duration_ms": outer.get("duration_ms") or int(elapsed_s * 1000),
+            "num_turns": outer.get("num_turns"),
+            "session_id": outer.get("session_id"),
+            "error": "max_turns",
+        }
+
     # --json-schema puts structured output in "structured_output", not "result"
     if "structured_output" in outer and isinstance(outer["structured_output"], dict):
         classification = outer["structured_output"]
@@ -168,7 +181,8 @@ def _parse_claude_output(raw: str, elapsed_s: float) -> dict:
         except json.JSONDecodeError:
             classification = _extract_json_fallback(outer["result"])
     else:
-        classification = outer
+        logger.warning("Could not find structured output in Claude response (keys: %s)", list(outer.keys()))
+        classification = {}
 
     return {
         "result": classification,
@@ -198,12 +212,20 @@ def _apply_result(fb: FeedbackRow, parsed: dict) -> None:
     """Write classification results back to the feedback row."""
     result = parsed["result"]
     logger.debug("Triage result keys: %s", list(result.keys()) if isinstance(result, dict) else type(result))
-    logger.debug("Triage result: %.500s", result)
+
+    if not isinstance(result, dict) or not result.get("classification"):
+        # No usable structured output — leave as pending with a note
+        error = parsed.get("error", "no structured output")
+        fb.admin_notes = f"AI triage incomplete: {error}"
+        fb.processed_at = datetime.now(timezone.utc)
+        logger.warning("Feedback #%d: triage produced no structured output (%s)", fb.id, error)
+        return
+
     fb.status = "ready"
-    fb.classification = result.get("classification") if isinstance(result, dict) else None
-    fb.ai_analysis = result.get("analysis") if isinstance(result, dict) else str(result)
-    fb.admin_reply = result.get("suggested_response") if isinstance(result, dict) else None
-    fb.confidence = result.get("confidence") if isinstance(result, dict) else None
+    fb.classification = result.get("classification")
+    fb.ai_analysis = result.get("analysis")
+    fb.admin_reply = result.get("suggested_response")
+    fb.confidence = result.get("confidence")
     fb.processed_at = datetime.now(timezone.utc)
 
 
