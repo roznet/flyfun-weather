@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 def _clean_env_leaks(monkeypatch):
     """Prevent load_dotenv() side-effects from leaking between test modules."""
     monkeypatch.delenv("OPENMETEO_API_KEY", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
 
 from flyfun_common.db import DEV_USER_ID
 from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
