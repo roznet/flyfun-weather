@@ -158,7 +158,7 @@ No personal information (name, email, routes) is sent to LLM providers — only 
 
 ## Open Source & Auditability
 
-The complete source code is open source. You can verify every claim in this document by reading the code yourself. Key areas:
+The complete source code is open source. You can verify every claim in this document by reading the code yourself — or ask your favorite AI coding agent to review the code and my claims for you. Key areas:
 
 - Authentication: `src/weatherbrief/api/app.py`
 - Credential encryption: `flyfun_common.credentials`
@@ -168,6 +168,12 @@ The complete source code is open source. You can verify every claim in this docu
 
 ---
 
+## Account Deletion
+
+You can delete your account and all associated data (flights, briefings, preferences, credentials) directly from the app settings. This will permanently remove everything linked to your account.
+
+---
+
 ## Contact
 
-If you have questions about your data, want your account deleted, or want to report a concern, reach out to me directly.
+If you have questions about your data or want to report a concern, reach out to me directly.
