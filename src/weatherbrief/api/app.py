@@ -15,11 +15,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from flyfun_common.auth import create_auth_router, get_jwt_secret, is_dev_mode
-from weatherbrief.api.security import (
-    AuthRateLimitMiddleware,
-    RequestValidationLoggingMiddleware,
-    SecurityHeadersMiddleware,
-)
 from flyfun_common.db import (
     SessionLocal,
     ensure_dev_user,
@@ -146,11 +141,6 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
-
-    # Security middleware (added last = executed first in Starlette)
-    app.add_middleware(AuthRateLimitMiddleware)
-    app.add_middleware(RequestValidationLoggingMiddleware)
-    app.add_middleware(SecurityHeadersMiddleware)
 
     # Weather-specific /auth/me (adds is_admin, setup_completed) — must be
     # registered BEFORE common's auth router so it takes priority.
