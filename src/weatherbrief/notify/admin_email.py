@@ -11,13 +11,12 @@ import hmac
 import html
 import logging
 import os
-import smtplib
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from urllib.parse import urlencode
 
-from weatherbrief.notify.email import SmtpConfig
+from weatherbrief.notify.email import SmtpConfig, send_message
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +101,7 @@ def send_new_user_notification(
     msg.attach(MIMEText(html_body, "html"))
 
     logger.info("Sending admin notification for new user %s to %s", email, admin_emails)
-    _smtp_send(smtp_config, msg)
+    send_message(msg, smtp_config)
     logger.info("Admin notification sent for %s", email)
 
 
@@ -178,7 +177,7 @@ def send_welcome_email(
     msg.attach(MIMEText(html_body, "html"))
 
     logger.info("Sending welcome email to %s", email)
-    _smtp_send(smtp_config, msg)
+    send_message(msg, smtp_config)
     logger.info("Welcome email sent to %s", email)
 
 
@@ -266,15 +265,7 @@ def send_feedback_notification(
     msg.attach(MIMEText(html_body, "html"))
 
     logger.info("Sending feedback notification to %s", admin_emails)
-    _smtp_send(smtp_config, msg)
+    send_message(msg, smtp_config)
     logger.info("Feedback notification sent")
 
 
-def _smtp_send(smtp_config: SmtpConfig, msg: MIMEMultipart) -> None:
-    """Send an email message via SMTP."""
-    with smtplib.SMTP(smtp_config.host, smtp_config.port) as server:
-        if smtp_config.use_tls:
-            server.starttls()
-        if smtp_config.user:
-            server.login(smtp_config.user, smtp_config.password)
-        server.send_message(msg)
