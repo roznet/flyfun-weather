@@ -35,6 +35,7 @@ from weatherbrief.db.models import (
     BriefingUsageRow, FlightRow,
 )
 from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails
+from weatherbrief.api.security import audit_admin_action
 from weatherbrief.storage.flights import safe_path_component
 
 logger = logging.getLogger(__name__)
@@ -415,6 +416,10 @@ def approve_user(
     user.approved = True
     db.flush()
     logger.info("User %s (%s) approved by admin", user.email, user.id)
+    audit_admin_action(
+        "approve_user", _admin_id, request,
+        target_user_id=user.id, details=f"email={user.email}",
+    )
 
     if not already:
         _send_welcome(user.email, user.display_name, request)
@@ -468,6 +473,10 @@ def one_click_approve(
         logger.info("One-click approve for %s — approved", user.email)
         status_msg = f"{user.display_name} ({user.email}) has been approved!"
         _send_welcome(user.email, user.display_name, request)
+    audit_admin_action(
+        "one_click_approve", "link", request,
+        target_user_id=user.id, details=f"email={user.email} already={already}",
+    )
 
     return _approve_html(status_msg)
 
@@ -541,6 +550,7 @@ class CreateTokenRequest(BaseModel):
 
 @router.post("/agents")
 def create_agent(
+    request: Request,
     body: CreateAgentRequest,
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -570,11 +580,17 @@ def create_agent(
     ))
     db.flush()
 
+    audit_admin_action(
+        "create_agent", _admin_id, request,
+        target_user_id=user_id, details=f"name={body.name}",
+    )
+
     return {"user_id": user_id, "token": plaintext, "name": body.name}
 
 
 @router.post("/agents/{user_id}/tokens")
 def create_agent_token(
+    request: Request,
     user_id: str,
     body: CreateTokenRequest,
     _admin_id: str = Depends(require_admin),
@@ -595,12 +611,17 @@ def create_agent_token(
     )
     db.add(token_row)
     db.flush()
+    audit_admin_action(
+        "create_agent_token", _admin_id, request,
+        target_user_id=user_id, details=f"token_id={token_row.id}",
+    )
 
     return {"token": plaintext, "token_id": token_row.id}
 
 
 @router.delete("/agents/{user_id}")
 def revoke_agent(
+    request: Request,
     user_id: str,
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -617,6 +638,10 @@ def revoke_agent(
         {"revoked": True}
     )
     db.flush()
+    audit_admin_action(
+        "revoke_agent", _admin_id, request,
+        target_user_id=user_id, details=f"name={user.display_name}",
+    )
 
     return {"status": "revoked", "user_id": user_id}
 
@@ -706,6 +731,7 @@ def get_metrics(
 
 @router.delete("/agents/{user_id}/tokens/{token_id}")
 def revoke_agent_token(
+    request: Request,
     user_id: str,
     token_id: int,
     _admin_id: str = Depends(require_admin),
@@ -721,5 +747,9 @@ def revoke_agent_token(
 
     token_row.revoked = True
     db.flush()
+    audit_admin_action(
+        "revoke_token", _admin_id, request,
+        target_user_id=user_id, details=f"token_id={token_id}",
+    )
 
     return {"status": "revoked", "token_id": token_id}
