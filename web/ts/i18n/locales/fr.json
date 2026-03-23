@@ -308,6 +308,9 @@
   "settings.costThisWeek": "Cette semaine : {cost}",
   "settings.costThisMonth": "Ce mois-ci : {cost}",
   "settings.costTotal": "Total : {cost}",
+  "settings.deleteAccountConfirm": "Êtes-vous sûr de vouloir supprimer votre compte ? Tous vos vols, briefings et paramètres seront définitivement supprimés.",
+  "settings.deleteAccountDoubleConfirm": "Cette action est irréversible. Êtes-vous sûr de vouloir supprimer définitivement votre compte et toutes vos données ?",
+  "settings.deleteAccountFailed": "Échec de la suppression du compte : {error}",
 
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
@@ -506,5 +509,8 @@
   "page.settings.icingEnhanceHint": "Augmenter la sévérité du givrage lorsque RH > 95 % ou eau précipitable > 25 mm.",
   "page.settings.advisoryModels": "Modèles",
   "page.settings.advisoryModelsHint": "Sélectionnez les modèles de briefing évalués pour les avis. Les modèles non cochés restent disponibles pour la coupe transversale et le Skew-T.",
-  "page.settings.loadingAdvisories": "Chargement du catalogue d'avis..."
+  "page.settings.loadingAdvisories": "Chargement du catalogue d'avis...",
+  "page.settings.deleteAccountTitle": "Supprimer le compte",
+  "page.settings.deleteAccountHint": "Supprime définitivement votre compte et toutes les données associées (vols, briefings, profils). Cette action est irréversible.",
+  "page.settings.deleteAccount": "Supprimer le compte"
 }

@@ -308,6 +308,9 @@
   "settings.costThisWeek": "This week: {cost}",
   "settings.costThisMonth": "This month: {cost}",
   "settings.costTotal": "Total: {cost}",
+  "settings.deleteAccountConfirm": "Are you sure you want to delete your account? All your flights, briefings, and settings will be permanently removed.",
+  "settings.deleteAccountDoubleConfirm": "This cannot be undone. Are you sure you want to permanently delete your account and all data?",
+  "settings.deleteAccountFailed": "Failed to delete account: {error}",
 
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
@@ -506,5 +509,8 @@
   "page.settings.icingEnhanceHint": "Upgrade icing severity when RH > 95% or precipitable water > 25 mm.",
   "page.settings.advisoryModels": "Models",
   "page.settings.advisoryModelsHint": "Select which briefing models are evaluated for advisories. Unchecked models are still available for cross-section and Skew-T.",
-  "page.settings.loadingAdvisories": "Loading advisory catalog..."
+  "page.settings.loadingAdvisories": "Loading advisory catalog...",
+  "page.settings.deleteAccountTitle": "Delete Account",
+  "page.settings.deleteAccountHint": "Permanently delete your account and all associated data (flights, briefings, profiles). This action cannot be undone.",
+  "page.settings.deleteAccount": "Delete Account"
 }

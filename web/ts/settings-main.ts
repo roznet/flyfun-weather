@@ -1,6 +1,6 @@
 /** Settings page entry point — tabbed preferences with profile-based advisory configuration. */
 
-import { fetchCurrentUser } from './adapters/auth-adapter';
+import { fetchCurrentUser, deleteAccount } from './adapters/auth-adapter';
 import { fetchCostSummary, type CostSummary } from './adapters/credits-adapter';
 import { renderUserInfo, escapeHtml, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
 import {
@@ -285,6 +285,10 @@ function translateStaticElements(): void {
   set('#clear-autorouter-btn', 'page.settings.clear');
   set('#usage-section h3', 'page.settings.usageTitle');
   set('#credits-section h3', 'page.settings.creditsTitle');
+  // Danger zone
+  set('.danger-zone h3', 'page.settings.deleteAccountTitle');
+  set('.danger-zone .section-hint', 'page.settings.deleteAccountHint');
+  set('#btn-delete-account', 'page.settings.deleteAccount');
   // Flight tab
   set('.profile-section h3', 'page.settings.flightProfiles');
   set('.profile-section .section-hint', 'page.settings.profilesHint');
@@ -435,6 +439,18 @@ async function init(): Promise<void> {
       showStatus(t('settings.credentialsCleared'));
     } catch (err) {
       showStatus(t('settings.failedClearCreds', { error: String(err) }), true);
+    }
+  });
+
+  // Delete account
+  const deleteAccountBtn = document.getElementById('btn-delete-account');
+  deleteAccountBtn?.addEventListener('click', async () => {
+    if (!confirm(t('settings.deleteAccountConfirm'))) return;
+    if (!confirm(t('settings.deleteAccountDoubleConfirm'))) return;
+    try {
+      await deleteAccount();
+    } catch (err) {
+      showStatus(t('settings.deleteAccountFailed', { error: String(err) }), true);
     }
   });
 }

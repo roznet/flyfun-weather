@@ -308,6 +308,9 @@
   "settings.costThisWeek": "Diese Woche: {cost}",
   "settings.costThisMonth": "Diesen Monat: {cost}",
   "settings.costTotal": "Gesamt: {cost}",
+  "settings.deleteAccountConfirm": "Möchten Sie Ihr Konto wirklich löschen? Alle Ihre Flüge, Briefings und Einstellungen werden dauerhaft entfernt.",
+  "settings.deleteAccountDoubleConfirm": "Dies kann nicht rückgängig gemacht werden. Sind Sie sicher, dass Sie Ihr Konto und alle Daten dauerhaft löschen möchten?",
+  "settings.deleteAccountFailed": "Konto konnte nicht gelöscht werden: {error}",
 
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
@@ -506,5 +509,8 @@
   "page.settings.icingEnhanceHint": "Vereisungsgrad erhöhen, wenn RH > 95% oder Niederschlagswasser > 25 mm.",
   "page.settings.advisoryModels": "Modelle",
   "page.settings.advisoryModelsHint": "Wählen Sie, welche Briefing-Modelle für Hinweise ausgewertet werden. Nicht ausgewählte Modelle sind weiterhin für Querschnitt und Skew-T verfügbar.",
-  "page.settings.loadingAdvisories": "Hinweiskatalog wird geladen..."
+  "page.settings.loadingAdvisories": "Hinweiskatalog wird geladen...",
+  "page.settings.deleteAccountTitle": "Konto löschen",
+  "page.settings.deleteAccountHint": "Löscht dauerhaft Ihr Konto und alle zugehörigen Daten (Flüge, Briefings, Profile). Diese Aktion kann nicht rückgängig gemacht werden.",
+  "page.settings.deleteAccount": "Konto löschen"
 }

@@ -41,6 +41,42 @@ from flyfun_common.admin_hub import create_hub_router
 logger = logging.getLogger(__name__)
 
 
+def _on_delete_user(user_id: str, db):
+    """Callback for account deletion: clean up all weatherbrief-specific data."""
+    from pathlib import Path
+    from weatherbrief.db.models import (
+        BriefingUsageRow, FeedbackRow, FlightProfileRow, FlightRow,
+    )
+    from weatherbrief.storage.flights import _data_dir, _rmtree, safe_path_component
+
+    # Delete artifact files for all user's flights
+    for flight in db.query(FlightRow).filter(FlightRow.user_id == user_id).all():
+        for pack in flight.packs:
+            if pack.artifact_path:
+                _rmtree(Path(pack.artifact_path))
+
+    # Remove the entire user packs directory (catches any orphaned files)
+    user_pack_dir = _data_dir() / "packs" / safe_path_component(user_id)
+    _rmtree(user_pack_dir)
+
+    # Delete DB rows — FlightRow cascade-deletes BriefingPackRow
+    db.query(FlightRow).filter(FlightRow.user_id == user_id).delete(
+        synchronize_session=False
+    )
+    db.query(FlightProfileRow).filter(
+        FlightProfileRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    db.query(BriefingUsageRow).filter(
+        BriefingUsageRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    db.query(FeedbackRow).filter(
+        FeedbackRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    db.flush()
+
+    logger.info("Deleted weatherbrief data for user %s", user_id)
+
+
 def _on_new_user(user, request, db):
     """Callback for new user registration: create prefs row + send emails."""
     db.add(UserPreferencesRow(user_id=user.id))
@@ -170,7 +206,10 @@ def create_app() -> FastAPI:
         }
 
     # Auth router from flyfun-common (with weather-specific on_new_user callback)
-    auth_router = create_auth_router(on_new_user=_on_new_user)
+    auth_router = create_auth_router(
+        on_new_user=_on_new_user,
+        on_delete_user=_on_delete_user,
+    )
     app.include_router(auth_router)
 
     app.include_router(flights_router, prefix="/api")
