@@ -68,7 +68,7 @@ async function loadUserCosts(userId: string): Promise<void> {
     renderUserHeader(data);
     renderSummaryCards(data);
     renderRecentFlights(data);
-    renderCostDistribution(data.cost_breakdown, data.summary.avg_cost_per_briefing, data.summary.total_briefings);
+    renderCostDistribution(data.cost_breakdown, data.summary.avg_cost_per_briefing_usd, data.summary.total_briefings);
     renderTransactions(data.transactions);
     setupBreakdownToggles();
   } catch (err) {

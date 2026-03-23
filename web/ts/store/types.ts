@@ -104,6 +104,7 @@ export interface EnhancedCloudLayer {
   mean_temperature_c: number | null;
   coverage: CloudCoverage;
   mean_dewpoint_depression_c: number | null;
+  source: string;
 }
 
 export interface IcingZone {
@@ -198,6 +199,7 @@ export interface NWPCloudDiagnostics {
 export interface SoundingAnalysis {
   indices: ThermodynamicIndices | null;
   cloud_layers: EnhancedCloudLayer[];
+  nwp_cloud_layers: EnhancedCloudLayer[] | null;
   icing_zones: IcingZone[];
   icing_ogimet_nwp_zones: IcingZone[];
   sfip_zones: SfipZone[];
