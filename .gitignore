@@ -12,6 +12,7 @@ venv/
 
 .DS_Store
 .env
+.env.triage
 .vite
 web/test-results
 
