@@ -161,7 +161,7 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
     detailsHtml += `
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">AI Analysis</label>
-        <div style="background:var(--surface);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.ai_analysis)}</div>
+        <div style="background:var(--surface);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;max-height:150px;overflow-y:auto;">${escapeHtml(fb.ai_analysis)}</div>
       </div>`;
   }
 
@@ -171,7 +171,7 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
     detailsHtml += `
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">Reply</label>
-        <textarea class="fb-reply" data-id="${fb.id}" rows="4" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;resize:vertical;background:var(--surface);color:var(--text);">${replyValue}</textarea>
+        <textarea class="fb-reply" data-id="${fb.id}" rows="8" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;resize:vertical;background:var(--surface);color:var(--text);">${replyValue}</textarea>
       </div>`;
   } else if (fb.admin_reply) {
     detailsHtml += `
