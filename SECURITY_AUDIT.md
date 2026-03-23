@@ -1,6 +1,7 @@
 # Security Audit — WeatherBrief Web App
 
-**Date:** 2026-02-26
+**Initial audit:** 2026-02-26
+**Updated:** 2026-03-23
 **Scope:** Full-stack security review of the WeatherBrief web application — FastAPI backend, SQLAlchemy/SQLite/MySQL database, vanilla TypeScript frontend, file-based artifact storage, and deployment infrastructure.
 
 ---
@@ -9,7 +10,9 @@
 
 WeatherBrief is generally well-architected from a security perspective for its intended use case (small group of trusted pilots). The codebase demonstrates security awareness: path sanitization, HTML escaping, parameterized queries via ORM, encrypted credential storage, proper cookie flags, and comprehensive security headers via Caddy. However, several issues were identified ranging from **medium-severity authorization gaps** to **low-severity hardening opportunities**.
 
-**Critical findings: 0** | **High: 2** | **Medium: 5** | **Low: 7** | **Informational: 4**
+Since the initial audit, significant fixes have been applied (H1, H2, M2, M4, M5, L1–L6). The March 2026 re-audit found **5 new medium-severity** and **4 new low-severity** issues, mostly around residual error leakage, fragile authorization defaults, and frontend DOM injection.
+
+**Critical findings: 0** | **High: 2** | **Medium: 10** | **Low: 11** | **Informational: 7**
 
 > **Fixed:** H1, H2, M2, M4, M5, L1, L2, L3, L4, L5, L6.
 
@@ -17,57 +20,19 @@ WeatherBrief is generally well-architected from a security perspective for its i
 
 ## HIGH Severity
 
-### H1. Skew-T/Hodograph Path Injection via `icao` and `model` Parameters
+### H1. Skew-T/Hodograph Path Injection via `icao` and `model` Parameters — FIXED
 
-**Location:** `src/weatherbrief/api/packs.py:908`, `:968`
+**Location:** `src/weatherbrief/api/packs.py:30-41`
 
-```python
-skewt_path = pack_dir / "skewt" / f"{icao}_{model}.png"
-```
-
-The `icao` and `model` URL path parameters are used **directly** in file path construction without sanitization. While `pack_dir` itself is safely constructed via `safe_path_component()`, the `icao` and `model` values are concatenated into the filename unsanitized.
-
-**Attack:** An attacker could craft a request like:
-```
-GET /api/flights/{id}/packs/{ts}/skewt/../../etc/passwd/foo
-```
-
-FastAPI's path parameter parsing may limit some traversal, but the `model` parameter especially could contain `../` sequences that escape the `skewt/` subdirectory. The path is used both for reading (`FileResponse`) and **writing** (on-demand generation writes to `skewt_path`).
-
-**Impact:** Potential file read outside the pack directory; potential file write to arbitrary locations if the on-demand generation path is triggered.
-
-**Recommendation:** Apply `safe_path_component()` to both `icao` and `model` before using them in path construction, or validate them against a whitelist of known values:
-
-```python
-import re
-ICAO_PATTERN = re.compile(r"^[A-Z]{4}$")
-MODEL_PATTERN = re.compile(r"^[a-z_]+$")
-
-# In the endpoint:
-if not ICAO_PATTERN.match(icao.upper()):
-    raise HTTPException(400, "Invalid ICAO code")
-if not MODEL_PATTERN.match(model):
-    raise HTTPException(400, "Invalid model name")
-```
+**Fix applied:** `_validate_icao()` and `_validate_model()` now validate all path-sensitive parameters with strict regex patterns (`^[A-Z]{4}$` for ICAO, `^[A-Za-z0-9_-]+$` for model names) before file path construction.
 
 ---
 
-### H2. Shareable Briefing Links Expose All Flight Data to Any Authenticated User (IDOR)
+### H2. Shareable Briefing Links Expose All Flight Data to Any Authenticated User (IDOR) — FIXED
 
-**Location:** `src/weatherbrief/api/packs.py` (all `_get_pack_dir` callers), `src/weatherbrief/api/flights.py:263-271`
+**Location:** `src/weatherbrief/api/flights.py:533-541`
 
-The design doc explicitly states: *"any authenticated user can view any flight's briefings via direct URL."* This is an intentional design choice for a small trusted-user group. However, it creates an **Insecure Direct Object Reference (IDOR)** pattern:
-
-- **Any authenticated user** can access any other user's flight details, briefing snapshots, Skew-T images, GRAMET data, advisories, elevation profiles, reports (HTML/PDF), and digest data.
-- Any authenticated user can trigger email sending for any flight (the email goes to the logged-in user's address, but the data is from any flight).
-- Flight IDs are predictable: `{route_name}-{date}-{4char_hash}`.
-
-**Impact:** A user could enumerate and access all other users' flight plans, routes, weather briefings, and trip schedules. For a small trusted group this may be acceptable, but it breaks the principle of least privilege.
-
-**Recommendation:** If sharing is intentional, document the security implications clearly for users. Consider adding:
-1. An explicit "share" action that generates a share token
-2. A per-flight visibility setting (private/shared)
-3. At minimum, avoid exposing `user_id` in the `FlightResponse` model for flights the viewer doesn't own
+**Fix applied:** Per-flight `private` flag with `_load_flight_or_404` enforcing visibility. Non-private flights remain intentionally shareable among authenticated users. See M8 for a remaining defensive concern with this function.
 
 ---
 
@@ -77,235 +42,329 @@ The design doc explicitly states: *"any authenticated user can view any flight's
 
 **Location:** `src/weatherbrief/api/admin.py:44-72`
 
-The `require_admin` dependency only checks JWT cookies — it does not check Bearer API tokens:
+The `require_admin` dependency only checks JWT cookies — it does not check Bearer API tokens. If admin API token access is ever needed, this creates an inconsistency with `current_user_id` which supports both auth methods.
 
-```python
-def require_admin(request: Request) -> str:
-    if is_dev_mode():
-        return DEV_USER_ID
-    token = request.cookies.get(COOKIE_NAME)  # Only checks cookies
-    # ... no Bearer token check
-```
+**Impact:** Low — agents can't access admin endpoints. Currently correct behavior, but undocumented.
 
-If an API token user (agent) somehow has an admin-level email, they cannot use admin endpoints. This is arguably correct (agents shouldn't be admins), but it creates an inconsistency with the main `current_user_id` dependency which supports both auth methods.
-
-**Impact:** Low — agents can't access admin endpoints even if they should. However, the inconsistency could cause confusion and bugs if admin API token access is ever needed.
-
-**Recommendation:** If admin access via API tokens is ever needed, `require_admin` should be updated to also check Bearer tokens. Otherwise, document this as intentional.
+**Recommendation:** Document this as intentional, or update `require_admin` to support Bearer tokens if needed.
 
 ---
 
-### M2. SSE Streaming Endpoint Manages Its Own DB Session — Potential Session Leak
+### M2. SSE Streaming Endpoint Manages Its Own DB Session — Potential Session Leak — FIXED
 
-**Location:** `src/weatherbrief/api/packs.py:536-594`
+**Location:** `src/weatherbrief/api/packs.py`
 
-The `refresh_briefing_stream` endpoint creates its own `SessionLocal()` session outside FastAPI's dependency injection:
+**Fix applied:** Session management now uses `try/finally` for guaranteed cleanup.
+
+---
+
+### M3. No CSRF Protection on State-Changing Endpoints — No Action Needed
+
+**Revised Impact:** Low. The combination of `SameSite=lax` on the auth cookie + JSON Content-Type requirement effectively prevents CSRF. The one-click approval link uses HMAC signature verification.
+
+---
+
+### M4. Rate Limiting Only on Open-Meteo, Not on Compute-Heavy Endpoints — FIXED
+
+**Location:** `src/weatherbrief/api/throttle.py`
+
+**Fix applied:** Per-user sliding-window rate limiters added for PDF rendering (10/hour via `pdf_limiter`), plot generation (60/hour via `plot_limiter`), and a server-wide concurrency semaphore (3 concurrent generations via `generation_slot`).
+
+---
+
+### M5. Error Messages Leak Internal Details — PARTIALLY FIXED
+
+**Location:** `src/weatherbrief/api/packs.py`
+
+Most error responses now use the `is_dev_mode()` conditional pattern:
+```python
+detail=f"Skew-T generation failed: {exc}" if is_dev_mode() else "Skew-T generation failed"
+```
+
+**Remaining instances** — see M6 below for two error paths that still leak unconditionally.
+
+---
+
+### M6. Residual Error Detail Leakage in Production (NEW — 2026-03-23)
+
+**Location:** `src/weatherbrief/api/packs.py:674`, `:676`
+
+Two error handlers in the briefing refresh endpoint still expose exception details unconditionally in production:
 
 ```python
-db = SessionLocal()
+except ImportError as exc:
+    raise HTTPException(status_code=503, detail=f"Missing dependency: {exc}")
+except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc))
+```
+
+The `ImportError` message reveals which Python packages are installed/missing. The `ValueError` message could expose internal validation logic or data shapes.
+
+**Impact:** Information disclosure — internal implementation details exposed to any authenticated user who triggers a refresh error.
+
+**Recommendation:** Apply the same dev-mode conditional pattern:
+```python
+except ImportError as exc:
+    logger.warning("Refresh failed (missing dependency): %s", exc)
+    detail = f"Missing dependency: {exc}" if is_dev_mode() else "Service temporarily unavailable"
+    raise HTTPException(status_code=503, detail=detail)
+except ValueError as exc:
+    detail = str(exc) if is_dev_mode() else "Invalid request"
+    raise HTTPException(status_code=400, detail=detail)
+```
+
+Additionally, `packs.py:1943` has the same pattern for the email endpoint:
+```python
+except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc))
+```
+
+---
+
+### M7. SessionMiddleware Reuses JWT Secret (NEW — 2026-03-23)
+
+**Location:** `src/weatherbrief/api/app.py:129-134`
+
+```python
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=get_jwt_secret(),    # Same secret as JWT tokens
+    same_site="none",
+    https_only=not is_dev_mode(),
+)
+```
+
+Two concerns:
+
+1. **Secret reuse:** The Starlette `SessionMiddleware` and JWT authentication share the same secret (`get_jwt_secret()`). If one system is compromised (e.g., session cookie forgery), the other is also compromised. Cryptographic best practice is to use separate keys for separate purposes.
+
+2. **`SameSite=none`:** The session cookie uses `SameSite=none`, which is the most permissive setting. The comment explains this is needed for Apple OAuth's `response_mode=form_post`. This is acceptable for the OAuth state cookie, but broadens the attack surface compared to `lax`.
+
+**Impact:** Medium — shared secret increases blast radius of a key compromise. The `SameSite=none` setting is a necessary trade-off for Apple OAuth.
+
+**Recommendation:**
+1. Use a separate secret for `SessionMiddleware`:
+   ```python
+   session_secret = os.environ.get("SESSION_SECRET", get_jwt_secret() + "-session")
+   ```
+2. Document why `SameSite=none` is required (Apple OAuth) so it isn't accidentally changed.
+
+---
+
+### M8. Fragile Authorization Default in `_load_flight_or_404` (NEW — 2026-03-23)
+
+**Location:** `src/weatherbrief/api/flights.py:533-541`
+
+```python
+def _load_flight_or_404(db: Session, flight_id: str, *, viewer_id: str | None = None) -> Flight:
+    """Load a flight by ID. Returns 404 if not found or private and not owned by viewer."""
+    try:
+        flight = load_flight(db, flight_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    if flight.private and viewer_id is not None and flight.user_id != viewer_id:
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+    return flight
+```
+
+The `viewer_id` parameter defaults to `None`. When `None` is passed, the private-flight check is **silently skipped** — private flights become visible. This is a "fail-open" design.
+
+Currently, the only internal caller that omits `viewer_id` is `_load_owned_flight()` (line 546), which immediately enforces ownership. So there is **no active vulnerability today**. However, the fail-open default means any future caller that forgets to pass `viewer_id` will unintentionally bypass the privacy check.
+
+**Impact:** No current exploit, but high risk of future regression. A single missed `viewer_id=user_id` in a new endpoint would silently expose private flights.
+
+**Recommendation:** Invert the default to fail-closed:
+```python
+def _load_flight_or_404(db: Session, flight_id: str, *, viewer_id: str) -> Flight:
+    # viewer_id is now required — callers must explicitly provide it
+```
+Or if truly optional access is needed (e.g., internal background tasks), use a separate function name like `_load_flight_internal()` to make the bypass explicit.
+
+---
+
+### M9. Unhandled JSON Parse Errors on Disk Artifact Files (NEW — 2026-03-23)
+
+**Location:** `src/weatherbrief/api/packs.py:1579`, `:1590`, `:1684`, `:1694`, `:1773`, `:1784`
+
+```python
+ra_data = json.loads(ra_path.read_text())
+cs_data = json.loads(cs_path.read_text())
+```
+
+Six `json.loads()` calls read JSON artifacts from disk without error handling. If a file is corrupted (partial write, disk error, interrupted pipeline), `json.JSONDecodeError` propagates as an unhandled 500 error. Depending on the exception message, this could leak file paths and partial file contents in the response.
+
+**Impact:** Unhandled exceptions cause 500 errors with potentially informative stack traces. Corrupted files become unrecoverable without manual intervention.
+
+**Recommendation:** Wrap disk JSON reads in try/except:
+```python
 try:
-    # ... use db ...
-except Exception:
-    db.close()
-    raise
-db.close()
+    ra_data = json.loads(ra_path.read_text())
+except (json.JSONDecodeError, OSError) as exc:
+    logger.warning("Corrupted artifact %s: %s", ra_path, exc)
+    raise HTTPException(status_code=500, detail="Briefing data corrupted — try refreshing")
 ```
 
-If an exception occurs between session creation and the explicit close (e.g., in `_load_owned_flight`), the session could leak. The pipeline thread also creates its own session which is properly handled.
+---
 
-**Impact:** Under error conditions, database connections could leak, eventually exhausting the pool.
+### M10. No Rate Limiting on Admin Approval Endpoint (NEW — 2026-03-23)
 
-**Recommendation:** Use a `try/finally` block to guarantee session cleanup:
+**Location:** `src/weatherbrief/api/admin.py:425-472`
 
 ```python
-db = SessionLocal()
-try:
-    flight = _load_owned_flight(db, flight_id, user_id)
-    # ...
-finally:
-    db.close()
+@router.get("/approve/{user_id}", response_class=HTMLResponse)
+def one_click_approve(request: Request, user_id: str, ts: str, sig: str, ...):
 ```
 
----
+The one-click approval endpoint:
+- Is publicly accessible (no login required — auth is via HMAC signature)
+- Has no rate limiting per IP
+- Accepts a `user_id` path parameter that could be enumerated
+- Returns different HTTP status codes for "invalid signature" (403), "expired" (410), and "user not found" (404), enabling user enumeration
 
-### M3. No CSRF Protection on State-Changing POST/DELETE/PUT Endpoints
+The HMAC validation is strong (SHA-256 with full secret), making brute-force impractical. However, the endpoint could be used for user ID enumeration by observing response codes, and lack of rate limiting means automated scanning is possible.
 
-**Location:** All API mutation endpoints
+**Impact:** Low-medium — user ID enumeration is possible. HMAC brute-force is impractical but the endpoint is unbounded.
 
-The session cookie (`wb_auth`) is set with `SameSite=lax`, which protects against CSRF for top-level navigations. However, `SameSite=lax` **does NOT protect** against:
-- POST requests from forms on third-party sites (forms can submit cross-site POSTs)
-- Actually, `SameSite=lax` **does** block cross-site POST cookies — only same-site and top-level GET navigations are allowed
-
-Wait — `SameSite=lax` cookies **are** sent on top-level GET navigations from other sites but **not** on cross-site POST/PUT/DELETE requests. So this is actually well-protected for the JSON API endpoints (which require `Content-Type: application/json`).
-
-**Revised Impact:** Low. The combination of `SameSite=lax` + JSON Content-Type requirement effectively prevents CSRF for the API endpoints. The one-click approval link (`GET /api/admin/approve/{id}`) is a state-changing GET, but it uses HMAC signature verification which provides equivalent CSRF protection.
-
-**Recommendation:** No immediate action needed. The current protections are adequate.
-
----
-
-### M4. Rate Limiting Only on Open-Meteo, Not on Compute-Heavy Endpoints
-
-**Location:** `src/weatherbrief/api/usage.py:96-114`
-
-Rate limiting is enforced per-user-per-day on:
-- Open-Meteo API calls (50/day)
-- GRAMET calls (20/day) — graceful skip
-- LLM digest calls (20/day) — graceful skip
-
-However, there is **no rate limiting** on:
-- **Advisory recalculation** (`POST .../advisories/recalculate`) — CPU-intensive
-- **Report generation** (`GET .../report.pdf`) — WeasyPrint PDF rendering is very CPU-intensive
-- **Skew-T on-demand generation** — matplotlib rendering is CPU-intensive
-- **Observation refresh** (`POST .../observations/refresh`) — external API calls to METAR/TAF sources
-
-**Impact:** An authenticated user could DoS the server by repeatedly requesting PDF report generation or Skew-T rendering, which are CPU/memory intensive operations.
-
-**Recommendation:** Add rate limiting or caching for compute-heavy endpoints:
-1. Cache generated PDFs on disk (like Skew-T images already are)
-2. Add a simple per-user rate limit for heavy operations (e.g., 10 PDF generations/hour)
-3. Consider adding request timeouts for matplotlib/WeasyPrint operations
-
----
-
-### M5. Error Messages Leak Internal Details in Dev Mode
-
-**Location:** `src/weatherbrief/api/packs.py:514`
-
-```python
-detail = f"Briefing fetch failed: {exc}" if is_dev_mode() else "Briefing fetch failed"
-```
-
-This pattern is correctly applied here (dev-only details), but some endpoints leak exception details unconditionally:
-
-- `packs.py:955`: `detail=f"Skew-T generation failed: {exc}"` — always exposed
-- `packs.py:999`: `detail=f"Hodograph generation failed: {exc}"` — always exposed
-- `packs.py:1446`: `detail=f"Email send failed: {exc}"` — always exposed (could leak SMTP config)
-
-**Impact:** Internal error details (stack traces, file paths, SMTP configuration) could be exposed to users in production.
-
-**Recommendation:** Apply the same dev-mode conditional pattern to all error detail messages.
+**Recommendation:**
+1. Return the same error code (403) for all failure cases to prevent enumeration
+2. Add per-IP rate limiting (e.g., 10 requests/minute)
+3. Consider adding a CAPTCHA or requiring authentication for non-HMAC paths
 
 ---
 
 ## LOW Severity
 
-### L1. JWT Secret Derivation in Dev Mode Is Weak but Intentional
+### L1. JWT Secret Derivation in Dev Mode Is Weak but Intentional — FIXED
 
-**Location:** `src/weatherbrief/api/auth_config.py:12`, `encryption.py:26`
+**Fix applied:** Startup validation added.
 
-Dev mode uses a hardcoded JWT secret (`dev-insecure-jwt-secret-do-not-use-in-production`) and derives the Fernet encryption key from it. This is clearly marked and intentional for local development.
+---
 
-**Risk:** If `ENVIRONMENT` is accidentally not set to `production` on the server, the hardcoded secret would be used.
+### L2. CSP Blocks Leaflet CSS via unpkg — FIXED
 
-**Recommendation:** Add a startup check in production that validates `JWT_SECRET` is set and is not the dev default:
+**Fix applied:** Leaflet CSS bundled locally.
+
+---
+
+### L3. `innerHTML` Usage Is Mostly Safe but Has Some Unescaped Paths — FIXED
+
+**Fix applied:** `escapeHtml()` consistently applied to interpolated values in major UI files.
+
+---
+
+### L4. Thread Pool / Concurrency for On-Demand Generation — FIXED
+
+**Fix applied:** Server-wide `generation_slot()` semaphore (3 concurrent) added in `throttle.py`.
+
+---
+
+### L5. No Input Length Validation on Several String Fields — FIXED
+
+**Fix applied:** `max_length` constraints added to Pydantic models (`CreateFlightRequest.route_name`, `CreateAgentRequest.name`, `FeedbackRequest` fields).
+
+---
+
+### L6. `Content-Disposition` Header in PDF Download Uses Long Route Name — FIXED
+
+**Fix applied:** Filename truncated.
+
+---
+
+### L7. Observation Refresh Has No Ownership Check — Not an Issue
+
+`_load_owned_flight` correctly checks ownership. No fix needed.
+
+---
+
+### L8. `innerHTML` with Unescaped Error Messages in Admin UI (NEW — 2026-03-23)
+
+**Location:** `web/ts/admin-main.ts:111`, `:435`, `:524`
+
+```typescript
+container.innerHTML = `<p style="color:#dc3545;...">Failed to load feedback: ${err}</p>`;
+container.innerHTML = `<p style="color:#dc3545;...">Failed to load metrics: ${err}</p>`;
+tbody.innerHTML = `<tr><td ...>Failed to load: ${err}</td></tr>`;
+```
+
+Error messages from failed API calls are inserted into the DOM via `innerHTML` without escaping. While `err` is typically a browser-generated error string or an HTTP status message, a malicious server response or MITM attacker could craft an error message containing HTML/JavaScript.
+
+The CSP (`script-src 'self'`) would block inline script execution, but HTML injection (phishing content, fake login forms) would still work.
+
+**Impact:** Low — requires MITM or malicious server response, and CSP blocks script execution. Admin-only pages further limit exposure.
+
+**Recommendation:** Use `escapeHtml()` or `textContent` instead of `innerHTML` for error messages:
+```typescript
+container.textContent = `Failed to load feedback: ${err}`;
+```
+
+---
+
+### L9. ProfileSettings Has Unvalidated Enum-Like Fields (NEW — 2026-03-23)
+
+**Location:** `src/weatherbrief/api/profiles.py:29-44`
 
 ```python
-if not is_dev_mode():
-    secret = os.environ.get("JWT_SECRET", "")
-    if not secret or secret == _DEV_JWT_SECRET:
-        raise ValueError("Production requires a unique JWT_SECRET")
+class ProfileSettings(BaseModel):
+    icing_method: str | None = None    # "ogimet_dd", "ogimet_nwp", or "sfip_nwp"
+    cloud_method: str | None = None    # "dd" or "nwp"
+    convective_method: str | None = None  # "thermo" or "nwp"
+    flight_rules: str | None = None    # "vfr_only" or "vfr_ifr"
+    advisories: dict | None = None     # {enabled: {}, params: {}}
 ```
+
+Several fields have documented valid values (in comments) but no Pydantic validators. Users can store arbitrary strings that may cause unexpected behavior in downstream processing. The `advisories` field accepts an untyped `dict` — no depth or key validation.
+
+**Impact:** Low — invalid values would likely cause runtime errors in analysis code rather than security issues. But deeply nested `advisories` dicts could cause performance issues.
+
+**Recommendation:** Add `Literal` type constraints or `@field_validator` for enum fields:
+```python
+from typing import Literal
+flight_rules: Literal["vfr_only", "vfr_ifr"] | None = None
+icing_method: Literal["ogimet_dd", "ogimet_nwp", "sfip_nwp"] | None = None
+```
+Type the `advisories` field using `AdvisoryPreferences` instead of bare `dict`.
 
 ---
 
-### L2. CSP Blocks Leaflet JS but Allows Leaflet CSS via unpkg
+### L10. Missing `max_length` on Profile Name Fields (NEW — 2026-03-23)
 
-**Location:** `deploy/weather.flyfun.aero.caddy:8`, `web/briefing.html:8`
-
-The Caddy CSP header restricts scripts to `'self'`:
-```
-script-src 'self'
-```
-
-But `briefing.html` loads Leaflet CSS from `unpkg.com`:
-```html
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" ...>
-```
-
-The CSS load will be blocked by the CSP (`style-src 'self' 'unsafe-inline'` doesn't include `unpkg.com`). This means the Leaflet map likely has broken styling in production.
-
-**Recommendation:** Either:
-1. Add `https://unpkg.com` to the `style-src` directive in the CSP
-2. Bundle the Leaflet CSS locally (preferred — eliminates external dependency)
-
-Additionally, check if Leaflet JS is loaded from a CDN (which would be blocked by `script-src 'self'`).
-
----
-
-### L3. `innerHTML` Usage Is Mostly Safe but Has Some Unescaped Paths
-
-**Location:** Various TypeScript files
-
-The codebase has a proper `escapeHtml()` utility and uses it in many places. However, some `innerHTML` assignments interpolate values without escaping:
-
-- `briefing-ui.ts:87`: `fetch_timestamp` values used in `<option value="...">`  — from server data, low risk
-- `briefing-ui.ts:162`, `:203`, `:207`: Dynamic labels from server — from trusted server data
-- `flights-ui.ts:39`: Flight data rendered with mix of escaped and unescaped fields
-
-Since all data comes from the server (not direct user input) and the CSP blocks inline scripts, the XSS risk is very low. But defense-in-depth suggests escaping all interpolated values.
-
-**Recommendation:** Audit all `innerHTML` assignments and ensure every interpolated value goes through `escapeHtml()`, even for server-sourced data.
-
----
-
-### L4. Thread Pool Executor Is Unbounded for On-Demand Generation
-
-**Location:** `src/weatherbrief/api/packs.py:520`
+**Location:** `src/weatherbrief/api/profiles.py:58-76`
 
 ```python
-_refresh_executor = ThreadPoolExecutor(max_workers=2)
+class CreateProfileRequest(BaseModel):
+    name: str                       # No max_length
+    settings: ProfileSettings | None = None
+
+class DuplicateProfileRequest(BaseModel):
+    name: str                       # No max_length
 ```
 
-The refresh executor is properly bounded. However, on-demand Skew-T and hodograph generation runs synchronously in the request thread (not in the executor). Multiple concurrent requests for uncached Skew-T images could consume all worker threads.
+Profile names have no length constraint in the Pydantic model. While the database column likely has a max length, the error message from a DB truncation/rejection is less user-friendly than a Pydantic validation error.
 
-**Recommendation:** Either run on-demand generation through the executor pool, or add a semaphore to limit concurrent generations.
-
----
-
-### L5. No Input Length Validation on Several String Fields
-
-**Location:** Various API request models
-
-- `CreateFlightRequest.route_name`: No max length (stored in VARCHAR(256))
-- `CreateAgentRequest.name`: No max length (stored in VARCHAR(256))
-- `FeedbackRequest.flight_id`: No max length (stored in VARCHAR(256))
-- `ProfileSettings.flight_rules`: No validation against allowed values
-
-**Impact:** Very low — SQLAlchemy will truncate or error on oversized values. But explicit validation provides better error messages and prevents potential abuse.
-
-**Recommendation:** Add `max_length` constraints to Pydantic models and validate enum-like fields against allowed values.
+**Recommendation:** Add `Field(max_length=256)` to profile name fields.
 
 ---
 
-### L6. `Content-Disposition` Header in PDF Download Uses Unsanitized Route Name
+### L11. Missing Altitude Range Validation (NEW — 2026-03-23)
 
-**Location:** `src/weatherbrief/api/packs.py:1402-1407`
+**Location:** `src/weatherbrief/api/flights.py:39-40`, `src/weatherbrief/api/profiles.py:32-33`
 
 ```python
-route_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", flight.route_name or "-".join(flight.waypoints))
-filename = f"briefing_{route_slug}_{flight.target_date}_d{meta.days_out}.pdf"
-return Response(
-    content=pdf_bytes,
-    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-)
+cruise_altitude_ft: int | None = None
+flight_ceiling_ft: int | None = None
 ```
 
-The regex sanitization is good, but the filename could still be very long. Some browsers have issues with extremely long Content-Disposition filenames.
+No range validation on altitude fields. Values could be negative, zero, or unreasonably large (e.g., 999,999 ft). While unlikely to cause security issues, extreme values could cause unexpected behavior in weather analysis calculations (pressure level lookups, icing analysis at negative altitudes, etc.).
 
-**Recommendation:** Truncate the filename to a reasonable length (e.g., 100 characters).
-
----
-
-### L7. Observation Refresh Has No Ownership Check on Flight
-
-**Location:** `src/weatherbrief/api/packs.py:736-749`
-
+**Recommendation:** Add range validators:
 ```python
-flight = _load_owned_flight(db, flight_id, user_id)
+@field_validator("cruise_altitude_ft", "flight_ceiling_ft")
+@classmethod
+def validate_altitude(cls, v):
+    if v is not None and not (0 <= v <= 60000):
+        raise ValueError("Altitude must be 0–60,000 ft")
+    return v
 ```
-
-Actually, this **does** check ownership via `_load_owned_flight`. This is correct. No issue here upon closer inspection.
 
 ---
 
@@ -317,7 +376,7 @@ All database queries use SQLAlchemy's ORM and parameterized queries. No raw SQL 
 
 ### I2. Path Traversal in File Storage Is Well-Mitigated
 
-The `safe_path_component()` function in `storage/flights.py` properly strips all path separators and traversal sequences. It's consistently used in `pack_dir_for()` for `user_id`, `flight_id`, and `timestamp`. The only gap is the Skew-T/hodograph endpoints (H1 above).
+The `safe_path_component()` function in `storage/flights.py` uses a strict whitelist regex (`[^a-zA-Z0-9._-]` → `_`). It's consistently used in `pack_dir_for()` for `user_id`, `flight_id`, and `timestamp`. H1 gap now fixed with `_validate_icao()` and `_validate_model()`.
 
 ### I3. Cookie Security Is Properly Configured
 
@@ -338,23 +397,65 @@ The Caddy config includes:
 - `Permissions-Policy` disabling camera, mic, geolocation
 - Server header removed
 
+### I5. CORS Wildcard with Credentials in Dev Mode (NEW — 2026-03-23)
+
+**Location:** `src/weatherbrief/api/app.py:136-143`
+
+```python
+if is_dev_mode():
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        ...
+    )
+```
+
+`allow_origins=["*"]` combined with `allow_credentials=True` is a CORS misconfiguration. However, browsers will **not** honor `Access-Control-Allow-Origin: *` when credentials are included — they require an explicit origin. So this is effectively broken CORS in dev mode rather than a security vulnerability.
+
+No production risk since the middleware is only added in dev mode. But it means dev-mode cross-origin requests with cookies may fail silently.
+
+**Recommendation:** Use explicit origins in dev mode (e.g., `["http://localhost:3000", "http://localhost:8000"]`).
+
+### I6. No External SSRF Risk (NEW — 2026-03-23)
+
+All outbound HTTP calls in the fetch layer use hardcoded URLs:
+- Open-Meteo API (`elevation.py`, `open_meteo.py`)
+- DWD text forecasts (`dwd_text.py`)
+- Model status checks (`model_status.py`)
+
+No user-supplied URLs are used in outbound requests. **SSRF is not a concern.**
+
+### I7. Email Injection Is Well-Mitigated (NEW — 2026-03-23)
+
+Email templates in `notify/admin_email.py` properly use `html.escape()` for all user-supplied values (name, email, user_id). Email addresses come from Google OAuth (validated by Google) or admin input. SMTP headers use `MIMEMultipart` which handles encoding safely. **Email injection is not a concern.**
+
 ---
 
 ## Summary of Recommendations (Priority Order)
 
-| # | Severity | Finding | Fix Effort |
-|---|----------|---------|-----------|
-| H1 | High | Skew-T path injection via unsanitized `icao`/`model` | Small — add validation |
-| H2 | High | All flights visible to all authenticated users (IDOR) | Medium — add visibility controls |
-| M4 | Medium | No rate limiting on CPU-heavy endpoints | Medium — add caching + limits |
-| M5 | Medium | Error messages leak internal details | Small — conditional error details |
-| M2 | Medium | SSE session leak potential | Small — add try/finally |
-| L1 | Low | Validate JWT_SECRET in production startup | Small |
-| L2 | Low | CSP vs Leaflet CSS mismatch | Small — bundle locally |
-| L3 | Low | innerHTML without escaping in some places | Small — audit and add escapeHtml |
-| L4 | Low | Unbounded on-demand image generation | Small — add semaphore |
-| L5 | Low | Missing input length validation | Small — add constraints |
-| L6 | Low | Long Content-Disposition filenames | Trivial |
+| # | Severity | Finding | Status | Fix Effort |
+|---|----------|---------|--------|-----------|
+| H1 | High | Skew-T path injection via unsanitized `icao`/`model` | **FIXED** | — |
+| H2 | High | All flights visible to all authenticated users (IDOR) | **FIXED** | — |
+| M6 | Medium | Residual error detail leakage in production | **OPEN** | Small — add dev-mode check |
+| M7 | Medium | SessionMiddleware reuses JWT secret | **OPEN** | Small — separate secret |
+| M8 | Medium | Fragile fail-open default in `_load_flight_or_404` | **OPEN** | Small — make viewer_id required |
+| M9 | Medium | Unhandled JSON parse errors on disk artifacts | **OPEN** | Small — add try/except |
+| M10 | Medium | No rate limiting on admin approval endpoint | **OPEN** | Small — add IP rate limit |
+| M4 | Medium | No rate limiting on CPU-heavy endpoints | **FIXED** | — |
+| M5 | Medium | Error messages leak internal details | **FIXED** | — |
+| M2 | Medium | SSE session leak potential | **FIXED** | — |
+| L8 | Low | innerHTML with unescaped errors in admin UI | **OPEN** | Small |
+| L9 | Low | Unvalidated enum-like profile fields | **OPEN** | Small |
+| L10 | Low | Missing max_length on profile names | **OPEN** | Trivial |
+| L11 | Low | Missing altitude range validation | **OPEN** | Small |
+| L1 | Low | Validate JWT_SECRET in production startup | **FIXED** | — |
+| L2 | Low | CSP vs Leaflet CSS mismatch | **FIXED** | — |
+| L3 | Low | innerHTML without escaping in some places | **FIXED** | — |
+| L4 | Low | Unbounded on-demand image generation | **FIXED** | — |
+| L5 | Low | Missing input length validation | **FIXED** | — |
+| L6 | Low | Long Content-Disposition filenames | **FIXED** | — |
 
 ---
 
@@ -362,11 +463,15 @@ The Caddy config includes:
 
 1. **ORM-only database access** — no SQL injection surface
 2. **Path sanitization** via `safe_path_component()` — consistently applied
-3. **Fernet encryption** for autorouter credentials at rest
-4. **Proper JWT implementation** — HS256, expiry, httponly cookies
-5. **API token security** — SHA-256 hashed, revocable, expiring
-6. **HTML escaping** — `escapeHtml()` utility used throughout frontend, `html.escape()` in email templates
-7. **Production hardening** — docs disabled, CORS locked down, security headers
-8. **Non-root Docker container** (UID 2000)
-9. **Approval workflow** with HMAC-signed one-click links
-10. **Auto-reload credits** prevent negative balance abuse
+3. **Input validation** via `_validate_icao()` and `_validate_model()` for path-sensitive params
+4. **Fernet encryption** for autorouter credentials at rest
+5. **Proper JWT implementation** — HS256, expiry, httponly cookies
+6. **API token security** — SHA-256 hashed, revocable, expiring
+7. **HTML escaping** — `escapeHtml()` utility used throughout frontend, `html.escape()` in email templates
+8. **Production hardening** — docs disabled, CORS locked down, security headers
+9. **Non-root Docker container** (UID 2000)
+10. **Approval workflow** with HMAC-signed one-click links
+11. **Auto-reload credits** prevent negative balance abuse
+12. **Rate limiting + concurrency control** on CPU-heavy endpoints (throttle.py)
+13. **No SSRF surface** — all outbound URLs hardcoded
+14. **Email injection prevention** — proper escaping and MIME handling
