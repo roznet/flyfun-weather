@@ -118,7 +118,7 @@ async function loadFeedback(): Promise<void> {
     if (archived.length > 0) {
       html += `
         <details style="margin-top:24px;">
-          <summary style="cursor:pointer;font-weight:600;color:var(--text-secondary, #6c757d);margin-bottom:12px;">
+          <summary style="cursor:pointer;font-weight:600;color:var(--text-muted);margin-bottom:12px;">
             Archived (${archived.length})
           </summary>
           ${archived.map(renderFeedbackCard).join('')}
@@ -148,10 +148,10 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
     : '';
 
   const classificationBadge = fb.classification
-    ? `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#e0e7ff;color:#3730a3;margin-left:6px;">${CLASSIFICATION_LABELS[fb.classification] ?? fb.classification}</span>`
+    ? `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface);color:var(--primary);border:1px solid var(--border);margin-left:6px;">${CLASSIFICATION_LABELS[fb.classification] ?? fb.classification}</span>`
     : '';
   const confidenceText = fb.confidence != null
-    ? `<span style="font-size:11px;color:var(--text-secondary, #6c757d);margin-left:6px;">${Math.round(fb.confidence * 100)}% confidence</span>`
+    ? `<span style="font-size:11px;color:var(--text-muted);margin-left:6px;">${Math.round(fb.confidence * 100)}% confidence</span>`
     : '';
 
   let detailsHtml = '';
@@ -160,8 +160,8 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
   if (fb.ai_analysis) {
     detailsHtml += `
       <div style="margin-top:12px;">
-        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">AI Analysis</label>
-        <div style="background:var(--bg-tertiary, #f0f4ff);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.ai_analysis)}</div>
+        <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">AI Analysis</label>
+        <div style="background:var(--surface);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.ai_analysis)}</div>
       </div>`;
   }
 
@@ -170,14 +170,14 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
     const replyValue = escapeHtml(fb.admin_reply || '');
     detailsHtml += `
       <div style="margin-top:12px;">
-        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">Reply</label>
-        <textarea class="fb-reply" data-id="${fb.id}" rows="4" style="width:100%;box-sizing:border-box;border:1px solid var(--border-color, #dee2e6);border-radius:6px;padding:8px;font-size:13px;resize:vertical;">${replyValue}</textarea>
+        <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">Reply</label>
+        <textarea class="fb-reply" data-id="${fb.id}" rows="4" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;resize:vertical;background:var(--surface);color:var(--text);">${replyValue}</textarea>
       </div>`;
   } else if (fb.admin_reply) {
     detailsHtml += `
       <div style="margin-top:12px;">
-        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">Reply${fb.replied_at ? ` (sent ${formatDate(fb.replied_at)})` : ''}</label>
-        <div style="background:var(--bg-tertiary, #f8f9fa);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.admin_reply)}</div>
+        <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">Reply${fb.replied_at ? ` (sent ${formatDate(fb.replied_at)})` : ''}</label>
+        <div style="background:var(--surface);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.admin_reply)}</div>
       </div>`;
   }
 
@@ -186,14 +186,14 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
     const notesValue = escapeHtml(fb.admin_notes || '');
     detailsHtml += `
       <div style="margin-top:12px;">
-        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">Admin Notes</label>
-        <textarea class="fb-notes" data-id="${fb.id}" rows="2" style="width:100%;box-sizing:border-box;border:1px solid var(--border-color, #dee2e6);border-radius:6px;padding:8px;font-size:13px;resize:vertical;">${notesValue}</textarea>
+        <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">Admin Notes</label>
+        <textarea class="fb-notes" data-id="${fb.id}" rows="2" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;resize:vertical;background:var(--surface);color:var(--text);">${notesValue}</textarea>
       </div>`;
   } else if (fb.admin_notes) {
     detailsHtml += `
       <div style="margin-top:12px;">
-        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">Admin Notes</label>
-        <div style="background:var(--bg-tertiary, #f8f9fa);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.admin_notes)}</div>
+        <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">Admin Notes</label>
+        <div style="background:var(--surface);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.admin_notes)}</div>
       </div>`;
   }
 
@@ -203,26 +203,26 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
     actionsHtml = `
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
         <button class="fb-send btn-sm" data-id="${fb.id}" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;font-weight:500;">Send Reply</button>
-        <button class="fb-mark-replied btn-sm" data-id="${fb.id}" style="background:var(--bg-tertiary, #e5e7eb);color:var(--text-primary, #1a1a2e);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Mark Replied</button>
-        <button class="fb-ignore btn-sm" data-id="${fb.id}" style="background:var(--bg-tertiary, #e5e7eb);color:var(--text-secondary, #6c757d);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Ignore</button>
+        <button class="fb-mark-replied btn-sm" data-id="${fb.id}" style="background:var(--bg);color:var(--text);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Mark Replied</button>
+        <button class="fb-ignore btn-sm" data-id="${fb.id}" style="background:var(--bg);color:var(--text-muted);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Ignore</button>
         <span class="fb-action-status" data-id="${fb.id}" style="font-size:12px;align-self:center;"></span>
       </div>`;
   }
 
   return `
-    <details class="fb-card" style="border:1px solid var(--border-color, #dee2e6);border-radius:8px;margin-bottom:10px;overflow:hidden;">
+    <details class="fb-card" style="border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden;">
       <summary style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         ${renderStatusBadge(fb.status)}
         ${classificationBadge}
         ${confidenceText}
         <span style="font-weight:500;">${escapeHtml(userName)}</span>
-        <span style="color:var(--text-secondary, #6c757d);font-size:13px;">${category}</span>
-        <span style="color:var(--text-secondary, #6c757d);font-size:12px;margin-left:auto;">${date}</span>
+        <span style="color:var(--text-muted);font-size:13px;">${category}</span>
+        <span style="color:var(--text-muted);font-size:12px;margin-left:auto;">${date}</span>
         ${briefingLink}
       </summary>
       <div style="padding:0 16px 16px;">
-        <div style="background:var(--bg-secondary, #f8f9fa);border-radius:6px;padding:10px;margin-top:4px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.comment)}</div>
-        <div style="font-size:12px;color:var(--text-secondary, #6c757d);margin-top:6px;">${escapeHtml(fb.user_email)} ${fb.flight_id ? '&middot; ' + escapeHtml(fb.flight_id) : ''}</div>
+        <div style="background:var(--surface);border-radius:6px;padding:10px;margin-top:4px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.comment)}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:6px;">${escapeHtml(fb.user_email)} ${fb.flight_id ? '&middot; ' + escapeHtml(fb.flight_id) : ''}</div>
         ${detailsHtml}
         ${actionsHtml}
       </div>
