@@ -252,6 +252,8 @@ def send_feedback_reply_email(
         original_comment=row.comment,
         category=row.category,
         base_url=base_url,
+        flight_id=row.flight_id or "",
+        pack_timestamp=row.pack_timestamp.isoformat() if row.pack_timestamp else "",
     )
 
     row.status = "replied"

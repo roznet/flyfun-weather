@@ -276,10 +276,13 @@ def send_feedback_reply(
     original_comment: str,
     category: str,
     base_url: str,
+    flight_id: str = "",
+    pack_timestamp: str = "",
 ) -> None:
     """Send a reply to the user's feedback via email.
 
     Works with Apple Private Relay addresses (standard SMTP delivery).
+    If *flight_id* is provided, includes a link to the specific briefing.
     In dev mode or if SMTP is not configured, logs instead of sending.
     """
     from flyfun_common.auth import is_dev_mode
@@ -300,6 +303,18 @@ def send_feedback_reply(
     esc_comment = html.escape(original_comment).replace(chr(10), "<br>")
     site_url = html.escape(base_url)
 
+    # Build briefing link if we have a flight
+    if flight_id:
+        if pack_timestamp:
+            briefing_url = f"{base_url}/briefing.html?flight={flight_id}&t={pack_timestamp}"
+        else:
+            briefing_url = f"{base_url}/briefing.html?flight={flight_id}"
+        briefing_link_html = f'<a href="{html.escape(briefing_url)}" style="color:#2563eb;">View your briefing</a>'
+        briefing_link_plain = f"View your briefing: {briefing_url}"
+    else:
+        briefing_link_html = ""
+        briefing_link_plain = ""
+
     subject = f"[FlyFun Weather] Re: Your feedback — {category_label}"
     html_body = f"""\
 <html>
@@ -315,7 +330,7 @@ def send_feedback_reply(
   </div>
   <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
   <p style="color:#6c757d;font-size:12px;">
-    <a href="{site_url}" style="color:#2563eb;">FlyFun Weather</a>
+    {briefing_link_html + ' &middot; ' if briefing_link_html else ''}<a href="{site_url}" style="color:#2563eb;">FlyFun Weather</a>
   </p>
 </body>
 </html>"""
@@ -327,7 +342,8 @@ def send_feedback_reply(
         f"---\n"
         f"Your original feedback ({category_label}):\n"
         f"{original_comment}\n\n"
-        f"---\n"
+        + (f"{briefing_link_plain}\n" if briefing_link_plain else "")
+        + f"---\n"
         f"FlyFun Weather — {base_url}\n"
     )
 
