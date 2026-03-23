@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import logging
 import os
 import shutil
 from datetime import datetime, timezone
@@ -13,6 +16,8 @@ from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import BriefingPackRow, FlightProfileRow, FlightRow
 from weatherbrief.models import BriefingPackMeta, Flight, FlightProfile
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -88,6 +93,30 @@ def _row_to_profile(row: FlightProfileRow) -> FlightProfile:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def _pack_hmac_key() -> bytes:
+    """Derive HMAC key from JWT_SECRET for pack integrity checks."""
+    secret = os.environ.get("JWT_SECRET", "")
+    return hashlib.sha256(f"pack-integrity:{secret}".encode()).digest()
+
+
+def _compute_pack_hmac(row: BriefingPackRow) -> str:
+    """Compute HMAC-SHA256 over key pack metadata fields."""
+    msg = (
+        f"{row.flight_id}|{row.fetch_timestamp}|{row.days_out}|"
+        f"{row.assessment}|{row.artifact_path}|"
+        f"{row.model_init_times_json}|{row.grib_init_times_json}"
+    )
+    return hmac.new(_pack_hmac_key(), msg.encode(), hashlib.sha256).hexdigest()
+
+
+def _verify_pack_hmac(row: BriefingPackRow) -> bool:
+    """Verify HMAC on a pack row. Returns True if valid or if no HMAC stored."""
+    if not row.integrity_hmac:
+        return True  # pre-existing rows without HMAC are trusted
+    expected = _compute_pack_hmac(row)
+    return hmac.compare_digest(row.integrity_hmac, expected)
 
 
 def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
@@ -221,8 +250,10 @@ def delete_flight(session: Session, flight_id: str) -> None:
 
 
 def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
-    """Insert briefing pack metadata."""
-    session.add(_meta_to_row(meta))
+    """Insert briefing pack metadata with integrity HMAC."""
+    row = _meta_to_row(meta)
+    row.integrity_hmac = _compute_pack_hmac(row)
+    session.add(row)
     session.flush()
 
 
@@ -250,6 +281,11 @@ def load_pack_meta(
     row = session.execute(stmt).scalar_one_or_none()
     if row is None:
         raise KeyError(f"Pack not found: {flight_id}/{fetch_timestamp}")
+    if not _verify_pack_hmac(row):
+        logger.warning(
+            "Pack integrity check failed: flight=%s ts=%s id=%d",
+            flight_id, fetch_timestamp, row.id,
+        )
     return _row_to_meta(row)
 
 
@@ -261,6 +297,11 @@ def list_packs(session: Session, flight_id: str) -> list[BriefingPackMeta]:
         .order_by(BriefingPackRow.fetch_timestamp.desc())
     )
     rows = session.execute(stmt).scalars().all()
+    for row in rows:
+        if not _verify_pack_hmac(row):
+            logger.warning(
+                "Pack integrity check failed: flight=%s id=%d", flight_id, row.id,
+            )
     return [_row_to_meta(r) for r in rows]
 
 

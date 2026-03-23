@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from flyfun_common.auth import is_dev_mode
+from weatherbrief.api.security import audit_pack_access
 from weatherbrief.api.throttle import generation_slot, pdf_limiter, plot_limiter
 
 # Input validation for path-sensitive parameters
@@ -903,6 +904,7 @@ def get_active_refreshes(
 
 @router.get("/{timestamp}", response_model=PackMetaResponse)
 def get_pack(
+    request: Request,
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
@@ -914,17 +916,20 @@ def get_pack(
         meta = load_pack_meta(db, flight_id, timestamp)
     except KeyError:
         raise HTTPException(status_code=404, detail="Pack not found")
+    audit_pack_access(user_id, flight_id, "get_pack", request)
     return _meta_to_response(meta)
 
 
 @router.get("/{timestamp}/snapshot")
 def get_snapshot(
+    request: Request,
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
     """Get the briefing JSON for a pack (route + analyses + observations, no forecasts)."""
+    audit_pack_access(user_id, flight_id, "get_snapshot", request)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     # Prefer briefing.json, fall back to legacy snapshot.json for old packs
     briefing_path = pack_dir / "briefing.json"
