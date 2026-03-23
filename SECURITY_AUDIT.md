@@ -477,3 +477,5 @@ Email templates in `notify/admin_email.py` properly use `html.escape()` for all 
 12. **Rate limiting + concurrency control** on CPU-heavy endpoints (throttle.py)
 13. **No SSRF surface** — all outbound URLs hardcoded
 14. **Email injection prevention** — proper escaping and MIME handling
+15. **Structured audit logging** for admin actions (approve, create/revoke agents and tokens) with IP tracking
+16. **HMAC-SHA256 integrity checks** on briefing pack metadata — computed on save, verified on load
