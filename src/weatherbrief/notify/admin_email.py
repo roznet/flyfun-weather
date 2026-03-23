@@ -269,3 +269,77 @@ def send_feedback_notification(
     logger.info("Feedback notification sent")
 
 
+def send_feedback_reply(
+    to_email: str,
+    user_name: str,
+    reply_text: str,
+    original_comment: str,
+    category: str,
+    base_url: str,
+) -> None:
+    """Send a reply to the user's feedback via email.
+
+    Works with Apple Private Relay addresses (standard SMTP delivery).
+    In dev mode or if SMTP is not configured, logs instead of sending.
+    """
+    from flyfun_common.auth import is_dev_mode
+
+    if is_dev_mode():
+        logger.info("Feedback reply (dev mode, not sent) to %s: %s", to_email, reply_text[:100])
+        return
+
+    try:
+        smtp_config = SmtpConfig.from_env()
+    except ValueError:
+        logger.warning("SMTP not configured — cannot send feedback reply to %s", to_email)
+        return
+
+    category_label = CATEGORY_LABELS.get(category, category)
+    esc_name = html.escape(user_name or "there")
+    esc_reply = html.escape(reply_text).replace(chr(10), "<br>")
+    esc_comment = html.escape(original_comment).replace(chr(10), "<br>")
+    site_url = html.escape(base_url)
+
+    subject = f"[FlyFun Weather] Re: Your feedback — {category_label}"
+    html_body = f"""\
+<html>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a2e;max-width:560px;">
+  <p>Hi {esc_name},</p>
+  <p>Thank you for your feedback. Here is our response:</p>
+  <div style="background:#f0f4ff;border-left:4px solid #2563eb;padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;">
+    {esc_reply}
+  </div>
+  <p style="color:#6c757d;font-size:13px;margin-top:24px;">Your original feedback ({html.escape(category_label)}):</p>
+  <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:12px;margin-bottom:16px;color:#6c757d;font-size:13px;">
+    {esc_comment}
+  </div>
+  <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
+  <p style="color:#6c757d;font-size:12px;">
+    <a href="{site_url}" style="color:#2563eb;">FlyFun Weather</a>
+  </p>
+</body>
+</html>"""
+
+    plain_body = (
+        f"Hi {user_name or 'there'},\n\n"
+        f"Thank you for your feedback. Here is our response:\n\n"
+        f"{reply_text}\n\n"
+        f"---\n"
+        f"Your original feedback ({category_label}):\n"
+        f"{original_comment}\n\n"
+        f"---\n"
+        f"FlyFun Weather — {base_url}\n"
+    )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = smtp_config.from_address
+    msg["To"] = to_email
+    msg.attach(MIMEText(plain_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    logger.info("Sending feedback reply to %s", to_email)
+    send_message(msg, smtp_config)
+    logger.info("Feedback reply sent to %s", to_email)
+
+

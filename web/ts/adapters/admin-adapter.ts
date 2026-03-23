@@ -176,6 +176,8 @@ export async function fetchHubUsers(period = '30d'): Promise<HubResponse> {
 
 // --- Feedback ---
 
+export type FeedbackStatus = 'pending' | 'ready' | 'replied' | 'ignored';
+
 export interface FeedbackEntry {
   id: number;
   user_email: string;
@@ -185,10 +187,47 @@ export interface FeedbackEntry {
   category: string;
   comment: string;
   created_at: string | null;
+  status: FeedbackStatus;
+  classification: string | null;
+  ai_analysis: string | null;
+  admin_reply: string | null;
+  admin_notes: string | null;
+  confidence: number | null;
+  replied_at: string | null;
+  processed_at: string | null;
 }
 
-export async function fetchAdminFeedback(): Promise<FeedbackEntry[]> {
-  return apiFetch<FeedbackEntry[]>('/feedback/admin');
+export async function fetchAdminFeedback(status?: string): Promise<FeedbackEntry[]> {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+  return apiFetch<FeedbackEntry[]>(`/feedback/admin${qs}`);
+}
+
+export async function updateFeedbackStatus(id: number, status: FeedbackStatus): Promise<void> {
+  await apiFetch(`/feedback/admin/${id}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function saveFeedbackReply(id: number, reply: string): Promise<void> {
+  await apiFetch(`/feedback/admin/${id}/reply`, {
+    method: 'PUT',
+    body: JSON.stringify({ reply }),
+  });
+}
+
+export async function sendFeedbackReply(id: number, reply?: string): Promise<{ sent_to: string }> {
+  return apiFetch(`/feedback/admin/${id}/send`, {
+    method: 'POST',
+    body: JSON.stringify(reply != null ? { reply } : {}),
+  });
+}
+
+export async function saveFeedbackNotes(id: number, notes: string): Promise<void> {
+  await apiFetch(`/feedback/admin/${id}/notes`, {
+    method: 'PUT',
+    body: JSON.stringify({ notes }),
+  });
 }
 
 // --- Performance Metrics ---

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 ALLOWED_CATEGORIES = {"data_issue", "too_conservative", "too_optimistic", "incorrect_interpretation", "other"}
+ALLOWED_STATUSES = {"pending", "ready", "replied", "ignored"}
 
 
 class FeedbackRequest(BaseModel):
@@ -45,6 +47,33 @@ class FeedbackRequest(BaseModel):
             raise ValueError("comment must not exceed 5000 characters")
         return v
 
+
+class StatusUpdate(BaseModel):
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in ALLOWED_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(sorted(ALLOWED_STATUSES))}")
+        return v
+
+
+class ReplyUpdate(BaseModel):
+    reply: str = Field(max_length=5000)
+
+
+class NotesUpdate(BaseModel):
+    notes: str = Field(max_length=5000)
+
+
+class SendReplyRequest(BaseModel):
+    reply: Optional[str] = Field(None, max_length=5000)
+
+
+# ---------------------------------------------------------------------------
+# User endpoint
+# ---------------------------------------------------------------------------
 
 @router.post("")
 def submit_feedback(
@@ -99,28 +128,149 @@ def submit_feedback(
     return {"id": row.id, "status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# Admin endpoints
+# ---------------------------------------------------------------------------
+
+def _get_feedback_or_404(db: Session, feedback_id: int) -> FeedbackRow:
+    """Fetch a FeedbackRow by ID or raise 404."""
+    row = db.query(FeedbackRow).filter(FeedbackRow.id == feedback_id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    return row
+
+
+def _serialize_feedback(fb: FeedbackRow, email: str, name: str) -> dict:
+    """Serialize a FeedbackRow + user info to a response dict."""
+    return {
+        "id": fb.id,
+        "user_email": email,
+        "user_name": name,
+        "flight_id": fb.flight_id,
+        "pack_timestamp": fb.pack_timestamp.isoformat() if fb.pack_timestamp else "",
+        "category": fb.category,
+        "comment": fb.comment,
+        "created_at": fb.created_at.isoformat() if fb.created_at else None,
+        "status": fb.status,
+        "classification": fb.classification,
+        "ai_analysis": fb.ai_analysis,
+        "admin_reply": fb.admin_reply,
+        "admin_notes": fb.admin_notes,
+        "confidence": fb.confidence,
+        "replied_at": fb.replied_at.isoformat() if fb.replied_at else None,
+        "processed_at": fb.processed_at.isoformat() if fb.processed_at else None,
+    }
+
+
 @router.get("/admin")
 def list_feedback(
+    status: Optional[str] = Query(None, description="Comma-separated status filter"),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """List all feedback entries (admin only)."""
-    rows = (
+    """List all feedback entries (admin only), optionally filtered by status."""
+    query = (
         db.query(FeedbackRow, UserRow.email, UserRow.display_name)
         .join(UserRow, FeedbackRow.user_id == UserRow.id)
-        .order_by(FeedbackRow.created_at.desc())
-        .all()
     )
-    return [
-        {
-            "id": fb.id,
-            "user_email": email,
-            "user_name": name,
-            "flight_id": fb.flight_id,
-            "pack_timestamp": fb.pack_timestamp.isoformat() if fb.pack_timestamp else "",
-            "category": fb.category,
-            "comment": fb.comment,
-            "created_at": fb.created_at.isoformat() if fb.created_at else None,
-        }
-        for fb, email, name in rows
-    ]
+
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        invalid = set(statuses) - ALLOWED_STATUSES
+        if invalid:
+            raise HTTPException(400, f"Invalid status values: {', '.join(sorted(invalid))}")
+        query = query.filter(FeedbackRow.status.in_(statuses))
+
+    rows = query.order_by(FeedbackRow.created_at.desc()).all()
+    return [_serialize_feedback(fb, email, name) for fb, email, name in rows]
+
+
+@router.put("/admin/{feedback_id}/status")
+def update_feedback_status(
+    feedback_id: int,
+    body: StatusUpdate,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Update the workflow status of a feedback entry."""
+    row = _get_feedback_or_404(db, feedback_id)
+    row.status = body.status
+    if body.status == "replied" and row.replied_at is None:
+        row.replied_at = datetime.now(timezone.utc)
+    db.flush()
+    logger.info("Feedback #%d status → %s", feedback_id, body.status)
+    return {"id": feedback_id, "status": row.status}
+
+
+@router.put("/admin/{feedback_id}/reply")
+def save_feedback_reply(
+    feedback_id: int,
+    body: ReplyUpdate,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Save a draft reply for a feedback entry (does not send email)."""
+    row = _get_feedback_or_404(db, feedback_id)
+    row.admin_reply = body.reply
+    db.flush()
+    logger.info("Feedback #%d reply saved (%d chars)", feedback_id, len(body.reply))
+    return {"id": feedback_id, "admin_reply": row.admin_reply}
+
+
+@router.post("/admin/{feedback_id}/send")
+def send_feedback_reply_email(
+    feedback_id: int,
+    request: Request,
+    body: SendReplyRequest = SendReplyRequest(),
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Send the reply email to the user and mark feedback as replied."""
+    row = _get_feedback_or_404(db, feedback_id)
+    user = db.query(UserRow).filter(UserRow.id == row.user_id).first()
+    if not user or not user.email:
+        raise HTTPException(400, "User has no email address")
+
+    reply_text = body.reply if body.reply is not None else row.admin_reply
+    if not reply_text or not reply_text.strip():
+        raise HTTPException(400, "No reply text to send")
+
+    # Update the stored reply if an override was provided
+    if body.reply is not None:
+        row.admin_reply = body.reply
+
+    base_url = str(request.base_url).rstrip("/")
+    if not is_dev_mode():
+        base_url = base_url.replace("http://", "https://")
+
+    from weatherbrief.notify.admin_email import send_feedback_reply
+
+    send_feedback_reply(
+        to_email=user.email,
+        user_name=user.display_name or "",
+        reply_text=reply_text,
+        original_comment=row.comment,
+        category=row.category,
+        base_url=base_url,
+    )
+
+    row.status = "replied"
+    row.replied_at = datetime.now(timezone.utc)
+    db.flush()
+    logger.info("Feedback #%d reply sent to %s", feedback_id, user.email)
+    return {"id": feedback_id, "status": "replied", "sent_to": user.email}
+
+
+@router.put("/admin/{feedback_id}/notes")
+def save_feedback_notes(
+    feedback_id: int,
+    body: NotesUpdate,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Save admin notes for a feedback entry."""
+    row = _get_feedback_or_404(db, feedback_id)
+    row.admin_notes = body.notes
+    db.flush()
+    logger.info("Feedback #%d notes saved (%d chars)", feedback_id, len(body.notes))
+    return {"id": feedback_id, "admin_notes": row.admin_notes}

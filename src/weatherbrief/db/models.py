@@ -150,6 +150,23 @@ class FeedbackRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+    # Workflow / triage columns
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="pending", default="pending"
+    )
+    classification: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ai_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    replied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     user: Mapped[UserRow] = relationship(UserRow)
 
 

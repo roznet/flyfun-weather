@@ -1,4 +1,4 @@
-"""Invoke Claude CLI to analyse and classify triage queue items."""
+"""Invoke Claude CLI to analyse and classify feedback items."""
 
 from __future__ import annotations
 
@@ -6,12 +6,17 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from weatherbrief.triage.db import connect, log_action
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from flyfun_common.costs import record_cost
+from flyfun_common.db import SessionLocal, get_engine
+from flyfun_common.db.models import UserRow
+from weatherbrief.db.models import FeedbackRow
 from weatherbrief.triage.prompt import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -47,33 +52,31 @@ RATE_LIMIT_WINDOW_DAYS = 7
 RATE_LIMIT_MAX = 10
 
 
-def _check_rate_limit(conn: sqlite3.Connection, user_id: str) -> bool:
+def _check_rate_limit(db: Session, user_id: str) -> bool:
     """Return True if the user has exceeded the rate limit."""
-    row = conn.execute(
-        """\
-        SELECT feedback_count, first_feedback_at, last_feedback_at
-        FROM user_rate WHERE user_id = ?""",
-        (user_id,),
-    ).fetchone()
-    if row is None:
-        return False
-
-    last = row["last_feedback_at"]
-    first = row["first_feedback_at"]
-    if not last or not first:
-        return False
-
-    first_dt = datetime.fromisoformat(first)
-    last_dt = datetime.fromisoformat(last)
-    window_days = (last_dt - first_dt).days
-    if window_days <= RATE_LIMIT_WINDOW_DAYS and row["feedback_count"] > RATE_LIMIT_MAX:
-        return True
-    return False
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RATE_LIMIT_WINDOW_DAYS)
+    count = (
+        db.query(func.count(FeedbackRow.id))
+        .filter(
+            FeedbackRow.user_id == user_id,
+            FeedbackRow.created_at > cutoff,
+        )
+        .scalar()
+    )
+    return count > RATE_LIMIT_MAX
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
-    """Convert a sqlite3.Row to a plain dict."""
-    return dict(row)
+def _feedback_to_prompt_dict(fb: FeedbackRow, user: UserRow) -> dict:
+    """Build the dict expected by load_prompt() from DB rows."""
+    return {
+        "category": fb.category or "",
+        "comment": fb.comment or "",
+        "user_email": user.email or "",
+        "user_name": user.display_name or "",
+        "flight_id": fb.flight_id or "",
+        "pack_timestamp": fb.pack_timestamp.isoformat() if fb.pack_timestamp else "N/A",
+        "feedback_created_at": fb.created_at.isoformat() if fb.created_at else "",
+    }
 
 
 def _run_claude(
@@ -87,9 +90,6 @@ def _run_claude(
 
     Returns a dict with keys: result, cost_usd, duration_ms, num_turns,
     session_id.
-
-    When *log_file* is set, stdout and stderr are streamed to that file
-    in real time (suitable for ``tail -f``).
     """
     cmd = [
         "claude",
@@ -133,18 +133,6 @@ def _run_claude(
         )
 
     return _parse_claude_output(stdout, elapsed)
-
-
-def _read_partial(path: str, max_bytes: int = 50_000) -> str:
-    """Read up to *max_bytes* from the end of a file."""
-    try:
-        with open(path) as f:
-            content = f.read()
-        if len(content) > max_bytes:
-            return content[-max_bytes:]
-        return content
-    except OSError:
-        return ""
 
 
 def _write_log(path: str, content: str) -> None:
@@ -206,59 +194,38 @@ def _extract_json_fallback(text: str) -> dict:
     raise ValueError(f"Could not extract JSON from claude output ({len(text)} chars)")
 
 
-def _update_queue_result(
-    conn: sqlite3.Connection,
-    queue_id: int,
-    parsed: dict,
-    processing_time_s: float,
-) -> None:
-    """Write classification results back to the queue row."""
+def _apply_result(fb: FeedbackRow, parsed: dict) -> None:
+    """Write classification results back to the feedback row."""
     result = parsed["result"]
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute(
-        """\
-        UPDATE queue SET
-            status             = 'completed',
-            classification     = ?,
-            analysis           = ?,
-            suggested_response = ?,
-            confidence         = ?,
-            processed_at       = ?,
-            processing_time_s  = ?,
-            claude_cost_usd    = ?,
-            claude_duration_ms = ?,
-            claude_num_turns   = ?,
-            claude_session_id  = ?
-        WHERE id = ?""",
-        (
-            result.get("classification"),
-            result.get("analysis"),
-            result.get("suggested_response"),
-            result.get("confidence"),
-            now,
-            processing_time_s,
-            parsed.get("cost_usd"),
-            parsed.get("duration_ms"),
-            parsed.get("num_turns"),
-            parsed.get("session_id"),
-            queue_id,
-        ),
-    )
-    conn.commit()
+    fb.status = "ready"
+    fb.classification = result.get("classification")
+    fb.ai_analysis = result.get("analysis")
+    fb.admin_reply = result.get("suggested_response")
+    fb.confidence = result.get("confidence")
+    fb.processed_at = datetime.now(timezone.utc)
 
 
-def _mark_failed(
-    conn: sqlite3.Connection,
-    queue_id: int,
-    error: str,
-) -> None:
-    """Mark a queue item as failed."""
-    conn.execute(
-        "UPDATE queue SET status = 'failed', error_message = ? WHERE id = ?",
-        (error[:2000], queue_id),
+def _record_triage_cost(db: Session, fb: FeedbackRow, parsed: dict) -> None:
+    """Record the Claude triage cost in the shared cost ledger."""
+    cost_usd = parsed.get("cost_usd") or 0.0
+    if cost_usd <= 0:
+        return
+    record_cost(
+        db,
+        user_id="system",
+        service="flyfun-weather",
+        action="triage",
+        cost=cost_usd,
+        category="support",
+        description=f"AI triage for feedback #{fb.id}",
+        metadata={
+            "feedback_id": fb.id,
+            "duration_ms": parsed.get("duration_ms"),
+            "num_turns": parsed.get("num_turns"),
+            "session_id": parsed.get("session_id"),
+        },
+        reference_id=str(fb.id),
     )
-    conn.commit()
-    log_action(conn, queue_id, "failed", error[:500])
 
 
 def process(
@@ -266,16 +233,13 @@ def process(
     n: int = 1,
     timeout: int = 300,
     dry_run: bool = False,
-    app_feedback_id: int | None = None,
+    feedback_id: int | None = None,
     log_file: str | None = None,
 ) -> int:
-    """Process pending items from the triage queue.
+    """Process pending feedback items with Claude.
 
-    If *app_feedback_id* is given, process that specific item (must be
-    pending).  Otherwise process up to *n* oldest pending items.
-
-    When *log_file* is set, Claude's raw output is streamed there
-    so you can ``tail -f`` it while processing runs.
+    If *feedback_id* is given, process that specific item (must be pending).
+    Otherwise process up to *n* oldest pending items.
 
     Returns the number of items successfully processed.
     """
@@ -284,60 +248,53 @@ def process(
         os.environ.get("WORKING_DIR", os.getcwd()),
     )
 
-    conn = connect()
+    get_engine()
+    db = SessionLocal()
     try:
-        if app_feedback_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM queue WHERE app_feedback_id = ? AND status = 'pending'",
-                (app_feedback_id,),
-            ).fetchall()
+        query = (
+            db.query(FeedbackRow, UserRow)
+            .join(UserRow, FeedbackRow.user_id == UserRow.id)
+        )
+
+        if feedback_id is not None:
+            rows = query.filter(
+                FeedbackRow.id == feedback_id,
+                FeedbackRow.status == "pending",
+            ).all()
             if not rows:
-                logger.error(
-                    "No pending item with app_feedback_id=%d", app_feedback_id
-                )
+                logger.error("No pending feedback with id=%d", feedback_id)
                 return 0
         else:
-            rows = conn.execute(
-                "SELECT * FROM queue WHERE status = 'pending' ORDER BY id LIMIT ?",
-                (n,),
-            ).fetchall()
+            rows = (
+                query.filter(FeedbackRow.status == "pending")
+                .order_by(FeedbackRow.created_at)
+                .limit(n)
+                .all()
+            )
 
         if not rows:
             logger.info("No pending items to process")
             return 0
 
         processed = 0
-        for row in rows:
-            item = _row_to_dict(row)
-            queue_id = item["id"]
-
+        for fb, user in rows:
             # Rate-limit check
-            if _check_rate_limit(conn, item["user_id"]):
-                conn.execute(
-                    "UPDATE queue SET status = 'deferred' WHERE id = ?",
-                    (queue_id,),
-                )
-                conn.commit()
-                log_action(conn, queue_id, "deferred", "rate limit exceeded")
-                logger.info("Deferred item %d (rate limit)", queue_id)
+            if _check_rate_limit(db, fb.user_id):
+                fb.status = "ignored"
+                fb.admin_notes = "Auto-ignored: user exceeded rate limit"
+                db.flush()
+                logger.info("Ignored feedback #%d (rate limit for user %s)", fb.id, fb.user_id)
                 continue
 
             if dry_run:
-                logger.info("[dry-run] Would process item %d", queue_id)
+                logger.info("[dry-run] Would process feedback #%d", fb.id)
                 processed += 1
                 continue
 
-            # Mark processing
-            conn.execute(
-                "UPDATE queue SET status = 'processing' WHERE id = ?",
-                (queue_id,),
-            )
-            conn.commit()
-            log_action(conn, queue_id, "processing_started")
-
             t0 = time.monotonic()
             try:
-                prompt = load_prompt(item)
+                prompt_dict = _feedback_to_prompt_dict(fb, user)
+                prompt = load_prompt(prompt_dict)
                 parsed = _run_claude(
                     prompt,
                     timeout=timeout,
@@ -346,30 +303,28 @@ def process(
                 )
                 processing_time = time.monotonic() - t0
 
-                _update_queue_result(conn, queue_id, parsed, processing_time)
-                log_action(
-                    conn,
-                    queue_id,
-                    "completed",
-                    parsed["result"].get("classification"),
-                )
+                _apply_result(fb, parsed)
+                _record_triage_cost(db, fb, parsed)
+                db.flush()
+
                 processed += 1
                 logger.info(
-                    "Processed item %d → %s (%.1fs)",
-                    queue_id,
+                    "Processed feedback #%d → %s (%.1fs, $%.4f)",
+                    fb.id,
                     parsed["result"].get("classification"),
                     processing_time,
+                    parsed.get("cost_usd") or 0,
                 )
             except _TimeoutWithOutput as exc:
-                detail = f"Timeout after {exc.timeout_s}s"
-                if exc.partial_output:
-                    detail += f"\n--- partial output ---\n{exc.partial_output[-2000:]}"
-                _mark_failed(conn, queue_id, detail)
-                logger.warning("Item %d timed out", queue_id)
+                logger.warning("Feedback #%d timed out after %ds", fb.id, exc.timeout_s)
+                fb.admin_notes = f"Triage timeout after {exc.timeout_s}s"
+                db.flush()
             except Exception as exc:
-                _mark_failed(conn, queue_id, str(exc))
-                logger.exception("Item %d failed", queue_id)
+                logger.exception("Feedback #%d triage failed", fb.id)
+                fb.admin_notes = f"Triage error: {str(exc)[:500]}"
+                db.flush()
 
+        db.commit()
         return processed
     finally:
-        conn.close()
+        db.close()
