@@ -147,7 +147,7 @@ class TestBuildSubject:
         sample_pack.assessment = None
         subject = _build_subject(sample_flight, sample_pack)
         assert "[" not in subject
-        assert "WeatherBrief" in subject
+        assert "FlyFun Weather" in subject
 
 
 class TestBuildBody:

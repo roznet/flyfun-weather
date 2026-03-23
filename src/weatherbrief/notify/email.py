@@ -142,7 +142,7 @@ def _build_subject(flight: Flight, pack: BriefingPackMeta) -> str:
     """Build email subject line."""
     route = " → ".join(flight.waypoints) if flight.waypoints else flight.route_name
     assessment = f"[{pack.assessment}] " if pack.assessment else ""
-    return f"{assessment}WeatherBrief: {route} — {flight.target_date} D-{pack.days_out}"
+    return f"{assessment}FlyFun Weather: {route} — {flight.target_date} D-{pack.days_out}"
 
 
 def _render_advisories_html(advisories_data: dict) -> str:
@@ -359,7 +359,7 @@ def _build_html_body(
   {digest_html}
   <hr style="border:none;border-top:1px solid #eee;margin:10px 0;">
   <p style="color:#888;font-size:12px;">
-    <a href="{html.escape(briefing_link)}" style="color:#888;">Open full briefing on WeatherBrief</a>
+    <a href="{html.escape(briefing_link)}" style="color:#888;">Open full briefing on FlyFun Weather</a>
   </p>
 </body>
 </html>"""
