@@ -388,7 +388,7 @@ The `safe_path_component()` function in `storage/flights.py` uses a strict white
 
 ### I4. Caddy Security Headers Are Comprehensive
 
-The Caddy config includes:
+Security headers are managed exclusively at the Caddy reverse-proxy layer (not duplicated in the FastAPI app). The Caddy config includes:
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
 - `Strict-Transport-Security` with `includeSubDomains; preload`
@@ -396,6 +396,8 @@ The Caddy config includes:
 - `Referrer-Policy: strict-origin-when-cross-origin`
 - `Permissions-Policy` disabling camera, mic, geolocation
 - Server header removed
+
+> **Note:** App-level security headers middleware was considered but deferred — Starlette's `BaseHTTPMiddleware` buffers streaming responses, which would break SSE briefing refresh. Caddy already provides equivalent coverage. Similarly, app-level rate limiting and suspicious-request logging middleware were deferred for the same streaming compatibility reason. Auth rate limiting can be revisited using Caddy's `rate_limit` directive or a pure-ASGI middleware that doesn't buffer responses.
 
 ### I5. CORS Wildcard with Credentials in Dev Mode (NEW — 2026-03-23)
 
