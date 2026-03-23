@@ -4,8 +4,9 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
   revokeAgent, fetchAdminFeedback, fetchAdminMetrics, fetchHubUsers,
+  updateFeedbackStatus, saveFeedbackReply, sendFeedbackReply, saveFeedbackNotes,
   type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
-  type AdminMetrics, type AdminMetricsWindow, type HubResponse,
+  type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 import { initTheme } from './theme';
@@ -82,6 +83,20 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: 'Other Bug/Issue',
 };
 
+const STATUS_BADGES: Record<FeedbackStatus, { label: string; color: string }> = {
+  pending: { label: 'To Review', color: '#6c757d' },
+  ready: { label: 'AI Ready', color: '#2563eb' },
+  replied: { label: 'Replied', color: '#16a34a' },
+  ignored: { label: 'Ignored', color: '#9ca3af' },
+};
+
+const CLASSIFICATION_LABELS: Record<string, string> = {
+  BUG_FIXABLE: 'Bug (Fixable)',
+  RESPOND_ONLY: 'Respond Only',
+  NEEDS_INVESTIGATION: 'Needs Investigation',
+  DEFER_TO_HUMAN: 'Defer to Human',
+};
+
 async function loadFeedback(): Promise<void> {
   const container = document.getElementById('feedback-list')!;
   try {
@@ -90,45 +105,187 @@ async function loadFeedback(): Promise<void> {
       container.innerHTML = '<p class="muted" style="text-align:center;padding:2rem;">No feedback yet.</p>';
       return;
     }
-    const rows = entries.map(renderFeedbackRow).join('');
-    container.innerHTML = `
-      <div style="overflow-x:auto;">
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>User</th>
-              <th>Flight</th>
-              <th>Category</th>
-              <th>Comment</th>
-              <th>Briefing</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
+    const outstanding = entries.filter(e => e.status === 'pending' || e.status === 'ready');
+    const archived = entries.filter(e => e.status === 'replied' || e.status === 'ignored');
+
+    let html = '';
+    if (outstanding.length > 0) {
+      html += `<h3 style="margin:0 0 12px;">Outstanding (${outstanding.length})</h3>`;
+      html += outstanding.map(renderFeedbackCard).join('');
+    } else {
+      html += '<p class="muted" style="padding:1rem 0;">No outstanding feedback.</p>';
+    }
+    if (archived.length > 0) {
+      html += `
+        <details style="margin-top:24px;">
+          <summary style="cursor:pointer;font-weight:600;color:var(--text-secondary, #6c757d);margin-bottom:12px;">
+            Archived (${archived.length})
+          </summary>
+          ${archived.map(renderFeedbackCard).join('')}
+        </details>`;
+    }
+    container.innerHTML = html;
+    attachFeedbackHandlers(container);
   } catch (err) {
     container.innerHTML = `<p style="color:#dc3545;text-align:center;padding:1rem;">Failed to load feedback: ${err}</p>`;
   }
 }
 
-function renderFeedbackRow(fb: FeedbackEntry): string {
+function renderStatusBadge(status: FeedbackStatus): string {
+  const { label, color } = STATUS_BADGES[status] ?? { label: status, color: '#6c757d' };
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;color:#fff;background:${color};">${label}</span>`;
+}
+
+function renderFeedbackCard(fb: FeedbackEntry): string {
   const date = fb.created_at ? formatDate(fb.created_at) : '-';
   const userName = fb.user_name || fb.user_email || '-';
   const category = CATEGORY_LABELS[fb.category] ?? fb.category;
-  const comment = escapeHtml(fb.comment.length > 120 ? fb.comment.slice(0, 120) + '...' : fb.comment);
-  const briefingLink = fb.pack_timestamp
-    ? `<a href="/briefing.html?flight=${encodeURIComponent(fb.flight_id)}&t=${encodeURIComponent(fb.pack_timestamp)}" target="_blank">View</a>`
-    : `<a href="/briefing.html?flight=${encodeURIComponent(fb.flight_id)}" target="_blank">View</a>`;
+  const isArchived = fb.status === 'replied' || fb.status === 'ignored';
+  const briefingLink = fb.flight_id
+    ? (fb.pack_timestamp
+      ? `<a href="/briefing.html?flight=${encodeURIComponent(fb.flight_id)}&t=${encodeURIComponent(fb.pack_timestamp)}" target="_blank" style="color:#2563eb;font-size:12px;">View Briefing</a>`
+      : `<a href="/briefing.html?flight=${encodeURIComponent(fb.flight_id)}" target="_blank" style="color:#2563eb;font-size:12px;">View Briefing</a>`)
+    : '';
+
+  const classificationBadge = fb.classification
+    ? `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#e0e7ff;color:#3730a3;margin-left:6px;">${CLASSIFICATION_LABELS[fb.classification] ?? fb.classification}</span>`
+    : '';
+  const confidenceText = fb.confidence != null
+    ? `<span style="font-size:11px;color:var(--text-secondary, #6c757d);margin-left:6px;">${Math.round(fb.confidence * 100)}% confidence</span>`
+    : '';
+
+  let detailsHtml = '';
+
+  // AI analysis section
+  if (fb.ai_analysis) {
+    detailsHtml += `
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">AI Analysis</label>
+        <div style="background:var(--bg-tertiary, #f0f4ff);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.ai_analysis)}</div>
+      </div>`;
+  }
+
+  // Reply section
+  if (!isArchived) {
+    const replyValue = escapeHtml(fb.admin_reply || '');
+    detailsHtml += `
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">Reply</label>
+        <textarea class="fb-reply" data-id="${fb.id}" rows="4" style="width:100%;box-sizing:border-box;border:1px solid var(--border-color, #dee2e6);border-radius:6px;padding:8px;font-size:13px;resize:vertical;">${replyValue}</textarea>
+      </div>`;
+  } else if (fb.admin_reply) {
+    detailsHtml += `
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">Reply${fb.replied_at ? ` (sent ${formatDate(fb.replied_at)})` : ''}</label>
+        <div style="background:var(--bg-tertiary, #f8f9fa);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.admin_reply)}</div>
+      </div>`;
+  }
+
+  // Notes section
+  if (!isArchived) {
+    const notesValue = escapeHtml(fb.admin_notes || '');
+    detailsHtml += `
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">Admin Notes</label>
+        <textarea class="fb-notes" data-id="${fb.id}" rows="2" style="width:100%;box-sizing:border-box;border:1px solid var(--border-color, #dee2e6);border-radius:6px;padding:8px;font-size:13px;resize:vertical;">${notesValue}</textarea>
+      </div>`;
+  } else if (fb.admin_notes) {
+    detailsHtml += `
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:600;color:var(--text-secondary, #6c757d);display:block;margin-bottom:4px;">Admin Notes</label>
+        <div style="background:var(--bg-tertiary, #f8f9fa);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.admin_notes)}</div>
+      </div>`;
+  }
+
+  // Action buttons
+  let actionsHtml = '';
+  if (!isArchived) {
+    actionsHtml = `
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="fb-send btn-sm" data-id="${fb.id}" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;font-weight:500;">Send Reply</button>
+        <button class="fb-mark-replied btn-sm" data-id="${fb.id}" style="background:var(--bg-tertiary, #e5e7eb);color:var(--text-primary, #1a1a2e);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Mark Replied</button>
+        <button class="fb-ignore btn-sm" data-id="${fb.id}" style="background:var(--bg-tertiary, #e5e7eb);color:var(--text-secondary, #6c757d);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Ignore</button>
+        <span class="fb-action-status" data-id="${fb.id}" style="font-size:12px;align-self:center;"></span>
+      </div>`;
+  }
+
   return `
-    <tr>
-      <td style="white-space:nowrap;">${date}</td>
-      <td>${escapeHtml(userName)}</td>
-      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(fb.flight_id)}">${escapeHtml(fb.flight_id)}</td>
-      <td>${category}</td>
-      <td style="max-width:300px;" title="${escapeHtml(fb.comment)}">${comment}</td>
-      <td>${briefingLink}</td>
-    </tr>`;
+    <details class="fb-card" style="border:1px solid var(--border-color, #dee2e6);border-radius:8px;margin-bottom:10px;overflow:hidden;">
+      <summary style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${renderStatusBadge(fb.status)}
+        ${classificationBadge}
+        ${confidenceText}
+        <span style="font-weight:500;">${escapeHtml(userName)}</span>
+        <span style="color:var(--text-secondary, #6c757d);font-size:13px;">${category}</span>
+        <span style="color:var(--text-secondary, #6c757d);font-size:12px;margin-left:auto;">${date}</span>
+        ${briefingLink}
+      </summary>
+      <div style="padding:0 16px 16px;">
+        <div style="background:var(--bg-secondary, #f8f9fa);border-radius:6px;padding:10px;margin-top:4px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.comment)}</div>
+        <div style="font-size:12px;color:var(--text-secondary, #6c757d);margin-top:6px;">${escapeHtml(fb.user_email)} ${fb.flight_id ? '&middot; ' + escapeHtml(fb.flight_id) : ''}</div>
+        ${detailsHtml}
+        ${actionsHtml}
+      </div>
+    </details>`;
+}
+
+function attachFeedbackHandlers(container: HTMLElement): void {
+  // Send Reply
+  container.querySelectorAll('.fb-send').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = Number((e.currentTarget as HTMLElement).dataset.id);
+      const replyEl = container.querySelector(`.fb-reply[data-id="${id}"]`) as HTMLTextAreaElement | null;
+      const notesEl = container.querySelector(`.fb-notes[data-id="${id}"]`) as HTMLTextAreaElement | null;
+      const statusEl = container.querySelector(`.fb-action-status[data-id="${id}"]`) as HTMLElement | null;
+      const reply = replyEl?.value?.trim();
+      if (!reply) {
+        if (statusEl) { statusEl.textContent = 'Please enter a reply first.'; statusEl.style.color = '#dc3545'; }
+        return;
+      }
+      try {
+        if (notesEl?.value) await saveFeedbackNotes(id, notesEl.value);
+        const result = await sendFeedbackReply(id, reply);
+        if (statusEl) { statusEl.textContent = `Sent to ${result.sent_to}`; statusEl.style.color = '#16a34a'; }
+        setTimeout(() => loadFeedback(), 1500);
+      } catch (err) {
+        if (statusEl) { statusEl.textContent = `Error: ${err}`; statusEl.style.color = '#dc3545'; }
+      }
+    });
+  });
+
+  // Mark Replied (no email)
+  container.querySelectorAll('.fb-mark-replied').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = Number((e.currentTarget as HTMLElement).dataset.id);
+      const notesEl = container.querySelector(`.fb-notes[data-id="${id}"]`) as HTMLTextAreaElement | null;
+      const replyEl = container.querySelector(`.fb-reply[data-id="${id}"]`) as HTMLTextAreaElement | null;
+      try {
+        if (replyEl?.value) await saveFeedbackReply(id, replyEl.value);
+        if (notesEl?.value) await saveFeedbackNotes(id, notesEl.value);
+        await updateFeedbackStatus(id, 'replied');
+        loadFeedback();
+      } catch (err) {
+        const statusEl = container.querySelector(`.fb-action-status[data-id="${id}"]`) as HTMLElement | null;
+        if (statusEl) { statusEl.textContent = `Error: ${err}`; statusEl.style.color = '#dc3545'; }
+      }
+    });
+  });
+
+  // Ignore
+  container.querySelectorAll('.fb-ignore').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = Number((e.currentTarget as HTMLElement).dataset.id);
+      const notesEl = container.querySelector(`.fb-notes[data-id="${id}"]`) as HTMLTextAreaElement | null;
+      try {
+        if (notesEl?.value) await saveFeedbackNotes(id, notesEl.value);
+        await updateFeedbackStatus(id, 'ignored');
+        loadFeedback();
+      } catch (err) {
+        const statusEl = container.querySelector(`.fb-action-status[data-id="${id}"]`) as HTMLElement | null;
+        if (statusEl) { statusEl.textContent = `Error: ${err}`; statusEl.style.color = '#dc3545'; }
+      }
+    });
+  });
 }
 
 function setupAgentCreateButton(): void {
