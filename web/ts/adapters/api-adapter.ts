@@ -166,10 +166,12 @@ export async function refreshBriefingStream(
   onEvent: (event: RefreshStreamEvent) => void,
   force?: boolean,
   asOfDate?: string,
+  notifyEmail?: boolean,
 ): Promise<PackMeta> {
   const params = new URLSearchParams();
   if (force) params.set('force', 'true');
   if (asOfDate) params.set('as_of_date', asOfDate);
+  if (notifyEmail) params.set('notify_email', 'true');
   const qs = params.toString();
   const url = `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/refresh/stream${qs ? '?' + qs : ''}`;
   const resp = await fetch(url, {
@@ -439,6 +441,15 @@ export async function fetchRefreshStatus(flightId: string): Promise<RefreshStatu
   return apiFetch<RefreshStatusResponse>(
     `/flights/${encodeURIComponent(flightId)}/packs/refresh/status`
   );
+}
+
+export interface RefreshStats {
+  avg_elapsed_seconds: number | null;
+  sample_size: number;
+}
+
+export async function fetchRefreshStats(): Promise<RefreshStats> {
+  return apiFetch<RefreshStats>('/refresh/stats');
 }
 
 export async function fetchActiveRefreshes(): Promise<RefreshEntry[]> {

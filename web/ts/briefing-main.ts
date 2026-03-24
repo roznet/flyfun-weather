@@ -526,7 +526,9 @@ async function init(): Promise<void> {
       state.refreshStatus !== prev.refreshStatus ||
       state.refreshStage !== prev.refreshStage ||
       state.refreshDetail !== prev.refreshDetail ||
-      state.refreshElapsed !== prev.refreshElapsed
+      state.refreshElapsed !== prev.refreshElapsed ||
+      state.avgRefreshSeconds !== prev.avgRefreshSeconds ||
+      state.notifyEmail !== prev.notifyEmail
     ) {
       ui.renderFreshnessBar(
         state.freshness,
@@ -540,6 +542,9 @@ async function init(): Promise<void> {
         () => store.getState().forceRefresh(),
         () => store.getState().checkFreshness(),
         state.refreshElapsed,
+        state.avgRefreshSeconds,
+        state.notifyEmail,
+        (checked: boolean) => store.getState().setNotifyEmail(checked),
       );
     }
     if (state.selectedPointIndex !== prev.selectedPointIndex) {

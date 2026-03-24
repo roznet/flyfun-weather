@@ -10,7 +10,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.auth import is_dev_mode
 from weatherbrief.api.security import audit_pack_access
+from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.api.throttle import generation_slot, pdf_limiter, plot_limiter
 
 # Input validation for path-sensitive parameters
@@ -67,6 +68,7 @@ class RefreshEntry(BaseModel):
     """Status entry for an active refresh."""
 
     flight_id: str
+    user_id: str | None = None
     status: str = "queued"  # "queued" | "refreshing"
     triggered_by: str = "user"  # "user" | "scheduler"
     stage: str | None = None
@@ -76,10 +78,21 @@ class RefreshEntry(BaseModel):
     refreshing_at_mono: float | None = None
 
 
+class UserQueueLimitError(Exception):
+    """Raised when a user already has the maximum number of active refreshes."""
+
+    def __init__(self, user_id: str, current_count: int, limit: int) -> None:
+        self.user_id = user_id
+        self.current_count = current_count
+        self.limit = limit
+        super().__init__(f"User {user_id} already has {current_count} active refresh(es) (limit {limit})")
+
+
 class _RefreshRegistry:
     """Thread-safe in-memory registry of active refreshes."""
 
     MAX_QUEUE_DEPTH = 5
+    MAX_PER_USER = 2
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -87,21 +100,32 @@ class _RefreshRegistry:
 
     def try_register(
         self, flight_id: str, triggered_by: str = "user",
+        user_id: str | None = None,
     ) -> RefreshEntry | None:
         """Atomically register a refresh.
 
         Returns the entry on success, or None if the flight is already active.
         Raises ``QueueFullError`` when the queue depth exceeds the cap
         (scheduler bypasses the cap).
+        Raises ``UserQueueLimitError`` when a user already has
+        ``MAX_PER_USER`` active refreshes.
         """
         with self._lock:
             if flight_id in self._entries:
                 return None
-            if triggered_by != "scheduler" and len(self._entries) >= self.MAX_QUEUE_DEPTH:
-                raise QueueFullError(len(self._entries))
+            if triggered_by != "scheduler":
+                if len(self._entries) >= self.MAX_QUEUE_DEPTH:
+                    raise QueueFullError(len(self._entries))
+                if user_id is not None:
+                    user_count = sum(
+                        1 for e in self._entries.values() if e.user_id == user_id
+                    )
+                    if user_count >= self.MAX_PER_USER:
+                        raise UserQueueLimitError(user_id, user_count, self.MAX_PER_USER)
             now_mono = time.monotonic()
             entry = RefreshEntry(
                 flight_id=flight_id,
+                user_id=user_id,
                 status="queued",
                 triggered_by=triggered_by,
                 queued_at=datetime.now(tz=timezone.utc).isoformat(),
@@ -634,9 +658,14 @@ async def refresh_briefing(
 
     # Duplicate / queue-depth check
     try:
-        entry = refresh_registry.try_register(flight_id, triggered_by="user")
+        entry = refresh_registry.try_register(flight_id, triggered_by="user", user_id=user_id)
     except QueueFullError:
         raise HTTPException(status_code=503, detail="Server busy, too many queued refreshes")
+    except UserQueueLimitError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=f"You already have {exc.current_count} refresh(es) in progress (limit {exc.limit}). Wait for one to finish.",
+        )
     if entry is None:
         raise HTTPException(status_code=409, detail="Refresh already in progress")
 
@@ -692,6 +721,7 @@ async def refresh_briefing_stream(
     request: Request,
     force: bool = False,
     as_of_date: str | None = None,
+    notify_email: bool = False,
     user_id: str = Depends(current_user_id),
 ):
     """Stream briefing refresh progress via Server-Sent Events.
@@ -700,6 +730,7 @@ async def refresh_briefing_stream(
     hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
     Pass ``?as_of_date=YYYY-MM-DD`` for historical flights to fetch
     forecasts as they were on that date.
+    Pass ``?notify_email=true`` to receive an email when the refresh completes.
     Returns an SSE error event if a refresh is already in progress.
     """
     # Manage our own DB session — FastAPI's Depends(get_db) cleanup
@@ -755,7 +786,7 @@ async def refresh_briefing_stream(
         # Duplicate / queue-depth check — return SSE error so clients
         # that already opened the stream can handle it gracefully.
         try:
-            entry = refresh_registry.try_register(flight_id, triggered_by="user")
+            entry = refresh_registry.try_register(flight_id, triggered_by="user", user_id=user_id)
         except QueueFullError:
             async def busy_generator() -> AsyncGenerator[str, None]:
                 event = {"type": "error", "message": "Server busy, too many queued refreshes"}
@@ -765,6 +796,20 @@ async def refresh_briefing_stream(
                 busy_generator(),
                 media_type="text/event-stream",
                 status_code=503,
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        except UserQueueLimitError as exc:
+            async def user_limit_generator() -> AsyncGenerator[str, None]:
+                event = {
+                    "type": "error",
+                    "message": f"You already have {exc.current_count} refresh(es) in progress (limit {exc.limit}). Wait for one to finish.",
+                }
+                yield f"event: error\ndata: {json_mod.dumps(event)}\n\n"
+
+            return StreamingResponse(
+                user_limit_generator(),
+                media_type="text/event-stream",
+                status_code=429,
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         if entry is None:
@@ -784,6 +829,9 @@ async def refresh_briefing_stream(
             is_privileged=_can_force_refresh(request, db),
             as_of_time=as_of_time,
         )
+
+        # Capture base_url for optional email notification (before db/request close)
+        base_url = str(request.base_url).rstrip("/") if notify_email else None
     except Exception:
         if registered:
             refresh_registry.unregister(flight_id)
@@ -839,6 +887,24 @@ async def refresh_briefing_stream(
                 "elapsed_seconds": total_elapsed,
             }
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
+
+            # Send email notification if requested
+            if notify_email and base_url:
+                try:
+                    from weatherbrief.db.models import UserRow
+                    from weatherbrief.notify.email import send_briefing_email
+
+                    email_db = SessionLocal()
+                    try:
+                        user = email_db.get(UserRow, user_id)
+                        if user and user.email:
+                            pack_dir = Path(pack_path)
+                            send_briefing_email([user.email], flight, meta, pack_dir, base_url=base_url)
+                            logger.info("Refresh completion email sent to %s for %s", user.email, flight_id)
+                    finally:
+                        email_db.close()
+                except Exception as email_exc:
+                    logger.warning("Failed to send refresh notification email: %s", email_exc)
         except Exception as exc:
             logger.error("Streaming refresh failed: %s", exc, exc_info=True)
             error_event = {"type": "error", "message": str(exc)}
@@ -900,6 +966,34 @@ def get_active_refreshes(
     """Return all currently active refreshes."""
     entries = refresh_registry.get_all_active()
     return [e.model_dump() for e in entries]
+
+
+@refresh_router.get("/stats")
+def get_refresh_stats(
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Return average refresh time (7-day window) for the progress hint."""
+    from sqlalchemy import func as sa_func
+
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    row = (
+        db.query(
+            sa_func.count().label("total"),
+            sa_func.avg(BriefingUsageRow.elapsed_seconds).label("avg_elapsed"),
+        )
+        .filter(
+            BriefingUsageRow.timestamp >= since,
+            BriefingUsageRow.elapsed_seconds.isnot(None),
+        )
+        .one()
+    )
+    total = row.total or 0
+    avg_elapsed = round(float(row.avg_elapsed), 0) if row.avg_elapsed else None
+    return {
+        "avg_elapsed_seconds": avg_elapsed,
+        "sample_size": total,
+    }
 
 
 @router.get("/{timestamp}", response_model=PackMetaResponse)
