@@ -223,7 +223,7 @@ Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens
 | Resource | Limit | Rationale |
 |----------|-------|-----------|
 | Open-Meteo calls | 50/day per user | Free tier: 10K/day total |
-| GRAMET calls | 10/day per user | Autorouter courtesy |
+| GRAMET calls | 20/day per user | Autorouter courtesy |
 | LLM digest calls | 20/day per user | Token cost |
 
 Every refresh logged to `briefing_usage` with timing metrics (`elapsed_seconds`, `queue_wait_seconds`, `triggered_by`). Freshness check via `check_freshness()` in `fetch/model_status.py`.
@@ -232,11 +232,19 @@ Every refresh logged to `briefing_usage` with timing metrics (`elapsed_seconds`,
 
 | Resource | Limit | Notes |
 |----------|-------|-------|
-| Concurrent refreshes | 5 | Returns 503 when full; scheduler bypasses queue limit |
+| Concurrent refreshes (server) | 5 | Returns 503 when full; scheduler bypasses queue limit |
+| Concurrent refreshes (per user) | 2 | Returns 429 when exceeded; prevents one user hogging the queue |
 | PDF generation | 3 concurrent | Semaphore in `api/throttle.py` |
 | Skew-T plot generation | 2 concurrent | Semaphore in `api/throttle.py` |
 
-`RefreshRegistry` (in-memory) tracks active refreshes, queue depth, and timing. `GET /api/admin/metrics` returns live queue state + 24h/7d/30d timing statistics.
+`RefreshRegistry` (in-memory) tracks active refreshes by flight and user, queue depth, and timing. Each `RefreshEntry` carries `user_id` for per-user accounting. `GET /api/admin/metrics` returns live queue state + 24h/7d/30d timing statistics. `GET /api/refresh/stats` returns 7-day average refresh time (public, used by frontend progress hint).
+
+### Refresh Progress UX
+
+During a refresh, the SSE stream and freshness bar show:
+- Pipeline stage labels with progress percentage (13 stages, 5%–95%)
+- **"You can close this page"** hint with average refresh time (from `/api/refresh/stats`)
+- **"Email me when done"** checkbox — passes `?notify_email=true` to the stream endpoint, which calls `send_briefing_email()` on completion
 
 ## Auto-Refresh Scheduler
 
