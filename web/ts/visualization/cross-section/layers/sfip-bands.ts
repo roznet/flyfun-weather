@@ -1,8 +1,8 @@
-/** SFIP icing zone bands: diagonal-hatch fills by risk level, visually distinct from Ogimet solid fills. */
+/** SFIP icing zone bands: fills by risk level, visually distinct from Ogimet solid fills. */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
-import { drawSmoothBand, type BandPointData } from './base';
 import { getActiveTheme } from '../theme';
+import { renderMatchedZones, maxRisk } from './zone-matching';
 
 function sfipRiskColor(risk: string): string {
   return getActiveTheme().sfipIcing[risk] ?? 'transparent';
@@ -16,55 +16,9 @@ export const sfipBandsLayer: CrossSectionLayer = {
   metricId: 'sfip_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
-    // Draw hatched bands between adjacent points
-    for (let i = 0; i < data.points.length - 1; i++) {
-      const curr = data.points[i];
-      const next = data.points[i + 1];
-      const usedNext = new Set<number>();
-
-      for (const sz of curr.sfipZones) {
-        if (sz.risk === 'none') continue;
-
-        // Find best overlap match in next point
-        let bestIdx = -1;
-        let bestOverlap = 0;
-        for (let j = 0; j < next.sfipZones.length; j++) {
-          if (usedNext.has(j) || next.sfipZones[j].risk === 'none') continue;
-          const nz = next.sfipZones[j];
-          const overlap = Math.min(sz.topFt, nz.topFt) - Math.max(sz.baseFt, nz.baseFt);
-          if (overlap > bestOverlap) { bestOverlap = overlap; bestIdx = j; }
-        }
-
-        if (bestIdx >= 0) {
-          usedNext.add(bestIdx);
-          const nz = next.sfipZones[bestIdx];
-          const riskOrder = ['none', 'light', 'moderate', 'severe'];
-          const maxRisk = riskOrder.indexOf(sz.risk) >= riskOrder.indexOf(nz.risk) ? sz.risk : nz.risk;
-          drawSmoothBand(ctx, [
-            { distance: curr.distanceNm, base: sz.baseFt, top: sz.topFt },
-            { distance: next.distanceNm, base: nz.baseFt, top: nz.topFt },
-          ], transform, sfipRiskColor(maxRisk));
-        } else {
-          const midDist = (curr.distanceNm + next.distanceNm) / 2;
-          const midAlt = (sz.baseFt + sz.topFt) / 2;
-          drawSmoothBand(ctx, [
-            { distance: curr.distanceNm, base: sz.baseFt, top: sz.topFt },
-            { distance: midDist, base: midAlt, top: midAlt },
-          ], transform, sfipRiskColor(sz.risk));
-        }
-      }
-
-      // Unmatched next zones: fade in from midpoint
-      for (let j = 0; j < next.sfipZones.length; j++) {
-        if (usedNext.has(j) || next.sfipZones[j].risk === 'none') continue;
-        const nz = next.sfipZones[j];
-        const midDist = (curr.distanceNm + next.distanceNm) / 2;
-        const midAlt = (nz.baseFt + nz.topFt) / 2;
-        drawSmoothBand(ctx, [
-          { distance: midDist, base: midAlt, top: midAlt },
-          { distance: next.distanceNm, base: nz.baseFt, top: nz.topFt },
-        ], transform, sfipRiskColor(nz.risk));
-      }
-    }
+    renderMatchedZones(ctx, transform, data, {
+      getZones: (p) => p.sfipZones.filter((z) => z.risk !== 'none'),
+      getColor: (z, matched) => sfipRiskColor(matched ? maxRisk(z.risk, matched.risk) : z.risk),
+    });
   },
 };

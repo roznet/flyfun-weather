@@ -247,6 +247,26 @@ export function monotoneCubicTangents(xs: number[], ys: number[]): number[] {
   return tangents;
 }
 
+// --- Cloud hatch helpers (shared by DD and NWP cloud layers) ---
+
+export interface CloudHatchConfig {
+  hatchGridPx: number;
+  hatchLineWidth: Record<string, number>;
+  hatchColor: string;
+}
+
+/** Draw cloud-style horizontal hatching inside a band, with line width from coverage. */
+export function hatchCloudBand(
+  ctx: CanvasRenderingContext2D,
+  bandPoints: BandPointData[],
+  transform: CoordTransform,
+  coverage: string,
+  hatch: CloudHatchConfig,
+): void {
+  const lw = hatch.hatchLineWidth[coverage] ?? hatch.hatchGridPx;
+  drawBandHatch(ctx, bandPoints, transform, hatch.hatchGridPx, lw, hatch.hatchColor);
+}
+
 // --- Helpers ---
 
 /** Split points into segments of consecutive non-null values. */

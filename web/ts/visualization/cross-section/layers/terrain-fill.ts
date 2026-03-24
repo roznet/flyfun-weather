@@ -1,7 +1,7 @@
 /** Terrain fill layer: earth-tone filled area from ground to chart bottom. */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData, TerrainPoint } from '../../types';
-import { drawSmoothLine, type PointData } from './base';
+import { drawSmoothLine, monotoneCubicTangents, type PointData } from './base';
 import { getActiveTheme } from '../theme';
 
 export const terrainFillLayer: CrossSectionLayer = {
@@ -64,46 +64,4 @@ function drawSmoothTerrain(
   ctx.lineTo(xs[xs.length - 1], bottomY);
   ctx.closePath();
   ctx.fill();
-}
-
-/** Fritsch-Carlson monotone cubic tangents (same algorithm as base.ts). */
-function monotoneCubicTangents(xs: number[], ys: number[]): number[] {
-  const n = xs.length;
-  if (n < 2) return new Array(n).fill(0);
-
-  const deltas: number[] = [];
-  for (let i = 0; i < n - 1; i++) {
-    const dx = xs[i + 1] - xs[i];
-    deltas.push(dx === 0 ? 0 : (ys[i + 1] - ys[i]) / dx);
-  }
-
-  const tangents: number[] = new Array(n);
-  tangents[0] = deltas[0];
-  tangents[n - 1] = deltas[n - 2];
-
-  for (let i = 1; i < n - 1; i++) {
-    if (deltas[i - 1] * deltas[i] <= 0) {
-      tangents[i] = 0;
-    } else {
-      tangents[i] = (deltas[i - 1] + deltas[i]) / 2;
-    }
-  }
-
-  for (let i = 0; i < n - 1; i++) {
-    if (deltas[i] === 0) {
-      tangents[i] = 0;
-      tangents[i + 1] = 0;
-      continue;
-    }
-    const alpha = tangents[i] / deltas[i];
-    const beta = tangents[i + 1] / deltas[i];
-    const tau = alpha * alpha + beta * beta;
-    if (tau > 9) {
-      const s = 3 / Math.sqrt(tau);
-      tangents[i] = s * alpha * deltas[i];
-      tangents[i + 1] = s * beta * deltas[i];
-    }
-  }
-
-  return tangents;
 }

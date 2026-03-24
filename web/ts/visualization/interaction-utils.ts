@@ -93,3 +93,19 @@ export function cssVar(name: string, fallback: string): string {
 export function isDarkTheme(): boolean {
   return document.documentElement.dataset.theme === 'dark';
 }
+
+/** Format altitude as FL (≥ 5000 ft) or feet. */
+export function fmtFL(ft: number): string {
+  if (ft >= 5000) return `FL${Math.round(ft / 100).toString().padStart(3, '0')}`;
+  return `${Math.round(ft).toLocaleString()} ft`;
+}
+
+/** True if hover altitude falls within [baseFt, topFt]. */
+export function altInBand(hoverAlt: number, baseFt: number, topFt: number): boolean {
+  return hoverAlt >= baseFt && hoverAlt <= topFt;
+}
+
+/** True if hover altitude is within tolerance (ft) of a line altitude. */
+export function altNearLine(hoverAlt: number, lineAlt: number, tolerance = 1500): boolean {
+  return Math.abs(hoverAlt - lineAlt) <= tolerance;
+}

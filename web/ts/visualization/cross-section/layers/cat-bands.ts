@@ -2,7 +2,7 @@
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import { catRiskColor } from '../../scales';
-import { drawSmoothBand, type BandPointData } from './base';
+import { renderMatchedZones, maxRisk } from './zone-matching';
 
 export const catBandsLayer: CrossSectionLayer = {
   id: 'cat-bands',
@@ -12,52 +12,9 @@ export const catBandsLayer: CrossSectionLayer = {
   metricId: 'cat_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
-    for (let i = 0; i < data.points.length - 1; i++) {
-      const curr = data.points[i];
-      const next = data.points[i + 1];
-      const usedNext = new Set<number>();
-
-      for (const cl of curr.catLayers) {
-        if (cl.risk === 'none') continue;
-
-        let bestIdx = -1;
-        let bestOverlap = 0;
-        for (let j = 0; j < next.catLayers.length; j++) {
-          if (usedNext.has(j) || next.catLayers[j].risk === 'none') continue;
-          const nl = next.catLayers[j];
-          const overlap = Math.min(cl.topFt, nl.topFt) - Math.max(cl.baseFt, nl.baseFt);
-          if (overlap > bestOverlap) { bestOverlap = overlap; bestIdx = j; }
-        }
-
-        if (bestIdx >= 0) {
-          usedNext.add(bestIdx);
-          const nl = next.catLayers[bestIdx];
-          const riskOrder = ['none', 'light', 'moderate', 'severe'];
-          const maxRisk = riskOrder.indexOf(cl.risk) >= riskOrder.indexOf(nl.risk) ? cl.risk : nl.risk;
-          drawSmoothBand(ctx, [
-            { distance: curr.distanceNm, base: cl.baseFt, top: cl.topFt },
-            { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
-          ], transform, catRiskColor(maxRisk));
-        } else {
-          const midDist = (curr.distanceNm + next.distanceNm) / 2;
-          const midAlt = (cl.baseFt + cl.topFt) / 2;
-          drawSmoothBand(ctx, [
-            { distance: curr.distanceNm, base: cl.baseFt, top: cl.topFt },
-            { distance: midDist, base: midAlt, top: midAlt },
-          ], transform, catRiskColor(cl.risk));
-        }
-      }
-
-      for (let j = 0; j < next.catLayers.length; j++) {
-        if (usedNext.has(j) || next.catLayers[j].risk === 'none') continue;
-        const nl = next.catLayers[j];
-        const midDist = (curr.distanceNm + next.distanceNm) / 2;
-        const midAlt = (nl.baseFt + nl.topFt) / 2;
-        drawSmoothBand(ctx, [
-          { distance: midDist, base: midAlt, top: midAlt },
-          { distance: next.distanceNm, base: nl.baseFt, top: nl.topFt },
-        ], transform, catRiskColor(nl.risk));
-      }
-    }
+    renderMatchedZones(ctx, transform, data, {
+      getZones: (p) => p.catLayers.filter((z) => z.risk !== 'none'),
+      getColor: (z, matched) => catRiskColor(matched ? maxRisk(z.risk, matched.risk) : z.risk),
+    });
   },
 };
