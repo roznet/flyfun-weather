@@ -215,18 +215,12 @@ export function renderFreshnessBar(
     }
     const leaveHint = `<span class="freshness-leave-hint">${t('freshness.canLeave')}${avgHint ? ' ' + avgHint : ''}</span>`;
 
-    // Email notification checkbox
-    const emailCheckId = 'freshness-notify-email';
-    const checked = notifyEmail ? ' checked' : '';
-    const emailToggle = `<label class="freshness-notify-label"><input type="checkbox" id="${emailCheckId}"${checked}> ${t('freshness.notifyEmail')}</label>`;
+    // Read-only confirmation if email notification was opted in before refresh started
+    const emailNote = notifyEmail
+      ? `<span class="freshness-leave-hint">${t('freshness.notifyEmailActive')}</span>`
+      : '';
 
-    el.innerHTML = `<span class="refresh-prefix">${t('freshness.inProgress')}</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>${leaveHint}${emailToggle}`;
-
-    // Wire email checkbox
-    const emailEl = document.getElementById(emailCheckId) as HTMLInputElement | null;
-    if (emailEl && onNotifyEmailChange) {
-      emailEl.addEventListener('change', () => onNotifyEmailChange(emailEl.checked));
-    }
+    el.innerHTML = `<span class="refresh-prefix">${t('freshness.inProgress')}</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>${leaveHint}${emailNote}`;
     return;
   }
 
@@ -277,6 +271,11 @@ export function renderFreshnessBar(
     ? ` <a href="#" class="freshness-link" id="freshness-force-refresh">${t('freshness.forceRefresh')}</a>`
     : '';
 
+  // Email notification opt-in checkbox (shown before refresh starts)
+  const emailCheckId = 'freshness-notify-email';
+  const emailChecked = notifyEmail ? ' checked' : '';
+  const emailToggle = `<label class="freshness-notify-label"><input type="checkbox" id="${emailCheckId}"${emailChecked}> ${t('freshness.notifyEmail')}</label>`;
+
   if (freshness.fresh) {
     let nextInfo = '';
     if (freshness.next_expected_update && freshness.next_expected_model) {
@@ -285,11 +284,11 @@ export function renderFreshnessBar(
     }
     const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">${t('freshness.checkAgain')}</a>`;
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>${t('freshness.upToDate')}${nextInfo} ${checkLink}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}`;
+    el.innerHTML = `<span>${t('freshness.upToDate')}${nextInfo} ${checkLink}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
   } else {
     const staleStr = freshness.stale_models.map((m) => modelLabel(m)).join(', ');
     el.className = 'freshness-bar freshness-stale';
-    el.innerHTML = `<span>${t('freshness.updatesAvailable')}${staleStr}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}`;
+    el.innerHTML = `<span>${t('freshness.updatesAvailable')}${staleStr}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
   }
 
   // Wire event handlers
@@ -300,6 +299,10 @@ export function renderFreshnessBar(
   const forceEl = document.getElementById('freshness-force-refresh');
   if (forceEl) {
     forceEl.addEventListener('click', (e) => { e.preventDefault(); onForceRefresh(); });
+  }
+  const emailEl = document.getElementById(emailCheckId) as HTMLInputElement | null;
+  if (emailEl && onNotifyEmailChange) {
+    emailEl.addEventListener('change', () => onNotifyEmailChange(emailEl.checked));
   }
 }
 
