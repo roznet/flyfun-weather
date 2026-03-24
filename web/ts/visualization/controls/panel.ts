@@ -1,9 +1,9 @@
 /** Visualization control panel: layout toggle, model selector, layer checkboxes, map controls. */
 
-import type { VizLayout, VizSettings } from '../types';
+import type { VizLayout, VizSettings, CompareBandMode } from '../types';
 import type { DisplayMode } from '../../types/metrics';
 import { getLayerGroups, getPreferredLayerForGroup } from '../cross-section/layer-registry';
-import { getComparableLayerGroups } from '../cross-section/compare-layers';
+import { getComparableLayerGroups, getComparableLayer } from '../cross-section/compare-layers';
 import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
@@ -333,6 +333,7 @@ export interface CompareControlCallbacks {
   onLayoutChange: (layout: VizLayout) => void;
   onCompareLayerChange: (layerId: string) => void;
   onCompareModelToggle: (model: string, enabled: boolean) => void;
+  onCompareBandModeChange: (mode: CompareBandMode) => void;
   onThemeChange?: (themeId: string) => void;
 }
 
@@ -369,6 +370,26 @@ export function renderCompareControls(
       html += `<option value="${layer.id}"${selected}>${t('viz.layer.' + layer.id)}</option>`;
     }
     html += '</optgroup>';
+  }
+  html += '</select>';
+  html += '</div>';
+
+  // Band mode selector (only visible when a band layer is selected)
+  const selectedLayer = getComparableLayer(settings.compareLayer);
+  const isBand = selectedLayer?.type === 'band';
+  const bandModeStyle = isBand ? '' : ' style="display:none"';
+  const bm = settings.compareBandMode ?? 'consensus-outline';
+  html += `<div class="viz-band-mode-selector"${bandModeStyle}>`;
+  html += `<span class="viz-toggle-label">${t('viz.bandMode')}</span>`;
+  html += '<select id="compare-band-mode-select" class="viz-model-select">';
+  const bandModes: { value: CompareBandMode; label: string }[] = [
+    { value: 'overlay', label: t('viz.bandMode.overlay') },
+    { value: 'consensus', label: t('viz.bandMode.consensus') },
+    { value: 'consensus-outline', label: t('viz.bandMode.consensusOutline') },
+  ];
+  for (const mode of bandModes) {
+    const selected = bm === mode.value ? ' selected' : '';
+    html += `<option value="${mode.value}"${selected}>${mode.label}</option>`;
   }
   html += '</select>';
   html += '</div>';
@@ -416,6 +437,14 @@ export function renderCompareControls(
   if (layerSelect) {
     layerSelect.addEventListener('change', () => {
       callbacks.onCompareLayerChange(layerSelect.value);
+    });
+  }
+
+  // Wire band mode selector
+  const bandModeSelect = container.querySelector('#compare-band-mode-select') as HTMLSelectElement | null;
+  if (bandModeSelect) {
+    bandModeSelect.addEventListener('change', () => {
+      callbacks.onCompareBandModeChange(bandModeSelect.value as CompareBandMode);
     });
   }
 

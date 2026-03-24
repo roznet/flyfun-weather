@@ -99,6 +99,9 @@ export interface CrossSectionTheme {
   };
 
   coverageOpacity: Record<string, number>;
+
+  /** Distinct colors assigned to models in consensus-outline mode. */
+  compareModelColors: string[];
 }
 
 // --- Theme IDs ---
@@ -244,6 +247,15 @@ const STANDARD_THEME: CrossSectionTheme = {
     bkn: 0.50,
     ovc: 0.75,
   },
+
+  compareModelColors: [
+    '#e6194b', // red
+    '#3cb44b', // green
+    '#4363d8', // blue
+    '#f58231', // orange
+    '#911eb4', // purple
+    '#42d4f4', // cyan
+  ],
 };
 
 // --- High-contrast theme ---

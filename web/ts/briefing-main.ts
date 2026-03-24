@@ -226,6 +226,7 @@ async function init(): Promise<void> {
         const layer = getComparableLayer(state.vizSettings.compareLayer) ?? null;
         compareRenderer.setModelData(datasets);
         compareRenderer.setCompareLayer(layer);
+        compareRenderer.setBandMode(state.vizSettings.compareBandMode ?? 'consensus-outline');
         compareRenderer.setSelectedPointIndex(state.selectedPointIndex);
         compareRenderer.render();
 
@@ -249,6 +250,7 @@ async function init(): Promise<void> {
         onLayoutChange: (l) => store.getState().setLayout(l),
         onCompareLayerChange: (layerId) => store.getState().setCompareLayer(layerId),
         onCompareModelToggle: (model, enabled) => store.getState().setCompareModel(model, enabled),
+        onCompareBandModeChange: (mode) => store.getState().setCompareBandMode(mode),
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
       }, availableModels);
 
