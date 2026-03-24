@@ -1,11 +1,9 @@
 /** Main cross-section canvas renderer with coordinate transform. */
 
-import type { CoordTransform, PlotArea, VizRouteData, CrossSectionLayer } from '../types';
+import type { CoordTransform, VizRouteData, CrossSectionLayer } from '../types';
 import { drawAxes } from './axes';
-import { isDarkTheme } from '../interaction-utils';
 import { getActiveTheme } from './theme';
-
-const MARGIN = { left: 60, right: 50, top: 20, bottom: 50 };
+import { createCoordTransform, renderCrosshairOverlay, setupCanvasDpr } from './renderer-utils';
 
 export class CrossSectionRenderer {
   private container: HTMLElement;
@@ -59,27 +57,7 @@ export class CrossSectionRenderer {
   /** Create a coordinate transform for the current canvas size and data. */
   createTransform(): CoordTransform | null {
     if (!this.data) return null;
-    const cssW = this.container.clientWidth;
-    const cssH = this.container.clientHeight;
-    if (cssW === 0 || cssH === 0) return null;
-
-    const plotArea: PlotArea = {
-      left: MARGIN.left,
-      top: MARGIN.top,
-      width: cssW - MARGIN.left - MARGIN.right,
-      height: cssH - MARGIN.top - MARGIN.bottom,
-    };
-
-    const maxDist = this.data.totalDistanceNm;
-    const maxAlt = this.data.flightCeilingFt;
-
-    return {
-      distanceToX: (d: number) => plotArea.left + (d / maxDist) * plotArea.width,
-      altitudeToY: (a: number) => plotArea.top + (1 - a / maxAlt) * plotArea.height,
-      xToDistance: (x: number) => ((x - plotArea.left) / plotArea.width) * maxDist,
-      yToAltitude: (y: number) => (1 - (y - plotArea.top) / plotArea.height) * maxAlt,
-      plotArea,
-    };
+    return createCoordTransform(this.container, this.data);
   }
 
   render(): void {
@@ -89,8 +67,8 @@ export class CrossSectionRenderer {
     if (cssW === 0 || cssH === 0) return;
 
     const dpr = window.devicePixelRatio || 1;
-    this.setupCanvas(this.mainCanvas, cssW, cssH, dpr);
-    this.setupCanvas(this.overlayCanvas, cssW, cssH, dpr);
+    setupCanvasDpr(this.mainCanvas, cssW, cssH, dpr);
+    setupCanvasDpr(this.overlayCanvas, cssW, cssH, dpr);
 
     const ctx = this.mainCanvas.getContext('2d')!;
     ctx.save();
@@ -131,70 +109,16 @@ export class CrossSectionRenderer {
   }
 
   renderOverlay(hoverX?: number, hoverY?: number): void {
-    const cssW = this.container.clientWidth;
-    const cssH = this.container.clientHeight;
-    if (cssW === 0 || cssH === 0) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = this.overlayCanvas.getContext('2d')!;
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, cssW, cssH);
-
-    const transform = this.createTransform();
-    if (!transform || !this.data) { ctx.restore(); return; }
-
-    const { plotArea } = transform;
-
-    // Draw selected point indicator
-    if (this.selectedPointIndex >= 0 && this.selectedPointIndex < this.data.points.length) {
-      const pt = this.data.points[this.selectedPointIndex];
-      const x = transform.distanceToX(pt.distanceNm);
-      ctx.strokeStyle = 'rgba(37, 99, 235, 0.6)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.moveTo(x, plotArea.top);
-      ctx.lineTo(x, plotArea.top + plotArea.height);
-      ctx.stroke();
-    }
-
-    // Draw hover crosshair (vertical)
-    const crosshairColor = getActiveTheme().axes.waypointLineColor;
-    if (hoverX !== undefined && hoverX >= plotArea.left && hoverX <= plotArea.left + plotArea.width) {
-      ctx.strokeStyle = crosshairColor;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(hoverX, plotArea.top);
-      ctx.lineTo(hoverX, plotArea.top + plotArea.height);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Draw hover crosshair (horizontal)
-    if (hoverY !== undefined && hoverY >= plotArea.top && hoverY <= plotArea.top + plotArea.height) {
-      ctx.strokeStyle = crosshairColor;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(plotArea.left, hoverY);
-      ctx.lineTo(plotArea.left + plotArea.width, hoverY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    ctx.restore();
+    renderCrosshairOverlay(
+      this.overlayCanvas, this.container,
+      this.createTransform(), this.data?.points ?? null,
+      this.selectedPointIndex, hoverX, hoverY,
+    );
   }
 
   destroy(): void {
     this.resizeObserver.disconnect();
     this.mainCanvas.remove();
     this.overlayCanvas.remove();
-  }
-
-  private setupCanvas(canvas: HTMLCanvasElement, cssW: number, cssH: number, dpr: number): void {
-    canvas.width = cssW * dpr;
-    canvas.height = cssH * dpr;
   }
 }

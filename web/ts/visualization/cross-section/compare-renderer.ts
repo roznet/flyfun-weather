@@ -1,6 +1,6 @@
 /** Compare cross-section renderer: one layer across N models. */
 
-import type { CoordTransform, PlotArea, VizRouteData, CrossSectionLayer, CompareBandMode } from '../types';
+import type { CoordTransform, VizRouteData, CompareBandMode } from '../types';
 import type { ComparableLayer } from './compare-layers';
 import { drawAxes } from './axes';
 import { terrainFillLayer } from './layers/terrain-fill';
@@ -9,8 +9,7 @@ import { getAllLayers } from './layer-registry';
 import { drawSmoothBand, drawSmoothLine, type BandPointData, type PointData } from './layers/base';
 import { getActiveTheme } from './theme';
 import { getZonesForLayer } from './compare-zone-access';
-
-const MARGIN = { left: 60, right: 50, top: 20, bottom: 50 };
+import { createCoordTransform, renderCrosshairOverlay, setupCanvasDpr } from './renderer-utils';
 
 export interface CompareModelData {
   model: string;
@@ -72,28 +71,7 @@ export class CompareSectionRenderer {
   /** Create a coordinate transform using the first dataset's dimensions. */
   createTransform(): CoordTransform | null {
     if (this.datasets.length === 0) return null;
-    const data = this.datasets[0].data;
-    const cssW = this.container.clientWidth;
-    const cssH = this.container.clientHeight;
-    if (cssW === 0 || cssH === 0) return null;
-
-    const plotArea: PlotArea = {
-      left: MARGIN.left,
-      top: MARGIN.top,
-      width: cssW - MARGIN.left - MARGIN.right,
-      height: cssH - MARGIN.top - MARGIN.bottom,
-    };
-
-    const maxDist = data.totalDistanceNm;
-    const maxAlt = data.flightCeilingFt;
-
-    return {
-      distanceToX: (d: number) => plotArea.left + (d / maxDist) * plotArea.width,
-      altitudeToY: (a: number) => plotArea.top + (1 - a / maxAlt) * plotArea.height,
-      xToDistance: (x: number) => ((x - plotArea.left) / plotArea.width) * maxDist,
-      yToAltitude: (y: number) => (1 - (y - plotArea.top) / plotArea.height) * maxAlt,
-      plotArea,
-    };
+    return createCoordTransform(this.container, this.datasets[0].data);
   }
 
   render(): void {
@@ -103,9 +81,9 @@ export class CompareSectionRenderer {
     if (cssW === 0 || cssH === 0) return;
 
     const dpr = window.devicePixelRatio || 1;
-    this.setupCanvas(this.mainCanvas, cssW, cssH, dpr);
-    this.setupCanvas(this.overlayCanvas, cssW, cssH, dpr);
-    this.setupCanvas(this.offscreenCanvas, cssW, cssH, dpr);
+    setupCanvasDpr(this.mainCanvas, cssW, cssH, dpr);
+    setupCanvasDpr(this.overlayCanvas, cssW, cssH, dpr);
+    setupCanvasDpr(this.offscreenCanvas, cssW, cssH, dpr);
 
     const ctx = this.mainCanvas.getContext('2d')!;
     ctx.save();
@@ -159,63 +137,12 @@ export class CompareSectionRenderer {
   }
 
   renderOverlay(hoverX?: number, hoverY?: number): void {
-    const cssW = this.container.clientWidth;
-    const cssH = this.container.clientHeight;
-    if (cssW === 0 || cssH === 0) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = this.overlayCanvas.getContext('2d')!;
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, cssW, cssH);
-
-    const transform = this.createTransform();
-    if (!transform || this.datasets.length === 0) { ctx.restore(); return; }
-
-    const { plotArea } = transform;
-    const data = this.datasets[0].data;
-
-    const theme = getActiveTheme();
-
-    // Selected point indicator
-    if (this.selectedPointIndex >= 0 && this.selectedPointIndex < data.points.length) {
-      const pt = data.points[this.selectedPointIndex];
-      const x = transform.distanceToX(pt.distanceNm);
-      ctx.strokeStyle = 'rgba(37, 99, 235, 0.6)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.moveTo(x, plotArea.top);
-      ctx.lineTo(x, plotArea.top + plotArea.height);
-      ctx.stroke();
-    }
-
-    // Hover crosshair (vertical)
-    const crosshairColor = theme.axes.waypointLineColor;
-    if (hoverX !== undefined && hoverX >= plotArea.left && hoverX <= plotArea.left + plotArea.width) {
-      ctx.strokeStyle = crosshairColor;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(hoverX, plotArea.top);
-      ctx.lineTo(hoverX, plotArea.top + plotArea.height);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Hover crosshair (horizontal)
-    if (hoverY !== undefined && hoverY >= plotArea.top && hoverY <= plotArea.top + plotArea.height) {
-      ctx.strokeStyle = crosshairColor;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(plotArea.left, hoverY);
-      ctx.lineTo(plotArea.left + plotArea.width, hoverY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    ctx.restore();
+    const points = this.datasets.length > 0 ? this.datasets[0].data.points : null;
+    renderCrosshairOverlay(
+      this.overlayCanvas, this.container,
+      this.createTransform(), points,
+      this.selectedPointIndex, hoverX, hoverY,
+    );
   }
 
   destroy(): void {
@@ -359,7 +286,6 @@ export class CompareSectionRenderer {
         const zones = ds.data.points.map((pt) => getZonesForLayer(layerId, pt));
 
         // For each zone track, draw top and bottom boundary lines
-        // Simple approach: draw each zone's top and base as individual line segments
         this.renderModelOutlines(ctx, transform, ds.data, zones, color);
       }
     }
@@ -532,11 +458,6 @@ export class CompareSectionRenderer {
       style: layer.lineStyle ?? { color: '#2563eb', width: 2 },
       fillColor: layer.envelopeFill ?? 'rgba(37, 99, 235, 0.15)',
     };
-  }
-
-  private setupCanvas(canvas: HTMLCanvasElement, cssW: number, cssH: number, dpr: number): void {
-    canvas.width = cssW * dpr;
-    canvas.height = cssH * dpr;
   }
 }
 

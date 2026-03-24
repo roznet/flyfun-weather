@@ -6,7 +6,9 @@ import type { ComparableLayer } from './compare-layers';
 import {
   getCanvasX, getCanvasY, findNearestPointIndex, ensureTooltip as ensureTooltipEl,
   positionTooltip, hideTooltip as hideTooltipEl, findNearbyWaypoint,
+  fmtFL, altInBand,
 } from '../interaction-utils';
+import { getZonesForLayer } from './compare-zone-access';
 import { modelLabel } from '../../utils';
 
 export interface CompareInteractionCallbacks {
@@ -165,93 +167,25 @@ export function attachCompareInteraction(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function fmtFL(ft: number): string {
-  if (ft >= 5000) return `FL${Math.round(ft / 100).toString().padStart(3, '0')}`;
-  return `${Math.round(ft).toLocaleString()} ft`;
-}
-
-function altInBand(hoverAlt: number, baseFt: number, topFt: number): boolean {
-  return hoverAlt >= baseFt && hoverAlt <= topFt;
-}
-
-/** Hit-test for band layers: check if hover altitude falls within any zone. */
+/** Hit-test for band layers using the shared zone accessor. */
 function bandHitTest(point: VizPoint, layerId: string, hoverAltFt: number): string | null {
-  switch (layerId) {
-    case 'icing-bands':
-      for (const z of point.icingZones) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          return `${z.risk} ${fmtFL(z.baseFt)}\u2013${fmtFL(z.topFt)}`;
-        }
+  // Inversions show strength rather than generic severity
+  if (layerId === 'inversion-bands') {
+    for (const inv of point.inversions) {
+      if (altInBand(hoverAltFt, inv.baseFt, inv.topFt)) {
+        return `+${inv.strengthC.toFixed(1)}\u00B0C`;
       }
-      return null;
-
-    case 'icing-ogimet-nwp-bands':
-      for (const z of point.icingOgimetNwpZones) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          return `${z.risk} ${fmtFL(z.baseFt)}\u2013${fmtFL(z.topFt)}`;
-        }
-      }
-      return null;
-
-    case 'sfip-bands':
-      for (const z of point.sfipZones) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          return `${z.risk} ${fmtFL(z.baseFt)}\u2013${fmtFL(z.topFt)}`;
-        }
-      }
-      return null;
-
-    case 'cloud-bands':
-      for (const cl of point.cloudLayers) {
-        if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
-          return `${cl.coverage} ${fmtFL(cl.baseFt)}\u2013${fmtFL(cl.topFt)}`;
-        }
-      }
-      return null;
-
-    case 'nwp-cloud-bands':
-      for (const cl of point.nwpCloudLayers) {
-        if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
-          return `${cl.coverage} ${fmtFL(cl.baseFt)}\u2013${fmtFL(cl.topFt)}`;
-        }
-      }
-      return null;
-
-    case 'cat-bands':
-      for (const z of point.catLayers) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          return `${z.risk} ${fmtFL(z.baseFt)}\u2013${fmtFL(z.topFt)}`;
-        }
-      }
-      return null;
-
-    case 'inversion-bands':
-      for (const inv of point.inversions) {
-        if (altInBand(hoverAltFt, inv.baseFt, inv.topFt)) {
-          return `+${inv.strengthC.toFixed(1)}\u00B0C`;
-        }
-      }
-      return null;
-
-    case 'thermo-convective-bg':
-      if (point.convectiveRisk !== 'none' &&
-          point.convectiveBaseFt !== null && point.convectiveTopFt !== null &&
-          altInBand(hoverAltFt, point.convectiveBaseFt, point.convectiveTopFt)) {
-        return point.convectiveRisk;
-      }
-      return null;
-
-    case 'nwp-convective-bg':
-      if (point.nwpConvectiveRisk !== 'none' &&
-          point.nwpConvectiveBaseFt !== null && point.nwpConvectiveTopFt !== null &&
-          altInBand(hoverAltFt, point.nwpConvectiveBaseFt, point.nwpConvectiveTopFt)) {
-        return point.nwpConvectiveRisk;
-      }
-      return null;
-
-    default:
-      return null;
+    }
+    return null;
   }
+
+  const zones = getZonesForLayer(layerId, point);
+  for (const z of zones) {
+    if (altInBand(hoverAltFt, z.baseFt, z.topFt)) {
+      return `${z.severity} ${fmtFL(z.baseFt)}\u2013${fmtFL(z.topFt)}`;
+    }
+  }
+  return null;
 }
 
 /** Hit-test for line layers: check proximity to the altitude value. */

@@ -5,6 +5,7 @@ import type { CrossSectionRenderer } from './renderer';
 import {
   getCanvasX, getCanvasY, findNearestPointIndex, ensureTooltip as ensureTooltipEl,
   positionTooltip, hideTooltip as hideTooltipEl, findNearbyWaypoint,
+  fmtFL, altInBand, altNearLine,
 } from '../interaction-utils';
 
 export interface InteractionCallbacks {
@@ -263,22 +264,6 @@ function fmt(n: number): string {
   return Math.round(n).toLocaleString();
 }
 
-/** Format altitude as FL (≥ 5000 ft) or feet. */
-function fmtFL(ft: number): string {
-  if (ft >= 5000) return `FL${Math.round(ft / 100).toString().padStart(3, '0')}`;
-  return `${fmt(ft)} ft`;
-}
-
-/** True if hover altitude falls within [baseFt, topFt]. */
-function altInBand(hoverAlt: number, baseFt: number, topFt: number): boolean {
-  return hoverAlt >= baseFt && hoverAlt <= topFt;
-}
-
-/** True if hover altitude is within tolerance (ft) of a line altitude. */
-function altNearLine(hoverAlt: number, lineAlt: number, tolerance = 1500): boolean {
-  return Math.abs(hoverAlt - lineAlt) <= tolerance;
-}
-
 /** Interpolate terrain elevation at a given distance. */
 function terrainElevationAt(data: VizRouteData, distanceNm: number): number {
   if (!data.terrainProfile || data.terrainProfile.length === 0) return 0;
@@ -293,4 +278,3 @@ function terrainElevationAt(data: VizRouteData, distanceNm: number): number {
   }
   return 0;
 }
-
