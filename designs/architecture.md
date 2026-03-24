@@ -319,6 +319,7 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/auth/me/account` | DELETE | Delete own account (cascades flights, profiles, artifacts) |
 | `/api/admin/hub/*` | various | Cross-app admin hub (users, costs) via flyfun-common |
 | `/api/refresh/active` | GET | List all currently active refreshes |
+| `/api/refresh/stats` | GET | Average refresh time (7-day window, for progress hint) |
 | `/api/flights/{id}/packs/refresh/status` | GET | Refresh status for a specific flight |
 | `/api/admin/metrics` | GET | Queue depth, active refreshes, timing stats (admin) |
 
