@@ -285,7 +285,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         get().checkActiveRefresh();
         return;
       }
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: `Refresh failed: ${err}` });
+      const msg = err instanceof Error ? err.message : String(err);
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: msg });
     }
   },
 
@@ -317,7 +318,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         get().checkActiveRefresh();
         return;
       }
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: `Refresh failed: ${err}` });
+      const msg = err instanceof Error ? err.message : String(err);
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: msg });
     }
   },
 
