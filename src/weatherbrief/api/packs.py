@@ -17,6 +17,7 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
 from flyfun_common.auth import is_dev_mode
@@ -799,18 +800,9 @@ async def refresh_briefing_stream(
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         except UserQueueLimitError as exc:
-            async def user_limit_generator() -> AsyncGenerator[str, None]:
-                event = {
-                    "type": "error",
-                    "message": f"You already have {exc.current_count} refresh(es) in progress (limit {exc.limit}). Wait for one to finish.",
-                }
-                yield f"event: error\ndata: {json_mod.dumps(event)}\n\n"
-
-            return StreamingResponse(
-                user_limit_generator(),
-                media_type="text/event-stream",
+            raise HTTPException(
                 status_code=429,
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                detail=f"You already have {exc.current_count} refresh(es) in progress (limit {exc.limit}). Wait for one to finish.",
             )
         if entry is None:
             async def duplicate_generator() -> AsyncGenerator[str, None]:
@@ -974,8 +966,6 @@ def get_refresh_stats(
     db: Session = Depends(get_db),
 ):
     """Return average refresh time (7-day window) for the progress hint."""
-    from sqlalchemy import func as sa_func
-
     since = datetime.now(timezone.utc) - timedelta(days=7)
     row = (
         db.query(
