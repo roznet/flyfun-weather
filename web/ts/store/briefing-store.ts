@@ -42,6 +42,7 @@ function loadVizSettings(): VizSettings {
     routeGraphRightMetric: 'temperature',
     compareLayer: 'icing-bands',
     compareModels: {},
+    compareBandMode: 'consensus-outline',
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
@@ -132,6 +133,7 @@ export interface BriefingState {
   setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => void;
   setCompareLayer: (layerId: string) => void;
   setCompareModel: (model: string, enabled: boolean) => void;
+  setCompareBandMode: (mode: import('../visualization/types').CompareBandMode) => void;
   initCompareModels: (models: string[]) => void;
   setVizTheme: (themeId: string) => void;
 }
@@ -565,6 +567,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const current = get().vizSettings;
     const compareModels = { ...current.compareModels, [model]: enabled };
     const updated = { ...current, compareModels };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setCompareBandMode: (mode) => {
+    const updated = { ...get().vizSettings, compareBandMode: mode };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },

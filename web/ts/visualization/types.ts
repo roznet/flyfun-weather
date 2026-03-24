@@ -3,6 +3,7 @@
 // --- Settings ---
 
 export type VizLayout = 'cross-section' | 'map' | 'split' | 'compare';
+export type CompareBandMode = 'overlay' | 'consensus' | 'consensus-outline';
 
 export interface VizSettings {
   layout: VizLayout;
@@ -15,6 +16,7 @@ export interface VizSettings {
   routeGraphRightMetric: string;  // 'none' to disable right axis
   compareLayer: string;
   compareModels: Record<string, boolean>;
+  compareBandMode: CompareBandMode;
   vizTheme?: string;
 }
 

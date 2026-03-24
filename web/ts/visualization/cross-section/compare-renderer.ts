@@ -1,6 +1,6 @@
 /** Compare cross-section renderer: one layer across N models. */
 
-import type { CoordTransform, PlotArea, VizRouteData, CrossSectionLayer } from '../types';
+import type { CoordTransform, PlotArea, VizRouteData, CrossSectionLayer, CompareBandMode } from '../types';
 import type { ComparableLayer } from './compare-layers';
 import { drawAxes } from './axes';
 import { terrainFillLayer } from './layers/terrain-fill';
@@ -8,6 +8,7 @@ import { cruiseAltitudeLayer } from './layers/reference-lines';
 import { getAllLayers } from './layer-registry';
 import { drawSmoothBand, drawSmoothLine, type BandPointData, type PointData } from './layers/base';
 import { getActiveTheme } from './theme';
+import { getZonesForLayer } from './compare-zone-access';
 
 const MARGIN = { left: 60, right: 50, top: 20, bottom: 50 };
 
@@ -24,6 +25,7 @@ export class CompareSectionRenderer {
   private resizeObserver: ResizeObserver;
   private datasets: CompareModelData[] = [];
   private compareLayer: ComparableLayer | null = null;
+  private bandMode: CompareBandMode = 'consensus-outline';
   private selectedPointIndex = -1;
 
   constructor(container: HTMLElement) {
@@ -52,6 +54,10 @@ export class CompareSectionRenderer {
 
   setCompareLayer(layer: ComparableLayer | null): void {
     this.compareLayer = layer;
+  }
+
+  setBandMode(mode: CompareBandMode): void {
+    this.bandMode = mode;
   }
 
   setSelectedPointIndex(index: number): void {
@@ -126,7 +132,11 @@ export class CompareSectionRenderer {
     // Render the selected compare layer
     if (this.compareLayer) {
       if (this.compareLayer.type === 'band') {
-        this.renderBandLayer(ctx, transform, cssW, cssH, dpr);
+        if (this.bandMode === 'overlay') {
+          this.renderBandLayerOverlay(ctx, transform, cssW, cssH, dpr);
+        } else {
+          this.renderConsensusBand(ctx, transform, this.bandMode === 'consensus-outline');
+        }
       } else {
         this.renderLineEnvelope(ctx, transform);
       }
@@ -214,7 +224,7 @@ export class CompareSectionRenderer {
     this.overlayCanvas.remove();
   }
 
-  private renderBandLayer(
+  private renderBandLayerOverlay(
     ctx: CanvasRenderingContext2D,
     transform: CoordTransform,
     cssW: number,
@@ -235,28 +245,222 @@ export class CompareSectionRenderer {
     const { plotArea } = transform;
 
     for (const dataset of this.datasets) {
-      // Clear offscreen to transparent — each layer's semi-transparent fills
-      // will composite against the opaque sky on the main canvas via
-      // source-over blending at reduced alpha.
       offCtx.save();
       offCtx.scale(dpr, dpr);
       offCtx.clearRect(0, 0, cssW, cssH);
 
-      // Clip offscreen to plot area
       offCtx.beginPath();
       offCtx.rect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
       offCtx.clip();
 
-      // Render the layer at full opacity on offscreen
       crossSectionLayer.render(offCtx, transform, dataset.data);
       offCtx.restore();
 
-      // Composite offscreen onto main canvas with source-over at reduced
-      // alpha so all models are visible and blend naturally on any background.
       ctx.save();
       ctx.globalAlpha = alpha;
       ctx.drawImage(this.offscreenCanvas, 0, 0, cssW * dpr, cssH * dpr, 0, 0, cssW, cssH);
       ctx.restore();
+    }
+  }
+
+  /** Consensus band rendering: fill opacity proportional to model agreement.
+   *  When showOutlines is true, also draws per-model zone boundaries. */
+  private renderConsensusBand(
+    ctx: CanvasRenderingContext2D,
+    transform: CoordTransform,
+    showOutlines: boolean,
+  ): void {
+    if (!this.compareLayer) return;
+    const layerId = this.compareLayer.id;
+    const numModels = this.datasets.length;
+    if (numModels === 0) return;
+
+    const refPoints = this.datasets[0].data.points;
+    const theme = getActiveTheme();
+    const baseRgb = this.getLayerBaseRgb(layerId, theme);
+
+    // For each pair of adjacent route points, compute consensus intervals
+    // and render them as bands.
+    for (let i = 0; i < refPoints.length - 1; i++) {
+      const dist0 = refPoints[i].distanceNm;
+      const dist1 = this.datasets[0].data.points[i + 1]?.distanceNm;
+      if (dist1 === undefined) continue;
+
+      // Collect zones at this point and next from all models
+      const zonesAtCurr = this.datasets.map((ds) =>
+        i < ds.data.points.length ? getZonesForLayer(layerId, ds.data.points[i]) : []);
+      const zonesAtNext = this.datasets.map((ds) =>
+        i + 1 < ds.data.points.length ? getZonesForLayer(layerId, ds.data.points[i + 1]) : []);
+
+      // Build consensus intervals at current point
+      const consensusCurr = buildConsensusIntervals(zonesAtCurr, numModels);
+      const consensusNext = buildConsensusIntervals(zonesAtNext, numModels);
+
+      // Render consensus fill: for each interval at curr, find the best matching
+      // interval at next and draw a smooth band between them.
+      const usedNext = new Set<number>();
+      for (const ci of consensusCurr) {
+        let bestIdx = -1;
+        let bestOverlap = 0;
+        for (let j = 0; j < consensusNext.length; j++) {
+          if (usedNext.has(j)) continue;
+          const overlap = Math.min(ci.topFt, consensusNext[j].topFt) -
+                          Math.max(ci.baseFt, consensusNext[j].baseFt);
+          if (overlap > bestOverlap) { bestOverlap = overlap; bestIdx = j; }
+        }
+
+        // Average the consensus ratio between the two endpoints
+        const ratio = bestIdx >= 0
+          ? (ci.count / numModels + consensusNext[bestIdx].count / numModels) / 2
+          : ci.count / numModels;
+        const alpha = 0.15 + 0.55 * ratio;
+        const fill = `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, ${alpha.toFixed(2)})`;
+
+        if (bestIdx >= 0) {
+          usedNext.add(bestIdx);
+          const ni = consensusNext[bestIdx];
+          drawSmoothBand(ctx, [
+            { distance: dist0, base: ci.baseFt, top: ci.topFt },
+            { distance: dist1, base: ni.baseFt, top: ni.topFt },
+          ], transform, fill);
+        } else {
+          // Taper to midpoint
+          const midDist = (dist0 + dist1) / 2;
+          const midAlt = (ci.baseFt + ci.topFt) / 2;
+          drawSmoothBand(ctx, [
+            { distance: dist0, base: ci.baseFt, top: ci.topFt },
+            { distance: midDist, base: midAlt, top: midAlt },
+          ], transform, fill);
+        }
+      }
+
+      // Unmatched next intervals (appear mid-segment)
+      for (let j = 0; j < consensusNext.length; j++) {
+        if (usedNext.has(j)) continue;
+        const ni = consensusNext[j];
+        const ratio = ni.count / numModels;
+        const alpha = 0.15 + 0.55 * ratio;
+        const fill = `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, ${alpha.toFixed(2)})`;
+        const midDist = (dist0 + dist1) / 2;
+        const midAlt = (ni.baseFt + ni.topFt) / 2;
+        drawSmoothBand(ctx, [
+          { distance: midDist, base: midAlt, top: midAlt },
+          { distance: dist1, base: ni.baseFt, top: ni.topFt },
+        ], transform, fill);
+      }
+    }
+
+    // Draw per-model outlines on top
+    if (showOutlines) {
+      const modelColors = theme.compareModelColors;
+      for (let m = 0; m < this.datasets.length; m++) {
+        const ds = this.datasets[m];
+        const color = modelColors[m % modelColors.length];
+        const zones = ds.data.points.map((pt) => getZonesForLayer(layerId, pt));
+
+        // For each zone track, draw top and bottom boundary lines
+        // Simple approach: draw each zone's top and base as individual line segments
+        this.renderModelOutlines(ctx, transform, ds.data, zones, color);
+      }
+    }
+  }
+
+  /** Draw zone boundary outlines for a single model. */
+  private renderModelOutlines(
+    ctx: CanvasRenderingContext2D,
+    transform: CoordTransform,
+    data: VizRouteData,
+    zonesPerPoint: { baseFt: number; topFt: number; severity: string }[][],
+    color: string,
+  ): void {
+    // For each pair of adjacent points, match zones and draw top/base outlines
+    for (let i = 0; i < data.points.length - 1; i++) {
+      const curr = zonesPerPoint[i];
+      const next = zonesPerPoint[i + 1] ?? [];
+      const dist0 = data.points[i].distanceNm;
+      const dist1 = data.points[i + 1].distanceNm;
+      const usedNext = new Set<number>();
+
+      for (const z of curr) {
+        let bestIdx = -1;
+        let bestOverlap = 0;
+        for (let j = 0; j < next.length; j++) {
+          if (usedNext.has(j)) continue;
+          const overlap = Math.min(z.topFt, next[j].topFt) - Math.max(z.baseFt, next[j].baseFt);
+          if (overlap > bestOverlap) { bestOverlap = overlap; bestIdx = j; }
+        }
+
+        if (bestIdx >= 0) {
+          usedNext.add(bestIdx);
+          const nz = next[bestIdx];
+          // Top boundary
+          drawSmoothLine(ctx, [
+            { distance: dist0, value: z.topFt },
+            { distance: dist1, value: nz.topFt },
+          ], transform, { color, width: 2 });
+          // Base boundary
+          drawSmoothLine(ctx, [
+            { distance: dist0, value: z.baseFt },
+            { distance: dist1, value: nz.baseFt },
+          ], transform, { color, width: 2 });
+        } else {
+          // Taper to midpoint
+          const midDist = (dist0 + dist1) / 2;
+          const midAlt = (z.baseFt + z.topFt) / 2;
+          drawSmoothLine(ctx, [
+            { distance: dist0, value: z.topFt },
+            { distance: midDist, value: midAlt },
+          ], transform, { color, width: 2 });
+          drawSmoothLine(ctx, [
+            { distance: dist0, value: z.baseFt },
+            { distance: midDist, value: midAlt },
+          ], transform, { color, width: 2 });
+        }
+      }
+
+      // Unmatched next zones
+      for (let j = 0; j < next.length; j++) {
+        if (usedNext.has(j)) continue;
+        const nz = next[j];
+        const midDist = (dist0 + dist1) / 2;
+        const midAlt = (nz.baseFt + nz.topFt) / 2;
+        drawSmoothLine(ctx, [
+          { distance: midDist, value: midAlt },
+          { distance: dist1, value: nz.topFt },
+        ], transform, { color, width: 2 });
+        drawSmoothLine(ctx, [
+          { distance: midDist, value: midAlt },
+          { distance: dist1, value: nz.baseFt },
+        ], transform, { color, width: 2 });
+      }
+    }
+  }
+
+  /** Get the base RGB color for a layer from the theme. */
+  private getLayerBaseRgb(
+    layerId: string,
+    theme: ReturnType<typeof getActiveTheme>,
+  ): [number, number, number] {
+    // Extract RGB from the theme's rgba strings for each layer type
+    switch (layerId) {
+      case 'icing-bands':
+      case 'icing-ogimet-nwp-bands':
+        return parseRgbaToRgb(theme.icing.moderate) ?? [255, 165, 0];
+      case 'sfip-bands':
+        return parseRgbaToRgb(theme.sfipIcing.moderate) ?? [255, 165, 0];
+      case 'cat-bands':
+        return parseRgbaToRgb(theme.cat.moderate) ?? [255, 152, 0];
+      case 'cloud-bands':
+        return theme.clouds.denseRgb;
+      case 'nwp-cloud-bands':
+        return theme.nwpClouds.brightRgb;
+      case 'inversion-bands':
+        return theme.inversion.baseRgb;
+      case 'thermo-convective-bg':
+      case 'nwp-convective-bg':
+        return parseRgbaToRgb(theme.convective.riskColors.moderate) ?? [255, 152, 0];
+      default:
+        return [100, 149, 237]; // fallback cornflower blue
     }
   }
 
@@ -334,4 +538,59 @@ export class CompareSectionRenderer {
     canvas.width = cssW * dpr;
     canvas.height = cssH * dpr;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Consensus interval helpers
+// ---------------------------------------------------------------------------
+
+interface ConsensusInterval {
+  baseFt: number;
+  topFt: number;
+  /** Number of models with a zone overlapping this interval. */
+  count: number;
+}
+
+/** Build consensus intervals from zones across N models at a single route point.
+ *
+ *  Uses a sweep-line approach: collect all zone start/end altitudes as events,
+ *  sort them, and walk through to compute per-interval model counts. */
+function buildConsensusIntervals(
+  zonesPerModel: { baseFt: number; topFt: number }[][],
+  _numModels: number,
+): ConsensusInterval[] {
+  // Collect altitude events: +1 at baseFt, -1 at topFt for each zone
+  const events: { alt: number; delta: number }[] = [];
+  for (const zones of zonesPerModel) {
+    for (const z of zones) {
+      if (z.topFt <= z.baseFt) continue;
+      events.push({ alt: z.baseFt, delta: +1 });
+      events.push({ alt: z.topFt, delta: -1 });
+    }
+  }
+  if (events.length === 0) return [];
+
+  // Sort by altitude, with +1 before -1 at same altitude (so intervals aren't lost)
+  events.sort((a, b) => a.alt - b.alt || b.delta - a.delta);
+
+  const result: ConsensusInterval[] = [];
+  let count = 0;
+  let prevAlt = events[0].alt;
+
+  for (const ev of events) {
+    if (ev.alt > prevAlt && count > 0) {
+      result.push({ baseFt: prevAlt, topFt: ev.alt, count });
+    }
+    count += ev.delta;
+    prevAlt = ev.alt;
+  }
+
+  return result;
+}
+
+/** Parse an rgba() CSS string to extract [r, g, b]. */
+function parseRgbaToRgb(rgba: string): [number, number, number] | null {
+  const m = rgba.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (!m) return null;
+  return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
 }
