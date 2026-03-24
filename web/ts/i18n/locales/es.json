@@ -45,6 +45,7 @@
   "freshness.canLeave": "Puedes cerrar esta página — la actualización continúa en segundo plano.",
   "freshness.avgTime": "Las actualizaciones suelen tardar ~{mins} min.",
   "freshness.notifyEmail": "Enviarme un email cuando termine",
+  "freshness.notifyEmailActive": "Recibirás un email cuando la actualización se complete.",
   "freshness.forceRefresh": "Forzar actualización",
   "freshness.nextUpdate": ", próxima actualización en ~{time}",
   "freshness.checkAgain": "Comprobar de nuevo",
