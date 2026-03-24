@@ -890,10 +890,10 @@ async def refresh_briefing_stream(
 
             # Send email notification if requested
             if notify_email and base_url:
-                try:
-                    from weatherbrief.db.models import UserRow
-                    from weatherbrief.notify.email import send_briefing_email
+                from weatherbrief.db.models import UserRow
+                from weatherbrief.notify.email import send_briefing_email
 
+                try:
                     email_db = SessionLocal()
                     try:
                         user = email_db.get(UserRow, user_id)
@@ -970,7 +970,7 @@ def get_active_refreshes(
 
 @refresh_router.get("/stats")
 def get_refresh_stats(
-    user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
     """Return average refresh time (7-day window) for the progress hint."""
