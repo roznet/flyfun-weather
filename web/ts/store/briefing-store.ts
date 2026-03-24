@@ -90,6 +90,8 @@ export interface BriefingState {
   refreshDetail: string | null;
   refreshProgress: number;
   refreshElapsed: number | null;
+  avgRefreshSeconds: number | null;
+  notifyEmail: boolean;
   advisoryAltitudeOverride: number | null;
   altitudeTable: AltitudeTableResult | null;
   altitudeTableLoading: boolean;
@@ -115,6 +117,7 @@ export interface BriefingState {
   recalculateAdvisories: () => Promise<void>;
   fetchAltitudeTable: () => Promise<void>;
   refreshObservations: () => Promise<void>;
+  setNotifyEmail: (notify: boolean) => void;
   sendEmail: () => Promise<void>;
   loadAltAdvisories: () => Promise<void>;
   computeAltAdvisories: () => Promise<void>;
@@ -158,6 +161,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refreshDetail: null,
   refreshProgress: 0,
   refreshElapsed: null,
+  avgRefreshSeconds: null,
+  notifyEmail: false,
   advisoryAltitudeOverride: null,
   altitudeTable: null,
   altitudeTableLoading: false,
@@ -242,8 +247,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: null });
+    // Fetch average refresh time for the progress hint (best-effort, non-blocking)
+    api.fetchRefreshStats().then(stats => {
+      if (stats.avg_elapsed_seconds) set({ avgRefreshSeconds: stats.avg_elapsed_seconds });
+    }).catch(() => { /* ignore */ });
     try {
       let elapsed: number | null = null;
+      const notifyEmail = get().notifyEmail;
       const newPack = await api.refreshBriefingStream(flight.id, (event) => {
         if (event.type === 'progress') {
           set({
@@ -255,7 +265,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         } else if (event.type === 'complete' && event.elapsed_seconds) {
           elapsed = event.elapsed_seconds;
         }
-      }, false, asOfDate);
+      }, false, asOfDate, notifyEmail);
       // If the server returned a data_status (fresh skip), update freshness
       if (newPack.data_status) {
         set({ freshness: newPack.data_status });
@@ -367,6 +377,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     } catch {
       set({ freshnessLoading: false });
     }
+  },
+
+  setNotifyEmail: (notify: boolean) => {
+    set({ notifyEmail: notify });
   },
 
   setSelectedModel: (model: string) => {

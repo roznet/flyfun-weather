@@ -183,6 +183,9 @@ export function renderFreshnessBar(
   onForceRefresh: () => void,
   onCheckAgain: () => void,
   refreshElapsed?: number | null,
+  avgRefreshSeconds?: number | null,
+  notifyEmail?: boolean,
+  onNotifyEmailChange?: (checked: boolean) => void,
 ): void {
   const el = $('freshness-bar');
   if (!el) return;
@@ -203,7 +206,27 @@ export function renderFreshnessBar(
     }
     const detailSuffix = refreshDetail ? ` (${escapeHtml(refreshDetail)})` : '';
     const label = refreshStage ? escapeHtml(refreshStage) : t('freshness.starting');
-    el.innerHTML = `<span class="refresh-prefix">${t('freshness.inProgress')}</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>`;
+
+    // Build "you can leave" hint with average time
+    let avgHint = '';
+    if (avgRefreshSeconds && avgRefreshSeconds > 0) {
+      const mins = Math.ceil(avgRefreshSeconds / 60);
+      avgHint = t('freshness.avgTime', { mins: String(mins) });
+    }
+    const leaveHint = `<span class="freshness-leave-hint">${t('freshness.canLeave')}${avgHint ? ' ' + avgHint : ''}</span>`;
+
+    // Email notification checkbox
+    const emailCheckId = 'freshness-notify-email';
+    const checked = notifyEmail ? ' checked' : '';
+    const emailToggle = `<label class="freshness-notify-label"><input type="checkbox" id="${emailCheckId}"${checked}> ${t('freshness.notifyEmail')}</label>`;
+
+    el.innerHTML = `<span class="refresh-prefix">${t('freshness.inProgress')}</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>${leaveHint}${emailToggle}`;
+
+    // Wire email checkbox
+    const emailEl = document.getElementById(emailCheckId) as HTMLInputElement | null;
+    if (emailEl && onNotifyEmailChange) {
+      emailEl.addEventListener('change', () => onNotifyEmailChange(emailEl.checked));
+    }
     return;
   }
 
