@@ -45,6 +45,7 @@
   "freshness.canLeave": "You can close this page — refresh continues in the background.",
   "freshness.avgTime": "Refreshes typically take ~{mins} min.",
   "freshness.notifyEmail": "Email me when done",
+  "freshness.notifyEmailActive": "You'll receive an email when the refresh completes.",
   "freshness.forceRefresh": "Force refresh",
   "freshness.nextUpdate": ", next update in ~{time}",
   "freshness.checkAgain": "Check again",
