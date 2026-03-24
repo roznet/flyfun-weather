@@ -31,6 +31,20 @@ git diff <server_commit>..HEAD -- alembic/versions/
 
 If new or changed migration files are found, **warn the user prominently** that migrations will need to run after deploy.
 
+## Disk usage check
+
+Before deploying, check disk usage on the server:
+```
+ssh <user>@<server> "df -h /"
+```
+
+If usage is **80% or higher**, warn the user and suggest cleaning the Docker build cache:
+```
+ssh <user>@<server> "docker builder prune -a -f"
+```
+
+Ask the user to confirm the cleanup before running it. After cleanup, re-check `df -h /` to confirm space was freed.
+
 ## Deploy steps
 
 1. Push to remote: `git push origin main`
