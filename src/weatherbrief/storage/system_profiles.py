@@ -41,6 +41,12 @@ def get_system_template(key: str) -> dict | None:
     return None
 
 
+def invalidate_cache() -> None:
+    """Clear the cached system templates, forcing a reload from disk on next access."""
+    global _cached_templates
+    _cached_templates = None
+
+
 def get_template_description(key: str, locale: str = "en") -> str:
     """Get the localized description for a system template."""
     tpl = get_system_template(key)

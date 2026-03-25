@@ -375,7 +375,6 @@ admin_router = APIRouter(prefix="/admin/system-profiles", tags=["admin"])
 class UpdateSystemTemplateRequest(BaseModel):
     """Update a system template's settings from a profile."""
 
-    template_key: str
     settings: ProfileSettings
 
 
@@ -395,6 +394,7 @@ def update_system_template(
     from weatherbrief.storage.system_profiles import (
         _TEMPLATES_PATH,
         get_system_template,
+        invalidate_cache,
         load_system_templates,
     )
 
@@ -405,8 +405,6 @@ def update_system_template(
         raise HTTPException(status_code=404, detail=f"System template '{template_key}' not found")
 
     # Update the template in the config file
-    import weatherbrief.storage.system_profiles as sp
-
     templates = load_system_templates()
     new_settings = req.settings.model_dump(exclude_none=True)
 
@@ -419,7 +417,7 @@ def update_system_template(
     _TEMPLATES_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
     # Clear cache so next load picks up changes
-    sp._cached_templates = None
+    invalidate_cache()
 
     descriptions = tpl.get("descriptions", {})
     return SystemTemplateResponse(

@@ -64,6 +64,8 @@ function createWizardDOM(onComplete: () => void): void {
   wizardEl = document.createElement('div');
   wizardEl.className = 'wizard-modal';
 
+  wizardEl.addEventListener('click', handleProfileCardClick);
+
   backdropEl.appendChild(wizardEl);
   document.body.appendChild(backdropEl);
 
@@ -339,8 +341,8 @@ function renderTourStep(): string {
   `;
 }
 
-// Wire profile card selection via event delegation on the wizard element
-document.addEventListener('click', (e) => {
+/** Handle profile card click — defined as named function so it can be removed on cleanup. */
+function handleProfileCardClick(e: Event): void {
   const card = (e.target as HTMLElement).closest('.wizard-profile-card') as HTMLElement | null;
   if (!card || !wizardEl) return;
   const profileId = parseInt(card.dataset.profileId!, 10);
@@ -362,7 +364,7 @@ document.addEventListener('click', (e) => {
       );
     }
   }
-});
+}
 
 /** Set the selected profile as default (via API). */
 async function applyProfileSelection(): Promise<void> {
@@ -420,6 +422,8 @@ async function handleFinish(): Promise<void> {
   } catch (err) {
     console.error('Failed to mark setup complete:', err);
   }
+
+  wizardEl.removeEventListener('click', handleProfileCardClick);
 
   backdropEl.classList.remove('active');
   setTimeout(() => {

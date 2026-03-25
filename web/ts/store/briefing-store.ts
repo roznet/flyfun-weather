@@ -448,7 +448,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     if (!flight || !currentPack) return;
     try {
       // Persist profile change on the flight
-      const updated = await api.updateFlight(flight.id, { profile_id: profileId });
+      await api.updateFlight(flight.id, { profile_id: profileId });
       const updatedFlight = await api.fetchFlight(flight.id);
       set({ flight: updatedFlight });
       // Recalculate advisories with the new profile's settings
