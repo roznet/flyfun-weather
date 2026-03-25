@@ -34,6 +34,7 @@ from weatherbrief.api.credits import (
     transparency_router,
 )
 from weatherbrief.api.feedback import router as feedback_router
+from weatherbrief.api.messages import router as messages_router
 from weatherbrief.api.models import router as models_router
 from weatherbrief.api.usage import router as usage_router
 from flyfun_common.admin_hub import create_hub_router
@@ -222,6 +223,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router, prefix="/api")
     app.include_router(cost_config_router, prefix="/api")
     app.include_router(feedback_router, prefix="/api")
+    app.include_router(messages_router, prefix="/api")
     app.include_router(models_router, prefix="/api")
     app.include_router(refresh_router, prefix="/api")
     app.include_router(transparency_router, prefix="/api")

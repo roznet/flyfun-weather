@@ -526,5 +526,11 @@
   "page.settings.loadingAdvisories": "Cargando catálogo de avisos...",
   "page.settings.deleteAccountTitle": "Eliminar cuenta",
   "page.settings.deleteAccountHint": "Elimina permanentemente su cuenta y todos los datos asociados (vuelos, briefings, perfiles). Esta acción no se puede deshacer.",
-  "page.settings.deleteAccount": "Eliminar cuenta"
+  "page.settings.deleteAccount": "Eliminar cuenta",
+
+  "messages.empty": "No hay anuncios todavía.",
+  "messages.loadFailed": "No se pudieron cargar los mensajes.",
+  "messages.category.feature": "Nuevo",
+  "messages.category.change": "Cambio",
+  "messages.category.fix": "Corrección"
 }

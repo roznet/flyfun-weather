@@ -526,5 +526,11 @@
   "page.settings.loadingAdvisories": "Hinweiskatalog wird geladen...",
   "page.settings.deleteAccountTitle": "Konto löschen",
   "page.settings.deleteAccountHint": "Löscht dauerhaft Ihr Konto und alle zugehörigen Daten (Flüge, Briefings, Profile). Diese Aktion kann nicht rückgängig gemacht werden.",
-  "page.settings.deleteAccount": "Konto löschen"
+  "page.settings.deleteAccount": "Konto löschen",
+
+  "messages.empty": "Noch keine Ankündigungen.",
+  "messages.loadFailed": "Nachrichten konnten nicht geladen werden.",
+  "messages.category.feature": "Neu",
+  "messages.category.change": "Änderung",
+  "messages.category.fix": "Fehlerbehebung"
 }

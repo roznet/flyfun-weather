@@ -16,6 +16,13 @@
       </div>
     </div>
 
+    <div class="help-tabs" id="help-tabs">
+      <button class="tab-btn active" data-tab="guide">Help &amp; Guide</button>
+      <button class="tab-btn" data-tab="whats-new">What's New<span class="help-tab-badge" id="whats-new-badge"></span></button>
+    </div>
+
+    <div id="tab-guide" class="tab-panel active">
+
     <!-- About -->
     <div class="help-section">
       <h3>About Flyfun Weather</h3>
@@ -349,6 +356,15 @@
         This application was built with AI assistance (Claude, Anthropic).
       </p>
     </div>
+
+    </div><!-- /tab-guide -->
+
+    <div id="tab-whats-new" class="tab-panel">
+      <div id="messages-container" class="message-list">
+        <p class="messages-empty">Loading...</p>
+      </div>
+    </div>
+
   </div>
 
   <script src="/dist/help.js"></script>

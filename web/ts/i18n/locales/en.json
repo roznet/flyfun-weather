@@ -535,5 +535,11 @@
   "page.settings.loadingAdvisories": "Loading advisory catalog...",
   "page.settings.deleteAccountTitle": "Delete Account",
   "page.settings.deleteAccountHint": "Permanently delete your account and all associated data (flights, briefings, profiles). This action cannot be undone.",
-  "page.settings.deleteAccount": "Delete Account"
+  "page.settings.deleteAccount": "Delete Account",
+
+  "messages.empty": "No announcements yet.",
+  "messages.loadFailed": "Failed to load messages.",
+  "messages.category.feature": "New",
+  "messages.category.change": "Change",
+  "messages.category.fix": "Fix"
 }

@@ -1403,6 +1403,22 @@ label {
   color: var(--text);
 }
 
+/* --- Nav notification dot --- */
+
+.nav-dot {
+  display: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  margin-left: 2px;
+  vertical-align: super;
+}
+
+.nav-dot.visible {
+  display: inline-block;
+}
+
 /* --- User info in header --- */
 
 .user-info {
@@ -3586,4 +3602,135 @@ label {
   background: var(--amber-bg);
   color: var(--amber);
   border: 1px solid var(--amber);
+}
+
+/* --- Help page tabs --- */
+
+.help-tabs {
+  display: flex;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 1.5rem;
+  gap: 0;
+}
+
+.help-tabs .tab-btn {
+  padding: 0.5rem 1.2rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.help-tabs .tab-btn:hover {
+  color: var(--text);
+}
+
+.help-tabs .tab-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.help-tab-badge {
+  display: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  margin-left: 4px;
+  vertical-align: super;
+}
+
+.help-tab-badge.visible {
+  display: inline-block;
+}
+
+/* --- Message cards --- */
+
+.message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.message-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+}
+
+.message-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.message-card-title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.message-card-date {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
+.message-category {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.message-category-feature {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.message-category-change {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.message-category-fix {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+[data-theme="dark"] .message-category-feature {
+  background: rgba(37, 99, 235, 0.2);
+  color: #93bbfd;
+}
+
+.message-card-body {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.message-card-body p { margin: 0.4rem 0; }
+.message-card-body p:first-child { margin-top: 0; }
+.message-card-body p:last-child { margin-bottom: 0; }
+.message-card-body code {
+  background: var(--bg-subtle);
+  padding: 0.15rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+.message-card-body ul, .message-card-body ol {
+  padding-left: 1.5rem;
+  margin: 0.4rem 0;
+}
+
+.messages-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2rem 0;
 }
