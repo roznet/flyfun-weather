@@ -131,7 +131,6 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         base_url="https://api.open-meteo.com/v1/forecast",
         max_days=16,
         pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
-        default=True,
     ),
     "ecmwf": ModelEndpoint(
         name="ECMWF IFS",

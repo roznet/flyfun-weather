@@ -76,9 +76,13 @@ class IcingEscapeEvaluator:
                     step=500,
                 ),
                 AdvisoryParameterDef(
-                    key="route_pct_amber",
-                    label="Route % (amber)",
-                    description="Percentage of route with icing to trigger amber",
+                    key="icing_coverage_pct_amber",
+                    label="Icing extent (amber)",
+                    description=(
+                        "Percentage of route with icing (but escape available) "
+                        "to trigger amber. Only applies when warm-air descent "
+                        "is viable everywhere along the route."
+                    ),
                     type="percent",
                     unit="%",
                     default=20,
@@ -87,9 +91,13 @@ class IcingEscapeEvaluator:
                     step=5,
                 ),
                 AdvisoryParameterDef(
-                    key="min_route_pct",
-                    label="Min route %",
-                    description="Minimum percentage of route affected to trigger red",
+                    key="no_escape_pct_red",
+                    label="No escape (red)",
+                    description=(
+                        "Percentage of route where icing exists but descending "
+                        "to warm air is blocked by terrain. Any no-escape point "
+                        "triggers amber; exceeding this threshold escalates to red."
+                    ),
                     type="percent",
                     unit="%",
                     default=15,
@@ -105,8 +113,15 @@ class IcingEscapeEvaluator:
         terrain_margin = params.get("terrain_margin_ft", 1000)
         tight_margin = params.get("tight_margin_ft", 2000)
         icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
-        route_pct_amber = params.get("route_pct_amber", 20)
-        min_route_pct = params.get("min_route_pct", 15)
+        # Accept both new and legacy param names for backwards compatibility
+        icing_coverage_pct_amber = params.get(
+            "icing_coverage_pct_amber",
+            params.get("route_pct_amber", 20),
+        )
+        no_escape_pct_red = params.get(
+            "no_escape_pct_red",
+            params.get("min_route_pct", 15),
+        )
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -155,7 +170,7 @@ class IcingEscapeEvaluator:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             elif no_escape_count > 0 and pct_above_threshold(
-                no_escape_count, total, min_route_pct,
+                no_escape_count, total, no_escape_pct_red,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
                 ext = format_extent(affected, total, ctx.total_distance_nm)
@@ -168,7 +183,7 @@ class IcingEscapeEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("icing_escape.no_icing", loc)
             else:
-                status = pct_above_threshold(affected, total, route_pct_amber)
+                status = pct_above_threshold(affected, total, icing_coverage_pct_amber)
                 ext = format_extent(affected, total, ctx.total_distance_nm)
                 if status == AdvisoryStatus.GREEN and has_tight_margin:
                     status = AdvisoryStatus.AMBER

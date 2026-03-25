@@ -381,6 +381,7 @@ def ensure_default_profile(session: Session, user_id: str) -> FlightProfile:
     )
     row = session.execute(stmt).scalar_one_or_none()
     if row is not None:
+        _backfill_system_templates(session, user_id)
         return _row_to_profile(row)
 
     # Check if user has legacy preferences to migrate
@@ -416,18 +417,25 @@ def ensure_default_profile(session: Session, user_id: str) -> FlightProfile:
     return _seed_system_profiles(session, user_id)
 
 
-def _seed_system_profiles(session: Session, user_id: str) -> FlightProfile:
-    """Create all system profile templates for a new user.
+def _seed_system_profiles(
+    session: Session, user_id: str, *, mark_first_default: bool = True,
+) -> FlightProfile:
+    """Create system profile templates for a user.
 
-    The first template is marked as default. Returns the default profile.
+    Args:
+        mark_first_default: If True (new users), the first template is marked
+            as the default profile.  If False (backfill for existing users),
+            all templates are created as non-default.
+
+    Returns the first profile created (the default for new users).
     """
     from weatherbrief.storage.system_profiles import load_system_templates
 
     templates = load_system_templates()
-    default_profile: FlightProfile | None = None
+    first_profile: FlightProfile | None = None
 
     for i, tpl in enumerate(templates):
-        is_default = (i == 0)
+        is_default = mark_first_default and (i == 0)
         row = FlightProfileRow(
             user_id=user_id,
             name=tpl["name"],
@@ -437,10 +445,10 @@ def _seed_system_profiles(session: Session, user_id: str) -> FlightProfile:
         )
         session.add(row)
         session.flush()
-        if is_default:
-            default_profile = _row_to_profile(row)
+        if first_profile is None:
+            first_profile = _row_to_profile(row)
 
-    if default_profile is None:
+    if first_profile is None:
         # Fallback if no templates found
         row = FlightProfileRow(
             user_id=user_id,
@@ -450,9 +458,30 @@ def _seed_system_profiles(session: Session, user_id: str) -> FlightProfile:
         )
         session.add(row)
         session.flush()
-        default_profile = _row_to_profile(row)
+        first_profile = _row_to_profile(row)
 
-    return default_profile
+    return first_profile
+
+
+def _backfill_system_templates(session: Session, user_id: str) -> None:
+    """Seed system templates for an existing user who doesn't have them yet.
+
+    No-op if the user already has any profile with a system_template_key.
+    Creates all templates as non-default so the user's existing default
+    is preserved.
+    """
+    has_templates = session.execute(
+        select(FlightProfileRow.id)
+        .where(
+            FlightProfileRow.user_id == user_id,
+            FlightProfileRow.system_template_key.is_not(None),
+        )
+        .limit(1)
+    ).first()
+    if has_templates:
+        return
+
+    _seed_system_profiles(session, user_id, mark_first_default=False)
 
 
 def safe_path_component(value: str) -> str:

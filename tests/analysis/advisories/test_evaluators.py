@@ -18,13 +18,13 @@ from weatherbrief.models import AdvisoryStatus
 
 class TestIcingEscape:
     def test_green_no_icing(self, clear_context: RouteContext):
-        result = IcingEscapeEvaluator.evaluate(clear_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "route_pct_amber": 20})
+        result = IcingEscapeEvaluator.evaluate(clear_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20})
         assert result.aggregate_status == AdvisoryStatus.GREEN
         assert result.advisory_id == "icing_escape"
 
     def test_icing_with_warm_escape(self, icing_context: RouteContext):
         """Icing present but freezing level above terrain — escape viable."""
-        result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "route_pct_amber": 20})
+        result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20})
         # All points have icing = 100% > 20% amber threshold
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
 
@@ -32,12 +32,12 @@ class TestIcingEscape:
         """Freezing level at terrain — no warm air escape."""
         result = IcingEscapeEvaluator.evaluate(
             icing_no_escape_context,
-            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "route_pct_amber": 20},
+            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20},
         )
         assert result.aggregate_status == AdvisoryStatus.RED
 
     def test_per_model_results(self, icing_context: RouteContext):
-        result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "route_pct_amber": 20})
+        result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20})
         assert len(result.per_model) == 2  # gfs + ecmwf
         for m in result.per_model:
             assert m.total_points > 0
@@ -48,7 +48,7 @@ class TestIcingEscape:
         """Icing at 14000ft with cruise 6000ft — above cruise + buffer → GREEN."""
         result = IcingEscapeEvaluator.evaluate(
             ifr_high_altitude_icing_context,
-            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "route_pct_amber": 20},
+            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20},
         )
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
@@ -56,7 +56,7 @@ class TestIcingEscape:
         """Icing at 4000–10000ft with cruise 8000ft is relevant."""
         result = IcingEscapeEvaluator.evaluate(
             icing_context,
-            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "route_pct_amber": 20},
+            {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20},
         )
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
 
@@ -74,12 +74,12 @@ class TestVMCCruise:
 
 class TestTurbulence:
     def test_green_smooth(self, clear_context: RouteContext):
-        result = TurbulenceEvaluator.evaluate(clear_context, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        result = TurbulenceEvaluator.evaluate(clear_context, {"icing_coverage_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_turbulent_route(self, turbulent_context: RouteContext):
         """CAT at cruise along full route → AMBER or RED."""
-        result = TurbulenceEvaluator.evaluate(turbulent_context, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        result = TurbulenceEvaluator.evaluate(turbulent_context, {"icing_coverage_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
 
 
