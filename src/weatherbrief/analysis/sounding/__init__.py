@@ -150,6 +150,7 @@ def analyze_sounding(
     Returns None if profile preparation fails (insufficient data).
     """
     from weatherbrief.analysis.sounding.clouds import (
+        apply_nwp_coverage,
         build_nwp_cloud_layers,
         detect_cloud_layers,
         enrich_cloud_top_uncertainty,
@@ -211,7 +212,7 @@ def analyze_sounding(
     _enrich_lwc(derived_levels, levels)
 
     # Enhanced cloud detection
-    cloud_layers = detect_cloud_layers(
+    dd_cloud_layers = detect_cloud_layers(
         derived_levels,
         lcl_altitude_ft=indices.lcl_altitude_ft,
     )
@@ -219,7 +220,19 @@ def analyze_sounding(
     # Cloud top uncertainty enrichment — use effective CAPE (max of all variants)
     # so elevated/ML convection triggers EL-based cloud tops correctly
     effective_cape = effective_cape(indices)
-    enrich_cloud_top_uncertainty(cloud_layers, indices, effective_cape)
+    enrich_cloud_top_uncertainty(dd_cloud_layers, indices, effective_cape)
+
+    # Apply NWP coverage percentages to DD layers: DD defines vertical extent
+    # but NWP cloud_low/mid/high constrains coverage per ICAO band.  This
+    # prevents moist boundary layers from being classified as OVC when the
+    # model's own cloud scheme reports only 20% low cloud.
+    cloud_layers = apply_nwp_coverage(
+        dd_cloud_layers,
+        nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+        nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+        nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+    )
 
     # Temperature inversion detection (before NWP synthesis — used for cloud top capping)
     inversion_layers = detect_inversions(derived_levels)
@@ -230,7 +243,7 @@ def analyze_sounding(
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
-        dd_cloud_layers=cloud_layers,
+        dd_cloud_layers=dd_cloud_layers,
         inversion_layers=inversion_layers,
         lcl_altitude_ft=indices.lcl_altitude_ft,
     )
@@ -317,7 +330,7 @@ def analyze_sounding(
         derived_levels=derived_levels,
         cloud_layers=cloud_layers,
         nwp_cloud_layers=nwp_cloud_layers,
-        dd_cloud_layers=cloud_layers,
+        dd_cloud_layers=dd_cloud_layers,
         icing_zones=icing_zones,
         icing_ogimet_dd_zones=icing_zones,
         icing_ogimet_nwp_zones=icing_ogimet_nwp_zones,
