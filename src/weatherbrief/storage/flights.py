@@ -90,6 +90,7 @@ def _row_to_profile(row: FlightProfileRow) -> FlightProfile:
         name=row.name,
         is_default=row.is_default,
         settings=json.loads(row.settings_json) if row.settings_json else {},
+        system_template_key=row.system_template_key,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -367,8 +368,10 @@ def delete_profile(session: Session, profile_id: int) -> None:
 def ensure_default_profile(session: Session, user_id: str) -> FlightProfile:
     """Ensure a default profile exists for a user, creating one if needed.
 
-    If the user has existing preferences in app_prefs_json, migrates them
-    to the default profile's settings.
+    For new users: seeds all system profile templates (VFR Only, IFR
+    Conservative, IFR FIKI) with the first template marked as default.
+    For existing users with legacy preferences: migrates them into a
+    "Default" profile.
     """
     from weatherbrief.db.models import UserPreferencesRow
 
@@ -380,13 +383,12 @@ def ensure_default_profile(session: Session, user_id: str) -> FlightProfile:
     if row is not None:
         return _row_to_profile(row)
 
-    # Migrate existing preferences if available
-    settings: dict = {}
+    # Check if user has legacy preferences to migrate
     prefs_row = session.get(UserPreferencesRow, user_id)
+    legacy_settings: dict = {}
     if prefs_row and prefs_row.app_prefs_json:
         try:
             data = json.loads(prefs_row.app_prefs_json)
-            # Extract profile-relevant fields
             for key in (
                 "cruise_altitude_ft", "flight_ceiling_ft",
                 "models", "advisory_models",
@@ -394,19 +396,63 @@ def ensure_default_profile(session: Session, user_id: str) -> FlightProfile:
                 "advisories",
             ):
                 if key in data:
-                    settings[key] = data[key]
+                    legacy_settings[key] = data[key]
         except json.JSONDecodeError:
             pass
 
-    new_row = FlightProfileRow(
-        user_id=user_id,
-        name="Default",
-        is_default=True,
-        settings_json=json.dumps(settings),
-    )
-    session.add(new_row)
-    session.flush()
-    return _row_to_profile(new_row)
+    if legacy_settings:
+        # Existing user with legacy prefs: create a single "Default" profile
+        new_row = FlightProfileRow(
+            user_id=user_id,
+            name="Default",
+            is_default=True,
+            settings_json=json.dumps(legacy_settings),
+        )
+        session.add(new_row)
+        session.flush()
+        return _row_to_profile(new_row)
+
+    # New user: seed all system profile templates
+    return _seed_system_profiles(session, user_id)
+
+
+def _seed_system_profiles(session: Session, user_id: str) -> FlightProfile:
+    """Create all system profile templates for a new user.
+
+    The first template is marked as default. Returns the default profile.
+    """
+    from weatherbrief.storage.system_profiles import load_system_templates
+
+    templates = load_system_templates()
+    default_profile: FlightProfile | None = None
+
+    for i, tpl in enumerate(templates):
+        is_default = (i == 0)
+        row = FlightProfileRow(
+            user_id=user_id,
+            name=tpl["name"],
+            is_default=is_default,
+            settings_json=json.dumps(tpl["settings"]),
+            system_template_key=tpl["key"],
+        )
+        session.add(row)
+        session.flush()
+        if is_default:
+            default_profile = _row_to_profile(row)
+
+    if default_profile is None:
+        # Fallback if no templates found
+        row = FlightProfileRow(
+            user_id=user_id,
+            name="Default",
+            is_default=True,
+            settings_json="{}",
+        )
+        session.add(row)
+        session.flush()
+        default_profile = _row_to_profile(row)
+
+    return default_profile
 
 
 def safe_path_component(value: str) -> str:

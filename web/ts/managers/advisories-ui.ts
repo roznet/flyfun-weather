@@ -350,6 +350,13 @@ export interface AltTimeToggleConfig {
   onToggle: () => void;
 }
 
+export interface ProfileSelectorConfig {
+  profiles: { id: number; name: string }[];
+  currentProfileId: number | null;
+  isOwner: boolean;
+  onChange: (profileId: number) => void;
+}
+
 /**
  * Render the advisory dashboard into the #advisories-section element.
  * onRecalculate callback wires up the recalculate button.
@@ -361,6 +368,7 @@ export function renderAdvisories(
   altitudeOverride?: AltitudeOverrideConfig,
   onAltitudeTable?: () => Promise<void>,
   altTimeToggle?: AltTimeToggleConfig,
+  profileSelector?: ProfileSelectorConfig,
 ): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
@@ -416,6 +424,20 @@ export function renderAdvisories(
     ? `<button class="btn btn-secondary btn-sm" id="alt-table-btn">${t('advisories.altitudeTable')}</button>`
     : '';
 
+  // Profile selector dropdown
+  let profileHtml = '';
+  if (profileSelector && profileSelector.isOwner && profileSelector.profiles.length > 0) {
+    const options = profileSelector.profiles.map(p => {
+      const selected = p.id === profileSelector.currentProfileId ? ' selected' : '';
+      return `<option value="${p.id}"${selected}>${escapeHtml(p.name)}</option>`;
+    }).join('');
+    profileHtml = `
+      <div class="advisory-profile-selector">
+        <label class="profile-selector-label">${t('advisories.profile')}</label>
+        <select id="advisory-profile-select" class="input-select input-select-sm">${options}</select>
+      </div>`;
+  }
+
   // Altitude slider
   let sliderHtml = '';
   if (altitudeOverride) {
@@ -457,6 +479,7 @@ export function renderAdvisories(
     ${toggleHtml}
     <div class="advisory-toolbar">
       ${summary}
+      ${profileHtml}
       ${sliderHtml}
       ${recalcBtn}
       ${altTableBtn}
@@ -464,6 +487,20 @@ export function renderAdvisories(
     ${airportHtml}
     <div class="advisory-grid">${cards}</div>
   `;
+
+  // Wire profile selector
+  if (profileSelector && profileSelector.isOwner) {
+    const selectEl = document.getElementById('advisory-profile-select') as HTMLSelectElement | null;
+    if (selectEl) {
+      selectEl.addEventListener('change', () => {
+        const newId = parseInt(selectEl.value, 10);
+        if (!isNaN(newId)) {
+          selectEl.setAttribute('disabled', 'true');
+          profileSelector.onChange(newId);
+        }
+      });
+    }
+  }
 
   // Wire recalculate button
   if (onRecalculate) {

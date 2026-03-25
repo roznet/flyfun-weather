@@ -197,7 +197,7 @@ async function init(): Promise<void> {
       initModelCatalog(modelCatalog);
       const defaultProfile = loadedProfiles.find(p => p.is_default) || loadedProfiles[0];
       if (defaultProfile) {
-        await showWelcomeWizard(defaultProfile, modelCatalog);
+        await showWelcomeWizard(defaultProfile, modelCatalog, loadedProfiles);
         // Reload profiles after wizard may have updated the default profile
         loadedProfiles = await fetchProfiles();
         populateProfileSelector(loadedProfiles);

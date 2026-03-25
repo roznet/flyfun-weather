@@ -1,0 +1,130 @@
+{
+  "profiles": [
+    {
+      "key": "vfr_only",
+      "name": "VFR Only",
+      "descriptions": {
+        "en": "For VFR-only pilots. Conservative cloud and visibility thresholds, focuses on visual flight conditions. Disables IFR-specific advisories.",
+        "fr": "Pour les pilotes VFR uniquement. Seuils conservateurs de nuages et de visibilit\u00e9, ax\u00e9 sur les conditions de vol \u00e0 vue. D\u00e9sactive les avis sp\u00e9cifiques IFR.",
+        "de": "F\u00fcr reine VFR-Piloten. Konservative Wolken- und Sichtschwellen, Fokus auf Sichtflugbedingungen. Deaktiviert IFR-spezifische Warnungen.",
+        "es": "Para pilotos solo VFR. Umbrales conservadores de nubes y visibilidad, enfocado en condiciones de vuelo visual. Desactiva avisos espec\u00edficos de IFR."
+      },
+      "settings": {
+        "cruise_altitude_ft": 5500,
+        "flight_ceiling_ft": 10000,
+        "flight_rules": "vfr_only",
+        "models": ["gfs", "ecmwf", "icon_eu"],
+        "advisory_models": ["gfs", "ecmwf"],
+        "gramet_enabled": true,
+        "llm_digest_enabled": true,
+        "icing_severity_enhance": false,
+        "icing_method": "ogimet_dd",
+        "cloud_method": "dd",
+        "convective_method": "thermo",
+        "advisories": {
+          "enabled": {
+            "icing_escape": true,
+            "fiki_icing": false,
+            "freezing_level": true,
+            "cloud_top": true,
+            "vmc_cruise": true,
+            "turbulence": true,
+            "mountain_wind": true,
+            "convective": true,
+            "model_agreement": false,
+            "flight_category": true,
+            "airport_wind": true,
+            "vfr_feasibility": true,
+            "ifr_feasibility": false
+          },
+          "params": {},
+          "aggregation": "majority"
+        }
+      }
+    },
+    {
+      "key": "ifr_conservative",
+      "name": "IFR Conservative",
+      "descriptions": {
+        "en": "For IFR-rated pilots preferring conservative assessments. Uses worst-case aggregation across models. All advisories enabled including IFR feasibility.",
+        "fr": "Pour les pilotes IFR pr\u00e9f\u00e9rant des \u00e9valuations conservatrices. Utilise l'agr\u00e9gation au pire cas entre les mod\u00e8les. Tous les avis activ\u00e9s, y compris la faisabilit\u00e9 IFR.",
+        "de": "F\u00fcr IFR-Piloten mit konservativer Bewertung. Worst-Case-Aggregation \u00fcber alle Modelle. Alle Warnungen aktiviert, einschlie\u00dflich IFR-Machbarkeit.",
+        "es": "Para pilotos IFR que prefieren evaluaciones conservadoras. Usa agregaci\u00f3n de peor caso entre modelos. Todos los avisos activados, incluyendo factibilidad IFR."
+      },
+      "settings": {
+        "cruise_altitude_ft": 8000,
+        "flight_ceiling_ft": 18000,
+        "flight_rules": "vfr_ifr",
+        "models": ["gfs", "ecmwf", "icon_eu"],
+        "advisory_models": ["gfs", "ecmwf"],
+        "gramet_enabled": true,
+        "llm_digest_enabled": true,
+        "icing_severity_enhance": false,
+        "icing_method": "ogimet_dd",
+        "cloud_method": "dd",
+        "convective_method": "thermo",
+        "advisories": {
+          "enabled": {
+            "icing_escape": true,
+            "fiki_icing": false,
+            "freezing_level": true,
+            "cloud_top": true,
+            "vmc_cruise": true,
+            "turbulence": true,
+            "mountain_wind": true,
+            "convective": true,
+            "model_agreement": true,
+            "flight_category": true,
+            "airport_wind": true,
+            "vfr_feasibility": true,
+            "ifr_feasibility": true
+          },
+          "params": {},
+          "aggregation": "worst"
+        }
+      }
+    },
+    {
+      "key": "ifr_fiki",
+      "name": "IFR FIKI",
+      "descriptions": {
+        "en": "For FIKI-equipped IFR aircraft. Enables FIKI icing advisory (layer thickness evaluation) and disables the non-FIKI icing escape advisory. Majority aggregation for balanced assessments.",
+        "fr": "Pour les avions IFR \u00e9quip\u00e9s FIKI. Active l'avis de givrage FIKI (\u00e9valuation d'\u00e9paisseur des couches) et d\u00e9sactive l'avis d'\u00e9vasion de givrage non-FIKI. Agr\u00e9gation majoritaire pour des \u00e9valuations \u00e9quilibr\u00e9es.",
+        "de": "F\u00fcr FIKI-ausger\u00fcstete IFR-Flugzeuge. Aktiviert die FIKI-Vereisungswarnung (Schichtdickenauswertung) und deaktiviert die Nicht-FIKI-Vereisungsfluchtwarnung. Mehrheitsaggregation f\u00fcr ausgewogene Bewertungen.",
+        "es": "Para aeronaves IFR equipadas con FIKI. Activa el aviso de engelamiento FIKI (evaluaci\u00f3n de espesor de capas) y desactiva el aviso de escape de engelamiento no-FIKI. Agregaci\u00f3n por mayor\u00eda para evaluaciones equilibradas."
+      },
+      "settings": {
+        "cruise_altitude_ft": 10000,
+        "flight_ceiling_ft": 25000,
+        "flight_rules": "vfr_ifr",
+        "models": ["gfs", "ecmwf", "icon_eu"],
+        "advisory_models": ["gfs", "ecmwf"],
+        "gramet_enabled": true,
+        "llm_digest_enabled": true,
+        "icing_severity_enhance": true,
+        "icing_method": "ogimet_nwp",
+        "cloud_method": "nwp",
+        "convective_method": "nwp",
+        "advisories": {
+          "enabled": {
+            "icing_escape": false,
+            "fiki_icing": true,
+            "freezing_level": true,
+            "cloud_top": true,
+            "vmc_cruise": true,
+            "turbulence": true,
+            "mountain_wind": true,
+            "convective": true,
+            "model_agreement": false,
+            "flight_category": true,
+            "airport_wind": true,
+            "vfr_feasibility": true,
+            "ifr_feasibility": true
+          },
+          "params": {},
+          "aggregation": "majority"
+        }
+      }
+    }
+  ]
+}

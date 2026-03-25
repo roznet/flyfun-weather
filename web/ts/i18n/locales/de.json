@@ -94,6 +94,7 @@
   "digest.loading": "Zusammenfassung wird geladen...",
   "digest.notAvailable": "Synoptische Übersicht nicht verfügbar. Führen Sie eine Aktualisierung durch, um sie zu generieren.",
   "digest.failed": "Zusammenfassung konnte nicht geladen werden.",
+  "digest.profileMismatch": "Diese Zusammenfassung wurde mit Profil \"{name}\" erstellt. Das aktuelle Profil ist anders — neu berechnen, um zu aktualisieren.",
 
   "dwd.originalGerman": "Deutsches Original",
   "dwd.header": "DWD Synoptische Übersicht — ",
@@ -160,6 +161,7 @@
 
   "advisories.noAdvisories": "Keine Hinweise verfügbar",
   "advisories.recalculate": "Neu berechnen",
+  "advisories.profile": "Profil",
   "advisories.recalculating": "Wird neu berechnet...",
   "advisories.altitudeTable": "Höhentabelle",
   "advisories.altTableTitle": "Höhenberatungstabelle",
@@ -280,7 +282,15 @@
   "wizard.tourHint": "Sie können diese Einstellungen jederzeit auf der Seite <strong>Einstellungen</strong> erneut aufrufen und auf der Seite <strong>Hilfe</strong> mehr erfahren.",
   "wizard.back": "Zurück",
   "wizard.next": "Weiter",
+  "wizard.profileTitle": "Wählen Sie Ihr Standardprofil",
+  "wizard.profileSubtitle": "Jedes Profil speichert Luftfahrzeug-Einstellungen, Hinweispräferenzen und Modellauswahl.",
+  "wizard.profileHint": "Klicken Sie auf eine Karte, um Ihr Standardprofil auszuwählen. Sie können Profile später in den Einstellungen wechseln oder anpassen.",
+  "wizard.profileNone": "Keine Systemprofile verfügbar — Sie können Ihre Einstellungen im nächsten Schritt konfigurieren.",
   "wizard.getStarted": "Loslegen",
+
+  "settings.resetToTemplate": "Auf Vorlage zurücksetzen",
+  "settings.resetConfirm": "\u201E{name}\u201C auf die ursprünglichen Systemvorlagen-Einstellungen zurücksetzen? Ihre Anpassungen gehen verloren.",
+  "settings.profileReset": "Profil auf Vorlagenwerte zurückgesetzt.",
 
   "settings.cat.icing": "Vereisung",
   "settings.cat.cloud": "Wolken",

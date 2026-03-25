@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -51,6 +51,7 @@ class ProfileResponse(BaseModel):
     name: str
     is_default: bool
     settings: ProfileSettings
+    system_template_key: str | None = None
     created_at: str
     updated_at: str
 
@@ -82,6 +83,7 @@ def _profile_to_response(profile: FlightProfile) -> ProfileResponse:
         name=profile.name,
         is_default=profile.is_default,
         settings=ProfileSettings(**profile.settings),
+        system_template_key=profile.system_template_key,
         created_at=profile.created_at.isoformat(),
         updated_at=profile.updated_at.isoformat(),
     )
@@ -235,6 +237,68 @@ def duplicate_profile(
     return _profile_to_response(saved)
 
 
+class SystemTemplateResponse(BaseModel):
+    """System profile template info returned to clients."""
+
+    key: str
+    name: str
+    description: str
+    settings: ProfileSettings
+
+
+@router.get("/system-templates", response_model=list[SystemTemplateResponse])
+def list_system_templates(
+    locale: str = "en",
+    user_id: str = Depends(current_user_id),
+):
+    """List available system profile templates with localized descriptions."""
+    from weatherbrief.storage.system_profiles import load_system_templates
+
+    templates = load_system_templates()
+    result = []
+    for tpl in templates:
+        descriptions = tpl.get("descriptions", {})
+        desc = descriptions.get(locale, descriptions.get("en", ""))
+        result.append(SystemTemplateResponse(
+            key=tpl["key"],
+            name=tpl["name"],
+            description=desc,
+            settings=ProfileSettings(**tpl["settings"]),
+        ))
+    return result
+
+
+@router.post("/{profile_id}/reset", response_model=ProfileResponse)
+def reset_profile_to_template(
+    profile_id: int,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Reset a profile's settings to its system template.
+
+    Only works for profiles that were created from a system template
+    (have a system_template_key set).
+    """
+    from weatherbrief.storage.system_profiles import get_system_template
+
+    profile = _load_owned_profile(db, profile_id, user_id)
+    if not profile.system_template_key:
+        raise HTTPException(
+            status_code=400,
+            detail="This profile was not created from a system template and cannot be reset",
+        )
+
+    tpl = get_system_template(profile.system_template_key)
+    if not tpl:
+        raise HTTPException(
+            status_code=404,
+            detail=f"System template '{profile.system_template_key}' no longer exists",
+        )
+
+    updated = update_profile(db, profile_id, settings=tpl["settings"], name=tpl["name"])
+    return _profile_to_response(updated)
+
+
 def _load_owned_profile(db: Session, profile_id: int, user_id: str) -> FlightProfile:
     """Load a profile, verifying ownership."""
     try:
@@ -244,6 +308,20 @@ def _load_owned_profile(db: Session, profile_id: int, user_id: str) -> FlightPro
     if profile.user_id != user_id:
         raise HTTPException(status_code=404, detail="Profile not found")
     return profile
+
+
+def _load_profile_name(db: Session, profile_id: int | None, user_id: str) -> str | None:
+    """Load the profile name for digest metadata tracking."""
+    if profile_id is None:
+        profile = _get_default_profile(db, user_id)
+        return profile.name if profile else None
+    try:
+        profile = load_profile(db, profile_id)
+        if profile.user_id == user_id:
+            return profile.name
+    except KeyError:
+        pass
+    return None
 
 
 def load_profile_settings(db: Session, profile_id: int | None, user_id: str) -> dict:
@@ -282,7 +360,71 @@ def _get_default_profile(db: Session, user_id: str) -> FlightProfile | None:
             name=row.name,
             is_default=row.is_default,
             settings=json.loads(row.settings_json) if row.settings_json else {},
+            system_template_key=row.system_template_key,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
     return None
+
+
+# --- Admin endpoint for updating system templates ---
+
+admin_router = APIRouter(prefix="/admin/system-profiles", tags=["admin"])
+
+
+class UpdateSystemTemplateRequest(BaseModel):
+    """Update a system template's settings from a profile."""
+
+    template_key: str
+    settings: ProfileSettings
+
+
+@admin_router.put("/{template_key}", response_model=SystemTemplateResponse)
+def update_system_template(
+    template_key: str,
+    req: UpdateSystemTemplateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Update a system profile template's settings. Admin only.
+
+    Writes the new settings to the system_profiles.json config file.
+    Existing user profiles are NOT automatically updated (they are copies).
+    """
+    from weatherbrief.api.admin import require_admin
+    from weatherbrief.storage.system_profiles import (
+        _TEMPLATES_PATH,
+        get_system_template,
+        load_system_templates,
+    )
+
+    require_admin(request, db=db)
+
+    tpl = get_system_template(template_key)
+    if not tpl:
+        raise HTTPException(status_code=404, detail=f"System template '{template_key}' not found")
+
+    # Update the template in the config file
+    import weatherbrief.storage.system_profiles as sp
+
+    templates = load_system_templates()
+    new_settings = req.settings.model_dump(exclude_none=True)
+
+    for t in templates:
+        if t["key"] == template_key:
+            t["settings"] = new_settings
+            break
+
+    data = {"profiles": templates}
+    _TEMPLATES_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+    # Clear cache so next load picks up changes
+    sp._cached_templates = None
+
+    descriptions = tpl.get("descriptions", {})
+    return SystemTemplateResponse(
+        key=template_key,
+        name=tpl["name"],
+        description=descriptions.get("en", ""),
+        settings=ProfileSettings(**new_settings),
+    )

@@ -683,28 +683,47 @@ export function renderSynopsis(
   }
 
   if (digest) {
-    el.innerHTML = renderDigestHtml(digest, displayMode);
+    const warning = buildDigestProfileWarning(digest, flight.profile_id);
+    const staleClass = warning ? ' digest-stale' : '';
+    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>`;
     return;
   }
 
   if (pack.has_digest) {
     el.innerHTML = `<p class="muted">${t('digest.loading')}</p>`;
-    fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el, displayMode);
+    fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el, displayMode, flight.profile_id);
     return;
   }
 
   el.innerHTML = `<p class="muted">${t('digest.notAvailable')}</p>`;
 }
 
+/** Build a warning banner if the digest was generated with a different profile. */
+function buildDigestProfileWarning(
+  digest: WeatherDigest,
+  currentProfileId: number | null | undefined,
+): string {
+  // No profile tracking in this digest (legacy) — no warning
+  if (digest.profile_id === undefined || digest.profile_id === null) return '';
+  // Profile matches — no warning
+  if (digest.profile_id === currentProfileId) return '';
+  // Profile mismatch
+  const digestProfileName = digest.profile_name || `#${digest.profile_id}`;
+  return `<div class="digest-profile-warning">${t('digest.profileMismatch', { name: digestProfileName })}</div>`;
+}
+
 async function fetchAndRenderDigestJson(
   flightId: string, timestamp: string, el: HTMLElement, displayMode: DisplayMode,
+  currentProfileId?: number | null,
 ): Promise<void> {
   try {
     const url = api.digestJsonUrl(flightId, timestamp);
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`${resp.status}`);
     const digest: WeatherDigest = await resp.json();
-    el.innerHTML = renderDigestHtml(digest, displayMode);
+    const warning = buildDigestProfileWarning(digest, currentProfileId ?? null);
+    const staleClass = warning ? ' digest-stale' : '';
+    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>`;
   } catch {
     el.innerHTML = `<p class="muted">${t('digest.failed')}</p>`;
   }

@@ -116,6 +116,7 @@ export interface BriefingState {
   setLayersBatch: (overrides: Record<string, boolean>) => void;
   setAdvisoryAltitudeOverride: (alt: number | null) => void;
   recalculateAdvisories: () => Promise<void>;
+  changeFlightProfile: (profileId: number) => Promise<void>;
   fetchAltitudeTable: () => Promise<void>;
   refreshObservations: () => Promise<void>;
   setNotifyEmail: (notify: boolean) => void;
@@ -439,6 +440,26 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       set({ routeAdvisories: result });
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });
+    }
+  },
+
+  changeFlightProfile: async (profileId: number) => {
+    const { flight, currentPack, advisoryAltitudeOverride } = get();
+    if (!flight || !currentPack) return;
+    try {
+      // Persist profile change on the flight
+      const updated = await api.updateFlight(flight.id, { profile_id: profileId });
+      const updatedFlight = await api.fetchFlight(flight.id);
+      set({ flight: updatedFlight });
+      // Recalculate advisories with the new profile's settings
+      const result = await api.recalculateAdvisories(
+        flight.id,
+        currentPack.fetch_timestamp,
+        advisoryAltitudeOverride ?? undefined,
+      );
+      set({ routeAdvisories: result });
+    } catch (err) {
+      set({ error: `Profile change failed: ${err}` });
     }
   },
 

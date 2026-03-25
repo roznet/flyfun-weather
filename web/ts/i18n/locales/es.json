@@ -94,6 +94,7 @@
   "digest.loading": "Cargando resumen...",
   "digest.notAvailable": "Sinopsis no disponible. Ejecute una actualización para generarla.",
   "digest.failed": "Error al cargar el resumen.",
+  "digest.profileMismatch": "Este resumen fue generado con el perfil \"{name}\". El perfil actual es diferente — recalcule para actualizar.",
 
   "dwd.originalGerman": "Alemán original",
   "dwd.header": "Resumen sinóptico DWD — ",
@@ -160,6 +161,7 @@
 
   "advisories.noAdvisories": "No hay avisos disponibles",
   "advisories.recalculate": "Recalcular",
+  "advisories.profile": "Perfil",
   "advisories.recalculating": "Recalculando...",
   "advisories.altitudeTable": "Tabla de altitudes",
   "advisories.altTableTitle": "Tabla de avisos por altitud",
@@ -280,7 +282,15 @@
   "wizard.tourHint": "Puede volver a consultar estos ajustes en cualquier momento desde la página de <strong>Configuración</strong>, y obtener más información en la página de <strong>Ayuda</strong>.",
   "wizard.back": "Atrás",
   "wizard.next": "Siguiente",
+  "wizard.profileTitle": "Elija su perfil predeterminado",
+  "wizard.profileSubtitle": "Cada perfil almacena la configuración de la aeronave, preferencias de avisos y selección de modelos.",
+  "wizard.profileHint": "Haga clic en una tarjeta para seleccionar su perfil predeterminado. Puede cambiar o personalizar perfiles más adelante en Configuración.",
+  "wizard.profileNone": "No hay perfiles del sistema disponibles — puede configurar sus ajustes en el siguiente paso.",
   "wizard.getStarted": "Comenzar",
+
+  "settings.resetToTemplate": "Restablecer a plantilla",
+  "settings.resetConfirm": "¿Restablecer «{name}» a la configuración original de la plantilla del sistema? Se perderán sus personalizaciones.",
+  "settings.profileReset": "Perfil restablecido a los valores predeterminados de la plantilla.",
 
   "settings.cat.icing": "Engelamiento",
   "settings.cat.cloud": "Nube",

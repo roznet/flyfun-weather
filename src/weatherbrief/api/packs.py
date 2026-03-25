@@ -414,13 +414,15 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     cloud_method = None
     convective_method = None
     locale = None
+    profile_name_for_digest = None
     if db is not None:
         from weatherbrief.api.preferences import load_autorouter_credentials, load_user_locale
-        from weatherbrief.api.profiles import load_profile_settings
+        from weatherbrief.api.profiles import load_profile_settings, _load_profile_name
 
         autorouter_creds = load_autorouter_credentials(db, user_id)
         locale = load_user_locale(db, user_id)
         profile_settings = load_profile_settings(db, flight.profile_id, user_id)
+        profile_name_for_digest = _load_profile_name(db, flight.profile_id, user_id)
 
         profile_models = profile_settings.get("models")
         if profile_models:
@@ -496,6 +498,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         options.advisory_params = adv_config["params"]
     if locale:
         options.locale = locale
+    options.profile_id = flight.profile_id
+    options.profile_name = profile_name_for_digest
 
     # Fetch current model metadata to record in the pack (skip for historical)
     model_metadata = None if is_historical else fetch_model_metadata()

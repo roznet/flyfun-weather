@@ -22,6 +22,7 @@ import {
   updateProfile,
   deleteProfile,
   duplicateProfile,
+  resetProfileToTemplate,
   type ProfileResponse,
   type ProfileSettings,
 } from './adapters/profiles-adapter';
@@ -120,10 +121,16 @@ function renderProfileSelector(): void {
   }).join('');
 
   // Update delete button state
+  const activeProfile = profiles.find(p => p.id === activeProfileId);
   const deleteBtn = document.getElementById('btn-delete-profile') as HTMLButtonElement;
   if (deleteBtn) {
-    const activeProfile = profiles.find(p => p.id === activeProfileId);
     deleteBtn.disabled = !!activeProfile?.is_default;
+  }
+
+  // Show/hide reset-to-template button
+  const resetBtn = document.getElementById('btn-reset-profile') as HTMLButtonElement;
+  if (resetBtn) {
+    resetBtn.style.display = activeProfile?.system_template_key ? '' : 'none';
   }
 }
 
@@ -235,6 +242,23 @@ async function handleRenameProfile(): Promise<void> {
   }
 }
 
+async function handleResetProfile(): Promise<void> {
+  if (!activeProfileId) return;
+  const current = profiles.find(p => p.id === activeProfileId);
+  if (!current?.system_template_key) return;
+  if (!confirm(t('settings.resetConfirm', { name: current.name }))) return;
+
+  try {
+    const updated = await resetProfileToTemplate(activeProfileId);
+    const idx = profiles.findIndex(p => p.id === activeProfileId);
+    if (idx >= 0) profiles[idx] = updated;
+    populateProfileForm(updated);
+    showStatus(t('settings.profileReset'));
+  } catch (err) {
+    showStatus(`Failed to reset profile: ${err}`, true);
+  }
+}
+
 async function handleDeleteProfile(): Promise<void> {
   if (!activeProfileId) return;
   const current = profiles.find(p => p.id === activeProfileId);
@@ -297,6 +321,7 @@ function translateStaticElements(): void {
   set('#btn-duplicate-profile', 'page.settings.duplicate');
   set('#btn-rename-profile', 'page.settings.rename');
   set('#btn-delete-profile', 'page.settings.delete');
+  set('#btn-reset-profile', 'settings.resetToTemplate');
   // Flight defaults section
   const sections = document.querySelectorAll('#tab-flight > .section');
   if (sections[1]) {
@@ -420,6 +445,7 @@ async function init(): Promise<void> {
   document.getElementById('btn-duplicate-profile')?.addEventListener('click', handleDuplicateProfile);
   document.getElementById('btn-rename-profile')?.addEventListener('click', handleRenameProfile);
   document.getElementById('btn-delete-profile')?.addEventListener('click', handleDeleteProfile);
+  document.getElementById('btn-reset-profile')?.addEventListener('click', handleResetProfile);
 
   // Save button
   const form = document.getElementById('settings-form') as HTMLFormElement;
