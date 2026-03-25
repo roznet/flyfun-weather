@@ -170,8 +170,8 @@ function renderSimpleMarkdown(md: string): string {
   // Inline code: `code`
   html = html.replace(/`(.+?)`/g, '<code>$1</code>');
 
-  // Links: [text](url)
-  html = html.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Links: [text](url) — only allow http(s) URLs to prevent javascript: XSS
+  html = html.replace(/\[(.+?)\]\((https?:\/\/.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 
   // Unordered list items: lines starting with "- "
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
