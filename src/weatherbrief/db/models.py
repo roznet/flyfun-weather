@@ -199,3 +199,16 @@ class CostConfigRow(Base):
     usd_per_credit: Mapped[float] = mapped_column(Float, default=0.01)
 
 
+class SystemMessageRow(Base):
+    __tablename__ = "system_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(20), default="feature")  # feature, change, fix
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+

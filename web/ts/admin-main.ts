@@ -46,6 +46,7 @@ function setupPeriodToggle(): void {
 
 let perfLoaded = false;
 let systemsLoaded = false;
+let messagesLoaded = false;
 let systemsPeriod: AdminPeriod = '30d';
 let systemsSort: 'last_active' | 'total_cost' = 'last_active';
 let systemsData: HubResponse | null = null;
@@ -70,6 +71,10 @@ function setupTabs(): void {
         systemsLoaded = true;
         setupSystemsPeriodToggle();
         loadSystems();
+      }
+      if (tabId === 'tab-messages' && !messagesLoaded) {
+        messagesLoaded = true;
+        loadAdminMessages();
       }
     });
   });
@@ -776,6 +781,126 @@ function renderSystems(): void {
     </tr>`;
   }).join('');
 }
+
+// --- Admin Messages (What's New) ---
+
+const MSG_CATEGORIES = ['feature', 'change', 'fix'];
+const MSG_CATEGORY_LABELS: Record<string, string> = { feature: 'New Feature', change: 'Change', fix: 'Fix' };
+
+async function loadAdminMessages(): Promise<void> {
+  const { adminListMessages } = await import('./adapters/messages-adapter');
+  const container = document.getElementById('messages-admin-list')!;
+  try {
+    const messages = await adminListMessages();
+    if (messages.length === 0) {
+      container.innerHTML = '<p class="muted" style="text-align:center;padding:2rem;">No messages yet. Click "New Message" to create one.</p>';
+    } else {
+      container.innerHTML = `<table class="admin-table">
+        <thead><tr>
+          <th>Date</th><th>Category</th><th>Title</th><th style="max-width:300px">Body</th><th>Actions</th>
+        </tr></thead>
+        <tbody>${messages.map(m => `<tr data-id="${m.id}">
+          <td>${escapeHtml(m.date)}</td>
+          <td><span class="message-category message-category-${escapeHtml(m.category)}">${escapeHtml(MSG_CATEGORY_LABELS[m.category] || m.category)}</span></td>
+          <td>${escapeHtml(m.title)}</td>
+          <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(m.body)}">${escapeHtml(m.body.length > 80 ? m.body.slice(0, 80) + '...' : m.body)}</td>
+          <td>
+            <button class="btn" style="font-size:0.75rem;padding:0.2rem 0.5rem;" onclick="window._editMsg(${m.id})">Edit</button>
+            <button class="btn btn-danger" style="font-size:0.75rem;padding:0.2rem 0.5rem;" onclick="window._deleteMsg(${m.id})">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    }
+  } catch (err) {
+    container.innerHTML = `<p class="muted" style="text-align:center;color:#dc3545;">Failed to load messages: ${escapeHtml(String(err))}</p>`;
+  }
+
+  // Wire up create button
+  document.getElementById('btn-create-message')?.addEventListener('click', () => showMessageModal());
+}
+
+function showMessageModal(existing?: { id: number; date: string; title: string; body: string; category: string }): void {
+  document.getElementById('msg-modal')?.remove();
+
+  const isEdit = !!existing;
+  const today = new Date().toISOString().slice(0, 10);
+  const catOptions = MSG_CATEGORIES.map(c =>
+    `<option value="${c}" ${existing?.category === c ? 'selected' : ''}>${MSG_CATEGORY_LABELS[c]}</option>`
+  ).join('');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'msg-modal';
+  overlay.className = 'token-modal-overlay';
+  overlay.innerHTML = `
+    <div class="token-modal">
+      <h3>${isEdit ? 'Edit Message' : 'New Message'}</h3>
+      <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.75rem;">
+        <label style="font-size:0.85rem;font-weight:500;">Date</label>
+        <input type="date" id="msg-date" value="${existing?.date || today}" style="padding:0.4rem;border:1px solid var(--border);border-radius:4px;">
+        <label style="font-size:0.85rem;font-weight:500;">Category</label>
+        <select id="msg-category" style="padding:0.4rem;border:1px solid var(--border);border-radius:4px;">${catOptions}</select>
+        <label style="font-size:0.85rem;font-weight:500;">Title</label>
+        <input type="text" id="msg-title" value="${escapeHtml(existing?.title || '')}" placeholder="Short title" style="padding:0.4rem;border:1px solid var(--border);border-radius:4px;">
+        <label style="font-size:0.85rem;font-weight:500;">Body (Markdown)</label>
+        <textarea id="msg-body" rows="6" style="padding:0.4rem;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit;" placeholder="Supports **bold**, *italic*, \`code\`, [links](url), and - list items">${escapeHtml(existing?.body || '')}</textarea>
+        <div id="msg-error" style="color:#dc3545;font-size:0.8rem;min-height:1.2em;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-top:0.5rem;">
+          <button class="btn" id="msg-cancel">Cancel</button>
+          <button class="btn btn-primary" id="msg-save">${isEdit ? 'Save' : 'Create'}</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('msg-cancel')!.addEventListener('click', () => overlay.remove());
+
+  document.getElementById('msg-save')!.addEventListener('click', async () => {
+    const date = (document.getElementById('msg-date') as HTMLInputElement).value;
+    const title = (document.getElementById('msg-title') as HTMLInputElement).value.trim();
+    const body = (document.getElementById('msg-body') as HTMLTextAreaElement).value.trim();
+    const category = (document.getElementById('msg-category') as HTMLSelectElement).value;
+    const errorEl = document.getElementById('msg-error')!;
+
+    if (!date || !title || !body) {
+      errorEl.textContent = 'Date, title, and body are required.';
+      return;
+    }
+
+    try {
+      if (isEdit) {
+        const { adminUpdateMessage } = await import('./adapters/messages-adapter');
+        await adminUpdateMessage(existing!.id, { date, title, body, category });
+      } else {
+        const { adminCreateMessage } = await import('./adapters/messages-adapter');
+        await adminCreateMessage({ date, title, body, category });
+      }
+      overlay.remove();
+      loadAdminMessages();
+    } catch (err) {
+      errorEl.textContent = `Failed: ${String(err)}`;
+    }
+  });
+}
+
+// Expose to onclick handlers in table
+(window as any)._editMsg = async (id: number) => {
+  const { adminListMessages } = await import('./adapters/messages-adapter');
+  const messages = await adminListMessages();
+  const msg = messages.find(m => m.id === id);
+  if (msg) showMessageModal(msg);
+};
+
+(window as any)._deleteMsg = async (id: number) => {
+  if (!confirm('Delete this message?')) return;
+  const { adminDeleteMessage } = await import('./adapters/messages-adapter');
+  try {
+    await adminDeleteMessage(id);
+    loadAdminMessages();
+  } catch (err) {
+    alert(`Failed to delete: ${String(err)}`);
+  }
+};
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);

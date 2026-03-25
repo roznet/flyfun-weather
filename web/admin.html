@@ -148,6 +148,7 @@
     <!-- Tabs -->
     <div class="settings-tabs">
       <button class="tab-btn active" data-tab="tab-feedback">Feedback</button>
+      <button class="tab-btn" data-tab="tab-messages">Messages</button>
       <button class="tab-btn" data-tab="tab-usage">Usage</button>
       <button class="tab-btn" data-tab="tab-systems">Systems</button>
       <button class="tab-btn" data-tab="tab-performance">Performance</button>
@@ -157,6 +158,17 @@
     <div id="tab-feedback" class="tab-panel active">
       <div id="feedback-list">
         <p class="muted" style="text-align:center;padding:2rem;">Loading feedback...</p>
+      </div>
+    </div>
+
+    <!-- Messages tab -->
+    <div id="tab-messages" class="tab-panel">
+      <div class="section-header">
+        <h3>System Messages (What's New)</h3>
+        <button class="btn btn-primary" id="btn-create-message" style="font-size:0.8rem;">New Message</button>
+      </div>
+      <div id="messages-admin-list">
+        <p class="muted" style="text-align:center;padding:2rem;">Click the Messages tab to load...</p>
       </div>
     </div>
 
