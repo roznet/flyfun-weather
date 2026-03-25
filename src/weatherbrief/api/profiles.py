@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 
@@ -310,38 +311,42 @@ def _load_owned_profile(db: Session, profile_id: int, user_id: str) -> FlightPro
     return profile
 
 
-def _load_profile_name(db: Session, profile_id: int | None, user_id: str) -> str | None:
-    """Load the profile name for digest metadata tracking."""
+class ProfileContext:
+    """Profile settings and name loaded together to avoid duplicate DB queries."""
+
+    __slots__ = ("settings", "name")
+
+    def __init__(self, settings: dict, name: str | None = None):
+        self.settings = settings
+        self.name = name
+
+
+def load_profile_context(db: Session, profile_id: int | None, user_id: str) -> ProfileContext:
+    """Load profile settings and name for use by the pipeline.
+
+    Falls back to empty settings if profile_id is None or not found.
+    """
     if profile_id is None:
         profile = _get_default_profile(db, user_id)
-        return profile.name if profile else None
+        if profile:
+            return ProfileContext(settings=profile.settings, name=profile.name)
+        return ProfileContext(settings={})
     try:
         profile = load_profile(db, profile_id)
         if profile.user_id == user_id:
-            return profile.name
+            return ProfileContext(settings=profile.settings, name=profile.name)
     except KeyError:
         pass
-    return None
+    return ProfileContext(settings={})
 
 
 def load_profile_settings(db: Session, profile_id: int | None, user_id: str) -> dict:
-    """Load profile settings for use by the pipeline.
+    """Load profile settings dict for use by the pipeline.
 
-    Falls back to empty dict if profile_id is None or not found.
+    Convenience wrapper around load_profile_context for callers that only
+    need the settings dict.
     """
-    if profile_id is None:
-        # Try the user's default profile
-        profile = _get_default_profile(db, user_id)
-        if profile:
-            return profile.settings
-        return {}
-    try:
-        profile = load_profile(db, profile_id)
-        if profile.user_id == user_id:
-            return profile.settings
-    except KeyError:
-        pass
-    return {}
+    return load_profile_context(db, profile_id, user_id).settings
 
 
 def _get_default_profile(db: Session, user_id: str) -> FlightProfile | None:
@@ -372,6 +377,12 @@ def _get_default_profile(db: Session, user_id: str) -> FlightProfile | None:
 admin_router = APIRouter(prefix="/admin/system-profiles", tags=["admin"])
 
 
+def _require_admin(request: Request, db: Session = Depends(get_db)) -> str:
+    """Thin DI wrapper around require_admin to avoid circular import at module level."""
+    from weatherbrief.api.admin import require_admin
+    return require_admin(request, db=db)
+
+
 class UpdateSystemTemplateRequest(BaseModel):
     """Update a system template's settings from a profile."""
 
@@ -382,30 +393,31 @@ class UpdateSystemTemplateRequest(BaseModel):
 def update_system_template(
     template_key: str,
     req: UpdateSystemTemplateRequest,
-    request: Request,
+    _admin_id: str = Depends(_require_admin),
     db: Session = Depends(get_db),
 ):
     """Update a system profile template's settings. Admin only.
 
     Writes the new settings to the system_profiles.json config file.
     Existing user profiles are NOT automatically updated (they are copies).
+
+    NOTE: This writes to a local JSON file.  In multi-instance deployments
+    the file may not be on shared storage, so changes won't propagate to
+    other workers automatically.  Fine for single-instance setups.
     """
-    from weatherbrief.api.admin import require_admin
     from weatherbrief.storage.system_profiles import (
-        _TEMPLATES_PATH,
         get_system_template,
         invalidate_cache,
         load_system_templates,
+        _templates_path,
     )
-
-    require_admin(request, db=db)
 
     tpl = get_system_template(template_key)
     if not tpl:
         raise HTTPException(status_code=404, detail=f"System template '{template_key}' not found")
 
-    # Update the template in the config file
-    templates = load_system_templates()
+    # Work on a deep copy so the cache is not mutated before the file write
+    templates = copy.deepcopy(load_system_templates())
     new_settings = req.settings.model_dump(exclude_none=True)
 
     for t in templates:
@@ -414,9 +426,9 @@ def update_system_template(
             break
 
     data = {"profiles": templates}
-    _TEMPLATES_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    _templates_path().write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
-    # Clear cache so next load picks up changes
+    # Clear cache so next load picks up changes from disk
     invalidate_cache()
 
     descriptions = tpl.get("descriptions", {})

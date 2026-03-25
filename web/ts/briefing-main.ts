@@ -116,9 +116,18 @@ async function init(): Promise<void> {
     };
   }
 
-  // Load user profiles for the profile selector on the advisory toolbar
+  // Load user profiles for the profile selector on the advisory toolbar.
+  // Fire-and-forget: re-render advisories when profiles arrive so the
+  // selector appears even if the initial render happened first.
   let profiles: ProfileResponse[] = [];
-  fetchProfiles().then(p => { profiles = p; }).catch(err => console.error('Failed to fetch profiles:', err));
+  fetchProfiles().then(p => {
+    profiles = p;
+    // Re-render advisories now that profiles are available for the selector
+    const s = store.getState();
+    if (s.flight) {
+      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
+    }
+  }).catch(err => console.error('Failed to fetch profiles:', err));
 
   /** Build profile selector config for the advisory toolbar. */
   function getProfileSelectorConfig(state: BriefingState): ProfileSelectorConfig | undefined {

@@ -4,11 +4,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_TEMPLATES_PATH = Path(__file__).resolve().parent.parent.parent.parent / "configs" / "system_profiles.json"
+_DEFAULT_TEMPLATES_PATH = Path(__file__).resolve().parent.parent.parent.parent / "configs" / "system_profiles.json"
+
+
+def _templates_path() -> Path:
+    """Resolve the system profiles config path.
+
+    Uses SYSTEM_PROFILES_PATH env var if set, otherwise falls back to the
+    default relative path.  The env var is needed in Docker / installed-package
+    contexts where the source-tree layout differs from development.
+    """
+    override = os.environ.get("SYSTEM_PROFILES_PATH")
+    if override:
+        return Path(override)
+    return _DEFAULT_TEMPLATES_PATH
 
 _cached_templates: list[dict] | None = None
 
@@ -23,11 +37,12 @@ def load_system_templates() -> list[dict]:
     if _cached_templates is not None:
         return _cached_templates
 
+    path = _templates_path()
     try:
-        data = json.loads(_TEMPLATES_PATH.read_text())
+        data = json.loads(path.read_text())
         _cached_templates = data.get("profiles", [])
     except Exception:
-        logger.warning("Failed to load system profile templates from %s", _TEMPLATES_PATH, exc_info=True)
+        logger.warning("Failed to load system profile templates from %s", path, exc_info=True)
         _cached_templates = []
 
     return _cached_templates
