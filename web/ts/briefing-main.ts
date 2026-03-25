@@ -118,7 +118,7 @@ async function init(): Promise<void> {
 
   // Load user profiles for the profile selector on the advisory toolbar
   let profiles: ProfileResponse[] = [];
-  fetchProfiles().then(p => { profiles = p; }).catch(() => {});
+  fetchProfiles().then(p => { profiles = p; }).catch(err => console.error('Failed to fetch profiles:', err));
 
   /** Build profile selector config for the advisory toolbar. */
   function getProfileSelectorConfig(state: BriefingState): ProfileSelectorConfig | undefined {
