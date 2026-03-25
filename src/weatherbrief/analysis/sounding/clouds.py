@@ -368,6 +368,119 @@ def _find_capping_inversion(
     return lowest
 
 
+def apply_nwp_coverage(
+    dd_layers: list[EnhancedCloudLayer],
+    nwp_cloud_low_pct: float | None,
+    nwp_cloud_mid_pct: float | None,
+    nwp_cloud_high_pct: float | None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
+) -> list[EnhancedCloudLayer]:
+    """Reclassify DD cloud layer coverage using NWP cloud percentages per ICAO band.
+
+    DD detection identifies cloud vertical extent well but classifies coverage
+    purely from dewpoint depression, which overestimates when the boundary layer
+    is moist but the model's own cloud scheme says little cloud (e.g. ECMWF
+    cloud_low=20% but DD < 3°C throughout → DD says OVC, should be SCT).
+
+    This function constrains DD coverage to the NWP model's cloud percentage
+    for the matching ICAO altitude band (low < 6500ft, mid 6500-20000ft,
+    high 20000-45000ft).  Layers spanning multiple bands are split.
+
+    GRIB diagnostics percentages (``nwp_cloud_diagnostics``) are preferred
+    over Open-Meteo percentages when available, as they come directly from
+    the model output and are more accurate.
+
+    Segments where NWP says < 12.5% (FEW/trace) are dropped.
+    If no NWP percentage is available for a band, DD coverage is kept.
+    """
+    if not dd_layers:
+        return []
+
+    # Prefer GRIB diagnostics cover_pct when available, fall back to Open-Meteo
+    low_pct = nwp_cloud_low_pct
+    mid_pct = nwp_cloud_mid_pct
+    high_pct = nwp_cloud_high_pct
+    if nwp_cloud_diagnostics is not None:
+        if nwp_cloud_diagnostics.low.cover_pct is not None:
+            low_pct = nwp_cloud_diagnostics.low.cover_pct
+        if nwp_cloud_diagnostics.mid.cover_pct is not None:
+            mid_pct = nwp_cloud_diagnostics.mid.cover_pct
+        if nwp_cloud_diagnostics.high.cover_pct is not None:
+            high_pct = nwp_cloud_diagnostics.high.cover_pct
+
+    # ICAO band boundaries and their NWP percentages
+    bands: list[tuple[float, float, float | None]] = [
+        (0, _LOW_TOP_FT, low_pct),
+        (_LOW_TOP_FT, _MID_TOP_FT, mid_pct),
+        (_MID_TOP_FT, _HIGH_TOP_FT, high_pct),
+    ]
+
+    result: list[EnhancedCloudLayer] = []
+
+    for layer in dd_layers:
+        segments = _split_layer_by_bands(layer, bands)
+        result.extend(segments)
+
+    result.sort(key=lambda lyr: lyr.base_ft)
+    return result
+
+
+def _split_layer_by_bands(
+    layer: EnhancedCloudLayer,
+    bands: list[tuple[float, float, float | None]],
+) -> list[EnhancedCloudLayer]:
+    """Split a DD layer by ICAO bands and reclassify each segment's coverage."""
+    segments: list[EnhancedCloudLayer] = []
+
+    for band_floor, band_ceiling, nwp_pct in bands:
+        # Compute overlap between layer and band
+        seg_base = max(layer.base_ft, band_floor)
+        seg_top = min(layer.top_ft, band_ceiling)
+        if seg_base >= seg_top and not (seg_base == seg_top == layer.base_ft == layer.top_ft
+                                        and band_floor <= layer.base_ft < band_ceiling):
+            # No overlap (special-case: zero-thickness layer at band boundary)
+            continue
+
+        if nwp_pct is not None:
+            if nwp_pct < _MIN_COVER_PCT:
+                continue  # NWP says trace/no cloud in this band — drop segment
+            coverage = _nwp_pct_to_coverage(nwp_pct)
+        else:
+            # No NWP data for this band — keep DD coverage
+            coverage = layer.coverage
+
+        segments.append(EnhancedCloudLayer(
+            base_ft=round(seg_base),
+            top_ft=round(seg_top),
+            base_pressure_hpa=layer.base_pressure_hpa if seg_base == layer.base_ft else None,
+            top_pressure_hpa=layer.top_pressure_hpa if seg_top == layer.top_ft else None,
+            thickness_ft=round(seg_top - seg_base),
+            mean_temperature_c=layer.mean_temperature_c,
+            coverage=coverage,
+            mean_dewpoint_depression_c=layer.mean_dewpoint_depression_c,
+            source=layer.source,
+            theoretical_max_top_ft=layer.theoretical_max_top_ft,
+        ))
+
+    # Portion above HIGH_TOP_FT — keep DD coverage unchanged
+    if layer.top_ft > _HIGH_TOP_FT:
+        seg_base = max(layer.base_ft, _HIGH_TOP_FT)
+        segments.append(EnhancedCloudLayer(
+            base_ft=round(seg_base),
+            top_ft=round(layer.top_ft),
+            base_pressure_hpa=None,
+            top_pressure_hpa=layer.top_pressure_hpa,
+            thickness_ft=round(layer.top_ft - seg_base),
+            mean_temperature_c=layer.mean_temperature_c,
+            coverage=layer.coverage,
+            mean_dewpoint_depression_c=layer.mean_dewpoint_depression_c,
+            source=layer.source,
+            theoretical_max_top_ft=layer.theoretical_max_top_ft,
+        ))
+
+    return segments
+
+
 def enrich_cloud_top_uncertainty(
     cloud_layers: list[EnhancedCloudLayer],
     indices: ThermodynamicIndices,

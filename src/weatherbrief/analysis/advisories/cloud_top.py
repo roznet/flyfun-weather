@@ -17,7 +17,7 @@ from weatherbrief.models import (
 
 @register
 class CloudTopEvaluator:
-    """Evaluates whether the aircraft can fly above cloud tops."""
+    """Evaluates whether the aircraft can fly above cloud tops near cruise altitude."""
 
     @staticmethod
     def catalog_entry() -> AdvisoryCatalogEntry:
@@ -26,10 +26,11 @@ class CloudTopEvaluator:
             name="Cloud Tops",
             short_description="Can fly above cloud tops",
             description=(
-                "Checks cloud tops for layers the pilot would encounter "
-                "(base below ceiling). High-altitude layers entirely above "
-                "the ceiling are ignored. Cloud tops near or above ceiling "
-                "means the pilot cannot get on top."
+                "Checks cloud tops for layers near cruise altitude "
+                "(base within clearance margin of cruise). Layers well "
+                "above cruise are ignored — the pilot flies clear below "
+                "them. Cloud tops near or above the flight ceiling means "
+                "the pilot cannot get on top if needed."
             ),
             category="cloud",
             altitude_dependent=True,
@@ -78,8 +79,15 @@ class CloudTopEvaluator:
                     continue
                 total += 1
 
-                # Only consider layers the pilot would enter (base below ceiling)
-                reachable = [cl for cl in sounding.cloud_layers if cl.base_ft <= ceiling]
+                # Only consider layers the pilot would actually encounter:
+                # base must be within margin of cruise altitude (close enough
+                # to enter) AND below flight ceiling.  Layers well above
+                # cruise are irrelevant — the pilot flies clear below them.
+                cruise = ctx.cruise_altitude_ft
+                reachable = [
+                    cl for cl in sounding.cloud_layers
+                    if cl.base_ft <= cruise + margin_ft and cl.base_ft <= ceiling
+                ]
                 if not reachable:
                     continue
 

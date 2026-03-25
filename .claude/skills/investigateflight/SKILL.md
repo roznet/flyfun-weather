@@ -44,18 +44,29 @@ curl -s http://localhost:8000/api/flights/{flight_id}/packs/latest | python -m j
 ### Production flight (URL was weather.flyfun.aero)
 
 Rsync the pack data from prod to a local `debug/` directory, then work locally.
-Use the SSH user/host and project directory from the deploy skill or CLAUDE.md config.
+Use the SSH user/host from the deploy skill or CLAUDE.md config.
+
+**Important:** On the server, pack data does NOT live under the project directory.
+First, find the actual data path by checking the remote `.env`:
+
+```bash
+# Get the host data directory from the server's .env
+ssh {user}@{server} "grep HOST_DATA_DIR flyfun-weather/.env"
+# This returns something like: HOST_DATA_DIR=/mnt/flyfun_data/weather/data
+```
+
+Then use that path (`{HOST_DATA_DIR}`) to find and rsync the pack:
 
 ```bash
 # Find the pack directory on the server (user_id varies — use wildcard)
-ssh {user}@{server} "ls {project_dir}/data/packs/*/{flight_id}/"
+ssh {user}@{server} "ls {HOST_DATA_DIR}/packs/*/{flight_id}/"
 
 # Rsync to local for offline analysis
-rsync -avz {user}@{server}:{project_dir}/data/packs/\*/{flight_id}/ \
+rsync -avz {user}@{server}:{HOST_DATA_DIR}/packs/\*/{flight_id}/ \
   data/packs/debug/{flight_id}/
 ```
 
-On the server, data lives at `{project_dir}/data/packs/{user_id}/{flight_id}/{timestamp}/`.
+On the server, data lives at `{HOST_DATA_DIR}/packs/{user_id}/{flight_id}/{timestamp}/`.
 
 ## Step 3 — Locate the pack directory on disk
 
