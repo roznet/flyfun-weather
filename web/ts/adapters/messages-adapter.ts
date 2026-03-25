@@ -3,7 +3,7 @@
 import { apiFetch } from '../utils';
 
 export interface SystemMessage {
-  id: string;
+  id: number;
   date: string;
   title: string;
   body: string;

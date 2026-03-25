@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
@@ -22,6 +23,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/messages", tags=["messages"])
 admin_router = APIRouter(prefix="/admin/messages", tags=["admin"])
 
+MessageCategory = Literal["feature", "change", "fix"]
+
 
 # --- Pydantic models ---
 
@@ -30,7 +33,7 @@ class SystemMessage(BaseModel):
     date: str
     title: str
     body: str
-    category: str  # feature, change, fix
+    category: str
 
 
 class MessagesStatus(BaseModel):
@@ -42,34 +45,27 @@ class MessageCreate(BaseModel):
     date: str  # YYYY-MM-DD
     title: str
     body: str
-    category: str = "feature"
+    category: MessageCategory = "feature"
 
 
 class MessageUpdate(BaseModel):
     date: str | None = None
     title: str | None = None
     body: str | None = None
-    category: str | None = None
+    category: MessageCategory | None = None
 
 
 # --- Helpers ---
 
-def _get_messages_seen_at(row: UserPreferencesRow | None) -> str | None:
-    """Extract messages_seen_at from user preferences."""
+def _get_last_seen_id(row: UserPreferencesRow | None) -> int:
+    """Extract messages_last_seen_id from user preferences. Returns 0 if unset."""
     if not row or not row.app_prefs_json:
-        return None
+        return 0
     try:
         data = json.loads(row.app_prefs_json)
-        return data.get("messages_seen_at")
-    except json.JSONDecodeError:
-        return None
-
-
-def _count_unseen(messages: list[SystemMessageRow], seen_at: str | None) -> int:
-    """Count messages newer than the seen_at timestamp."""
-    if not seen_at:
-        return len(messages)
-    return sum(1 for m in messages if m.date > seen_at)
+        return int(data.get("messages_last_seen_id", 0))
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return 0
 
 
 def _row_to_response(r: SystemMessageRow) -> SystemMessage:
@@ -91,12 +87,14 @@ def get_messages_status(
     db: Session = Depends(get_db),
 ):
     """Return unseen message count for the current user."""
-    rows = db.query(SystemMessageRow).all()
     prefs_row = db.get(UserPreferencesRow, user_id)
-    seen_at = _get_messages_seen_at(prefs_row)
-    latest = max((r.date for r in rows), default=None)
+    last_seen_id = _get_last_seen_id(prefs_row)
+    unseen_count = db.query(func.count(SystemMessageRow.id)).filter(
+        SystemMessageRow.id > last_seen_id
+    ).scalar() or 0
+    latest = db.query(func.max(SystemMessageRow.date)).scalar()
     return MessagesStatus(
-        unseen_count=_count_unseen(rows, seen_at),
+        unseen_count=unseen_count,
         latest_message_date=latest,
     )
 
@@ -106,19 +104,21 @@ def mark_messages_seen(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Mark all messages as seen (sets messages_seen_at to today)."""
+    """Mark all current messages as seen (stores max message ID)."""
     row = db.get(UserPreferencesRow, user_id)
     if not row:
         row = UserPreferencesRow(user_id=user_id)
         db.add(row)
         db.flush()
 
+    max_id = db.query(func.max(SystemMessageRow.id)).scalar() or 0
+
     try:
         data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
     except json.JSONDecodeError:
         data = {}
 
-    data["messages_seen_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    data["messages_last_seen_id"] = max_id
     row.app_prefs_json = json.dumps(data)
 
 
