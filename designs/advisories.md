@@ -79,7 +79,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
-| `IcingEscapeEvaluator` | icing | Non-FIKI: can we descend below freezing to escape icing? Checks FZ level vs terrain + margin. Altitude-aware: ignores icing above cruise + buffer. `min_route_pct` suppresses alerts when only a tiny fraction of route is affected | `terrain_margin_ft`, `tight_margin_ft`, `icing_altitude_buffer_ft`, `route_pct_amber`, `min_route_pct` (15%) |
+| `IcingEscapeEvaluator` | icing | Non-FIKI: can we descend below freezing to escape icing? Checks FZ level vs terrain + margin. Altitude-aware: ignores icing above cruise + buffer. Any no-escape point → amber; `no_escape_pct_red` escalates to red. `icing_coverage_pct_amber` warns when escapable icing covers a significant portion of the route | `terrain_margin_ft`, `tight_margin_ft`, `icing_altitude_buffer_ft`, `icing_coverage_pct_amber` (20%), `no_escape_pct_red` (15%) |
 | `FIKIIcingEvaluator` | icing | FIKI-equipped: evaluates icing layer thickness and severity (transit OK, loiter not) | `thickness_amber_ft`, `thickness_red_ft`, `severe_is_red` |
 | `FreezingLevelEvaluator` | icing | Freezing level vs max terrain height (mountain icing risk). `min_route_pct` suppresses alerts when only isolated points are affected | `margin_ft`, `tight_margin_ft`, `min_route_pct` (15%) |
 
