@@ -526,5 +526,11 @@
   "page.settings.loadingAdvisories": "Chargement du catalogue d'avis...",
   "page.settings.deleteAccountTitle": "Supprimer le compte",
   "page.settings.deleteAccountHint": "Supprime définitivement votre compte et toutes les données associées (vols, briefings, profils). Cette action est irréversible.",
-  "page.settings.deleteAccount": "Supprimer le compte"
+  "page.settings.deleteAccount": "Supprimer le compte",
+
+  "messages.empty": "Aucune annonce pour le moment.",
+  "messages.loadFailed": "Impossible de charger les messages.",
+  "messages.category.feature": "Nouveau",
+  "messages.category.change": "Changement",
+  "messages.category.fix": "Correctif"
 }

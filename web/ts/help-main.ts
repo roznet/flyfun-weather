@@ -1,25 +1,35 @@
-/** Help page entry point — user info if signed in. Content is static HTML, no auth required. */
+/** Help page entry point — tabs (Help & Guide / What's New), user info, feedback. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
+import { fetchMessages, markMessagesSeen, type SystemMessage } from './adapters/messages-adapter';
 import { submitFeedback } from './adapters/api-adapter';
-import { renderUserInfo } from './utils';
+import { renderUserInfo, checkMessagesBadge, escapeHtml } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
+
+let isSignedIn = false;
 
 async function init(): Promise<void> {
   await initI18n();
   initTheme();
-  // Translate the page title
+
   const h1 = document.querySelector('h1');
   if (h1) h1.textContent = t('nav.help');
+
+  initTabs();
+
   const user = await fetchCurrentUser();
   if (user) {
+    isSignedIn = true;
     renderUserInfo(user, 'help');
     document.getElementById('getting-access')?.remove();
     // Show feedback button for signed-in users
     const feedbackInline = document.getElementById('feedback-inline');
     if (feedbackInline) feedbackInline.style.display = '';
     document.getElementById('help-feedback-btn')?.addEventListener('click', showFeedbackModal);
+
+    // Load unseen count for the tab badge
+    loadTabBadge();
   } else {
     const info = document.getElementById('user-info');
     if (info) {
@@ -31,7 +41,157 @@ async function init(): Promise<void> {
       `;
     }
   }
+
+  // Check if URL has ?tab=whats-new to auto-switch
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('tab') === 'whats-new') {
+    switchTab('whats-new');
+  }
 }
+
+// --- Tab management ---
+
+function initTabs(): void {
+  const tabBar = document.getElementById('help-tabs');
+  if (!tabBar) return;
+
+  tabBar.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('.tab-btn') as HTMLElement | null;
+    if (!btn) return;
+    const tab = btn.dataset.tab;
+    if (tab) switchTab(tab);
+  });
+}
+
+let messagesLoaded = false;
+
+function switchTab(tab: string): void {
+  // Update tab buttons
+  document.querySelectorAll('.help-tabs .tab-btn').forEach(btn => {
+    btn.classList.toggle('active', (btn as HTMLElement).dataset.tab === tab);
+  });
+  // Update tab panels
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `tab-${tab}`);
+  });
+
+  if (tab === 'whats-new' && !messagesLoaded) {
+    messagesLoaded = true;
+    loadMessages();
+  }
+}
+
+// --- Messages ---
+
+async function loadTabBadge(): Promise<void> {
+  try {
+    const { fetchMessagesStatus } = await import('./adapters/messages-adapter');
+    const status = await fetchMessagesStatus();
+    const badge = document.getElementById('whats-new-badge');
+    if (badge) {
+      badge.classList.toggle('visible', status.unseen_count > 0);
+    }
+  } catch {
+    // non-critical
+  }
+}
+
+async function loadMessages(): Promise<void> {
+  const container = document.getElementById('messages-container');
+  if (!container) return;
+
+  try {
+    const messages = await fetchMessages();
+    if (messages.length === 0) {
+      container.innerHTML = `<p class="messages-empty">${t('messages.empty')}</p>`;
+      return;
+    }
+
+    // Render messages newest-first
+    const sorted = [...messages].sort((a, b) => b.date.localeCompare(a.date));
+    container.innerHTML = sorted.map(renderMessageCard).join('');
+
+    // Mark as seen for signed-in users
+    if (isSignedIn) {
+      try {
+        await markMessagesSeen();
+        // Clear both the tab badge and nav badge
+        document.getElementById('whats-new-badge')?.classList.remove('visible');
+        document.getElementById('nav-messages-badge')?.classList.remove('visible');
+      } catch {
+        // non-critical
+      }
+    }
+  } catch {
+    container.innerHTML = `<p class="messages-empty">${t('messages.loadFailed')}</p>`;
+  }
+}
+
+function renderMessageCard(msg: SystemMessage): string {
+  const categoryLabel = t(`messages.category.${msg.category}`);
+  const categoryClass = `message-category message-category-${escapeHtml(msg.category)}`;
+  const formattedDate = formatMessageDate(msg.date);
+  const bodyHtml = renderSimpleMarkdown(msg.body);
+
+  return `
+    <div class="message-card">
+      <div class="message-card-header">
+        <span class="${categoryClass}">${escapeHtml(categoryLabel)}</span>
+        <span class="message-card-title">${escapeHtml(msg.title)}</span>
+        <span class="message-card-date">${escapeHtml(formattedDate)}</span>
+      </div>
+      <div class="message-card-body">${bodyHtml}</div>
+    </div>`;
+}
+
+function formatMessageDate(iso: string): string {
+  try {
+    const d = new Date(iso + 'T00:00:00Z');
+    return d.toLocaleDateString('en-GB', {
+      day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC',
+    });
+  } catch {
+    return iso;
+  }
+}
+
+/** Minimal markdown renderer: bold, italic, inline code, links, paragraphs, lists. */
+function renderSimpleMarkdown(md: string): string {
+  // Escape HTML first, then apply markdown
+  let html = escapeHtml(md);
+
+  // Bold: **text** or __text__
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+
+  // Italic: *text* or _text_ (but not inside **)
+  html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+
+  // Inline code: `code`
+  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+
+  // Links: [text](url)
+  html = html.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+  // Unordered list items: lines starting with "- "
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+  // Paragraphs: split on double newlines
+  html = html
+    .split(/\n{2,}/)
+    .map(p => p.trim())
+    .filter(p => p)
+    .map(p => p.startsWith('<ul>') || p.startsWith('<ol>') ? p : `<p>${p}</p>`)
+    .join('\n');
+
+  // Single newlines within paragraphs → <br>
+  html = html.replace(/(?<!\n)\n(?!\n)/g, '<br>');
+
+  return html;
+}
+
+// --- Feedback modal (unchanged) ---
 
 function showFeedbackModal(): void {
   document.getElementById('feedback-modal')?.remove();

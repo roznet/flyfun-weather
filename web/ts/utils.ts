@@ -20,20 +20,21 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
   const container = document.getElementById('user-info');
   if (!container) return;
 
-  const navItems: { label: string; href: string; page: string; adminOnly?: boolean }[] = [
+  const navItems: { label: string; href: string; page: string; adminOnly?: boolean; badgeId?: string }[] = [
     { label: t('nav.flights'),  href: '/',               page: 'flights' },
     { label: t('nav.settings'), href: '/settings.html',  page: 'settings' },
-    { label: t('nav.help'),     href: '/help.html',      page: 'help' },
+    { label: t('nav.help'),     href: '/help.html',      page: 'help', badgeId: 'nav-messages-badge' },
     { label: t('nav.admin'),    href: '/admin.html',     page: 'admin', adminOnly: true },
   ];
 
   const links = navItems
     .filter(item => !item.adminOnly || user.is_admin)
     .map(item => {
+      const badge = item.badgeId ? `<span class="nav-dot" id="${item.badgeId}"></span>` : '';
       if (item.page === currentPage) {
-        return `<span class="btn-settings nav-current">${item.label}</span>`;
+        return `<span class="btn-settings nav-current">${item.label}${badge}</span>`;
       }
-      return `<a href="${item.href}" class="btn-settings" title="${item.label}">${item.label}</a>`;
+      return `<a href="${item.href}" class="btn-settings" title="${item.label}">${item.label}${badge}</a>`;
     })
     .join('\n');
 
@@ -43,6 +44,23 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
     <button class="btn-logout" id="logout-btn">${t('nav.signOut')}</button>
   `;
   document.getElementById('logout-btn')?.addEventListener('click', () => logout());
+
+  // Fire-and-forget: check for unseen messages and show badge
+  checkMessagesBadge();
+}
+
+/** Check for unseen messages and show/hide the nav badge dot. */
+export async function checkMessagesBadge(): Promise<void> {
+  try {
+    const { fetchMessagesStatus } = await import('./adapters/messages-adapter');
+    const status = await fetchMessagesStatus();
+    const dot = document.getElementById('nav-messages-badge');
+    if (dot) {
+      dot.classList.toggle('visible', status.unseen_count > 0);
+    }
+  } catch {
+    // Silently ignore — badge is non-critical
+  }
 }
 
 // --- DOM helpers ---
