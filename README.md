@@ -10,9 +10,9 @@ WeatherBrief fetches forecast data from multiple numerical weather prediction (N
 
 - **Multi-model forecasting** — Fetches from 6 NWP models via Open-Meteo (GFS, ECMWF IFS, DWD ICON, UKMO, Meteo-France, Best Match) at 8 pressure levels along your route
 - **~40 derived metrics** — From raw NWP data, derives thermodynamic indices (CAPE, CIN, Lifted Index, K-Index, etc.), cloud layers, icing zones, CAT turbulence risk, convective potential, wind shear, and more using MetPy
-- **9 route advisories** — Deterministic hazard evaluators (icing escape, FIKI icing, freezing level, cloud top, VMC cruise, turbulence, mountain wind, convective, model agreement) with per-model GREEN/AMBER/RED severity grading
+- **13 route advisories** — Deterministic hazard evaluators (icing escape, FIKI icing, freezing level, cloud top, VMC cruise, VFR/IFR feasibility, flight category, turbulence, mountain wind, airport wind, convective, model agreement) with per-model GREEN/AMBER/RED severity grading
 - **Model comparison** — Side-by-side divergence scoring across 15 metrics so you can see where models agree and where they don't
-- **Interactive cross-section** — Canvas-rendered visualization with 13 toggleable layers (terrain, clouds, icing, CAT, inversions, convective towers, temperature lines, NWP cloud bands) and hover/click interaction
+- **Interactive cross-section** — Canvas-rendered visualization with 17 toggleable layers (terrain, clouds, icing, SFIP, CAT, inversions, convective, temperature lines, stability levels, NWP cloud bands) and hover/click interaction
 - **Skew-T soundings** — Per-waypoint, per-model diagrams with CAPE/CIN shading, hodograph, and indices panel
 - **GRAMET cross-section** — From the Autorouter API (requires credentials)
 - **LLM-powered synopsis** — Optional AI-generated weather narrative via Claude or ChatGPT, combining DWD synoptic text with quantitative analysis
@@ -43,8 +43,12 @@ Each advisory evaluates a specific weather hazard along your route, per model:
 | Freezing Level | Freezing level vs terrain (mountain icing risk) |
 | Cloud Top | Can you fly above the clouds? (cloud top vs flight ceiling) |
 | VMC Cruise | Cloud coverage at cruise altitude (VFR viability) |
+| VFR Feasibility | Overall VFR viability considering ceiling, visibility, and cloud layers |
+| IFR Feasibility | IFR flight viability considering ceiling and visibility minimums |
+| Flight Category | VFR/MVFR/IFR/LIFR classification at departure, en-route, and arrival |
 | Turbulence | Clear Air Turbulence + strong vertical motion at cruise |
 | Mountain Wind | Orographic/rotor wind risk near significant terrain |
+| Airport Wind | Surface wind and crosswind at departure and arrival airports |
 | Convective | Thunderstorm development risk from CAPE and instability indices |
 | Model Agreement | How much do the models agree with each other? |
 
@@ -56,7 +60,7 @@ Advisory parameters are user-tunable (terrain margins, percentage thresholds, et
 
 **Frontend:** TypeScript / Vanilla DOM (no framework) / Zustand / Canvas API / esbuild
 
-**Infrastructure:** Docker / SQLite (dev) / MySQL (prod) / Google OAuth
+**Infrastructure:** Docker / SQLite (dev) / MySQL (prod) / Multi-provider OAuth (Google, Apple)
 
 ## Project Structure
 
@@ -68,7 +72,7 @@ src/weatherbrief/
 ├── analysis/
 │   ├── wind.py       # Headwind/crosswind decomposition
 │   ├── comparison.py # Multi-model divergence scoring
-│   ├── advisories/   # 9 route hazard evaluators (registry pattern)
+│   ├── advisories/   # 13 route hazard evaluators (registry pattern)
 │   └── sounding/     # MetPy thermodynamic analysis (clouds, icing, CAT, convective)
 ├── digest/           # Text digest, Skew-T plots, LLM briefing (LangGraph)
 ├── api/              # FastAPI app (auth, flights, packs, preferences, admin)
@@ -79,19 +83,23 @@ src/weatherbrief/
 
 web/
 ├── ts/
-│   ├── visualization/  # Canvas cross-section renderer (13 layers)
+│   ├── visualization/  # Canvas cross-section renderer (17 layers)
 │   ├── store/          # Zustand state management
 │   ├── managers/       # DOM rendering (briefing, advisories, flights)
 │   ├── adapters/       # API communication
 │   └── data/           # Metrics catalog, display config
 ├── css/style.css
 ├── index.html          # Flights list
-├── briefing.html       # Briefing report (8 collapsible sections)
+├── briefing.html       # Briefing report (10 collapsible sections)
+├── flight.html         # Single flight detail / edit
 ├── settings.html       # User preferences + advisory tuning
-└── admin.html          # User approval + usage tracking
+├── admin.html          # User approval + usage tracking
+├── login.html          # Authentication page
+├── help.html           # User help / FAQ
+└── user-costs.html     # Personal usage & cost tracking
 
 configs/              # LLM digest configuration and prompts
-designs/              # Design documentation (18 docs)
+designs/              # Design documentation (21 docs)
 tests/                # pytest test suite
 ```
 
@@ -107,7 +115,7 @@ tests/                # pytest test suite
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/flyfun-weather.git
+git clone https://github.com/roznet/flyfun-weather.git
 cd flyfun-weather
 
 # Create virtual environment
@@ -155,13 +163,13 @@ In development mode, the app uses SQLite and auto-creates a dev user — no OAut
 
 ```bash
 # Start the API server
-uvicorn weatherbrief.api.app:app --reload --port 8020
+uvicorn weatherbrief.api.app:app --reload --port 8000
 
 # In another terminal — watch and rebuild frontend
 cd web && npm run dev
 ```
 
-Then open http://localhost:8020
+Then open http://localhost:8000
 
 **CLI (single briefing):**
 
@@ -173,7 +181,7 @@ weatherbrief EGTK LFQA LSGS --date 2026-03-15 --time 9 --alt 8000
 
 ```bash
 docker build -t weatherbrief .
-docker-compose up -d
+docker compose up -d
 ```
 
 The Docker image runs as a non-root user (UID 2000). Data is persisted via volume mount at `/app/data`.
@@ -182,7 +190,7 @@ The Docker image runs as a non-root user (UID 2000). Data is persisted via volum
 
 - **NWP forecasts** — [Open-Meteo](https://open-meteo.com/) (free, open-source weather API)
 - **Terrain elevation** — [SRTM](https://www.usgs.gov/centers/eros/science/usgs-eros-archive-digital-elevation-shuttle-radar-topography-mission-srtm-1) 90m resolution via srtm.py
-- **Airport database** — [euro-aip](https://github.com/nicklblackburn/rzflight) (European AIP data)
+- **Airport database** — [euro-aip](https://github.com/roznet/rzflight) (European AIP data)
 - **GRAMET cross-sections** — [Autorouter](https://www.autorouter.aero/) (requires free account)
 - **Synoptic text forecasts** — DWD (German Weather Service) open data
 
@@ -197,7 +205,7 @@ The pipeline fetches NWP data for ~20 interpolated points along your route (ever
 - **Convective risk** — from CAPE thresholds with CIN modulation and severe weather modifiers (shear, hail indicators)
 - **Vertical motion** — omega profiles classified as quiescent, synoptic ascent/subsidence, oscillating, or convective
 
-These per-point results feed into the 9 route-level advisory evaluators that produce the GREEN/AMBER/RED hazard assessment.
+These per-point results feed into the 13 route-level advisory evaluators that produce the GREEN/AMBER/RED hazard assessment.
 
 ## Known Limitations
 
@@ -209,7 +217,7 @@ These per-point results feed into the 9 route-level advisory evaluators that pro
 
 ## Design Documentation
 
-The `designs/` directory contains 18 detailed design documents covering architecture, data models, analysis methods, metrics catalog, and implementation plans. Start with `designs/architecture.md` for the system overview.
+The `designs/` directory contains 21 detailed design documents covering architecture, data models, analysis methods, metrics catalog, and implementation plans. Start with `designs/architecture.md` for the system overview.
 
 ## AI Acknowledgment
 
