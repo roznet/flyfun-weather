@@ -417,12 +417,13 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     profile_name_for_digest = None
     if db is not None:
         from weatherbrief.api.preferences import load_autorouter_credentials, load_user_locale
-        from weatherbrief.api.profiles import load_profile_settings, _load_profile_name
+        from weatherbrief.api.profiles import load_profile_context
 
         autorouter_creds = load_autorouter_credentials(db, user_id)
         locale = load_user_locale(db, user_id)
-        profile_settings = load_profile_settings(db, flight.profile_id, user_id)
-        profile_name_for_digest = _load_profile_name(db, flight.profile_id, user_id)
+        profile_ctx = load_profile_context(db, flight.profile_id, user_id)
+        profile_settings = profile_ctx.settings
+        profile_name_for_digest = profile_ctx.name
 
         profile_models = profile_settings.get("models")
         if profile_models:
