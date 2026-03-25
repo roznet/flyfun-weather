@@ -111,6 +111,15 @@ async function loadMessages(): Promise<void> {
     const sorted = [...messages].sort((a, b) => b.date.localeCompare(a.date));
     container.innerHTML = sorted.map(renderMessageCard).join('');
 
+    // Expand the newest message by default
+    container.querySelector('.message-card')?.classList.remove('collapsed');
+
+    // Toggle collapse on header click
+    container.addEventListener('click', (e) => {
+      const header = (e.target as HTMLElement).closest('.message-card-header');
+      if (header) header.closest('.message-card')?.classList.toggle('collapsed');
+    });
+
     // Mark as seen for signed-in users
     if (isSignedIn) {
       try {
@@ -134,8 +143,9 @@ function renderMessageCard(msg: SystemMessage): string {
   const bodyHtml = renderSimpleMarkdown(msg.body);
 
   return `
-    <div class="message-card">
-      <div class="message-card-header">
+    <div class="message-card collapsed">
+      <div class="message-card-header" role="button" tabindex="0">
+        <span class="message-card-chevron">&#x25B6;</span>
         <span class="${categoryClass}">${escapeHtml(categoryLabel)}</span>
         <span class="message-card-title">${escapeHtml(msg.title)}</span>
         <span class="message-card-date">${escapeHtml(formattedDate)}</span>

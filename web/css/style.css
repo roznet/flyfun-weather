@@ -3668,6 +3668,26 @@ label {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.message-card-chevron {
+  font-size: 0.65rem;
+  transition: transform 0.15s;
+  color: var(--text-muted);
+}
+
+.message-card:not(.collapsed) .message-card-chevron {
+  transform: rotate(90deg);
+}
+
+.message-card.collapsed .message-card-header {
+  margin-bottom: 0;
+}
+
+.message-card.collapsed .message-card-body {
+  display: none;
 }
 
 .message-card-title {
