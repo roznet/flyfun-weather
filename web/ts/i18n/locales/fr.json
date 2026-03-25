@@ -94,6 +94,7 @@
   "digest.loading": "Chargement du résumé...",
   "digest.notAvailable": "Résumé synoptique non disponible. Lancez une actualisation pour le générer.",
   "digest.failed": "Échec du chargement du résumé.",
+  "digest.profileMismatch": "Ce résumé a été généré avec le profil \"{name}\". Le profil actuel est différent — recalculez pour mettre à jour.",
 
   "dwd.originalGerman": "Original en allemand",
   "dwd.header": "Aperçu synoptique DWD — ",
@@ -160,6 +161,7 @@
 
   "advisories.noAdvisories": "Aucun avis disponible",
   "advisories.recalculate": "Recalculer",
+  "advisories.profile": "Profil",
   "advisories.recalculating": "Recalcul en cours...",
   "advisories.altitudeTable": "Tableau d'altitudes",
   "advisories.altTableTitle": "Tableau d'avis par altitude",
@@ -280,7 +282,15 @@
   "wizard.tourHint": "Vous pouvez retrouver ces paramètres à tout moment depuis la page <strong>Paramètres</strong>, et en savoir plus sur la page <strong>Aide</strong>.",
   "wizard.back": "Retour",
   "wizard.next": "Suivant",
+  "wizard.profileTitle": "Choisissez votre profil par défaut",
+  "wizard.profileSubtitle": "Chaque profil stocke les paramètres de l'aéronef, les préférences d'avis et la sélection des modèles.",
+  "wizard.profileHint": "Cliquez sur une carte pour sélectionner votre profil par défaut. Vous pourrez changer ou personnaliser les profils plus tard dans les Paramètres.",
+  "wizard.profileNone": "Aucun profil système disponible — vous pouvez configurer vos paramètres à l'étape suivante.",
   "wizard.getStarted": "Commencer",
+
+  "settings.resetToTemplate": "Réinitialiser au modèle",
+  "settings.resetConfirm": "Réinitialiser « {name} » aux paramètres du modèle système d'origine ? Vos personnalisations seront perdues.",
+  "settings.profileReset": "Profil réinitialisé aux valeurs par défaut du modèle.",
 
   "settings.cat.icing": "Givrage",
   "settings.cat.cloud": "Nuage",

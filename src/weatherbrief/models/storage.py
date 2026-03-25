@@ -16,6 +16,7 @@ class FlightProfile(BaseModel):
     name: str = "Default"
     is_default: bool = False
     settings: dict = Field(default_factory=dict)
+    system_template_key: str | None = None
     created_at: datetime
     updated_at: datetime
 

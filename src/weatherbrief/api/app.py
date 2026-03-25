@@ -26,7 +26,7 @@ from flyfun_common.db.models import UserPreferencesRow
 from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import refresh_router, router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
-from weatherbrief.api.profiles import router as profiles_router
+from weatherbrief.api.profiles import admin_router as profiles_admin_router, router as profiles_router
 from weatherbrief.api.admin import router as admin_router, require_admin
 from weatherbrief.api.credits import (
     admin_router as cost_config_router,
@@ -216,6 +216,7 @@ def create_app() -> FastAPI:
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")
     app.include_router(profiles_router, prefix="/api")
+    app.include_router(profiles_admin_router, prefix="/api")
     app.include_router(usage_router, prefix="/api")
     app.include_router(credits_router, prefix="/api")
     app.include_router(admin_router, prefix="/api")

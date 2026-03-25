@@ -32,6 +32,9 @@ class FlightProfileRow(Base):
     name: Mapped[str] = mapped_column(String(100), default="Default")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    system_template_key: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

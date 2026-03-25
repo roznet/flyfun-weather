@@ -24,8 +24,16 @@ export interface ProfileResponse {
   name: string;
   is_default: boolean;
   settings: ProfileSettings;
+  system_template_key: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface SystemTemplate {
+  key: string;
+  name: string;
+  description: string;
+  settings: ProfileSettings;
 }
 
 export async function fetchProfiles(): Promise<ProfileResponse[]> {
@@ -58,4 +66,12 @@ export async function duplicateProfile(id: number, name: string): Promise<Profil
     method: 'POST',
     body: JSON.stringify({ name }),
   });
+}
+
+export async function resetProfileToTemplate(id: number): Promise<ProfileResponse> {
+  return apiFetch<ProfileResponse>(`/user/profiles/${id}/reset`, { method: 'POST' });
+}
+
+export async function fetchSystemTemplates(locale = 'en'): Promise<SystemTemplate[]> {
+  return apiFetch<SystemTemplate[]>(`/user/profiles/system-templates?locale=${locale}`);
 }

@@ -267,6 +267,9 @@ export interface WeatherDigest {
   specific_concerns: string;
   trend: string;
   watch_items: string;
+  // Profile tracking: which profile was active when digest was generated
+  profile_id?: number | null;
+  profile_name?: string | null;
   // Legacy fields (may be present in older digests)
   winds?: string;
   cloud_visibility?: string;

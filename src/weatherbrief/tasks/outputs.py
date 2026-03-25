@@ -154,6 +154,8 @@ def run_llm_digest(
     flight_rules: str | None = None,
     previous_digest=None,  # WeatherDigest | None
     locale: str | None = None,
+    profile_id: int | None = None,
+    profile_name: str | None = None,
 ) -> DigestResult:
     """Generate LLM-powered weather digest."""
     try:
@@ -204,7 +206,13 @@ def run_llm_digest(
 
         md_path.write_text(digest_result["digest_text"])
         if digest_obj is not None:
-            json_path.write_text(digest_obj.model_dump_json(indent=2))
+            digest_data = digest_obj.model_dump()
+            # Include profile metadata for tracking which profile was active
+            if profile_id is not None:
+                digest_data["profile_id"] = profile_id
+            if profile_name is not None:
+                digest_data["profile_name"] = profile_name
+            json_path.write_text(json.dumps(digest_data, indent=2))
         digest_path = md_path
         logger.info("LLM digest saved: %s", md_path)
 

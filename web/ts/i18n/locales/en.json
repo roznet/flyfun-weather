@@ -94,6 +94,7 @@
   "digest.loading": "Loading digest...",
   "digest.notAvailable": "Synopsis not available. Trigger a refresh to generate.",
   "digest.failed": "Failed to load digest.",
+  "digest.profileMismatch": "This summary was generated with profile \"{name}\". The current profile is different \u2014 recalculate to update.",
 
   "dwd.originalGerman": "Original German",
   "dwd.header": "DWD Synoptic Overview — ",
@@ -159,6 +160,7 @@
   "skewt.tabNotAvailable": "Not available",
 
   "advisories.noAdvisories": "No advisories available",
+  "advisories.profile": "Profile",
   "advisories.recalculate": "Recalculate",
   "advisories.recalculating": "Recalculating...",
   "advisories.altitudeTable": "Altitude Table",
@@ -284,7 +286,15 @@
   "wizard.tourHint": "You can revisit these settings any time from the <strong>Settings</strong> page, and learn more on the <strong>Help</strong> page.",
   "wizard.back": "Back",
   "wizard.next": "Next",
+  "wizard.profileTitle": "Choose Your Default Profile",
+  "wizard.profileSubtitle": "Each profile stores aircraft settings, advisory preferences, and model selections.",
+  "wizard.profileHint": "Click a card to select your default profile. You can switch or customize profiles later in Settings.",
+  "wizard.profileNone": "No system profiles available — you can configure your settings on the next step.",
   "wizard.getStarted": "Get Started",
+
+  "settings.resetToTemplate": "Reset to Template",
+  "settings.resetConfirm": "Reset \"{name}\" to its original system template settings? Your customizations will be lost.",
+  "settings.profileReset": "Profile reset to template defaults.",
 
   "settings.cat.icing": "Icing",
   "settings.cat.cloud": "Cloud",

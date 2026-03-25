@@ -1,39 +1,51 @@
 /**
  * Welcome wizard — shown on first login to collect initial settings.
  *
- * Three steps:
+ * Four steps:
  *   1. Welcome  — brief intro to Flyfun Weather
- *   2. Aircraft — flight rules, cruise altitude, ceiling, speed
- *   3. Tour    — quick overview of key features
+ *   2. Profile  — select a default profile from system templates
+ *   3. Aircraft — flight rules, cruise altitude, ceiling, speed (pre-filled from selected profile)
+ *   4. Tour     — quick overview of key features
  *
- * On completion, saves the default profile and marks setup_completed.
+ * On completion, marks the selected profile as default and saves setup_completed.
  */
 
-import { updateProfile, type ProfileResponse, type ProfileSettings } from '../adapters/profiles-adapter';
+import { updateProfile, fetchSystemTemplates, type ProfileResponse, type ProfileSettings, type SystemTemplate } from '../adapters/profiles-adapter';
 import { completeSetup } from '../adapters/preferences-adapter';
 import { escapeHtml, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from '../utils';
 import type { ModelCatalogEntry } from '../utils';
 import { t } from '../i18n/i18n';
 
-type StepId = 'welcome' | 'aircraft' | 'tour';
+type StepId = 'welcome' | 'profile' | 'aircraft' | 'tour';
 
-const STEPS: StepId[] = ['welcome', 'aircraft', 'tour'];
+const STEPS: StepId[] = ['welcome', 'profile', 'aircraft', 'tour'];
 const DEFAULT_CRUISE_ALT_FT = 8000;
 const DEFAULT_CEILING_FT = 18000;
 
 let backdropEl: HTMLElement | null = null;
 let wizardEl: HTMLElement | null = null;
 let currentStep = 0;
-let defaultProfile: ProfileResponse | null = null;
+let allProfiles: ProfileResponse[] = [];
+let selectedProfileId: number | null = null;
+let systemTemplates: SystemTemplate[] = [];
 
 /** Show the welcome wizard. Returns a promise that resolves when the user finishes. */
 export async function showWelcomeWizard(
   profile: ProfileResponse,
   modelCatalog: ModelCatalogEntry[],
+  profiles?: ProfileResponse[],
 ): Promise<void> {
-  defaultProfile = profile;
+  allProfiles = profiles ?? [profile];
+  selectedProfileId = profile.id;
   initModelCatalog(modelCatalog);
   currentStep = 0;
+
+  // Load system template descriptions
+  try {
+    systemTemplates = await fetchSystemTemplates();
+  } catch {
+    systemTemplates = [];
+  }
 
   return new Promise<void>((resolve) => {
     createWizardDOM(resolve);
@@ -41,24 +53,24 @@ export async function showWelcomeWizard(
   });
 }
 
+function getSelectedProfile(): ProfileResponse | null {
+  return allProfiles.find(p => p.id === selectedProfileId) ?? allProfiles[0] ?? null;
+}
+
 function createWizardDOM(onComplete: () => void): void {
-  // Backdrop
   backdropEl = document.createElement('div');
   backdropEl.className = 'wizard-backdrop';
 
-  // Wizard container
   wizardEl = document.createElement('div');
   wizardEl.className = 'wizard-modal';
 
   backdropEl.appendChild(wizardEl);
   document.body.appendChild(backdropEl);
 
-  // Show with a slight delay for CSS transition
   requestAnimationFrame(() => {
     backdropEl?.classList.add('active');
   });
 
-  // Store onComplete for later
   (wizardEl as any)._onComplete = onComplete;
 }
 
@@ -69,7 +81,6 @@ function renderStep(): void {
   const isFirst = currentStep === 0;
   const isLast = currentStep === STEPS.length - 1;
 
-  // Progress indicator
   const dots = STEPS.map((_, i) =>
     `<span class="wizard-dot${i === currentStep ? ' active' : ''}"></span>`
   ).join('');
@@ -78,6 +89,9 @@ function renderStep(): void {
   switch (step) {
     case 'welcome':
       content = renderWelcomeStep();
+      break;
+    case 'profile':
+      content = renderProfileStep();
       break;
     case 'aircraft':
       content = renderAircraftStep();
@@ -114,7 +128,6 @@ function wireStepHandlers(): void {
 
   backBtn?.addEventListener('click', async () => {
     if (currentStep > 0) {
-      // Save aircraft settings before going back from tour
       if (STEPS[currentStep] === 'tour') {
         await collectAndSaveAircraftSettings();
       }
@@ -124,6 +137,9 @@ function wireStepHandlers(): void {
   });
 
   nextBtn?.addEventListener('click', async () => {
+    if (STEPS[currentStep] === 'profile') {
+      await applyProfileSelection();
+    }
     if (STEPS[currentStep] === 'aircraft') {
       await collectAndSaveAircraftSettings();
     }
@@ -173,14 +189,56 @@ function renderWelcomeStep(): string {
   `;
 }
 
+function renderProfileStep(): string {
+  // Build profile cards from system templates matched to user profiles
+  const cardsHtml = allProfiles
+    .filter(p => p.system_template_key)
+    .map(p => {
+      const tpl = systemTemplates.find(t => t.key === p.system_template_key);
+      const desc = tpl?.description ?? '';
+      const isSelected = p.id === selectedProfileId;
+      const activeClass = isSelected ? ' wizard-profile-card-active' : '';
+      return `
+        <div class="wizard-profile-card${activeClass}" data-profile-id="${p.id}">
+          <div class="wizard-profile-card-header">
+            <strong>${escapeHtml(p.name)}</strong>
+            ${isSelected ? '<span class="badge badge-green">Default</span>' : ''}
+          </div>
+          <p class="wizard-profile-desc">${escapeHtml(desc)}</p>
+        </div>
+      `;
+    })
+    .join('');
+
+  // Fallback if no system templates were seeded
+  if (!cardsHtml) {
+    return `
+      <div class="wizard-step">
+        <h2>${t('wizard.profileTitle')}</h2>
+        <p class="wizard-subtitle">${t('wizard.profileSubtitle')}</p>
+        <p class="muted">${t('wizard.profileNone')}</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="wizard-step wizard-profiles">
+      <h2>${t('wizard.profileTitle')}</h2>
+      <p class="wizard-subtitle">${t('wizard.profileSubtitle')}</p>
+      <p class="wizard-hint">${t('wizard.profileHint')}</p>
+      <div class="wizard-profile-cards">${cardsHtml}</div>
+    </div>
+  `;
+}
+
 function renderAircraftStep(): string {
-  const settings = defaultProfile?.settings;
+  const profile = getSelectedProfile();
+  const settings = profile?.settings;
   const altitude = settings?.cruise_altitude_ft ?? DEFAULT_CRUISE_ALT_FT;
   const ceiling = settings?.flight_ceiling_ft ?? DEFAULT_CEILING_FT;
   const speed = settings?.speed_kt ?? '';
   const rules = settings?.flight_rules ?? 'vfr_ifr';
 
-  // Model checkboxes
   const defaults = settings?.models ?? defaultModelKeys();
   const modelHtml = allModelKeys().map(m => {
     const label = escapeHtml(modelLabel(m));
@@ -281,9 +339,46 @@ function renderTourStep(): string {
   `;
 }
 
-/** Collect aircraft settings from the form and save to the default profile. */
+// Wire profile card selection via event delegation on the wizard element
+document.addEventListener('click', (e) => {
+  const card = (e.target as HTMLElement).closest('.wizard-profile-card') as HTMLElement | null;
+  if (!card || !wizardEl) return;
+  const profileId = parseInt(card.dataset.profileId!, 10);
+  if (isNaN(profileId)) return;
+
+  selectedProfileId = profileId;
+
+  // Update active state on all cards
+  for (const c of wizardEl.querySelectorAll('.wizard-profile-card')) {
+    const el = c as HTMLElement;
+    const isActive = parseInt(el.dataset.profileId!, 10) === profileId;
+    el.classList.toggle('wizard-profile-card-active', isActive);
+    const badge = el.querySelector('.badge');
+    if (badge) badge.remove();
+    if (isActive) {
+      el.querySelector('.wizard-profile-card-header')?.insertAdjacentHTML(
+        'beforeend',
+        ' <span class="badge badge-green">Default</span>'
+      );
+    }
+  }
+});
+
+/** Set the selected profile as default (via API). */
+async function applyProfileSelection(): Promise<void> {
+  if (selectedProfileId == null) return;
+  try {
+    await updateProfile(selectedProfileId, { is_default: true });
+  } catch (err) {
+    console.error('Failed to set default profile:', err);
+  }
+}
+
+/** Collect aircraft settings from the form and save to the selected profile. */
 async function collectAndSaveAircraftSettings(): Promise<void> {
-  if (!wizardEl || !defaultProfile) return;
+  if (!wizardEl) return;
+  const profile = getSelectedProfile();
+  if (!profile) return;
 
   const altitude = parseInt((wizardEl.querySelector('#wiz-altitude') as HTMLInputElement)?.value || String(DEFAULT_CRUISE_ALT_FT), 10);
   const ceiling = parseInt((wizardEl.querySelector('#wiz-ceiling') as HTMLInputElement)?.value || String(DEFAULT_CEILING_FT), 10);
@@ -305,8 +400,7 @@ async function collectAndSaveAircraftSettings(): Promise<void> {
   };
 
   try {
-    const updated = await updateProfile(defaultProfile.id, { settings });
-    defaultProfile = updated;
+    await updateProfile(profile.id, { settings });
   } catch (err) {
     console.error('Failed to save wizard profile settings:', err);
   }
@@ -317,19 +411,16 @@ async function handleFinish(): Promise<void> {
 
   const onComplete = (wizardEl as any)._onComplete as () => void;
 
-  // Save settings from current step if on aircraft
   if (STEPS[currentStep] === 'aircraft') {
     await collectAndSaveAircraftSettings();
   }
 
-  // Mark setup as completed
   try {
     await completeSetup();
   } catch (err) {
     console.error('Failed to mark setup complete:', err);
   }
 
-  // Remove wizard
   backdropEl.classList.remove('active');
   setTimeout(() => {
     backdropEl?.remove();

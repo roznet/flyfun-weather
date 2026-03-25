@@ -4,7 +4,8 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
-import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig, type AltTimeToggleConfig } from './managers/advisories-ui';
+import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
+import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import type { DisplayMode } from './types/metrics';
 import { renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
@@ -112,6 +113,24 @@ async function init(): Promise<void> {
       defaultAlt,
       ceilingFt,
       onChange: (alt) => store.getState().setAdvisoryAltitudeOverride(alt === defaultAlt ? null : alt),
+    };
+  }
+
+  // Load user profiles for the profile selector on the advisory toolbar
+  let profiles: ProfileResponse[] = [];
+  fetchProfiles().then(p => { profiles = p; }).catch(() => {});
+
+  /** Build profile selector config for the advisory toolbar. */
+  function getProfileSelectorConfig(state: BriefingState): ProfileSelectorConfig | undefined {
+    if (!state.flight || profiles.length === 0) return undefined;
+    return {
+      profiles: profiles.map(p => ({ id: p.id, name: p.name })),
+      currentProfileId: state.flight.profile_id,
+      isOwner: state.flight.user_id === user.id,
+      onChange: async (profileId: number) => {
+        await store.getState().changeFlightProfile(profileId);
+        // Re-fetch profiles list isn't needed — IDs don't change
+      },
     };
   }
 
@@ -511,7 +530,7 @@ async function init(): Promise<void> {
       state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride
     ) {
       ui.renderAssessment(state.currentPack, state.flight);
-      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state));
+      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
       ui.renderDWDOverview(state.flight, state.currentPack);
@@ -558,7 +577,7 @@ async function init(): Promise<void> {
       updateToggleButtons(state.displayMode);
       renderSliderSections(state);
       if (state.displayMode !== prev.displayMode) {
-        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state));
+        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
         // Entering compact: enforce preferred-only layers for clouds/icing
         // (triggers vizSettings change → renderVisualization runs via that subscriber)
@@ -876,7 +895,7 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack, s.flight);
-    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s));
+    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode);
     ui.renderDWDOverview(s.flight, s.currentPack);
