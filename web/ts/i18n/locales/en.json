@@ -389,6 +389,13 @@
   "legend.icing.severe": "Severe",
   "legend.icing.severeDesc": "Rapid buildup \u2014 exit now",
 
+  "legend.sld.light": "Light",
+  "legend.sld.lightDesc": "Marginal SLD \u2014 monitor closely",
+  "legend.sld.moderate": "Moderate",
+  "legend.sld.moderateDesc": "SLD likely \u2014 avoid unless SLD-certified",
+  "legend.sld.severe": "Severe",
+  "legend.sld.severeDesc": "Strong SLD signal \u2014 avoid",
+
   "legend.cat.light": "Light",
   "legend.cat.lightDesc": "Intermittent bumps",
   "legend.cat.moderate": "Moderate",

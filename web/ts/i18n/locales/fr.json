@@ -5,11 +5,9 @@
   "nav.admin": "Admin",
   "nav.signOut": "Déconnexion",
   "nav.signIn": "Connexion",
-
   "theme.light": "Clair",
   "theme.system": "Système",
   "theme.dark": "Sombre",
-
   "flights.empty": "Aucun vol pour le moment. Créez-en un pour commencer.",
   "flights.past": "Vols passés ({count})",
   "flights.deleteConfirm": "Supprimer le vol {id} ? Tout l'historique des briefings sera supprimé.",
@@ -20,20 +18,16 @@
   "flights.btnBriefing": "Briefing",
   "flights.btnEdit": "Modifier",
   "flights.btnDelete": "Supprimer",
-
   "flights.form.errorDate": "Veuillez saisir une date.",
   "flights.form.errorWaypoints": "La route doit comporter au moins 2 codes ICAO d'aérodromes séparés par des espaces (ex. EGTK LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Chaque point de passage doit être un code ICAO à 4 lettres séparé par des espaces. Invalide(s) : {codes}",
   "flights.form.defaultTag": " (par défaut)",
-
   "briefing.noFlightSpecified": "Aucun vol spécifié. Retournez à la liste des vols.",
   "briefing.noBriefings": "Aucun briefing pour le moment",
   "briefing.noAssessment": "Aucune évaluation disponible",
   "briefing.flightPastTitle": "Le vol est dans le passé",
   "briefing.historicalRefreshTitle": "Actualisation historique (admin)",
-
   "briefing.alt": "Alt {time}",
-
   "freshness.queued": "En file d'attente",
   "freshness.queuedWaiting": "En attente de la fin des autres actualisations",
   "freshness.starting": "Démarrage de l'actualisation",
@@ -52,12 +46,9 @@
   "freshness.upToDate": "À jour",
   "freshness.updatesAvailable": "Mises à jour disponibles : ",
   "freshness.auto": " (auto)",
-
   "privacy.label": "Privé",
-
   "autoRefresh.label": "Actualisation automatique",
   "autoRefresh.at": "à ",
-
   "observations.confirming": "CONFIRME",
   "observations.significant": "SIGNIFICATIF",
   "observations.conflicting": "CONTRADICTOIRE",
@@ -85,7 +76,6 @@
   "observations.tableModel": "Modèle",
   "observations.refreshing": "Actualisation...",
   "observations.refresh": "Actualiser",
-
   "digest.synoptic": "Synoptique",
   "digest.concerns": "Préoccupations spécifiques",
   "digest.trend": "Tendance",
@@ -95,15 +85,12 @@
   "digest.notAvailable": "Résumé synoptique non disponible. Lancez une actualisation pour le générer.",
   "digest.failed": "Échec du chargement du résumé.",
   "digest.profileMismatch": "Ce résumé a été généré avec le profil \"{name}\". Le profil actuel est différent — recalculez pour mettre à jour.",
-
   "dwd.originalGerman": "Original en allemand",
   "dwd.header": "Aperçu synoptique DWD — ",
-
   "gramet.noCreds": "GRAMET non disponible. Pour l'activer, saisissez vos identifiants Autorouter dans les paramètres du compte.",
   "gramet.notAvailable": "GRAMET non disponible pour ce briefing.",
   "gramet.altText": "Coupe transversale GRAMET",
   "gramet.downloadPdf": "Télécharger le PDF GRAMET",
-
   "comparison.noDataPoint": "Aucune donnée de comparaison de modèles pour ce point.",
   "comparison.noDataAvailable": "Aucune donnée de comparaison de modèles disponible.",
   "comparison.variable": "Variable",
@@ -124,7 +111,6 @@
   "comparison.liftedIndex": "Lifted Index",
   "comparison.shear": "Cisaillement 0-6km (kt)",
   "comparison.maxOmega": "Omega max (Pa/s)",
-
   "sounding.noAnalysis": "Aucune analyse de sondage disponible.",
   "sounding.notAvailable": "Analyse de sondage non disponible pour ce briefing.",
   "sounding.noDataPoint": "Aucune donnée de sondage pour ce point.",
@@ -151,14 +137,11 @@
   "sounding.unableDescend": "Impossible de descendre sous l'isotherme 0°C",
   "sounding.surface": "SFC",
   "sounding.atmosphericProfile": "Profil atmosphérique",
-
   "sounding.advisories": "Avis",
   "sounding.origin": "Départ",
   "sounding.destination": "Destination",
-
   "skewt.notAvailable": "Diagrammes Skew-T non disponibles.",
   "skewt.tabNotAvailable": "Non disponible",
-
   "advisories.noAdvisories": "Aucun avis disponible",
   "advisories.recalculate": "Recalculer",
   "advisories.profile": "Profil",
@@ -182,11 +165,9 @@
   "advisories.headwind": "Vent de face",
   "advisories.departure": "Départ",
   "advisories.arrival": "Arrivée",
-
   "advisories.parameter": "Paramètre",
   "advisories.value": "Valeur",
   "advisories.description": "Description",
-
   "viz.xSection": "Coupe",
   "viz.compare": "Comparer",
   "viz.split": "Diviser",
@@ -205,11 +186,9 @@
   "viz.right": "Droite :",
   "viz.color": "Couleur :",
   "viz.width": "Largeur :",
-
   "viz.cloudMethods": "<h3>Méthodes de détection des nuages</h3><p>Les nuages peuvent être détectés de deux façons sur la coupe transversale :</p><ul><li><strong>Couches NWP</strong> — dérivées de la paramétrisation de la couverture nuageuse du modèle de prévision numérique (bandes basses / moyennes / hautes). Indique où le modèle lui-même prévoit des nuages.</li><li><strong>Couches DD</strong> — dérivées de l'écart au point de rosée dans le profil de sondage. Lorsque l'écart entre la température et le point de rosée est faible (DD &lt; 2°C), l'air est proche de la saturation et la présence de nuages est probable. C'est un signal basé sur le sondage, indépendant du schéma nuageux du modèle.</li></ul><p>Les deux méthodes peuvent être activées simultanément pour comparaison. Elles concordent souvent dans les couches humides mais peuvent diverger là où des nuages sous-maille NWP ou de l'humidité locale sont présents.</p>",
   "viz.convectionMethods": "<h3>Méthodes convectives</h3><p>La coupe transversale propose deux couches de risque convectif :</p><ul><li><strong>Thermo</strong> — risque basé sur les indices thermodynamiques (CAPE, CIN). Les limites des tours sont définies par le LFC/LCL (base) et l'EL (sommet). Risque nul lorsque le CAPE est nul, même si le modèle NWP paramétre des nuages convectifs.</li><li><strong>NWP</strong> — risque basé sur la paramétrisation native de la nébulosité convective du modèle NWP (couverture convective GFS en %). Les limites des tours sont calculées par le modèle (base/sommet convectifs). Cela correspond généralement à ce que GRAMET affiche.</li></ul><p>Activez les deux pour comparer. Le système d'avis utilise la méthode que vous avez sélectionnée dans les paramètres de votre profil.</p>",
   "viz.icingMethods": "<h3>Méthodes de givrage</h3><p>La coupe transversale propose trois couches de givrage, chacune combinant une <strong>formule de givrage</strong> avec une <strong>méthode de détection des nuages</strong> :</p><h4>Formules</h4><ul><li><strong>Ogimet</strong> — indice parabolique continu avec un pic à −7°C. Associe la température à un indice de sévérité du givrage sur la plage de 0 à −14°C (stratiforme) ou de 0 à −20°C (convectif). Simple et éprouvé pour l'aviation générale européenne.</li><li><strong>SFIP</strong> — algorithme à logique floue combinant température, humidité relative, eau liquide nuageuse et vitesse verticale via des fonctions d'appartenance. Plus complexe, utilise directement les données d'humidité NWP lorsqu'elles sont disponibles.</li></ul><h4>Signaux de nuages</h4><ul><li><strong>DD</strong> (écart au point de rosée) — basé sur le sondage. Utilise une transition en cosinus continue : indice de givrage complet à DD = 0, nul à DD ≥ 2°C. Aucune donnée NWP de nuages nécessaire.</li><li><strong>NWP</strong> (couverture nuageuse du modèle) — utilise le pourcentage de couverture nuageuse du modèle NWP à chaque altitude. 50 % de nuages → 50 % de l'indice de givrage. C'est l'approche utilisée par Autorouter GRAMET.</li></ul><h4>Les trois méthodes</h4><ul><li><strong>Ogimet-DD</strong> — formule Ogimet + signal de nuage DD</li><li><strong>Ogimet-NWP</strong> — formule Ogimet + signal de nuage NWP</li><li><strong>SFIP-NWP</strong> — logique floue SFIP (utilise intrinsèquement les données d'humidité NWP)</li></ul><p>Activez plusieurs méthodes pour les comparer côte à côte. Le système d'avis utilise la méthode que vous avez sélectionnée dans les paramètres de votre profil.</p>",
-
   "feedback.title": "Envoyer un retour",
   "feedback.subtitle": "Signalez un problème ou suggérez une amélioration pour ce briefing.",
   "feedback.categoryLabel": "Catégorie",
@@ -222,24 +201,20 @@
   "feedback.thanks": "Merci pour votre retour !",
   "feedback.submitted": "Votre signalement a été envoyé.",
   "feedback.failedSubmit": "Échec de l'envoi : {error}",
-
   "feedback.cat.dataIssue": "Problème de données du briefing",
   "feedback.cat.tooConservative": "Briefing trop conservateur",
   "feedback.cat.tooOptimistic": "Briefing trop optimiste",
   "feedback.cat.incorrectInterpretation": "Interprétation incorrecte du briefing",
   "feedback.cat.other": "Autre bug/problème",
-
   "historical.title": "Actualisation historique",
   "historical.subtitle": "Récupérer la prévision telle qu'elle était à cette date.",
   "historical.asOfDate": "Date de référence",
   "historical.cancel": "Annuler",
   "historical.refresh": "Actualiser",
-
   "btn.refreshing": "Actualisation...",
   "btn.refresh": "Actualiser",
   "btn.sending": "Envoi en cours...",
   "btn.sendEmail": "Envoyer par e-mail",
-
   "wizard.welcomeTitle": "Bienvenue sur Flyfun Weather",
   "wizard.welcomeSubtitle": "Évaluation météorologique pour les vols d'aviation générale en campagne",
   "wizard.betaNotice": "Flyfun Weather est actuellement en <strong>bêta</strong>. Nous vous remercions de prendre le temps d'essayer l'outil — n'hésitez pas à nous envoyer vos retours si un briefing vous semble suspect ou si vous rencontrez un problème.",
@@ -287,11 +262,9 @@
   "wizard.profileHint": "Cliquez sur une carte pour sélectionner votre profil par défaut. Vous pourrez changer ou personnaliser les profils plus tard dans les Paramètres.",
   "wizard.profileNone": "Aucun profil système disponible — vous pouvez configurer vos paramètres à l'étape suivante.",
   "wizard.getStarted": "Commencer",
-
   "settings.resetToTemplate": "Réinitialiser au modèle",
   "settings.resetConfirm": "Réinitialiser « {name} » aux paramètres du modèle système d'origine ? Vos personnalisations seront perdues.",
   "settings.profileReset": "Profil réinitialisé aux valeurs par défaut du modèle.",
-
   "settings.cat.icing": "Givrage",
   "settings.cat.cloud": "Nuage",
   "settings.cat.turbulence": "Turbulence",
@@ -325,19 +298,15 @@
   "settings.deleteAccountConfirm": "Êtes-vous sûr de vouloir supprimer votre compte ? Tous vos vols, briefings et paramètres seront définitivement supprimés.",
   "settings.deleteAccountDoubleConfirm": "Cette action est irréversible. Êtes-vous sûr de vouloir supprimer définitivement votre compte et toutes vos données ?",
   "settings.deleteAccountFailed": "Échec de la suppression du compte : {error}",
-
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
   "usage.gramet": "GRAMET",
   "usage.aiDigest": "Digest IA",
   "usage.monthSummary": "{briefings} briefings / {gramet} GRAMET / {digests} digests IA / {tokens}",
-
   "privacy.failedUpdate": "Échec de la mise à jour de la confidentialité : {error}",
   "autoRefresh.failedUpdate": "Échec de la mise à jour de l'actualisation automatique : {error}",
-
   "popup.close": "Fermer",
   "popup.discussAi": "Parlez-moi davantage de {metric} dans le contexte de la météorologie aéronautique. Comment un pilote VFR ou IFR devrait-il l'interpréter, quels sont les seuils clés, et comment interagit-il avec les autres paramètres météorologiques pour la sécurité du vol ?",
-
   "viz.layer.terrain": "Terrain",
   "viz.layer.cloud-bands": "Couches DD",
   "viz.layer.nwp-cloud-bands": "Couches NWP",
@@ -360,7 +329,6 @@
   "viz.layer.lfc": "LFC",
   "viz.layer.el": "EL",
   "viz.layer.cruise-altitude": "Croisière / Plafond",
-
   "viz.group.terrain": "Terrain",
   "viz.group.temperature": "Température",
   "viz.group.clouds": "Nuages",
@@ -369,24 +337,20 @@
   "viz.group.turbulence": "Turbulence",
   "viz.group.convection": "Convection",
   "viz.group.reference": "Référence",
-
   "viz.refCruise": "Croisière {alt} ft",
   "viz.refCeiling": "Plafond {alt} ft",
-
   "legend.icing.light": "Léger",
   "legend.icing.lightDesc": "Gérable pour un aéronef équipé",
   "legend.icing.moderate": "Modéré",
   "legend.icing.moderateDesc": "Sortir des nuages si le givre persiste",
   "legend.icing.severe": "Sévère",
   "legend.icing.severeDesc": "Accumulation rapide — sortir immédiatement",
-
   "legend.cat.light": "Léger",
   "legend.cat.lightDesc": "Secousses intermittentes",
   "legend.cat.moderate": "Modéré",
   "legend.cat.moderateDesc": "Les objets non arrimés se déplaceront",
   "legend.cat.severe": "Sévère",
   "legend.cat.severeDesc": "Éviter cette couche",
-
   "legend.convective.marginal": "Marginal",
   "legend.convective.marginalDesc": "Convection peu profonde possible",
   "legend.convective.low": "Faible",
@@ -397,28 +361,24 @@
   "legend.convective.highDesc": "Orages violents probables",
   "legend.convective.extreme": "Extrême",
   "legend.convective.extremeDesc": "Conditions sévères — reporter ou annuler",
-
   "legend.cloud.ovc": "OVC (DD < 1°C)",
   "legend.cloud.ovcDesc": "Couvert — remplissage plein",
   "legend.cloud.bkn": "BKN (DD 1–2°C)",
   "legend.cloud.bknDesc": "Fragmenté — traits épais",
   "legend.cloud.sct": "SCT (DD 2–3°C)",
   "legend.cloud.sctDesc": "Épars — traits fins",
-
   "legend.nwpCloud.25": "25 % de couverture",
   "legend.nwpCloud.25Desc": "Épars",
   "legend.nwpCloud.50": "50 % de couverture",
   "legend.nwpCloud.50Desc": "Fragmenté",
   "legend.nwpCloud.75": "75 %+ de couverture",
   "legend.nwpCloud.75Desc": "Couvert",
-
   "legend.inversion.weak": "Faible (<1°C)",
   "legend.inversion.weakDesc": "Légère rétention de brume",
   "legend.inversion.moderate": "Modérée (1–3°C)",
   "legend.inversion.moderateDesc": "Visibilité réduite en dessous",
   "legend.inversion.strong": "Forte (>3°C)",
   "legend.inversion.strongDesc": "Brume/brouillard dense piégé",
-
   "legend.line.freezingLevel": "Isotherme 0°C",
   "legend.line.minus10": "Niveau −10°C",
   "legend.line.minus20": "Niveau −20°C",
@@ -430,7 +390,6 @@
   "legend.line.dashedCloudBase": "Trait pointillé — base des nuages",
   "legend.line.dashedFreeConvection": "Trait pointillé — convection libre",
   "legend.line.dashedStormTop": "Trait pointillé — sommet d'orage",
-
   "graph.headwind": "Vent de face/arrière",
   "graph.crosswind": "Vent traversier",
   "graph.temperature": "Température (2m)",
@@ -443,7 +402,6 @@
   "graph.none": "Aucun",
   "graph.headwindUp": "Vent de face ↑",
   "graph.tailwindDown": "Vent arrière ↓",
-
   "map.cloud-cover-total": "Couverture nuageuse (totale)",
   "map.cloud-cover-low": "Couverture nuageuse (basse)",
   "map.convective-risk": "Risque convectif",
@@ -465,7 +423,6 @@
   "map.overcast": "Couvert",
   "map.calm": "Calme",
   "map.sfc": "SFC",
-
   "page.flights.title": "Mes vols",
   "page.flights.newFlight": "Nouveau vol",
   "page.flights.waypoints": "Points de passage (codes ICAO d'aérodromes uniquement)",
@@ -477,7 +434,6 @@
   "page.flights.duration": "Durée (h)",
   "page.flights.createFlight": "Créer un vol",
   "page.flights.loading": "Chargement des vols...",
-
   "page.settings.title": "Paramètres",
   "page.settings.save": "Enregistrer",
   "page.settings.backToFlights": "Retour aux vols",
@@ -537,10 +493,15 @@
   "page.settings.deleteAccountTitle": "Supprimer le compte",
   "page.settings.deleteAccountHint": "Supprime définitivement votre compte et toutes les données associées (vols, briefings, profils). Cette action est irréversible.",
   "page.settings.deleteAccount": "Supprimer le compte",
-
   "messages.empty": "Aucune annonce pour le moment.",
   "messages.loadFailed": "Impossible de charger les messages.",
   "messages.category.feature": "Nouveau",
   "messages.category.change": "Changement",
-  "messages.category.fix": "Correctif"
+  "messages.category.fix": "Correctif",
+  "legend.sld.light": "Light",
+  "legend.sld.lightDesc": "Marginal SLD — monitor closely",
+  "legend.sld.moderate": "Moderate",
+  "legend.sld.moderateDesc": "SLD likely — avoid unless SLD-certified",
+  "legend.sld.severe": "Severe",
+  "legend.sld.severeDesc": "Strong SLD signal — avoid"
 }

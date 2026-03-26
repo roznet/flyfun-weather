@@ -545,8 +545,42 @@
       { "min": 55, "max": 100, "label": "Severe", "risk": "severe", "meaning": "Severe icing — avoid or exit immediately." }
     ]
   },
+  "ieng_icing_risk": {
+    "name": "Icing Risk (IENG)",
+    "unit": "",
+    "vibe": "CloudPath-style icing from temperature and cloud cover",
+    "primary_goal": "Classify icing severity using the IENG formula: temperature-based index scaled directly by NWP cloud coverage fraction.",
+    "best_used_for": "A simpler alternative to Ogimet-NWP. No glaciation correction — treats cloud fraction as a direct multiplier on icing potential. Matches the approach used by CloudPath.",
+    "limitations": "Does not account for droplet size (SLD) or cloud glaciation state. Relies on NWP cloud cover which may differ between models. Slightly overestimates icing in glaciated clouds compared to Ogimet-NWP.",
+    "theory": "Uses the same Ogimet layered index formula — a parabola peaking at −7°C: 100 × (−T) × (T + 14) / 49 for −14 ≤ T ≤ 0°C. The cloud signal is the NWP cloud coverage fraction at the level's altitude, used as a direct multiplier: effective = index × cloud_fraction. No glaciation factor is applied (unlike Ogimet-NWP which reduces the index when GRIB data shows ice-dominant cloud). Convective component added when CAPE > 100 J/kg from convective cloud cover.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain how the IENG icing index works — same temperature parabola as Ogimet but scaled directly by NWP cloud fraction without glaciation correction",
+    "thresholds": [
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No icing concern." },
+      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
+    ]
+  },
+  "sld_risk": {
+    "name": "SLD Risk (Supercooled Large Droplets)",
+    "unit": "",
+    "vibe": "The droplet size danger signal",
+    "primary_goal": "Detect areas where supercooled large droplets are likely, which can cause rapid ice accretion beyond what standard de-ice systems handle.",
+    "best_used_for": "Identifying the most dangerous icing conditions — SLD can overwhelm FIKI equipment. Currently GFS-only (requires cloud liquid water and ice mixing ratio from GRIB data).",
+    "limitations": "Only available for GFS — ECMWF and ICON do not provide CLMR/ICMR fields via Open-Meteo. Model resolution may not capture localized SLD conditions. The detection is a necessary but not sufficient condition for SLD encounter.",
+    "theory": "Detects SLD by analyzing cloud microphysics from GRIB data. Three criteria must be met: (1) temperature between −20°C and 0°C, (2) cloud liquid water mixing ratio (CLMR) exceeds a minimum threshold, and (3) the liquid ratio CLMR/(CLMR+ICMR) exceeds 0.5, indicating liquid-dominant (not glaciated) cloud. Intensity combines the liquid ratio with the magnitude of CLMR. Higher liquid ratios in warmer sub-zero temperatures indicate larger droplets that resist freezing — the signature of SLD conditions.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Supercooled_large_drop_icing_conditions",
+    "llm_prompt": "explain what supercooled large droplets (SLD) are, why they're more dangerous than regular icing, and how CLMR/ICMR ratios can detect them",
+    "thresholds": [
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No SLD detected." },
+      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Marginal SLD conditions — monitor closely." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "SLD likely — avoid unless SLD-certified." },
+      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Strong SLD signal. Avoid regardless of equipment." }
+    ]
+  },
   "cat_risk": {
-    "name": "CAT Risk",
+    "name": "CAT Risk (Richardson)",
     "unit": "",
     "vibe": "The coffee spiller gauge",
     "primary_goal": "Predict Clear Air Turbulence from Richardson number.",
@@ -560,6 +594,23 @@
       { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Intermittent bumps possible." },
       { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Turbulence likely. Unsecured items will move." },
       { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Shear overwhelms stability — turbulent breakdown. Avoid this layer." }
+    ]
+  },
+  "e_shear_risk": {
+    "name": "CAT Risk (E-Shear)",
+    "unit": "",
+    "vibe": "Wind shear turbulence detector",
+    "primary_goal": "Predict Clear Air Turbulence from combined vertical and horizontal wind shear magnitude.",
+    "best_used_for": "An alternative to Richardson number that focuses on raw shear strength rather than the stability/shear balance. Matches the CloudPath GRAMET turbulence method. Works for all models.",
+    "limitations": "Does not consider atmospheric stability — strong shear in a very stable layer (high Ri) may trigger a false positive. Blind to mountain waves, convective turbulence, and wake turbulence. HWS component depends on route point spacing.",
+    "theory": "Computes the E parameter from combined wind shear: E = (5 × HWS + VWS² + 42) / 4. VWS (vertical wind shear) is computed between adjacent pressure levels from U/V wind components. HWS (horizontal wind shear) is computed between adjacent route points at matching pressure levels. The formula weights horizontal shear more heavily (×5) reflecting its importance for CAT along flight routes. Thresholds: E ≥ 40 light, E ≥ 80 moderate, E ≥ 160 severe.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Clear-air_turbulence",
+    "llm_prompt": "explain the E-parameter turbulence formula E = (5*HWS + VWS² + 42) / 4, how it combines vertical and horizontal wind shear, and how it compares to the Richardson number approach",
+    "thresholds": [
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "Smooth. Minimal wind shear." },
+      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Minor shear. Occasional bumps." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant shear. Expect turbulence." },
+      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Extreme wind shear. Avoid this layer." }
     ]
   },
   "richardson_number": {
