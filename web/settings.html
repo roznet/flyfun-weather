@@ -207,10 +207,12 @@
             <div class="form-group">
               <label for="input-cloud-method">Cloud Method</label>
               <select id="input-cloud-method" class="input-select">
-                <option value="dd">DD (dewpoint depression)</option>
-                <option value="nwp">NWP (model cloud layers)</option>
+                <option value="soft_nwp">Soft NWP (recommended)</option>
+                <option value="soft_dd">Soft DD</option>
+                <option value="nwp">NWP (hatched)</option>
+                <option value="dd">DD (hatched)</option>
               </select>
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which cloud detection feeds Cloud Tops, VFR Feasibility, VMC Cruise advisories. NWP falls back to DD when model lacks cloud layer boundaries.</span>
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Cloud rendering style for the cross-section. Soft uses gradient fills; DD/NWP hatched is the classic look. Advisory cloud detection is independent of this setting.</span>
             </div>
             <div class="form-group">
               <label for="input-convective-method">Convective Method</label>
