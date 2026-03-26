@@ -19,7 +19,7 @@ jobs:
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
       issues: write
       id-token: write
@@ -35,16 +35,45 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          print_output: "true"
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr:*)'
+          allowed_tools: |
+            Bash(git diff:*)
+            Bash(git log:*)
+            Bash(git show:*)
+            Bash(git status)
+            Bash(git fetch:*)
+            Bash(python:*)
+            Bash(pip:*)
+            Bash(npm:*)
+            Bash(npx:*)
+            Bash(cat:*)
+            Bash(ls:*)
+            Bash(find:*)
+            Bash(grep:*)
+            Bash(head:*)
+            Bash(tail:*)
+            Read
+            Edit
+            Write
+            Glob
+            Grep
+            mcp__github__create_pull_request
+            mcp__github__add_issue_comment
+            mcp__github__add_reply_to_pull_request_comment
+            mcp__github__create_branch
+            mcp__github__create_or_update_file
+            mcp__github__list_commits
+            mcp__github__list_pull_requests
+            mcp__github__pull_request_read
+            mcp__github__pull_request_review_write
+            mcp__github__search_code
+            mcp__github__get_file_contents
+            mcp__github__issue_read
+            mcp__github__issue_write
+            mcp__github__push_files
 
