@@ -142,6 +142,8 @@ def main():
         print(fixture["context"])
         return
 
+    guidance_key = args.guidance
+
     # Filter
     entries = index
     if args.filter:
@@ -154,20 +156,32 @@ def main():
     print(f"Fixtures: {len(entries)} (of {len(index)} total)")
 
     if args.dry_run:
+        has_expected_count = 0
         for e in entries:
             adv = e.get("advisory_counts", {})
+            # Show expected assessment for the active guidance if available
+            expected_col = ""
+            if guidance_key:
+                fixture = load_fixture(e["id"])
+                ea = fixture["meta"].get("expected_assessments", {})
+                if guidance_key in ea:
+                    expected_col = f" exp={ea[guidance_key]:5}"
+                    has_expected_count += 1
+                else:
+                    expected_col = " exp=  -  "
             print(
-                f"  [{e['assessment']:5}] G={adv.get('green', '-'):>2} "
+                f"  [{e['assessment']:5}]{expected_col} G={adv.get('green', '-'):>2} "
                 f"A={adv.get('amber', '-'):>2} R={adv.get('red', '-'):>2} | "
                 f"{e['route']:45} d{e['days_out']} | {e['context_chars']:>6}ch  {e['id']}"
             )
         total_chars = sum(e["context_chars"] for e in entries)
         print(f"\nTotal context: {total_chars:,} chars (~{total_chars//4:,} tokens)")
+        if guidance_key:
+            print(f"Expected assessments ({guidance_key}): {has_expected_count}/{len(entries)} fixtures")
         return
 
     # Load LLM config and prompt
     config = load_digest_config(args.config)
-    guidance_key = args.guidance
     if args.prompt:
         system_prompt = Path(args.prompt).read_text()
     else:
@@ -181,42 +195,68 @@ def main():
 
     results = []
     changed = 0
+    passed = 0
+    failed = 0
+    no_expected = 0
     total_input = 0
     total_output = 0
 
     for i, entry in enumerate(entries):
         fixture = load_fixture(entry["id"])
-        old_assessment = fixture["digest"]["assessment"]
+        meta = fixture["meta"]
+
+        # Use expected_assessments[guidance] when available, else fall back to digest
+        expected_assessments = meta.get("expected_assessments", {})
+        if guidance_key and guidance_key in expected_assessments:
+            expected = expected_assessments[guidance_key]
+            has_expected = True
+        else:
+            expected = fixture["digest"]["assessment"]
+            has_expected = False
 
         try:
             digest, info = run_one(fixture["context"], system_prompt, config)
             new_assessment = digest.assessment
-            cmp = compare_assessment(old_assessment, new_assessment)
+            cmp = compare_assessment(expected, new_assessment)
             total_input += info.get("input_tokens", 0)
             total_output += info.get("output_tokens", 0)
 
-            if old_assessment != new_assessment:
+            if expected != new_assessment:
                 changed += 1
+
+            if has_expected:
+                if expected == new_assessment:
+                    passed += 1
+                    status = "PASS"
+                else:
+                    failed += 1
+                    status = "FAIL"
+            else:
+                no_expected += 1
+                status = "----"
 
             adv = entry.get("advisory_counts", {})
             print(
-                f"  [{i+1:>3}/{len(entries)}] {old_assessment:5} {cmp} {new_assessment:5} | "
+                f"  [{i+1:>3}/{len(entries)}] {status} {expected:5} {cmp} {new_assessment:5} | "
                 f"G={adv.get('green', '-'):>2} A={adv.get('amber', '-'):>2} R={adv.get('red', '-'):>2} | "
                 f"{entry['route']:35} d{entry['days_out']} | "
                 f"{info.get('elapsed_s', '?')}s"
             )
             if cmp != "=":
-                print(f"         old: {fixture['digest']['assessment_reason'][:90]}")
-                print(f"         new: {digest.assessment_reason[:90]}")
+                reason_label = "expected" if has_expected else "old"
+                print(f"         {reason_label}: {fixture['digest']['assessment_reason'][:90]}")
+                print(f"         new:      {digest.assessment_reason[:90]}")
 
             results.append({
                 "id": entry["id"],
                 "route": entry["route"],
                 "days_out": entry["days_out"],
-                "old_assessment": old_assessment,
+                "expected_assessment": expected,
                 "new_assessment": new_assessment,
-                "changed": old_assessment != new_assessment,
-                "old_reason": fixture["digest"]["assessment_reason"],
+                "has_expected": has_expected,
+                "passed": has_expected and expected == new_assessment,
+                "changed": expected != new_assessment,
+                "expected_reason": fixture["digest"]["assessment_reason"],
                 "new_reason": digest.assessment_reason,
                 "new_digest": digest.model_dump(),
                 "advisory_counts": entry.get("advisory_counts", {}),
@@ -233,12 +273,17 @@ def main():
     # Summary
     print(f"\n{'='*60}")
     print(f"Changed: {changed}/{len(entries)}")
+    if passed or failed:
+        total_tested = passed + failed
+        print(f"Regression: {passed}/{total_tested} passed, {failed}/{total_tested} failed")
+        if no_expected:
+            print(f"  ({no_expected} fixtures without expected_assessments — not scored)")
     print(f"Tokens: {total_input:,} input + {total_output:,} output")
 
     from collections import Counter
-    old_dist = Counter(r.get("old_assessment") for r in results if "old_assessment" in r)
+    expected_dist = Counter(r.get("expected_assessment") for r in results if "expected_assessment" in r)
     new_dist = Counter(r.get("new_assessment") for r in results if "new_assessment" in r)
-    print(f"Old distribution: {dict(old_dist)}")
+    print(f"Expected distribution: {dict(expected_dist)}")
     print(f"New distribution: {dict(new_dist)}")
 
     if args.output:

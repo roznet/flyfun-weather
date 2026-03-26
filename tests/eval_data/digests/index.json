@@ -1,13 +1,433 @@
 [
   {
+    "id": "bgsf_birk_2026-03-02_d0_2026-03-02",
+    "route": "BGSF -> BIRK",
+    "target_date": "2026-03-02",
+    "days_out": 0,
+    "assessment": "AMBER",
+    "context_chars": 7217,
+    "advisory_counts": {
+      "green": 5,
+      "amber": 3,
+      "red": 4
+    }
+  },
+  {
     "id": "borderline_icing_amber_red",
-    "route": "EGTK -> LFPB -> LSGG",
+    "route": "EGTK -> LSGG",
     "target_date": "2026-03-15",
     "days_out": 1,
     "assessment": "AMBER",
-    "context_chars": 3464,
-    "advisory_counts": {"green": 8, "amber": 1, "red": 1},
+    "context_chars": 3439,
+    "advisory_counts": {
+      "green": 8,
+      "amber": 1,
+      "red": 1
+    },
     "synthetic": true
+  },
+  {
+    "id": "egbt_egff_2026-02-25_d0_2026-02-25",
+    "route": "EGBT -> EGFF",
+    "target_date": "2026-02-25",
+    "days_out": 0,
+    "assessment": "AMBER",
+    "context_chars": 10242,
+    "advisory_counts": {
+      "green": 6,
+      "amber": 4,
+      "red": 1
+    }
+  },
+  {
+    "id": "egtf_ebos_ehrd_2026-03-01_d1_2026-02-28",
+    "route": "EGTF -> EBOS -> EHRD",
+    "target_date": "2026-03-01",
+    "days_out": 1,
+    "assessment": "AMBER",
+    "context_chars": 10819,
+    "advisory_counts": {
+      "green": 5,
+      "amber": 4,
+      "red": 3
+    }
+  },
+  {
+    "id": "egtf_ebos_ehrd_2026-03-02_d1_2026-03-01",
+    "route": "EGTF -> EBOS -> EHRD",
+    "target_date": "2026-03-02",
+    "days_out": 1,
+    "assessment": "GREEN",
+    "context_chars": 9266,
+    "advisory_counts": {
+      "green": 12,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "egtf_ebos_ehrd_2026-03-02_d2_2026-02-28",
+    "route": "EGTF -> EBOS -> EHRD",
+    "target_date": "2026-03-02",
+    "days_out": 2,
+    "assessment": "GREEN",
+    "context_chars": 9299,
+    "advisory_counts": {
+      "green": 12,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "egtf_eglf_2026-02-25_d0_2026-02-25",
+    "route": "EGTF -> EGLF",
+    "target_date": "2026-02-25",
+    "days_out": 0,
+    "assessment": "GREEN",
+    "context_chars": 8432,
+    "advisory_counts": {
+      "green": 12,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "egtf_lfat_2026-02-21_d5_2026-02-16",
+    "route": "EGTF -> LFAT",
+    "target_date": "2026-02-21",
+    "days_out": 5,
+    "assessment": "GREEN",
+    "context_chars": 4238,
+    "advisory_counts": {
+      "green": 4,
+      "amber": 4,
+      "red": 2
+    }
+  },
+  {
+    "id": "egtf_lfat_2026-02-21_d6_2026-02-15",
+    "route": "EGTF -> LFAT",
+    "target_date": "2026-02-21",
+    "days_out": 6,
+    "assessment": "GREEN",
+    "context_chars": 4254,
+    "advisory_counts": {
+      "green": 5,
+      "amber": 3,
+      "red": 1
+    }
+  },
+  {
+    "id": "egtf_lfat_2026-03-14_d7_2026-03-07",
+    "route": "EGTF -> LFAT",
+    "target_date": "2026-03-14",
+    "days_out": 7,
+    "assessment": "RED",
+    "context_chars": 4199,
+    "advisory_counts": {
+      "green": 3,
+      "amber": 2,
+      "red": 6
+    }
+  },
+  {
+    "id": "egtf_lfat_lfqa_lfsd_lsgl_lsgs_2026-03-06_d4_2026-03-02",
+    "route": "EGTF -> LFAT -> LFQA -> LFSD -> LSGL -> LSGS",
+    "target_date": "2026-03-06",
+    "days_out": 4,
+    "assessment": "AMBER",
+    "context_chars": 16233,
+    "advisory_counts": {
+      "green": 6,
+      "amber": 2,
+      "red": 3
+    }
+  },
+  {
+    "id": "egtf_lfat_lfqa_lfsd_lsgl_lsgs_2026-03-06_d7_2026-02-27",
+    "route": "EGTF -> LFAT -> LFQA -> LFSD -> LSGL -> LSGS",
+    "target_date": "2026-03-06",
+    "days_out": 7,
+    "assessment": "AMBER",
+    "context_chars": 8330,
+    "advisory_counts": {
+      "green": 4,
+      "amber": 2,
+      "red": 5
+    }
+  },
+  {
+    "id": "egtf_lfat_lfqb_lsgl_lsgs_2026-03-06_d4_2026-03-02",
+    "route": "EGTF -> LFAT -> LFQB -> LSGL -> LSGS",
+    "target_date": "2026-03-06",
+    "days_out": 4,
+    "assessment": "AMBER",
+    "context_chars": 15525,
+    "advisory_counts": {
+      "green": 10,
+      "amber": 0,
+      "red": 2
+    }
+  },
+  {
+    "id": "egtf_lfat_lfqb_lsgl_lsgs_2026-03-06_d7_2026-02-27",
+    "route": "EGTF -> LFAT -> LFQB -> LSGL -> LSGS",
+    "target_date": "2026-03-06",
+    "days_out": 7,
+    "assessment": "AMBER",
+    "context_chars": 11013,
+    "advisory_counts": {
+      "green": 4,
+      "amber": 3,
+      "red": 5
+    }
+  },
+  {
+    "id": "egtf_lflx_lfmd_2026-02-16_d1_2026-02-15",
+    "route": "EGTF -> LFLX -> LFMD",
+    "target_date": "2026-02-16",
+    "days_out": 1,
+    "assessment": "AMBER",
+    "context_chars": 3083,
+    "advisory_counts": {
+      "green": 0,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "egtf_lflx_lfmd_2026-02-23_d2_2026-02-21",
+    "route": "EGTF -> LFLX -> LFMD",
+    "target_date": "2026-02-23",
+    "days_out": 2,
+    "assessment": "AMBER",
+    "context_chars": 12158,
+    "advisory_counts": {
+      "green": 1,
+      "amber": 6,
+      "red": 4
+    }
+  },
+  {
+    "id": "egtf_lflx_lftz_2026-02-23_d1_2026-02-22",
+    "route": "EGTF -> LFLX -> LFTZ",
+    "target_date": "2026-02-23",
+    "days_out": 1,
+    "assessment": "AMBER",
+    "context_chars": 11416,
+    "advisory_counts": {
+      "green": 5,
+      "amber": 3,
+      "red": 3
+    }
+  },
+  {
+    "id": "egtf_lflx_lftz_2026-02-23_d2_2026-02-21",
+    "route": "EGTF -> LFLX -> LFTZ",
+    "target_date": "2026-02-23",
+    "days_out": 2,
+    "assessment": "AMBER",
+    "context_chars": 12315,
+    "advisory_counts": {
+      "green": 4,
+      "amber": 4,
+      "red": 3
+    }
+  },
+  {
+    "id": "egtf_lfqa_lsgs_2026-02-14_d0_2026-02-14",
+    "route": "EGTF -> LFQA -> LSGS",
+    "target_date": "2026-02-14",
+    "days_out": 0,
+    "assessment": "AMBER",
+    "context_chars": 4464,
+    "advisory_counts": {
+      "green": 0,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "egtf_lfqa_lsgs_2026-02-14_d2_2026-02-12",
+    "route": "EGTF -> LFQA -> LSGS",
+    "target_date": "2026-02-14",
+    "days_out": 2,
+    "assessment": "AMBER",
+    "context_chars": 4504,
+    "advisory_counts": {
+      "green": 0,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "kpao_kpga_2026-03-04_d3_2026-03-01",
+    "route": "KPAO -> KPGA",
+    "target_date": "2026-03-04",
+    "days_out": 3,
+    "assessment": "AMBER",
+    "context_chars": 4336,
+    "advisory_counts": {
+      "green": 9,
+      "amber": 2,
+      "red": 1
+    }
+  },
+  {
+    "id": "kteb_kpvd_khya_2026-03-01_d1_2026-02-28",
+    "route": "KTEB -> KPVD -> KHYA",
+    "target_date": "2026-03-01",
+    "days_out": 1,
+    "assessment": "RED",
+    "context_chars": 6604,
+    "advisory_counts": {
+      "green": 3,
+      "amber": 0,
+      "red": 9
+    }
+  },
+  {
+    "id": "lfmd_lflx_egtf_2026-03-01_d0_2026-03-01",
+    "route": "LFMD -> LFLX -> EGTF",
+    "target_date": "2026-03-01",
+    "days_out": 0,
+    "assessment": "AMBER",
+    "context_chars": 11330,
+    "advisory_counts": {
+      "green": 4,
+      "amber": 6,
+      "red": 2
+    }
+  },
+  {
+    "id": "lfmd_lflx_egtf_2026-03-01_d4_2026-02-25",
+    "route": "LFMD -> LFLX -> EGTF",
+    "target_date": "2026-03-01",
+    "days_out": 4,
+    "assessment": "AMBER",
+    "context_chars": 11187,
+    "advisory_counts": {
+      "green": 4,
+      "amber": 4,
+      "red": 3
+    }
+  },
+  {
+    "id": "lfmd_lflx_lfmd_2026-02-25_d0_2026-02-25",
+    "route": "LFMD -> LFLX -> LFMD",
+    "target_date": "2026-02-25",
+    "days_out": 0,
+    "assessment": "AMBER",
+    "context_chars": 14172,
+    "advisory_counts": {
+      "green": 11,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "lfmd_lfth_lfmq_2026-02-24_d3_2026-02-21",
+    "route": "LFMD -> LFTH -> LFMQ",
+    "target_date": "2026-02-24",
+    "days_out": 3,
+    "assessment": "AMBER",
+    "context_chars": 10123,
+    "advisory_counts": {
+      "green": 11,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "lfqa_lsgs_2026-03-03_d1_2026-03-02",
+    "route": "LFQA -> LSGS",
+    "target_date": "2026-03-03",
+    "days_out": 1,
+    "assessment": "AMBER",
+    "context_chars": 6380,
+    "advisory_counts": {
+      "green": 11,
+      "amber": 0,
+      "red": 1
+    }
+  },
+  {
+    "id": "lsgs_lfqa_2026-03-04_d2_2026-03-02",
+    "route": "LSGS -> LFQA",
+    "target_date": "2026-03-04",
+    "days_out": 2,
+    "assessment": "GREEN",
+    "context_chars": 6078,
+    "advisory_counts": {
+      "green": 12,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "lsgs_lfqa_egtf_2026-02-15_d1_2026-02-14",
+    "route": "LSGS -> LFQA -> EGTF",
+    "target_date": "2026-02-15",
+    "days_out": 1,
+    "assessment": "RED",
+    "context_chars": 4756,
+    "advisory_counts": {
+      "green": 0,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "lsgs_lfqb_lfqa_egtf_2026-03-09_d4_2026-03-05",
+    "route": "LSGS -> LFQB -> LFQA -> EGTF",
+    "target_date": "2026-03-09",
+    "days_out": 4,
+    "assessment": "AMBER",
+    "context_chars": 12385,
+    "advisory_counts": {
+      "green": 11,
+      "amber": 0,
+      "red": 0
+    }
+  },
+  {
+    "id": "lsgs_lsgl_lfqb_lfqa_lfat_egtf_2026-03-09_d0_2026-03-09",
+    "route": "LSGS -> LSGL -> LFQB -> LFQA -> LFAT -> EGTF",
+    "target_date": "2026-03-09",
+    "days_out": 0,
+    "assessment": "AMBER",
+    "context_chars": 10180,
+    "advisory_counts": {
+      "green": 9,
+      "amber": 2,
+      "red": 0
+    }
+  },
+  {
+    "id": "lsgs_lsgl_lfqb_lfqa_lfat_egtf_2026-03-09_d6_2026-03-03",
+    "route": "LSGS -> LSGL -> LFQB -> LFQA -> LFAT -> EGTF",
+    "target_date": "2026-03-09",
+    "days_out": 6,
+    "assessment": "AMBER",
+    "context_chars": 15590,
+    "advisory_counts": {
+      "green": 8,
+      "amber": 4,
+      "red": 0
+    }
+  },
+  {
+    "id": "lsgs_lsgl_lfsd_lfqa_egtf_2026-02-17_d1_2026-02-16",
+    "route": "LSGS -> LSGL -> LFSD -> LFQA -> EGTF",
+    "target_date": "2026-02-17",
+    "days_out": 1,
+    "assessment": "RED",
+    "context_chars": 13360,
+    "advisory_counts": {
+      "green": 3,
+      "amber": 2,
+      "red": 5
+    }
   },
   {
     "id": "multiple_amber_imc_icing",
@@ -15,8 +435,12 @@
     "target_date": "2026-03-20",
     "days_out": 0,
     "assessment": "AMBER",
-    "context_chars": 2988,
-    "advisory_counts": {"green": 6, "amber": 3, "red": 0},
+    "context_chars": 2972,
+    "advisory_counts": {
+      "green": 6,
+      "amber": 3,
+      "red": 0
+    },
     "synthetic": true
   }
 ]

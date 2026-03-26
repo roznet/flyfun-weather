@@ -8,6 +8,15 @@
   "purpose": "Multiple AMBER advisories (IMC + icing + wind). Conservative should go AMBER/RED, tolerant should be GREEN/AMBER for IFR-capable pilot.",
   "advisory_summary": {
     "has_advisories": true,
-    "counts": {"green": 6, "amber": 3, "red": 0}
+    "counts": {
+      "green": 6,
+      "amber": 3,
+      "red": 0
+    }
+  },
+  "expected_assessments": {
+    "conservative": "AMBER",
+    "balanced": "AMBER",
+    "tolerant": "GREEN"
   }
 }
