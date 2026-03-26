@@ -34,40 +34,43 @@ def get_timezone(lat: float, lon: float) -> str | None:
     return _timezone_finder().timezone_at(lat=lat, lng=lon)
 
 
-def resolve_waypoints(icao_codes: list[str], db_path: str) -> list[Waypoint]:
-    """Resolve ICAO codes to Waypoints using the euro_aip airport database.
+def resolve_waypoints(codes: list[str], db_path: str) -> list[Waypoint]:
+    """Resolve waypoint codes to Waypoints using euro_aip RouteResolver.
+
+    Accepts ICAO airport codes (4 letters), navaid codes (2-3 letters),
+    and five-letter fix names. Each code is resolved by trying airport
+    lookup first, then waypoint/navaid lookup.
 
     Args:
-        icao_codes: Ordered list of ICAO codes (min 2).
+        codes: Ordered list of waypoint codes (min 2).
         db_path: Path to the euro_aip SQLite database.
 
     Returns:
         List of Waypoint objects with coordinates from the database.
 
     Raises:
-        KeyError: If any ICAO code is not found in the database.
+        KeyError: If any code is not found in the database.
     """
+    from euro_aip.models.route_resolver import RouteResolver
+
     model = _load_airport_model(db_path)
+    resolver = RouteResolver(model)
 
     waypoints: list[Waypoint] = []
     missing: list[str] = []
 
-    for icao in icao_codes:
-        airport = model.airports.get(icao)
-        if airport is None:
-            missing.append(icao)
-            continue
-
-        if airport.latitude_deg is None or airport.longitude_deg is None:
-            missing.append(f"{icao} (no coordinates)")
+    for code in codes:
+        point = resolver.resolve_point(code)
+        if point is None:
+            missing.append(code)
             continue
 
         waypoints.append(
             Waypoint(
-                icao=airport.ident,
-                name=airport.name or airport.ident,
-                lat=airport.latitude_deg,
-                lon=airport.longitude_deg,
+                icao=point.name,
+                name=point.name,
+                lat=point.latitude,
+                lon=point.longitude,
             )
         )
 
