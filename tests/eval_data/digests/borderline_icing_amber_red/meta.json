@@ -8,6 +8,15 @@
   "purpose": "Borderline case: single RED icing advisory with other GREEN. Conservative should go RED, tolerant should stay AMBER.",
   "advisory_summary": {
     "has_advisories": true,
-    "counts": {"green": 8, "amber": 1, "red": 1}
+    "counts": {
+      "green": 8,
+      "amber": 1,
+      "red": 1
+    }
+  },
+  "expected_assessments": {
+    "conservative": "RED",
+    "balanced": "AMBER",
+    "tolerant": "AMBER"
   }
 }
