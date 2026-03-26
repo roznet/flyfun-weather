@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -42,7 +43,7 @@ class ProfileSettings(BaseModel):
     cloud_method: str | None = None  # "dd" or "nwp"
     convective_method: str | None = None  # "thermo" or "nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
-    digest_guidance: str | None = None  # "conservative", "balanced", or "tolerant"
+    digest_guidance: Literal["conservative", "balanced", "tolerant"] | None = None
     advisories: dict | None = None  # {enabled: {}, params: {}}
 
 
@@ -307,7 +308,11 @@ def get_digest_guidance_text(
     """Return the full guidance prompt text for a preset (read-only)."""
     from weatherbrief.digest.llm_config import load_guidance_text
 
-    return DigestGuidanceTextResponse(key=key, text=load_guidance_text(key))
+    try:
+        text = load_guidance_text(key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return DigestGuidanceTextResponse(key=key, text=text)
 
 
 @router.post("/{profile_id}/reset", response_model=ProfileResponse)

@@ -486,11 +486,11 @@ async function init(): Promise<void> {
       const { fetchDigestGuidanceText } = await import('./adapters/profiles-adapter');
       const text = await fetchDigestGuidanceText(key);
       showPopupContent(`
-        <h3 style="margin-top:0">AI Assessment Guidance: ${key.charAt(0).toUpperCase() + key.slice(1)}</h3>
-        <pre style="white-space:pre-wrap; font-size:0.9em; line-height:1.5; max-height:60vh; overflow-y:auto;">${text}</pre>
+        <h3 style="margin-top:0">AI Assessment Guidance: ${escapeHtml(key.charAt(0).toUpperCase() + key.slice(1))}</h3>
+        <pre style="white-space:pre-wrap; font-size:0.9em; line-height:1.5; max-height:60vh; overflow-y:auto;">${escapeHtml(text)}</pre>
       `);
     } catch (err) {
-      showPopupContent(`<p>Failed to load guidance text: ${String(err)}</p>`);
+      showPopupContent(`<p>Failed to load guidance text: ${escapeHtml(String(err))}</p>`);
     }
   });
 
