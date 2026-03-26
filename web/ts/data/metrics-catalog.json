@@ -460,13 +460,13 @@
     ]
   },
   "convective_risk": {
-    "name": "Convective Risk",
+    "name": "Convective Risk (Thermo)",
     "unit": "",
-    "vibe": "The overall thunderstorm threat level",
-    "primary_goal": "Summarise the convective risk from all indices.",
-    "best_used_for": "Quick go/no-go assessment for convective weather.",
-    "limitations": "Based on CAPE thresholds with CIN modulation. Doesn't account for all trigger mechanisms.",
-    "theory": "A summary risk level combining CAPE (storm energy) and CIN (the cap strength). CAPE thresholds set the base risk from none to extreme. CIN then modulates it — a strong cap downgrades the risk because storms can't fire easily without a powerful trigger. Additional severe weather flags check wind shear > 40kt, K-Index > 35, Total Totals > 55, and Lifted Index < −6.",
+    "vibe": "Thunderstorm threat from thermodynamic indices",
+    "primary_goal": "Assess convective risk from sounding-derived thermodynamic indices (CAPE, CIN, shear).",
+    "best_used_for": "Detailed convective analysis using classical stability parameters. Independent of the NWP model's convective scheme — works from raw temperature/wind profiles. Best when you want to understand why storms form, not just where the model predicts them.",
+    "limitations": "Based on CAPE thresholds with CIN modulation. Doesn't account for all trigger mechanisms. Tower tops estimated from thermodynamic equilibrium level which may differ from actual storm tops. Single-parcel approach doesn't capture mesoscale forcing.",
+    "theory": "Combines CAPE (storm energy) and CIN (the cap strength) from the atmospheric sounding. CAPE thresholds set the base risk from none to extreme. CIN modulates — a strong cap downgrades risk because storms need a powerful trigger. Additional severe flags check wind shear > 40kt, K-Index > 35, Total Totals > 55, and Lifted Index < −6. Tower base is LFC (Level of Free Convection), top is EL (Equilibrium Level).",
     "wikipedia": "https://en.wikipedia.org/wiki/Convective_available_potential_energy",
     "llm_prompt": "explain how CAPE, CIN, wind shear, K-Index, Total Totals, and Lifted Index are combined into a composite convective risk assessment, and how CIN modulates the threat level",
     "thresholds": [
@@ -476,6 +476,25 @@
       { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Thunderstorms possible with trigger. Plan alternates." },
       { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Vigorous storms likely. Significant turbulence." },
       { "min": null, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Severe weather expected. Delay or cancel." }
+    ]
+  },
+  "nwp_convective_risk": {
+    "name": "Convective Risk (NWP)",
+    "unit": "",
+    "vibe": "Where the model predicts convective cloud",
+    "primary_goal": "Show the NWP model's own convective cloud prediction — base, top, and coverage percentage.",
+    "best_used_for": "Seeing where the model's convective parameterisation places storms. This is what Autorouter GRAMET uses. More spatially accurate than thermodynamic indices because the model accounts for moisture convergence, orographic lifting, and mesoscale forcing that raw CAPE/CIN miss.",
+    "limitations": "Only available when the model provides convective cloud diagnostics (GFS, ICON). The convective scheme is a parameterisation, not an explicit simulation — it can miss isolated storms or misplace them. Coverage percentage is a model estimate, not observed.",
+    "theory": "Uses the NWP model's convective cloud parameterisation output directly. The model runs its own convective scheme (e.g., Simplified Arakawa-Schubert for GFS, Tiedtke for ICON) to predict where convective clouds form, their base and top altitudes, and coverage fraction. This accounts for large-scale forcing, moisture transport, and orography that single-column thermodynamic analysis cannot capture. Risk level is derived from coverage percentage and cloud depth.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cumulus_parameterization",
+    "llm_prompt": "explain how NWP models parameterise convection using schemes like Arakawa-Schubert or Tiedtke, and how their convective cloud output compares to thermodynamic indices like CAPE",
+    "thresholds": [
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No convective cloud predicted." },
+      { "min": null, "max": null, "label": "Marginal", "risk": "marginal", "meaning": "Trace convective cloud. Shallow cumulus." },
+      { "min": null, "max": null, "label": "Low", "risk": "low", "meaning": "Scattered convective cloud. Light showers possible." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant convective coverage. Thunderstorms likely." },
+      { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Widespread deep convection. Route avoidance recommended." },
+      { "min": null, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Intense convective system. Delay or cancel." }
     ]
   },
   "icing_risk": {
@@ -678,6 +697,36 @@
       { "min": 25, "max": 50, "label": "Scattered", "risk": "none", "meaning": "Some cloud but gaps." },
       { "min": 50, "max": 75, "label": "Broken", "risk": "low", "meaning": "Significant cloud." },
       { "min": 75, "max": null, "label": "Overcast", "risk": "moderate", "meaning": "Full cloud layer." }
+    ]
+  },
+  "soft_cloud_dd": {
+    "name": "Soft Clouds (DD)",
+    "unit": "",
+    "vibe": "Smooth gradient cloud fills from sounding moisture",
+    "primary_goal": "Visualise cloud layers with soft, feathered edges instead of hatching. Uses the same dewpoint depression detection as the DD Layers method.",
+    "best_used_for": "A cleaner, more GRAMET-like visual. Identical cloud detection to DD Layers — the difference is purely in rendering: gradient opacity fills instead of horizontal hatching. Coverage is shown by opacity (OVC = opaque, SCT = semi-transparent) and dewpoint depression modulates density (DD near 0 = denser cloud).",
+    "limitations": "Same as DD Layers: derived from 8 pressure levels, can miss thin layers. Coverage estimated from humidity, not observed. The soft rendering may make boundaries less precise than hatching for detailed analysis.",
+    "theory": "Cloud layers detected identically to DD Layers — dewpoint depression below 3°C indicates saturation and cloud presence. The rendering replaces hatching with vertical gradient fills: each cloud band has feathered edges (top and bottom 15% fade to transparent) and coverage-proportional opacity. Dense cloud (DD ≈ 0°C) appears more opaque; thin cloud (DD ≈ 3°C) is more transparent.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Semi-transparent fill. Patches of cloud." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "Moderate opacity. Mostly cloudy." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque fill. Full cloud layer." }
+    ]
+  },
+  "soft_cloud_nwp": {
+    "name": "Soft Clouds (NWP)",
+    "unit": "",
+    "vibe": "Smooth gradient cloud fills from model output",
+    "primary_goal": "Visualise NWP model cloud layers with soft, feathered edges. Uses the same NWP cloud detection as the NWP Layers method.",
+    "best_used_for": "The recommended default cloud visualisation. Combines the NWP model's cloud prediction (which captures sub-grid processes the sounding misses) with the GRAMET-style soft rendering. This is what the GRAMET preset uses.",
+    "limitations": "Same as NWP Layers: coverage is model-predicted, not observed. When GRIB diagnostics aren't available, falls back to synthesised layers from Open-Meteo cloud percentages narrowed by the dewpoint depression envelope.",
+    "theory": "Cloud layers from the NWP model's cloud scheme — either direct GRIB diagnostics (GFS: explicit base/top per cloud tier) or synthesised from Open-Meteo low/mid/high cloud percentages constrained by the sounding's dewpoint depression envelope and capped at inversions. Rendering uses vertical gradient fills with feathered edges and coverage-proportional opacity, identical to Soft DD but using NWP cloud data instead of sounding-derived layers.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Semi-transparent fill. Patches of cloud." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "Moderate opacity. Mostly cloudy." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque fill. Full cloud layer." }
     ]
   },
   "inversion_layer": {

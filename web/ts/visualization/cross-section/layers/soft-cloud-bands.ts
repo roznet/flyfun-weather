@@ -95,6 +95,7 @@ export const softCloudBandsLayer: CrossSectionLayer = {
   name: 'Soft DD',
   group: 'clouds',
   defaultEnabled: false,
+  metricId: 'soft_cloud_dd',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     const maxLayers = data.points.reduce((max, p) => Math.max(max, p.cloudLayers.length), 0);
@@ -118,6 +119,7 @@ export const softNwpCloudBandsLayer: CrossSectionLayer = {
   name: 'Soft NWP',
   group: 'clouds',
   defaultEnabled: true,
+  metricId: 'soft_cloud_nwp',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     const maxLayers = data.points.reduce((max, p) => Math.max(max, p.nwpCloudLayers.length), 0);
