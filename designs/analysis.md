@@ -32,7 +32,7 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → nwp_value_preservation → enrich_lwc → clouds → cloud_top_uncertainty → inversions → nwp_clouds → sfip → ogimet_dd → ogimet_nwp → precipitation → convective → vertical_motion → ceiling`
+Pipeline: `prepare → thermodynamics → nwp_value_preservation → enrich_lwc → clouds → cloud_top_uncertainty → inversions → nwp_clouds → sfip → ogimet_dd → ogimet_nwp → ieng → sld → precipitation → convective → vertical_motion → ceiling` (then post-pass: `e_shear` across all route points)
 
 Note: NWP value preservation (attaching `nwp_cape_jkg` etc. to indices) must run before any consumer of `_effective_cape()` — i.e. before icing, cloud top uncertainty, and convective assessment.
 
@@ -295,7 +295,31 @@ vm = assess_vertical_motion(derived_levels)
 
 **Data source:** Open-Meteo `vertical_velocity` field (omega in Pa/s, negative = ascent). Available for GFS, ECMWF, and UKMO; unavailable for ICON, Météo-France, and GEM.
 
-Output: `VerticalMotionAssessment` with classification, max omega/w values, and list of `CATRiskLayer` objects identifying altitude bands with turbulence risk.
+Output: `VerticalMotionAssessment` with classification, max omega/w values, `cat_risk_layers` (Richardson), and `e_shear_layers` (E-Shear).
+
+### E-Shear Turbulence (`sounding/e_shear.py`)
+
+Second CAT detection method using combined wind shear magnitude (CloudPath formula):
+
+```
+E = (5 × HWS + VWS² + 42) / 4
+```
+
+- **VWS** (vertical): ∂U/∂z, ∂V/∂z between adjacent pressure levels (per-sounding)
+- **HWS** (horizontal): ∂U/∂x, ∂V/∂x between adjacent route points at matching pressure levels
+
+E-Shear is computed as a **post-processing pass** in `tasks/analyze.py:_enrich_e_shear()` after all per-point sounding analyses complete (HWS requires adjacent route points). For each model, it averages HWS from both neighbors, then calls `compute_e_shear_per_sounding()`.
+
+| E range | Risk |
+|---------|------|
+| < 40 | NONE |
+| 40–80 | LIGHT |
+| 80–160 | MODERATE |
+| ≥ 160 | SEVERE |
+
+**Key difference from Richardson:** E-Shear measures raw shear magnitude without considering atmospheric stability. Strong shear in a very stable layer (high Ri) can trigger E-Shear but not Richardson. Conversely, Richardson detects instability in moderate shear that E-Shear would miss.
+
+**Model availability:** All models — only requires wind speed/direction at pressure levels, which all Open-Meteo models provide. `DerivedLevel` now carries `wind_speed_kt` and `wind_direction_deg` (populated from `PreparedProfile` during `compute_derived_levels()`).
 
 ### Altitude Advisories (`sounding/advisories.py`)
 

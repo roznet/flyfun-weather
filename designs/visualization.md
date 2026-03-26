@@ -55,15 +55,21 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 
 | Layer | Name | Group | File | Default | Description |
 |-------|------|-------|------|---------|-------------|
-| Convective BG | Convective | convection | `convective-bg.ts` | on | Tower columns LCL→EL, hatching, CB labels, anvil strip |
-| Cloud bands | DD Layers | clouds | `cloud-bands.ts` | on | Hatch lines by coverage (SCT/BKN/OVC line widths) |
-| NWP cloud bands | NWP Layers | clouds | `nwp-cloud-bands.ts` | on | Server-computed NWP cloud layers (GRIB or synthesized), blue-tinted with proportional hatching |
-| Icing bands | Ogimet-DD | icing | `icing-bands.ts` | on | Colored by risk (light→severe), DD-attenuated Ogimet index |
-| Ogimet-NWP bands | Ogimet-NWP | icing | `icing-ogimet-nwp-bands.ts` | off | NWP cloud-scaled Ogimet index |
+| Soft NWP clouds | Soft NWP | clouds | `soft-cloud-bands.ts` | **on** | Gradient-edge fills with coverage-proportional opacity (GRAMET style) |
+| Soft DD clouds | Soft DD | clouds | `soft-cloud-bands.ts` | off | Same soft rendering using DD-derived cloud layers |
+| NWP cloud bands | NWP Layers | clouds | `nwp-cloud-bands.ts` | off | Hatched NWP cloud layers (classic style) |
+| Cloud bands | DD Layers | clouds | `cloud-bands.ts` | off | Hatched DD cloud layers (classic style) |
+| NWP Convective | NWP Convective | convection | `nwp-convective-bg.ts` | **on** | Model convective scheme output (base/top/coverage) |
+| Thermo Convective | Thermo Convective | convection | `thermo-convective-bg.ts` | off | CAPE/CIN tower columns LCL→EL, hatching, CB labels |
+| Icing bands | Ogimet-DD | icing | `icing-bands.ts` | off | DD-attenuated Ogimet index |
+| Ogimet-NWP bands | Ogimet-NWP | icing | `icing-ogimet-nwp-bands.ts` | **on** | NWP cloud-fraction-scaled Ogimet index with glaciation |
 | SFIP bands | SFIP-NWP | icing | `sfip-bands.ts` | off | Fuzzy-logic SFIP icing index |
-| CAT bands | CAT | turbulence | `cat-bands.ts` | on | Orange-red bands by Richardson number |
+| IENG bands | IENG | icing | `ieng-icing-bands.ts` | off | Cloud-fraction-weighted Ogimet without glaciation (CloudPath method) |
+| SLD bands | SLD | icing | `sld-bands.ts` | off | Supercooled Large Droplet detection from CLMR/ICMR (GFS-only) |
+| CAT bands | CAT (Ri) | turbulence | `cat-bands.ts` | on | Richardson number turbulence |
+| E-Shear bands | CAT (E-Shear) | turbulence | `e-shear-bands.ts` | off | Vertical + horizontal wind shear E parameter (CloudPath method) |
 | Inversion bands | Inversions | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
-| Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient (drawn after bands to mask below-surface artifacts) |
+| Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
 | Freezing level | 0°C | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
 | −10°C level | −10°C | temperature | `temperature-lines.ts` | off | Cyan dashed line |
 | −20°C level | −20°C | temperature | `temperature-lines.ts` | off | Navy dashed line |
@@ -78,16 +84,26 @@ All layers use **smooth** rendering: monotone cubic spline (Fritsch-Carlson) int
 
 ## Layer Groups & Compact Mode
 
-The **clouds** and **icing** groups support multiple methods with a preferred method setting:
+Four groups support multiple methods with a preferred method setting:
 
 ```typescript
 PREFERRED_METHOD_LAYER = {
-  clouds: { dd: 'cloud-bands', nwp: 'nwp-cloud-bands' },
-  icing:  { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands' }
+  clouds:     { soft_nwp, soft_dd, nwp, dd },
+  icing:      { ogimet_nwp, ogimet_dd, sfip_nwp, ieng },
+  turbulence: { ri, e_shear },
+  convection: { nwp, thermo },
 }
 ```
 
-**Compact mode** (`VizSettings.compactLayers`): When enabled, only the user's preferred method layer is shown per group; alternative layers are hidden. In full mode, all layers remain toggleable. Group headers show an info button (ⓘ) explaining the methods available.
+**Compact mode** collapses each group to the user's preferred method. Defaults (for new users and migrated existing users): Soft NWP clouds, Ogimet-NWP icing, CAT (Ri) turbulence, NWP Convective. User preferences from the backend override these defaults. Legacy values (`dd`, `ogimet_dd`, `thermo`) are auto-upgraded to GRAMET-aligned defaults in `_parse_service_toggles()`.
+
+## Preset System
+
+Layer presets provide one-click configurations. Currently one preset:
+
+**GRAMET** — Autorouter-style: Soft NWP clouds + Ogimet-NWP icing + SLD + CAT (Ri) + NWP Convective + freezing level + terrain + cruise altitude. Also switches to the GRAMET theme. Selecting "Custom" reverts to user's previous layer state.
+
+Presets defined in `layer-registry.ts` as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides.
 
 ## Data Flow
 
@@ -145,13 +161,11 @@ Switchable visual themes for the cross-section via `cross-section/theme.ts`. Sep
 **Available themes:**
 - `'standard'` — Light blue sky (#7395DB), default, designed for readability
 - `'high-contrast'` — Dark navy sky (#1B3060), optimized for visibility in varying lighting
+- `'gramet'` — Deep blue sky (#2B5DA8), CloudPath-inspired. Blue-tinted icing, prominent red freezing level, warm brown terrain. Optimized for soft cloud rendering. Applied automatically by the GRAMET preset.
 
-**Cloud hatch patterns:**
-- Clouds rendered with horizontal hatch lines instead of solid fills, improving readability
-- Fixed-grid alignment (`hatchGridPx = 8px`) so hatching aligns across adjacent bands
-- DD clouds: line width per coverage class (`sct: 2, bkn: 5, ovc: 8` — solid at full grid width)
-- NWP clouds: line width proportional to coverage percentage (`gridPx * coverPct/100`)
-- Core drawing primitive: `drawBandHatch()` in `layers/base.ts` clips hatch lines to band shape
+**Cloud rendering styles:**
+- **Hatched** (DD Layers, NWP Layers): horizontal hatch lines, fixed 8px grid, coverage-proportional line width. Classic cross-section look.
+- **Soft** (Soft DD, Soft NWP): gradient-edge fills with coverage-proportional opacity. Each band has feathered edges (top/bottom 15% fades to transparent). Opacity: OVC ~0.85, BKN ~0.65, SCT ~0.45, modulated by dewpoint depression for density. GRAMET-like aesthetic. Rendering uses `onBand` callback in `renderMatchedZones` to draw vertical `CanvasGradient` fills — no changes to `base.ts` core primitives needed. Theme config: `softClouds: { fillRgb, coverageAlpha, featherFraction }`.
 
 **Theme preview:** `theme-preview.ts` renders a popup canvas showing all visual elements (NWP clouds, DD clouds, icing, CAT, convective tower, inversion, temperature/stability/reference lines, terrain) for the selected theme.
 
