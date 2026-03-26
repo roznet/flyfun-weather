@@ -164,15 +164,15 @@ function populateProfileForm(profile: ProfileResponse): void {
 
   // Icing method selector
   const icingMethodSelect = document.getElementById('input-icing-method') as HTMLSelectElement;
-  if (icingMethodSelect) icingMethodSelect.value = s.icing_method ?? 'ogimet_dd';
+  if (icingMethodSelect) icingMethodSelect.value = s.icing_method ?? 'ogimet_nwp';
 
   // Cloud method selector
   const cloudMethodSelect = document.getElementById('input-cloud-method') as HTMLSelectElement;
-  if (cloudMethodSelect) cloudMethodSelect.value = s.cloud_method ?? 'dd';
+  if (cloudMethodSelect) cloudMethodSelect.value = s.cloud_method ?? 'soft_nwp';
 
   // Convective method selector
   const convectiveMethodSelect = document.getElementById('input-convective-method') as HTMLSelectElement;
-  if (convectiveMethodSelect) convectiveMethodSelect.value = s.convective_method ?? 'thermo';
+  if (convectiveMethodSelect) convectiveMethodSelect.value = s.convective_method ?? 'nwp';
 
   // Digest guidance selector
   const guidanceSelect = document.getElementById('input-digest-guidance') as HTMLSelectElement;
