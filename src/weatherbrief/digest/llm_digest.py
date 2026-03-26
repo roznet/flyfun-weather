@@ -2,6 +2,10 @@
 
 Produces a structured WeatherDigest from quantitative forecast data
 and regional text forecasts (NWS AFD or DWD) via an LLM briefer.
+
+Heavy data (ForecastSnapshot, text forecasts) is processed outside the
+graph so that only the lightweight context string enters LangGraph state.
+This keeps LangSmith trace payloads small (~100 KB instead of ~30 MB).
 """
 
 from __future__ import annotations
@@ -17,8 +21,7 @@ from typing_extensions import TypedDict
 
 from weatherbrief.digest.llm_config import DigestConfig, create_llm
 from weatherbrief.digest.prompt_builder import build_digest_context
-from weatherbrief.fetch.dwd_text import DWDDayBlock
-from weatherbrief.fetch.text_forecasts import TextForecasts, fetch_text_forecasts
+from weatherbrief.fetch.text_forecasts import fetch_text_forecasts
 from weatherbrief.models import ForecastSnapshot
 
 logger = logging.getLogger(__name__)
@@ -38,20 +41,13 @@ class WeatherDigest(BaseModel):
     watch_items: str
 
 
-# --- LangGraph state ---
+# --- LangGraph state (lightweight — no snapshot) ---
 
 
 class DigestState(TypedDict, total=False):
-    snapshot: ForecastSnapshot
-    target_time: datetime
+    context: str
     config: DigestConfig
     locale: str | None
-    previous_digest: WeatherDigest | None
-    route_advisories: object | None  # RouteAdvisoriesManifest
-    flight_rules: str | None
-    text_forecasts: TextForecasts | None
-    dwd_translated: list[tuple[DWDDayBlock, str]] | None
-    context: str
     digest: WeatherDigest | None
     digest_text: str
     llm_input_tokens: int | None
@@ -59,72 +55,7 @@ class DigestState(TypedDict, total=False):
     error: str | None
 
 
-# --- Graph nodes ---
-
-
-def fetch_text_node(state: DigestState) -> dict:
-    """Fetch region-appropriate text forecasts (graceful failure)."""
-    try:
-        route = state["snapshot"].route
-        text_forecasts = fetch_text_forecasts(route=route)
-        return {"text_forecasts": text_forecasts}
-    except Exception:
-        logger.warning("Text forecast fetch failed", exc_info=True)
-        return {"text_forecasts": None}
-
-
-def translate_text_node(state: DigestState) -> dict:
-    """Extract and translate DWD day blocks for European routes."""
-    text_forecasts = state.get("text_forecasts")
-    if text_forecasts is None or text_forecasts.region.value != "europe":
-        return {"dwd_translated": None}
-
-    try:
-        from weatherbrief.digest.dwd_translate import translate_dwd_blocks
-        from weatherbrief.fetch.dwd_text import DWDTextForecasts, get_dwd_day_blocks
-
-        target_date = date.fromisoformat(state["snapshot"].target_date)
-        config = state["config"]
-
-        # Build a DWDTextForecasts from the entries already fetched
-        dwd_text = DWDTextForecasts(
-            short_range=next(
-                (e.text for e in text_forecasts.entries if "Kurzfrist" in e.label),
-                None,
-            ),
-            medium_range=next(
-                (e.text for e in text_forecasts.entries if "Mittelfrist" in e.label),
-                None,
-            ),
-            fetched_at=text_forecasts.fetched_at,
-        )
-
-        # Extract day blocks relevant to flight date
-        blocks = get_dwd_day_blocks(dwd_text, target_date)
-        if not blocks:
-            return {"dwd_translated": None}
-
-        # Translate
-        translated = translate_dwd_blocks(blocks, config)
-        return {"dwd_translated": translated}
-
-    except Exception:
-        logger.warning("DWD translation failed, falling back to raw text", exc_info=True)
-        return {"dwd_translated": None}
-
-
-def assemble_context_node(state: DigestState) -> dict:
-    """Combine quantitative snapshot + text forecasts into LLM context string."""
-    context = build_digest_context(
-        snapshot=state["snapshot"],
-        target_time=state["target_time"],
-        text_forecasts=state.get("text_forecasts"),
-        previous_digest=state.get("previous_digest"),
-        route_advisories=state.get("route_advisories"),
-        flight_rules=state.get("flight_rules"),
-        dwd_translated=state.get("dwd_translated"),
-    )
-    return {"context": context}
+# --- Graph node ---
 
 
 def briefer_node(state: DigestState) -> dict:
@@ -152,8 +83,7 @@ def briefer_node(state: DigestState) -> dict:
                 token_info["llm_input_tokens"] = usage_meta.get("input_tokens")
                 token_info["llm_output_tokens"] = usage_meta.get("output_tokens")
 
-        digest_text = format_digest_markdown(result, state["snapshot"])
-        return {"digest": result, "digest_text": digest_text, **token_info}
+        return {"digest": result, **token_info}
     except Exception as e:
         logger.error("LLM digest generation failed", exc_info=True)
         return {"error": str(e)}
@@ -165,21 +95,63 @@ def briefer_node(state: DigestState) -> dict:
 def build_digest_graph(config: DigestConfig) -> CompiledStateGraph:
     """Build the LangGraph digest pipeline.
 
-    Flow: fetch_text -> translate_text -> assemble -> briefer -> END
+    The graph contains only the LLM briefer node.  All data preparation
+    (text forecast fetching, DWD translation, context assembly) happens
+    in run_digest() before graph.invoke() so the snapshot never enters
+    the traced graph state.
     """
     graph = StateGraph(DigestState)
-    graph.add_node("fetch_text", fetch_text_node)
-    graph.add_node("translate_text", translate_text_node)
-    graph.add_node("assemble", assemble_context_node)
     graph.add_node("briefer", briefer_node)
 
-    graph.add_edge(START, "fetch_text")
-    graph.add_edge("fetch_text", "translate_text")
-    graph.add_edge("translate_text", "assemble")
-    graph.add_edge("assemble", "briefer")
+    graph.add_edge(START, "briefer")
     graph.add_edge("briefer", END)
 
     return graph.compile()
+
+
+def _fetch_and_translate_text(
+    snapshot: ForecastSnapshot,
+    config: DigestConfig,
+) -> tuple:
+    """Fetch text forecasts and translate DWD blocks if applicable.
+
+    Returns (text_forecasts, dwd_translated).
+    """
+    from weatherbrief.fetch.dwd_text import DWDDayBlock
+
+    # Fetch text forecasts
+    text_forecasts = None
+    try:
+        text_forecasts = fetch_text_forecasts(route=snapshot.route)
+    except Exception:
+        logger.warning("Text forecast fetch failed", exc_info=True)
+
+    # Translate DWD blocks for European routes
+    dwd_translated: list[tuple[DWDDayBlock, str]] | None = None
+    if text_forecasts is not None and text_forecasts.region.value == "europe":
+        try:
+            from weatherbrief.digest.dwd_translate import translate_dwd_blocks
+            from weatherbrief.fetch.dwd_text import DWDTextForecasts, get_dwd_day_blocks
+
+            target_date = date.fromisoformat(snapshot.target_date)
+            dwd_text = DWDTextForecasts(
+                short_range=next(
+                    (e.text for e in text_forecasts.entries if "Kurzfrist" in e.label),
+                    None,
+                ),
+                medium_range=next(
+                    (e.text for e in text_forecasts.entries if "Mittelfrist" in e.label),
+                    None,
+                ),
+                fetched_at=text_forecasts.fetched_at,
+            )
+            blocks = get_dwd_day_blocks(dwd_text, target_date)
+            if blocks:
+                dwd_translated = translate_dwd_blocks(blocks, config)
+        except Exception:
+            logger.warning("DWD translation failed, falling back to raw text", exc_info=True)
+
+    return text_forecasts, dwd_translated
 
 
 def run_digest(
@@ -191,17 +163,36 @@ def run_digest(
     flight_rules: str | None = None,
     locale: str | None = None,
 ) -> DigestState:
-    """Run the full digest pipeline and return final state."""
+    """Run the full digest pipeline and return final state.
+
+    Data preparation (text fetching, translation, context assembly) runs
+    outside the graph so only the context string is traced by LangSmith.
+    """
+    # --- Pre-graph data preparation (not traced) ---
+    text_forecasts, dwd_translated = _fetch_and_translate_text(snapshot, config)
+
+    context = build_digest_context(
+        snapshot=snapshot,
+        target_time=target_time,
+        text_forecasts=text_forecasts,
+        previous_digest=previous_digest,
+        route_advisories=route_advisories,
+        flight_rules=flight_rules,
+        dwd_translated=dwd_translated,
+    )
+
+    # --- LLM call via graph (traced — lightweight state) ---
     graph = build_digest_graph(config)
     result = graph.invoke({
-        "snapshot": snapshot,
-        "target_time": target_time,
+        "context": context,
         "config": config,
         "locale": locale,
-        "previous_digest": previous_digest,
-        "route_advisories": route_advisories,
-        "flight_rules": flight_rules,
     })
+
+    # --- Post-graph formatting (not traced) ---
+    if result.get("digest") is not None:
+        result["digest_text"] = format_digest_markdown(result["digest"], snapshot)
+
     return result
 
 
