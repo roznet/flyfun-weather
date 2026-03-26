@@ -1,0 +1,8 @@
+{
+  "assessment": "AMBER",
+  "assessment_reason": "Moderate icing at cruise altitude near Geneva with no escape below freezing level, but IFR flight path is viable and icing is limited to the final segment.",
+  "synoptic": "A weakening frontal system crossing from the Atlantic brings moisture and lower freezing levels across the Channel and into the Alps. High pressure to the north limits the extent.",
+  "specific_concerns": "Alpine approach to Geneva — freezing level drops to 3800ft with moderate rime icing up to 8200ft. Terrain limits escape options below the freezing level. ICON shows the most aggressive icing (moderate-severe).",
+  "trend": "Deterioration from yesterday's GREEN — frontal system bringing icing risk that was not present 24h ago.",
+  "watch_items": "Monitor freezing level evolution — if it drops further, icing escape becomes impossible. Check ICON vs GFS/ECMWF convergence on icing severity."
+}

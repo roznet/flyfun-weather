@@ -167,6 +167,20 @@
                 <input type="checkbox" id="toggle-llm-digest" checked> AI weather synopsis
               </label>
             </div>
+            <div class="form-row" style="margin-top:8px;">
+              <div class="form-group">
+                <label for="input-digest-guidance">
+                  AI Assessment Style
+                  <button class="metric-info-btn digest-guidance-info-btn" type="button" title="View guidance prompt" aria-label="View guidance prompt">i</button>
+                </label>
+                <select id="input-digest-guidance" class="input-select">
+                  <option value="conservative">Conservative</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="tolerant">Tolerant</option>
+                </select>
+                <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">How the AI interprets advisory severity when producing the go/no-go assessment.</span>
+              </div>
+            </div>
           </div>
         </div>
 

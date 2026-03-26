@@ -413,6 +413,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     icing_method = None
     cloud_method = None
     convective_method = None
+    digest_guidance = None
     locale = None
     profile_name_for_digest = None
     if db is not None:
@@ -440,6 +441,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         cloud_method = profile_settings.get("cloud_method")
         convective_method = profile_settings.get("convective_method")
         flight_rules = profile_settings.get("flight_rules")  # "vfr_only" or "vfr_ifr"
+        digest_guidance = profile_settings.get("digest_guidance")
         adv_config = profile_settings.get("advisories", {})
 
     # Check rate limits before running the pipeline
@@ -501,6 +503,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         options.locale = locale
     options.profile_id = flight.profile_id
     options.profile_name = profile_name_for_digest
+    if digest_guidance:
+        options.guidance_key = digest_guidance
 
     # Fetch current model metadata to record in the pack (skip for historical)
     model_metadata = None if is_historical else fetch_model_metadata()

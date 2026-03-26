@@ -129,6 +129,24 @@ Structured output with 11 fields:
 
 `configs/weather_digest/prompts/briefer_v1.md`: aviation weather briefer persona, instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty.
 
+The prompt contains a `{guidance}` placeholder that is replaced at runtime with a guidance preset. This controls how the LLM interprets advisory severity when producing the GREEN/AMBER/RED assessment.
+
+### Digest Guidance Presets (`configs/digest_guidance/`)
+
+Three preset files control assessment calibration:
+
+| Preset | File | Philosophy |
+|--------|------|------------|
+| **Conservative** | `conservative.md` | Single RED = strong signal toward RED. Multiple AMBERs push toward RED. Favours cautious interpretation. |
+| **Balanced** | `balanced.md` | Single RED requires investigation, not auto no-go. Meteorological judgment weighs the combination. (Default) |
+| **Tolerant** | `tolerant.md` | For IFR/FIKI-equipped. AMBER icing/IMC is routine. RED reserved for genuinely unmanageable conditions. |
+
+`index.json` provides localised names and descriptions (en/fr/de/es) for the frontend.
+
+Presets are stored per-profile in `settings_json.digest_guidance`. System templates map: VFR Only → conservative, IFR Conservative → balanced, IFR FIKI → tolerant.
+
+The `WEATHERBRIEF_GUIDANCE_DIR` env var can override the guidance directory to allow updates without redeploying.
+
 ## Key Choices
 
 - **LangGraph over plain function** — provides structured state management, easy node-level testing, and future extensibility (e.g., parallel text fetch + quant assembly)

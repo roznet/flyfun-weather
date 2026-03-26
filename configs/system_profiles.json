@@ -20,6 +20,7 @@
         "icing_method": "ogimet_dd",
         "cloud_method": "dd",
         "convective_method": "thermo",
+        "digest_guidance": "conservative",
         "advisories": {
           "enabled": {
             "icing_escape": true,
@@ -69,6 +70,7 @@
         "icing_method": "ogimet_dd",
         "cloud_method": "dd",
         "convective_method": "thermo",
+        "digest_guidance": "balanced",
         "advisories": {
           "enabled": {
             "icing_escape": true,
@@ -120,6 +122,7 @@
         "icing_method": "ogimet_nwp",
         "cloud_method": "nwp",
         "convective_method": "nwp",
+        "digest_guidance": "tolerant",
         "advisories": {
           "enabled": {
             "icing_escape": true,

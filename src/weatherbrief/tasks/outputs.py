@@ -156,6 +156,7 @@ def run_llm_digest(
     locale: str | None = None,
     profile_id: int | None = None,
     profile_name: str | None = None,
+    guidance_key: str | None = None,
 ) -> DigestResult:
     """Generate LLM-powered weather digest."""
     try:
@@ -171,6 +172,7 @@ def run_llm_digest(
             route_advisories=route_advisories,
             flight_rules=flight_rules,
             locale=locale,
+            guidance_key=guidance_key,
         )
 
         if digest_result.get("error"):
@@ -212,6 +214,8 @@ def run_llm_digest(
                 digest_data["profile_id"] = profile_id
             if profile_name is not None:
                 digest_data["profile_name"] = profile_name
+            if guidance_key is not None:
+                digest_data["digest_guidance"] = guidance_key
             json_path.write_text(json.dumps(digest_data, indent=2))
         digest_path = md_path
         logger.info("LLM digest saved: %s", md_path)

@@ -48,6 +48,7 @@ class DigestState(TypedDict, total=False):
     context: str
     config: DigestConfig
     locale: str | None
+    guidance_key: str | None
     digest: WeatherDigest | None
     digest_text: str
     llm_input_tokens: int | None
@@ -65,7 +66,10 @@ def briefer_node(state: DigestState) -> dict:
         llm = create_llm(config)
         structured_llm = llm.with_structured_output(WeatherDigest, include_raw=True)
         locale = state.get("locale")
-        system_prompt = config.load_prompt("briefer", locale=locale)
+        guidance_key = state.get("guidance_key")
+        system_prompt = config.load_prompt(
+            "briefer", locale=locale, guidance_key=guidance_key,
+        )
 
         raw_result = structured_llm.invoke([
             {"role": "system", "content": system_prompt},
@@ -162,6 +166,7 @@ def run_digest(
     route_advisories=None,  # RouteAdvisoriesManifest | None
     flight_rules: str | None = None,
     locale: str | None = None,
+    guidance_key: str | None = None,
 ) -> DigestState:
     """Run the full digest pipeline and return final state.
 
@@ -187,6 +192,7 @@ def run_digest(
         "context": context,
         "config": config,
         "locale": locale,
+        "guidance_key": guidance_key,
     })
 
     # --- Post-graph formatting (not traced) ---

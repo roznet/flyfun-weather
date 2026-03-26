@@ -1,0 +1,74 @@
+ROUTE: EGTK -> LFPB
+DATE: Friday 2026-03-20 (D-0)
+BRIEFING ISSUED: Friday 2026-03-20
+ALTITUDE: 8000ft (~750hPa)
+PILOT CAPABILITY: VFR + IFR
+
+=== QUANTITATIVE DATA ===
+
+--- EGTK (Oxford) ---
+Models: gfs, ecmwf, icon
+
+  Surface:
+    gfs:   T=5°C  Td=3°C  Wind=240/15kt  Gusts=28kt
+    ecmwf: T=6°C  Td=4°C  Wind=230/14kt  Gusts=25kt
+    icon:  T=5°C  Td=3°C  Wind=235/16kt  Gusts=27kt
+
+  Weather: Cloud cover 90%, Vis 6km, Precip 2mm, FzLvl 4500ft, CAPE 0
+  Cruise: P=750hPa Wind=270/35kt T=-1°C RH=85%
+
+  Sounding (gfs):
+    CAPE=0 CIN=0 FzLvl=4500ft K=22 TT=44 PW=15mm Shear=30kt
+    Cloud layers: OVC 2500-6000ft, SCT 8000-12000ft
+    Icing: LIGHT RIME 4500-6500ft (SLD: No)
+
+--- LFPB (Paris Le Bourget) ---
+Models: gfs, ecmwf, icon
+
+  Surface:
+    gfs:   T=7°C  Td=5°C  Wind=250/12kt  Gusts=22kt
+    ecmwf: T=8°C  Td=6°C  Wind=240/10kt  Gusts=18kt
+    icon:  T=7°C  Td=5°C  Wind=245/13kt  Gusts=20kt
+
+  Weather: Cloud cover 85%, Vis 7km, Precip 1mm, FzLvl 5000ft, CAPE 0
+  Cruise: P=750hPa Wind=260/30kt T=0°C RH=80%
+
+  Sounding (gfs):
+    CAPE=0 CIN=0 FzLvl=5000ft K=20 TT=42 PW=14mm Shear=28kt
+    Cloud layers: BKN 3000-5500ft, SCT 9000-14000ft
+    Icing: LIGHT RIME 5000-7000ft (SLD: No)
+
+=== ROUTE ADVISORIES ===
+
+[AMBER] VMC Cruise: BKN/OVC cloud coverage at cruise altitude along 45% of route.
+  gfs=AMBER: 45% affected | ecmwf=AMBER: 40% affected | icon=AMBER: 50% affected
+[AMBER] Icing Escape: Light rime icing between 4500-7000ft. Escape below freezing level possible but terrain margin tight near Channel crossing.
+  gfs=AMBER: 30% affected | ecmwf=GREEN: 20% affected | icon=AMBER: 35% affected
+[AMBER] Airport Wind: Crosswind 18kt gusting 28kt at EGTK departure.
+  gfs=AMBER | ecmwf=GREEN | icon=AMBER
+[GREEN] Turbulence: No significant CAT or vertical motion at cruise altitude.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] Mountain Wind: No significant terrain on route.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] Convective: No convective risk along route.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] Flight Category: Departure EGTK MVFR (ceiling 2500ft, vis 6km), Arrival LFPB VFR (ceiling 3000ft, vis 7km).
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] VFR Feasibility: VFR not viable due to low cloud base. IFR required.
+  gfs=AMBER | ecmwf=GREEN | icon=AMBER
+[GREEN] IFR Feasibility: IFR viable — adequate ceilings above minimums, light icing manageable.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+
+=== METAR/TAF OBSERVATIONS ===
+
+Corridor: 25nm | Airports: 6 found, 5 with METAR, 4 with TAF
+Worst METAR category: MVFR
+Worst TAF category: MVFR
+
+EGTK (0nm from route)
+  METAR [MVFR]: METAR EGTK 200750Z 24015G28KT 6000 -RA BKN025 OVC060 05/03 Q1008
+  TAF at ETA [MVFR] (TEMPO): TAF EGTK 200500Z 2006/2106 24012G25KT 7000 BKN030 TEMPO 2006/2012 24018G30KT 5000 -RA BKN020
+
+LFPB (0nm from route)
+  METAR [VFR]: METAR LFPB 200800Z 25010G18KT 8000 SCT030 BKN055 08/06 Q1010
+  TAF at ETA [VFR]: TAF LFPB 200500Z 2006/2106 25008KT 9999 SCT035 BKN060

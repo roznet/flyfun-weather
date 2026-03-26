@@ -68,6 +68,7 @@ class BriefingOptions:
     locale: str | None = None  # user locale for LLM digest language (en/fr/de/es)
     profile_id: int | None = None  # flight profile ID for digest tracking
     profile_name: str | None = None  # flight profile name for digest tracking
+    guidance_key: str | None = None  # digest guidance preset (conservative/balanced/tolerant)
 
 
 @dataclass
@@ -432,6 +433,7 @@ def execute_briefing(
             locale=options.locale,
             profile_id=options.profile_id,
             profile_name=options.profile_name,
+            guidance_key=options.guidance_key,
         )
         if digest_result.digest is not None:
             result.digest = digest_result.digest
