@@ -8,7 +8,7 @@ export const icingBandsLayer: CrossSectionLayer = {
   id: 'icing-bands',
   name: 'Ogimet-DD',
   group: 'icing',
-  defaultEnabled: true,
+  defaultEnabled: false,
   metricId: 'icing_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
