@@ -14,7 +14,6 @@ _CONFIGS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs" 
 _GUIDANCE_DIR_DEFAULT = Path(__file__).resolve().parent.parent.parent.parent / "configs" / "digest_guidance"
 
 DEFAULT_GUIDANCE = "balanced"
-VALID_GUIDANCE_KEYS = ("conservative", "balanced", "tolerant")
 
 
 class LLMConfig(BaseModel):
@@ -110,14 +109,26 @@ def _get_guidance_dir() -> Path:
     return _GUIDANCE_DIR_DEFAULT
 
 
+def get_valid_guidance_keys() -> tuple[str, ...]:
+    """Return valid guidance keys derived from index.json."""
+    guidance_dir = _get_guidance_dir()
+    index_path = guidance_dir / "index.json"
+    if not index_path.exists():
+        return (DEFAULT_GUIDANCE,)
+    raw = json.loads(index_path.read_text())
+    return tuple(p["key"] for p in raw["presets"])
+
+
 def load_guidance_text(key: str) -> str:
     """Load guidance markdown for a given preset key.
 
-    Raises FileNotFoundError if the key doesn't map to a file.
+    Raises ValueError if the key is not in the guidance index.
+    Raises FileNotFoundError if the file doesn't exist.
     """
-    if key not in VALID_GUIDANCE_KEYS:
+    valid = get_valid_guidance_keys()
+    if key not in valid:
         raise ValueError(
-            f"Unknown guidance key {key!r}; valid: {VALID_GUIDANCE_KEYS}"
+            f"Unknown guidance key {key!r}; valid: {valid}"
         )
     guidance_dir = _get_guidance_dir()
     path = guidance_dir / f"{key}.md"
