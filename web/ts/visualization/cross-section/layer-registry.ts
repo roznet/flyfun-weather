@@ -18,6 +18,7 @@ import { nwpCloudBandsLayer } from './layers/nwp-cloud-bands';
 import { softCloudBandsLayer, softNwpCloudBandsLayer } from './layers/soft-cloud-bands';
 import { iengIcingBandsLayer } from './layers/ieng-icing-bands';
 import { sldBandsLayer } from './layers/sld-bands';
+import { eShearBandsLayer } from './layers/e-shear-bands';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
   // Rendering order: clouds → convection → icing → other bands → terrain → lines → reference
@@ -33,6 +34,7 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   iengIcingBandsLayer,
   sldBandsLayer,
   catBandsLayer,
+  eShearBandsLayer,
   inversionBandsLayer,
   terrainFillLayer,
   freezingLevelLayer,
@@ -66,6 +68,7 @@ export interface LayerGroupInfo {
 const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
   clouds: { dd: 'cloud-bands', nwp: 'nwp-cloud-bands', soft_dd: 'soft-cloud-bands', soft_nwp: 'soft-nwp-cloud-bands' },
   icing: { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands', ieng: 'ieng-icing-bands' },
+  turbulence: { ri: 'cat-bands', e_shear: 'e-shear-bands' },
   convection: { thermo: 'thermo-convective-bg', nwp: 'nwp-convective-bg' },
 };
 
@@ -122,7 +125,8 @@ const GRAMET_ENABLED: Record<string, boolean> = {
   'sfip-bands': false,
   'ieng-icing-bands': true,
   'sld-bands': true,
-  'cat-bands': true,
+  'cat-bands': false,
+  'e-shear-bands': true,
   'inversion-bands': false,
   'terrain': true,
   'freezing-level': true,

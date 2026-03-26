@@ -317,7 +317,62 @@ def analyze_all_route_points(
             model_divergence=divergences,
         ))
 
+    # Post-processing: compute E-Shear turbulence using horizontal wind shear
+    # between adjacent route points (requires all points to be analyzed first)
+    _enrich_e_shear(analyses)
+
     return analyses
+
+
+def _enrich_e_shear(analyses: list[RoutePointAnalysis]) -> None:
+    """Add E-Shear turbulence layers to each route point's soundings.
+
+    Computes horizontal wind shear between adjacent points, then combines
+    with vertical wind shear to produce the E parameter per model.
+    """
+    from weatherbrief.analysis.sounding.e_shear import (
+        compute_e_shear_per_sounding,
+        compute_hws_between_points,
+    )
+
+    if len(analyses) < 2:
+        return
+
+    for model in analyses[0].sounding:
+        for i, rpa in enumerate(analyses):
+            sounding = rpa.sounding.get(model)
+            if sounding is None or sounding.vertical_motion is None:
+                continue
+
+            levels = sounding.derived_levels
+
+            # Compute HWS from adjacent points
+            hws_at_level: dict[int, float] = {}
+            prev_sounding = analyses[i - 1].sounding.get(model) if i > 0 else None
+            next_sounding = analyses[i + 1].sounding.get(model) if i < len(analyses) - 1 else None
+
+            if prev_sounding and prev_sounding.derived_levels:
+                dist = rpa.distance_from_origin_nm - analyses[i - 1].distance_from_origin_nm
+                hws_prev = compute_hws_between_points(
+                    prev_sounding.derived_levels, levels, dist,
+                )
+                for p, v in hws_prev.items():
+                    hws_at_level[p] = v
+
+            if next_sounding and next_sounding.derived_levels:
+                dist = analyses[i + 1].distance_from_origin_nm - rpa.distance_from_origin_nm
+                hws_next = compute_hws_between_points(
+                    levels, next_sounding.derived_levels, dist,
+                )
+                # Average with prev if both exist
+                for p, v in hws_next.items():
+                    if p in hws_at_level:
+                        hws_at_level[p] = (hws_at_level[p] + v) / 2
+                    else:
+                        hws_at_level[p] = v
+
+            e_shear_layers = compute_e_shear_per_sounding(levels, hws_at_level or None)
+            sounding.vertical_motion.e_shear_layers = e_shear_layers
 
 
 # ---------------------------------------------------------------------------

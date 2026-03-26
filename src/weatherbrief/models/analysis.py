@@ -410,6 +410,8 @@ class DerivedLevel(BaseModel):
     lapse_rate_c_per_km: Optional[float] = None
     icing_index: Optional[float] = None  # Ogimet-DD continuous icing index (0–100)
     icing_index_nwp: Optional[float] = None  # Ogimet-NWP icing index (0–100)
+    wind_speed_kt: Optional[float] = None
+    wind_direction_deg: Optional[float] = None
     omega_pa_s: Optional[float] = None  # raw model omega (Pa/s)
     w_fpm: Optional[float] = None  # vertical velocity (ft/min)
     richardson_number: Optional[float] = None  # Ri for layer below
@@ -568,6 +570,7 @@ class VerticalMotionAssessment(BaseModel):
     max_w_fpm: Optional[float] = None
     max_w_level_ft: Optional[float] = None
     cat_risk_layers: list[CATRiskLayer] = Field(default_factory=list)
+    e_shear_layers: list[CATRiskLayer] = Field(default_factory=list)
     convective_contamination: bool = False
 
 
