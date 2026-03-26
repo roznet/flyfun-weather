@@ -24,7 +24,7 @@ from weatherbrief.storage.flights import (
 
 router = APIRouter(prefix="/flights", tags=["flights"])
 
-_ICAO_PATTERN = re.compile(r"^[A-Z]{4}$")
+_WAYPOINT_PATTERN = re.compile(r"^[A-Z0-9]{2,5}$")
 
 
 class CreateFlightRequest(BaseModel):
@@ -34,7 +34,7 @@ class CreateFlightRequest(BaseModel):
     """
 
     route_name: str = Field("", max_length=256)  # optional preset name
-    waypoints: list[str] = Field(default_factory=list, max_length=20)  # ICAO codes
+    waypoints: list[str] = Field(default_factory=list, max_length=20)  # ICAO codes, navaids, or fixes
     departure_time: str  # ISO 8601 datetime with timezone (e.g. "2026-02-21T09:00:00Z")
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
@@ -56,9 +56,9 @@ class CreateFlightRequest(BaseModel):
     @classmethod
     def validate_waypoints(cls, v: list[str]) -> list[str]:
         for wp in v:
-            if not _ICAO_PATTERN.match(wp.upper()):
+            if not _WAYPOINT_PATTERN.match(wp.upper()):
                 raise ValueError(
-                    f"Invalid waypoint '{wp}': must be a 4-letter ICAO code"
+                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters"
                 )
         return v
 
@@ -247,9 +247,9 @@ class RouteDistanceRequest(BaseModel):
             raise ValueError("At least 2 waypoints are required")
         normalized = [wp.strip().upper() for wp in v]
         for wp in normalized:
-            if not _ICAO_PATTERN.match(wp):
+            if not _WAYPOINT_PATTERN.match(wp):
                 raise ValueError(
-                    f"Invalid waypoint '{wp}': must be a 4-letter ICAO code"
+                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters"
                 )
         return normalized
 

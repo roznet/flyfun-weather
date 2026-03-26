@@ -85,13 +85,14 @@ function getSelectedProfile(): ProfileResponse | undefined {
   return loadedProfiles.find(p => p.id === id);
 }
 
-/** Parse waypoints from the input field. Returns valid ICAO codes or empty array. */
+/** Parse waypoints from the input field. Returns valid codes or empty array.
+ *  Accepts ICAO airports (4 letters), navaids (2-3 chars), and fixes (5 chars). */
 function parseWaypoints(): string[] {
   const wpRaw = (document.getElementById('input-waypoints') as HTMLInputElement)?.value.trim();
   if (!wpRaw) return [];
   const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map(w => w.toUpperCase());
   if (waypoints.length < 2) return [];
-  if (waypoints.some(w => !/^[A-Z]{4}$/.test(w))) return [];
+  if (waypoints.some(w => !/^[A-Z0-9]{2,5}$/.test(w))) return [];
   return waypoints;
 }
 
