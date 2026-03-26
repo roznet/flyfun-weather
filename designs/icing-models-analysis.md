@@ -4,13 +4,15 @@
 
 ## Overview
 
-WeatherBrief computes icing potential using three independent methods, all running on every sounding:
+WeatherBrief computes icing potential using four independent methods plus SLD detection, all running on every sounding:
 
 | Method | Module | Signal Source | Index Range |
 |--------|--------|--------------|-------------|
-| **Ogimet-DD** (default) | `sounding/icing.py` | Dewpoint depression attenuation | 0–100 |
-| **Ogimet-NWP** | `sounding/icing.py` | NWP cloud fraction × glaciation | 0–100 |
+| **Ogimet-DD** | `sounding/icing.py` | Dewpoint depression attenuation | 0–100 |
+| **Ogimet-NWP** (default) | `sounding/icing.py` | NWP cloud fraction × glaciation | 0–100 |
 | **SFIP** | `sounding/sfip.py` | Fuzzy-logic membership functions | 0–100 |
+| **IENG** | `sounding/icing.py` | NWP cloud fraction (no glaciation) | 0–100 |
+| **SLD** | `sounding/sld.py` | CLMR/ICMR microphysics (GFS-only) | intensity 0–1 |
 
 Shared utilities live in `sounding/icing_common.py`: cloud-proximity checks, NWP cloud altitude lookup, icing type classification, and zone grouping.
 
@@ -158,6 +160,37 @@ Shared adjacency grouping: pressure gap ≤ 100 hPa → same zone. Used by Ogime
 **Problem:** `_is_near_cloud`, `_classify_icing_type`, `_nwp_cloud_for_altitude`/`_cloud_cover_for_level`, and zone grouping logic were duplicated between `icing.py` and `sfip.py` with subtle differences.
 
 **Fix:** Extracted to `icing_common.py`. Both modules delegate to shared implementations. Original private functions preserved as thin wrappers for backward compatibility.
+
+---
+
+## Per-Method Analysis (continued)
+
+### 4. IENG (`assess_icing_zones_ieng`)
+
+**Signal:** `effective = layered_index(T) × cloud_fraction(alt)` — no glaciation correction.
+
+Uses the same Ogimet layered formula (parabola peaking at −7°C) but weights only by NWP cloud coverage fraction. Unlike Ogimet-NWP, does NOT apply the glaciation factor from CLW/ICMR. This makes it simpler and slightly more conservative in glaciated clouds (where Ogimet-NWP would reduce the index).
+
+Matches the approach used by CloudPath. Convective component added when CAPE > 100 J/kg, weighted by NWP convective cloud cover.
+
+**Model consistency:** Same as Ogimet-NWP — requires NWP cloud data. Available for all models with Open-Meteo cloud percentages.
+
+**Key difference from Ogimet-NWP:** No `glaciation_factor(clw, icmr, T)` call. In ice-dominant clouds (high ICMR/CLW ratio), Ogimet-NWP reduces the index while IENG does not.
+
+### 5. SLD (`assess_sld_zones`)
+
+**Signal:** CLMR/ICMR microphysics — detects supercooled large droplets that can overwhelm de-ice systems.
+
+Three criteria must all be met:
+1. Temperature: −20°C ≤ T ≤ 0°C
+2. Cloud liquid water: CLW > 1e-3 g/kg (measurable supercooled liquid)
+3. Liquid ratio: CLW/(CLW+ICMR) > 0.5 (liquid-dominant, not glaciated)
+
+Intensity: `liquid_ratio × clamp(CLW_kg_kg / 5e-4, 0, 1)`. Risk: >0 light, ≥0.3 moderate, ≥0.7 severe.
+
+**Model availability:** GFS only (requires CLMR/ICMR from GRIB2). ECMWF and ICON do not provide these fields via Open-Meteo. The layer auto-disables via `getUnavailableLayers()` when data is absent. Generic interface — auto-enables for any model that starts providing CLMR/ICMR.
+
+Zones grouped with same adjacency logic as icing (100 hPa gap) and expanded to minimum 1000ft thickness for cross-section visibility.
 
 ---
 
