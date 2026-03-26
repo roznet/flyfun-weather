@@ -278,6 +278,24 @@ def analyze_sounding(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
+    # IENG icing: cloud-fraction-weighted Ogimet (no glaciation correction)
+    from weatherbrief.analysis.sounding.icing import assess_icing_zones_ieng
+
+    ieng_icing_zones = assess_icing_zones_ieng(
+        derived_levels,
+        cloud_layers,
+        cape_jkg=effective_cape,
+        nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+        nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+        nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+    )
+
+    # SLD detection from CLMR/ICMR microphysics (GFS-only for now)
+    from weatherbrief.analysis.sounding.sld import assess_sld_zones
+
+    sld_zones = assess_sld_zones(derived_levels)
+
     # Precipitation phase classification
     precipitation = assess_precipitation(
         derived_levels,
@@ -335,6 +353,8 @@ def analyze_sounding(
         icing_ogimet_dd_zones=icing_zones,
         icing_ogimet_nwp_zones=icing_ogimet_nwp_zones,
         sfip_zones=sfip_zones,
+        ieng_icing_zones=ieng_icing_zones,
+        sld_zones=sld_zones,
         inversion_layers=inversion_layers,
         convective=convective,
         convective_thermo=convective,

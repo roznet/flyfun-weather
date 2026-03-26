@@ -106,7 +106,7 @@ export interface CrossSectionTheme {
 
 // --- Theme IDs ---
 
-export type ThemeId = 'standard' | 'high-contrast';
+export type ThemeId = 'standard' | 'high-contrast' | 'gramet';
 
 // --- Standard theme (current production values) ---
 
@@ -394,11 +394,75 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
   },
 };
 
+// --- GRAMET theme (CloudPath-inspired, optimized for soft cloud overlays) ---
+
+const GRAMET_THEME: CrossSectionTheme = {
+  ...STANDARD_THEME,
+  id: 'gramet' as ThemeId,
+  label: 'GRAMET',
+
+  sky: {
+    background: '#2B5DA8',
+  },
+
+  axes: {
+    gridColor: 'rgba(255, 255, 255, 0.25)',
+    waypointLineColor: 'rgba(255, 255, 255, 0.35)',
+  },
+
+  terrain: {
+    fillColor: '#8B6914',
+    outlineColor: '#6B5010',
+  },
+
+  temperature: {
+    freezingLevel: { color: '#FF4444', width: 2.5 },
+    minus10c: { color: '#22CC44', width: 1.5, dash: [6, 4] },
+    minus20c: { color: '#22CC44', width: 1, dash: [4, 4] },
+  },
+
+  reference: {
+    cruiseColor: '#e0e0e0',
+    ceilingColor: '#ce93d8',
+  },
+
+  // Icing: blue tint like CloudPath
+  icing: {
+    none: 'transparent',
+    light: 'rgba(91, 184, 232, 0.40)',
+    moderate: 'rgba(24, 120, 184, 0.55)',
+    severe: 'rgba(10, 40, 120, 0.70)',
+  },
+
+  sfipIcing: {
+    none: 'transparent',
+    light: 'rgba(91, 184, 232, 0.50)',
+    moderate: 'rgba(24, 120, 184, 0.65)',
+    severe: 'rgba(10, 40, 120, 0.80)',
+  },
+
+  // SLD: red overlay
+  sld: {
+    none: 'transparent',
+    light: 'rgba(220, 53, 69, 0.30)',
+    moderate: 'rgba(220, 53, 69, 0.45)',
+    severe: 'rgba(220, 53, 69, 0.60)',
+  },
+
+  // Soft cloud config
+  softClouds: {
+    fillRgb: [255, 255, 255],
+    coverageAlpha: { OVC: 0.85, BKN: 0.65, SCT: 0.45, FEW: 0.25 },
+    featherFraction: 0.15,
+  },
+} as CrossSectionTheme & { sld: Record<string, string>; softClouds: any };
+
 // --- Theme registry ---
 
 export const THEMES: Record<ThemeId, CrossSectionTheme> = {
   'standard': STANDARD_THEME,
   'high-contrast': HIGH_CONTRAST_THEME,
+  'gramet': GRAMET_THEME,
 };
 
 // --- Module-level getter/setter ---

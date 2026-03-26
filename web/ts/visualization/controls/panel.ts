@@ -2,7 +2,7 @@
 
 import type { VizLayout, VizSettings, CompareBandMode } from '../types';
 import type { DisplayMode } from '../../types/metrics';
-import { getLayerGroups, getPreferredLayerForGroup } from '../cross-section/layer-registry';
+import { getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset } from '../cross-section/layer-registry';
 import { getComparableLayerGroups, getComparableLayer } from '../cross-section/compare-layers';
 import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
@@ -27,6 +27,7 @@ export interface VizControlCallbacks {
   onLayoutChange: (layout: VizLayout) => void;
   onModelChange?: (model: string) => void;
   onThemeChange?: (themeId: string) => void;
+  onPresetChange?: (presetId: string | null) => void;
 }
 
 export interface RouteGraphControlCallbacks {
@@ -95,6 +96,18 @@ export function renderVizControls(
     html += `</select>`;
     html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="${t('viz.previewTheme')}">\u{1f441}</button>`;
     html += `</div>`;
+    // Preset selector
+    const presets = getPresets();
+    if (presets.length > 0) {
+      html += `<div class="viz-theme-selector">`;
+      html += `<span class="viz-toggle-label">Preset</span>`;
+      html += `<select id="viz-preset-select" class="viz-model-select">`;
+      html += `<option value="">Custom</option>`;
+      for (const preset of presets) {
+        html += `<option value="${preset.id}">${preset.label}</option>`;
+      }
+      html += `</select></div>`;
+    }
   }
 
   // Windy link placeholder (updated dynamically by updateWindyLink)
@@ -179,6 +192,14 @@ export function renderVizControls(
       e.stopPropagation();
       const themeId = vizThemeSelect?.value ?? getActiveThemeId();
       showThemePreview(themeId as ThemeId);
+    });
+  }
+  // Wire preset selector
+  const vizPresetSelect = container.querySelector('#viz-preset-select') as HTMLSelectElement | null;
+  if (vizPresetSelect && callbacks.onPresetChange) {
+    const presetCb = callbacks.onPresetChange;
+    vizPresetSelect.addEventListener('change', () => {
+      presetCb(vizPresetSelect.value || null);
     });
   }
 

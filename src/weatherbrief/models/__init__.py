@@ -37,6 +37,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     RoutePoint,
     RoutePointAnalysis,
     SfipZone,
+    SldZone,
     SoundingAnalysis,
     ThermodynamicIndices,
     VerticalMotionAssessment,

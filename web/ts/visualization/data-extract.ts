@@ -1,7 +1,7 @@
 /** Extract visualization-ready data from a RouteAnalysesManifest for a given model. */
 
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
-import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizCATLayer, VizInversionLayer, VizCloudDiag } from './types';
+import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag } from './types';
 
 export function extractVizData(
   manifest: RouteAnalysesManifest,
@@ -106,6 +106,20 @@ function extractPoint(
     variant: sz.variant,
   }));
 
+  const iengIcingZones: VizIcingZone[] = (sounding?.ieng_icing_zones ?? []).map((iz: any) => ({
+    baseFt: iz.base_ft,
+    topFt: iz.top_ft,
+    risk: iz.risk,
+    type: iz.icing_type,
+  }));
+
+  const sldZones: VizSldZone[] = (sounding?.sld_zones ?? []).map((sz: any) => ({
+    baseFt: sz.base_ft,
+    topFt: sz.top_ft,
+    risk: sz.risk,
+    meanIntensity: sz.mean_intensity ?? null,
+  }));
+
   const catLayers: VizCATLayer[] = (sounding?.vertical_motion?.cat_risk_layers ?? []).map((cl) => ({
     baseFt: cl.base_ft,
     topFt: cl.top_ft,
@@ -155,6 +169,8 @@ function extractPoint(
     icingZones,
     icingOgimetNwpZones,
     sfipZones,
+    iengIcingZones,
+    sldZones,
     catLayers,
     inversions,
     convectiveRisk: sounding?.convective?.risk_level ?? 'none',
@@ -190,10 +206,14 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const hasOgimetNwp = data.points.some((p) => p.icingOgimetNwpZones.length > 0);
   const hasSfip = data.points.some((p) => p.sfipZones.length > 0);
   const hasNwpConvective = data.points.some((p) => p.nwpConvectiveBaseFt !== null);
+  const hasIeng = data.points.some((p) => p.iengIcingZones.length > 0);
+  const hasSld = data.points.some((p) => p.sldZones.length > 0);
 
   if (!hasNwpCloudLayers) unavailable.add('nwp-cloud-bands');
   if (!hasOgimetNwp) unavailable.add('icing-ogimet-nwp-bands');
   if (!hasSfip) unavailable.add('sfip-bands');
+  if (!hasIeng) unavailable.add('ieng-icing-bands');
+  if (!hasSld) unavailable.add('sld-bands');
   if (!hasNwpConvective) unavailable.add('nwp-convective-bg');
 
   return unavailable;

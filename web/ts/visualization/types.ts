@@ -115,6 +115,8 @@ export interface VizPoint {
   icingZones: VizIcingZone[];
   icingOgimetNwpZones: VizIcingZone[];
   sfipZones: VizSfipZone[];
+  iengIcingZones: VizIcingZone[];
+  sldZones: VizSldZone[];
   catLayers: VizCATLayer[];
   inversions: VizInversionLayer[];
   convectiveRisk: string;
@@ -179,6 +181,13 @@ export interface VizSfipZone {
   type: string;
   meanSfip100: number | null;
   variant: string;  // "full" or "proxy"
+}
+
+export interface VizSldZone {
+  baseFt: number;
+  topFt: number;
+  risk: string;
+  meanIntensity: number | null;
 }
 
 export interface VizCATLayer {

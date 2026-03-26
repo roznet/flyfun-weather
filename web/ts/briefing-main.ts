@@ -280,6 +280,7 @@ async function init(): Promise<void> {
         onCompareModelToggle: (model, enabled) => store.getState().setCompareModel(model, enabled),
         onCompareBandModeChange: (mode) => store.getState().setCompareBandMode(mode),
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
+        onPresetChange: (presetId) => store.getState().setVizPreset(presetId),
       }, availableModels);
 
       // Hide route graph controls in compare mode
@@ -488,6 +489,7 @@ async function init(): Promise<void> {
         onLayoutChange: (l) => store.getState().setLayout(l),
         onModelChange: (model) => store.getState().setSelectedModel(model),
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
+        onPresetChange: (presetId) => store.getState().setVizPreset(presetId),
       }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable);
 
       // Render route graph controls (below graph)

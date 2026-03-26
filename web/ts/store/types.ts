@@ -130,6 +130,15 @@ export interface SfipZone {
   variant: string;  // "full" or "proxy"
 }
 
+export interface SldZone {
+  base_ft: number;
+  top_ft: number;
+  risk: IcingRisk;
+  mean_intensity: number | null;
+  mean_liquid_ratio: number | null;
+  mean_temperature_c: number | null;
+}
+
 export interface ConvectiveAssessment {
   risk_level: ConvectiveRisk;
   cape_jkg: number | null;
@@ -203,6 +212,8 @@ export interface SoundingAnalysis {
   icing_zones: IcingZone[];
   icing_ogimet_nwp_zones: IcingZone[];
   sfip_zones: SfipZone[];
+  ieng_icing_zones?: IcingZone[];
+  sld_zones?: SldZone[];
   inversion_layers: InversionLayer[];
   convective: ConvectiveAssessment | null;
   convective_nwp: ConvectiveAssessment | null;

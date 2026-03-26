@@ -488,6 +488,20 @@ class SfipZone(BaseModel):
     variant: str = "full"  # "full" or "proxy"
 
 
+class SldZone(BaseModel):
+    """Supercooled Large Droplet detection zone from CLMR/ICMR microphysics."""
+
+    base_ft: float
+    top_ft: float
+    base_pressure_hpa: Optional[int] = None
+    top_pressure_hpa: Optional[int] = None
+    risk: IcingRisk = IcingRisk.NONE
+    icing_type: IcingType = IcingType.NONE
+    mean_intensity: Optional[float] = None
+    mean_liquid_ratio: Optional[float] = None
+    mean_temperature_c: Optional[float] = None
+
+
 class PrecipitationZone(BaseModel):
     """A vertical zone with uniform precipitation phase."""
 
@@ -567,6 +581,8 @@ class SoundingAnalysis(BaseModel):
     icing_zones: list[IcingZone] = Field(default_factory=list)
     icing_ogimet_nwp_zones: list[IcingZone] = Field(default_factory=list)
     sfip_zones: list[SfipZone] = Field(default_factory=list)
+    ieng_icing_zones: list[IcingZone] = Field(default_factory=list)
+    sld_zones: list[SldZone] = Field(default_factory=list)
     inversion_layers: list[InversionLayer] = Field(default_factory=list)
     convective: Optional[ConvectiveAssessment] = None
     convective_thermo: Optional[ConvectiveAssessment] = None

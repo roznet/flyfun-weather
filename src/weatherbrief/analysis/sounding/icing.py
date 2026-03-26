@@ -705,3 +705,64 @@ def assess_icing_zones_ogimet_nwp(
         icing_levels.append((lv, icing_type, risk, effective))
 
     return _group_into_zones(icing_levels)
+
+
+def assess_icing_zones_ieng(
+    levels: list[DerivedLevel],
+    clouds: list[EnhancedCloudLayer],
+    cape_jkg: float | None = None,
+    nwp_cloud_low_pct: float | None = None,
+    nwp_cloud_mid_pct: float | None = None,
+    nwp_cloud_high_pct: float | None = None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
+) -> list[IcingZone]:
+    """IENG icing index: Ogimet temperature curve scaled by NWP cloud fraction.
+
+    Like CloudPath's IENG formula: ``layered_index(T) × cloud_coverage``.
+    No glaciation correction — uses raw NWP cloud fraction directly.
+    This makes it a simpler, coverage-proportional alternative to Ogimet-NWP.
+    """
+    if not levels:
+        return []
+
+    icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = []
+
+    for lv in levels:
+        if lv.temperature_c is None or lv.altitude_ft is None:
+            continue
+
+        raw_index = _compute_layered_index(lv.temperature_c)
+        if raw_index <= 0:
+            continue
+
+        nwp_cloud = _nwp_cloud_for_altitude(
+            lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+            nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+        )
+        if nwp_cloud is None or nwp_cloud <= 0:
+            continue
+
+        cloud_fraction = nwp_cloud / 100.0
+        effective = raw_index * cloud_fraction
+
+        # Add convective component when CAPE is significant
+        if cape_jkg is not None and cape_jkg > 100 and lv.dewpoint_c is not None:
+            vd_base = _cloud_base_vapor_density(clouds, levels)
+            conv_index = _compute_convective_index(lv.temperature_c, 0.0, vd_base)
+            if conv_index > 0:
+                conv_cover = 0.0
+                if nwp_cloud_diagnostics and nwp_cloud_diagnostics.convective_cover_pct:
+                    conv_cover = nwp_cloud_diagnostics.convective_cover_pct / 100.0
+                effective += conv_index * conv_cover
+
+        if effective <= 0:
+            continue
+
+        icing_type = _classify_icing_type(lv.temperature_c, lv.wet_bulb_c)
+        if icing_type == IcingType.NONE:
+            continue
+
+        risk = _index_to_risk(effective)
+        icing_levels.append((lv, icing_type, risk, effective))
+
+    return _group_into_zones(icing_levels)
