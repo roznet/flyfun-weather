@@ -120,7 +120,13 @@ function extractPoint(
     meanIntensity: sz.mean_intensity ?? null,
   }));
 
-  const catLayers: VizCATLayer[] = (sounding?.vertical_motion?.cat_risk_layers ?? []).map((cl) => ({
+  const catLayers: VizCATLayer[] = (sounding?.vertical_motion?.cat_risk_layers ?? []).map((cl: any) => ({
+    baseFt: cl.base_ft,
+    topFt: cl.top_ft,
+    risk: cl.risk,
+  }));
+
+  const eShearLayers: VizCATLayer[] = (sounding?.vertical_motion?.e_shear_layers ?? []).map((cl: any) => ({
     baseFt: cl.base_ft,
     topFt: cl.top_ft,
     risk: cl.risk,
@@ -172,6 +178,7 @@ function extractPoint(
     iengIcingZones,
     sldZones,
     catLayers,
+    eShearLayers,
     inversions,
     convectiveRisk: sounding?.convective?.risk_level ?? 'none',
     convectiveBaseFt: sounding?.convective?.base_ft ?? null,
@@ -208,12 +215,14 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const hasNwpConvective = data.points.some((p) => p.nwpConvectiveBaseFt !== null);
   const hasIeng = data.points.some((p) => p.iengIcingZones.length > 0);
   const hasSld = data.points.some((p) => p.sldZones.length > 0);
+  const hasEShear = data.points.some((p) => p.eShearLayers.length > 0);
 
   if (!hasNwpCloudLayers) unavailable.add('nwp-cloud-bands');
   if (!hasOgimetNwp) unavailable.add('icing-ogimet-nwp-bands');
   if (!hasSfip) unavailable.add('sfip-bands');
   if (!hasIeng) unavailable.add('ieng-icing-bands');
   if (!hasSld) unavailable.add('sld-bands');
+  if (!hasEShear) unavailable.add('e-shear-bands');
   if (!hasNwpConvective) unavailable.add('nwp-convective-bg');
 
   return unavailable;

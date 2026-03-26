@@ -118,6 +118,7 @@ export interface VizPoint {
   iengIcingZones: VizIcingZone[];
   sldZones: VizSldZone[];
   catLayers: VizCATLayer[];
+  eShearLayers: VizCATLayer[];
   inversions: VizInversionLayer[];
   convectiveRisk: string;
   convectiveBaseFt: number | null;

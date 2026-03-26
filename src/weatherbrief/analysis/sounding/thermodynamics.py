@@ -223,6 +223,13 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
     if profile.omega is not None:
         omega_vals = profile.omega.to("Pa/s").magnitude
 
+    # Extract wind speed/direction for E-Shear turbulence
+    wspd_kt = None
+    wdir_deg = None
+    if profile.wind_speed is not None and profile.wind_direction is not None:
+        wspd_kt = profile.wind_speed.to("knots").magnitude
+        wdir_deg = profile.wind_direction.to("degrees").magnitude
+
     # RH for each level
     try:
         rh_vals = mpcalc.relative_humidity_from_dewpoint(
@@ -285,6 +292,9 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
 
         rh_pct = round(float(rh_vals[i]), 1) if rh_vals[i] is not None else None
 
+        ws = round(float(wspd_kt[i]), 1) if wspd_kt is not None and not np.isnan(wspd_kt[i]) else None
+        wd = round(float(wdir_deg[i]), 0) if wdir_deg is not None and not np.isnan(wdir_deg[i]) else None
+
         levels.append(DerivedLevel(
             pressure_hpa=p_hpa,
             altitude_ft=round(float(heights_ft[i])),
@@ -295,6 +305,8 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
             dewpoint_depression_c=dd,
             theta_e_k=theta_e,
             lapse_rate_c_per_km=lapse,
+            wind_speed_kt=ws,
+            wind_direction_deg=wd,
             omega_pa_s=omega_pa_s,
             w_fpm=w_fpm,
         ))
