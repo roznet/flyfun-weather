@@ -6,7 +6,7 @@ import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advi
 import type { DisplayMode, Tier } from '../types/metrics';
 import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
-import { getDefaultEnabled } from '../visualization/cross-section/layer-registry';
+import { getDefaultEnabled, getPreset } from '../visualization/cross-section/layer-registry';
 import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-section/theme';
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
@@ -137,6 +137,7 @@ export interface BriefingState {
   setCompareBandMode: (mode: import('../visualization/types').CompareBandMode) => void;
   initCompareModels: (models: string[]) => void;
   setVizTheme: (themeId: string) => void;
+  setVizPreset: (presetId: string | null) => void;
 }
 
 export const briefingStore = createStore<BriefingState>((set, get) => ({
@@ -616,6 +617,31 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       saveVizSettings(updated);
       window.dispatchEvent(new Event('theme-changed'));
     }
+  },
+
+  setVizPreset: (presetId: string | null) => {
+    const current = get().vizSettings;
+    if (!presetId) {
+      // Revert to default layers and standard theme
+      const updated = { ...current, enabledLayers: getDefaultEnabled(), vizTheme: 'standard' };
+      setActiveTheme('standard');
+      set({ vizSettings: updated });
+      saveVizSettings(updated);
+      window.dispatchEvent(new Event('theme-changed'));
+      return;
+    }
+    const preset = getPreset(presetId);
+    if (!preset) return;
+    // Apply preset: override theme + layer enabled state
+    const themeId = preset.themeId as ThemeId;
+    if (themeId in THEMES) {
+      setActiveTheme(themeId);
+    }
+    const enabled = { ...current.enabledLayers, ...preset.enabledLayers };
+    const updated = { ...current, enabledLayers: enabled, vizTheme: preset.themeId };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+    window.dispatchEvent(new Event('theme-changed'));
   },
 }));
 

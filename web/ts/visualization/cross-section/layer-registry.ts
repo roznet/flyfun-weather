@@ -15,9 +15,14 @@ import { thermoConvectiveBgLayer } from './layers/thermo-convective-bg';
 import { nwpConvectiveBgLayer } from './layers/nwp-convective-bg';
 import { terrainFillLayer } from './layers/terrain-fill';
 import { nwpCloudBandsLayer } from './layers/nwp-cloud-bands';
+import { softCloudBandsLayer, softNwpCloudBandsLayer } from './layers/soft-cloud-bands';
+import { iengIcingBandsLayer } from './layers/ieng-icing-bands';
+import { sldBandsLayer } from './layers/sld-bands';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
   // Rendering order: clouds → convection → icing → other bands → terrain → lines → reference
+  softNwpCloudBandsLayer,
+  softCloudBandsLayer,
   nwpCloudBandsLayer,
   cloudBandsLayer,
   thermoConvectiveBgLayer,
@@ -25,6 +30,8 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   icingBandsLayer,
   icingOgimetNwpBandsLayer,
   sfipBandsLayer,
+  iengIcingBandsLayer,
+  sldBandsLayer,
   catBandsLayer,
   inversionBandsLayer,
   terrainFillLayer,
@@ -57,8 +64,8 @@ export interface LayerGroupInfo {
 
 /** Maps preference values to layer IDs for groups that collapse in compact mode. */
 const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
-  clouds: { dd: 'cloud-bands', nwp: 'nwp-cloud-bands' },
-  icing: { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands' },
+  clouds: { dd: 'cloud-bands', nwp: 'nwp-cloud-bands', soft_dd: 'soft-cloud-bands', soft_nwp: 'soft-nwp-cloud-bands' },
+  icing: { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands', ieng: 'ieng-icing-bands' },
   convection: { thermo: 'thermo-convective-bg', nwp: 'nwp-convective-bg' },
 };
 
@@ -92,6 +99,56 @@ export function getCompactLayerOverrides(
     }
   }
   return overrides;
+}
+
+// --- Presets ---
+
+export interface LayerPreset {
+  id: string;
+  label: string;
+  themeId: string;
+  enabledLayers: Record<string, boolean>;
+}
+
+const GRAMET_ENABLED: Record<string, boolean> = {
+  'soft-nwp-cloud-bands': true,
+  'soft-cloud-bands': false,
+  'nwp-cloud-bands': false,
+  'cloud-bands': false,
+  'thermo-convective-bg': false,
+  'nwp-convective-bg': false,
+  'icing-bands': false,
+  'icing-ogimet-nwp-bands': false,
+  'sfip-bands': false,
+  'ieng-icing-bands': true,
+  'sld-bands': true,
+  'cat-bands': true,
+  'inversion-bands': false,
+  'terrain': true,
+  'freezing-level': true,
+  'minus-10c': false,
+  'minus-20c': false,
+  'lcl-line': false,
+  'lfc-line': false,
+  'el-line': false,
+  'cruise-altitude': true,
+};
+
+const PRESETS: Record<string, LayerPreset> = {
+  gramet: {
+    id: 'gramet',
+    label: 'GRAMET',
+    themeId: 'gramet',
+    enabledLayers: GRAMET_ENABLED,
+  },
+};
+
+export function getPresets(): LayerPreset[] {
+  return Object.values(PRESETS);
+}
+
+export function getPreset(id: string): LayerPreset | undefined {
+  return PRESETS[id];
 }
 
 export function getLayerGroups(): LayerGroupInfo[] {

@@ -68,7 +68,7 @@ export function drawSmoothBand(
   ctx: CanvasRenderingContext2D,
   bandPoints: BandPointData[],
   transform: CoordTransform,
-  fillStyle: string,
+  fillStyle: string | CanvasGradient | CanvasPattern,
 ): void {
   // Filter to points where both base and top are defined
   const valid = bandPoints.filter((p) => p.base !== null && p.top !== null);
@@ -305,7 +305,7 @@ function drawSingleBandColumn(
   ctx: CanvasRenderingContext2D,
   point: BandPointData,
   transform: CoordTransform,
-  fillStyle: string,
+  fillStyle: string | CanvasGradient | CanvasPattern,
   allPoints: BandPointData[],
 ): void {
   ctx.fillStyle = fillStyle;
