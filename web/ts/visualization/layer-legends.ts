@@ -32,6 +32,14 @@ function icingLegend(): LegendEntry[] {
   ];
 }
 
+function sldLegend(): LegendEntry[] {
+  return [
+    { label: t('legend.sld.light'), color: 'rgba(220, 53, 69, 0.25)', meaning: t('legend.sld.lightDesc') },
+    { label: t('legend.sld.moderate'), color: 'rgba(220, 53, 69, 0.40)', meaning: t('legend.sld.moderateDesc') },
+    { label: t('legend.sld.severe'), color: 'rgba(220, 53, 69, 0.55)', meaning: t('legend.sld.severeDesc') },
+  ];
+}
+
 function catLegend(): LegendEntry[] {
   return [
     { label: t('legend.cat.light'), color: catRiskColor('light'), meaning: t('legend.cat.lightDesc') },
@@ -120,10 +128,17 @@ function lineLegends(): Record<string, LegendEntry[]> {
 export function getLayerLegend(layerId: string): LegendEntry[] | null {
   const bandLegends: Record<string, () => LegendEntry[]> = {
     'icing-bands': icingLegend,
+    'icing-ogimet-nwp-bands': icingLegend,
+    'ieng-icing-bands': icingLegend,
+    'sfip-bands': icingLegend,
+    'sld-bands': sldLegend,
     'cat-bands': catLegend,
+    'e-shear-bands': catLegend,
     'convective-bg': convectiveLegend,
     'cloud-bands': cloudBandsLegend,
     'nwp-cloud-bands': nwpCloudLegend,
+    'soft-cloud-bands': cloudBandsLegend,
+    'soft-nwp-cloud-bands': nwpCloudLegend,
     'inversion-bands': inversionLegend,
   };
 

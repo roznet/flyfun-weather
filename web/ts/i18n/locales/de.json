@@ -5,11 +5,9 @@
   "nav.admin": "Admin",
   "nav.signOut": "Abmelden",
   "nav.signIn": "Anmelden",
-
   "theme.light": "Hell",
   "theme.system": "System",
   "theme.dark": "Dunkel",
-
   "flights.empty": "Noch keine Flüge vorhanden. Erstellen Sie einen, um zu beginnen.",
   "flights.past": "Vergangene Flüge ({count})",
   "flights.deleteConfirm": "Flug {id} löschen? Damit wird der gesamte Briefing-Verlauf entfernt.",
@@ -20,20 +18,16 @@
   "flights.btnBriefing": "Briefing",
   "flights.btnEdit": "Bearbeiten",
   "flights.btnDelete": "Löschen",
-
   "flights.form.errorDate": "Bitte geben Sie ein Datum ein.",
-  "flights.form.errorWaypoints": "Die Route muss aus mindestens 2 ICAO-Flugplatzkennungen bestehen, getrennt durch Leerzeichen (z.\u00a0B. EGTK LFQA LSGS).",
+  "flights.form.errorWaypoints": "Die Route muss aus mindestens 2 ICAO-Flugplatzkennungen bestehen, getrennt durch Leerzeichen (z. B. EGTK LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Jeder Wegpunkt muss eine 4-stellige ICAO-Flugplatzkennung sein, getrennt durch Leerzeichen. Ungültig: {codes}",
   "flights.form.defaultTag": " (Standard)",
-
   "briefing.noFlightSpecified": "Kein Flug angegeben. Zurück zur Flugliste.",
   "briefing.noBriefings": "Noch keine Briefings vorhanden",
   "briefing.noAssessment": "Keine Bewertung verfügbar",
   "briefing.flightPastTitle": "Flug liegt in der Vergangenheit",
   "briefing.historicalRefreshTitle": "Historische Aktualisierung (Admin)",
-
   "briefing.alt": "Alt {time}",
-
   "freshness.queued": "In Warteschlange",
   "freshness.queuedWaiting": "Warten auf Abschluss anderer Aktualisierungen",
   "freshness.starting": "Aktualisierung wird gestartet",
@@ -41,7 +35,7 @@
   "freshness.checking": "Suche nach Aktualisierungen...",
   "freshness.skipped": "übersprungen",
   "freshness.basedOn": "Basierend auf ",
-  "freshness.refreshedIn": "Aktualisiert in {m}\u00a0Min. {s}\u00a0Sek.",
+  "freshness.refreshedIn": "Aktualisiert in {m} Min. {s} Sek.",
   "freshness.canLeave": "Sie können diese Seite schließen — die Aktualisierung läuft im Hintergrund weiter.",
   "freshness.avgTime": "Aktualisierungen dauern ca. {mins} Min.",
   "freshness.notifyEmail": "Per E-Mail benachrichtigen",
@@ -52,12 +46,9 @@
   "freshness.upToDate": "Aktuell",
   "freshness.updatesAvailable": "Aktualisierungen verfügbar: ",
   "freshness.auto": " (auto)",
-
   "privacy.label": "Privat",
-
   "autoRefresh.label": "Auto-Aktualisierung",
   "autoRefresh.at": "um ",
-
   "observations.confirming": "BESTÄTIGEND",
   "observations.significant": "BEDEUTSAM",
   "observations.conflicting": "WIDERSPRÜCHLICH",
@@ -85,7 +76,6 @@
   "observations.tableModel": "Modell",
   "observations.refreshing": "Wird aktualisiert...",
   "observations.refresh": "Aktualisieren",
-
   "digest.synoptic": "Synoptik",
   "digest.concerns": "Besondere Bedenken",
   "digest.trend": "Trend",
@@ -95,15 +85,12 @@
   "digest.notAvailable": "Synoptische Übersicht nicht verfügbar. Führen Sie eine Aktualisierung durch, um sie zu generieren.",
   "digest.failed": "Zusammenfassung konnte nicht geladen werden.",
   "digest.profileMismatch": "Diese Zusammenfassung wurde mit Profil \"{name}\" erstellt. Das aktuelle Profil ist anders — neu berechnen, um zu aktualisieren.",
-
   "dwd.originalGerman": "Deutsches Original",
   "dwd.header": "DWD Synoptische Übersicht — ",
-
   "gramet.noCreds": "Kein GRAMET verfügbar. Um es zu aktivieren, geben Sie Ihre Autorouter-Zugangsdaten in den Kontoeinstellungen ein.",
   "gramet.notAvailable": "GRAMET für dieses Briefing nicht verfügbar.",
   "gramet.altText": "GRAMET-Querschnitt",
   "gramet.downloadPdf": "GRAMET-PDF herunterladen",
-
   "comparison.noDataPoint": "Keine Modellvergleichsdaten für diesen Punkt.",
   "comparison.noDataAvailable": "Keine Modellvergleichsdaten verfügbar.",
   "comparison.variable": "Variable",
@@ -124,7 +111,6 @@
   "comparison.liftedIndex": "Lifted Index",
   "comparison.shear": "Scherung 0–6 km (kt)",
   "comparison.maxOmega": "Max. Omega (Pa/s)",
-
   "sounding.noAnalysis": "Keine Sondierungsanalyse verfügbar.",
   "sounding.notAvailable": "Sondierungsanalyse für dieses Briefing nicht verfügbar.",
   "sounding.noDataPoint": "Keine Sondierungsdaten für diesen Punkt.",
@@ -133,7 +119,7 @@
   "sounding.hideAdvanced": "Erweitert ausblenden",
   "sounding.showAdvanced": "Erweitert anzeigen",
   "sounding.classification": "Klassifikation",
-  "sounding.na": "k.\u00a0A.",
+  "sounding.na": "k. A.",
   "sounding.maxW": "Max. W (ft/min)",
   "sounding.contamination": "Kontamination",
   "sounding.midLevelConvective": "Konvektion in mittleren Höhen",
@@ -151,14 +137,11 @@
   "sounding.unableDescend": "Abstieg unter die Nullgradgrenze nicht möglich",
   "sounding.surface": "GND",
   "sounding.atmosphericProfile": "Atmosphärisches Profil",
-
   "sounding.advisories": "Hinweise",
   "sounding.origin": "Abflug",
   "sounding.destination": "Ziel",
-
   "skewt.notAvailable": "Skew-T-Diagramme nicht verfügbar.",
   "skewt.tabNotAvailable": "Nicht verfügbar",
-
   "advisories.noAdvisories": "Keine Hinweise verfügbar",
   "advisories.recalculate": "Neu berechnen",
   "advisories.profile": "Profil",
@@ -182,11 +165,9 @@
   "advisories.headwind": "Gegenwind",
   "advisories.departure": "Abflug",
   "advisories.arrival": "Ankunft",
-
   "advisories.parameter": "Parameter",
   "advisories.value": "Wert",
   "advisories.description": "Beschreibung",
-
   "viz.xSection": "Querschnitt",
   "viz.compare": "Vergleich",
   "viz.split": "Teilen",
@@ -205,11 +186,9 @@
   "viz.right": "Rechts:",
   "viz.color": "Farbe:",
   "viz.width": "Breite:",
-
   "viz.cloudMethods": "<h3>Wolkenerkennungsmethoden</h3><p>Wolken können im Querschnitt auf zwei Arten erkannt werden:</p><ul><li><strong>NWP-Schichten</strong> — abgeleitet aus der Wolkenbedeckungsparametrisierung des numerischen Wettervorhersagemodells (niedrige/mittlere/hohe Schichten). Zeigt, wo das Modell selbst Wolken vorhersagt.</li><li><strong>DD-Schichten</strong> — abgeleitet aus der Taupunktdifferenz im Sondierungsprofil. Wenn der Abstand zwischen Temperatur und Taupunkt gering ist (DD &lt; 2°C), ist die Luft nahe der Sättigung und Wolkenbildung wahrscheinlich. Dies ist ein sondierungsbasiertes Signal, das unabhängig vom Wolkenschema des Modells ist.</li></ul><p>Beide Methoden können gleichzeitig zum Vergleich aktiviert werden. Sie stimmen in feuchten Schichten oft überein, können aber abweichen, wo NWP-subskalige Wolken oder lokale Feuchte vorhanden sind.</p>",
   "viz.convectionMethods": "<h3>Konvektionsmethoden</h3><p>Der Querschnitt bietet zwei Konvektionsrisiko-Overlays:</p><ul><li><strong>Thermo</strong> — Risiko aus thermodynamischen Indizes (CAPE, CIN). Turmbegrenzungen von LFC/LCL (Basis) und EL (Obergrenze). Kein Risiko, wenn CAPE null ist, selbst wenn das NWP-Modell konvektive Wolken parametrisiert.</li><li><strong>NWP</strong> — Risiko aus der nativen konvektiven Wolkenparametrisierung des NWP-Modells (GFS konvektive Bedeckung in %). Turmbegrenzungen sind modellberechnete konvektive Basis/Obergrenze. Dies entspricht in der Regel dem, was GRAMET anzeigt.</li></ul><p>Aktivieren Sie beide zum Vergleich. Das Hinweissystem verwendet die Methode, die Sie in Ihren Profileinstellungen ausgewählt haben.</p>",
   "viz.icingMethods": "<h3>Vereisungsmethoden</h3><p>Der Querschnitt bietet drei Vereisungs-Overlays, die jeweils eine <strong>Vereisungsformel</strong> mit einer <strong>Wolkenerkennungsmethode</strong> kombinieren:</p><h4>Formeln</h4><ul><li><strong>Ogimet</strong> — kontinuierlicher parabolischer Index mit Maximum bei −7°C. Bildet die Temperatur auf einen Vereisungsindex im Bereich von 0 bis −14°C (geschichtet) bzw. 0 bis −20°C (konvektiv) ab. Einfach und bewährt in der europäischen Allgemeinen Luftfahrt.</li><li><strong>SFIP</strong> — Fuzzy-Logic-Algorithmus, der Temperatur, relative Feuchte, Wolkenwassergehalt und Vertikalgeschwindigkeit mittels Zugehörigkeitsfunktionen kombiniert. Komplexer, nutzt direkte NWP-Feuchtedaten, wenn verfügbar.</li></ul><h4>Wolkensignale</h4><ul><li><strong>DD</strong> (Taupunktdifferenz) — sondierungsbasiert. Verwendet eine kontinuierliche Kosinus-Überblendung: voller Vereisungsindex bei DD = 0, null bei DD ≥ 2°C. Keine NWP-Wolkendaten erforderlich.</li><li><strong>NWP</strong> (Modell-Wolkenbedeckung) — verwendet den Wolkenbedeckungsgrad des NWP-Modells in Prozent auf jeder Höhe. 50 % Wolken → 50 % des Vereisungsindex. Dies ist der Ansatz, den Autorouter GRAMET verwendet.</li></ul><h4>Die drei Methoden</h4><ul><li><strong>Ogimet-DD</strong> — Ogimet-Formel + DD-Wolkensignal</li><li><strong>Ogimet-NWP</strong> — Ogimet-Formel + NWP-Wolkensignal</li><li><strong>SFIP-NWP</strong> — SFIP-Fuzzy-Logic (nutzt inhärent NWP-Feuchteeingaben)</li></ul><p>Aktivieren Sie mehrere Methoden, um sie nebeneinander zu vergleichen. Das Hinweissystem verwendet die Methode, die Sie in Ihren Profileinstellungen ausgewählt haben.</p>",
-
   "feedback.title": "Feedback senden",
   "feedback.subtitle": "Melden Sie ein Problem oder schlagen Sie eine Verbesserung für dieses Briefing vor.",
   "feedback.categoryLabel": "Kategorie",
@@ -222,24 +201,20 @@
   "feedback.thanks": "Vielen Dank für Ihr Feedback!",
   "feedback.submitted": "Ihre Meldung wurde übermittelt.",
   "feedback.failedSubmit": "Senden fehlgeschlagen: {error}",
-
   "feedback.cat.dataIssue": "Briefing-Datenproblem",
   "feedback.cat.tooConservative": "Briefing zu konservativ",
   "feedback.cat.tooOptimistic": "Briefing zu optimistisch",
   "feedback.cat.incorrectInterpretation": "Briefing falsche Interpretation",
   "feedback.cat.other": "Sonstiger Fehler/Problem",
-
   "historical.title": "Historische Aktualisierung",
   "historical.subtitle": "Rufen Sie die Vorhersage ab, wie sie an diesem Datum war.",
   "historical.asOfDate": "Stichtag",
   "historical.cancel": "Abbrechen",
   "historical.refresh": "Aktualisieren",
-
   "btn.refreshing": "Wird aktualisiert...",
   "btn.refresh": "Aktualisieren",
   "btn.sending": "Wird gesendet...",
   "btn.sendEmail": "E-Mail senden",
-
   "wizard.welcomeTitle": "Willkommen bei Flyfun Weather",
   "wizard.welcomeSubtitle": "Flugwetterbewertung für Überlandflüge in der Allgemeinen Luftfahrt",
   "wizard.betaNotice": "Flyfun Weather befindet sich derzeit in der <strong>Beta</strong>-Phase. Wir freuen uns, dass Sie das Tool ausprobieren — bitte helfen Sie uns bei der Verbesserung, indem Sie Feedback senden, wenn ein Briefing verdächtig erscheint oder Sie auf Probleme stoßen.",
@@ -263,7 +238,7 @@
   "wizard.cruiseAltitude": "Reiseflughöhe (ft)",
   "wizard.flightCeiling": "Dienstgipfelhöhe (ft)",
   "wizard.speed": "Geschwindigkeit (kt)",
-  "wizard.speedPlaceholder": "z.\u00a0B. 120",
+  "wizard.speedPlaceholder": "z. B. 120",
   "wizard.forecastModels": "Vorhersagemodelle",
   "wizard.modelHint": "Wählen Sie die NWP-Modelle aus, die in Ihren Briefings enthalten sein sollen.",
   "wizard.tourTitle": "Kurzübersicht",
@@ -287,11 +262,9 @@
   "wizard.profileHint": "Klicken Sie auf eine Karte, um Ihr Standardprofil auszuwählen. Sie können Profile später in den Einstellungen wechseln oder anpassen.",
   "wizard.profileNone": "Keine Systemprofile verfügbar — Sie können Ihre Einstellungen im nächsten Schritt konfigurieren.",
   "wizard.getStarted": "Loslegen",
-
   "settings.resetToTemplate": "Auf Vorlage zurücksetzen",
-  "settings.resetConfirm": "\u201E{name}\u201C auf die ursprünglichen Systemvorlagen-Einstellungen zurücksetzen? Ihre Anpassungen gehen verloren.",
+  "settings.resetConfirm": "„{name}“ auf die ursprünglichen Systemvorlagen-Einstellungen zurücksetzen? Ihre Anpassungen gehen verloren.",
   "settings.profileReset": "Profil auf Vorlagenwerte zurückgesetzt.",
-
   "settings.cat.icing": "Vereisung",
   "settings.cat.cloud": "Wolken",
   "settings.cat.turbulence": "Turbulenz",
@@ -299,12 +272,12 @@
   "settings.cat.airport": "Flugplatz",
   "settings.cat.model": "Vorhersage",
   "settings.selectOneModel": "Wählen Sie mindestens ein Vorhersagemodell aus.",
-  "settings.profileCreated": "Profil \u201E{name}\u201C erstellt.",
-  "settings.profileDuplicated": "Profil dupliziert als \u201E{name}\u201C.",
-  "settings.profileRenamed": "Profil umbenannt in \u201E{name}\u201C.",
+  "settings.profileCreated": "Profil „{name}“ erstellt.",
+  "settings.profileDuplicated": "Profil dupliziert als „{name}“.",
+  "settings.profileRenamed": "Profil umbenannt in „{name}“.",
   "settings.profileDeleted": "Profil gelöscht.",
   "settings.cannotDeleteDefault": "Das Standardprofil kann nicht gelöscht werden.",
-  "settings.deleteProfileConfirm": "Profil \u201E{name}\u201C löschen?",
+  "settings.deleteProfileConfirm": "Profil „{name}“ löschen?",
   "settings.enterProfileName": "Profilnamen eingeben:",
   "settings.enterDuplicateName": "Namen für das Duplikat eingeben:",
   "settings.enterNewName": "Neuen Namen eingeben:",
@@ -325,19 +298,15 @@
   "settings.deleteAccountConfirm": "Möchten Sie Ihr Konto wirklich löschen? Alle Ihre Flüge, Briefings und Einstellungen werden dauerhaft entfernt.",
   "settings.deleteAccountDoubleConfirm": "Dies kann nicht rückgängig gemacht werden. Sind Sie sicher, dass Sie Ihr Konto und alle Daten dauerhaft löschen möchten?",
   "settings.deleteAccountFailed": "Konto konnte nicht gelöscht werden: {error}",
-
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
   "usage.gramet": "GRAMET",
   "usage.aiDigest": "KI-Digest",
   "usage.monthSummary": "{briefings} Briefings / {gramet} GRAMET / {digests} KI-Digests / {tokens}",
-
   "privacy.failedUpdate": "Datenschutz-Aktualisierung fehlgeschlagen: {error}",
   "autoRefresh.failedUpdate": "Auto-Aktualisierung fehlgeschlagen: {error}",
-
   "popup.close": "Schließen",
   "popup.discussAi": "Erzählen Sie mir mehr über {metric} im Kontext der Flugmeteorologie. Wie sollte ein VFR- oder IFR-Pilot dies interpretieren, was sind die wichtigsten Schwellenwerte und wie interagiert es mit anderen Wetterparametern für die Flugsicherheit?",
-
   "viz.layer.terrain": "Gelände",
   "viz.layer.cloud-bands": "DD-Schichten",
   "viz.layer.nwp-cloud-bands": "NWP-Schichten",
@@ -360,7 +329,6 @@
   "viz.layer.lfc": "LFC",
   "viz.layer.el": "EL",
   "viz.layer.cruise-altitude": "Reiseflughöhe / Gipfelhöhe",
-
   "viz.group.terrain": "Gelände",
   "viz.group.temperature": "Temperatur",
   "viz.group.clouds": "Wolken",
@@ -369,24 +337,20 @@
   "viz.group.turbulence": "Turbulenz",
   "viz.group.convection": "Konvektion",
   "viz.group.reference": "Referenz",
-
   "viz.refCruise": "Reiseflughöhe {alt} ft",
   "viz.refCeiling": "Gipfelhöhe {alt} ft",
-
   "legend.icing.light": "Leicht",
   "legend.icing.lightDesc": "Beherrschbar für ausgerüstete Luftfahrzeuge",
   "legend.icing.moderate": "Mäßig",
   "legend.icing.moderateDesc": "Wolken verlassen, wenn Eisansatz anhält",
   "legend.icing.severe": "Stark",
   "legend.icing.severeDesc": "Schneller Eisansatz — sofort verlassen",
-
   "legend.cat.light": "Leicht",
   "legend.cat.lightDesc": "Gelegentliche Böen",
   "legend.cat.moderate": "Mäßig",
   "legend.cat.moderateDesc": "Ungesicherte Gegenstände bewegen sich",
   "legend.cat.severe": "Stark",
   "legend.cat.severeDesc": "Diese Schicht meiden",
-
   "legend.convective.marginal": "Gering",
   "legend.convective.marginalDesc": "Flache Konvektion möglich",
   "legend.convective.low": "Niedrig",
@@ -397,28 +361,24 @@
   "legend.convective.highDesc": "Kräftige Gewitter wahrscheinlich",
   "legend.convective.extreme": "Extrem",
   "legend.convective.extremeDesc": "Unwetter — verschieben oder absagen",
-
   "legend.cloud.ovc": "OVC (DD < 1°C)",
   "legend.cloud.ovcDesc": "Bedeckt — durchgehende Füllung",
   "legend.cloud.bkn": "BKN (DD 1–2°C)",
   "legend.cloud.bknDesc": "Aufgelockert — dicke Linien",
   "legend.cloud.sct": "SCT (DD 2–3°C)",
   "legend.cloud.sctDesc": "Vereinzelt — dünne Linien",
-
   "legend.nwpCloud.25": "25% Bedeckung",
   "legend.nwpCloud.25Desc": "Vereinzelt",
   "legend.nwpCloud.50": "50% Bedeckung",
   "legend.nwpCloud.50Desc": "Aufgelockert",
   "legend.nwpCloud.75": "75%+ Bedeckung",
   "legend.nwpCloud.75Desc": "Bedeckt",
-
   "legend.inversion.weak": "Schwach (<1°C)",
   "legend.inversion.weakDesc": "Leichte Dunstbildung",
   "legend.inversion.moderate": "Mäßig (1–3°C)",
   "legend.inversion.moderateDesc": "Eingeschränkte Sicht darunter",
   "legend.inversion.strong": "Stark (>3°C)",
   "legend.inversion.strongDesc": "Dichter Dunst/Nebel eingeschlossen",
-
   "legend.line.freezingLevel": "Nullgradgrenze (0°C)",
   "legend.line.minus10": "−10°C-Niveau",
   "legend.line.minus20": "−20°C-Niveau",
@@ -430,7 +390,6 @@
   "legend.line.dashedCloudBase": "Gestrichelte Linie — Wolkenuntergrenze",
   "legend.line.dashedFreeConvection": "Gestrichelte Linie — freie Konvektion",
   "legend.line.dashedStormTop": "Gestrichelte Linie — Gewitterobergrenze",
-
   "graph.headwind": "Gegen-/Rückenwind",
   "graph.crosswind": "Seitenwind",
   "graph.temperature": "Temperatur (2m)",
@@ -443,7 +402,6 @@
   "graph.none": "Keine",
   "graph.headwindUp": "Gegenwind ↑",
   "graph.tailwindDown": "Rückenwind ↓",
-
   "map.cloud-cover-total": "Bewölkung (Gesamt)",
   "map.cloud-cover-low": "Bewölkung (Tief)",
   "map.convective-risk": "Konvektionsrisiko",
@@ -465,7 +423,6 @@
   "map.overcast": "Bedeckt",
   "map.calm": "Windstille",
   "map.sfc": "GND",
-
   "page.flights.title": "Meine Flüge",
   "page.flights.newFlight": "Neuer Flug",
   "page.flights.waypoints": "Wegpunkte (nur ICAO-Flugplatzkennungen)",
@@ -477,7 +434,6 @@
   "page.flights.duration": "Dauer (Std.)",
   "page.flights.createFlight": "Flug erstellen",
   "page.flights.loading": "Flüge werden geladen...",
-
   "page.settings.title": "Einstellungen",
   "page.settings.save": "Einstellungen speichern",
   "page.settings.backToFlights": "Zurück zu Flügen",
@@ -497,7 +453,7 @@
   "page.settings.thisMonth": "Dieser Monat",
   "page.settings.creditsTitle": "Kosten",
   "page.settings.flightProfiles": "Flugprofile",
-  "page.settings.profilesHint": "Erstellen Sie Profile für verschiedene Luftfahrzeuge oder Flugarten (z.\u00a0B. VFR, IFR). Jedes Profil hat eigene Parameter und Hinweiseinstellungen.",
+  "page.settings.profilesHint": "Erstellen Sie Profile für verschiedene Luftfahrzeuge oder Flugarten (z. B. VFR, IFR). Jedes Profil hat eigene Parameter und Hinweiseinstellungen.",
   "page.settings.activeProfile": "Aktives Profil",
   "page.settings.new": "Neu",
   "page.settings.duplicate": "Duplizieren",
@@ -537,10 +493,15 @@
   "page.settings.deleteAccountTitle": "Konto löschen",
   "page.settings.deleteAccountHint": "Löscht dauerhaft Ihr Konto und alle zugehörigen Daten (Flüge, Briefings, Profile). Diese Aktion kann nicht rückgängig gemacht werden.",
   "page.settings.deleteAccount": "Konto löschen",
-
   "messages.empty": "Noch keine Ankündigungen.",
   "messages.loadFailed": "Nachrichten konnten nicht geladen werden.",
   "messages.category.feature": "Neu",
   "messages.category.change": "Änderung",
-  "messages.category.fix": "Fehlerbehebung"
+  "messages.category.fix": "Fehlerbehebung",
+  "legend.sld.light": "Light",
+  "legend.sld.lightDesc": "Marginal SLD — monitor closely",
+  "legend.sld.moderate": "Moderate",
+  "legend.sld.moderateDesc": "SLD likely — avoid unless SLD-certified",
+  "legend.sld.severe": "Severe",
+  "legend.sld.severeDesc": "Strong SLD signal — avoid"
 }
