@@ -244,7 +244,7 @@ async function init(): Promise<void> {
         ui.renderError(t('flights.form.errorWaypoints'));
         return;
       }
-      const invalidCodes = waypoints.filter((w) => !/^[A-Z]{4}$/.test(w));
+      const invalidCodes = waypoints.filter((w) => !/^[A-Z0-9]{2,5}$/.test(w));
       if (invalidCodes.length > 0) {
         ui.renderError(
           t('flights.form.errorInvalidCodes', { codes: invalidCodes.join(', ') }),
