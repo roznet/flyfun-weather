@@ -1,0 +1,13 @@
+{
+  "id": "borderline_icing_amber_red",
+  "route": "EGTK -> LSGG",
+  "target_date": "2026-03-15",
+  "days_out": 1,
+  "context_chars": 3464,
+  "synthetic": true,
+  "purpose": "Borderline case: single RED icing advisory with other GREEN. Conservative should go RED, tolerant should stay AMBER.",
+  "advisory_summary": {
+    "has_advisories": true,
+    "counts": {"green": 8, "amber": 1, "red": 1}
+  }
+}

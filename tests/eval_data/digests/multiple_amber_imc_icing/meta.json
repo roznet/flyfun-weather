@@ -1,0 +1,13 @@
+{
+  "id": "multiple_amber_imc_icing",
+  "route": "EGTK -> LFPB",
+  "target_date": "2026-03-20",
+  "days_out": 0,
+  "context_chars": 2988,
+  "synthetic": true,
+  "purpose": "Multiple AMBER advisories (IMC + icing + wind). Conservative should go AMBER/RED, tolerant should be GREEN/AMBER for IFR-capable pilot.",
+  "advisory_summary": {
+    "has_advisories": true,
+    "counts": {"green": 6, "amber": 3, "red": 0}
+  }
+}

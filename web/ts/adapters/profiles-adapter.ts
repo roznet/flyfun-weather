@@ -16,6 +16,7 @@ export interface ProfileSettings {
   cloud_method: string | null;
   convective_method: string | null;
   flight_rules: string | null;
+  digest_guidance: string | null;
   advisories: AdvisoryPreferences | null;
 }
 
@@ -74,4 +75,19 @@ export async function resetProfileToTemplate(id: number): Promise<ProfileRespons
 
 export async function fetchSystemTemplates(locale = 'en'): Promise<SystemTemplate[]> {
   return apiFetch<SystemTemplate[]>(`/user/profiles/system-templates?locale=${locale}`);
+}
+
+export interface DigestGuidancePreset {
+  key: string;
+  name: string;
+  description: string;
+}
+
+export async function fetchDigestGuidancePresets(locale = 'en'): Promise<DigestGuidancePreset[]> {
+  return apiFetch<DigestGuidancePreset[]>(`/user/profiles/digest-guidance-presets?locale=${locale}`);
+}
+
+export async function fetchDigestGuidanceText(key: string): Promise<string> {
+  const resp = await apiFetch<{ key: string; text: string }>(`/user/profiles/digest-guidance-presets/${key}/text`);
+  return resp.text;
 }

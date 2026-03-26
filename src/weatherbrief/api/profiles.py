@@ -42,6 +42,7 @@ class ProfileSettings(BaseModel):
     cloud_method: str | None = None  # "dd" or "nwp"
     convective_method: str | None = None  # "thermo" or "nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
+    digest_guidance: str | None = None  # "conservative", "balanced", or "tolerant"
     advisories: dict | None = None  # {enabled: {}, params: {}}
 
 
@@ -267,6 +268,46 @@ def list_system_templates(
             settings=ProfileSettings(**tpl["settings"]),
         ))
     return result
+
+
+class DigestGuidancePresetResponse(BaseModel):
+    """Digest guidance preset info returned to clients."""
+
+    key: str
+    name: str
+    description: str
+
+
+@router.get("/digest-guidance-presets", response_model=list[DigestGuidancePresetResponse])
+def list_digest_guidance_presets(
+    locale: str = "en",
+    user_id: str = Depends(current_user_id),
+):
+    """List available digest guidance presets with localized descriptions."""
+    from weatherbrief.digest.llm_config import load_guidance_index
+
+    return [
+        DigestGuidancePresetResponse(**preset)
+        for preset in load_guidance_index(locale)
+    ]
+
+
+class DigestGuidanceTextResponse(BaseModel):
+    """Full guidance text for a preset."""
+
+    key: str
+    text: str
+
+
+@router.get("/digest-guidance-presets/{key}/text", response_model=DigestGuidanceTextResponse)
+def get_digest_guidance_text(
+    key: str,
+    user_id: str = Depends(current_user_id),
+):
+    """Return the full guidance prompt text for a preset (read-only)."""
+    from weatherbrief.digest.llm_config import load_guidance_text
+
+    return DigestGuidanceTextResponse(key=key, text=load_guidance_text(key))
 
 
 @router.post("/{profile_id}/reset", response_model=ProfileResponse)

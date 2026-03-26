@@ -28,6 +28,10 @@ Usage:
 
     # Use a specific LLM config
     python scripts/run_digest_eval.py --config openai
+
+    # Compare guidance presets on the same fixtures
+    python scripts/run_digest_eval.py --guidance conservative
+    python scripts/run_digest_eval.py --guidance tolerant
 """
 
 from __future__ import annotations
@@ -111,6 +115,7 @@ def main():
     parser.add_argument("--assessment", type=str, help="Only fixtures with this original assessment")
     parser.add_argument("--show", type=str, help="Show context for a specific fixture ID")
     parser.add_argument("--prompt", type=str, help="Path to alternative system prompt file")
+    parser.add_argument("--guidance", type=str, help="Guidance preset key (conservative/balanced/tolerant)")
     parser.add_argument("--config", type=str, default="default", help="LLM config name")
     parser.add_argument("--output", type=str, help="Save results JSON to this path")
     parser.add_argument("--limit", type=int, help="Max fixtures to run")
@@ -162,13 +167,16 @@ def main():
 
     # Load LLM config and prompt
     config = load_digest_config(args.config)
+    guidance_key = args.guidance
     if args.prompt:
         system_prompt = Path(args.prompt).read_text()
     else:
-        system_prompt = config.load_prompt("briefer")
+        system_prompt = config.load_prompt("briefer", guidance_key=guidance_key)
 
     print(f"LLM: {config.llm.provider}/{config.llm.model}")
     print(f"Prompt: {args.prompt or config.prompts.briefer}")
+    if guidance_key:
+        print(f"Guidance: {guidance_key}")
     print()
 
     results = []

@@ -174,6 +174,10 @@ function populateProfileForm(profile: ProfileResponse): void {
   const convectiveMethodSelect = document.getElementById('input-convective-method') as HTMLSelectElement;
   if (convectiveMethodSelect) convectiveMethodSelect.value = s.convective_method ?? 'thermo';
 
+  // Digest guidance selector
+  const guidanceSelect = document.getElementById('input-digest-guidance') as HTMLSelectElement;
+  if (guidanceSelect) guidanceSelect.value = s.digest_guidance ?? 'balanced';
+
   // Advisories
   const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
@@ -360,6 +364,24 @@ function translateStaticElements(): void {
       if (opt.value === 'vfr_only') opt.textContent = t('page.settings.vfrOnly');
     }
   }
+  // Translate digest guidance label (preserves info button)
+  const guidanceLabel = document.querySelector('label[for="input-digest-guidance"]');
+  if (guidanceLabel) {
+    const btn = guidanceLabel.querySelector('button');
+    const span = document.createTextNode(t('page.settings.digestGuidance') + ' ');
+    guidanceLabel.textContent = '';
+    guidanceLabel.appendChild(span);
+    if (btn) guidanceLabel.appendChild(btn);
+  }
+  // Translate digest guidance options
+  const guidanceSelect = document.getElementById('input-digest-guidance') as HTMLSelectElement;
+  if (guidanceSelect) {
+    for (const opt of guidanceSelect.options) {
+      if (opt.value === 'conservative') opt.textContent = t('page.settings.guidanceConservative');
+      if (opt.value === 'balanced') opt.textContent = t('page.settings.guidanceBalanced');
+      if (opt.value === 'tolerant') opt.textContent = t('page.settings.guidanceTolerant');
+    }
+  }
   // Translate aggregation options
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
   if (aggSelect) {
@@ -452,6 +474,24 @@ async function init(): Promise<void> {
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     await handleSave();
+  });
+
+  // Digest guidance info popup
+  const guidanceInfoBtn = document.querySelector('.digest-guidance-info-btn');
+  guidanceInfoBtn?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const guidanceSelect = document.getElementById('input-digest-guidance') as HTMLSelectElement;
+    const key = guidanceSelect?.value || 'balanced';
+    try {
+      const { fetchDigestGuidanceText } = await import('./adapters/profiles-adapter');
+      const text = await fetchDigestGuidanceText(key);
+      showPopupContent(`
+        <h3 style="margin-top:0">AI Assessment Guidance: ${key.charAt(0).toUpperCase() + key.slice(1)}</h3>
+        <pre style="white-space:pre-wrap; font-size:0.9em; line-height:1.5; max-height:60vh; overflow-y:auto;">${text}</pre>
+      `);
+    } catch (err) {
+      showPopupContent(`<p>Failed to load guidance text: ${String(err)}</p>`);
+    }
   });
 
   // Clear autorouter credentials
@@ -695,6 +735,7 @@ async function handleSave(): Promise<void> {
   const icingMethod = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd';
   const cloudMethod = (document.getElementById('input-cloud-method') as HTMLSelectElement)?.value || 'dd';
   const convectiveMethod = (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || 'thermo';
+  const digestGuidance = (document.getElementById('input-digest-guidance') as HTMLSelectElement)?.value || 'balanced';
   const advisories = collectAdvisoryPrefs();
 
   // Build profile settings
@@ -711,6 +752,7 @@ async function handleSave(): Promise<void> {
     icing_method: icingMethod,
     cloud_method: cloudMethod,
     convective_method: convectiveMethod,
+    digest_guidance: digestGuidance,
     advisories,
   };
 
