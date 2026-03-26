@@ -13,7 +13,7 @@ import { showThemePreview } from '../cross-section/theme-preview';
 import { t } from '../../i18n/i18n';
 
 /** Groups that collapse to a single preferred-method toggle in compact mode. */
-const COMPACT_GROUPS = new Set(['clouds', 'icing', 'convection']);
+const COMPACT_GROUPS = new Set(['clouds', 'icing', 'turbulence', 'convection']);
 
 /** Explanatory text for layer group info buttons. */
 const GROUP_INFO: Record<string, () => string> = {

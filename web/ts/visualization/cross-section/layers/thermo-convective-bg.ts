@@ -59,7 +59,7 @@ export const thermoConvectiveBgLayer: CrossSectionLayer = {
   id: 'thermo-convective-bg',
   name: 'Thermo Convective',
   group: 'convection',
-  defaultEnabled: true,
+  defaultEnabled: false,
   metricId: 'convective_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {

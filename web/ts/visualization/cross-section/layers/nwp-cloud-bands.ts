@@ -38,7 +38,7 @@ export const nwpCloudBandsLayer: CrossSectionLayer = {
   id: 'nwp-cloud-bands',
   name: 'NWP Layers',
   group: 'clouds',
-  defaultEnabled: true,
+  defaultEnabled: false,
   metricId: 'nwp_cloud_cover',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {

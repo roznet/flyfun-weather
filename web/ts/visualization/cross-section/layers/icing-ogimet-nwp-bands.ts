@@ -8,7 +8,7 @@ export const icingOgimetNwpBandsLayer: CrossSectionLayer = {
   id: 'icing-ogimet-nwp-bands',
   name: 'Ogimet-NWP',
   group: 'icing',
-  defaultEnabled: false,
+  defaultEnabled: true,
   metricId: 'icing_ogimet_nwp_risk',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {

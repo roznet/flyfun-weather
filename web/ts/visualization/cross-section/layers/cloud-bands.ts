@@ -10,7 +10,7 @@ export const cloudBandsLayer: CrossSectionLayer = {
   id: 'cloud-bands',
   name: 'DD Layers',
   group: 'clouds',
-  defaultEnabled: true,
+  defaultEnabled: false,
   metricId: 'cloud_coverage',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {

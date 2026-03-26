@@ -15,7 +15,7 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
   id: 'nwp-convective-bg',
   name: 'NWP Convective',
   group: 'convection',
-  defaultEnabled: false,
+  defaultEnabled: true,
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     const { plotArea } = transform;

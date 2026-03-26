@@ -117,7 +117,7 @@ export const softNwpCloudBandsLayer: CrossSectionLayer = {
   id: 'soft-nwp-cloud-bands',
   name: 'Soft NWP',
   group: 'clouds',
-  defaultEnabled: false,
+  defaultEnabled: true,
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
     const maxLayers = data.points.reduce((max, p) => Math.max(max, p.nwpCloudLayers.length), 0);
