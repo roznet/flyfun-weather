@@ -1,0 +1,49 @@
+{
+  "presets": [
+    {
+      "key": "conservative",
+      "name": {
+        "en": "Conservative",
+        "fr": "Conservateur",
+        "de": "Konservativ",
+        "es": "Conservador"
+      },
+      "description": {
+        "en": "Err on the side of caution. A single RED advisory is a strong signal toward a RED assessment. AMBER conditions in cloud, icing, or visibility are treated seriously even for IFR-capable pilots.",
+        "fr": "Privilégie la prudence. Un seul avis RED est un signal fort vers une évaluation RED. Les conditions AMBER pour les nuages, le givrage ou la visibilité sont prises au sérieux, même pour les pilotes IFR.",
+        "de": "Im Zweifelsfall vorsichtiger. Ein einzelner RED-Hinweis ist ein starkes Signal für eine RED-Bewertung. AMBER-Bedingungen bei Wolken, Vereisung oder Sicht werden auch für IFR-Piloten ernst genommen.",
+        "es": "Prioriza la precaución. Un solo aviso RED es una señal fuerte hacia una evaluación RED. Las condiciones AMBER en nubes, engelamiento o visibilidad se toman en serio incluso para pilotos IFR."
+      }
+    },
+    {
+      "key": "balanced",
+      "name": {
+        "en": "Balanced",
+        "fr": "Équilibré",
+        "de": "Ausgewogen",
+        "es": "Equilibrado"
+      },
+      "description": {
+        "en": "Weigh hazards using meteorological judgment. A single RED advisory requires investigation but is not automatically a no-go. Consider altitude flexibility, routing options, and whether the hazard is localised.",
+        "fr": "Évalue les dangers avec discernement météorologique. Un seul avis RED nécessite une investigation mais n'est pas automatiquement un no-go. Considère la flexibilité d'altitude, les options de route et si le danger est localisé.",
+        "de": "Bewertet Gefahren mit meteorologischem Sachverstand. Ein einzelner RED-Hinweis erfordert Untersuchung, ist aber nicht automatisch ein No-Go. Berücksichtigt Höhenflexibilität, Routenoptionen und ob die Gefahr lokal ist.",
+        "es": "Evalúa los peligros con criterio meteorológico. Un solo aviso RED requiere investigación pero no es automáticamente un no-go. Considera flexibilidad de altitud, opciones de ruta y si el peligro es localizado."
+      }
+    },
+    {
+      "key": "tolerant",
+      "name": {
+        "en": "Tolerant",
+        "fr": "Tolérant",
+        "de": "Tolerant",
+        "es": "Tolerante"
+      },
+      "description": {
+        "en": "For well-equipped IFR/FIKI pilots. AMBER icing or IMC is manageable with proper equipment. Focus RED assessments on situations with multiple severe hazards or genuinely unmanageable conditions.",
+        "fr": "Pour les pilotes IFR/FIKI bien équipés. Le givrage ou l'IMC AMBER sont gérables avec l'équipement approprié. Réserve les évaluations RED aux situations avec plusieurs dangers graves ou conditions réellement ingérables.",
+        "de": "Für gut ausgerüstete IFR/FIKI-Piloten. AMBER-Vereisung oder IMC ist mit geeigneter Ausrüstung beherrschbar. RED-Bewertungen nur bei mehreren schweren Gefahren oder wirklich unbeherrschbaren Bedingungen.",
+        "es": "Para pilotos IFR/FIKI bien equipados. El engelamiento o IMC AMBER es manejable con equipo adecuado. Reserva evaluaciones RED para situaciones con múltiples peligros severos o condiciones realmente inmanejables."
+      }
+    }
+  ]
+}

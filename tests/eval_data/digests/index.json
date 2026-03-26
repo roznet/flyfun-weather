@@ -1,0 +1,22 @@
+[
+  {
+    "id": "borderline_icing_amber_red",
+    "route": "EGTK -> LFPB -> LSGG",
+    "target_date": "2026-03-15",
+    "days_out": 1,
+    "assessment": "AMBER",
+    "context_chars": 3464,
+    "advisory_counts": {"green": 8, "amber": 1, "red": 1},
+    "synthetic": true
+  },
+  {
+    "id": "multiple_amber_imc_icing",
+    "route": "EGTK -> LFPB",
+    "target_date": "2026-03-20",
+    "days_out": 0,
+    "assessment": "AMBER",
+    "context_chars": 2988,
+    "advisory_counts": {"green": 6, "amber": 3, "red": 0},
+    "synthetic": true
+  }
+]

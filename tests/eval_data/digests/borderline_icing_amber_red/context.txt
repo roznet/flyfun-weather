@@ -1,0 +1,85 @@
+ROUTE: EGTK -> LFPB -> LSGG
+DATE: Saturday 2026-03-15 (D-1)
+BRIEFING ISSUED: Friday 2026-03-14
+ALTITUDE: 8000ft (~750hPa)
+PILOT CAPABILITY: VFR + IFR
+
+=== QUANTITATIVE DATA ===
+
+--- EGTK (Oxford) ---
+Models: gfs, ecmwf, icon
+
+  Surface:
+    gfs:   T=4°C  Td=1°C  Wind=210/12kt  Gusts=22kt
+    ecmwf: T=5°C  Td=2°C  Wind=200/10kt  Gusts=18kt
+    icon:  T=4°C  Td=1°C  Wind=205/11kt  Gusts=20kt
+
+  Weather: Cloud cover 75%, Vis >10km, Precip 0mm, FzLvl 4200ft, CAPE 0
+  Cruise: P=750hPa Wind=250/25kt T=-2°C RH=82%
+
+--- LFPB (Paris Le Bourget) ---
+Models: gfs, ecmwf, icon
+
+  Surface:
+    gfs:   T=6°C  Td=3°C  Wind=220/8kt  Gusts=15kt
+    ecmwf: T=7°C  Td=4°C  Wind=210/7kt  Gusts=12kt
+    icon:  T=6°C  Td=3°C  Wind=215/8kt  Gusts=14kt
+
+  Weather: Cloud cover 60%, Vis >10km, Precip 0mm, FzLvl 4500ft, CAPE 0
+  Cruise: P=750hPa Wind=240/22kt T=-1°C RH=78%
+
+--- LSGG (Geneva) ---
+Models: gfs, ecmwf, icon
+
+  Surface:
+    gfs:   T=3°C  Td=0°C  Wind=180/6kt  Gusts=12kt
+    ecmwf: T=4°C  Td=1°C  Wind=170/5kt  Gusts=10kt
+    icon:  T=3°C  Td=-1°C Wind=175/7kt  Gusts=14kt
+
+  Weather: Cloud cover 80%, Vis 8km, Precip 1mm, FzLvl 3800ft, CAPE 0
+  Cruise: P=750hPa Wind=260/28kt T=-3°C RH=88%
+
+  Sounding (gfs):
+    CAPE=0 CIN=0 FzLvl=3800ft K=18 TT=42 PW=12mm Shear=25kt
+    Cloud layers: BKN 3500-6500ft, SCT 12000-18000ft
+    Icing: MODERATE RIME 3800-7500ft (SLD: No)
+
+  Sounding (ecmwf):
+    CAPE=0 CIN=0 FzLvl=4000ft K=16 TT=40 PW=11mm Shear=22kt
+    Cloud layers: BKN 3800-7000ft, SCT 13000-19000ft
+    Icing: MODERATE RIME 4000-8000ft (SLD: No)
+
+  Sounding (icon):
+    CAPE=0 CIN=0 FzLvl=3600ft K=20 TT=44 PW=13mm Shear=28kt
+    Cloud layers: OVC 3200-7200ft, SCT 11000-17000ft
+    Icing: MODERATE-SEVERE RIME 3600-8200ft (SLD: No)
+
+=== ROUTE ADVISORIES ===
+
+[RED]   Icing Escape: No escape below freezing level near Geneva — terrain at 2200ft, freezing level at 3800ft, icing from 3800-8200ft encompasses cruise altitude. 40% of route affected with no escape option.
+  gfs=RED: 35% affected | ecmwf=AMBER: 25% affected | icon=RED: 45% affected
+[AMBER] VMC Cruise: BKN/OVC cloud coverage at cruise altitude along 30% of route.
+  gfs=AMBER: 30% affected | ecmwf=GREEN: 15% affected | icon=AMBER: 35% affected
+[GREEN] Turbulence: No significant CAT or vertical motion at cruise altitude.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] Mountain Wind: Wind speeds below threshold near significant terrain.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] Convective: No convective risk along route.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] Flight Category: Departure EGTK VFR, Arrival LSGG MVFR (ceiling 3500ft, vis 8km).
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] Airport Wind: Crosswind within limits at both airports.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] VFR Feasibility: VFR viable with adequate cloud bases and visibility.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] IFR Feasibility: IFR viable — adequate ceilings and manageable icing.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+[GREEN] Cloud Top: Cloud tops below flight ceiling, can overfly.
+  gfs=GREEN | ecmwf=GREEN | icon=GREEN
+
+=== PREVIOUS DIGEST ===
+
+Previous assessment: GREEN
+Previous reason: Benign conditions across the route with good visibility and light winds.
+Previous synoptic: High pressure centered over the British Isles bringing settled conditions across northern Europe.
+Previous trend: Stable pattern expected to continue for the next 48 hours.
