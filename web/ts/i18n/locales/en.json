@@ -22,8 +22,8 @@
   "flights.btnDelete": "Delete",
 
   "flights.form.errorDate": "Please enter a date.",
-  "flights.form.errorWaypoints": "Route must be a list of at least 2 ICAO airport codes separated by spaces (e.g. EGTK LFQA LSGS).",
-  "flights.form.errorInvalidCodes": "Each waypoint must be a 4-letter ICAO airport code separated by spaces. Invalid: {codes}",
+  "flights.form.errorWaypoints": "Route must be at least 2 waypoints separated by spaces (e.g. EGTK POGOL LFQA LSGS).",
+  "flights.form.errorInvalidCodes": "Each waypoint must be 2-5 alphanumeric characters (airports, navaids, or fixes). Invalid: {codes}",
   "flights.form.defaultTag": " (default)",
 
   "briefing.noFlightSpecified": "No flight specified. Go back to flights list.",
