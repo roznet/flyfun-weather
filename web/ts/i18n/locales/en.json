@@ -25,6 +25,11 @@
   "flights.form.errorWaypoints": "Route must be at least 2 waypoints separated by spaces (e.g. EGTK POGOL LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Each waypoint must be 2-5 alphanumeric characters (airports, navaids, or fixes). Invalid: {codes}",
   "flights.form.defaultTag": " (default)",
+  "flights.fpl.parseError": "Failed to parse flight plan.",
+  "flights.fpl.modalTitle": "Paste ICAO Flight Plan",
+  "flights.fpl.cancel": "Cancel",
+  "flights.fpl.import": "Import",
+  "flights.fpl.pasteFpl": "Paste FPL",
 
   "briefing.noFlightSpecified": "No flight specified. Go back to flights list.",
   "briefing.noBriefings": "No briefings yet",

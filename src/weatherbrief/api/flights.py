@@ -314,6 +314,74 @@ def compute_route_distance(
     )
 
 
+class ParseFplRequest(BaseModel):
+    """Request body for parsing an ICAO flight plan string."""
+
+    fpl_text: str = Field(..., min_length=10, max_length=4000)
+
+
+class ParseFplResponse(BaseModel):
+    """Parsed ICAO flight plan fields relevant for flight creation."""
+
+    waypoints: list[str] = []
+    date: str | None = None  # YYYY-MM-DD
+    time_utc: str | None = None  # HH:MM
+    altitude_ft: int | None = None
+    duration_hours: float | None = None
+    flight_rules: str | None = None  # V, I, Y, Z
+    aircraft_type: str | None = None
+    raw_route: str | None = None
+    error: str | None = None
+
+
+@router.post("/parse-fpl", response_model=ParseFplResponse)
+def parse_flight_plan(
+    req: ParseFplRequest,
+    user_id: str = Depends(current_user_id),
+):
+    """Parse an ICAO FPL string and return fields for flight creation."""
+    from euro_aip.briefing import parse_icao_fpl
+
+    fpl = parse_icao_fpl(req.fpl_text)
+    if fpl is None:
+        return ParseFplResponse(error="Could not parse flight plan. Expected (FPL-...) format.")
+
+    # Build waypoint list: departure + route waypoints + destination
+    waypoints: list[str] = []
+    if fpl.route.departure:
+        waypoints.append(fpl.route.departure)
+    # Filter route waypoints to those matching our waypoint pattern (skip GPS coords)
+    for wp in fpl.route.waypoints:
+        if WAYPOINT_RE.match(wp):
+            waypoints.append(wp)
+    if fpl.route.destination and fpl.route.destination not in waypoints:
+        waypoints.append(fpl.route.destination)
+
+    # Date
+    date_str = fpl.date_of_flight.isoformat() if fpl.date_of_flight else None
+
+    # Time
+    time_str = None
+    if fpl.departure_time_utc:
+        time_str = fpl.departure_time_utc.strftime("%H:%M")
+
+    # Duration from EET
+    duration_hours = None
+    if fpl.eet_minutes is not None:
+        duration_hours = round(fpl.eet_minutes / 60, 1)
+
+    return ParseFplResponse(
+        waypoints=waypoints,
+        date=date_str,
+        time_utc=time_str,
+        altitude_ft=fpl.altitude_feet,
+        duration_hours=duration_hours,
+        flight_rules=fpl.flight_rules,
+        aircraft_type=fpl.aircraft_type,
+        raw_route=fpl.raw_route,
+    )
+
+
 @router.get("/{flight_id}", response_model=FlightResponse)
 def get_flight(
     flight_id: str,

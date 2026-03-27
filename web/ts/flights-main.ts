@@ -1,7 +1,7 @@
 /** Flights page entry point — wires store, UI manager, and event handlers. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { fetchRouteDistance, type WaypointInfo } from './adapters/api-adapter';
+import { fetchRouteDistance, parseFpl, type WaypointInfo } from './adapters/api-adapter';
 import { fetchModelCatalog } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
@@ -143,6 +143,153 @@ function translateStaticElements(): void {
   set('#loading-spinner', 'page.flights.loading');
   const submitBtn = document.querySelector('#create-flight-form button[type="submit"]');
   if (submitBtn) submitBtn.textContent = t('page.flights.createFlight');
+  const pasteFplBtn = document.querySelector('#btn-paste-fpl');
+  if (pasteFplBtn) pasteFplBtn.textContent = t('flights.fpl.pasteFpl');
+}
+
+/** Apply parsed FPL data to the flight creation form. */
+async function applyParsedFpl(text: string): Promise<void> {
+  try {
+    const parsed = await parseFpl(text);
+    if (parsed.error) {
+      ui.renderError(parsed.error);
+      return;
+    }
+
+    // Waypoints
+    if (parsed.waypoints.length >= 2) {
+      const wpInput = document.getElementById('input-waypoints') as HTMLInputElement;
+      if (wpInput) wpInput.value = parsed.waypoints.join(' ');
+    }
+
+    // Date
+    if (parsed.date) {
+      const dateInput = document.getElementById('input-date') as HTMLInputElement;
+      if (dateInput) dateInput.value = parsed.date;
+    }
+
+    // Time (UTC) — set timezone to UTC first, then set hour/minute
+    if (parsed.time_utc) {
+      const [h, m] = parsed.time_utc.split(':').map(Number);
+      const tzSel = document.getElementById('input-timezone') as HTMLSelectElement;
+      if (tzSel) tzSel.value = 'UTC';
+      const hourSel = document.getElementById('input-hour') as HTMLSelectElement;
+      const minSel = document.getElementById('input-minute') as HTMLSelectElement;
+      if (hourSel) hourSel.value = String(h);
+      if (minSel) {
+        // Snap to nearest 15-min option
+        const snapped = nearestMinuteOption(m);
+        minSel.value = String(snapped);
+      }
+      internalUtcHour = h;
+      internalUtcMinute = nearestMinuteOption(m);
+    }
+
+    // Altitude
+    if (parsed.altitude_ft != null) {
+      const altInput = document.getElementById('input-altitude') as HTMLInputElement;
+      if (altInput) altInput.value = String(parsed.altitude_ft);
+    }
+
+    // Duration
+    if (parsed.duration_hours != null) {
+      const durInput = document.getElementById('input-duration') as HTMLInputElement;
+      if (durInput) {
+        durInput.value = String(parsed.duration_hours);
+        durationManuallyEdited = true; // prevent auto-calc from overwriting
+      }
+    }
+
+    // Trigger route distance fetch to populate timezones and validate
+    await fetchRouteAndUpdateUI();
+
+    // If time was set and we now have timezone options, re-display in UTC
+    if (parsed.time_utc) {
+      utcToLocalDisplay(internalUtcHour, internalUtcMinute);
+    }
+  } catch (err) {
+    ui.renderError(t('flights.fpl.parseError'));
+    console.error('FPL parse failed:', err);
+  }
+}
+
+/** Show a modal for the user to paste their FPL text. */
+function showFplModal(): void {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'metric-popup-backdrop active';
+
+  const modal = document.createElement('div');
+  modal.className = 'metric-popup';
+  modal.innerHTML = `
+    <button class="metric-popup-close" aria-label="${t('popup.close')}">\u00d7</button>
+    <h3>${t('flights.fpl.modalTitle')}</h3>
+    <textarea id="fpl-paste-area" rows="8" style="width:100%;font-family:monospace;font-size:0.85rem;resize:vertical;" placeholder="(FPL-N122DR-VG&#10;-S22T/L-SBDGORVY/LB2&#10;-LFAT0930&#10;-N0166F085 DCT LYD DCT VESAN DCT&#10;-EGTF0033 EGLL&#10;-DOF/260318)"></textarea>
+    <div style="margin-top:0.75rem;display:flex;gap:0.5rem;justify-content:flex-end;">
+      <button type="button" id="fpl-cancel-btn" class="btn btn-outline btn-sm">${t('flights.fpl.cancel')}</button>
+      <button type="button" id="fpl-import-btn" class="btn btn-primary btn-sm">${t('flights.fpl.import')}</button>
+    </div>
+  `;
+
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  // Stop clicks inside modal from closing
+  modal.addEventListener('click', (e) => e.stopPropagation());
+
+  const close = () => backdrop.remove();
+
+  backdrop.addEventListener('click', close);
+  modal.querySelector('.metric-popup-close')?.addEventListener('click', close);
+  modal.querySelector('#fpl-cancel-btn')?.addEventListener('click', close);
+
+  modal.querySelector('#fpl-import-btn')?.addEventListener('click', async () => {
+    const area = document.getElementById('fpl-paste-area') as HTMLTextAreaElement;
+    const text = area?.value?.trim();
+    if (!text) return;
+    close();
+    await applyParsedFpl(text);
+  });
+
+  // Also handle Enter in textarea with Ctrl/Cmd
+  const area = modal.querySelector('#fpl-paste-area') as HTMLTextAreaElement;
+  area?.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      const text = area.value?.trim();
+      if (!text) return;
+      close();
+      await applyParsedFpl(text);
+    }
+  });
+
+  // ESC to close
+  const onEsc = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      close();
+      document.removeEventListener('keydown', onEsc);
+    }
+  };
+  document.addEventListener('keydown', onEsc);
+
+  // Focus textarea
+  requestAnimationFrame(() => area?.focus());
+}
+
+/** Handle "Paste FPL" button click — try clipboard first, fall back to modal. */
+async function handlePasteFpl(): Promise<void> {
+  // Try clipboard API (requires secure context and user gesture)
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      const text = await navigator.clipboard.readText();
+      if (text && text.includes('FPL')) {
+        await applyParsedFpl(text);
+        return;
+      }
+    }
+  } catch {
+    // Clipboard access denied or unavailable — fall through to modal
+  }
+  showFplModal();
 }
 
 async function init(): Promise<void> {
@@ -326,6 +473,10 @@ async function init(): Promise<void> {
     durationManuallyEdited = false;
     fetchRouteAndUpdateUI();
   });
+
+  // --- Wire "Paste FPL" button ---
+  const pasteFplBtn = document.getElementById('btn-paste-fpl');
+  pasteFplBtn?.addEventListener('click', handlePasteFpl);
 
   // --- Initial load ---
   store.getState().loadFlights().then(() => {
