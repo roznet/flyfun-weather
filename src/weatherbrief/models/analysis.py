@@ -308,6 +308,7 @@ class IcingType(str, Enum):
 class CloudCoverage(str, Enum):
     """Cloud coverage category derived from dewpoint depression."""
 
+    FEW = "few"
     SCT = "sct"
     BKN = "bkn"
     OVC = "ovc"

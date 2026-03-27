@@ -193,12 +193,19 @@ def test_build_nwp_cloud_layers_coverage_thresholds():
     layers = build_nwp_cloud_layers(diag)
     assert layers[0].coverage == CloudCoverage.SCT
 
-    # 10% -> SCT (below lowest threshold, falls to SCT)
+    # 15% -> FEW (1-2 oktas)
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=15.0, base_ft=1000.0, top_ft=3000.0),
+    )
+    layers = build_nwp_cloud_layers(diag)
+    assert layers[0].coverage == CloudCoverage.FEW
+
+    # 10% -> sub-FEW, no layer created (essentially clear)
     diag = NWPCloudDiagnostics(
         low=NWPCloudLayerDiag(cover_pct=10.0, base_ft=1000.0, top_ft=3000.0),
     )
     layers = build_nwp_cloud_layers(diag)
-    assert layers[0].coverage == CloudCoverage.SCT
+    assert layers == []
 
 
 def test_build_nwp_cloud_layers_convective():

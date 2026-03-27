@@ -119,15 +119,19 @@ _NWP_COVERAGE_THRESHOLDS = [
     (87.5, CloudCoverage.OVC),  # 7-8 oktas
     (50.0, CloudCoverage.BKN),  # 5-6 oktas
     (25.0, CloudCoverage.SCT),  # 3-4 oktas
+    (12.5, CloudCoverage.FEW),  # 1-2 oktas
 ]
 
 
-def _nwp_pct_to_coverage(pct: float) -> CloudCoverage:
-    """Map NWP cloud cover percentage to METAR coverage category."""
+def _nwp_pct_to_coverage(pct: float) -> CloudCoverage | None:
+    """Map NWP cloud cover percentage to METAR coverage category.
+
+    Returns None for sub-FEW coverage (<12.5%) — essentially clear sky.
+    """
     for threshold, coverage in _NWP_COVERAGE_THRESHOLDS:
         if pct >= threshold:
             return coverage
-    return CloudCoverage.SCT
+    return None
 
 
 def build_nwp_cloud_layers(
@@ -197,10 +201,14 @@ def _build_grib_layers(
         if cover_pct is None or cover_pct <= 0:
             continue
 
+        coverage = _nwp_pct_to_coverage(cover_pct)
+        if coverage is None:
+            continue  # sub-FEW (<12.5%) — essentially clear
+
         layers.append(EnhancedCloudLayer(
             base_ft=round(diag.base_ft),
             top_ft=round(diag.top_ft),
-            coverage=_nwp_pct_to_coverage(cover_pct),
+            coverage=coverage,
             mean_temperature_c=diag.top_temp_c,
             mean_dewpoint_depression_c=None,
             source="grib",
@@ -213,13 +221,15 @@ def _build_grib_layers(
         has_usable_band = True
         conv_pct = diag_root.convective_cover_pct
         if conv_pct is not None and conv_pct > 0:
-            layers.append(EnhancedCloudLayer(
-                base_ft=round(diag_root.convective_base_ft),
-                top_ft=round(diag_root.convective_top_ft),
-                coverage=_nwp_pct_to_coverage(conv_pct),
-                mean_dewpoint_depression_c=None,
-                source="grib",
-            ))
+            conv_cov = _nwp_pct_to_coverage(conv_pct)
+            if conv_cov is not None:
+                layers.append(EnhancedCloudLayer(
+                    base_ft=round(diag_root.convective_base_ft),
+                    top_ft=round(diag_root.convective_top_ft),
+                    coverage=conv_cov,
+                    mean_dewpoint_depression_c=None,
+                    source="grib",
+                ))
 
     if not has_usable_band:
         return None

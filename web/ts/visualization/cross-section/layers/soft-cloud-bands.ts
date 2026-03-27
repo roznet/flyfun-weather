@@ -10,12 +10,12 @@ import { renderMatchedZones } from './zone-matching';
 import type { BandPointData } from './base';
 import { drawSmoothBand } from './base';
 
-// Coverage to opacity mapping
+// Coverage to opacity mapping (METAR categories, uppercase to match .toUpperCase() lookup)
 const COVERAGE_ALPHA: Record<string, number> = {
   OVC: 0.85,
   BKN: 0.65,
   SCT: 0.45,
-  FEW: 0.25,
+  FEW: 0.15,
 };
 
 /** Feather fraction: top/bottom 15% of band height fades in/out. */
