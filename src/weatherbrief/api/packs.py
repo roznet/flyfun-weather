@@ -1668,24 +1668,25 @@ def get_bundle(
 
     bundle: dict[str, object] = {}
 
-    # Fixed endpoints — map cache key to server file
+    # Fixed endpoints — map cache key to server file (with fallbacks)
     file_map = {
-        "advisories": "route_advisories.json",
-        "snapshot": "briefing.json",
-        "route-analyses": "route_analyses.json",
-        "elevation": "elevation_profile.json",
-        "digest": "digest.json",
+        "advisories": ["route_advisories.json"],
+        "snapshot": ["briefing.json", "snapshot.json"],
+        "route-analyses": ["route_analyses.json"],
+        "elevation": ["elevation_profile.json"],
+        "digest": ["digest.json"],
     }
-    for endpoint, filename in file_map.items():
-        path = pack_dir / filename
-        if path.exists():
-            bundle[endpoint] = json.loads(path.read_text())
+    for endpoint, filenames in file_map.items():
+        for filename in filenames:
+            path = pack_dir / filename
+            if path.exists():
+                bundle[endpoint] = json.loads(path.read_text())
+                break
 
     # Sounding profiles for every (point, model) combination
-    ra_path = pack_dir / "route_analyses.json"
+    ra_data = bundle.get("route-analyses")
     cs_path = pack_dir / "cross_section.json"
-    if ra_path.exists() and cs_path.exists():
-        ra_data = json.loads(ra_path.read_text())
+    if ra_data and cs_path.exists():
         cs_data = json.loads(cs_path.read_text())
         models = ra_data.get("models", [])
         analyses = ra_data.get("analyses", [])
