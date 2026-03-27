@@ -276,23 +276,32 @@ def update_cost_config(
     Accepts a partial dict of config keys to update.  Unchanged keys are
     inherited from the current active config.
     """
+    from dataclasses import fields as dc_fields
+
+    # Reject unknown keys
+    known_keys = {f.name for f in dc_fields(CostConfig)}
+    unknown = set(body.keys()) - known_keys
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown config keys: {', '.join(sorted(unknown))}",
+        )
+
     now = datetime.now(timezone.utc)
 
     # Deactivate current
     current = get_active_cost_config(db)
     current_config = (
-        json.loads(current.config_json) if current else DEFAULT_CONFIG.to_json()
+        json.loads(current.config_json) if current else {}
     )
-    if isinstance(current_config, str):
-        current_config = json.loads(current_config)
 
     if current:
         current.active_until = now
         db.flush()
 
-    # Merge: current values + overrides
-    merged = {**current_config, **body}
-    # Validate by round-tripping through CostConfig
+    # Merge: defaults ← current values ← overrides, then validate
+    defaults = json.loads(DEFAULT_CONFIG.to_json())
+    merged = {**defaults, **current_config, **body}
     CostConfig.from_json(json.dumps(merged))
 
     new_row = CostConfigRow(

@@ -514,10 +514,10 @@ def _prepare_icon_eu(
     """Resolve ICON-EU run info and check eligibility. Returns None to skip."""
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_MODEL_LEVEL_MAX,
-        ICON_EU_MODEL_LEVEL_MAX_HOUR,
         ICON_EU_MODEL_LEVEL_MIN,
         compute_icon_eu_flight_window_hours,
         find_latest_icon_eu_run,
+        icon_eu_model_level_max_hour,
         route_in_icon_eu_domain,
     )
 
@@ -556,9 +556,9 @@ def _prepare_icon_eu(
     forecast_hours = compute_icon_eu_flight_window_hours(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
-    # Cap model-level fetches at the reliable hourly region; see
-    # ICON_EU_MODEL_LEVEL_MAX_HOUR for rationale.
-    forecast_hours = [h for h in forecast_hours if h <= ICON_EU_MODEL_LEVEL_MAX_HOUR]
+    # Cap model-level fetches based on the run cycle (00/12 → 120h, others → 78h)
+    max_hour = icon_eu_model_level_max_hour(init_hour)
+    forecast_hours = [h for h in forecast_hours if h <= max_hour]
     if not forecast_hours:
         logger.info("ICON-EU: all forecast hours beyond model-level horizon, skipping")
         return None
