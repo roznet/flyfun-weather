@@ -130,11 +130,13 @@ forecasts_data = load_forecasts(pack_dir)  # dict, auto-falls back to snapshot.j
 from weatherbrief.models import ForecastSnapshot
 snapshot = ForecastSnapshot.model_validate(forecasts_data)
 
-# --- Load advisories ---
-from weatherbrief.models.analysis import RouteAdvisoriesManifest
-advisories = RouteAdvisoriesManifest.model_validate_json(
-    (pack_dir / "route_advisories.json").read_text()
-)
+# --- Load advisories (raw JSON — no typed model for the manifest envelope) ---
+import json
+advisories_data = json.loads((pack_dir / "route_advisories.json").read_text())
+# Top-level keys: advisories (list), catalog, route_name, cruise_altitude_ft,
+#                 flight_ceiling_ft, total_distance_nm, models, aggregation, airport_conditions
+# Each advisory in advisories_data["advisories"] has keys:
+#   advisory_id, aggregate_status, aggregate_detail, per_model, parameters_used
 ```
 
 ## Step 5 — Reproduce and debug specific computations
@@ -196,7 +198,8 @@ for rpa in manifest.analyses:
         print(f"    Icing zones:  {[(i.base_ft, i.top_ft, i.risk) for i in sounding.icing_zones]}")
         if sounding.vertical_motion:
             vm = sounding.vertical_motion
-            print(f"    CAT: {[(c.base_ft, c.top_ft, c.severity) for c in vm.cat_layers]}")
+            # CAT layer fields: base_ft, top_ft, risk (CATRiskLevel), richardson_number
+            print(f"    CAT: {[(c.base_ft, c.top_ft, c.risk, c.richardson_number) for c in vm.cat_risk_layers]}")
         if sounding.indices:
             print(f"    Freezing lvl: {sounding.indices.freezing_level_ft}")
 ```
@@ -207,13 +210,13 @@ for rpa in manifest.analyses:
 from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
 
 for rpa in manifest.analyses:
-    for model, sounding in rpa.soundings.items():
+    name = rpa.waypoint_icao or rpa.waypoint_name or f"pt{rpa.point_index}"
+    for model, sounding in rpa.sounding.items():  # note: .sounding not .soundings
         alt_adv = compute_altitude_advisories(
             sounding=sounding,
             cruise_altitude_ft=manifest.cruise_altitude_ft,
-            flight_ceiling_ft=manifest.flight_ceiling_ft,
         )
-        print(f"{rpa.location_name} / {model}: {alt_adv}")
+        print(f"{name} / {model}: {alt_adv}")
 ```
 
 ### E. Inspect cross-section data for a layer
@@ -238,11 +241,19 @@ for cs in cross_sections:
 forecasts_data = load_forecasts(pack_dir)
 snapshot = ForecastSnapshot.model_validate(forecasts_data)
 
-# snapshot structure: snapshot.waypoints[i].forecasts[model_name].levels[j]
-for wp in snapshot.waypoints:
-    print(f"Waypoint: {wp.icao} ({wp.lat}, {wp.lon})")
-    for model_name, forecast in wp.forecasts.items():
-        print(f"  Model: {model_name}, {len(forecast.levels)} levels")
+# snapshot.forecasts is a list[WaypointForecast]
+# WaypointForecast fields: waypoint, model (ModelSource enum), fetched_at, hourly
+# HourlyForecast fields: time, pressure_levels (list[PressureLevelData]), plus surface obs
+# PressureLevelData fields: pressure_hpa, temperature_c, relative_humidity_pct, dewpoint_c,
+#   wind_speed_kt (NOT _kts), wind_direction_deg, geopotential_height_m,
+#   vertical_velocity_pa_s, cloud_liquid_water_kg_kg, ice_mixing_ratio_kg_kg,
+#   cloud_area_fraction_pct, clw_interpolated
+for fc in snapshot.forecasts:
+    wp = fc.waypoint
+    wp_name = wp.icao if hasattr(wp, 'icao') else str(wp)
+    print(f"Waypoint: {wp_name}, Model: {fc.model.value}, hours: {len(fc.hourly)}")
+    for h in fc.hourly[:1]:
+        print(f"  {len(h.pressure_levels)} pressure levels")
 ```
 
 ### G. Re-run analysis pipeline on a single point's forecast
@@ -258,13 +269,15 @@ and gives you all intermediate results.
 forecasts_data = load_forecasts(pack_dir)
 snapshot = ForecastSnapshot.model_validate(forecasts_data)
 
-wp = snapshot.waypoints[point_index]   # by index, or iterate by lat/lon
-forecast = wp.forecasts["gfs"]         # or "ecmwf", etc.
-hourly = forecast.hourly[hour_index]   # the target hour
+# snapshot.forecasts is a flat list of WaypointForecast (one per waypoint×model)
+# Filter by waypoint and model:
+fc = next(f for f in snapshot.forecasts
+          if f.waypoint.icao == "EGTF" and f.model.value == "gfs")
+hourly = fc.hourly[0]  # first forecast hour
 
 # 2. Re-run the full sounding analysis pipeline
 from weatherbrief.analysis.sounding import analyze_sounding
-result = analyze_sounding(hourly.levels, hourly, icing_severity_enhance=True)
+result = analyze_sounding(hourly.pressure_levels, hourly, icing_severity_enhance=True)
 
 # 3. Inspect whichever part is relevant:
 #    result.cloud_layers         — EnhancedCloudLayer list
@@ -280,7 +293,7 @@ result = analyze_sounding(hourly.levels, hourly, icing_severity_enhance=True)
 ```
 
 The `HourlyForecast` (`hourly`) also carries the NWP inputs that feed the pipeline:
-- `hourly.levels` — raw `PressureLevelData` list (the input)
+- `hourly.pressure_levels` — raw `PressureLevelData` list (the input)
 - `hourly.nwp_cloud_diagnostics` — `NWPCloudDiagnostics` with `.low`/`.mid`/`.high`
   layers, each having `cover_pct`, `base_ft`, `top_ft`, `top_temp_c`
 - `hourly.cloud_cover_low_pct` / `_mid_pct` / `_high_pct` — bulk NWP cloud %
@@ -452,6 +465,20 @@ Pattern: `/api/flights/{flight_id}/packs/{timestamp}/{resource}` (use `latest` f
 | `vmc_cruise` | Convective | Cloud coverage at cruise |
 | `freezing_level` | Other | Freezing level vs terrain |
 | `model_agreement` | Other | Cross-model divergence |
+
+## Common pitfalls (field names & nullability)
+
+These are the mistakes most likely to cause runtime errors during investigation:
+
+- **`PressureLevelData.wind_speed_kt`** — NOT `wind_speed_kts` (no trailing 's')
+- **`PressureLevelData.vertical_velocity_pa_s`** — NOT `omega_pa_s`
+- **`HourlyForecast.pressure_levels`** — NOT `levels`
+- **`ForecastSnapshot.forecasts`** — flat `list[WaypointForecast]`, NOT `.waypoints[i].forecasts[model]`. Each `WaypointForecast` has `.waypoint`, `.model` (enum, use `.value` for string), `.hourly`
+- **`RouteAnalysesManifest`** has no `flight_ceiling_ft` field (only `cruise_altitude_ft`)
+- **Advisory JSON** — `route_advisories.json` top-level is a dict with `advisories` (list), each item keyed by `advisory_id` (NOT `evaluator_id`)
+- **Many numeric fields can be `None`** — always guard before formatting: `f"{val:.1f}" if val is not None else "N/A"`. Common None fields: `max_w_fpm`, `max_omega_pa_s`, `richardson_number`, `bv_freq_squared_per_s2`, `w_fpm`, `omega_pa_s` on DerivedLevel
+- **`model` on WaypointForecast is an enum** (`ModelSource`) — use `.value` for string comparison (e.g., `fc.model.value == "gfs"`)
+- **`rpa.sounding`** (not `.soundings`) — dict mapping model name (str) to SoundingAnalysis
 
 ## Tips
 
