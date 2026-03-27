@@ -24,11 +24,19 @@ logger = logging.getLogger(__name__)
 # DWD Open Data base URL
 DWD_BASE_URL = "https://opendata.dwd.de/weather/nwp/icon-eu/grib"
 
-# ICON-EU model-level data (QC, QI, CLC, P) is reliably published up to 78h
-# for all runs.  Runs 00/12 publish up to 120h but DWD's ~48h file retention
-# means older runs' extended-range files often vanish.  Cap model-level
-# fetches at 78h to avoid noisy 404s in the 3-hourly tail.
-ICON_EU_MODEL_LEVEL_MAX_HOUR = 78
+# ICON-EU model-level horizon depends on the run cycle:
+# - Main runs (00z, 12z): model-level data published up to 120h
+# - Intermediate runs (03/06/09/15/18/21z): only up to 78h
+ICON_EU_MAIN_CYCLES = {0, 12}
+ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN = 120
+ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = 78
+
+
+def icon_eu_model_level_max_hour(init_hour: int) -> int:
+    """Return the model-level forecast horizon for the given ICON-EU cycle."""
+    if init_hour in ICON_EU_MAIN_CYCLES:
+        return ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN
+    return ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT
 
 # ICON-EU domain bounds (regular lat-lon grid)
 ICON_EU_LAT_MIN = 29.5
