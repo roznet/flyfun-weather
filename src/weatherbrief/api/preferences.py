@@ -17,6 +17,8 @@ from flyfun_common.credentials import (
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserPreferencesRow
 
+from weatherbrief.api.user_migrations import run_pending_migrations
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user/preferences", tags=["preferences"])
@@ -101,16 +103,7 @@ def _parse_service_toggles(raw: str) -> dict:
         data = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
         data = {}
-    # Migrate legacy method defaults to GRAMET-aligned values.
-    # Existing users who never explicitly changed these have the old defaults
-    # stored; remap so compact mode shows the improved layers.
-    _METHOD_UPGRADES = {
-        "cloud_method": {"dd": "soft_nwp", "nwp": "soft_nwp"},
-        "icing_method": {"ogimet_dd": "ogimet_nwp"},
-        "convective_method": {"thermo": "nwp"},
-    }
-
-    result = {
+    return {
         "gramet_enabled": data.get("gramet_enabled", True),
         "llm_digest_enabled": data.get("llm_digest_enabled", True),
         "icing_severity_enhance": data.get("icing_severity_enhance", False),
@@ -119,10 +112,6 @@ def _parse_service_toggles(raw: str) -> dict:
         "convective_method": data.get("convective_method", "nwp"),
         "locale": data.get("locale", "en"),
     }
-    for key, upgrades in _METHOD_UPGRADES.items():
-        if result[key] in upgrades:
-            result[key] = upgrades[result[key]]
-    return result
 
 
 def _parse_advisory_prefs(raw: str) -> AdvisoryPreferences:
@@ -171,6 +160,7 @@ def get_preferences(
 ):
     """Get the current user's preferences."""
     row = _load_prefs(db, user_id)
+    run_pending_migrations(db, row)
     return _build_response(row)
 
 
@@ -313,6 +303,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
     row = db.get(UserPreferencesRow, user_id)
     if not row:
         return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "soft_nwp", "convective_method": "nwp"}
+    run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 
 

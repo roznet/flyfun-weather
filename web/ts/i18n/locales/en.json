@@ -193,6 +193,8 @@
   "viz.map": "Map",
   "viz.model": "Model:",
   "viz.theme": "Theme:",
+  "viz.preset": "Preset:",
+  "viz.presetCustom": "Custom",
   "viz.layer": "Layer:",
   "viz.models": "Models:",
   "viz.externalLinks": "Open selected location in ",

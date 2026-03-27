@@ -174,6 +174,8 @@
   "viz.map": "Mapa",
   "viz.model": "Modelo:",
   "viz.theme": "Tema:",
+  "viz.preset": "Preajuste:",
+  "viz.presetCustom": "Personalizado",
   "viz.layer": "Capa:",
   "viz.models": "Modelos:",
   "viz.externalLinks": "Abrir la ubicación seleccionada en ",

@@ -312,6 +312,8 @@ def get_digest_guidance_text(
         text = load_guidance_text(key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     return DigestGuidanceTextResponse(key=key, text=text)
 
 

@@ -100,9 +100,9 @@ export function renderVizControls(
     const presets = getPresets();
     if (presets.length > 0) {
       html += `<div class="viz-theme-selector">`;
-      html += `<span class="viz-toggle-label">Preset</span>`;
+      html += `<span class="viz-toggle-label">${t('viz.preset')}</span>`;
       html += `<select id="viz-preset-select" class="viz-model-select">`;
-      html += `<option value="">Custom</option>`;
+      html += `<option value="">${t('viz.presetCustom')}</option>`;
       for (const preset of presets) {
         html += `<option value="${preset.id}">${preset.label}</option>`;
       }
@@ -356,6 +356,7 @@ export interface CompareControlCallbacks {
   onCompareModelToggle: (model: string, enabled: boolean) => void;
   onCompareBandModeChange: (mode: CompareBandMode) => void;
   onThemeChange?: (themeId: string) => void;
+  onPresetChange?: (presetId: string | null) => void;
 }
 
 /** Render compare-mode controls: layout toggle, layer dropdown, model chips. */
