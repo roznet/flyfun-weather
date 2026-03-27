@@ -78,7 +78,12 @@ final class CachingBriefingRepository: BriefingRepository {
     }
 
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse {
-        try await online.soundingProfile(flightId: flightId, timestamp: timestamp, pointIndex: pointIndex, model: model)
+        try await cachedOrFetch(
+            flightId: flightId, timestamp: timestamp,
+            endpoint: "sounding-\(pointIndex)-\(model)",
+            pathSuffix: "sounding-profile/\(pointIndex)/\(model)",
+            writeThrough: true
+        )
     }
 
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data {
@@ -91,7 +96,7 @@ final class CachingBriefingRepository: BriefingRepository {
 
     // MARK: - Explicit download / delete
 
-    /// Download all pack data to disk for offline access.
+    /// Download all pack data to disk for offline access via a single bundle request.
     func downloadPack(
         flightId: String,
         timestamp: String,
@@ -99,24 +104,31 @@ final class CachingBriefingRepository: BriefingRepository {
         assessment: String?,
         progress: @Sendable @escaping (Double) -> Void
     ) async throws {
-        let endpoints = Array(Self.endpointPaths.keys).sorted()
+        progress(0.1)
+
+        // Single request fetches everything (gzip-compressed by server)
+        let path = "/api/flights/\(flightId)/packs/\(timestamp)/bundle"
+        let data = try await client.requestData(path)
+        progress(0.7)
+
+        // Parse the bundle: { "endpoint-name": { ... }, ... }
+        guard let bundle = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.decodingError(NSError(domain: "BundleDownload", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid bundle format"]))
+        }
+
         var totalBytes: Int64 = 0
         var downloaded: Set<String> = []
 
-        for (i, endpoint) in endpoints.enumerated() {
-            let pathSuffix = Self.endpointPaths[endpoint]!
-            let path = "/api/flights/\(flightId)/packs/\(timestamp)/\(pathSuffix)"
+        for (i, (endpoint, value)) in bundle.enumerated() {
             do {
-                let data = try await client.requestData(path)
-                try await cache.writeData(data, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
-                totalBytes += Int64(data.count)
+                let entryData = try JSONSerialization.data(withJSONObject: value)
+                try await cache.writeData(entryData, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
+                totalBytes += Int64(entryData.count)
                 downloaded.insert(endpoint)
-                Self.logger.debug("Cached \(endpoint) (\(data.count) bytes)")
             } catch {
-                // Non-critical endpoints (digest may not exist) — log and continue
                 Self.logger.warning("Failed to cache \(endpoint): \(error)")
             }
-            progress(Double(i + 1) / Double(endpoints.count))
+            progress(0.7 + 0.3 * Double(i + 1) / Double(bundle.count))
         }
 
         await cache.registerDownload(
@@ -145,6 +157,13 @@ final class CachingBriefingRepository: BriefingRepository {
     // MARK: - Private
 
     private func cachedOrFetch<T: Decodable>(flightId: String, timestamp: String, endpoint: String) async throws -> T {
+        let pathSuffix = Self.endpointPaths[endpoint]!
+        return try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: endpoint, pathSuffix: pathSuffix)
+    }
+
+    private func cachedOrFetch<T: Decodable>(
+        flightId: String, timestamp: String, endpoint: String, pathSuffix: String, writeThrough: Bool = false
+    ) async throws -> T {
         // Check cache first
         if let data = await cache.readData(flightId: flightId, timestamp: timestamp, endpoint: endpoint) {
             do {
@@ -155,9 +174,11 @@ final class CachingBriefingRepository: BriefingRepository {
         }
 
         // Fall back to network
-        let pathSuffix = Self.endpointPaths[endpoint]!
         let path = "/api/flights/\(flightId)/packs/\(timestamp)/\(pathSuffix)"
         let data = try await client.requestData(path)
+        if writeThrough {
+            try? await cache.writeData(data, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
+        }
         return try JSONDecoder.weatherBrief.decode(T.self, from: data)
     }
 }
