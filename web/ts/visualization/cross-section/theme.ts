@@ -149,13 +149,14 @@ const STANDARD_THEME: CrossSectionTheme = {
     denseRgb: [140, 140, 150],
     thinRgb: [250, 250, 255],
     coverageAlpha: {
+      few: [0.20, 0.35],
       sct: [0.50, 0.65],
       bkn: [0.60, 0.88],
       ovc: [0.70, 0.95],
     },
     fallbackGray: [180, 180, 185],
     hatchGridPx: 8,
-    hatchLineWidth: { sct: 2, bkn: 5, ovc: 8 },
+    hatchLineWidth: { few: 1, sct: 2, bkn: 5, ovc: 8 },
     hatchColor: 'rgba(255, 255, 255, 0.5)',
   },
 
@@ -300,13 +301,14 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
     denseRgb: [70, 70, 70],
     thinRgb: [230, 230, 230],
     coverageAlpha: {
+      few: [0.15, 0.30],
       sct: [0.45, 0.60],
       bkn: [0.55, 0.85],
       ovc: [0.65, 0.95],
     },
     fallbackGray: [120, 120, 120],
     hatchGridPx: 8,
-    hatchLineWidth: { sct: 2, bkn: 5, ovc: 8 },
+    hatchLineWidth: { few: 1, sct: 2, bkn: 5, ovc: 8 },
     hatchColor: 'rgba(180, 180, 180, 0.45)',
   },
 
@@ -452,7 +454,7 @@ const GRAMET_THEME: CrossSectionTheme = {
   // Soft cloud config
   softClouds: {
     fillRgb: [255, 255, 255],
-    coverageAlpha: { OVC: 0.85, BKN: 0.65, SCT: 0.45, FEW: 0.25 },
+    coverageAlpha: { OVC: 0.85, BKN: 0.65, SCT: 0.45, FEW: 0.15 },
     featherFraction: 0.15,
   },
 } as CrossSectionTheme & { sld: Record<string, string>; softClouds: any };
