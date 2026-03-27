@@ -116,6 +116,27 @@ export async function fetchRouteDistance(waypoints: string[]): Promise<RouteDist
   });
 }
 
+// --- FPL parsing ---
+
+export interface ParseFplResponse {
+  waypoints: string[];
+  date: string | null;
+  time_utc: string | null;
+  altitude_ft: number | null;
+  duration_hours: number | null;
+  flight_rules: string | null;
+  aircraft_type: string | null;
+  raw_route: string | null;
+  error: string | null;
+}
+
+export async function parseFpl(fplText: string): Promise<ParseFplResponse> {
+  return apiFetch<ParseFplResponse>('/flights/parse-fpl', {
+    method: 'POST',
+    body: JSON.stringify({ fpl_text: fplText }),
+  });
+}
+
 // --- Packs ---
 
 export async function fetchPacks(flightId: string): Promise<PackMeta[]> {

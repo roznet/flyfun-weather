@@ -1264,7 +1264,28 @@ label {
   box-shadow: var(--shadow);
 }
 
-.create-panel h3 { margin-bottom: 0.75rem; }
+.create-panel h3 { margin-bottom: 0; }
+
+.create-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-outline:hover {
+  background: var(--border);
+  border-color: var(--text-muted);
+}
 
 /* --- Image lightbox --- */
 
