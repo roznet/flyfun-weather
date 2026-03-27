@@ -197,23 +197,30 @@ def find_latest_icon_eu_run(
     target_time: datetime,
     session: requests.Session | None = None,
     as_of_time: datetime | None = None,
+    cover_until: datetime | None = None,
 ) -> tuple[str, int] | None:
-    """Find the latest available ICON-EU model run.
+    """Find the latest available ICON-EU model run whose horizon covers the flight.
 
     Tries cycles in reverse chronological order, checking that enough time
-    has passed for publication. Probes with HEAD request on a known file.
+    has passed for publication and that the run's model-level horizon
+    reaches ``cover_until``.  If ``cover_until`` is None, any run that
+    covers ``target_time`` is accepted.
 
     Args:
-        target_time: The forecast target time.
+        target_time: Flight departure time.
         session: Optional requests session.
         as_of_time: If set, only consider runs initialized before this time
             (for historical "as-of" briefings). Uses ``now`` if None.
+        cover_until: Latest time the run must cover (typically departure +
+            flight duration).  Runs whose model-level horizon falls short
+            are skipped in favour of an older main run with longer range.
 
     Returns:
         (init_date_YYYYMMDD, init_hour) or None if no run available.
     """
     sess = session or requests.Session()
     reference_time = as_of_time or datetime.now(timezone.utc)
+    need_until = cover_until or target_time
 
     for days_back in range(2):
         check_date = reference_time - timedelta(days=days_back)
@@ -228,12 +235,22 @@ def find_latest_icon_eu_run(
             if hours_since_init < ICON_EU_PUBLISH_DELAY_HOURS:
                 continue
 
+            # Check if this run's horizon covers the flight
+            max_hour = icon_eu_model_level_max_hour(cycle)
+            horizon = init_time + timedelta(hours=max_hour)
+            if horizon < need_until:
+                logger.debug(
+                    "ICON-EU %s %02dz: horizon %dh doesn't reach flight end, skipping",
+                    date_str, cycle, max_hour,
+                )
+                continue
+
             # Probe: check if a level-74 P file for forecast hour 000 exists
             probe_url = icon_eu_file_url(date_str, cycle, 0, 74, "p")
             try:
                 resp = sess.head(probe_url, timeout=10)
                 if resp.status_code == 200:
-                    logger.info("Found ICON-EU run: %s %02dz", date_str, cycle)
+                    logger.info("Found ICON-EU run: %s %02dz (horizon %dh)", date_str, cycle, max_hour)
                     return date_str, cycle
             except requests.RequestException:
                 continue
