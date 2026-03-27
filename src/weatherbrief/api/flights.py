@@ -24,7 +24,7 @@ from weatherbrief.storage.flights import (
 
 router = APIRouter(prefix="/flights", tags=["flights"])
 
-_WAYPOINT_PATTERN = re.compile(r"^[A-Z0-9]{2,5}$")
+from weatherbrief.api.validation import WAYPOINT_RE
 
 
 class CreateFlightRequest(BaseModel):
@@ -56,7 +56,7 @@ class CreateFlightRequest(BaseModel):
     @classmethod
     def validate_waypoints(cls, v: list[str]) -> list[str]:
         for wp in v:
-            if not _WAYPOINT_PATTERN.match(wp.upper()):
+            if not WAYPOINT_RE.match(wp.upper()):
                 raise ValueError(
                     f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters"
                 )
@@ -247,7 +247,7 @@ class RouteDistanceRequest(BaseModel):
             raise ValueError("At least 2 waypoints are required")
         normalized = [wp.strip().upper() for wp in v]
         for wp in normalized:
-            if not _WAYPOINT_PATTERN.match(wp):
+            if not WAYPOINT_RE.match(wp):
                 raise ValueError(
                     f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters"
                 )
