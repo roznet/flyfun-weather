@@ -27,6 +27,34 @@ Then perform a code review of the current PR focusing on:
 - Code and logic duplication, opportunity for optimisation and consolidation
 - Check for simplicity, maintainability and extensibility
 
+If the PR touches weather analysis code (formulas, thresholds, sounding pipeline,
+layer building, advisory evaluators, or data model changes in the analysis path):
+
+- **Meteorological validity**: Do the formulas, thresholds, and assumptions hold
+  from an aviation weather / thermodynamics standpoint? Are the physical units
+  consistent? Are threshold values reasonable for the NWP resolution we use?
+  Flag anything that contradicts standard meteorological practice or could
+  produce misleading results for a pilot.
+
+- **Cross-metric impact**: Does the same pattern, formula, or data structure
+  exist in a sibling module or parallel metric? (e.g., Ri-based CAT layers
+  and E-Shear layers share the same grouping logic; icing has Ogimet, SFIP,
+  and IENG variants.) If the change fixes or improves one, check whether the
+  same fix should be applied to the others. List any sibling modules that
+  were reviewed and whether they need a matching change.
+
+- **Cross-model robustness**: The pipeline processes multiple NWP models
+  (GFS, ECMWF, ICON, UKMO, MétéoFrance) which differ in available fields,
+  pressure level spacing, and variable naming. For any change, check:
+  - Is the logic at the right abstraction level to apply to all models,
+    or is it model-specific when it shouldn't be (or vice versa)?
+  - If it relies on an input field (omega, cloud water, geopotential),
+    does it fail gracefully when that field is absent for some models?
+  - Could differences in vertical resolution (e.g., GFS 25hPa vs UKMO
+    50hPa spacing) cause the same logic to behave very differently?
+  - Are thresholds calibrated for one model's characteristics but applied
+    to all?
+
 Do NOT flag:
 - Style issues not covered by CLAUDE.md
 - Minor suggestions or nits

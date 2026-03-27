@@ -156,11 +156,16 @@ def compute_hws_between_points(
 def _group_e_shear_levels(
     e_levels: list[tuple[DerivedLevel, CATRiskLevel, float]],
 ) -> list[CATRiskLayer]:
-    """Group adjacent E-Shear levels into risk layers."""
+    """Group adjacent E-Shear levels into risk layers, split by severity.
+
+    After adjacency grouping (pressure gap ≤ 100 hPa), each group is split
+    into sub-layers by severity tier so that each layer's risk accurately
+    reflects its altitude range.
+    """
     if not e_levels:
         return []
 
-    layers: list[CATRiskLayer] = []
+    groups: list[list[tuple[DerivedLevel, CATRiskLevel, float]]] = []
     current: list[tuple[DerivedLevel, CATRiskLevel, float]] = [e_levels[0]]
 
     for item in e_levels[1:]:
@@ -169,19 +174,41 @@ def _group_e_shear_levels(
         if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= _ZONE_MAX_PRESSURE_GAP_HPA:
             current.append(item)
         else:
-            layers.append(_build_e_shear_layer(current))
+            groups.append(current)
             current = [item]
+    groups.append(current)
 
-    layers.append(_build_e_shear_layer(current))
+    # Split each adjacency group into sub-layers by severity tier
+    layers: list[CATRiskLayer] = []
+    for group in groups:
+        layers.extend(_split_e_shear_by_severity(group))
+
     return layers
+
+
+def _split_e_shear_by_severity(
+    items: list[tuple[DerivedLevel, CATRiskLevel, float]],
+) -> list[CATRiskLayer]:
+    """Split a group of adjacent levels into sub-layers by severity tier."""
+    result: list[CATRiskLayer] = []
+    run: list[tuple[DerivedLevel, CATRiskLevel, float]] = [items[0]]
+
+    for item in items[1:]:
+        if item[1] == run[-1][1]:
+            run.append(item)
+        else:
+            result.append(_build_e_shear_layer(run))
+            run = [item]
+
+    result.append(_build_e_shear_layer(run))
+    return result
 
 
 def _build_e_shear_layer(
     items: list[tuple[DerivedLevel, CATRiskLevel, float]],
 ) -> CATRiskLayer:
-    """Build a CATRiskLayer from grouped E-Shear levels."""
-    risk_order = [CATRiskLevel.NONE, CATRiskLevel.LIGHT, CATRiskLevel.MODERATE, CATRiskLevel.SEVERE]
-    worst_risk = max((r for _, r, _ in items), key=lambda r: risk_order.index(r))
+    """Build a CATRiskLayer from grouped E-Shear levels of same severity."""
+    risk = items[0][1]
 
     altitudes = [lv.altitude_ft for lv, _, _ in items if lv.altitude_ft is not None]
     base_ft = min(altitudes)
@@ -198,5 +225,5 @@ def _build_e_shear_layer(
         top_ft=round(top_ft),
         base_pressure_hpa=items[0][0].pressure_hpa,
         top_pressure_hpa=items[-1][0].pressure_hpa,
-        risk=worst_risk,
+        risk=risk,
     )
