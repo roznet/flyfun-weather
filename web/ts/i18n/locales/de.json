@@ -174,6 +174,8 @@
   "viz.map": "Karte",
   "viz.model": "Modell:",
   "viz.theme": "Thema:",
+  "viz.preset": "Voreinstellung:",
+  "viz.presetCustom": "Benutzerdefiniert",
   "viz.layer": "Schicht:",
   "viz.models": "Modelle:",
   "viz.externalLinks": "Ausgewählten Ort öffnen in ",
