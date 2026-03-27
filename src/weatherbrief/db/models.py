@@ -185,18 +185,7 @@ class CostConfigRow(Base):
     active_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None,
     )
-    token_cost_per_1k_input: Mapped[float] = mapped_column(Float, default=0.003)
-    token_cost_per_1k_output: Mapped[float] = mapped_column(Float, default=0.015)
-    droplet_monthly_usd: Mapped[float] = mapped_column(Float, default=24.0)
-    misc_monthly_usd: Mapped[float] = mapped_column(Float, default=2.0)
-    subscriptions_monthly_usd: Mapped[float] = mapped_column(Float, default=30.0)
-    subscription_details_json: Mapped[str] = mapped_column(
-        String(1024), default='{"open_meteo": 30}',
-    )
-    disk_cost_per_gb_monthly: Mapped[float] = mapped_column(Float, default=0.10)
-    estimated_monthly_briefings: Mapped[int] = mapped_column(Integer, default=500)
-    margin_percent: Mapped[float] = mapped_column(Float, default=30.0)
-    usd_per_credit: Mapped[float] = mapped_column(Float, default=0.01)
+    config_json: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class SystemMessageRow(Base):

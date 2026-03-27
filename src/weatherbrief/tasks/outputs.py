@@ -61,16 +61,21 @@ def run_gramet(
     user_id: str | None = None,
 ) -> GrametResult:
     """Fetch GRAMET cross-section PDF from the Autorouter API."""
+    if not autorouter_credentials:
+        logger.debug("Skipping GRAMET: no autorouter credentials configured")
+        return GrametResult(error="GRAMET requires autorouter credentials")
+
     try:
         from weatherbrief.fetch.gramet import AutorouterGramet
         icao_codes = [wp.icao for wp in route.waypoints]
         duration_hours = route.flight_duration_hours or 2.0
 
-        kwargs: dict = {}
-        if autorouter_credentials:
-            kwargs["username"], kwargs["password"] = autorouter_credentials
-            if user_id and data_dir:
-                kwargs["cache_dir"] = str(data_dir / ".cache" / "autorouter" / user_id)
+        kwargs: dict = {
+            "username": autorouter_credentials[0],
+            "password": autorouter_credentials[1],
+        }
+        if user_id and data_dir:
+            kwargs["cache_dir"] = str(data_dir / ".cache" / "autorouter" / user_id)
         gramet_client = AutorouterGramet(**kwargs)
         data = gramet_client.fetch_gramet(
             icao_codes=icao_codes,

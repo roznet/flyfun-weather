@@ -115,10 +115,11 @@ async def lifespan(app: FastAPI):
             ensure_dev_user(session)
             # Ensure a default cost config exists
             from weatherbrief.api.credits import get_active_cost_config
+            from weatherbrief.costs import DEFAULT_CONFIG
             from weatherbrief.db.models import CostConfigRow
 
             if not get_active_cost_config(session):
-                session.add(CostConfigRow())
+                session.add(CostConfigRow(config_json=DEFAULT_CONFIG.to_json()))
                 session.commit()
                 logger.info("Seeded default cost config")
         logger.info("Dev user ensured")

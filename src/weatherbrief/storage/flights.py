@@ -104,8 +104,30 @@ def _pack_hmac_key() -> bytes:
 
 def _compute_pack_hmac(row: BriefingPackRow) -> str:
     """Compute HMAC-SHA256 over key pack metadata fields."""
+    # Normalize timestamp: strip tzinfo so MySQL (naive) and SQLite (aware)
+    # produce the same HMAC string.
+    ts = row.fetch_timestamp.replace(tzinfo=None) if row.fetch_timestamp else ""
     msg = (
-        f"{row.flight_id}|{row.fetch_timestamp}|{row.days_out}|"
+        f"{row.flight_id}|{ts}|{row.days_out}|"
+        f"{row.assessment}|{row.artifact_path}|"
+        f"{row.model_init_times_json}|{row.grib_init_times_json}"
+    )
+    return hmac.new(_pack_hmac_key(), msg.encode(), hashlib.sha256).hexdigest()
+
+
+def _compute_pack_hmac_legacy(row: BriefingPackRow) -> str:
+    """Compute HMAC using the original format (with UTC tzinfo in timestamp).
+
+    HMACs written before the naive-timestamp normalization used aware
+    datetimes.  MySQL strips tzinfo on read, so we re-attach UTC here
+    to reconstruct the original HMAC input.
+    """
+    from datetime import timezone
+    ts = row.fetch_timestamp
+    if ts and ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    msg = (
+        f"{row.flight_id}|{ts}|{row.days_out}|"
         f"{row.assessment}|{row.artifact_path}|"
         f"{row.model_init_times_json}|{row.grib_init_times_json}"
     )
@@ -116,8 +138,10 @@ def _verify_pack_hmac(row: BriefingPackRow) -> bool:
     """Verify HMAC on a pack row. Returns True if valid or if no HMAC stored."""
     if not row.integrity_hmac:
         return True  # pre-existing rows without HMAC are trusted
-    expected = _compute_pack_hmac(row)
-    return hmac.compare_digest(row.integrity_hmac, expected)
+    # Try normalized format first, fall back to legacy (aware timestamp) format
+    if hmac.compare_digest(row.integrity_hmac, _compute_pack_hmac(row)):
+        return True
+    return hmac.compare_digest(row.integrity_hmac, _compute_pack_hmac_legacy(row))
 
 
 def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
@@ -167,6 +191,16 @@ def _resolve_artifact_path(raw: str) -> str:
     return raw
 
 
+def _parse_diagnostics(raw: str | None) -> list[dict]:
+    """Parse diagnostics_json, tolerating old rows that stored {} instead of []."""
+    if not raw:
+        return []
+    parsed = json.loads(raw)
+    if isinstance(parsed, dict):
+        return []
+    return parsed
+
+
 def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
     return BriefingPackMeta(
         id=row.id,
@@ -182,7 +216,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         model_init_times=json.loads(row.model_init_times_json) if row.model_init_times_json else {},
         grib_init_times=json.loads(row.grib_init_times_json) if row.grib_init_times_json else {},
         models_skipped_region=json.loads(row.models_skipped_region_json) if row.models_skipped_region_json else [],
-        diagnostics=json.loads(row.diagnostics_json) if row.diagnostics_json else [],
+        diagnostics=_parse_diagnostics(row.diagnostics_json),
         alt_assessment=row.alt_assessment,
         alt_assessment_reason=row.alt_assessment_reason,
         has_alt_advisories=row.has_alt_advisories,
