@@ -28,7 +28,7 @@ class Flight(BaseModel):
     user_id: str = ""  # owner; empty in single-user / dev mode
     profile_id: int | None = None  # associated flight profile
     route_name: str  # user-assigned name or derived from waypoints
-    waypoints: list[str] = Field(default_factory=list)  # ICAO codes
+    waypoints: list[str] = Field(default_factory=list)  # airports, navaids, or fixes
     departure_time: datetime  # aware UTC datetime
     cruise_altitude_ft: int = 8000
     flight_ceiling_ft: int = 18000
