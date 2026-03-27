@@ -25,6 +25,7 @@ _VAR_MAP = {
     "icmr": "ice_mixing_ratio_kg_kg",
     "qc": "cloud_liquid_water_kg_kg",     # ICON-EU cloud liquid water
     "qi": "ice_mixing_ratio_kg_kg",       # ICON-EU cloud ice
+    "clc": "cloud_area_fraction_pct",     # ICON-EU cloud area fraction (0–100%)
 }
 
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
@@ -461,12 +462,127 @@ def _decode_icon_eu_single_var(
         tmp_path.unlink(missing_ok=True)
 
 
+def _derive_clc_cloud_layers(
+    pressure_data: dict[int, list[float | None]],
+    clc_data: dict[int, list[float | None]],
+    n_points: int,
+    clc_threshold: float = 5.0,
+) -> list[dict[str, float]]:
+    """Derive ICAO-band cloud base/top from model-level CLC profiles.
+
+    Scans each point's CLC profile (on native model levels, not interpolated)
+    to find where cloud fraction exceeds the threshold, then classifies into
+    low/mid/high ICAO bands and returns base_ft/top_ft for each.
+
+    ICAO band boundaries (by pressure):
+      low:  surface to 800 hPa  (~6500 ft)
+      mid:  800 to 400 hPa      (~6500–23000 ft)
+      high: above 400 hPa       (~23000 ft)
+
+    Returns:
+        List of dicts (one per point), each with keys like
+        ``low_base_ft``, ``low_top_ft``, ``mid_base_ft``, etc.
+        Only populated for bands where cloud was detected.
+    """
+    from weatherbrief.models.analysis import pressure_pa_to_altitude_ft
+
+    # ICAO layer boundaries in Pa
+    LOW_TOP_PA = 80_000   # 800 hPa
+    MID_TOP_PA = 40_000   # 400 hPa
+
+    LAYERS = [
+        ("low",  MID_TOP_PA,  float("inf")),   # include up to mid boundary
+        ("mid",  MID_TOP_PA,  LOW_TOP_PA),
+        ("high", 0,           MID_TOP_PA),
+    ]
+    # NOTE: for the "low" layer we use a wide pressure range and then classify
+    # based on whether the cloud *base* is below the low/mid boundary.
+
+    model_levels = sorted(pressure_data.keys())
+    results: list[dict[str, float]] = [{} for _ in range(n_points)]
+
+    for pt_idx in range(n_points):
+        # Build (pressure_pa, clc%) pairs
+        profile: list[tuple[float, float]] = []
+        for lev in model_levels:
+            p_vals = pressure_data.get(lev)
+            c_vals = clc_data.get(lev)
+            if p_vals is None or c_vals is None:
+                continue
+            if pt_idx >= len(p_vals) or pt_idx >= len(c_vals):
+                continue
+            p_val = p_vals[pt_idx]
+            c_val = c_vals[pt_idx]
+            if p_val is not None and c_val is not None:
+                profile.append((p_val, c_val))
+
+        if not profile:
+            continue
+
+        # Sort by pressure descending (surface/high-pressure first)
+        profile.sort(key=lambda x: -x[0])
+
+        # Find contiguous cloud layers, then classify into ICAO bands
+        cloud_layers: list[tuple[float, float]] = []  # (base_pa, top_pa)
+        in_cloud = False
+        base_pa = 0.0
+        top_pa = 0.0
+
+        for p_pa, clc in profile:
+            if clc >= clc_threshold:
+                if not in_cloud:
+                    base_pa = p_pa
+                    in_cloud = True
+                top_pa = p_pa  # keep updating top (lower pressure)
+            else:
+                if in_cloud:
+                    cloud_layers.append((base_pa, top_pa))
+                    in_cloud = False
+        if in_cloud:
+            cloud_layers.append((base_pa, top_pa))
+
+        if not cloud_layers:
+            continue
+
+        # Classify each cloud layer into ICAO bands by its base pressure
+        for band_name, band_min_pa, band_max_pa in [
+            ("low",  LOW_TOP_PA, float("inf")),
+            ("mid",  MID_TOP_PA, LOW_TOP_PA),
+            ("high", 0,          MID_TOP_PA),
+        ]:
+            band_base_pa: float | None = None
+            band_top_pa: float | None = None
+            for cl_base_pa, cl_top_pa in cloud_layers:
+                # A cloud layer contributes to this band if it overlaps
+                if cl_base_pa < band_min_pa and cl_top_pa > band_max_pa:
+                    continue  # entirely outside this band
+                # Clamp to band boundaries
+                clamped_base = min(cl_base_pa, band_max_pa) if band_max_pa != float("inf") else cl_base_pa
+                clamped_top = max(cl_top_pa, band_min_pa)
+                if clamped_base <= clamped_top:
+                    continue  # no overlap after clamping
+                if band_base_pa is None or clamped_base > band_base_pa:
+                    band_base_pa = clamped_base
+                if band_top_pa is None or clamped_top < band_top_pa:
+                    band_top_pa = clamped_top
+
+            if band_base_pa is not None and band_top_pa is not None:
+                results[pt_idx][f"{band_name}_base_ft"] = round(
+                    pressure_pa_to_altitude_ft(band_base_pa),
+                )
+                results[pt_idx][f"{band_name}_top_ft"] = round(
+                    pressure_pa_to_altitude_ft(band_top_pa),
+                )
+
+    return results
+
+
 def decode_icon_eu_per_point_chunked(
     var_bytes: dict[str, bytes],
     latitudes: list[float],
     longitudes: list[float],
     target_pressures_hpa: list[int] | None = None,
-) -> list[dict[int, dict[str, float]]]:
+) -> tuple[list[dict[int, dict[str, float]]], list[dict[str, float]]]:
     """Decode ICON-EU model-level GRIB2 per-variable to limit peak memory.
 
     Instead of decoding all variables at once (~800MB), this processes one
@@ -475,14 +591,17 @@ def decode_icon_eu_per_point_chunked(
 
     Args:
         var_bytes: {variable_name: grib_bytes} — one entry per variable
-            (e.g. "p", "qc", "qi"). Each is concatenated GRIB2 for all
-            model levels of that variable.
+            (e.g. "p", "qc", "qi", "clc"). Each is concatenated GRIB2 for
+            all model levels of that variable.
         latitudes: Target latitudes for interpolation.
         longitudes: Target longitudes for interpolation.
         target_pressures_hpa: Target pressure levels in hPa.
 
     Returns:
-        List of dicts (one per point): [{pressure_hpa: {field: value}}, ...].
+        Tuple of:
+        - List of dicts (one per point): [{pressure_hpa: {field: value}}, ...]
+        - List of dicts (one per point): CLC-derived cloud layer boundaries
+          with keys like ``low_base_ft``, ``low_top_ft``, etc.
     """
     import gc
 
@@ -502,17 +621,21 @@ def decode_icon_eu_per_point_chunked(
     del p_bytes
     gc.collect()
 
+    empty_clc_layers: list[dict[str, float]] = [{} for _ in range(n_points)]
+
     if not pressure_data:
         logger.warning("No pressure (P) data found in ICON-EU GRIB — cannot interpolate")
-        return [{} for _ in range(n_points)]
+        return [{} for _ in range(n_points)], empty_clc_layers
 
     model_levels = sorted(pressure_data.keys())
     results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+    clc_cloud_layers = empty_clc_layers
 
     # Step 2: Decode each cloud variable one at a time, interpolate, discard
     for var_name, field_key in (
         ("qc", "cloud_liquid_water_kg_kg"),
         ("qi", "ice_mixing_ratio_kg_kg"),
+        ("clc", "cloud_area_fraction_pct"),
     ):
         raw = var_bytes.get(var_name, b"")
         if not raw:
@@ -550,10 +673,16 @@ def decode_icon_eu_per_point_chunked(
             for p_hpa, val in interp_result.items():
                 results[pt_idx].setdefault(p_hpa, {})[field_key] = val
 
+        # Derive cloud layer boundaries from model-level CLC before discarding
+        if var_name == "clc":
+            clc_cloud_layers = _derive_clc_cloud_layers(
+                pressure_data, field_data, n_points,
+            )
+
         del field_data
         gc.collect()
 
-    return results
+    return results, clc_cloud_layers
 
 
 def decode_icon_eu_per_point(

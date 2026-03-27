@@ -620,7 +620,16 @@ def _decode_and_merge_icon_eu(
 
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
 
-    def _decode_fhour(fhour: int) -> list[dict[int, dict[str, float]]] | None:
+    # Collect CLC-derived cloud layers across forecast hours.
+    # Use the last non-empty result per point (layers are time-invariant for
+    # a given ICON run, so any forecast hour's CLC works).
+    n_points = len(ctx.point_lats)
+    clc_layers_per_point: list[dict[str, float]] = [{} for _ in range(n_points)]
+
+    def _decode_fhour(
+        fhour: int,
+    ) -> tuple[list[dict[int, dict[str, float]]] | None, list[dict[str, float]]]:
+        empty_clc = [{} for _ in range(n_points)]
         # Check for legacy combined cache first
         legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
         legacy_bytes = get_cached(ctx.run_dir, legacy_ck)
@@ -628,7 +637,7 @@ def _decode_and_merge_icon_eu(
             decoded = decode_icon_eu_per_point(legacy_bytes, ctx.point_lats, ctx.point_lons)
             del legacy_bytes
             gc.collect()
-            return decoded
+            return decoded, empty_clc
 
         # Load per-variable data from cache (already downloaded by prefetch)
         var_bytes: dict[str, bytes] = {}
@@ -639,18 +648,25 @@ def _decode_and_merge_icon_eu(
                 var_bytes[var] = cached
 
         if not var_bytes:
-            return None
+            return None, empty_clc
 
-        decoded = decode_icon_eu_per_point_chunked(var_bytes, ctx.point_lats, ctx.point_lons)
+        decoded, clc_layers = decode_icon_eu_per_point_chunked(
+            var_bytes, ctx.point_lats, ctx.point_lons,
+        )
         del var_bytes
         gc.collect()
-        return decoded
+        return decoded, clc_layers
 
     total_enriched = 0
     for fhour in ctx.forecast_hours:
-        decoded_points = _decode_fhour(fhour)
+        decoded_points, clc_layers = _decode_fhour(fhour)
         if not decoded_points:
             continue
+
+        # Keep CLC-derived layers (first non-empty wins per point)
+        for i, layers in enumerate(clc_layers):
+            if layers and not clc_layers_per_point[i]:
+                clc_layers_per_point[i] = layers
 
         valid_utc = _forecast_hour_to_utc(ctx.init_date, ctx.init_hour, fhour)
         total_enriched += _merge_cloud_water_into_sections(
@@ -669,11 +685,13 @@ def _decode_and_merge_icon_eu(
         total_enriched,
     )
 
-    # Cloud diagnostics (ceiling, convective base/top) from single-level files
+    # Cloud diagnostics (ceiling, convective base/top) from single-level files.
+    # Pass CLC-derived layer boundaries to fill missing NWP base/top.
     _enrich_icon_eu_cloud_diagnostics(
         icon_sections, all_forecasts, route_points,
         ctx.init_date, ctx.init_hour, ctx.forecast_hours,
         ctx.run_dir, ctx.point_lats, ctx.point_lons, ctx.session,
+        clc_layers_per_point=clc_layers_per_point,
     )
 
     return _run_info_to_timestamp(ctx.init_date, ctx.init_hour), None
@@ -690,8 +708,15 @@ def _enrich_icon_eu_cloud_diagnostics(
     point_lats: list[float],
     point_lons: list[float],
     session: requests.Session,
+    *,
+    clc_layers_per_point: list[dict[str, float]] | None = None,
 ) -> None:
-    """Enrich ICON forecasts with single-level cloud diagnostics (ceiling, etc.)."""
+    """Enrich ICON forecasts with single-level cloud diagnostics (ceiling, etc.).
+
+    If *clc_layers_per_point* is provided (CLC-derived cloud layer boundaries
+    from model-level data), missing ``base_ft``/``top_ft`` on low/mid/high
+    NWPCloudLayerDiag are filled from it.
+    """
     from weatherbrief.fetch.grib.decode import (
         build_icon_cloud_diagnostics,
         decode_icon_eu_cloud_diag_per_point,
@@ -724,6 +749,22 @@ def _enrich_icon_eu_cloud_diagnostics(
             continue
 
         diagnostics_per_point = [build_icon_cloud_diagnostics(raw) for raw in decoded_points]
+
+        # Fill missing layer base/top from CLC-derived boundaries
+        if clc_layers_per_point:
+            for pt_idx, diag in enumerate(diagnostics_per_point):
+                if diag is None or pt_idx >= len(clc_layers_per_point):
+                    continue
+                clc = clc_layers_per_point[pt_idx]
+                if not clc:
+                    continue
+                for band in ("low", "mid", "high"):
+                    layer = getattr(diag, band)
+                    if layer.base_ft is None and f"{band}_base_ft" in clc:
+                        layer.base_ft = clc[f"{band}_base_ft"]
+                    if layer.top_ft is None and f"{band}_top_ft" in clc:
+                        layer.top_ft = clc[f"{band}_top_ft"]
+
         valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
 
         # Use _apply_cloud_diagnostics_to_sections with GFS-priority guard
@@ -818,6 +859,10 @@ def _merge_cloud_water_into_sections(
                     if icmr is not None:
                         pl.ice_mixing_ratio_kg_kg = icmr
 
+                    clc = level_data.get("cloud_area_fraction_pct")
+                    if clc is not None:
+                        pl.cloud_area_fraction_pct = clc
+
     # Also enrich waypoint-only forecasts
     wp_data_lookup: dict[str, dict[int, dict[str, float]]] = {}
     for rp, pd in zip(route_points, decoded_points):
@@ -844,5 +889,8 @@ def _merge_cloud_water_into_sections(
                 icmr = level_data.get("ice_mixing_ratio_kg_kg")
                 if icmr is not None:
                     pl.ice_mixing_ratio_kg_kg = icmr
+                clc = level_data.get("cloud_area_fraction_pct")
+                if clc is not None:
+                    pl.cloud_area_fraction_pct = clc
 
     return enriched_count

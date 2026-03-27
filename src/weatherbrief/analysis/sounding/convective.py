@@ -193,8 +193,10 @@ def assess_convective_nwp(
                 if cape >= threshold:
                     risk = level
                     break
-            # Marginal: any CAPE > 0 with defined base/top
-            if risk == ConvectiveRisk.NONE and cape > 0:
+            # Marginal: meaningful CAPE with defined base/top.
+            # ICON can report convective geometry with negligible CAPE (<10 J/kg);
+            # filter that noise — 10 J/kg is well below the LOW threshold (50).
+            if risk == ConvectiveRisk.NONE and cape >= 10:
                 risk = ConvectiveRisk.MARGINAL
         method = "nwp_hybrid"
     else:

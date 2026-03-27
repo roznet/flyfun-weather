@@ -201,6 +201,7 @@ class PressureLevelData(BaseModel):
     vertical_velocity_pa_s: Optional[float] = None  # omega (Pa/s)
     cloud_liquid_water_kg_kg: Optional[float] = None  # CLWMR from GRIB2
     ice_mixing_ratio_kg_kg: Optional[float] = None  # ICMR from GRIB2
+    cloud_area_fraction_pct: Optional[float] = None  # CLC from ICON-EU GRIB2 (0–100%)
     clw_interpolated: bool = False  # True when CLW filled by spatial interpolation
 
 

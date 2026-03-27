@@ -150,8 +150,8 @@ function drawTower(
     ctx.fillRect(xLeft - anvilExtend, yTop, colWidth + anvilExtend * 2, STRIP_HEIGHT);
   }
 
-  // 6. CB label inside tower (moderate+)
-  if (risk !== 'low' && colWidth > 18) {
+  // 6. CB label inside tower (moderate+ only — low towers don't warrant CB marking)
+  if (risk !== 'low' && risk !== 'marginal' && colWidth > 18) {
     const cx = (xLeft + xRight) / 2;
     const cy = yTop + towerHeight * 0.3; // Upper third of tower
     drawCBLabel(ctx, cx, cy, risk);

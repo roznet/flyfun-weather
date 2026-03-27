@@ -42,8 +42,8 @@ ICON_EU_PUBLISH_DELAY_HOURS = 3
 ICON_EU_MODEL_LEVEL_MIN = 35
 ICON_EU_MODEL_LEVEL_MAX = 74
 
-# Variables to fetch: cloud liquid water, ice mixing ratio, pressure
-ICON_EU_VARIABLES = ("qc", "qi", "p")
+# Variables to fetch: cloud liquid water, ice mixing ratio, cloud fraction, pressure
+ICON_EU_VARIABLES = ("qc", "qi", "clc", "p")
 
 # Single-level cloud diagnostic variables
 ICON_EU_CLOUD_DIAG_VARIABLES = (
