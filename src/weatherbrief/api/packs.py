@@ -1648,6 +1648,64 @@ def get_elevation(
     return FileResponse(path, media_type="application/json")
 
 
+@router.get("/{timestamp}/bundle")
+def get_bundle(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Download a complete pack as a single gzipped JSON bundle for offline use.
+
+    Returns a JSON object keyed by cache endpoint name, gzip-compressed.
+    Includes all data files plus pre-computed sounding profiles
+    for every (point, model) combination.
+    """
+    import gzip
+    import json
+
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    bundle: dict[str, object] = {}
+
+    # Fixed endpoints — map cache key to server file
+    file_map = {
+        "advisories": "route_advisories.json",
+        "snapshot": "briefing.json",
+        "route-analyses": "route_analyses.json",
+        "elevation": "elevation_profile.json",
+        "digest": "digest.json",
+    }
+    for endpoint, filename in file_map.items():
+        path = pack_dir / filename
+        if path.exists():
+            bundle[endpoint] = json.loads(path.read_text())
+
+    # Sounding profiles for every (point, model) combination
+    ra_path = pack_dir / "route_analyses.json"
+    cs_path = pack_dir / "cross_section.json"
+    if ra_path.exists() and cs_path.exists():
+        ra_data = json.loads(ra_path.read_text())
+        cs_data = json.loads(cs_path.read_text())
+        models = ra_data.get("models", [])
+        analyses = ra_data.get("analyses", [])
+        for point_data in analyses:
+            point_index = point_data["point_index"]
+            for model_name in models:
+                profile = _build_sounding_profile(ra_data, cs_data, point_index, model_name)
+                if profile:
+                    bundle[f"sounding-{point_index}-{model_name}"] = profile.model_dump(mode="json")
+
+    payload = json.dumps(bundle, separators=(",", ":")).encode()
+    compressed = gzip.compress(payload)
+
+    return Response(
+        content=compressed,
+        media_type="application/json",
+        headers={"Content-Encoding": "gzip"},
+    )
+
+
 @router.get("/{timestamp}/skewt/route/{point_index}/{model}")
 def get_route_skewt(
     flight_id: str, timestamp: str, point_index: int, model: str,
@@ -1762,52 +1820,31 @@ class SoundingProfileResponse(BaseModel):
     inversion_layers: list[dict] = Field(default_factory=list)
 
 
-@router.get("/{timestamp}/sounding-profile/{point_index}/{model}")
-def get_sounding_profile(
-    flight_id: str, timestamp: str, point_index: int, model: str,
-    user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
-):
-    """Get raw sounding profile data (T, Td, wind at pressure levels) for a route point.
+def _build_sounding_profile(
+    ra_data: dict, cs_data: dict, point_index: int, model: str,
+) -> SoundingProfileResponse | None:
+    """Build a SoundingProfileResponse from route analyses and cross-section data.
 
-    Used by iOS app for client-side Skew-T rendering.
+    Returns None if the point/model combination has no usable data.
     """
-    import json
+    from weatherbrief.models import WaypointForecast
 
-    model = _validate_model(model)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
-
-    # Load route analyses for point metadata + sounding analysis
-    ra_path = pack_dir / "route_analyses.json"
-    if not ra_path.exists():
-        raise HTTPException(status_code=404, detail="Route analyses not available")
-    ra_data = json.loads(ra_path.read_text())
     analyses = ra_data.get("analyses", [])
     point_data = next((a for a in analyses if a["point_index"] == point_index), None)
     if point_data is None:
-        raise HTTPException(status_code=404, detail=f"Point index {point_index} not found")
+        return None
 
-    # Load cross-section for raw pressure level data
-    cs_path = pack_dir / "cross_section.json"
-    if not cs_path.exists():
-        raise HTTPException(status_code=404, detail="Cross-section data not available")
-    cs_data = json.loads(cs_path.read_text())
     cross_sections = cs_data.get("cross_sections", [])
     cs_match = next((cs for cs in cross_sections if cs["model"] == model), None)
-    if cs_match is None:
-        raise HTTPException(status_code=404, detail=f"Model {model} not found")
-    if point_index >= len(cs_match["point_forecasts"]):
-        raise HTTPException(status_code=404, detail=f"Point index {point_index} out of range")
+    if cs_match is None or point_index >= len(cs_match["point_forecasts"]):
+        return None
 
-    # Extract raw profile at interpolated time
-    from weatherbrief.models import WaypointForecast
     wf = WaypointForecast.model_validate(cs_match["point_forecasts"][point_index])
     interp_time = datetime.fromisoformat(point_data["interpolated_time"])
     hourly = wf.at_time(interp_time)
     if not hourly or not hourly.pressure_levels:
-        raise HTTPException(status_code=404, detail="No forecast data at this point/time")
+        return None
 
-    # Convert pressure levels to response format
     levels = []
     for pl in sorted(hourly.pressure_levels, key=lambda x: x.pressure_hpa, reverse=True):
         if pl.temperature_c is None:
@@ -1822,7 +1859,6 @@ def get_sounding_profile(
             wind_direction_deg=pl.wind_direction_deg,
         ))
 
-    # Extract overlay data from sounding analysis
     sounding_data = point_data.get("sounding", {}).get(model, {})
 
     return SoundingProfileResponse(
@@ -1840,6 +1876,37 @@ def get_sounding_profile(
         icing_zones=sounding_data.get("icing_zones", []),
         inversion_layers=sounding_data.get("inversion_layers", []),
     )
+
+
+@router.get("/{timestamp}/sounding-profile/{point_index}/{model}")
+def get_sounding_profile(
+    flight_id: str, timestamp: str, point_index: int, model: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get raw sounding profile data (T, Td, wind at pressure levels) for a route point.
+
+    Used by iOS app for client-side Skew-T rendering.
+    """
+    import json
+
+    model = _validate_model(model)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available")
+    ra_data = json.loads(ra_path.read_text())
+
+    cs_path = pack_dir / "cross_section.json"
+    if not cs_path.exists():
+        raise HTTPException(status_code=404, detail="Cross-section data not available")
+    cs_data = json.loads(cs_path.read_text())
+
+    result = _build_sounding_profile(ra_data, cs_data, point_index, model)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No sounding data for point {point_index}/{model}")
+    return result
 
 
 @router.get("/{timestamp}/hodograph/route/{point_index}/{model}")
