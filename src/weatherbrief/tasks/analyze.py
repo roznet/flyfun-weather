@@ -452,10 +452,14 @@ def run_analysis(
                     model_divergence=rpa.model_divergence,
                 ))
             else:
-                # Fallback: compute from forecasts (waypoint not in route points)
+                # Fallback: compute from forecasts (waypoint not in route points).
+                # Only attempt for waypoints that have forecasts (airports).
+                # Navaids/fixes won't have forecasts — skip them silently.
                 wp_forecasts = [
                     f for f in all_forecasts if f.waypoint.icao == waypoint.icao
                 ]
+                if not wp_forecasts:
+                    continue
                 track_deg = route.waypoint_track(waypoint.icao)
                 analysis = analyze_waypoint(
                     wp_forecasts, target_dt, track_deg,
@@ -470,6 +474,8 @@ def run_analysis(
             wp_forecasts = [
                 f for f in all_forecasts if f.waypoint.icao == waypoint.icao
             ]
+            if not wp_forecasts:
+                continue  # Skip navaids/fixes without forecasts
             track_deg = route.waypoint_track(waypoint.icao)
             analysis = analyze_waypoint(
                 wp_forecasts, target_dt, track_deg,
