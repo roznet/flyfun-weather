@@ -1,7 +1,14 @@
-# ICON-EU Full GRIB Sounding Plan
+# Full GRIB Sounding Plan
 
-Replace ICON Open-Meteo pressure-level data with complete 40-level GRIB soundings
-for ~500 ft vertical resolution (vs ~3000 ft from Open-Meteo's 19 standard levels).
+Replace Open-Meteo pressure-level data with complete GRIB soundings for higher
+vertical resolution (~500 ft vs ~3000 ft from Open-Meteo's standard levels).
+
+## Scope
+
+Initially ICON-EU (40 model levels from DWD opendata). ECMWF IFS commercial API
+access is pending — if granted, the same framework should handle both models.
+Design abstractions generically: per-model fetch strategy, shared derived-quantity
+computation, shared "replace Open-Meteo pressure levels" enrichment path.
 
 ## Background
 
