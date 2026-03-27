@@ -517,7 +517,6 @@ def _prepare_icon_eu(
         ICON_EU_MODEL_LEVEL_MIN,
         compute_icon_eu_flight_window_hours,
         find_latest_icon_eu_run,
-        icon_eu_model_level_max_hour,
         route_in_icon_eu_domain,
     )
 
@@ -532,36 +531,25 @@ def _prepare_icon_eu(
 
     session = _grib_session()
 
+    cover_until = departure_time + timedelta(hours=flight_duration_hours)
     try:
         run_info = find_latest_icon_eu_run(
             departure_time, session=session, as_of_time=as_of_time,
+            cover_until=cover_until,
         )
     except Exception:
         logger.warning("Failed to find ICON-EU model run", exc_info=True)
         return None
 
     if run_info is None:
-        logger.warning("No ICON-EU model run found for enrichment")
+        logger.info("No ICON-EU run found that covers the flight window")
         return None
 
     init_date, init_hour = run_info
 
-    init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
-        tzinfo=timezone.utc,
-    )
-    if (departure_time - init_dt).total_seconds() / 3600 > 120:
-        logger.info("ICON-EU: departure exceeds 120h range, skipping")
-        return None
-
     forecast_hours = compute_icon_eu_flight_window_hours(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
-    # Cap model-level fetches based on the run cycle (00/12 → 120h, others → 78h)
-    max_hour = icon_eu_model_level_max_hour(init_hour)
-    forecast_hours = [h for h in forecast_hours if h <= max_hour]
-    if not forecast_hours:
-        logger.info("ICON-EU: all forecast hours beyond model-level horizon, skipping")
-        return None
 
     purge_old_runs(data_dir, model="icon-eu")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
