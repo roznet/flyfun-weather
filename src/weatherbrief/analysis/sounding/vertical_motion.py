@@ -175,13 +175,17 @@ def _build_cat_layers(
     derived_levels: list[DerivedLevel],
     max_index_gap: int = 2,
 ) -> list[CATRiskLayer]:
-    """Group adjacent low-Ri levels into CAT risk layers.
+    """Group adjacent low-Ri levels into CAT risk layers, split by severity.
 
     Qualifying levels (Ri < 2.0) are merged when both the pressure gap
     (≤ 100 hPa) **and** the original-index gap (≤ *max_index_gap*) are
     small enough.  The index-gap check prevents chaining scattered low-Ri
     levels across large stable gaps that the pressure-only check misses
     (e.g. GFS 25 hPa spacing where stable levels are simply skipped).
+
+    After adjacency grouping, each group is split into sub-layers by
+    severity tier so that e.g. boundary-layer SEVERE shear doesn't paint
+    an entire deep layer SEVERE when higher levels are only MODERATE.
     """
     # Collect qualifying levels with their original index in derived_levels
     cat_levels: list[tuple[int, DerivedLevel, CATRiskLevel, float]] = []
@@ -197,7 +201,7 @@ def _build_cat_layers(
         return []
 
     # Group adjacent levels (pressure gap <= 100 hPa AND index gap <= max_index_gap)
-    layers: list[CATRiskLayer] = []
+    groups: list[list[tuple[int, DerivedLevel, CATRiskLevel, float]]] = []
     current: list[tuple[int, DerivedLevel, CATRiskLevel, float]] = [cat_levels[0]]
 
     for item in cat_levels[1:]:
@@ -209,23 +213,46 @@ def _build_cat_layers(
         ):
             current.append(item)
         else:
-            layers.append(_build_single_cat_layer(
-                [(lv, risk, ri) for _, lv, risk, ri in current]
-            ))
+            groups.append(current)
             current = [item]
+    groups.append(current)
 
-    layers.append(_build_single_cat_layer(
-        [(lv, risk, ri) for _, lv, risk, ri in current]
-    ))
+    # Split each adjacency group into sub-layers by severity tier
+    layers: list[CATRiskLayer] = []
+    for group in groups:
+        items = [(lv, risk, ri) for _, lv, risk, ri in group]
+        layers.extend(_split_by_severity(items))
+
     return layers
+
+
+def _split_by_severity(
+    items: list[tuple[DerivedLevel, CATRiskLevel, float]],
+) -> list[CATRiskLayer]:
+    """Split a group of adjacent levels into sub-layers by severity tier.
+
+    Adjacent levels with the same severity are merged into one sub-layer.
+    This ensures each layer's risk accurately reflects its altitude range.
+    """
+    result: list[CATRiskLayer] = []
+    run: list[tuple[DerivedLevel, CATRiskLevel, float]] = [items[0]]
+
+    for item in items[1:]:
+        if item[1] == run[-1][1]:
+            run.append(item)
+        else:
+            result.append(_build_single_cat_layer(run))
+            run = [item]
+
+    result.append(_build_single_cat_layer(run))
+    return result
 
 
 def _build_single_cat_layer(
     items: list[tuple[DerivedLevel, CATRiskLevel, float]],
 ) -> CATRiskLayer:
-    """Build a CATRiskLayer from a group of adjacent low-Ri levels."""
-    risk_order = [CATRiskLevel.NONE, CATRiskLevel.LIGHT, CATRiskLevel.MODERATE, CATRiskLevel.SEVERE]
-    worst_risk = max((r for _, r, _ in items), key=lambda r: risk_order.index(r))
+    """Build a CATRiskLayer from a group of same-severity levels."""
+    risk = items[0][1]
     min_ri = min(ri for _, _, ri in items)
 
     base = items[0][0]
@@ -237,7 +264,7 @@ def _build_single_cat_layer(
         base_pressure_hpa=base.pressure_hpa,
         top_pressure_hpa=top.pressure_hpa,
         richardson_number=round(min_ri, 2),
-        risk=worst_risk,
+        risk=risk,
     )
 
 

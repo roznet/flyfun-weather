@@ -116,7 +116,7 @@ def test_stability_indicators_positive_n2(sample_pressure_levels_with_omega):
 
 
 def test_cat_risk_from_low_ri():
-    """Low Ri values produce CAT risk layers."""
+    """Low Ri values produce CAT risk layers split by severity."""
     levels = [
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-1.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5,
@@ -125,11 +125,13 @@ def test_cat_risk_from_low_ri():
                      richardson_number=0.8),
     ]
     assessment = assess_vertical_motion(levels)
-    assert len(assessment.cat_risk_layers) > 0
 
-    # With loosened thresholds: Ri=0.3 → SEVERE, Ri=0.8 → MODERATE
-    risks = {l.risk for l in assessment.cat_risk_layers}
-    assert CATRiskLevel.SEVERE in risks or CATRiskLevel.MODERATE in risks
+    # Ri=0.3 → SEVERE, Ri=0.8 → MODERATE — different severities → 2 layers
+    assert len(assessment.cat_risk_layers) == 2
+    assert assessment.cat_risk_layers[0].risk == CATRiskLevel.SEVERE
+    assert assessment.cat_risk_layers[0].base_ft == 10000
+    assert assessment.cat_risk_layers[1].risk == CATRiskLevel.MODERATE
+    assert assessment.cat_risk_layers[1].base_ft == 18000
 
 
 def test_no_cat_risk_high_ri():
@@ -145,23 +147,70 @@ def test_no_cat_risk_high_ri():
     assert len(assessment.cat_risk_layers) == 0
 
 
-def test_cat_layer_grouping():
-    """Adjacent low-Ri levels are grouped into a single CAT layer."""
+def test_cat_layer_grouping_same_severity():
+    """Adjacent low-Ri levels with the same severity form one layer."""
     levels = [
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-1.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5,
-                     richardson_number=0.4),
-        DerivedLevel(pressure_hpa=600, altitude_ft=14000, omega_pa_s=-1.2,
                      richardson_number=0.6),
+        DerivedLevel(pressure_hpa=600, altitude_ft=14000, omega_pa_s=-1.2,
+                     richardson_number=0.7),
         DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-1.0,
                      richardson_number=5.0),
     ]
     assessment = assess_vertical_motion(levels)
-    # The two adjacent low-Ri levels should form one layer
+    # Both levels are MODERATE (0.5 <= Ri < 1.0) — one layer
     assert len(assessment.cat_risk_layers) == 1
     layer = assessment.cat_risk_layers[0]
     assert layer.base_ft == 10000
     assert layer.top_ft == 14000
+    assert layer.risk == CATRiskLevel.MODERATE
+
+
+def test_severity_split_boundary_layer():
+    """A deep layer with mixed severities is split by severity tier.
+
+    Reproduces the EGTF→EGBJ scenario: SEVERE shear at 975hPa (BL)
+    chains through MODERATE mid-levels. Without severity splitting, the
+    whole band would be painted SEVERE. With splitting, each altitude
+    range gets its own accurate risk.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=545, omega_pa_s=-0.1),
+        DerivedLevel(pressure_hpa=975, altitude_ft=1224, omega_pa_s=-0.0,
+                     richardson_number=0.31),   # SEVERE
+        DerivedLevel(pressure_hpa=950, altitude_ft=1916, omega_pa_s=-0.2,
+                     richardson_number=0.89),   # MODERATE
+        DerivedLevel(pressure_hpa=925, altitude_ft=2621, omega_pa_s=-0.3,
+                     richardson_number=1.60),   # LIGHT
+        DerivedLevel(pressure_hpa=900, altitude_ft=3343, omega_pa_s=-0.3,
+                     richardson_number=0.66),   # MODERATE
+        DerivedLevel(pressure_hpa=850, altitude_ft=4839, omega_pa_s=-0.2,
+                     richardson_number=0.78),   # MODERATE
+    ]
+    assessment = assess_vertical_motion(levels)
+
+    # Should produce 3 sub-layers: SEVERE, MODERATE, LIGHT, MODERATE
+    # But adjacent MODERATE levels merge, so: SEVERE(1224), MODERATE(1916),
+    # LIGHT(2621), MODERATE(3343-4839)
+    assert len(assessment.cat_risk_layers) == 4
+
+    risks = [l.risk for l in assessment.cat_risk_layers]
+    assert risks == [
+        CATRiskLevel.SEVERE,
+        CATRiskLevel.MODERATE,
+        CATRiskLevel.LIGHT,
+        CATRiskLevel.MODERATE,
+    ]
+
+    # Cruise at 4000ft would fall in the last MODERATE layer, not SEVERE
+    cruise = 4000
+    layers_at_cruise = [
+        l for l in assessment.cat_risk_layers
+        if l.base_ft <= cruise <= l.top_ft
+    ]
+    assert len(layers_at_cruise) == 1
+    assert layers_at_cruise[0].risk == CATRiskLevel.MODERATE
 
 
 def test_boundary_layer_shear_not_merged_to_cruise():
@@ -200,17 +249,18 @@ def test_scattered_cat_not_merged_across_stable_gap():
 
     GFS-realistic 25 hPa spacing: low Ri at 975/950/925 and at 700, with
     several stable levels in between.  The index gap is too large to merge.
+    BL cluster has mixed severities (MODERATE + LIGHT), which also get split.
     """
     levels = [
         # Surface
         DerivedLevel(pressure_hpa=1000, altitude_ft=300, omega_pa_s=-0.5),
         # BL low-Ri cluster (indices 1, 2, 3)
         DerivedLevel(pressure_hpa=975, altitude_ft=1100, omega_pa_s=-0.5,
-                     richardson_number=0.59),
+                     richardson_number=0.59),   # MODERATE
         DerivedLevel(pressure_hpa=950, altitude_ft=1800, omega_pa_s=-0.5,
-                     richardson_number=0.96),
+                     richardson_number=0.96),   # MODERATE
         DerivedLevel(pressure_hpa=925, altitude_ft=2500, omega_pa_s=-0.5,
-                     richardson_number=1.04),
+                     richardson_number=1.04),   # LIGHT
         # Stable gap (indices 4, 5, 6, 7)
         DerivedLevel(pressure_hpa=900, altitude_ft=3200, omega_pa_s=-0.5,
                      richardson_number=2.84),
@@ -222,16 +272,19 @@ def test_scattered_cat_not_merged_across_stable_gap():
                      richardson_number=20.0),
         # Upper low-Ri (index 8)
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.5,
-                     richardson_number=0.71),
+                     richardson_number=0.71),   # MODERATE
     ]
     assessment = assess_vertical_motion(levels)
-    assert len(assessment.cat_risk_layers) == 2, (
-        f"Expected 2 separate layers, got {len(assessment.cat_risk_layers)}"
+    # BL: MODERATE(1100-1800) + LIGHT(2500) = 2 sub-layers
+    # Upper: MODERATE(10000) = 1 layer
+    assert len(assessment.cat_risk_layers) == 3, (
+        f"Expected 3 layers (2 BL sub-layers + 1 upper), got {len(assessment.cat_risk_layers)}"
     )
-    # BL layer stays low
-    assert assessment.cat_risk_layers[0].top_ft <= 3000
+    # BL layers stay low
+    assert assessment.cat_risk_layers[0].top_ft <= 2000
+    assert assessment.cat_risk_layers[1].top_ft <= 3000
     # Upper layer is separate
-    assert assessment.cat_risk_layers[1].base_ft >= 9000
+    assert assessment.cat_risk_layers[2].base_ft >= 9000
 
 
 def test_cat_merges_across_single_stable_level():
