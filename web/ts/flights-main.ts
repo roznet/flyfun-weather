@@ -214,7 +214,7 @@ async function applyParsedFpl(text: string): Promise<void> {
 }
 
 /** Show a modal for the user to paste their FPL text. */
-function showFplModal(): void {
+function showFplModal(prefill?: string): void {
   const backdrop = document.createElement('div');
   backdrop.className = 'metric-popup-backdrop active';
 
@@ -236,7 +236,15 @@ function showFplModal(): void {
   // Stop clicks inside modal from closing
   modal.addEventListener('click', (e) => e.stopPropagation());
 
-  const close = () => backdrop.remove();
+  // ESC to close (defined early so close() can remove it)
+  const onEsc = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') close();
+  };
+
+  const close = () => {
+    document.removeEventListener('keydown', onEsc);
+    backdrop.remove();
+  };
 
   backdrop.addEventListener('click', close);
   modal.querySelector('.metric-popup-close')?.addEventListener('click', close);
@@ -252,6 +260,7 @@ function showFplModal(): void {
 
   // Also handle Enter in textarea with Ctrl/Cmd
   const area = modal.querySelector('#fpl-paste-area') as HTMLTextAreaElement;
+  if (prefill) area.value = prefill;
   area?.addEventListener('keydown', async (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -262,13 +271,6 @@ function showFplModal(): void {
     }
   });
 
-  // ESC to close
-  const onEsc = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      close();
-      document.removeEventListener('keydown', onEsc);
-    }
-  };
   document.addEventListener('keydown', onEsc);
 
   // Focus textarea
@@ -282,7 +284,13 @@ async function handlePasteFpl(): Promise<void> {
     if (navigator.clipboard && navigator.clipboard.readText) {
       const text = await navigator.clipboard.readText();
       if (text && text.includes('FPL')) {
-        await applyParsedFpl(text);
+        const parsed = await parseFpl(text);
+        if (!parsed.error && parsed.waypoints.length >= 2) {
+          await applyParsedFpl(text);
+          return;
+        }
+        // Parse failed — fall through to show modal with text pre-filled
+        showFplModal(text);
         return;
       }
     }

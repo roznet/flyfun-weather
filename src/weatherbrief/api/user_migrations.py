@@ -80,6 +80,10 @@ def run_pending_migrations(db: Session, row: UserPreferencesRow) -> None:
     except json.JSONDecodeError:
         prefs = {}
 
+    # New user with no prefs yet — nothing to migrate, skip the DB write.
+    if not prefs:
+        return
+
     applied = set(prefs.get("_applied_migrations", []))
 
     changed = False
