@@ -544,34 +544,33 @@ def _derive_clc_cloud_layers(
         if not cloud_layers:
             continue
 
-        # Classify each cloud layer into ICAO bands by its base pressure
+        # Classify each cloud layer into ICAO bands.
+        # When multiple disjoint clouds overlap a band, pick the lowest
+        # (highest base pressure) — most relevant for flight altitude.
         for band_name, band_min_pa, band_max_pa in [
             ("low",  LOW_TOP_PA, float("inf")),
             ("mid",  MID_TOP_PA, LOW_TOP_PA),
             ("high", 0,          MID_TOP_PA),
         ]:
-            band_base_pa: float | None = None
-            band_top_pa: float | None = None
+            best_base_pa: float | None = None
+            best_top_pa: float | None = None
             for cl_base_pa, cl_top_pa in cloud_layers:
-                # A cloud layer contributes to this band if it overlaps
-                if cl_base_pa < band_min_pa and cl_top_pa > band_max_pa:
-                    continue  # entirely outside this band
                 # Clamp to band boundaries
                 clamped_base = min(cl_base_pa, band_max_pa) if band_max_pa != float("inf") else cl_base_pa
                 clamped_top = max(cl_top_pa, band_min_pa)
                 if clamped_base <= clamped_top:
-                    continue  # no overlap after clamping
-                if band_base_pa is None or clamped_base > band_base_pa:
-                    band_base_pa = clamped_base
-                if band_top_pa is None or clamped_top < band_top_pa:
-                    band_top_pa = clamped_top
+                    continue  # no overlap with this band
+                # Pick the lowest cloud (highest base pressure = lowest altitude)
+                if best_base_pa is None or clamped_base > best_base_pa:
+                    best_base_pa = clamped_base
+                    best_top_pa = clamped_top
 
-            if band_base_pa is not None and band_top_pa is not None:
+            if best_base_pa is not None and best_top_pa is not None:
                 results[pt_idx][f"{band_name}_base_ft"] = round(
-                    pressure_pa_to_altitude_ft(band_base_pa),
+                    pressure_pa_to_altitude_ft(best_base_pa),
                 )
                 results[pt_idx][f"{band_name}_top_ft"] = round(
-                    pressure_pa_to_altitude_ft(band_top_pa),
+                    pressure_pa_to_altitude_ft(best_top_pa),
                 )
 
     return results
