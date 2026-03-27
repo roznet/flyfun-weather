@@ -8,6 +8,7 @@ struct CrossSectionView: View {
     let viewModel: BriefingViewModel
     @State private var csVM = CrossSectionViewModel()
     @State private var selectedPointIndex: Int?
+    @State private var canvasSize: CGSize = .zero
 
     var body: some View {
         ScrollView {
@@ -48,11 +49,16 @@ struct CrossSectionView: View {
     private var crossSectionCanvas: some View {
         if let vizData = csVM.vizData {
             Canvas { context, size in
-                CrossSectionRenderer(data: vizData, enabledLayers: csVM.enabledLayers)
+                CrossSectionRenderer(data: vizData, enabledLayers: csVM.enabledLayers,
+                                     selectedDistanceNm: selectedDistanceNm)
                     .render(context: &context, size: size)
             }
             .frame(minHeight: 300)
             .aspectRatio(2.0, contentMode: .fit)
+            .background(GeometryReader { geo in
+                Color.clear.onAppear { canvasSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
+            })
             .onTapGesture { location in
                 handleTap(at: location)
             }
@@ -104,25 +110,28 @@ struct CrossSectionView: View {
         }
     }
 
+    /// Distance along route for the selected point, used to draw the vertical indicator.
+    private var selectedDistanceNm: Double? {
+        guard let idx = selectedPointIndex,
+              case .loaded(let analyses) = viewModel.routeAnalysesState,
+              let rpa = analyses.analyses.first(where: { $0.pointIndex == idx })
+        else { return nil }
+        return rpa.distanceFromOriginNm
+    }
+
     // MARK: - Tap handling
 
     private func handleTap(at location: CGPoint) {
         guard let vizData = csVM.vizData else { return }
-        // Reconstruct the transform to map pixel → distance
-        // Use the same size as the canvas (we need GeometryReader for exact size,
-        // but we can approximate from the vizData)
         let points = vizData.points
-        guard !points.isEmpty else { return }
+        guard !points.isEmpty, canvasSize.width > 0 else { return }
 
-        // Find nearest point by x-position proportion
-        // The canvas uses CoordTransform with margins, but onTapGesture gives location
-        // relative to the view. We'll approximate using the total distance.
-        let margins = CoordTransform.margins
-        // Estimate canvas width from the aspect ratio constraint
-        let tapFraction = Double(location.x - margins.left) /
-            Double(max(1, location.x + margins.right)) // rough fraction
-
-        let tapDistanceNm = tapFraction * vizData.totalDistanceNm
+        let transform = CoordTransform(
+            size: canvasSize,
+            maxDistanceNm: vizData.totalDistanceNm,
+            maxAltitudeFt: vizData.flightCeilingFt
+        )
+        let tapDistanceNm = transform.xToDistance(location.x)
         let nearest = points.enumerated().min(by: {
             abs($0.element.distanceNm - tapDistanceNm) < abs($1.element.distanceNm - tapDistanceNm)
         })

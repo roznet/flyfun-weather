@@ -4,6 +4,7 @@ import SwiftUI
 struct CrossSectionRenderer {
     let data: VizRouteData
     let enabledLayers: [String: Bool]
+    var selectedDistanceNm: Double?
 
     func render(context: inout GraphicsContext, size: CGSize) {
         let transform = CoordTransform(
@@ -28,6 +29,15 @@ struct CrossSectionRenderer {
             if enabledLayers[layer.id] ?? false {
                 layer.render(context: &clipped, transform: transform, data: data)
             }
+        }
+
+        // Selected-point indicator (drawn inside clip so it stays in plot area)
+        if let selectedNm = selectedDistanceNm {
+            let x = transform.distanceToX(selectedNm)
+            var selPath = Path()
+            selPath.move(to: CGPoint(x: x, y: transform.plotArea.top))
+            selPath.addLine(to: CGPoint(x: x, y: transform.plotArea.bottom))
+            clipped.stroke(selPath, with: .color(.orange), lineWidth: 1.5)
         }
 
         // Axes and grid (drawn outside clip)
