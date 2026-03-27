@@ -490,14 +490,6 @@ def _derive_clc_cloud_layers(
     LOW_TOP_PA = 80_000   # 800 hPa
     MID_TOP_PA = 40_000   # 400 hPa
 
-    LAYERS = [
-        ("low",  MID_TOP_PA,  float("inf")),   # include up to mid boundary
-        ("mid",  MID_TOP_PA,  LOW_TOP_PA),
-        ("high", 0,           MID_TOP_PA),
-    ]
-    # NOTE: for the "low" layer we use a wide pressure range and then classify
-    # based on whether the cloud *base* is below the low/mid boundary.
-
     model_levels = sorted(pressure_data.keys())
     results: list[dict[str, float]] = [{} for _ in range(n_points)]
 
