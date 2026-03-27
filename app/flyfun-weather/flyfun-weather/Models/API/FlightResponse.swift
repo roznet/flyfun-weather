@@ -24,7 +24,7 @@ struct FlightResponse: Codable, Identifiable, Sendable {
 
     /// Short title: "ORIGIN → DEST" from waypoints.
     var shortTitle: String {
-        guard let origin = waypoints.first, let dest = waypoints.last, origin != dest else {
+        guard let origin = waypoints.first, let dest = waypoints.last else {
             return routeName
         }
         return "\(origin.uppercased()) → \(dest.uppercased())"

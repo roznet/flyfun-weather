@@ -92,7 +92,7 @@ struct SkewTDetailView: View {
                                        description: Text(error.localizedDescription))
             }
         }
-        .task {
+        .task(id: pointIndex) {
             await loadProfile()
         }
     }
