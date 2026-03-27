@@ -24,7 +24,7 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
     for (let i = 0; i < data.points.length; i++) {
       const p = data.points[i];
       const risk = p.nwpConvectiveRisk;
-      if (risk === 'none') continue;
+      if (risk === 'none' || risk === 'marginal') continue;
 
       // Column x-bounds (midpoint between neighbors)
       const x = transform.distanceToX(p.distanceNm);
@@ -85,8 +85,8 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
           ctx.fillRect(xLeft - anvilExtend, yTop, colWidth + anvilExtend * 2, STRIP_HEIGHT);
         }
 
-        // 6. CB label (moderate+)
-        if (risk !== 'low' && colWidth > 18) {
+        // 6. CB label (moderate+ only — low towers don't warrant CB marking)
+        if (risk !== 'low' && risk !== 'marginal' && colWidth > 18) {
           const cx = (xLeft + xRight) / 2;
           const cy = yTop + towerHeight * 0.3;
           drawCBLabel(ctx, cx, cy, risk);
