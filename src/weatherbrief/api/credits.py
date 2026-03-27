@@ -6,14 +6,16 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.admin import require_admin
 from weatherbrief.costs import (
     CostBreakdown,
+    CostConfig,
+    DEFAULT_CONFIG,
     breakdown_to_dict,
     compute_cost,
     config_from_row,
@@ -131,72 +133,19 @@ class CostConfigResponse(BaseModel):
     id: int
     active_from: str
     active_until: str | None
-    token_cost_per_1k_input: float
-    token_cost_per_1k_output: float
-    droplet_monthly_usd: float
-    misc_monthly_usd: float
-    subscriptions_monthly_usd: float
-    subscription_details_json: str
-    disk_cost_per_gb_monthly: float
-    estimated_monthly_briefings: int
-    margin_percent: float
-    usd_per_credit: float
-
-
-class CostConfigUpdate(BaseModel):
-    token_cost_per_1k_input: float | None = None
-    token_cost_per_1k_output: float | None = None
-    droplet_monthly_usd: float | None = None
-    misc_monthly_usd: float | None = None
-    subscriptions_monthly_usd: float | None = None
-    subscription_details_json: str | None = None
-    disk_cost_per_gb_monthly: float | None = None
-    estimated_monthly_briefings: int | None = None
-    margin_percent: float | None = None
-    usd_per_credit: float | None = None
-
-    @field_validator(
-        "token_cost_per_1k_input", "token_cost_per_1k_output",
-        "droplet_monthly_usd", "misc_monthly_usd",
-        "subscriptions_monthly_usd", "disk_cost_per_gb_monthly",
-    )
-    @classmethod
-    def non_negative_float(cls, v: float | None) -> float | None:
-        if v is not None and v < 0:
-            raise ValueError("value must be non-negative")
-        return v
-
-    @field_validator("usd_per_credit")
-    @classmethod
-    def positive_usd_per_credit(cls, v: float | None) -> float | None:
-        if v is not None and v <= 0:
-            raise ValueError("usd_per_credit must be positive")
-        return v
-
-    @field_validator("margin_percent")
-    @classmethod
-    def reasonable_margin(cls, v: float | None) -> float | None:
-        if v is not None and (v < 0 or v > 200):
-            raise ValueError("margin_percent must be between 0 and 200")
-        return v
-
-    @field_validator("estimated_monthly_briefings")
-    @classmethod
-    def positive_briefings(cls, v: int | None) -> int | None:
-        if v is not None and v < 1:
-            raise ValueError("estimated_monthly_briefings must be at least 1")
-        return v
+    config: dict
 
 
 class TransparencyResponse(BaseModel):
+    """Public-facing cost structure.  Flat dict derived from config JSON."""
     token_cost_per_1k_input: float
     token_cost_per_1k_output: float
     infra_monthly_usd: float
     subscriptions_monthly_usd: float
+    subscription_details: dict | None
     disk_cost_per_gb_monthly: float
     estimated_monthly_briefings: int
     margin_percent: float
-    usd_per_credit: float
 
 
 # ---------------------------------------------------------------------------
@@ -209,16 +158,7 @@ def _config_to_response(row: CostConfigRow) -> CostConfigResponse:
         id=row.id,
         active_from=row.active_from.isoformat() if row.active_from else "",
         active_until=row.active_until.isoformat() if row.active_until else None,
-        token_cost_per_1k_input=row.token_cost_per_1k_input,
-        token_cost_per_1k_output=row.token_cost_per_1k_output,
-        droplet_monthly_usd=row.droplet_monthly_usd,
-        misc_monthly_usd=row.misc_monthly_usd,
-        subscriptions_monthly_usd=row.subscriptions_monthly_usd,
-        subscription_details_json=row.subscription_details_json,
-        disk_cost_per_gb_monthly=row.disk_cost_per_gb_monthly,
-        estimated_monthly_briefings=row.estimated_monthly_briefings,
-        margin_percent=row.margin_percent,
-        usd_per_credit=row.usd_per_credit,
+        config=json.loads(row.config_json),
     )
 
 
@@ -327,36 +267,38 @@ def get_cost_config(
 
 @admin_router.put("", response_model=CostConfigResponse)
 def update_cost_config(
-    body: CostConfigUpdate,
+    body: dict,
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Create a new cost config version; deactivate the previous one."""
+    """Create a new cost config version; deactivate the previous one.
+
+    Accepts a partial dict of config keys to update.  Unchanged keys are
+    inherited from the current active config.
+    """
     now = datetime.now(timezone.utc)
 
     # Deactivate current
     current = get_active_cost_config(db)
+    current_config = (
+        json.loads(current.config_json) if current else DEFAULT_CONFIG.to_json()
+    )
+    if isinstance(current_config, str):
+        current_config = json.loads(current_config)
+
     if current:
         current.active_until = now
         db.flush()
 
-    # Build new config, inheriting unchanged fields from current
-    fields = {
-        "token_cost_per_1k_input", "token_cost_per_1k_output",
-        "droplet_monthly_usd", "misc_monthly_usd",
-        "subscriptions_monthly_usd", "subscription_details_json",
-        "disk_cost_per_gb_monthly", "estimated_monthly_briefings",
-        "margin_percent", "usd_per_credit",
-    }
-    kwargs: dict = {"active_from": now}
-    for f in fields:
-        new_val = getattr(body, f, None)
-        if new_val is not None:
-            kwargs[f] = new_val
-        elif current:
-            kwargs[f] = getattr(current, f)
+    # Merge: current values + overrides
+    merged = {**current_config, **body}
+    # Validate by round-tripping through CostConfig
+    CostConfig.from_json(json.dumps(merged))
 
-    new_row = CostConfigRow(**kwargs)
+    new_row = CostConfigRow(
+        active_from=now,
+        config_json=json.dumps(merged),
+    )
     db.add(new_row)
     db.flush()
 
@@ -390,13 +332,14 @@ def get_transparency(db: Session = Depends(get_db)):
     row = get_active_cost_config(db)
     if not row:
         return None
+    cfg = CostConfig.from_json(row.config_json)
     return TransparencyResponse(
-        token_cost_per_1k_input=row.token_cost_per_1k_input,
-        token_cost_per_1k_output=row.token_cost_per_1k_output,
-        infra_monthly_usd=row.droplet_monthly_usd + row.misc_monthly_usd,
-        subscriptions_monthly_usd=row.subscriptions_monthly_usd,
-        disk_cost_per_gb_monthly=row.disk_cost_per_gb_monthly,
-        estimated_monthly_briefings=row.estimated_monthly_briefings,
-        margin_percent=row.margin_percent,
-        usd_per_credit=row.usd_per_credit,
+        token_cost_per_1k_input=cfg.token_cost_per_1k_input,
+        token_cost_per_1k_output=cfg.token_cost_per_1k_output,
+        infra_monthly_usd=cfg.droplet_monthly_usd + cfg.misc_monthly_usd,
+        subscriptions_monthly_usd=cfg.subscriptions_monthly_usd,
+        subscription_details=cfg.subscription_details,
+        disk_cost_per_gb_monthly=cfg.disk_cost_per_gb_monthly,
+        estimated_monthly_briefings=cfg.estimated_monthly_briefings,
+        margin_percent=cfg.margin_percent,
     )

@@ -10,7 +10,6 @@ export interface CostBreakdown {
   subtotal_usd: number;
   margin_usd: number;
   total_usd: number;
-  credits_charged: number;
   config_id: number;
 }
 
@@ -36,10 +35,10 @@ export interface TransparencyInfo {
   token_cost_per_1k_output: number;
   infra_monthly_usd: number;
   subscriptions_monthly_usd: number;
+  subscription_details: Record<string, number> | null;
   disk_cost_per_gb_monthly: number;
   estimated_monthly_briefings: number;
   margin_percent: number;
-  usd_per_credit: number;
 }
 
 export async function fetchCostSummary(): Promise<CostSummary> {

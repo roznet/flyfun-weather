@@ -541,17 +541,18 @@ def _charge_briefing_cost(
         if not config_row:
             return
 
-        config = config_from_row(config_row)
+        config, config_id = config_from_row(config_row)
         breakdown = compute_cost(
             input_tokens=usage.llm_input_tokens or 0,
             output_tokens=usage.llm_output_tokens or 0,
             result_size_bytes=result_size_bytes,
             config=config,
+            config_id=config_id,
         )
         charge_briefing(db, user_id, usage_row_id, breakdown)
         logger.info(
-            "Charged %.2f credits to %s (usage #%d)",
-            breakdown.credits_charged, user_id, usage_row_id,
+            "Charged $%.4f to %s (usage #%d)",
+            breakdown.total_usd, user_id, usage_row_id,
         )
     except Exception:
         logger.warning("Failed to charge briefing cost for %s", user_id, exc_info=True)

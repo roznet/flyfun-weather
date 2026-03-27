@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from weatherbrief.fetch.grib.cache import (
     cache_dir_for_run,
@@ -38,6 +39,19 @@ from weatherbrief.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# GRIB downloads use 8 workers; pool_maxsize must be at least that large
+# to avoid urllib3 "Connection pool is full, discarding connection" warnings.
+_POOL_MAXSIZE = 12
+
+
+def _grib_session() -> requests.Session:
+    """Create a requests session with a connection pool sized for parallel GRIB downloads."""
+    session = requests.Session()
+    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=_POOL_MAXSIZE)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def _apply_cloud_diagnostics(hourly: HourlyForecast, diag: NWPCloudDiagnostics) -> None:
@@ -186,7 +200,7 @@ def _enrich_gfs(
         logger.info("No GFS cross-sections to enrich")
         return None
 
-    session = requests.Session()
+    session = _grib_session()
 
     run_info = find_latest_run(departure_time, session=session, as_of_time=as_of_time)
     if run_info is None:
@@ -500,6 +514,7 @@ def _prepare_icon_eu(
     """Resolve ICON-EU run info and check eligibility. Returns None to skip."""
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_MODEL_LEVEL_MAX,
+        ICON_EU_MODEL_LEVEL_MAX_HOUR,
         ICON_EU_MODEL_LEVEL_MIN,
         compute_icon_eu_flight_window_hours,
         find_latest_icon_eu_run,
@@ -515,7 +530,7 @@ def _prepare_icon_eu(
         logger.info("Route outside ICON-EU domain, skipping ICON-EU enrichment")
         return None
 
-    session = requests.Session()
+    session = _grib_session()
 
     try:
         run_info = find_latest_icon_eu_run(
@@ -541,6 +556,12 @@ def _prepare_icon_eu(
     forecast_hours = compute_icon_eu_flight_window_hours(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
+    # Cap model-level fetches at the reliable hourly region; see
+    # ICON_EU_MODEL_LEVEL_MAX_HOUR for rationale.
+    forecast_hours = [h for h in forecast_hours if h <= ICON_EU_MODEL_LEVEL_MAX_HOUR]
+    if not forecast_hours:
+        logger.info("ICON-EU: all forecast hours beyond model-level horizon, skipping")
+        return None
 
     purge_old_runs(data_dir, model="icon-eu")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
