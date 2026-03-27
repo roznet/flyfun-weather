@@ -25,14 +25,15 @@ from weatherbrief.api.security import audit_pack_access
 from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.api.throttle import generation_slot, pdf_limiter, plot_limiter
 
+from weatherbrief.api.validation import WAYPOINT_RE
+
 # Input validation for path-sensitive parameters
-_WAYPOINT_RE = re.compile(r"^[A-Z0-9]{2,5}$", re.IGNORECASE)
 _MODEL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _validate_icao(icao: str) -> str:
     """Validate and sanitize waypoint code used in file paths."""
-    if not _WAYPOINT_RE.match(icao):
+    if not WAYPOINT_RE.match(icao):
         raise HTTPException(status_code=400, detail="Invalid waypoint code")
     return icao
 
