@@ -12,7 +12,7 @@ WeatherBrief computes icing potential using four independent methods plus SLD de
 | **Ogimet-NWP** (default) | `sounding/icing.py` | NWP cloud fraction × glaciation | 0–100 |
 | **SFIP** | `sounding/sfip.py` | Fuzzy-logic membership functions | 0–100 |
 | **IENG** | `sounding/icing.py` | NWP cloud fraction (no glaciation) | 0–100 |
-| **SLD** | `sounding/sld.py` | CLMR/ICMR microphysics (GFS-only) | intensity 0–1 |
+| **SLD** | `sounding/sld.py` | Warm-nose freezing rain (all models) | moderate/severe |
 
 Shared utilities live in `sounding/icing_common.py`: cloud-proximity checks, NWP cloud altitude lookup, icing type classification, and zone grouping.
 
@@ -179,18 +179,15 @@ Matches the approach used by CloudPath. Convective component added when CAPE > 1
 
 ### 5. SLD (`assess_sld_zones`)
 
-**Signal:** CLMR/ICMR microphysics — detects supercooled large droplets that can overwhelm de-ice systems.
+**Signal:** Atmospheric structure — detects supercooled large droplets (>50μm) that can overwhelm de-ice systems. Two physical formation mechanisms implemented; only warm-nose is active.
 
-Three criteria must all be met:
-1. Temperature: −20°C ≤ T ≤ 0°C
-2. Cloud liquid water: CLW > 1e-3 g/kg (measurable supercooled liquid)
-3. Liquid ratio: CLW/(CLW+ICMR) > 0.5 (liquid-dominant, not glaciated)
+**Active — Warm-nose freezing rain:** When the precipitation module detects a warm layer (Tw > 0°C) above a subfreezing surface layer with `freezing_rain_risk=True`, the cold layer below the warm nose is an SLD zone. Freezing rain drops are 0.5–5mm — SLD by definition. Risk: MODERATE (normal), SEVERE if warm nose ≥ 3000ft deep.
 
-Intensity: `liquid_ratio × clamp(CLW_kg_kg / 5e-4, 0, 1)`. Risk: >0 light, ≥0.3 moderate, ≥0.7 severe.
+**Disabled — Collision-coalescence:** Deep clouds (>3000ft) with tops warmer than −12°C where ice nucleation is too slow for Bergeron glaciation. Disabled because it fires on virtually every deep stratiform cloud in European weather — NWP models lack droplet size data to distinguish SLD from normal icing. Code retained in `_coalescence_sld_zones()`. See `designs/future/known-issues.md` for details and future improvement ideas.
 
-**Model availability:** GFS only (requires CLMR/ICMR from GRIB2). ECMWF and ICON do not provide these fields via Open-Meteo. The layer auto-disables via `getUnavailableLayers()` when data is absent. Generic interface — auto-enables for any model that starts providing CLMR/ICMR.
+**Model availability:** Works with all models (uses temperature/wet-bulb profile, not GRIB-specific fields). The `mechanism` field on `SldZone` indicates which detection fired ("warm_nose" or "coalescence").
 
-Zones grouped with same adjacency logic as icing (100 hPa gap) and expanded to minimum 1000ft thickness for cross-section visibility.
+**Cross-section:** Layer `sld-bands`, disabled by default and in GRAMET preset (experimental). Zones expanded to minimum 1000ft thickness for visibility.
 
 ---
 

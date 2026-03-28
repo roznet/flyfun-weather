@@ -506,9 +506,9 @@
   "messages.category.change": "Changement",
   "messages.category.fix": "Correctif",
   "legend.sld.light": "Light",
-  "legend.sld.lightDesc": "Marginal SLD — monitor closely",
+  "legend.sld.lightDesc": "Marginal SLD conditions \u2014 monitor",
   "legend.sld.moderate": "Moderate",
-  "legend.sld.moderateDesc": "SLD likely — avoid unless SLD-certified",
+  "legend.sld.moderateDesc": "Freezing rain \u2014 SLD below warm nose, avoid unless SLD-certified",
   "legend.sld.severe": "Severe",
-  "legend.sld.severeDesc": "Strong SLD signal — avoid"
+  "legend.sld.severeDesc": "Heavy freezing rain (deep warm nose) \u2014 avoid"
 }

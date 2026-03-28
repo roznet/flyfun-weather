@@ -134,8 +134,7 @@ export interface SldZone {
   base_ft: number;
   top_ft: number;
   risk: IcingRisk;
-  mean_intensity: number | null;
-  mean_liquid_ratio: number | null;
+  mechanism: string;  // "warm_nose" or "coalescence"
   mean_temperature_c: number | null;
 }
 

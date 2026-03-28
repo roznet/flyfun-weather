@@ -117,7 +117,7 @@ function extractPoint(
     baseFt: sz.base_ft,
     topFt: sz.top_ft,
     risk: sz.risk,
-    meanIntensity: sz.mean_intensity ?? null,
+    mechanism: sz.mechanism ?? 'unknown',
   }));
 
   const catLayers: VizCATLayer[] = (sounding?.vertical_motion?.cat_risk_layers ?? []).map((cl: any) => ({

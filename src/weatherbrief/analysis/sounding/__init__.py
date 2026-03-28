@@ -291,17 +291,22 @@ def analyze_sounding(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
-    # SLD detection from CLMR/ICMR microphysics (GFS-only for now)
-    from weatherbrief.analysis.sounding.sld import assess_sld_zones
-
-    sld_zones = assess_sld_zones(derived_levels)
-
     # Precipitation phase classification
     precipitation = assess_precipitation(
         derived_levels,
         levels,
         hourly=hourly,
         freezing_level_ft=indices.freezing_level_ft,
+    )
+
+    # SLD detection from atmospheric structure (warm-nose + coalescence)
+    from weatherbrief.analysis.sounding.sld import assess_sld_zones
+
+    sld_zones = assess_sld_zones(
+        derived_levels,
+        cloud_layers=cloud_layers,
+        freezing_level_ft=indices.freezing_level_ft,
+        precipitation=precipitation,
     )
 
     # Convective assessment (thermo + NWP)

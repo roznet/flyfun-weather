@@ -188,7 +188,7 @@ export interface VizSldZone {
   baseFt: number;
   topFt: number;
   risk: string;
-  meanIntensity: number | null;
+  mechanism: string;
 }
 
 export interface VizCATLayer {

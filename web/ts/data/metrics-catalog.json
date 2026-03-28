@@ -584,18 +584,17 @@
   "sld_risk": {
     "name": "SLD Risk (Supercooled Large Droplets)",
     "unit": "",
-    "vibe": "The droplet size danger signal",
-    "primary_goal": "Detect areas where supercooled large droplets are likely, which can cause rapid ice accretion beyond what standard de-ice systems handle.",
-    "best_used_for": "Identifying the most dangerous icing conditions — SLD can overwhelm FIKI equipment. Currently GFS-only (requires cloud liquid water and ice mixing ratio from GRIB data).",
-    "limitations": "Only available for GFS — ECMWF and ICON do not provide CLMR/ICMR fields via Open-Meteo. Model resolution may not capture localized SLD conditions. The detection is a necessary but not sufficient condition for SLD encounter.",
-    "theory": "Detects SLD by analyzing cloud microphysics from GRIB data. Three criteria must be met: (1) temperature between −20°C and 0°C, (2) cloud liquid water mixing ratio (CLMR) exceeds a minimum threshold, and (3) the liquid ratio CLMR/(CLMR+ICMR) exceeds 0.5, indicating liquid-dominant (not glaciated) cloud. Intensity combines the liquid ratio with the magnitude of CLMR. Higher liquid ratios in warmer sub-zero temperatures indicate larger droplets that resist freezing — the signature of SLD conditions.",
+    "vibe": "The droplet size danger signal — experimental",
+    "primary_goal": "Detect areas where supercooled large droplets (> 50 \u00b5m) are likely, which can cause rapid ice accretion beyond what standard de-ice systems handle. Experimental layer — not enabled by default.",
+    "best_used_for": "Identifying the most dangerous icing conditions — SLD can overwhelm even FIKI equipment. Works with all models (uses temperature/wet-bulb profile, not GRIB-specific fields).",
+    "limitations": "Currently only detects warm-nose freezing rain (the highest-confidence SLD signal). Collision-coalescence SLD in deep warm-top clouds is not yet detected — NWP models lack droplet size data needed to distinguish SLD from ordinary icing in those clouds. Experimental — enable manually to review.",
+    "theory": "Detects SLD from warm-nose freezing rain: when a warm layer (wet-bulb > 0\u00b0C) exists above a subfreezing surface layer, rain melts in the warm nose then refreezes as large drops (0.5\u20135 mm) in the cold layer below — freezing rain is SLD by definition. Severity scales with warm-nose depth: deeper melting layers produce heavier freezing rain. A second mechanism (collision-coalescence in deep warm-top clouds) is implemented but disabled pending better corroboration data.",
     "wikipedia": "https://en.wikipedia.org/wiki/Supercooled_large_drop_icing_conditions",
-    "llm_prompt": "explain what supercooled large droplets (SLD) are, why they're more dangerous than regular icing, and how CLMR/ICMR ratios can detect them",
+    "llm_prompt": "explain what supercooled large droplets (SLD) are, the two formation mechanisms (warm-nose freezing rain and collision-coalescence in deep warm-top clouds), and why they exceed the FAR 25 Appendix C icing envelope",
     "thresholds": [
-      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No SLD detected." },
-      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Marginal SLD conditions — monitor closely." },
-      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "SLD likely — avoid unless SLD-certified." },
-      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Strong SLD signal. Avoid regardless of equipment." }
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No SLD-forming structure detected." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Freezing rain — SLD in the cold layer below warm nose. Avoid unless SLD-certified." },
+      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Heavy freezing rain (deep warm nose > 3000 ft). Avoid regardless of equipment." }
     ]
   },
   "cat_risk": {

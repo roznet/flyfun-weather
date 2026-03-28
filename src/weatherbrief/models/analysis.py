@@ -493,16 +493,23 @@ class SfipZone(BaseModel):
 
 
 class SldZone(BaseModel):
-    """Supercooled Large Droplet detection zone from CLMR/ICMR microphysics."""
+    """Supercooled Large Droplet detection zone.
+
+    Two physical formation mechanisms:
+    - ``warm_nose``: Freezing rain — rain melts in a warm layer aloft then
+      refreezes in the cold layer below.  The SLD zone is the subfreezing
+      layer where large freezing drops fall.
+    - ``coalescence``: Collision-coalescence in a deep cloud with a warm top
+      (> −12 °C).  Insufficient ice nuclei allow droplets to grow large via
+      the warm-rain process within the supercooled portion of the cloud.
+    """
 
     base_ft: float
     top_ft: float
     base_pressure_hpa: Optional[int] = None
     top_pressure_hpa: Optional[int] = None
     risk: IcingRisk = IcingRisk.NONE
-    icing_type: IcingType = IcingType.NONE
-    mean_intensity: Optional[float] = None
-    mean_liquid_ratio: Optional[float] = None
+    mechanism: str = "unknown"  # "warm_nose" or "coalescence"
     mean_temperature_c: Optional[float] = None
 
 
