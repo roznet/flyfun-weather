@@ -49,6 +49,33 @@ actor BriefingCacheStore {
         try data.write(to: file)
     }
 
+    // MARK: - Metadata cache (for offline fallback)
+
+    /// Write a metadata file at the cache root level (e.g. "flights.json").
+    func writeMetadata(_ data: Data, name: String) throws {
+        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        try data.write(to: cacheDir.appendingPathComponent("\(name).json"))
+    }
+
+    /// Read a metadata file from the cache root level.
+    func readMetadata(name: String) -> Data? {
+        try? Data(contentsOf: cacheDir.appendingPathComponent("\(name).json"))
+    }
+
+    /// Write per-flight metadata (e.g. "latest-pack" for a given flight).
+    func writeFlightMetadata(_ data: Data, flightId: String, name: String) throws {
+        let dir = cacheDir.appendingPathComponent(flightId, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try data.write(to: dir.appendingPathComponent("\(name).json"))
+    }
+
+    /// Read per-flight metadata.
+    func readFlightMetadata(flightId: String, name: String) -> Data? {
+        let file = cacheDir.appendingPathComponent(flightId, isDirectory: true)
+            .appendingPathComponent("\(name).json")
+        return try? Data(contentsOf: file)
+    }
+
     // MARK: - Index management
 
     func isPackCached(flightId: String, timestamp: String) -> Bool {

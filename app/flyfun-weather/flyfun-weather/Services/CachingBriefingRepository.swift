@@ -33,18 +33,59 @@ final class CachingBriefingRepository: BriefingRepository {
         self.cache = cache
     }
 
-    // MARK: - Always online (metadata)
+    // MARK: - Metadata with offline fallback
 
     func flights() async throws -> [FlightResponse] {
-        try await online.flights()
+        do {
+            let flights = try await online.flights()
+            // Cache for offline use
+            if let data = try? JSONEncoder.weatherBrief.encode(flights) {
+                try? await cache.writeMetadata(data, name: "flights")
+            }
+            return flights
+        } catch {
+            // Fall back to cached flight list
+            if let data = await cache.readMetadata(name: "flights"),
+               let cached = try? JSONDecoder.weatherBrief.decode([FlightResponse].self, from: data) {
+                Self.logger.info("Serving \(cached.count) flights from cache (offline)")
+                return cached
+            }
+            throw error
+        }
     }
 
     func packs(flightId: String) async throws -> [PackMetaResponse] {
-        try await online.packs(flightId: flightId)
+        do {
+            let packs = try await online.packs(flightId: flightId)
+            if let data = try? JSONEncoder.weatherBrief.encode(packs) {
+                try? await cache.writeFlightMetadata(data, flightId: flightId, name: "packs")
+            }
+            return packs
+        } catch {
+            if let data = await cache.readFlightMetadata(flightId: flightId, name: "packs"),
+               let cached = try? JSONDecoder.weatherBrief.decode([PackMetaResponse].self, from: data) {
+                Self.logger.info("Serving pack history from cache for \(flightId) (offline)")
+                return cached
+            }
+            throw error
+        }
     }
 
     func latestPack(flightId: String) async throws -> PackMetaResponse {
-        try await online.latestPack(flightId: flightId)
+        do {
+            let pack = try await online.latestPack(flightId: flightId)
+            if let data = try? JSONEncoder.weatherBrief.encode(pack) {
+                try? await cache.writeFlightMetadata(data, flightId: flightId, name: "latest-pack")
+            }
+            return pack
+        } catch {
+            if let data = await cache.readFlightMetadata(flightId: flightId, name: "latest-pack"),
+               let cached = try? JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: data) {
+                Self.logger.info("Serving latest pack from cache for \(flightId) (offline)")
+                return cached
+            }
+            throw error
+        }
     }
 
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {

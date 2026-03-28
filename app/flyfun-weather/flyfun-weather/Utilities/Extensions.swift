@@ -10,6 +10,16 @@ extension JSONDecoder {
     }()
 }
 
+extension JSONEncoder {
+    /// Shared encoder matching the WeatherBrief decoder (snake_case keys, ISO 8601 dates).
+    static nonisolated let weatherBrief: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+}
+
 extension DateFormatter {
     /// Short date format for flight cards (e.g. "Mar 15").
     static let shortDate: DateFormatter = {
