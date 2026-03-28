@@ -8,6 +8,30 @@ enum StorageKey: String {
     case selectedModel
 }
 
+#if targetEnvironment(simulator)
+/// Server environment toggle, available only in simulator builds.
+enum ServerEnvironment: String, CaseIterable {
+    case production = "prod"
+    case development = "dev"
+
+    var baseURL: URL {
+        switch self {
+        case .production:
+            URL(string: "https://weather.flyfun.aero")!
+        case .development:
+            URL(string: "https://localhost.ro-z.me:8000")!
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .production: "Production"
+        case .development: "Local Dev"
+        }
+    }
+}
+#endif
+
 /// Central app state: authentication, API client, repository.
 @Observable
 @MainActor
@@ -24,10 +48,22 @@ final class AppState {
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AppState")
 
-    #if DEBUG
-    static let defaultBaseURL = URL(string: "https://localhost.ro-z.me:8000")!
+    static let productionBaseURL = URL(string: "https://weather.flyfun.aero")!
+
+    #if targetEnvironment(simulator)
+    @ObservationIgnored
+    static var serverEnvironment: ServerEnvironment {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: "serverEnvironment"),
+                  let env = ServerEnvironment(rawValue: raw) else { return .production }
+            return env
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "serverEnvironment") }
+    }
+
+    static var defaultBaseURL: URL { serverEnvironment.baseURL }
     #else
-    static let defaultBaseURL = URL(string: "https://weather.flyfun.aero")!
+    static var defaultBaseURL: URL { productionBaseURL }
     #endif
 
     var isAuthenticated: Bool {
@@ -65,6 +101,18 @@ final class AppState {
         apiClient = nil
         repository = nil
     }
+
+    #if targetEnvironment(simulator)
+    /// Switch server environment and reconnect if authenticated.
+    func setServerEnvironment(_ env: ServerEnvironment) {
+        Self.serverEnvironment = env
+        Self.logger.info("Switched to \(env.label) (\(env.baseURL))")
+        // Re-setup client with new base URL if we have a JWT
+        if let jwt = secureStorage.wrappedValue, !jwt.isEmpty {
+            setupClient(jwt: jwt)
+        }
+    }
+    #endif
 
     // MARK: - Private
 

@@ -35,6 +35,25 @@ struct FlightListView: View {
             }
             .navigationTitle("Flights")
             .toolbar {
+                #if targetEnvironment(simulator)
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        ForEach(ServerEnvironment.allCases, id: \.self) { env in
+                            Button {
+                                appState.setServerEnvironment(env)
+                            } label: {
+                                if env == AppState.serverEnvironment {
+                                    Label(env.label, systemImage: "checkmark")
+                                } else {
+                                    Text(env.label)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Server", systemImage: "server.rack")
+                    }
+                }
+                #endif
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
                         appState.logout()
