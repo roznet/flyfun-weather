@@ -51,7 +51,8 @@ struct RouteMapView: View {
                             Image(systemName: "airplane")
                                 .font(.system(size: 28, weight: .bold))
                                 .foregroundStyle(.orange)
-                                .rotationEffect(.degrees(aircraftHeading))
+                                // SF Symbol "airplane" points right (90°); rotate so 0° = north
+                                .rotationEffect(.degrees(aircraftHeading - 90))
                                 .opacity(aircraftOpacity)
                                 .shadow(color: .black.opacity(0.5), radius: 3)
                         }

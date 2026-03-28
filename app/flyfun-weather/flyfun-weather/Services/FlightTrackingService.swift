@@ -130,6 +130,7 @@ final class FlightTrackingService: NSObject {
         // Project onto route using RouteGeometry
         var bestPerpDistance = Double.infinity
         var bestAlongDistance = 0.0
+        var bestSegmentIndex = 0
         let coord = location.coordinate
 
         for i in 0..<(routePoints.count - 1) {
@@ -144,13 +145,23 @@ final class FlightTrackingService: NSObject {
 
             if perpDist < bestPerpDistance {
                 bestPerpDistance = perpDist
+                bestSegmentIndex = i
                 bestAlongDistance = segStart.distanceFromOriginNm +
                     ratio * (segEnd.distanceFromOriginNm - segStart.distanceFromOriginNm)
             }
         }
 
         let altitudeFt = location.altitude * 3.28084 // meters to feet
-        let heading = location.course >= 0 ? location.course : 0
+
+        // Use GPS course if available, otherwise estimate from route segment bearing
+        let heading: Double
+        if location.course >= 0 {
+            heading = location.course
+        } else {
+            let segStart = routePoints[bestSegmentIndex].coordinate
+            let segEnd = routePoints[bestSegmentIndex + 1].coordinate
+            heading = Self.bearing(from: segStart, to: segEnd)
+        }
 
         projectedPosition = ProjectedPosition(
             distanceNm: bestAlongDistance,
@@ -160,6 +171,17 @@ final class FlightTrackingService: NSObject {
         )
 
         logger.info("Projected: \(bestAlongDistance, format: .fixed(precision: 1))nm along, \(Int(altitudeFt))ft, \(bestPerpDistance, format: .fixed(precision: 1))nm off-track")
+    }
+
+    /// Great-circle initial bearing from one coordinate to another, in degrees (0-360).
+    private static func bearing(from start: CLLocationCoordinate2D, to end: CLLocationCoordinate2D) -> Double {
+        let lat1 = start.latitude * .pi / 180
+        let lat2 = end.latitude * .pi / 180
+        let dLon = (end.longitude - start.longitude) * .pi / 180
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        let bearing = atan2(y, x) * 180 / .pi
+        return (bearing + 360).truncatingRemainder(dividingBy: 360)
     }
 }
 
