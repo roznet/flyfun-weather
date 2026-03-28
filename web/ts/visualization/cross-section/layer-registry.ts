@@ -124,7 +124,7 @@ const GRAMET_ENABLED: Record<string, boolean> = {
   'icing-ogimet-nwp-bands': true,
   'sfip-bands': false,
   'ieng-icing-bands': false,
-  'sld-bands': true,
+  'sld-bands': false,
   'cat-bands': true,
   'e-shear-bands': false,
   'inversion-bands': false,

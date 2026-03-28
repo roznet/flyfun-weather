@@ -32,7 +32,7 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 # Returns SoundingAnalysis | None (None if <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → nwp_value_preservation → enrich_lwc → clouds → cloud_top_uncertainty → inversions → nwp_clouds → sfip → ogimet_dd → ogimet_nwp → ieng → sld → precipitation → convective → vertical_motion → ceiling` (then post-pass: `e_shear` across all route points)
+Pipeline: `prepare → thermodynamics → nwp_value_preservation → enrich_lwc → clouds → cloud_top_uncertainty → inversions → nwp_clouds → sfip → ogimet_dd → ogimet_nwp → ieng → precipitation → sld → convective → vertical_motion → ceiling` (then post-pass: `e_shear` across all route points)
 
 Note: NWP value preservation (attaching `nwp_cape_jkg` etc. to indices) must run before any consumer of `_effective_cape()` — i.e. before icing, cloud top uncertainty, and convective assessment.
 
@@ -209,7 +209,7 @@ Default changed from True to False — was producing too-conservative results fo
 
 - Adjacent levels grouped into zones (gap ≤ 100 hPa / 30 hPa pressure gap between levels)
 - Minimum zone thickness: single-level zones expanded to ±500ft (1000ft total) for cross-section visibility
-- SLD detection: **disabled** — heuristics too sensitive for available data resolution
+- SLD detection: warm-nose freezing rain only (active). Collision-coalescence mechanism disabled — over-triggers on common deep stratiform clouds. See `designs/future/known-issues.md`.
 
 ### CLW/ICMR Interpolation
 

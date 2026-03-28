@@ -65,7 +65,7 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 | Ogimet-NWP bands | Ogimet-NWP | icing | `icing-ogimet-nwp-bands.ts` | **on** | NWP cloud-fraction-scaled Ogimet index with glaciation |
 | SFIP bands | SFIP-NWP | icing | `sfip-bands.ts` | off | Fuzzy-logic SFIP icing index |
 | IENG bands | IENG | icing | `ieng-icing-bands.ts` | off | Cloud-fraction-weighted Ogimet without glaciation (CloudPath method) |
-| SLD bands | SLD | icing | `sld-bands.ts` | off | Supercooled Large Droplet detection from CLMR/ICMR (GFS-only) |
+| SLD bands | SLD | icing | `sld-bands.ts` | off | SLD from warm-nose freezing rain (experimental, all models) |
 | CAT bands | CAT (Ri) | turbulence | `cat-bands.ts` | on | Richardson number turbulence |
 | E-Shear bands | CAT (E-Shear) | turbulence | `e-shear-bands.ts` | off | Vertical + horizontal wind shear E parameter (CloudPath method) |
 | Inversion bands | Inversions | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
@@ -101,7 +101,7 @@ PREFERRED_METHOD_LAYER = {
 
 Layer presets provide one-click configurations. Currently one preset:
 
-**GRAMET** — Autorouter-style: Soft NWP clouds + Ogimet-NWP icing + SLD + CAT (Ri) + NWP Convective + freezing level + terrain + cruise altitude. Also switches to the GRAMET theme. Selecting "Custom" reverts to user's previous layer state.
+**GRAMET** — Autorouter-style: Soft NWP clouds + Ogimet-NWP icing + CAT (Ri) + NWP Convective + freezing level + terrain + cruise altitude. Also switches to the GRAMET theme. Selecting "Custom" reverts to user's previous layer state. (SLD is excluded from GRAMET — experimental.)
 
 Presets defined in `layer-registry.ts` as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides.
 
