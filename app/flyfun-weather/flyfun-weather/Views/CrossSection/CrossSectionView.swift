@@ -6,6 +6,7 @@ private let logger = Logger(subsystem: "aero.flyfun.weather", category: "CrossSe
 /// SwiftUI Canvas wrapper for the cross-section visualization.
 struct CrossSectionView: View {
     let viewModel: BriefingViewModel
+    var trackingService: FlightTrackingService
     @State private var csVM = CrossSectionViewModel()
     @State private var selectedPointIndex: Int?
     @State private var canvasSize: CGSize = .zero
@@ -48,9 +49,18 @@ struct CrossSectionView: View {
     @ViewBuilder
     private var crossSectionCanvas: some View {
         if let vizData = csVM.vizData {
+            // Read observable values here (view body) so SwiftUI tracks changes.
+            // Canvas closures are @escaping — observation doesn't work inside them.
+            // locationUpdateCount forces re-evaluation since CLLocation is a reference type.
+            let _ = trackingService.locationUpdateCount
+            let aircraft = aircraftPosition
+            let selectedNm = selectedDistanceNm
+            let layers = csVM.enabledLayers
+
             Canvas { context, size in
-                CrossSectionRenderer(data: vizData, enabledLayers: csVM.enabledLayers,
-                                     selectedDistanceNm: selectedDistanceNm)
+                CrossSectionRenderer(data: vizData, enabledLayers: layers,
+                                     selectedDistanceNm: selectedNm,
+                                     aircraftPosition: aircraft)
                     .render(context: &context, size: size)
             }
             .frame(minHeight: 300)
@@ -108,6 +118,12 @@ struct CrossSectionView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
+    }
+
+    /// Aircraft position for cross-section overlay, from flight tracking service.
+    private var aircraftPosition: CrossSectionRenderer.AircraftPosition? {
+        guard trackingService.isTracking, let pos = trackingService.projectedPosition else { return nil }
+        return .init(distanceNm: pos.distanceNm, altitudeFt: pos.altitudeFt, opacity: pos.opacity)
     }
 
     /// Distance along route for the selected point, used to draw the vertical indicator.

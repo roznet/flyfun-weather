@@ -5,6 +5,14 @@ struct CrossSectionRenderer {
     let data: VizRouteData
     let enabledLayers: [String: Bool]
     var selectedDistanceNm: Double?
+    var aircraftPosition: AircraftPosition?
+
+    /// Lightweight position data for rendering the aircraft icon on the cross-section.
+    struct AircraftPosition {
+        let distanceNm: Double
+        let altitudeFt: Double
+        let opacity: Double
+    }
 
     func render(context: inout GraphicsContext, size: CGSize) {
         let transform = CoordTransform(
@@ -38,6 +46,11 @@ struct CrossSectionRenderer {
             selPath.move(to: CGPoint(x: x, y: transform.plotArea.top))
             selPath.addLine(to: CGPoint(x: x, y: transform.plotArea.bottom))
             clipped.stroke(selPath, with: .color(.orange), lineWidth: 1.5)
+        }
+
+        // Aircraft position icon
+        if let aircraft = aircraftPosition {
+            drawAircraft(context: &clipped, transform: transform, position: aircraft)
         }
 
         // Axes and grid (drawn outside clip)
@@ -108,6 +121,36 @@ struct CrossSectionRenderer {
             let text = context.resolve(Text(wp.icao).font(.system(size: 8, weight: .bold)).foregroundColor(textColor))
             context.draw(text, at: CGPoint(x: x, y: plot.top - 4), anchor: .bottom)
         }
+    }
+
+    // MARK: - Aircraft icon
+
+    private func drawAircraft(context: inout GraphicsContext, transform: CoordTransform, position: AircraftPosition) {
+        let x = transform.distanceToX(position.distanceNm)
+        // Clamp Y so the icon stays visible even at 0ft (don't let it clip below plot)
+        let rawY = transform.altitudeToY(position.altitudeFt)
+        let y = min(rawY, transform.plotArea.bottom - 12)
+        let point = CGPoint(x: x, y: y)
+
+        // Resolve SF Symbol as side-view airplane
+        let symbol = context.resolve(
+            Text(Image(systemName: "airplane"))
+                .font(.system(size: 22, weight: .bold))
+                .foregroundColor(.orange.opacity(position.opacity))
+        )
+        context.draw(symbol, at: point, anchor: .center)
+
+        // Small crosshair at aircraft position for precision
+        let crossSize: CGFloat = 4
+        var hLine = Path()
+        hLine.move(to: CGPoint(x: x - crossSize, y: y))
+        hLine.addLine(to: CGPoint(x: x + crossSize, y: y))
+        var vLine = Path()
+        vLine.move(to: CGPoint(x: x, y: y - crossSize))
+        vLine.addLine(to: CGPoint(x: x, y: y + crossSize))
+        let crossColor = Color.orange.opacity(position.opacity * 0.5)
+        context.stroke(hLine, with: .color(crossColor), lineWidth: 0.5)
+        context.stroke(vLine, with: .color(crossColor), lineWidth: 0.5)
     }
 
     private func altitudeTickInterval(_ maxAlt: Double) -> Double {
