@@ -25,7 +25,7 @@ final class AppState {
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AppState")
 
     #if DEBUG
-    static let defaultBaseURL = URL(string: "https://weather.flyfun.aero")!
+    static let defaultBaseURL = URL(string: "https://localhost.ro-z.me:8000")!
     #else
     static let defaultBaseURL = URL(string: "https://weather.flyfun.aero")!
     #endif

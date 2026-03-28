@@ -4,6 +4,7 @@ import MapKit
 /// Native map showing route polyline and waypoint annotations.
 struct RouteMapView: View {
     let viewModel: BriefingViewModel
+    var trackingService: FlightTrackingService
     @State private var mapVM = RouteMapViewModel()
 
     var body: some View {
@@ -18,6 +19,13 @@ struct RouteMapView: View {
                     ProgressView()
                 }
             } else {
+                // Read observable values in view body — Map content builder is @escaping.
+                // locationUpdateCount forces re-evaluation since CLLocation is a reference type.
+                let _ = trackingService.locationUpdateCount
+                let isTracking = trackingService.isTracking
+                let aircraftLocation = trackingService.currentLocation
+                let aircraftOpacity = trackingService.projectedPosition?.opacity ?? 0.3
+                let aircraftHeading = trackingService.projectedPosition?.headingDeg ?? 0
                 Map(initialPosition: .region(mapVM.mapRegion)) {
                     MapPolyline(coordinates: mapVM.routeCoordinates)
                         .stroke(.blue, lineWidth: 3)
@@ -35,6 +43,19 @@ struct RouteMapView: View {
                                     .frame(width: 8, height: 8)
                             }
                         }
+                    }
+
+                    // Live aircraft position — drawn last so it renders on top
+                    if isTracking, let location = aircraftLocation {
+                        Annotation("", coordinate: location.coordinate, anchor: .center) {
+                            Image(systemName: "airplane")
+                                .font(.system(size: 28, weight: .bold))
+                                .foregroundStyle(.orange)
+                                .rotationEffect(.degrees(aircraftHeading))
+                                .opacity(aircraftOpacity)
+                                .shadow(color: .black.opacity(0.5), radius: 3)
+                        }
+                        .annotationTitles(.hidden)
                     }
                 }
                 .mapStyle(.standard(elevation: .realistic))

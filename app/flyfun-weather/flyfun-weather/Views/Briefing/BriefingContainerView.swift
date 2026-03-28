@@ -1,3 +1,4 @@
+import CoreLocation
 import SwiftUI
 
 /// Tab-based briefing viewer for a single flight.
@@ -5,13 +6,23 @@ struct BriefingContainerView: View {
     let flight: FlightResponse
     @Environment(AppState.self) private var appState
     @State private var viewModel: BriefingViewModel?
+    @State private var trackingService = FlightTrackingService()
+
+    /// Whether the current time is within the flight tracking window (departure - 2h to departure + duration + 2h).
+    private var isInFlightWindow: Bool {
+        guard let departure = flight.departureDate else { return false }
+        let windowStart = departure.addingTimeInterval(-2 * 3600)
+        let windowEnd = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
+        let now = Date()
+        return now >= windowStart && now <= windowEnd
+    }
 
     var body: some View {
         Group {
             if let viewModel {
                 VStack(spacing: 0) {
                     RefreshBannerView(state: viewModel.refreshState)
-                    BriefingContentView(viewModel: viewModel)
+                    BriefingContentView(viewModel: viewModel, trackingService: trackingService)
                 }
             } else {
                 ProgressView("Loading briefing...")
@@ -22,7 +33,8 @@ struct BriefingContainerView: View {
         .toolbar {
             if let viewModel {
                 ToolbarItem(placement: .topBarTrailing) {
-                    BriefingToolbarView(viewModel: viewModel)
+                    BriefingToolbarView(viewModel: viewModel, trackingService: trackingService,
+                                        isInFlightWindow: isInFlightWindow, startTracking: startTracking)
                 }
             }
         }
@@ -34,14 +46,48 @@ struct BriefingContainerView: View {
             await vm.checkActiveRefresh()
         }
     }
+
+    private func startTracking() {
+        guard let viewModel,
+              case .loaded(let analyses) = viewModel.routeAnalysesState else { return }
+        guard let departure = flight.departureDate else { return }
+
+        let routePoints = analyses.analyses.map { rpa in
+            TrackingRoutePoint(
+                coordinate: .init(latitude: rpa.lat, longitude: rpa.lon),
+                distanceFromOriginNm: rpa.distanceFromOriginNm
+            )
+        }
+        let flightEndTime = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
+        trackingService.start(routePoints: routePoints, flightEndTime: flightEndTime)
+    }
 }
 
-/// Toolbar with pack history picker and refresh button.
+/// Toolbar with pack history picker, flight tracking, and refresh button.
 private struct BriefingToolbarView: View {
     @Bindable var viewModel: BriefingViewModel
+    var trackingService: FlightTrackingService
+    var isInFlightWindow: Bool
+    var startTracking: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
+            // Start / Stop Flight button
+            if isInFlightWindow {
+                Button {
+                    if trackingService.isTracking {
+                        trackingService.stop()
+                    } else {
+                        startTracking()
+                    }
+                } label: {
+                    Label(trackingService.isTracking ? "Stop" : "Start",
+                          systemImage: trackingService.isTracking ? "location.fill" : "location")
+                        .font(.caption)
+                        .foregroundStyle(trackingService.isTracking ? .red : .accentColor)
+                }
+            }
+
             // Pack history picker
             if viewModel.packHistory.count > 1 {
                 Menu {
@@ -184,6 +230,7 @@ private struct RefreshBannerView: View {
 /// Inner content once the view model is ready.
 private struct BriefingContentView: View {
     @Bindable var viewModel: BriefingViewModel
+    var trackingService: FlightTrackingService
 
     var body: some View {
         TabView(selection: $viewModel.selectedTab) {
@@ -192,11 +239,11 @@ private struct BriefingContentView: View {
             }
 
             Tab("Cross-Section", systemImage: "chart.xyaxis.line", value: BriefingTab.crossSection) {
-                CrossSectionView(viewModel: viewModel)
+                CrossSectionView(viewModel: viewModel, trackingService: trackingService)
             }
 
             Tab("Map", systemImage: "map", value: BriefingTab.map) {
-                RouteMapView(viewModel: viewModel)
+                RouteMapView(viewModel: viewModel, trackingService: trackingService)
             }
 
             Tab("Digest", systemImage: "doc.text", value: BriefingTab.digest) {
