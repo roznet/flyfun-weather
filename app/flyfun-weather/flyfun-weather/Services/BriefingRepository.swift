@@ -3,6 +3,8 @@ import Foundation
 /// Abstraction over briefing data access.
 protocol BriefingRepository: Sendable {
     func flights() async throws -> [FlightResponse]
+    func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse
+    func parseFpl(_ text: String) async throws -> ParseFplResponse
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
@@ -27,6 +29,16 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func flights() async throws -> [FlightResponse] {
         try await client.request("/api/flights")
+    }
+
+    func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/flights", method: "POST", body: body)
+    }
+
+    func parseFpl(_ text: String) async throws -> ParseFplResponse {
+        let body = try JSONEncoder.weatherBrief.encode(ParseFplRequest(fplText: text))
+        return try await client.request("/api/flights/parse-fpl", method: "POST", body: body)
     }
 
     func packs(flightId: String) async throws -> [PackMetaResponse] {
