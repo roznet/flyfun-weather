@@ -130,12 +130,19 @@ async def lifespan(app: FastAPI):
 
         scheduler_task = asyncio.create_task(run_scheduler_loop(app.state))
 
+    retention_task = None
+    if os.environ.get("DISABLE_RETENTION") != "1":
+        from weatherbrief.scheduler import run_retention_loop
+
+        retention_task = asyncio.create_task(run_retention_loop(app.state))
+
     yield
 
-    if scheduler_task:
-        scheduler_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await scheduler_task
+    for task in (scheduler_task, retention_task):
+        if task:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 def create_app() -> FastAPI:
