@@ -33,6 +33,16 @@ final class CachingBriefingRepository: BriefingRepository {
         self.cache = cache
     }
 
+    // MARK: - Flight creation (pass-through, no caching)
+
+    func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
+        try await online.createFlight(request)
+    }
+
+    func parseFpl(_ text: String) async throws -> ParseFplResponse {
+        try await online.parseFpl(text)
+    }
+
     // MARK: - Metadata with offline fallback
 
     func flights() async throws -> [FlightResponse] {

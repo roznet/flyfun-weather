@@ -3,9 +3,11 @@ import SwiftUI
 /// Main screen showing the user's saved flights with sidebar/detail split on iPad.
 struct FlightListView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openURL) private var openURL
     @State private var viewModel: FlightListViewModel?
     @State private var selectedFlight: FlightResponse?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var showAddFlight = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -13,11 +15,7 @@ struct FlightListView: View {
                 if let viewModel {
                     LoadingStateView(state: viewModel.state, retryAction: viewModel.loadFlights) { flights in
                         if flights.isEmpty {
-                            ContentUnavailableView(
-                                "No Flights",
-                                systemImage: "airplane",
-                                description: Text("Create a flight on weather.flyfun.aero to see it here.")
-                            )
+                            emptyStateView
                         } else {
                             List(flights, selection: $selectedFlight) { flight in
                                 NavigationLink(value: flight) {
@@ -55,8 +53,25 @@ struct FlightListView: View {
                 }
                 #endif
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
-                        appState.logout()
+                    HStack(spacing: 12) {
+                        Button {
+                            showAddFlight = true
+                        } label: {
+                            Label("Add Flight", systemImage: "plus")
+                        }
+                        Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
+                            appState.logout()
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showAddFlight) {
+                if let repo = appState.repository {
+                    AddFlightView(repository: repo) { flight in
+                        Task {
+                            await viewModel?.loadFlights()
+                            selectedFlight = flight
+                        }
                     }
                 }
             }
@@ -74,6 +89,30 @@ struct FlightListView: View {
             let vm = FlightListViewModel(repository: repo)
             viewModel = vm
             await vm.loadFlights()
+        }
+    }
+
+    private var emptyStateView: some View {
+        ContentUnavailableView {
+            Label("No Flights", systemImage: "airplane")
+        } description: {
+            Text("Create a flight here or on the website to get started.")
+        } actions: {
+            VStack(spacing: 12) {
+                Button {
+                    showAddFlight = true
+                } label: {
+                    Label("New Flight", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    openURL(AppState.defaultBaseURL)
+                } label: {
+                    Label("Open Website", systemImage: "safari")
+                }
+                .buttonStyle(.bordered)
+            }
         }
     }
 }
