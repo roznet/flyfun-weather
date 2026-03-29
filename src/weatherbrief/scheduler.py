@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 _POLL_INTERVAL_SECONDS = 600  # 10 minutes
 _STARTUP_DELAY_SECONDS = 30
 _PREFLIGHT_LEAD_HOURS = 2
+_RETENTION_INTERVAL_SECONDS = 86_400  # 24 hours
+_RETENTION_STARTUP_DELAY_SECONDS = 120  # let auto-refresh settle first
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -261,3 +263,41 @@ def _try_send_email(
         logger.info("Auto-refresh email sent for %s to %s", flight.id, user.email)
     except Exception:
         logger.warning("Auto-refresh email failed for %s", flight.id, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Retention loop
+# ---------------------------------------------------------------------------
+
+
+async def run_retention_loop(app_state) -> None:
+    """Periodic retention — started as an asyncio task from app lifespan.
+
+    Runs once per day, purging old pack artifacts according to the
+    tiered retention policy (see :mod:`weatherbrief.tasks.retention`).
+    """
+    logger.info("Retention loop started (every %ds)", _RETENTION_INTERVAL_SECONDS)
+    await asyncio.sleep(_RETENTION_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            await asyncio.to_thread(_run_retention_once)
+        except Exception:
+            logger.error("Retention cycle failed", exc_info=True)
+        await asyncio.sleep(_RETENTION_INTERVAL_SECONDS)
+
+
+def _run_retention_once() -> None:
+    """Execute a single retention pass (called in a thread)."""
+    from weatherbrief.tasks.retention import RetentionConfig, run_retention
+
+    db = SessionLocal()
+    try:
+        config = RetentionConfig.from_env()
+        run_retention(db, config)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
