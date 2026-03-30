@@ -304,28 +304,6 @@ WHERE p.pack_id IS NOT NULL
 
 Over time this builds a dataset of NWP model accuracy at GA-relevant altitudes in European airspace — something met offices don’t currently track.
 
------
-
-## Phase 8 — Flysto G1000 Integration (Future)
-
-Flysto already has an existing API relationship. Extend to pull G1000 flight data:
-
-**Data of interest per forecast interpolation point (~20nm spacing):**
-
-- Pressure altitude (better than GPS for model level matching)
-- OAT — direct comparison to model temperature
-- Derived wind (direction + speed)
-- GPS position + timestamp
-
-**Filter to cruise segments only** — exclude climbs, descents, turns (G1000 wind derivation is noisy in manoeuvres).
-
-**Framing for Flysto partnership:**
-
-> “Our users overlap. Flysto pilots get post-flight weather accuracy feedback. You get a differentiating feature. We get validation data.”
-
-Not a data request — a joint feature.
-
------
 
 ## PIREP Data Format
 
