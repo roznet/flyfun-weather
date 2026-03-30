@@ -25,14 +25,12 @@ def _table_exists(name: str) -> bool:
     return name in insp.get_table_names()
 
 
-def _index_exists(name: str) -> bool:
+def _index_exists(table: str, name: str) -> bool:
     conn = op.get_bind()
     insp = sa.inspect(conn)
-    for table in insp.get_table_names():
-        for idx in insp.get_indexes(table):
-            if idx["name"] == name:
-                return True
-    return False
+    if table not in insp.get_table_names():
+        return False
+    return any(idx["name"] == name for idx in insp.get_indexes(table))
 
 
 def upgrade() -> None:
@@ -76,7 +74,7 @@ def upgrade() -> None:
             ),
         )
 
-    if not _index_exists("ix_pireps_observed_at"):
+    if not _index_exists("pireps", "ix_pireps_observed_at"):
         op.create_index("ix_pireps_observed_at", "pireps", ["observed_at"])
 
     if not _table_exists("device_tokens"):
@@ -96,5 +94,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("device_tokens")
-    op.drop_index("ix_pireps_observed_at", table_name="pireps")
+    # Drop index before table on MySQL; on SQLite drop_table removes indexes.
+    if _index_exists("pireps", "ix_pireps_observed_at"):
+        op.drop_index("ix_pireps_observed_at", table_name="pireps")
     op.drop_table("pireps")
