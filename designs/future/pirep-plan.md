@@ -47,7 +47,7 @@ temp_c                  FLOAT NULL
 wind_dir                INT NULL
 wind_speed_kt           INT NULL
 remarks                 TEXT NULL
-aircraft_type           VARCHAR(10) NULL    -- e.g. SR22, C172 — affects intensity interpretation
+aircraft_id             INT NULL            -- FK to user_aircraft(id), see prerequisite below
 pack_id                 INT NULL            -- FK to briefing_packs(id), enables prediction vs observation research
 source                  ENUM('manual','inflight','postflight') DEFAULT 'manual'
 user_id                 VARCHAR(64) NULL    -- FK to users(id), nullable for anonymous
@@ -514,7 +514,7 @@ Follows US PIREP structure with additions for ceiling/tops:
 |----------------------|-------------------|---------------------------------------------------|
 |Location + time       |UL + TM            |From GPS                                           |
 |Altitude              |FL                 |GPS pre-filled, editable                           |
-|Aircraft type         |TP                 |From user profile                                  |
+|Aircraft              |TP                 |From user_aircraft registry (ICAO type + tail number)|
 |Cloud/ceiling         |SK                 |Added ceiling MSL field                            |
 |Cloud tops            |SK                 |Added tops + observed/estimated flag               |
 |Icing intensity + type|IC                 |NONE/TRACE/LIGHT/MODERATE/SEVERE + RIME/CLEAR/MIXED|
@@ -536,15 +536,73 @@ Follows US PIREP structure with additions for ceiling/tops:
 
 -----
 
+## Prerequisite: Aircraft Registry
+
+**Separate feature, implemented before PIREPs.** A user-managed list of aircraft, required so PIREPs can link to an `aircraft_id` with known ICAO type for icing/turbulence intensity interpretation.
+
+### `icao_aircraft_types` (reference table)
+
+```sql
+id                      INT PRIMARY KEY AUTO_INCREMENT
+icao_code               VARCHAR(4) UNIQUE NOT NULL  -- e.g. SR22, C172, PA28, DA40
+manufacturer            VARCHAR(100)                -- e.g. Cirrus, Cessna, Piper, Diamond
+model                   VARCHAR(100)                -- e.g. SR22, 172S Skyhawk, Warrior III, DA40 NG
+category                ENUM('SEP','MEP','SET','MET','JET') NULL  -- for filtering
+```
+
+Pre-populated with common GA types. Searchable by ICAO code, manufacturer, or model name. Source: ICAO DOC 8643 aircraft type designators, filtered to GA-relevant entries.
+
+### `user_aircraft`
+
+```sql
+id                      INT PRIMARY KEY AUTO_INCREMENT
+user_id                 VARCHAR(64) NOT NULL  -- FK to users(id)
+icao_type_id            INT NOT NULL          -- FK to icao_aircraft_types(id)
+tail_number             VARCHAR(10) NULL      -- e.g. N12345, G-ABCD, HB-XYZ
+nickname                VARCHAR(50) NULL      -- e.g. "Club SR22", "My Archer"
+is_default              BOOLEAN DEFAULT FALSE -- default aircraft for new flights/PIREPs
+created_at              DATETIME UTC
+```
+
+### API endpoints
+
+```
+GET    /api/aircraft-types?q=SR2       # Search ICAO types (autocomplete)
+GET    /api/aircraft                    # List user's aircraft
+POST   /api/aircraft                    # Add aircraft to user's list
+PUT    /api/aircraft/{id}               # Update tail number, nickname, default
+DELETE /api/aircraft/{id}               # Remove from user's list
+```
+
+This is a standalone feature — useful for flight profiles too (link `FlightProfileRow` to a `user_aircraft` entry). Implement as a separate issue/PR before the PIREP work begins.
+
+-----
+
 ## Implementation Sequence
 
-1. **Alembic migration** — 5 new tables (pireps, device_tokens, route_watches, airport_watches, notification_log), no existing schema changes
+### Milestone 0 — Aircraft Registry (prerequisite, separate PR)
+1. **Alembic migration** — `icao_aircraft_types` + `user_aircraft` tables
+1. **Seed ICAO types** — import GA-relevant subset of DOC 8643
+1. **API endpoints** — CRUD + type search
+1. **UI** — aircraft picker in flight profile settings
+
+### Milestone 1 — PIREP Publish & View
+1. **Alembic migration** — `pireps` table (include `device_tokens` table now so it's ready for Milestone 2)
+1. **FastAPI endpoints** — PIREP submit, batch submit, query by flight/pack/bounds/time range
+1. **Retention integration** — exempt PIREP-linked packs from T1/T2 cleanup
+1. **Web app PIREP viewer** — PIREPs tab with list view, fog-of-war map, detail cards, flight briefing integration
+1. **iOS reporting card** — prediction-guided inflight UI with offline sync
+
+### Milestone 2 — Notifications (builds on Milestone 1)
+1. **Alembic migration** — `route_watches`, `airport_watches`, `notification_log` tables
 1. **Shapely spatial matching** — standalone utility, easily testable
-1. **FastAPI endpoints** — PIREP submit + query + watch registration
-1. **Web app PIREP viewer** — list view, map with fog-of-war overlay, detail cards
+1. **Watch endpoints** — route/airport watch CRUD, device token upsert
 1. **APNs p8 setup** — generate key in Apple Developer Portal, implement `notify/apns.py`
-1. **iOS reporting card** — inflight contextual UI
-1. **Post-flight debrief screen**
+1. **Notification trigger** — matching, rate limiting, coalescing, flight window checks
+
+### Milestone 3 — Post-Flight & Validation
+1. **Post-flight debrief screen** — segment-level assessment
+1. **Model validation tooling** — prediction reconstruction, comparison queries
 
 -----
 
