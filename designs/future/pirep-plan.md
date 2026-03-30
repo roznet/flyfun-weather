@@ -194,14 +194,22 @@ def find_matching_airport_watches(pirep_lat, pirep_lon, airport_watches):
 Add to existing API structure under `src/weatherbrief/api/`.
 
 ```
-POST   /api/pireps                  # Submit a PIREP
-GET    /api/pireps?flight_id=X      # List PIREPs for a route (with age filter)
+POST   /api/pireps                  # Submit a single PIREP
+POST   /api/pireps/batch            # Submit multiple PIREPs (offline sync)
+GET    /api/pireps?flight_id=X      # List PIREPs linked to a flight
+GET    /api/pireps?pack_id=X        # List PIREPs linked to a briefing pack
 GET    /api/pireps?airport=EGTF     # List PIREPs near airport
+GET    /api/pireps?bounds=...&hours=6  # Map viewport query (Phase 5)
+GET    /api/pireps?from=...&to=...  # Historical range query (Phase 5)
 POST   /api/watches/route           # Register route watch
 DELETE /api/watches/route/{id}      # Cancel route watch
 POST   /api/watches/airport         # Register airport watch
 PUT    /api/device-token            # Upsert APNs device token (call on every app launch)
 ```
+
+### Flight-linked PIREPs in briefing view
+
+When a PIREP has a `pack_id`, it appears in the flight's briefing view as a **PIREPs** section (alongside advisories, cross-section, etc.). This shows all PIREPs linked to that flight's packs as a chronological list with the same detail card as the standalone viewer. This is the primary way pilots review their own reports and see community reports along their route after a briefing.
 
 ### Device token upsert (call on every app launch)
 
@@ -385,6 +393,52 @@ Cloud tops (optional):  [_____] ft  [ Observed above ] [ Estimated ]
 - Editable number pad if pilot wants to enter indicated altitude
 - Record both GPS altitude and reported altitude separately in DB
 
+### Offline sync
+
+PIREPs created without connectivity are stored locally in the iOS app (Core Data or similar) and synced when the network is available. This requires careful handling to avoid stale notifications and duplicates.
+
+#### Client-side
+
+- Each PIREP gets a `client_uuid` (UUID v4) at creation time, stored locally
+- Local PIREPs are marked with a `synced` flag (false until server confirms)
+- On connectivity restore, the app submits all unsynced PIREPs in `observed_at` order
+- If the server returns 409 Conflict (duplicate `client_uuid`), mark as synced and move on
+- The app submits all pending PIREPs in a single batch request to `POST /api/pireps/batch`
+
+#### Server-side
+
+- `POST /api/pireps/batch` accepts an array of PIREPs, processes each individually
+- Deduplication via `client_uuid` UNIQUE constraint — duplicate inserts return 409, not 500
+- For each accepted PIREP, compute `sync_delay = submitted_at - observed_at`
+
+#### Notification rules for late-synced PIREPs
+
+Late-arriving PIREPs are still valuable as data (stored permanently for model validation), but notifications must not mislead:
+
+- **`sync_delay` ≤ 30 minutes:** send notifications normally — weather conditions are still broadly relevant
+- **`sync_delay` > 30 minutes:** store the PIREP but **suppress all push notifications** — the weather has likely changed and alerting would be misleading
+- **Flight window check:** even for fresh PIREPs, only send notifications to route watches whose `active_from`/`active_to` window is currently active. Don't notify for watches whose flight has already landed.
+
+#### Batch notification coalescing
+
+When multiple PIREPs sync at once (common after landing and reconnecting):
+
+- Group by matching watch (same `watch_id` + `watch_type`)
+- If multiple PIREPs match the same watch within a 5-minute processing window, coalesce into a single notification:
+  ```json
+  {
+    "aps": {
+      "alert": {
+        "title": "3 new PIREPs — EGTF→LSGS route",
+        "body": "Moderate icing FL085, Light turbulence FL065, Clear FL045"
+      }
+    },
+    "pirep_ids": [123, 124, 125],
+    "flight_id": 456
+  }
+  ```
+- Use the highest severity among the batch for the `min_severity` threshold check — if any PIREP in the batch meets the watch's threshold, send the coalesced notification
+
 -----
 
 ## Phase 7 — Post-Flight Debrief
@@ -418,6 +472,26 @@ WHERE p.pack_id IS NOT NULL
 
 Over time this builds a dataset of NWP model accuracy at GA-relevant altitudes in European airspace — something met offices don’t currently track.
 
+### Data Retention
+
+PIREPs are **never deleted**. They form a permanent observation dataset for model validation research.
+
+Briefing packs linked to PIREPs are **exempt from retention cleanup**. The existing tiered retention system (`tasks/retention.py`) must check for linked PIREPs before pruning:
+
+- **T1 (strip heavy artifacts):** skip packs that have at least one linked PIREP — the full forecast data (`forecasts.json`, `cross_section.json`) is needed to compare predictions against observations
+- **T2 (delete pack entirely):** skip packs with linked PIREPs entirely
+
+Implementation: add a subquery check in the retention task:
+```python
+# In retention.py, when selecting packs for cleanup:
+# Exclude packs that have linked PIREPs
+packs_with_pireps = select(PirepRow.pack_id).where(PirepRow.pack_id.isnot(None)).distinct()
+query = query.where(BriefingPackRow.id.notin_(packs_with_pireps))
+```
+
+This ensures every PIREP retains its full forecast context for retrospective analysis indefinitely.
+
+-----
 
 ## PIREP Data Format
 
