@@ -94,6 +94,7 @@ radius_km               INT DEFAULT 30
 min_severity            ENUM('any','light','moderate','severe') DEFAULT 'moderate'
 quiet_hours_start       INT NULL            -- hour UTC e.g. 22
 quiet_hours_end         INT NULL            -- hour UTC e.g. 6
+created_at              DATETIME UTC
 ```
 
 ### `notification_log`
@@ -120,7 +121,7 @@ pirep_can_publish       BOOLEAN DEFAULT FALSE   -- can submit PIREPs
 
 **Initial rollout:** both flags default to FALSE. Admin enables for beta testers.
 
-**Post-rollout:** `pirep_can_view` is removed or ignored — all authenticated users can see PIREPs. `pirep_can_publish` remains as a permanent gate (requires opt-in or admin approval).
+**Post-rollout:** `pirep_can_view` is removed or ignored — all authenticated users can see PIREPs. `pirep_can_publish` remains as a gate — long-term, all approved users will have it enabled by default, but the flag is kept so admin can disable individual users who abuse the system.
 
 The API enforces these permissions:
 - `POST /api/pireps` requires `pirep_can_publish`
@@ -216,7 +217,12 @@ PUT    /api/device-token            # Upsert APNs device token (call on every ap
 
 ### Flight-linked PIREPs in briefing view
 
-When a PIREP has a `pack_id`, it appears in the flight's briefing view as a **PIREPs** section (alongside advisories, cross-section, etc.). This shows all PIREPs linked to that flight's packs as a chronological list with the same detail card as the standalone viewer. This is the primary way pilots review their own reports and see community reports along their route after a briefing.
+The flight briefing view includes a **PIREPs** section (alongside advisories, cross-section, etc.) showing two categories:
+
+1. **Own PIREPs** — PIREPs linked to this flight's packs via `pack_id` (the pilot's own inflight and postflight reports)
+2. **Community PIREPs** (M2+) — PIREPs from other pilots within the route corridor and flight time window, found via spatial matching against the flight's waypoints. Same corridor logic as route watches.
+
+Both are shown as a chronological list with the same detail card as the standalone viewer. Own PIREPs are always available (M1); community PIREPs require the spatial matching from M2.
 
 ### Submission endpoint flow (POST /api/pireps)
 
@@ -317,7 +323,7 @@ PIREP stored
 
 ## Web App PIREP Viewer (Milestone 1)
 
-Requires `pirep_can_view` permission. New **PIREPs** tab in the web app briefing view.
+Requires `pirep_can_view` permission (beta) or authenticated user (post-rollout). New **PIREPs** tab in the web app briefing view.
 
 ### Two views
 
@@ -340,10 +346,10 @@ Requires `pirep_can_view` permission. New **PIREPs** tab in the web app briefing
 - Icing: snowflake
 - Turbulence: zigzag
 - Cloud/ceiling: cloud
-- Multiple hazards: stacked or combined icon
+- Multiple hazards: split icon (e.g., snowflake + zigzag) — one marker per PIREP, not per hazard
 - "None" reports (pilot confirmed clear): checkmark — these are valuable data too
 
-**Severity** — marker color:
+**Severity** — marker color (uses highest severity across all reported hazards):
 - None/clear: green
 - Trace/light: yellow
 - Moderate: orange
@@ -509,9 +515,10 @@ Validation queries reconstruct predictions by loading the linked pack’s foreca
 # Pseudocode: reconstruct prediction vs observation for a PIREP
 pirep = get_pirep(pirep_id)
 pack = load_pack(pirep.pack_id)  # retained indefinitely due to PIREP link
+altitude = pirep.gps_altitude_ft or pirep.reported_altitude_ft
 forecast_at_pirep = interpolate_forecast(
     pack.forecasts, pirep.latitude, pirep.longitude,
-    pirep.gps_altitude_ft, pirep.observed_at
+    altitude, pirep.observed_at
 )
 comparison = {
     "observed_icing": pirep.icing_intensity,
