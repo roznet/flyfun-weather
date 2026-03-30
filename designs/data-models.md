@@ -197,6 +197,7 @@ Flight(
     flight_ceiling_ft=18000,
     flight_duration_hours=4.5,
     profile_id=1,  # optional FK → FlightProfile, SET NULL on delete
+    aircraft_id=3,  # optional FK → UserAircraftRow, SET NULL on delete
     created_at=datetime(...),
 )
 # Backward-compat computed fields (auto-derived from departure_time):
@@ -206,6 +207,7 @@ flight.target_time_utc  # → 9
 
 - `departure_time` is the canonical field — a single aware-UTC datetime
 - `target_date` and `target_time_utc` are `@computed_field` properties for backward compatibility (used by email, admin, digest, and frontend display code)
+- `aircraft_id` links to a user's aircraft (see `multi-user-deployment.md` for schema). Independent from `profile_id` — aircraft provides physical defaults (speed, ceiling), profile provides mission preferences.
 
 ### BriefingPackMeta
 
