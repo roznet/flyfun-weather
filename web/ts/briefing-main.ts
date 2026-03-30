@@ -4,6 +4,8 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import { briefingStore, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
+import { fetchPirepsByFlight } from './adapters/pirep-adapter';
+import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -27,6 +29,25 @@ import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
+
+async function loadFlightPireps(flightId: string): Promise<void> {
+  const wrapper = document.getElementById('pireps-wrapper');
+  const section = document.getElementById('pireps-section');
+  if (!wrapper || !section) return;
+
+  try {
+    const resp = await fetchPirepsByFlight(flightId);
+    if (resp.items.length > 0) {
+      wrapper.style.display = '';
+      renderPirepList(section, resp.items);
+    } else {
+      wrapper.style.display = 'none';
+    }
+  } catch {
+    // Permission denied or error — hide section silently
+    wrapper.style.display = 'none';
+  }
+}
 
 async function init(): Promise<void> {
   await initI18n();
@@ -914,6 +935,11 @@ async function init(): Promise<void> {
     renderSliderSections(s);
     renderVisualization(s);
     ui.renderLoading(s.loading);
+
+    // Load PIREPs for this flight (fire-and-forget, non-blocking)
+    if (s.flight) {
+      loadFlightPireps(s.flight.id);
+    }
 
     // Show refresh button only for the flight owner; disable for past flights
     // (admins can still refresh past flights for historical briefings)

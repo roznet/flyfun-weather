@@ -315,6 +315,28 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
     return _parse_service_toggles(row.app_prefs_json)
 
 
+def can_view_pireps(db: Session, user_id: str) -> bool:
+    """Check if user has pirep_can_view permission."""
+    row = db.get(UserPreferencesRow, user_id)
+    if not row or not row.app_prefs_json:
+        return False
+    try:
+        return json.loads(row.app_prefs_json).get("pirep_can_view", False)
+    except json.JSONDecodeError:
+        return False
+
+
+def can_publish_pireps(db: Session, user_id: str) -> bool:
+    """Check if user has pirep_can_publish permission."""
+    row = db.get(UserPreferencesRow, user_id)
+    if not row or not row.app_prefs_json:
+        return False
+    try:
+        return json.loads(row.app_prefs_json).get("pirep_can_publish", False)
+    except json.JSONDecodeError:
+        return False
+
+
 @router.post("/setup-complete", status_code=204)
 def mark_setup_complete(
     user_id: str = Depends(current_user_id),

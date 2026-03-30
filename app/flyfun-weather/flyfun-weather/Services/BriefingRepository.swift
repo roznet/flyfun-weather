@@ -17,6 +17,11 @@ protocol BriefingRepository: Sendable {
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error>
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse
+
+    // PIREP
+    func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse
+    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse]
+    func fetchPireps(flightId: String) async throws -> PirepListResponse
 }
 
 /// Online-only implementation — every call hits the API.
@@ -87,5 +92,19 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse {
         try await client.request("/api/flights/\(flightId)/packs/refresh/status")
+    }
+
+    func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/pireps", method: "POST", body: body)
+    }
+
+    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] {
+        let body = try JSONEncoder.weatherBrief.encode(requests)
+        return try await client.request("/api/pireps/batch", method: "POST", body: body)
+    }
+
+    func fetchPireps(flightId: String) async throws -> PirepListResponse {
+        try await client.request("/api/pireps?flight_id=\(flightId)")
     }
 }
