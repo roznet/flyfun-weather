@@ -105,6 +105,13 @@ export function renderFlightInfo(
     container.innerHTML = `
       <div class="flight-info-grid editing">
         <div class="info-row">
+          <span class="info-label">Route</span>
+          <span class="info-value">
+            <input type="text" id="edit-waypoints" class="edit-input" value="${escapeHtml(flight.waypoints.join(' '))}" placeholder="e.g. EGTK LFPB LSGS" style="width:100%;font-family:monospace;">
+            <div class="muted" style="font-size:0.75rem;margin-top:2px;">Origin (${escapeHtml(flight.waypoints[0] || '')}) and destination (${escapeHtml(flight.waypoints[flight.waypoints.length - 1] || '')}) cannot change</div>
+          </span>
+        </div>
+        <div class="info-row">
           <span class="info-label">Profile</span>
           <span class="info-value">
             <select id="edit-profile" class="edit-input">${profileOptions}</select>
@@ -208,8 +215,16 @@ export function renderFlightInfo(
         </div>`;
     }
 
+    const routeDisplay = flight.waypoints.length > 2
+      ? flight.waypoints.join(' \u2192 ')
+      : flight.waypoints.join(' \u2192 ');
+
     container.innerHTML = `
       <div class="flight-info-grid">
+        <div class="info-row">
+          <span class="info-label">Route</span>
+          <span class="info-value" style="font-family:monospace;">${escapeHtml(routeDisplay)}</span>
+        </div>
         <div class="info-row">
           <span class="info-label">Profile</span>
           <span class="info-value">${escapeHtml(profileName)}</span>
