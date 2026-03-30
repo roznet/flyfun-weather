@@ -389,29 +389,36 @@ User opens app while:
 
 ### Reporting card
 
-Non-intrusive card shown below/beside the existing cross-section view. The form is **prediction-guided**: the app reads the forecast pack at the pilot's current GPS position + altitude and shows fields relevant to what's predicted. This keeps the form short and contextual.
+Non-intrusive card shown below/beside the existing cross-section view. **All fields are always visible** — this avoids confirmation bias (hiding fields implies they're not relevant) and ensures every PIREP captures explicit values including "none" (which is valuable data for model validation).
 
-**Prediction-guided field selection:**
+**Field ordering — user preference:**
 
-- Forecast predicts icing → show icing intensity + type fields
-- Forecast predicts turbulence → show turbulence field
-- Forecast predicts cloud/low ceiling → show in-cloud + ceiling + tops fields
-- Always show: altitude, general conditions, remarks
+- **Smart ordering (default):** fields are reordered based on the forecast at the pilot's current position + altitude. Predicted hazards float to the top for quick confirmation/correction, followed by remaining fields. No values are pre-selected — only the order changes.
+- **Fixed ordering:** fields always appear in the same order (icing, turbulence, cloud, wind, temp) for pilots who prefer consistent muscle-memory layout.
 
-If nothing significant is predicted, the form is minimal — just "Conditions as expected? [Yes] [No]" with [No] expanding to the full field set.
+Controlled via a user preference: `pirep_smart_field_order` (boolean, default true).
 
-**Example form (icing + cloud predicted):**
+**Form layout:**
 
 ```
 Current altitude: [8,500 ft]  ← pre-filled from GPS, editable
 
+── predicted hazards first (smart order) or fixed order ──
+
+Icing:           [ None ] [ Trace ] [ Light ] [ Moderate ] [ Severe ]
+  Type (if not None): [ Rime ] [ Clear ] [ Mixed ]
+
 In cloud?        [ Yes ]  [ No ]  [ Uncertain ]
 
-Icing:           [ None ] [ Trace ] [ Light ] [ Moderate ]
+Turbulence:      [ None ] [ Light ] [ Moderate ] [ Severe ]
 
-Cloud tops (optional):  [_____] ft  [ Climbed through ] [ Above, est. ] [ Below, at least ]
+Cloud tops (opt):  [_____] ft  [ Climbed through ] [ Above, est. ] [ Below, at least ]
+Ceiling (opt):     [_____] ft MSL
 
-[ + More fields ]     ← expands to turbulence, wind, temp, remarks
+Wind (opt):      Dir [___]°  Speed [___] kt
+Temp (opt):      [___] °C
+
+Remarks (opt):   [________________________]
 
 [ Submit Report ]   [ Skip ]
 ```
@@ -419,8 +426,9 @@ Cloud tops (optional):  [_____] ft  [ Climbed through ] [ Above, est. ] [ Below,
 **Key UX principles:**
 
 - Never a modal or pop-up — always opt-in when pilot opens app
-- Form is guided by forecast predictions to stay short and relevant
-- Show forecast prediction *after* submission, not before (avoids confirmation bias) — the prediction guides which fields appear, but NOT what values are pre-selected
+- All fields always visible — "none" is an explicit, valuable answer
+- No values pre-selected — avoids confirmation bias entirely
+- Smart ordering surfaces predicted hazards first without hiding anything
 - Skip is one tap, never penalised
 - Offline-capable: store locally, sync when connectivity returns
 
