@@ -352,27 +352,17 @@ def interpret_route(
     # Filter to valid waypoint patterns (2-5 alphanumeric chars)
     candidate_tokens = [t for t in tokens if WAYPOINT_RE.match(t)]
 
-    # Resolve each candidate individually to separate known from unknown
-    from euro_aip.models.route_resolver import RouteResolver
-
-    model = None
-    try:
-        from weatherbrief.airports import _load_airport_model
-        model = _load_airport_model(db_path)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Could not load airport database")
-
-    resolver = RouteResolver(model)
+    # Resolve all candidates via resolve_waypoints; use the KeyError to find unknowns
     interpreted: list[str] = []
     skipped: list[str] = []
 
     for token in candidate_tokens:
-        point = resolver.resolve_point(token)
-        if point is not None:
+        try:
+            resolve_waypoints([token], db_path)
             # Skip consecutive duplicates (e.g. "ABDIL ABDIL" after filtering)
             if not interpreted or interpreted[-1] != token:
                 interpreted.append(token)
-        else:
+        except KeyError:
             skipped.append(token)
 
     # Resolve the interpreted waypoints to get full info
@@ -638,8 +628,7 @@ def update_flight(
                 detail=f"Destination cannot change (was {old_dest}, got {new_dest}). Create a new flight instead.",
             )
         if new_waypoints != original_flight.waypoints:
-            import json as _json
-            row.waypoints_json = _json.dumps(new_waypoints)
+            row.waypoints_json = json.dumps(new_waypoints)
             # Update route_name to reflect new waypoints
             row.route_name = "_".join(w.lower() for w in new_waypoints)
             route_changed = True
