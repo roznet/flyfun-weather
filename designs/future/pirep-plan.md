@@ -21,9 +21,9 @@ This is an open-source, community-driven feature with no commercial entity behin
 
 -----
 
-## Phase 1 — Database Schema
+## Database Schema
 
-Add 4 new tables via Alembic migration. No change to existing MySQL setup.
+Tables are created across milestones (see Implementation Sequence). Listed here together for reference. No change to existing MySQL setup.
 
 ### `pireps`
 
@@ -53,7 +53,8 @@ remarks                 TEXT NULL
 aircraft_id             INT NULL            -- FK to user_aircraft(id), see prerequisite below
 pack_id                 INT NULL            -- FK to briefing_packs(id), enables prediction vs observation research
 source                  ENUM('manual','inflight','postflight') DEFAULT 'manual'
-user_id                 VARCHAR(64) NULL    -- FK to users(id), nullable for anonymous
+held_for_review         BOOLEAN DEFAULT FALSE -- severe reports from new accounts held until admin approves
+user_id                 VARCHAR(64) NOT NULL -- FK to users(id); set to NULL on account deletion (anonymization)
 ```
 
 ### `device_tokens`
@@ -138,7 +139,7 @@ PIREP submissions are rate-limited to prevent abuse and notification flooding:
 
 -----
 
-## Phase 2 — Spatial Matching (Python/Shapely)
+## Spatial Matching (Milestone 2 — Python/Shapely)
 
 No PostGIS needed. Shapely handles corridor queries at expected volumes (<<100 active watches).
 
@@ -175,11 +176,13 @@ def find_matching_route_watches(pirep_lat, pirep_lon, active_watches):
             matches.append(watch)
     return matches
 
-def find_matching_airport_watches(pirep_lat, pirep_lon, airport_watches):
+def find_matching_airport_watches(pirep_lat, pirep_lon, airport_watches, resolve_icao):
+    """resolve_icao: callable(icao) -> (lat, lon), using existing airport database."""
     point = Point(pirep_lon, pirep_lat)
     matches = []
     for watch in airport_watches:
-        airport_point = Point(watch.airport_lon, watch.airport_lat)
+        lat, lon = resolve_icao(watch.airport_icao)
+        airport_point = Point(lon, lat)
         buffer_deg = degrees_per_km(pirep_lat) * watch.radius_km
         if airport_point.buffer(buffer_deg).contains(point):
             matches.append(watch)
@@ -188,18 +191,23 @@ def find_matching_airport_watches(pirep_lat, pirep_lon, airport_watches):
 
 -----
 
-## Phase 3 — FastAPI Endpoints
+## FastAPI Endpoints (Milestones 1 & 2)
 
 Add to existing API structure under `src/weatherbrief/api/`.
 
+**Milestone 1 — PIREP submit & query:**
 ```
 POST   /api/pireps                  # Submit a single PIREP
 POST   /api/pireps/batch            # Submit multiple PIREPs (offline sync)
 GET    /api/pireps?flight_id=X      # List PIREPs linked to a flight
 GET    /api/pireps?pack_id=X        # List PIREPs linked to a briefing pack
 GET    /api/pireps?airport=EGTF     # List PIREPs near airport
-GET    /api/pireps?bounds=...&hours=6  # Map viewport query (Phase 5)
-GET    /api/pireps?from=...&to=...  # Historical range query (Phase 5)
+GET    /api/pireps?bounds=...&hours=6  # Map viewport query
+GET    /api/pireps?from=...&to=...  # Historical range query
+```
+
+**Milestone 2 — Watches & notifications:**
+```
 POST   /api/watches/route           # Register route watch
 DELETE /api/watches/route/{id}      # Cancel route watch
 POST   /api/watches/airport         # Register airport watch
@@ -233,7 +241,7 @@ async def upsert_device_token(user_id: str, token: str, environment: str):
 
 -----
 
-## Phase 4 — APNs Integration
+## APNs Integration (Milestone 2)
 
 New file: `src/weatherbrief/notify/apns.py` alongside existing `notify/` email infrastructure.
 
@@ -259,21 +267,32 @@ async def send_push(device_token: str, environment: str, payload: dict):
     ...
 ```
 
-### Notification trigger flow
+### Submission endpoint flow (POST /api/pireps)
 
 ```
-PIREP submitted (user must have pirep_can_publish permission)
-  → check submission rate limit (1 per 2 min, 50 per day)
-  → if severe report from new account (<7 days): queue for admin review
-  → deduplicate by client_uuid if present
-  → find_matching_route_watches()
+Request received
+  → check pirep_can_publish permission
+  → check rate limit (1 per 2 min, 50 per day)
+  → deduplicate by client_uuid (409 if duplicate)
+  → validate and store PIREP
+  → if severe report from new account (<7 days): mark held_for_review = true
+  → if not held: trigger notification flow (async)
+```
+
+### Notification trigger flow (async, post-store)
+
+```
+PIREP stored and not held for review
+  → compute sync_delay = submitted_at - observed_at
+  → if sync_delay > 30 min: skip notifications (data retained, alerts suppressed)
+  → find_matching_route_watches() — filter to active flight windows only
   → find_matching_airport_watches()
   → for each match:
-      check severity >= min_severity
+      check severity >= watch.min_severity
       check not in quiet hours (airport watches)
-      check not sent same watch in last 30 min (rate limit)
-      look up device token from device_tokens table via watch.user_id
-      batch if multiple PIREPs pending for same watch
+      check not sent same watch in last 30 min (notification rate limit)
+      look up device tokens from device_tokens table via watch.user_id
+      coalesce with other pending PIREPs for same watch (5-min window)
       send via APNs to correct endpoint (from device_tokens.environment)
       log to notification_log
 ```
@@ -296,7 +315,7 @@ PIREP submitted (user must have pirep_can_publish permission)
 
 -----
 
-## Phase 5 — Web App PIREP Viewer
+## Web App PIREP Viewer (Milestone 1)
 
 Requires `pirep_can_view` permission. New **PIREPs** tab in the web app briefing view.
 
@@ -358,7 +377,7 @@ All require `pirep_can_view` permission (beta) or authenticated user (post-rollo
 
 -----
 
-## Phase 6 — iOS In-Flight Reporting UI
+## iOS In-Flight Reporting UI (Milestone 1)
 
 ### Trigger condition
 
@@ -459,7 +478,7 @@ When multiple PIREPs sync at once (common after landing and reconnecting):
 
 -----
 
-## Phase 7 — Post-Flight Debrief
+## Post-Flight Debrief (Milestone 3)
 
 After landing, prompt once with the forecast cross-section overlaid with the route flown.
 
@@ -472,7 +491,7 @@ More considered responses than inflight — pilots are relaxed, can think.
 
 -----
 
-## Phase 8 — Model Validation Dataset
+## Model Validation Dataset (Milestone 3)
 
 PIREPs are pure observation data — no predictions are stored on the PIREP row itself. Instead, each PIREP links to the forecast pack via `pack_id`, and since linked packs are exempt from retention (see Data Retention below), the full forecast data is always available for retrospective comparison.
 
