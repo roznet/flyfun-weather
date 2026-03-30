@@ -22,6 +22,12 @@
   3. For `[library]` entries: import and reuse the code
   4. For `[project]` entries: use as inspiration for patterns or architecture to follow
 
+  If the MCP tools above (`list_libraries`, `get_design_doc`) are not available, use the design docs instead:
+  1. Read `designs/INDEX.md` to get an overview of all modules and their key exports
+  2. Read the relevant `designs/<module>.md` file identified from the index for detailed design and implementation guidance
+  3. For `[library]` entries: import and reuse the code
+  4. For `[project]` entries: use as inspiration for patterns or architecture to follow
+
 ## Setup
 
 - don't run npm run build as for development we use npv run dev
