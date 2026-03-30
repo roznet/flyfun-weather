@@ -337,14 +337,24 @@ Requires `pirep_can_view` permission. New **PIREPs** tab in the web app briefing
 
 Tap a marker to show the same detail card as the list view.
 
-### API endpoints
+### API query filtering
+
+All PIREP query endpoints support optional filters. **By default no filters are applied** — all PIREPs are returned, including "none" / clear reports, since knowing an altitude was clear is as valuable as knowing it had icing.
+
+Optional query parameters:
+- `hazard=icing|turbulence|cloud` — filter by hazard type
+- `min_severity=trace|light|moderate|severe` — exclude reports below this severity (omit to include "none" reports)
+- `altitude_min=5000&altitude_max=12000` — altitude band in feet MSL
+- `aircraft_type=SR22` — filter by ICAO aircraft type (useful for intensity interpretation — turbulence in a C152 vs a SR22)
 
 ```
 GET /api/pireps?bounds=sw_lat,sw_lon,ne_lat,ne_lon&hours=6   # map viewport query
 GET /api/pireps?from=2026-03-01T00:00Z&to=2026-03-01T12:00Z  # historical range
+GET /api/pireps?bounds=...&min_severity=moderate              # only moderate+ reports
+GET /api/pireps?bounds=...&altitude_min=8000&altitude_max=10000  # altitude band
 ```
 
-Both require `pirep_can_view` permission.
+All require `pirep_can_view` permission (beta) or authenticated user (post-rollout).
 
 -----
 
