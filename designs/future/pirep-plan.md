@@ -488,14 +488,13 @@ When multiple PIREPs sync at once (common after landing and reconnecting):
 
 ## Post-Flight Debrief (Milestone 3)
 
-After landing, prompt once with the forecast cross-section overlaid with the route flown.
+After landing, prompt once to submit PIREPs from the flight. The pilot taps a position on the cross-section view, which interpolates lat/lon/altitude from the route at that point. This opens the standard PIREP reporting card with the position pre-filled. The PIREP is stored with `source = 'postflight'`.
 
-Simple tap-based assessment per segment:
-
-- **Better than forecast / As forecast / Worse than forecast**
-- Flag specific hazards that were notably different
-
-More considered responses than inflight — pilots are relaxed, can think.
+- Same schema, same fields, same validation as inflight PIREPs — just a different input method
+- `source = 'postflight'` indicates position is approximate (tapped on cross-section) rather than live GPS
+- Pilot can submit multiple PIREPs for different points along the route (e.g., "icing here, turbulence there")
+- More considered responses than inflight — pilots are relaxed, can review the whole route
+- Cross-section overlay shows any inflight PIREPs already submitted during the flight, so the pilot doesn't duplicate
 
 -----
 
