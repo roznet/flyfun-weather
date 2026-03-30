@@ -42,7 +42,10 @@ icing_type              ENUM('rime','clear','mixed') NULL
 turbulence_intensity    ENUM('none','light','moderate','severe') NULL
 ceiling_msl_ft          INT NULL
 tops_msl_ft             INT NULL
-tops_observed_type      ENUM('observed','estimated') NULL   -- above vs below cloud
+tops_basis              ENUM('crossed','estimated_above','below_min') NULL
+    -- crossed:         pilot climbed through top, exact altitude from altimeter
+    -- estimated_above: pilot is above cloud, estimating top altitude visually
+    -- below_min:       pilot is below/in cloud, tops_msl_ft is a lower bound (tops ≥ value)
 temp_c                  FLOAT NULL
 wind_dir                INT NULL
 wind_speed_kt           INT NULL
@@ -379,7 +382,7 @@ In cloud?        [ Yes ]  [ No ]  [ Uncertain ]
 
 Icing:           [ None ] [ Trace ] [ Light ] [ Moderate ]
 
-Cloud tops (optional):  [_____] ft  [ Observed above ] [ Estimated ]
+Cloud tops (optional):  [_____] ft  [ Climbed through ] [ Above, est. ] [ Below, at least ]
 
 [ + More fields ]     ← expands to turbulence, wind, temp, remarks
 
@@ -516,7 +519,7 @@ Follows US PIREP structure with additions for ceiling/tops:
 |Altitude              |FL                 |GPS pre-filled, editable                           |
 |Aircraft              |TP                 |From user_aircraft registry (ICAO type + tail number)|
 |Cloud/ceiling         |SK                 |Added ceiling MSL field                            |
-|Cloud tops            |SK                 |Added tops + observed/estimated flag               |
+|Cloud tops            |SK                 |Added tops + basis (crossed/estimated_above/below_min)|
 |Icing intensity + type|IC                 |NONE/TRACE/LIGHT/MODERATE/SEVERE + RIME/CLEAR/MIXED|
 |Turbulence            |TB                 |NONE/LIGHT/MODERATE/SEVERE                         |
 |Temperature           |TA                 |From OAT if available                              |
