@@ -343,7 +343,6 @@ Follows US PIREP structure with additions for ceiling/tops:
 1. **APNs p8 setup** — generate key in Apple Developer Portal, implement `notify/apns.py`
 1. **iOS reporting card** — inflight contextual UI
 1. **Post-flight debrief screen**
-1. **Flysto G1000 integration** — after core feature is working and demonstrable
 
 -----
 
