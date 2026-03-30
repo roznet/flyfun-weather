@@ -27,7 +27,66 @@
       <!-- Tab navigation -->
       <div class="settings-tabs">
         <button type="button" class="tab-btn active" data-tab="flight">Flight Profiles</button>
+        <button type="button" class="tab-btn" data-tab="aircraft">Aircraft</button>
         <button type="button" class="tab-btn" data-tab="services">Account</button>
+      </div>
+
+      <!-- Aircraft tab -->
+      <div id="tab-aircraft" class="tab-panel">
+        <div class="section">
+          <h3>My Aircraft</h3>
+          <p class="muted section-hint">Manage your aircraft. Selecting an aircraft when creating a flight pre-fills speed, ceiling, and flight rules.</p>
+          <div id="aircraft-list"></div>
+          <button type="button" id="btn-add-aircraft" class="btn btn-primary btn-sm" style="margin-top:0.75rem">+ Add Aircraft</button>
+        </div>
+        <div id="aircraft-form-section" class="section" style="display:none">
+          <h3 id="aircraft-form-title">Add Aircraft</h3>
+          <div class="form-row">
+            <div class="form-group grow">
+              <label for="ac-icao-type">ICAO Type</label>
+              <input type="text" id="ac-icao-type" placeholder="e.g. SR22, C172" maxlength="4" class="input-narrow" autocomplete="off">
+              <div id="ac-type-suggestions" class="autocomplete-dropdown" style="display:none"></div>
+            </div>
+            <div class="form-group grow">
+              <label id="ac-type-label" class="muted" style="min-height:1.4em">&nbsp;</label>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="ac-tail">Tail Number</label>
+              <input type="text" id="ac-tail" placeholder="e.g. HB-KOG" maxlength="10">
+            </div>
+            <div class="form-group">
+              <label for="ac-nickname">Nickname</label>
+              <input type="text" id="ac-nickname" placeholder="e.g. Club SR22" maxlength="50">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="ac-speed">Cruise Speed (kt)</label>
+              <input type="number" id="ac-speed" placeholder="e.g. 170" min="10" max="500" class="input-narrow">
+            </div>
+            <div class="form-group">
+              <label for="ac-ceiling">Service Ceiling (ft)</label>
+              <input type="number" id="ac-ceiling" placeholder="e.g. 25000" min="1000" max="60000" step="500" class="input-narrow">
+            </div>
+          </div>
+          <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="ac-ifr"> IFR capable
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="ac-fiki"> FIKI equipped
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="ac-default"> Default aircraft
+            </label>
+          </div>
+          <div class="form-row" style="margin-top:0.75rem; gap:0.5rem">
+            <button type="button" id="btn-save-aircraft" class="btn btn-primary btn-sm">Save</button>
+            <button type="button" id="btn-cancel-aircraft" class="btn btn-secondary btn-sm">Cancel</button>
+          </div>
+        </div>
       </div>
       <!-- Services tab -->
       <div id="tab-services" class="tab-panel">

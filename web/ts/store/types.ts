@@ -1,9 +1,19 @@
 /** Shared TypeScript types matching the API response models. */
 
+export interface AircraftInfo {
+  id: number;
+  icao_type: string;
+  type_name: string;
+  tail_number: string | null;
+  nickname: string | null;
+}
+
 export interface FlightResponse {
   id: string;
   user_id: string;
   profile_id: number | null;
+  aircraft_id: number | null;
+  aircraft: AircraftInfo | null;
   route_name: string;
   waypoints: string[];
   departure_time: string;
@@ -27,6 +37,7 @@ export interface CreateFlightRequest {
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
   profile_id?: number;
+  aircraft_id?: number;
 }
 
 export interface DataStatus {

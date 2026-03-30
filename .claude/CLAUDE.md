@@ -28,6 +28,17 @@
   3. For `[library]` entries: import and reuse the code
   4. For `[project]` entries: use as inspiration for patterns or architecture to follow
 
+## Alembic Migrations
+
+Dev uses SQLite, production uses MySQL. Migrations must work on both:
+
+- **Always use `batch_alter_table`** for ALTER operations (add/drop columns, constraints). SQLite doesn't support ALTER natively — batch mode does a copy-and-move. MySQL handles it as a normal ALTER. The env.py has `render_as_batch=True` as a safety net, but prefer explicit `batch_alter_table` in migration code.
+- **`op.create_table` / `op.drop_table`** work on both dialects without batch mode.
+- **Named constraints** (e.g. `create_foreign_key("fk_flights_aircraft_id", ...)`) — use them so the downgrade can reference them by name.
+- **Reference migration 004** (`004_flight_profiles.py`) as the canonical pattern for "create table + add FK column to existing table."
+- **Column renames on MySQL** need `existing_type` parameter — see memory note.
+- If dialect-specific logic is needed, use `op.get_bind().dialect.name == "mysql"` (see migrations 014, 015).
+
 ## Setup
 
 - don't run npm run build as for development we use npv run dev

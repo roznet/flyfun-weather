@@ -223,6 +223,7 @@ label {
 .form-group {
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .form-group.grow { flex: 1; }
@@ -3774,4 +3775,71 @@ label {
   color: var(--text-muted);
   text-align: center;
   padding: 2rem 0;
+}
+
+/* --- Aircraft cards --- */
+
+.aircraft-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.5rem;
+  background: var(--surface);
+  gap: 0.75rem;
+}
+
+.aircraft-card-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.aircraft-card-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.aircraft-card-details {
+  font-size: 0.85em;
+  margin-top: 0.15rem;
+}
+
+.aircraft-card-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+/* --- Autocomplete dropdown --- */
+
+.autocomplete-dropdown {
+  position: absolute;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 2px;
+  min-width: 280px;
+}
+
+.autocomplete-item {
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.autocomplete-item:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+.autocomplete-item:hover .muted {
+  color: rgba(255, 255, 255, 0.8);
 }
