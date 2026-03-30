@@ -110,23 +110,21 @@ apns_status             VARCHAR(50)
 
 ### PIREP Permissions
 
-PIREP viewing and publishing are independently controlled per user via the existing `user_preferences` table:
+PIREP publishing is controlled per user. Viewing is gated during initial rollout only.
 
 ```sql
 -- Added to user_preferences JSON or as columns:
-pirep_can_view          BOOLEAN DEFAULT FALSE   -- can see other pilots' PIREPs on map/cross-section
+pirep_can_view          BOOLEAN DEFAULT FALSE   -- temporary: gates viewing during beta testing
 pirep_can_publish       BOOLEAN DEFAULT FALSE   -- can submit PIREPs
 ```
 
-Admin can enable/disable each capability independently per user. This allows:
-- **View-only users** — see community PIREPs but can't submit (e.g., student pilots, dispatchers)
-- **Publish-only users** — submit reports but don't yet have the viewer (phased rollout)
-- **Full access** — both view and publish
-- **Disabled** — neither (default for new users until feature is generally available)
+**Initial rollout:** both flags default to FALSE. Admin enables for beta testers.
+
+**Post-rollout:** `pirep_can_view` is removed or ignored — all authenticated users can see PIREPs. `pirep_can_publish` remains as a permanent gate (requires opt-in or admin approval).
 
 The API enforces these permissions:
 - `POST /api/pireps` requires `pirep_can_publish`
-- `GET /api/pireps` requires `pirep_can_view`
+- `GET /api/pireps` requires `pirep_can_view` during beta, open to all authenticated users after
 - Admin endpoints can bulk-enable for approved users
 
 ### Rate Limiting
@@ -528,6 +526,17 @@ Follows US PIREP structure with additions for ceiling/tops:
 
 -----
 
+## Geographic Scope
+
+This feature targets **European airspace** where no equivalent to the US PIREP system exists. GA pilots in Europe have no standardized way to share in-flight observations.
+
+- **Europe:** full feature — community PIREPs fill a real gap
+- **US:** do NOT show community PIREPs. Official PIREPs from AWC/ADDS are the authoritative source. Showing community reports alongside official ones would create confusion about data provenance and reliability. If US support is added later, it should ingest official PIREPs only.
+
+The geographic scope should be enforced server-side: reject PIREP submissions with coordinates outside the European coverage area (configurable bounding box).
+
+-----
+
 ## Liability & Legal Notes
 
 - MIT licensed, no warranty
@@ -536,6 +545,13 @@ Follows US PIREP structure with additions for ceiling/tops:
 - Stale reports (>90 min) flagged visually, not quietly hidden
 - Sparse coverage must be explicit — empty map ≠ clear skies
 - Consult aviation law specialist before public launch (AOPA Legal Services Plan as starting point, but check scope covers product liability not just certificate defence)
+
+### Privacy & GDPR
+
+- PIREPs are retained permanently for model validation research (see Data Retention)
+- **Account deletion:** when a user deletes their account (existing feature), their PIREPs are **anonymized, not deleted** — `user_id` is set to NULL, `aircraft_id` is set to NULL. The observation data (location, altitude, weather conditions, timestamps) is retained as anonymous records. This preserves the validation dataset while respecting the right to erasure.
+- Disclaimer at PIREP submission: “Your observation will be stored permanently for weather research. If you delete your account, reports will be anonymized (no link to your identity).”
+- No GPS tracks are stored — PIREPs are discrete point observations, not continuous position logs
 
 -----
 
