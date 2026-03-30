@@ -9,6 +9,7 @@ import { renderUserInfo } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
+import { interpretAndConfirmRoute, validateOriginDestination } from './components/route-interpret';
 
 async function init(): Promise<void> {
   await initI18n();
@@ -150,6 +151,7 @@ async function init(): Promise<void> {
       const ceilEl = document.getElementById('edit-ceiling') as HTMLInputElement;
       const durEl = document.getElementById('edit-duration') as HTMLInputElement;
       const altEnabledEl = document.getElementById('edit-alt-enabled') as HTMLInputElement;
+      const waypointsEl = document.getElementById('edit-waypoints') as HTMLInputElement;
 
       // Sync final UTC values from displayed local time
       syncUtcFromLocal();
@@ -168,6 +170,28 @@ async function init(): Promise<void> {
         ? `${flight.target_date}T${editAltUtcHour.toString().padStart(2, '0')}:${editAltUtcMinute.toString().padStart(2, '0')}:00Z`
         : '';
 
+      // Handle route editing with smart interpretation
+      let newWaypoints: string[] | undefined;
+      const wpRaw = waypointsEl?.value?.trim();
+      if (wpRaw) {
+        const currentRoute = flight.waypoints.join(' ');
+        // Only interpret if route text has changed
+        if (wpRaw.toUpperCase() !== currentRoute.toUpperCase()) {
+          const result = await interpretAndConfirmRoute(wpRaw, (msg) => {
+            ui.renderError(msg);
+          });
+          if (!result || !result.confirmed) return;
+
+          // Validate origin/destination haven't changed
+          const validationError = validateOriginDestination(flight.waypoints, result.waypoints);
+          if (validationError) {
+            ui.renderError(validationError);
+            return;
+          }
+          newWaypoints = result.waypoints;
+        }
+      }
+
       await store.getState().saveFlight({
         profile_id: profileId,
         departure_time: departureTime,
@@ -175,7 +199,13 @@ async function init(): Promise<void> {
         cruise_altitude_ft: altitude,
         flight_ceiling_ft: ceiling,
         flight_duration_hours: duration,
+        ...(newWaypoints ? { waypoints: newWaypoints } : {}),
       });
+
+      // If route changed, reload waypoints for the map
+      if (newWaypoints) {
+        store.getState().loadWaypoints();
+      }
     });
 
     cancelBtn?.addEventListener('click', () => {
