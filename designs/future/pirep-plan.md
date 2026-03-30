@@ -13,9 +13,9 @@ This is an open-source, community-driven feature with no commercial entity behin
 
 ## Design Principles
 
-- **Zero friction in the cockpit** — no pop-ups, no forms; the app pre-populates from the forecast, pilot confirms or corrects
+- **Zero friction in the cockpit** — no pop-ups; all fields visible with smart ordering, one-tap severity buttons, skip always available
 - **Pilot opens app → report is already there** — contextual, not interruptive
-- **Avoid confirmation bias** — show predictions *after* pilot responds, not before
+- **Avoid confirmation bias** — all fields shown (no hiding implies irrelevance), no values pre-selected; predictions only influence field ordering
 - **Staleness is explicit** — stale reports are flagged aggressively, never displayed as current
 - **Open source, MIT licensed** — no corporation, community-owned data
 
@@ -34,8 +34,8 @@ submitted_at            DATETIME UTC        -- when report was filed
 observed_at             DATETIME UTC        -- when conditions were observed (may differ if offline)
 latitude                FLOAT
 longitude               FLOAT
-gps_altitude_ft         INT                 -- from CLLocation.altitude
-reported_altitude_ft    INT NULL            -- pilot-corrected if different
+gps_altitude_ft         INT NULL            -- from CLLocation.altitude (inflight) or NULL (postflight)
+reported_altitude_ft    INT NULL            -- pilot-entered altitude (editable for inflight, required for postflight)
 in_cloud                BOOLEAN NULL
 icing_intensity         ENUM('none','trace','light','moderate','severe') NULL
 icing_type              ENUM('rime','clear','mixed') NULL
@@ -53,7 +53,7 @@ remarks                 TEXT NULL
 aircraft_id             INT NULL            -- FK to user_aircraft(id), see prerequisite below
 pack_id                 INT NULL            -- FK to briefing_packs(id), enables prediction vs observation research
 source                  ENUM('manual','inflight','postflight') DEFAULT 'manual'
-user_id                 VARCHAR(64) NOT NULL -- FK to users(id); set to NULL on account deletion (anonymization)
+user_id                 VARCHAR(64) NULL    -- FK to users(id); always set at insert (authenticated), set to NULL on account deletion (anonymization)
 ```
 
 ### `device_tokens`
@@ -201,7 +201,7 @@ POST   /api/pireps                  # Submit a single PIREP
 POST   /api/pireps/batch            # Submit multiple PIREPs (offline sync)
 GET    /api/pireps?flight_id=X      # List PIREPs linked to a flight
 GET    /api/pireps?pack_id=X        # List PIREPs linked to a briefing pack
-GET    /api/pireps?airport=EGTF     # List PIREPs near airport
+GET    /api/pireps?airport=EGTF     # List PIREPs near airport (simple bounding box; M2 upgrades to Shapely)
 GET    /api/pireps?bounds=...&hours=6  # Map viewport query
 GET    /api/pireps?from=...&to=...  # Historical range query
 ```
@@ -217,6 +217,18 @@ PUT    /api/device-token            # Upsert APNs device token (call on every ap
 ### Flight-linked PIREPs in briefing view
 
 When a PIREP has a `pack_id`, it appears in the flight's briefing view as a **PIREPs** section (alongside advisories, cross-section, etc.). This shows all PIREPs linked to that flight's packs as a chronological list with the same detail card as the standalone viewer. This is the primary way pilots review their own reports and see community reports along their route after a briefing.
+
+### Submission endpoint flow (POST /api/pireps)
+
+```
+Request received
+  → check pirep_can_publish permission
+  → check rate limit (1 per 2 min, 50 per day)
+  → deduplicate by client_uuid (409 if duplicate)
+  → validate geographic bounds (European airspace)
+  → validate and store PIREP
+  → if Milestone 2 deployed: trigger notification flow (async)
+```
 
 ### Device token upsert (call on every app launch)
 
@@ -265,17 +277,6 @@ async def send_push(device_token: str, environment: str, payload: dict):
     # Sign JWT with p8 key, POST to endpoint
     # Handle 410 Gone = invalid token, remove from DB
     ...
-```
-
-### Submission endpoint flow (POST /api/pireps)
-
-```
-Request received
-  → check pirep_can_publish permission
-  → check rate limit (1 per 2 min, 50 per day)
-  → deduplicate by client_uuid (409 if duplicate)
-  → validate and store PIREP
-  → trigger notification flow (async)
 ```
 
 ### Notification trigger flow (async, post-store)
@@ -646,7 +647,7 @@ This is a standalone feature — useful for flight profiles too (link `FlightPro
 1. **FastAPI endpoints** — PIREP submit, batch submit, query by flight/pack/bounds/time range
 1. **Retention integration** — exempt PIREP-linked packs from T1/T2 cleanup
 1. **Web app PIREP viewer** — PIREPs tab with list view, fog-of-war map, detail cards, flight briefing integration
-1. **iOS reporting card** — prediction-guided inflight UI with offline sync
+1. **iOS reporting card** — smart-ordered inflight UI with offline sync
 
 ### Milestone 2 — Notifications (builds on Milestone 1)
 1. **Alembic migration** — `route_watches`, `airport_watches`, `notification_log` tables
@@ -656,7 +657,7 @@ This is a standalone feature — useful for flight profiles too (link `FlightPro
 1. **Notification trigger** — matching, rate limiting, coalescing, flight window checks
 
 ### Milestone 3 — Post-Flight & Validation
-1. **Post-flight debrief screen** — segment-level assessment
+1. **Post-flight debrief** — cross-section tap to submit PIREPs with `source = 'postflight'`
 1. **Model validation tooling** — prediction reconstruction, comparison queries
 
 -----
