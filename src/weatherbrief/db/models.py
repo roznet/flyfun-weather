@@ -22,6 +22,28 @@ from flyfun_common.db.models import (  # noqa: F401
 )
 
 
+class UserAircraftRow(Base):
+    __tablename__ = "user_aircraft"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    icao_type: Mapped[str] = mapped_column(String(4))  # e.g. SR22, C172
+    tail_number: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    nickname: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    is_ifr: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_fiki: Mapped[bool] = mapped_column(Boolean, default=False)
+    cruise_speed_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    user: Mapped[UserRow] = relationship(UserRow)
+
+
 class FlightProfileRow(Base):
     __tablename__ = "flight_profiles"
 
@@ -58,6 +80,9 @@ class FlightRow(Base):
     profile_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("flight_profiles.id", ondelete="SET NULL"), nullable=True
     )
+    aircraft_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("user_aircraft.id", ondelete="SET NULL"), nullable=True
+    )
     route_name: Mapped[str] = mapped_column(String(256), default="")
     waypoints_json: Mapped[str] = mapped_column(Text, default="[]")
     departure_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -82,6 +107,7 @@ class FlightRow(Base):
 
     user: Mapped[UserRow] = relationship(UserRow)
     profile: Mapped[FlightProfileRow | None] = relationship(back_populates="flights")
+    aircraft: Mapped[UserAircraftRow | None] = relationship(UserAircraftRow)
     packs: Mapped[list[BriefingPackRow]] = relationship(
         back_populates="flight", cascade="all, delete-orphan"
     )
