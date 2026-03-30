@@ -63,8 +63,11 @@ user_id                 VARCHAR(64) NOT NULL  -- FK to users(id)
 token                   VARCHAR(200) NOT NULL
 environment             ENUM('sandbox','production') NOT NULL
 updated_at              DATETIME UTC
-UNIQUE KEY (user_id)    -- one active token per user
+UNIQUE KEY (token)      -- a given token belongs to exactly one user/environment
+INDEX (user_id)         -- look up all tokens for a user
 ```
+
+One user can have multiple devices (iPhone + iPad), each with its own token. A device in development uses `sandbox`, production builds use `production`. Notifications are sent to **all** active tokens for the user, each routed to the correct APNs endpoint.
 
 ### `route_watches`
 
@@ -203,16 +206,21 @@ PUT    /api/device-token            # Upsert APNs device token (call on every ap
 ### Device token upsert (call on every app launch)
 
 ```python
-# Always upsert — tokens change silently.
-# Uses the device_tokens table defined in Phase 1 schema.
+# Always upsert by token — tokens change silently, and a user may have
+# multiple devices (iPhone + iPad), each with its own token.
 async def upsert_device_token(user_id: str, token: str, environment: str):
     await db.execute("""
         INSERT INTO device_tokens (user_id, token, environment, updated_at)
         VALUES (:user_id, :token, :environment, NOW())
         ON DUPLICATE KEY UPDATE
-            token = :token,
+            user_id = :user_id,
             environment = :environment,
             updated_at = NOW()
+    """, ...)
+    # Prune stale tokens for this user not seen in 90 days
+    await db.execute("""
+        DELETE FROM device_tokens
+        WHERE user_id = :user_id AND updated_at < NOW() - INTERVAL 90 DAY
     """, ...)
 ```
 
