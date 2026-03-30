@@ -217,6 +217,73 @@ class CostConfigRow(Base):
     config_json: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+# ---------------------------------------------------------------------------
+# PIREP enums (used by validators; stored as VARCHAR, not sa.Enum)
+# ---------------------------------------------------------------------------
+
+ICING_INTENSITIES = ("none", "trace", "light", "moderate", "severe")
+ICING_TYPES = ("rime", "clear", "mixed")
+TURBULENCE_INTENSITIES = ("none", "light", "moderate", "severe")
+TOPS_BASES = ("crossed", "estimated_above", "below_min")
+PIREP_SOURCES = ("manual", "inflight", "postflight")
+
+
+class PirepRow(Base):
+    __tablename__ = "pireps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_uuid: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    latitude: Mapped[float] = mapped_column(Float)
+    longitude: Mapped[float] = mapped_column(Float)
+    gps_altitude_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reported_altitude_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    in_cloud: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    icing_intensity: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    icing_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    turbulence_intensity: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    ceiling_msl_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tops_msl_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tops_basis: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    temp_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_dir: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    wind_speed_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    aircraft_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("user_aircraft.id", ondelete="SET NULL"), nullable=True
+    )
+    pack_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("briefing_packs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source: Mapped[str] = mapped_column(String(16), default="manual")
+    user_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    user: Mapped[UserRow | None] = relationship(UserRow, foreign_keys=[user_id])
+    aircraft: Mapped[UserAircraftRow | None] = relationship(UserAircraftRow)
+    pack: Mapped[BriefingPackRow | None] = relationship(BriefingPackRow)
+
+
+class DeviceTokenRow(Base):
+    __tablename__ = "device_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token: Mapped[str] = mapped_column(String(200), unique=True)
+    environment: Mapped[str] = mapped_column(String(16))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    user: Mapped[UserRow] = relationship(UserRow)
+
+
 class SystemMessageRow(Base):
     __tablename__ = "system_messages"
 

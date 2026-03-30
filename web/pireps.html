@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — PIREPs</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/leaflet.css">
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <h2>Pilot Reports (PIREPs)</h2>
+      <div class="header-right">
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
+
+    <p class="pirep-disclaimer muted">
+      Community pilot weather reports for European airspace.
+      For situational awareness only — not a substitute for official weather briefings.
+    </p>
+
+    <div class="pirep-view-toggle">
+      <button class="btn-toggle active" data-view="list" id="view-list-btn">List</button>
+      <button class="btn-toggle" data-view="map" id="view-map-btn">Map</button>
+    </div>
+
+    <div id="pirep-filters"></div>
+
+    <div id="pirep-list-container" class="pirep-list-container">
+      <p class="muted">Loading...</p>
+    </div>
+
+    <div id="pirep-map-container" class="pirep-map-container" style="display: none;"></div>
+  </div>
+
+  <script src="/dist/pireps.js"></script>
+</body>
+</html>
