@@ -39,6 +39,7 @@ def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
         id=flight.id,
         user_id=user_id,
         profile_id=flight.profile_id,
+        aircraft_id=flight.aircraft_id,
         route_name=flight.route_name,
         waypoints_json=json.dumps(flight.waypoints),
         departure_time=flight.departure_time,
@@ -59,6 +60,7 @@ def _row_to_flight(row: FlightRow) -> Flight:
         id=row.id,
         user_id=row.user_id,
         profile_id=row.profile_id,
+        aircraft_id=row.aircraft_id,
         route_name=row.route_name,
         waypoints=json.loads(row.waypoints_json),
         departure_time=_ensure_utc(row.departure_time),
@@ -232,6 +234,7 @@ def save_flight(session: Session, flight: Flight, user_id: str) -> None:
     if existing:
         existing.route_name = flight.route_name
         existing.profile_id = flight.profile_id
+        existing.aircraft_id = flight.aircraft_id
         existing.waypoints_json = json.dumps(flight.waypoints)
         existing.departure_time = flight.departure_time
         existing.cruise_altitude_ft = flight.cruise_altitude_ft

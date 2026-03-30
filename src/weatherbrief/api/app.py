@@ -23,6 +23,7 @@ from flyfun_common.db import (
 )
 from flyfun_common.db.models import UserPreferencesRow
 
+from weatherbrief.api.aircraft import router as aircraft_router
 from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import refresh_router, router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
@@ -47,6 +48,7 @@ def _on_delete_user(user_id: str, db):
     from pathlib import Path
     from weatherbrief.db.models import (
         BriefingUsageRow, FeedbackRow, FlightProfileRow, FlightRow,
+        UserAircraftRow,
     )
     from weatherbrief.storage.flights import _data_dir, _rmtree, safe_path_component
 
@@ -72,6 +74,9 @@ def _on_delete_user(user_id: str, db):
     ).delete(synchronize_session=False)
     db.query(FeedbackRow).filter(
         FeedbackRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    db.query(UserAircraftRow).filter(
+        UserAircraftRow.user_id == user_id
     ).delete(synchronize_session=False)
     db.flush()
 
@@ -227,6 +232,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(auth_router)
 
+    app.include_router(aircraft_router, prefix="/api")
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")

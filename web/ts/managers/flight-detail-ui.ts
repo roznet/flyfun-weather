@@ -2,6 +2,7 @@
 
 import type { FlightResponse, PackMeta } from '../store/types';
 import type { WaypointInfo } from '../adapters/api-adapter';
+import type { AircraftResponse } from '../adapters/aircraft-adapter';
 import type { ProfileResponse } from '../adapters/profiles-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRoute } from '../utils';
 import { getDateLocale } from '../i18n/i18n';
@@ -34,6 +35,7 @@ export function renderFlightInfo(
   editing: boolean,
   profiles: ProfileResponse[] = [],
   waypoints: WaypointInfo[] = [],
+  aircraft: AircraftResponse[] = [],
 ): void {
   const container = $('flight-info');
   if (!container || !flight) return;
@@ -102,6 +104,16 @@ export function renderFlightInfo(
       return `<option value="${p.id}"${sel}>${escapeHtml(p.name)}</option>`;
     }).join('');
 
+    // Build aircraft options
+    const aircraftOptions = '<option value="">None</option>' + aircraft.map(ac => {
+      const label = ac.tail_number
+        ? `${ac.tail_number} — ${ac.type_name}`
+        : ac.type_name;
+      const nickname = ac.nickname ? ` (${ac.nickname})` : '';
+      const sel = ac.id === flight.aircraft_id ? ' selected' : '';
+      return `<option value="${ac.id}"${sel}>${escapeHtml(label + nickname)}</option>`;
+    }).join('');
+
     container.innerHTML = `
       <div class="flight-info-grid editing">
         <div class="info-row">
@@ -109,6 +121,12 @@ export function renderFlightInfo(
           <span class="info-value">
             <input type="text" id="edit-waypoints" class="edit-input" value="${escapeHtml(flight.waypoints.join(' '))}" placeholder="e.g. EGTK LFPB LSGS" style="width:100%;font-family:monospace;">
             <div class="muted" style="font-size:0.75rem;margin-top:2px;">Origin (${escapeHtml(flight.waypoints[0] || '')}) and destination (${escapeHtml(flight.waypoints[flight.waypoints.length - 1] || '')}) cannot change</div>
+          </span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Aircraft</span>
+          <span class="info-value">
+            <select id="edit-aircraft" class="edit-input">${aircraftOptions}</select>
           </span>
         </div>
         <div class="info-row">
@@ -217,11 +235,22 @@ export function renderFlightInfo(
 
     const routeDisplay = flight.waypoints.join(' \u2192 ');
 
+    // Aircraft display (privacy-gated by server: tail_number only if owner)
+    const ac = flight.aircraft;
+    const aircraftDisplay = ac
+      ? (ac.tail_number ? `${ac.tail_number} — ${ac.type_name}` : ac.type_name)
+        + (ac.nickname ? ` (${ac.nickname})` : '')
+      : '\u2014';
+
     container.innerHTML = `
       <div class="flight-info-grid">
         <div class="info-row">
           <span class="info-label">Route</span>
           <span class="info-value" style="font-family:monospace;">${escapeHtml(routeDisplay)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Aircraft</span>
+          <span class="info-value">${escapeHtml(aircraftDisplay)}</span>
         </div>
         <div class="info-row">
           <span class="info-label">Profile</span>
