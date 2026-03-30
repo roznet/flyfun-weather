@@ -215,9 +215,7 @@ export function renderFlightInfo(
         </div>`;
     }
 
-    const routeDisplay = flight.waypoints.length > 2
-      ? flight.waypoints.join(' \u2192 ')
-      : flight.waypoints.join(' \u2192 ');
+    const routeDisplay = flight.waypoints.join(' \u2192 ');
 
     container.innerHTML = `
       <div class="flight-info-grid">
