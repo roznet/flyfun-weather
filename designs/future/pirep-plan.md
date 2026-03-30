@@ -48,9 +48,7 @@ wind_dir                INT NULL
 wind_speed_kt           INT NULL
 remarks                 TEXT NULL
 aircraft_type           VARCHAR(10) NULL    -- e.g. SR22, C172 — affects intensity interpretation
-pack_id                 INT NULL            -- FK to briefing_packs(id)
-predicted_icing         JSON NULL           -- snapshot of model prediction at this point
-predicted_cloud         JSON NULL           -- snapshot of model prediction at this point
+pack_id                 INT NULL            -- FK to briefing_packs(id), enables prediction vs observation research
 source                  ENUM('manual','inflight','postflight') DEFAULT 'manual'
 user_id                 VARCHAR(64) NULL    -- FK to users(id), nullable for anonymous
 ```
@@ -361,9 +359,18 @@ User opens app while:
 
 ### Reporting card
 
-Non-intrusive card shown below/beside the existing cross-section view. Pre-populated from forecast pack at current GPS position + altitude.
+Non-intrusive card shown below/beside the existing cross-section view. The form is **prediction-guided**: the app reads the forecast pack at the pilot's current GPS position + altitude and shows fields relevant to what's predicted. This keeps the form short and contextual.
 
-**Fields shown:**
+**Prediction-guided field selection:**
+
+- Forecast predicts icing → show icing intensity + type fields
+- Forecast predicts turbulence → show turbulence field
+- Forecast predicts cloud/low ceiling → show in-cloud + ceiling + tops fields
+- Always show: altitude, general conditions, remarks
+
+If nothing significant is predicted, the form is minimal — just "Conditions as expected? [Yes] [No]" with [No] expanding to the full field set.
+
+**Example form (icing + cloud predicted):**
 
 ```
 Current altitude: [8,500 ft]  ← pre-filled from GPS, editable
@@ -371,11 +378,10 @@ Current altitude: [8,500 ft]  ← pre-filled from GPS, editable
 In cloud?        [ Yes ]  [ No ]  [ Uncertain ]
 
 Icing:           [ None ] [ Trace ] [ Light ] [ Moderate ]
-                  ↑ pre-selected from forecast, pilot confirms/corrects
-
-Turbulence:      [ None ] [ Light ] [ Moderate ]
 
 Cloud tops (optional):  [_____] ft  [ Observed above ] [ Estimated ]
+
+[ + More fields ]     ← expands to turbulence, wind, temp, remarks
 
 [ Submit Report ]   [ Skip ]
 ```
@@ -383,7 +389,8 @@ Cloud tops (optional):  [_____] ft  [ Observed above ] [ Estimated ]
 **Key UX principles:**
 
 - Never a modal or pop-up — always opt-in when pilot opens app
-- Show forecast prediction *after* submission, not before (avoids confirmation bias)
+- Form is guided by forecast predictions to stay short and relevant
+- Show forecast prediction *after* submission, not before (avoids confirmation bias) — the prediction guides which fields appear, but NOT what values are pre-selected
 - Skip is one tap, never penalised
 - Offline-capable: store locally, sync when connectivity returns
 
@@ -456,21 +463,27 @@ More considered responses than inflight — pilots are relaxed, can think.
 
 ## Phase 8 — Model Validation Dataset
 
-Each PIREP automatically links to the forecast pack via `pack_id`, enabling retrospective comparison:
+PIREPs are pure observation data — no predictions are stored on the PIREP row itself. Instead, each PIREP links to the forecast pack via `pack_id`, and since linked packs are exempt from retention (see Data Retention below), the full forecast data is always available for retrospective comparison.
+
+Validation queries reconstruct predictions by loading the linked pack’s forecast data and interpolating to the PIREP’s lat/lon/altitude/time:
 
 ```python
-# Query: how accurate was ECMWF icing prediction vs pilot reports?
-SELECT
-    p.observed_at,
-    p.icing_intensity AS reported,
-    JSON_EXTRACT(p.predicted_icing, '$.ecmwf.intensity') AS ecmwf_predicted,
-    JSON_EXTRACT(p.predicted_icing, '$.gfs.intensity') AS gfs_predicted
-FROM pireps p
-WHERE p.pack_id IS NOT NULL
-  AND p.icing_intensity IS NOT NULL
+# Pseudocode: reconstruct prediction vs observation for a PIREP
+pirep = get_pirep(pirep_id)
+pack = load_pack(pirep.pack_id)  # retained indefinitely due to PIREP link
+forecast_at_pirep = interpolate_forecast(
+    pack.forecasts, pirep.latitude, pirep.longitude,
+    pirep.gps_altitude_ft, pirep.observed_at
+)
+comparison = {
+    "observed_icing": pirep.icing_intensity,
+    "ecmwf_predicted_icing": forecast_at_pirep["ecmwf"]["icing"],
+    "gfs_predicted_icing": forecast_at_pirep["gfs"]["icing"],
+    # ... same for cloud, turbulence, etc.
+}
 ```
 
-Over time this builds a dataset of NWP model accuracy at GA-relevant altitudes in European airspace — something met offices don’t currently track.
+Over time this builds a dataset of NWP model accuracy at GA-relevant altitudes in European airspace — something met offices don’t currently track. Reconstructing from the full pack (rather than storing snapshots) means validation can be re-run as analysis methods improve.
 
 ### Data Retention
 
