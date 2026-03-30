@@ -53,7 +53,6 @@ remarks                 TEXT NULL
 aircraft_id             INT NULL            -- FK to user_aircraft(id), see prerequisite below
 pack_id                 INT NULL            -- FK to briefing_packs(id), enables prediction vs observation research
 source                  ENUM('manual','inflight','postflight') DEFAULT 'manual'
-held_for_review         BOOLEAN DEFAULT FALSE -- severe reports from new accounts held until admin approves
 user_id                 VARCHAR(64) NOT NULL -- FK to users(id); set to NULL on account deletion (anonymization)
 ```
 
@@ -128,14 +127,15 @@ The API enforces these permissions:
 - `GET /api/pireps` requires `pirep_can_view` during beta, open to all authenticated users after
 - Admin endpoints can bulk-enable for approved users
 
-### Rate Limiting
+### Rate Limiting & Moderation
 
 PIREP submissions are rate-limited to prevent abuse and notification flooding:
 
 - **Per-user:** max 1 PIREP per 2 minutes (inflight reports are periodic, not continuous)
 - **Per-user daily cap:** max 50 PIREPs per 24h (generous for long flights, catches runaway clients)
-- **Severe reports:** PIREPs with `moderate`/`severe` icing or turbulence from accounts less than 7 days old are held for admin review before triggering notifications
 - Enforced server-side; client should also debounce to avoid wasted requests
+
+**Trust model:** all users with `pirep_can_publish` are trusted by default. If a user misbehaves, admin disables their `pirep_can_publish` flag. This is a community feature — no pre-moderation queue.
 
 -----
 
@@ -275,14 +275,13 @@ Request received
   → check rate limit (1 per 2 min, 50 per day)
   → deduplicate by client_uuid (409 if duplicate)
   → validate and store PIREP
-  → if severe report from new account (<7 days): mark held_for_review = true
-  → if not held: trigger notification flow (async)
+  → trigger notification flow (async)
 ```
 
 ### Notification trigger flow (async, post-store)
 
 ```
-PIREP stored and not held for review
+PIREP stored
   → compute sync_delay = submitted_at - observed_at
   → if sync_delay > 30 min: skip notifications (data retained, alerts suppressed)
   → find_matching_route_watches() — filter to active flight windows only
@@ -429,6 +428,7 @@ Remarks (opt):   [________________________]
 - All fields always visible — "none" is an explicit, valuable answer
 - No values pre-selected — avoids confirmation bias entirely
 - Smart ordering surfaces predicted hazards first without hiding anything
+- **Offline dependency:** smart ordering reads the forecast pack to determine predicted hazards at the pilot's position. The companion app already supports downloading packs for offline use (Phase 2 of companion app) — pilots routinely download before departure since connectivity in flight is unreliable. If no pack is available offline, fall back to fixed field ordering.
 - Skip is one tap, never penalised
 - Offline-capable: store locally, sync when connectivity returns
 
