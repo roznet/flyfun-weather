@@ -74,3 +74,9 @@ pdf_limiter = SlidingWindowRateLimiter(max_requests=10, window_seconds=3600)
 
 plot_limiter = SlidingWindowRateLimiter(max_requests=60, window_seconds=3600)
 """Skew-T and hodograph matplotlib rendering (combined budget)."""
+
+pirep_burst_limiter = SlidingWindowRateLimiter(max_requests=1, window_seconds=120)
+"""PIREP submission — max 1 per 2 minutes."""
+
+pirep_daily_limiter = SlidingWindowRateLimiter(max_requests=50, window_seconds=86400)
+"""PIREP submission — max 50 per 24 hours."""

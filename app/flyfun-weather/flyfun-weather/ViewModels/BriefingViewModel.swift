@@ -6,6 +6,7 @@ enum BriefingTab: String, Hashable {
     case crossSection
     case map
     case digest
+    case pireps
 }
 
 /// Refresh pipeline state.
@@ -38,6 +39,7 @@ final class BriefingViewModel {
     private(set) var snapshotState: LoadingState<SnapshotResponse> = .idle
     private(set) var routeAnalysesState: LoadingState<RouteAnalysesResponse> = .idle
     private(set) var elevationState: LoadingState<ElevationResponse> = .idle
+    private(set) var pirepsState: LoadingState<[PirepResponse]> = .idle
 
     // Refresh state
     private(set) var refreshState: RefreshState = .idle
@@ -346,6 +348,17 @@ final class BriefingViewModel {
         } catch {
             elevationState = .error(error)
             Self.logger.error("Failed to load elevation: \(error)")
+        }
+    }
+
+    func loadPireps() async {
+        pirepsState = .loading
+        do {
+            let response = try await repository.fetchPireps(flightId: flight.id)
+            pirepsState = .loaded(response.items)
+        } catch {
+            pirepsState = .error(error)
+            Self.logger.error("Failed to load PIREPs: \(error)")
         }
     }
 }

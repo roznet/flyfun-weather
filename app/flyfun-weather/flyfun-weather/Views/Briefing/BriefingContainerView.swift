@@ -7,6 +7,7 @@ struct BriefingContainerView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel: BriefingViewModel?
     @State private var trackingService = FlightTrackingService()
+    @State private var showingPirepSheet = false
 
     /// Whether the current time is within the flight tracking window (departure - 2h to departure + duration + 2h).
     private var isInFlightWindow: Bool {
@@ -33,9 +34,24 @@ struct BriefingContainerView: View {
         .toolbar {
             if let viewModel {
                 ToolbarItem(placement: .topBarTrailing) {
-                    BriefingToolbarView(viewModel: viewModel, trackingService: trackingService,
-                                        isInFlightWindow: isInFlightWindow, startTracking: startTracking)
+                    HStack(spacing: 12) {
+                        if isInFlightWindow {
+                            Button {
+                                showingPirepSheet = true
+                            } label: {
+                                Label("Report PIREP", systemImage: "square.and.pencil")
+                                    .font(.caption)
+                            }
+                        }
+                        BriefingToolbarView(viewModel: viewModel, trackingService: trackingService,
+                                            isInFlightWindow: isInFlightWindow, startTracking: startTracking)
+                    }
                 }
+            }
+        }
+        .sheet(isPresented: $showingPirepSheet) {
+            if let viewModel, let repo = appState.repository {
+                PirepReportingView(viewModel: PirepViewModel(flight: flight, repository: repo))
             }
         }
         .task {
@@ -44,6 +60,7 @@ struct BriefingContainerView: View {
             viewModel = vm
             await vm.loadBriefing()
             await vm.checkActiveRefresh()
+            await vm.loadPireps()
         }
     }
 
@@ -248,6 +265,10 @@ private struct BriefingContentView: View {
 
             Tab("Digest", systemImage: "doc.text", value: BriefingTab.digest) {
                 DigestView(viewModel: viewModel)
+            }
+
+            Tab("PIREPs", systemImage: "cloud.sun", value: BriefingTab.pireps) {
+                PirepListView(pirepsState: viewModel.pirepsState)
             }
         }
     }

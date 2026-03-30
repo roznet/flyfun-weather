@@ -22,6 +22,7 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
 
   const navItems: { label: string; href: string; page: string; adminOnly?: boolean; badgeId?: string }[] = [
     { label: t('nav.flights'),  href: '/',               page: 'flights' },
+    { label: 'PIREPs',          href: '/pireps.html',    page: 'pireps' },
     { label: t('nav.settings'), href: '/settings.html',  page: 'settings' },
     { label: t('nav.help'),     href: '/help.html',      page: 'help', badgeId: 'nav-messages-badge' },
     { label: t('nav.admin'),    href: '/admin.html',     page: 'admin', adminOnly: true },
