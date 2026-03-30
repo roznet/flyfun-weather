@@ -51,6 +51,7 @@ export interface UpdateFlightRequest {
   cruise_altitude_ft?: number;
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
+  waypoints?: string[];
 }
 
 export interface UpdateFlightResponse extends FlightResponse {
@@ -134,6 +135,22 @@ export async function parseFpl(fplText: string): Promise<ParseFplResponse> {
   return apiFetch<ParseFplResponse>('/flights/parse-fpl', {
     method: 'POST',
     body: JSON.stringify({ fpl_text: fplText }),
+  });
+}
+
+// --- Route interpretation ---
+
+export interface InterpretRouteResponse {
+  original_tokens: string[];
+  interpreted: string[];
+  skipped: string[];
+  waypoints: WaypointInfo[];
+}
+
+export async function interpretRoute(rawRoute: string): Promise<InterpretRouteResponse> {
+  return apiFetch<InterpretRouteResponse>('/flights/interpret-route', {
+    method: 'POST',
+    body: JSON.stringify({ raw_route: rawRoute }),
   });
 }
 

@@ -2,6 +2,7 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchRouteDistance, parseFpl, type WaypointInfo } from './adapters/api-adapter';
+import { interpretAndConfirmRoute } from './components/route-interpret';
 import { fetchModelCatalog } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
@@ -390,22 +391,23 @@ async function init(): Promise<void> {
       const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;
       const profileId = profileSelect?.value ? parseInt(profileSelect.value, 10) : undefined;
 
-      const waypoints = wpRaw.split(/[\s,]+/).filter(Boolean).map((w) => w.toUpperCase());
       if (!targetDate) {
         ui.renderError(t('flights.form.errorDate'));
         return;
       }
-      if (waypoints.length < 2) {
+      if (!wpRaw) {
         ui.renderError(t('flights.form.errorWaypoints'));
         return;
       }
-      const invalidCodes = waypoints.filter((w) => !/^[A-Z0-9]{2,5}$/.test(w));
-      if (invalidCodes.length > 0) {
-        ui.renderError(
-          t('flights.form.errorInvalidCodes', { codes: invalidCodes.join(', ') }),
-        );
-        return;
-      }
+
+      // Smart route interpretation — resolve known waypoints, skip unknown tokens
+      const result = await interpretAndConfirmRoute(wpRaw, (msg) => ui.renderError(msg));
+      if (!result || !result.confirmed) return;
+      const waypoints = result.waypoints;
+
+      // Update the waypoints input to show the interpreted route
+      const wpInput = document.getElementById('input-waypoints') as HTMLInputElement;
+      if (wpInput) wpInput.value = waypoints.join(' ');
 
       try {
         const flight = await store.getState().createFlight(waypoints, targetDate, {

@@ -314,6 +314,94 @@ def compute_route_distance(
     )
 
 
+class InterpretRouteRequest(BaseModel):
+    """Request body for interpreting a route string with smart waypoint filtering."""
+
+    raw_route: str = Field(..., min_length=1, max_length=2000)
+
+
+class InterpretRouteResponse(BaseModel):
+    """Result of smart route interpretation."""
+
+    original_tokens: list[str] = []  # all tokens extracted from the input
+    interpreted: list[str] = []  # waypoints that resolved successfully
+    skipped: list[str] = []  # tokens that didn't resolve
+    waypoints: list[WaypointInfo] = []  # resolved waypoint details
+
+
+@router.post("/interpret-route", response_model=InterpretRouteResponse)
+def interpret_route(
+    req: InterpretRouteRequest,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+):
+    """Interpret a raw route string, resolving known waypoints and skipping unknown tokens.
+
+    Accepts free-form route text (e.g. from a flight plan paste). Extracts tokens
+    matching waypoint patterns, resolves each against the airport/navaid database,
+    and returns the list of recognized waypoints plus any skipped tokens.
+    """
+    from weatherbrief.airports import get_timezone, resolve_waypoints
+
+    db_path = getattr(request.app.state, "db_path", "")
+    if not db_path:
+        raise HTTPException(status_code=500, detail="Airport database not configured")
+
+    # Extract tokens that look like waypoint codes
+    tokens = [t.upper() for t in re.split(r"[\s,\-/]+", req.raw_route.strip()) if t]
+    # Filter to valid waypoint patterns (2-5 alphanumeric chars)
+    candidate_tokens = [t for t in tokens if WAYPOINT_RE.match(t)]
+
+    # Resolve each candidate individually to separate known from unknown
+    from euro_aip.models.route_resolver import RouteResolver
+
+    model = None
+    try:
+        from weatherbrief.airports import _load_airport_model
+        model = _load_airport_model(db_path)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not load airport database")
+
+    resolver = RouteResolver(model)
+    interpreted: list[str] = []
+    skipped: list[str] = []
+
+    for token in candidate_tokens:
+        point = resolver.resolve_point(token)
+        if point is not None:
+            # Skip consecutive duplicates (e.g. "ABDIL ABDIL" after filtering)
+            if not interpreted or interpreted[-1] != token:
+                interpreted.append(token)
+        else:
+            skipped.append(token)
+
+    # Resolve the interpreted waypoints to get full info
+    waypoint_infos: list[WaypointInfo] = []
+    if len(interpreted) >= 2:
+        try:
+            resolved = resolve_waypoints(interpreted, db_path)
+            waypoint_infos = [
+                WaypointInfo(
+                    icao=wp.icao,
+                    name=wp.name,
+                    lat=wp.lat,
+                    lon=wp.lon,
+                    timezone=get_timezone(wp.lat, wp.lon),
+                )
+                for wp in resolved
+            ]
+        except KeyError:
+            # Should not happen since we pre-filtered, but handle gracefully
+            pass
+
+    return InterpretRouteResponse(
+        original_tokens=candidate_tokens,
+        interpreted=interpreted,
+        skipped=skipped,
+        waypoints=waypoint_infos,
+    )
+
+
 class ParseFplRequest(BaseModel):
     """Request body for parsing an ICAO flight plan string."""
 
@@ -453,6 +541,7 @@ class UpdateFlightRequest(BaseModel):
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
+    waypoints: list[str] | None = None  # updated route (origin+destination must match)
 
     @field_validator("departure_time")
     @classmethod
@@ -491,12 +580,13 @@ class UpdateFlightResponse(FlightResponse):
 def update_flight(
     flight_id: str,
     req: UpdateFlightRequest,
+    request: Request,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Update editable flight parameters (time, altitude, ceiling, duration).
+    """Update editable flight parameters (time, altitude, ceiling, duration, route).
 
-    The date portion of the flight cannot change — only time-of-day.
+    The date portion and origin/destination of the flight cannot change.
     Returns an invalidation hint so the frontend knows whether existing
     briefings need a refetch or just an advisory recalculation.
     """
@@ -506,6 +596,53 @@ def update_flight(
     time_changed = False
     altitude_changed = False
     profile_changed = False
+    route_changed = False
+
+    # Route (waypoints) change — origin and destination must remain the same
+    if req.waypoints is not None:
+        new_waypoints = [w.upper().strip() for w in req.waypoints]
+        if len(new_waypoints) < 2:
+            raise HTTPException(
+                status_code=422,
+                detail="At least 2 waypoints are required",
+            )
+        # Validate waypoint format
+        for wp in new_waypoints:
+            if not WAYPOINT_RE.match(wp):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters",
+                )
+        # Validate waypoints exist in the database
+        db_path = getattr(request.app.state, "db_path", "")
+        if db_path:
+            from weatherbrief.airports import resolve_waypoints
+
+            try:
+                resolve_waypoints(new_waypoints, db_path)
+            except KeyError as exc:
+                raise HTTPException(status_code=422, detail=exc.args[0])
+        # Enforce same origin and destination
+        old_origin = original_flight.waypoints[0] if original_flight.waypoints else None
+        old_dest = original_flight.waypoints[-1] if original_flight.waypoints else None
+        new_origin = new_waypoints[0]
+        new_dest = new_waypoints[-1]
+        if old_origin and new_origin != old_origin:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Origin cannot change (was {old_origin}, got {new_origin}). Create a new flight instead.",
+            )
+        if old_dest and new_dest != old_dest:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Destination cannot change (was {old_dest}, got {new_dest}). Create a new flight instead.",
+            )
+        if new_waypoints != original_flight.waypoints:
+            import json as _json
+            row.waypoints_json = _json.dumps(new_waypoints)
+            # Update route_name to reflect new waypoints
+            row.route_name = "_".join(w.lower() for w in new_waypoints)
+            route_changed = True
 
     # Profile change — apply the new profile's altitude/ceiling to the flight
     if req.profile_id is not None and req.profile_id != original_flight.profile_id:
@@ -573,7 +710,7 @@ def update_flight(
     db.flush()
     updated = load_flight(db, flight_id)
 
-    if time_changed:
+    if time_changed or route_changed:
         invalidation = "refetch_needed"
     elif altitude_changed or profile_changed:
         invalidation = "advisories_only"
