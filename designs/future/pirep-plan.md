@@ -289,7 +289,59 @@ PIREP submitted (user must have pirep_can_publish permission)
 
 -----
 
-## Phase 5 — iOS In-Flight Reporting UI
+## Phase 5 — Web App PIREP Viewer
+
+Requires `pirep_can_view` permission. New **PIREPs** tab in the web app briefing view.
+
+### Two views
+
+#### List view (default)
+
+- Chronological list of recent PIREPs (last 6 hours by default)
+- Time range selector to browse historical PIREPs — when viewing historical data, age badges are hidden (all data is old by definition)
+- Each row shows: time, location (nearest waypoint or lat/lon), altitude, hazard type icons, severity
+- Tap/click a row to expand inline detail card showing all fields (icing type, turbulence, cloud tops, temp, wind, remarks, aircraft type, source)
+
+#### Map view
+
+- Leaflet map (reuse existing route map infrastructure)
+- **"Fog of war" overlay:** the entire map has a semi-transparent dark overlay by default. Around each PIREP, a circle (radius ~30 km) is cut out of the overlay, revealing the normal map underneath. This makes it visually unambiguous that areas without PIREPs are **unknown**, not clear.
+- PIREPs shown as markers within the cleared circles
+
+##### PIREP marker design
+
+**Hazard type** — marker icon/shape:
+- Icing: snowflake
+- Turbulence: zigzag
+- Cloud/ceiling: cloud
+- Multiple hazards: stacked or combined icon
+- "None" reports (pilot confirmed clear): checkmark — these are valuable data too
+
+**Severity** — marker color:
+- None/clear: green
+- Trace/light: yellow
+- Moderate: orange
+- Severe: red
+
+**Age** (live view only, not historical):
+- Fresh (<30 min): full opacity, subtle pulse animation
+- Recent (30–90 min): reduced opacity (~70%)
+- Stale (>90 min): low opacity (~40%) with "STALE" label, grey-tinted
+
+Tap a marker to show the same detail card as the list view.
+
+### API endpoints
+
+```
+GET /api/pireps?bounds=sw_lat,sw_lon,ne_lat,ne_lon&hours=6   # map viewport query
+GET /api/pireps?from=2026-03-01T00:00Z&to=2026-03-01T12:00Z  # historical range
+```
+
+Both require `pirep_can_view` permission.
+
+-----
+
+## Phase 6 — iOS In-Flight Reporting UI
 
 ### Trigger condition
 
@@ -335,7 +387,7 @@ Cloud tops (optional):  [_____] ft  [ Observed above ] [ Estimated ]
 
 -----
 
-## Phase 6 — Post-Flight Debrief
+## Phase 7 — Post-Flight Debrief
 
 After landing, prompt once with the forecast cross-section overlaid with the route flown.
 
@@ -348,7 +400,7 @@ More considered responses than inflight — pilots are relaxed, can think.
 
 -----
 
-## Phase 7 — Model Validation Dataset
+## Phase 8 — Model Validation Dataset
 
 Each PIREP automatically links to the forecast pack via `pack_id`, enabling retrospective comparison:
 
@@ -401,7 +453,8 @@ Follows US PIREP structure with additions for ceiling/tops:
 
 1. **Alembic migration** — 5 new tables (pireps, device_tokens, route_watches, airport_watches, notification_log), no existing schema changes
 1. **Shapely spatial matching** — standalone utility, easily testable
-1. **FastAPI endpoints** — PIREP submit + watch registration
+1. **FastAPI endpoints** — PIREP submit + query + watch registration
+1. **Web app PIREP viewer** — list view, map with fog-of-war overlay, detail cards
 1. **APNs p8 setup** — generate key in Apple Developer Portal, implement `notify/apns.py`
 1. **iOS reporting card** — inflight contextual UI
 1. **Post-flight debrief screen**
