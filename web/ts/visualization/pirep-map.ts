@@ -1,9 +1,8 @@
 /** PIREP map — Leaflet map with PIREP markers, severity colors, and awareness circles. */
 
+import * as L from 'leaflet';
 import type { PirepResponse } from '../adapters/pirep-adapter';
 import { renderPirepDetailCard } from '../managers/pirep-ui';
-
-declare const L: any;
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
@@ -47,9 +46,9 @@ function ageOpacity(observedAt: string): number {
 
 export class PirepMap {
   private container: HTMLElement;
-  private map: any = null;
-  private markersGroup: any = null;
-  private circlesGroup: any = null;
+  private map: L.Map | null = null;
+  private markersGroup: L.LayerGroup | null = null;
+  private circlesGroup: L.LayerGroup | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
