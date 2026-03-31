@@ -241,6 +241,16 @@ def create_app() -> FastAPI:
     )
     app.include_router(auth_router)
 
+    # Dev-only endpoint: issue a JWT for the dev user without OAuth
+    if is_dev_mode():
+        from flyfun_common.auth import create_token
+        from flyfun_common.db import DEV_USER_ID
+
+        @app.get("/auth/dev-token")
+        def dev_token():
+            token = create_token(DEV_USER_ID, "dev@localhost", "Dev User", get_jwt_secret())
+            return {"token": token}
+
     app.include_router(aircraft_router, prefix="/api")
     app.include_router(pireps_router, prefix="/api")
     app.include_router(flights_router, prefix="/api")
