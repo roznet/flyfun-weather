@@ -60,10 +60,28 @@ struct FlightListView: View {
                         } label: {
                             Label("Add Flight", systemImage: "plus")
                         }
-                        Button {
-                            showSettings = true
+                        Menu {
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Label("Settings", systemImage: "gearshape")
+                            }
+
+                            Button {
+                                openURL(AppState.defaultBaseURL)
+                            } label: {
+                                Label("Open Website", systemImage: "safari")
+                            }
+
+                            Divider()
+
+                            Button(role: .destructive) {
+                                appState.logout()
+                            } label: {
+                                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
                         } label: {
-                            Label("Settings", systemImage: "gearshape")
+                            Label("More", systemImage: "ellipsis.circle")
                         }
                     }
                 }
