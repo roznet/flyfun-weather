@@ -100,7 +100,7 @@ def _run_claude(
         "--tools", "Read,Grep,Glob,Agent",
         "--model", "sonnet",
         "--max-turns", "20",
-        "--max-budget-usd", "0.50",
+        "--max-budget-usd", "1.00",
         "--no-session-persistence",
     ]
 
@@ -157,17 +157,19 @@ def _parse_claude_output(raw: str, elapsed_s: float) -> dict:
     except json.JSONDecodeError:
         outer = _extract_json_fallback(raw)
 
-    # Check for max-turns or other errors with no structured output
+    # Check for errors with no structured output (max-turns, budget exceeded, etc.)
     subtype = outer.get("subtype", "")
-    if subtype == "error_max_turns":
-        logger.warning("Claude hit max turns — no structured output")
+    is_error = outer.get("is_error", False)
+    if subtype == "error_max_turns" or (is_error and "structured_output" not in outer and "result" not in outer):
+        error_label = subtype or "error_unknown"
+        logger.warning("Claude triage ended with error: %s (stop_reason=%s)", error_label, outer.get("stop_reason"))
         return {
             "result": {},
             "cost_usd": outer.get("total_cost_usd") or outer.get("cost_usd"),
             "duration_ms": outer.get("duration_ms") or int(elapsed_s * 1000),
             "num_turns": outer.get("num_turns"),
             "session_id": outer.get("session_id"),
-            "error": "max_turns",
+            "error": error_label,
         }
 
     # --json-schema puts structured output in "structured_output", not "result"
