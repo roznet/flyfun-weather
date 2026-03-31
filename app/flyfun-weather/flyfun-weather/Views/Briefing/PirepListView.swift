@@ -3,9 +3,10 @@ import SwiftUI
 /// Read-only list of PIREPs for a flight, shown as a briefing tab.
 struct PirepListView: View {
     let pirepsState: LoadingState<[PirepResponse]>
+    var retryAction: () async -> Void = {}
 
     var body: some View {
-        LoadingStateView(state: pirepsState, loadingMessage: "Loading PIREPs...") { pireps in
+        LoadingStateView(state: pirepsState, retryAction: retryAction) { pireps in
             if pireps.isEmpty {
                 ContentUnavailableView(
                     "No PIREPs",
