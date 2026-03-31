@@ -105,6 +105,7 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func fetchPireps(flightId: String) async throws -> PirepListResponse {
-        try await client.request("/api/pireps?flight_id=\(flightId)")
+        let encoded = flightId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? flightId
+        return try await client.requestURL("/api/pireps?flight_id=\(encoded)")
     }
 }

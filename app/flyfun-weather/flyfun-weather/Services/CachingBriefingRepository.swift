@@ -115,6 +115,7 @@ final class CachingBriefingRepository: BriefingRepository {
     }
 
     func fetchPireps(flightId: String) async throws -> PirepListResponse {
+        // Always online — PIREPs are live community data, not cached
         try await online.fetchPireps(flightId: flightId)
     }
 
