@@ -268,7 +268,9 @@ private struct BriefingContentView: View {
             }
 
             Tab("PIREPs", systemImage: "cloud.sun", value: BriefingTab.pireps) {
-                PirepListView(pirepsState: viewModel.pirepsState)
+                PirepListView(pirepsState: viewModel.pirepsState) {
+                    await viewModel.loadPireps()
+                }
             }
         }
     }
