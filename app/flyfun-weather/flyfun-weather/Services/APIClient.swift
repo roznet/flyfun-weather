@@ -106,6 +106,26 @@ actor APIClient {
         }
     }
 
+    /// Decode a JSON response from a path that may contain query parameters.
+    /// Use this instead of `request(_:)` when the path includes `?key=value`.
+    func requestURL<T: Decodable>(_ pathAndQuery: String, method: String = "GET", body: Data? = nil) async throws -> T {
+        let data = try await requestDataURL(pathAndQuery, method: method, body: body)
+        do {
+            return try JSONDecoder.weatherBrief.decode(T.self, from: data)
+        } catch {
+            Self.logger.error("Decoding failed for \(pathAndQuery): \(error)")
+            throw APIError.decodingError(error)
+        }
+    }
+
+    /// Fetch raw data from a path that may contain query parameters.
+    func requestDataURL(_ pathAndQuery: String, method: String = "GET", body: Data? = nil) async throws -> Data {
+        guard let url = URL(string: pathAndQuery, relativeTo: baseURL) else {
+            throw APIError.networkError(URLError(.badURL))
+        }
+        return try await _fetch(url: url, method: method, body: body, label: pathAndQuery)
+    }
+
     /// Perform a request that returns no body (e.g. DELETE).
     func requestVoid(_ path: String, method: String = "DELETE") async throws {
         _ = try await requestData(path, method: method)
@@ -114,6 +134,10 @@ actor APIClient {
     /// Fetch raw data (for images, file downloads).
     func requestData(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         let url = baseURL.appendingPathComponent(path)
+        return try await _fetch(url: url, method: method, body: body, label: path)
+    }
+
+    private func _fetch(url: URL, method: String, body: Data?, label: String) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
@@ -122,7 +146,7 @@ actor APIClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
-        Self.logger.debug("\(method) \(path)")
+        Self.logger.debug("\(method) \(label)")
 
         let data: Data
         let response: URLResponse
