@@ -64,6 +64,21 @@ struct LoginView: View {
             }
             .disabled(isSigningIn)
 
+            #if targetEnvironment(simulator)
+            Button {
+                Task { await devLogin() }
+            } label: {
+                Text("Dev Login")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: 280)
+                    .padding()
+                    .background(.gray)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(isSigningIn)
+            #endif
+
             Spacer()
                 .frame(height: 60)
         }
@@ -92,6 +107,27 @@ struct LoginView: View {
             }
         }
     }
+
+    #if targetEnvironment(simulator)
+    private func devLogin() async {
+        isSigningIn = true
+        errorMessage = nil
+        defer { isSigningIn = false }
+        do {
+            let url = AppState.defaultBaseURL.appendingPathComponent("auth/dev-token")
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard let token = json?["token"] as? String else {
+                errorMessage = "No token in dev-token response"
+                return
+            }
+            let callbackURL = URL(string: "flyfunweather://auth/callback?token=\(token)")!
+            appState.handleAuthCallback(url: callbackURL)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+    #endif
 
     private func signIn(provider: String) async {
         isSigningIn = true
