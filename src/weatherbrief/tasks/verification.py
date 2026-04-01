@@ -80,11 +80,14 @@ def _resolve_corridor_airports(
     airports_db_path: str,
     corridor_nm: float,
 ) -> list[tuple[str, float]]:
-    """Resolve corridor airports for a flight via spatial query.
+    """Resolve corridor airports for a flight via local spatial query.
+
+    Uses model.find_airports_near_route() which queries the local SQLite
+    airport database — no network calls. METAR/TAF fetching happens only
+    once, later in Phase B.
 
     Returns list of (icao, distance_from_route_nm).
     """
-    from euro_aip.briefing.weather.route_weather import RouteWeatherService
     from weatherbrief.airports import _load_airport_model
 
     waypoints_raw = json.loads(flight_row.waypoints_json or "[]")
@@ -97,18 +100,12 @@ def _resolve_corridor_airports(
     ]
 
     model = _load_airport_model(airports_db_path)
-    service = RouteWeatherService()
-    result = service.fetch_route_weather(
-        route_icaos=route_icaos,
-        corridor_nm=corridor_nm,
-        model=model,
-    )
+    nearby = model.find_airports_near_route(route_icaos, distance_nm=corridor_nm)
 
     airports: list[tuple[str, float]] = []
-    for raw in result.airports:
-        # Only keep airports that have a METAR — skip empty ones
-        if raw.latest_metar is not None:
-            airports.append((raw.icao, raw.distance_from_route_nm))
+    for entry in nearby:
+        airport = entry["airport"]
+        airports.append((airport.ident, entry["segment_distance_nm"]))
 
     return airports
 
@@ -272,34 +269,24 @@ def fetch_observations_batch(
 def _should_skip_for_hourly_dedup(
     db: Session, icao: str, obs_time: datetime,
 ) -> bool:
-    """One-per-hour filter: keep whichever observation is closest to :00.
+    """One-per-hour filter: keep at most one observation per airport per clock hour.
 
-    Returns True if the caller should skip this observation (existing is better).
-    Returns False if the caller should insert (no existing, or new is closer
-    to top-of-hour — in which case the old row is deleted here).
+    Returns True if an observation already exists for this (icao, hour) —
+    the caller should skip this observation. Once an observation is stored
+    it is never replaced, since scores or FK references may already point
+    to it.
     """
     hour_start = obs_time.replace(minute=0, second=0, microsecond=0)
     hour_end = hour_start + timedelta(hours=1)
     existing = db.execute(
-        select(VerificationObservationRow)
+        select(VerificationObservationRow.id)
         .where(VerificationObservationRow.icao == icao)
         .where(VerificationObservationRow.observation_time >= hour_start)
         .where(VerificationObservationRow.observation_time < hour_end)
         .limit(1)
     ).scalar_one_or_none()
 
-    if existing is None:
-        return False  # No existing observation — insert
-
-    # Keep whichever is closer to the top of the hour
-    existing_offset = abs((existing.observation_time - hour_start).total_seconds())
-    new_offset = abs((obs_time - hour_start).total_seconds())
-    if new_offset < existing_offset:
-        # New observation is closer — delete the old one so caller can insert
-        db.delete(existing)
-        db.flush()
-        return False
-    return True  # Existing is closer — skip
+    return existing is not None
 
 
 def store_observations(
