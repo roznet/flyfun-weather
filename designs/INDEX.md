@@ -79,7 +79,7 @@ Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `Cros
 
 ### metar-taf-accuracy [project]
 Automated METAR/TAF verification system: collects observations during flights, scores NWP models and TAFs against ground truth, builds historical accuracy database. Standalone observation archive (anonymized, flight-independent), thin flight linkage, 10-min collection loop, CLI for backfill/export.
-Key exports: `collect_and_store`, `score_against_models`, `score_taf_against_metar`, `VerificationObservation`, `VerificationScore`
+Key exports: `collect_and_store`, `score_flight`, `score_completed_flights`, `VerificationObservation`, `VerificationSummary`
 → Full doc: metar-taf-accuracy.md
 
 ### rzskewt
