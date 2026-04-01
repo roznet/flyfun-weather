@@ -2,6 +2,7 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchRouteDistance, parseFpl, type WaypointInfo } from './adapters/api-adapter';
+import { fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
 import { interpretAndConfirmRoute } from './components/route-interpret';
 import { fetchModelCatalog } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
@@ -16,6 +17,7 @@ import {
 } from './utils/timezone';
 
 let loadedProfiles: ProfileResponse[] = [];
+let loadedAircraft: AircraftResponse[] = [];
 
 /** Whether the user has manually edited the duration field since the last
  *  waypoint or profile change. When true, auto-calculation is suppressed. */
@@ -135,6 +137,20 @@ function translateStaticElements(): void {
   set('h1', 'page.flights.title');
   set('.create-panel h3', 'page.flights.newFlight');
   set('label[for="input-waypoints"]', 'page.flights.waypoints');
+  // Aircraft label — preserve the (i) button child
+  const acLabel = document.querySelector('label[for="input-aircraft"]');
+  const acInfoBtn = acLabel?.querySelector('.aircraft-info-btn');
+  if (acLabel) {
+    acLabel.textContent = t('page.flights.aircraft') + ' ';
+    if (acInfoBtn) {
+      acLabel.appendChild(acInfoBtn);
+      acInfoBtn.setAttribute('title', t('flights.form.aircraftHint'));
+      acInfoBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        alert(t('flights.form.aircraftHint'));
+      });
+    }
+  }
   set('label[for="input-profile"]', 'page.flights.profile');
   set('label[for="input-date"]', 'page.flights.date');
   set('label[for="input-hour"]', 'page.flights.time');
@@ -339,12 +355,18 @@ async function init(): Promise<void> {
     }
   });
 
-  // --- Load profiles for the selector ---
+  // --- Load profiles and aircraft for the selectors ---
   try {
-    loadedProfiles = await fetchProfiles();
+    const [profs, acList] = await Promise.all([
+      fetchProfiles().catch(() => [] as ProfileResponse[]),
+      fetchAircraft().catch(() => [] as AircraftResponse[]),
+    ]);
+    loadedProfiles = profs;
+    loadedAircraft = acList;
     populateProfileSelector(loadedProfiles);
+    populateAircraftSelector(loadedAircraft);
   } catch {
-    // Profile selector stays empty; flights still work without it
+    // Selectors stay empty; flights still work without them
   }
 
   // --- First-login welcome wizard ---
@@ -390,6 +412,8 @@ async function init(): Promise<void> {
       const duration = parseFloat((document.getElementById('input-duration') as HTMLInputElement).value || '0');
       const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;
       const profileId = profileSelect?.value ? parseInt(profileSelect.value, 10) : undefined;
+      const aircraftSelect = document.getElementById('input-aircraft') as HTMLSelectElement;
+      const aircraftId = aircraftSelect?.value ? parseInt(aircraftSelect.value, 10) : undefined;
 
       if (!targetDate) {
         ui.renderError(t('flights.form.errorDate'));
@@ -417,6 +441,7 @@ async function init(): Promise<void> {
           flightCeilingFt: ceiling,
           flightDurationHours: duration,
           profileId: !isNaN(profileId!) ? profileId : undefined,
+          aircraftId: !isNaN(aircraftId!) ? aircraftId : undefined,
         });
         // Navigate to briefing page for the new flight
         navigateToBriefing(flight.id);
@@ -526,6 +551,58 @@ function populateProfileSelector(profiles: ProfileResponse[]): void {
       ceilInput.value = String(defaultProfile.settings.flight_ceiling_ft);
     }
   }
+}
+
+function populateAircraftSelector(aircraft: AircraftResponse[]): void {
+  const select = document.getElementById('input-aircraft') as HTMLSelectElement;
+  if (!select) return;
+
+  const formGroup = select.closest('.form-group') as HTMLElement | null;
+  // Remove any previous footnote
+  formGroup?.parentElement?.querySelector('.aircraft-hint')?.remove();
+
+  if (aircraft.length === 0) {
+    // Hide dropdown, show hint instead
+    if (formGroup) formGroup.style.display = 'none';
+    const hint = document.createElement('p');
+    hint.className = 'aircraft-hint muted';
+    hint.style.fontSize = '0.8rem';
+    hint.style.margin = '0.25rem 0 0';
+    hint.innerHTML = `You can add aircraft presets in <a href="/settings.html">Settings</a>.`;
+    // Insert hint after the form-row containing the aircraft dropdown
+    const formRow = formGroup?.parentElement;
+    formRow?.parentElement?.insertBefore(hint, formRow.nextSibling);
+    return;
+  }
+
+  if (formGroup) formGroup.style.display = '';
+
+  select.innerHTML = '<option value="">None</option>' + aircraft.map(ac => {
+    const label = ac.tail_number
+      ? `${ac.tail_number} — ${ac.type_name}`
+      : ac.type_name;
+    const nickname = ac.nickname ? ` (${ac.nickname})` : '';
+    const defaultTag = ac.is_default ? ' *' : '';
+    const selected = ac.is_default ? ' selected' : '';
+    return `<option value="${ac.id}"${selected}>${escapeHtml(label + nickname + defaultTag)}</option>`;
+  }).join('');
+
+  // When aircraft changes, pre-fill speed/ceiling from aircraft defaults
+  select.addEventListener('change', () => {
+    const acId = parseInt(select.value, 10);
+    const ac = aircraft.find(a => a.id === acId);
+    if (ac) {
+      if (ac.cruise_speed_kt) {
+        // Recalculate duration if we have a route distance
+        durationManuallyEdited = false;
+        fetchRouteAndUpdateUI();
+      }
+      if (ac.ceiling_ft) {
+        const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
+        if (ceilInput) ceilInput.value = String(ac.ceiling_ft);
+      }
+    }
+  });
 }
 
 function navigateToFlight(flightId: string): void {

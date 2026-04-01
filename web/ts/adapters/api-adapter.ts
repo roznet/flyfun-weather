@@ -46,6 +46,7 @@ export async function deleteFlight(id: string): Promise<void> {
 
 export interface UpdateFlightRequest {
   profile_id?: number;
+  aircraft_id?: number;
   departure_time?: string;
   alt_departure_time?: string | null;
   cruise_altitude_ft?: number;

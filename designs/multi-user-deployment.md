@@ -83,6 +83,28 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 | created_at | DATETIME | |
 | updated_at | DATETIME | |
 
+### user_aircraft
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INT AUTO_INCREMENT PK | |
+| user_id | VARCHAR(64) FK | Cascade delete with user |
+| icao_type | VARCHAR(4) NOT NULL | ICAO DOC 8643 designator (e.g. SR22, C172) |
+| tail_number | VARCHAR(10) NULL | Privacy-gated: only shown to owner |
+| nickname | VARCHAR(50) NULL | e.g. "Club SR22" — only shown to owner |
+| is_ifr | BOOLEAN DEFAULT FALSE | IFR capable |
+| is_fiki | BOOLEAN DEFAULT FALSE | FIKI equipped |
+| cruise_speed_kt | INT NULL | Typical cruise speed |
+| ceiling_ft | INT NULL | Service ceiling |
+| is_default | BOOLEAN DEFAULT FALSE | One default per user |
+| created_at | DATETIME | |
+
+ICAO type data is a **static JSON file** (`configs/icao_aircraft_types.json`, ~150 GA types) loaded into memory — not a database table. Searched via `storage/aircraft_types.py`.
+
+Aircraft and flight profiles are **independent** — aircraft provides physical capabilities (speed, ceiling, FIKI), profiles provide mission preferences (models, advisories, flight rules). Selecting an aircraft pre-fills defaults but doesn't constrain the profile.
+
+**Privacy rule**: `tail_number` and `nickname` are only included in API responses when `viewer_id == aircraft.user_id`. All other fields (type, capabilities) are always visible. This applies uniformly: flight detail views, shared flights, and future PIREPs.
+
 ### flights
 
 | Column | Type | Notes |
@@ -90,6 +112,7 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 | id | VARCHAR(100) PK | `{route_slug}-{target_date}-{hash}` |
 | user_id | VARCHAR(36) FK | |
 | profile_id | INT FK NULL | → flight_profiles.id, SET NULL on delete |
+| aircraft_id | INT FK NULL | → user_aircraft.id, SET NULL on delete |
 | route_name | VARCHAR(100) | |
 | waypoints | JSON | `["EGTK","LFPB","LSGS"]` |
 | departure_time | DATETIME(6) NOT NULL | Aware UTC departure (replaces old target_date + target_time_utc) |
@@ -208,7 +231,7 @@ Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens
 
 ### Account Deletion
 
-`DELETE /auth/me/account` triggers `_on_delete_user()` callback: cascade-deletes all flights (which cascade-deletes packs), profiles, usage records, feedback, and removes artifact files from disk.
+`DELETE /auth/me/account` triggers `_on_delete_user()` callback: cascade-deletes all flights (which cascade-deletes packs), profiles, aircraft, usage records, feedback, and removes artifact files from disk.
 
 ### Admin Hub (Cross-App)
 

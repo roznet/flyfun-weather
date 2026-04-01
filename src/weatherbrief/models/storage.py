@@ -27,6 +27,7 @@ class Flight(BaseModel):
     id: str  # slug: "{route_name}-{YYYY-MM-DD}-{hash}"
     user_id: str = ""  # owner; empty in single-user / dev mode
     profile_id: int | None = None  # associated flight profile
+    aircraft_id: int | None = None  # associated user aircraft
     route_name: str  # user-assigned name or derived from waypoints
     waypoints: list[str] = Field(default_factory=list)  # airports, navaids, or fixes
     departure_time: datetime  # aware UTC datetime

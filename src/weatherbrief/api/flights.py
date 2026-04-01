@@ -40,6 +40,7 @@ class CreateFlightRequest(BaseModel):
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
     profile_id: int | None = None  # flight profile to associate
+    aircraft_id: int | None = None  # user aircraft to associate
 
     @field_validator("departure_time")
     @classmethod
@@ -63,12 +64,28 @@ class CreateFlightRequest(BaseModel):
         return v
 
 
+class AircraftInfo(BaseModel):
+    """Lightweight aircraft info embedded in flight responses.
+
+    Privacy-gated: ``tail_number`` is only set when the viewer is the aircraft
+    owner; otherwise it is None.
+    """
+
+    id: int
+    icao_type: str
+    type_name: str  # "Manufacturer Model"
+    tail_number: str | None = None
+    nickname: str | None = None
+
+
 class FlightResponse(BaseModel):
     """Flight data in API responses."""
 
     id: str
     user_id: str
     profile_id: int | None = None
+    aircraft_id: int | None = None
+    aircraft: AircraftInfo | None = None
     route_name: str
     waypoints: list[str] = []
     departure_time: str
@@ -96,11 +113,47 @@ def _is_admin_or_dev(request: Request, db: Session) -> bool:
         return False
 
 
-def _flight_to_response(flight: Flight) -> FlightResponse:
+def _resolve_aircraft_info(
+    db: Session, aircraft_id: int | None, *, viewer_id: str | None = None,
+) -> AircraftInfo | None:
+    """Build AircraftInfo for a flight, privacy-gated by viewer."""
+    if aircraft_id is None:
+        return None
+    from weatherbrief.db.models import UserAircraftRow
+    from weatherbrief.storage.aircraft_types import get_aircraft_type
+
+    row = db.get(UserAircraftRow, aircraft_id)
+    if row is None:
+        return None
+
+    type_info = get_aircraft_type(row.icao_type)
+    type_name = f"{type_info['manufacturer']} {type_info['model']}" if type_info else row.icao_type
+
+    is_owner = viewer_id is not None and row.user_id == viewer_id
+    return AircraftInfo(
+        id=row.id,
+        icao_type=row.icao_type,
+        type_name=type_name,
+        tail_number=row.tail_number if is_owner else None,
+        nickname=row.nickname if is_owner else None,
+    )
+
+
+def _flight_to_response(
+    flight: Flight,
+    db: Session | None = None,
+    viewer_id: str | None = None,
+) -> FlightResponse:
+    aircraft = None
+    if db is not None and flight.aircraft_id:
+        aircraft = _resolve_aircraft_info(db, flight.aircraft_id, viewer_id=viewer_id)
+
     return FlightResponse(
         id=flight.id,
         user_id=flight.user_id,
         profile_id=flight.profile_id,
+        aircraft_id=flight.aircraft_id,
+        aircraft=aircraft,
         route_name=flight.route_name,
         waypoints=flight.waypoints,
         departure_time=flight.departure_time.isoformat(),
@@ -124,7 +177,7 @@ def list_all_flights(
 ):
     """List all saved flights."""
     flights = list_flights(db, user_id)
-    return [_flight_to_response(f) for f in flights]
+    return [_flight_to_response(f, db, viewer_id=user_id) for f in flights]
 
 
 @router.post("", response_model=FlightResponse, status_code=201)
@@ -222,6 +275,7 @@ def create_flight(
         id=flight_id,
         user_id=user_id,
         profile_id=req.profile_id,
+        aircraft_id=req.aircraft_id,
         route_name=route_name,
         waypoints=waypoints,
         departure_time=departure_time,
@@ -232,7 +286,7 @@ def create_flight(
     )
 
     save_flight(db, flight, user_id)
-    return _flight_to_response(flight)
+    return _flight_to_response(flight, db, viewer_id=user_id)
 
 
 class RouteDistanceRequest(BaseModel):
@@ -446,7 +500,8 @@ def parse_flight_plan(
     # Duration from EET
     duration_hours = None
     if fpl.eet_minutes is not None:
-        duration_hours = round(fpl.eet_minutes / 60, 1)
+        import math
+        duration_hours = float(math.ceil(fpl.eet_minutes / 60))
 
     return ParseFplResponse(
         waypoints=waypoints,
@@ -468,7 +523,7 @@ def get_flight(
 ):
     """Get flight details. Any authenticated user can view public flights."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
-    return _flight_to_response(flight)
+    return _flight_to_response(flight, db, viewer_id=user_id)
 
 
 class UpdateAutoRefreshRequest(BaseModel):
@@ -498,7 +553,7 @@ def update_auto_refresh(
     row.auto_refresh_hour = req.auto_refresh_hour
     db.flush()
     updated = load_flight(db, flight_id)
-    return _flight_to_response(updated)
+    return _flight_to_response(updated, db, viewer_id=user_id)
 
 
 class UpdatePrivacyRequest(BaseModel):
@@ -519,13 +574,14 @@ def update_privacy(
     row.private = req.private
     db.flush()
     updated = load_flight(db, flight_id)
-    return _flight_to_response(updated)
+    return _flight_to_response(updated, db, viewer_id=user_id)
 
 
 class UpdateFlightRequest(BaseModel):
     """Request body for updating editable flight parameters."""
 
     profile_id: int | None = None  # switch aircraft profile (applies its altitude/ceiling)
+    aircraft_id: int | None = None  # switch aircraft (applies speed/ceiling defaults)
     departure_time: str | None = None  # ISO 8601 (time-of-day change only; date must match)
     alt_departure_time: str | None = None  # ISO 8601 or "" to clear
     cruise_altitude_ft: int | None = None
@@ -649,6 +705,10 @@ def update_flight(
             row.flight_ceiling_ft = profile_settings["flight_ceiling_ft"]
             altitude_changed = True
 
+    # Aircraft change
+    if req.aircraft_id is not None and req.aircraft_id != original_flight.aircraft_id:
+        row.aircraft_id = req.aircraft_id if req.aircraft_id != 0 else None
+
     if req.departure_time is not None:
         new_dt = datetime.fromisoformat(req.departure_time)
         if new_dt.tzinfo is None:
@@ -706,7 +766,7 @@ def update_flight(
     else:
         invalidation = "none"
 
-    resp = _flight_to_response(updated)
+    resp = _flight_to_response(updated, db, viewer_id=user_id)
     return UpdateFlightResponse(**resp.model_dump(), invalidation=invalidation)
 
 

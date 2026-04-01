@@ -23,6 +23,8 @@ from flyfun_common.db import (
 )
 from flyfun_common.db.models import UserPreferencesRow
 
+from weatherbrief.api.aircraft import router as aircraft_router
+from weatherbrief.api.pireps import router as pireps_router
 from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import refresh_router, router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
@@ -46,7 +48,8 @@ def _on_delete_user(user_id: str, db):
     """Callback for account deletion: clean up all weatherbrief-specific data."""
     from pathlib import Path
     from weatherbrief.db.models import (
-        BriefingUsageRow, FeedbackRow, FlightProfileRow, FlightRow,
+        BriefingUsageRow, DeviceTokenRow, FeedbackRow, FlightProfileRow,
+        FlightRow, PirepRow, UserAircraftRow,
     )
     from weatherbrief.storage.flights import _data_dir, _rmtree, safe_path_component
 
@@ -72,6 +75,17 @@ def _on_delete_user(user_id: str, db):
     ).delete(synchronize_session=False)
     db.query(FeedbackRow).filter(
         FeedbackRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    db.query(UserAircraftRow).filter(
+        UserAircraftRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    # Anonymize PIREPs — preserve observation data, remove identity
+    db.query(PirepRow).filter(PirepRow.user_id == user_id).update(
+        {"user_id": None, "aircraft_id": None}, synchronize_session=False
+    )
+    # Delete device tokens entirely
+    db.query(DeviceTokenRow).filter(
+        DeviceTokenRow.user_id == user_id
     ).delete(synchronize_session=False)
     db.flush()
 
@@ -227,6 +241,18 @@ def create_app() -> FastAPI:
     )
     app.include_router(auth_router)
 
+    # Dev-only endpoint: issue a JWT for the dev user without OAuth
+    if is_dev_mode():
+        from flyfun_common.auth import create_token
+        from flyfun_common.db import DEV_USER_ID
+
+        @app.get("/auth/dev-token")
+        def dev_token():
+            token = create_token(DEV_USER_ID, "dev@localhost", "Dev User", get_jwt_secret())
+            return {"token": token}
+
+    app.include_router(aircraft_router, prefix="/api")
+    app.include_router(pireps_router, prefix="/api")
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")

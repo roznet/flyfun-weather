@@ -26,6 +26,7 @@ export interface FlightsState {
     flightCeilingFt?: number;
     flightDurationHours?: number;
     profileId?: number;
+    aircraftId?: number;
   }) => Promise<FlightResponse>;
   deleteFlight: (id: string) => Promise<void>;
 }
@@ -89,6 +90,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
         flight_ceiling_ft: opts?.flightCeilingFt,
         flight_duration_hours: opts?.flightDurationHours,
         profile_id: opts?.profileId,
+        aircraft_id: opts?.aircraftId,
       });
       // Refresh the list
       await get().loadFlights();
