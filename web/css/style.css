@@ -223,6 +223,7 @@ label {
 .form-group {
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .form-group.grow { flex: 1; }
@@ -3774,4 +3775,256 @@ label {
   color: var(--text-muted);
   text-align: center;
   padding: 2rem 0;
+}
+
+/* --- Aircraft cards --- */
+
+.aircraft-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.5rem;
+  background: var(--surface);
+  gap: 0.75rem;
+}
+
+.aircraft-card-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.aircraft-card-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.aircraft-card-details {
+  font-size: 0.85em;
+  margin-top: 0.15rem;
+}
+
+.aircraft-card-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+/* --- Autocomplete dropdown --- */
+
+.autocomplete-dropdown {
+  position: absolute;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 2px;
+  min-width: 280px;
+}
+
+.autocomplete-item {
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.autocomplete-item:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+.autocomplete-item:hover .muted {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* ==============================
+   PIREP styles
+   ============================== */
+
+.pirep-disclaimer {
+  margin-bottom: 1rem;
+  font-style: italic;
+}
+
+.pirep-view-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1rem;
+}
+
+.pirep-view-toggle .btn-toggle {
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.pirep-view-toggle .btn-toggle:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.pirep-view-toggle .btn-toggle:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.pirep-view-toggle .btn-toggle.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+.pirep-list-container {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.pirep-map-container {
+  height: 60vh;
+  min-height: 400px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pirep-filters {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.pirep-filters label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.pirep-filters select {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.pirep-row {
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.4rem;
+  background: var(--surface);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.pirep-row:hover {
+  background: var(--hover);
+}
+
+.pirep-row-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  font-size: 0.9rem;
+}
+
+.pirep-time {
+  min-width: 100px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.pirep-icons {
+  font-size: 1.1rem;
+}
+
+.pirep-icon-icing { color: #42a5f5; }
+.pirep-icon-turbulence { color: #ff9800; }
+.pirep-icon-cloud { color: #78909c; }
+.pirep-icon-clear { color: #4caf50; }
+
+.pirep-alt {
+  margin-left: auto;
+  font-family: monospace;
+  font-size: 0.85rem;
+}
+
+.pirep-own-badge {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: var(--primary);
+  color: #fff;
+  text-transform: uppercase;
+}
+
+.pirep-stale-tag {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  background: var(--text-muted);
+  color: var(--bg);
+  margin-left: 0.3rem;
+  text-transform: uppercase;
+}
+
+.pirep-detail-card {
+  padding: 0.6rem 0;
+}
+
+.pirep-detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.2rem 0;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.pirep-detail-row:last-child {
+  border-bottom: none;
+}
+
+.pirep-label {
+  color: var(--text-muted);
+  min-width: 80px;
+}
+
+.pirep-value {
+  text-align: right;
+  font-weight: 500;
+}
+
+/* PIREP map markers */
+.pirep-marker {
+  background: none;
+  border: none;
+}
+
+.pirep-marker-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+.pirep-map-disclaimer {
+  background: rgba(0,0,0,0.7);
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  max-width: 280px;
 }

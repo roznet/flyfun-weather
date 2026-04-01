@@ -427,6 +427,66 @@ def approve_user(
     return {"status": "approved", "user_id": user.id, "email": user.email}
 
 
+class PirepPermissionsRequest(BaseModel):
+    can_view: bool = True
+    can_publish: bool = False
+
+
+@router.post("/users/{user_id}/pirep-permissions")
+def set_pirep_permissions(
+    request: Request,
+    user_id: str,
+    body: PirepPermissionsRequest,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Set PIREP permissions for a user."""
+    row = db.get(UserPreferencesRow, user_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
+    data["pirep_can_view"] = body.can_view
+    data["pirep_can_publish"] = body.can_publish
+    row.app_prefs_json = json.dumps(data)
+    db.flush()
+
+    audit_admin_action(
+        "set_pirep_permissions", _admin_id, request,
+        target_user_id=user_id,
+        details=f"can_view={body.can_view} can_publish={body.can_publish}",
+    )
+    return {"user_id": user_id, "pirep_can_view": body.can_view, "pirep_can_publish": body.can_publish}
+
+
+@router.post("/pirep-permissions/bulk")
+def bulk_set_pirep_permissions(
+    request: Request,
+    body: PirepPermissionsRequest,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Enable PIREP permissions for all approved users."""
+    rows = db.query(UserPreferencesRow).join(
+        UserRow, UserPreferencesRow.user_id == UserRow.id
+    ).filter(UserRow.approved.is_(True)).all()
+
+    count = 0
+    for row in rows:
+        data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
+        data["pirep_can_view"] = body.can_view
+        data["pirep_can_publish"] = body.can_publish
+        row.app_prefs_json = json.dumps(data)
+        count += 1
+    db.flush()
+
+    audit_admin_action(
+        "bulk_pirep_permissions", _admin_id, request,
+        details=f"can_view={body.can_view} can_publish={body.can_publish} count={count}",
+    )
+    return {"updated": count, "pirep_can_view": body.can_view, "pirep_can_publish": body.can_publish}
+
+
 @router.get("/approve/{user_id}", response_class=HTMLResponse)
 def one_click_approve(
     request: Request,

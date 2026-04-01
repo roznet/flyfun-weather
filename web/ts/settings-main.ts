@@ -26,6 +26,15 @@ import {
   type ProfileResponse,
   type ProfileSettings,
 } from './adapters/profiles-adapter';
+import {
+  fetchAircraft,
+  createAircraft,
+  updateAircraft,
+  deleteAircraft,
+  searchAircraftTypes,
+  type AircraftResponse,
+  type AircraftType,
+} from './adapters/aircraft-adapter';
 import { initTheme } from './theme';
 import { initI18n, t, setLocale, getLocale, getDateLocale } from './i18n/i18n';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
@@ -45,6 +54,8 @@ const CATEGORY_KEYS: [string, string][] = [
 let catalog: AdvisoryCatalogEntry[] = [];
 let profiles: ProfileResponse[] = [];
 let activeProfileId: number | null = null;
+let aircraftList: AircraftResponse[] = [];
+let editingAircraftId: number | null = null;
 
 /** Default advisory models: all default briefing models except best_match. */
 function defaultAdvisoryModelKeys(): string[] {
@@ -508,6 +519,9 @@ async function init(): Promise<void> {
     }
   });
 
+  // Aircraft tab
+  initAircraftTab();
+
   // Delete account
   const deleteAccountBtn = document.getElementById('btn-delete-account');
   deleteAccountBtn?.addEventListener('click', async () => {
@@ -920,6 +934,225 @@ function renderUsageBar(label: string, used: number, limit: number | null): stri
       <span class="usage-label">${label}</span>
       <span class="usage-count" style="flex:1;">${used}</span>
     </div>`;
+}
+
+// --- Aircraft tab ---
+
+function initAircraftTab(): void {
+  // Load aircraft list
+  fetchAircraft()
+    .then(list => {
+      aircraftList = list;
+      renderAircraftList();
+    })
+    .catch(() => { /* aircraft section stays empty */ });
+
+  document.getElementById('btn-add-aircraft')?.addEventListener('click', () => {
+    editingAircraftId = null;
+    showAircraftForm('Add Aircraft');
+    clearAircraftForm();
+  });
+  document.getElementById('btn-save-aircraft')?.addEventListener('click', saveAircraftForm);
+  document.getElementById('btn-cancel-aircraft')?.addEventListener('click', hideAircraftForm);
+
+  // ICAO type autocomplete
+  const icaoInput = document.getElementById('ac-icao-type') as HTMLInputElement;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  icaoInput?.addEventListener('input', () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      const q = icaoInput.value.trim();
+      if (q.length >= 1) {
+        searchAircraftTypes(q).then(showTypeSuggestions).catch(() => hideTypeSuggestions());
+      } else {
+        hideTypeSuggestions();
+      }
+    }, 200);
+  });
+  icaoInput?.addEventListener('blur', () => {
+    // Delay hiding to allow click on suggestion
+    setTimeout(hideTypeSuggestions, 200);
+  });
+}
+
+function renderAircraftList(): void {
+  const container = document.getElementById('aircraft-list');
+  if (!container) return;
+
+  if (aircraftList.length === 0) {
+    container.innerHTML = '<p class="muted">No aircraft added yet.</p>';
+    return;
+  }
+
+  container.innerHTML = aircraftList.map(ac => {
+    const badges: string[] = [];
+    if (ac.is_default) badges.push('<span class="badge badge-green">Default</span>');
+    if (ac.is_ifr) badges.push('<span class="badge badge-none">IFR</span>');
+    if (ac.is_fiki) badges.push('<span class="badge badge-none">FIKI</span>');
+
+    const details: string[] = [];
+    if (ac.cruise_speed_kt) details.push(`${ac.cruise_speed_kt} kt`);
+    if (ac.ceiling_ft) details.push(`FL${Math.round(ac.ceiling_ft / 100)}`);
+
+    const tailDisplay = ac.tail_number ? `<strong>${escapeHtml(ac.tail_number)}</strong> — ` : '';
+    const nicknameDisplay = ac.nickname ? ` <span class="muted">(${escapeHtml(ac.nickname)})</span>` : '';
+
+    return `
+      <div class="aircraft-card" data-id="${ac.id}">
+        <div class="aircraft-card-main">
+          <div class="aircraft-card-info">
+            ${tailDisplay}${escapeHtml(ac.type_name)}${nicknameDisplay}
+            ${badges.join(' ')}
+          </div>
+          <div class="aircraft-card-details muted">${details.join(' · ')}</div>
+        </div>
+        <div class="aircraft-card-actions">
+          <button type="button" class="btn btn-secondary btn-sm ac-edit-btn" data-id="${ac.id}">Edit</button>
+          <button type="button" class="btn btn-danger btn-sm ac-delete-btn" data-id="${ac.id}">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Bind edit/delete buttons
+  for (const btn of container.querySelectorAll<HTMLButtonElement>('.ac-edit-btn')) {
+    btn.addEventListener('click', () => {
+      const ac = aircraftList.find(a => a.id === Number(btn.dataset.id));
+      if (ac) editAircraft(ac);
+    });
+  }
+  for (const btn of container.querySelectorAll<HTMLButtonElement>('.ac-delete-btn')) {
+    btn.addEventListener('click', async () => {
+      const id = Number(btn.dataset.id);
+      const ac = aircraftList.find(a => a.id === id);
+      if (!ac || !confirm(`Delete ${ac.tail_number || ac.type_name}?`)) return;
+      try {
+        await deleteAircraft(id);
+        aircraftList = aircraftList.filter(a => a.id !== id);
+        renderAircraftList();
+        showStatus('Aircraft deleted');
+      } catch (err) {
+        showStatus(`Failed to delete: ${err}`, true);
+      }
+    });
+  }
+}
+
+function editAircraft(ac: AircraftResponse): void {
+  editingAircraftId = ac.id;
+  showAircraftForm('Edit Aircraft');
+
+  (document.getElementById('ac-icao-type') as HTMLInputElement).value = ac.icao_type;
+  (document.getElementById('ac-tail') as HTMLInputElement).value = ac.tail_number || '';
+  (document.getElementById('ac-nickname') as HTMLInputElement).value = ac.nickname || '';
+  (document.getElementById('ac-speed') as HTMLInputElement).value = ac.cruise_speed_kt?.toString() || '';
+  (document.getElementById('ac-ceiling') as HTMLInputElement).value = ac.ceiling_ft?.toString() || '';
+  (document.getElementById('ac-ifr') as HTMLInputElement).checked = ac.is_ifr;
+  (document.getElementById('ac-fiki') as HTMLInputElement).checked = ac.is_fiki;
+  (document.getElementById('ac-default') as HTMLInputElement).checked = ac.is_default;
+
+  const label = document.getElementById('ac-type-label');
+  if (label) label.textContent = ac.type_name;
+}
+
+function showAircraftForm(title: string): void {
+  const section = document.getElementById('aircraft-form-section');
+  const titleEl = document.getElementById('aircraft-form-title');
+  if (section) section.style.display = '';
+  if (titleEl) titleEl.textContent = title;
+}
+
+function hideAircraftForm(): void {
+  const section = document.getElementById('aircraft-form-section');
+  if (section) section.style.display = 'none';
+  editingAircraftId = null;
+}
+
+function clearAircraftForm(): void {
+  (document.getElementById('ac-icao-type') as HTMLInputElement).value = '';
+  (document.getElementById('ac-tail') as HTMLInputElement).value = '';
+  (document.getElementById('ac-nickname') as HTMLInputElement).value = '';
+  (document.getElementById('ac-speed') as HTMLInputElement).value = '';
+  (document.getElementById('ac-ceiling') as HTMLInputElement).value = '';
+  (document.getElementById('ac-ifr') as HTMLInputElement).checked = false;
+  (document.getElementById('ac-fiki') as HTMLInputElement).checked = false;
+  (document.getElementById('ac-default') as HTMLInputElement).checked = false;
+  const label = document.getElementById('ac-type-label');
+  if (label) label.innerHTML = '&nbsp;';
+}
+
+async function saveAircraftForm(): Promise<void> {
+  const icaoType = (document.getElementById('ac-icao-type') as HTMLInputElement).value.trim().toUpperCase();
+  if (!icaoType) {
+    showStatus('ICAO type is required', true);
+    return;
+  }
+
+  const data = {
+    icao_type: icaoType,
+    tail_number: (document.getElementById('ac-tail') as HTMLInputElement).value.trim() || null,
+    nickname: (document.getElementById('ac-nickname') as HTMLInputElement).value.trim() || null,
+    cruise_speed_kt: parseInt((document.getElementById('ac-speed') as HTMLInputElement).value) || null,
+    ceiling_ft: parseInt((document.getElementById('ac-ceiling') as HTMLInputElement).value) || null,
+    is_ifr: (document.getElementById('ac-ifr') as HTMLInputElement).checked,
+    is_fiki: (document.getElementById('ac-fiki') as HTMLInputElement).checked,
+    is_default: (document.getElementById('ac-default') as HTMLInputElement).checked,
+  };
+
+  try {
+    if (editingAircraftId) {
+      const updated = await updateAircraft(editingAircraftId, data);
+      aircraftList = aircraftList.map(a => a.id === updated.id ? updated : a);
+      // If this became default, clear default from others
+      if (updated.is_default) {
+        aircraftList = aircraftList.map(a => a.id === updated.id ? a : { ...a, is_default: false });
+      }
+      showStatus('Aircraft updated');
+    } else {
+      const created = await createAircraft(data);
+      if (created.is_default) {
+        aircraftList = aircraftList.map(a => ({ ...a, is_default: false }));
+      }
+      aircraftList.push(created);
+      showStatus('Aircraft added');
+    }
+    renderAircraftList();
+    hideAircraftForm();
+  } catch (err) {
+    showStatus(`Failed to save: ${err}`, true);
+  }
+}
+
+function showTypeSuggestions(types: AircraftType[]): void {
+  const dropdown = document.getElementById('ac-type-suggestions');
+  if (!dropdown || types.length === 0) {
+    hideTypeSuggestions();
+    return;
+  }
+
+  dropdown.innerHTML = types.slice(0, 10).map(t =>
+    `<div class="autocomplete-item" data-icao="${escapeHtml(t.icao)}">
+      <strong>${escapeHtml(t.icao)}</strong> — ${escapeHtml(t.manufacturer)} ${escapeHtml(t.model)}
+      ${t.category ? `<span class="muted">(${escapeHtml(t.category)})</span>` : ''}
+    </div>`
+  ).join('');
+  dropdown.style.display = 'block';
+
+  for (const item of dropdown.querySelectorAll<HTMLElement>('.autocomplete-item')) {
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // prevent blur
+      const icao = item.dataset.icao || '';
+      (document.getElementById('ac-icao-type') as HTMLInputElement).value = icao;
+      const type = types.find(t => t.icao === icao);
+      const label = document.getElementById('ac-type-label');
+      if (label && type) label.textContent = `${type.manufacturer} ${type.model}`;
+      hideTypeSuggestions();
+    });
+  }
+}
+
+function hideTypeSuggestions(): void {
+  const dropdown = document.getElementById('ac-type-suggestions');
+  if (dropdown) dropdown.style.display = 'none';
 }
 
 if (document.readyState === 'loading') {

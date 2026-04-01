@@ -24,7 +24,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow, FlightRow, UserRow
+from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow, FlightRow, PirepRow, UserRow
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,13 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
 
     inactive_user_ids = _inactive_user_ids(db, now, config.inactive_threshold_days)
 
+    # Pack IDs linked to PIREPs — exempt from all retention.
+    pirep_pack_ids: set[int] = set(
+        db.execute(
+            select(PirepRow.pack_id).where(PirepRow.pack_id.isnot(None)).distinct()
+        ).scalars().all()
+    )
+
     # Query all packs joined to their flight (for departure_time + user_id).
     stmt = (
         select(BriefingPackRow, FlightRow.departure_time, FlightRow.user_id)
@@ -92,6 +99,8 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
     rows = db.execute(stmt).all()
 
     for pack, departure_time, user_id in rows:
+        if pack.id in pirep_pack_ids:
+            continue  # exempt: linked PIREP needs full forecast data
         if departure_time is None:
             continue
 
