@@ -2,39 +2,15 @@
 
 import * as L from 'leaflet';
 import type { PirepResponse } from '../adapters/pirep-adapter';
+import { SEVERITY_COLORS, maxSeverity, hazardIconsRaw as hazardIcon } from '../utils/pirep-helpers';
 import { renderPirepDetailCard } from '../managers/pirep-ui';
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
 const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
 
-const SEVERITY_COLORS: Record<string, string> = {
-  none: '#4caf50',
-  trace: '#fbc02d',
-  light: '#fbc02d',
-  moderate: '#ff9800',
-  severe: '#f44336',
-};
-
 function isDark(): boolean {
   return document.documentElement.dataset.theme === 'dark';
-}
-
-function maxSeverity(p: PirepResponse): string {
-  const order = ['none', 'trace', 'light', 'moderate', 'severe'];
-  let max = 0;
-  if (p.icing_intensity) max = Math.max(max, order.indexOf(p.icing_intensity));
-  if (p.turbulence_intensity) max = Math.max(max, order.indexOf(p.turbulence_intensity));
-  return order[max] || 'none';
-}
-
-function hazardIcon(p: PirepResponse): string {
-  const parts: string[] = [];
-  if (p.icing_intensity && p.icing_intensity !== 'none') parts.push('&#10052;');
-  if (p.turbulence_intensity && p.turbulence_intensity !== 'none') parts.push('&#9084;');
-  if (p.in_cloud || p.ceiling_msl_ft != null || p.tops_msl_ft != null) parts.push('&#9729;');
-  if (parts.length === 0) parts.push('&#10003;');
-  return parts.join('');
 }
 
 function ageOpacity(observedAt: string): number {

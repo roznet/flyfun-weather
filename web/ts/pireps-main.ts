@@ -37,12 +37,13 @@ async function loadPireps(): Promise<void> {
     if (pirepMap) {
       pirepMap.setData(currentPireps);
     }
-  } catch (err: any) {
-    if (err?.message?.includes('403')) {
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('403')) {
       listContainer.innerHTML = '<p class="muted">PIREP viewing is not enabled for your account.</p>';
       mapContainer.innerHTML = '';
     } else {
-      listContainer.innerHTML = `<p class="error">Failed to load PIREPs: ${err?.message || err}</p>`;
+      listContainer.innerHTML = `<p class="error">Failed to load PIREPs: ${msg}</p>`;
     }
   }
 }

@@ -1,19 +1,8 @@
 /** PIREP UI — list view, detail cards, filters, and severity styling. */
 
 import type { PirepResponse, PirepFilters } from '../adapters/pirep-adapter';
+import { SEVERITY_COLORS, maxSeverity, hazardIconsRaw } from '../utils/pirep-helpers';
 import { escapeHtml } from '../utils';
-
-// ---------------------------------------------------------------------------
-// Severity & hazard helpers
-// ---------------------------------------------------------------------------
-
-const SEVERITY_COLORS: Record<string, string> = {
-  none: '#4caf50',
-  trace: '#fbc02d',
-  light: '#fbc02d',
-  moderate: '#ff9800',
-  severe: '#f44336',
-};
 
 const SEVERITY_LABELS: Record<string, string> = {
   none: 'None',
@@ -26,26 +15,18 @@ const SEVERITY_LABELS: Record<string, string> = {
 function hazardIcons(pirep: PirepResponse): string {
   const icons: string[] = [];
   if (pirep.icing_intensity && pirep.icing_intensity !== 'none') {
-    icons.push('<span class="pirep-icon pirep-icon-icing" title="Icing">&#10052;</span>'); // snowflake
+    icons.push('<span class="pirep-icon pirep-icon-icing" title="Icing">&#10052;</span>');
   }
   if (pirep.turbulence_intensity && pirep.turbulence_intensity !== 'none') {
-    icons.push('<span class="pirep-icon pirep-icon-turbulence" title="Turbulence">&#9084;</span>'); // zigzag
+    icons.push('<span class="pirep-icon pirep-icon-turbulence" title="Turbulence">&#9084;</span>');
   }
   if (pirep.in_cloud || pirep.ceiling_msl_ft != null || pirep.tops_msl_ft != null) {
-    icons.push('<span class="pirep-icon pirep-icon-cloud" title="Cloud">&#9729;</span>'); // cloud
+    icons.push('<span class="pirep-icon pirep-icon-cloud" title="Cloud">&#9729;</span>');
   }
   if (icons.length === 0) {
-    icons.push('<span class="pirep-icon pirep-icon-clear" title="Clear">&#10003;</span>'); // checkmark
+    icons.push('<span class="pirep-icon pirep-icon-clear" title="Clear">&#10003;</span>');
   }
   return icons.join('');
-}
-
-function maxSeverity(pirep: PirepResponse): string {
-  const order = ['none', 'trace', 'light', 'moderate', 'severe'];
-  let max = 0;
-  if (pirep.icing_intensity) max = Math.max(max, order.indexOf(pirep.icing_intensity));
-  if (pirep.turbulence_intensity) max = Math.max(max, order.indexOf(pirep.turbulence_intensity));
-  return order[max] || 'none';
 }
 
 function ageCategory(observedAt: string): 'fresh' | 'recent' | 'stale' {
