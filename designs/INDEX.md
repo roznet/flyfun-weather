@@ -73,8 +73,8 @@ Key exports: `compute_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `
 → Full doc: cost-attribution-design.md
 
 ### companion-app
-iOS/iPad companion app: Phase 1 (online viewer) complete, Phase 2 (offline) mostly done. Auth (Apple + Google), NavigationSplitView, advisory dashboard, cross-section Canvas renderer, native Skew-T (RZSkewT package), pack history picker, SSE refresh streaming, offline caching. Phase 3 (PIREPs) not started.
-Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `CrossSectionRenderer`, `SkewTDetailView`
+iOS/iPad companion app: Phase 1 (online viewer) complete, Phase 2 (offline) mostly done, Phase 3 M0+M1 (aircraft registry, PIREP submit/view) implemented. Auth (Apple + Google + dev login), advisory dashboard, cross-section Canvas renderer, native Skew-T (RZSkewT package), offline caching, PIREP reporting sheet with offline queue.
+Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `CrossSectionRenderer`, `PirepViewModel`, `PirepOfflineStore`
 → Full doc: companion-app.md
 
 ### metar-taf-accuracy [project]

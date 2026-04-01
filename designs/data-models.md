@@ -243,7 +243,7 @@ See [advisories.md](./advisories.md) for the evaluator framework.
 
 ## Enums
 
-- `ModelSource`: `BEST_MATCH`, `GFS`, `ECMWF`, `ICON`, `UKMO`, `METEOFRANCE`
+- `ModelSource`: `GFS`, `ECMWF`, `ICON`, `UKMO`, `METEOFRANCE` (note: `BEST_MATCH` retained in enum for backward-compat deserialization but removed from `MODEL_ENDPOINTS`)
 - `IcingRisk`: `NONE`, `LIGHT`, `MODERATE`, `SEVERE`
 - `IcingType`: `NONE`, `RIME`, `MIXED`, `CLEAR`
 - `CloudCoverage`: `SCT`, `BKN`, `OVC`
