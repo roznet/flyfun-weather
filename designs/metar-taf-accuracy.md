@@ -246,14 +246,18 @@ For each verification cycle:
 Phase A — Gather & Deduplicate
   1. Find active flights (departure-1h ≤ now ≤ flight_end+1h, has ≥1 pack)
   2. For each flight, resolve corridor airports (15nm) from route waypoints
+     - First cycle: spatial query via RouteWeatherService, cache ICAOs
+       in flight_verification_map for subsequent cycles
+     - Subsequent cycles: read ICAOs from existing map rows (no spatial query)
   3. Build a global dict:  icao → set[flight_id]
      Example: 5 flights through LFPG, 3 through EDDF, 2 through LSZH
      → unique ICAOs = {LFPG, EDDF, LSZH, ...}  (not 10 duplicate fetches)
 
-Phase B — Single Batch Fetch
-  4. Batch-fetch METAR/TAF for all unique ICAOs in one call
-     (aviationweather.gov supports up to 400 ICAOs per request)
-  5. This is the ONLY network call in the entire cycle
+Phase B — Batch Fetch (chunked if needed)
+  4. Batch-fetch METAR/TAF for all unique ICAOs
+     aviationweather.gov supports up to 400 ICAOs per request —
+     if more, chunk into batches of 400 with a small delay (~1s) between calls
+  5. Minimal network calls: ceil(N/400) per cycle, typically just 1
 
 Phase C — Store & Link
   6. For each fetched observation:
@@ -265,6 +269,10 @@ Phase C — Store & Link
 
 Phase D — Score (can be deferred to Phase 2 or batched separately)
   7. For each NEW observation × each linked flight's briefing packs:
+     - Pick ONE pack per days_out: the latest pack for each calendar day
+       (if user refreshed D-1 twice, only score against the last refresh)
+     - Skip packs whose forecasts.json is missing (log warning)
+     For each selected pack:
      a. Load forecasts.json for the pack
      b. Find route point closest to airport
      c. Find HourlyForecast closest to observation_time
