@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — Privacy Policy</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <h1>Privacy &amp; Data Practices</h1>
+    </div>
+
+    <div class="help-section">
+      <p><em>Last updated: 2026-04-01</em></p>
+      <p>
+        This document explains what data the app collects, why, and what I do (and don't do) with it.
+        FlyFun Weather is a personal project &mdash; I'm a single developer, not a company.
+        The entire codebase is <a href="https://github.com/roznet/flyfun-weather">open source</a>
+        so you can audit exactly what happens with your data.
+      </p>
+    </div>
+
+    <div class="help-section">
+      <h3>Authentication &amp; Identity</h3>
+      <h4>Google Sign-In</h4>
+      <p>
+        When you sign in with Google, the server receives your <strong>email address</strong> and
+        <strong>display name</strong> from Google's OAuth flow. These are stored in the database
+        to identify your account.
+      </p>
+      <h4>Apple Sign-In</h4>
+      <p>
+        When you sign in with Apple, Apple's <strong>Private Relay</strong> system is used. The
+        server receives a private relay email address &mdash; I never see your real email unless
+        you choose to share it. Your display name may also be provided depending on your Apple ID
+        settings.
+      </p>
+    </div>
+
+    <div class="help-section">
+      <h3>What Data Is Stored</h3>
+      <h4>Account Data</h4>
+      <ul>
+        <li>Email address (or Apple private relay address)</li>
+        <li>Display name</li>
+        <li>OAuth provider (Google or Apple)</li>
+        <li>Account creation and last login timestamps</li>
+      </ul>
+      <h4>Flights &amp; Briefings</h4>
+      <ul>
+        <li>Your saved routes, waypoints, departure times, and flight parameters</li>
+        <li>Generated briefing packs (weather data, advisories, GRAMET cross-sections, Skew-T charts, LLM digests)</li>
+        <li>Briefing artifacts are stored as files on the server, organized by user</li>
+      </ul>
+      <h4>Preferences</h4>
+      <ul>
+        <li>Flight defaults (cruise altitude, ceiling, preferred models)</li>
+        <li>Advisory settings, display preferences, locale</li>
+        <li>Autorouter credentials (see dedicated section below)</li>
+      </ul>
+      <h4>Feedback</h4>
+      <p>If you submit feedback on a briefing, the comment and associated flight reference are stored.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>Briefing Sharing</h3>
+      <p>
+        Briefings are <strong>shareable by direct link</strong> to any authenticated user of the app.
+        If you share a briefing URL with another pilot, they can view it.
+        This is intentional &mdash; the app is designed for a small trusted community of pilots.
+        If you don't want a briefing to be viewable by others, you can mark flights as private.
+      </p>
+    </div>
+
+    <div class="help-section">
+      <h3>Automated Briefing Emails</h3>
+      <p>If you enable auto-refresh on a flight, the app will:</p>
+      <ol>
+        <li>Automatically refresh your briefing before departure (based on your preferred schedule)</li>
+        <li>Send you an <strong>email summary</strong> of the updated briefing to your account email</li>
+      </ol>
+      <p>
+        Your email is used <strong>solely</strong> for delivering these briefing notifications
+        and account-related messages (welcome email, etc.).
+      </p>
+      <p><strong>I will never use your email for marketing, newsletters, promotions, or share it with any third party.</strong></p>
+    </div>
+
+    <div class="help-section">
+      <h3>Autorouter Credentials</h3>
+      <p>
+        If you use the Autorouter integration (for GRAMET cross-section data), the app stores your
+        Autorouter username and password.
+      </p>
+      <h4>How they are stored</h4>
+      <p>
+        Credentials are <strong>encrypted at rest</strong> using Fernet symmetric encryption (AES-128-CBC).
+        The encryption key is stored separately from the database.
+      </p>
+      <h4>Honest disclosure</h4>
+      <p>
+        Anyone with access to the server (i.e., me) could technically decrypt these credentials, since
+        the encryption key lives on the same server. This means you need to <strong>trust me</strong>
+        not to look at or misuse them. I have no intention of doing so and never will, but I want to
+        be upfront about the technical reality.
+      </p>
+      <p>You can delete your Autorouter credentials at any time from your settings.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>Usage Tracking &amp; Cost Transparency</h3>
+      <h4>What Is Tracked</h4>
+      <p>Every briefing refresh logs:</p>
+      <ul>
+        <li>Number of API calls made (Open-Meteo, GRAMET, LLM)</li>
+        <li>LLM model used and token counts (input/output)</li>
+        <li>Briefing size and processing time</li>
+        <li>Whether the refresh was manual or automatic</li>
+      </ul>
+      <h4>Why</h4>
+      <p>This usage data serves two purposes:</p>
+      <ol>
+        <li><strong>Rate limiting</strong> &mdash; to keep costs sustainable and prevent abuse</li>
+        <li><strong>Cost transparency</strong> &mdash; so I can show you (and myself) exactly what the app costs to run</li>
+      </ol>
+      <p>
+        There are <strong>no third-party analytics</strong>, no tracking pixels, no cookies beyond the
+        authentication session cookie. I don't use Google Analytics or any similar service.
+      </p>
+    </div>
+
+    <div class="help-section">
+      <h3>Third-Party Services</h3>
+      <p>The app interacts with these external services during normal operation:</p>
+      <table style="width:100%; border-collapse:collapse; margin:1em 0;">
+        <thead>
+          <tr style="text-align:left; border-bottom:1px solid var(--border);">
+            <th style="padding:0.5em;">Service</th>
+            <th style="padding:0.5em;">Data Sent</th>
+            <th style="padding:0.5em;">Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:0.5em;">Open-Meteo</td><td style="padding:0.5em;">Coordinates, altitudes</td><td style="padding:0.5em;">Weather forecast data</td></tr>
+          <tr><td style="padding:0.5em;">Autorouter</td><td style="padding:0.5em;">Your credentials + route</td><td style="padding:0.5em;">GRAMET cross-section images</td></tr>
+          <tr><td style="padding:0.5em;">OpenAI / Anthropic</td><td style="padding:0.5em;">Weather data context (no personal info)</td><td style="padding:0.5em;">LLM-generated briefing digest</td></tr>
+          <tr><td style="padding:0.5em;">SMTP / Resend</td><td style="padding:0.5em;">Your email + briefing summary</td><td style="padding:0.5em;">Email delivery</td></tr>
+          <tr><td style="padding:0.5em;">Google / Apple OAuth</td><td style="padding:0.5em;">OAuth tokens</td><td style="padding:0.5em;">Authentication</td></tr>
+        </tbody>
+      </table>
+      <p>No personal information (name, email, routes) is sent to LLM providers &mdash; only anonymized weather data context.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>Account Deletion</h3>
+      <p>
+        You can delete your account and all associated data (flights, briefings, preferences, credentials) at any time:
+      </p>
+      <ul>
+        <li><strong>iOS app:</strong> Settings &gt; Delete Account</li>
+        <li><strong>Web app:</strong> Settings &gt; Delete Account</li>
+      </ul>
+      <p>This will permanently remove everything linked to your account and cannot be undone.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>Data Retention &amp; Hosting</h3>
+      <ul>
+        <li><strong>Briefing artifacts</strong> (weather files, charts) are cleaned up automatically after a period to manage disk space</li>
+        <li><strong>Account data and flight history</strong> are retained as long as your account exists</li>
+        <li>The server is hosted on <strong>DigitalOcean</strong> in the <strong>EU</strong> region</li>
+        <li>No data is replicated to other regions or services beyond what's needed for email delivery</li>
+      </ul>
+    </div>
+
+    <div class="help-section">
+      <h3>Open Source &amp; Auditability</h3>
+      <p>
+        The complete source code is <a href="https://github.com/roznet/flyfun-weather">open source</a>.
+        You can verify every claim in this document by reading the code yourself.
+        If you identify any issues, please raise a
+        <a href="https://github.com/roznet/flyfun-weather/issues">GitHub issue</a>.
+      </p>
+    </div>
+
+    <div class="help-section">
+      <h3>Contact</h3>
+      <p>If you have questions about your data or want to report a concern, reach out via the <a href="https://github.com/roznet/flyfun-weather/issues">GitHub issue tracker</a>.</p>
+    </div>
+
+  </div>
+</body>
+</html>
