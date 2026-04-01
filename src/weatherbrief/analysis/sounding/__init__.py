@@ -323,8 +323,12 @@ def analyze_sounding(
     from weatherbrief.models.analysis import CloudCoverage
 
     sounding_ceiling_ft: float | None = None
+    # Use dd_cloud_layers (original dewpoint-depression detection) so the
+    # ceiling reflects the sounding-derived estimate, not the NWP-constrained
+    # version.  This keeps it consistent with _ceiling_from_sounding() in
+    # airport_conditions.py which also reads dd_cloud_layers.
     bkn_ovc_layers = [
-        cl for cl in cloud_layers
+        cl for cl in dd_cloud_layers
         if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
     ]
     if bkn_ovc_layers:
