@@ -82,9 +82,10 @@ final class AppState {
     // MARK: - Auth
 
     func handleAuthCallback(url: URL) {
-        guard url.scheme == "flyfunweather",
-              url.host == "auth",
-              url.path == "/callback" || url.pathComponents.contains("callback"),
+        let isCustomScheme = url.scheme == "flyfunweather" && url.host == "auth"
+        let isUniversalLink = url.scheme == "https" && url.host == "weather.flyfun.aero"
+        guard (isCustomScheme || isUniversalLink),
+              url.path == "/callback" || url.path == "/auth/callback",
               let token = url.queryParam("token"), !token.isEmpty
         else {
             Self.logger.warning("Invalid auth callback URL: \(url)")
