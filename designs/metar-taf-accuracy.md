@@ -99,6 +99,7 @@ One row per (airport, observation, model, model_init_time). This lets us compare
 ```sql
 CREATE TABLE verification_scores (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    observation_id      INTEGER     NOT NULL,   -- FK → verification_observations
     icao                VARCHAR(4)  NOT NULL,
     observation_time    DATETIME    NOT NULL,
     model               VARCHAR(20) NOT NULL,  -- "gfs","ecmwf","icon","best_match"...
@@ -129,9 +130,11 @@ CREATE TABLE verification_scores (
     obs_has_convection      BOOLEAN,           -- TS in METAR
     model_has_convection    BOOLEAN,            -- CAPE-based or model flag
 
-    UNIQUE(icao, observation_time, model, model_init_time)
+    UNIQUE(icao, observation_time, model, model_init_time),
+    FOREIGN KEY (observation_id) REFERENCES verification_observations(id)
 );
 
+CREATE INDEX ix_verif_scores_obs   ON verification_scores(observation_id);
 CREATE INDEX ix_verif_scores_model ON verification_scores(model, days_out);
 CREATE INDEX ix_verif_scores_icao  ON verification_scores(icao);
 CREATE INDEX ix_verif_scores_lead  ON verification_scores(lead_hours);
@@ -144,6 +147,7 @@ TAFs are forecasts too. How accurate was the TAF compared to the actual METAR?
 ```sql
 CREATE TABLE taf_verification_scores (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    observation_id      INTEGER     NOT NULL,   -- FK → verification_observations
     icao                VARCHAR(4)  NOT NULL,
     observation_time    DATETIME    NOT NULL,   -- METAR time (ground truth)
     taf_issue_time      DATETIME    NOT NULL,   -- when TAF was issued
@@ -160,9 +164,11 @@ CREATE TABLE taf_verification_scores (
     wind_speed_delta_kt FLOAT,
     wind_dir_delta_deg  FLOAT,
 
-    UNIQUE(icao, observation_time, taf_issue_time)
+    UNIQUE(icao, observation_time, taf_issue_time),
+    FOREIGN KEY (observation_id) REFERENCES verification_observations(id)
 );
 
+CREATE INDEX ix_taf_verif_obs  ON taf_verification_scores(observation_id);
 CREATE INDEX ix_taf_verif_icao ON taf_verification_scores(icao);
 ```
 
@@ -363,14 +369,28 @@ def compute_taf_verification(
 
 ### Deriving Model Ceiling
 
-Challenge: NWP models don't directly output METAR-style ceiling. Two approaches:
+Use the **pre-computed `sounding_ceiling_ft`** from `route_analyses.json`. Each `RoutePointAnalysis` stores `sounding: dict[model, SoundingAnalysis]`, and each `SoundingAnalysis.indices` has `sounding_ceiling_ft` and `nwp_ceiling_ft`. The `reconcile_ceiling()` function in `analysis/airport_conditions.py` picks the more conservative of the two.
 
-1. **Sounding-derived ceiling** (preferred): Use `analyze_sounding()` → cloud layers → lowest cloud base. Already computed in route analyses — stored in `route_analyses.json`.
-2. **Cloud cover heuristic**: If sounding analysis not available, use `cloud_cover_pct > 50%` at each pressure level → convert to altitude.
+For verification: find the nearest route point to the airport, pick the nearest hour to the METAR observation time, and read the pre-computed ceiling. No recomputation needed — hourly resolution is close enough to METAR times.
 
-For verification, we should recompute sounding analysis at the observation time, not just reuse the briefing's analysis (which targets the departure window). This means the scoring step is slightly heavier — but it gives accurate ceiling estimates.
+Access pattern:
+```python
+rpa = route_analyses[nearest_point_index]  # RoutePointAnalysis
+sounding = rpa.sounding.get(model_name)    # SoundingAnalysis
+ceiling = reconcile_ceiling(sounding, hourly_forecast)
+```
 
-**Pragmatic v1**: Use the nearest-hour sounding from the briefing pack's `forecasts.json`. The hourly resolution (1h) is close enough to METAR times for verification purposes.
+### Wind Advisory Scoring
+
+Runway data is **already preloaded** via `get_runway_ends()` from the cached euro_aip model — no extra DB queries. Batch-load runway orientations for all verification airports once per cycle, then reuse `compute_wind_advisory()` for both observation and model wind fields.
+
+```python
+runway_data = get_runway_ends(unique_icaos, airports_db_path)  # one call
+for obs in observations:
+    rwy_ends = runway_data.get(obs.icao, [])
+    obs_advisory = compute_wind_advisory(obs.wind_dir, obs.wind_speed_kt, obs.wind_gust_kt, rwy_ends)
+    model_advisory = compute_wind_advisory(model_wind_dir, model_wind_speed, model_gust, rwy_ends)
+```
 
 ## CLI Interface
 
@@ -488,12 +508,22 @@ GROUP BY model, days_out;
 | Thin mapping table with CASCADE | Flight deletion removes linkage, not data |
 | UNIQUE(icao, observation_time) | Natural dedup key — same METAR never stored twice |
 | TAF verification as separate table | Different key structure (taf_issue_time), different semantics |
+| TAF scored per METAR | Same TAF scored against multiple METARs — shows accuracy across its validity period |
 | 15nm corridor (not 30nm) | Tighter = fewer noisy small airfields, still catches alternates |
 | 10-min poll interval | METARs update ~30-60min, SPECIs more frequent; good coverage vs API load |
-| Scoring deferred from collection | Collection is time-critical (METARs age out), scoring can be batched |
+| Pre-computed sounding ceiling | Reuse `sounding_ceiling_ft` from `route_analyses.json` — no recomputation, nearest-hour is close enough |
+| Wind advisory with preloaded runways | `get_runway_ends()` batch-loads from cached euro_aip model, no extra DB queries |
+| One pack per days_out | Score against the latest briefing pack per calendar day — avoids near-duplicate scores from same-day refreshes |
+| Score all packs including stale ones | D-7/D-3 packs scored even without D-0 — builds accuracy stats per lead time independently |
+| Score after collection cycle | Scoring is an independent process that runs after each collection cycle; can be re-run via CLI |
+| observation_id FK on scores | `verification_scores` has FK to `verification_observations.id` for clean joins and referential integrity |
+| UPSERT idempotency for concurrency | INSERT OR IGNORE / ON CONFLICT DO NOTHING — safe if cycles overlap; no explicit locking needed |
+| Cache airport resolution | Spatial query (RouteWeatherService) runs once per flight on first cycle; subsequent cycles read from `flight_verification_map` |
+| Batch fetch with chunking | Chunk ICAOs into batches of 400 (aviationweather.gov limit) with ~1s delay between calls |
+| Skip packs without forecasts.json | Log warning, don't error — shouldn't happen for active flights but safe for backfill |
 | CLI for backfill/export | Can run independently of web process, enables data science workflows |
 | Store all fields, not just deltas | Raw observations enable future metrics we haven't thought of yet |
-| Sounding-derived model ceiling | Consistent with briefing's ceiling method; nearest-hour is acceptable |
+| Keep data forever | This is the whole point — a growing accuracy dataset. At current scale, storage is negligible |
 
 ## Implementation Phases
 
@@ -505,7 +535,7 @@ GROUP BY model, days_out;
 - No scoring yet — just archive observations
 
 ### Phase 2: Model Scoring
-- `score_against_models()` — load forecasts, compute deltas
+- `score_against_models()` — load forecasts, compute deltas, wind advisory comparison
 - TAF scoring
 - CLI: `verify score`, `verify stats`
 - Backfill past flights where forecasts.json still exists
@@ -518,10 +548,9 @@ GROUP BY model, days_out;
 
 ## Open Considerations
 
-- **Historical METAR sources**: For backfill, aviationweather.gov has limited history. Iowa State Mesonet or OGIMET could provide deeper archives if needed.
-- **Model ceiling derivation**: Sounding analysis is the most accurate but heaviest approach. Could cache sounding results during scoring or accept nearest-hour approximation.
+- **Historical METAR sources**: For backfill, aviationweather.gov has limited history. Iowa State Mesonet or OGIMET could provide deeper archives if needed. May add backup source later.
 - **SPECI handling**: Special METARs (significant weather changes) are more interesting for verification but occur irregularly. The 10-min poll should catch most of them.
-- **Retention**: Keep forever. This is the whole point — a growing accuracy dataset. At current scale, storage is negligible.
+- **Retention**: Keep forever — a growing accuracy dataset. At current scale, storage is negligible.
 
 ## References
 
