@@ -164,6 +164,11 @@ CREATE TABLE taf_verification_scores (
     wind_speed_delta_kt FLOAT,
     wind_dir_delta_deg  FLOAT,
 
+    -- Wind advisory comparison (same compute_wind_advisory() as advisories)
+    obs_wind_advisory   VARCHAR(10),
+    taf_wind_advisory   VARCHAR(10),
+    advisory_match      BOOLEAN,
+
     UNIQUE(icao, observation_time, taf_issue_time),
     FOREIGN KEY (observation_id) REFERENCES verification_observations(id)
 );
@@ -174,18 +179,26 @@ CREATE INDEX ix_taf_verif_icao ON taf_verification_scores(icao);
 
 ### `flight_verification_map` — Thin Flight Linkage
 
+Maps flights to corridor airports. Populated on first collection cycle via spatial query; reused on subsequent cycles to avoid re-querying. Only airports that have produced at least one METAR are kept — airports with no METAR data are skipped entirely and never inserted.
+
 ```sql
 CREATE TABLE flight_verification_map (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     flight_id       VARCHAR(256) NOT NULL,      -- FK → flights ON DELETE CASCADE
-    observation_id  INTEGER      NOT NULL,      -- FK → verification_observations
+    icao            VARCHAR(4)   NOT NULL,       -- corridor airport
+    observation_id  INTEGER      NULL,           -- FK → verification_observations (NULL until first METAR)
     distance_from_route_nm FLOAT,               -- how far airport is from route
 
-    UNIQUE(flight_id, observation_id),
+    UNIQUE(flight_id, icao, observation_id),
     FOREIGN KEY (flight_id) REFERENCES flights(id) ON DELETE CASCADE,
     FOREIGN KEY (observation_id) REFERENCES verification_observations(id)
 );
+
+CREATE INDEX ix_fvm_flight ON flight_verification_map(flight_id);
+CREATE INDEX ix_fvm_icao   ON flight_verification_map(icao);
 ```
+
+**Note**: `observation_id` is nullable — on the first cycle, rows are created with just `flight_id + icao + distance` to cache the corridor resolution. As observations arrive, new rows are inserted with the `observation_id` set. Airports that never produce a METAR simply have no observation-linked rows.
 
 ### Flight-Level Tracking
 
@@ -193,8 +206,15 @@ Add column to `flights` table:
 
 ```sql
 ALTER TABLE flights ADD COLUMN verification_status VARCHAR(16) DEFAULT NULL;
--- NULL = not eligible, "collecting" = in progress, "complete" = done
+-- NULL = not yet started, "collecting" = actively gathering observations, "complete" = done
 ```
+
+**Lifecycle**:
+- `NULL`: Flight exists but hasn't entered the verification window yet (or has no packs)
+- `"collecting"`: Set on first cycle that picks up this flight. Subsequent cycles see `"collecting"` and skip the spatial query (read cached ICAOs from map instead)
+- `"complete"`: Set when `now > flight_end + 1h`. No further collection or scoring.
+
+The query `WHERE verification_status != 'complete'` picks up both NULL and "collecting" flights. NULL flights are checked for eligibility (has packs, in time window) and promoted to "collecting" on first match.
 
 ## Collection Loop
 
@@ -252,9 +272,11 @@ For each verification cycle:
 Phase A — Gather & Deduplicate
   1. Find active flights (departure-1h ≤ now ≤ flight_end+1h, has ≥1 pack)
   2. For each flight, resolve corridor airports (15nm) from route waypoints
-     - First cycle: spatial query via RouteWeatherService, cache ICAOs
-       in flight_verification_map for subsequent cycles
-     - Subsequent cycles: read ICAOs from existing map rows (no spatial query)
+     - First cycle (verification_status=NULL → set to "collecting"):
+       Spatial query via RouteWeatherService → cache (flight_id, icao, distance)
+       in flight_verification_map (observation_id=NULL)
+     - Subsequent cycles (verification_status="collecting"):
+       Read ICAOs from existing map rows (no spatial query)
   3. Build a global dict:  icao → set[flight_id]
      Example: 5 flights through LFPG, 3 through EDDF, 2 through LSZH
      → unique ICAOs = {LFPG, EDDF, LSZH, ...}  (not 10 duplicate fetches)
@@ -266,12 +288,16 @@ Phase B — Batch Fetch (chunked if needed)
   5. Minimal network calls: ceil(N/400) per cycle, typically just 1
 
 Phase C — Store & Link
-  6. For each fetched observation:
-     a. UPSERT into verification_observations (dedup on icao + observation_time)
+  6. For each fetched result:
+     a. Skip airports with no METAR data — don't store empty rows
+     b. One-per-hour filter: if we already have an observation for this
+        (icao, clock_hour), skip unless this one is closer to the top of hour
+     c. UPSERT into verification_observations (dedup on icao + observation_time)
         → if METAR already stored from a previous cycle, skip
-     b. Parse TAF: find applicable trend at observation_time, extract fields
-     c. For each flight_id in icao_to_flights[icao]:
-        → INSERT OR IGNORE into flight_verification_map
+     d. Parse TAF: find applicable trend at observation_time, extract fields
+     e. For each flight_id in icao_to_flights[icao]:
+        → INSERT flight_verification_map row with observation_id
+        (map rows without observation_id were created in Phase A for caching)
 
 Phase D — Score (can be deferred to Phase 2 or batched separately)
   7. For each NEW observation × each linked flight's briefing packs:
@@ -438,11 +464,27 @@ def compute_taf_verification(
     )
 ```
 
+### Observation Frequency: One Per Airport Per Hour
+
+METARs are issued every 30-60 minutes, and SPECIs can be more frequent. To avoid inflating the dataset with near-duplicate observations, **keep at most one observation per airport per clock hour**. If multiple METARs exist for the same (icao, hour), keep the one closest to the top of the hour (e.g., for 14:00-14:59, prefer the METAR at 14:20 over 14:50). The UNIQUE(icao, observation_time) constraint handles exact dedup; the hourly filtering is applied during collection before insertion.
+
+### Scoring Window Limitations
+
+`route_analyses.json` stores soundings for the **flight window hours** only (departure through arrival). Observations collected in the 1h buffer before departure or after arrival may not have a matching sounding hour. In this case:
+- **Ceiling/convection**: Fall back to the nearest available sounding hour (first or last hour of the flight window). The error from this approximation is small — ceiling patterns don't change dramatically in 1 hour.
+- **Surface fields** (visibility, wind, temperature): `forecasts.json` typically has a wider hourly range and should cover the buffer. If not, skip scoring for that observation.
+
 ### Accessing Model Data for Scoring
 
 For each observation, we need the `SoundingAnalysis` and `HourlyForecast` at the nearest route point and nearest hour. These come from the briefing pack's stored artifacts:
 
 ```python
+# 0. Map airport to nearest route point — same logic as run_observation_comparison()
+#    Uses cumulative great-circle distance along route to find nearest waypoint,
+#    then nearest RoutePointAnalysis (20nm spacing) around that waypoint.
+#    Corridor is 15nm, so max off-route distance is small.
+nearest_point_index = find_nearest_route_point(airport_lat, airport_lon, route_points)
+
 # 1. Ceiling + convection: from route_analyses.json
 rpa = route_analyses[nearest_point_index]  # RoutePointAnalysis
 sounding = rpa.sounding.get(model_name)    # SoundingAnalysis
@@ -585,7 +627,9 @@ GROUP BY model, days_out;
 | Score after collection cycle | Scoring is an independent process that runs after each collection cycle; can be re-run via CLI |
 | observation_id FK on scores | `verification_scores` has FK to `verification_observations.id` for clean joins and referential integrity |
 | UPSERT idempotency for concurrency | INSERT OR IGNORE / ON CONFLICT DO NOTHING — safe if cycles overlap; no explicit locking needed |
-| Cache airport resolution | Spatial query (RouteWeatherService) runs once per flight on first cycle; subsequent cycles read from `flight_verification_map` |
+| Skip airports without METAR | Don't store empty rows — only airports with actual METAR data enter the database |
+| One observation per airport per hour | Avoids inflating dataset with near-duplicate METARs; keep the one closest to top of hour |
+| Cache airport resolution | Spatial query runs once per flight (status NULL→"collecting"); subsequent cycles read ICAOs from `flight_verification_map` |
 | Batch fetch with chunking | Chunk ICAOs into batches of 400 (aviationweather.gov limit) with ~1s delay between calls |
 | Skip packs without forecasts.json | Log warning, don't error — shouldn't happen for active flights but safe for backfill |
 | CLI for backfill/export | Can run independently of web process, enables data science workflows |
