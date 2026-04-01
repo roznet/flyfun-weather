@@ -45,19 +45,25 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: "true"
           prompt: '/code-review https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          additional_permissions: |
-            Bash(git diff:*)
-            Bash(git log:*)
-            Bash(git show:*)
-            Bash(git status)
-            Bash(gh:*)
-            Bash(cat:*)
-            Bash(ls:*)
-            Bash(find:*)
-            Bash(grep:*)
-            Bash(head:*)
-            Bash(tail:*)
-            Read
-            Glob
-            Grep
+          settings: |
+            {
+              "permissions": {
+                "allow": [
+                  "Bash(git diff:*)",
+                  "Bash(git log:*)",
+                  "Bash(git show:*)",
+                  "Bash(git status)",
+                  "Bash(gh:*)",
+                  "Bash(cat:*)",
+                  "Bash(ls:*)",
+                  "Bash(find:*)",
+                  "Bash(grep:*)",
+                  "Bash(head:*)",
+                  "Bash(tail:*)",
+                  "Read",
+                  "Glob",
+                  "Grep"
+                ]
+              }
+            }
 
