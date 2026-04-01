@@ -613,9 +613,9 @@ class SoundingAnalysis(BaseModel):
     # "nwp_synthesized" (synthesized from Open-Meteo + DD heuristics).
     cloud_method_effective: Optional[str] = None
 
-    # Immutable DD source fields — populated at construction, excluded from
-    # serialization.  The validator reconstructs them from cloud_layers /
-    # icing_zones when loading old JSON that lacks these fields.
+    # Immutable DD source fields — populated at construction, preserved
+    # through serialization.  The validator reconstructs them from
+    # cloud_layers / icing_zones when loading old JSON that lacks them.
     dd_cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
     icing_ogimet_dd_zones: list[IcingZone] = Field(default_factory=list)
 
