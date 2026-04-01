@@ -33,6 +33,8 @@ _STARTUP_DELAY_SECONDS = 30
 _PREFLIGHT_LEAD_HOURS = 2
 _RETENTION_INTERVAL_SECONDS = 86_400  # 24 hours
 _RETENTION_STARTUP_DELAY_SECONDS = 120  # let auto-refresh settle first
+_VERIF_POLL_SECONDS = 600  # 10 minutes
+_VERIF_STARTUP_DELAY_SECONDS = 60  # let auto-refresh settle first
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -263,6 +265,53 @@ def _try_send_email(
         logger.info("Auto-refresh email sent for %s to %s", flight.id, user.email)
     except Exception:
         logger.warning("Auto-refresh email failed for %s", flight.id, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Verification loop
+# ---------------------------------------------------------------------------
+
+
+async def run_verification_loop(app_state) -> None:
+    """Collect METAR/TAF observations for active flights.
+
+    Polls every 10 minutes for flights in their observation window
+    (departure-1h to flight_end+1h) and archives METAR/TAF data.
+    """
+    logger.info("Verification loop started (poll every %ds)", _VERIF_POLL_SECONDS)
+    await asyncio.sleep(_VERIF_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            await asyncio.to_thread(_run_verification_once, app_state)
+        except Exception:
+            logger.error("Verification cycle failed", exc_info=True)
+        await asyncio.sleep(_VERIF_POLL_SECONDS)
+
+
+def _run_verification_once(app_state) -> None:
+    """Execute a single verification collection cycle (called in a thread)."""
+    db_path = getattr(app_state, "db_path", "")
+    if not db_path:
+        return
+
+    from weatherbrief.tasks.verification import collect_and_store
+
+    db = SessionLocal()
+    try:
+        result = collect_and_store(db, db_path)
+        if result["flights"] > 0:
+            logger.info(
+                "Verification cycle: %d flight(s), %d airport(s), "
+                "%d observation(s) stored, %d finalized",
+                result["flights"], result["airports"],
+                result["observations"], result["finalized"],
+            )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
