@@ -113,6 +113,30 @@ def _find_nearest_route_point(
     return best_idx
 
 
+def _find_nearest_waypoint_forecasts(
+    airport_lat: float,
+    airport_lon: float,
+    forecasts: list,
+) -> dict:
+    """Find the WaypointForecast nearest to an airport for each model.
+
+    Returns dict mapping model_name → WaypointForecast for the nearest waypoint.
+    """
+    if not forecasts:
+        return {}
+
+    # Group forecasts by model, pick nearest waypoint per model
+    best_per_model: dict = {}  # model_name → (distance, WaypointForecast)
+    for wpf in forecasts:
+        model_name = wpf.model.value
+        d = _haversine_nm(airport_lat, airport_lon, wpf.waypoint.lat, wpf.waypoint.lon)
+        current = best_per_model.get(model_name)
+        if current is None or d < current[0]:
+            best_per_model[model_name] = (d, wpf)
+
+    return {k: v[1] for k, v in best_per_model.items()}
+
+
 # ---------------------------------------------------------------------------
 # Score one observation against one model forecast
 # ---------------------------------------------------------------------------
@@ -440,8 +464,14 @@ def score_flight(
                     coords[0], coords[1], route_analyses.analyses,
                 )
 
-            for wpf in snapshot.forecasts:
-                model_name = wpf.model.value
+            # Find nearest waypoint forecast per model for this airport
+            nearest_wpf: dict = {}
+            if coords:
+                nearest_wpf = _find_nearest_waypoint_forecasts(
+                    coords[0], coords[1], snapshot.forecasts,
+                )
+
+            for model_name, wpf in nearest_wpf.items():
                 init_dt = model_init_datetimes.get(model_name)
                 if init_dt is None:
                     continue
