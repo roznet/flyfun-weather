@@ -182,12 +182,9 @@ def _score_model_vs_metar(
         else None
     )
 
-    # Flight category — same function
+    # Flight category — model uses same derivation as advisory pipeline;
+    # observation uses the METAR-reported category (ground truth).
     model_cat = classify_flight_category(model_ceiling, model_vis_sm)
-    obs_cat = classify_flight_category(
-        float(obs_row.ceiling_ft) if obs_row.ceiling_ft is not None else None,
-        obs_vis_sm,
-    )
 
     # Wind advisory — same function + thresholds
     model_adv, _, _, _ = compute_wind_advisory(
@@ -227,9 +224,9 @@ def _score_model_vs_metar(
         model_init_time=model_init_time,
         lead_hours=lead_hours,
         days_out=days_out,
-        obs_flight_category=obs_cat.value,
+        obs_flight_category=obs_row.flight_category,
         model_flight_category=model_cat.value,
-        category_match=(obs_cat == model_cat),
+        category_match=(obs_row.flight_category == model_cat.value),
         ceiling_delta_ft=(
             _delta(model_ceiling, float(obs_row.ceiling_ft))
             if obs_row.ceiling_ft is not None and model_ceiling is not None
