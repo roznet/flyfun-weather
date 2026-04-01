@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -114,11 +114,32 @@ def list_pireps(
 
     # Scope filters
     if flight_id is not None:
+        # Match PIREPs linked to the flight's packs OR submitted by the
+        # flight owner within the flight time window (for PIREPs without
+        # a pack_id, e.g. from the iOS offline queue).
         pack_ids = (
             select(BriefingPackRow.id)
             .where(BriefingPackRow.flight_id == flight_id)
         )
-        stmt = stmt.where(PirepRow.pack_id.in_(pack_ids))
+        flight = session.get(FlightRow, flight_id)
+        if flight is not None:
+            window_start = flight.departure_time - timedelta(hours=2)
+            window_end = flight.departure_time + timedelta(
+                hours=flight.flight_duration_hours + 2
+            )
+            stmt = stmt.where(
+                or_(
+                    PirepRow.pack_id.in_(pack_ids),
+                    and_(
+                        PirepRow.pack_id.is_(None),
+                        PirepRow.user_id == flight.user_id,
+                        PirepRow.observed_at >= window_start,
+                        PirepRow.observed_at <= window_end,
+                    ),
+                )
+            )
+        else:
+            stmt = stmt.where(PirepRow.pack_id.in_(pack_ids))
     elif pack_id is not None:
         stmt = stmt.where(PirepRow.pack_id == pack_id)
     elif bounds is not None:
