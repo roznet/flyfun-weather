@@ -89,11 +89,19 @@ def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
     return row
 
 
+_RETIRED_MODELS = {"best_match"}
+
+
 def _parse_defaults(raw: str) -> FlightDefaults:
     try:
         data = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
         data = {}
+    # Strip retired models from stored preferences
+    if "models" in data and isinstance(data["models"], list):
+        data["models"] = [m for m in data["models"] if m not in _RETIRED_MODELS]
+    if "advisory_models" in data and isinstance(data["advisory_models"], list):
+        data["advisory_models"] = [m for m in data["advisory_models"] if m not in _RETIRED_MODELS]
     return FlightDefaults(**data)
 
 

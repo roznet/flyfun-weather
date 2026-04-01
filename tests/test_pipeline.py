@@ -89,9 +89,12 @@ def sample_forecasts(target_time):
 
 
 class TestModelCatalog:
+    # Retired models kept in ModelSource enum for backward compat (old pack deserialization)
+    _RETIRED_MODELS = {"best_match"}
+
     def test_model_source_matches_endpoints(self):
-        """Every ModelSource value has a corresponding MODEL_ENDPOINTS key and vice versa."""
-        enum_values = {m.value for m in ModelSource}
+        """Every active ModelSource value has a MODEL_ENDPOINTS key and vice versa."""
+        enum_values = {m.value for m in ModelSource} - self._RETIRED_MODELS
         endpoint_keys = set(MODEL_ENDPOINTS.keys())
         assert enum_values == endpoint_keys
 

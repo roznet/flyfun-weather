@@ -81,7 +81,6 @@ class TestNWPCapeTypePerModel:
 
     @pytest.mark.parametrize("model_key,expected_type", [
         ("gfs", "sb"),
-        ("best_match", "sb"),
         ("ecmwf", "mu"),
         ("icon", "ml"),
         ("ukmo", "unknown"),
