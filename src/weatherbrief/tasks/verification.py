@@ -269,20 +269,37 @@ def fetch_observations_batch(
 # ---------------------------------------------------------------------------
 
 
-def _already_have_observation_this_hour(
+def _should_skip_for_hourly_dedup(
     db: Session, icao: str, obs_time: datetime,
 ) -> bool:
-    """Check if we already have an observation for this ICAO in the same clock hour."""
+    """One-per-hour filter: keep whichever observation is closest to :00.
+
+    Returns True if the caller should skip this observation (existing is better).
+    Returns False if the caller should insert (no existing, or new is closer
+    to top-of-hour — in which case the old row is deleted here).
+    """
     hour_start = obs_time.replace(minute=0, second=0, microsecond=0)
     hour_end = hour_start + timedelta(hours=1)
     existing = db.execute(
-        select(VerificationObservationRow.id)
+        select(VerificationObservationRow)
         .where(VerificationObservationRow.icao == icao)
         .where(VerificationObservationRow.observation_time >= hour_start)
         .where(VerificationObservationRow.observation_time < hour_end)
         .limit(1)
     ).scalar_one_or_none()
-    return existing is not None
+
+    if existing is None:
+        return False  # No existing observation — insert
+
+    # Keep whichever is closer to the top of the hour
+    existing_offset = abs((existing.observation_time - hour_start).total_seconds())
+    new_offset = abs((obs_time - hour_start).total_seconds())
+    if new_offset < existing_offset:
+        # New observation is closer — delete the old one so caller can insert
+        db.delete(existing)
+        db.flush()
+        return False
+    return True  # Existing is closer — skip
 
 
 def store_observations(
@@ -308,8 +325,8 @@ def store_observations(
         if existing is not None:
             obs_row_id = existing.id
         else:
-            # One-per-hour filter
-            if _already_have_observation_this_hour(db, obs.icao, obs.observation_time):
+            # One-per-hour filter: keep whichever observation is closer to :00
+            if _should_skip_for_hourly_dedup(db, obs.icao, obs.observation_time):
                 continue
 
             row = VerificationObservationRow(
