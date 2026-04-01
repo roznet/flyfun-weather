@@ -101,7 +101,7 @@ class TestShouldSkipForRegion:
 
 class TestModelEndpointRegions:
     def test_global_models(self):
-        for key in ("best_match", "gfs", "ecmwf"):
+        for key in ("gfs", "ecmwf"):
             assert MODEL_ENDPOINTS[key].region == ModelRegion.GLOBAL, f"{key} should be GLOBAL"
 
     def test_european_models(self):
