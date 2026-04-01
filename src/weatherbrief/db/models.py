@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # Re-export shared models so existing imports from weatherbrief.db.models still work
@@ -214,6 +214,7 @@ class VerificationObservationRow(Base):
 
     __tablename__ = "verification_observations"
     __table_args__ = (
+        UniqueConstraint("icao", "observation_time", name="uq_verif_obs_icao_time"),
         Index("ix_verif_obs_icao", "icao"),
         Index("ix_verif_obs_time", "observation_time"),
     )
@@ -260,6 +261,10 @@ class VerificationScoreRow(Base):
 
     __tablename__ = "verification_scores"
     __table_args__ = (
+        UniqueConstraint(
+            "icao", "observation_time", "model", "model_init_time",
+            name="uq_verif_scores_key",
+        ),
         Index("ix_verif_scores_obs", "observation_id"),
         Index("ix_verif_scores_model", "model", "days_out"),
         Index("ix_verif_scores_icao", "icao"),
@@ -268,7 +273,7 @@ class VerificationScoreRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     observation_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("verification_observations.id"), nullable=False
+        Integer, ForeignKey("verification_observations.id", ondelete="CASCADE"), nullable=False
     )
     icao: Mapped[str] = mapped_column(String(4), nullable=False)
     observation_time: Mapped[datetime] = mapped_column(
@@ -314,13 +319,17 @@ class TafVerificationScoreRow(Base):
 
     __tablename__ = "taf_verification_scores"
     __table_args__ = (
+        UniqueConstraint(
+            "icao", "observation_time", "taf_issue_time",
+            name="uq_taf_verif_key",
+        ),
         Index("ix_taf_verif_obs", "observation_id"),
         Index("ix_taf_verif_icao", "icao"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     observation_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("verification_observations.id"), nullable=False
+        Integer, ForeignKey("verification_observations.id", ondelete="CASCADE"), nullable=False
     )
     icao: Mapped[str] = mapped_column(String(4), nullable=False)
     observation_time: Mapped[datetime] = mapped_column(
@@ -362,6 +371,10 @@ class FlightVerificationMapRow(Base):
 
     __tablename__ = "flight_verification_map"
     __table_args__ = (
+        UniqueConstraint(
+            "flight_id", "icao", "observation_id",
+            name="uq_fvm_flight_icao_obs",
+        ),
         Index("ix_fvm_flight", "flight_id"),
         Index("ix_fvm_icao", "icao"),
     )
@@ -372,7 +385,7 @@ class FlightVerificationMapRow(Base):
     )
     icao: Mapped[str] = mapped_column(String(4), nullable=False)
     observation_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("verification_observations.id"), nullable=True
+        Integer, ForeignKey("verification_observations.id", ondelete="CASCADE"), nullable=True
     )
     distance_from_route_nm: Mapped[float | None] = mapped_column(Float, nullable=True)
 

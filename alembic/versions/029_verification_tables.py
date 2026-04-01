@@ -67,7 +67,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
         sa.Column(
             "observation_id", sa.Integer,
-            sa.ForeignKey("verification_observations.id"), nullable=False,
+            sa.ForeignKey("verification_observations.id", ondelete="CASCADE"), nullable=False,
         ),
         sa.Column("icao", sa.String(4), nullable=False),
         sa.Column("observation_time", sa.DateTime(timezone=True), nullable=False),
@@ -106,7 +106,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
         sa.Column(
             "observation_id", sa.Integer,
-            sa.ForeignKey("verification_observations.id"), nullable=False,
+            sa.ForeignKey("verification_observations.id", ondelete="CASCADE"), nullable=False,
         ),
         sa.Column("icao", sa.String(4), nullable=False),
         sa.Column("observation_time", sa.DateTime(timezone=True), nullable=False),
@@ -141,7 +141,7 @@ def upgrade() -> None:
         sa.Column("icao", sa.String(4), nullable=False),
         sa.Column(
             "observation_id", sa.Integer,
-            sa.ForeignKey("verification_observations.id"), nullable=True,
+            sa.ForeignKey("verification_observations.id", ondelete="CASCADE"), nullable=True,
         ),
         sa.Column("distance_from_route_nm", sa.Float, nullable=True),
         sa.UniqueConstraint(
