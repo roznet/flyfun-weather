@@ -55,6 +55,20 @@ layer building, advisory evaluators, or data model changes in the analysis path)
   - Are thresholds calibrated for one model's characteristics but applied
     to all?
 
+If the PR touches web frontend code (HTML, TypeScript, CSS):
+
+- **CSP compliance**: Read `deploy/weather.flyfun.aero.caddy` for the active
+  Content-Security-Policy. Check whether any new or changed code would be
+  blocked by the policy:
+  - New external script/stylesheet loads (CDNs) → blocked by `script-src`/`style-src`
+  - New `fetch()`/XHR to external domains → blocked by `connect-src`
+  - New images from external domains (not tile servers) → blocked by `img-src`
+  - New inline scripts in HTML without `'unsafe-inline'` in `script-src`
+  - New `<form action="...">` to unlisted domains → blocked by `form-action`
+  - New iframes → blocked by `frame-ancestors`/`default-src`
+  If a violation is found, flag it and suggest either updating the CSP or
+  refactoring to stay within the current policy.
+
 Do NOT flag:
 - Style issues not covered by CLAUDE.md
 - Minor suggestions or nits
