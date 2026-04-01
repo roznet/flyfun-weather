@@ -163,7 +163,7 @@ async function init(): Promise<void> {
       syncUtcFromLocal();
 
       const profileId = profileEl ? parseInt(profileEl.value, 10) : undefined;
-      const aircraftId = aircraftEl?.value ? parseInt(aircraftEl.value, 10) : 0;
+      const aircraftId = aircraftEl?.value ? parseInt(aircraftEl.value, 10) : undefined;
       const altitude = parseInt(altEl.value, 10);
       const ceiling = parseInt(ceilEl.value, 10);
       const duration = parseFloat(durEl.value);
