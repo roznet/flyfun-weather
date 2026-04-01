@@ -373,6 +373,78 @@ class TestQueryPireps:
         assert data["count"] >= 1
         assert len(data["items"]) >= 1
 
+    def test_query_by_flight_id_includes_pireps_without_pack(self, client, app_db):
+        """PIREPs without pack_id are found by flight_id via user + time window."""
+        now = datetime.now(timezone.utc)
+        session = app_db()
+        # Create a flight owned by DEV_USER_ID
+        flight = FlightRow(
+            id="pirep-test-flight", user_id=DEV_USER_ID,
+            route_name="Test",
+            waypoints_json='[{"icao":"LFPG","name":"Paris","lat":49.0,"lon":2.5}]',
+            departure_time=now - timedelta(hours=1),
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            flight_duration_hours=2.0,
+        )
+        session.add(flight)
+        session.flush()
+        # Create a pack for the flight
+        pack = BriefingPackRow(
+            flight_id="pirep-test-flight", days_out=0,
+            fetch_timestamp=now - timedelta(hours=2),
+        )
+        session.add(pack)
+        session.flush()
+        pack_id = pack.id
+        session.commit()
+        session.close()
+
+        # Submit PIREP WITH pack_id
+        r1 = client.post("/api/pireps", json=_pirep_payload(
+            observed_at=now.isoformat(), pack_id=pack_id,
+        ))
+        assert r1.status_code == 201
+
+        # Submit PIREP WITHOUT pack_id (within flight window)
+        r2 = client.post("/api/pireps", json=_pirep_payload(
+            observed_at=now.isoformat(),
+        ))
+        assert r2.status_code == 201
+
+        # Query by flight_id — both should appear
+        r = client.get("/api/pireps?flight_id=pirep-test-flight")
+        assert r.status_code == 200
+        ids = {p["id"] for p in r.json()["items"]}
+        assert r1.json()["id"] in ids, "PIREP with pack_id should be found"
+        assert r2.json()["id"] in ids, "PIREP without pack_id should be found via time window"
+
+    def test_query_by_flight_id_excludes_outside_window(self, client, app_db):
+        """PIREPs outside the flight time window are not included."""
+        now = datetime.now(timezone.utc)
+        session = app_db()
+        flight = FlightRow(
+            id="pirep-window-test", user_id=DEV_USER_ID,
+            route_name="Test",
+            waypoints_json='[{"icao":"LFPG","name":"Paris","lat":49.0,"lon":2.5}]',
+            departure_time=now - timedelta(hours=10),
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            flight_duration_hours=1.0,
+        )
+        session.add(flight)
+        session.commit()
+        session.close()
+
+        # Submit PIREP far outside the flight window (now, but flight was 10h ago)
+        r1 = client.post("/api/pireps", json=_pirep_payload(
+            observed_at=now.isoformat(),
+        ))
+        assert r1.status_code == 201
+
+        # Query by flight_id — PIREP should NOT appear
+        r = client.get("/api/pireps?flight_id=pirep-window-test")
+        assert r.status_code == 200
+        assert r.json()["count"] == 0
+
     def test_query_by_bounds(self, client):
         client.post("/api/pireps", json=_pirep_payload(latitude=48.0, longitude=2.0))
         r = client.get("/api/pireps?bounds=47,1,49,3&hours=6")
