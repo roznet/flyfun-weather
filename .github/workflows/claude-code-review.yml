@@ -43,9 +43,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          print_output: "true"
+          show_full_output: "true"
           prompt: '/code-review https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          allowed_tools: |
+          additional_permissions: |
             Bash(git diff:*)
             Bash(git log:*)
             Bash(git show:*)
@@ -60,11 +60,4 @@ jobs:
             Read
             Glob
             Grep
-            mcp__github__pull_request_read
-            mcp__github__pull_request_review_write
-            mcp__github__add_reply_to_pull_request_comment
-            mcp__github__list_commits
-            mcp__github__get_file_contents
-            mcp__github__search_code
-            mcp__github__add_issue_comment
 
