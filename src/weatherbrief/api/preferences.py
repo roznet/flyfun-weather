@@ -60,6 +60,8 @@ class PreferencesResponse(BaseModel):
     cloud_method: str
     convective_method: str
     locale: str
+    pirep_can_view: bool = False
+    pirep_can_publish: bool = False
 
 
 class PreferencesUpdate(BaseModel):
@@ -152,11 +154,17 @@ def _parse_digest_config_from_prefs(raw: str) -> DigestConfig:
 def _build_response(row: UserPreferencesRow) -> PreferencesResponse:
     """Build a PreferencesResponse from a DB row."""
     toggles = _parse_service_toggles(row.app_prefs_json)
+    try:
+        prefs_data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
+    except json.JSONDecodeError:
+        prefs_data = {}
     return PreferencesResponse(
         defaults=_parse_defaults(row.app_prefs_json),
         digest_config=_parse_digest_config_from_prefs(row.app_prefs_json),
         advisories=_parse_advisory_prefs(row.app_prefs_json),
         has_autorouter_creds=bool(row.encrypted_creds_json),
+        pirep_can_view=prefs_data.get("pirep_can_view", False),
+        pirep_can_publish=prefs_data.get("pirep_can_publish", False),
         **toggles,
     )
 
