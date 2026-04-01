@@ -24,8 +24,11 @@ class SlidingWindowRateLimiter:
         self._lock = threading.Lock()
         self._hits: dict[str, list[float]] = defaultdict(list)
 
-    def check(self, key: str) -> None:
-        """Raise 429 if *key* has exceeded the rate limit."""
+    def check(self, key: str, *, count: int = 1) -> None:
+        """Raise 429 if *key* has exceeded the rate limit.
+
+        *count* is the number of slots to consume (e.g. batch size).
+        """
         now = time.monotonic()
         cutoff = now - self.window_seconds
 
@@ -33,13 +36,13 @@ class SlidingWindowRateLimiter:
             timestamps = self._hits[key]
             # Prune expired entries
             timestamps[:] = [t for t in timestamps if t > cutoff]
-            if len(timestamps) >= self.max_requests:
+            if len(timestamps) + count > self.max_requests:
                 raise HTTPException(
                     status_code=429,
                     detail=f"Rate limit exceeded ({self.max_requests} per "
                     f"{self.window_seconds // 3600}h). Try again later.",
                 )
-            timestamps.append(now)
+            timestamps.extend([now] * count)
 
 
 # ---------------------------------------------------------------------------

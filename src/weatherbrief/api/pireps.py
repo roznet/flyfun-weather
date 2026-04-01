@@ -355,8 +355,9 @@ def submit_pireps_batch(
     if len(items) > 50:
         raise HTTPException(status_code=400, detail="Batch size must be <= 50")
 
-    # Check daily cap has room (don't check burst for batch — it's a sync)
-    pirep_daily_limiter.check(user_id)
+    # Check daily cap has room (don't check burst for batch — it's a sync).
+    # Check against actual batch size so the 50/day limit means 50 PIREPs, not 50 calls.
+    pirep_daily_limiter.check(user_id, count=len(items))
 
     results: list[PirepResponse] = []
     for req in items:
@@ -379,10 +380,11 @@ def submit_pireps_batch(
                 continue
 
         try:
+            nested = db.begin_nested()
             row = _create_one(db, user_id, req)
             results.append(_row_to_response(row, viewer_id=user_id))
         except IntegrityError:
-            db.rollback()
+            nested.rollback()
             # Already exists — find and return it
             if req.client_uuid:
                 existing = db.query(PirepRow).filter(
