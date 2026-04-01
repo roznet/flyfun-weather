@@ -309,25 +309,71 @@ This means: if we improve how we derive ceiling or classify flight categories in
 
 ### Model → METAR Comparison
 
-Reuse and refactor logic from `tasks/route_weather.py:run_observation_comparison()`:
+Every derived value must use **the same function the advisory pipeline uses**. The table below maps each scored field to its advisory-pipeline source:
+
+| Scored field | Advisory function | Location | Inputs |
+|-------------|-------------------|----------|--------|
+| Model ceiling | `reconcile_ceiling(sounding, hourly)` | `analysis/airport_conditions.py:117` | `SoundingAnalysis` + `HourlyForecast` → min of sounding & NWP ceiling |
+| Model visibility | `hourly.visibility_m / 1609.34` (→ statute miles) | `analysis/airport_conditions.py:200` | Direct from model, converted to SM like advisories do |
+| Model flight category | `classify_flight_category(ceiling_ft, visibility_sm)` | `analysis/airport_conditions.py:48` | Standard VFR/MVFR/IFR/LIFR thresholds |
+| Model wind advisory | `compute_wind_advisory(dir, speed, gust, runway_ends)` | `tasks/route_weather.py:109` | Same thresholds: xw ≥15kt amber, ≥25kt red; gust ≥25/35kt |
+| Model precipitation | `hourly.precipitation_mm > 0 or hourly.snowfall_cm > 0` | `analysis/sounding/precipitation.py:44` | Same check as `assess_precipitation()` |
+| Model convection | `sounding.convective.risk_level` from `assess_convective_thermo()` | `analysis/sounding/convective.py:97` | CAPE thresholds: 50/300/1000/2000 J/kg, CIN suppression |
 
 ```python
 def compute_verification_score(
     obs: VerificationObservation,
-    forecast: HourlyForecast,
+    sounding: SoundingAnalysis | None,
+    hourly: HourlyForecast,
+    runway_ends: list[RunwayEnd],
     model: str,
     model_init_time: datetime,
     days_out: int,
 ) -> VerificationScore:
-    """Compare one model forecast against one METAR observation."""
+    """Compare one model forecast against one METAR observation.
     
+    Uses the SAME derivation functions as the advisory pipeline.
+    """
     lead_hours = int((obs.observation_time - model_init_time).total_seconds() / 3600)
     
-    # Flight category from model (reuse classify_flight_category)
-    model_cat = classify_flight_category(
-        ceiling_ft=model_ceiling_from_sounding(forecast),  # or from route analysis
-        visibility_m=forecast.visibility_m,
+    # Ceiling — same as advisory pipeline: reconcile sounding + NWP ceiling
+    model_ceiling = reconcile_ceiling(sounding, hourly)
+    
+    # Visibility — same conversion as advisory pipeline: meters → statute miles
+    model_visibility_sm = (
+        round(hourly.visibility_m / 1609.34, 1)
+        if hourly.visibility_m is not None else None
     )
+    obs_visibility_sm = (
+        round(obs.visibility_m / 1609.34, 1)
+        if obs.visibility_m is not None else None
+    )
+    
+    # Flight category — same function as advisory pipeline
+    model_cat = classify_flight_category(model_ceiling, model_visibility_sm)
+    
+    # Wind advisory — same function + thresholds as advisory pipeline
+    model_adv, model_rwy, model_xw, model_hw = compute_wind_advisory(
+        hourly.wind_direction_10m_deg, hourly.wind_speed_10m_kt,
+        hourly.wind_gusts_10m_kt, runway_ends,
+    )
+    obs_adv, obs_rwy, obs_xw, obs_hw = compute_wind_advisory(
+        obs.wind_dir, obs.wind_speed_kt, obs.wind_gust_kt, runway_ends,
+    )
+    
+    # Precipitation — same check as assess_precipitation()
+    model_has_precip = (
+        (hourly.precipitation_mm or 0) > 0 or (hourly.snowfall_cm or 0) > 0
+    )
+    obs_has_precip = any(w in _PRECIP_PHENOMENA for w in obs.weather)
+    
+    # Convection — same CAPE-based risk from sounding analysis
+    model_has_convection = (
+        sounding is not None
+        and sounding.convective is not None
+        and sounding.convective.risk_level >= ConvectiveRisk.LOW  # same threshold as advisory
+    )
+    obs_has_convection = "TS" in obs.weather
     
     return VerificationScore(
         icao=obs.icao,
@@ -337,28 +383,45 @@ def compute_verification_score(
         lead_hours=lead_hours,
         days_out=days_out,
         obs_flight_category=obs.flight_category,
-        model_flight_category=model_cat,
-        category_match=(obs.flight_category == model_cat),
+        model_flight_category=str(model_cat),
+        category_match=(obs.flight_category == str(model_cat)),
         ceiling_delta_ft=_delta(model_ceiling, obs.ceiling_ft),
-        visibility_delta_m=_delta(forecast.visibility_m, obs.visibility_m),
-        wind_speed_delta_kt=_delta(forecast.wind_speed_10m_kt, obs.wind_speed_kt),
-        wind_dir_delta_deg=_circular_delta(forecast.wind_direction_10m_deg, obs.wind_dir),
-        temperature_delta_c=_delta(forecast.temperature_2m_c, obs.temperature_c),
-        ...
+        visibility_delta_m=_delta(hourly.visibility_m, obs.visibility_m),
+        wind_speed_delta_kt=_delta(hourly.wind_speed_10m_kt, obs.wind_speed_kt),
+        wind_dir_delta_deg=_circular_delta(hourly.wind_direction_10m_deg, obs.wind_dir),
+        temperature_delta_c=_delta(hourly.temperature_2m_c, obs.temperature_c),
+        obs_wind_advisory=obs_adv,
+        model_wind_advisory=model_adv,
+        advisory_match=(obs_adv == model_adv),
+        obs_has_precipitation=obs_has_precip,
+        model_has_precipitation=model_has_precip,
+        obs_has_convection=obs_has_convection,
+        model_has_convection=model_has_convection,
     )
 ```
 
 ### TAF → METAR Comparison
 
+TAF fields are already parsed and stored in `verification_observations`. The TAF-derived flight category uses the same `classify_flight_category()` as advisories.
+
 ```python
 def compute_taf_verification(
     obs: VerificationObservation,
+    runway_ends: list[RunwayEnd],
 ) -> TafVerificationScore | None:
     """Compare TAF prediction against actual METAR for same airport/time."""
     if not obs.taf_flight_category:
         return None
     
     lead_hours = int((obs.observation_time - obs.taf_issue_time).total_seconds() / 3600)
+    
+    # Wind advisory for TAF — same function as advisory pipeline
+    taf_adv, _, _, _ = compute_wind_advisory(
+        obs.taf_wind_dir, obs.taf_wind_speed_kt, obs.taf_wind_gust_kt, runway_ends,
+    )
+    obs_adv, _, _, _ = compute_wind_advisory(
+        obs.wind_dir, obs.wind_speed_kt, obs.wind_gust_kt, runway_ends,
+    )
     
     return TafVerificationScore(
         icao=obs.icao,
@@ -369,33 +432,31 @@ def compute_taf_verification(
         taf_flight_category=obs.taf_flight_category,
         category_match=(obs.flight_category == obs.taf_flight_category),
         ceiling_delta_ft=_delta(obs.taf_ceiling_ft, obs.ceiling_ft),
-        ...
+        visibility_delta_m=_delta(obs.taf_visibility_m, obs.visibility_m),
+        wind_speed_delta_kt=_delta(obs.taf_wind_speed_kt, obs.wind_speed_kt),
+        wind_dir_delta_deg=_circular_delta(obs.taf_wind_dir, obs.wind_dir),
     )
 ```
 
-### Deriving Model Ceiling
+### Accessing Model Data for Scoring
 
-Use the **pre-computed `sounding_ceiling_ft`** from `route_analyses.json`. Each `RoutePointAnalysis` stores `sounding: dict[model, SoundingAnalysis]`, and each `SoundingAnalysis.indices` has `sounding_ceiling_ft` and `nwp_ceiling_ft`. The `reconcile_ceiling()` function in `analysis/airport_conditions.py` picks the more conservative of the two.
+For each observation, we need the `SoundingAnalysis` and `HourlyForecast` at the nearest route point and nearest hour. These come from the briefing pack's stored artifacts:
 
-For verification: find the nearest route point to the airport, pick the nearest hour to the METAR observation time, and read the pre-computed ceiling. No recomputation needed — hourly resolution is close enough to METAR times.
-
-Access pattern:
 ```python
+# 1. Ceiling + convection: from route_analyses.json
 rpa = route_analyses[nearest_point_index]  # RoutePointAnalysis
 sounding = rpa.sounding.get(model_name)    # SoundingAnalysis
-ceiling = reconcile_ceiling(sounding, hourly_forecast)
-```
+#    → reconcile_ceiling(sounding, hourly) for ceiling
+#    → sounding.convective.risk_level for convection
 
-### Wind Advisory Scoring
+# 2. Surface fields: from forecasts.json
+wp_forecast = forecasts[nearest_waypoint][model]  # WaypointForecast
+hourly = wp_forecast.at_time(obs.observation_time) # nearest hour
+#    → hourly.visibility_m, wind_speed_10m_kt, temperature_2m_c, etc.
 
-Runway data is **already preloaded** via `get_runway_ends()` from the cached euro_aip model — no extra DB queries. Batch-load runway orientations for all verification airports once per cycle, then reuse `compute_wind_advisory()` for both observation and model wind fields.
-
-```python
-runway_data = get_runway_ends(unique_icaos, airports_db_path)  # one call
-for obs in observations:
-    rwy_ends = runway_data.get(obs.icao, [])
-    obs_advisory = compute_wind_advisory(obs.wind_dir, obs.wind_speed_kt, obs.wind_gust_kt, rwy_ends)
-    model_advisory = compute_wind_advisory(model_wind_dir, model_wind_speed, model_gust, rwy_ends)
+# 3. Runways: preloaded once per cycle
+runway_data = get_runway_ends(unique_icaos, airports_db_path)
+rwy_ends = runway_data.get(obs.icao, [])
 ```
 
 ## CLI Interface
