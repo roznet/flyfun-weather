@@ -34,6 +34,8 @@ export interface PreferencesResponse {
   cloud_method: string;
   convective_method: string;
   locale: string;
+  pirep_can_view: boolean;
+  pirep_can_publish: boolean;
 }
 
 export interface PreferencesUpdate {

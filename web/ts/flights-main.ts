@@ -557,6 +557,26 @@ function populateAircraftSelector(aircraft: AircraftResponse[]): void {
   const select = document.getElementById('input-aircraft') as HTMLSelectElement;
   if (!select) return;
 
+  const formGroup = select.closest('.form-group') as HTMLElement | null;
+  // Remove any previous footnote
+  formGroup?.parentElement?.querySelector('.aircraft-hint')?.remove();
+
+  if (aircraft.length === 0) {
+    // Hide dropdown, show hint instead
+    if (formGroup) formGroup.style.display = 'none';
+    const hint = document.createElement('p');
+    hint.className = 'aircraft-hint muted';
+    hint.style.fontSize = '0.8rem';
+    hint.style.margin = '0.25rem 0 0';
+    hint.innerHTML = `You can add aircraft presets in <a href="/settings.html">Settings</a>.`;
+    // Insert hint after the form-row containing the aircraft dropdown
+    const formRow = formGroup?.parentElement;
+    formRow?.parentElement?.insertBefore(hint, formRow.nextSibling);
+    return;
+  }
+
+  if (formGroup) formGroup.style.display = '';
+
   select.innerHTML = '<option value="">None</option>' + aircraft.map(ac => {
     const label = ac.tail_number
       ? `${ac.tail_number} — ${ac.type_name}`
