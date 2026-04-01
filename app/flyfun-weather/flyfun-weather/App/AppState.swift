@@ -102,6 +102,14 @@ final class AppState {
         repository = nil
     }
 
+    /// Delete the user's account on the server, then log out locally.
+    func deleteAccount() async throws {
+        guard let apiClient else { return }
+        try await apiClient.requestVoid("/auth/account", method: "DELETE")
+        Self.logger.info("Account deleted")
+        logout()
+    }
+
     #if targetEnvironment(simulator)
     /// Switch server environment and reconnect if authenticated.
     func setServerEnvironment(_ env: ServerEnvironment) {

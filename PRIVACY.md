@@ -1,6 +1,6 @@
 # FlyFun Weather — Privacy & Data Practices
 
-*Last updated: 2026-03-23*
+*Last updated: 2026-04-01*
 
 This document explains what data the app collects, why, and what I do (and don't do) with it.
 FlyFun Weather is a personal project — I'm a single developer, not a company.
@@ -128,7 +128,7 @@ I will not monetize your data, sell your information, or introduce advertising.
 
 - **Briefing artifacts** (weather files, charts) are cleaned up automatically after a period to manage disk space
 - **Account data and flight history** are retained as long as your account exists
-- If you want your account and all associated data deleted, contact me and I will remove everything
+- You can delete your account and all data at any time from the app settings (see Account Deletion below)
 
 ---
 
@@ -170,10 +170,15 @@ The complete source code is open source. You can verify every claim in this docu
 
 ## Account Deletion
 
-You can delete your account and all associated data (flights, briefings, preferences, credentials) directly from the app settings. This will permanently remove everything linked to your account.
+You can delete your account and all associated data (flights, briefings, preferences, credentials) at any time:
+
+- **iOS app:** Settings > Delete Account
+- **Web app:** Settings > Delete Account
+
+This will permanently remove everything linked to your account and cannot be undone.
 
 ---
 
 ## Contact
 
-If you have questions about your data or want to report a concern, reach out to me directly.
+If you have questions about your data or want to report a concern, reach out via the [GitHub issue tracker](https://github.com/roznet/flyfun-weather/issues).
