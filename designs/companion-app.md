@@ -2,22 +2,29 @@
 
 > iOS/iPad app for in-flight condition reporting, offline briefing access, and collaborative PIREPs
 
-## Current Implementation Status (as of 2026-03-17)
+## Current Implementation Status (as of 2026-04-01)
 
-Phase 1 is complete. Most of Phase 2 is implemented. Phase 3 (PIREPs) is not started.
+Phase 1 is complete. Most of Phase 2 is implemented. Phase 3 M0 (aircraft registry) and M1 (PIREP submit/view) are implemented.
 
 ### What's built
 
-**Authentication**: Google OAuth + native Sign in with Apple (via `SignInWithAppleButton`, token exchange with `/auth/apple/token` from flyfun-common). JWT stored in Keychain.
+**Authentication**: Google OAuth + native Sign in with Apple (via `SignInWithAppleButton`, token exchange with `/auth/apple/token` from flyfun-common). JWT stored in Keychain. Dev login for simulator (`/auth/dev-token` endpoint, `#if targetEnvironment(simulator)` button).
 
-**Flight list**: `NavigationSplitView` — sidebar flight list + detail briefing pane on iPad (collapsible). Flight titles show "ORIGIN → DEST" format. Pull-to-refresh.
+**Flight list**: `NavigationSplitView` — sidebar flight list + detail briefing pane on iPad (collapsible). Flight titles show "ORIGIN → DEST" format. Pull-to-refresh. Aircraft dropdown (hidden when none configured, links to Settings). Ellipsis menu replaces logout button.
 
-**Briefing viewer** (tab-based: Advisories, Cross-Section, Map, Digest):
+**Briefing viewer** (tab-based: Advisories, Cross-Section, Map, Digest, PIREPs):
 - Advisory dashboard with 3-column grid on iPad, model status badges as colored capsules, short model names (MF for Météo-France)
 - Airport conditions: departure/arrival side-by-side on iPad
 - Cross-section: Canvas renderer with cloud bands, icing, CAT, inversions, terrain, temperature lines, reference lines. Model selector. Layer toggle chips.
 - Native Skew-T: tap cross-section point → `SkewTView` (RZSkewT package) renders below with full thermodynamics, wind barbs, CAPE/CIN shading, LCL/LFC/EL markers, FL labels
 - Route map, digest view
+- PIREPs tab: read-only list of PIREPs for the flight, expandable rows with severity color bars, hazard icons, own-badge
+
+**PIREP reporting** (M1):
+- In-flight reporting sheet (toolbar button visible during flight window)
+- `PirepViewModel`: GPS pre-fill altitude, all fields unselected (no confirmation bias), smart field ordering
+- `PirepOfflineStore` actor: JSON-file queue in Documents, batch sync via `/api/pireps/batch`, dedup by `client_uuid`
+- `BriefingRepository` protocol extended with `submitPirep`, `submitPirepsBatch`, `fetchPireps`
 
 **Pack management**:
 - Pack history picker (toolbar dropdown with D-N labels and assessment badges)
@@ -36,11 +43,14 @@ Phase 1 is complete. Most of Phase 2 is implemented. Phase 3 (PIREPs) is not sta
 - `GET /sounding-profile/{point_index}/{model}` — raw T/Td/wind at pressure levels for client-side Skew-T
 
 ### What's NOT built yet
-- Push notifications for briefing updates
+- Push notifications for briefing updates (M2)
 - SwiftData persistence (current cache is file-based, not SwiftData)
 - Auto-sync / background refresh
 - Sounding profiles in offline download (online-only for now)
-- Phase 3: PIREPs, flight sessions, observations, prompting engine
+- Phase 3 M2: route/airport watches, APNs notifications, spatial matching
+- Phase 3 M3: post-flight debrief, validation tooling
+- Phase 3a: voice PIREP (Siri shortcut), proactive prompting engine
+- Phase 3c: live PIREP sharing (WebSocket)
 
 ## Vision
 

@@ -27,6 +27,21 @@ weather.flyfun.aero (Caddy, auto-TLS)
 
 Port 8020 chosen to avoid conflicts with existing services (8000=maps, 8002=mcp, 8010=boarding).
 
+### Content Security Policy
+
+Caddy injects CSP headers via `deploy/weather.flyfun.aero.caddy`. Key directives:
+
+| Directive | Value | Why |
+|-----------|-------|-----|
+| `script-src` | `'self' 'unsafe-inline'` | Bundled JS + inline theme/login scripts |
+| `style-src` | `'self' 'unsafe-inline'` | Local CSS + inline styles in admin/costs pages |
+| `img-src` | `'self' data: blob: *.tile.openstreetmap.org *.basemaps.cartocdn.com` | Leaflet map tiles (light/dark themes) |
+| `connect-src` | `'self' *.flyfun.aero` | API calls + cross-subdomain (forms.flyfun.aero) |
+| `form-action` | `'self' accounts.google.com` | Google OAuth redirect |
+| `frame-ancestors` | `'none'` | No embedding |
+
+**Gotcha**: Any new external resource (CDN script, external fetch, new tile provider) will be silently blocked. The `/code-review` command checks PRs against this policy. When adding external resources, either update the CSP in the Caddy file or refactor to stay within the policy.
+
 ## Development Mode
 
 `ENVIRONMENT=development` (from `.env`) activates dev mode:
@@ -39,7 +54,7 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 
 | Concern | Development | Production |
 |---------|------------|------------|
-| Auth | Auto-injected dev user | Google OAuth + JWT |
+| Auth | Auto-injected dev user + `/auth/dev-token` endpoint | Google OAuth + JWT |
 | Database | SQLite (file) | MySQL (shared-services) |
 | Artifacts | `data/packs/...` | `/app/data/packs/...` (volume) |
 | TLS | None (localhost) | Caddy auto-TLS |
@@ -202,6 +217,22 @@ Append-only cost tracking table (replaces old credit_ledger for new transactions
 
 See [cost-attribution-design.md](./cost-attribution-design.md) for full schema.
 
+### pireps
+
+Pilot weather reports — community observations. Schema in `designs/future/pirep-plan.md`.
+
+Key columns: `id`, `client_uuid` (unique, offline dedup), `submitted_at`, `observed_at`, `latitude`/`longitude`, `gps_altitude_ft`, `reported_altitude_ft`, `in_cloud`, `icing_intensity`/`icing_type`, `turbulence_intensity`, `ceiling_msl_ft`, `tops_msl_ft`/`tops_basis`, `temp_c`, `wind_dir`/`wind_speed_kt`, `remarks`, `aircraft_id` (FK → user_aircraft, SET NULL), `pack_id` (FK → briefing_packs, SET NULL), `source` (manual/inflight/postflight), `user_id` (FK → users, SET NULL for anonymization on account deletion).
+
+**Permission gating**: `pirep_can_view` and `pirep_can_publish` flags in `app_prefs_json`. Admin can set per-user or bulk. Feature-gating 403s must NOT trigger login redirect in frontend (see `apiFetch` in `web/ts/utils.ts`).
+
+**Flight query**: PIREPs queried by `flight_id` match via `pack_id` OR (for PIREPs without pack_id) by user + flight time window (departure ±2h).
+
+**Retention**: PIREPs are never deleted. Packs linked to PIREPs are exempt from T1/T2 retention cleanup.
+
+### device_tokens
+
+APNs push notification tokens (M2, table created but not yet used): `id`, `user_id` (FK → users, CASCADE), `token` (unique), `environment` (sandbox/production), `updated_at`.
+
 ## Authentication (via flyfun-common)
 
 Auth, JWT, encryption, DB engine, and user models are provided by `flyfun-common` (shared across flyfun apps). WeatherBrief mounts the common auth router and extends it with a custom `/auth/me` endpoint (registered first for priority).
@@ -231,7 +262,7 @@ Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens
 
 ### Account Deletion
 
-`DELETE /auth/me/account` triggers `_on_delete_user()` callback: cascade-deletes all flights (which cascade-deletes packs), profiles, aircraft, usage records, feedback, and removes artifact files from disk.
+`DELETE /auth/me/account` triggers `_on_delete_user()` callback: cascade-deletes all flights (which cascade-deletes packs), profiles, aircraft, device tokens, usage records, feedback, and removes artifact files from disk. PIREPs are **anonymized** (user_id/aircraft_id set to NULL) rather than deleted — observation data is preserved.
 
 ### Admin Hub (Cross-App)
 
@@ -248,6 +279,8 @@ Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens
 | Open-Meteo calls | 50/day per user | Free tier: 10K/day total |
 | GRAMET calls | 20/day per user | Autorouter courtesy |
 | LLM digest calls | 20/day per user | Token cost |
+| PIREP submit (burst) | 1 per 2 min per user | Prevent spam |
+| PIREP submit (daily) | 50/day per user | Reasonable cap; batch sync counts items not calls |
 
 Every refresh logged to `briefing_usage` with timing metrics (`elapsed_seconds`, `queue_wait_seconds`, `triggered_by`). Freshness check via `check_freshness()` in `fetch/model_status.py`.
 
