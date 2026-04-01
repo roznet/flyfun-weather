@@ -8,6 +8,7 @@ struct FlightListView: View {
     @State private var selectedFlight: FlightResponse?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showAddFlight = false
+    @State private var showSettings = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -59,8 +60,10 @@ struct FlightListView: View {
                         } label: {
                             Label("Add Flight", systemImage: "plus")
                         }
-                        Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
-                            appState.logout()
+                        Button {
+                            showSettings = true
+                        } label: {
+                            Label("Settings", systemImage: "gearshape")
                         }
                     }
                 }
@@ -74,6 +77,9 @@ struct FlightListView: View {
                         }
                     }
                 }
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
             }
         } detail: {
             if let selectedFlight {

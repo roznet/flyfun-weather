@@ -106,6 +106,11 @@ actor APIClient {
         }
     }
 
+    /// Perform a request that returns no body (e.g. DELETE).
+    func requestVoid(_ path: String, method: String = "DELETE") async throws {
+        _ = try await requestData(path, method: method)
+    }
+
     /// Fetch raw data (for images, file downloads).
     func requestData(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         let url = baseURL.appendingPathComponent(path)
