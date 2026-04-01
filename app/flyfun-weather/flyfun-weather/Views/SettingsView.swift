@@ -29,6 +29,13 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Label("Supplementary Tool", systemImage: "info.circle")
+                        .foregroundStyle(.secondary)
+                } footer: {
+                    Text("FlyFun Weather is an exploratory briefing tool. It is not a substitute for official weather briefings (e.g. FSS, DATIS, or your country's AIS). Always verify conditions through approved sources before flight.")
+                }
+
+                Section {
                     Button {
                         appState.logout()
                     } label: {
