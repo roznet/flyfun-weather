@@ -46,7 +46,10 @@ def find_verifiable_flights(db: Session) -> list[FlightRow]:
     stmt = (
         select(FlightRow)
         .join(BriefingPackRow)
-        .where(FlightRow.verification_status != "complete")
+        .where(
+            FlightRow.verification_status.is_(None)
+            | ~FlightRow.verification_status.in_(["complete", "scored"])
+        )
         .where(FlightRow.departure_time <= now + timedelta(hours=1))
         .distinct()
     )
@@ -412,13 +415,15 @@ def collect_and_store(
     # Phase A
     flights = find_verifiable_flights(db)
     if not flights:
-        return {"flights": 0, "airports": 0, "observations": 0, "finalized": 0}
+        return {"flights": 0, "airports": 0, "observations": 0, "finalized": 0, "scored": 0}
 
     icao_to_flights = gather_airports(flights, db, airports_db_path, corridor_nm)
     if not icao_to_flights:
         finalized = finalize_completed_flights(flights)
         db.commit()
-        return {"flights": len(flights), "airports": 0, "observations": 0, "finalized": finalized}
+        # Score any newly completed flights
+        scored = _score_completed(db, airports_db_path)
+        return {"flights": len(flights), "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
 
     unique_icaos = sorted(icao_to_flights.keys())
     logger.info(
@@ -437,9 +442,12 @@ def collect_and_store(
 
     db.commit()
 
+    # Phase F — Score completed flights
+    scored = _score_completed(db, airports_db_path)
+
     logger.info(
-        "Verification: %d observations stored, %d flights finalized",
-        inserted, finalized,
+        "Verification: %d observations stored, %d flights finalized, %d scored",
+        inserted, finalized, scored,
     )
 
     return {
@@ -447,4 +455,22 @@ def collect_and_store(
         "airports": len(unique_icaos),
         "observations": inserted,
         "finalized": finalized,
+        "scored": scored,
     }
+
+
+def _score_completed(db: Session, airports_db_path: str) -> int:
+    """Score any flights with verification_status='complete'.
+
+    Returns count of flights scored.
+    """
+    from weatherbrief.tasks.scoring import score_completed_flights
+
+    try:
+        result = score_completed_flights(db, airports_db_path)
+        db.commit()
+        return result["flights_scored"]
+    except Exception:
+        logger.warning("Scoring cycle failed", exc_info=True)
+        db.rollback()
+        return 0

@@ -159,6 +159,52 @@ def cmd_export(args):
         db.close()
 
 
+def cmd_score(args):
+    """Run scoring for completed flights."""
+    SessionLocal = _init_db()
+    db = SessionLocal()
+
+    airports_db = os.environ.get("AIRPORTS_DB", "")
+    if not airports_db:
+        print("ERROR: AIRPORTS_DB environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        from weatherbrief.tasks.scoring import score_completed_flights
+
+        result = score_completed_flights(db, airports_db)
+        db.commit()
+
+        print(f"Flights scored: {result['flights_scored']}")
+        print(f"Model scores:   {result['model_scores']}")
+        print(f"TAF scores:     {result['taf_scores']}")
+    finally:
+        db.close()
+
+
+def cmd_backfill(args):
+    """Re-run scoring (backfill after code changes)."""
+    SessionLocal = _init_db()
+    db = SessionLocal()
+
+    airports_db = os.environ.get("AIRPORTS_DB", "")
+    if not airports_db:
+        print("ERROR: AIRPORTS_DB environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        from weatherbrief.tasks.scoring import backfill_scores
+
+        result = backfill_scores(db, airports_db, flight_id=args.flight_id)
+        db.commit()
+
+        print(f"Flights scored: {result['flights_scored']}")
+        print(f"Model scores:   {result['model_scores']}")
+        print(f"TAF scores:     {result['taf_scores']}")
+    finally:
+        db.close()
+
+
 def cmd_stats(args):
     """Show verification statistics."""
     SessionLocal = _init_db()
@@ -244,6 +290,13 @@ def main():
     p_export.add_argument("--icao", help="Filter by ICAO code")
     p_export.add_argument("--limit", type=int, help="Limit number of records")
 
+    # score
+    p_score = subparsers.add_parser("score", help="Score completed flights")
+
+    # backfill
+    p_backfill = subparsers.add_parser("backfill", help="Re-run scoring (backfill)")
+    p_backfill.add_argument("--flight-id", help="Backfill a specific flight")
+
     # stats
     p_stats = subparsers.add_parser("stats", help="Show verification statistics")
 
@@ -253,6 +306,10 @@ def main():
         cmd_collect(args)
     elif args.command == "export":
         cmd_export(args)
+    elif args.command == "score":
+        cmd_score(args)
+    elif args.command == "backfill":
+        cmd_backfill(args)
     elif args.command == "stats":
         cmd_stats(args)
 
