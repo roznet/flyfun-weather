@@ -238,30 +238,45 @@ def _find_verifiable_flights(db: Session) -> list[FlightRow]:
 
 ### Collection Flow
 
+The key optimization: **gather all airports across all active flights first, deduplicate, make one batch fetch, then fan out results to flights.**
+
 ```
 For each verification cycle:
 
-1. Find active flights → deduplicate airports across all flights
-   (Airport X appears in 3 flights? Fetch METAR once)
+Phase A — Gather & Deduplicate
+  1. Find active flights (departure-1h ≤ now ≤ flight_end+1h, has ≥1 pack)
+  2. For each flight, resolve corridor airports (15nm) from route waypoints
+  3. Build a global dict:  icao → set[flight_id]
+     Example: 5 flights through LFPG, 3 through EDDF, 2 through LSZH
+     → unique ICAOs = {LFPG, EDDF, LSZH, ...}  (not 10 duplicate fetches)
 
-2. Batch-fetch METAR/TAF for all unique airports
-   (Reuse euro_aip.RouteWeatherService, corridor ~15nm)
+Phase B — Single Batch Fetch
+  4. Batch-fetch METAR/TAF for all unique ICAOs in one call
+     (aviationweather.gov supports up to 400 ICAOs per request)
+  5. This is the ONLY network call in the entire cycle
 
-3. For each observation:
-   a. UPSERT into verification_observations (dedup on icao + observation_time)
-   b. Parse TAF: find applicable trend at observation_time, extract fields
-   c. Link to flights via flight_verification_map
+Phase C — Store & Link
+  6. For each fetched observation:
+     a. UPSERT into verification_observations (dedup on icao + observation_time)
+        → if METAR already stored from a previous cycle, skip
+     b. Parse TAF: find applicable trend at observation_time, extract fields
+     c. For each flight_id in icao_to_flights[icao]:
+        → INSERT OR IGNORE into flight_verification_map
 
-4. For each new observation × each flight's briefing packs:
-   a. Load forecasts.json for the pack
-   b. Find route point closest to airport
-   c. Find HourlyForecast closest to observation_time
-   d. Compute deltas → INSERT into verification_scores
-   e. Compute TAF vs METAR deltas → INSERT into taf_verification_scores
+Phase D — Score (can be deferred to Phase 2 or batched separately)
+  7. For each NEW observation × each linked flight's briefing packs:
+     a. Load forecasts.json for the pack
+     b. Find route point closest to airport
+     c. Find HourlyForecast closest to observation_time
+     d. Compute deltas → INSERT into verification_scores
+     e. Compute TAF vs METAR deltas → INSERT into taf_verification_scores
 
-5. If now > flight_end + 1h:
-   Mark flight verification_status = "complete"
+Phase E — Finalize
+  8. For flights where now > flight_end + 1h:
+     Mark flight verification_status = "complete"
 ```
+
+**Why this matters**: On a busy day with 20 concurrent flights across similar European routes, many share LFPG, EDDF, EHAM, etc. Without dedup, we'd fetch the same METAR 10+ times per cycle. With dedup, it's one batch call for ~50-100 unique ICAOs regardless of flight count.
 
 ### Corridor Width
 
