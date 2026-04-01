@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -73,23 +72,26 @@ def _has_precip(weather: list[str]) -> bool:
     return any(w in _PRECIP_PHENOMENA for w in weather)
 
 
+def _ensure_utc(dt: datetime) -> datetime:
+    """Ensure a datetime is timezone-aware UTC (SQLite may return naive)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 # ---------------------------------------------------------------------------
 # Nearest route point matching
 # ---------------------------------------------------------------------------
 
 
-def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in nautical miles."""
-    R_NM = 3440.065  # Earth radius in nautical miles
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
-    )
-    return 2 * R_NM * math.asin(math.sqrt(a))
+def _distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in nautical miles via euro_aip NavPoint."""
+    from euro_aip.models.navpoint import NavPoint
+
+    a = NavPoint(latitude=lat1, longitude=lon1)
+    b = NavPoint(latitude=lat2, longitude=lon2)
+    _, dist = a.haversine_distance(b)
+    return dist
 
 
 def _find_nearest_route_point(
@@ -106,7 +108,7 @@ def _find_nearest_route_point(
     best_idx = 0
     best_dist = float("inf")
     for i, rpa in enumerate(analyses):
-        d = _haversine_nm(airport_lat, airport_lon, rpa.lat, rpa.lon)
+        d = _distance_nm(airport_lat, airport_lon, rpa.lat, rpa.lon)
         if d < best_dist:
             best_dist = d
             best_idx = i
@@ -129,7 +131,7 @@ def _find_nearest_waypoint_forecasts(
     best_per_model: dict = {}  # model_name → (distance, WaypointForecast)
     for wpf in forecasts:
         model_name = wpf.model.value
-        d = _haversine_nm(airport_lat, airport_lon, wpf.waypoint.lat, wpf.waypoint.lon)
+        d = _distance_nm(airport_lat, airport_lon, wpf.waypoint.lat, wpf.waypoint.lon)
         current = best_per_model.get(model_name)
         if current is None or d < current[0]:
             best_per_model[model_name] = (d, wpf)
@@ -163,9 +165,9 @@ def _score_model_vs_metar(
     if hourly is None:
         return None
 
-    lead_hours = int(
-        (obs_row.observation_time - model_init_time).total_seconds() / 3600
-    )
+    obs_time = _ensure_utc(obs_row.observation_time)
+    init_time = _ensure_utc(model_init_time)
+    lead_hours = int((obs_time - init_time).total_seconds() / 3600)
 
     # Ceiling — same as advisory pipeline
     model_ceiling = reconcile_ceiling(sounding, hourly)
@@ -226,7 +228,10 @@ def _score_model_vs_metar(
         days_out=days_out,
         obs_flight_category=obs_row.flight_category,
         model_flight_category=model_cat.value,
-        category_match=(obs_row.flight_category == model_cat.value),
+        category_match=(
+            obs_row.flight_category.upper() == model_cat.value.upper()
+            if obs_row.flight_category is not None else None
+        ),
         ceiling_delta_ft=(
             _delta(model_ceiling, float(obs_row.ceiling_ft))
             if obs_row.ceiling_ft is not None and model_ceiling is not None
@@ -270,9 +275,9 @@ def _score_taf_vs_metar(
     if obs_row.taf_issue_time is None or obs_row.taf_flight_category is None:
         return None
 
-    lead_hours = int(
-        (obs_row.observation_time - obs_row.taf_issue_time).total_seconds() / 3600
-    )
+    obs_time = _ensure_utc(obs_row.observation_time)
+    taf_time = _ensure_utc(obs_row.taf_issue_time)
+    lead_hours = int((obs_time - taf_time).total_seconds() / 3600)
 
     obs_adv, _, _, _ = compute_wind_advisory(
         obs_row.wind_dir, obs_row.wind_speed_kt, obs_row.wind_gust_kt,
@@ -291,7 +296,11 @@ def _score_taf_vs_metar(
         lead_hours=lead_hours,
         obs_flight_category=obs_row.flight_category,
         taf_flight_category=obs_row.taf_flight_category,
-        category_match=(obs_row.flight_category == obs_row.taf_flight_category),
+        category_match=(
+            obs_row.flight_category.upper() == obs_row.taf_flight_category.upper()
+            if obs_row.flight_category is not None and obs_row.taf_flight_category is not None
+            else None
+        ),
         ceiling_delta_ft=_delta(
             float(obs_row.taf_ceiling_ft) if obs_row.taf_ceiling_ft is not None else None,
             float(obs_row.ceiling_ft) if obs_row.ceiling_ft is not None else None,
@@ -415,9 +424,9 @@ def score_flight(
     airport_model = _load_airport_model(airports_db_path)
     airport_coords: dict[str, tuple[float, float]] = {}
     for icao in icaos:
-        apt = airport_model.airports.get(icao)
+        apt = airport_model.get_airport(icao)
         if apt is not None:
-            airport_coords[icao] = (apt.latitude, apt.longitude)
+            airport_coords[icao] = (apt.latitude_deg, apt.longitude_deg)
 
     # Load observations
     obs_rows = db.execute(

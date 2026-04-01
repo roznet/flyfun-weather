@@ -292,7 +292,7 @@ class VerificationScoreRow(Base):
     category_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # Quantitative deltas (model - observation)
-    ceiling_delta_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     visibility_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_dir_delta_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -346,7 +346,7 @@ class TafVerificationScoreRow(Base):
     category_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # Deltas (TAF - observation)
-    ceiling_delta_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     visibility_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_dir_delta_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
