@@ -77,6 +77,11 @@ iOS/iPad companion app: Phase 1 (online viewer) complete, Phase 2 (offline) most
 Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `CrossSectionRenderer`, `SkewTDetailView`
 → Full doc: companion-app.md
 
+### metar-taf-accuracy [project]
+Automated METAR/TAF verification system: collects observations during flights, scores NWP models and TAFs against ground truth, builds historical accuracy database. Standalone observation archive (anonymized, flight-independent), thin flight linkage, 10-min collection loop, CLI for backfill/export.
+Key exports: `collect_and_store`, `score_against_models`, `score_taf_against_metar`, `VerificationObservation`, `VerificationScore`
+→ Full doc: metar-taf-accuracy.md
+
 ### rzskewt
 Swift package for Skew-T log-P diagrams. Extracted to own repo: `github.com/roznet/rztskew`. Full atmospheric thermodynamics, Canvas rendering, 47 unit tests. Design docs live in that repo's `designs/` directory.
 Key exports: `SkewTView`, `SkewTRenderer`, `SoundingProfile`, `Thermodynamics`
