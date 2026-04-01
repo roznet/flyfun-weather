@@ -1,7 +1,7 @@
 """Add pireps and device_tokens tables.
 
-Revision ID: 030
-Revises: 029
+Revision ID: 032
+Revises: 031
 Create Date: 2026-03-30
 """
 from __future__ import annotations
@@ -11,8 +11,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "030"
-down_revision: Union[str, None] = "029"
+revision: str = "032"
+down_revision: Union[str, None] = "031"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
