@@ -393,6 +393,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     If a DB session is provided, loads user preferences (models, autorouter
     credentials) and applies them to the BriefingOptions.
     """
+    from weatherbrief.fetch.variables import MODEL_ENDPOINTS
     from weatherbrief.models import ModelSource
     from weatherbrief.pipeline import BriefingOptions
 
@@ -429,7 +430,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
 
         profile_models = profile_settings.get("models")
         if profile_models:
-            valid = {m.value for m in ModelSource}
+            valid = {m.value for m in ModelSource} & set(MODEL_ENDPOINTS)
             models = [ModelSource(m) for m in profile_models if m in valid]
 
         advisory_models = profile_settings.get("advisory_models")  # may be None

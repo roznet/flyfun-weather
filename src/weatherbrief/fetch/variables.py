@@ -9,7 +9,7 @@ BASE_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
 
 # 25 levels — 25 hPa spacing below 500, 50 hPa above.
 # Gives ~1000ft vertical resolution in the lower atmosphere (4x improvement).
-# GFS and best_match support all of these plus upper-atmosphere levels.
+# GFS supports all of these plus upper-atmosphere levels.
 EXTENDED_PRESSURE_LEVELS = [
     1000, 975, 950, 925, 900, 875, 850, 825, 800, 775,
     750, 725, 700, 675, 650, 625, 600, 575, 550, 525,
@@ -80,10 +80,9 @@ SURFACE_VARIABLES = [
 ]
 
 # What type of CAPE each model's surface "cape" variable represents.
-# GFS/best_match: surface-based, ECMWF: most-unstable, ICON: mixed-layer.
+# GFS: surface-based, ECMWF: most-unstable, ICON: mixed-layer.
 NWP_CAPE_TYPE: dict[str, str] = {
     "gfs": "sb",
-    "best_match": "sb",
     "ecmwf": "mu",
     "icon": "ml",
 }
@@ -126,12 +125,6 @@ class ModelEndpoint:
 
 
 MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
-    "best_match": ModelEndpoint(
-        name="Best Match",
-        base_url="https://api.open-meteo.com/v1/forecast",
-        max_days=16,
-        pressure_levels=list(EXTENDED_PRESSURE_LEVELS),
-    ),
     "ecmwf": ModelEndpoint(
         name="ECMWF IFS",
         base_url="https://api.open-meteo.com/v1/ecmwf",
