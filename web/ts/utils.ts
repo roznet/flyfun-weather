@@ -235,8 +235,16 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       throw new Error('Session expired');
     }
     if (resp.status === 403) {
-      window.location.href = '/login.html';
-      throw new Error('Account suspended');
+      const body403 = await resp.text();
+      let detail403 = '';
+      try { detail403 = JSON.parse(body403).detail || ''; } catch { /* */ }
+      // Only redirect for auth-level rejections (suspended account),
+      // not feature-gating 403s (e.g. PIREP permissions).
+      if (detail403 === 'Account suspended' || detail403 === 'Account is not approved') {
+        window.location.href = '/login.html';
+        throw new Error('Account suspended');
+      }
+      throw new Error(`API 403: ${detail403 || body403}`);
     }
     const body = await resp.text();
     let detail: string;
