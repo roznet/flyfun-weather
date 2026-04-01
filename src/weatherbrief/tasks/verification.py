@@ -202,7 +202,7 @@ def fetch_observations_batch(
         try:
             result = service.fetch_route_weather(
                 route_icaos=chunk,
-                corridor_nm=0,  # exact ICAO match, no corridor
+                corridor_nm=1,  # minimal corridor — just enough to find the airports themselves
                 model=model,
             )
         except Exception:
