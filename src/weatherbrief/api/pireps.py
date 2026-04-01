@@ -370,6 +370,14 @@ def submit_pireps_batch(
             if aircraft is None or aircraft.user_id != user_id:
                 continue
 
+        if req.pack_id is not None:
+            pack = db.get(BriefingPackRow, req.pack_id)
+            if pack is None:
+                continue
+            flight = db.get(FlightRow, pack.flight_id)
+            if flight is None or flight.user_id != user_id:
+                continue
+
         try:
             row = _create_one(db, user_id, req)
             results.append(_row_to_response(row, viewer_id=user_id))
