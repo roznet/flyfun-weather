@@ -9,7 +9,7 @@ import {
   type PirepFilterState,
 } from './managers/pirep-ui';
 import { PirepMap } from './visualization/pirep-map';
-import { renderUserInfo, $ } from './utils';
+import { renderUserInfo, $, escapeHtml } from './utils';
 import { initI18n } from './i18n/i18n';
 
 let pirepMap: PirepMap | null = null;
@@ -43,7 +43,7 @@ async function loadPireps(): Promise<void> {
       listContainer.innerHTML = '<p class="muted">PIREP viewing is not enabled for your account.</p>';
       mapContainer.innerHTML = '';
     } else {
-      listContainer.innerHTML = `<p class="error">Failed to load PIREPs: ${msg}</p>`;
+      listContainer.innerHTML = `<p class="error">Failed to load PIREPs: ${escapeHtml(msg)}</p>`;
     }
   }
 }
