@@ -301,6 +301,12 @@ Phase E — Finalize
 
 ## Scoring Logic
 
+### Core Principle: Verify What Users See
+
+Verification must score **the same derivations used in advisories** — not independent calculations. If advisories use `reconcile_ceiling()` for ceiling, verification uses `reconcile_ceiling()`. If advisories use `compute_wind_advisory()` with preloaded runway data, verification uses the same function.
+
+This means: if we improve how we derive ceiling or classify flight categories in the advisory pipeline, the verification stats for new observations will naturally reflect that improvement. The verification database becomes a measure of **advisory quality**, not just raw model quality. Over time, we can track whether advisory logic changes actually improved accuracy.
+
 ### Model → METAR Comparison
 
 Reuse and refactor logic from `tasks/route_weather.py:run_observation_comparison()`:
