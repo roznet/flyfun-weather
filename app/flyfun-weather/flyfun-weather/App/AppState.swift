@@ -105,7 +105,9 @@ final class AppState {
 
     /// Delete the user's account on the server, then log out locally.
     func deleteAccount() async throws {
-        guard let apiClient else { return }
+        guard let apiClient else {
+            throw URLError(.userAuthenticationRequired)
+        }
         try await apiClient.requestVoid("/auth/account", method: "DELETE")
         Self.logger.info("Account deleted")
         logout()
