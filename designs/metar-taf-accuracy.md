@@ -206,15 +206,16 @@ Add column to `flights` table:
 
 ```sql
 ALTER TABLE flights ADD COLUMN verification_status VARCHAR(16) DEFAULT NULL;
--- NULL = not yet started, "collecting" = actively gathering observations, "complete" = done
+-- NULL = not yet started, "collecting" = actively gathering, "complete" = collection done, "scored" = scoring done
 ```
 
 **Lifecycle**:
 - `NULL`: Flight exists but hasn't entered the verification window yet (or has no packs)
 - `"collecting"`: Set on first cycle that picks up this flight. Subsequent cycles see `"collecting"` and skip the spatial query (read cached ICAOs from map instead)
-- `"complete"`: Set when `now > flight_end + 1h`. No further collection or scoring.
+- `"complete"`: Set when `now > flight_end + 1h`. Collection done, ready for scoring.
+- `"scored"`: Set after scoring completes. No further collection or scoring.
 
-The query `WHERE verification_status != 'complete'` picks up both NULL and "collecting" flights. NULL flights are checked for eligibility (has packs, in time window) and promoted to "collecting" on first match.
+The collection query `WHERE verification_status IS NULL OR verification_status NOT IN ('complete', 'scored')` picks up both NULL and "collecting" flights. NULL flights are checked for eligibility (has packs, in time window) and promoted to "collecting" on first match. Scoring runs automatically after each collection cycle for any flights in "complete" status.
 
 ## Collection Loop
 
