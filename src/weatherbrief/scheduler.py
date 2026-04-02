@@ -322,20 +322,28 @@ def _run_verification_once(app_state) -> None:
 
 
 async def run_digest_loop(app_state) -> None:
-    """Send daily verification digest email.
+    """Send daily verification digest email at a fixed UTC hour.
 
-    Runs once per day, computing stats for the last 24 hours and
-    emailing them to admin users.
+    Waits until the target hour (default 06:00 UTC), sends the digest,
+    then sleeps until the same hour the next day.
     """
-    logger.info("Digest loop started (every %ds)", _DIGEST_INTERVAL_SECONDS)
+    target_hour = int(os.environ.get("DIGEST_HOUR_UTC", "6"))
+    logger.info("Digest loop started (daily at %02d:00 UTC)", target_hour)
     await asyncio.sleep(_DIGEST_STARTUP_DELAY_SECONDS)
 
     while True:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        logger.info("Digest: next send at %s (in %.0fs)", next_run.isoformat(), wait_seconds)
+        await asyncio.sleep(wait_seconds)
+
         try:
             await asyncio.to_thread(_run_digest_once)
         except Exception:
             logger.error("Digest cycle failed", exc_info=True)
-        await asyncio.sleep(_DIGEST_INTERVAL_SECONDS)
 
 
 def _run_digest_once() -> None:
