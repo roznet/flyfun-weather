@@ -488,3 +488,28 @@ class FlightVerificationMapRow(Base):
     )
 
 
+class VerificationCycleRow(Base):
+    """Performance metrics for each verification collection cycle.
+
+    One row per cycle that found at least one active flight.
+    Used to track timing trends and detect server overload.
+    """
+
+    __tablename__ = "verification_cycles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    phase_finalize_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase_find_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase_gather_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase_fetch_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase_store_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase_score_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    flights: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    airports: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    observations_stored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    finalized: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
