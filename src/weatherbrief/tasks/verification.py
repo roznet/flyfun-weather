@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -21,6 +22,7 @@ from weatherbrief.db.models import (
     BriefingPackRow,
     FlightRow,
     FlightVerificationMapRow,
+    VerificationCycleRow,
     VerificationObservationRow,
 )
 from weatherbrief.models.verification import VerificationObservation
@@ -415,6 +417,11 @@ def finalize_completed_flights(db: Session) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _ms_since(t0: float) -> int:
+    """Milliseconds elapsed since monotonic timestamp *t0*."""
+    return int((time.monotonic() - t0) * 1000)
+
+
 def collect_and_store(
     db: Session,
     airports_db_path: str,
@@ -424,19 +431,38 @@ def collect_and_store(
 
     Returns summary dict with counts.
     """
+    cycle_start = time.monotonic()
+    started_at = datetime.now(timezone.utc)
+    timings: dict[str, int] = {}
+
     # Phase E — finalize flights past their window (runs independently)
+    t0 = time.monotonic()
     finalized = finalize_completed_flights(db)
     if finalized:
         db.commit()
-    scored = _score_completed(db, airports_db_path)
+    timings["finalize"] = _ms_since(t0)
 
-    # Phase A
+    t0 = time.monotonic()
+    scored = _score_completed(db, airports_db_path)
+    timings["score"] = _ms_since(t0)
+
+    # Phase A — find active flights
+    t0 = time.monotonic()
     flights = find_verifiable_flights(db)
+    timings["find"] = _ms_since(t0)
+
     if not flights:
+        # No active flights — skip metrics row
         return {"flights": 0, "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
 
+    t0 = time.monotonic()
     icao_to_flights = gather_airports(flights, db, airports_db_path, corridor_nm)
+    timings["gather"] = _ms_since(t0)
+
     if not icao_to_flights:
+        _record_cycle(db, started_at, cycle_start, timings,
+                      flights=len(flights), airports=0, inserted=0,
+                      finalized=finalized, scored=scored)
         return {"flights": len(flights), "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
 
     unique_icaos = sorted(icao_to_flights.keys())
@@ -445,11 +471,19 @@ def collect_and_store(
         len(flights), len(unique_icaos),
     )
 
-    # Phase B
+    # Phase B — fetch METARs
+    t0 = time.monotonic()
     observations = fetch_observations_batch(unique_icaos, airports_db_path)
+    timings["fetch"] = _ms_since(t0)
 
-    # Phase C
+    # Phase C — store observations
+    t0 = time.monotonic()
     inserted = store_observations(observations, icao_to_flights, db)
+    timings["store"] = _ms_since(t0)
+
+    _record_cycle(db, started_at, cycle_start, timings,
+                  flights=len(flights), airports=len(unique_icaos),
+                  inserted=inserted, finalized=finalized, scored=scored)
 
     db.commit()
 
@@ -465,6 +499,36 @@ def collect_and_store(
         "finalized": finalized,
         "scored": scored,
     }
+
+
+def _record_cycle(
+    db: Session,
+    started_at: datetime,
+    cycle_start: float,
+    timings: dict[str, int],
+    *,
+    flights: int,
+    airports: int,
+    inserted: int,
+    finalized: int,
+    scored: int,
+) -> None:
+    """Insert a verification_cycles row with timing metrics."""
+    db.add(VerificationCycleRow(
+        started_at=started_at,
+        duration_ms=_ms_since(cycle_start),
+        phase_finalize_ms=timings.get("finalize", 0),
+        phase_find_ms=timings.get("find", 0),
+        phase_gather_ms=timings.get("gather", 0),
+        phase_fetch_ms=timings.get("fetch", 0),
+        phase_store_ms=timings.get("store", 0),
+        phase_score_ms=timings.get("score", 0),
+        flights=flights,
+        airports=airports,
+        observations_stored=inserted,
+        finalized=finalized,
+        scored=scored,
+    ))
 
 
 def _score_completed(db: Session, airports_db_path: str) -> int:
