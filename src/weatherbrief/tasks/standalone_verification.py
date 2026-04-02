@@ -43,7 +43,7 @@ MODEL_FORECAST_DAYS = {
     "ecmwf": 7,
 }
 
-_OPEN_METEO_BATCH_SIZE = 100  # airports per Open-Meteo API call
+_OPEN_METEO_BATCH_SIZE = 50  # airports per Open-Meteo API call
 _LCL_CONSTANT_FT = 400  # 400 * (T - Td) approximation for LCL in feet
 
 
@@ -167,7 +167,9 @@ def _enrich_with_grib(
         if snap["model"] != model:
             continue
         delta = snap["forecast_hour"] - init_time
-        fhour_set.add(int(delta.total_seconds() / 3600))
+        offset = int(delta.total_seconds() / 3600)
+        if offset >= 0:
+            fhour_set.add(offset)
 
     if not fhour_set:
         return
@@ -542,11 +544,13 @@ def run_standalone_cycle(
     session = requests.Session()
 
     try:
-        # Phase A: Get model metadata and fetch forecasts
+        # Phase A+B: Fetch and store forecasts per model
+        # Process one model at a time to limit memory usage — each model's
+        # snapshots are stored and freed before fetching the next.
         metadata = fetch_model_metadata(STANDALONE_MODELS)
 
-        all_snapshots: list[dict] = []
         models_fetched = 0
+        snapshots_stored = 0
 
         for model in STANDALONE_MODELS:
             meta = metadata.get(model)
@@ -577,23 +581,23 @@ def run_standalone_cycle(
             # GRIB enrichment for ceiling/cloud_base
             _enrich_with_grib(snapshots, model, init_time, airports, session)
 
-            all_snapshots.extend(snapshots)
+            # Store immediately and free memory
+            stored = _store_snapshots(snapshots, db)
+            snapshots_stored += stored
+            logger.info("Model %s: stored %d snapshots", model, stored)
+            del snapshots
             models_fetched += 1
 
-        # Phase B: Store snapshots
-        t_store = time.monotonic()
-        snapshots_stored = _store_snapshots(all_snapshots, db)
-        logger.info("Stored %d forecast snapshots", snapshots_stored)
+        t_fetch_done = time.monotonic()
 
         # Phase C: Fetch METAR/TAF
-        t_obs = time.monotonic()
         obs_stored = _fetch_and_store_observations(airports, airports_db_path, db)
         t_obs_done = time.monotonic()
         logger.info("Stored %d new observations", obs_stored)
 
         # Phase D: Score
-        t_score = time.monotonic()
         scores_created = _score_cycle(now, airports, airports_db_path, db)
+        t_score_done = time.monotonic()
         logger.info("Created %d scores", scores_created)
 
         # Phase E: Prune
@@ -609,10 +613,10 @@ def run_standalone_cycle(
             started_at=now,
             duration_ms=duration_ms,
             source="standalone",
-            phase_fetch_ms=int((t_store - t_start) * 1000),
-            phase_store_ms=int((t_obs - t_store) * 1000),
-            phase_gather_ms=int((t_obs_done - t_obs) * 1000),
-            phase_score_ms=int((t_end - t_score) * 1000),
+            # fetch+store is interleaved per model, so combined into phase_fetch
+            phase_fetch_ms=int((t_fetch_done - t_start) * 1000),
+            phase_gather_ms=int((t_obs_done - t_fetch_done) * 1000),
+            phase_score_ms=int((t_score_done - t_obs_done) * 1000),
             airports=len(airports),
             observations_stored=obs_stored,
             scored=scores_created,
