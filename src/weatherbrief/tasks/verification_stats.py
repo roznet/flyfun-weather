@@ -3,6 +3,9 @@
 Used by both the daily email digest and the admin web dashboard API.
 All functions take a SQLAlchemy Session and a date range, returning
 Pydantic models from :mod:`weatherbrief.models.verification`.
+
+Every query filters by ``source`` ('flight' or 'standalone') to ensure
+flight-based and standalone verification data are never mixed.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ _DAYS_OUT_COLS = (0, 1, 2, 3, 5, 7)
 
 def get_activity_summary(
     db: Session, since: datetime, until: datetime,
+    source: str = "flight",
 ) -> ActivitySummary:
     """High-level counts for a date range."""
     obs_count = db.execute(
@@ -57,31 +61,36 @@ def get_activity_summary(
         )
     ).scalar() or 0
 
-    # Flights that had observations in this window
-    flights_verified = db.execute(
-        select(func.count(func.distinct(FlightVerificationMapRow.flight_id))).where(
-            FlightVerificationMapRow.observation_id.isnot(None),
-            FlightVerificationMapRow.observation_id.in_(
-                select(VerificationObservationRow.id).where(
-                    VerificationObservationRow.observation_time.between(since, until)
-                )
-            ),
-        )
-    ).scalar() or 0
+    # Flight-specific counts (only relevant for source='flight')
+    flights_verified = 0
+    flights_completed = 0
+    if source == "flight":
+        flights_verified = db.execute(
+            select(func.count(func.distinct(FlightVerificationMapRow.flight_id))).where(
+                FlightVerificationMapRow.observation_id.isnot(None),
+                FlightVerificationMapRow.observation_id.in_(
+                    select(VerificationObservationRow.id).where(
+                        VerificationObservationRow.observation_time.between(since, until)
+                    )
+                ),
+            )
+        ).scalar() or 0
 
-    # Flights completed (scored) in this window
-    flights_completed = db.execute(
-        select(func.count(FlightRow.id)).where(
-            FlightRow.verification_status.in_(("complete", "scored")),
-        )
-    ).scalar() or 0
+        flights_completed = db.execute(
+            select(func.count(FlightRow.id)).where(
+                FlightRow.verification_status.in_(("complete", "scored")),
+            )
+        ).scalar() or 0
 
-    # Cycle metrics
+    # Cycle metrics — filtered by source
     cycle_rows = db.execute(
         select(
             func.count(VerificationCycleRow.id),
             func.avg(VerificationCycleRow.duration_ms),
-        ).where(VerificationCycleRow.started_at.between(since, until))
+        ).where(
+            VerificationCycleRow.started_at.between(since, until),
+            VerificationCycleRow.source == source,
+        )
     ).one()
     cycles_run = cycle_rows[0] or 0
     avg_duration = round(cycle_rows[1], 1) if cycle_rows[1] is not None else None
@@ -103,6 +112,7 @@ def get_activity_summary(
 
 def get_category_accuracy(
     db: Session, since: datetime, until: datetime,
+    source: str = "flight",
 ) -> list[CategoryAccuracyRow]:
     """Flight-category match rate per model and days-out.
 
@@ -122,6 +132,7 @@ def get_category_accuracy(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.category_match.isnot(None),
             VerificationScoreRow.days_out.in_(_DAYS_OUT_COLS),
+            VerificationScoreRow.source == source,
         )
         .group_by(VerificationScoreRow.model, VerificationScoreRow.days_out)
     ).all()
@@ -142,6 +153,7 @@ def get_category_accuracy(
         ).where(
             TafVerificationScoreRow.observation_time.between(since, until),
             TafVerificationScoreRow.category_match.isnot(None),
+            TafVerificationScoreRow.source == source,
         )
     ).one()
 
@@ -165,11 +177,11 @@ _VFR_CATS = ("VFR", "MVFR")
 
 
 def get_notable_misses(
-    db: Session, since: datetime, until: datetime, *, limit: int = 10,
+    db: Session, since: datetime, until: datetime,
+    source: str = "flight",
+    *, limit: int = 10,
 ) -> list[NotableMiss]:
     """Category busts where model and observation disagree by 2+ levels."""
-    # Model missed IFR (predicted VFR/MVFR but actual was IFR/LIFR)
-    # or false alarm (predicted IFR/LIFR but actual was VFR/MVFR)
     stmt = (
         select(
             VerificationScoreRow.icao,
@@ -183,13 +195,12 @@ def get_notable_misses(
         .where(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.category_match == False,  # noqa: E712
+            VerificationScoreRow.source == source,
             or_(
-                # Model missed IFR/LIFR
                 (
                     VerificationScoreRow.obs_flight_category.in_(_IFR_CATS)
                     & VerificationScoreRow.model_flight_category.in_(_VFR_CATS)
                 ),
-                # Model false-alarmed IFR/LIFR
                 (
                     VerificationScoreRow.model_flight_category.in_(_IFR_CATS)
                     & VerificationScoreRow.obs_flight_category.in_(_VFR_CATS)
@@ -221,6 +232,7 @@ def get_notable_misses(
 
 def get_wind_advisory_accuracy(
     db: Session, since: datetime, until: datetime,
+    source: str = "flight",
 ) -> list[WindAdvisoryStats]:
     """Per-model wind advisory match rate."""
     rows = db.execute(
@@ -232,6 +244,7 @@ def get_wind_advisory_accuracy(
         .where(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.advisory_match.isnot(None),
+            VerificationScoreRow.source == source,
         )
         .group_by(VerificationScoreRow.model)
     ).all()
@@ -253,6 +266,7 @@ def get_wind_advisory_accuracy(
         ).where(
             TafVerificationScoreRow.observation_time.between(since, until),
             TafVerificationScoreRow.advisory_match.isnot(None),
+            TafVerificationScoreRow.source == source,
         )
     ).one()
 
@@ -267,7 +281,9 @@ def get_wind_advisory_accuracy(
 
 
 def get_missed_warnings(
-    db: Session, since: datetime, until: datetime, *, limit: int = 10,
+    db: Session, since: datetime, until: datetime,
+    source: str = "flight",
+    *, limit: int = 10,
 ) -> list[MissedWarning]:
     """Wind WARNINGs that models failed to predict."""
     stmt = (
@@ -282,6 +298,7 @@ def get_missed_warnings(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.obs_wind_advisory == "WARNING",
             VerificationScoreRow.model_wind_advisory != "WARNING",
+            VerificationScoreRow.source == source,
         )
         .order_by(VerificationScoreRow.observation_time.desc())
         .limit(limit)
@@ -306,6 +323,7 @@ def get_missed_warnings(
 
 def get_mae_stats(
     db: Session, since: datetime, until: datetime,
+    source: str = "flight",
 ) -> list[MAERow]:
     """Mean absolute error per model at D-0 and D-1."""
     rows = db.execute(
@@ -321,6 +339,7 @@ def get_mae_stats(
         .where(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.days_out.in_((0, 1)),
+            VerificationScoreRow.source == source,
         )
         .group_by(VerificationScoreRow.model, VerificationScoreRow.days_out)
     ).all()
@@ -349,22 +368,23 @@ def get_digest_data(
     since: datetime,
     until: datetime,
     *,
+    source: str = "flight",
     period_label: str = "",
     include_7d: bool = True,
 ) -> VerificationDigestData:
     """Build complete digest payload for email or web dashboard."""
-    activity = get_activity_summary(db, since, until)
-    category_today = get_category_accuracy(db, since, until)
-    notable = get_notable_misses(db, since, until)
-    wind = get_wind_advisory_accuracy(db, since, until)
-    missed = get_missed_warnings(db, since, until)
-    mae = get_mae_stats(db, since, until)
+    activity = get_activity_summary(db, since, until, source)
+    category_today = get_category_accuracy(db, since, until, source)
+    notable = get_notable_misses(db, since, until, source)
+    wind = get_wind_advisory_accuracy(db, since, until, source)
+    missed = get_missed_warnings(db, since, until, source)
+    mae = get_mae_stats(db, since, until, source)
 
     # 7-day rolling for comparison
     category_7d: list[CategoryAccuracyRow] = []
     if include_7d:
         seven_days_ago = until - timedelta(days=7)
-        category_7d = get_category_accuracy(db, seven_days_ago, until)
+        category_7d = get_category_accuracy(db, seven_days_ago, until, source)
 
     return VerificationDigestData(
         period_label=period_label,

@@ -823,6 +823,7 @@ def revoke_agent_token(
 @router.get("/verification")
 def get_verification_stats(
     period: str = Query(default="24h", pattern=r"^(24h|7d|30d)$"),
+    source: str = Query(default="flight", pattern=r"^(flight|standalone)$"),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -835,6 +836,7 @@ def get_verification_stats(
 
     data = get_digest_data(
         db, since, now,
+        source=source,
         period_label=period,
         include_7d=(period != "7d"),
     )

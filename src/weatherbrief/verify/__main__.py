@@ -3,7 +3,9 @@
 Usage:
     python -m weatherbrief.verify collect [--flight-id ID] [--corridor NM]
     python -m weatherbrief.verify export [--format csv|json] [--output FILE]
-    python -m weatherbrief.verify stats [--model MODEL] [--icao ICAO]
+    python -m weatherbrief.verify stats [--model MODEL] [--icao ICAO] [--source SOURCE]
+    python -m weatherbrief.verify discover [--prefixes LF,ED,...]
+    python -m weatherbrief.verify standalone [--once]
 """
 
 from __future__ import annotations
@@ -210,6 +212,8 @@ def cmd_stats(args):
     SessionLocal = _init_db()
     db = SessionLocal()
 
+    source = getattr(args, 'source', None)
+
     try:
         from sqlalchemy import func, select
         from weatherbrief.db.models import (
@@ -222,27 +226,29 @@ def cmd_stats(args):
             select(func.count(VerificationObservationRow.id))
         ).scalar() or 0
 
-        score_count = db.execute(
-            select(func.count(VerificationScoreRow.id))
-        ).scalar() or 0
+        score_stmt = select(func.count(VerificationScoreRow.id))
+        if source:
+            score_stmt = score_stmt.where(VerificationScoreRow.source == source)
+        score_count = db.execute(score_stmt).scalar() or 0
 
         airport_count = db.execute(
             select(func.count(func.distinct(VerificationObservationRow.icao)))
         ).scalar() or 0
 
-        flight_count = db.execute(
-            select(func.count(func.distinct(FlightVerificationMapRow.flight_id)))
-        ).scalar() or 0
-
-        print(f"Verification Database Statistics")
+        label = f"Verification Statistics (source={source})" if source else "Verification Database Statistics"
+        print(label)
         print(f"{'─' * 40}")
         print(f"Observations:    {obs_count:>8}")
         print(f"Scores:          {score_count:>8}")
         print(f"Unique airports: {airport_count:>8}")
-        print(f"Flights tracked: {flight_count:>8}")
+
+        if not source or source == "flight":
+            flight_count = db.execute(
+                select(func.count(func.distinct(FlightVerificationMapRow.flight_id)))
+            ).scalar() or 0
+            print(f"Flights tracked: {flight_count:>8}")
 
         if obs_count > 0:
-            # Category distribution
             print(f"\nFlight Category Distribution:")
             cat_counts = db.execute(
                 select(
@@ -258,6 +264,65 @@ def cmd_stats(args):
                 print(f"  {cat:>5}: {count:>6} ({pct:.1f}%)")
     finally:
         db.close()
+
+
+def cmd_discover(args):
+    """Discover METAR-reporting airports for the watchlist."""
+    load_dotenv()
+    from weatherbrief.tasks.airport_watchlist import (
+        DEFAULT_PREFIXES,
+        discover_airports,
+        get_configs_dir,
+        save_watchlist,
+    )
+
+    airports_db = os.environ.get("AIRPORTS_DB", "")
+    if not airports_db:
+        print("ERROR: AIRPORTS_DB environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    prefixes = args.prefixes.split(",") if args.prefixes else DEFAULT_PREFIXES
+    print(f"Discovering airports for prefixes: {', '.join(prefixes)}")
+
+    airports = discover_airports(prefixes, airports_db)
+    total = sum(len(v) for v in airports.values())
+    print(f"\nFound {total} airports with METARs:")
+    for prefix in sorted(airports):
+        print(f"  {prefix}: {len(airports[prefix])}")
+
+    configs_dir = get_configs_dir()
+    path = save_watchlist(airports, configs_dir)
+    print(f"\nSaved to {path}")
+
+
+def cmd_standalone(args):
+    """Run a standalone verification cycle."""
+    _init_db()
+    load_dotenv()
+
+    airports_db = os.environ.get("AIRPORTS_DB", "")
+    if not airports_db:
+        print("ERROR: AIRPORTS_DB environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    from weatherbrief.tasks.airport_watchlist import get_configs_dir, load_watchlist_with_coords
+
+    try:
+        watchlist = load_watchlist_with_coords(get_configs_dir(), airports_db)
+        print(f"Loaded {len(watchlist)} airports from watchlist")
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+
+    result = run_standalone_cycle(watchlist, airports_db)
+    print(f"\nStandalone verification cycle complete:")
+    print(f"  Models fetched: {result.get('models_fetched', 0)}")
+    print(f"  Snapshots stored: {result.get('snapshots_stored', 0)}")
+    print(f"  Observations stored: {result.get('observations_stored', 0)}")
+    print(f"  Scores created: {result.get('scores_created', 0)}")
+    print(f"  Duration: {result.get('duration_ms', 0)}ms")
 
 
 def main():
@@ -299,6 +364,30 @@ def main():
 
     # stats
     p_stats = subparsers.add_parser("stats", help="Show verification statistics")
+    p_stats.add_argument(
+        "--source", choices=["flight", "standalone"],
+        help="Filter by source (default: all)",
+    )
+
+    # discover
+    p_discover = subparsers.add_parser(
+        "discover",
+        help="Discover METAR-reporting airports for watchlist",
+    )
+    p_discover.add_argument(
+        "--prefixes",
+        help="Comma-separated ICAO prefixes (default: LF,ED,EG,EH,EB,LS,LO)",
+    )
+
+    # standalone
+    p_standalone = subparsers.add_parser(
+        "standalone",
+        help="Run a standalone verification cycle",
+    )
+    p_standalone.add_argument(
+        "--once", action="store_true", default=True,
+        help="Run a single cycle (default)",
+    )
 
     args = parser.parse_args()
 
@@ -312,6 +401,10 @@ def main():
         cmd_backfill(args)
     elif args.command == "stats":
         cmd_stats(args)
+    elif args.command == "discover":
+        cmd_discover(args)
+    elif args.command == "standalone":
+        cmd_standalone(args)
 
 
 if __name__ == "__main__":

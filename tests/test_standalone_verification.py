@@ -1,0 +1,631 @@
+"""Tests for the standalone airport verification pipeline.
+
+Covers:
+- Airport watchlist: discover, save, load, load_with_coords
+- Snapshot to HourlyForecast adapter
+- Forecast snapshot storage (Phase B)
+- Observation fetch + store (Phase C, reuses existing infra)
+- Scoring against stored snapshots (Phase D)
+- Pruning old snapshots (Phase E)
+- Scheduler helper: _seconds_until_next_sample_hour
+- Full cycle orchestration (run_standalone_cycle)
+- Verification stats source filtering
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+import responses
+from sqlalchemy import select
+
+from weatherbrief.db.models import (
+    AirportForecastSnapshotRow,
+    TafVerificationScoreRow,
+    VerificationCycleRow,
+    VerificationObservationRow,
+    VerificationScoreRow,
+)
+from weatherbrief.tasks.airport_watchlist import (
+    DEFAULT_PREFIXES,
+    WatchlistAirport,
+    discover_airports,
+    load_watchlist,
+    load_watchlist_with_coords,
+    save_watchlist,
+)
+from weatherbrief.tasks.standalone_verification import (
+    SAMPLE_HOURS_UTC,
+    STANDALONE_MODELS,
+    _fetch_and_store_observations,
+    _prune_old_snapshots,
+    _score_cycle,
+    _snapshot_to_hourly,
+    _store_snapshots,
+)
+
+
+def _utc(*args) -> datetime:
+    return datetime(*args, tzinfo=timezone.utc)
+
+
+NOW = _utc(2026, 4, 2, 12, 0)
+GFS_INIT = _utc(2026, 4, 2, 6, 0)
+ICON_INIT = _utc(2026, 4, 2, 6, 0)
+
+
+# ---------------------------------------------------------------------------
+# Airport watchlist
+# ---------------------------------------------------------------------------
+
+
+class TestSaveLoadWatchlist:
+
+    def test_save_and_load_roundtrip(self, tmp_path):
+        airports = {"LF": ["LFPG", "LFBO"], "ED": ["EDDF"]}
+        save_watchlist(airports, tmp_path)
+        loaded = load_watchlist(tmp_path)
+        assert loaded == airports
+
+    def test_load_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="watchlist not found"):
+            load_watchlist(tmp_path)
+
+    def test_save_includes_generated_at(self, tmp_path):
+        save_watchlist({"LF": ["LFPG"]}, tmp_path)
+        data = json.loads((tmp_path / "airport_watchlist.json").read_text())
+        assert "generated_at" in data
+
+    def test_load_with_coords_filters_missing(self, tmp_path):
+        save_watchlist({"LF": ["LFPG", "XXXX"]}, tmp_path)
+
+        mock_airport = SimpleNamespace(latitude_deg=49.01, longitude_deg=2.55)
+        mock_model = MagicMock()
+        mock_model.airports.__getitem__ = MagicMock(side_effect=lambda k: mock_airport if k == "LFPG" else (_ for _ in ()).throw(KeyError(k)))
+
+        with patch("weatherbrief.airports._load_airport_model", return_value=mock_model):
+            result = load_watchlist_with_coords(tmp_path, "/fake/db")
+
+        assert len(result) == 1
+        assert result[0].icao == "LFPG"
+        assert result[0].lat == pytest.approx(49.01)
+
+
+class TestDiscoverAirports:
+
+    @responses.activate
+    def test_discover_filters_to_reporting(self):
+        """Airports in DB but not returning METARs are excluded."""
+        mock_model = MagicMock()
+        mock_model.airports.__iter__ = MagicMock(
+            return_value=iter([
+                SimpleNamespace(ident="LSGG"),
+                SimpleNamespace(ident="LSZH"),
+                SimpleNamespace(ident="LSGE"),  # no METAR
+            ])
+        )
+
+        # aviationweather returns METARs only for LSGG and LSZH
+        responses.add(
+            responses.GET,
+            "https://aviationweather.gov/api/data/metar",
+            json=[
+                {"icaoId": "LSGG", "temp": 10},
+                {"icaoId": "LSZH", "temp": 12},
+            ],
+            status=200,
+        )
+
+        with patch("weatherbrief.airports._load_airport_model", return_value=mock_model):
+            result = discover_airports(["LS"], "/fake/db")
+
+        assert result["LS"] == ["LSGG", "LSZH"]
+
+    @responses.activate
+    def test_discover_handles_204_no_content(self):
+        """aviationweather returns 204 for empty results."""
+        mock_model = MagicMock()
+        mock_model.airports.__iter__ = MagicMock(
+            return_value=iter([SimpleNamespace(ident="XXXX")])
+        )
+
+        responses.add(
+            responses.GET,
+            "https://aviationweather.gov/api/data/metar",
+            body="",
+            status=204,
+        )
+
+        with patch("weatherbrief.airports._load_airport_model", return_value=mock_model):
+            result = discover_airports(["XX"], "/fake/db")
+
+        assert result["XX"] == []
+
+
+# ---------------------------------------------------------------------------
+# Snapshot → HourlyForecast adapter
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotToHourly:
+
+    def test_basic_conversion(self):
+        snap = SimpleNamespace(
+            forecast_hour=NOW,
+            temperature_2m_c=12.5,
+            dewpoint_2m_c=7.2,
+            visibility_m=9999.0,
+            wind_speed_10m_kt=15.0,
+            wind_direction_10m_deg=270.0,
+            wind_gusts_10m_kt=22.0,
+            precipitation_mm=0.0,
+            snowfall_cm=0.0,
+            cape_jkg=50.0,
+            weather_code=3,
+            cloud_cover_pct=75.0,
+            cloud_cover_low_pct=40.0,
+            nwp_ceiling_ft=3500.0,
+        )
+
+        hourly = _snapshot_to_hourly(snap)
+
+        assert hourly.time == NOW
+        assert hourly.temperature_2m_c == 12.5
+        assert hourly.visibility_m == 9999.0
+        assert hourly.wind_speed_10m_kt == 15.0
+        assert hourly.nwp_cloud_diagnostics is not None
+        assert hourly.nwp_cloud_diagnostics.ceiling_ft == 3500.0
+
+    def test_no_ceiling(self):
+        snap = SimpleNamespace(
+            forecast_hour=NOW,
+            temperature_2m_c=12.5,
+            dewpoint_2m_c=7.2,
+            visibility_m=9999.0,
+            wind_speed_10m_kt=15.0,
+            wind_direction_10m_deg=270.0,
+            wind_gusts_10m_kt=None,
+            precipitation_mm=0.0,
+            snowfall_cm=0.0,
+            cape_jkg=None,
+            weather_code=None,
+            cloud_cover_pct=None,
+            cloud_cover_low_pct=None,
+            nwp_ceiling_ft=None,
+        )
+
+        hourly = _snapshot_to_hourly(snap)
+        assert hourly.nwp_cloud_diagnostics is None
+
+    def test_pressure_levels_empty(self):
+        snap = SimpleNamespace(
+            forecast_hour=NOW,
+            temperature_2m_c=10.0, dewpoint_2m_c=5.0,
+            visibility_m=5000.0, wind_speed_10m_kt=8.0,
+            wind_direction_10m_deg=180.0, wind_gusts_10m_kt=None,
+            precipitation_mm=0.0, snowfall_cm=0.0,
+            cape_jkg=None, weather_code=None,
+            cloud_cover_pct=None, cloud_cover_low_pct=None,
+            nwp_ceiling_ft=1200.0,
+        )
+        hourly = _snapshot_to_hourly(snap)
+        assert hourly.pressure_levels == []
+
+
+# ---------------------------------------------------------------------------
+# Phase B: Store snapshots
+# ---------------------------------------------------------------------------
+
+
+class TestStoreSnapshots:
+
+    def test_stores_new_snapshots(self, db_session):
+        snaps = [
+            {
+                "icao": "LFPG", "model": "gfs",
+                "model_init_time": GFS_INIT,
+                "forecast_hour": _utc(2026, 4, 2, 12, 0),
+                "temperature_2m_c": 12.0, "dewpoint_2m_c": 7.0,
+                "visibility_m": 9999.0, "wind_speed_10m_kt": 10.0,
+                "wind_direction_10m_deg": 270.0, "wind_gusts_10m_kt": None,
+                "precipitation_mm": 0.0, "snowfall_cm": 0.0,
+                "cape_jkg": None, "weather_code": None,
+                "cloud_cover_pct": 50.0, "cloud_cover_low_pct": 20.0,
+                "nwp_ceiling_ft": 3000.0, "cloud_base_ft": 2800.0,
+                "lcl_ft": 2000.0,
+            },
+        ]
+
+        stored = _store_snapshots(snaps, db_session)
+        assert stored == 1
+
+        rows = db_session.execute(select(AirportForecastSnapshotRow)).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].icao == "LFPG"
+        assert rows[0].nwp_ceiling_ft == 3000.0
+        assert rows[0].lcl_ft == 2000.0
+
+    def test_duplicate_is_skipped(self, db_session):
+        snap = {
+            "icao": "EDDF", "model": "icon",
+            "model_init_time": ICON_INIT,
+            "forecast_hour": _utc(2026, 4, 2, 9, 0),
+            "temperature_2m_c": 8.0, "dewpoint_2m_c": 4.0,
+            "visibility_m": 15000.0,
+        }
+
+        assert _store_snapshots([snap], db_session) == 1
+        assert _store_snapshots([snap], db_session) == 0  # duplicate
+
+        rows = db_session.execute(select(AirportForecastSnapshotRow)).scalars().all()
+        assert len(rows) == 1
+
+    def test_empty_list(self, db_session):
+        assert _store_snapshots([], db_session) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase D: Scoring
+# ---------------------------------------------------------------------------
+
+
+def _insert_snapshot(db_session, **overrides):
+    defaults = dict(
+        icao="LFPG", model="gfs",
+        model_init_time=GFS_INIT,
+        forecast_hour=NOW,
+        fetched_at=NOW,
+        temperature_2m_c=12.0, dewpoint_2m_c=7.0,
+        visibility_m=9999.0, wind_speed_10m_kt=10.0,
+        wind_direction_10m_deg=270.0, wind_gusts_10m_kt=None,
+        precipitation_mm=0.0, snowfall_cm=0.0,
+        cape_jkg=None, weather_code=None,
+        cloud_cover_pct=50.0, cloud_cover_low_pct=20.0,
+        nwp_ceiling_ft=3000.0, cloud_base_ft=2800.0,
+        lcl_ft=2000.0,
+    )
+    defaults.update(overrides)
+    row = AirportForecastSnapshotRow(**defaults)
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def _insert_observation(db_session, **overrides):
+    defaults = dict(
+        icao="LFPG",
+        observation_time=NOW,
+        collected_at=NOW,
+        flight_category="VFR",
+        ceiling_ft=3500,
+        visibility_m=9999,
+        wind_dir=260,
+        wind_speed_kt=8,
+        wind_gust_kt=None,
+        temperature_c=11,
+        dewpoint_c=6,
+        weather=json.dumps([]),
+    )
+    defaults.update(overrides)
+    row = VerificationObservationRow(**defaults)
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+class TestScoreCycle:
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_scores_snapshot_against_observation(self, mock_rwy, db_session):
+        _insert_snapshot(db_session)
+        _insert_observation(db_session)
+
+        scores = _score_cycle(NOW, [], "/fake/db", db_session)
+
+        assert scores >= 1
+        rows = db_session.execute(select(VerificationScoreRow)).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].source == "standalone"
+        assert rows[0].model == "gfs"
+        assert rows[0].days_out == 0  # same day as init
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_scores_d1_snapshot(self, mock_rwy, db_session):
+        """Snapshot from yesterday's init scores as D-1."""
+        yesterday_init = GFS_INIT - timedelta(days=1)
+        _insert_snapshot(db_session, model_init_time=yesterday_init)
+        _insert_observation(db_session)
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        row = db_session.execute(select(VerificationScoreRow)).scalar_one()
+        assert row.days_out == 1
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_no_double_scoring(self, mock_rwy, db_session):
+        _insert_snapshot(db_session)
+        _insert_observation(db_session)
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        rows = db_session.execute(select(VerificationScoreRow)).scalars().all()
+        assert len(rows) == 1
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_no_scores_without_observations(self, mock_rwy, db_session):
+        _insert_snapshot(db_session)
+        # No observations
+
+        scores = _score_cycle(NOW, [], "/fake/db", db_session)
+        assert scores == 0
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_cloud_base_and_lcl_deltas(self, mock_rwy, db_session):
+        _insert_snapshot(db_session, cloud_base_ft=2800.0, lcl_ft=2000.0)
+        _insert_observation(db_session, ceiling_ft=3000)
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        row = db_session.execute(select(VerificationScoreRow)).scalar_one()
+        assert row.cloud_base_delta_ft == pytest.approx(-200.0)  # 2800 - 3000
+        assert row.lcl_delta_ft == pytest.approx(-1000.0)  # 2000 - 3000
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_multiple_models_scored_independently(self, mock_rwy, db_session):
+        _insert_snapshot(db_session, model="gfs")
+        _insert_snapshot(db_session, model="icon", model_init_time=ICON_INIT)
+        _insert_observation(db_session)
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        rows = db_session.execute(select(VerificationScoreRow)).scalars().all()
+        models = {r.model for r in rows}
+        assert models == {"gfs", "icon"}
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_taf_scoring(self, mock_rwy, db_session):
+        _insert_snapshot(db_session)
+        _insert_observation(
+            db_session,
+            taf_issue_time=NOW - timedelta(hours=1),
+            taf_flight_category="VFR",
+            taf_ceiling_ft=4000,
+            taf_visibility_m=9999,
+            taf_wind_dir=260,
+            taf_wind_speed_kt=10,
+            taf_wind_gust_kt=None,
+        )
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        taf_rows = db_session.execute(select(TafVerificationScoreRow)).scalars().all()
+        assert len(taf_rows) == 1
+        assert taf_rows[0].source == "standalone"
+
+
+# ---------------------------------------------------------------------------
+# Phase E: Prune
+# ---------------------------------------------------------------------------
+
+
+class TestPruneOldSnapshots:
+
+    def test_prunes_old(self, db_session):
+        old_time = NOW - timedelta(days=15)
+        _insert_snapshot(db_session, fetched_at=old_time, forecast_hour=old_time)
+        _insert_snapshot(
+            db_session, fetched_at=NOW, icao="EDDF",
+            forecast_hour=NOW,
+        )
+
+        pruned = _prune_old_snapshots(db_session)
+        assert pruned == 1
+
+        remaining = db_session.execute(select(AirportForecastSnapshotRow)).scalars().all()
+        assert len(remaining) == 1
+        assert remaining[0].icao == "EDDF"
+
+    def test_nothing_to_prune(self, db_session):
+        _insert_snapshot(db_session)
+        assert _prune_old_snapshots(db_session) == 0
+
+
+# ---------------------------------------------------------------------------
+# Scheduler helper
+# ---------------------------------------------------------------------------
+
+
+class TestSecondsUntilNextSampleHour:
+
+    def test_before_first_sample(self):
+        from weatherbrief.scheduler import _seconds_until_next_sample_hour
+
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = _utc(2026, 4, 2, 4, 30)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            secs = _seconds_until_next_sample_hour([6, 9, 12, 15, 18])
+
+        # 04:30 → 06:00 = 1.5h = 5400s
+        assert secs == pytest.approx(5400.0)
+
+    def test_between_samples(self):
+        from weatherbrief.scheduler import _seconds_until_next_sample_hour
+
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = _utc(2026, 4, 2, 10, 0)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            secs = _seconds_until_next_sample_hour([6, 9, 12, 15, 18])
+
+        # 10:00 → 12:00 = 2h = 7200s
+        assert secs == pytest.approx(7200.0)
+
+    def test_after_last_sample_wraps_to_tomorrow(self):
+        from weatherbrief.scheduler import _seconds_until_next_sample_hour
+
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = _utc(2026, 4, 2, 19, 0)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            secs = _seconds_until_next_sample_hour([6, 9, 12, 15, 18])
+
+        # 19:00 → tomorrow 06:00 = 11h = 39600s
+        assert secs == pytest.approx(39600.0)
+
+
+# ---------------------------------------------------------------------------
+# Verification stats source filtering
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationStatsSourceFilter:
+
+    def _insert_scores(self, db_session):
+        """Insert observations and scores for both sources."""
+        obs = _insert_observation(db_session)
+
+        for source in ("flight", "standalone"):
+            db_session.add(VerificationScoreRow(
+                observation_id=obs.id,
+                icao="LFPG",
+                observation_time=NOW,
+                model="gfs",
+                model_init_time=GFS_INIT,
+                lead_hours=6,
+                days_out=0,
+                source=source,
+                obs_flight_category="VFR",
+                model_flight_category="VFR",
+                category_match=True,
+                advisory_match=True,
+                ceiling_delta_ft=100.0,
+                visibility_delta_m=500.0,
+                wind_speed_delta_kt=2.0,
+                temperature_delta_c=1.0,
+            ))
+        db_session.flush()
+
+    def test_category_accuracy_filters_by_source(self, db_session):
+        from weatherbrief.tasks.verification_stats import get_category_accuracy
+
+        self._insert_scores(db_session)
+        since = NOW - timedelta(hours=1)
+        until = NOW + timedelta(hours=1)
+
+        flight_rows = get_category_accuracy(db_session, since, until, source="flight")
+        standalone_rows = get_category_accuracy(db_session, since, until, source="standalone")
+
+        # Each source should have exactly 1 row (gfs D-0)
+        assert len(flight_rows) == 1
+        assert len(standalone_rows) == 1
+        assert flight_rows[0].sample_count == 1
+        assert standalone_rows[0].sample_count == 1
+
+    def test_mae_filters_by_source(self, db_session):
+        from weatherbrief.tasks.verification_stats import get_mae_stats
+
+        self._insert_scores(db_session)
+        since = NOW - timedelta(hours=1)
+        until = NOW + timedelta(hours=1)
+
+        flight_mae = get_mae_stats(db_session, since, until, source="flight")
+        standalone_mae = get_mae_stats(db_session, since, until, source="standalone")
+
+        assert len(flight_mae) == 1
+        assert len(standalone_mae) == 1
+
+    def test_activity_summary_cycles_filtered(self, db_session):
+        from weatherbrief.tasks.verification_stats import get_activity_summary
+
+        # Insert cycle rows for both sources
+        db_session.add(VerificationCycleRow(
+            started_at=NOW, duration_ms=5000, source="flight",
+        ))
+        db_session.add(VerificationCycleRow(
+            started_at=NOW, duration_ms=30000, source="standalone",
+        ))
+        db_session.flush()
+
+        since = NOW - timedelta(hours=1)
+        until = NOW + timedelta(hours=1)
+
+        flight_summary = get_activity_summary(db_session, since, until, source="flight")
+        standalone_summary = get_activity_summary(db_session, since, until, source="standalone")
+
+        assert flight_summary.cycles_run == 1
+        assert flight_summary.avg_cycle_duration_ms == pytest.approx(5000.0)
+        assert standalone_summary.cycles_run == 1
+        assert standalone_summary.avg_cycle_duration_ms == pytest.approx(30000.0)
+
+
+# ---------------------------------------------------------------------------
+# Full cycle (integration-level, mocked externals)
+# ---------------------------------------------------------------------------
+
+
+class TestRunStandaloneCycle:
+
+    @patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0)
+    @patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=5)
+    @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=3)
+    @patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=100)
+    @patch("weatherbrief.tasks.standalone_verification._enrich_with_grib")
+    @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=[{"dummy": True}])
+    @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
+    @patch("flyfun_common.db.SessionLocal")
+    def test_full_cycle_orchestration(
+        self, mock_session_local, mock_meta, mock_fetch, mock_enrich,
+        mock_store_snap, mock_store_obs, mock_score, mock_prune,
+    ):
+        from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+
+        # Mock DB session
+        mock_db = MagicMock()
+        mock_session_local.return_value = mock_db
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None  # no existing snapshots
+
+        # Mock model metadata
+        mock_meta.return_value = {
+            "gfs": SimpleNamespace(last_init_time=int(GFS_INIT.timestamp())),
+        }
+
+        airports = [WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55)]
+        result = run_standalone_cycle(airports, "/fake/db")
+
+        assert result["models_fetched"] == 1
+        assert result["snapshots_stored"] == 100
+        assert result["observations_stored"] == 3
+        assert result["scores_created"] == 5
+        assert result["duration_ms"] >= 0
+        mock_db.commit.assert_called_once()
+
+    @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
+    @patch("flyfun_common.db.SessionLocal")
+    def test_skips_already_fetched_model(self, mock_session_local, mock_meta):
+        from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+
+        mock_db = MagicMock()
+        mock_session_local.return_value = mock_db
+        # Simulate existing snapshot for this init time
+        mock_db.execute.return_value.scalar_one_or_none.return_value = 1
+
+        mock_meta.return_value = {
+            "gfs": SimpleNamespace(last_init_time=int(GFS_INIT.timestamp())),
+        }
+
+        with patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=0), \
+             patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=0), \
+             patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0), \
+             patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=0):
+            result = run_standalone_cycle(
+                [WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55)],
+                "/fake/db",
+            )
+
+        assert result["models_fetched"] == 0  # skipped

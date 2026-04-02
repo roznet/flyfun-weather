@@ -316,9 +316,11 @@ export interface VerificationDigest {
 }
 
 export type VerificationPeriod = '24h' | '7d' | '30d';
+export type VerificationSource = 'flight' | 'standalone';
 
 export async function fetchVerificationStats(
   period: VerificationPeriod = '24h',
+  source: VerificationSource = 'flight',
 ): Promise<VerificationDigest> {
-  return apiFetch<VerificationDigest>(`/admin/verification?period=${period}`);
+  return apiFetch<VerificationDigest>(`/admin/verification?period=${period}&source=${source}`);
 }

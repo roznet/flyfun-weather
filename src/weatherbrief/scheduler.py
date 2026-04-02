@@ -37,6 +37,7 @@ _VERIF_POLL_SECONDS = 600  # 10 minutes
 _VERIF_STARTUP_DELAY_SECONDS = 60  # let auto-refresh settle first
 _DIGEST_INTERVAL_SECONDS = 86_400  # 24 hours
 _DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
+_STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -411,3 +412,90 @@ def _run_retention_once() -> None:
         raise
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Standalone verification loop
+# ---------------------------------------------------------------------------
+
+
+async def run_standalone_verification_loop(app_state) -> None:
+    """Run standalone airport verification at configured sample hours.
+
+    Instead of polling every N minutes, computes the next sample hour
+    and sleeps until then — no wasted cycles.
+
+    Disableable via DISABLE_STANDALONE_VERIFICATION=1 env var.
+    """
+    from weatherbrief.tasks.standalone_verification import SAMPLE_HOURS_UTC
+
+    if os.environ.get("DISABLE_STANDALONE_VERIFICATION", "").strip() in ("1", "true"):
+        logger.info("Standalone verification disabled via env var")
+        return
+
+    logger.info("Standalone verification loop started (sample hours: %s UTC)",
+                SAMPLE_HOURS_UTC)
+    await asyncio.sleep(_STANDALONE_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            sleep_secs = _seconds_until_next_sample_hour(SAMPLE_HOURS_UTC)
+            logger.info("Standalone verification: sleeping %ds until next sample hour",
+                        sleep_secs)
+            await asyncio.sleep(sleep_secs)
+            await asyncio.to_thread(_run_standalone_once, app_state)
+        except Exception:
+            logger.error("Standalone verification cycle failed", exc_info=True)
+            # On failure, wait 15 min before retrying
+            await asyncio.sleep(900)
+
+
+def _seconds_until_next_sample_hour(sample_hours: list[int]) -> float:
+    """Compute seconds until the next sample hour (top of the hour)."""
+    now = datetime.now(timezone.utc)
+    for hour in sorted(sample_hours):
+        candidate = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if candidate > now:
+            return (candidate - now).total_seconds()
+
+    # Next sample hour is tomorrow's first
+    tomorrow = now + timedelta(days=1)
+    first_hour = min(sample_hours)
+    candidate = tomorrow.replace(hour=first_hour, minute=0, second=0, microsecond=0)
+    return (candidate - now).total_seconds()
+
+
+def _run_standalone_once(app_state) -> None:
+    """Execute a single standalone verification cycle (called in a thread)."""
+    db_path = getattr(app_state, "db_path", "")
+    if not db_path:
+        logger.warning("Standalone verification: no AIRPORTS_DB configured")
+        return
+
+    from weatherbrief.tasks.airport_watchlist import (
+        get_configs_dir,
+        load_watchlist_with_coords,
+    )
+    from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+
+    try:
+        airports = load_watchlist_with_coords(get_configs_dir(), db_path)
+    except FileNotFoundError:
+        logger.warning(
+            "Standalone verification: airport watchlist not found. "
+            "Run: python -m weatherbrief.verify discover"
+        )
+        return
+
+    if not airports:
+        logger.warning("Standalone verification: empty watchlist")
+        return
+
+    result = run_standalone_cycle(airports, db_path)
+    logger.info(
+        "Standalone verification cycle: %d models, %d snapshots, "
+        "%d observations, %d scores (%dms)",
+        result["models_fetched"], result["snapshots_stored"],
+        result["observations_stored"], result["scores_created"],
+        result["duration_ms"],
+    )
