@@ -36,7 +36,7 @@ from weatherbrief.models.verification import (
 
 logger = logging.getLogger(__name__)
 
-_DAYS_OUT_COLS = (0, 1, 2, 3, 5, 7)
+_DAYS_OUT_COLS = (0, 1, 2, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +191,10 @@ def get_notable_misses(
     source: str = "flight",
     *, limit: int = 10,
 ) -> list[NotableMiss]:
-    """Category busts where model and observation disagree by 2+ levels."""
+    """Category busts where model and observation disagree by 2+ levels.
+
+    Limited to D-0 and D-1 — longer-range misses are expected and noisy.
+    """
     stmt = (
         select(
             VerificationScoreRow.icao,
@@ -206,6 +209,7 @@ def get_notable_misses(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.category_match == False,  # noqa: E712
             VerificationScoreRow.source == source,
+            VerificationScoreRow.days_out.in_((0, 1)),
             or_(
                 (
                     VerificationScoreRow.obs_flight_category.in_(_IFR_CATS)
