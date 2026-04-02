@@ -415,10 +415,10 @@ class TestStoreObservations:
 
 class TestFinalizeCompletedFlights:
 
-    def test_marks_past_flights_complete(self):
-        row = SimpleNamespace(
+    def test_marks_past_flights_complete(self, db_session, dev_user):
+        row = _make_flight(
+            db_session, dev_user, id="fin-1",
             departure_time=_utc(2026, 4, 1, 6, 0),
-            flight_duration_hours=2.0,
             verification_status="collecting",
         )
         with patch(
@@ -426,15 +426,15 @@ class TestFinalizeCompletedFlights:
         ) as mock_dt:
             mock_dt.now.return_value = _utc(2026, 4, 1, 12, 0)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            count = finalize_completed_flights([row])
+            count = finalize_completed_flights(db_session)
 
         assert count == 1
         assert row.verification_status == "complete"
 
-    def test_does_not_finalize_active_flight(self):
-        row = SimpleNamespace(
+    def test_does_not_finalize_active_flight(self, db_session, dev_user):
+        row = _make_flight(
+            db_session, dev_user, id="fin-2",
             departure_time=_utc(2026, 4, 1, 11, 0),
-            flight_duration_hours=2.0,
             verification_status="collecting",
         )
         with patch(
@@ -442,15 +442,15 @@ class TestFinalizeCompletedFlights:
         ) as mock_dt:
             mock_dt.now.return_value = _utc(2026, 4, 1, 12, 0)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            count = finalize_completed_flights([row])
+            count = finalize_completed_flights(db_session)
 
         assert count == 0
         assert row.verification_status == "collecting"
 
-    def test_handles_naive_departure_time(self):
-        row = SimpleNamespace(
+    def test_handles_naive_departure_time(self, db_session, dev_user):
+        row = _make_flight(
+            db_session, dev_user, id="fin-3",
             departure_time=datetime(2026, 4, 1, 6, 0),  # naive
-            flight_duration_hours=2.0,
             verification_status="collecting",
         )
         with patch(
@@ -458,24 +458,13 @@ class TestFinalizeCompletedFlights:
         ) as mock_dt:
             mock_dt.now.return_value = _utc(2026, 4, 1, 12, 0)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            count = finalize_completed_flights([row])
+            count = finalize_completed_flights(db_session)
 
         assert count == 1
 
-    def test_skips_none_departure(self):
-        row = SimpleNamespace(
-            departure_time=None,
-            flight_duration_hours=2.0,
-            verification_status="collecting",
-        )
-        with patch(
-            "weatherbrief.tasks.verification.datetime",
-        ) as mock_dt:
-            mock_dt.now.return_value = _utc(2026, 4, 1, 12, 0)
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            count = finalize_completed_flights([row])
-
-        assert count == 0
+    # NOTE: test_skips_none_departure removed — departure_time has a NOT NULL
+    # constraint in the DB, so NULL departures are impossible.  The query in
+    # finalize_completed_flights also filters with isnot(None) as a safety net.
 
 
 # ---------------------------------------------------------------------------
