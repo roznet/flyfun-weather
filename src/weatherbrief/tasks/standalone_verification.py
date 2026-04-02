@@ -87,16 +87,30 @@ def _fetch_forecasts_for_model(
             for a in chunk_list
         ]
 
-        try:
-            forecasts = client.fetch_multi_point(
-                points, model_source,
-                start_date=start_date, end_date=end_date,
-            )
-        except Exception:
-            logger.warning(
-                "Open-Meteo %s fetch failed for chunk of %d airports",
-                model, len(chunk_list), exc_info=True,
-            )
+        forecasts = None
+        for attempt in range(3):
+            try:
+                forecasts = client.fetch_multi_point(
+                    points, model_source,
+                    start_date=start_date, end_date=end_date,
+                )
+                break
+            except Exception:
+                if attempt < 2:
+                    wait = 5 * (attempt + 1)
+                    logger.warning(
+                        "Open-Meteo %s chunk %d airports attempt %d/3 failed, "
+                        "retrying in %ds",
+                        model, len(chunk_list), attempt + 1, wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.warning(
+                        "Open-Meteo %s fetch failed for chunk of %d airports "
+                        "after 3 attempts",
+                        model, len(chunk_list), exc_info=True,
+                    )
+        if forecasts is None:
             continue
 
         for airport, wpf in zip(chunk_list, forecasts):
