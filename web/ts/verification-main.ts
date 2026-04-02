@@ -77,14 +77,16 @@ async function loadData(): Promise<void> {
 
 function renderSummary(data: VerificationDigest): void {
   const a = data.activity;
-  const cards = [
-    { value: a.flights_verified, label: 'Flights' },
-    { value: a.flights_completed, label: 'Completed' },
-    { value: a.airports_observed, label: 'Airports' },
-    { value: a.observations_collected, label: 'Observations' },
-    { value: a.cycles_run, label: 'Cycles' },
-    { value: a.avg_cycle_duration_ms != null ? `${Math.round(a.avg_cycle_duration_ms)}ms` : '—', label: 'Avg Cycle' },
-  ];
+  const cards: { value: string | number; label: string }[] = [];
+
+  if (currentSource === 'flight') {
+    cards.push({ value: a.flights_verified, label: 'Flights' });
+    cards.push({ value: a.flights_completed, label: 'Completed' });
+  }
+  cards.push({ value: a.airports_observed, label: 'Airports' });
+  cards.push({ value: a.observations_collected, label: 'Observations' });
+  cards.push({ value: a.cycles_run, label: 'Cycles' });
+  cards.push({ value: fmtDuration(a.avg_cycle_duration_ms), label: 'Avg Cycle' });
 
   const el = document.getElementById('summary-bar')!;
   el.innerHTML = cards
@@ -112,12 +114,22 @@ function fmtTime(iso: string): string {
   return d.toISOString().slice(11, 16) + 'Z';
 }
 
+function fmtDuration(ms: number | null): string {
+  if (ms == null) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}m${sec.toString().padStart(2, '0')}s`;
+}
+
 function renderAccuracy(data: VerificationDigest): void {
   const el = document.getElementById('accuracy-section')!;
   const todayMap = new Map<string, CategoryAccuracyRow>();
   const sevenMap = new Map<string, CategoryAccuracyRow>();
   const modelsSet = new Set<string>();
-  const daysOut = [0, 1, 2, 3, 5, 7];
+  const daysOut = [0, 1, 2, 3];
 
   for (const r of data.category_accuracy_today) {
     todayMap.set(`${r.model}:${r.days_out}`, r);
@@ -284,9 +296,11 @@ function renderHealth(data: VerificationDigest): void {
   let html = '<h2>System Health</h2>';
   html += '<table class="admin-table"><thead><tr><th>Metric</th><th class="num">Value</th></tr></thead><tbody>';
   html += `<tr><td>Verification cycles</td><td class="num">${a.cycles_run}</td></tr>`;
-  html += `<tr><td>Avg cycle duration</td><td class="num">${a.avg_cycle_duration_ms != null ? Math.round(a.avg_cycle_duration_ms) + ' ms' : '—'}</td></tr>`;
+  html += `<tr><td>Avg cycle duration</td><td class="num">${fmtDuration(a.avg_cycle_duration_ms)}</td></tr>`;
   html += `<tr><td>Total observations stored</td><td class="num">${a.observations_collected}</td></tr>`;
-  html += `<tr><td>Flights with verification</td><td class="num">${a.flights_verified}</td></tr>`;
+  if (currentSource === 'flight') {
+    html += `<tr><td>Flights with verification</td><td class="num">${a.flights_verified}</td></tr>`;
+  }
   html += '</tbody></table>';
 
   el.innerHTML = html;
