@@ -813,3 +813,29 @@ def revoke_agent_token(
     )
 
     return {"status": "revoked", "token_id": token_id}
+
+
+# ---------------------------------------------------------------------------
+# Verification stats
+# ---------------------------------------------------------------------------
+
+
+@router.get("/verification")
+def get_verification_stats(
+    period: str = Query(default="24h", pattern=r"^(24h|7d|30d)$"),
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Return verification accuracy stats for the requested period."""
+    from weatherbrief.tasks.verification_stats import get_digest_data
+
+    now = datetime.now(timezone.utc)
+    hours = {"24h": 24, "7d": 168, "30d": 720}[period]
+    since = now - timedelta(hours=hours)
+
+    data = get_digest_data(
+        db, since, now,
+        period_label=period,
+        include_7d=(period != "7d"),
+    )
+    return data.model_dump(mode="json")

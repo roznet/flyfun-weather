@@ -35,6 +35,8 @@ _RETENTION_INTERVAL_SECONDS = 86_400  # 24 hours
 _RETENTION_STARTUP_DELAY_SECONDS = 120  # let auto-refresh settle first
 _VERIF_POLL_SECONDS = 600  # 10 minutes
 _VERIF_STARTUP_DELAY_SECONDS = 60  # let auto-refresh settle first
+_DIGEST_INTERVAL_SECONDS = 86_400  # 24 hours
+_DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -310,6 +312,57 @@ def _run_verification_once(app_state) -> None:
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Digest loop
+# ---------------------------------------------------------------------------
+
+
+async def run_digest_loop(app_state) -> None:
+    """Send daily verification digest email.
+
+    Runs once per day, computing stats for the last 24 hours and
+    emailing them to admin users.
+    """
+    logger.info("Digest loop started (every %ds)", _DIGEST_INTERVAL_SECONDS)
+    await asyncio.sleep(_DIGEST_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            await asyncio.to_thread(_run_digest_once)
+        except Exception:
+            logger.error("Digest cycle failed", exc_info=True)
+        await asyncio.sleep(_DIGEST_INTERVAL_SECONDS)
+
+
+def _run_digest_once() -> None:
+    """Execute a single digest send (called in a thread)."""
+    from weatherbrief.notify.admin_email import get_admin_emails
+    from weatherbrief.notify.verification_email import send_verification_digest
+    from weatherbrief.tasks.verification_stats import get_digest_data
+
+    admin_emails = get_admin_emails()
+    if not admin_emails:
+        logger.debug("Digest: no admin emails configured, skipping")
+        return
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=24)
+    date_label = now.strftime("%Y-%m-%d")
+
+    db = SessionLocal()
+    try:
+        data = get_digest_data(db, since, now, period_label=date_label)
+
+        if data.activity.observations_collected == 0:
+            logger.info("Digest: no observations in last 24h, skipping email")
+            return
+
+        send_verification_digest(admin_emails, data)
+        logger.info("Digest: sent to %d admin(s)", len(admin_emails))
     finally:
         db.close()
 
