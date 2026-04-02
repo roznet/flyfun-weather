@@ -102,9 +102,13 @@
   </style>
 </head>
 <body>
-  <div id="user-info"></div>
-  <main class="container" style="max-width: 960px; margin: 0 auto; padding: 1rem;">
-    <h1 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Verification Dashboard</h1>
+  <div class="container" style="max-width: 960px;">
+    <div class="page-header">
+      <h1>Verification Dashboard</h1>
+      <div class="header-right">
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
 
     <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem;">
       <div class="period-toggle" id="period-toggle">
@@ -125,7 +129,7 @@
     <div id="wind-section" class="section"></div>
     <div id="mae-section" class="section"></div>
     <div id="health-section" class="section"></div>
-  </main>
+  </div>
 
   <script src="/dist/verification.js"></script>
 </body>

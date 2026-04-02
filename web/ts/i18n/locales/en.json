@@ -43,7 +43,7 @@
   "freshness.queued": "Queued",
   "freshness.queuedWaiting": "Waiting for other refreshes to complete",
   "freshness.starting": "Starting refresh",
-  "freshness.inProgress": "Refreshing (may take a minute)",
+  "freshness.inProgress": "Refreshing",
   "freshness.checking": "Checking for updates...",
   "freshness.skipped": "skipped",
   "freshness.basedOn": "Based on ",
