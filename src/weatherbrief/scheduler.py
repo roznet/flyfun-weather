@@ -444,6 +444,9 @@ async def run_standalone_verification_loop(app_state) -> None:
                         sleep_secs)
             await asyncio.sleep(sleep_secs)
             await asyncio.to_thread(_run_standalone_once, app_state)
+            # After running, sleep briefly to ensure we advance past the
+            # current sample hour and don't re-trigger immediately.
+            await asyncio.sleep(60)
         except Exception:
             logger.error("Standalone verification cycle failed", exc_info=True)
             # On failure, wait 15 min before retrying
@@ -451,11 +454,14 @@ async def run_standalone_verification_loop(app_state) -> None:
 
 
 def _seconds_until_next_sample_hour(sample_hours: list[int]) -> float:
-    """Compute seconds until the next sample hour (top of the hour)."""
+    """Compute seconds until the next sample hour (top of the hour).
+
+    If we are exactly on a sample hour, returns 0 so the cycle runs immediately.
+    """
     now = datetime.now(timezone.utc)
     for hour in sorted(sample_hours):
         candidate = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-        if candidate > now:
+        if candidate >= now:
             return (candidate - now).total_seconds()
 
     # Next sample hour is tomorrow's first

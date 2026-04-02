@@ -48,16 +48,26 @@ def get_activity_summary(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
 ) -> ActivitySummary:
-    """High-level counts for a date range."""
+    """High-level counts for a date range, scoped by source."""
+    # Count observations and airports that have scores for this source,
+    # so flight vs standalone dashboards show relevant counts only.
+    scored_obs_ids = (
+        select(func.distinct(VerificationScoreRow.observation_id))
+        .where(
+            VerificationScoreRow.observation_time.between(since, until),
+            VerificationScoreRow.source == source,
+        )
+        .scalar_subquery()
+    )
     obs_count = db.execute(
         select(func.count(VerificationObservationRow.id)).where(
-            VerificationObservationRow.observation_time.between(since, until)
+            VerificationObservationRow.id.in_(scored_obs_ids),
         )
     ).scalar() or 0
 
     airport_count = db.execute(
         select(func.count(func.distinct(VerificationObservationRow.icao))).where(
-            VerificationObservationRow.observation_time.between(since, until)
+            VerificationObservationRow.id.in_(scored_obs_ids),
         )
     ).scalar() or 0
 
