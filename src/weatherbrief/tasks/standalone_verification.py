@@ -36,11 +36,11 @@ logger = logging.getLogger(__name__)
 STANDALONE_MODELS = ["gfs", "icon", "ecmwf"]
 SAMPLE_HOURS_UTC = [6, 9, 12, 15, 18]  # 3-hourly through the flying day
 
-# Model forecast horizon in days (capped by GRIB cloud diagnostic coverage)
+# Model forecast horizon — 4 days is enough for actionable verification stats
 MODEL_FORECAST_DAYS = {
-    "gfs": 7,
-    "icon": 4,       # ICON-EU GRIB only covers 120h (5 days) → 4 full days
-    "ecmwf": 7,
+    "gfs": 4,
+    "icon": 4,
+    "ecmwf": 4,
 }
 
 _OPEN_METEO_BATCH_SIZE = 50  # airports per Open-Meteo API call
@@ -72,7 +72,7 @@ def _fetch_forecasts_for_model(
     end_dt = init_time + timedelta(days=forecast_days)
     end_date = end_dt.strftime("%Y-%m-%d")
 
-    client = OpenMeteoClient()
+    client = OpenMeteoClient(timeout=60)
     all_results: list[dict] = []
 
     # Process airports in chunks
