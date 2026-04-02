@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — Verification</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .admin-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    .admin-table th,
+    .admin-table td {
+      padding: 0.5rem 0.6rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .admin-table th {
+      background: var(--bg);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .admin-table td.num {
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+    .summary-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .summary-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      text-align: center;
+    }
+    .summary-card .value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .summary-card .label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-top: 0.15rem;
+    }
+    .period-toggle {
+      display: flex;
+      gap: 0;
+      margin-bottom: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      width: fit-content;
+    }
+    .period-toggle .toggle-btn {
+      padding: 0.4rem 1rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+      background: var(--bg);
+      border: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: background 0.15s, color 0.15s;
+    }
+    .period-toggle .toggle-btn:not(:last-child) {
+      border-right: 1px solid var(--border);
+    }
+    .period-toggle .toggle-btn.active {
+      background: var(--accent, #2563eb);
+      color: #fff;
+    }
+    .period-toggle .toggle-btn:hover:not(.active) {
+      background: var(--surface, #e9ecef);
+    }
+    .accuracy-green { background: var(--green-bg, #d1e7dd); color: var(--green-text, #0f5132); }
+    .accuracy-amber { background: var(--amber-bg, #fff3cd); color: var(--amber-text, #664d03); }
+    .accuracy-red   { background: var(--red-bg, #f8d7da);   color: var(--red-text, #842029); }
+    .section { margin-bottom: 2rem; }
+    .section h2 {
+      font-size: 1rem;
+      margin: 0 0 0.75rem;
+      padding-bottom: 0.25rem;
+      border-bottom: 2px solid var(--border);
+    }
+    .empty-state {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 1rem 0;
+    }
+    .miss-row-danger { background: var(--red-bg, #fff0f0); }
+    .miss-row-warn   { background: var(--amber-bg, #fffde7); }
+  </style>
+</head>
+<body>
+  <div id="user-info"></div>
+  <main class="container" style="max-width: 960px; margin: 0 auto; padding: 1rem;">
+    <h1 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Verification Dashboard</h1>
+
+    <div class="period-toggle" id="period-toggle">
+      <button class="toggle-btn active" data-period="24h">24h</button>
+      <button class="toggle-btn" data-period="7d">7 days</button>
+      <button class="toggle-btn" data-period="30d">30 days</button>
+    </div>
+
+    <div id="summary-bar" class="summary-bar"></div>
+
+    <div id="accuracy-section" class="section"></div>
+    <div id="misses-section" class="section"></div>
+    <div id="wind-section" class="section"></div>
+    <div id="mae-section" class="section"></div>
+    <div id="health-section" class="section"></div>
+  </main>
+
+  <script src="/dist/verification.js"></script>
+</body>
+</html>

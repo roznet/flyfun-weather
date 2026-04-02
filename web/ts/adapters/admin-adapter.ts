@@ -251,3 +251,74 @@ export interface AdminMetrics {
 export async function fetchAdminMetrics(): Promise<AdminMetrics> {
   return apiFetch<AdminMetrics>('/admin/metrics');
 }
+
+// --- Verification Stats ---
+
+export interface VerificationActivity {
+  flights_verified: number;
+  flights_completed: number;
+  airports_observed: number;
+  observations_collected: number;
+  cycles_run: number;
+  avg_cycle_duration_ms: number | null;
+}
+
+export interface CategoryAccuracyRow {
+  model: string;
+  days_out: number;
+  accuracy_pct: number | null;
+  sample_count: number;
+}
+
+export interface NotableMiss {
+  icao: string;
+  observation_time: string;
+  model: string;
+  days_out: number;
+  obs_category: string;
+  model_category: string;
+  ceiling_delta_ft: number | null;
+}
+
+export interface WindAdvisoryStats {
+  model: string;
+  accuracy_pct: number | null;
+  sample_count: number;
+}
+
+export interface MissedWarning {
+  icao: string;
+  observation_time: string;
+  model: string;
+  obs_wind_advisory: string;
+  model_wind_advisory: string;
+}
+
+export interface MAERow {
+  model: string;
+  days_out: number;
+  ceiling_mae_ft: number | null;
+  visibility_mae_m: number | null;
+  wind_speed_mae_kt: number | null;
+  temperature_mae_c: number | null;
+  sample_count: number;
+}
+
+export interface VerificationDigest {
+  period_label: string;
+  activity: VerificationActivity;
+  category_accuracy_today: CategoryAccuracyRow[];
+  category_accuracy_7d: CategoryAccuracyRow[];
+  notable_misses: NotableMiss[];
+  wind_advisory: WindAdvisoryStats[];
+  missed_warnings: MissedWarning[];
+  mae_stats: MAERow[];
+}
+
+export type VerificationPeriod = '24h' | '7d' | '30d';
+
+export async function fetchVerificationStats(
+  period: VerificationPeriod = '24h',
+): Promise<VerificationDigest> {
+  return apiFetch<VerificationDigest>(`/admin/verification?period=${period}`);
+}

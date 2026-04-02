@@ -26,6 +26,7 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
     { label: t('nav.settings'), href: '/settings.html',  page: 'settings' },
     { label: t('nav.help'),     href: '/help.html',      page: 'help', badgeId: 'nav-messages-badge' },
     { label: t('nav.admin'),    href: '/admin.html',     page: 'admin', adminOnly: true },
+    { label: 'Verification',   href: '/verification.html', page: 'verification', adminOnly: true },
   ];
 
   // Render nav without PIREP initially; it will appear once preferences load

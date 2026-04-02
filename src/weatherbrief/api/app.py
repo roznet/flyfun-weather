@@ -156,9 +156,15 @@ async def lifespan(app: FastAPI):
 
         verification_task = asyncio.create_task(run_verification_loop(app.state))
 
+    digest_task = None
+    if os.environ.get("DISABLE_DIGEST") != "1":
+        from weatherbrief.scheduler import run_digest_loop
+
+        digest_task = asyncio.create_task(run_digest_loop(app.state))
+
     yield
 
-    for task in (scheduler_task, retention_task, verification_task):
+    for task in (scheduler_task, retention_task, verification_task, digest_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):

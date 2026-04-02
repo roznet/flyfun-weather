@@ -61,3 +61,83 @@ class VerificationSummary(BaseModel):
     total_scores: int = 0
     flights_tracked: int = 0
     airports_tracked: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Digest models
+# ---------------------------------------------------------------------------
+
+
+class ActivitySummary(BaseModel):
+    """High-level counts for a date range."""
+
+    flights_verified: int = 0
+    flights_completed: int = 0
+    airports_observed: int = 0
+    observations_collected: int = 0
+    cycles_run: int = 0
+    avg_cycle_duration_ms: float | None = None
+
+
+class CategoryAccuracyRow(BaseModel):
+    """One cell in the model × days-out accuracy table."""
+
+    model: str
+    days_out: int
+    accuracy_pct: float | None = None
+    sample_count: int = 0
+
+
+class NotableMiss(BaseModel):
+    """A significant flight-category bust."""
+
+    icao: str
+    observation_time: datetime
+    model: str
+    days_out: int
+    obs_category: str
+    model_category: str
+    ceiling_delta_ft: int | None = None
+
+
+class WindAdvisoryStats(BaseModel):
+    """Per-model wind advisory match rate."""
+
+    model: str
+    accuracy_pct: float | None = None
+    sample_count: int = 0
+
+
+class MissedWarning(BaseModel):
+    """A wind WARNING that a model failed to predict."""
+
+    icao: str
+    observation_time: datetime
+    model: str
+    obs_wind_advisory: str
+    model_wind_advisory: str
+
+
+class MAERow(BaseModel):
+    """Mean absolute error per model/days-out (web-only)."""
+
+    model: str
+    days_out: int
+    ceiling_mae_ft: float | None = None
+    visibility_mae_m: float | None = None
+    wind_speed_mae_kt: float | None = None
+    temperature_mae_c: float | None = None
+    sample_count: int = 0
+
+
+class VerificationDigestData(BaseModel):
+    """Complete digest payload for email and web dashboard."""
+
+    period_label: str = ""
+    activity: ActivitySummary = Field(default_factory=ActivitySummary)
+    category_accuracy_today: list[CategoryAccuracyRow] = Field(default_factory=list)
+    category_accuracy_7d: list[CategoryAccuracyRow] = Field(default_factory=list)
+    notable_misses: list[NotableMiss] = Field(default_factory=list)
+    wind_advisory: list[WindAdvisoryStats] = Field(default_factory=list)
+    missed_warnings: list[MissedWarning] = Field(default_factory=list)
+    mae_stats: list[MAERow] = Field(default_factory=list)
