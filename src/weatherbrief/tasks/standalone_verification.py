@@ -16,11 +16,11 @@ from itertools import batched
 from pathlib import Path
 
 import requests
-from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import select, tuple_
 
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
+    TafVerificationScoreRow,
     VerificationCycleRow,
     VerificationObservationRow,
     VerificationScoreRow,
@@ -209,24 +209,59 @@ def _enrich_with_grib(
 # Phase B: Store forecast snapshots in DB
 # ---------------------------------------------------------------------------
 
+def _normalize_key(icao: str, model: str, init_time: datetime, fhour: datetime) -> tuple:
+    """Normalize a snapshot key by stripping tzinfo for consistent comparison.
+
+    SQLite returns naive datetimes, so we strip tzinfo from all keys to match.
+    """
+    init_naive = init_time.replace(tzinfo=None) if init_time.tzinfo else init_time
+    fhour_naive = fhour.replace(tzinfo=None) if fhour.tzinfo else fhour
+    return (icao, model, init_naive, fhour_naive)
+
+
 def _store_snapshots(snapshots: list[dict], db) -> int:
-    """UPSERT forecast snapshot rows. Returns count of new rows."""
+    """Insert new forecast snapshot rows, skipping duplicates. Returns count of new rows."""
     if not snapshots:
         return 0
 
-    stored = 0
-    for snap in snapshots:
-        # Check if exists
-        existing = db.execute(
-            select(AirportForecastSnapshotRow.id)
-            .where(AirportForecastSnapshotRow.icao == snap["icao"])
-            .where(AirportForecastSnapshotRow.model == snap["model"])
-            .where(AirportForecastSnapshotRow.model_init_time == snap["model_init_time"])
-            .where(AirportForecastSnapshotRow.forecast_hour == snap["forecast_hour"])
-            .limit(1)
-        ).scalar_one_or_none()
+    # Bulk-fetch existing keys in one query
+    snap_keys = [
+        (s["icao"], s["model"], s["model_init_time"], s["forecast_hour"])
+        for s in snapshots
+    ]
+    # Deduplicate input keys for the query
+    unique_keys = list({k for k in snap_keys})
 
-        if existing is not None:
+    existing_keys: set[tuple] = set()
+    # Query in chunks to stay within SQL parameter limits
+    for i in range(0, len(unique_keys), 500):
+        chunk = unique_keys[i : i + 500]
+        rows = db.execute(
+            select(
+                AirportForecastSnapshotRow.icao,
+                AirportForecastSnapshotRow.model,
+                AirportForecastSnapshotRow.model_init_time,
+                AirportForecastSnapshotRow.forecast_hour,
+            ).where(
+                tuple_(
+                    AirportForecastSnapshotRow.icao,
+                    AirportForecastSnapshotRow.model,
+                    AirportForecastSnapshotRow.model_init_time,
+                    AirportForecastSnapshotRow.forecast_hour,
+                ).in_(chunk)
+            )
+        ).all()
+        for r in rows:
+            existing_keys.add(_normalize_key(*r))
+
+    stored = 0
+    now = datetime.now(timezone.utc)
+    for snap in snapshots:
+        key = _normalize_key(
+            snap["icao"], snap["model"],
+            snap["model_init_time"], snap["forecast_hour"],
+        )
+        if key in existing_keys:
             continue
 
         row = AirportForecastSnapshotRow(
@@ -234,7 +269,7 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
             model=snap["model"],
             model_init_time=snap["model_init_time"],
             forecast_hour=snap["forecast_hour"],
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=now,
             temperature_2m_c=snap.get("temperature_2m_c"),
             dewpoint_2m_c=snap.get("dewpoint_2m_c"),
             visibility_m=snap.get("visibility_m"),
@@ -252,6 +287,7 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
             lcl_ft=snap.get("lcl_ft"),
         )
         db.add(row)
+        existing_keys.add(key)  # prevent duplicates within same batch
         stored += 1
 
     db.flush()
@@ -366,16 +402,45 @@ def _score_cycle(
     unique_icaos = list(set(obs_by_icao.keys()))
     runway_map = get_runway_ends(unique_icaos, airports_db_path)
 
+    # Bulk-fetch existing score keys to avoid per-row duplicate checks
+    def _strip_tz(dt: datetime) -> datetime:
+        return dt.replace(tzinfo=None) if dt and dt.tzinfo else dt
+
+    existing_score_keys: set[tuple] = set()
+    score_key_rows = db.execute(
+        select(
+            VerificationScoreRow.icao,
+            VerificationScoreRow.observation_time,
+            VerificationScoreRow.model,
+            VerificationScoreRow.model_init_time,
+        ).where(
+            VerificationScoreRow.source == "standalone",
+            VerificationScoreRow.observation_time.between(window_start, window_end),
+        )
+    ).all()
+    for r in score_key_rows:
+        existing_score_keys.add((r[0], _strip_tz(r[1]), r[2], _strip_tz(r[3])))
+
+    existing_taf_keys: set[tuple] = set()
+    taf_key_rows = db.execute(
+        select(
+            TafVerificationScoreRow.icao,
+            TafVerificationScoreRow.observation_time,
+            TafVerificationScoreRow.taf_issue_time,
+        ).where(
+            TafVerificationScoreRow.source == "standalone",
+            TafVerificationScoreRow.observation_time.between(window_start, window_end),
+        )
+    ).all()
+    for r in taf_key_rows:
+        existing_taf_keys.add((r[0], _strip_tz(r[1]), _strip_tz(r[2])))
+
     scores_created = 0
 
-    # Group snapshots by (icao, model, model_init_time)
     for snap in matching_snapshots:
         obs = obs_by_icao.get(snap.icao)
         if obs is None:
             continue
-
-        weather = json.loads(obs.weather) if obs.weather else []
-        runway_ends = runway_map.get(snap.icao, [])
 
         # Compute days_out
         snap_init = snap.model_init_time
@@ -386,18 +451,13 @@ def _score_cycle(
             fh = fh.replace(tzinfo=timezone.utc)
         days_out = (fh.date() - snap_init.date()).days
 
-        # Check for existing score (avoid duplicates)
-        existing = db.execute(
-            select(VerificationScoreRow.id)
-            .where(VerificationScoreRow.icao == snap.icao)
-            .where(VerificationScoreRow.observation_time == obs.observation_time)
-            .where(VerificationScoreRow.model == snap.model)
-            .where(VerificationScoreRow.model_init_time == snap.model_init_time)
-            .where(VerificationScoreRow.source == "standalone")
-            .limit(1)
-        ).scalar_one_or_none()
-        if existing is not None:
+        # Check duplicate via in-memory set (strip tz for SQLite compat)
+        score_key = (snap.icao, _strip_tz(obs.observation_time), snap.model, _strip_tz(snap.model_init_time))
+        if score_key in existing_score_keys:
             continue
+
+        weather = json.loads(obs.weather) if obs.weather else []
+        runway_ends = runway_map.get(snap.icao, [])
 
         hourly = _snapshot_to_hourly(snap)
         score_row = _score_model_vs_metar(
@@ -420,30 +480,26 @@ def _score_cycle(
                 if snap.lcl_ft is not None:
                     score_row.lcl_delta_ft = snap.lcl_ft - float(obs.ceiling_ft)
             db.add(score_row)
+            existing_score_keys.add(score_key)
             scores_created += 1
 
     # TAF scoring
     for obs in obs_by_icao.values():
         if obs.taf_issue_time is None:
             continue
+
+        taf_key = (obs.icao, _strip_tz(obs.observation_time), _strip_tz(obs.taf_issue_time))
+        if taf_key in existing_taf_keys:
+            continue
+
         weather = json.loads(obs.weather) if obs.weather else []
         runway_ends = runway_map.get(obs.icao, [])
 
         taf_row = _score_taf_vs_metar(obs, weather, runway_ends, source="standalone")
         if taf_row is not None:
-            # Check for existing TAF score
-            from weatherbrief.db.models import TafVerificationScoreRow
-            existing = db.execute(
-                select(TafVerificationScoreRow.id)
-                .where(TafVerificationScoreRow.icao == obs.icao)
-                .where(TafVerificationScoreRow.observation_time == obs.observation_time)
-                .where(TafVerificationScoreRow.taf_issue_time == obs.taf_issue_time)
-                .where(TafVerificationScoreRow.source == "standalone")
-                .limit(1)
-            ).scalar_one_or_none()
-            if existing is None:
-                db.add(taf_row)
-                scores_created += 1
+            db.add(taf_row)
+            existing_taf_keys.add(taf_key)
+            scores_created += 1
 
     db.flush()
     return scores_created
@@ -532,6 +588,7 @@ def run_standalone_cycle(
         # Phase C: Fetch METAR/TAF
         t_obs = time.monotonic()
         obs_stored = _fetch_and_store_observations(airports, airports_db_path, db)
+        t_obs_done = time.monotonic()
         logger.info("Stored %d new observations", obs_stored)
 
         # Phase D: Score
@@ -554,6 +611,7 @@ def run_standalone_cycle(
             source="standalone",
             phase_fetch_ms=int((t_store - t_start) * 1000),
             phase_store_ms=int((t_obs - t_store) * 1000),
+            phase_gather_ms=int((t_obs_done - t_obs) * 1000),
             phase_score_ms=int((t_end - t_score) * 1000),
             airports=len(airports),
             observations_stored=obs_stored,

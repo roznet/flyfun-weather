@@ -563,6 +563,24 @@ class TestVerificationStatsSourceFilter:
         assert standalone_summary.cycles_run == 1
         assert standalone_summary.avg_cycle_duration_ms == pytest.approx(30000.0)
 
+    def test_activity_summary_obs_filtered_by_source(self, db_session):
+        """Observation and airport counts only include obs with scores for that source."""
+        from weatherbrief.tasks.verification_stats import get_activity_summary
+
+        self._insert_scores(db_session)
+
+        since = NOW - timedelta(hours=1)
+        until = NOW + timedelta(hours=1)
+
+        flight_summary = get_activity_summary(db_session, since, until, source="flight")
+        standalone_summary = get_activity_summary(db_session, since, until, source="standalone")
+
+        # Both sources share the same observation, so each sees 1
+        assert flight_summary.observations_collected == 1
+        assert standalone_summary.observations_collected == 1
+        assert flight_summary.airports_observed == 1
+        assert standalone_summary.airports_observed == 1
+
 
 # ---------------------------------------------------------------------------
 # Full cycle (integration-level, mocked externals)
