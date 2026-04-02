@@ -355,13 +355,14 @@ class VerificationScoreRow(Base):
     __tablename__ = "verification_scores"
     __table_args__ = (
         UniqueConstraint(
-            "icao", "observation_time", "model", "model_init_time",
+            "icao", "observation_time", "model", "model_init_time", "source",
             name="uq_verif_scores_key",
         ),
         Index("ix_verif_scores_obs", "observation_id"),
         Index("ix_verif_scores_model", "model", "days_out"),
         Index("ix_verif_scores_icao", "icao"),
         Index("ix_verif_scores_lead", "lead_hours"),
+        Index("ix_verif_scores_source_model_days", "source", "model", "days_out"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -378,6 +379,7 @@ class VerificationScoreRow(Base):
     )
     lead_hours: Mapped[int] = mapped_column(Integer, nullable=False)
     days_out: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="flight")
 
     # Flight category comparison
     obs_flight_category: Mapped[str | None] = mapped_column(String(4), nullable=True)
@@ -386,6 +388,8 @@ class VerificationScoreRow(Base):
 
     # Quantitative deltas (model - observation)
     ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cloud_base_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lcl_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     visibility_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_dir_delta_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -413,7 +417,7 @@ class TafVerificationScoreRow(Base):
     __tablename__ = "taf_verification_scores"
     __table_args__ = (
         UniqueConstraint(
-            "icao", "observation_time", "taf_issue_time",
+            "icao", "observation_time", "taf_issue_time", "source",
             name="uq_taf_verif_key",
         ),
         Index("ix_taf_verif_obs", "observation_id"),
@@ -432,6 +436,7 @@ class TafVerificationScoreRow(Base):
         DateTime(timezone=True), nullable=False
     )
     lead_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="flight")
 
     # Flight category
     obs_flight_category: Mapped[str | None] = mapped_column(String(4), nullable=True)
@@ -488,11 +493,63 @@ class FlightVerificationMapRow(Base):
     )
 
 
+class AirportForecastSnapshotRow(Base):
+    """NWP forecast snapshot for a METAR-reporting airport at a sample hour.
+
+    Stores surface fields from Open-Meteo API and ceiling estimates from GRIB.
+    Used by the standalone verification pipeline to score models against METARs.
+    """
+
+    __tablename__ = "airport_forecast_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "icao", "model", "model_init_time", "forecast_hour",
+            name="uq_afs_key",
+        ),
+        Index("ix_afs_icao_hour", "icao", "forecast_hour"),
+        Index("ix_afs_fetched", "fetched_at"),
+        Index("ix_afs_model_init", "model", "model_init_time"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    icao: Mapped[str] = mapped_column(String(4), nullable=False)
+    model: Mapped[str] = mapped_column(String(20), nullable=False)
+    model_init_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    forecast_hour: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    # Surface fields (from Open-Meteo API)
+    temperature_2m_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dewpoint_2m_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    visibility_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_speed_10m_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_direction_10m_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_gusts_10m_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    precipitation_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    snowfall_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weather_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cloud_cover_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cloud_cover_low_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Ceiling estimates (from GRIB + computed)
+    nwp_ceiling_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cloud_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lcl_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class VerificationCycleRow(Base):
     """Performance metrics for each verification collection cycle.
 
-    One row per cycle that found at least one active flight.
-    Used to track timing trends and detect server overload.
+    One row per cycle. source='flight' for flight verification,
+    source='standalone' for standalone airport verification.
     """
 
     __tablename__ = "verification_cycles"
@@ -500,6 +557,7 @@ class VerificationCycleRow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="flight")
     phase_finalize_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     phase_find_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     phase_gather_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -5,6 +5,7 @@ import {
   fetchVerificationStats,
   type VerificationDigest,
   type VerificationPeriod,
+  type VerificationSource,
   type CategoryAccuracyRow,
   type NotableMiss,
   type MissedWarning,
@@ -14,6 +15,7 @@ import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 
 let currentPeriod: VerificationPeriod = '24h';
+let currentSource: VerificationSource = 'flight';
 
 async function init(): Promise<void> {
   await initI18n();
@@ -25,6 +27,7 @@ async function init(): Promise<void> {
   initTheme();
   renderUserInfo(user, 'verification');
   setupPeriodToggle();
+  setupSourceToggle();
   await loadData();
 }
 
@@ -41,9 +44,22 @@ function setupPeriodToggle(): void {
   });
 }
 
+function setupSourceToggle(): void {
+  document.querySelectorAll('#source-toggle .toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const source = (btn as HTMLElement).dataset.source as VerificationSource;
+      if (source === currentSource) return;
+      currentSource = source;
+      document.querySelectorAll('#source-toggle .toggle-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadData();
+    });
+  });
+}
+
 async function loadData(): Promise<void> {
   try {
-    const data = await fetchVerificationStats(currentPeriod);
+    const data = await fetchVerificationStats(currentPeriod, currentSource);
     renderSummary(data);
     renderAccuracy(data);
     renderMisses(data);

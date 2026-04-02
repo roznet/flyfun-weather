@@ -106,10 +106,16 @@
   <main class="container" style="max-width: 960px; margin: 0 auto; padding: 1rem;">
     <h1 style="font-size: 1.25rem; margin-bottom: 0.5rem;">Verification Dashboard</h1>
 
-    <div class="period-toggle" id="period-toggle">
-      <button class="toggle-btn active" data-period="24h">24h</button>
-      <button class="toggle-btn" data-period="7d">7 days</button>
-      <button class="toggle-btn" data-period="30d">30 days</button>
+    <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem;">
+      <div class="period-toggle" id="period-toggle">
+        <button class="toggle-btn active" data-period="24h">24h</button>
+        <button class="toggle-btn" data-period="7d">7 days</button>
+        <button class="toggle-btn" data-period="30d">30 days</button>
+      </div>
+      <div class="period-toggle" id="source-toggle">
+        <button class="toggle-btn active" data-source="flight">Flight</button>
+        <button class="toggle-btn" data-source="standalone">Standalone</button>
+      </div>
     </div>
 
     <div id="summary-bar" class="summary-bar"></div>

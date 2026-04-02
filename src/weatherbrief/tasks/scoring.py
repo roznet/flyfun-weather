@@ -153,6 +153,7 @@ def _score_model_vs_metar(
     model: str,
     model_init_time: datetime,
     days_out: int,
+    source: str = "flight",
 ) -> VerificationScoreRow | None:
     """Compute a single model-vs-METAR score using advisory pipeline functions."""
     from weatherbrief.analysis.airport_conditions import (
@@ -226,6 +227,7 @@ def _score_model_vs_metar(
         model_init_time=model_init_time,
         lead_hours=lead_hours,
         days_out=days_out,
+        source=source,
         obs_flight_category=obs_row.flight_category,
         model_flight_category=model_cat.value,
         category_match=(
@@ -268,6 +270,7 @@ def _score_taf_vs_metar(
     obs_row: VerificationObservationRow,
     obs_weather: list[str],
     runway_ends: list,
+    source: str = "flight",
 ) -> TafVerificationScoreRow | None:
     """Score one TAF prediction against its METAR observation."""
     from weatherbrief.tasks.route_weather import compute_wind_advisory
@@ -294,6 +297,7 @@ def _score_taf_vs_metar(
         observation_time=obs_row.observation_time,
         taf_issue_time=obs_row.taf_issue_time,
         lead_hours=lead_hours,
+        source=source,
         obs_flight_category=obs_row.flight_category,
         taf_flight_category=obs_row.taf_flight_category,
         category_match=(
@@ -489,6 +493,7 @@ def score_flight(
                     .where(VerificationScoreRow.observation_time == obs_row.observation_time)
                     .where(VerificationScoreRow.model == model_name)
                     .where(VerificationScoreRow.model_init_time == init_dt)
+                    .where(VerificationScoreRow.source == "flight")
                     .limit(1)
                 ).scalar_one_or_none()
                 if existing is not None:
@@ -503,6 +508,10 @@ def score_flight(
                     rpa = route_analyses.analyses[rpa_idx]
                     sounding = rpa.sounding.get(model_name)
 
+                # Compute days_out from model init time, not pack
+                obs_time = _ensure_utc(obs_row.observation_time)
+                days_out = (obs_time.date() - _ensure_utc(init_dt).date()).days
+
                 score_row = _score_model_vs_metar(
                     obs_row=obs_row,
                     obs_weather=weather,
@@ -511,7 +520,7 @@ def score_flight(
                     runway_ends=runway_ends,
                     model=model_name,
                     model_init_time=init_dt,
-                    days_out=pack_row.days_out,
+                    days_out=days_out,
                 )
                 if score_row is not None:
                     db.add(score_row)
@@ -532,6 +541,7 @@ def score_flight(
             .where(TafVerificationScoreRow.icao == icao)
             .where(TafVerificationScoreRow.observation_time == obs_row.observation_time)
             .where(TafVerificationScoreRow.taf_issue_time == obs_row.taf_issue_time)
+            .where(TafVerificationScoreRow.source == "flight")
             .limit(1)
         ).scalar_one_or_none()
         if existing is not None:
