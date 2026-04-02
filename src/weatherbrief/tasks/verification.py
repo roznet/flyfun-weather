@@ -380,20 +380,28 @@ def store_observations(
 # ---------------------------------------------------------------------------
 
 
-def finalize_completed_flights(flights: list[FlightRow]) -> int:
-    """Mark flights past their window as verification_complete.
+def finalize_completed_flights(db: Session) -> int:
+    """Mark 'collecting' flights past their window as verification_complete.
+
+    Queries the DB directly for flights still in 'collecting' status whose
+    observation window has closed (now > departure + duration + 1h).
 
     Returns count of flights finalized.
     """
     now = datetime.now(timezone.utc)
-    finalized = 0
 
-    for row in flights:
+    stmt = (
+        select(FlightRow)
+        .where(FlightRow.verification_status == "collecting")
+        .where(FlightRow.departure_time.isnot(None))
+    )
+    rows = db.execute(stmt).scalars().all()
+
+    finalized = 0
+    for row in rows:
         dep = row.departure_time
         if dep is not None and dep.tzinfo is None:
             dep = dep.replace(tzinfo=timezone.utc)
-        if dep is None:
-            continue
         flight_end = dep + timedelta(hours=row.flight_duration_hours or 0)
         if now > flight_end + timedelta(hours=1):
             row.verification_status = "complete"
@@ -416,17 +424,19 @@ def collect_and_store(
 
     Returns summary dict with counts.
     """
+    # Phase E — finalize flights past their window (runs independently)
+    finalized = finalize_completed_flights(db)
+    if finalized:
+        db.commit()
+    scored = _score_completed(db, airports_db_path)
+
     # Phase A
     flights = find_verifiable_flights(db)
     if not flights:
-        return {"flights": 0, "airports": 0, "observations": 0, "finalized": 0, "scored": 0}
+        return {"flights": 0, "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
 
     icao_to_flights = gather_airports(flights, db, airports_db_path, corridor_nm)
     if not icao_to_flights:
-        finalized = finalize_completed_flights(flights)
-        db.commit()
-        # Score any newly completed flights
-        scored = _score_completed(db, airports_db_path)
         return {"flights": len(flights), "airports": 0, "observations": 0, "finalized": finalized, "scored": scored}
 
     unique_icaos = sorted(icao_to_flights.keys())
@@ -441,13 +451,7 @@ def collect_and_store(
     # Phase C
     inserted = store_observations(observations, icao_to_flights, db)
 
-    # Phase E
-    finalized = finalize_completed_flights(flights)
-
     db.commit()
-
-    # Phase F — Score completed flights
-    scored = _score_completed(db, airports_db_path)
 
     logger.info(
         "Verification: %d observations stored, %d flights finalized, %d scored",
