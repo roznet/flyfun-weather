@@ -51,7 +51,9 @@ struct BriefingContainerView: View {
         }
         .sheet(isPresented: $showingPirepSheet) {
             if let viewModel, let repo = appState.repository {
-                PirepReportingView(viewModel: PirepViewModel(flight: flight, repository: repo))
+                PirepReportingView(viewModel: PirepViewModel(flight: flight, repository: repo,
+                                                                      offlineStore: appState.pirepOfflineStore),
+                                   trackingService: trackingService)
             }
         }
         .task {

@@ -8,8 +8,8 @@ private let logger = Logger(subsystem: "aero.flyfun.weather", category: "FlightT
 struct ProjectedPosition {
     /// Distance along route from origin (nautical miles)
     let distanceNm: Double
-    /// GPS altitude in feet MSL
-    let altitudeFt: Double
+    /// GPS altitude in feet MSL, nil when vertical accuracy is invalid
+    let altitudeFt: Double?
     /// Perpendicular distance from route centerline (nautical miles)
     let crossTrackNm: Double
     /// True if within 10nm of route
@@ -151,7 +151,8 @@ final class FlightTrackingService: NSObject {
             }
         }
 
-        let altitudeFt = location.altitude * 3.28084 // meters to feet
+        let altitudeFt: Double? = location.verticalAccuracy >= 0
+            ? location.altitude * 3.28084 : nil
 
         // Use GPS course if available, otherwise estimate from route segment bearing
         let heading: Double
@@ -170,7 +171,8 @@ final class FlightTrackingService: NSObject {
             headingDeg: heading
         )
 
-        logger.info("Projected: \(bestAlongDistance, format: .fixed(precision: 1))nm along, \(Int(altitudeFt))ft, \(bestPerpDistance, format: .fixed(precision: 1))nm off-track")
+        let altStr = altitudeFt.map { "\(Int($0))ft" } ?? "no-alt"
+        logger.info("Projected: \(bestAlongDistance, format: .fixed(precision: 1))nm along, \(altStr), \(bestPerpDistance, format: .fixed(precision: 1))nm off-track")
     }
 
     /// Great-circle initial bearing from one coordinate to another, in degrees (0-360).

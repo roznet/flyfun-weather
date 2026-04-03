@@ -122,8 +122,9 @@ struct CrossSectionView: View {
 
     /// Aircraft position for cross-section overlay, from flight tracking service.
     private var aircraftPosition: CrossSectionRenderer.AircraftPosition? {
-        guard trackingService.isTracking, let pos = trackingService.projectedPosition else { return nil }
-        return .init(distanceNm: pos.distanceNm, altitudeFt: pos.altitudeFt, opacity: pos.opacity)
+        guard trackingService.isTracking, let pos = trackingService.projectedPosition,
+              let altFt = pos.altitudeFt else { return nil }
+        return .init(distanceNm: pos.distanceNm, altitudeFt: altFt, opacity: pos.opacity)
     }
 
     /// Distance along route for the selected point, used to draw the vertical indicator.

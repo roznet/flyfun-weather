@@ -33,6 +33,16 @@ struct PirepResponse: Codable, Identifiable, Sendable {
         ISO8601DateFormatter().date(from: observedAt)
     }
 
+    /// Sentinel for offline-queued PIREPs.
+    static let offline = PirepResponse(
+        id: -1, clientUuid: nil, submittedAt: "", observedAt: "",
+        latitude: 0, longitude: 0, gpsAltitudeFt: nil, reportedAltitudeFt: nil,
+        inCloud: nil, icingIntensity: nil, icingType: nil, turbulenceIntensity: nil,
+        ceilingMslFt: nil, topsMslFt: nil, topsBasis: nil, tempC: nil,
+        windDir: nil, windSpeedKt: nil, remarks: nil, aircraftType: nil,
+        packId: nil, source: "inflight", isOwn: true
+    )
+
     /// Highest severity across icing and turbulence.
     var maxSeverity: String {
         let order = ["none", "trace", "light", "moderate", "severe"]

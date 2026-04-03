@@ -21,9 +21,6 @@ final class PirepViewModel {
     let flight: FlightResponse
     private let repository: any BriefingRepository
 
-    // GPS state
-    var currentLocation: CLLocation?
-
     // Form fields — no defaults selected (avoids confirmation bias)
     var reportedAltitudeFt: Int?
     var icingIntensity: String?
@@ -45,43 +42,43 @@ final class PirepViewModel {
     // Submission state
     var submitState: LoadingState<PirepResponse> = .idle
     var errorMessage: String?
+    var queuedOffline = false
 
+    private let offlineStore: PirepOfflineStore
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "PirepVM")
 
-    init(flight: FlightResponse, repository: any BriefingRepository) {
+    init(flight: FlightResponse, repository: any BriefingRepository, offlineStore: PirepOfflineStore) {
         self.flight = flight
         self.repository = repository
+        self.offlineStore = offlineStore
     }
 
-    /// Pre-fill altitude from GPS.
-    func updateLocation(_ location: CLLocation) {
-        currentLocation = location
-        if reportedAltitudeFt == nil {
-            // CLLocation.altitude is meters MSL
-            reportedAltitudeFt = Int(location.altitude * 3.28084)
-        }
-    }
-
-    var gpsAltitudeFt: Int? {
-        guard let loc = currentLocation else { return nil }
-        return Int(loc.altitude * 3.28084)
-    }
-
-    /// Build the request and submit.
-    func submit() async {
-        guard let loc = currentLocation else {
-            errorMessage = "No GPS position available"
+    /// Build the request and submit. Location is passed from the view which reads it
+    /// from the tracking service via @Observable (same pattern as CrossSectionView).
+    func submit(location: CLLocation?) async {
+        guard let loc = location else {
+            errorMessage = "No GPS position available — start flight tracking first"
+            Self.logger.warning("PIREP submit blocked: no GPS location")
             return
         }
 
+        let gpsAlt: Int? = loc.verticalAccuracy >= 0
+            ? Int(loc.altitude * 3.28084) : nil
+
+        Self.logger.info("Submitting PIREP at \(loc.coordinate.latitude), \(loc.coordinate.longitude) gpsAlt=\(gpsAlt.map(String.init) ?? "nil")")
         submitState = .loading
 
         let request = SubmitPirepRequest(
             clientUuid: UUID().uuidString.lowercased(),
-            observedAt: ISO8601DateFormatter().string(from: Date()),
+            observedAt: {
+                let fmt = ISO8601DateFormatter()
+                fmt.formatOptions = [.withInternetDateTime]
+                fmt.timeZone = TimeZone(identifier: "UTC")
+                return fmt.string(from: Date())
+            }(),
             latitude: loc.coordinate.latitude,
             longitude: loc.coordinate.longitude,
-            gpsAltitudeFt: gpsAltitudeFt,
+            gpsAltitudeFt: gpsAlt,
             reportedAltitudeFt: reportedAltitudeFt,
             inCloud: inCloud,
             icingIntensity: icingIntensity,
@@ -101,6 +98,15 @@ final class PirepViewModel {
             let response = try await repository.submitPirep(request)
             submitState = .loaded(response)
             Self.logger.info("PIREP submitted: id=\(response.id)")
+        } catch let error as URLError where error.code == .notConnectedToInternet
+                    || error.code == .timedOut
+                    || error.code == .networkConnectionLost
+                    || error.code == .cannotConnectToHost {
+            await offlineStore.enqueue(request)
+            let pending = await offlineStore.pendingCount
+            queuedOffline = true
+            submitState = .loaded(PirepResponse.offline)
+            Self.logger.info("PIREP queued offline (pending: \(pending))")
         } catch {
             submitState = .error(error)
             errorMessage = error.localizedDescription
@@ -123,9 +129,5 @@ final class PirepViewModel {
         remarks = ""
         submitState = .idle
         errorMessage = nil
-        // Keep altitude from GPS
-        if let loc = currentLocation {
-            reportedAltitudeFt = Int(loc.altitude * 3.28084)
-        }
     }
 }

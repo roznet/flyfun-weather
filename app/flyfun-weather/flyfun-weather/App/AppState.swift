@@ -8,7 +8,7 @@ enum StorageKey: String {
     case selectedModel
 }
 
-#if targetEnvironment(simulator)
+#if DEBUG
 /// Server environment toggle, available only in simulator builds.
 enum ServerEnvironment: String, CaseIterable {
     case production = "prod"
@@ -45,12 +45,13 @@ final class AppState {
 
     private(set) var apiClient: APIClient?
     private(set) var repository: (any BriefingRepository)?
+    let pirepOfflineStore = PirepOfflineStore()
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AppState")
 
     static let productionBaseURL = URL(string: "https://weather.flyfun.aero")!
 
-    #if targetEnvironment(simulator)
+    #if DEBUG
     @ObservationIgnored
     static var serverEnvironment: ServerEnvironment {
         get {
@@ -113,7 +114,7 @@ final class AppState {
         logout()
     }
 
-    #if targetEnvironment(simulator)
+    #if DEBUG
     /// Switch server environment and reconnect if authenticated.
     func setServerEnvironment(_ env: ServerEnvironment) {
         Self.serverEnvironment = env
@@ -124,6 +125,18 @@ final class AppState {
         }
     }
     #endif
+
+    // MARK: - Offline sync
+
+    /// Sync any queued PIREPs when connectivity returns.
+    func syncPendingPireps() async {
+        guard let repository else { return }
+        await pirepOfflineStore.load()
+        let synced = await pirepOfflineStore.sync(using: repository)
+        if synced > 0 {
+            Self.logger.info("Synced \(synced) offline PIREPs")
+        }
+    }
 
     // MARK: - Private
 

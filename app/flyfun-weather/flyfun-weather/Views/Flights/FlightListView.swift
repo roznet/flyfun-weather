@@ -34,7 +34,7 @@ struct FlightListView: View {
             }
             .navigationTitle("Flights")
             .toolbar {
-                #if targetEnvironment(simulator)
+                #if DEBUG
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         ForEach(ServerEnvironment.allCases, id: \.self) { env in

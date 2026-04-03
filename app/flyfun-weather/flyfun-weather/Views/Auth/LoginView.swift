@@ -64,7 +64,7 @@ struct LoginView: View {
             }
             .disabled(isSigningIn)
 
-            #if targetEnvironment(simulator)
+            #if DEBUG
             Button {
                 Task { await devLogin() }
             } label: {
@@ -108,7 +108,7 @@ struct LoginView: View {
         }
     }
 
-    #if targetEnvironment(simulator)
+    #if DEBUG
     private func devLogin() async {
         isSigningIn = true
         errorMessage = nil

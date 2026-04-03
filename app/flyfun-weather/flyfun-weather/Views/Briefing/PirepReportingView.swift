@@ -1,9 +1,22 @@
+import CoreLocation
 import SwiftUI
 
 /// In-flight PIREP reporting card — one-tap severity buttons, no pre-selected values.
 struct PirepReportingView: View {
     @Bindable var viewModel: PirepViewModel
+    var trackingService: FlightTrackingService
     @Environment(\.dismiss) private var dismiss
+
+    /// Read tracking service location in body so SwiftUI observes it via @Observable.
+    /// This is the same pattern CrossSectionView uses for projectedPosition.
+    private var currentLocation: CLLocation? {
+        trackingService.currentLocation
+    }
+
+    private var gpsAltitudeFt: Int? {
+        guard let loc = currentLocation, loc.verticalAccuracy >= 0 else { return nil }
+        return Int(loc.altitude * 3.28084)
+    }
 
     var body: some View {
         NavigationStack {
@@ -23,6 +36,13 @@ struct PirepReportingView: View {
                     Button("Skip") { dismiss() }
                 }
             }
+            .onAppear {
+                // Pre-fill altitude from GPS if available
+                if let loc = currentLocation, loc.verticalAccuracy >= 0,
+                   viewModel.reportedAltitudeFt == nil {
+                    viewModel.reportedAltitudeFt = Int(loc.altitude * 3.28084)
+                }
+            }
         }
     }
 
@@ -33,9 +53,12 @@ struct PirepReportingView: View {
             HStack {
                 Text("GPS altitude")
                 Spacer()
-                if let gps = viewModel.gpsAltitudeFt {
+                if let gps = gpsAltitudeFt {
                     Text("\(gps) ft")
                         .foregroundStyle(.secondary)
+                } else if currentLocation != nil {
+                    Text("No altitude")
+                        .foregroundStyle(.tertiary)
                 } else {
                     Text("No GPS")
                         .foregroundStyle(.tertiary)
@@ -162,7 +185,9 @@ struct PirepReportingView: View {
         Section {
             switch viewModel.submitState {
             case .idle, .error:
-                Button(action: { Task { await viewModel.submit() } }) {
+                Button(action: {
+                    Task { await viewModel.submit(location: currentLocation) }
+                }) {
                     Label("Submit Report", systemImage: "paperplane.fill")
                         .frame(maxWidth: .infinity)
                 }
@@ -179,9 +204,15 @@ struct PirepReportingView: View {
                     .frame(maxWidth: .infinity)
 
             case .loaded:
-                Label("Report submitted", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .frame(maxWidth: .infinity)
+                if viewModel.queuedOffline {
+                    Label("Saved offline — will sync when connected", systemImage: "arrow.clockwise.icloud")
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Label("Report submitted", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .frame(maxWidth: .infinity)
+                }
 
                 Button("Submit Another") {
                     viewModel.resetForm()
