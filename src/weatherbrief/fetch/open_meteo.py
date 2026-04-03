@@ -198,6 +198,11 @@ class OpenMeteoClient:
                 )
         return results
 
+    # Maximum points per request to avoid 414 Request-URI Too Large.
+    # The hourly parameter list is long (pressure levels × variables), so
+    # the coordinate portion of the URL must stay well under ~8 KB.
+    _MAX_POINTS_PER_REQUEST = 50
+
     def fetch_multi_point(
         self,
         points: list[RoutePoint],
@@ -206,7 +211,7 @@ class OpenMeteoClient:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> list[WaypointForecast]:
-        """Fetch forecast for multiple points in a single API call.
+        """Fetch forecast for multiple points, chunking to avoid URL limits.
 
         Open-Meteo accepts comma-separated latitude/longitude values and returns
         a list of per-location results.  When ``start_date`` / ``end_date`` are
@@ -216,6 +221,42 @@ class OpenMeteoClient:
         """
         model_key = model.value
         endpoint = MODEL_ENDPOINTS[model_key]
+
+        logger.info(
+            "Fetching %s for %d route points (%s–%s)",
+            endpoint.name,
+            len(points),
+            start_date or "full",
+            end_date or "range",
+        )
+
+        results: list[WaypointForecast] = []
+        chunk_size = self._MAX_POINTS_PER_REQUEST
+        for chunk_start in range(0, len(points), chunk_size):
+            chunk = points[chunk_start : chunk_start + chunk_size]
+            if len(points) > chunk_size:
+                logger.info(
+                    "  chunk %d–%d of %d points",
+                    chunk_start, chunk_start + len(chunk), len(points),
+                )
+            chunk_results = self._fetch_multi_point_chunk(
+                chunk, model, endpoint,
+                start_date=start_date, end_date=end_date,
+            )
+            results.extend(chunk_results)
+
+        return results
+
+    def _fetch_multi_point_chunk(
+        self,
+        points: list[RoutePoint],
+        model: ModelSource,
+        endpoint,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[WaypointForecast]:
+        """Fetch forecast for a single chunk of points."""
         hourly_params = build_hourly_params(endpoint)
 
         params: dict[str, object] = {
@@ -232,14 +273,6 @@ class OpenMeteoClient:
             params["forecast_days"] = min(endpoint.max_days, 16)
         if endpoint.model_param:
             params["models"] = endpoint.model_param
-
-        logger.info(
-            "Fetching %s for %d route points (%s–%s)",
-            endpoint.name,
-            len(points),
-            start_date or "full",
-            end_date or "range",
-        )
 
         resp = self._get_with_retry(endpoint.base_url, params)
         response_json = resp.json()
