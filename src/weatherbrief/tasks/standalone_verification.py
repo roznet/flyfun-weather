@@ -43,7 +43,7 @@ MODEL_FORECAST_DAYS = {
     "ecmwf": 4,
 }
 
-_OPEN_METEO_BATCH_SIZE = 50  # airports per Open-Meteo API call
+_OPEN_METEO_BATCH_SIZE = 100  # airports per Open-Meteo API call (also retry boundary)
 _LCL_CONSTANT_FT = 400  # 400 * (T - Td) approximation for LCL in feet
 
 
