@@ -4,7 +4,7 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
   revokeAgent, fetchAdminFeedback, fetchAdminMetrics, fetchHubUsers,
-  updateFeedbackStatus, saveFeedbackReply, sendFeedbackReply, saveFeedbackNotes,
+  updateFeedbackStatus, saveFeedbackReply, sendFeedbackReply, saveFeedbackNotes, reopenFeedback,
   type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
   type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse,
 } from './adapters/admin-adapter';
@@ -212,6 +212,12 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
         <button class="fb-ignore btn-sm" data-id="${fb.id}" style="background:var(--bg);color:var(--text-muted);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Ignore</button>
         <span class="fb-action-status" data-id="${fb.id}" style="font-size:12px;align-self:center;"></span>
       </div>`;
+  } else {
+    actionsHtml = `
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="fb-reopen btn-sm" data-id="${fb.id}" style="background:var(--bg);color:var(--primary);border:1px solid var(--border);border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Reply Again</button>
+        <span class="fb-action-status" data-id="${fb.id}" style="font-size:12px;align-self:center;"></span>
+      </div>`;
   }
 
   return `
@@ -287,6 +293,20 @@ function attachFeedbackHandlers(container: HTMLElement): void {
         loadFeedback();
       } catch (err) {
         const statusEl = container.querySelector(`.fb-action-status[data-id="${id}"]`) as HTMLElement | null;
+        if (statusEl) { statusEl.textContent = `Error: ${err}`; statusEl.style.color = '#dc3545'; }
+      }
+    });
+  });
+
+  // Reply Again (re-open archived feedback)
+  container.querySelectorAll('.fb-reopen').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = Number((e.currentTarget as HTMLElement).dataset.id);
+      const statusEl = container.querySelector(`.fb-action-status[data-id="${id}"]`) as HTMLElement | null;
+      try {
+        await reopenFeedback(id);
+        loadFeedback();
+      } catch (err) {
         if (statusEl) { statusEl.textContent = `Error: ${err}`; statusEl.style.color = '#dc3545'; }
       }
     });

@@ -223,6 +223,10 @@ export async function sendFeedbackReply(id: number, reply?: string): Promise<{ s
   });
 }
 
+export async function reopenFeedback(id: number): Promise<void> {
+  await apiFetch(`/feedback/admin/${id}/reopen`, { method: 'POST' });
+}
+
 export async function saveFeedbackNotes(id: number, notes: string): Promise<void> {
   await apiFetch(`/feedback/admin/${id}/notes`, {
     method: 'PUT',
