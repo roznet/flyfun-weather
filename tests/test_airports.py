@@ -20,14 +20,39 @@ def _mock_airport(icao: str, name: str, lat: float, lon: float):
     return airport
 
 
-def _mock_model(airports_dict: dict):
-    """Create a mock model with airports collection."""
+class _MockAirportsCollection:
+    """Minimal mock for the airports collection used by RouteResolver."""
+
+    def __init__(self, airports_dict: dict):
+        self._airports = airports_dict
+
+    def get(self, icao):
+        return self._airports.get(icao)
+
+    def where(self, **kwargs):
+        """Mimic airports.where(ident=...).first() used by RouteResolver."""
+        ident = kwargs.get("ident")
+        result = self._airports.get(ident)
+        return _MockQueryResult(result)
+
+
+class _MockQueryResult:
+    def __init__(self, value):
+        self._value = value
+
+    def first(self):
+        return self._value
+
+
+def _mock_model(airports_dict: dict, waypoints_dict: dict | None = None):
+    """Create a mock model with airports collection and optional waypoints."""
     model = MagicMock()
+    model.airports = _MockAirportsCollection(airports_dict)
 
-    def get_airport(icao):
-        return airports_dict.get(icao)
-
-    model.airports.get = get_airport
+    # Waypoint lookups (for get_waypoint and get_waypoint_candidates)
+    _wp = waypoints_dict or {}
+    model.get_waypoint.side_effect = lambda name: _wp.get(name)
+    model.get_waypoint_candidates.side_effect = lambda name: _wp.get(name, [])
     return model
 
 
@@ -63,10 +88,10 @@ def test_resolve_waypoints_missing(mock_load):
 
 @patch("weatherbrief.airports._load_airport_model")
 def test_resolve_waypoints_no_coordinates(mock_load):
-    """Raises KeyError when airport has no coordinates."""
+    """Raises KeyError when departure airport has no coordinates."""
     airport = _mock_airport("EGTK", "Oxford Kidlington", None, None)
     airports = {"EGTK": airport}
     mock_load.return_value = _mock_model(airports)
 
-    with pytest.raises(KeyError, match="no coordinates"):
-        resolve_waypoints(["EGTK"], "/fake/db.sqlite")
+    with pytest.raises(KeyError, match="EGTK"):
+        resolve_waypoints(["EGTK", "LSGS"], "/fake/db.sqlite")
