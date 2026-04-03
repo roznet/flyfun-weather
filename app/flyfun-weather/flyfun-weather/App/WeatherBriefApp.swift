@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct WeatherBriefApp: App {
     @State private var appState = AppState()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +17,11 @@ struct WeatherBriefApp: App {
             .environment(appState)
             .onOpenURL { url in
                 appState.handleAuthCallback(url: url)
+            }
+            .onChange(of: scenePhase) {
+                if scenePhase == .active {
+                    Task { await appState.syncPendingPireps() }
+                }
             }
         }
     }

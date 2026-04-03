@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -344,9 +345,23 @@ def store_observations(
                 taf_wind_gust_kt=obs.taf_wind_gust_kt,
             )
             db.add(row)
-            db.flush()  # get the id
-            obs_row_id = row.id
-            inserted += 1
+            try:
+                db.flush()  # get the id
+            except IntegrityError:
+                db.rollback()
+                # Lost the race — another cycle inserted this observation
+                existing = db.execute(
+                    select(VerificationObservationRow)
+                    .where(VerificationObservationRow.icao == obs.icao)
+                    .where(VerificationObservationRow.observation_time == obs.observation_time)
+                ).scalar_one_or_none()
+                if existing is not None:
+                    obs_row_id = existing.id
+                else:
+                    continue
+            else:
+                obs_row_id = row.id
+                inserted += 1
 
         # Link to flights
         flight_ids = icao_to_flights.get(obs.icao, set())
