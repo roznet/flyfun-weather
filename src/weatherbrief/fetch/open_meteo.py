@@ -199,9 +199,11 @@ class OpenMeteoClient:
         return results
 
     # Maximum points per request to avoid 414 Request-URI Too Large.
-    # The hourly parameter list is long (pressure levels × variables), so
-    # the coordinate portion of the URL must stay well under ~8 KB.
-    _MAX_POINTS_PER_REQUEST = 50
+    # Open-Meteo supports up to ~400 locations per call, but the hourly
+    # parameter list (pressure levels × variables) makes URLs long, so we
+    # stay conservative.  Normal routes are 50-80 points; this limit is a
+    # safety net for unusually long routes.
+    _MAX_POINTS_PER_REQUEST = 150
 
     def fetch_multi_point(
         self,
