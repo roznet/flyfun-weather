@@ -54,11 +54,17 @@ final class CachingBriefingRepository: BriefingRepository {
             }
             return flights
         } catch {
-            // Fall back to cached flight list
+            // Fallback 1: cached flights.json
             if let data = await cache.readMetadata(name: "flights"),
                let cached = try? JSONDecoder.weatherBrief.decode([FlightResponse].self, from: data) {
                 Self.logger.info("Serving \(cached.count) flights from cache (offline)")
                 return cached
+            }
+            // Fallback 2: recover from per-flight cached data (downloaded packs)
+            let recovered = await recoverFlightsFromCache()
+            if !recovered.isEmpty {
+                Self.logger.info("Recovered \(recovered.count) flights from download cache")
+                return recovered
             }
             throw error
         }
@@ -89,9 +95,16 @@ final class CachingBriefingRepository: BriefingRepository {
             }
             return pack
         } catch {
+            // Fallback 1: cached latest-pack metadata
             if let data = await cache.readFlightMetadata(flightId: flightId, name: "latest-pack"),
                let cached = try? JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: data) {
                 Self.logger.info("Serving latest pack from cache for \(flightId) (offline)")
+                return cached
+            }
+            // Fallback 2: pack metadata saved during download
+            if let data = await cache.readFlightMetadata(flightId: flightId, name: "pack-meta"),
+               let cached = try? JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: data) {
+                Self.logger.info("Serving pack meta from download cache for \(flightId)")
                 return cached
             }
             throw error
@@ -158,6 +171,15 @@ final class CachingBriefingRepository: BriefingRepository {
         try await online.grametImage(flightId: flightId, timestamp: timestamp)
     }
 
+    // MARK: - Offline recovery
+
+    /// Cache flight data for offline recovery (called when navigating to a flight).
+    func cacheFlightData(_ flight: FlightResponse) async {
+        if let data = try? JSONEncoder.weatherBrief.encode(flight) {
+            try? await cache.writeFlightMetadata(data, flightId: flight.id, name: "flight")
+        }
+    }
+
     // MARK: - Explicit download / delete
 
     /// Download all pack data to disk for offline access via a single bundle request.
@@ -166,6 +188,7 @@ final class CachingBriefingRepository: BriefingRepository {
         timestamp: String,
         flightTitle: String,
         assessment: String?,
+        packMeta: PackMetaResponse? = nil,
         progress: @Sendable @escaping (Double) -> Void
     ) async throws {
         progress(0.1)
@@ -203,6 +226,10 @@ final class CachingBriefingRepository: BriefingRepository {
             endpoints: downloaded,
             totalBytes: totalBytes
         )
+        // Cache pack metadata for offline latestPack() recovery
+        if let packMeta, let metaData = try? JSONEncoder.weatherBrief.encode(packMeta) {
+            try? await cache.writeFlightMetadata(metaData, flightId: flightId, name: "pack-meta")
+        }
         Self.logger.info("Downloaded pack \(flightId)/\(timestamp): \(downloaded.count) endpoints, \(totalBytes) bytes")
     }
 
@@ -220,6 +247,20 @@ final class CachingBriefingRepository: BriefingRepository {
 
     // MARK: - Private
 
+    /// Recover flight list from per-flight cached data when flights.json is unavailable.
+    private func recoverFlightsFromCache() async -> [FlightResponse] {
+        let entries = await cache.cachedPacks()
+        let flightIds = Set(entries.map(\.flightId))
+        var flights: [FlightResponse] = []
+        for id in flightIds {
+            if let data = await cache.readFlightMetadata(flightId: id, name: "flight"),
+               let flight = try? JSONDecoder.weatherBrief.decode(FlightResponse.self, from: data) {
+                flights.append(flight)
+            }
+        }
+        return flights
+    }
+
     private func cachedOrFetch<T: Decodable>(flightId: String, timestamp: String, endpoint: String) async throws -> T {
         let pathSuffix = Self.endpointPaths[endpoint]!
         return try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: endpoint, pathSuffix: pathSuffix)
@@ -228,7 +269,7 @@ final class CachingBriefingRepository: BriefingRepository {
     private func cachedOrFetch<T: Decodable>(
         flightId: String, timestamp: String, endpoint: String, pathSuffix: String, writeThrough: Bool = false
     ) async throws -> T {
-        // Check cache first
+        // Check cache first (exact timestamp)
         if let data = await cache.readData(flightId: flightId, timestamp: timestamp, endpoint: endpoint) {
             do {
                 return try JSONDecoder.weatherBrief.decode(T.self, from: data)
@@ -237,12 +278,25 @@ final class CachingBriefingRepository: BriefingRepository {
             }
         }
 
-        // Fall back to network
-        let path = "/api/flights/\(flightId)/packs/\(timestamp)/\(pathSuffix)"
-        let data = try await client.requestData(path)
-        if writeThrough {
-            try? await cache.writeData(data, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
+        // Try network
+        do {
+            let path = "/api/flights/\(flightId)/packs/\(timestamp)/\(pathSuffix)"
+            let data = try await client.requestData(path)
+            if writeThrough {
+                try? await cache.writeData(data, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
+            }
+            return try JSONDecoder.weatherBrief.decode(T.self, from: data)
+        } catch {
+            // Network failed — try any other cached timestamp for this flight
+            let entries = await cache.cachedPacks()
+            for entry in entries where entry.flightId == flightId && entry.timestamp != timestamp {
+                if let data = await cache.readData(flightId: entry.flightId, timestamp: entry.timestamp, endpoint: endpoint),
+                   let decoded = try? JSONDecoder.weatherBrief.decode(T.self, from: data) {
+                    Self.logger.info("Serving \(endpoint) from cached pack \(entry.timestamp) (offline fallback)")
+                    return decoded
+                }
+            }
+            throw error
         }
-        return try JSONDecoder.weatherBrief.decode(T.self, from: data)
     }
 }
