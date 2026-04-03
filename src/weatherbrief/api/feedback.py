@@ -263,6 +263,34 @@ def send_feedback_reply_email(
     return {"id": feedback_id, "status": "replied", "sent_to": user.email}
 
 
+@router.post("/admin/{feedback_id}/reopen")
+def reopen_feedback(
+    feedback_id: int,
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Re-open a replied/ignored feedback so the admin can send another reply.
+
+    Archives the previous reply into admin_notes, clears admin_reply,
+    and sets status back to 'ready'.
+    """
+    row = _get_feedback_or_404(db, feedback_id)
+    if row.status not in ("replied", "ignored"):
+        raise HTTPException(400, "Only replied or ignored feedback can be re-opened")
+
+    # Archive previous reply into admin_notes
+    if row.admin_reply:
+        timestamp = row.replied_at.strftime("%Y-%m-%d %H:%M") if row.replied_at else "unknown"
+        archived = f"[Previous reply ({timestamp})]:\n{row.admin_reply}"
+        row.admin_notes = f"{row.admin_notes}\n\n{archived}" if row.admin_notes else archived
+
+    row.admin_reply = None
+    row.status = "ready"
+    db.flush()
+    logger.info("Feedback #%d re-opened for follow-up reply", feedback_id)
+    return {"id": feedback_id, "status": "ready"}
+
+
 @router.put("/admin/{feedback_id}/notes")
 def save_feedback_notes(
     feedback_id: int,
