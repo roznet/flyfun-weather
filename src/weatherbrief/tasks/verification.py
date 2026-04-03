@@ -345,10 +345,11 @@ def store_observations(
                 taf_wind_gust_kt=obs.taf_wind_gust_kt,
             )
             db.add(row)
+            nested = db.begin_nested()
             try:
-                db.flush()  # get the id
+                nested.commit()  # flushes within savepoint
             except IntegrityError:
-                db.rollback()
+                nested.rollback()
                 # Lost the race — another cycle inserted this observation
                 existing = db.execute(
                     select(VerificationObservationRow)
