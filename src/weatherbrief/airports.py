@@ -38,8 +38,9 @@ def resolve_waypoints(codes: list[str], db_path: str) -> list[Waypoint]:
     """Resolve waypoint codes to Waypoints using euro_aip RouteResolver.
 
     Accepts ICAO airport codes (4 letters), navaid codes (2-3 letters),
-    and five-letter fix names. Each code is resolved by trying airport
-    lookup first, then waypoint/navaid lookup.
+    and five-letter fix names. Uses the full route context (departure +
+    destination midpoint, then progressive proximity) to disambiguate
+    navaids that exist in multiple regions (e.g. "ABB" in Europe vs US).
 
     Args:
         codes: Ordered list of waypoint codes (min 2).
@@ -56,26 +57,43 @@ def resolve_waypoints(codes: list[str], db_path: str) -> list[Waypoint]:
     model = _load_airport_model(db_path)
     resolver = RouteResolver(model)
 
-    waypoints: list[Waypoint] = []
-    missing: list[str] = []
+    # Use the full route resolver which disambiguates by proximity:
+    # dep/dest midpoint for context, then progressive last-resolved point.
+    route_string = " ".join(codes)
+    route = resolver.resolve(route_string)
 
-    for code in codes:
-        point = resolver.resolve_point(code)
-        if point is None:
-            missing.append(code)
-            continue
+    # Collect all resolved points in order: departure, waypoints, destination
+    all_points = []
+    if route.departure_coords:
+        all_points.append((codes[0], route.departure_coords))
+    else:
+        raise KeyError(f"We did not find in our database: {codes[0]}")
 
-        waypoints.append(
-            Waypoint(
-                icao=point.name,
-                name=point.name,
-                lat=point.latitude,
-                lon=point.longitude,
-            )
-        )
+    for name, coord in zip(route.waypoints, route.waypoint_coords):
+        all_points.append((name, coord))
 
+    if route.destination_coords:
+        all_points.append((codes[-1], route.destination_coords))
+    else:
+        raise KeyError(f"We did not find in our database: {codes[-1]}")
+
+    # Check for unresolved middle waypoints
+    resolved_middle = set(route.waypoints)
+    missing = [c for c in codes[1:-1] if c.upper() not in resolved_middle]
     if missing:
         raise KeyError(f"We did not find in our database: {', '.join(missing)}")
+
+    waypoints: list[Waypoint] = []
+    for name, coord in all_points:
+        if hasattr(coord, "latitude"):
+            # RoutePoint object (from waypoint_coords)
+            lat, lon = coord.latitude, coord.longitude
+        else:
+            # Tuple (from departure_coords / destination_coords)
+            lat, lon = coord
+        waypoints.append(
+            Waypoint(icao=name.upper(), name=name.upper(), lat=lat, lon=lon)
+        )
 
     return waypoints
 
