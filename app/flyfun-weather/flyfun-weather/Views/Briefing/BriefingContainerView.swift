@@ -58,6 +58,10 @@ struct BriefingContainerView: View {
         }
         .task {
             guard let repo = appState.repository else { return }
+            // Cache flight data for offline recovery
+            if let caching = repo as? CachingBriefingRepository {
+                await caching.cacheFlightData(flight)
+            }
             let vm = BriefingViewModel(flight: flight, repository: repo)
             viewModel = vm
             await vm.loadBriefing()

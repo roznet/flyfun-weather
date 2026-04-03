@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showSignOutWarning = false
     @State private var showDeleteConfirmation = false
     @State private var showFinalConfirmation = false
     @State private var isDeleting = false
@@ -37,7 +38,14 @@ struct SettingsView: View {
 
                 Section {
                     Button {
-                        appState.logout()
+                        Task {
+                            if let caching = appState.cachingRepository,
+                               !(await caching.cachedPacks()).isEmpty {
+                                showSignOutWarning = true
+                            } else {
+                                appState.logout()
+                            }
+                        }
                     } label: {
                         Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                     }
@@ -97,6 +105,12 @@ struct SettingsView: View {
                 }
             } message: {
                 Text("This action cannot be undone. Your account and all data will be permanently deleted.")
+            }
+            .alert("Sign Out?", isPresented: $showSignOutWarning) {
+                Button("Sign Out", role: .destructive) { appState.logout() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You have downloaded packs. They won't be accessible until you sign in again.")
             }
         }
     }

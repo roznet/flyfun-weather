@@ -9,6 +9,7 @@ struct FlightListView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showAddFlight = false
     @State private var showSettings = false
+    @State private var showSignOutWarning = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -76,7 +77,14 @@ struct FlightListView: View {
                             Divider()
 
                             Button(role: .destructive) {
-                                appState.logout()
+                                Task {
+                                    if let caching = appState.cachingRepository,
+                                       !(await caching.cachedPacks()).isEmpty {
+                                        showSignOutWarning = true
+                                    } else {
+                                        appState.logout()
+                                    }
+                                }
                             } label: {
                                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                             }
@@ -98,6 +106,12 @@ struct FlightListView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
+            }
+            .alert("Sign Out?", isPresented: $showSignOutWarning) {
+                Button("Sign Out", role: .destructive) { appState.logout() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You have downloaded packs. They won't be accessible until you sign in again.")
             }
         } detail: {
             if let selectedFlight {

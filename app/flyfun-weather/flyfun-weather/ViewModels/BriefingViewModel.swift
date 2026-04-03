@@ -154,7 +154,8 @@ final class BriefingViewModel {
                 flightId: flight.id,
                 timestamp: pack.fetchTimestamp,
                 flightTitle: flight.shortTitle,
-                assessment: pack.assessment
+                assessment: pack.assessment,
+                packMeta: pack
             ) { [weak self] progress in
                 Task { @MainActor in
                     self?.downloadState = .downloading(progress: progress)
