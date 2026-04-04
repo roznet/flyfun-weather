@@ -2,9 +2,9 @@
 
 > iOS/iPad app for in-flight condition reporting, offline briefing access, and collaborative PIREPs
 
-## Current Implementation Status (as of 2026-04-01)
+## Current Implementation Status (as of 2026-04-04)
 
-Phase 1 is complete. Most of Phase 2 is implemented. Phase 3 M0 (aircraft registry) and M1 (PIREP submit/view) are implemented.
+Phase 1 is complete. Phase 2 is implemented (including offline resilience hardening). Phase 3 M0 (aircraft registry) and M1 (PIREP submit/view) are implemented with offline queue flush.
 
 ### What's built
 
@@ -22,8 +22,10 @@ Phase 1 is complete. Most of Phase 2 is implemented. Phase 3 M0 (aircraft regist
 
 **PIREP reporting** (M1):
 - In-flight reporting sheet (toolbar button visible during flight window)
-- `PirepViewModel`: GPS pre-fill altitude, all fields unselected (no confirmation bias), smart field ordering
+- `PirepViewModel`: GPS pre-fill altitude, all fields unselected (no confirmation bias), smart field ordering, location from `FlightTrackingService`
 - `PirepOfflineStore` actor: JSON-file queue in Documents, batch sync via `/api/pireps/batch`, dedup by `client_uuid`
+- **Automatic offline queue flush**: on successful online PIREP submission, `offlineStore.sync(using: repository)` flushes all queued PIREPs — connectivity confirmed, so drain the queue
+- Network error detection: `.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost` → enqueue locally with synthetic `PirepResponse.offline`
 - `BriefingRepository` protocol extended with `submitPirep`, `submitPirepsBatch`, `fetchPireps`
 
 **Pack management**:
@@ -31,13 +33,18 @@ Phase 1 is complete. Most of Phase 2 is implemented. Phase 3 M0 (aircraft regist
 - Server refresh with SSE streaming progress bar (stage name, percentage)
 - Active refresh detection (polls for refreshes started from web/other device)
 
-**Offline caching**:
-- `CachingBriefingRepository` wraps `OnlineBriefingRepository`
+**Offline caching & resilience**:
+- `CachingBriefingRepository` wraps `OnlineBriefingRepository` with multi-tier fallback
+- **Flight list fallback**: (1) online API → (2) cached `flights.json` → (3) recover from per-flight cached pack data
+- `isServingCachedFlights` flag: exposed to ViewModels for offline-aware UI
+- **Cached flight indicators**: `FlightListViewModel` maintains `cachedFlightIds: Set<String>` from `caching.cachedPacks()` — flight cards show green dot for locally available packs, non-cached flights disabled when offline
+- **Resilient data fallback**: when online requests fail, serves cached data from any matching timestamp in `cachedPacks()`, not just exact requested timestamp
 - Explicit download button per pack (not automatic)
-- Caches 5 endpoints to `Application Support/BriefingCache/` as raw JSON
+- Caches 5 endpoints to `Application Support/BriefingCache/` as gzip-compressed JSON
 - Cache status indicators in pack history picker (green dot)
 - Download/delete UI in toolbar
 - `BriefingCacheStore` actor with JSON index
+- **Sign-out protection**: prevents accidental sign-out when offline (would clear auth with no way to re-authenticate)
 
 **Backend endpoints added**:
 - `GET /sounding-profile/{point_index}/{model}` — raw T/Td/wind at pressure levels for client-side Skew-T
