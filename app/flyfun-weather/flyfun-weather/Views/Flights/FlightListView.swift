@@ -20,9 +20,12 @@ struct FlightListView: View {
                             emptyStateView
                         } else {
                             List(flights, selection: $selectedFlight) { flight in
+                                let hasCached = viewModel.cachedFlightIds.contains(flight.id)
                                 NavigationLink(value: flight) {
-                                    FlightCardView(flight: flight)
+                                    FlightCardView(flight: flight, hasCachedData: hasCached,
+                                                   isOffline: viewModel.isOffline)
                                 }
+                                .disabled(viewModel.isOffline && !hasCached)
                             }
                             .refreshable {
                                 await viewModel.loadFlights()

@@ -3,6 +3,8 @@ import SwiftUI
 /// Card displaying a flight summary in the list.
 struct FlightCardView: View {
     let flight: FlightResponse
+    var hasCachedData: Bool = false
+    var isOffline: Bool = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -30,11 +32,18 @@ struct FlightCardView: View {
 
             Spacer()
 
+            if hasCachedData {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+            }
+
             if let assessment = flight.assessment {
                 AssessmentStringBadge(status: assessment)
             }
         }
         .padding(.vertical, 4)
+        .opacity(isOffline && !hasCachedData ? 0.4 : 1.0)
     }
 }
 

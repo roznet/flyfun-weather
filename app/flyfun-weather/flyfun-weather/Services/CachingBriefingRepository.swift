@@ -27,6 +27,9 @@ final class CachingBriefingRepository: BriefingRepository {
         "elevation": "elevation",
     ]
 
+    /// Whether the last `flights()` call was served from cache (offline).
+    private(set) var isServingCachedFlights = false
+
     init(client: APIClient, online: OnlineBriefingRepository, cache: BriefingCacheStore) {
         self.client = client
         self.online = online
@@ -48,12 +51,14 @@ final class CachingBriefingRepository: BriefingRepository {
     func flights() async throws -> [FlightResponse] {
         do {
             let flights = try await online.flights()
+            isServingCachedFlights = false
             // Cache for offline use
             if let data = try? JSONEncoder.weatherBrief.encode(flights) {
                 try? await cache.writeMetadata(data, name: "flights")
             }
             return flights
         } catch {
+            isServingCachedFlights = true
             // Fallback 1: cached flights.json
             if let data = await cache.readMetadata(name: "flights"),
                let cached = try? JSONDecoder.weatherBrief.decode([FlightResponse].self, from: data) {
