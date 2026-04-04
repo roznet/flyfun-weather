@@ -47,12 +47,64 @@ def test_config_defaults():
 
 
 def test_load_prompt():
-    """load_prompt reads the briefer prompt file."""
+    """load_prompt reads the briefer prompt file with EN defaults."""
     config = load_digest_config("default")
     prompt = config.load_prompt("briefer")
 
     assert "aviation weather briefer" in prompt
     assert "assessment" in prompt
+    # EN locale tokens should be resolved
+    assert 'Say "None"' in prompt
+    assert '"I don\'t know"' in prompt
+    assert '"DWD synoptic overview"' in prompt
+    # No unresolved placeholders (except {guidance} which needs guidance_key)
+    assert "{locale}" not in prompt
+    assert "{none_word}" not in prompt
+    assert "{uncertainty_phrase}" not in prompt
+    assert "{dwd_label}" not in prompt
+    assert "{aviation_terms_note}" not in prompt
+
+
+def test_load_prompt_french():
+    """French locale injects language instruction and vocabulary."""
+    config = load_digest_config("default")
+    prompt = config.load_prompt("briefer", locale="fr")
+
+    assert "Write ALL text fields in French" in prompt
+    assert 'Say "Aucun"' in prompt
+    assert '"Données incertaines"' in prompt
+    assert "aperçu synoptique DWD" in prompt
+    assert "{locale}" not in prompt
+    assert "{none_word}" not in prompt
+
+
+def test_load_prompt_german():
+    """German locale injects language instruction and vocabulary."""
+    config = load_digest_config("default")
+    prompt = config.load_prompt("briefer", locale="de")
+
+    assert "Write ALL text fields in German" in prompt
+    assert 'Say "Keine"' in prompt
+    assert "DWD-Synoptikübersicht" in prompt
+
+
+def test_load_prompt_locale_gets_guidance():
+    """Non-EN locales correctly get guidance injection."""
+    config = load_digest_config("default")
+    prompt = config.load_prompt("briefer", locale="fr", guidance_key="balanced")
+
+    assert "ROUTE ADVISORIES" in prompt
+    assert "VFR only" in prompt
+    assert "{guidance}" not in prompt
+
+
+def test_load_prompt_unknown_locale_falls_back():
+    """Unknown locale falls back to EN defaults."""
+    config = load_digest_config("default")
+    prompt = config.load_prompt("briefer", locale="ja")
+
+    assert 'Say "None"' in prompt
+    assert "Write ALL text fields" not in prompt
 
 
 def test_load_missing_config():
