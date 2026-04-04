@@ -414,6 +414,16 @@ def _mock_is_known_waypoint(code: str, db_path: str) -> bool:
 
 
 def _mock_resolve_waypoints(codes: list[str], db_path: str):
+    """Mock that faithfully replicates resolve_waypoints' contract.
+
+    The real RouteResolver.resolve() requires departure + destination (>= 2 codes).
+    This constraint is what caused the original bug — interpret_route passed a single
+    token and the resolver blew up. The mock must enforce the same precondition,
+    otherwise the test would pass even with buggy caller code.
+    """
+    if len(codes) < 2:
+        raise ValueError("resolve_waypoints requires at least 2 waypoint codes")
+
     from weatherbrief.models.analysis import Waypoint
 
     result = []
