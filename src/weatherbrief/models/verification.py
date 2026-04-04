@@ -98,6 +98,22 @@ class NotableMiss(BaseModel):
     obs_category: str
     model_category: str
     ceiling_delta_ft: int | None = None
+    direction: str = ""  # "optimistic" or "pessimistic"
+    severity: int = 0    # number of category levels off (1, 2, or 3)
+
+
+class CategoryBiasStats(BaseModel):
+    """Per-model category bias breakdown: optimistic vs pessimistic miss rates."""
+
+    model: str
+    days_out: int
+    total_scores: int = 0
+    optimistic_1: int = 0   # predicted better by 1 level
+    optimistic_2: int = 0   # predicted better by 2 levels
+    optimistic_3: int = 0   # predicted better by 3 levels
+    pessimistic_1: int = 0  # predicted worse by 1 level
+    pessimistic_2: int = 0  # predicted worse by 2 levels
+    pessimistic_3: int = 0  # predicted worse by 3 levels
 
 
 class WindAdvisoryStats(BaseModel):
@@ -138,6 +154,7 @@ class VerificationDigestData(BaseModel):
     category_accuracy_today: list[CategoryAccuracyRow] = Field(default_factory=list)
     category_accuracy_7d: list[CategoryAccuracyRow] = Field(default_factory=list)
     notable_misses: list[NotableMiss] = Field(default_factory=list)
+    category_bias: list[CategoryBiasStats] = Field(default_factory=list)
     wind_advisory: list[WindAdvisoryStats] = Field(default_factory=list)
     missed_warnings: list[MissedWarning] = Field(default_factory=list)
     mae_stats: list[MAERow] = Field(default_factory=list)

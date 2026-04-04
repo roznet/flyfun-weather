@@ -27,6 +27,7 @@ from weatherbrief.db.models import (
 from weatherbrief.models.verification import (
     ActivitySummary,
     CategoryAccuracyRow,
+    CategoryBiasStats,
     MAERow,
     MissedWarning,
     NotableMiss,
@@ -179,21 +180,44 @@ def get_category_accuracy(
 
 
 # ---------------------------------------------------------------------------
-# Notable misses (IFR/LIFR busts)
+# Notable misses — category busts with direction & severity
 # ---------------------------------------------------------------------------
 
-_IFR_CATS = ("IFR", "LIFR")
-_VFR_CATS = ("VFR", "MVFR")
+# Ordered from best to worst flying conditions
+_CAT_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
+
+
+def _category_delta(obs_cat: str | None, model_cat: str | None) -> tuple[str, int]:
+    """Return (direction, severity) for a category mismatch.
+
+    direction: "optimistic" if model predicted better than actual,
+               "pessimistic" if model predicted worse.
+    severity:  number of category levels apart (1-3).
+    """
+    obs_rank = _CAT_ORDER.get(obs_cat or "", -1)
+    model_rank = _CAT_ORDER.get(model_cat or "", -1)
+    if obs_rank < 0 or model_rank < 0:
+        return ("", 0)
+    diff = obs_rank - model_rank  # positive = actual worse = optimistic
+    if diff > 0:
+        return ("optimistic", diff)
+    elif diff < 0:
+        return ("pessimistic", -diff)
+    return ("", 0)
 
 
 def get_notable_misses(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
-    *, limit: int = 10,
+    *, limit: int = 20,
 ) -> list[NotableMiss]:
-    """Category busts where model and observation disagree by 2+ levels.
+    """Category busts at D-0/D-1, prioritising dangerous optimistic misses.
 
-    Limited to D-0 and D-1 — longer-range misses are expected and noisy.
+    Includes:
+    - All optimistic misses (severity 1+): model said better than actual
+    - Pessimistic misses only at severity 2+: model said much worse than actual
+
+    Sorted by severity desc (worst first), then optimistic before pessimistic.
     """
     stmt = (
         select(
@@ -210,24 +234,22 @@ def get_notable_misses(
             VerificationScoreRow.category_match == False,  # noqa: E712
             VerificationScoreRow.source == source,
             VerificationScoreRow.days_out.in_((0, 1)),
-            or_(
-                (
-                    VerificationScoreRow.obs_flight_category.in_(_IFR_CATS)
-                    & VerificationScoreRow.model_flight_category.in_(_VFR_CATS)
-                ),
-                (
-                    VerificationScoreRow.model_flight_category.in_(_IFR_CATS)
-                    & VerificationScoreRow.obs_flight_category.in_(_VFR_CATS)
-                ),
-            ),
+            VerificationScoreRow.obs_flight_category.in_(tuple(_CAT_ORDER)),
+            VerificationScoreRow.model_flight_category.in_(tuple(_CAT_ORDER)),
         )
         .order_by(VerificationScoreRow.observation_time.desc())
-        .limit(limit)
+        .limit(500)  # fetch generously, filter & sort in Python
     )
 
-    results = []
+    raw: list[NotableMiss] = []
     for row in db.execute(stmt).all():
-        results.append(NotableMiss(
+        direction, severity = _category_delta(row[4], row[5])
+        if severity == 0:
+            continue
+        # Include all optimistic, but only severity 2+ pessimistic
+        if direction == "pessimistic" and severity < 2:
+            continue
+        raw.append(NotableMiss(
             icao=row[0],
             observation_time=row[1],
             model=row[2],
@@ -235,8 +257,59 @@ def get_notable_misses(
             obs_category=row[4],
             model_category=row[5],
             ceiling_delta_ft=int(row[6]) if row[6] is not None else None,
+            direction=direction,
+            severity=severity,
         ))
-    return results
+
+    # Sort: severity desc, optimistic first
+    raw.sort(key=lambda m: (-m.severity, m.direction != "optimistic"))
+    return raw[:limit]
+
+
+def get_category_bias_stats(
+    db: Session, since: datetime, until: datetime,
+    source: str = "flight",
+) -> list[CategoryBiasStats]:
+    """Per-model bias breakdown: how often each model is optimistic vs pessimistic."""
+    stmt = (
+        select(
+            VerificationScoreRow.model,
+            VerificationScoreRow.days_out,
+            VerificationScoreRow.obs_flight_category,
+            VerificationScoreRow.model_flight_category,
+            func.count(VerificationScoreRow.id),
+        )
+        .where(
+            VerificationScoreRow.observation_time.between(since, until),
+            VerificationScoreRow.source == source,
+            VerificationScoreRow.days_out.in_((0, 1)),
+            VerificationScoreRow.obs_flight_category.in_(tuple(_CAT_ORDER)),
+            VerificationScoreRow.model_flight_category.in_(tuple(_CAT_ORDER)),
+        )
+        .group_by(
+            VerificationScoreRow.model,
+            VerificationScoreRow.days_out,
+            VerificationScoreRow.obs_flight_category,
+            VerificationScoreRow.model_flight_category,
+        )
+    )
+
+    # Accumulate per (model, days_out)
+    accum: dict[tuple[str, int], CategoryBiasStats] = {}
+    for model, days_out, obs_cat, model_cat, count in db.execute(stmt).all():
+        key = (model, days_out)
+        if key not in accum:
+            accum[key] = CategoryBiasStats(model=model, days_out=days_out)
+        stats = accum[key]
+        stats.total_scores += count
+
+        direction, severity = _category_delta(obs_cat, model_cat)
+        if severity == 0:
+            continue
+        field = f"{direction}_{severity}"
+        setattr(stats, field, getattr(stats, field) + count)
+
+    return sorted(accum.values(), key=lambda s: (s.model, s.days_out))
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +463,7 @@ def get_digest_data(
     activity = get_activity_summary(db, since, until, source)
     category_today = get_category_accuracy(db, since, until, source)
     notable = get_notable_misses(db, since, until, source)
+    bias = get_category_bias_stats(db, since, until, source)
     wind = get_wind_advisory_accuracy(db, since, until, source)
     missed = get_missed_warnings(db, since, until, source)
     mae = get_mae_stats(db, since, until, source)
@@ -406,6 +480,7 @@ def get_digest_data(
         category_accuracy_today=category_today,
         category_accuracy_7d=category_7d,
         notable_misses=notable,
+        category_bias=bias,
         wind_advisory=wind,
         missed_warnings=missed,
         mae_stats=mae,
