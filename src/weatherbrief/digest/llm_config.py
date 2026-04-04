@@ -11,6 +11,7 @@ from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel
 
 _CONFIGS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs" / "weather_digest"
+_LOCALES_DIR = _CONFIGS_DIR / "prompts" / "locales"
 _GUIDANCE_DIR_DEFAULT = Path(__file__).resolve().parent.parent.parent.parent / "configs" / "digest_guidance"
 
 DEFAULT_GUIDANCE = "balanced"
@@ -49,25 +50,59 @@ class DigestConfig(BaseModel):
         locale: str | None = None,
         guidance_key: str | None = None,
     ) -> str:
-        """Load prompt markdown from configs/weather_digest/{path}.
+        """Load prompt markdown with locale and guidance injection.
 
-        If a locale is provided (e.g. 'fr'), looks for a locale-specific
-        variant first (e.g. prompts/briefer_v1.fr.md). Falls back to the
-        default prompt if no locale variant exists.
-
-        If the prompt contains a ``{guidance}`` placeholder and *guidance_key*
-        is given (or defaults to ``DEFAULT_GUIDANCE``), the placeholder is
-        replaced with the guidance text loaded from the digest_guidance
-        config directory.
+        Loads the base prompt template, then injects:
+        1. Locale-specific content (language instruction + vocabulary tokens)
+           from configs/weather_digest/prompts/locales/{locale}.md
+        2. Guidance text from digest_guidance/{key}.md into {guidance} placeholder
         """
         rel_path = getattr(self.prompts, key)
-        if locale and locale != "en":
-            base, ext = rel_path.rsplit(".", 1)
-            locale_path = _CONFIGS_DIR / f"{base}.{locale}.{ext}"
-            if locale_path.exists():
-                return self._inject_guidance(locale_path.read_text(), guidance_key)
         prompt_path = _CONFIGS_DIR / rel_path
-        return self._inject_guidance(prompt_path.read_text(), guidance_key)
+        prompt = prompt_path.read_text()
+
+        prompt = self._inject_locale(prompt, locale)
+        prompt = self._inject_guidance(prompt, guidance_key)
+        return prompt
+
+    @staticmethod
+    def _parse_locale_file(text: str) -> tuple[dict[str, str], str]:
+        """Parse a locale file with YAML-like frontmatter and body.
+
+        Returns (metadata_dict, body_text).
+        """
+        if text.startswith("---"):
+            _, frontmatter, body = text.split("---", 2)
+            metadata: dict[str, str] = {}
+            for line in frontmatter.strip().splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    v = v.strip().strip('"')
+                    metadata[k.strip()] = v
+            return metadata, body.strip()
+        return {}, text.strip()
+
+    @staticmethod
+    def _inject_locale(prompt: str, locale: str | None) -> str:
+        """Replace {locale} and locale vocabulary tokens."""
+        lang = locale if locale and locale != "en" else "en"
+        locale_path = _LOCALES_DIR / f"{lang}.md"
+        if not locale_path.exists():
+            locale_path = _LOCALES_DIR / "en.md"
+
+        metadata, body = DigestConfig._parse_locale_file(locale_path.read_text())
+
+        # Replace {locale} — collapse blank lines when body is empty
+        if body:
+            prompt = prompt.replace("{locale}", body)
+        else:
+            prompt = prompt.replace("\n\n{locale}\n", "\n")
+
+        # Replace vocabulary tokens from frontmatter
+        for key, value in metadata.items():
+            prompt = prompt.replace(f"{{{key}}}", value)
+
+        return prompt
 
     @staticmethod
     def _inject_guidance(prompt: str, guidance_key: str | None) -> str:

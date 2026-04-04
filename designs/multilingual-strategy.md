@@ -229,17 +229,19 @@ Ask the LLM to output both languages in one call (structured output with `synopt
 - May degrade quality by splitting attention
 - Rigid — can't add languages without schema change
 
-**Recommendation:** Option 1 (direct generation). The prompt already handles DWD German text input gracefully. Adding a language parameter is minimal work. Create per-locale prompt variants:
+**Recommendation:** Option 1 (direct generation). The prompt already handles DWD German text input gracefully. Adding a language parameter is minimal work. A single base prompt template with per-locale snippets:
 
 ```
 configs/weather_digest/prompts/
-├── briefer_v1.md        # English (existing)
-├── briefer_v1.fr.md     # French variant
-├── briefer_v1.de.md     # German variant
-└── briefer_v1.es.md     # Spanish variant
+├── briefer_v1.md              # Shared base template with {locale} placeholder
+└── locales/
+    ├── en.md                  # EN defaults (vocabulary only, no body)
+    ├── fr.md                  # French: language instruction + vocabulary
+    ├── de.md                  # German: language instruction + vocabulary
+    └── es.md                  # Spanish: language instruction + vocabulary
 ```
 
-The prompt variants are mostly identical — only the output language instruction and any language-specific terminology guidance differ. Consider a template approach where the base prompt is shared and only the language block varies.
+Each locale file has YAML-like frontmatter for vocabulary tokens (`none_word`, `uncertainty_phrase`, `dwd_label`, `aviation_terms_note`) and an optional body for the language instruction paragraph. The base template uses `{locale}` and token placeholders, resolved at load time alongside `{guidance}`.
 
 ### Aviation Terminology Considerations
 
