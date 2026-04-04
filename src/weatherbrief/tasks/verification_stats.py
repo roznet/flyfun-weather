@@ -261,8 +261,8 @@ def get_notable_misses(
             severity=severity,
         ))
 
-    # Sort: severity desc, optimistic first
-    raw.sort(key=lambda m: (-m.severity, m.direction != "optimistic"))
+    # Sort: optimistic first (safety-relevant), then severity desc
+    raw.sort(key=lambda m: (m.direction != "optimistic", -m.severity))
     return raw[:limit]
 
 
