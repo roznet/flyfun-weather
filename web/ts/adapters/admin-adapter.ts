@@ -340,6 +340,15 @@ export type VerificationSource = 'flight' | 'standalone';
 export async function fetchVerificationStats(
   period: VerificationPeriod = '24h',
   source: VerificationSource = 'flight',
+  country?: string,
+  icao?: string,
 ): Promise<VerificationDigest> {
-  return apiFetch<VerificationDigest>(`/admin/verification?period=${period}&source=${source}`);
+  let url = `/admin/verification?period=${period}&source=${source}`;
+  if (icao) url += `&icao=${encodeURIComponent(icao)}`;
+  else if (country) url += `&country=${encodeURIComponent(country)}`;
+  return apiFetch<VerificationDigest>(url);
+}
+
+export async function fetchVerificationAirports(): Promise<Record<string, string[]>> {
+  return apiFetch<Record<string, string[]>>('/admin/verification/airports');
 }
