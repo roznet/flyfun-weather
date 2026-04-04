@@ -98,6 +98,11 @@ final class PirepViewModel {
             let response = try await repository.submitPirep(request)
             submitState = .loaded(response)
             Self.logger.info("PIREP submitted: id=\(response.id)")
+            // Connectivity confirmed — flush any queued PIREPs
+            let synced = await offlineStore.sync(using: repository)
+            if synced > 0 {
+                Self.logger.info("Flushed \(synced) queued PIREPs after successful submit")
+            }
         } catch let error as URLError where error.code == .notConnectedToInternet
                     || error.code == .timedOut
                     || error.code == .networkConnectionLost
