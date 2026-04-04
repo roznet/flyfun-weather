@@ -7,22 +7,22 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 # Flight category severity order and display colors (single source of truth)
-_SEVERITY_ORDER = ("vfr", "mvfr", "ifr", "lifr")
+_SEVERITY_ORDER = ("VFR", "MVFR", "IFR", "LIFR")
 FLIGHT_CATEGORY_COLORS: dict[str, str] = {
-    "vfr": "#0f5132",
-    "mvfr": "#b45309",
-    "ifr": "#dc2626",
-    "lifr": "#7f1d1d",
+    "VFR": "#0f5132",
+    "MVFR": "#b45309",
+    "IFR": "#dc2626",
+    "LIFR": "#7f1d1d",
 }
 
 
 class FlightCategory(str, Enum):
     """Standard aviation flight category."""
 
-    VFR = "vfr"  # ceiling >= 3000ft AND vis >= 5sm
-    MVFR = "mvfr"  # ceiling 1000-3000ft OR vis 3-5sm
-    IFR = "ifr"  # ceiling 500-1000ft OR vis 1-3sm
-    LIFR = "lifr"  # ceiling < 500ft OR vis < 1sm
+    VFR = "VFR"  # ceiling >= 3000ft AND vis >= 5sm
+    MVFR = "MVFR"  # ceiling 1000-3000ft OR vis 3-5sm
+    IFR = "IFR"  # ceiling 500-1000ft OR vis 1-3sm
+    LIFR = "LIFR"  # ceiling < 500ft OR vis < 1sm
 
     @classmethod
     def worst(cls, categories: list[FlightCategory]) -> FlightCategory:

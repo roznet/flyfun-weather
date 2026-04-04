@@ -146,7 +146,7 @@ class FlightCategoryEvaluator:
                     cond, amber_ceiling_ft, amber_vis_sm,
                     red_ceiling_ft, red_vis_sm,
                 )
-                cat_label = cond.flight_category.value.upper()
+                cat_label = cond.flight_category.value
                 label = adv_t(label_key, loc)
                 parts.append(f"{label} {icao}: {cat_label}")
                 worst = AdvisoryStatus.worst([worst, status])
