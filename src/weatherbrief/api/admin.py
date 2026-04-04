@@ -824,6 +824,8 @@ def revoke_agent_token(
 def get_verification_stats(
     period: str = Query(default="24h", pattern=r"^(24h|7d|30d)$"),
     source: str = Query(default="flight", pattern=r"^(flight|standalone)$"),
+    country: str | None = Query(default=None, min_length=2, max_length=2),
+    icao: str | None = Query(default=None, min_length=4, max_length=4),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -834,10 +836,42 @@ def get_verification_stats(
     hours = {"24h": 24, "7d": 168, "30d": 720}[period]
     since = now - timedelta(hours=hours)
 
+    # Build ICAO filter from country prefix or specific airport
+    icao_filter: list[str] | None = None
+    if icao:
+        icao_filter = [icao.upper()]
+    elif country:
+        icao_filter = _get_country_icaos(country.upper())
+
     data = get_digest_data(
         db, since, now,
         source=source,
         period_label=period,
         include_7d=(period != "7d"),
+        icao_filter=icao_filter,
     )
     return data.model_dump(mode="json")
+
+
+def _get_country_icaos(prefix: str) -> list[str] | None:
+    """Load ICAO codes for a country prefix from the watchlist."""
+    from weatherbrief.tasks.airport_watchlist import get_configs_dir, load_watchlist
+
+    try:
+        watchlist = load_watchlist(get_configs_dir())
+        return watchlist.get(prefix)
+    except FileNotFoundError:
+        return None
+
+
+@router.get("/verification/airports")
+def get_verification_airports(
+    _admin_id: str = Depends(require_admin),
+):
+    """Return the airport watchlist grouped by country prefix."""
+    from weatherbrief.tasks.airport_watchlist import get_configs_dir, load_watchlist
+
+    try:
+        return load_watchlist(get_configs_dir())
+    except FileNotFoundError:
+        return {}

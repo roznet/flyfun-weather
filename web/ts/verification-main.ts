@@ -3,6 +3,7 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchVerificationStats,
+  fetchVerificationAirports,
   type VerificationDigest,
   type VerificationPeriod,
   type VerificationSource,
@@ -18,6 +19,9 @@ import { initInfoPopup, showPopupContent } from './components/info-popup';
 
 let currentPeriod: VerificationPeriod = '24h';
 let currentSource: VerificationSource = 'flight';
+let currentCountry: string | undefined;
+let currentIcao: string | undefined;
+let airportsByCountry: Record<string, string[]> = {};
 
 async function init(): Promise<void> {
   await initI18n();
@@ -32,6 +36,8 @@ async function init(): Promise<void> {
   setupSourceToggle();
   initInfoPopup();
   setupInfoButtons();
+  await loadAirports();
+  setupLocationFilter();
   await loadData();
 }
 
@@ -61,9 +67,76 @@ function setupSourceToggle(): void {
   });
 }
 
+async function loadAirports(): Promise<void> {
+  try {
+    airportsByCountry = await fetchVerificationAirports();
+  } catch {
+    airportsByCountry = {};
+  }
+}
+
+const COUNTRY_LABELS: Record<string, string> = {
+  LF: 'France (LF)',
+  ED: 'Germany (ED)',
+  EG: 'United Kingdom (EG)',
+  EH: 'Netherlands (EH)',
+  EB: 'Belgium (EB)',
+  LS: 'Switzerland (LS)',
+  LO: 'Austria (LO)',
+};
+
+function setupLocationFilter(): void {
+  const container = document.getElementById('location-filter');
+  if (!container) return;
+
+  const countries = Object.keys(airportsByCountry).sort();
+  if (countries.length === 0) return;
+
+  let html = '<select id="country-select" style="padding:0.4rem 0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.8rem;">';
+  html += '<option value="">All countries</option>';
+  for (const c of countries) {
+    html += `<option value="${c}">${escapeHtml(COUNTRY_LABELS[c] || c)}</option>`;
+  }
+  html += '</select>';
+
+  html += ' <select id="airport-select" style="padding:0.4rem 0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.8rem;display:none;">';
+  html += '<option value="">All airports</option>';
+  html += '</select>';
+
+  container.innerHTML = html;
+
+  const countryEl = document.getElementById('country-select') as HTMLSelectElement;
+  const airportEl = document.getElementById('airport-select') as HTMLSelectElement;
+
+  countryEl.addEventListener('change', () => {
+    const val = countryEl.value || undefined;
+    currentCountry = val;
+    currentIcao = undefined;
+
+    // Populate airport dropdown
+    if (val && airportsByCountry[val]) {
+      let opts = '<option value="">All airports</option>';
+      for (const icao of airportsByCountry[val]) {
+        opts += `<option value="${icao}">${icao}</option>`;
+      }
+      airportEl.innerHTML = opts;
+      airportEl.style.display = '';
+    } else {
+      airportEl.style.display = 'none';
+    }
+    airportEl.value = '';
+    loadData();
+  });
+
+  airportEl.addEventListener('change', () => {
+    currentIcao = airportEl.value || undefined;
+    loadData();
+  });
+}
+
 async function loadData(): Promise<void> {
   try {
-    const data = await fetchVerificationStats(currentPeriod, currentSource);
+    const data = await fetchVerificationStats(currentPeriod, currentSource, currentCountry, currentIcao);
     renderSummary(data);
     renderAccuracy(data);
     renderBias(data);

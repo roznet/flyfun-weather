@@ -40,6 +40,15 @@ logger = logging.getLogger(__name__)
 _DAYS_OUT_COLS = (0, 1, 2, 3)
 
 
+def _icao_clause(col, icao_filter: list[str] | None):
+    """Return a WHERE clause for ICAO filtering, or True (no-op) if no filter."""
+    if not icao_filter:
+        return True  # SQLAlchemy treats literal True as no-op in .where()
+    if len(icao_filter) == 1:
+        return col == icao_filter[0]
+    return col.in_(icao_filter)
+
+
 # ---------------------------------------------------------------------------
 # Activity summary
 # ---------------------------------------------------------------------------
@@ -48,6 +57,7 @@ _DAYS_OUT_COLS = (0, 1, 2, 3)
 def get_activity_summary(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
+    icao_filter: list[str] | None = None,
 ) -> ActivitySummary:
     """High-level counts for a date range, scoped by source."""
     # Count observations and airports that have scores for this source,
@@ -57,6 +67,7 @@ def get_activity_summary(
         .where(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.source == source,
+            _icao_clause(VerificationScoreRow.icao, icao_filter),
         )
         .scalar_subquery()
     )
@@ -124,6 +135,7 @@ def get_activity_summary(
 def get_category_accuracy(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
+    icao_filter: list[str] | None = None,
 ) -> list[CategoryAccuracyRow]:
     """Flight-category match rate per model and days-out.
 
@@ -144,6 +156,7 @@ def get_category_accuracy(
             VerificationScoreRow.category_match.isnot(None),
             VerificationScoreRow.days_out.in_(_DAYS_OUT_COLS),
             VerificationScoreRow.source == source,
+            _icao_clause(VerificationScoreRow.icao, icao_filter),
         )
         .group_by(VerificationScoreRow.model, VerificationScoreRow.days_out)
     ).all()
@@ -165,6 +178,7 @@ def get_category_accuracy(
             TafVerificationScoreRow.observation_time.between(since, until),
             TafVerificationScoreRow.category_match.isnot(None),
             TafVerificationScoreRow.source == source,
+            _icao_clause(TafVerificationScoreRow.icao, icao_filter),
         )
     ).one()
 
@@ -209,6 +223,7 @@ def _category_delta(obs_cat: str | None, model_cat: str | None) -> tuple[str, in
 def get_notable_misses(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
+    icao_filter: list[str] | None = None,
     *, limit: int = 20,
 ) -> list[NotableMiss]:
     """Category busts at D-0/D-1, prioritising dangerous optimistic misses.
@@ -236,6 +251,7 @@ def get_notable_misses(
             VerificationScoreRow.days_out.in_((0, 1)),
             VerificationScoreRow.obs_flight_category.in_(tuple(_CAT_ORDER)),
             VerificationScoreRow.model_flight_category.in_(tuple(_CAT_ORDER)),
+            _icao_clause(VerificationScoreRow.icao, icao_filter),
         )
         .order_by(VerificationScoreRow.observation_time.desc())
         .limit(500)  # fetch generously, filter & sort in Python
@@ -269,6 +285,7 @@ def get_notable_misses(
 def get_category_bias_stats(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
+    icao_filter: list[str] | None = None,
 ) -> list[CategoryBiasStats]:
     """Per-model bias breakdown: how often each model is optimistic vs pessimistic."""
     stmt = (
@@ -285,6 +302,7 @@ def get_category_bias_stats(
             VerificationScoreRow.days_out.in_((0, 1)),
             VerificationScoreRow.obs_flight_category.in_(tuple(_CAT_ORDER)),
             VerificationScoreRow.model_flight_category.in_(tuple(_CAT_ORDER)),
+            _icao_clause(VerificationScoreRow.icao, icao_filter),
         )
         .group_by(
             VerificationScoreRow.model,
@@ -320,6 +338,7 @@ def get_category_bias_stats(
 def get_wind_advisory_accuracy(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
+    icao_filter: list[str] | None = None,
 ) -> list[WindAdvisoryStats]:
     """Per-model wind advisory match rate."""
     rows = db.execute(
@@ -332,6 +351,7 @@ def get_wind_advisory_accuracy(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.advisory_match.isnot(None),
             VerificationScoreRow.source == source,
+            _icao_clause(VerificationScoreRow.icao, icao_filter),
         )
         .group_by(VerificationScoreRow.model)
     ).all()
@@ -354,6 +374,7 @@ def get_wind_advisory_accuracy(
             TafVerificationScoreRow.observation_time.between(since, until),
             TafVerificationScoreRow.advisory_match.isnot(None),
             TafVerificationScoreRow.source == source,
+            _icao_clause(TafVerificationScoreRow.icao, icao_filter),
         )
     ).one()
 
@@ -370,6 +391,7 @@ def get_wind_advisory_accuracy(
 def get_missed_warnings(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
+    icao_filter: list[str] | None = None,
     *, limit: int = 10,
 ) -> list[MissedWarning]:
     """Wind WARNINGs that models failed to predict."""
@@ -386,6 +408,7 @@ def get_missed_warnings(
             VerificationScoreRow.obs_wind_advisory == "WARNING",
             VerificationScoreRow.model_wind_advisory != "WARNING",
             VerificationScoreRow.source == source,
+            _icao_clause(VerificationScoreRow.icao, icao_filter),
         )
         .order_by(VerificationScoreRow.observation_time.desc())
         .limit(limit)
@@ -411,6 +434,7 @@ def get_missed_warnings(
 def get_mae_stats(
     db: Session, since: datetime, until: datetime,
     source: str = "flight",
+    icao_filter: list[str] | None = None,
 ) -> list[MAERow]:
     """Mean absolute error per model at D-0 and D-1."""
     rows = db.execute(
@@ -427,6 +451,7 @@ def get_mae_stats(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.days_out.in_((0, 1)),
             VerificationScoreRow.source == source,
+            _icao_clause(VerificationScoreRow.icao, icao_filter),
         )
         .group_by(VerificationScoreRow.model, VerificationScoreRow.days_out)
     ).all()
@@ -458,21 +483,22 @@ def get_digest_data(
     source: str = "flight",
     period_label: str = "",
     include_7d: bool = True,
+    icao_filter: list[str] | None = None,
 ) -> VerificationDigestData:
     """Build complete digest payload for email or web dashboard."""
-    activity = get_activity_summary(db, since, until, source)
-    category_today = get_category_accuracy(db, since, until, source)
-    notable = get_notable_misses(db, since, until, source)
-    bias = get_category_bias_stats(db, since, until, source)
-    wind = get_wind_advisory_accuracy(db, since, until, source)
-    missed = get_missed_warnings(db, since, until, source)
-    mae = get_mae_stats(db, since, until, source)
+    activity = get_activity_summary(db, since, until, source, icao_filter)
+    category_today = get_category_accuracy(db, since, until, source, icao_filter)
+    notable = get_notable_misses(db, since, until, source, icao_filter)
+    bias = get_category_bias_stats(db, since, until, source, icao_filter)
+    wind = get_wind_advisory_accuracy(db, since, until, source, icao_filter)
+    missed = get_missed_warnings(db, since, until, source, icao_filter)
+    mae = get_mae_stats(db, since, until, source, icao_filter)
 
     # 7-day rolling for comparison
     category_7d: list[CategoryAccuracyRow] = []
     if include_7d:
         seven_days_ago = until - timedelta(days=7)
-        category_7d = get_category_accuracy(db, seven_days_ago, until, source)
+        category_7d = get_category_accuracy(db, seven_days_ago, until, source, icao_filter)
 
     return VerificationDigestData(
         period_label=period_label,
