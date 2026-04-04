@@ -393,3 +393,105 @@ class TestRefreshEndpoint:
         # but importantly it should NOT be a 503 "not configured"
         assert resp.status_code != 503 or "not configured" not in resp.json().get("detail", "")
         client.app.state.db_path = ""
+
+
+# --- Interpret Route ---
+
+# Known waypoints for test mocking
+_KNOWN_WAYPOINTS = {"EGTK", "LFPB", "LSGS", "ABDIL", "LFPO"}
+
+_FAKE_COORDS = {
+    "EGTK": (51.8361, -1.3200, "Oxford/Kidlington"),
+    "LFPB": (48.9694, 2.4414, "Paris Le Bourget"),
+    "LSGS": (46.2196, 7.3267, "Sion"),
+    "ABDIL": (49.5000, 2.0000, "ABDIL"),
+    "LFPO": (48.7233, 2.3794, "Paris Orly"),
+}
+
+
+def _mock_is_known_waypoint(code: str, db_path: str) -> bool:
+    return code.upper() in _KNOWN_WAYPOINTS
+
+
+def _mock_resolve_waypoints(codes: list[str], db_path: str):
+    from weatherbrief.models.analysis import Waypoint
+
+    result = []
+    for c in codes:
+        cu = c.upper()
+        if cu not in _KNOWN_WAYPOINTS:
+            raise KeyError(f"We did not find in our database: {cu}")
+        lat, lon, name = _FAKE_COORDS[cu]
+        result.append(Waypoint(icao=cu, name=name, lat=lat, lon=lon))
+    return result
+
+
+class TestInterpretRoute:
+    """Tests for POST /api/interpret-route endpoint."""
+
+    def _post(self, client, raw_route: str):
+        client.app.state.db_path = "/fake/db"
+        with patch("weatherbrief.airports.is_known_waypoint", _mock_is_known_waypoint), \
+             patch("weatherbrief.airports.resolve_waypoints", _mock_resolve_waypoints), \
+             patch("weatherbrief.airports.get_timezone", return_value="Europe/London"):
+            return client.post("/api/interpret-route", json={"raw_route": raw_route})
+
+    def test_basic_multi_waypoint_route(self, client):
+        """Standard route with multiple known waypoints."""
+        resp = self._post(client, "EGTK LFPB LSGS")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGTK", "LFPB", "LSGS"]
+        assert data["skipped"] == []
+        assert len(data["waypoints"]) == 3
+
+    def test_single_waypoint(self, client):
+        """Single waypoint must resolve via is_known_waypoint, not resolve_waypoints.
+
+        This is the exact regression case: resolve_waypoints requires >= 2 codes,
+        so single-token validation must use the single-point lookup path.
+        """
+        resp = self._post(client, "EGTK")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGTK"]
+        assert data["skipped"] == []
+
+    def test_unknown_token_skipped(self, client):
+        """Unknown tokens are placed in skipped, known ones in interpreted."""
+        resp = self._post(client, "EGTK XYZZY LSGS")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGTK", "LSGS"]
+        assert data["skipped"] == ["XYZZY"]
+
+    def test_consecutive_duplicates_removed(self, client):
+        """Consecutive duplicate waypoints should be deduplicated."""
+        resp = self._post(client, "EGTK EGTK LFPB")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGTK", "LFPB"]
+
+    def test_messy_flight_plan_text(self, client):
+        """Route with non-waypoint tokens (long words, numbers) should filter correctly."""
+        resp = self._post(client, "DEPARTURE EGTK DCT ABDIL DCT LFPB ARRIVAL LSGS")
+        assert resp.status_code == 200
+        data = resp.json()
+        # DEPARTURE and ARRIVAL are >5 chars so filtered by WAYPOINT_RE
+        # DCT is a valid pattern but not a known waypoint, so skipped
+        assert "EGTK" in data["interpreted"]
+        assert "LFPB" in data["interpreted"]
+        assert "LSGS" in data["interpreted"]
+        assert "ABDIL" in data["interpreted"]
+        assert "DCT" in data["skipped"]
+
+    def test_no_db_configured_returns_500(self, client):
+        """When AIRPORTS_DB is not configured, returns 500."""
+        client.app.state.db_path = ""
+        resp = client.post("/api/interpret-route", json={"raw_route": "EGTK LSGS"})
+        assert resp.status_code == 500
+
+    def test_empty_route_rejected(self, client):
+        """Empty route string should be rejected by validation."""
+        resp = self._post(client, "")
+        assert resp.status_code == 422
