@@ -243,8 +243,8 @@ def fetch_observations_batch(
             taf = raw.latest_taf
             if taf is not None:
                 obs.taf_raw = taf.raw_text
-                if hasattr(taf, "issue_time"):
-                    obs.taf_issue_time = taf.issue_time
+                if taf.observation_time is not None:
+                    obs.taf_issue_time = taf.observation_time
 
                 applicable = WeatherAnalyzer.find_applicable_taf(
                     taf, metar.observation_time,
