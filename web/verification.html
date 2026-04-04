@@ -106,21 +106,9 @@
       background: var(--surface, #e9ecef); color: var(--text-muted);
       font-size: 12px; font-weight: 700; font-style: italic; font-family: serif;
       cursor: pointer; border: 1px solid var(--border);
-      margin-left: 6px; vertical-align: middle; position: relative;
+      margin-left: 6px; vertical-align: middle;
     }
     .info-btn:hover { background: var(--accent, #2563eb); color: #fff; border-color: var(--accent, #2563eb); }
-    .info-popup {
-      display: none; position: absolute; top: 28px; left: 0; z-index: 100;
-      background: var(--surface, #fff); border: 1px solid var(--border);
-      border-radius: 8px; padding: 12px 16px; width: 380px; max-width: 90vw;
-      font-size: 13px; font-weight: 400; font-style: normal; font-family: inherit;
-      line-height: 1.5; color: var(--text); box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-      white-space: normal; text-align: left;
-    }
-    .info-btn.open .info-popup { display: block; }
-    .info-popup p { margin: 0 0 8px; }
-    .info-popup p:last-child { margin-bottom: 0; }
-    .info-popup strong { font-weight: 600; }
   </style>
 </head>
 <body>

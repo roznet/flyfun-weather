@@ -14,6 +14,7 @@ import {
 import { renderUserInfo, escapeHtml } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
+import { initInfoPopup, showPopupContent } from './components/info-popup';
 
 let currentPeriod: VerificationPeriod = '24h';
 let currentSource: VerificationSource = 'flight';
@@ -29,6 +30,7 @@ async function init(): Promise<void> {
   renderUserInfo(user, 'verification');
   setupPeriodToggle();
   setupSourceToggle();
+  initInfoPopup();
   setupInfoButtons();
   await loadData();
 }
@@ -75,65 +77,104 @@ async function loadData(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Info button helper
+// Info button helper — uses the shared metric-popup modal
 // ---------------------------------------------------------------------------
 
 const SECTION_INFO: Record<string, string> = {
-  accuracy: `<p><strong>Flight Category Accuracy</strong> measures how often each NWP model correctly predicts the flight category (VFR, MVFR, IFR, LIFR) at airports along the route.</p>
-<p><strong>How it works:</strong> Every 3 hours, we compare the model's forecast to the actual METAR observation at each airport. The percentage shows how often the predicted category matched.</p>
-<p><strong>D-0</strong> = forecast made same day, <strong>D-1</strong> = 1 day ahead, etc. TAF is the official aerodrome forecast (always D-0).</p>
-<p>Arrows show the change compared to the 7-day rolling average. Sample count in parentheses.</p>`,
+  accuracy: `
+    <div class="popup-header"><h3>Flight Category Accuracy</h3></div>
+    <p class="popup-vibe">How often does each model get the flight category right?</p>
+    <div class="popup-section"><h4>Goal</h4>
+      <p>Measure how often each NWP model correctly predicts the flight category (VFR, MVFR, IFR, LIFR) at airports along the route.</p>
+    </div>
+    <div class="popup-section"><h4>How It Works</h4>
+      <p>Every 3 hours, we compare the model's forecast to the actual METAR observation at each airport. The percentage shows how often the predicted category matched the observed one.</p>
+      <p><strong>D-0</strong> = forecast made same day, <strong>D-1</strong> = 1 day ahead, <strong>D-2</strong> = 2 days ahead, etc.</p>
+      <p><strong>TAF</strong> = the official aerodrome forecast issued by human forecasters (always D-0).</p>
+    </div>
+    <div class="popup-section"><h4>Reading the Table</h4>
+      <p>Each cell shows the match rate and sample count. Arrows indicate change vs the 7-day rolling average (\u25B2 improving, \u25BC declining).</p>
+      <p>Green \u2265 80%, amber \u2265 60%, red &lt; 60%.</p>
+    </div>`,
 
-  bias: `<p><strong>Category Bias</strong> shows how each model's prediction errors break down by direction and severity.</p>
-<p><strong>Optimistic (Opt)</strong> = model predicted better conditions than what actually occurred. This is the dangerous direction for flight planning — the weather was worse than expected.</p>
-<p><strong>Pessimistic (Pess)</strong> = model predicted worse conditions than actual. Conservative and safer, but can cause unnecessary cancellations.</p>
-<p><strong>+1, +2, +3</strong> = number of category levels off. E.g., Opt +2 means the model said VFR but actual was IFR (two levels worse).</p>
-<p>Percentages are relative to total scores for that model/day combination.</p>`,
+  bias: `
+    <div class="popup-header"><h3>Category Bias</h3></div>
+    <p class="popup-vibe">When a model gets it wrong, does it err on the safe side or the dangerous side?</p>
+    <div class="popup-section"><h4>Optimistic (Opt)</h4>
+      <p>Model predicted better conditions than what actually occurred. This is the <strong>dangerous direction</strong> for flight planning \u2014 the weather was worse than expected.</p>
+    </div>
+    <div class="popup-section"><h4>Pessimistic (Pess)</h4>
+      <p>Model predicted worse conditions than actual. Conservative and safer, but can cause unnecessary cancellations or diversions.</p>
+    </div>
+    <div class="popup-section"><h4>Severity Levels</h4>
+      <p><strong>+1</strong> = one category off (e.g. predicted VFR, actual MVFR)</p>
+      <p><strong>+2</strong> = two categories off (e.g. predicted VFR, actual IFR)</p>
+      <p><strong>+3</strong> = three categories off (e.g. predicted VFR, actual LIFR)</p>
+      <p>Percentages are relative to total scores for that model/day combination.</p>
+    </div>`,
 
-  misses: `<p><strong>Notable Misses</strong> lists individual cases where a model's category prediction was significantly wrong at D-0 or D-1.</p>
-<p>Sorted by importance: optimistic misses first (model too rosy — safety risk), then by severity.</p>
-<p><strong>\u26a0 +N</strong> = optimistic miss (actual was N categories worse than predicted). Red = 2+ levels, amber = 1 level.</p>
-<p><strong>\u2193 +N</strong> = pessimistic miss (actual was N categories better than predicted, shown in blue). Only severity 2+ pessimistic misses are shown.</p>
-<p><strong>Ceiling \u0394</strong> = difference between model ceiling and observed ceiling in feet.</p>`,
+  misses: `
+    <div class="popup-header"><h3>Notable Misses</h3></div>
+    <p class="popup-vibe">Individual cases where a model got the category significantly wrong.</p>
+    <div class="popup-section"><h4>What's Shown</h4>
+      <p>Category busts at D-0 and D-1, sorted by importance: optimistic misses first (safety-relevant), then by severity.</p>
+    </div>
+    <div class="popup-section"><h4>Severity Column</h4>
+      <p><strong>\u26a0 +N</strong> = optimistic miss \u2014 actual was N categories worse than predicted. Red background for 2+ levels, amber for 1 level.</p>
+      <p><strong>\u2193 +N</strong> = pessimistic miss \u2014 actual was N categories better than predicted (blue background). Only severity 2+ shown.</p>
+    </div>
+    <div class="popup-section"><h4>Ceiling \u0394</h4>
+      <p>Difference between model ceiling and observed ceiling in feet. Negative means model predicted lower ceiling than actual.</p>
+    </div>`,
 
-  wind: `<p><strong>Wind Advisory Accuracy</strong> measures how often each model's wind advisory level matches the observed conditions.</p>
-<p>Wind advisories are computed from crosswind and gust components relative to the runway. Match rate shows how often the model predicted the correct advisory level (OK, CAUTION, WARNING).</p>
-<p><strong>Missed Wind Warnings</strong> lists cases where actual conditions triggered a WARNING but the model failed to predict it — the most safety-critical wind misses.</p>`,
+  wind: `
+    <div class="popup-header"><h3>Wind Advisory Accuracy</h3></div>
+    <p class="popup-vibe">How well do models predict crosswind and gust conditions at airports?</p>
+    <div class="popup-section"><h4>How It Works</h4>
+      <p>Wind advisories are computed from crosswind and gust components relative to the active runway. Three levels: OK, CAUTION, WARNING.</p>
+      <p>Match rate shows how often the model predicted the correct advisory level compared to actual METAR winds.</p>
+    </div>
+    <div class="popup-section"><h4>Missed Wind Warnings</h4>
+      <p>Cases where actual conditions triggered a WARNING but the model failed to predict it \u2014 the most safety-critical wind misses.</p>
+    </div>`,
 
-  mae: `<p><strong>Mean Absolute Error (MAE)</strong> is the average magnitude of prediction error for each weather parameter.</p>
-<p>For each observation, we compute |predicted - actual| and average across all data points. Lower values = more accurate.</p>
-<p><strong>Ceiling (ft)</strong> — average error in cloud ceiling height. A value of 500 means the model is off by 500ft on average.</p>
-<p><strong>Visibility (m)</strong> — average error in visibility distance.</p>
-<p><strong>Wind (kt)</strong> — average error in wind speed.</p>
-<p><strong>Temp (\u00B0C)</strong> — average error in temperature. Useful as a model quality sanity check.</p>
-<p>Only D-0 and D-1 forecasts are shown — longer range errors are expected to be larger.</p>`,
+  mae: `
+    <div class="popup-header"><h3>Mean Absolute Error</h3></div>
+    <p class="popup-vibe">On average, how far off is each model for key weather parameters?</p>
+    <div class="popup-section"><h4>How It Works</h4>
+      <p>For each observation, we compute |predicted \u2212 actual| and average across all data points. Lower values = more accurate model.</p>
+    </div>
+    <div class="popup-section"><h4>Parameters</h4>
+      <p><strong>Ceiling (ft)</strong> \u2014 average error in cloud ceiling height. E.g., 500 means the model is off by ~500ft on average.</p>
+      <p><strong>Visibility (m)</strong> \u2014 average error in visibility distance.</p>
+      <p><strong>Wind (kt)</strong> \u2014 average error in wind speed.</p>
+      <p><strong>Temp (\u00B0C)</strong> \u2014 average error in surface temperature. A good sanity check for overall model quality.</p>
+    </div>
+    <div class="popup-section popup-limitations"><h4>Limitations</h4>
+      <p>Only D-0 and D-1 forecasts are shown. Longer range errors are expected to be larger and less informative for comparison.</p>
+    </div>`,
 
-  health: `<p><strong>System Health</strong> shows operational metrics for the verification pipeline itself.</p>
-<p><strong>Cycles</strong> = number of data collection runs in the selected period. Flight verification runs every 10 minutes; standalone runs at 06, 09, 12, 15, 18 UTC.</p>
-<p><strong>Avg Cycle</strong> = average time to complete one collection cycle (fetch METARs, store, score).</p>`,
+  health: `
+    <div class="popup-header"><h3>System Health</h3></div>
+    <p class="popup-vibe">Operational metrics for the verification pipeline.</p>
+    <div class="popup-section"><h4>Metrics</h4>
+      <p><strong>Cycles</strong> \u2014 number of data collection runs in the selected period. Flight verification runs every 10 minutes; standalone runs at 06, 09, 12, 15, 18 UTC.</p>
+      <p><strong>Avg Cycle</strong> \u2014 average time to complete one collection cycle (fetch METARs, store observations, score against models).</p>
+    </div>`,
 };
 
 function infoBtn(sectionId: string): string {
-  const content = SECTION_INFO[sectionId] || '';
-  if (!content) return '';
-  return `<span class="info-btn" data-info="${sectionId}">i<span class="info-popup">${content}</span></span>`;
+  if (!SECTION_INFO[sectionId]) return '';
+  return `<span class="info-btn" data-info="${sectionId}">i</span>`;
 }
 
 function setupInfoButtons(): void {
   document.addEventListener('click', (e) => {
-    const target = e.target as HTMLElement;
-    const btn = target.closest('.info-btn') as HTMLElement | null;
-
-    // Close all open popups first
-    document.querySelectorAll('.info-btn.open').forEach((el) => {
-      if (el !== btn) el.classList.remove('open');
-    });
-
-    // Toggle clicked button
-    if (btn) {
-      e.stopPropagation();
-      btn.classList.toggle('open');
-    }
+    const btn = (e.target as HTMLElement).closest('.info-btn[data-info]') as HTMLElement | null;
+    if (!btn) return;
+    const id = btn.dataset.info || '';
+    const content = SECTION_INFO[id];
+    if (content) showPopupContent(content);
   });
 }
 
