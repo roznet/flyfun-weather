@@ -29,6 +29,7 @@ async function init(): Promise<void> {
   renderUserInfo(user, 'verification');
   setupPeriodToggle();
   setupSourceToggle();
+  setupInfoButtons();
   await loadData();
 }
 
@@ -71,6 +72,69 @@ async function loadData(): Promise<void> {
   } catch (err) {
     console.error('Failed to load verification stats', err);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Info button helper
+// ---------------------------------------------------------------------------
+
+const SECTION_INFO: Record<string, string> = {
+  accuracy: `<p><strong>Flight Category Accuracy</strong> measures how often each NWP model correctly predicts the flight category (VFR, MVFR, IFR, LIFR) at airports along the route.</p>
+<p><strong>How it works:</strong> Every 3 hours, we compare the model's forecast to the actual METAR observation at each airport. The percentage shows how often the predicted category matched.</p>
+<p><strong>D-0</strong> = forecast made same day, <strong>D-1</strong> = 1 day ahead, etc. TAF is the official aerodrome forecast (always D-0).</p>
+<p>Arrows show the change compared to the 7-day rolling average. Sample count in parentheses.</p>`,
+
+  bias: `<p><strong>Category Bias</strong> shows how each model's prediction errors break down by direction and severity.</p>
+<p><strong>Optimistic (Opt)</strong> = model predicted better conditions than what actually occurred. This is the dangerous direction for flight planning — the weather was worse than expected.</p>
+<p><strong>Pessimistic (Pess)</strong> = model predicted worse conditions than actual. Conservative and safer, but can cause unnecessary cancellations.</p>
+<p><strong>+1, +2, +3</strong> = number of category levels off. E.g., Opt +2 means the model said VFR but actual was IFR (two levels worse).</p>
+<p>Percentages are relative to total scores for that model/day combination.</p>`,
+
+  misses: `<p><strong>Notable Misses</strong> lists individual cases where a model's category prediction was significantly wrong at D-0 or D-1.</p>
+<p>Sorted by importance: optimistic misses first (model too rosy — safety risk), then by severity.</p>
+<p><strong>\u26a0 +N</strong> = optimistic miss (actual was N categories worse than predicted). Red = 2+ levels, amber = 1 level.</p>
+<p><strong>\u2193 +N</strong> = pessimistic miss (actual was N categories better than predicted, shown in blue). Only severity 2+ pessimistic misses are shown.</p>
+<p><strong>Ceiling \u0394</strong> = difference between model ceiling and observed ceiling in feet.</p>`,
+
+  wind: `<p><strong>Wind Advisory Accuracy</strong> measures how often each model's wind advisory level matches the observed conditions.</p>
+<p>Wind advisories are computed from crosswind and gust components relative to the runway. Match rate shows how often the model predicted the correct advisory level (OK, CAUTION, WARNING).</p>
+<p><strong>Missed Wind Warnings</strong> lists cases where actual conditions triggered a WARNING but the model failed to predict it — the most safety-critical wind misses.</p>`,
+
+  mae: `<p><strong>Mean Absolute Error (MAE)</strong> is the average magnitude of prediction error for each weather parameter.</p>
+<p>For each observation, we compute |predicted - actual| and average across all data points. Lower values = more accurate.</p>
+<p><strong>Ceiling (ft)</strong> — average error in cloud ceiling height. A value of 500 means the model is off by 500ft on average.</p>
+<p><strong>Visibility (m)</strong> — average error in visibility distance.</p>
+<p><strong>Wind (kt)</strong> — average error in wind speed.</p>
+<p><strong>Temp (\u00B0C)</strong> — average error in temperature. Useful as a model quality sanity check.</p>
+<p>Only D-0 and D-1 forecasts are shown — longer range errors are expected to be larger.</p>`,
+
+  health: `<p><strong>System Health</strong> shows operational metrics for the verification pipeline itself.</p>
+<p><strong>Cycles</strong> = number of data collection runs in the selected period. Flight verification runs every 10 minutes; standalone runs at 06, 09, 12, 15, 18 UTC.</p>
+<p><strong>Avg Cycle</strong> = average time to complete one collection cycle (fetch METARs, store, score).</p>`,
+};
+
+function infoBtn(sectionId: string): string {
+  const content = SECTION_INFO[sectionId] || '';
+  if (!content) return '';
+  return `<span class="info-btn" data-info="${sectionId}">i<span class="info-popup">${content}</span></span>`;
+}
+
+function setupInfoButtons(): void {
+  document.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    const btn = target.closest('.info-btn') as HTMLElement | null;
+
+    // Close all open popups first
+    document.querySelectorAll('.info-btn.open').forEach((el) => {
+      if (el !== btn) el.classList.remove('open');
+    });
+
+    // Toggle clicked button
+    if (btn) {
+      e.stopPropagation();
+      btn.classList.toggle('open');
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -146,11 +210,11 @@ function renderAccuracy(data: VerificationDigest): void {
   if (modelsSet.has('TAF')) models.push('TAF');
 
   if (models.length === 0) {
-    el.innerHTML = '<h2>Flight Category Accuracy</h2><p class="empty-state">No accuracy data available.</p>';
+    el.innerHTML = `<h2>Flight Category Accuracy ${infoBtn('accuracy')}</h2><p class="empty-state">No accuracy data available.</p>`;
     return;
   }
 
-  let html = '<h2>Flight Category Accuracy</h2>';
+  let html = `<h2>Flight Category Accuracy ${infoBtn('accuracy')}</h2>`;
   html += '<table class="admin-table"><thead><tr><th>Model</th>';
   for (const d of daysOut) html += `<th class="num">D-${d}</th>`;
   html += '</tr></thead><tbody>';
@@ -192,11 +256,11 @@ function renderBias(data: VerificationDigest): void {
   const bias = data.category_bias;
 
   if (bias.length === 0) {
-    el.innerHTML = '<h2>Category Bias</h2><p class="empty-state">No data available.</p>';
+    el.innerHTML = `<h2>Category Bias ${infoBtn('bias')}</h2><p class="empty-state">No data available.</p>`;
     return;
   }
 
-  let html = '<h2>Category Bias</h2>';
+  let html = `<h2>Category Bias ${infoBtn('bias')}</h2>`;
   html += '<table class="admin-table"><thead><tr>';
   html += '<th>Model</th><th class="num">D-out</th><th class="num">Scores</th>';
   html += '<th class="num" title="Model predicted better than actual by 1 cat level">Opt +1</th>';
@@ -239,11 +303,11 @@ function renderMisses(data: VerificationDigest): void {
   const misses = data.notable_misses;
 
   if (misses.length === 0) {
-    el.innerHTML = '<h2>Notable Misses</h2><p class="empty-state">No significant category busts.</p>';
+    el.innerHTML = `<h2>Notable Misses ${infoBtn('misses')}</h2><p class="empty-state">No significant category busts.</p>`;
     return;
   }
 
-  let html = '<h2>Notable Misses</h2>';
+  let html = `<h2>Notable Misses ${infoBtn('misses')}</h2>`;
   html += '<table class="admin-table"><thead><tr>';
   for (const h of ['ICAO', 'Time', 'Model', 'D-out', 'Observed', 'Predicted', 'Severity', 'Ceiling \u0394']) {
     html += `<th>${h}</th>`;
@@ -277,7 +341,7 @@ function renderMisses(data: VerificationDigest): void {
 
 function renderWind(data: VerificationDigest): void {
   const el = document.getElementById('wind-section')!;
-  let html = '<h2>Wind Advisory Accuracy</h2>';
+  let html = `<h2>Wind Advisory Accuracy ${infoBtn('wind')}</h2>`;
 
   if (data.wind_advisory.length > 0) {
     html += '<table class="admin-table"><thead><tr><th>Model</th><th class="num">Match Rate</th><th class="num">Samples</th></tr></thead><tbody>';
@@ -314,11 +378,11 @@ function renderMAE(data: VerificationDigest): void {
   const mae = data.mae_stats;
 
   if (mae.length === 0) {
-    el.innerHTML = '<h2>Mean Absolute Error (D-0 / D-1)</h2><p class="empty-state">No MAE data available.</p>';
+    el.innerHTML = `<h2>Mean Absolute Error (D-0 / D-1) ${infoBtn('mae')}</h2><p class="empty-state">No MAE data available.</p>`;
     return;
   }
 
-  let html = '<h2>Mean Absolute Error (D-0 / D-1)</h2>';
+  let html = `<h2>Mean Absolute Error (D-0 / D-1) ${infoBtn('mae')}</h2>`;
   html += '<table class="admin-table"><thead><tr>';
   for (const h of ['Model', 'D-out', 'Ceiling (ft)', 'Visibility (m)', 'Wind (kt)', 'Temp (\u00B0C)', 'Samples']) {
     html += `<th class="num">${h}</th>`;
@@ -345,7 +409,7 @@ function renderHealth(data: VerificationDigest): void {
   const el = document.getElementById('health-section')!;
   const a = data.activity;
 
-  let html = '<h2>System Health</h2>';
+  let html = `<h2>System Health ${infoBtn('health')}</h2>`;
   html += '<table class="admin-table"><thead><tr><th>Metric</th><th class="num">Value</th></tr></thead><tbody>';
   html += `<tr><td>Verification cycles</td><td class="num">${a.cycles_run}</td></tr>`;
   html += `<tr><td>Avg cycle duration</td><td class="num">${fmtDuration(a.avg_cycle_duration_ms)}</td></tr>`;
