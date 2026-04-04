@@ -395,7 +395,7 @@ def interpret_route(
     matching waypoint patterns, resolves each against the airport/navaid database,
     and returns the list of recognized waypoints plus any skipped tokens.
     """
-    from weatherbrief.airports import get_timezone, resolve_waypoints
+    from weatherbrief.airports import get_timezone, is_known_waypoint, resolve_waypoints
 
     db_path = getattr(request.app.state, "db_path", "")
     if not db_path:
@@ -406,18 +406,28 @@ def interpret_route(
     # Filter to valid waypoint patterns (2-5 alphanumeric chars)
     candidate_tokens = [t for t in tokens if WAYPOINT_RE.match(t)]
 
-    # Resolve all candidates via resolve_waypoints; use the KeyError to find unknowns
+    # Validate each candidate: use single-point lookup until we have 2+
+    # points, then switch to full route resolution for proper disambiguation
     interpreted: list[str] = []
     skipped: list[str] = []
 
     for token in candidate_tokens:
-        try:
-            resolve_waypoints([token], db_path)
-            # Skip consecutive duplicates (e.g. "ABDIL ABDIL" after filtering)
-            if not interpreted or interpreted[-1] != token:
+        # Skip consecutive duplicates (e.g. "ABDIL ABDIL" after filtering)
+        if interpreted and interpreted[-1] == token:
+            continue
+        test_list = interpreted + [token]
+        if len(test_list) < 2:
+            # Not enough points for route resolver, validate individually
+            if is_known_waypoint(token, db_path):
                 interpreted.append(token)
-        except KeyError:
-            skipped.append(token)
+            else:
+                skipped.append(token)
+        else:
+            try:
+                resolve_waypoints(test_list, db_path)
+                interpreted.append(token)
+            except KeyError:
+                skipped.append(token)
 
     # Resolve the interpreted waypoints to get full info
     waypoint_infos: list[WaypointInfo] = []
