@@ -73,13 +73,13 @@ Key exports: `compute_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `
 → Full doc: cost-attribution-design.md
 
 ### companion-app
-iOS/iPad companion app: Phase 1 (online viewer) complete, Phase 2 (offline) mostly done, Phase 3 M0+M1 (aircraft registry, PIREP submit/view) implemented. Auth (Apple + Google + dev login), advisory dashboard, cross-section Canvas renderer, native Skew-T (RZSkewT package), offline caching, PIREP reporting sheet with offline queue.
+iOS/iPad companion app: Phase 1 (online viewer) complete, Phase 2 (offline + resilience) complete, Phase 3 M0+M1 (aircraft registry, PIREP submit/view) implemented. Auth (Apple + Google + dev login), advisory dashboard, cross-section Canvas renderer, native Skew-T (RZSkewT package), multi-tier offline fallback, cached flight indicators, PIREP offline queue with auto-flush on connectivity.
 Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `CrossSectionRenderer`, `PirepViewModel`, `PirepOfflineStore`
 → Full doc: companion-app.md
 
 ### metar-taf-accuracy [project]
-Automated METAR/TAF verification system: collects observations during flights, scores NWP models and TAFs against ground truth, builds historical accuracy database. Standalone observation archive (anonymized, flight-independent), thin flight linkage, 10-min collection loop, CLI for backfill/export.
-Key exports: `collect_and_store`, `score_flight`, `score_completed_flights`, `VerificationObservation`, `VerificationSummary`
+Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone airport monitoring (250 watchlist airports at fixed UTC hours). Scores NWP models and TAFs against ground truth. Daily digest email + admin web dashboard. Verification cycles performance tracking.
+Key exports: `collect_and_store`, `run_standalone_cycle`, `get_digest_data`, `send_verification_digest`, `VerificationDigestData`, `VerificationObservation`
 → Full doc: metar-taf-accuracy.md
 
 ### rzskewt

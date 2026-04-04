@@ -55,9 +55,19 @@ point_forecasts = client.fetch_multi_point(
 The pipeline uses `fetch_multi_point()` to consolidate API calls: **1 call per model** with all route points (comma-separated lat/lon), instead of 1 call per waypoint per model.
 
 - Open-Meteo accepts comma-separated `latitude=lat1,lat2,...&longitude=lon1,lon2,...`
-- Multi-point response is a `list[dict]`; single-point is a `dict` (handled automatically)
+- **Chunking**: requests are split into batches of `_MAX_POINTS_PER_REQUEST = 150` points. Open-Meteo supports ~400 locations, but the expanded pressure-level parameter list makes URLs long. Normal routes (50-80 points) fit in a single chunk; the limit is a safety net for unusually long routes or standalone verification batches.
+- Multi-point response is a `list[dict]`; single-point is a `dict` (handled automatically via type check)
 - `start_date`/`end_date` window the time range to the target date (24h instead of full horizon)
 - Returns one `WaypointForecast` per point; named waypoints get full airport name from `RoutePoint.waypoint_name`, interpolated points get synthetic IDs like `"RP042"`
+
+### Retry & Rate Limiting
+
+`_get_with_retry()` handles Open-Meteo 429 responses with a generous backoff schedule:
+
+- **Max retries**: 4, with backoff `[10, 30, 60, 90]` seconds (generous for expanded pressure-level requests)
+- Respects `Retry-After` header from server if present; falls back to backoff schedule otherwise
+- Only retries on 429 (rate-limit) — other HTTP errors propagate immediately
+- Logging includes attempt count, wait time, and truncated URL for debugging
 
 ### Route Walking (`fetch/route_walk.py`)
 
@@ -86,6 +96,8 @@ route_points = interpolate_route(route, spacing_nm=20.0)
 - **Graceful failure** — individual model failures logged, others continue
 - **UKMO model_param** — uses generic `/v1/forecast` with `?models=ukmo_seamless` query param
 - **Multi-point over per-waypoint** — reduces API calls from N×M to M; trivially within free-tier rate limits (600/min, 5K/hour)
+- **Chunking at 150 points** — conservative limit avoids 414 URI Too Large; most routes fit in one chunk
+- **Generous retry backoff** — [10, 30, 60, 90]s schedule for 429s; respects server Retry-After header
 - **24h time window** — only fetch target date data, not the full 16-day horizon (~150KB vs ~1MB per model)
 
 ## Text Forecasts (Route-Aware)

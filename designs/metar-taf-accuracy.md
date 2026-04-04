@@ -1,16 +1,17 @@
 # METAR/TAF Accuracy System
 
-> Automated collection of METAR/TAF observations during flights, compared against NWP model forecasts and TAFs, building a historical verification database for model accuracy analysis.
+> Dual-track verification: flight-based observation collection during active flights + standalone airport monitoring at fixed UTC hours, with daily digest email and admin dashboard.
 
 ## Intent
 
 We already have NWP model forecasts stored in briefing packs (GFS, ECMWF, ICON, etc.) and we fetch METAR/TAF on D-0 for the current observation comparison. But we don't systematically **archive** observations or **score** model accuracy over time.
 
-This system:
-1. **Collects** METAR/TAF observations during the flight window (1h before → flight end + 1h)
-2. **Scores** each model's forecast against actual observations at multiple lead times (D-0 through D-7)
+This system has two verification tracks:
+1. **Flight-based**: Collects METAR/TAF observations during flight windows (1h before → flight end + 1h), scores against briefing pack forecasts
+2. **Standalone**: Continuously monitors ~250 watchlist airports at fixed UTC hours (6, 9, 12, 15, 18), fetches independent Open-Meteo forecasts, scores GFS/ICON/ECMWF at up to 4 days out
 3. **Scores** TAF accuracy against METARs (TAF is also a forecast — was it right?)
 4. **Archives** everything in a standalone, anonymized verification database
+5. **Reports** daily verification digest via email + admin web dashboard
 
 Over time this builds a dataset answering: "How accurate is GFS vs ECMWF at D-3 for ceiling in Alpine regions?"
 
@@ -23,31 +24,62 @@ This makes the accuracy database a **growing, anonymized, community asset**.
 ## Architecture
 
 ```
-scheduler.py (or standalone CLI)
-├── run_verification_loop()        ← new asyncio loop, 10-min poll
-│   ├── _find_verifiable_flights() ← flights in active window
-│   ├── _collect_observations()    ← fetch METAR/TAF, dedup, store
-│   └── _score_observations()     ← compare vs all packs/models
-│
-tasks/verification.py              ← core logic (testable independently)
-├── collect_and_store()            ← fetch → dedup → insert observations
-├── score_against_models()         ← load forecasts → compute deltas → insert scores
-├── score_taf_against_metar()      ← TAF vs METAR accuracy
-└── summarize_flight()             ← aggregate scores for one flight
+scheduler.py
+├── run_verification_loop()             ← flight-based, 10-min poll
+│   ├── _find_verifiable_flights()
+│   ├── _collect_observations()
+│   └── _score_observations()
+├── run_standalone_verification_loop()  ← standalone, sleeps until next sample hour
+│   └── run_standalone_cycle()          ← fetch forecasts → collect METARs → score
+├── run_digest_loop()                   ← daily at 06:00 UTC
+│   └── send_verification_digest()
 
-models/verification.py             ← Pydantic models
-├── VerificationObservation        ← METAR/TAF ground truth
-├── VerificationScore              ← model-vs-reality comparison
-├── TafVerificationScore           ← TAF-vs-METAR comparison
-└── VerificationSummary            ← aggregated accuracy per model/lead
+tasks/verification.py                   ← flight-based collection & scoring
+├── collect_and_store()
+├── score_against_models()
+├── score_taf_against_metar()
+└── finalize_completed_flights()
 
-db/models.py                       ← SQLAlchemy tables (3 new)
-├── VerificationObservationRow     ← standalone, keyed by (icao, observation_time)
-├── VerificationScoreRow           ← standalone, keyed by (icao, time, model, init_time)
-├── TafVerificationScoreRow        ← standalone, keyed by (icao, obs_time, taf_issue_time)
-├── FlightVerificationMapRow       ← thin linkage, CASCADE on flight delete
+tasks/standalone_verification.py        ← standalone airport monitoring
+├── run_standalone_cycle()              ← orchestrator
+├── _fetch_forecasts_for_model()        ← Open-Meteo multi-point (batches of 100)
+└── _enrich_with_grib()                 ← GFS cloud diagnostics for ceiling
 
-CLI: python -m weatherbrief.verify  ← backfill, manual runs, export
+tasks/verification_stats.py             ← shared queries for digest + dashboard
+├── get_activity_summary()
+├── get_category_accuracy()
+├── get_notable_misses()
+├── get_category_bias()
+├── get_wind_advisory_stats()
+├── get_mae_stats()
+└── get_digest_data()                   ← orchestrator → VerificationDigestData
+
+tasks/airport_watchlist.py              ← standalone airport discovery
+└── discover_airports()                 ← euro_aip DB + aviationweather.gov
+
+tasks/standalone_grib.py                ← GRIB ceiling adapter for standalone
+└── fetch_gfs_cloud_diag()
+
+notify/verification_email.py            ← HTML + plaintext digest email
+└── send_verification_digest()
+
+models/verification.py                  ← Pydantic models
+├── VerificationObservation, VerificationScore, TafVerificationScore
+├── VerificationSummary
+├── VerificationDigestData              ← complete digest payload
+├── ActivitySummary, CategoryAccuracyRow, NotableMiss
+├── CategoryBiasStats, WindAdvisoryStats, MissedWarning, MAERow
+
+db/models.py                            ← SQLAlchemy tables
+├── VerificationObservationRow          ← (icao, observation_time)
+├── VerificationScoreRow                ← (icao, time, model, init_time, source)
+├── TafVerificationScoreRow             ← (icao, obs_time, taf_issue_time, source)
+├── FlightVerificationMapRow            ← thin linkage, CASCADE on flight delete
+├── VerificationCycleRow                ← performance metrics per cycle
+├── AirportForecastSnapshotRow          ← standalone NWP forecasts
+
+API: /api/verification/stats            ← admin dashboard data
+CLI: python -m weatherbrief.verify      ← backfill, manual runs, export
 ```
 
 ## Database Schema
@@ -94,87 +126,88 @@ CREATE INDEX ix_verif_obs_time ON verification_observations(observation_time);
 
 ### `verification_scores` — Model vs Reality
 
-One row per (airport, observation, model, model_init_time). This lets us compare the same model at different lead times.
+One row per (airport, observation, model, model_init_time, source). The `source` column distinguishes flight-based vs standalone scores — all queries filter by source to prevent mixing.
 
 ```sql
 CREATE TABLE verification_scores (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    observation_id      INTEGER     NOT NULL,   -- FK → verification_observations
-    icao                VARCHAR(4)  NOT NULL,
-    observation_time    DATETIME    NOT NULL,
-    model               VARCHAR(20) NOT NULL,  -- "gfs","ecmwf","icon","best_match"...
-    model_init_time     DATETIME    NOT NULL,   -- NWP model run init time
-    lead_hours          INTEGER     NOT NULL,   -- model_init → observation gap
-    days_out            INTEGER     NOT NULL,   -- briefing pack days_out (D-0..D-7)
+    -- ... standard columns ...
+    source              VARCHAR(16) NOT NULL DEFAULT 'flight',  -- 'flight' or 'standalone'
+    cloud_base_delta_ft INTEGER,    -- added for standalone ceiling scoring
+    lcl_delta_ft        INTEGER,    -- LCL-based ceiling delta
 
-    -- Flight category comparison
-    obs_flight_category     VARCHAR(4),
-    model_flight_category   VARCHAR(4),
-    category_match          BOOLEAN,
-
-    -- Quantitative deltas (model - observation)
-    ceiling_delta_ft        INTEGER,
-    visibility_delta_m      FLOAT,
-    wind_speed_delta_kt     FLOAT,
-    wind_dir_delta_deg      FLOAT,    -- circular delta, -180..+180
-    temperature_delta_c     FLOAT,
-
-    -- Wind advisory comparison
-    obs_wind_advisory       VARCHAR(10),       -- OK/CAUTION/WARNING
-    model_wind_advisory     VARCHAR(10),
-    advisory_match          BOOLEAN,
-
-    -- Significant weather hit/miss
-    obs_has_precipitation   BOOLEAN,
-    model_has_precipitation BOOLEAN,
-    obs_has_convection      BOOLEAN,           -- TS in METAR
-    model_has_convection    BOOLEAN,            -- CAPE-based or model flag
-
-    UNIQUE(icao, observation_time, model, model_init_time),
-    FOREIGN KEY (observation_id) REFERENCES verification_observations(id)
+    UNIQUE(icao, observation_time, model, model_init_time, source),
+    -- ...
 );
 
-CREATE INDEX ix_verif_scores_obs   ON verification_scores(observation_id);
-CREATE INDEX ix_verif_scores_model ON verification_scores(model, days_out);
-CREATE INDEX ix_verif_scores_icao  ON verification_scores(icao);
-CREATE INDEX ix_verif_scores_lead  ON verification_scores(lead_hours);
+CREATE INDEX ix_verif_scores_source ON verification_scores(source, model, days_out);
 ```
 
 ### `taf_verification_scores` — TAF vs METAR
 
-TAFs are forecasts too. How accurate was the TAF compared to the actual METAR?
+TAFs are forecasts too. The `source` column is included in the unique constraint.
 
 ```sql
 CREATE TABLE taf_verification_scores (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    observation_id      INTEGER     NOT NULL,   -- FK → verification_observations
-    icao                VARCHAR(4)  NOT NULL,
-    observation_time    DATETIME    NOT NULL,   -- METAR time (ground truth)
-    taf_issue_time      DATETIME    NOT NULL,   -- when TAF was issued
-    lead_hours          INTEGER     NOT NULL,   -- taf_issue → observation gap
+    -- ... standard columns ...
+    source              VARCHAR(16) NOT NULL DEFAULT 'flight',
 
-    -- Flight category
-    obs_flight_category VARCHAR(4),
-    taf_flight_category VARCHAR(4),
-    category_match      BOOLEAN,
-
-    -- Deltas (TAF - observation)
-    ceiling_delta_ft    INTEGER,
-    visibility_delta_m  FLOAT,
-    wind_speed_delta_kt FLOAT,
-    wind_dir_delta_deg  FLOAT,
-
-    -- Wind advisory comparison (same compute_wind_advisory() as advisories)
-    obs_wind_advisory   VARCHAR(10),
-    taf_wind_advisory   VARCHAR(10),
-    advisory_match      BOOLEAN,
-
-    UNIQUE(icao, observation_time, taf_issue_time),
-    FOREIGN KEY (observation_id) REFERENCES verification_observations(id)
+    UNIQUE(icao, observation_time, taf_issue_time, source),
+    -- ...
 );
+```
 
-CREATE INDEX ix_taf_verif_obs  ON taf_verification_scores(observation_id);
-CREATE INDEX ix_taf_verif_icao ON taf_verification_scores(icao);
+### `verification_cycles` — Performance Metrics
+
+Tracks timing and counts for each collection cycle (flight or standalone).
+
+```sql
+CREATE TABLE verification_cycles (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source          VARCHAR(16) NOT NULL DEFAULT 'flight',  -- 'flight' or 'standalone'
+    started_at      DATETIME NOT NULL,
+    duration_ms     INTEGER,
+    -- Phase timings
+    find_ms         INTEGER,
+    gather_ms       INTEGER,
+    fetch_ms        INTEGER,
+    store_ms        INTEGER,
+    score_ms        INTEGER,
+    finalize_ms     INTEGER,
+    -- Counts
+    flights_found   INTEGER,
+    airports_found  INTEGER,
+    observations_stored INTEGER
+);
+```
+
+### `airport_forecast_snapshots` — Standalone NWP Forecasts
+
+Stores Open-Meteo forecasts at watchlist airports for standalone verification scoring.
+
+```sql
+CREATE TABLE airport_forecast_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    icao            VARCHAR(4) NOT NULL,
+    model           VARCHAR(20) NOT NULL,
+    model_init_time DATETIME NOT NULL,
+    forecast_hour   DATETIME NOT NULL,
+    fetched_at      DATETIME NOT NULL,
+    -- Surface fields
+    temperature_c   FLOAT,
+    dewpoint_c      FLOAT,
+    visibility_m    FLOAT,
+    wind_speed_kt   FLOAT,
+    wind_dir_deg    FLOAT,
+    wind_gust_kt    FLOAT,
+    precipitation_mm FLOAT,
+    cape            FLOAT,
+    -- Ceiling estimates
+    nwp_ceiling_ft  INTEGER,
+    cloud_base_ft   INTEGER,
+    lcl_ft          INTEGER,
+
+    UNIQUE(icao, model, model_init_time, forecast_hour)
+);
 ```
 
 ### `flight_verification_map` — Thin Flight Linkage
@@ -217,11 +250,82 @@ ALTER TABLE flights ADD COLUMN verification_status VARCHAR(16) DEFAULT NULL;
 
 The collection query `WHERE verification_status IS NULL OR verification_status NOT IN ('complete', 'scored')` picks up both NULL and "collecting" flights. NULL flights are checked for eligibility (has packs, in time window) and promoted to "collecting" on first match. Scoring runs automatically after each collection cycle for any flights in "complete" status.
 
-## Collection Loop
+## Standalone Verification Pipeline
+
+### Intent
+
+Flight-based verification is limited to airports along active flight routes. Standalone verification monitors ~250 watchlist airports continuously, building a broader accuracy dataset independent of user activity.
+
+### How It Differs from Flight-Based
+
+| Aspect | Flight-Based | Standalone |
+|--------|-------------|-----------|
+| **Trigger** | Active flights in observation window | Fixed sample hours (6, 9, 12, 15, 18 UTC) |
+| **Polling** | Every 10 minutes | Sleep until next sample hour |
+| **Airports** | Flight corridor (15nm) | Watchlist (~250 Western/Central European airports) |
+| **Forecast source** | Briefing pack forecasts.json | Independent Open-Meteo fetch + GRIB ceiling |
+| **Models** | All models in briefing pack | GFS, ICON, ECMWF (3 models) |
+| **Horizon** | D-0 through D-7 (per pack) | Up to 4 days per model |
+| **Source tag** | `source='flight'` | `source='standalone'` |
+| **Database** | `verification_observations` + scores | Same + `airport_forecast_snapshots` |
+
+### Airport Watchlist
+
+`tasks/airport_watchlist.py` discovers METAR-reporting airports. Default ICAO prefixes: LF, ED, EG, EH, EB, LS, LO (Western/Central Europe). Sources: euro_aip DB + aviationweather.gov METAR endpoint (batch queries with `@prefix`, batch size 400). Config file: `configs/airport_watchlist.json`.
+
+### Standalone Cycle Flow
+
+```
+1. Load watchlist airports (~250)
+2. For each model (GFS, ICON, ECMWF):
+   a. Fetch Open-Meteo forecasts (batches of 100 airports)
+   b. Filter to sample hours only
+   c. Store in airport_forecast_snapshots
+3. Enrich with GRIB cloud diagnostics (NWP ceiling, cloud base)
+4. Fetch METAR observations for sample hour
+5. Score forecasts against observations
+6. Record cycle in verification_cycles (source='standalone')
+```
+
+### Open-Meteo Batching
+
+Standalone fetches surface variables for ~250 airports per cycle. Requests are chunked into batches of 100 airports per Open-Meteo call (`STANDALONE_BATCH_SIZE`). Chunk-level retry: up to 3 attempts on timeout with 60s timeout per request.
 
 ### Scheduler Integration
 
-New loop in `scheduler.py`, alongside `run_scheduler_loop()` and `run_retention_loop()`:
+Disableable via `DISABLE_STANDALONE_VERIFICATION=1` env var. Instead of polling, computes next sample hour and sleeps until then. On failure, retries after 15 minutes. Startup delay: 240 seconds.
+
+## Verification Stats & Digest
+
+### Daily Digest Email
+
+`notify/verification_email.py` sends a daily HTML + plaintext email at 06:00 UTC (configurable via `DIGEST_HOUR_UTC` env var). Admin-only while testing. Accuracy color thresholds: green ≥80%, amber 60-80%, red <60%.
+
+### Digest Data Model
+
+`VerificationDigestData` contains: `period_label`, `activity` (ActivitySummary), `category_accuracy_today` / `category_accuracy_7d` (CategoryAccuracyRow lists), `notable_misses` (with directional severity — optimistic vs pessimistic), `category_bias` (CategoryBiasStats per model), `wind_advisory` (WindAdvisoryStats), `missed_warnings` (MissedWarning list), `mae_stats` (MAERow list).
+
+### Admin Dashboard
+
+`GET /api/verification/stats` serves JSON for the web dashboard (`web/verification.html`). Source-filtered: flight and standalone stats are queried independently, never mixed. Dashboard shows category accuracy by model/days_out, notable misses, MAE trends.
+
+### Query Functions
+
+All in `tasks/verification_stats.py`. Every query accepts a `source` parameter ('flight' or 'standalone') to ensure isolation:
+
+- `get_activity_summary()` — observations, airports, flights, cycles, avg cycle duration
+- `get_category_accuracy()` — category match rate per model/days_out (includes TAF as pseudo-model)
+- `get_notable_misses()` — category busts with severity and direction (optimistic/pessimistic)
+- `get_category_bias()` — optimistic vs pessimistic miss rates per model
+- `get_wind_advisory_stats()` — wind advisory match rate
+- `get_missed_warnings()` — WARNINGs that models failed to predict
+- `get_mae_stats()` — MAE per model/days_out for temperature, ceiling, wind, visibility
+
+## Collection Loop (Flight-Based)
+
+### Scheduler Integration
+
+Loop in `scheduler.py`, alongside other async loops:
 
 ```python
 async def run_verification_loop(app_state) -> None:
@@ -636,33 +740,27 @@ GROUP BY model, days_out;
 | CLI for backfill/export | Can run independently of web process, enables data science workflows |
 | Store all fields, not just deltas | Raw observations enable future metrics we haven't thought of yet |
 | Keep data forever | This is the whole point — a growing accuracy dataset. At current scale, storage is negligible |
+| Dual-track (flight + standalone) | Flight-based provides real route context; standalone provides broader coverage independent of user activity |
+| Source column in unique constraints | Prevents flight and standalone scores from conflicting; all queries filter by source |
+| Verification cycles table | Performance monitoring — track phase timings and counts per cycle for both tracks |
+| airport_forecast_snapshots | Standalone needs its own forecast storage since there's no briefing pack to reference |
+| Daily digest at 06:00 UTC | Fixed time avoids multiple sends; early morning for overnight review |
+| Category bias (directional severity) | Distinguishes optimistic misses (model said VFR, was IFR) from pessimistic — optimistic misses are more dangerous |
+| Savepoint for observation inserts | Race condition protection — concurrent cycles may try to insert the same observation |
 
-## Implementation Phases
+## Implementation Status
 
-### Phase 1: Collection Infrastructure
-- DB tables + Alembic migration
-- `tasks/verification.py`: `collect_and_store()`
-- Scheduler loop integration
-- CLI: `verify collect`, `verify export`
-- No scoring yet — just archive observations
-
-### Phase 2: Model Scoring
-- `score_against_models()` — load forecasts, compute deltas, wind advisory comparison
-- TAF scoring
-- CLI: `verify score`, `verify stats`
-- Backfill past flights where forecasts.json still exists
-
-### Phase 3: Surfacing
-- API endpoints: `/api/verification/stats`, `/api/verification/flight/{id}`
-- Dashboard page: model accuracy charts
-- Per-flight verification report
-- Confidence annotations on forecasts ("historically X% accurate at D-3")
+**Phase 1 (Collection)**: Complete. Flight-based collection loop, CLI, observation archiving.
+**Phase 2 (Scoring)**: Complete. Model scoring, TAF scoring, wind advisory comparison.
+**Phase 3 (Surfacing)**: Partially complete. Admin dashboard and daily digest email implemented. Per-flight verification report and confidence annotations are future work.
+**Standalone pipeline**: Complete. Airport watchlist, Open-Meteo forecasting, GRIB ceiling enrichment, scoring.
 
 ## Open Considerations
 
-- **Historical METAR sources**: For backfill, aviationweather.gov has limited history. Iowa State Mesonet or OGIMET could provide deeper archives if needed. May add backup source later.
-- **SPECI handling**: Special METARs (significant weather changes) are more interesting for verification but occur irregularly. The 10-min poll should catch most of them.
-- **Retention**: Keep forever — a growing accuracy dataset. At current scale, storage is negligible.
+- **Historical METAR sources**: For backfill, aviationweather.gov has limited history. Iowa State Mesonet or OGIMET could provide deeper archives if needed.
+- **SPECI handling**: Special METARs are more interesting for verification but occur irregularly. The 10-min poll should catch most of them.
+- **Confidence annotations**: Future — annotate forecasts with "historically X% accurate at D-3" based on verification data.
+- **Per-flight verification report**: Future — show per-flight model accuracy in the briefing viewer.
 
 ## References
 
