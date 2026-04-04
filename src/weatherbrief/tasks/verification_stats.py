@@ -194,8 +194,8 @@ def _category_delta(obs_cat: str | None, model_cat: str | None) -> tuple[str, in
                "pessimistic" if model predicted worse.
     severity:  number of category levels apart (1-3).
     """
-    obs_rank = _CAT_ORDER.get(obs_cat or "", -1)
-    model_rank = _CAT_ORDER.get(model_cat or "", -1)
+    obs_rank = _CAT_ORDER.get((obs_cat or "").upper(), -1)
+    model_rank = _CAT_ORDER.get((model_cat or "").upper(), -1)
     if obs_rank < 0 or model_rank < 0:
         return ("", 0)
     diff = obs_rank - model_rank  # positive = actual worse = optimistic
@@ -234,8 +234,8 @@ def get_notable_misses(
             VerificationScoreRow.category_match == False,  # noqa: E712
             VerificationScoreRow.source == source,
             VerificationScoreRow.days_out.in_((0, 1)),
-            VerificationScoreRow.obs_flight_category.in_(tuple(_CAT_ORDER)),
-            VerificationScoreRow.model_flight_category.in_(tuple(_CAT_ORDER)),
+            func.upper(VerificationScoreRow.obs_flight_category).in_(tuple(_CAT_ORDER)),
+            func.upper(VerificationScoreRow.model_flight_category).in_(tuple(_CAT_ORDER)),
         )
         .order_by(VerificationScoreRow.observation_time.desc())
         .limit(500)  # fetch generously, filter & sort in Python
@@ -283,8 +283,8 @@ def get_category_bias_stats(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.source == source,
             VerificationScoreRow.days_out.in_((0, 1)),
-            VerificationScoreRow.obs_flight_category.in_(tuple(_CAT_ORDER)),
-            VerificationScoreRow.model_flight_category.in_(tuple(_CAT_ORDER)),
+            func.upper(VerificationScoreRow.obs_flight_category).in_(tuple(_CAT_ORDER)),
+            func.upper(VerificationScoreRow.model_flight_category).in_(tuple(_CAT_ORDER)),
         )
         .group_by(
             VerificationScoreRow.model,
