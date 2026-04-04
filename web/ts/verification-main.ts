@@ -9,6 +9,7 @@ import {
   type CategoryAccuracyRow,
   type NotableMiss,
   type MissedWarning,
+  type CategoryBiasStats,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml } from './utils';
 import { initTheme } from './theme';
@@ -62,6 +63,7 @@ async function loadData(): Promise<void> {
     const data = await fetchVerificationStats(currentPeriod, currentSource);
     renderSummary(data);
     renderAccuracy(data);
+    renderBias(data);
     renderMisses(data);
     renderWind(data);
     renderMAE(data);
@@ -184,6 +186,54 @@ function renderAccuracy(data: VerificationDigest): void {
   el.innerHTML = html;
 }
 
+function renderBias(data: VerificationDigest): void {
+  const el = document.getElementById('bias-section');
+  if (!el) return;
+  const bias = data.category_bias;
+
+  if (bias.length === 0) {
+    el.innerHTML = '<h2>Category Bias</h2><p class="empty-state">No data available.</p>';
+    return;
+  }
+
+  let html = '<h2>Category Bias</h2>';
+  html += '<table class="admin-table"><thead><tr>';
+  html += '<th>Model</th><th class="num">D-out</th><th class="num">Scores</th>';
+  html += '<th class="num" title="Model predicted better than actual by 1 cat level">Opt +1</th>';
+  html += '<th class="num" title="Model predicted better than actual by 2 cat levels">Opt +2</th>';
+  html += '<th class="num" title="Model predicted better than actual by 3 cat levels">Opt +3</th>';
+  html += '<th class="num" title="Model predicted worse than actual by 1 cat level">Pess +1</th>';
+  html += '<th class="num" title="Model predicted worse than actual by 2 cat levels">Pess +2</th>';
+  html += '<th class="num" title="Model predicted worse than actual by 3 cat levels">Pess +3</th>';
+  html += '</tr></thead><tbody>';
+
+  for (const b of bias) {
+    const optTotal = b.optimistic_1 + b.optimistic_2 + b.optimistic_3;
+    const pessTotal = b.pessimistic_1 + b.pessimistic_2 + b.pessimistic_3;
+    const fmtCell = (n: number, danger: boolean) => {
+      if (n === 0) return '<td class="num" style="color:var(--text-muted)">—</td>';
+      const pct = ((n / b.total_scores) * 100).toFixed(1);
+      const cls = danger && n > 0 ? ' style="color:#dc3545;font-weight:600"' : '';
+      return `<td class="num"${cls}>${n} <small style="color:var(--text-muted)">(${pct}%)</small></td>`;
+    };
+    html += '<tr>';
+    html += `<td style="font-weight:600">${escapeHtml(b.model.toUpperCase())}</td>`;
+    html += `<td class="num">D-${b.days_out}</td>`;
+    html += `<td class="num">${b.total_scores}</td>`;
+    html += fmtCell(b.optimistic_1, true);
+    html += fmtCell(b.optimistic_2, true);
+    html += fmtCell(b.optimistic_3, true);
+    html += fmtCell(b.pessimistic_1, false);
+    html += fmtCell(b.pessimistic_2, false);
+    html += fmtCell(b.pessimistic_3, false);
+    html += '</tr>';
+    // Summary row if model has both D-0 and D-1 — skip for now, per-row is clear
+  }
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
 function renderMisses(data: VerificationDigest): void {
   const el = document.getElementById('misses-section')!;
   const misses = data.notable_misses;
@@ -193,20 +243,21 @@ function renderMisses(data: VerificationDigest): void {
     return;
   }
 
-  const IFR_CATS = ['IFR', 'LIFR'];
-  const VFR_CATS = ['VFR', 'MVFR'];
-
   let html = '<h2>Notable Misses</h2>';
   html += '<table class="admin-table"><thead><tr>';
-  for (const h of ['ICAO', 'Time', 'Model', 'D-out', 'Observed', 'Predicted', 'Ceiling \u0394']) {
+  for (const h of ['ICAO', 'Time', 'Model', 'D-out', 'Observed', 'Predicted', 'Severity', 'Ceiling \u0394']) {
     html += `<th>${h}</th>`;
   }
   html += '</tr></thead><tbody>';
 
   for (const m of misses) {
-    const isMissedIFR = IFR_CATS.includes(m.obs_category) && VFR_CATS.includes(m.model_category);
-    const rowClass = isMissedIFR ? 'miss-row-danger' : 'miss-row-warn';
+    const rowClass = m.direction === 'optimistic'
+      ? (m.severity >= 2 ? 'miss-row-danger' : 'miss-row-warn')
+      : 'miss-row-info';
     const ceiling = m.ceiling_delta_ft != null ? `${m.ceiling_delta_ft > 0 ? '+' : ''}${Math.round(m.ceiling_delta_ft)}ft` : '—';
+    const sevLabel = m.direction === 'optimistic'
+      ? `\u26a0 +${m.severity}`   // ⚠ optimistic
+      : `\u2193 +${m.severity}`;   // ↓ pessimistic
 
     html += `<tr class="${rowClass}">`;
     html += `<td style="font-weight:600">${escapeHtml(m.icao)}</td>`;
@@ -215,6 +266,7 @@ function renderMisses(data: VerificationDigest): void {
     html += `<td class="num">D-${m.days_out}</td>`;
     html += `<td style="font-weight:600">${escapeHtml(m.obs_category)}</td>`;
     html += `<td>${escapeHtml(m.model_category)}</td>`;
+    html += `<td class="num">${sevLabel}</td>`;
     html += `<td class="num">${ceiling}</td>`;
     html += '</tr>';
   }

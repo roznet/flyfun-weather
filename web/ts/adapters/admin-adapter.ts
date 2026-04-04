@@ -282,6 +282,20 @@ export interface NotableMiss {
   obs_category: string;
   model_category: string;
   ceiling_delta_ft: number | null;
+  direction: string;
+  severity: number;
+}
+
+export interface CategoryBiasStats {
+  model: string;
+  days_out: number;
+  total_scores: number;
+  optimistic_1: number;
+  optimistic_2: number;
+  optimistic_3: number;
+  pessimistic_1: number;
+  pessimistic_2: number;
+  pessimistic_3: number;
 }
 
 export interface WindAdvisoryStats {
@@ -314,6 +328,7 @@ export interface VerificationDigest {
   category_accuracy_today: CategoryAccuracyRow[];
   category_accuracy_7d: CategoryAccuracyRow[];
   notable_misses: NotableMiss[];
+  category_bias: CategoryBiasStats[];
   wind_advisory: WindAdvisoryStats[];
   missed_warnings: MissedWarning[];
   mae_stats: MAERow[];

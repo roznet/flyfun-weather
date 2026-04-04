@@ -222,15 +222,18 @@ def _render_notable_misses(misses: list[NotableMiss]) -> str:
     )
     parts.append(f'<table style="{_STYLE_TABLE}">')
     parts.append("<tr>")
-    for h in ("ICAO", "Time", "Model", "D-out", "Observed", "Predicted", "Ceiling \u0394"):
+    for h in ("ICAO", "Time", "Model", "D-out", "Observed", "Predicted", "Severity", "Ceiling \u0394"):
         parts.append(f'<th style="{_STYLE_TH}">{h}</th>')
     parts.append("</tr>")
 
     for m in misses:
-        # Highlight missed IFR in red, false alarm in amber
-        is_missed_ifr = m.obs_category in _IFR_CATS and m.model_category in _VFR_CATS
-        row_bg = "background:#fff0f0;" if is_missed_ifr else "background:#fffde7;"
+        if m.direction == "optimistic":
+            row_bg = "background:#fff0f0;" if m.severity >= 2 else "background:#fffde7;"
+        else:
+            row_bg = "background:#f0f4ff;"
         ceiling = f"{m.ceiling_delta_ft:+.0f}ft" if m.ceiling_delta_ft is not None else "—"
+        sev_icon = "\u26a0" if m.direction == "optimistic" else "\u2193"
+        sev_label = f"{sev_icon} +{m.severity}"
 
         parts.append(f'<tr style="{row_bg}">')
         parts.append(f'<td style="{_STYLE_TD} font-weight:600;">{html.escape(m.icao)}</td>')
@@ -239,15 +242,12 @@ def _render_notable_misses(misses: list[NotableMiss]) -> str:
         parts.append(f'<td style="{_STYLE_TD} text-align:center;">D-{m.days_out}</td>')
         parts.append(f'<td style="{_STYLE_TD} font-weight:600;">{html.escape(m.obs_category)}</td>')
         parts.append(f'<td style="{_STYLE_TD}">{html.escape(m.model_category)}</td>')
+        parts.append(f'<td style="{_STYLE_TD} text-align:center;">{sev_label}</td>')
         parts.append(f'<td style="{_STYLE_TD}">{ceiling}</td>')
         parts.append("</tr>")
 
     parts.append("</table>")
     return "".join(parts)
-
-
-_IFR_CATS = ("IFR", "LIFR")
-_VFR_CATS = ("VFR", "MVFR")
 
 
 def _render_wind_section(data: VerificationDigestData) -> str:
@@ -367,10 +367,11 @@ def _build_digest_plain(data: VerificationDigestData) -> str:
         lines.append("NOTABLE MISSES")
         for m in data.notable_misses:
             ceiling = f" (ceiling {m.ceiling_delta_ft:+.0f}ft)" if m.ceiling_delta_ft is not None else ""
+            tag = f"[{m.direction} +{m.severity}]" if m.direction else ""
             lines.append(
                 f"  {m.icao} {_fmt_time(m.observation_time)} — "
                 f"{m.model.upper()}(D-{m.days_out}): {m.model_category}, "
-                f"Actual: {m.obs_category}{ceiling}"
+                f"Actual: {m.obs_category}{ceiling} {tag}"
             )
         lines.append("")
 
