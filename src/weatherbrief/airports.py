@@ -34,6 +34,18 @@ def get_timezone(lat: float, lon: float) -> str | None:
     return _timezone_finder().timezone_at(lat=lat, lng=lon)
 
 
+def is_known_waypoint(code: str, db_path: str) -> bool:
+    """Check if a single waypoint code is known in the database.
+
+    Checks airports, navaids, and five-letter fixes.
+    """
+    from euro_aip.models.route_resolver import RouteResolver
+
+    model = _load_airport_model(db_path)
+    resolver = RouteResolver(model)
+    return resolver.resolve_point(code.upper()) is not None
+
+
 def resolve_waypoints(codes: list[str], db_path: str) -> list[Waypoint]:
     """Resolve waypoint codes to Waypoints using euro_aip RouteResolver.
 
