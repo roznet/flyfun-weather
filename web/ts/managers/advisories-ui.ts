@@ -31,12 +31,7 @@ function statusLabel(status: AdvisoryStatus): string {
 }
 
 function flightCatBadgeClass(cat: FlightCategory): string {
-  switch (cat) {
-    case 'vfr': return 'flight-cat-vfr';
-    case 'mvfr': return 'flight-cat-mvfr';
-    case 'ifr': return 'flight-cat-ifr';
-    case 'lifr': return 'flight-cat-lifr';
-  }
+  return `flight-cat-${cat.toLowerCase()}`;
 }
 
 function formatRunwayPopup(allRunways: RunwayWind[]): string {
@@ -84,7 +79,7 @@ function formatRunwayComponents(rwy: RunwayWind, windDir: number): string {
 
 /** Severity rank for flight categories — higher = worse. */
 const FLIGHT_CAT_SEVERITY: Record<FlightCategory, number> = {
-  vfr: 0, mvfr: 1, ifr: 2, lifr: 3,
+  VFR: 0, MVFR: 1, IFR: 2, LIFR: 3,
 };
 
 /**
@@ -174,7 +169,7 @@ function computeSummaryCondition(
 }
 
 function renderSummaryRow(cond: AirportModelCondition): string {
-  const catLabel = cond.flight_category.toUpperCase();
+  const catLabel = cond.flight_category;
   const catClass = flightCatBadgeClass(cond.flight_category);
   const vis = cond.visibility_sm !== null ? `vis ${cond.visibility_sm}sm` : '';
   const ceil = cond.ceiling_ft !== null ? `ceil ${cond.ceiling_ft}ft` : 'CLR';
@@ -194,7 +189,7 @@ function renderSummaryRow(cond: AirportModelCondition): string {
 }
 
 function renderConditionRow(cond: AirportModelCondition): string {
-  const catLabel = cond.flight_category.toUpperCase();
+  const catLabel = cond.flight_category;
   const catClass = flightCatBadgeClass(cond.flight_category);
   const vis = cond.visibility_sm !== null ? `${cond.visibility_sm}sm` : 'N/A';
   const ceil = cond.ceiling_ft !== null ? `${cond.ceiling_ft}ft` : 'CLR';

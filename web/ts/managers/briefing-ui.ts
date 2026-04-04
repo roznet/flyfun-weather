@@ -403,13 +403,8 @@ export function renderAutoRefreshBar(
 
 function flightCatBadge(cat: string | null): string {
   if (!cat) return '\u2014';
-  const lower = cat.toLowerCase();
-  const cls = lower === 'vfr' ? 'flight-cat-vfr'
-    : lower === 'mvfr' ? 'flight-cat-mvfr'
-    : lower === 'ifr' ? 'flight-cat-ifr'
-    : lower === 'lifr' ? 'flight-cat-lifr'
-    : '';
-  return `<span class="flight-cat-badge ${cls}">${escapeHtml(cat.toUpperCase())}</span>`;
+  const upper = cat.toUpperCase();
+  return `<span class="flight-cat-badge flight-cat-${cat.toLowerCase()}">${escapeHtml(upper)}</span>`;
 }
 
 function matchIcon(match: string): string {

@@ -44,7 +44,7 @@ export interface RouteAdvisoryResult {
   parameters_used: Record<string, number>;
 }
 
-export type FlightCategory = 'vfr' | 'mvfr' | 'ifr' | 'lifr';
+export type FlightCategory = 'VFR' | 'MVFR' | 'IFR' | 'LIFR';
 
 export interface RunwayEnd {
   id: string;

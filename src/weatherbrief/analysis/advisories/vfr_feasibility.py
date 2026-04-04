@@ -56,7 +56,7 @@ def _check_airport_vfr(
         cat = cond.flight_category
         if cat in (FlightCategory.IFR, FlightCategory.LIFR):
             worst = _worst_status(worst, AdvisoryStatus.RED)
-            parts.append(f"{label} {icao} {cat.value.upper()}")
+            parts.append(f"{label} {icao} {cat.value}")
         elif cat == FlightCategory.MVFR:
             worst = _worst_status(worst, AdvisoryStatus.AMBER)
             parts.append(f"{label} {icao} MVFR")
