@@ -14,9 +14,33 @@ The project directory on the server is `flyfun-weather`.
 1. Ensure the working tree is clean (`git status`)
 2. Ensure we are on the `main` branch
 3. Show the commits that will be deployed: `git log --oneline origin/main..HEAD`
-4. **Check for pending Alembic migrations** (see below)
-5. **Check airport database freshness** (see below)
-6. Ask the user to confirm before proceeding
+4. **Run tests** (see below)
+5. **Check for pending Alembic migrations** (see below)
+6. **Check airport database freshness** (see below)
+7. Ask the user to confirm before proceeding
+
+## Run tests
+
+**Always run Python tests** — they take ~15s and cover the backend:
+```bash
+source venv/bin/activate && python -m pytest tests/ --ignore=tests/test_llm_digest.py -q
+```
+If any test fails, **stop the deploy** and report the failures.
+
+**Run Playwright tests if frontend or API changed.** Check what changed since the last deploy:
+```bash
+git diff origin/main..HEAD --name-only
+```
+Run Playwright if ANY of these paths have changes:
+- `web/` (frontend code, templates, static files)
+- `src/weatherbrief/api/` (API endpoints)
+- `src/weatherbrief/models/` (data models served to frontend)
+- `configs/` (prompt configs, guidance presets)
+
+```bash
+cd web && npx playwright test --reporter=line
+```
+If Playwright tests fail, **warn the user** but don't block — failures may be from stale selectors rather than real bugs. Let the user decide.
 
 ## Check for Alembic migrations
 
