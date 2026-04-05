@@ -21,8 +21,21 @@ logger = logging.getLogger(__name__)
 # aviationweather.gov METAR endpoint — supports @prefix queries
 _AWC_METAR_URL = "https://aviationweather.gov/api/data/metar"
 
-# Default prefixes: FR, DE, UK, NL, BE, CH, AT
-DEFAULT_PREFIXES = ["LF", "ED", "EG", "EH", "EB", "LS", "LO"]
+# European ICAO prefixes (excluding ET/German military)
+DEFAULT_PREFIXES = [
+    # Western Europe (original)
+    "LF", "ED", "EG", "EH", "EB", "LS", "LO",
+    # Scandinavia & Nordic
+    "ES", "EN", "EF", "EK", "BI",
+    # Southern Europe
+    "LI", "LE", "LG", "LP",
+    # Central & Eastern Europe
+    "EP", "LK", "LH", "LR", "LB", "LZ",
+    # Balkans
+    "LD", "LJ", "LY", "LQ", "LW", "LA",
+    # Baltics & small
+    "EE", "EV", "EY", "EI", "EL",
+]
 
 _WATCHLIST_FILENAME = "airport_watchlist.json"
 

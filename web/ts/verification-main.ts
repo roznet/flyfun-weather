@@ -76,13 +76,17 @@ async function loadAirports(): Promise<void> {
 }
 
 const COUNTRY_LABELS: Record<string, string> = {
-  LF: 'France (LF)',
-  ED: 'Germany (ED)',
-  EG: 'United Kingdom (EG)',
-  EH: 'Netherlands (EH)',
-  EB: 'Belgium (EB)',
-  LS: 'Switzerland (LS)',
-  LO: 'Austria (LO)',
+  BI: 'Iceland (BI)', EB: 'Belgium (EB)', ED: 'Germany (ED)',
+  EE: 'Estonia (EE)', EF: 'Finland (EF)', EG: 'United Kingdom (EG)',
+  EH: 'Netherlands (EH)', EI: 'Ireland (EI)', EK: 'Denmark (EK)',
+  EL: 'Luxembourg (EL)', EN: 'Norway (EN)', EP: 'Poland (EP)',
+  ES: 'Sweden (ES)', EV: 'Latvia (EV)', EY: 'Lithuania (EY)',
+  LA: 'Albania (LA)', LB: 'Bulgaria (LB)', LD: 'Croatia (LD)',
+  LE: 'Spain (LE)', LF: 'France (LF)', LG: 'Greece (LG)',
+  LH: 'Hungary (LH)', LI: 'Italy (LI)', LJ: 'Slovenia (LJ)',
+  LK: 'Czech Republic (LK)', LO: 'Austria (LO)', LP: 'Portugal (LP)',
+  LQ: 'Bosnia & Herz. (LQ)', LR: 'Romania (LR)', LS: 'Switzerland (LS)',
+  LW: 'N. Macedonia (LW)', LY: 'Serbia (LY)', LZ: 'Slovakia (LZ)',
 };
 
 function setupLocationFilter(): void {
