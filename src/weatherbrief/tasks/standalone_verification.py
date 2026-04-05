@@ -148,7 +148,10 @@ def _fetch_forecasts_for_model(
     all_results: list[dict] = []
 
     # Process airports in chunks
+    chunk_num = 0
+    total_chunks = (len(airports) + _OPEN_METEO_BATCH_SIZE - 1) // _OPEN_METEO_BATCH_SIZE
     for chunk_airports in batched(airports, _OPEN_METEO_BATCH_SIZE):
+        chunk_num += 1
         chunk_list = list(chunk_airports)
         points = [
             RoutePoint(
@@ -185,6 +188,8 @@ def _fetch_forecasts_for_model(
         if forecasts is None:
             continue
 
+        logger.info("Model %s chunk %d/%d: processing %d airports",
+                    model, chunk_num, total_chunks, len(chunk_list))
         for airport, wpf in zip(chunk_list, forecasts):
             # Filter to sample hours only
             for hourly in wpf.hourly:
@@ -724,8 +729,9 @@ def run_standalone_cycle(
             # GRIB enrichment for ceiling/cloud_base
             _enrich_with_grib(snapshots, model, init_time, airports, session)
 
-            # Store immediately and free memory
+            # Store immediately, commit, and free memory
             stored = _store_snapshots(snapshots, db)
+            db.commit()
             snapshots_stored += stored
             logger.info("Model %s: stored %d snapshots", model, stored)
             del snapshots

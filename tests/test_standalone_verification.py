@@ -621,7 +621,7 @@ class TestRunStandaloneCycle:
         assert result["observations_stored"] == 3
         assert result["scores_created"] == 5
         assert result["duration_ms"] >= 0
-        mock_db.commit.assert_called_once()
+        assert mock_db.commit.call_count >= 1
 
     @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
     @patch("flyfun_common.db.SessionLocal")
