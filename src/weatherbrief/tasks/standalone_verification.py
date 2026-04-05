@@ -205,6 +205,8 @@ def _fetch_forecasts_for_model(
                         lcl_ft = _LCL_CONSTANT_FT * spread
 
                 # Sounding analysis from pressure-level data
+                # Only run for D-0/D-1 (within 48h of init) — these are the
+                # forecast hours that get scored. D-2+ don't need sounding.
                 sounding_ceiling_ft = None
                 sounding_cloud_base_ft = None
                 freezing_level_ft = None
@@ -213,7 +215,11 @@ def _fetch_forecasts_for_model(
                 sounding_lifted_index = None
                 sounding_convective_risk = None
 
-                if hourly.pressure_levels:
+                forecast_time = hourly.time if hasattr(hourly.time, 'tzinfo') and hourly.time.tzinfo else hourly.time.replace(tzinfo=timezone.utc) if hasattr(hourly.time, 'replace') else hourly.time
+                hours_ahead = (forecast_time - init_time).total_seconds() / 3600 if hasattr(forecast_time, '__sub__') else 999
+                run_sounding = hours_ahead <= 48 and hourly.pressure_levels
+
+                if run_sounding:
                     try:
                         sounding = _analyze(
                             hourly.pressure_levels, hourly, model_key=model,
