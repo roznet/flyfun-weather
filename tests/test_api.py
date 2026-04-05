@@ -394,57 +394,76 @@ class TestRefreshEndpoint:
         assert resp.status_code != 503 or "not configured" not in resp.json().get("detail", "")
         client.app.state.db_path = ""
 
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_refresh_success(self, mock_load, mock_execute, client, sample_flight, app_db):
+        """Full refresh: route resolution → pipeline → pack saved in DB."""
+        from airport_mocks import TEST_AIRPORTS, mock_model
+        from weatherbrief.models import ForecastSnapshot, RouteConfig, Waypoint
+        from weatherbrief.pipeline import BriefingResult, BriefingUsage
+
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        # Build a minimal BriefingResult
+        route = RouteConfig(
+            name="egtk_lsgs",
+            waypoints=[
+                Waypoint(icao="EGTK", name="Oxford Kidlington", lat=51.8361, lon=-1.32),
+                Waypoint(icao="LSGS", name="Sion", lat=46.2192, lon=7.3267),
+            ],
+            cruise_altitude_ft=sample_flight.cruise_altitude_ft,
+        )
+        snapshot = ForecastSnapshot(
+            route=route,
+            target_date=sample_flight.departure_time.strftime("%Y-%m-%d"),
+            fetch_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            days_out=3,
+            departure_time=sample_flight.departure_time,
+        )
+        fake_result = BriefingResult(
+            snapshot=snapshot,
+            snapshot_path=Path("/tmp/fake_snapshot.json"),
+            usage=BriefingUsage(open_meteo_calls=2),
+        )
+        mock_execute.return_value = fake_result
+
+        resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["flight_id"] == sample_flight.id
+        assert data["days_out"] == 3
+
+        # Verify pipeline was called
+        mock_execute.assert_called_once()
+
+        # Verify pack is now in DB
+        packs_resp = client.get(f"/api/flights/{sample_flight.id}/packs")
+        assert packs_resp.status_code == 200
+        assert len(packs_resp.json()) == 1
+
+    def test_refresh_duplicate_409(self, client, sample_flight):
+        """Refresh returns 409 when one is already in progress."""
+        from weatherbrief.api.packs import refresh_registry
+
+        client.app.state.db_path = "/fake/db"
+        refresh_registry.try_register(
+            sample_flight.id, triggered_by="user", user_id=DEV_USER_ID,
+        )
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 409
+            assert "already in progress" in resp.json()["detail"]
+        finally:
+            refresh_registry.unregister(sample_flight.id)
+
 
 # --- Interpret Route ---
 
-# Mock helpers — mirror test_airports.py, mock only the DB layer so the real
+# Mock helpers imported from conftest — mock only the DB layer so the real
 # RouteResolver runs (catches contract violations like the single-token bug).
-
-
-def _mock_airport(icao: str, name: str, lat: float, lon: float):
-    airport = MagicMock()
-    airport.ident = icao
-    airport.name = name
-    airport.latitude_deg = lat
-    airport.longitude_deg = lon
-    return airport
-
-
-class _MockAirportsCollection:
-    def __init__(self, airports_dict: dict):
-        self._airports = airports_dict
-
-    def get(self, icao):
-        return self._airports.get(icao)
-
-    def where(self, **kwargs):
-        ident = kwargs.get("ident")
-        result = self._airports.get(ident)
-        return _MockQueryResult(result)
-
-
-class _MockQueryResult:
-    def __init__(self, value):
-        self._value = value
-
-    def first(self):
-        return self._value
-
-
-def _mock_model(airports_dict: dict):
-    model = MagicMock()
-    model.airports = _MockAirportsCollection(airports_dict)
-    model.get_waypoint.side_effect = lambda name: None
-    model.get_waypoint_candidates.side_effect = lambda name: []
-    return model
-
-
-_TEST_AIRPORTS = {
-    "EGBJ": _mock_airport("EGBJ", "Gloucestershire", 51.8942, -2.1672),
-    "LFOV": _mock_airport("LFOV", "Laval-Entrammes", 48.0314, -0.7428),
-    "EGTK": _mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
-    "LSGS": _mock_airport("LSGS", "Sion", 46.2192, 7.3267),
-}
+from airport_mocks import TEST_AIRPORTS, mock_model
 
 
 class TestInterpretRoute:
@@ -462,7 +481,7 @@ class TestInterpretRoute:
     @patch("weatherbrief.airports._load_airport_model")
     def test_two_valid_airports(self, mock_load, client):
         """Basic happy path — two ICAO codes resolve successfully."""
-        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
         resp = self._post(client, "EGBJ LFOV")
@@ -475,7 +494,7 @@ class TestInterpretRoute:
     @patch("weatherbrief.airports._load_airport_model")
     def test_single_valid_airport(self, mock_load, client):
         """Single code is recognized but no full route resolution."""
-        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
         resp = self._post(client, "EGBJ")
@@ -489,7 +508,7 @@ class TestInterpretRoute:
     @patch("weatherbrief.airports._load_airport_model")
     def test_unknown_token_skipped(self, mock_load, client):
         """Unknown codes go to skipped, valid ones to interpreted."""
-        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
         resp = self._post(client, "EGBJ ZZZZ LFOV")
@@ -501,7 +520,7 @@ class TestInterpretRoute:
     @patch("weatherbrief.airports._load_airport_model")
     def test_filters_route_notation(self, mock_load, client):
         """Non-waypoint tokens (separators, short words) are filtered out."""
-        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
         resp = self._post(client, "EGBJ - LFOV")
@@ -512,7 +531,7 @@ class TestInterpretRoute:
     @patch("weatherbrief.airports._load_airport_model")
     def test_multi_waypoint_route(self, mock_load, client):
         """Three-leg route resolves all waypoints."""
-        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
         resp = self._post(client, "EGTK EGBJ LSGS")
@@ -524,7 +543,7 @@ class TestInterpretRoute:
     @patch("weatherbrief.airports._load_airport_model")
     def test_duplicate_consecutive_tokens(self, mock_load, client):
         """Consecutive duplicates are collapsed."""
-        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
         resp = self._post(client, "EGBJ EGBJ LFOV")
@@ -541,7 +560,7 @@ class TestInterpretRoute:
     @patch("weatherbrief.airports._load_airport_model")
     def test_all_unknown(self, mock_load, client):
         """All tokens unknown — interpreted is empty."""
-        mock_load.return_value = _mock_model({})
+        mock_load.return_value = mock_model({})
         client.app.state.db_path = "/fake/db"
 
         resp = self._post(client, "ZZZZ YYYY")
