@@ -134,6 +134,30 @@ test('flight lifecycle: create → view → change setting → recalculate → d
     route.fulfill({ json: advisoriesData.catalog }),
   );
 
+  // --- Mock interpret-route ---
+  await page.route('**/api/flights/interpret-route', route => {
+    const body = route.request().postDataJSON();
+    const raw = (body?.raw_route ?? '').toUpperCase();
+    const tokens = raw.split(/[\s,\-/]+/).filter(Boolean);
+    const known = new Set(['EGTF', 'EGLF', 'EGBJ', 'LFOV', 'EGTK', 'LSGS', 'LFPB']);
+    const interpreted = tokens.filter(t => known.has(t));
+    const skipped = tokens.filter(t => !known.has(t));
+    return route.fulfill({
+      json: {
+        original_tokens: tokens,
+        interpreted,
+        skipped,
+        waypoints: interpreted.map(icao => ({
+          icao,
+          name: icao,
+          lat: 51.0,
+          lon: -1.0,
+          timezone: 'Europe/London',
+        })),
+      },
+    });
+  });
+
   // --- Mock flights list ---
   await page.route('**/api/flights', route => {
     const url = route.request().url();

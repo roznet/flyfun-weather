@@ -27,3 +27,4 @@ DerivedData/
 .build/
 *.xcscmblueprint
 eval_data
+test-results/
