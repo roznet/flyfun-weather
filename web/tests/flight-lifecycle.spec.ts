@@ -7,11 +7,26 @@ import { join } from 'path';
 // ---------------------------------------------------------------------------
 
 const FIXTURES = join(__dirname, 'fixtures', 'egtf_eglf');
-const FLIGHT_ID = 'egtf_eglf-2026-02-25-45ed';
+
+// Use a future date so the flight shows in the "upcoming" section, not collapsed under "past"
+const FUTURE_DATE = new Date(Date.now() + 3 * 86400_000).toISOString().slice(0, 10);
+const FLIGHT_ID = `egtf_eglf-${FUTURE_DATE}-45ed`;
 const TIMESTAMP = '2026-02-25T16:10:07.255073+00:00';
 
 function fixture(name: string) {
-  return JSON.parse(readFileSync(join(FIXTURES, name), 'utf-8'));
+  const data = JSON.parse(readFileSync(join(FIXTURES, name), 'utf-8'));
+  return data;
+}
+
+/** Patch flight-facing dates to use FUTURE_DATE so flights aren't in the past.
+ *  Only patches target_date and departure_time — NOT fetch_timestamp or other metadata. */
+function patchFlightDates(obj: Record<string, any>): Record<string, any> {
+  const out = { ...obj };
+  if (out.target_date) out.target_date = FUTURE_DATE;
+  if (out.departure_time && typeof out.departure_time === 'string') {
+    out.departure_time = out.departure_time.replace(/\d{4}-\d{2}-\d{2}/, FUTURE_DATE);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -20,8 +35,8 @@ function fixture(name: string) {
 
 test('flight lifecycle: create → view → change setting → recalculate → delete', async ({ page }) => {
   const enc = encodeURIComponent;
-  const flightData = fixture('flight.json');
-  const packMetaData = fixture('pack_meta.json');
+  const flightData = patchFlightDates({ ...fixture('flight.json'), id: FLIGHT_ID });
+  const packMetaData = { ...fixture('pack_meta.json'), flight_id: FLIGHT_ID };
   const advisoriesData = fixture('advisories.json');
   const advisoriesWorstData = fixture('advisories_worst.json');
 
@@ -203,7 +218,7 @@ test('flight lifecycle: create → view → change setting → recalculate → d
     const afterPacks = url.split('/packs')[1];
     if (afterPacks && afterPacks !== '' && afterPacks !== '/')
       return route.fallthrough();
-    return route.fulfill({ json: fixture('packs.json') });
+    return route.fulfill({ json: fixture('packs.json').map((p: any) => ({ ...p, flight_id: FLIGHT_ID })) });
   });
 
   // --- Mock pack metadata ---
@@ -278,6 +293,22 @@ test('flight lifecycle: create → view → change setting → recalculate → d
     route.fulfill({ status: 404, json: { detail: 'not available' } }),
   );
 
+  // --- Mock aircraft list ---
+  await page.route('**/api/user/aircraft', route =>
+    route.fulfill({ json: [] }),
+  );
+
+  // --- Mock DWD overview and skewt (non-critical) ---
+  await page.route('**/dwd-overview**', route =>
+    route.fulfill({ status: 404, json: { detail: 'not available' } }),
+  );
+  await page.route('**/skewt/**', route =>
+    route.fulfill({ status: 404, json: { detail: 'not available' } }),
+  );
+  await page.route('**/hodograph/**', route =>
+    route.fulfill({ status: 404, json: { detail: 'not available' } }),
+  );
+
   // =========================================================================
   // Phase 1: Create a flight on the flights page
   // =========================================================================
@@ -289,7 +320,7 @@ test('flight lifecycle: create → view → change setting → recalculate → d
 
   // Fill in the flight creation form
   await page.fill('#input-waypoints', 'EGTF EGLF');
-  await page.fill('#input-date', '2026-02-25');
+  await page.fill('#input-date', FUTURE_DATE);
   await page.selectOption('#input-hour', '17');
   await page.selectOption('#input-minute', '0');
   await page.fill('#input-altitude', '2000');
@@ -302,6 +333,7 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   // =========================================================================
 
   await page.waitForURL(/briefing\.html/);
+
 
   // Verify route info is visible
   await expect(page.getByText('EGTF')).toBeVisible();
@@ -339,11 +371,17 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   await page.click('a[href="/"]');
   await page.waitForURL(/\/$/);
 
-  // Flight card should be visible now
+  // Flight card may be under "Past flights" if departure is in the past
+  const pastToggle = page.locator('button:has-text("Past flights")');
+  if (await pastToggle.isVisible()) {
+    await pastToggle.click();
+  }
+
+  // Flight card should now be visible
   await expect(page.locator('.flight-card')).toBeVisible();
 
-  // Click "View Briefing" on the flight card
-  await page.click('.btn-view');
+  // Click "Briefing" on the flight card
+  await page.click('.flight-card button:has-text("Briefing")');
   await page.waitForURL(/briefing\.html/);
 
   // Wait for advisories to load
@@ -368,6 +406,12 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   await page.click('a[href="/"]');
   await page.waitForURL(/\/$/);
 
+  // Expand past flights if collapsed
+  const pastToggle2 = page.locator('button:has-text("Past flights")');
+  if (await pastToggle2.isVisible()) {
+    await pastToggle2.click();
+  }
+
   // Flight card should exist
   await expect(page.locator('.flight-card')).toBeVisible();
 
@@ -375,7 +419,7 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   page.on('dialog', dialog => dialog.accept());
 
   // Click delete
-  await page.click('.btn-delete');
+  await page.click('.flight-card button:has-text("Delete")');
 
   // Should return to empty state
   await expect(page.locator('.empty-state')).toContainText('No flights yet');

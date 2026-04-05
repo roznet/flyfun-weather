@@ -7,7 +7,8 @@ import { join } from 'path';
 // ---------------------------------------------------------------------------
 
 const FIXTURES = join(__dirname, 'fixtures', 'egtf_eglf');
-const FLIGHT_ID = 'egtf_eglf-2026-02-25-45ed';
+const FUTURE_DATE = new Date(Date.now() + 3 * 86400_000).toISOString().slice(0, 10);
+const FLIGHT_ID = `egtf_eglf-${FUTURE_DATE}-45ed`;
 const TIMESTAMP = '2026-02-25T16:10:07.255073+00:00';
 
 function fixture(name: string) {
@@ -25,7 +26,8 @@ async function mockBriefingApi(page: import('@playwright/test').Page) {
   await page.route(`**/api/flights/${FLIGHT_ID}`, route => {
     if (route.request().url().includes('/packs'))
       return route.fallthrough();            // let more-specific routes handle /packs/*
-    return route.fulfill({ json: fixture('flight.json') });
+    const flight = { ...fixture('flight.json'), id: FLIGHT_ID, departure_time: `${FUTURE_DATE}T17:00:00+00:00`, target_date: FUTURE_DATE };
+    return route.fulfill({ json: flight });
   });
 
   // GET /api/flights/{id}/packs

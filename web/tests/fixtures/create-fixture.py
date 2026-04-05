@@ -196,10 +196,28 @@ def load_json_safe(path: str):
     return None
 
 
+def _dir_name_to_iso(name: str) -> str:
+    """Convert pack directory name to ISO 8601 timestamp.
+
+    Directory names use filesystem-safe format: 2026-02-25T16-10-07.255073p00-00
+    ISO 8601 needs:                             2026-02-25T16:10:07.255073+00:00
+    """
+    import re
+    # Replace 'p' with '+' for timezone
+    s = name.replace("p", "+")
+    # Fix time part: after 'T', replace first two '-' with ':'
+    m = re.match(r"(\d{4}-\d{2}-\d{2}T)(\d{2})-(\d{2})-(\d{2})(.*)", s)
+    if m:
+        s = f"{m.group(1)}{m.group(2)}:{m.group(3)}:{m.group(4)}{m.group(5)}"
+    # Fix timezone: +00-00 → +00:00
+    s = re.sub(r"\+(\d{2})-(\d{2})$", r"+\1:\2", s)
+    return s
+
+
 def generate_from_pack(pack_dir: str, flight_id: str, dest: str):
     """Generate fixtures directly from pack files on disk (no server needed)."""
     pack_dir = os.path.abspath(pack_dir)
-    timestamp = os.path.basename(pack_dir).replace("T", "T").replace("p", "+")
+    timestamp = _dir_name_to_iso(os.path.basename(pack_dir))
 
     # Load pack files
     snapshot = load_json_safe(os.path.join(pack_dir, "briefing.json"))
@@ -211,6 +229,20 @@ def generate_from_pack(pack_dir: str, flight_id: str, dest: str):
     waypoints = [wp["icao"] for wp in snapshot["route"]["waypoints"]]
     target_date = snapshot.get("target_date", "unknown")
 
+    # Derive departure time from snapshot or fetch_meta
+    departure_time = snapshot.get("departure_time")
+    if departure_time:
+        from datetime import datetime as _dt
+        dt = _dt.fromisoformat(departure_time)
+        target_time_utc = dt.hour
+    else:
+        # Old packs may not have departure_time — check fetch_meta
+        meta = load_json_safe(os.path.join(pack_dir, "fetch_meta.json")) or {}
+        # Fall back to midday if truly unknown
+        target_time_utc = meta.get("target_time_utc", 12)
+        departure_time = f"{target_date}T{target_time_utc:02d}:00:00+00:00"
+        print(f"  note: departure_time not in snapshot, using {departure_time}")
+
     # Build synthetic flight.json (API response shape)
     flight = {
         "id": flight_id,
@@ -218,8 +250,10 @@ def generate_from_pack(pack_dir: str, flight_id: str, dest: str):
         "profile_id": None,
         "route_name": route_name,
         "waypoints": waypoints,
+        "departure_time": departure_time,
+        "alt_departure_time": None,
         "target_date": target_date,
-        "target_time_utc": 9,
+        "target_time_utc": target_time_utc,
         "cruise_altitude_ft": snapshot["route"].get("cruise_altitude_ft", 8000),
         "flight_ceiling_ft": snapshot["route"].get("flight_ceiling_ft", 18000),
         "flight_duration_hours": snapshot["route"].get("flight_duration_hours", 0),
