@@ -130,12 +130,8 @@ def _fetch_forecasts_for_model(
     Returns list of dicts, each with airport ICAO and per-sample-hour values.
     Filters to SAMPLE_HOURS_UTC only.
     """
-    from weatherbrief.models.analysis import CloudCoverage, ModelSource, RoutePoint
+    from weatherbrief.models.analysis import ModelSource, RoutePoint
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
-    from weatherbrief.analysis.sounding import analyze_sounding as _analyze
-
-    _BKN = CloudCoverage.BKN
-    _OVC = CloudCoverage.OVC
 
     model_source = ModelSource(model)
     forecast_days = MODEL_FORECAST_DAYS.get(model, 7)
@@ -197,60 +193,12 @@ def _fetch_forecasts_for_model(
                 if utc_hour not in SAMPLE_HOURS_UTC:
                     continue
 
-                # Compute LCL from T-Td (fallback if sounding fails)
+                # Compute LCL from T-Td
                 lcl_ft = None
                 if hourly.temperature_2m_c is not None and hourly.dewpoint_2m_c is not None:
                     spread = hourly.temperature_2m_c - hourly.dewpoint_2m_c
                     if spread >= 0:
                         lcl_ft = _LCL_CONSTANT_FT * spread
-
-                # Sounding analysis from pressure-level data
-                # Only run for D-0/D-1 (within 48h of init) — these are the
-                # forecast hours that get scored. D-2+ don't need sounding.
-                sounding_ceiling_ft = None
-                sounding_cloud_base_ft = None
-                freezing_level_ft = None
-                sounding_cape_jkg = None
-                sounding_cin_jkg = None
-                sounding_lifted_index = None
-                sounding_convective_risk = None
-
-                forecast_time = hourly.time if hasattr(hourly.time, 'tzinfo') and hourly.time.tzinfo else hourly.time.replace(tzinfo=timezone.utc) if hasattr(hourly.time, 'replace') else hourly.time
-                hours_ahead = (forecast_time - init_time).total_seconds() / 3600 if hasattr(forecast_time, '__sub__') else 999
-                run_sounding = hours_ahead <= 48 and hourly.pressure_levels
-
-                if run_sounding:
-                    try:
-                        sounding = _analyze(
-                            hourly.pressure_levels, hourly, model_key=model,
-                        )
-                        if sounding is not None:
-                            idx = sounding.indices
-                            if idx is not None:
-                                sounding_ceiling_ft = idx.sounding_ceiling_ft
-                                freezing_level_ft = idx.freezing_level_ft
-                                sounding_cape_jkg = idx.cape_surface_jkg
-                                sounding_cin_jkg = idx.cin_surface_jkg
-                                sounding_lifted_index = idx.lifted_index
-                                if idx.lcl_altitude_ft is not None:
-                                    lcl_ft = round(idx.lcl_altitude_ft)
-
-                            # Lowest BKN/OVC for reconcile_ceiling fallback
-                            bkn_ovc = [
-                                cl.base_ft for cl in sounding.dd_cloud_layers
-                                if cl.coverage in (_BKN, _OVC)
-                            ]
-                            if bkn_ovc:
-                                sounding_cloud_base_ft = min(bkn_ovc)
-
-                            if (sounding.convective
-                                    and sounding.convective.risk_level is not None):
-                                sounding_convective_risk = sounding.convective.risk_level.value
-                    except Exception:
-                        logger.debug(
-                            "Sounding analysis failed for %s %s %s",
-                            airport.icao, model, hourly.time, exc_info=True,
-                        )
 
                 all_results.append({
                     "icao": airport.icao,
@@ -270,13 +218,6 @@ def _fetch_forecasts_for_model(
                     "cloud_cover_pct": hourly.cloud_cover_pct,
                     "cloud_cover_low_pct": hourly.cloud_cover_low_pct,
                     "lcl_ft": lcl_ft,
-                    "sounding_ceiling_ft": sounding_ceiling_ft,
-                    "sounding_cloud_base_ft": sounding_cloud_base_ft,
-                    "freezing_level_ft": freezing_level_ft,
-                    "sounding_cape_jkg": sounding_cape_jkg,
-                    "sounding_cin_jkg": sounding_cin_jkg,
-                    "sounding_lifted_index": sounding_lifted_index,
-                    "sounding_convective_risk": sounding_convective_risk,
                 })
 
     return all_results
@@ -499,6 +440,131 @@ def _snapshot_to_hourly(snap: AirportForecastSnapshotRow):
     )
 
 
+def _fetch_soundings_for_scoring(
+    obs_by_icao: dict[str, VerificationObservationRow],
+    airports: list[WatchlistAirport],
+    cycle_time: datetime,
+    matching_snapshots: list,
+) -> dict[tuple[str, str], _SoundingProxy | None]:
+    """Fetch pressure-level data and run sounding analysis for scoring.
+
+    Does a single Open-Meteo call per model for airports with observations,
+    requesting only the cycle hour. Returns a dict keyed by (icao, model)
+    mapping to SoundingProxy objects.
+    """
+    from weatherbrief.analysis.sounding import analyze_sounding
+    from weatherbrief.fetch.open_meteo import OpenMeteoClient
+    from weatherbrief.models.analysis import CloudCoverage, ModelSource, RoutePoint
+
+    # Which (icao, model) pairs do we need?
+    needed_models: set[str] = set()
+    needed_icaos: set[str] = set()
+    for snap in matching_snapshots:
+        if snap.icao in obs_by_icao:
+            needed_models.add(snap.model)
+            needed_icaos.add(snap.icao)
+
+    if not needed_icaos:
+        return {}
+
+    # Build airport lookup for coordinates
+    airport_map = {a.icao: a for a in airports if a.icao in needed_icaos}
+    points = [
+        RoutePoint(
+            lat=airport_map[icao].lat, lon=airport_map[icao].lon,
+            distance_from_origin_nm=0.0, waypoint_icao=icao,
+        )
+        for icao in sorted(needed_icaos) if icao in airport_map
+    ]
+    icao_order = [p.waypoint_icao for p in points]
+
+    if not points:
+        return {}
+
+    result: dict[tuple[str, str], _SoundingProxy | None] = {}
+    client = OpenMeteoClient(timeout=60)
+    date_str = cycle_time.strftime("%Y-%m-%d")
+
+    for model in sorted(needed_models):
+        try:
+            model_source = ModelSource(model)
+            forecasts = None
+            # Fetch in chunks (same batch size as fetch phase)
+            for i in range(0, len(points), _OPEN_METEO_BATCH_SIZE):
+                chunk_points = points[i:i + _OPEN_METEO_BATCH_SIZE]
+                chunk_icaos = icao_order[i:i + _OPEN_METEO_BATCH_SIZE]
+                try:
+                    chunk_forecasts = client.fetch_multi_point(
+                        chunk_points, model_source,
+                        start_date=date_str, end_date=date_str,
+                    )
+                except Exception:
+                    logger.warning("Sounding fetch failed for %s chunk %d", model, i // _OPEN_METEO_BATCH_SIZE + 1, exc_info=True)
+                    continue
+
+                for icao, wpf in zip(chunk_icaos, chunk_forecasts):
+                    # Find the hourly closest to cycle_time
+                    best_hourly = None
+                    best_delta = float("inf")
+                    for h in wpf.hourly:
+                        ht = h.time if h.time.tzinfo else h.time.replace(tzinfo=timezone.utc)
+                        delta = abs((ht - cycle_time).total_seconds())
+                        if delta < best_delta:
+                            best_delta = delta
+                            best_hourly = h
+
+                    if best_hourly is None or not best_hourly.pressure_levels:
+                        continue
+
+                    try:
+                        sounding = analyze_sounding(
+                            best_hourly.pressure_levels, best_hourly,
+                            model_key=model,
+                        )
+                        if sounding is not None:
+                            proxy = _build_sounding_proxy_from_analysis(sounding)
+                            result[(icao, model)] = proxy
+                    except Exception:
+                        logger.debug("Sounding analysis failed for %s %s", icao, model, exc_info=True)
+
+            logger.info("Sounding analysis for %s: %d airports",
+                        model, sum(1 for k in result if k[1] == model))
+        except Exception:
+            logger.warning("Sounding fetch phase failed for model %s", model, exc_info=True)
+
+    return result
+
+
+def _build_sounding_proxy_from_analysis(sounding) -> _SoundingProxy | None:
+    """Build a SoundingProxy directly from a SoundingAnalysis object."""
+    from weatherbrief.models.analysis import CloudCoverage
+
+    indices = _IndicesProxy(
+        sounding_ceiling_ft=sounding.indices.sounding_ceiling_ft if sounding.indices else None,
+    )
+
+    dd_cloud_layers = []
+    bkn_ovc = [
+        cl for cl in sounding.dd_cloud_layers
+        if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+    ]
+    if bkn_ovc:
+        lowest = min(bkn_ovc, key=lambda cl: cl.base_ft)
+        dd_cloud_layers = [_CloudLayerProxy(
+            base_ft=lowest.base_ft, coverage=lowest.coverage,
+        )]
+
+    convective = None
+    if sounding.convective and sounding.convective.risk_level is not None:
+        convective = _ConvectiveProxy(risk_level=sounding.convective.risk_level)
+
+    return _SoundingProxy(
+        indices=indices,
+        dd_cloud_layers=dd_cloud_layers,
+        convective=convective,
+    )
+
+
 def _score_cycle(
     cycle_time: datetime,
     airports: list[WatchlistAirport],
@@ -590,6 +656,13 @@ def _score_cycle(
     for r in taf_key_rows:
         existing_taf_keys.add((r[0], _strip_tz(r[1]), _strip_tz(r[2])))
 
+    # Fetch pressure-level soundings for airports with observations.
+    # One targeted Open-Meteo call per model at the current cycle hour —
+    # much cheaper than running soundings for all forecast hours at fetch time.
+    sounding_map = _fetch_soundings_for_scoring(
+        obs_by_icao, airports, cycle_time, matching_snapshots,
+    )
+
     scores_created = 0
 
     for snap in matching_snapshots:
@@ -615,7 +688,7 @@ def _score_cycle(
         runway_ends = runway_map.get(snap.icao, [])
 
         hourly = _snapshot_to_hourly(snap)
-        sounding_proxy = _build_sounding_proxy(snap)
+        sounding_proxy = sounding_map.get((snap.icao, snap.model))
         score_row = _score_model_vs_metar(
             obs_row=obs,
             obs_weather=weather,
