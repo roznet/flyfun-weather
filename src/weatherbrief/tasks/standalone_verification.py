@@ -48,6 +48,74 @@ _LCL_CONSTANT_FT = 400  # 400 * (T - Td) approximation for LCL in feet
 
 
 # ---------------------------------------------------------------------------
+# Sounding proxy — lightweight stand-in for SoundingAnalysis at scoring time
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass, field as dc_field
+from typing import Optional
+
+
+@dataclass
+class _IndicesProxy:
+    sounding_ceiling_ft: Optional[float] = None
+
+
+@dataclass
+class _CloudLayerProxy:
+    base_ft: float = 0.0
+    coverage: object = None
+
+
+@dataclass
+class _ConvectiveProxy:
+    risk_level: object = None
+
+
+@dataclass
+class _SoundingProxy:
+    """Minimal sounding stand-in for reconcile_ceiling and convective scoring."""
+    indices: Optional[_IndicesProxy] = None
+    dd_cloud_layers: list = dc_field(default_factory=list)
+    convective: Optional[_ConvectiveProxy] = None
+
+
+def _build_sounding_proxy(snap: AirportForecastSnapshotRow):
+    """Reconstruct a minimal SoundingAnalysis proxy from stored snapshot fields.
+
+    Returns None when no sounding data was stored (backward-compatible fallback).
+    """
+    if (snap.sounding_ceiling_ft is None
+            and snap.sounding_cloud_base_ft is None
+            and snap.sounding_convective_risk is None):
+        return None
+
+    from weatherbrief.models.analysis import CloudCoverage, ConvectiveRisk
+
+    indices = _IndicesProxy(sounding_ceiling_ft=snap.sounding_ceiling_ft)
+
+    dd_cloud_layers = []
+    if snap.sounding_cloud_base_ft is not None:
+        dd_cloud_layers = [_CloudLayerProxy(
+            base_ft=snap.sounding_cloud_base_ft,
+            coverage=CloudCoverage.BKN,
+        )]
+
+    convective = None
+    if snap.sounding_convective_risk is not None:
+        try:
+            risk = ConvectiveRisk(snap.sounding_convective_risk)
+        except ValueError:
+            risk = ConvectiveRisk.NONE
+        convective = _ConvectiveProxy(risk_level=risk)
+
+    return _SoundingProxy(
+        indices=indices,
+        dd_cloud_layers=dd_cloud_layers,
+        convective=convective,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Phase A: Fetch forecasts from Open-Meteo + GRIB ceiling
 # ---------------------------------------------------------------------------
 
@@ -62,8 +130,12 @@ def _fetch_forecasts_for_model(
     Returns list of dicts, each with airport ICAO and per-sample-hour values.
     Filters to SAMPLE_HOURS_UTC only.
     """
-    from weatherbrief.models.analysis import ModelSource, RoutePoint
+    from weatherbrief.models.analysis import CloudCoverage, ModelSource, RoutePoint
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
+    from weatherbrief.analysis.sounding import analyze_sounding as _analyze
+
+    _BKN = CloudCoverage.BKN
+    _OVC = CloudCoverage.OVC
 
     model_source = ModelSource(model)
     forecast_days = MODEL_FORECAST_DAYS.get(model, 7)
@@ -120,12 +192,54 @@ def _fetch_forecasts_for_model(
                 if utc_hour not in SAMPLE_HOURS_UTC:
                     continue
 
-                # Compute LCL from T-Td
+                # Compute LCL from T-Td (fallback if sounding fails)
                 lcl_ft = None
                 if hourly.temperature_2m_c is not None and hourly.dewpoint_2m_c is not None:
                     spread = hourly.temperature_2m_c - hourly.dewpoint_2m_c
                     if spread >= 0:
                         lcl_ft = _LCL_CONSTANT_FT * spread
+
+                # Sounding analysis from pressure-level data
+                sounding_ceiling_ft = None
+                sounding_cloud_base_ft = None
+                freezing_level_ft = None
+                sounding_cape_jkg = None
+                sounding_cin_jkg = None
+                sounding_lifted_index = None
+                sounding_convective_risk = None
+
+                if hourly.pressure_levels:
+                    try:
+                        sounding = _analyze(
+                            hourly.pressure_levels, hourly, model_key=model,
+                        )
+                        if sounding is not None:
+                            idx = sounding.indices
+                            if idx is not None:
+                                sounding_ceiling_ft = idx.sounding_ceiling_ft
+                                freezing_level_ft = idx.freezing_level_ft
+                                sounding_cape_jkg = idx.cape_surface_jkg
+                                sounding_cin_jkg = idx.cin_surface_jkg
+                                sounding_lifted_index = idx.lifted_index
+                                if idx.lcl_altitude_ft is not None:
+                                    lcl_ft = round(idx.lcl_altitude_ft)
+
+                            # Lowest BKN/OVC for reconcile_ceiling fallback
+                            bkn_ovc = [
+                                cl.base_ft for cl in sounding.dd_cloud_layers
+                                if cl.coverage in (_BKN, _OVC)
+                            ]
+                            if bkn_ovc:
+                                sounding_cloud_base_ft = min(bkn_ovc)
+
+                            if (sounding.convective
+                                    and sounding.convective.risk_level is not None):
+                                sounding_convective_risk = sounding.convective.risk_level.value
+                    except Exception:
+                        logger.debug(
+                            "Sounding analysis failed for %s %s %s",
+                            airport.icao, model, hourly.time, exc_info=True,
+                        )
 
                 all_results.append({
                     "icao": airport.icao,
@@ -145,6 +259,13 @@ def _fetch_forecasts_for_model(
                     "cloud_cover_pct": hourly.cloud_cover_pct,
                     "cloud_cover_low_pct": hourly.cloud_cover_low_pct,
                     "lcl_ft": lcl_ft,
+                    "sounding_ceiling_ft": sounding_ceiling_ft,
+                    "sounding_cloud_base_ft": sounding_cloud_base_ft,
+                    "freezing_level_ft": freezing_level_ft,
+                    "sounding_cape_jkg": sounding_cape_jkg,
+                    "sounding_cin_jkg": sounding_cin_jkg,
+                    "sounding_lifted_index": sounding_lifted_index,
+                    "sounding_convective_risk": sounding_convective_risk,
                 })
 
     return all_results
@@ -301,6 +422,13 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
             nwp_ceiling_ft=snap.get("nwp_ceiling_ft"),
             cloud_base_ft=snap.get("cloud_base_ft"),
             lcl_ft=snap.get("lcl_ft"),
+            sounding_ceiling_ft=snap.get("sounding_ceiling_ft"),
+            sounding_cloud_base_ft=snap.get("sounding_cloud_base_ft"),
+            freezing_level_ft=snap.get("freezing_level_ft"),
+            sounding_cape_jkg=snap.get("sounding_cape_jkg"),
+            sounding_cin_jkg=snap.get("sounding_cin_jkg"),
+            sounding_lifted_index=snap.get("sounding_lifted_index"),
+            sounding_convective_risk=snap.get("sounding_convective_risk"),
         )
         db.add(row)
         existing_keys.add(key)  # prevent duplicates within same batch
@@ -476,10 +604,11 @@ def _score_cycle(
         runway_ends = runway_map.get(snap.icao, [])
 
         hourly = _snapshot_to_hourly(snap)
+        sounding_proxy = _build_sounding_proxy(snap)
         score_row = _score_model_vs_metar(
             obs_row=obs,
             obs_weather=weather,
-            sounding=None,
+            sounding=sounding_proxy,
             hourly=hourly,
             runway_ends=runway_ends,
             model=snap.model,

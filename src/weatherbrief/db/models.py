@@ -544,6 +544,15 @@ class AirportForecastSnapshotRow(Base):
     cloud_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     lcl_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Sounding-derived fields (from analyze_sounding on pressure levels)
+    sounding_ceiling_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sounding_cloud_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    freezing_level_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sounding_cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sounding_cin_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sounding_lifted_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sounding_convective_risk: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
 
 class VerificationCycleRow(Base):
     """Performance metrics for each verification collection cycle.
