@@ -1,3 +1,1 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:62bf8b54c0cf3e1e921e71c19f0f41172a67a6473d78c869e5ab45f231202292
-size 560
+{"flight_id":"egtf_eglf-2026-02-25-45ed","fetch_timestamp":"2026-02-25T16:10:07.255073+00:00","days_out":0,"has_gramet":false,"has_skewt":false,"has_digest":true,"has_advisories":true,"assessment":"GREEN","assessment_reason":"All route advisories are GREEN across all models, observations confirm CAVOK/VFR conditions at all corridor airports, and the synoptic pattern is firmly anticyclonic \u2014 this is a straightforward go under VFR or IFR.","model_init_times":{"ecmwf":1771999200,"gfs":1771999200},"grib_init_times":{"gfs":1771999200},"data_status":null}

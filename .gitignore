@@ -24,5 +24,6 @@ tmp
 xcuserdata/
 *.xcuserstate
 DerivedData/
+.build/
 *.xcscmblueprint
 eval_data
