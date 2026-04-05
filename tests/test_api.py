@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 # Dynamic future dates so tests don't break as time passes
 _NOW = datetime.now(timezone.utc)
@@ -393,3 +393,159 @@ class TestRefreshEndpoint:
         # but importantly it should NOT be a 503 "not configured"
         assert resp.status_code != 503 or "not configured" not in resp.json().get("detail", "")
         client.app.state.db_path = ""
+
+
+# --- Interpret Route ---
+
+# Mock helpers — mirror test_airports.py, mock only the DB layer so the real
+# RouteResolver runs (catches contract violations like the single-token bug).
+
+
+def _mock_airport(icao: str, name: str, lat: float, lon: float):
+    airport = MagicMock()
+    airport.ident = icao
+    airport.name = name
+    airport.latitude_deg = lat
+    airport.longitude_deg = lon
+    return airport
+
+
+class _MockAirportsCollection:
+    def __init__(self, airports_dict: dict):
+        self._airports = airports_dict
+
+    def get(self, icao):
+        return self._airports.get(icao)
+
+    def where(self, **kwargs):
+        ident = kwargs.get("ident")
+        result = self._airports.get(ident)
+        return _MockQueryResult(result)
+
+
+class _MockQueryResult:
+    def __init__(self, value):
+        self._value = value
+
+    def first(self):
+        return self._value
+
+
+def _mock_model(airports_dict: dict):
+    model = MagicMock()
+    model.airports = _MockAirportsCollection(airports_dict)
+    model.get_waypoint.side_effect = lambda name: None
+    model.get_waypoint_candidates.side_effect = lambda name: []
+    return model
+
+
+_TEST_AIRPORTS = {
+    "EGBJ": _mock_airport("EGBJ", "Gloucestershire", 51.8942, -2.1672),
+    "LFOV": _mock_airport("LFOV", "Laval-Entrammes", 48.0314, -0.7428),
+    "EGTK": _mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
+    "LSGS": _mock_airport("LSGS", "Sion", 46.2192, 7.3267),
+}
+
+
+class TestInterpretRoute:
+    """Tests for POST /api/flights/interpret-route.
+
+    Mock at _load_airport_model level so RouteResolver runs for real.
+    """
+
+    def _post(self, client, raw_route: str):
+        return client.post(
+            "/api/flights/interpret-route",
+            json={"raw_route": raw_route},
+        )
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_two_valid_airports(self, mock_load, client):
+        """Basic happy path — two ICAO codes resolve successfully."""
+        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(client, "EGBJ LFOV")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGBJ", "LFOV"]
+        assert data["skipped"] == []
+        assert len(data["waypoints"]) == 2
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_single_valid_airport(self, mock_load, client):
+        """Single code is recognized but no full route resolution."""
+        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(client, "EGBJ")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGBJ"]
+        assert data["skipped"] == []
+        # No waypoint details — need >= 2 for full resolution
+        assert data["waypoints"] == []
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_unknown_token_skipped(self, mock_load, client):
+        """Unknown codes go to skipped, valid ones to interpreted."""
+        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(client, "EGBJ ZZZZ LFOV")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGBJ", "LFOV"]
+        assert data["skipped"] == ["ZZZZ"]
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_filters_route_notation(self, mock_load, client):
+        """Non-waypoint tokens (separators, short words) are filtered out."""
+        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(client, "EGBJ - LFOV")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGBJ", "LFOV"]
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_multi_waypoint_route(self, mock_load, client):
+        """Three-leg route resolves all waypoints."""
+        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(client, "EGTK EGBJ LSGS")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGTK", "EGBJ", "LSGS"]
+        assert len(data["waypoints"]) == 3
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_duplicate_consecutive_tokens(self, mock_load, client):
+        """Consecutive duplicates are collapsed."""
+        mock_load.return_value = _mock_model(_TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(client, "EGBJ EGBJ LFOV")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGBJ", "LFOV"]
+
+    def test_no_db_configured(self, client):
+        """Returns 500 when airport database is not configured."""
+        client.app.state.db_path = ""
+        resp = self._post(client, "EGBJ LFOV")
+        assert resp.status_code == 500
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_all_unknown(self, mock_load, client):
+        """All tokens unknown — interpreted is empty."""
+        mock_load.return_value = _mock_model({})
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(client, "ZZZZ YYYY")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == []
+        assert set(data["skipped"]) == {"ZZZZ", "YYYY"}

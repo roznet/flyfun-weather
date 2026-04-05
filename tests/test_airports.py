@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from weatherbrief.airports import resolve_waypoints
+from weatherbrief.airports import is_known_waypoint, resolve_waypoints
 from weatherbrief.models import Waypoint
 
 
@@ -95,3 +95,36 @@ def test_resolve_waypoints_no_coordinates(mock_load):
 
     with pytest.raises(KeyError, match="EGTK"):
         resolve_waypoints(["EGTK", "LSGS"], "/fake/db.sqlite")
+
+
+# --- is_known_waypoint ---
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_is_known_waypoint_found(mock_load):
+    """Returns True for a known airport code."""
+    airports = {
+        "EGBJ": _mock_airport("EGBJ", "Gloucestershire", 51.8942, -2.1672),
+    }
+    mock_load.return_value = _mock_model(airports)
+
+    assert is_known_waypoint("EGBJ", "/fake/db.sqlite") is True
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_is_known_waypoint_not_found(mock_load):
+    """Returns False for an unknown code."""
+    mock_load.return_value = _mock_model({})
+
+    assert is_known_waypoint("ZZZZ", "/fake/db.sqlite") is False
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_is_known_waypoint_case_insensitive(mock_load):
+    """Accepts lowercase input."""
+    airports = {
+        "EGBJ": _mock_airport("EGBJ", "Gloucestershire", 51.8942, -2.1672),
+    }
+    mock_load.return_value = _mock_model(airports)
+
+    assert is_known_waypoint("egbj", "/fake/db.sqlite") is True
