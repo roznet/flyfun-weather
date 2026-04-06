@@ -105,20 +105,23 @@ class OpenMeteoClient:
             params = {**params, "apikey": self._api_key}
         return url, params
 
+    _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
     def _get_with_retry(self, url: str, params: dict) -> requests.Response:
-        """GET with retry on 429 rate-limit responses."""
+        """GET with retry on 429 rate-limit and 5xx server error responses."""
         url, params = self._prepare_request(url, params)
         for attempt in range(_MAX_RETRIES):
             resp = self.session.get(url, params=params, timeout=self.timeout)
-            if resp.status_code != 429:
+            if resp.status_code not in self._RETRYABLE_STATUS_CODES:
                 resp.raise_for_status()
                 return resp
             # Use Retry-After header if present, otherwise use backoff schedule
             retry_after = resp.headers.get("Retry-After")
             wait = int(retry_after) if retry_after and retry_after.isdigit() else _RETRY_BACKOFF[attempt]
+            label = "Rate limited" if resp.status_code == 429 else f"Server error ({resp.status_code})"
             logger.warning(
-                "Rate limited (429) on attempt %d/%d, retrying in %ds: %s",
-                attempt + 1, _MAX_RETRIES, wait, url.split("/")[-1],
+                "%s on attempt %d/%d, retrying in %ds: %s",
+                label, attempt + 1, _MAX_RETRIES, wait, url.split("/")[-1],
             )
             time.sleep(wait)
         # Final attempt — let it raise on any error

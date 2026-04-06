@@ -427,14 +427,20 @@ async def run_standalone_verification_loop(app_state) -> None:
 
     Disableable via DISABLE_STANDALONE_VERIFICATION=1 env var.
     """
-    from weatherbrief.tasks.standalone_verification import SAMPLE_HOURS_UTC
+    from weatherbrief.tasks.standalone_verification import (
+        FULL_CYCLE_HOURS_UTC,
+        SAMPLE_HOURS_UTC,
+    )
 
     if os.environ.get("DISABLE_STANDALONE_VERIFICATION", "").strip() in ("1", "true"):
         logger.info("Standalone verification disabled via env var")
         return
 
-    logger.info("Standalone verification loop started (sample hours: %s UTC)",
-                SAMPLE_HOURS_UTC)
+    logger.info(
+        "Standalone verification loop started (sample hours: %s UTC, "
+        "full cycle hours: %s UTC)",
+        SAMPLE_HOURS_UTC, sorted(FULL_CYCLE_HOURS_UTC),
+    )
     await asyncio.sleep(_STANDALONE_STARTUP_DELAY_SECONDS)
 
     while True:
@@ -443,7 +449,11 @@ async def run_standalone_verification_loop(app_state) -> None:
             logger.info("Standalone verification: sleeping %ds until next sample hour",
                         sleep_secs)
             await asyncio.sleep(sleep_secs)
-            await asyncio.to_thread(_run_standalone_once, app_state)
+            current_hour = datetime.now(timezone.utc).hour
+            fetch_forecasts = current_hour in FULL_CYCLE_HOURS_UTC
+            await asyncio.to_thread(
+                _run_standalone_once, app_state, fetch_forecasts,
+            )
             # After running, sleep briefly to ensure we advance past the
             # current sample hour and don't re-trigger immediately.
             await asyncio.sleep(60)
@@ -471,7 +481,10 @@ def _seconds_until_next_sample_hour(sample_hours: list[int]) -> float:
     return (candidate - now).total_seconds()
 
 
-def _run_standalone_once(app_state) -> None:
+def _run_standalone_once(
+    app_state,
+    fetch_forecasts: bool = True,
+) -> None:
     """Execute a single standalone verification cycle (called in a thread)."""
     db_path = getattr(app_state, "db_path", "")
     if not db_path:
@@ -497,10 +510,13 @@ def _run_standalone_once(app_state) -> None:
         logger.warning("Standalone verification: empty watchlist")
         return
 
-    result = run_standalone_cycle(airports, db_path)
+    result = run_standalone_cycle(
+        airports, db_path, fetch_forecasts=fetch_forecasts,
+    )
     logger.info(
-        "Standalone verification cycle: %d models, %d snapshots, "
+        "Standalone verification %s cycle: %d models, %d snapshots, "
         "%d observations, %d scores (%dms)",
+        result["cycle_type"],
         result["models_fetched"], result["snapshots_stored"],
         result["observations_stored"], result["scores_created"],
         result["duration_ms"],

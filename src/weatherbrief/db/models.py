@@ -566,7 +566,7 @@ class VerificationCycleRow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
-    source: Mapped[str] = mapped_column(String(16), nullable=False, default="flight")
+    source: Mapped[str] = mapped_column(String(24), nullable=False, default="flight")
     phase_finalize_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     phase_find_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     phase_gather_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -578,5 +578,6 @@ class VerificationCycleRow(Base):
     observations_stored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     finalized: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     scored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

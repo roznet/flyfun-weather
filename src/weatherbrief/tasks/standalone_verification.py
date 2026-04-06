@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 STANDALONE_MODELS = ["gfs", "icon", "ecmwf"]
 SAMPLE_HOURS_UTC = [6, 9, 12, 15, 18]  # 3-hourly through the flying day
+FULL_CYCLE_HOURS_UTC = {6, 18}  # Only these hours fetch new forecasts from Open-Meteo
 
 # Model forecast horizon — 4 days is enough for actionable verification stats
 MODEL_FORECAST_DAYS = {
@@ -200,7 +201,7 @@ def _fetch_forecasts_for_model(
                     if spread >= 0:
                         lcl_ft = _LCL_CONSTANT_FT * spread
 
-                all_results.append({
+                snap = {
                     "icao": airport.icao,
                     "model": model,
                     "model_init_time": init_time,
@@ -218,9 +219,60 @@ def _fetch_forecasts_for_model(
                     "cloud_cover_pct": hourly.cloud_cover_pct,
                     "cloud_cover_low_pct": hourly.cloud_cover_low_pct,
                     "lcl_ft": lcl_ft,
-                })
+                }
+
+                # Run sounding analysis on pressure levels (already fetched)
+                _enrich_with_sounding(snap, hourly, model)
+
+                all_results.append(snap)
 
     return all_results
+
+
+def _enrich_with_sounding(snap: dict, hourly, model: str) -> None:
+    """Run sounding analysis on pressure-level data and store results in snap dict.
+
+    Fails silently — surface data is preserved even if sounding analysis fails.
+    """
+    if not getattr(hourly, "pressure_levels", None):
+        return
+
+    try:
+        from weatherbrief.analysis.sounding import analyze_sounding
+        from weatherbrief.models.analysis import CloudCoverage
+
+        sounding = analyze_sounding(
+            hourly.pressure_levels, hourly, model_key=model,
+        )
+        if sounding is None:
+            return
+
+        # Thermodynamic indices
+        if sounding.indices:
+            snap["sounding_ceiling_ft"] = sounding.indices.sounding_ceiling_ft
+            snap["freezing_level_ft"] = sounding.indices.freezing_level_ft
+            snap["sounding_cape_jkg"] = sounding.indices.cape_surface_jkg
+            snap["sounding_cin_jkg"] = sounding.indices.cin_surface_jkg
+            snap["sounding_lifted_index"] = sounding.indices.lifted_index
+
+        # Lowest BKN/OVC cloud layer base → sounding_cloud_base_ft
+        bkn_ovc = [
+            cl for cl in sounding.dd_cloud_layers
+            if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+        ]
+        if bkn_ovc:
+            lowest = min(bkn_ovc, key=lambda cl: cl.base_ft)
+            snap["sounding_cloud_base_ft"] = lowest.base_ft
+
+        # Convective risk
+        if sounding.convective and sounding.convective.risk_level is not None:
+            snap["sounding_convective_risk"] = sounding.convective.risk_level.value
+
+    except Exception:
+        logger.debug(
+            "Sounding analysis failed for %s %s, surface data preserved",
+            snap.get("icao"), model, exc_info=True,
+        )
 
 
 def _enrich_with_grib(
@@ -440,130 +492,6 @@ def _snapshot_to_hourly(snap: AirportForecastSnapshotRow):
     )
 
 
-def _fetch_soundings_for_scoring(
-    obs_by_icao: dict[str, VerificationObservationRow],
-    airports: list[WatchlistAirport],
-    cycle_time: datetime,
-    matching_snapshots: list,
-) -> dict[tuple[str, str], _SoundingProxy | None]:
-    """Fetch pressure-level data and run sounding analysis for scoring.
-
-    Does a single Open-Meteo call per model for airports with observations,
-    requesting only the cycle hour. Returns a dict keyed by (icao, model)
-    mapping to SoundingProxy objects.
-    """
-    from weatherbrief.analysis.sounding import analyze_sounding
-    from weatherbrief.fetch.open_meteo import OpenMeteoClient
-    from weatherbrief.models.analysis import CloudCoverage, ModelSource, RoutePoint
-
-    # Which (icao, model) pairs do we need?
-    needed_models: set[str] = set()
-    needed_icaos: set[str] = set()
-    for snap in matching_snapshots:
-        if snap.icao in obs_by_icao:
-            needed_models.add(snap.model)
-            needed_icaos.add(snap.icao)
-
-    if not needed_icaos:
-        return {}
-
-    # Build airport lookup for coordinates
-    airport_map = {a.icao: a for a in airports if a.icao in needed_icaos}
-    points = [
-        RoutePoint(
-            lat=airport_map[icao].lat, lon=airport_map[icao].lon,
-            distance_from_origin_nm=0.0, waypoint_icao=icao,
-        )
-        for icao in sorted(needed_icaos) if icao in airport_map
-    ]
-    icao_order = [p.waypoint_icao for p in points]
-
-    if not points:
-        return {}
-
-    result: dict[tuple[str, str], _SoundingProxy | None] = {}
-    client = OpenMeteoClient(timeout=60)
-    date_str = cycle_time.strftime("%Y-%m-%d")
-
-    for model in sorted(needed_models):
-        try:
-            model_source = ModelSource(model)
-            forecasts = None
-            # Fetch in chunks (same batch size as fetch phase)
-            for i in range(0, len(points), _OPEN_METEO_BATCH_SIZE):
-                chunk_points = points[i:i + _OPEN_METEO_BATCH_SIZE]
-                chunk_icaos = icao_order[i:i + _OPEN_METEO_BATCH_SIZE]
-                try:
-                    chunk_forecasts = client.fetch_multi_point(
-                        chunk_points, model_source,
-                        start_date=date_str, end_date=date_str,
-                    )
-                except Exception:
-                    logger.warning("Sounding fetch failed for %s chunk %d", model, i // _OPEN_METEO_BATCH_SIZE + 1, exc_info=True)
-                    continue
-
-                for icao, wpf in zip(chunk_icaos, chunk_forecasts):
-                    # Find the hourly closest to cycle_time
-                    best_hourly = None
-                    best_delta = float("inf")
-                    for h in wpf.hourly:
-                        ht = h.time if h.time.tzinfo else h.time.replace(tzinfo=timezone.utc)
-                        delta = abs((ht - cycle_time).total_seconds())
-                        if delta < best_delta:
-                            best_delta = delta
-                            best_hourly = h
-
-                    if best_hourly is None or not best_hourly.pressure_levels:
-                        continue
-
-                    try:
-                        sounding = analyze_sounding(
-                            best_hourly.pressure_levels, best_hourly,
-                            model_key=model,
-                        )
-                        if sounding is not None:
-                            proxy = _build_sounding_proxy_from_analysis(sounding)
-                            result[(icao, model)] = proxy
-                    except Exception:
-                        logger.debug("Sounding analysis failed for %s %s", icao, model, exc_info=True)
-
-            logger.info("Sounding analysis for %s: %d airports",
-                        model, sum(1 for k in result if k[1] == model))
-        except Exception:
-            logger.warning("Sounding fetch phase failed for model %s", model, exc_info=True)
-
-    return result
-
-
-def _build_sounding_proxy_from_analysis(sounding) -> _SoundingProxy | None:
-    """Build a SoundingProxy directly from a SoundingAnalysis object."""
-    from weatherbrief.models.analysis import CloudCoverage
-
-    indices = _IndicesProxy(
-        sounding_ceiling_ft=sounding.indices.sounding_ceiling_ft if sounding.indices else None,
-    )
-
-    dd_cloud_layers = []
-    bkn_ovc = [
-        cl for cl in sounding.dd_cloud_layers
-        if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
-    ]
-    if bkn_ovc:
-        lowest = min(bkn_ovc, key=lambda cl: cl.base_ft)
-        dd_cloud_layers = [_CloudLayerProxy(
-            base_ft=lowest.base_ft, coverage=lowest.coverage,
-        )]
-
-    convective = None
-    if sounding.convective and sounding.convective.risk_level is not None:
-        convective = _ConvectiveProxy(risk_level=sounding.convective.risk_level)
-
-    return _SoundingProxy(
-        indices=indices,
-        dd_cloud_layers=dd_cloud_layers,
-        convective=convective,
-    )
-
 
 def _score_cycle(
     cycle_time: datetime,
@@ -656,13 +584,6 @@ def _score_cycle(
     for r in taf_key_rows:
         existing_taf_keys.add((r[0], _strip_tz(r[1]), _strip_tz(r[2])))
 
-    # Fetch pressure-level soundings for airports with observations.
-    # One targeted Open-Meteo call per model at the current cycle hour —
-    # much cheaper than running soundings for all forecast hours at fetch time.
-    sounding_map = _fetch_soundings_for_scoring(
-        obs_by_icao, airports, cycle_time, matching_snapshots,
-    )
-
     scores_created = 0
 
     for snap in matching_snapshots:
@@ -688,7 +609,8 @@ def _score_cycle(
         runway_ends = runway_map.get(snap.icao, [])
 
         hourly = _snapshot_to_hourly(snap)
-        sounding_proxy = sounding_map.get((snap.icao, snap.model))
+        # Reconstruct sounding proxy from stored snapshot fields (no API call)
+        sounding_proxy = _build_sounding_proxy(snap)
         score_row = _score_model_vs_metar(
             obs_row=obs,
             obs_weather=weather,
@@ -756,14 +678,21 @@ def _prune_old_snapshots(db, retention_days: int = 10) -> int:
 def run_standalone_cycle(
     airports: list[WatchlistAirport],
     airports_db_path: str,
+    *,
+    fetch_forecasts: bool = True,
 ) -> dict:
-    """Run one standalone verification cycle (Phases A-E).
+    """Run one standalone verification cycle.
+
+    When *fetch_forecasts* is True (full cycle), runs Phases A-E including
+    Open-Meteo forecast fetching.  When False (light cycle), skips straight
+    to observations + scoring — no external API calls except aviationweather.gov.
 
     Returns a summary dict with counts and timing.
     """
     from flyfun_common.db import SessionLocal
     from weatherbrief.fetch.model_status import fetch_model_metadata
 
+    cycle_type = "full" if fetch_forecasts else "light"
     t_start = time.monotonic()
     now = datetime.now(timezone.utc)
 
@@ -771,15 +700,18 @@ def run_standalone_cycle(
     session = requests.Session()
 
     try:
-        # Phase A+B: Fetch and store forecasts per model
-        # Process one model at a time to limit memory usage — each model's
-        # snapshots are stored and freed before fetching the next.
-        metadata = fetch_model_metadata(STANDALONE_MODELS)
-
         models_fetched = 0
         snapshots_stored = 0
 
-        for model in STANDALONE_MODELS:
+        if not fetch_forecasts:
+            logger.info("Light cycle — skipping forecast fetch, observations + scoring only")
+        else:
+            # Phase A+B: Fetch and store forecasts per model
+            # Process one model at a time to limit memory usage — each model's
+            # snapshots are stored and freed before fetching the next.
+            metadata = fetch_model_metadata(STANDALONE_MODELS)
+
+        for model in STANDALONE_MODELS if fetch_forecasts else []:
             meta = metadata.get(model)
             if meta is None:
                 logger.warning("No metadata for model %s, skipping", model)
@@ -840,7 +772,7 @@ def run_standalone_cycle(
         cycle_row = VerificationCycleRow(
             started_at=now,
             duration_ms=duration_ms,
-            source="standalone",
+            source=f"standalone_{cycle_type}",
             # fetch+store is interleaved per model, so combined into phase_fetch
             phase_fetch_ms=int((t_fetch_done - t_start) * 1000),
             phase_gather_ms=int((t_obs_done - t_fetch_done) * 1000),
@@ -853,6 +785,7 @@ def run_standalone_cycle(
         db.commit()
 
         return {
+            "cycle_type": cycle_type,
             "models_fetched": models_fetched,
             "snapshots_stored": snapshots_stored,
             "observations_stored": obs_stored,
@@ -863,7 +796,42 @@ def run_standalone_cycle(
 
     except Exception:
         db.rollback()
+        # Record the failure in a separate session so the error row survives
+        _record_failed_cycle(now, t_start, cycle_type, len(airports))
         raise
     finally:
         session.close()
         db.close()
+
+
+def _record_failed_cycle(
+    started_at: datetime,
+    t_start: float,
+    cycle_type: str,
+    airport_count: int,
+) -> None:
+    """Commit a VerificationCycleRow with error info using a fresh session."""
+    import traceback
+
+    from flyfun_common.db import SessionLocal
+
+    duration_ms = int((time.monotonic() - t_start) * 1000)
+    error_msg = traceback.format_exc()[-500:]  # last 500 chars
+
+    try:
+        err_db = SessionLocal()
+        cycle_row = VerificationCycleRow(
+            started_at=started_at,
+            duration_ms=duration_ms,
+            source=f"standalone_{cycle_type}",
+            airports=airport_count,
+            observations_stored=0,
+            scored=0,
+            error=error_msg,
+        )
+        err_db.add(cycle_row)
+        err_db.commit()
+        err_db.close()
+        logger.info("Recorded failed %s cycle in DB (%dms)", cycle_type, duration_ms)
+    except Exception:
+        logger.warning("Failed to record error cycle row", exc_info=True)

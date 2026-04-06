@@ -3,6 +3,11 @@ services:
     build: .
     container_name: weatherbrief
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     ports:
       - "8020:8020"
     env_file:
