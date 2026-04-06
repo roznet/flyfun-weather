@@ -39,7 +39,7 @@ Data source:                               └── fetchAvailableHours()
 - Per-airport verification accuracy, marker size scales with sample count
 - **Filters**: Period (7d/30d), days-out (D-0 to D-3), model, metric
 - **Metrics**: Category Match %, Ceiling MAE, Wind MAE, Temperature MAE
-- Admin-only endpoint (`require_admin`)
+- Authenticated users (same as forecast tab)
 
 ### Accuracy Stats
 - Embedded iframe to `/verification.html?embed`
@@ -82,6 +82,7 @@ Server-side in `map_queries.py::_consensus()`:
 
 - **Hour availability**: Not all sample hours have data for all days — `fetchAvailableHours()` checks and disables unavailable hour buttons
 - **Consensus requires server round-trip**: Switching between worst/majority triggers API call (server computes consensus); switching to individual model is client-side only
+- **Per-model-only metrics**: `convective_risk` uses worst-across-models in consensus mode; `cloud_cover_pct` uses the average
 - **Marker sizing**: Radius scales with zoom level (3-8px) for readability at all zoom levels
 - **All map endpoints require authentication**: Both forecast and verification data are available to any authenticated user
 
