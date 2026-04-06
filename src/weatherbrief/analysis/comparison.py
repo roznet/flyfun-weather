@@ -14,8 +14,11 @@ DIVERGENCE_THRESHOLDS: dict[str, tuple[float, float]] = {
     "precipitation_mm": (1.0, 5.0),
     "cloud_cover_pct": (20.0, 50.0),
     "freezing_level_m": (200.0, 600.0),
+    "ceiling_ft": (500.0, 1500.0),
+    "visibility_m": (2000.0, 5000.0),
     # Sounding-derived metrics
     "freezing_level_ft": (500.0, 1500.0),
+    "cape_jkg": (200.0, 500.0),
     "cape_surface_jkg": (200.0, 500.0),
     "nwp_cape_jkg": (200.0, 500.0),
     "lcl_altitude_ft": (750.0, 2000.0),

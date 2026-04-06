@@ -31,7 +31,14 @@ async function init(): Promise<void> {
     return;
   }
   initTheme();
-  renderUserInfo(user, 'verification');
+  const isEmbed = new URLSearchParams(window.location.search).has('embed');
+  if (isEmbed) {
+    // Hide header when embedded in iframe
+    const hdr = document.querySelector('.page-header') as HTMLElement | null;
+    if (hdr) hdr.style.display = 'none';
+  } else {
+    renderUserInfo(user, 'maps');
+  }
   setupPeriodToggle();
   setupSourceToggle();
   initInfoPopup();

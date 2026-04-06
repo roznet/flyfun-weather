@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — Forecast</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/leaflet.css">
+  <style>
+    .maps-page { max-width: 1400px; }
+
+    .maps-controls {
+      display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;
+      margin-bottom: 0.75rem; font-size: 0.85rem;
+    }
+    .maps-controls label { color: var(--text-muted); font-weight: 600; font-size: 0.8rem; }
+    .maps-controls .btn-group { display: flex; gap: 0; }
+    .maps-controls .btn-group .btn-toggle {
+      padding: 0.3rem 0.6rem; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); cursor: pointer; font-size: 0.8rem;
+    }
+    .maps-controls .btn-group .btn-toggle:first-child { border-radius: 4px 0 0 4px; }
+    .maps-controls .btn-group .btn-toggle:last-child { border-radius: 0 4px 4px 0; }
+    .maps-controls .btn-group .btn-toggle:not(:first-child) { border-left: none; }
+    .maps-controls .btn-group .btn-toggle.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .maps-controls .btn-group .btn-toggle:hover:not(.active) { background: var(--bg); }
+    .maps-controls .btn-group .btn-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .maps-controls select {
+      padding: 0.3rem 0.5rem; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); border-radius: 4px; font-size: 0.8rem;
+    }
+
+    .forecast-datetime {
+      font-size: 0.85rem; font-weight: 600; color: var(--text);
+      padding: 0.25rem 0.6rem; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+
+    #map-container {
+      width: 100%; height: calc(100vh - 280px); min-height: 400px;
+      border-radius: 8px; border: 1px solid var(--border); overflow: hidden;
+    }
+    .map-info { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem; }
+
+    .map-legend {
+      position: absolute; bottom: 30px; left: 10px; z-index: 1000;
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.5rem 0.7rem; font-size: 0.75rem;
+      max-width: 200px; color: var(--text);
+    }
+    .map-legend-title { font-weight: 600; margin-bottom: 0.3rem; }
+    .legend-item { display: flex; align-items: center; gap: 0.3rem; margin: 0.15rem 0; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    .map-wrapper { position: relative; }
+
+    /* Experimental banner */
+    .experimental-banner {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.25rem 0.6rem; margin-bottom: 0.75rem;
+      background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px;
+      font-size: 0.8rem; color: #92400e;
+    }
+    [data-theme="dark"] .experimental-banner {
+      background: #451a03; border-color: #b45309; color: #fbbf24;
+    }
+    .experimental-banner .badge { font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+    .experimental-info {
+      cursor: help; font-weight: 700; width: 16px; height: 16px;
+      border-radius: 50%; border: 1.5px solid currentColor;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; flex-shrink: 0;
+    }
+    .experimental-detail {
+      display: none; margin-top: 0.4rem; font-size: 0.75rem; line-height: 1.4;
+      padding: 0.4rem 0.6rem; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text-muted); margin-bottom: 0.75rem;
+    }
+    .experimental-detail.open { display: block; }
+
+    /* Stats iframe panel */
+    #stats-frame {
+      width: 100%; border: none; border-radius: 8px;
+      height: calc(100vh - 200px); min-height: 500px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container maps-page">
+    <div class="page-header">
+      <h2>Forecast</h2>
+      <div class="header-right">
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
+
+    <div class="experimental-banner">
+      <span class="badge">Experimental</span>
+      <span class="experimental-info" id="experimental-toggle">i</span>
+    </div>
+    <div class="experimental-detail" id="experimental-detail">
+      This page is experimental. It systematically collects NWP model forecasts (GFS, ICON, ECMWF)
+      for ~830 European airports and scores them against actual METAR observations.
+      The goal is to build statistics on model accuracy across geography and lead time,
+      and to help identify where and when forecasts can be trusted.
+      Data and methodology are being refined — treat all results as indicative, not definitive.
+    </div>
+
+    <!-- Tab bar (settings-tabs underline style) -->
+    <div class="settings-tabs" id="tabs">
+      <button class="tab-btn active" data-tab="forecast">Forecast Overview</button>
+      <button class="tab-btn" data-tab="verification">Model Accuracy Map</button>
+      <button class="tab-btn" data-tab="stats">Accuracy Stats</button>
+    </div>
+
+    <!-- Tab: Forecast Overview -->
+    <div id="panel-forecast" class="tab-panel active">
+      <div class="maps-controls" id="controls-forecast">
+        <label>Day</label>
+        <div class="btn-group" id="day-picker">
+          <button class="btn-toggle active" data-day="0">D-0</button>
+          <button class="btn-toggle" data-day="1">D-1</button>
+          <button class="btn-toggle" data-day="2">D-2</button>
+          <button class="btn-toggle" data-day="3">D-3</button>
+        </div>
+        <label>Hour</label>
+        <div class="btn-group" id="hour-picker">
+          <button class="btn-toggle" data-hour="6">06Z</button>
+          <button class="btn-toggle" data-hour="9">09Z</button>
+          <button class="btn-toggle active" data-hour="12">12Z</button>
+          <button class="btn-toggle" data-hour="15">15Z</button>
+          <button class="btn-toggle" data-hour="18">18Z</button>
+        </div>
+        <span class="forecast-datetime" id="forecast-datetime"></span>
+        <label>Model</label>
+        <div class="btn-group" id="model-picker">
+          <button class="btn-toggle active" data-model="worst">Worst</button>
+          <button class="btn-toggle" data-model="majority">Majority</button>
+          <button class="btn-toggle" data-model="gfs">GFS</button>
+          <button class="btn-toggle" data-model="icon">ICON</button>
+          <button class="btn-toggle" data-model="ecmwf">ECMWF</button>
+        </div>
+        <label>Color</label>
+        <select id="metric-picker">
+          <option value="flight_category" selected>Flight Category</option>
+          <option value="wind_speed_kt">Wind Speed</option>
+          <option value="ceiling_ft">Ceiling</option>
+          <option value="cape_jkg">CAPE</option>
+          <option value="convective_risk">Convective Risk</option>
+          <option value="cloud_cover_pct">Cloud Cover</option>
+        </select>
+      </div>
+
+      <div class="map-wrapper">
+        <div id="map-container"></div>
+      </div>
+      <div class="map-info" id="map-info"></div>
+    </div>
+
+    <!-- Tab: Model Accuracy Map -->
+    <div id="panel-verification" class="tab-panel">
+      <div class="maps-controls" id="controls-verification">
+        <label>Period</label>
+        <div class="btn-group" id="verif-period-picker">
+          <button class="btn-toggle active" data-period="7d">7d</button>
+          <button class="btn-toggle" data-period="30d">30d</button>
+        </div>
+        <label>Days out</label>
+        <div class="btn-group" id="verif-days-picker">
+          <button class="btn-toggle active" data-days="0">D-0</button>
+          <button class="btn-toggle" data-days="1">D-1</button>
+          <button class="btn-toggle" data-days="2">D-2</button>
+          <button class="btn-toggle" data-days="3">D-3</button>
+        </div>
+        <label>Model</label>
+        <div class="btn-group" id="verif-model-picker">
+          <button class="btn-toggle active" data-model="all">All</button>
+          <button class="btn-toggle" data-model="gfs">GFS</button>
+          <button class="btn-toggle" data-model="icon">ICON</button>
+          <button class="btn-toggle" data-model="ecmwf">ECMWF</button>
+        </div>
+        <label>Metric</label>
+        <select id="verif-metric-picker">
+          <option value="category_match_pct" selected>Category Match %</option>
+          <option value="ceiling_mae_ft">Ceiling MAE (ft)</option>
+          <option value="wind_mae_kt">Wind MAE (kt)</option>
+          <option value="temp_mae_c">Temperature MAE</option>
+        </select>
+      </div>
+
+      <div class="map-wrapper" id="verif-map-wrapper">
+        <div id="map-container-verif" style="width:100%; height:calc(100vh - 280px); min-height:400px; border-radius:8px; border:1px solid var(--border); overflow:hidden;"></div>
+      </div>
+      <div class="map-info" id="map-info-verif"></div>
+    </div>
+
+    <!-- Tab: Accuracy Stats (embedded verification page) -->
+    <div id="panel-stats" class="tab-panel">
+      <iframe id="stats-frame" src="" loading="lazy"></iframe>
+    </div>
+  </div>
+
+  <script src="/dist/maps.js"></script>
+</body>
+</html>

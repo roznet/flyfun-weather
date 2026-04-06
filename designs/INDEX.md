@@ -78,8 +78,8 @@ Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `Cros
 → Full doc: companion-app.md
 
 ### metar-taf-accuracy [project]
-Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone airport monitoring (250 watchlist airports at fixed UTC hours). Scores NWP models and TAFs against ground truth. Daily digest email + admin web dashboard. Verification cycles performance tracking.
-Key exports: `collect_and_store`, `run_standalone_cycle`, `get_digest_data`, `send_verification_digest`, `VerificationDigestData`, `VerificationObservation`
+Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone airport monitoring (~830 pan-European watchlist airports at fixed UTC hours with pressure-level soundings). Scores NWP models and TAFs against ground truth. Daily digest email + admin web dashboard. Verification cycles performance tracking.
+Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `VerificationDigestData`, `VerificationObservation`
 → Full doc: metar-taf-accuracy.md
 
 ### rzskewt

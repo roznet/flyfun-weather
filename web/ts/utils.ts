@@ -23,10 +23,10 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
   const navItems: { label: string; href: string; page: string; adminOnly?: boolean; pirepOnly?: boolean; badgeId?: string }[] = [
     { label: t('nav.flights'),  href: '/',               page: 'flights' },
     { label: 'PIREPs',          href: '/pireps.html',    page: 'pireps', pirepOnly: true },
+    { label: 'Forecast',        href: '/maps.html',      page: 'maps' },
     { label: t('nav.settings'), href: '/settings.html',  page: 'settings' },
     { label: t('nav.help'),     href: '/help.html',      page: 'help', badgeId: 'nav-messages-badge' },
     { label: t('nav.admin'),    href: '/admin.html',     page: 'admin', adminOnly: true },
-    { label: 'Verification',   href: '/verification.html', page: 'verification', adminOnly: true },
   ];
 
   // Render nav without PIREP initially; it will appear once preferences load
