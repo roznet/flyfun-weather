@@ -1,0 +1,3 @@
+weather.flyfun.aero {
+    respond "WeatherBrief is under maintenance. Back shortly." 503
+}
