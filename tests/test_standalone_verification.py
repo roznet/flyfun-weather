@@ -647,3 +647,119 @@ class TestRunStandaloneCycle:
             )
 
         assert result["models_fetched"] == 0  # skipped
+
+    @patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0)
+    @patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=7)
+    @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=5)
+    @patch("flyfun_common.db.SessionLocal")
+    def test_light_cycle_skips_fetch(
+        self, mock_session_local, mock_store_obs, mock_score, mock_prune,
+    ):
+        """Light cycle (fetch_forecasts=False) skips Phase A+B entirely."""
+        from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+
+        mock_db = MagicMock()
+        mock_session_local.return_value = mock_db
+
+        airports = [WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55)]
+        result = run_standalone_cycle(airports, "/fake/db", fetch_forecasts=False)
+
+        assert result["cycle_type"] == "light"
+        assert result["models_fetched"] == 0
+        assert result["snapshots_stored"] == 0
+        assert result["observations_stored"] == 5
+        assert result["scores_created"] == 7
+        assert result["duration_ms"] >= 0
+
+    @patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0)
+    @patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=5)
+    @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=3)
+    @patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=100)
+    @patch("weatherbrief.tasks.standalone_verification._enrich_with_grib")
+    @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=[{"dummy": True}])
+    @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
+    @patch("flyfun_common.db.SessionLocal")
+    def test_full_cycle_returns_cycle_type(
+        self, mock_session_local, mock_meta, mock_fetch, mock_enrich,
+        mock_store_snap, mock_store_obs, mock_score, mock_prune,
+    ):
+        """Full cycle sets cycle_type='full' in result."""
+        from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+
+        mock_db = MagicMock()
+        mock_session_local.return_value = mock_db
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        mock_meta.return_value = {
+            "gfs": SimpleNamespace(last_init_time=int(GFS_INIT.timestamp())),
+        }
+
+        airports = [WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55)]
+        result = run_standalone_cycle(airports, "/fake/db")
+
+        assert result["cycle_type"] == "full"
+
+
+class TestEnrichWithSounding:
+
+    def test_populates_sounding_fields(self):
+        """_enrich_with_sounding extracts fields from pressure-level analysis."""
+        from weatherbrief.tasks.standalone_verification import _enrich_with_sounding
+        from weatherbrief.models.analysis import (
+            CloudCoverage,
+            ConvectiveRisk,
+        )
+
+        # Build a mock hourly with pressure levels that analyze_sounding can use
+        snap = {"icao": "LFPG", "model": "gfs"}
+
+        # Mock the sounding analysis result
+        mock_sounding = SimpleNamespace(
+            indices=SimpleNamespace(
+                sounding_ceiling_ft=3500.0,
+                freezing_level_ft=8000.0,
+                cape_surface_jkg=150.0,
+                cin_surface_jkg=-20.0,
+                lifted_index=-2.5,
+            ),
+            dd_cloud_layers=[
+                SimpleNamespace(base_ft=3500.0, coverage=CloudCoverage.BKN),
+                SimpleNamespace(base_ft=8000.0, coverage=CloudCoverage.SCT),
+            ],
+            convective=SimpleNamespace(risk_level=ConvectiveRisk.MODERATE),
+        )
+
+        mock_hourly = SimpleNamespace(pressure_levels=[1, 2, 3])  # non-empty
+
+        with patch("weatherbrief.analysis.sounding.analyze_sounding", return_value=mock_sounding):
+            _enrich_with_sounding(snap, mock_hourly, "gfs")
+
+        assert snap["sounding_ceiling_ft"] == 3500.0
+        assert snap["sounding_cloud_base_ft"] == 3500.0  # lowest BKN
+        assert snap["freezing_level_ft"] == 8000.0
+        assert snap["sounding_cape_jkg"] == 150.0
+        assert snap["sounding_cin_jkg"] == -20.0
+        assert snap["sounding_lifted_index"] == -2.5
+        assert snap["sounding_convective_risk"] == ConvectiveRisk.MODERATE.value
+
+    def test_no_pressure_levels_is_noop(self):
+        """No pressure levels → snap unchanged."""
+        from weatherbrief.tasks.standalone_verification import _enrich_with_sounding
+
+        snap = {"icao": "LFPG", "model": "gfs"}
+        mock_hourly = SimpleNamespace(pressure_levels=None)
+        _enrich_with_sounding(snap, mock_hourly, "gfs")
+        assert "sounding_ceiling_ft" not in snap
+
+    def test_analysis_failure_preserves_surface_data(self):
+        """Sounding analysis exception doesn't lose surface fields."""
+        from weatherbrief.tasks.standalone_verification import _enrich_with_sounding
+
+        snap = {"icao": "LFPG", "model": "gfs", "temperature_2m_c": 15.0}
+        mock_hourly = SimpleNamespace(pressure_levels=[1, 2])
+
+        with patch("weatherbrief.analysis.sounding.analyze_sounding", side_effect=ValueError("bad data")):
+            _enrich_with_sounding(snap, mock_hourly, "gfs")
+
+        assert snap["temperature_2m_c"] == 15.0  # preserved
+        assert "sounding_ceiling_ft" not in snap  # not added
