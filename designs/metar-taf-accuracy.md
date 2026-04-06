@@ -8,7 +8,7 @@ We already have NWP model forecasts stored in briefing packs (GFS, ECMWF, ICON, 
 
 This system has two verification tracks:
 1. **Flight-based**: Collects METAR/TAF observations during flight windows (1h before → flight end + 1h), scores against briefing pack forecasts
-2. **Standalone**: Continuously monitors ~250 watchlist airports at fixed UTC hours (6, 9, 12, 15, 18), fetches independent Open-Meteo forecasts, scores GFS/ICON/ECMWF at up to 4 days out
+2. **Standalone**: Monitors ~830 pan-European watchlist airports via full cycles (06/18 UTC — fetch forecasts + score) and light cycles (09/12/15 UTC — score existing forecasts against fresh METARs), covering GFS/ICON/ECMWF at up to 4 days out
 3. **Scores** TAF accuracy against METARs (TAF is also a forecast — was it right?)
 4. **Archives** everything in a standalone, anonymized verification database
 5. **Reports** daily verification digest via email + admin web dashboard
@@ -30,7 +30,7 @@ scheduler.py
 │   ├── _collect_observations()
 │   └── _score_observations()
 ├── run_standalone_verification_loop()  ← standalone, sleeps until next sample hour
-│   └── run_standalone_cycle()          ← fetch forecasts → collect METARs → score
+│   └── run_standalone_cycle()          ← full (fetch+score) or light (score only)
 ├── run_digest_loop()                   ← daily at 06:00 UTC
 │   └── send_verification_digest()
 
@@ -41,9 +41,11 @@ tasks/verification.py                   ← flight-based collection & scoring
 └── finalize_completed_flights()
 
 tasks/standalone_verification.py        ← standalone airport monitoring
-├── run_standalone_cycle()              ← orchestrator
+├── run_standalone_cycle()              ← orchestrator (full or light cycle)
 ├── _fetch_forecasts_for_model()        ← Open-Meteo multi-point (batches of 100)
-└── _enrich_with_grib()                 ← GFS cloud diagnostics for ceiling
+├── _enrich_with_sounding()             ← pressure-level sounding analysis
+├── _enrich_with_grib()                 ← GFS cloud diagnostics for ceiling
+└── _record_failed_cycle()              ← error capture on failure
 
 tasks/verification_stats.py             ← shared queries for digest + dashboard
 ├── get_activity_summary()
@@ -131,7 +133,8 @@ One row per (airport, observation, model, model_init_time, source). The `source`
 ```sql
 CREATE TABLE verification_scores (
     -- ... standard columns ...
-    source              VARCHAR(16) NOT NULL DEFAULT 'flight',  -- 'flight' or 'standalone'
+    source              VARCHAR(24) NOT NULL DEFAULT 'flight',
+    -- Values: 'flight', 'standalone_full', 'standalone_light'
     cloud_base_delta_ft INTEGER,    -- added for standalone ceiling scoring
     lcl_delta_ft        INTEGER,    -- LCL-based ceiling delta
 
@@ -149,7 +152,7 @@ TAFs are forecasts too. The `source` column is included in the unique constraint
 ```sql
 CREATE TABLE taf_verification_scores (
     -- ... standard columns ...
-    source              VARCHAR(16) NOT NULL DEFAULT 'flight',
+    source              VARCHAR(24) NOT NULL DEFAULT 'flight',
 
     UNIQUE(icao, observation_time, taf_issue_time, source),
     -- ...
@@ -163,13 +166,15 @@ Tracks timing and counts for each collection cycle (flight or standalone).
 ```sql
 CREATE TABLE verification_cycles (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    source          VARCHAR(16) NOT NULL DEFAULT 'flight',  -- 'flight' or 'standalone'
+    source          VARCHAR(24) NOT NULL DEFAULT 'flight',
+    -- Values: 'flight', 'standalone_full', 'standalone_light'
     started_at      DATETIME NOT NULL,
     duration_ms     INTEGER,
+    error           TEXT,              -- last 500 chars of traceback on failure
     -- Phase timings
     find_ms         INTEGER,
     gather_ms       INTEGER,
-    fetch_ms        INTEGER,
+    fetch_ms        INTEGER,           -- 0 for light cycles (no forecast fetch)
     store_ms        INTEGER,
     score_ms        INTEGER,
     finalize_ms     INTEGER,
@@ -205,6 +210,14 @@ CREATE TABLE airport_forecast_snapshots (
     nwp_ceiling_ft  INTEGER,
     cloud_base_ft   INTEGER,
     lcl_ft          INTEGER,
+    -- Sounding-derived fields (from pressure-level analysis)
+    sounding_ceiling_ft    INTEGER,
+    sounding_cloud_base_ft INTEGER,
+    sounding_convective_risk INTEGER,
+    freezing_level_ft      INTEGER,
+    sounding_cape_jkg      FLOAT,
+    sounding_cin_jkg       FLOAT,
+    sounding_lifted_index  FLOAT,
 
     UNIQUE(icao, model, model_init_time, forecast_hour)
 );
@@ -254,7 +267,7 @@ The collection query `WHERE verification_status IS NULL OR verification_status N
 
 ### Intent
 
-Flight-based verification is limited to airports along active flight routes. Standalone verification monitors ~250 watchlist airports continuously, building a broader accuracy dataset independent of user activity.
+Flight-based verification is limited to airports along active flight routes. Standalone verification monitors ~830 pan-European watchlist airports, building a broader accuracy dataset independent of user activity.
 
 ### How It Differs from Flight-Based
 
@@ -262,38 +275,75 @@ Flight-based verification is limited to airports along active flight routes. Sta
 |--------|-------------|-----------|
 | **Trigger** | Active flights in observation window | Fixed sample hours (6, 9, 12, 15, 18 UTC) |
 | **Polling** | Every 10 minutes | Sleep until next sample hour |
-| **Airports** | Flight corridor (15nm) | Watchlist (~250 Western/Central European airports) |
-| **Forecast source** | Briefing pack forecasts.json | Independent Open-Meteo fetch + GRIB ceiling |
+| **Airports** | Flight corridor (15nm) | Watchlist (~830 pan-European airports) |
+| **Forecast source** | Briefing pack forecasts.json | Independent Open-Meteo fetch + GRIB + sounding |
 | **Models** | All models in briefing pack | GFS, ICON, ECMWF (3 models) |
 | **Horizon** | D-0 through D-7 (per pack) | Up to 4 days per model |
-| **Source tag** | `source='flight'` | `source='standalone'` |
+| **Source tag** | `source='flight'` | `source='standalone_full'` or `'standalone_light'` |
 | **Database** | `verification_observations` + scores | Same + `airport_forecast_snapshots` |
+
+### Full vs Light Cycles
+
+The standalone pipeline runs two cycle types to balance API cost against scoring frequency:
+
+| | Full Cycle (06, 18 UTC) | Light Cycle (09, 12, 15 UTC) |
+|---|---|---|
+| **Forecast fetch** | Yes — Open-Meteo for 3 models | No — uses stored snapshots |
+| **Sounding enrichment** | Yes — pressure-level analysis | No |
+| **GRIB enrichment** | Yes — cloud diagnostics | No |
+| **METAR fetch** | Yes | Yes |
+| **Scoring** | Yes — against fresh snapshots | Yes — against latest stored snapshots |
+| **Phases executed** | A→B→C→D→E | C→D→E only |
+| **Source tag** | `standalone_full` | `standalone_light` |
+
+**Why**: Full cycles at 06/18 UTC align with fresh model runs. Light cycles in between provide continuous scoring coverage without redundant forecast fetching — the same stored snapshots get scored against fresh METARs.
 
 ### Airport Watchlist
 
 `tasks/airport_watchlist.py` discovers METAR-reporting airports. Default ICAO prefixes: LF, ED, EG, EH, EB, LS, LO (Western/Central Europe). Sources: euro_aip DB + aviationweather.gov METAR endpoint (batch queries with `@prefix`, batch size 400). Config file: `configs/airport_watchlist.json`.
 
-### Standalone Cycle Flow
+### Standalone Cycle Flow (Five Phases)
 
 ```
-1. Load watchlist airports (~250)
-2. For each model (GFS, ICON, ECMWF):
-   a. Fetch Open-Meteo forecasts (batches of 100 airports)
-   b. Filter to sample hours only
-   c. Store in airport_forecast_snapshots
-3. Enrich with GRIB cloud diagnostics (NWP ceiling, cloud base)
-4. Fetch METAR observations for sample hour
-5. Score forecasts against observations
-6. Record cycle in verification_cycles (source='standalone')
+Full cycle (phases A–E):
+  A. Fetch Open-Meteo forecasts per model (batches of 100, with pressure levels)
+  B. Store snapshots + enrich with sounding analysis + GRIB cloud diagnostics
+  C. Fetch METAR/TAF observations
+  D. Score forecasts vs observations (using stored sounding proxy)
+  E. Prune old snapshots (>10 days)
+
+Light cycle (phases C–E only):
+  C. Fetch METAR/TAF observations
+  D. Score latest stored snapshots vs fresh observations
+  E. Prune old snapshots (>10 days)
 ```
+
+### Sounding Enrichment
+
+Full cycles fetch pressure-level data alongside surface fields from Open-Meteo. Each snapshot is enriched via `analyze_sounding()`:
+
+- `sounding_ceiling_ft` — thermodynamic ceiling from pressure levels
+- `sounding_cloud_base_ft` — lowest BKN/OVC cloud layer base
+- `sounding_convective_risk` — convective risk level (enum)
+- `freezing_level_ft`, `sounding_cape_jkg`, `sounding_cin_jkg`, `sounding_lifted_index`
+
+During scoring (Phase D), `_build_sounding_proxy()` reconstructs a minimal `SoundingAnalysis`-like object from stored fields — avoids re-running analysis. If snapshot has no sounding data (pre-enrichment rows), proxy returns `None` and scoring skips sounding-based comparisons.
+
+### Resilience
+
+- **Chunk-level retry**: Open-Meteo fetch retries up to 3 times per batch of 100 airports with exponential backoff (5s, 10s)
+- **Graceful degradation**: Failed chunks are skipped with a warning — partial cycles succeed
+- **Error recording**: `_record_failed_cycle()` captures last 500 chars of traceback in the `error` column
+- **Sounding fault tolerance**: `_enrich_with_sounding()` fails silently — surface data preserved
+- **GRIB fallback**: GRIB failures logged but don't block the cycle
 
 ### Open-Meteo Batching
 
-Standalone fetches surface variables for ~250 airports per cycle. Requests are chunked into batches of 100 airports per Open-Meteo call (`STANDALONE_BATCH_SIZE`). Chunk-level retry: up to 3 attempts on timeout with 60s timeout per request.
+Standalone fetches surface + pressure-level variables for ~830 airports per full cycle. Requests are chunked into batches of 100 airports per Open-Meteo call (`_OPEN_METEO_BATCH_SIZE`). Chunk-level retry: up to 3 attempts with exponential backoff.
 
 ### Scheduler Integration
 
-Disableable via `DISABLE_STANDALONE_VERIFICATION=1` env var. Instead of polling, computes next sample hour and sleeps until then. On failure, retries after 15 minutes. Startup delay: 240 seconds.
+Disableable via `DISABLE_STANDALONE_VERIFICATION=1` env var. Instead of polling, computes next sample hour and sleeps until then. At each sample hour, determines cycle type: `fetch_forecasts = hour in {6, 18}`. On failure, retries after 15 minutes. Startup delay: 240 seconds. Post-cycle 60s cooldown prevents immediate re-trigger.
 
 ## Verification Stats & Digest
 
@@ -742,6 +792,10 @@ GROUP BY model, days_out;
 | Keep data forever | This is the whole point — a growing accuracy dataset. At current scale, storage is negligible |
 | Dual-track (flight + standalone) | Flight-based provides real route context; standalone provides broader coverage independent of user activity |
 | Source column in unique constraints | Prevents flight and standalone scores from conflicting; all queries filter by source |
+| Full/light cycle split | Full at 06/18 UTC (fresh model runs), light at 09/12/15 UTC — reduces API load 60% while maintaining scoring frequency |
+| Sounding enrichment in snapshots | Store derived sounding fields once, reconstruct proxy during scoring — avoids re-running MetPy analysis per observation |
+| Error column on cycles | Captures traceback on failure for post-mortem without needing log access |
+| Chunk-level retry with backoff | Partial success beats total failure — 800/830 airports scored is better than 0 |
 | Verification cycles table | Performance monitoring — track phase timings and counts per cycle for both tracks |
 | airport_forecast_snapshots | Standalone needs its own forecast storage since there's no briefing pack to reference |
 | Daily digest at 06:00 UTC | Fixed time avoids multiple sends; early morning for overnight review |

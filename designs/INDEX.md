@@ -77,8 +77,13 @@ iOS/iPad companion app: Phase 1 (online viewer) complete, Phase 2 (offline + res
 Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `CrossSectionRenderer`, `PirepViewModel`, `PirepOfflineStore`
 → Full doc: companion-app.md
 
+### forecast-page
+Pan-European weather overview map with per-airport forecast visualization (6 metrics, consensus modes) and model accuracy heatmaps, powered by standalone verification snapshots. Three tabs: forecast overview, model accuracy, detailed stats.
+Key exports: `get_forecast_map_data`, `get_verification_map_data`, `WeatherMap`, `fetchForecastMap`
+→ Full doc: forecast-page.md
+
 ### metar-taf-accuracy [project]
-Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone airport monitoring (~830 pan-European watchlist airports at fixed UTC hours with pressure-level soundings). Scores NWP models and TAFs against ground truth. Daily digest email + admin web dashboard. Verification cycles performance tracking.
+Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone monitoring (~830 pan-European airports) with full/light cycle split (full at 06/18 UTC fetches forecasts + sounding enrichment, light at 09/12/15 UTC scores existing snapshots). Chunk-level retry, error recording, graceful degradation.
 Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `VerificationDigestData`, `VerificationObservation`
 → Full doc: metar-taf-accuracy.md
 
