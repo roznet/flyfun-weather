@@ -39,7 +39,7 @@ CIRCULAR_VARIABLES = {"wind_direction_deg"}
 DEFAULT_THRESHOLD = (5.0, 15.0)
 
 
-def _circular_spread(values: list[float]) -> tuple[float, float]:
+def circular_spread(values: list[float]) -> tuple[float, float]:
     """Compute mean and spread for circular (angular) data in degrees.
 
     Returns (circular_mean_deg, max_angular_spread_deg).
@@ -71,7 +71,7 @@ def compare_models(
     values = list(model_values.values())
 
     if variable in CIRCULAR_VARIABLES:
-        mean, spread = _circular_spread(values)
+        mean, spread = circular_spread(values)
     else:
         mean = sum(values) / len(values)
         spread = max(values) - min(values)

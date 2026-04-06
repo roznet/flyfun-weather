@@ -16,8 +16,7 @@ from sqlalchemy.orm import Session
 
 from weatherbrief.analysis.airport_conditions import classify_flight_category
 from weatherbrief.analysis.comparison import (
-    CIRCULAR_VARIABLES,
-    _circular_spread,
+    circular_spread,
     compare_models,
 )
 from weatherbrief.db.models import AirportForecastSnapshotRow, VerificationScoreRow
@@ -135,7 +134,7 @@ def _consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any
         vals = [v for v in vals if v is not None]
         if vals:
             if field == "wind_dir_deg":
-                mean, _ = _circular_spread(vals)
+                mean, _ = circular_spread(vals)
                 result[field] = round(mean, 1)
             else:
                 result[field] = round(sum(vals) / len(vals), 1)

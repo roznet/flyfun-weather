@@ -101,20 +101,19 @@ def get_available_hours(
     now = datetime.now(timezone.utc)
     target_date = (now + timedelta(days=day)).date()
 
-    # Check which hours have at least one snapshot
-    available = []
-    for h in _SAMPLE_HOURS:
-        fh = datetime(
+    # Single query: distinct forecast hours that exist for this date
+    hour_rows = db.execute(
+        select(func.extract("hour", AirportForecastSnapshotRow.forecast_hour))
+        .where(AirportForecastSnapshotRow.forecast_hour >= datetime(
             target_date.year, target_date.month, target_date.day,
-            h, 0, 0, tzinfo=timezone.utc,
-        )
-        count = db.execute(
-            select(func.count())
-            .select_from(AirportForecastSnapshotRow)
-            .where(AirportForecastSnapshotRow.forecast_hour == fh)
-            .limit(1)
-        ).scalar()
-        if count and count > 0:
-            available.append(h)
+            0, 0, 0, tzinfo=timezone.utc,
+        ))
+        .where(AirportForecastSnapshotRow.forecast_hour < datetime(
+            target_date.year, target_date.month, target_date.day,
+            23, 59, 59, tzinfo=timezone.utc,
+        ))
+        .distinct()
+    ).scalars().all()
+    available = sorted(int(h) for h in hour_rows if int(h) in _SAMPLE_HOURS)
 
     return {"day": day, "date": target_date.isoformat(), "hours": available}
