@@ -82,22 +82,24 @@ function isConsensusMode(model: string): boolean {
 }
 
 function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, model: string): string {
-  const data = isConsensusMode(model) ? airport.consensus : airport.models[model];
+  const consensus = isConsensusMode(model);
+  const modelData = consensus ? null : airport.models[model];
+  const data = consensus ? airport.consensus : modelData;
   if (!data) return '#888';
 
   switch (metric) {
     case 'flight_category':
-      return CAT_COLORS[(data as any).flight_category] || '#888';
+      return CAT_COLORS[data.flight_category] || '#888';
     case 'wind_speed_kt':
-      return windSpeedColor((data as any).wind_speed_kt ?? 0);
+      return windSpeedColor(data.wind_speed_kt ?? 0);
     case 'ceiling_ft':
-      return ceilingColor((data as any).ceiling_ft ?? null);
+      return ceilingColor(data.ceiling_ft ?? null);
     case 'cape_jkg':
-      return capeColor((data as any).cape_jkg ?? 0);
+      return capeColor(data.cape_jkg ?? 0);
     case 'convective_risk':
-      return RISK_COLORS[(data as any).convective_risk || 'none'] || '#888';
+      return RISK_COLORS[(modelData?.convective_risk) || 'none'] || '#888';
     case 'cloud_cover_pct':
-      return cloudCoverColor((data as any).cloud_cover_pct ?? 0);
+      return cloudCoverColor(modelData?.cloud_cover_pct ?? 0);
     default:
       return '#888';
   }

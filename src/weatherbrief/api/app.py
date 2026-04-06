@@ -37,7 +37,7 @@ from weatherbrief.api.credits import (
 )
 from weatherbrief.api.feedback import router as feedback_router
 from weatherbrief.api.messages import admin_router as messages_admin_router, router as messages_router
-from weatherbrief.api.maps import admin_router as maps_admin_router, router as maps_router
+from weatherbrief.api.maps import router as maps_router
 from weatherbrief.api.models import router as models_router
 from weatherbrief.api.usage import router as usage_router
 from flyfun_common.admin_hub import create_hub_router
@@ -282,7 +282,6 @@ def create_app() -> FastAPI:
     app.include_router(messages_router, prefix="/api")
     app.include_router(messages_admin_router, prefix="/api")
     app.include_router(maps_router, prefix="/api")
-    app.include_router(maps_admin_router, prefix="/api/admin")
     app.include_router(models_router, prefix="/api")
     app.include_router(refresh_router, prefix="/api")
     app.include_router(transparency_router, prefix="/api")

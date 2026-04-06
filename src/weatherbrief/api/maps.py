@@ -1,9 +1,10 @@
 """Weather overview map endpoints.
 
-Public:
-  GET /maps/forecast  — forecast overview for all watchlist airports
-Admin:
-  GET /maps/verification — per-airport verification accuracy stats
+All endpoints require authentication (current_user_id).
+
+  GET /maps/forecast       — forecast overview for all watchlist airports
+  GET /maps/verification   — per-airport verification accuracy stats
+  GET /maps/forecast/hours — available sample hours for a given day
 """
 
 from __future__ import annotations
@@ -16,18 +17,11 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
 
-from weatherbrief.api.admin import require_admin
-
 logger = logging.getLogger(__name__)
 
-# Public router — authenticated users
 router = APIRouter(prefix="/maps", tags=["maps"])
 
-# Admin router — reuses /admin prefix from app.py
-admin_router = APIRouter(prefix="/maps", tags=["admin-maps"])
-
-# Standalone sample hours (must match standalone_verification.py)
-_SAMPLE_HOURS = [6, 9, 12, 15, 18]
+from weatherbrief.tasks.standalone_verification import SAMPLE_HOURS_UTC as _SAMPLE_HOURS
 
 
 def _airports_db(request: Request) -> str:
@@ -65,12 +59,12 @@ def get_forecast_map(
     return get_forecast_map_data(db, forecast_hour, airports_db, consensus_mode=mode)
 
 
-@admin_router.get("/verification")
+@router.get("/verification")
 def get_verification_map(
     period: str = Query(default="7d", pattern=r"^(7d|30d)$"),
     model: str = Query(default="all"),
     days_out: int = Query(default=0, ge=0, le=3),
-    _admin_id: str = Depends(require_admin),
+    _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
     airports_db: str = Depends(_airports_db),
 ):

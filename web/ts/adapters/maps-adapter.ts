@@ -77,7 +77,7 @@ export async function fetchVerificationMap(
   period: string, model: string, daysOut: number,
 ): Promise<VerificationMapResponse> {
   const resp = await fetch(
-    `${apiBase}/admin/maps/verification?period=${period}&model=${model}&days_out=${daysOut}`,
+    `${apiBase}/maps/verification?period=${period}&model=${model}&days_out=${daysOut}`,
     { credentials: 'include' },
   );
   if (!resp.ok) throw new Error(`Verification map: ${resp.status}`);

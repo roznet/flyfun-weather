@@ -16,7 +16,7 @@ api/maps.py                                maps.html (template)
 │   → map_queries.get_forecast_map_data()  ├── state mgmt (day/hour/model/metric)
 ├── GET /maps/forecast/hours               ├── tab switching (forecast/accuracy/stats)
 │   → available hours for a day            └── data loading + rerender
-├── GET /admin/maps/verification           adapters/maps-adapter.ts (API client)
+├── GET /maps/verification                 adapters/maps-adapter.ts (API client)
 │   → map_queries.get_verification_map_data()  ├── fetchForecastMap()
                                            ├── fetchVerificationMap()
 Data source:                               └── fetchAvailableHours()
@@ -83,7 +83,7 @@ Server-side in `map_queries.py::_consensus()`:
 - **Hour availability**: Not all sample hours have data for all days — `fetchAvailableHours()` checks and disables unavailable hour buttons
 - **Consensus requires server round-trip**: Switching between worst/majority triggers API call (server computes consensus); switching to individual model is client-side only
 - **Marker sizing**: Radius scales with zoom level (3-8px) for readability at all zoom levels
-- **Verification data is admin-only**: `/admin/maps/verification` requires admin auth; forecast overview is available to all authenticated users
+- **All map endpoints require authentication**: Both forecast and verification data are available to any authenticated user
 
 ## References
 

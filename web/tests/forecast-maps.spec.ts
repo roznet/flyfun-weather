@@ -68,7 +68,7 @@ async function mockApis(page: import('@playwright/test').Page) {
     if (route.request().url().includes('/hours')) return route.fallthrough();
     return route.fulfill({ json: MOCK_FORECAST });
   });
-  await page.route('**/api/admin/maps/verification*', route => route.fulfill({ json: MOCK_VERIF }));
+  await page.route('**/api/maps/verification*', route => route.fulfill({ json: MOCK_VERIF }));
   // Preferences (for nav rendering)
   await page.route('**/api/user/preferences', route => route.fulfill({ json: { pirep_enabled: false } }));
   // Messages badge

@@ -269,7 +269,7 @@ def _enrich_with_sounding(snap: dict, hourly, model: str) -> None:
             snap["sounding_convective_risk"] = sounding.convective.risk_level.value
 
     except Exception:
-        logger.debug(
+        logger.warning(
             "Sounding analysis failed for %s %s, surface data preserved",
             snap.get("icao"), model, exc_info=True,
         )

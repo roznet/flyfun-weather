@@ -8,10 +8,11 @@ Two query types:
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.analysis.airport_conditions import classify_flight_category
@@ -20,6 +21,7 @@ from weatherbrief.analysis.comparison import (
     compare_models,
 )
 from weatherbrief.db.models import AirportForecastSnapshotRow, VerificationScoreRow
+from weatherbrief.models.airport_conditions import FlightCategory
 from weatherbrief.tasks.airport_watchlist import (
     WatchlistAirport,
     get_configs_dir,
@@ -95,21 +97,16 @@ def _consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any
     if not models_with_data:
         return {"flight_category": "VFR", "agreement": "good"}
 
-    cats = [m["flight_category"] for m in per_model.values()]
-    from collections import Counter
-    from weatherbrief.models.airport_conditions import FlightCategory as FC
-
-    _SEVERITY = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
+    cats = [FlightCategory(m["flight_category"]) for m in per_model.values()]
 
     if mode == "majority":
         counts = Counter(cats)
-        # Pick the category with most votes; on tie, pick worst
-        consensus_cat = max(
-            counts.keys(),
-            key=lambda c: (counts[c], _SEVERITY.get(c, 0)),
-        )
+        max_count = max(counts.values())
+        tied = [c for c, n in counts.items() if n == max_count]
+        # Most votes wins; on tie, pick worst (most restrictive)
+        consensus_cat = FlightCategory.worst(tied).value
     else:
-        consensus_cat = FC.worst([FC(c) for c in cats]).value
+        consensus_cat = FlightCategory.worst(cats).value
 
     # Overall agreement — check key variables
     agreement = "good"
@@ -180,8 +177,6 @@ def get_forecast_map_data(
             & (AirportForecastSnapshotRow.model_init_time == init_time)
             & (AirportForecastSnapshotRow.forecast_hour == forecast_hour)
         )
-
-    from sqlalchemy import or_
 
     snaps = db.execute(
         select(AirportForecastSnapshotRow).where(or_(*conditions))

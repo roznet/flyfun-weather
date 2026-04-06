@@ -469,9 +469,7 @@ def app_db():
     engine.dispose()
 
 
-def _make_client(app_db, tmp_path, monkeypatch, *, user_id=DEV_USER_ID, is_admin=False):
-    from weatherbrief.api.admin import require_admin
-
+def _make_client(app_db, tmp_path, monkeypatch, *, user_id=DEV_USER_ID):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET", TEST_SECRET)
@@ -497,8 +495,6 @@ def _make_client(app_db, tmp_path, monkeypatch, *, user_id=DEV_USER_ID, is_admin
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[current_user_id] = lambda: user_id
-    if is_admin:
-        app.dependency_overrides[require_admin] = lambda: user_id
     app.state.db_path = "/fake/airports.db"
 
     return TestClient(app, raise_server_exceptions=False)
@@ -542,23 +538,16 @@ class TestForecastMapEndpoint:
 
 
 class TestVerificationMapEndpoint:
-    """Tests for GET /api/admin/maps/verification."""
+    """Tests for GET /api/maps/verification."""
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_admin_can_access(self, _mock_coords, app_db, tmp_path, monkeypatch):
-        client = _make_client(app_db, tmp_path, monkeypatch, user_id=ADMIN_ID, is_admin=True)
+    def test_authenticated_user_can_access(self, _mock_coords, app_db, tmp_path, monkeypatch):
+        client = _make_client(app_db, tmp_path, monkeypatch)
 
-        resp = client.get("/api/admin/maps/verification?period=7d&model=all&days_out=0")
+        resp = client.get("/api/maps/verification?period=7d&model=all&days_out=0")
         assert resp.status_code == 200
         data = resp.json()
         assert "airports" in data
-
-    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_non_admin_rejected(self, _mock_coords, app_db, tmp_path, monkeypatch):
-        client = _make_client(app_db, tmp_path, monkeypatch, is_admin=False)
-
-        resp = client.get("/api/admin/maps/verification?period=7d&model=all&days_out=0")
-        assert resp.status_code in (401, 403)
 
 
 class TestAvailableHoursEndpoint:
