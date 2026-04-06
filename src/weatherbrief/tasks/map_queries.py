@@ -43,7 +43,11 @@ _coords_cache: dict[str, tuple[float, float]] | None = None
 
 
 def _get_coords(airports_db_path: str) -> dict[str, tuple[float, float]]:
-    """Return icao → (lat, lon) mapping, cached in-process."""
+    """Return icao → (lat, lon) mapping, cached in-process.
+
+    The watchlist config changes infrequently and triggers a process restart
+    (Docker rebuild + deploy) when it does, so no TTL is needed.
+    """
     global _coords_cache
     if _coords_cache is None:
         airports = load_watchlist_with_coords(get_configs_dir(), airports_db_path)

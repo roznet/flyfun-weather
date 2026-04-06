@@ -96,10 +96,27 @@ function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, mode
       return ceilingColor(data.ceiling_ft ?? null);
     case 'cape_jkg':
       return capeColor(data.cape_jkg ?? 0);
-    case 'convective_risk':
-      return RISK_COLORS[(modelData?.convective_risk) || 'none'] || '#888';
-    case 'cloud_cover_pct':
+    case 'convective_risk': {
+      // In consensus mode, pick the worst risk across models
+      if (consensus) {
+        const riskOrder = ['none', 'marginal', 'moderate', 'high', 'extreme'];
+        let worst = 'none';
+        for (const md of Object.values(airport.models)) {
+          const r = md.convective_risk || 'none';
+          if (riskOrder.indexOf(r) > riskOrder.indexOf(worst)) worst = r;
+        }
+        return RISK_COLORS[worst] || '#888';
+      }
+      return RISK_COLORS[modelData?.convective_risk || 'none'] || '#888';
+    }
+    case 'cloud_cover_pct': {
+      // In consensus mode, average cloud cover across models
+      if (consensus) {
+        const vals = Object.values(airport.models).map(m => m.cloud_cover_pct).filter((v): v is number => v != null);
+        return cloudCoverColor(vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0);
+      }
       return cloudCoverColor(modelData?.cloud_cover_pct ?? 0);
+    }
     default:
       return '#888';
   }

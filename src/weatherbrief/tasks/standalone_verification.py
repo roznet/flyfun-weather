@@ -711,7 +711,7 @@ def run_standalone_cycle(
             # snapshots are stored and freed before fetching the next.
             metadata = fetch_model_metadata(STANDALONE_MODELS)
 
-        for model in STANDALONE_MODELS if fetch_forecasts else []:
+        for model in (STANDALONE_MODELS if fetch_forecasts else []):
             meta = metadata.get(model)
             if meta is None:
                 logger.warning("No metadata for model %s, skipping", model)
@@ -824,6 +824,11 @@ def _record_failed_cycle(
             started_at=started_at,
             duration_ms=duration_ms,
             source=f"standalone_{cycle_type}",
+            phase_fetch_ms=0,
+            phase_find_ms=0,
+            phase_gather_ms=0,
+            phase_score_ms=0,
+            phase_finalize_ms=0,
             airports=airport_count,
             observations_stored=0,
             scored=0,
