@@ -158,7 +158,6 @@ def enrich_forecasts(
             cross_sections, all_forecasts, route_points,
             departure_time,
             flight_duration_hours=flight_duration_hours,
-            progress_callback=progress_callback,
             as_of_time=as_of_time,
         )
         if icon_ctx is not None:
@@ -210,7 +209,6 @@ def _enrich_ecmwf(
     departure_time: datetime,
     *,
     flight_duration_hours: float = 0.0,
-    progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
 ) -> int | None:
     """Enrich ECMWF cross-sections with GRIB pressure-level and surface data.
@@ -249,9 +247,6 @@ def _enrich_ecmwf(
         if not all_files:
             logger.info("No ECMWF GRIB runs before as_of_time %s", as_of_time)
             return None
-
-    if progress_callback is not None:
-        progress_callback("grib_enrichment", "ECMWF GRIB")
 
     # Pick the latest run and filter to its files (single scan)
     latest_bt = max(f.base_time for f in all_files)

@@ -108,7 +108,7 @@ def _interp_value(values_2d: np.ndarray, weights) -> float | None:
 # Pressure-level variables we want from a2 files
 _PL_VARS = {"t", "r", "u", "v", "cc", "clwc", "ciwc", "w", "z"}
 # Surface variables from a1 files
-_SFC_VARS = {"lcc", "mcc", "tcc", "ceil", "cbh", "deg0l", "vis", "sp", "2t", "2d"}
+_SFC_VARS = {"lcc", "mcc", "hcc", "tcc", "ceil", "cbh", "deg0l", "vis", "sp", "2t", "2d"}
 
 
 def decode_grib_at_points(
@@ -297,11 +297,12 @@ def compare_surface(
     # Cloud covers (GRIB is 0-1 fraction)
     for var, label in [("lcc", "Low cloud cover %"),
                        ("mcc", "Mid cloud cover %"),
+                       ("hcc", "High cloud cover %"),
                        ("tcc", "Total cloud cover %")]:
         grib_val = grib_sfc.get(var, {}).get(0, [None] * (pt_idx + 1))[pt_idx]
         grib_pct = grib_val * 100 if grib_val is not None else None
 
-        om_key = {"lcc": "cloud_cover_low_pct", "mcc": "cloud_cover_mid_pct", "tcc": "cloud_cover_pct"}.get(var)
+        om_key = {"lcc": "cloud_cover_low_pct", "mcc": "cloud_cover_mid_pct", "hcc": "cloud_cover_high_pct", "tcc": "cloud_cover_pct"}.get(var)
         om_val = om_hourly.get(om_key)
 
         om_s = f"{om_val:12.1f}" if om_val is not None else "           ·"
