@@ -74,6 +74,9 @@ ECMWF_PUBLISH_DELAY_HOURS = 8
 # oper stream at 00z/12z (0-192h), scda stream at 06z/18z (0-144h).
 ECMWF_CYCLES = [0, 6, 12, 18]
 
+# Known file extensions to strip before parsing the ECMWF filename.
+_KNOWN_SUFFIXES = (".grib2", ".grib", ".idx", ".bz2")
+
 # Filename regex — handles the ECMWF naming convention.
 # Groups: destination, feed, model, class, stream, type,
 #         base_time, valid_time, step, optional experiment version.
@@ -174,7 +177,6 @@ def parse_ecmwf_filename(path: Path) -> ECMWFFileInfo | None:
     """
     # Strip all known extensions (.grib2.bz2, .grib2, .grib, .idx, etc.)
     stem = path.name
-    _KNOWN_SUFFIXES = (".grib2", ".grib", ".idx", ".bz2")
     changed = True
     while changed:
         changed = False

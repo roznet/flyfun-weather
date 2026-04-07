@@ -100,8 +100,9 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "lcc": "low_cover_frac",         # 0–1 fraction, ×100 during build
     "mcc": "mid_cover_frac",         # 0–1 fraction, ×100 during build
     "tcc": "total_cover_frac",       # 0–1 fraction, ×100 during build
-    "deg0l": "freezing_level_m",     # meters
     "vis": "visibility_m",           # meters
+    # Note: deg0l (freezing level) is available but NWPCloudDiagnostics has
+    # no freezing_level_ft field. Add when the model is extended.
 }
 
 # Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
@@ -1237,7 +1238,6 @@ def build_ecmwf_cloud_diagnostics(
 
     ceiling_ft = _m_to_ft("ceiling_m")
     cloud_base_ft = _m_to_ft("cloud_base_height_m")
-    freezing_ft = _m_to_ft("freezing_level_m")
     low_cover = _frac_to_pct("low_cover_frac")
     mid_cover = _frac_to_pct("mid_cover_frac")
     total_cover = _frac_to_pct("total_cover_frac")

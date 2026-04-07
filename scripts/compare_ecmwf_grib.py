@@ -22,7 +22,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import eccodes
@@ -443,7 +443,7 @@ def main():
     for step_h in matching_steps:
         files = grib_files[step_h]
         print(f"\n{'='*80}")
-        valid_time = grib_bt + __import__("datetime").timedelta(hours=step_h)
+        valid_time = grib_bt + timedelta(hours=step_h)
         print(f"Step +{step_h}h  (valid {valid_time.strftime('%Y-%m-%d %H:%MZ')})")
         print(f"{'='*80}")
 
