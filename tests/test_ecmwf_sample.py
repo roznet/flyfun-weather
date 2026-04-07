@@ -22,6 +22,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from weatherbrief.fetch.grib.ecmwf_fetch import (
@@ -108,6 +109,16 @@ class TestFilenameParser:
         assert info.experiment == "1"
         assert info.is_operational
 
+    def test_parse_operational_expver_0001(self):
+        """Experiment version '0001' (ECMWF standard 4-digit) is operational."""
+        path = Path(
+            "ABC_XY_ifs_od_oper_fc_20260407T000000Z_20260407T060000Z_6_0001"
+        )
+        info = parse_ecmwf_filename(path)
+        assert info is not None
+        assert info.experiment == "0001"
+        assert info.is_operational
+
     def test_parse_aifs_ens(self):
         """Parse AIFS ensemble model filename."""
         path = Path(
@@ -123,6 +134,15 @@ class TestFilenameParser:
         """Extension is stripped before parsing."""
         path = Path(
             "ABC_XY_ifs_od_oper_fc_20260407T120000Z_20260407T180000Z_6.grib2"
+        )
+        info = parse_ecmwf_filename(path)
+        assert info is not None
+        assert info.step_hours == 6
+
+    def test_parse_compound_extension(self):
+        """Compound extensions like .grib2.bz2 are fully stripped."""
+        path = Path(
+            "ABC_XY_ifs_od_oper_fc_20260407T120000Z_20260407T180000Z_6.grib2.bz2"
         )
         info = parse_ecmwf_filename(path)
         assert info is not None
@@ -327,7 +347,6 @@ class TestSampleInventory:
                 # Report value ranges for each variable
                 for var in var_names:
                     data = ds[var].values
-                    import numpy as np
                     finite = data[np.isfinite(data)]
                     if len(finite) > 0:
                         print(f"    {var}: min={finite.min():.6g}  "
@@ -387,7 +406,6 @@ class TestSampleInventory:
         Uses a central European coordinate (near Munich) as a test point.
         """
         import cfgrib
-        import numpy as np
 
         test_lat, test_lon = 48.0, 11.5  # near Munich, EDDM
 
@@ -533,7 +551,6 @@ class TestPipelineDecode:
 
 def _grid_spacing(coords) -> float:
     """Compute the grid spacing from a coordinate array."""
-    import numpy as np
     if len(coords) < 2:
         return 0.0
     diffs = np.diff(np.sort(coords))
