@@ -62,8 +62,13 @@ def _find_temperature_crossing(
     return None
 
 
-def compute_indices(profile: PreparedProfile) -> ThermodynamicIndices:
-    """Compute thermodynamic indices from a prepared sounding profile."""
+def compute_indices_core(profile: PreparedProfile) -> ThermodynamicIndices:
+    """Compute core thermodynamic indices needed for ceiling and convective risk.
+
+    This is the lightweight subset: LCL, parcel profile, LFC, EL,
+    surface CAPE/CIN, lifted index, and freezing level.  Used by both
+    the full briefing pipeline and standalone verification.
+    """
     idx = ThermodynamicIndices()
     p = profile.pressure
     t = profile.temperature
@@ -113,6 +118,37 @@ def compute_indices(profile: PreparedProfile) -> ThermodynamicIndices:
         except Exception:
             logger.debug("Surface CAPE/CIN failed", exc_info=True)
 
+    # --- Lifted index ---
+    if parcel is not None:
+        try:
+            li = mpcalc.lifted_index(p, t, parcel)
+            idx.lifted_index = round(_mag(li.to("delta_degC")), 1)
+        except Exception:
+            logger.debug("Lifted index failed", exc_info=True)
+
+    # --- Temperature crossings ---
+    idx.freezing_level_ft = _safe_round(_find_temperature_crossing(profile, 0.0))
+    idx.minus10c_level_ft = _safe_round(_find_temperature_crossing(profile, -10.0))
+    idx.minus20c_level_ft = _safe_round(_find_temperature_crossing(profile, -20.0))
+
+    return idx
+
+
+def compute_indices_extended(
+    profile: PreparedProfile,
+    idx: ThermodynamicIndices,
+) -> None:
+    """Compute extended indices on top of core results (mutates *idx* in-place).
+
+    Adds MU-CAPE, ML-CAPE, Showalter, K-index, Total Totals,
+    precipitable water, and bulk wind shear.  These are used by the full
+    briefing pipeline (icing severity modifiers, cloud top uncertainty,
+    Skew-T display) but not needed for standalone verification scoring.
+    """
+    p = profile.pressure
+    t = profile.temperature
+    td = profile.dewpoint
+
     # --- Most-unstable CAPE ---
     try:
         mu_cape, _ = mpcalc.most_unstable_cape_cin(p, t, td)
@@ -126,13 +162,6 @@ def compute_indices(profile: PreparedProfile) -> ThermodynamicIndices:
         idx.cape_mixed_layer_jkg = round(_mag(ml_cape.to("J/kg")), 1)
     except Exception:
         logger.debug("ML CAPE failed", exc_info=True)
-
-    # --- Lifted index ---
-    try:
-        li = mpcalc.lifted_index(p, t, parcel)
-        idx.lifted_index = round(_mag(li.to("delta_degC")), 1)
-    except Exception:
-        logger.debug("Lifted index failed", exc_info=True)
 
     # --- Showalter index ---
     try:
@@ -162,11 +191,6 @@ def compute_indices(profile: PreparedProfile) -> ThermodynamicIndices:
     except Exception:
         logger.debug("Precipitable water failed", exc_info=True)
 
-    # --- Temperature crossings ---
-    idx.freezing_level_ft = _safe_round(_find_temperature_crossing(profile, 0.0))
-    idx.minus10c_level_ft = _safe_round(_find_temperature_crossing(profile, -10.0))
-    idx.minus20c_level_ft = _safe_round(_find_temperature_crossing(profile, -20.0))
-
     # --- Bulk wind shear ---
     if profile.wind_speed is not None and profile.wind_direction is not None:
         u, v = mpcalc.wind_components(profile.wind_speed, profile.wind_direction)
@@ -181,6 +205,11 @@ def compute_indices(profile: PreparedProfile) -> ThermodynamicIndices:
         idx.bulk_shear_0_6km_kt = _compute_bulk_shear(u, v, heights_m, 0, 6000)
         idx.bulk_shear_0_1km_kt = _compute_bulk_shear(u, v, heights_m, 0, 1000)
 
+
+def compute_indices(profile: PreparedProfile) -> ThermodynamicIndices:
+    """Compute all thermodynamic indices (core + extended)."""
+    idx = compute_indices_core(profile)
+    compute_indices_extended(profile, idx)
     return idx
 
 
@@ -207,8 +236,13 @@ def _compute_bulk_shear(
         return None
 
 
-def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
-    """Compute per-level derived values from a prepared sounding profile."""
+def compute_derived_levels_core(profile: PreparedProfile) -> list[DerivedLevel]:
+    """Compute core per-level values needed for cloud detection and ceiling.
+
+    Produces: pressure, altitude, temperature, dewpoint, dewpoint depression,
+    lapse rate, wind speed/direction.  Skips expensive MetPy calls
+    (wet bulb, theta-e, RH, omega→w).
+    """
     pressures = profile.pressure.to("hPa").magnitude
     temps = profile.temperature.to("degC").magnitude
     dewpoints = profile.dewpoint.to("degC").magnitude
@@ -218,25 +252,12 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
     else:
         heights_ft = np.array([_pressure_to_altitude_ft(p) for p in pressures])
 
-    # Extract omega values (may contain NaN for missing levels)
-    omega_vals = None
-    if profile.omega is not None:
-        omega_vals = profile.omega.to("Pa/s").magnitude
-
-    # Extract wind speed/direction for E-Shear turbulence
+    # Extract wind speed/direction (cheap unit conversion, needed by convective)
     wspd_kt = None
     wdir_deg = None
     if profile.wind_speed is not None and profile.wind_direction is not None:
         wspd_kt = profile.wind_speed.to("knots").magnitude
         wdir_deg = profile.wind_direction.to("degrees").magnitude
-
-    # RH for each level
-    try:
-        rh_vals = mpcalc.relative_humidity_from_dewpoint(
-            profile.temperature, profile.dewpoint
-        ).magnitude * 100
-    except Exception:
-        rh_vals = [None] * len(pressures)
 
     levels: list[DerivedLevel] = []
     for i in range(len(pressures)):
@@ -244,53 +265,14 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
         t_c = float(temps[i])
         td_c = float(dewpoints[i])
 
-        # Wet-bulb temperature
-        wet_bulb = None
-        try:
-            wb = mpcalc.wet_bulb_temperature(
-                pressures[i] * units.hPa, temps[i] * units.degC, dewpoints[i] * units.degC
-            )
-            wet_bulb = round(float(wb.to("degC").magnitude), 1)
-        except Exception:
-            pass
-
-        # Dewpoint depression
         dd = round(t_c - td_c, 1)
 
-        # Theta-E
-        theta_e = None
-        try:
-            te = mpcalc.equivalent_potential_temperature(
-                pressures[i] * units.hPa, temps[i] * units.degC, dewpoints[i] * units.degC
-            )
-            theta_e = round(float(te.to("kelvin").magnitude), 1)
-        except Exception:
-            pass
-
-        # Lapse rate between this level and the next (C/km)
         lapse = None
         if i < len(pressures) - 1:
             dz_m = (heights_ft[i + 1] - heights_ft[i]) / M_TO_FT
             if dz_m > 0:
                 dt = temps[i + 1] - temps[i]
-                lapse = round(float(-dt / (dz_m / 1000)), 1)  # -dT/dz in C/km
-
-        # Omega → w conversion
-        omega_pa_s = None
-        w_fpm = None
-        if omega_vals is not None and not np.isnan(omega_vals[i]):
-            omega_pa_s = round(float(omega_vals[i]), 4)
-            try:
-                w = mpcalc.vertical_velocity(
-                    omega_vals[i] * units("Pa/s"),
-                    pressures[i] * units.hPa,
-                    temps[i] * units.degC,
-                )
-                w_fpm = round(float(w.to("m/s").magnitude) * 196.85, 1)  # m/s → ft/min
-            except Exception:
-                logger.debug("Omega→w conversion failed at %s hPa", pressures[i], exc_info=True)
-
-        rh_pct = round(float(rh_vals[i]), 1) if rh_vals[i] is not None else None
+                lapse = round(float(-dt / (dz_m / 1000)), 1)
 
         ws = round(float(wspd_kt[i]), 1) if wspd_kt is not None and not np.isnan(wspd_kt[i]) else None
         wd = round(float(wdir_deg[i]), 0) if wdir_deg is not None and not np.isnan(wdir_deg[i]) else None
@@ -300,15 +282,78 @@ def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
             altitude_ft=round(float(heights_ft[i])),
             temperature_c=round(t_c, 1),
             dewpoint_c=round(td_c, 1),
-            relative_humidity_pct=rh_pct,
-            wet_bulb_c=wet_bulb,
             dewpoint_depression_c=dd,
-            theta_e_k=theta_e,
             lapse_rate_c_per_km=lapse,
             wind_speed_kt=ws,
             wind_direction_deg=wd,
-            omega_pa_s=omega_pa_s,
-            w_fpm=w_fpm,
         ))
 
+    return levels
+
+
+def compute_derived_levels_extended(
+    profile: PreparedProfile,
+    levels: list[DerivedLevel],
+) -> None:
+    """Enrich derived levels with wet bulb, theta-e, RH, and omega (mutates in-place).
+
+    Called by the full briefing pipeline after ``compute_derived_levels_core``.
+    These fields are used by icing, inversions, vertical motion, and Skew-T.
+    """
+    pressures = profile.pressure.to("hPa").magnitude
+    temps = profile.temperature.to("degC").magnitude
+    dewpoints = profile.dewpoint.to("degC").magnitude
+
+    # Omega
+    omega_vals = None
+    if profile.omega is not None:
+        omega_vals = profile.omega.to("Pa/s").magnitude
+
+    # RH (vectorized)
+    try:
+        rh_vals = mpcalc.relative_humidity_from_dewpoint(
+            profile.temperature, profile.dewpoint
+        ).magnitude * 100
+    except Exception:
+        rh_vals = [None] * len(pressures)
+
+    for i, lv in enumerate(levels):
+        # Wet-bulb temperature
+        try:
+            wb = mpcalc.wet_bulb_temperature(
+                pressures[i] * units.hPa, temps[i] * units.degC, dewpoints[i] * units.degC
+            )
+            lv.wet_bulb_c = round(float(wb.to("degC").magnitude), 1)
+        except Exception:
+            pass
+
+        # Theta-E
+        try:
+            te = mpcalc.equivalent_potential_temperature(
+                pressures[i] * units.hPa, temps[i] * units.degC, dewpoints[i] * units.degC
+            )
+            lv.theta_e_k = round(float(te.to("kelvin").magnitude), 1)
+        except Exception:
+            pass
+
+        # Omega → w conversion
+        if omega_vals is not None and not np.isnan(omega_vals[i]):
+            lv.omega_pa_s = round(float(omega_vals[i]), 4)
+            try:
+                w = mpcalc.vertical_velocity(
+                    omega_vals[i] * units("Pa/s"),
+                    pressures[i] * units.hPa,
+                    temps[i] * units.degC,
+                )
+                lv.w_fpm = round(float(w.to("m/s").magnitude) * 196.85, 1)
+            except Exception:
+                logger.debug("Omega→w conversion failed at %s hPa", pressures[i], exc_info=True)
+
+        lv.relative_humidity_pct = round(float(rh_vals[i]), 1) if rh_vals[i] is not None else None
+
+
+def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
+    """Compute all per-level derived values (core + extended)."""
+    levels = compute_derived_levels_core(profile)
+    compute_derived_levels_extended(profile, levels)
     return levels

@@ -238,10 +238,10 @@ def _enrich_with_sounding(snap: dict, hourly, model: str) -> None:
         return
 
     try:
-        from weatherbrief.analysis.sounding import analyze_sounding
+        from weatherbrief.analysis.sounding import analyze_sounding_lite
         from weatherbrief.models.analysis import CloudCoverage
 
-        sounding = analyze_sounding(
+        sounding = analyze_sounding_lite(
             hourly.pressure_levels, hourly, model_key=model,
         )
         if sounding is None:
