@@ -28,6 +28,7 @@ _VAR_MAP = {
     "clc": "cloud_area_fraction_pct",     # ICON-EU cloud area fraction (0–100%)
     "clwc": "cloud_liquid_water_kg_kg",   # ECMWF IFS cloud liquid water content
     "ciwc": "ice_mixing_ratio_kg_kg",     # ECMWF IFS cloud ice water content
+    "cc": "cloud_area_fraction_pct",      # ECMWF IFS cloud cover (0–1 fraction, ×100 in decode)
 }
 
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
@@ -89,6 +90,22 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "clch": "high_cover_pct",
     "clct": "total_cover_pct",
 }
+
+# ECMWF single-level cloud diagnostic field mapping.
+# ECMWF reports heights in meters, cloud covers as 0–1 fractions.
+# cfgrib shortName → internal field name
+_ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
+    "ceil": "ceiling_m",             # meters, 9999 = no cloud sentinel
+    "cbh": "cloud_base_height_m",    # meters, 9999 = no cloud sentinel
+    "lcc": "low_cover_frac",         # 0–1 fraction, ×100 during build
+    "mcc": "mid_cover_frac",         # 0–1 fraction, ×100 during build
+    "tcc": "total_cover_frac",       # 0–1 fraction, ×100 during build
+    "deg0l": "freezing_level_m",     # meters
+    "vis": "visibility_m",           # meters
+}
+
+# Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
+_ECMWF_FRAC_TO_PCT = {"cc"}
 
 
 def decode_grib_to_points(
@@ -1027,4 +1044,218 @@ def build_icon_cloud_diagnostics(
         ceiling_ft=ceiling_ft,
         convective_base_ft=convective_base_ft,
         convective_top_ft=convective_top_ft,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ECMWF GRIB decode — local files, multi-grid, per-point coverage
+# ---------------------------------------------------------------------------
+
+
+def decode_ecmwf_pressure_per_point(
+    file_path: Path,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
+    """Decode ECMWF pressure-level GRIB and interpolate per route point.
+
+    Handles multi-grid files: cfgrib.open_datasets() splits each geographic
+    sub-grid into a separate xarray Dataset.  For each point we try every
+    dataset until one returns non-NaN values.
+
+    ECMWF ``cc`` (cloud cover fraction, 0–1) is converted to 0–100 % to
+    match the ``cloud_area_fraction_pct`` convention used by ICON-EU CLC.
+
+    Args:
+        file_path: Path to an ECMWF a2 (pressure-level) GRIB file on disk.
+        latitudes: Route-point latitudes.
+        longitudes: Route-point longitudes.
+
+    Returns:
+        Tuple of:
+        - Per-point data: [{pressure_hpa: {field: value, …}, …}, …]
+        - Coverage mask: [True if at least one level decoded, …]
+    """
+    import cfgrib
+    import numpy as np
+
+    n_points = len(latitudes)
+    results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+    covered: list[bool] = [False] * n_points
+
+    try:
+        datasets = cfgrib.open_datasets(str(file_path))
+    except Exception:
+        logger.warning("cfgrib failed to open ECMWF file %s", file_path, exc_info=True)
+        return results, covered
+
+    try:
+        for ds in datasets:
+            for var_name, xr_var in ds.data_vars.items():
+                var_lower = str(var_name).lower()
+                field_name = _VAR_MAP.get(var_lower)
+                if field_name is None:
+                    continue
+
+                is_frac = var_lower in _ECMWF_FRAC_TO_PCT
+
+                # Determine pressure coordinate
+                pressure_coord = None
+                for coord_name in ("isobaricInhPa", "level", "pressure"):
+                    if coord_name in xr_var.dims:
+                        pressure_coord = coord_name
+                        break
+
+                if pressure_coord is None:
+                    # Single-level variable with attrs-level
+                    level = xr_var.attrs.get("level")
+                    if level is not None:
+                        p_hpa = int(level)
+                        values = _interpolate_per_point(xr_var, latitudes, longitudes)
+                        for i, val in enumerate(values):
+                            if val is not None:
+                                if is_frac:
+                                    val *= 100.0
+                                results[i].setdefault(p_hpa, {})[field_name] = val
+                                covered[i] = True
+                    continue
+
+                pressures = ds.coords[pressure_coord].values
+                for p_val in pressures:
+                    p_hpa = int(float(p_val))
+                    level_data = xr_var.sel({pressure_coord: p_val})
+                    values = _interpolate_per_point(level_data, latitudes, longitudes)
+                    for i, val in enumerate(values):
+                        if val is not None:
+                            # Only fill if not already set (first grid wins)
+                            existing = results[i].get(p_hpa, {})
+                            if field_name not in existing:
+                                if is_frac:
+                                    val *= 100.0
+                                results[i].setdefault(p_hpa, {})[field_name] = val
+                                covered[i] = True
+
+        return results, covered
+    except Exception:
+        logger.warning("Failed to decode ECMWF pressure data from %s", file_path, exc_info=True)
+        return [{} for _ in range(n_points)], [False] * n_points
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
+def decode_ecmwf_surface_per_point(
+    file_path: Path,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> tuple[list[dict[str, float]], list[bool]]:
+    """Decode ECMWF surface/single-level GRIB and interpolate per point.
+
+    Handles multi-grid files the same way as the pressure-level decoder.
+
+    Args:
+        file_path: Path to an ECMWF a1 (surface) GRIB file on disk.
+        latitudes: Route-point latitudes.
+        longitudes: Route-point longitudes.
+
+    Returns:
+        Tuple of:
+        - Per-point raw dicts: [{field_name: value, …}, …]
+        - Coverage mask
+    """
+    import cfgrib
+    import numpy as np
+
+    n_points = len(latitudes)
+    results: list[dict[str, float]] = [{} for _ in range(n_points)]
+    covered: list[bool] = [False] * n_points
+
+    try:
+        datasets = cfgrib.open_datasets(str(file_path))
+    except Exception:
+        logger.warning("cfgrib failed to open ECMWF surface file %s", file_path, exc_info=True)
+        return results, covered
+
+    try:
+        for ds in datasets:
+            for var_name in ds.data_vars:
+                var_lower = str(var_name).lower()
+                field_name = _ECMWF_CLOUD_DIAG_FIELD_MAP.get(var_lower)
+                if field_name is None:
+                    continue
+
+                xr_var = ds[var_name]
+                values = _interpolate_per_point(xr_var, latitudes, longitudes)
+                for i, val in enumerate(values):
+                    if val is not None and field_name not in results[i]:
+                        results[i][field_name] = val
+                        covered[i] = True
+
+        return results, covered
+    except Exception:
+        logger.warning("Failed to decode ECMWF surface data from %s", file_path, exc_info=True)
+        return [{} for _ in range(n_points)], [False] * n_points
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
+_ECMWF_NO_CLOUD_SENTINEL_M = 9990.0  # ECMWF uses 9999m for "no cloud"
+
+
+def build_ecmwf_cloud_diagnostics(
+    raw: dict[str, float],
+) -> "NWPCloudDiagnostics | None":
+    """Convert raw ECMWF surface values into NWPCloudDiagnostics.
+
+    ECMWF reports heights in meters (like ICON-EU), cloud covers as
+    0–1 fractions.  Heights ≥ 9990 m are treated as "no cloud" sentinel.
+
+    Unit conversions:
+    - meters → feet (× 3.28084)
+    - 0–1 fraction → 0–100 % (× 100)
+    """
+    from weatherbrief.models.analysis import (
+        NWPCloudDiagnostics,
+        NWPCloudLayerDiag,
+    )
+
+    if not raw:
+        return None
+
+    def _m_to_ft(key: str) -> float | None:
+        val = raw.get(key)
+        if val is None or val <= 0 or val >= _ECMWF_NO_CLOUD_SENTINEL_M:
+            return None
+        return round(val * _M_TO_FT)
+
+    def _frac_to_pct(key: str) -> float | None:
+        val = raw.get(key)
+        if val is None:
+            return None
+        return round(val * 100.0, 1)
+
+    ceiling_ft = _m_to_ft("ceiling_m")
+    cloud_base_ft = _m_to_ft("cloud_base_height_m")
+    freezing_ft = _m_to_ft("freezing_level_m")
+    low_cover = _frac_to_pct("low_cover_frac")
+    mid_cover = _frac_to_pct("mid_cover_frac")
+    total_cover = _frac_to_pct("total_cover_frac")
+
+    has_any = (
+        ceiling_ft is not None
+        or cloud_base_ft is not None
+        or low_cover is not None
+        or mid_cover is not None
+        or total_cover is not None
+    )
+    if not has_any:
+        return None
+
+    return NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=low_cover, base_ft=cloud_base_ft),
+        mid=NWPCloudLayerDiag(cover_pct=mid_cover),
+        high=NWPCloudLayerDiag(),
+        total_cover_pct=total_cover,
+        ceiling_ft=ceiling_ft,
     )

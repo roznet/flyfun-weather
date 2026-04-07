@@ -113,6 +113,15 @@ def enrich_forecasts(
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
 
+    # ECMWF GRIB enrichment — local disk, fast, runs first.
+    ecmwf_grib_ts = _enrich_ecmwf(
+        cross_sections, all_forecasts, route_points, departure_time,
+        flight_duration_hours=flight_duration_hours,
+        progress_callback=progress_callback,
+    )
+    if ecmwf_grib_ts is not None:
+        grib_init_times["ecmwf_grib"] = ecmwf_grib_ts
+
     # Download GFS and ICON-EU in parallel (network-bound), but decode
     # sequentially (memory-bound). ICON-EU decode peaks at ~270MB per
     # variable; overlapping with GFS decode caused OOM.
@@ -172,6 +181,122 @@ def enrich_forecasts(
     propagate_all(cross_sections, all_forecasts)
 
     return grib_init_times, grib_skip_reasons
+
+
+# ---------------------------------------------------------------------------
+# ECMWF GRIB enrichment (local disk)
+# ---------------------------------------------------------------------------
+
+
+def _enrich_ecmwf(
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    *,
+    flight_duration_hours: float = 0.0,
+    progress_callback: Callable[[str, str | None], None] | None = None,
+) -> int | None:
+    """Enrich ECMWF cross-sections with GRIB pressure-level and surface data.
+
+    Reads ECMWF GRIB files from the local ECPDS delivery directory.
+    For each route point, uses GRIB data if the point is covered by
+    any geographic sub-grid; uncovered points keep their Open-Meteo data.
+
+    Returns:
+        GRIB init Unix timestamp, or None if no ECMWF data found.
+    """
+    from weatherbrief.fetch.grib.decode import (
+        build_ecmwf_cloud_diagnostics,
+        decode_ecmwf_pressure_per_point,
+        decode_ecmwf_surface_per_point,
+    )
+    from weatherbrief.fetch.grib.ecmwf_fetch import (
+        ecmwf_grib_dir,
+        find_files_for_run,
+        find_latest_ecmwf_run,
+    )
+
+    # Only enrich ECMWF model cross-sections
+    ecmwf_sections = [cs for cs in cross_sections if cs.model == ModelSource.ECMWF]
+    if not ecmwf_sections:
+        return None
+
+    data_dir = ecmwf_grib_dir()
+    latest_bt = find_latest_ecmwf_run(data_dir, operational_only=False)
+    if latest_bt is None:
+        logger.info("No ECMWF GRIB data available in %s", data_dir)
+        return None
+
+    if progress_callback is not None:
+        progress_callback("grib_enrichment", "ECMWF GRIB")
+
+    run_files = find_files_for_run(latest_bt, data_dir, operational_only=False)
+    if not run_files:
+        return None
+
+    # Group files by step_hours, separate a1 (surface) and a2 (pressure)
+    files_by_step: dict[int, dict[str, Path]] = {}
+    for f in run_files:
+        part = "a2" if f.is_pressure_level else "a1" if f.is_surface else None
+        if part is not None:
+            files_by_step.setdefault(f.step_hours, {})[part] = f.path
+
+    # Compute which forecast steps cover the flight window
+    flight_start = departure_time
+    flight_end = departure_time + timedelta(hours=max(flight_duration_hours, 1))
+
+    point_lats = [rp.lat for rp in route_points]
+    point_lons = [rp.lon for rp in route_points]
+
+    enriched_steps = 0
+    for step_hours, parts in sorted(files_by_step.items()):
+        valid_time = latest_bt + timedelta(hours=step_hours)
+        # Only process steps within the flight window (with some margin)
+        margin = timedelta(hours=3)
+        if valid_time < flight_start - margin or valid_time > flight_end + margin:
+            continue
+
+        # Decode pressure levels (a2)
+        if "a2" in parts:
+            pl_data, pl_covered = decode_ecmwf_pressure_per_point(
+                parts["a2"], point_lats, point_lons,
+            )
+            # Only merge covered points — set uncovered to empty
+            for i, cov in enumerate(pl_covered):
+                if not cov:
+                    pl_data[i] = {}
+
+            merged = _merge_cloud_water_into_sections(
+                ecmwf_sections, all_forecasts, route_points,
+                pl_data, "ecmwf", valid_utc=valid_time,
+            )
+            if merged > 0:
+                enriched_steps += 1
+
+        # Decode surface diagnostics (a1)
+        if "a1" in parts:
+            sfc_data, sfc_covered = decode_ecmwf_surface_per_point(
+                parts["a1"], point_lats, point_lons,
+            )
+            diagnostics = [
+                build_ecmwf_cloud_diagnostics(raw) if cov else None
+                for raw, cov in zip(sfc_data, sfc_covered)
+            ]
+            _apply_cloud_diagnostics_to_sections(
+                ecmwf_sections, all_forecasts, route_points,
+                diagnostics, "ecmwf", valid_utc=valid_time,
+            )
+
+    if enriched_steps > 0:
+        logger.info(
+            "ECMWF GRIB enrichment applied (%d steps, base %s)",
+            enriched_steps, latest_bt.isoformat(),
+        )
+        return int(latest_bt.timestamp())
+
+    logger.info("ECMWF GRIB: no matching steps for flight window")
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -44,10 +44,17 @@ SAMPLE_DIR = Path(_SAMPLE_DIR_ENV) if _SAMPLE_DIR_ENV else _SAMPLE_DIR_LOCAL
 
 
 def _grib_files() -> list[Path]:
-    """Collect all GRIB files from the sample directory."""
+    """Collect all ECMWF GRIB files from the sample directory.
+
+    ECMWF ECPDS files may have no extension — we identify them by
+    parsing the filename against the ECMWF naming convention.
+    """
     if not SAMPLE_DIR.exists():
         return []
-    files = list(SAMPLE_DIR.glob("**/*.grib2")) + list(SAMPLE_DIR.glob("**/*.grib"))
+    files = [
+        p for p in SAMPLE_DIR.rglob("*")
+        if p.is_file() and parse_ecmwf_filename(p) is not None
+    ]
     return sorted(files)
 
 
@@ -165,6 +172,49 @@ class TestFilenameParser:
         info = parse_ecmwf_filename(path)
         assert info is not None
         assert info.step_hours == 72
+
+    def test_parse_ifs_ens_cf_no_extension(self):
+        """Parse real sample filename: ifs-ens-cf with no extension."""
+        path = Path(
+            "brg_a1_ifs-ens-cf_od_oper_fc_20260406T000000Z_20260406T030000Z_3h"
+        )
+        info = parse_ecmwf_filename(path)
+        assert info is not None
+        assert info.destination == "brg"
+        assert info.feed == "a1"
+        assert info.model == "ifs-ens-cf"
+        assert info.data_class == "od"
+        assert info.stream == "oper"
+        assert info.data_type == "fc"
+        assert info.step_hours == 3
+        assert info.base_time == datetime(2026, 4, 6, 0, 0, 0, tzinfo=timezone.utc)
+        assert info.is_surface
+        assert not info.is_pressure_level
+        # expver not in filename but sample data has 0001 internally
+        assert info.experiment is None
+        assert info.is_operational
+
+    def test_parse_a2_pressure_level_file(self):
+        """Parse a2 (pressure-level) file."""
+        path = Path(
+            "brg_a2_ifs-ens-cf_od_oper_fc_20260406T000000Z_20260407T000000Z_24h"
+        )
+        info = parse_ecmwf_filename(path)
+        assert info is not None
+        assert info.feed == "a2"
+        assert info.is_pressure_level
+        assert not info.is_surface
+        assert info.step_hours == 24
+
+    def test_parse_scda_stream(self):
+        """Parse scda (short cut-off data assimilation) stream file."""
+        path = Path(
+            "brg_a1_ifs-ens-cf_od_scda_fc_20260406T060000Z_20260406T090000Z_3h"
+        )
+        info = parse_ecmwf_filename(path)
+        assert info is not None
+        assert info.stream == "scda"
+        assert info.init_hour == 6
 
     def test_parse_invalid_filename(self):
         """Non-matching filename returns None."""
@@ -543,6 +593,131 @@ class TestPipelineDecode:
         if unmapped:
             print("\nUnmapped variables may need to be added to _VAR_MAP in "
                   "decode.py if they are useful for our analysis.")
+
+
+# ---------------------------------------------------------------------------
+# ECMWF decode function tests (require sample data)
+# ---------------------------------------------------------------------------
+
+
+@skip_no_samples
+class TestECMWFDecode:
+    """Test the new ECMWF-specific decode functions against sample data."""
+
+    def _find_a2_file(self) -> Path | None:
+        """Find a pressure-level (a2) sample file."""
+        for p in _grib_files():
+            info = parse_ecmwf_filename(p)
+            if info and info.is_pressure_level:
+                return p
+        return None
+
+    def _find_a1_file(self) -> Path | None:
+        """Find a surface (a1) sample file."""
+        for p in _grib_files():
+            info = parse_ecmwf_filename(p)
+            if info and info.is_surface:
+                return p
+        return None
+
+    def test_pressure_decode_covered_point(self):
+        """Decode pressure levels for a point inside the Europe grid."""
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
+
+        a2 = self._find_a2_file()
+        if a2 is None:
+            pytest.skip("No a2 (pressure-level) file found")
+
+        # Munich — well inside the main Europe grid
+        data, covered = decode_ecmwf_pressure_per_point(a2, [48.0], [11.5])
+        assert covered[0], "Munich should be covered by the Europe grid"
+        assert len(data[0]) == 25, f"Expected 25 pressure levels, got {len(data[0])}"
+
+        # Check expected fields at 700 hPa
+        fields_700 = data[0].get(700, {})
+        assert "cloud_liquid_water_kg_kg" in fields_700
+        assert "ice_mixing_ratio_kg_kg" in fields_700
+        assert "cloud_area_fraction_pct" in fields_700
+
+    def test_pressure_decode_uncovered_point(self):
+        """A point outside all grids returns no data."""
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
+
+        a2 = self._find_a2_file()
+        if a2 is None:
+            pytest.skip("No a2 file found")
+
+        # Mid-Atlantic — outside all European grids
+        data, covered = decode_ecmwf_pressure_per_point(a2, [40.0], [-30.0])
+        assert not covered[0], "Mid-Atlantic should not be covered"
+        assert len(data[0]) == 0
+
+    def test_pressure_decode_nordic_point(self):
+        """A point in the Nordic grid (60-71N) returns data."""
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
+
+        a2 = self._find_a2_file()
+        if a2 is None:
+            pytest.skip("No a2 file found")
+
+        # Oslo — in the Nordic extension grid
+        data, covered = decode_ecmwf_pressure_per_point(a2, [59.9], [10.7])
+        assert covered[0], "Oslo should be covered by the Nordic grid"
+        assert len(data[0]) > 0
+
+    def test_pressure_decode_cc_scaled(self):
+        """Cloud cover fraction (0-1) is scaled to percentage (0-100)."""
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
+
+        a2 = self._find_a2_file()
+        if a2 is None:
+            pytest.skip("No a2 file found")
+
+        data, _ = decode_ecmwf_pressure_per_point(a2, [48.0], [11.5])
+        for p_hpa, fields in data[0].items():
+            cc = fields.get("cloud_area_fraction_pct")
+            if cc is not None:
+                assert 0 <= cc <= 100, (
+                    f"CC at {p_hpa} hPa = {cc}, expected 0-100%"
+                )
+
+    def test_surface_decode(self):
+        """Decode surface fields and build cloud diagnostics."""
+        from weatherbrief.fetch.grib.decode import (
+            build_ecmwf_cloud_diagnostics,
+            decode_ecmwf_surface_per_point,
+        )
+
+        a1 = self._find_a1_file()
+        if a1 is None:
+            pytest.skip("No a1 (surface) file found")
+
+        sfc_data, covered = decode_ecmwf_surface_per_point(a1, [48.0], [11.5])
+        assert covered[0], "Munich should be covered"
+        raw = sfc_data[0]
+        # Should have at least some cloud cover fields
+        assert any(k.endswith("_frac") for k in raw), f"Expected cover fields, got {raw.keys()}"
+
+        diag = build_ecmwf_cloud_diagnostics(raw)
+        assert diag is not None
+        # Cover values should be 0-100% (converted from 0-1 fractions)
+        if diag.total_cover_pct is not None:
+            assert 0 <= diag.total_cover_pct <= 100
+
+    def test_mixed_coverage(self):
+        """Two points: one covered, one not — verify independent coverage."""
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
+
+        a2 = self._find_a2_file()
+        if a2 is None:
+            pytest.skip("No a2 file found")
+
+        lats = [48.0, 40.0]   # Munich (in), mid-Atlantic (out)
+        lons = [11.5, -30.0]
+        data, covered = decode_ecmwf_pressure_per_point(a2, lats, lons)
+        assert covered[0] and not covered[1]
+        assert len(data[0]) == 25
+        assert len(data[1]) == 0
 
 
 # ---------------------------------------------------------------------------
