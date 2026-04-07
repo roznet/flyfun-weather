@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -56,14 +57,20 @@ def _parse_meta(model: str, data: dict) -> ModelMetadata:
     )
 
 
+_META_MAX_RETRIES = 3
+_META_RETRY_BACKOFF = [5, 10]  # seconds between retries
+
+
 def fetch_model_metadata(
     models: list[str] | None = None,
     timeout: float = 5,
 ) -> dict[str, ModelMetadata]:
     """Fetch metadata for the given models in parallel.
 
-    Returns a dict keyed by model name. Failed fetches are silently
-    omitted — the caller should treat a missing model as stale.
+    Retries up to 3 times per model on transient errors (502, timeouts,
+    connection resets).  Returns a dict keyed by model name.  Failed
+    fetches are silently omitted — the caller should treat a missing
+    model as stale.
     """
     if models is None:
         models = list(META_URLS.keys())
@@ -75,13 +82,26 @@ def fetch_model_metadata(
     result: dict[str, ModelMetadata] = {}
 
     def _fetch_one(model: str, url: str) -> tuple[str, ModelMetadata | None]:
-        try:
-            resp = httpx.get(url, timeout=timeout)
-            resp.raise_for_status()
-            return model, _parse_meta(model, resp.json())
-        except Exception as exc:
-            logger.warning("Failed to fetch metadata for %s: %s", model, exc)
-            return model, None
+        for attempt in range(_META_MAX_RETRIES):
+            try:
+                resp = httpx.get(url, timeout=timeout)
+                resp.raise_for_status()
+                return model, _parse_meta(model, resp.json())
+            except Exception as exc:
+                if attempt < _META_MAX_RETRIES - 1:
+                    wait = _META_RETRY_BACKOFF[attempt]
+                    logger.warning(
+                        "Failed to fetch metadata for %s (attempt %d/%d): %s, "
+                        "retrying in %ds",
+                        model, attempt + 1, _META_MAX_RETRIES, exc, wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.warning(
+                        "Failed to fetch metadata for %s after %d attempts: %s",
+                        model, _META_MAX_RETRIES, exc,
+                    )
+        return model, None
 
     with ThreadPoolExecutor(max_workers=len(urls)) as pool:
         futures = {pool.submit(_fetch_one, m, u): m for m, u in urls.items()}
