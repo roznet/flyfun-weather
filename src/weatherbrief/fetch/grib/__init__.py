@@ -113,20 +113,12 @@ def enrich_forecasts(
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
 
-    # ECMWF GRIB enrichment — local disk, fast, runs first.
-    ecmwf_grib_ts = _enrich_ecmwf(
-        cross_sections, all_forecasts, route_points, departure_time,
-        flight_duration_hours=flight_duration_hours,
-        progress_callback=progress_callback,
-    )
-    if ecmwf_grib_ts is not None:
-        grib_init_times["ecmwf_grib"] = ecmwf_grib_ts
-
     # Download GFS and ICON-EU in parallel (network-bound), but decode
     # sequentially (memory-bound). ICON-EU decode peaks at ~270MB per
     # variable; overlapping with GFS decode caused OOM.
+    # ECMWF GRIB is local disk I/O — runs in parallel with network fetches.
     if progress_callback is not None:
-        progress_callback("grib_enrichment", "GFS + ICON-EU")
+        progress_callback("grib_enrichment", "GFS + ICON-EU + ECMWF GRIB")
 
     gfs_ts: int | None = None
     icon_ts: int | None = None
@@ -140,15 +132,22 @@ def enrich_forecasts(
         as_of_time=as_of_time,
     )
 
-    # Phase 1: Download in parallel — GFS (download+decode, it's small)
-    # overlaps with ICON-EU download-only (cached to disk).
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    # Phase 1: Download/decode in parallel — GFS (download+decode),
+    # ICON-EU (download-only), ECMWF GRIB (local disk decode).
+    with ThreadPoolExecutor(max_workers=3) as pool:
         gfs_future = pool.submit(
             _enrich_gfs,
             cross_sections, all_forecasts, route_points,
             departure_time, data_dir=data_dir,
             flight_duration_hours=flight_duration_hours,
             as_of_time=as_of_time,
+        )
+        ecmwf_future = pool.submit(
+            _enrich_ecmwf,
+            cross_sections, all_forecasts, route_points,
+            departure_time,
+            flight_duration_hours=flight_duration_hours,
+            progress_callback=progress_callback,
         )
         if icon_ctx is not None:
             icon_dl_future = pool.submit(
@@ -158,8 +157,12 @@ def enrich_forecasts(
             icon_dl_future = None
 
         gfs_ts = gfs_future.result()
+        ecmwf_grib_ts = ecmwf_future.result()
         if icon_dl_future is not None:
             icon_dl_future.result()  # ensure downloads are cached
+
+    if ecmwf_grib_ts is not None:
+        grib_init_times["ecmwf_grib"] = ecmwf_grib_ts
 
     # Phase 2: Decode ICON-EU sequentially (memory-heavy, GFS is done).
     if icon_ctx is not None:

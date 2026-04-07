@@ -77,6 +77,9 @@ ECMWF_CYCLES = [0, 6, 12, 18]
 # Known file extensions to strip before parsing the ECMWF filename.
 _KNOWN_SUFFIXES = (".grib2", ".grib", ".idx", ".bz2")
 
+# File suffixes to skip entirely during directory scanning.
+_SKIP_SUFFIXES = frozenset({".idx", ".txt", ".json", ".log", ".md"})
+
 # Filename regex — handles the ECMWF naming convention.
 # Groups: destination, feed, model, class, stream, type,
 #         base_time, valid_time, step, optional experiment version.
@@ -237,7 +240,6 @@ def scan_ecmwf_files(
     # Scan all files — ECMWF ECPDS files may have no extension.
     # parse_ecmwf_filename() rejects non-matching names.
     # Skip obvious non-GRIB files (.idx, .txt, .json, hidden files).
-    _SKIP_SUFFIXES = {".idx", ".txt", ".json", ".log", ".md"}
     for path in scan_dir.rglob("*"):
         if not path.is_file():
             continue
