@@ -100,6 +100,7 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "lcc": "low_cover_frac",         # 0–1 fraction, ×100 during build
     "mcc": "mid_cover_frac",         # 0–1 fraction, ×100 during build
     "tcc": "total_cover_frac",       # 0–1 fraction, ×100 during build
+    "hcc": "high_cover_frac",       # 0–1 fraction, ×100 during build
     "vis": "visibility_m",           # meters
     # Note: deg0l (freezing level) is available but NWPCloudDiagnostics has
     # no freezing_level_ft field. Add when the model is extended.
@@ -1240,6 +1241,7 @@ def build_ecmwf_cloud_diagnostics(
     cloud_base_ft = _m_to_ft("cloud_base_height_m")
     low_cover = _frac_to_pct("low_cover_frac")
     mid_cover = _frac_to_pct("mid_cover_frac")
+    high_cover = _frac_to_pct("high_cover_frac")
     total_cover = _frac_to_pct("total_cover_frac")
 
     has_any = (
@@ -1247,6 +1249,7 @@ def build_ecmwf_cloud_diagnostics(
         or cloud_base_ft is not None
         or low_cover is not None
         or mid_cover is not None
+        or high_cover is not None
         or total_cover is not None
     )
     if not has_any:
@@ -1255,7 +1258,7 @@ def build_ecmwf_cloud_diagnostics(
     return NWPCloudDiagnostics(
         low=NWPCloudLayerDiag(cover_pct=low_cover, base_ft=cloud_base_ft),
         mid=NWPCloudLayerDiag(cover_pct=mid_cover),
-        high=NWPCloudLayerDiag(),
+        high=NWPCloudLayerDiag(cover_pct=high_cover),
         total_cover_pct=total_cover,
         ceiling_ft=ceiling_ft,
     )
