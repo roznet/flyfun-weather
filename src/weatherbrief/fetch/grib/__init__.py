@@ -213,8 +213,7 @@ def _enrich_ecmwf(
     )
     from weatherbrief.fetch.grib.ecmwf_fetch import (
         ecmwf_grib_dir,
-        find_files_for_run,
-        find_latest_ecmwf_run,
+        scan_ecmwf_files,
     )
 
     # Only enrich ECMWF model cross-sections
@@ -223,17 +222,17 @@ def _enrich_ecmwf(
         return None
 
     data_dir = ecmwf_grib_dir()
-    latest_bt = find_latest_ecmwf_run(data_dir, operational_only=False)
-    if latest_bt is None:
+    all_files = scan_ecmwf_files(data_dir, operational_only=False)
+    if not all_files:
         logger.info("No ECMWF GRIB data available in %s", data_dir)
         return None
 
     if progress_callback is not None:
         progress_callback("grib_enrichment", "ECMWF GRIB")
 
-    run_files = find_files_for_run(latest_bt, data_dir, operational_only=False)
-    if not run_files:
-        return None
+    # Pick the latest run and filter to its files (single scan)
+    latest_bt = max(f.base_time for f in all_files)
+    run_files = [f for f in all_files if f.base_time == latest_bt]
 
     # Group files by step_hours, separate a1 (surface) and a2 (pressure)
     files_by_step: dict[int, dict[str, Path]] = {}
