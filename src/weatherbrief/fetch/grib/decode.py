@@ -101,7 +101,6 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "mcc": "mid_cover_frac",         # 0–1 fraction, ×100 during build
     "tcc": "total_cover_frac",       # 0–1 fraction, ×100 during build
     "hcc": "high_cover_frac",       # 0–1 fraction, ×100 during build
-    "vis": "visibility_m",           # meters
     # Note: deg0l (freezing level) is available but NWPCloudDiagnostics has
     # no freezing_level_ft field. Add when the model is extended.
 }
@@ -1010,7 +1009,7 @@ def build_icon_cloud_diagnostics(
 
     def _m_to_ft(key: str) -> float | None:
         val = raw.get(key)
-        if val is None or val <= 0:
+        if val is None or val < 0:
             return None
         return round(val * _M_TO_FT)
 
@@ -1079,7 +1078,6 @@ def decode_ecmwf_pressure_per_point(
         - Coverage mask: [True if at least one level decoded, …]
     """
     import cfgrib
-    import numpy as np
 
     n_points = len(latitudes)
     results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
@@ -1166,7 +1164,6 @@ def decode_ecmwf_surface_per_point(
         - Coverage mask
     """
     import cfgrib
-    import numpy as np
 
     n_points = len(latitudes)
     results: list[dict[str, float]] = [{} for _ in range(n_points)]
@@ -1227,7 +1224,7 @@ def build_ecmwf_cloud_diagnostics(
 
     def _m_to_ft(key: str) -> float | None:
         val = raw.get(key)
-        if val is None or val <= 0 or val >= _ECMWF_NO_CLOUD_SENTINEL_M:
+        if val is None or val < 0 or val >= _ECMWF_NO_CLOUD_SENTINEL_M:
             return None
         return round(val * _M_TO_FT)
 
@@ -1256,9 +1253,9 @@ def build_ecmwf_cloud_diagnostics(
         return None
 
     return NWPCloudDiagnostics(
-        low=NWPCloudLayerDiag(cover_pct=low_cover, base_ft=cloud_base_ft),
+        low=NWPCloudLayerDiag(cover_pct=low_cover),
         mid=NWPCloudLayerDiag(cover_pct=mid_cover),
         high=NWPCloudLayerDiag(cover_pct=high_cover),
         total_cover_pct=total_cover,
-        ceiling_ft=ceiling_ft,
+        ceiling_ft=ceiling_ft or cloud_base_ft,
     )
