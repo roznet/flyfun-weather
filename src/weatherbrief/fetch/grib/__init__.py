@@ -78,6 +78,17 @@ def _run_info_to_timestamp(init_date: str, init_hour: int) -> int:
     )
 
 
+def _matches_valid_time(hourly_time: datetime, valid_utc: datetime | None) -> bool:
+    """Check if a forecast hourly entry matches the target valid time.
+
+    Compares both date and hour to avoid cross-day collisions when GRIB
+    steps span multiple days (e.g. ECMWF steps out to 192h).
+    """
+    if valid_utc is None:
+        return True
+    return hourly_time.date() == valid_utc.date() and hourly_time.hour == valid_utc.hour
+
+
 def enrich_forecasts(
     cross_sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
@@ -535,7 +546,7 @@ def _apply_cloud_diagnostics_to_sections(
             if diag is None:
                 continue
             for hourly in wf.hourly:
-                if valid_utc is not None and hourly.time.hour != valid_utc.hour:
+                if not _matches_valid_time(hourly.time, valid_utc):
                     continue
                 _apply_cloud_diagnostics(hourly, diag)
                 enriched_count += 1
@@ -553,7 +564,7 @@ def _apply_cloud_diagnostics_to_sections(
         if diag is None:
             continue
         for hourly in wf.hourly:
-            if valid_utc is not None and hourly.time.hour != valid_utc.hour:
+            if not _matches_valid_time(hourly.time, valid_utc):
                 continue
             _apply_cloud_diagnostics(hourly, diag)
 
@@ -912,7 +923,7 @@ def _enrich_icon_eu_cloud_diagnostics(
                 if diag is None:
                     continue
                 for hourly in wf.hourly:
-                    if hourly.time.hour != valid_utc.hour:
+                    if not _matches_valid_time(hourly.time, valid_utc):
                         continue
                     if hourly.nwp_cloud_diagnostics is None:
                         _apply_cloud_diagnostics(hourly, diag)
@@ -931,7 +942,7 @@ def _enrich_icon_eu_cloud_diagnostics(
             if diag is None:
                 continue
             for hourly in wf.hourly:
-                if hourly.time.hour != valid_utc.hour:
+                if not _matches_valid_time(hourly.time, valid_utc):
                     continue
                 if hourly.nwp_cloud_diagnostics is None:
                     _apply_cloud_diagnostics(hourly, diag)
@@ -979,7 +990,7 @@ def _merge_cloud_water_into_sections(
                 continue
 
             for hourly in wf.hourly:
-                if valid_utc is not None and hourly.time.hour != valid_utc.hour:
+                if not _matches_valid_time(hourly.time, valid_utc):
                     continue
                 for pl in hourly.pressure_levels:
                     level_data = point_data.get(pl.pressure_hpa)
@@ -1013,7 +1024,7 @@ def _merge_cloud_water_into_sections(
         if not point_data:
             continue
         for hourly in wf.hourly:
-            if valid_utc is not None and hourly.time.hour != valid_utc.hour:
+            if not _matches_valid_time(hourly.time, valid_utc):
                 continue
             for pl in hourly.pressure_levels:
                 level_data = point_data.get(pl.pressure_hpa)

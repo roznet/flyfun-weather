@@ -124,9 +124,6 @@ def decode_grib_at_points(
         lambda: defaultdict(lambda: [None] * len(lats))
     )
 
-    # First pass: collect all grid definitions
-    grids: list[dict] = []
-
     with open(file_path, "rb") as f:
         while True:
             msgid = eccodes.codes_grib_new_from_file(f)
