@@ -1257,5 +1257,5 @@ def build_ecmwf_cloud_diagnostics(
         mid=NWPCloudLayerDiag(cover_pct=mid_cover),
         high=NWPCloudLayerDiag(cover_pct=high_cover),
         total_cover_pct=total_cover,
-        ceiling_ft=ceiling_ft or cloud_base_ft,
+        ceiling_ft=ceiling_ft if ceiling_ft is not None else cloud_base_ft,
     )
