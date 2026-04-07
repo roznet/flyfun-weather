@@ -113,8 +113,13 @@ class ECMWFFileInfo:
 
     @property
     def is_operational(self) -> bool:
-        """True if this is operational data (not an experiment)."""
-        return self.experiment is None or self.experiment == "1"
+        """True if this is operational data (not an experiment).
+
+        ECMWF delivers operational files with expver "0001" (4-digit) but
+        the filename may truncate to "1". Accept both until confirmed
+        from actual sample files.
+        """
+        return self.experiment is None or self.experiment.lstrip("0") in ("", "1")
 
 
 def _parse_timestamp(ts: str) -> datetime:
@@ -141,11 +146,16 @@ def parse_ecmwf_filename(path: Path) -> ECMWFFileInfo | None:
 
     Returns None if the filename doesn't match the expected convention.
     """
-    # Strip any extension(s) (.grib2, .grib, .idx, etc.)
+    # Strip all known extensions (.grib2.bz2, .grib2, .grib, .idx, etc.)
     stem = path.name
-    for suffix in (".grib2", ".grib", ".idx", ".bz2"):
-        if stem.endswith(suffix):
-            stem = stem[: -len(suffix)]
+    _KNOWN_SUFFIXES = (".grib2", ".grib", ".idx", ".bz2")
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _KNOWN_SUFFIXES:
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                changed = True
 
     match = _FILENAME_RE.match(stem)
     if match is None:
@@ -196,8 +206,8 @@ def scan_ecmwf_files(
 
     files: list[ECMWFFileInfo] = []
 
-    # Scan for GRIB files (may be in subdirectories)
-    for pattern in ("*.grib2", "*.grib", "**/*.grib2", "**/*.grib"):
+    # Scan for GRIB files (including subdirectories)
+    for pattern in ("**/*.grib2", "**/*.grib"):
         for path in scan_dir.glob(pattern):
             if not path.is_file():
                 continue
