@@ -17,6 +17,7 @@ services:
       DATA_DIR: /app/data
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
+      - ${HOST_ECMWF_GRIB_DIR:-./data/ecmwf}:/data/ecmwf:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
       interval: 30s

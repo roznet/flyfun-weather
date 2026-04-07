@@ -295,32 +295,39 @@ both models").
 
 ## Data Delivery Architecture
 
-### Option A: ECPDS Push to Local Directory
-ECMWF pushes files to our server. We scan the directory.
-- **Pro**: No download latency, files appear automatically
-- **Con**: Needs disk space management, directory watching
-- **Best for**: Production deployment
+ECPDS pushes files to our server. We mount that directory into the Docker
+container as a read-only volume and scan it from the pipeline.
 
-### Option B: ECMWF API Pull
-Use ECMWF's MARS-style API to request specific variables/levels.
-- **Pro**: Only download what we need
-- **Con**: Adds latency, needs API credentials management
-- **Best for**: Development/testing
+### Configuration (IMPLEMENTED)
 
-### Recommendation
-Start with **Option A** (ECPDS push) since that's what the commercial
-agreement provides. Add a configurable `ECMWF_GRIB_DIR` env var that
-defaults to `/data/ecmwf` in production. For development, symlink the
-test sample directory.
-
-## Configuration
-
-```python
-# In env / .env:
-ECMWF_GRIB_DIR=/data/ecmwf          # ECPDS delivery directory
-ECMWF_GRIB_ENABLED=true             # Feature flag during rollout
-ECMWF_GRIB_RETENTION_HOURS=72       # Auto-cleanup old files
+**`.env` / `.env.sample`:**
+```bash
+# Directory where ECMWF files are delivered (mounted as Docker volume in prod)
+ECMWF_GRIB_DIR=/data/ecmwf
+# Host path for Docker volume mount
+HOST_ECMWF_GRIB_DIR=/path/to/ecmwf/data
 ```
+
+**`docker-compose.yml`:**
+```yaml
+volumes:
+  - ${HOST_DATA_DIR:-./data}:/app/data
+  - ${HOST_ECMWF_GRIB_DIR:-./data/ecmwf}:/data/ecmwf:ro  # ECMWF GRIB (read-only)
+```
+
+**In code** (`ecmwf_fetch.py`):
+```python
+def ecmwf_grib_dir() -> Path:
+    return Path(os.environ.get("ECMWF_GRIB_DIR", "/data/ecmwf"))
+```
+
+For **local dev/test**: set `ECMWF_GRIB_DIR` in your `.env` to wherever
+the sample files live, or symlink `tests/data/ecmwf_samples/` and run
+tests with `ECMWF_GRIB_DIR=tests/data/ecmwf_samples`.
+
+The volume is `:ro` (read-only) since ECPDS manages file delivery and
+our code only reads. Retention/cleanup of old files is handled on the
+host side (ECPDS or a cron job), not by our application.
 
 ## Testing Strategy
 
@@ -353,11 +360,11 @@ ECMWF_GRIB_RETENTION_HOURS=72       # Auto-cleanup old files
 
 ```
 src/weatherbrief/fetch/grib/
-├── __init__.py           # Add _enrich_ecmwf, extend enrich_forecasts
-├── ecmwf_fetch.py        # NEW: file discovery, run selection
-├── decode.py             # Add ECMWF variable mappings
-├── fill.py               # Add ECMWF forward-fill
-├── cache.py              # Reuse (ECMWF files are already on disk)
+├── __init__.py           # Phase 2: add _enrich_ecmwf, extend enrich_forecasts
+├── ecmwf_fetch.py        # DONE: filename parser, directory scanner, run discovery
+├── decode.py             # DONE: ECMWF variable mappings (clwc, ciwc)
+├── fill.py               # Phase 2: add ECMWF forward-fill
+├── cache.py              # N/A (ECMWF files are already on disk, no caching needed)
 ├── gfs_idx.py            # Unchanged
 ├── grib_fetch.py         # Unchanged (GFS-specific)
 ├── icon_eu_fetch.py      # Unchanged
@@ -365,9 +372,14 @@ src/weatherbrief/fetch/grib/
 
 tests/
 ├── data/
-│   └── ecmwf_samples/    # NEW: test sample files (gitignored, symlinked)
-├── test_ecmwf_sample.py  # NEW: Phase 0 validation
-└── test_ecmwf_grib.py    # NEW: Phase 1-2 unit + integration tests
+│   └── ecmwf_samples/    # DONE: gitignored, set ECMWF_GRIB_DIR to point here
+├── test_ecmwf_sample.py  # DONE: Phase 0 validation (parser + scanner + GRIB decode)
+└── test_ecmwf_grib.py    # Phase 1-2: unit + integration tests
+
+Config:
+├── .env.sample           # DONE: ECMWF_GRIB_DIR, HOST_ECMWF_GRIB_DIR
+├── docker-compose.yml    # DONE: read-only volume mount for ECMWF data
+└── .gitignore            # DONE: excludes tests/data/ecmwf_samples/
 ```
 
 ## Risks and Mitigations

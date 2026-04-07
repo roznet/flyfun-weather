@@ -28,3 +28,6 @@ DerivedData/
 *.xcscmblueprint
 eval_data
 test-results/
+
+# ECMWF sample GRIB files (large binary, not for git)
+tests/data/ecmwf_samples/

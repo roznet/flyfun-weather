@@ -26,6 +26,8 @@ _VAR_MAP = {
     "qc": "cloud_liquid_water_kg_kg",     # ICON-EU cloud liquid water
     "qi": "ice_mixing_ratio_kg_kg",       # ICON-EU cloud ice
     "clc": "cloud_area_fraction_pct",     # ICON-EU cloud area fraction (0–100%)
+    "clwc": "cloud_liquid_water_kg_kg",   # ECMWF IFS cloud liquid water content
+    "ciwc": "ice_mixing_ratio_kg_kg",     # ECMWF IFS cloud ice water content
 }
 
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
