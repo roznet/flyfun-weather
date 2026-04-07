@@ -119,7 +119,7 @@ class ECMWFFileInfo:
         the filename may truncate to "1". Accept both until confirmed
         from actual sample files.
         """
-        return self.experiment is None or self.experiment.lstrip("0") in ("", "1")
+        return self.experiment in (None, "1", "0001")
 
 
 def _parse_timestamp(ts: str) -> datetime:
@@ -239,13 +239,14 @@ def find_latest_ecmwf_run(
     data_dir: Path | None = None,
     *,
     model: str | None = None,
+    operational_only: bool = True,
 ) -> datetime | None:
     """Find the most recent ECMWF forecast init time in the delivery directory.
 
     Returns:
         The latest base_time as an aware UTC datetime, or None if no files found.
     """
-    files = scan_ecmwf_files(data_dir, model=model)
+    files = scan_ecmwf_files(data_dir, model=model, operational_only=operational_only)
     if not files:
         return None
     return max(f.base_time for f in files)
@@ -256,6 +257,7 @@ def find_files_for_run(
     data_dir: Path | None = None,
     *,
     model: str | None = None,
+    operational_only: bool = True,
 ) -> list[ECMWFFileInfo]:
     """Find all files belonging to a specific forecast run.
 
@@ -263,32 +265,30 @@ def find_files_for_run(
         base_time: The forecast init time to match.
         data_dir: Directory to scan.
         model: Filter by model identifier.
+        operational_only: If True, skip experimental runs.
 
     Returns:
         Files for the given run, sorted by step_hours.
     """
-    return scan_ecmwf_files(data_dir, model=model, base_time=base_time)
+    return scan_ecmwf_files(
+        data_dir, model=model, base_time=base_time, operational_only=operational_only,
+    )
 
 
 def find_file_for_step(
-    base_time: datetime,
+    files: list[ECMWFFileInfo],
     step_hours: int,
-    data_dir: Path | None = None,
-    *,
-    model: str | None = None,
 ) -> ECMWFFileInfo | None:
-    """Find a specific forecast step file.
+    """Find a specific forecast step from a pre-scanned file list.
 
     Args:
-        base_time: The forecast init time.
+        files: Pre-scanned file list (from find_files_for_run or scan_ecmwf_files).
         step_hours: The forecast step to find.
-        data_dir: Directory to scan.
-        model: Filter by model identifier.
 
     Returns:
         Matching file info, or None.
     """
-    for f in find_files_for_run(base_time, data_dir, model=model):
+    for f in files:
         if f.step_hours == step_hours:
             return f
     return None

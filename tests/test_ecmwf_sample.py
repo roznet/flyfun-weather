@@ -229,8 +229,9 @@ class TestDirectoryScanner:
 
     def test_scan_sorted_by_time_and_step(self, tmp_path):
         """Results are sorted by base_time then step_hours."""
+        valid_times = {6: "20260407T060000Z", 12: "20260407T120000Z", 24: "20260408T000000Z"}
         for step in (12, 6, 24):
-            name = f"A_B_ifs_od_oper_fc_20260407T000000Z_20260407T{step:02d}0000Z_{step}.grib2"
+            name = f"A_B_ifs_od_oper_fc_20260407T000000Z_{valid_times[step]}_{step}.grib2"
             (tmp_path / name).write_bytes(b"")
         files = scan_ecmwf_files(tmp_path)
         steps = [f.step_hours for f in files]
