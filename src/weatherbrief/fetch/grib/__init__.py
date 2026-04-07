@@ -241,11 +241,11 @@ def _enrich_ecmwf(
         logger.info("No ECMWF GRIB data available in %s", data_dir)
         return None
 
-    # In replay/backtest mode, only use runs initialized before as_of_time
+    # Filter to runs initialized before as_of_time (replay/backtest support)
     if as_of_time is not None:
         all_files = [f for f in all_files if f.base_time <= as_of_time]
         if not all_files:
-            logger.info("No ECMWF GRIB runs before as_of_time %s", as_of_time)
+            logger.info("No ECMWF GRIB runs before as_of_time=%s", as_of_time)
             return None
 
     # Pick the latest run and filter to its files (single scan)
