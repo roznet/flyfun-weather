@@ -963,13 +963,23 @@ class TestBuildIconCloudDiagnostics:
 
         assert build_icon_cloud_diagnostics({}) is None
 
-    def test_zero_or_negative_values_returns_none(self):
-        """Zero/negative meter values treated as missing."""
+    def test_zero_ceiling_is_fog(self):
+        """Zero ceiling_m means fog/cloud at surface — should be valid, not None."""
         from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
 
         raw = {"ceiling_m": 0.0, "convective_cloud_base_m": -1.0}
         diag = build_icon_cloud_diagnostics(raw)
-        # All values are zero/negative, so nothing populates → None
+        # ceiling_m=0 is valid (fog), convective_cloud_base_m < 0 is missing
+        assert diag is not None
+        assert diag.ceiling_ft == 0.0
+        assert diag.convective_base_ft is None
+
+    def test_negative_values_returns_none(self):
+        """Negative meter values treated as missing."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        raw = {"convective_cloud_base_m": -1.0}
+        diag = build_icon_cloud_diagnostics(raw)
         assert diag is None
 
     def test_partial_data(self):

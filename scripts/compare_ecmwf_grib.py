@@ -64,14 +64,14 @@ def _bilinear_weight(lat: float, lon: float, lats: np.ndarray, lons: np.ndarray)
     i_left = max(0, min(i_left, len(lon_sorted) - 2))
     i_right = i_left + 1
 
-    # Bilinear weights
+    # Bilinear weights (computed in ascending-lat space)
     lat0, lat1 = lat_sorted[j_below], lat_sorted[j_above]
     lon0, lon1 = lon_sorted[i_left], lon_sorted[i_right]
 
     dlat = (lat1 - lat0) if lat1 != lat0 else 1.0
     dlon = (lon1 - lon0) if lon1 != lon0 else 1.0
 
-    t = (lat - lat0) / dlat
+    t = (lat - lat0) / dlat  # 0 = at j_below (lower lat), 1 = at j_above (higher lat)
     s = (lon - lon0) / dlon
 
     # If original lats are descending, flip j indices and invert t
@@ -385,11 +385,27 @@ def main():
     sample_fc = ecmwf_fcs[0]
     om_hours = sample_fc["hourly"]
 
+    om_pressures = sorted(
+        [pl['pressure_hpa'] for pl in om_hours[0]['pressure_levels']],
+        reverse=True,
+    )
+
+    # Discover actual GRIB pressure levels from first available a2 file
+    grib_pressures_discovered: list[int] = []
+    for step_h in sorted(grib_files.keys()):
+        if "a2" in grib_files[step_h]:
+            sample_grib = decode_grib_at_points(
+                grib_files[step_h]["a2"], lats[:1], lons[:1], {"t"},
+            )
+            grib_pressures_discovered = sorted(
+                sample_grib.get("t", {}).keys(), reverse=True,
+            )
+            break
+
     print(f"\nOpen-Meteo ECMWF: {len(om_hours)} hourly forecasts")
-    print(f"Open-Meteo pressure levels: "
-          f"{[pl['pressure_hpa'] for pl in om_hours[0]['pressure_levels']]}")
-    print(f"GRIB pressure levels: {len(grib_pressures)} "
-          f"({', '.join(str(p) for p in grib_pressures)})")
+    print(f"Open-Meteo pressure levels: {om_pressures}")
+    print(f"GRIB pressure levels: {len(grib_pressures_discovered)} "
+          f"({', '.join(str(p) for p in grib_pressures_discovered)})")
 
     # Build mapping: step_hours -> list of (wp_idx, hourly, wp_icao)
     # Deduplicate by (step, wp_icao) to avoid printing the same waypoint twice
@@ -518,9 +534,12 @@ def main():
               f"max={np.max(np.abs(rh_deltas)):.1f}%")
     print(f"Max CLWC: {max_clwc:.2e} kg/kg")
     print(f"Max CIWC: {max_ciwc:.2e} kg/kg")
-    grib_only = sorted(set(grib_pressures) - set(om_pressures), reverse=True)
-    print(f"GRIB-only levels (not in Open-Meteo): "
-          f"{', '.join(str(p) for p in grib_only)} hPa")
+    grib_only = sorted(
+        set(grib_pressures_discovered) - set(om_pressures), reverse=True,
+    )
+    if grib_only:
+        print(f"GRIB-only levels (not in Open-Meteo): "
+              f"{', '.join(str(p) for p in grib_only)} hPa")
 
     return 0
 

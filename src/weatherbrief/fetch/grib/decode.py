@@ -243,6 +243,82 @@ def _interpolate_to_points(
         return None
 
 
+def _decode_pressure_vars_from_datasets(
+    datasets: list,
+    latitudes: list[float],
+    longitudes: list[float],
+    *,
+    frac_vars: set[str] | None = None,
+    first_wins: bool = False,
+) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
+    """Shared decode loop for pressure-level GRIB datasets.
+
+    Iterates datasets, maps variable names via _VAR_MAP, finds the pressure
+    coordinate, interpolates per point, and stores results.
+
+    Args:
+        datasets: cfgrib-opened xarray Datasets.
+        latitudes: Route-point latitudes.
+        longitudes: Route-point longitudes (already in the grid's convention).
+        frac_vars: Variable names (lowercase) that are 0–1 fractions needing ×100.
+        first_wins: If True, skip a field at a level if already set (multi-grid).
+
+    Returns:
+        Tuple of (per-point results, coverage mask).
+    """
+    frac_vars = frac_vars or set()
+    n_points = len(latitudes)
+    results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+    covered: list[bool] = [False] * n_points
+
+    for ds in datasets:
+        for var_name, xr_var in ds.data_vars.items():
+            var_lower = str(var_name).lower()
+            field_name = _VAR_MAP.get(var_lower)
+            if field_name is None:
+                continue
+
+            is_frac = var_lower in frac_vars
+
+            # Determine pressure coordinate
+            pressure_coord = None
+            for coord_name in ("isobaricInhPa", "level", "pressure"):
+                if coord_name in xr_var.dims:
+                    pressure_coord = coord_name
+                    break
+
+            if pressure_coord is None:
+                level = xr_var.attrs.get("level")
+                if level is not None:
+                    p_hpa = int(level)
+                    values = _interpolate_per_point(xr_var, latitudes, longitudes)
+                    for i, val in enumerate(values):
+                        if val is not None:
+                            if first_wins and field_name in results[i].get(p_hpa, {}):
+                                continue
+                            if is_frac:
+                                val *= 100.0
+                            results[i].setdefault(p_hpa, {})[field_name] = val
+                            covered[i] = True
+                continue
+
+            pressures = ds.coords[pressure_coord].values
+            for p_val in pressures:
+                p_hpa = int(float(p_val))
+                level_data = xr_var.sel({pressure_coord: p_val})
+                values = _interpolate_per_point(level_data, latitudes, longitudes)
+                for i, val in enumerate(values):
+                    if val is not None:
+                        if first_wins and field_name in results[i].get(p_hpa, {}):
+                            continue
+                        if is_frac:
+                            val *= 100.0
+                        results[i].setdefault(p_hpa, {})[field_name] = val
+                        covered[i] = True
+
+    return results, covered
+
+
 def decode_grib_per_point(
     grib_bytes: bytes,
     latitudes: list[float],
@@ -254,8 +330,6 @@ def decode_grib_per_point(
         List of dicts (one per point): [{pressure_hpa: {field: value}}, ...].
     """
     import cfgrib
-    import numpy as np
-    import xarray as xr
 
     if not grib_bytes:
         return [{} for _ in latitudes]
@@ -268,46 +342,12 @@ def decode_grib_per_point(
     try:
         datasets = cfgrib.open_datasets(str(tmp_path))
 
-        # Normalize longitudes to 0–360
+        # Normalize longitudes to 0–360 (GFS convention)
         target_lons = [(lon % 360) for lon in longitudes]
-        n_points = len(latitudes)
-        results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
 
-        for ds in datasets:
-            for var_name, xr_var in ds.data_vars.items():
-                field_name = _VAR_MAP.get(str(var_name).lower())
-                if field_name is None:
-                    continue
-
-                # Determine pressure coordinate
-                pressure_coord = None
-                for coord_name in ("isobaricInhPa", "level", "pressure"):
-                    if coord_name in xr_var.dims:
-                        pressure_coord = coord_name
-                        break
-
-                if pressure_coord is None:
-                    level = xr_var.attrs.get("level")
-                    if level is not None:
-                        p_hpa = int(level)
-                        values = _interpolate_per_point(
-                            xr_var, latitudes, target_lons,
-                        )
-                        for i, val in enumerate(values):
-                            if val is not None:
-                                results[i].setdefault(p_hpa, {})[field_name] = val
-                    continue
-
-                pressures = ds.coords[pressure_coord].values
-                for p_val in pressures:
-                    p_hpa = int(float(p_val))
-                    level_data = xr_var.sel({pressure_coord: p_val})
-                    values = _interpolate_per_point(
-                        level_data, latitudes, target_lons,
-                    )
-                    for i, val in enumerate(values):
-                        if val is not None:
-                            results[i].setdefault(p_hpa, {})[field_name] = val
+        results, _ = _decode_pressure_vars_from_datasets(
+            datasets, latitudes, target_lons,
+        )
 
         for ds in datasets:
             ds.close()
@@ -1092,51 +1132,11 @@ def decode_ecmwf_pressure_per_point(
     # No longitude normalization needed: ECMWF grids use -180/+180 convention,
     # same as route points.  (GFS uses 0-360 and requires `lon % 360`.)
     try:
-        for ds in datasets:
-            for var_name, xr_var in ds.data_vars.items():
-                var_lower = str(var_name).lower()
-                field_name = _VAR_MAP.get(var_lower)
-                if field_name is None:
-                    continue
-
-                is_frac = var_lower in _ECMWF_FRAC_TO_PCT
-
-                # Determine pressure coordinate
-                pressure_coord = None
-                for coord_name in ("isobaricInhPa", "level", "pressure"):
-                    if coord_name in xr_var.dims:
-                        pressure_coord = coord_name
-                        break
-
-                if pressure_coord is None:
-                    # Single-level variable with attrs-level
-                    level = xr_var.attrs.get("level")
-                    if level is not None:
-                        p_hpa = int(level)
-                        values = _interpolate_per_point(xr_var, latitudes, longitudes)
-                        for i, val in enumerate(values):
-                            if val is not None:
-                                if is_frac:
-                                    val *= 100.0
-                                results[i].setdefault(p_hpa, {})[field_name] = val
-                                covered[i] = True
-                    continue
-
-                pressures = ds.coords[pressure_coord].values
-                for p_val in pressures:
-                    p_hpa = int(float(p_val))
-                    level_data = xr_var.sel({pressure_coord: p_val})
-                    values = _interpolate_per_point(level_data, latitudes, longitudes)
-                    for i, val in enumerate(values):
-                        if val is not None:
-                            # Only fill if not already set (first grid wins)
-                            existing = results[i].get(p_hpa, {})
-                            if field_name not in existing:
-                                if is_frac:
-                                    val *= 100.0
-                                results[i].setdefault(p_hpa, {})[field_name] = val
-                                covered[i] = True
-
+        results, covered = _decode_pressure_vars_from_datasets(
+            datasets, latitudes, longitudes,
+            frac_vars=_ECMWF_FRAC_TO_PCT,
+            first_wins=True,
+        )
         return results, covered
     except Exception:
         logger.warning("Failed to decode ECMWF pressure data from %s", file_path, exc_info=True)
@@ -1201,7 +1201,7 @@ def decode_ecmwf_surface_per_point(
             ds.close()
 
 
-_ECMWF_NO_CLOUD_SENTINEL_M = 9998.0  # ECMWF uses 9999m for "no cloud"
+_ECMWF_NO_CLOUD_SENTINEL_M = 9999.0  # ECMWF uses 9999m for "no cloud"
 
 
 def build_ecmwf_cloud_diagnostics(
