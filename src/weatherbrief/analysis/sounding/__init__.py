@@ -11,6 +11,8 @@ import logging
 
 from weatherbrief.models import DerivedLevel, HourlyForecast, PressureLevelData, SoundingAnalysis
 
+from weatherbrief.analysis.sounding.prepare import PreparedProfile
+
 logger = logging.getLogger(__name__)
 
 # Dry air gas constant (J/(kg·K))
@@ -142,6 +144,7 @@ def analyze_sounding_lite(
     levels: list[PressureLevelData],
     hourly: HourlyForecast | None = None,
     model_key: str | None = None,
+    _profile: PreparedProfile | None = None,
 ) -> SoundingAnalysis | None:
     """Lightweight sounding analysis: ceiling, clouds, and convective risk.
 
@@ -169,7 +172,7 @@ def analyze_sounding_lite(
         compute_indices_core,
     )
 
-    profile = prepare_profile(levels, hourly)
+    profile = _profile or prepare_profile(levels, hourly)
     if profile is None:
         return None
 
@@ -262,7 +265,7 @@ def _analyze_sounding_heavy(
     result: SoundingAnalysis,
     levels: list[PressureLevelData],
     hourly: HourlyForecast | None,
-    profile,
+    profile: PreparedProfile,
 ) -> None:
     """Extend a lite SoundingAnalysis with icing, inversions, NWP clouds, etc.
 
@@ -419,105 +422,14 @@ def analyze_sounding(
     """
     from weatherbrief.analysis.sounding.prepare import prepare_profile
 
-    # We need the profile for both lite indices and heavy phase, so
-    # prepare it here and pass the core parts through lite.
     profile = prepare_profile(levels, hourly)
     if profile is None:
         return None
 
-    # Lite phase: core indices, DD cloud layers, convective, ceiling
-    from weatherbrief.analysis.sounding.thermodynamics import (
-        compute_derived_levels_core,
-        compute_indices_core,
-    )
-    from weatherbrief.analysis.sounding.clouds import detect_cloud_layers
-    from weatherbrief.analysis.sounding.convective import (
-        assess_convective_nwp,
-        assess_convective_thermo,
-    )
+    result = analyze_sounding_lite(levels, hourly, model_key=model_key, _profile=profile)
+    if result is None:
+        return None
 
-    indices = compute_indices_core(profile)
-    derived_levels = compute_derived_levels_core(profile)
-
-    if hourly is not None:
-        from weatherbrief.fetch.variables import NWP_CAPE_TYPE
-
-        indices.nwp_cape_jkg = hourly.cape_jkg
-        indices.nwp_cape_type = NWP_CAPE_TYPE.get(model_key, "unknown") if model_key else None
-        indices.nwp_cin_jkg = hourly.convective_inhibition_jkg
-        indices.nwp_lifted_index = hourly.lifted_index_raw
-        if hourly.freezing_level_m is not None:
-            indices.nwp_freezing_level_ft = round(hourly.freezing_level_m * 3.28084)
-
-        raw = indices.nwp_cape_jkg
-        calc = indices.cape_surface_jkg
-        if raw is not None and calc is not None:
-            abs_diff = abs(raw - calc)
-            larger = max(abs(raw), abs(calc), 1.0)
-            indices.cape_raw_vs_calc_divergent = (
-                abs_diff > 200.0 or abs_diff / larger > 1.0
-            )
-
-    dd_cloud_layers = detect_cloud_layers(
-        derived_levels,
-        lcl_altitude_ft=indices.lcl_altitude_ft,
-    )
-
-    convective = assess_convective_thermo(indices)
-    convective_nwp = assess_convective_nwp(
-        indices, hourly.nwp_cloud_diagnostics if hourly else None,
-    )
-
-    # Compute ceiling
-    from weatherbrief.models.analysis import CloudCoverage
-
-    sounding_ceiling_ft: float | None = None
-    bkn_ovc_layers = [
-        cl for cl in dd_cloud_layers
-        if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
-    ]
-    if bkn_ovc_layers:
-        lowest = min(bkn_ovc_layers, key=lambda cl: cl.base_ft)
-        sounding_ceiling_ft = lowest.base_ft
-        if (indices.lcl_altitude_ft is not None
-                and derived_levels
-                and lowest.base_pressure_hpa is not None
-                and lowest.base_pressure_hpa >= derived_levels[0].pressure_hpa
-                and indices.lcl_altitude_ft > sounding_ceiling_ft):
-            sounding_ceiling_ft = round(indices.lcl_altitude_ft)
-
-    nwp_ceiling_ft: float | None = None
-    if hourly and hourly.nwp_cloud_diagnostics:
-        nwp_ceiling_ft = hourly.nwp_cloud_diagnostics.ceiling_ft
-
-    indices.sounding_ceiling_ft = sounding_ceiling_ft
-    indices.nwp_ceiling_ft = nwp_ceiling_ft
-
-    result = SoundingAnalysis(
-        indices=indices,
-        derived_levels=derived_levels,
-        cloud_layers=dd_cloud_layers,
-        nwp_cloud_layers=[],
-        dd_cloud_layers=dd_cloud_layers,
-        icing_zones=[],
-        icing_ogimet_dd_zones=[],
-        icing_ogimet_nwp_zones=[],
-        sfip_zones=[],
-        ieng_icing_zones=[],
-        sld_zones=[],
-        inversion_layers=[],
-        convective=convective,
-        convective_thermo=convective,
-        convective_nwp=convective_nwp,
-        precipitation=None,
-        vertical_motion=None,
-        cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,
-        cloud_cover_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
-        cloud_cover_high_pct=hourly.cloud_cover_high_pct if hourly else None,
-        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
-    )
-
-    # Heavy phase: extended indices, icing, inversions, NWP clouds, etc.
     _analyze_sounding_heavy(result, levels, hourly, profile)
 
     return result

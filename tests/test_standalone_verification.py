@@ -731,7 +731,7 @@ class TestEnrichWithSounding:
 
         mock_hourly = SimpleNamespace(pressure_levels=[1, 2, 3])  # non-empty
 
-        with patch("weatherbrief.analysis.sounding.analyze_sounding", return_value=mock_sounding):
+        with patch("weatherbrief.analysis.sounding.analyze_sounding_lite", return_value=mock_sounding):
             _enrich_with_sounding(snap, mock_hourly, "gfs")
 
         assert snap["sounding_ceiling_ft"] == 3500.0
@@ -758,7 +758,7 @@ class TestEnrichWithSounding:
         snap = {"icao": "LFPG", "model": "gfs", "temperature_2m_c": 15.0}
         mock_hourly = SimpleNamespace(pressure_levels=[1, 2])
 
-        with patch("weatherbrief.analysis.sounding.analyze_sounding", side_effect=ValueError("bad data")):
+        with patch("weatherbrief.analysis.sounding.analyze_sounding_lite", side_effect=ValueError("bad data")):
             _enrich_with_sounding(snap, mock_hourly, "gfs")
 
         assert snap["temperature_2m_c"] == 15.0  # preserved
