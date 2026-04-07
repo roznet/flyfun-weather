@@ -151,21 +151,24 @@ def analyze_sounding_lite(
     Computes the subset needed for verification scoring and
     ``reconcile_ceiling()``: core thermodynamic indices (LCL, parcel,
     LFC, EL, surface CAPE/CIN, lifted index, freezing level), DD cloud
-    layers, and convective assessment.
+    layers with NWP coverage reclassification, inversions, and
+    convective assessment.
 
     Skips: extended indices (MU/ML-CAPE, Showalter, K-index, bulk shear),
-    icing (Ogimet, SFIP, IENG, SLD), inversions, NWP cloud synthesis,
+    icing (Ogimet, SFIP, IENG, SLD), NWP cloud layer synthesis,
     precipitation, and vertical motion / turbulence.
 
     Returns None if profile preparation fails (insufficient data).
     """
     from weatherbrief.analysis.sounding.clouds import (
+        apply_nwp_coverage,
         detect_cloud_layers,
     )
     from weatherbrief.analysis.sounding.convective import (
         assess_convective_nwp,
         assess_convective_thermo,
     )
+    from weatherbrief.analysis.sounding.inversions import detect_inversions
     from weatherbrief.analysis.sounding.prepare import prepare_profile
     from weatherbrief.analysis.sounding.thermodynamics import (
         compute_derived_levels_core,
@@ -205,18 +208,30 @@ def analyze_sounding_lite(
         lcl_altitude_ft=indices.lcl_altitude_ft,
     )
 
+    # Apply NWP coverage to DD layers so ceiling reflects model cloud amount
+    cloud_layers = apply_nwp_coverage(
+        dd_cloud_layers,
+        nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+        nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+        nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+    )
+
+    # Inversions (cheap — single linear scan, ~2 µs)
+    inversion_layers = detect_inversions(derived_levels)
+
     # Convective assessment
     convective = assess_convective_thermo(indices)
     convective_nwp = assess_convective_nwp(
         indices, hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
-    # Compute ceiling from DD cloud layers
+    # Compute ceiling from NWP-reclassified cloud layers
     from weatherbrief.models.analysis import CloudCoverage
 
     sounding_ceiling_ft: float | None = None
     bkn_ovc_layers = [
-        cl for cl in dd_cloud_layers
+        cl for cl in cloud_layers
         if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
     ]
     if bkn_ovc_layers:
@@ -239,7 +254,7 @@ def analyze_sounding_lite(
     return SoundingAnalysis(
         indices=indices,
         derived_levels=derived_levels,
-        cloud_layers=dd_cloud_layers,  # no NWP coverage applied
+        cloud_layers=cloud_layers,
         nwp_cloud_layers=[],
         dd_cloud_layers=dd_cloud_layers,
         icing_zones=[],
@@ -248,7 +263,7 @@ def analyze_sounding_lite(
         sfip_zones=[],
         ieng_icing_zones=[],
         sld_zones=[],
-        inversion_layers=[],
+        inversion_layers=inversion_layers,
         convective=convective,
         convective_thermo=convective,
         convective_nwp=convective_nwp,
