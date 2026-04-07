@@ -21,7 +21,7 @@ const CAT_COLORS: Record<string, string> = {
 };
 
 const RISK_COLORS: Record<string, string> = {
-  none: '#22c55e', marginal: '#eab308', moderate: '#f97316', high: '#ef4444', extreme: '#991b1b',
+  none: '#22c55e', marginal: '#eab308', low: '#facc15', moderate: '#f97316', high: '#ef4444', extreme: '#991b1b',
 };
 
 const AGREEMENT_COLORS: Record<string, string> = {
@@ -99,7 +99,7 @@ function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, mode
     case 'convective_risk': {
       // In consensus mode, pick the worst risk across models
       if (consensus) {
-        const riskOrder = ['none', 'marginal', 'moderate', 'high', 'extreme'];
+        const riskOrder = ['none', 'marginal', 'low', 'moderate', 'high', 'extreme'];
         let worst = 'none';
         for (const md of Object.values(airport.models)) {
           const r = md.convective_risk || 'none';
