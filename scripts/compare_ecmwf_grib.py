@@ -74,10 +74,12 @@ def _bilinear_weight(lat: float, lon: float, lats: np.ndarray, lons: np.ndarray)
     t = (lat - lat0) / dlat
     s = (lon - lon0) / dlon
 
-    # If original lats are descending, flip j indices
+    # If original lats are descending, flip j indices and invert t
+    # so weights remain consistent with the remapped positions.
     if lats[0] > lats[-1]:
         j_below = len(lats) - 1 - j_below
         j_above = len(lats) - 1 - j_above
+        t = 1 - t
 
     weights = [
         ((j_below, i_left), (1 - t) * (1 - s)),
@@ -142,6 +144,8 @@ def decode_grib_at_points(
                 lon1 = eccodes.codes_get(msgid, "longitudeOfFirstGridPointInDegrees")
                 lon2 = eccodes.codes_get(msgid, "longitudeOfLastGridPointInDegrees")
 
+                # Assumes regular lat-lon grid (valid for IFS HRES European subarea;
+                # would need scipy griddata for reduced Gaussian grids).
                 grid_lats = np.linspace(lat1, lat2, nj)
                 grid_lons = np.linspace(lon1, lon2, ni)
 
@@ -383,8 +387,8 @@ def main():
     print(f"\nOpen-Meteo ECMWF: {len(om_hours)} hourly forecasts")
     print(f"Open-Meteo pressure levels: "
           f"{[pl['pressure_hpa'] for pl in om_hours[0]['pressure_levels']]}")
-    print(f"GRIB pressure levels: 25 (1000, 950, 925, 900, 850, 800, 700, "
-          f"600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10, 7, 5, 3, 2, 1)")
+    print(f"GRIB pressure levels: {len(grib_pressures)} "
+          f"({', '.join(str(p) for p in grib_pressures)})")
 
     # Build mapping: step_hours -> list of (wp_idx, hourly, wp_icao)
     # Deduplicate by (step, wp_icao) to avoid printing the same waypoint twice
@@ -513,8 +517,9 @@ def main():
               f"max={np.max(np.abs(rh_deltas)):.1f}%")
     print(f"Max CLWC: {max_clwc:.2e} kg/kg")
     print(f"Max CIWC: {max_ciwc:.2e} kg/kg")
+    grib_only = sorted(set(grib_pressures) - set(om_pressures), reverse=True)
     print(f"GRIB-only levels (not in Open-Meteo): "
-          f"950, 800, 600, 400, 70, 30, 20, 10, 7, 5, 3, 2, 1 hPa")
+          f"{', '.join(str(p) for p in grib_only)} hPa")
 
     return 0
 

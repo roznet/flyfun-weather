@@ -1089,6 +1089,8 @@ def decode_ecmwf_pressure_per_point(
         logger.warning("cfgrib failed to open ECMWF file %s", file_path, exc_info=True)
         return results, covered
 
+    # No longitude normalization needed: ECMWF grids use -180/+180 convention,
+    # same as route points.  (GFS uses 0-360 and requires `lon % 360`.)
     try:
         for ds in datasets:
             for var_name, xr_var in ds.data_vars.items():
@@ -1199,7 +1201,7 @@ def decode_ecmwf_surface_per_point(
             ds.close()
 
 
-_ECMWF_NO_CLOUD_SENTINEL_M = 9990.0  # ECMWF uses 9999m for "no cloud"
+_ECMWF_NO_CLOUD_SENTINEL_M = 9998.0  # ECMWF uses 9999m for "no cloud"
 
 
 def build_ecmwf_cloud_diagnostics(
@@ -1208,7 +1210,8 @@ def build_ecmwf_cloud_diagnostics(
     """Convert raw ECMWF surface values into NWPCloudDiagnostics.
 
     ECMWF reports heights in meters (like ICON-EU), cloud covers as
-    0–1 fractions.  Heights ≥ 9990 m are treated as "no cloud" sentinel.
+    0–1 fractions.  Heights ≥ 9998 m are treated as "no cloud" sentinel
+    (ECMWF uses 9999 m; threshold at 9998 for float tolerance).
 
     Unit conversions:
     - meters → feet (× 3.28084)
