@@ -225,7 +225,7 @@ def _enrich_ecmwf(
         return None
 
     data_dir = ecmwf_grib_dir()
-    all_files = scan_ecmwf_files(data_dir, operational_only=False)
+    all_files = scan_ecmwf_files(data_dir)
     if not all_files:
         logger.info("No ECMWF GRIB data available in %s", data_dir)
         return None
