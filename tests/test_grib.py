@@ -861,6 +861,36 @@ class TestIconEuDecode:
         assert _VAR_MAP["clwmr"] == "cloud_liquid_water_kg_kg"
         assert _VAR_MAP["icmr"] == "ice_mixing_ratio_kg_kg"
 
+    def test_icon_sounding_vars_in_chunked_decoder(self):
+        """Sounding variables in ICON_EU_VARIABLES have matching decoder mappings."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
+
+        # These are the vars the chunked decoder knows how to process
+        decoder_vars = {"qc", "qi", "clc", "p", "t", "qv", "u", "v"}
+        for var in ICON_EU_VARIABLES:
+            assert var in decoder_vars, f"{var} not handled by chunked decoder"
+
+    def test_sounding_vars_produce_pressure_level_fields(self):
+        """Raw sounding fields from ICON decode convert to PressureLevelData fields."""
+        from weatherbrief.fetch.grib.decode import _convert_raw_sounding
+
+        # Simulate what ICON decode produces after model→pressure interpolation
+        raw = {
+            "cloud_liquid_water_kg_kg": 1e-5,
+            "ice_mixing_ratio_kg_kg": 2e-6,
+            "cloud_area_fraction_pct": 30.0,
+            "raw_temperature_k": 270.0,
+            "raw_specific_humidity_kg_kg": 0.003,
+            "raw_u_wind_m_s": 5.0,
+            "raw_v_wind_m_s": -10.0,
+        }
+        result = _convert_raw_sounding(raw, 700)
+        assert result["temperature_c"] is not None
+        assert result["relative_humidity_pct"] is not None
+        assert result["dewpoint_c"] is not None
+        assert result["wind_speed_kt"] is not None
+        assert result["wind_direction_deg"] is not None
+
     def test_icon_cloud_diag_field_map(self):
         """ICON cloud diagnostic field map has correct entries."""
         from weatherbrief.fetch.grib.decode import _ICON_CLOUD_DIAG_FIELD_MAP
