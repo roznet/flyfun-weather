@@ -1,14 +1,19 @@
-# Full GRIB Sounding Plan
+# Full GRIB Sounding Plan — ICON-EU
 
-Replace Open-Meteo pressure-level data with complete GRIB soundings for higher
-vertical resolution (~500 ft vs ~3000 ft from Open-Meteo's standard levels).
+**Status: Deferred** — ICON cloud fields (CLW, ice, CLC) are already enriched at
+full 40-level resolution, which was the high-value gap. The remaining gain (T, RH,
+wind on 40 native levels vs Open-Meteo's 19) is marginal for flight planning.
+ECMWF full sounding replacement is being handled separately (higher priority since
+its 25 native levels vs 19 Open-Meteo levels matter more). Revisit if
+source-consistency issues or icing analysis precision problems surface in practice.
+
+Replace Open-Meteo pressure-level data with complete ICON-EU GRIB soundings for
+higher vertical resolution (~500 ft vs ~3000 ft from Open-Meteo's 19 standard levels).
 
 ## Scope
 
-Initially ICON-EU (40 model levels from DWD opendata). ECMWF IFS commercial API
-access is pending — if granted, the same framework should handle both models.
-Design abstractions generically: per-model fetch strategy, shared derived-quantity
-computation, shared "replace Open-Meteo pressure levels" enrichment path.
+ICON-EU only (40 model levels from DWD opendata). ECMWF full sounding replacement
+is being built separately. Build this ICON-specific; generalize later if needed.
 
 ## Background
 
@@ -21,6 +26,19 @@ spacing would catch.
 The CLC cloud boundary derivation (added March 2026) proved the value: using 40
 model levels directly gave ~500 ft cloud boundary precision vs ~3000 ft from
 interpolated data.
+
+### Current state (April 2026)
+
+All three GRIB sources (GFS, ICON-EU, ECMWF) currently only enrich cloud fields
+onto existing Open-Meteo pressure levels via the shared
+`_merge_cloud_water_into_sections()`. No model replaces the full sounding today.
+
+Current ICON-EU variables: `ICON_EU_VARIABLES = ("qc", "qi", "clc", "p")`
+
+Current `_VAR_MAP` maps only cloud fields:
+- `qc` → `cloud_liquid_water_kg_kg`
+- `qi` → `ice_mixing_ratio_kg_kg`
+- `clc` → `cloud_area_fraction_pct`
 
 ## Goal
 
@@ -59,6 +77,30 @@ Geopotential_height: use hypsometric equation layer-by-layer from surface P
     (or skip — only needed for Skew-T plotting, not core analysis)
 ```
 
+## Key Design Decisions
+
+### pressure_hpa stays `int` — round to nearest hPa
+
+`PressureLevelData.pressure_hpa` is `int` throughout the codebase. Changing to
+`float` would ripple through dict keys, JSON serialization, cross-section lookups,
+and frontend code. Rounding to nearest integer hPa loses ~30 ft precision — negligible
+for aviation. ICON model-level spacing is ~20-30 hPa in the troposphere, so rounded
+values will mostly be unique.
+
+### No shared "full sounding" abstraction yet
+
+The current enrichment pipeline (`_merge_cloud_water_into_sections()`) only writes
+cloud fields onto existing `PressureLevelData` objects. A new code path is needed
+to *replace* the entire `pressure_levels` list on `HourlyForecast`. Build this
+ICON-specific; if ECMWF full sounding replacement is needed later, factor out then.
+
+### Memory: keep per-variable chunked decode
+
+`decode_icon_eu_per_point_chunked()` processes one variable at a time (~270 MB peak)
+and accumulates small per-point results. Adding T, QV, U, V doubles the variables
+but fits the same pattern — accumulate raw model-level values across variable passes,
+then build `PressureLevelData` objects from the accumulated result at the end.
+
 ## Download Impact
 
 Current: 4 vars (P, QC, QI, CLC) x 40 levels = 160 files per forecast hour
@@ -72,94 +114,115 @@ Consider bumping to 12 workers if latency matters.
 
 ## Implementation Steps
 
-### Phase 1: Fetch additional GRIB variables
+### Phase 1: Fetch and decode additional GRIB variables
 
 **File: `src/weatherbrief/fetch/grib/icon_eu_fetch.py`**
 - Add "t", "qv", "u", "v" to `ICON_EU_VARIABLES`
 
 **File: `src/weatherbrief/fetch/grib/decode.py`**
-- Add mappings to `_VAR_MAP`:
+- These new variables should NOT go through `_VAR_MAP` or `interpolate_model_to_pressure_levels()`.
+  `_VAR_MAP` maps to cloud field names for the cloud-only enrichment path. T/QV/U/V
+  are raw inputs to derived-quantity computation and need to stay on native model
+  levels (not interpolated to 19 standard levels).
+- In `decode_icon_eu_per_point_chunked()`, handle the new variables with a separate
+  mapping that preserves raw model-level values per point:
   ```
-  "t": "temperature_k"
-  "qv": "specific_humidity_kg_kg"
-  "u": "u_wind_ms"
-  "v": "v_wind_ms"
+  _SOUNDING_VAR_MAP = {
+      "t": "temperature_k",
+      "qv": "specific_humidity_kg_kg",
+      "u": "u_wind_ms",
+      "v": "v_wind_ms",
+  }
   ```
-- Add these to the decode loop in `decode_icon_eu_per_point_chunked()`
+- Accumulate these alongside existing cloud fields in the per-point result dict,
+  keyed by model level (not pressure level) until Phase 2 converts them.
 
-**File: `src/weatherbrief/models/analysis.py`**
-- Consider whether to add raw fields to `PressureLevelData` or compute derived
-  quantities during decode. Recommended: compute during decode so downstream
-  code sees the same fields (temperature_c, relative_humidity_pct, etc.)
+### Phase 2: Compute derived quantities and build PressureLevelData
 
-### Phase 2: Compute derived quantities
-
-**New function in `decode.py` or new module `icon_eu_derived.py`:**
+**New module: `src/weatherbrief/fetch/grib/icon_eu_sounding.py`**
 
 ```python
-def build_icon_pressure_levels(
-    pressure_pa: list[float],     # per model level
-    temperature_k: list[float],
-    specific_humidity: list[float],
-    u_wind_ms: list[float],
-    v_wind_ms: list[float],
-    cloud_liquid_water: list[float] | None,
-    ice_mixing_ratio: list[float] | None,
-    cloud_area_fraction: list[float] | None,
+def build_icon_sounding(
+    model_level_data: dict[int, dict[str, float]],
+    # model_level → {temperature_k, specific_humidity_kg_kg, u_wind_ms,
+    #                v_wind_ms, pressure_pa, cloud_liquid_water_kg_kg,
+    #                ice_mixing_ratio_kg_kg, cloud_area_fraction_pct}
 ) -> list[PressureLevelData]:
     """Convert raw ICON model-level data to PressureLevelData list.
 
-    Computes RH, dewpoint, wind speed/direction from raw GRIB fields.
-    Returns one PressureLevelData per model level with native (non-integer)
-    pressure values.
+    For each model level with all required fields (T, QV, U, V, P):
+    1. Convert T from K to C
+    2. Compute RH from QV, T, P (Buck equation)
+    3. Compute dewpoint from QV, P
+    4. Compute wind speed (kt) and direction from U, V
+    5. Round pressure to int hPa
+    6. Carry through CLW, ice, CLC if present
+
+    Returns one PressureLevelData per model level, sorted by descending
+    pressure (surface first), with duplicate int pressures merged.
     """
 ```
 
-Key decisions:
-- **pressure_hpa type**: Currently `int`. Change to `float` to support native
-  model-level pressures (761.3 hPa, 784.2 hPa, etc.). Check all callers that
-  use `pressure_hpa` as a dict key — may need rounding strategy for lookups.
-  Alternative: keep int, round to nearest hPa (~1 hPa = ~30 ft precision loss,
-  acceptable).
-- **Level count**: 40 levels per point vs current 19. JSON size increases ~2x
-  per ICON waypoint. Verify pack file sizes stay reasonable.
+Output `PressureLevelData` fields must match what Open-Meteo provides so downstream
+code (`analyze_sounding()`, cross-section renderer) works unchanged:
+- `temperature_c`, `relative_humidity_pct`, `dewpoint_c`
+- `wind_speed_kt`, `wind_direction_deg`
+- `cloud_liquid_water_kg_kg`, `ice_mixing_ratio_kg_kg`, `cloud_area_fraction_pct`
 
-### Phase 3: Integration with enrichment pipeline
+### Phase 3: Replace pressure levels in enrichment pipeline
 
 **File: `src/weatherbrief/fetch/grib/__init__.py`**
 
-When full GRIB data is available (T, QV, U, V all present):
-1. Build complete `PressureLevelData` list from GRIB (40 levels)
-2. **Replace** the Open-Meteo pressure levels on `HourlyForecast` for that hour
-3. Preserve Open-Meteo surface variables (they're separate fields on `HourlyForecast`)
+Add a new function alongside `_merge_cloud_water_into_sections()`:
 
-When partial GRIB data (missing T or QV):
-- Fall back to current behavior (enrich Open-Meteo levels with CLW/QI/CLC only)
+```python
+def _replace_pressure_levels_from_grib(
+    sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    sounding_per_point: list[list[PressureLevelData]],
+    model_value: str,
+    valid_utc: datetime,
+) -> int:
+    """Replace Open-Meteo pressure levels with full GRIB sounding.
+
+    Unlike _merge_cloud_water_into_sections() which adds fields to existing
+    PressureLevelData, this replaces the entire pressure_levels list on
+    matching HourlyForecast entries.
+    """
+```
+
+Modify `_decode_and_merge_icon_eu()`:
+- When full sounding variables are present (T, QV, U, V all decoded):
+  1. Call `build_icon_sounding()` per point to get 40-level `PressureLevelData` lists
+  2. Call `_replace_pressure_levels_from_grib()` to swap onto `HourlyForecast`
+  3. Still run `_derive_clc_cloud_layers()` for cloud diagnostics (uses native CLC)
+- When partial data (missing T or QV):
+  - Fall back to current behavior — cloud-only enrichment via `_merge_cloud_water_into_sections()`
 
 **Fallback logic**: If GRIB enrichment produces full levels for some forecast
-hours but not others, the pack would have mixed resolution. Either:
-- Accept mixed (analysis handles arbitrary level counts)
-- Only use full GRIB if ALL forecast hours have it (simpler, but wastes data)
-
-Recommendation: accept mixed — the analysis already works per-hour.
+hours but not others, the pack has mixed resolution. Accept mixed — the analysis
+already works per-hour with arbitrary level counts.
 
 ### Phase 4: Cloud boundary derivation update
 
-With full GRIB soundings, `_derive_clc_cloud_layers()` becomes redundant for
-the primary path — we can derive cloud boundaries from the high-res CLC directly
-in the sounding analysis. Keep it as fallback for the Open-Meteo-only path.
+With full GRIB soundings, `_derive_clc_cloud_layers()` remains useful for filling
+`NWPCloudDiagnostics` base/top values. No change needed — it already runs on
+native model levels.
 
-Also consider: with per-level CLC available, the cloud detection in
-`analyze_sounding()` could use CLC as a primary signal alongside dewpoint
-depression, improving cloud layer detection for ICON.
+Additionally, with per-level CLC available in the full sounding, `analyze_sounding()`
+could use CLC as a primary cloud detection signal alongside dewpoint depression,
+improving cloud layer detection for ICON. This is an enhancement to explore after
+the core sounding replacement is working.
 
 ### Phase 5: Cross-section visualization
 
 The cross-section renderer (`web/ts/visualization/cross-section/`) currently
-assumes data on standard pressure levels for the y-axis grid. With native model
+handles data on standard pressure levels for the y-axis grid. With native model
 levels:
-- The y-axis already maps altitude, not pressure directly
-- `VizPoint` carries per-level data — more levels just means more data points
+- The y-axis maps altitude, not pressure directly — more levels just means more
+  data points for the interpolation grid
+- `VizPoint` carries per-level data — variable level counts already work
 - `data-extract.ts` builds VizPoints from route analyses — needs to handle
   variable level counts per model
 - Performance: 40 levels x 8 points = 320 data points per model (vs 152 now).
@@ -176,11 +239,12 @@ ICON-EU GRIB (DWD opendata)
   |
   +-- Model-level files: P, T, QV, U, V, QC, QI, CLC (40 levels each)
         |
-        +-> build_icon_pressure_levels()
+        +-> build_icon_sounding() per point
         |     |
         |     +-> 40 PressureLevelData per point (T, RH, Td, wind, CLW, QI, CLC)
         |           |
-        |           +-> REPLACES Open-Meteo pressure_levels on HourlyForecast
+        |           +-> _replace_pressure_levels_from_grib()
+        |                 REPLACES Open-Meteo pressure_levels on HourlyForecast
         |
         +-> _derive_clc_cloud_layers() (fills NWPCloudDiagnostics base/top)
 
@@ -193,6 +257,10 @@ Open-Meteo (api.open-meteo.com)
   +-- Pressure-level variables (FALLBACK only, when GRIB unavailable)
         |
         +-> 19 PressureLevelData per point (current behavior)
+
+GFS / ECMWF GRIB
+  |
+  +-> Cloud-only enrichment (unchanged — _merge_cloud_water_into_sections)
 ```
 
 ## Risks and Mitigations
@@ -205,11 +273,18 @@ Open-Meteo (api.open-meteo.com)
 | Model-level pressure rounding | Round to int hPa — max 30 ft error, acceptable |
 | Mixed resolution across hours | Analysis already handles variable level counts |
 | Download latency | Parallel fetch (8-12 workers), already proven with current 4 vars |
+| Duplicate int pressures after rounding | Merge levels with same rounded pressure (pick lower model level) |
+| Per-variable decode memory | Existing chunked approach handles 8 vars same as 4 |
 
 ## Testing Strategy
 
-1. Unit test `build_icon_pressure_levels()` with known T/QV/U/V → verify RH, Td, wind
-2. Integration test: fetch real GRIB, build levels, run `analyze_sounding()` → compare
+1. Unit test `build_icon_sounding()` with known T/QV/U/V/P → verify RH, Td, wind
+   match meteorological reference values
+2. Unit test pressure rounding and duplicate-merge logic
+3. Integration test: fetch real GRIB, build sounding, verify `PressureLevelData`
+   fields populate correctly on `HourlyForecast`
+4. Integration test: run `analyze_sounding()` on GRIB-replaced sounding → compare
    cloud layers, icing zones with Open-Meteo-based analysis
-3. Regression: ensure GFS/ECMWF/UKMO paths unchanged
-4. Visual: compare cross-sections before/after for same flight
+5. Regression: ensure GFS/ECMWF cloud-only enrichment paths unchanged
+6. Visual: compare cross-sections before/after for same flight — verify more
+   vertical detail without rendering artifacts
