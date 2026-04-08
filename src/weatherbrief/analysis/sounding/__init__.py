@@ -202,7 +202,7 @@ def analyze_sounding_lite(
                 abs_diff > 200.0 or abs_diff / larger > 1.0
             )
 
-    # DD cloud layers (sounding-derived — used for ceiling)
+    # DD cloud layers (sounding-derived)
     dd_cloud_layers = detect_cloud_layers(
         derived_levels,
         lcl_altitude_ft=indices.lcl_altitude_ft,
@@ -282,10 +282,11 @@ def _analyze_sounding_heavy(
     hourly: HourlyForecast | None,
     profile: PreparedProfile,
 ) -> None:
-    """Extend a lite SoundingAnalysis with icing, inversions, NWP clouds, etc.
+    """Extend a lite SoundingAnalysis with icing, NWP cloud synthesis, etc.
 
     Mutates *result* in-place.  Called by ``analyze_sounding()`` to
-    complete the full analysis after the lite phase.
+    complete the full analysis after the lite phase.  Recomputes
+    cloud_layers and inversions after extended enrichment.
     """
     from weatherbrief.analysis.sounding.clouds import (
         apply_nwp_coverage,
