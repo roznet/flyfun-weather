@@ -427,9 +427,9 @@ def main():
             step_h = int((h_time - grib_bt).total_seconds() / 3600)
             if step_h < 0:
                 continue
-            # Round to nearest 3h for GRIB matching
-            grib_step = round(step_h / 3) * 3
-            if grib_step in grib_files:
+            # Snap to nearest available GRIB step (not hardcoded 3h)
+            grib_step = min(grib_files.keys(), key=lambda s: abs(s - step_h)) if grib_files else step_h
+            if grib_step in grib_files and abs(grib_step - step_h) <= 3:
                 key = (grib_step, wp_icao)
                 if key in seen_step_wp:
                     continue

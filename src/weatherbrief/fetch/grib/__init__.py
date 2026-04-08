@@ -210,12 +210,14 @@ def _enrich_ecmwf(
     *,
     flight_duration_hours: float = 0.0,
     as_of_time: datetime | None = None,
+    ecmwf_data_dir: Path | None = None,
 ) -> int | None:
     """Enrich ECMWF cross-sections with GRIB pressure-level and surface data.
 
-    Reads ECMWF GRIB files from the local ECPDS delivery directory.
-    For each route point, uses GRIB data if the point is covered by
-    any geographic sub-grid; uncovered points keep their Open-Meteo data.
+    Reads ECMWF GRIB files from the ECPDS delivery directory. Uses
+    ``ecmwf_data_dir`` if provided, otherwise falls back to the
+    ``ECMWF_GRIB_DIR`` env var (separate from the shared ``data_dir``
+    because ECMWF data is delivered to its own volume).
 
     Returns:
         GRIB init Unix timestamp, or None if no ECMWF data found.
@@ -235,10 +237,10 @@ def _enrich_ecmwf(
     if not ecmwf_sections:
         return None
 
-    data_dir = ecmwf_grib_dir()
-    all_files = scan_ecmwf_files(data_dir)
+    grib_dir = ecmwf_data_dir or ecmwf_grib_dir()
+    all_files = scan_ecmwf_files(grib_dir)
     if not all_files:
-        logger.info("No ECMWF GRIB data available in %s", data_dir)
+        logger.info("No ECMWF GRIB data available in %s", grib_dir)
         return None
 
     # Filter to runs initialized before as_of_time (replay/backtest support)
