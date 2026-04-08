@@ -554,6 +554,65 @@ class AirportForecastSnapshotRow(Base):
     sounding_convective_risk: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
+class VerificationMonthlyStatsRow(Base):
+    """Pre-aggregated monthly verification accuracy per airport/model/days_out.
+
+    Combines both model (GFS, ICON, ECMWF) and TAF scores into a single table.
+    For TAF rows, model='taf' and days_out is derived from lead_hours buckets.
+    Generated monthly by the retention/rollup job.
+    """
+
+    __tablename__ = "verification_monthly_stats"
+    __table_args__ = (
+        UniqueConstraint(
+            "month", "source", "model", "days_out", "icao",
+            name="uq_vms_key",
+        ),
+        Index("ix_vms_month", "month"),
+        Index("ix_vms_model_days", "model", "days_out"),
+        Index("ix_vms_icao", "icao"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    month: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )  # first day of month
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  # flight / standalone
+    model: Mapped[str] = mapped_column(String(20), nullable=False)  # gfs / icon / ecmwf / taf
+    days_out: Mapped[int] = mapped_column(Integer, nullable=False)
+    icao: Mapped[str] = mapped_column(String(4), nullable=False)
+
+    # Sample size
+    n_scores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Flight category direction counts
+    n_cat_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_optimistic_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_optimistic_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_pessimistic_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_pessimistic_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Wind advisory direction counts
+    n_advisory_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_optimistic: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_pessimistic: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Continuous error metrics (MAE = mean absolute error, bias = signed mean)
+    ceiling_mae_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ceiling_bias_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    visibility_mae_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_speed_mae_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temperature_mae_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Precipitation / convection hit rates (model scores only, NULL for TAF)
+    n_precip_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_precip_miss: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_precip_false_alarm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_convection_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_convection_miss: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_convection_false_alarm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class VerificationCycleRow(Base):
     """Performance metrics for each verification collection cycle.
 
