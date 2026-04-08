@@ -53,6 +53,14 @@ function capeColor(jkg: number): string {
   return '#991b1b';
 }
 
+function visibilityColor(m: number): string {
+  const sm = m / 1609.34;
+  if (sm >= 5) return '#22c55e';   // VFR
+  if (sm >= 3) return '#3b82f6';   // MVFR
+  if (sm >= 1) return '#ef4444';   // IFR
+  return '#a855f7';                 // LIFR
+}
+
 function cloudCoverColor(pct: number): string {
   const g = Math.round(220 - (pct / 100) * 160);
   return `rgb(${g},${g},${g + 10})`;
@@ -75,7 +83,7 @@ function maeColor(value: number, thresholdBad: number): string {
 
 // --- Forecast metric extraction ---
 
-export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'ceiling_ft' | 'cape_jkg' | 'convective_risk' | 'cloud_cover_pct';
+export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'ceiling_ft' | 'cape_jkg' | 'convective_risk' | 'cloud_cover_pct' | 'visibility_m';
 
 function isConsensusMode(model: string): boolean {
   return model === 'worst' || model === 'majority';
@@ -109,6 +117,13 @@ function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, mode
       }
       return RISK_COLORS[modelData?.convective_risk || 'none'] || '#888';
     }
+    case 'visibility_m': {
+      if (consensus) {
+        const vals = Object.values(airport.models).map(m => m.visibility_m).filter((v): v is number => v != null);
+        return visibilityColor(vals.length ? Math.min(...vals) : 99999);
+      }
+      return visibilityColor(modelData?.visibility_m ?? 99999);
+    }
     case 'cloud_cover_pct': {
       // In consensus mode, average cloud cover across models
       if (consensus) {
@@ -128,15 +143,60 @@ function fmtCeiling(ft: number | null | undefined): string {
   return `${Math.round(ft)} ft`;
 }
 
-function getForecastTooltip(airport: ForecastAirport, model: string): string {
+function fmtVisibility(m: number | null | undefined): string {
+  if (m == null) return '';
+  const sm = m / 1609.34;
+  if (sm >= 10) return '>10 SM';
+  return `${sm.toFixed(1)} SM`;
+}
+
+function fmtWind(speed: number | null | undefined, dir: number | null | undefined, gust: number | null | undefined): string {
+  if (speed == null) return '';
+  const dirStr = dir != null ? `${String(Math.round(dir)).padStart(3, '0')}/` : '';
+  const gustStr = gust ? `G${Math.round(gust)}` : '';
+  return `${dirStr}${Math.round(speed)}${gustStr} kt`;
+}
+
+function getMetricLine(data: { [key: string]: any }, metric: ForecastMetric): string | null {
+  switch (metric) {
+    case 'wind_speed_kt':
+      return data.wind_speed_kt != null ? `Wind: ${fmtWind(data.wind_speed_kt, data.wind_dir_deg, data.wind_gust_kt)}` : null;
+    case 'ceiling_ft':
+      return data.ceiling_ft != null ? `Ceiling: ${fmtCeiling(data.ceiling_ft)}` : null;
+    case 'visibility_m':
+      return data.visibility_m != null ? `Visibility: ${fmtVisibility(data.visibility_m)}` : null;
+    case 'cape_jkg':
+      return data.cape_jkg != null ? `CAPE: ${Math.round(data.cape_jkg)} J/kg` : null;
+    case 'convective_risk':
+      return `Convective: ${data.convective_risk || 'none'}`;
+    case 'cloud_cover_pct':
+      return data.cloud_cover_pct != null ? `Cloud cover: ${Math.round(data.cloud_cover_pct)}%` : null;
+    default:
+      return null;
+  }
+}
+
+function getForecastTooltip(airport: ForecastAirport, model: string, metric: ForecastMetric): string {
   const lines: string[] = [`<b>${airport.icao}</b>`];
 
   if (isConsensusMode(model)) {
     const c = airport.consensus;
     lines.push(`Category: <b>${c.flight_category}</b> (${c.agreement})`);
-    if (c.wind_speed_kt != null) lines.push(`Wind: ${Math.round(c.wind_speed_kt)} kt`);
-    if (c.ceiling_ft != null) lines.push(`Ceiling: ${fmtCeiling(c.ceiling_ft)}`);
-    // Per-model breakdown
+    if (metric !== 'flight_category') {
+      // For consensus, build metric line from averaged consensus data or worst-of-models
+      if (metric === 'convective_risk') {
+        const riskOrder = ['none', 'marginal', 'low', 'moderate', 'high', 'extreme'];
+        let worst = 'none';
+        for (const md of Object.values(airport.models)) {
+          const r = md.convective_risk || 'none';
+          if (riskOrder.indexOf(r) > riskOrder.indexOf(worst)) worst = r;
+        }
+        lines.push(`Convective: ${worst}`);
+      } else {
+        const line = getMetricLine(c, metric);
+        if (line) lines.push(line);
+      }
+    }
     for (const [m, d] of Object.entries(airport.models)) {
       lines.push(`<span style="color:var(--text-muted)">${m.toUpperCase()}: ${d.flight_category}</span>`);
     }
@@ -144,14 +204,10 @@ function getForecastTooltip(airport: ForecastAirport, model: string): string {
     const d = airport.models[model];
     if (!d) { lines.push('No data'); return lines.join('<br>'); }
     lines.push(`Category: <b>${d.flight_category}</b>`);
-    if (d.wind_speed_kt != null) {
-      const dir = d.wind_dir_deg != null ? `${Math.round(d.wind_dir_deg)}@` : '';
-      const gust = d.wind_gust_kt ? `G${Math.round(d.wind_gust_kt)}` : '';
-      lines.push(`Wind: ${dir}${Math.round(d.wind_speed_kt)}${gust} kt`);
+    if (metric !== 'flight_category') {
+      const line = getMetricLine(d, metric);
+      if (line) lines.push(line);
     }
-    if (d.ceiling_ft != null) lines.push(`Ceiling: ${fmtCeiling(d.ceiling_ft)}`);
-    if (d.cape_jkg != null && d.cape_jkg > 0) lines.push(`CAPE: ${Math.round(d.cape_jkg)} J/kg`);
-    if (d.temperature_c != null) lines.push(`Temp: ${d.temperature_c.toFixed(1)} C`);
   }
   return lines.join('<br>');
 }
@@ -231,6 +287,15 @@ const FORECAST_LEGENDS: Record<ForecastMetric, { title: string; items: Array<{ c
   convective_risk: {
     title: 'Convective Risk',
     items: Object.entries(RISK_COLORS).map(([k, c]) => ({ color: c, label: k })),
+  },
+  visibility_m: {
+    title: 'Visibility',
+    items: [
+      { color: '#22c55e', label: '>= 5 SM (VFR)' },
+      { color: '#3b82f6', label: '3-5 SM (MVFR)' },
+      { color: '#ef4444', label: '1-3 SM (IFR)' },
+      { color: '#a855f7', label: '< 1 SM (LIFR)' },
+    ],
   },
   cloud_cover_pct: {
     title: 'Cloud Cover',
@@ -313,7 +378,7 @@ export class WeatherMap {
         opacity: 1,
       });
 
-      marker.bindTooltip(getForecastTooltip(apt, model), { className: 'map-tooltip' });
+      marker.bindTooltip(getForecastTooltip(apt, model, metric), { className: 'map-tooltip' });
       marker.addTo(this.markersGroup);
     }
 

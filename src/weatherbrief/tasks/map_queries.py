@@ -130,7 +130,7 @@ def _consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any
         "flight_category": consensus_cat,
         "agreement": agreement,
     }
-    for field in ("wind_speed_kt", "wind_dir_deg", "ceiling_ft", "cape_jkg"):
+    for field in ("wind_speed_kt", "wind_dir_deg", "ceiling_ft", "cape_jkg", "visibility_m"):
         vals = [per_model[m].get(field) for m in models_with_data]
         vals = [v for v in vals if v is not None]
         if vals:

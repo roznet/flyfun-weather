@@ -34,6 +34,7 @@ export interface ConsensusForecast {
   wind_dir_deg?: number;
   ceiling_ft?: number;
   cape_jkg?: number;
+  visibility_m?: number;
 }
 
 export interface ForecastMapResponse {
