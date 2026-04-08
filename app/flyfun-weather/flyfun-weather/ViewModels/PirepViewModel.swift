@@ -103,10 +103,7 @@ final class PirepViewModel {
             if synced > 0 {
                 Self.logger.info("Flushed \(synced) queued PIREPs after successful submit")
             }
-        } catch let error as URLError where error.code == .notConnectedToInternet
-                    || error.code == .timedOut
-                    || error.code == .networkConnectionLost
-                    || error.code == .cannotConnectToHost {
+        } catch let apiError as APIError where apiError.isTransientNetwork {
             await offlineStore.enqueue(request)
             let pending = await offlineStore.pendingCount
             queuedOffline = true

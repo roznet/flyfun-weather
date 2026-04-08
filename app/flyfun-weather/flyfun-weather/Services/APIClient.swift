@@ -10,6 +10,14 @@ enum APIError: LocalizedError {
     case networkError(Error)
     case decodingError(Error)
 
+    /// True for transient network errors that should trigger offline queuing.
+    var isTransientNetwork: Bool {
+        guard case .networkError(let inner) = self,
+              let urlError = inner as? URLError else { return false }
+        return [.notConnectedToInternet, .timedOut, .networkConnectionLost, .cannotConnectToHost]
+            .contains(urlError.code)
+    }
+
     var errorDescription: String? {
         switch self {
         case .unauthorized: "Session expired. Please sign in again."
