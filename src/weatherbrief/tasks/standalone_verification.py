@@ -535,6 +535,9 @@ def _score_cycle(
         return 0
 
     # Build lookup: icao → observation (closest to cycle_time)
+    def _ensure_utc(dt: datetime) -> datetime:
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
     obs_by_icao: dict[str, VerificationObservationRow] = {}
     for obs in obs_rows:
         icao = obs.icao
@@ -542,8 +545,8 @@ def _score_cycle(
             obs_by_icao[icao] = obs
         else:
             # Keep the one closest to cycle_time
-            existing_delta = abs((obs_by_icao[icao].observation_time - cycle_time).total_seconds())
-            new_delta = abs((obs.observation_time - cycle_time).total_seconds())
+            existing_delta = abs((_ensure_utc(obs_by_icao[icao].observation_time) - cycle_time).total_seconds())
+            new_delta = abs((_ensure_utc(obs.observation_time) - cycle_time).total_seconds())
             if new_delta < existing_delta:
                 obs_by_icao[icao] = obs
 
