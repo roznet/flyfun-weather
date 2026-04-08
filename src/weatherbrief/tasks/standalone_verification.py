@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 STANDALONE_MODELS = ["gfs", "icon", "ecmwf"]
-SAMPLE_HOURS_UTC = [5, 9, 12, 15, 17]  # light cycles at 09/12/15, full at 05/17
-FULL_CYCLE_HOURS_UTC = {5, 17}  # Offset from model init times (00/06/12/18) to avoid Open-Meteo ingest load
+SAMPLE_HOURS_UTC = [6, 9, 12, 15, 18]  # light cycles at 09/12/15, full at 06/18
+FULL_CYCLE_HOURS_UTC = {6, 18}  # full forecast fetch + scoring at synoptic boundary hours
 
 # Model forecast horizon — 4 days is enough for actionable verification stats
 MODEL_FORECAST_DAYS = {
