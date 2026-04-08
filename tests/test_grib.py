@@ -865,7 +865,7 @@ class TestIconEuDecode:
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
 
         # These are the vars the chunked decoder knows how to process
-        decoder_vars = {"qc", "qi", "clc", "p", "t", "qv", "u", "v"}
+        decoder_vars = {"qc", "qi", "clc", "p", "t", "qv", "u", "v", "fi"}
         for var in ICON_EU_VARIABLES:
             assert var in decoder_vars, f"{var} not handled by chunked decoder"
 

@@ -59,7 +59,8 @@ ICON_EU_MODEL_LEVEL_MAX = 74
 # Variables to fetch: sounding + cloud microphysics + pressure for vertical interpolation.
 # Note: "qv" (specific humidity) is used instead of "relhum" because relhum is only
 # available on pressure levels, not model levels on DWD Open Data.
-ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v")
+# "fi" (geopotential) provides altitude info for Skew-T annotations and sounding analysis.
+ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "fi")
 
 # Single-level cloud diagnostic variables
 ICON_EU_CLOUD_DIAG_VARIABLES = (

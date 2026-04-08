@@ -47,8 +47,8 @@ def propagate_all(
     before the analysis stage.
     """
     _forward_fill_cloud_diagnostics(sections, all_forecasts)
-    _forward_fill_cloud_water(sections, all_forecasts)
     _forward_fill_pressure_levels(sections, all_forecasts)
+    _forward_fill_cloud_water(sections, all_forecasts)
 
 
 # ---------------------------------------------------------------------------

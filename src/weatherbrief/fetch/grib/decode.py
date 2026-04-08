@@ -44,6 +44,17 @@ _ECMWF_FULL_VAR_MAP = {
     "w": "vertical_velocity_pa_s",
 }
 
+# Extended variable map for ICON-EU full sounding replacement.
+# ICON uses "qv" for specific humidity and "fi" for geopotential (vs ECMWF's "q"/"z").
+_ICON_FULL_VAR_MAP = {
+    **_VAR_MAP,
+    "t": "raw_temperature_k",
+    "qv": "raw_specific_humidity_kg_kg",
+    "u": "raw_u_wind_m_s",
+    "v": "raw_v_wind_m_s",
+    "fi": "raw_geopotential_m2_s2",
+}
+
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
 # cfgrib uses avg_ prefix for time-averaged stepType variables.
 # Field names use a flat namespace for build_cloud_diagnostics().
@@ -709,6 +720,7 @@ def decode_icon_eu_per_point_chunked(
         ("qv", "raw_specific_humidity_kg_kg"),
         ("u", "raw_u_wind_m_s"),
         ("v", "raw_v_wind_m_s"),
+        ("fi", "raw_geopotential_m2_s2"),
     ):
         raw = var_bytes.get(var_name, b"")
         if not raw:
@@ -820,17 +832,10 @@ def decode_icon_eu_per_point(
                 # Map ICON-EU variable names
                 # cfgrib may decode the P field as "p" or "pres" depending
                 # on the GRIB shortName mapping.
-                _ICON_VAR_MAP = {
-                    **_VAR_MAP,
-                    "t": "raw_temperature_k",
-                    "qv": "raw_specific_humidity_kg_kg",
-                    "u": "raw_u_wind_m_s",
-                    "v": "raw_v_wind_m_s",
-                }
                 if name_lower in ("p", "pres"):
                     field_key = "pressure_pa"
-                elif name_lower in _ICON_VAR_MAP:
-                    field_key = _ICON_VAR_MAP[name_lower]
+                elif name_lower in _ICON_FULL_VAR_MAP:
+                    field_key = _ICON_FULL_VAR_MAP[name_lower]
                 else:
                     continue
 
@@ -881,6 +886,7 @@ def decode_icon_eu_per_point(
             "cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg",
             "raw_temperature_k", "raw_specific_humidity_kg_kg",
             "raw_u_wind_m_s", "raw_v_wind_m_s",
+            "raw_geopotential_m2_s2",
         )
         for field_key in _ICON_INTERP_FIELDS:
             field_data = point_level_data.get(field_key, {})
