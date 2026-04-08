@@ -266,3 +266,98 @@ class TestInterpolateAllSpatially:
         # Diagnostics filled
         diag_result = cs.point_forecasts[1].hourly[0].nwp_cloud_diagnostics
         assert diag_result is not None
+
+
+# ---------------------------------------------------------------------------
+# Pressure-level forward-fill (3h gap fill for GRIB sounding replacement)
+# ---------------------------------------------------------------------------
+
+
+def _make_grib_levels(n: int = 24) -> list[PressureLevelData]:
+    """Create a GRIB-replaced pressure level list with more levels than Open-Meteo."""
+    return [
+        PressureLevelData(
+            pressure_hpa=1000 - i * 25,
+            temperature_c=15.0 - i * 2,
+            cloud_liquid_water_kg_kg=1e-5,
+        )
+        for i in range(n)
+    ]
+
+
+def _make_open_meteo_levels(n: int = 19) -> list[PressureLevelData]:
+    """Create an Open-Meteo pressure level list (fewer levels, no CLW)."""
+    levels = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500,
+              400, 300, 250, 200, 150, 100, 70, 50, 30]
+    return [PressureLevelData(pressure_hpa=p, temperature_c=10.0) for p in levels[:n]]
+
+
+class TestForwardFillPressureLevels:
+    """Tests for _forward_fill_pressure_levels (3h gap fill)."""
+
+    def test_fills_gap_between_grib_hours(self):
+        """Hours between two GRIB hours get the preceding GRIB levels."""
+        hourly = [
+            HourlyForecast(time=T0 + timedelta(hours=0), pressure_levels=_make_grib_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=1), pressure_levels=_make_open_meteo_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=2), pressure_levels=_make_open_meteo_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=3), pressure_levels=_make_grib_levels()),
+        ]
+        cs = _make_cs_with_hourly([hourly])
+        propagate_all([cs], [])
+
+        assert len(cs.point_forecasts[0].hourly[1].pressure_levels) == 24
+        assert len(cs.point_forecasts[0].hourly[2].pressure_levels) == 24
+
+    def test_no_fill_before_first_grib_hour(self):
+        """Hours before the first GRIB hour keep Open-Meteo levels."""
+        hourly = [
+            HourlyForecast(time=T0 + timedelta(hours=0), pressure_levels=_make_open_meteo_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=1), pressure_levels=_make_open_meteo_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=2), pressure_levels=_make_grib_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=3), pressure_levels=_make_grib_levels()),
+        ]
+        cs = _make_cs_with_hourly([hourly])
+        propagate_all([cs], [])
+
+        assert len(cs.point_forecasts[0].hourly[0].pressure_levels) == 19
+        assert len(cs.point_forecasts[0].hourly[1].pressure_levels) == 19
+
+    def test_no_fill_after_last_grib_hour(self):
+        """Hours after the last GRIB hour keep Open-Meteo levels."""
+        hourly = [
+            HourlyForecast(time=T0 + timedelta(hours=0), pressure_levels=_make_grib_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=1), pressure_levels=_make_grib_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=2), pressure_levels=_make_open_meteo_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=3), pressure_levels=_make_open_meteo_levels()),
+        ]
+        cs = _make_cs_with_hourly([hourly])
+        propagate_all([cs], [])
+
+        assert len(cs.point_forecasts[0].hourly[2].pressure_levels) == 19
+        assert len(cs.point_forecasts[0].hourly[3].pressure_levels) == 19
+
+    def test_no_fill_when_all_same_levels(self):
+        """No fill when all hours have the same level count."""
+        hourly = [
+            HourlyForecast(time=T0 + timedelta(hours=i), pressure_levels=_make_open_meteo_levels())
+            for i in range(4)
+        ]
+        cs = _make_cs_with_hourly([hourly])
+        propagate_all([cs], [])
+
+        for h in cs.point_forecasts[0].hourly:
+            assert len(h.pressure_levels) == 19
+
+    def test_single_grib_hour_no_fill(self):
+        """A single GRIB hour with no second anchor doesn't fill anything."""
+        hourly = [
+            HourlyForecast(time=T0 + timedelta(hours=0), pressure_levels=_make_open_meteo_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=1), pressure_levels=_make_grib_levels()),
+            HourlyForecast(time=T0 + timedelta(hours=2), pressure_levels=_make_open_meteo_levels()),
+        ]
+        cs = _make_cs_with_hourly([hourly])
+        propagate_all([cs], [])
+
+        assert len(cs.point_forecasts[0].hourly[0].pressure_levels) == 19
+        assert len(cs.point_forecasts[0].hourly[2].pressure_levels) == 19
