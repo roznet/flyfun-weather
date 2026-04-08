@@ -188,7 +188,7 @@ result = check_freshness(last_pack_init_times)
 
 ## GRIB2 Enrichment (`fetch/grib/`)
 
-GRIB2 enrichment for Cloud Liquid Water, Ice Mixing Ratio, and cloud diagnostics — variables not available from Open-Meteo. Supports GFS (via NOAA S3) and ICON-EU (via DWD opendata). Enabled via `BriefingOptions.enrich_grib=True` (always on in API, opt-in via `--enrich-grib` in CLI).
+GRIB2 enrichment for Cloud Liquid Water, Ice Mixing Ratio, and cloud diagnostics — variables not available from Open-Meteo. Supports GFS (via NOAA S3), ICON-EU (via DWD opendata), and ECMWF IFS (via ECPDS local delivery). Enabled via `BriefingOptions.enrich_grib=True` (always on in API, opt-in via `--enrich-grib` in CLI).
 
 ```python
 from weatherbrief.fetch.grib import enrich_forecasts
@@ -206,7 +206,8 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 | `grib_fetch.py` | Find latest GFS run, bracket forecast hours, download via HTTP Range from S3 |
 | `icon_eu_fetch.py` | Find latest ICON-EU run, download model-level (QC/QI/P) and single-level diagnostics from DWD. Per-variable download for memory-efficient chunked decode |
 | `icon_eu_levels.py` | Log-pressure interpolation from ICON-EU model levels to pressure levels |
-| `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points. Chunked ICON-EU decoder (`decode_icon_eu_per_point_chunked()`) processes one variable at a time with explicit `gc.collect()` between — peak ~270MB vs ~800MB |
+| `ecmwf_fetch.py` | Parse ECPDS filenames, scan delivery directory, find latest run. No HTTP — files land on local disk via ECPDS push |
+| `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points. Chunked ICON-EU decoder (`decode_icon_eu_per_point_chunked()`) processes one variable at a time with explicit `gc.collect()` between — peak ~270MB vs ~800MB. ECMWF decoders handle multi-grid files (first-wins per point) |
 | `fill.py` | Forward-fill GRIB-enriched fields across time axis (cloud diagnostics + microphysics) |
 | `cache.py` | Disk cache per model (`data/.cache/grib/{model}/{date}_{cycle}z/`) with 48h TTL |
 
@@ -229,6 +230,14 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 5. Merge QC→CLWMR, QI→ICMR into pressure-level data
 6. Attach `NWPCloudDiagnostics` and override cloud cover (only if GFS hasn't already enriched the point)
 
+**ECMWF IFS enrichment** (`_enrich_ecmwf()`):
+1. Scan the ECPDS delivery directory for ECMWF GRIB files (local disk, no HTTP)
+2. Parse filenames to extract run metadata (model, base time, step, a1/a2 part)
+3. Pick the latest operational run; filter steps to the flight window (±3h margin)
+4. **Pressure levels (a2 files):** Decode clwc/ciwc/cc at 25 pressure levels per point. Multi-grid files (main Europe + Nordic extension) handled via first-wins: each point uses whichever sub-grid covers it
+5. **Surface diagnostics (a1 files):** Decode ceil, cbh, lcc/mcc/hcc/tcc. Heights in meters (9999m = no-cloud sentinel → None). Fractions 0–1 → converted to 0–100%
+6. Merge cloud water into ECMWF cross-sections; attach `NWPCloudDiagnostics`
+
 **Cloud cover override strategy:** When GRIB diagnostics are available, `_apply_cloud_diagnostics()` overwrites the Open-Meteo `cloud_cover_low/mid/high_pct` values with GRIB-native values. This ensures all cloud data for a given model comes from the same initialization run. GFS takes priority over ICON-EU for points where both provide data.
 
 **Gap-filling for GRIB-enriched fields:** GRIB enrichment only targets native model forecast hours (e.g. every 3h for GFS at longer lead times), and some grid cells may return None. Two gap-filling passes ensure all route points and hours have data:
@@ -242,13 +251,17 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 **When adding new GRIB-enriched fields:** add a forward-fill in `fill.py` (time axis) and a spatial interpolation function in `spatial_interpolation.py` (spatial axis). If the field is per-pressure-level, also add vertical interpolation in the sounding analysis.
 
 ### Key Choices
-- **GFS + ICON-EU** — GFS for global coverage, ICON-EU for higher-resolution European data (~6.5km vs ~27km)
+- **GFS + ICON-EU + ECMWF IFS** — GFS for global coverage, ICON-EU for higher-resolution European data (~6.5km vs ~27km), ECMWF IFS for model-native cloud microphysics on ECMWF cross-sections
 - **GFS takes priority** — if GFS already attached diagnostics, ICON-EU skips that point (avoids contradictory overrides)
+- **ECMWF enriches its own model only** — ECMWF GRIB data is only applied to ECMWF cross-sections, never mixed with GFS/ICON data
 - **Cloud cover override** — eliminates model-run mismatches between Open-Meteo (which may lag) and GRIB (latest run)
-- **Per-point interpolation** — `decode_grib_per_point()` / `decode_icon_eu_per_point()` return values per route point
+- **Per-point interpolation** — `decode_grib_per_point()` / `decode_icon_eu_per_point()` / `decode_ecmwf_pressure_per_point()` return values per route point
 - **Graceful degradation** — enrichment failure logged but pipeline continues with Open-Meteo data only
-- **Init time tracking** — `enrich_forecasts()` returns `(grib_init_times, grib_skip_reasons)`. `grib_init_times: dict[str, int]` maps model names to Unix timestamps. `grib_skip_reasons: dict[str, str]` explains why models were skipped (e.g., `"out_of_range"`). Stored in `BriefingPackMeta` and displayed in the freshness bar
-- **Two-phase sequential decode** — GFS download+decode runs in parallel with ICON-EU download-only. ICON-EU decode runs after GFS completes to prevent OOM (ICON-EU peaks at ~270MB per variable during cfgrib decode)
+- **Init time tracking** — `enrich_forecasts()` returns `(grib_init_times, grib_skip_reasons)`. `grib_init_times: dict[str, int]` maps model names to Unix timestamps (including `"ecmwf_grib"`). `grib_skip_reasons: dict[str, str]` explains why models were skipped (e.g., `"out_of_range"`). Stored in `BriefingPackMeta` and displayed in the freshness bar
+- **Two-phase sequential decode** — GFS download+decode runs in parallel with ICON-EU download-only and ECMWF disk decode. ICON-EU decode runs after GFS completes to prevent OOM (ICON-EU peaks at ~270MB per variable during cfgrib decode)
+- **ECMWF local disk I/O** — no HTTP, no cache needed. Files delivered by ECPDS to `ECMWF_GRIB_DIR` (default `/data/ecmwf`). Read-only volume in Docker
+- **Multi-grid handling** — ECMWF files may contain multiple geographic sub-grids (e.g. main Europe + Nordic extension). cfgrib splits these into separate Datasets; the decoder uses first-wins per point across all sub-grids
+- **ECMWF file naming** — structured convention: `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]`. Parsed by `parse_ecmwf_filename()` into `ECMWFFileInfo` dataclass. a1 = surface, a2 = pressure levels
 
 ### Gotchas
 - **cfgrib uses lazy loading** — temp file must stay alive through interpolation, not just `open_datasets()`. Deleting too early causes `FileNotFoundError`.
@@ -256,6 +269,10 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 - ICON-EU: model levels (not pressure levels) — requires P field for vertical interpolation
 - ICON-EU: bz2-compressed individual files, ~240 files per enrichment — parallel download essential
 - Cache is shared across users (same model run = same data)
+- **ECMWF no-cloud sentinel** — heights ≥ 9998m (nominally 9999m) mean "no cloud", converted to None
+- **ECMWF fractions** — `cc` (cloud cover) is 0–1 in GRIB, multiplied ×100 to match our `cloud_area_fraction_pct` convention. Surface covers (lcc/mcc/hcc/tcc) similarly converted in `build_ecmwf_cloud_diagnostics()`
+- **ECMWF longitude convention** — uses -180/+180 (same as route points), unlike GFS which uses 0–360. No longitude normalization needed for ECMWF decode
+- **ECMWF files may have no extension** — ECPDS default delivery has no `.grib2` suffix. Scanner accepts any filename matching the naming convention
 
 ## Gotchas
 
