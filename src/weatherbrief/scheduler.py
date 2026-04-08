@@ -521,3 +521,20 @@ def _run_standalone_once(
         result["observations_stored"], result["scores_created"],
         result["duration_ms"],
     )
+
+    # Rebuild dashboard + map caches after cycle completes
+    try:
+        from flyfun_common.db import SessionLocal
+        from weatherbrief.tasks.cache_builder import rebuild_all
+
+        cache_db = SessionLocal()
+        try:
+            cache_result = rebuild_all(cache_db, db_path)
+            logger.info(
+                "Standalone verification: cache rebuilt (%dms)",
+                cache_result["duration_ms"],
+            )
+        finally:
+            cache_db.close()
+    except Exception:
+        logger.error("Cache rebuild failed", exc_info=True)

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -28,7 +28,6 @@ from weatherbrief.models.verification import (
     ActivitySummary,
     CategoryAccuracyRow,
     CategoryBiasStats,
-    MAERow,
     MissedWarning,
     NotableMiss,
     VerificationDigestData,
@@ -360,7 +359,6 @@ def get_wind_advisory_accuracy(
         WindAdvisoryStats(
             model=model,
             accuracy_pct=round(float(avg_match) * 100, 1) if avg_match is not None else None,
-            sample_count=count,
         )
         for model, avg_match, count in rows
     ]
@@ -427,50 +425,6 @@ def get_missed_warnings(
 
 
 # ---------------------------------------------------------------------------
-# MAE stats (web-only)
-# ---------------------------------------------------------------------------
-
-
-def get_mae_stats(
-    db: Session, since: datetime, until: datetime,
-    source: str = "flight",
-    icao_filter: list[str] | None = None,
-) -> list[MAERow]:
-    """Mean absolute error per model at D-0 and D-1."""
-    rows = db.execute(
-        select(
-            VerificationScoreRow.model,
-            VerificationScoreRow.days_out,
-            func.avg(func.abs(VerificationScoreRow.ceiling_delta_ft)),
-            func.avg(func.abs(VerificationScoreRow.visibility_delta_m)),
-            func.avg(func.abs(VerificationScoreRow.wind_speed_delta_kt)),
-            func.avg(func.abs(VerificationScoreRow.temperature_delta_c)),
-            func.count(VerificationScoreRow.id),
-        )
-        .where(
-            VerificationScoreRow.observation_time.between(since, until),
-            VerificationScoreRow.days_out.in_((0, 1)),
-            VerificationScoreRow.source == source,
-            _icao_clause(VerificationScoreRow.icao, icao_filter),
-        )
-        .group_by(VerificationScoreRow.model, VerificationScoreRow.days_out)
-    ).all()
-
-    return [
-        MAERow(
-            model=row[0],
-            days_out=row[1],
-            ceiling_mae_ft=round(float(row[2]), 0) if row[2] is not None else None,
-            visibility_mae_m=round(float(row[3]), 0) if row[3] is not None else None,
-            wind_speed_mae_kt=round(float(row[4]), 1) if row[4] is not None else None,
-            temperature_mae_c=round(float(row[5]), 1) if row[5] is not None else None,
-            sample_count=row[6],
-        )
-        for row in rows
-    ]
-
-
-# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -492,7 +446,6 @@ def get_digest_data(
     bias = get_category_bias_stats(db, since, until, source, icao_filter)
     wind = get_wind_advisory_accuracy(db, since, until, source, icao_filter)
     missed = get_missed_warnings(db, since, until, source, icao_filter)
-    mae = get_mae_stats(db, since, until, source, icao_filter)
 
     # 7-day rolling for comparison
     category_7d: list[CategoryAccuracyRow] = []
@@ -509,5 +462,4 @@ def get_digest_data(
         category_bias=bias,
         wind_advisory=wind,
         missed_warnings=missed,
-        mae_stats=mae,
     )

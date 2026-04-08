@@ -301,7 +301,6 @@ export interface CategoryBiasStats {
 export interface WindAdvisoryStats {
   model: string;
   accuracy_pct: number | null;
-  sample_count: number;
 }
 
 export interface MissedWarning {
@@ -310,16 +309,6 @@ export interface MissedWarning {
   model: string;
   obs_wind_advisory: string;
   model_wind_advisory: string;
-}
-
-export interface MAERow {
-  model: string;
-  days_out: number;
-  ceiling_mae_ft: number | null;
-  visibility_mae_m: number | null;
-  wind_speed_mae_kt: number | null;
-  temperature_mae_c: number | null;
-  sample_count: number;
 }
 
 export interface VerificationDigest {
@@ -331,7 +320,6 @@ export interface VerificationDigest {
   category_bias: CategoryBiasStats[];
   wind_advisory: WindAdvisoryStats[];
   missed_warnings: MissedWarning[];
-  mae_stats: MAERow[];
 }
 
 export type VerificationPeriod = '24h' | '7d' | '30d';

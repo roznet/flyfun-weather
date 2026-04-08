@@ -830,7 +830,18 @@ def get_verification_stats(
     db: Session = Depends(get_db),
 ):
     """Return verification accuracy stats for the requested period."""
+    from weatherbrief.tasks.cache_builder import get_cached, is_stale
     from weatherbrief.tasks.verification_stats import get_digest_data
+
+    # Filtered views (country/airport) always run live — small result set
+    has_filter = bool(icao or country)
+
+    if not has_filter:
+        cache_key = f"stats:{source}:{period}"
+        if not is_stale(db, cache_key, source):
+            cached = get_cached(db, cache_key)
+            if cached is not None:
+                return cached
 
     now = datetime.now(timezone.utc)
     hours = {"24h": 24, "7d": 168, "30d": 720}[period]

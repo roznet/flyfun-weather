@@ -153,7 +153,6 @@ async function loadData(): Promise<void> {
     renderBias(data);
     renderMisses(data);
     renderWind(data);
-    renderMAE(data);
     renderHealth(data);
   } catch (err) {
     console.error('Failed to load verification stats', err);
@@ -220,22 +219,6 @@ const SECTION_INFO: Record<string, string> = {
     </div>
     <div class="popup-section"><h4>Missed Wind Warnings</h4>
       <p>Cases where actual conditions triggered a WARNING but the model failed to predict it \u2014 the most safety-critical wind misses.</p>
-    </div>`,
-
-  mae: `
-    <div class="popup-header"><h3>Mean Absolute Error</h3></div>
-    <p class="popup-vibe">On average, how far off is each model for key weather parameters?</p>
-    <div class="popup-section"><h4>How It Works</h4>
-      <p>For each observation, we compute |predicted \u2212 actual| and average across all data points. Lower values = more accurate model.</p>
-    </div>
-    <div class="popup-section"><h4>Parameters</h4>
-      <p><strong>Ceiling (ft)</strong> \u2014 average error in cloud ceiling height. E.g., 500 means the model is off by ~500ft on average.</p>
-      <p><strong>Visibility (m)</strong> \u2014 average error in visibility distance.</p>
-      <p><strong>Wind (kt)</strong> \u2014 average error in wind speed.</p>
-      <p><strong>Temp (\u00B0C)</strong> \u2014 average error in surface temperature. A good sanity check for overall model quality.</p>
-    </div>
-    <div class="popup-section popup-limitations"><h4>Limitations</h4>
-      <p>Only D-0 and D-1 forecasts are shown. Longer range errors are expected to be larger and less informative for comparison.</p>
     </div>`,
 
   health: `
@@ -469,12 +452,11 @@ function renderWind(data: VerificationDigest): void {
   let html = `<h2>Wind Advisory Accuracy ${infoBtn('wind')}</h2>`;
 
   if (data.wind_advisory.length > 0) {
-    html += '<table class="admin-table"><thead><tr><th>Model</th><th class="num">Match Rate</th><th class="num">Samples</th></tr></thead><tbody>';
+    html += '<table class="admin-table"><thead><tr><th>Model</th><th class="num">Match Rate</th></tr></thead><tbody>';
     for (const w of data.wind_advisory) {
       const cls = accuracyClass(w.accuracy_pct);
       html += `<tr><td style="font-weight:600">${escapeHtml(w.model.toUpperCase())}</td>`;
-      html += `<td class="num ${cls}">${fmtPct(w.accuracy_pct)}</td>`;
-      html += `<td class="num">${w.sample_count}</td></tr>`;
+      html += `<td class="num ${cls}">${fmtPct(w.accuracy_pct)}</td></tr>`;
     }
     html += '</tbody></table>';
   } else {
@@ -495,38 +477,6 @@ function renderWind(data: VerificationDigest): void {
     html += '</tbody></table>';
   }
 
-  el.innerHTML = html;
-}
-
-function renderMAE(data: VerificationDigest): void {
-  const el = document.getElementById('mae-section')!;
-  const mae = data.mae_stats;
-
-  if (mae.length === 0) {
-    el.innerHTML = `<h2>Mean Absolute Error (D-0 / D-1) ${infoBtn('mae')}</h2><p class="empty-state">No MAE data available.</p>`;
-    return;
-  }
-
-  let html = `<h2>Mean Absolute Error (D-0 / D-1) ${infoBtn('mae')}</h2>`;
-  html += '<table class="admin-table"><thead><tr>';
-  for (const h of ['Model', 'D-out', 'Ceiling (ft)', 'Visibility (m)', 'Wind (kt)', 'Temp (\u00B0C)', 'Samples']) {
-    html += `<th class="num">${h}</th>`;
-  }
-  html += '</tr></thead><tbody>';
-
-  for (const m of mae) {
-    html += '<tr>';
-    html += `<td style="font-weight:600">${escapeHtml(m.model.toUpperCase())}</td>`;
-    html += `<td class="num">D-${m.days_out}</td>`;
-    html += `<td class="num">${m.ceiling_mae_ft != null ? Math.round(m.ceiling_mae_ft) : '—'}</td>`;
-    html += `<td class="num">${m.visibility_mae_m != null ? Math.round(m.visibility_mae_m) : '—'}</td>`;
-    html += `<td class="num">${m.wind_speed_mae_kt != null ? m.wind_speed_mae_kt.toFixed(1) : '—'}</td>`;
-    html += `<td class="num">${m.temperature_mae_c != null ? m.temperature_mae_c.toFixed(1) : '—'}</td>`;
-    html += `<td class="num">${m.sample_count}</td>`;
-    html += '</tr>';
-  }
-
-  html += '</tbody></table>';
   el.innerHTML = html;
 }
 

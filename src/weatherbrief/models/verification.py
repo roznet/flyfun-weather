@@ -121,7 +121,6 @@ class WindAdvisoryStats(BaseModel):
 
     model: str
     accuracy_pct: float | None = None
-    sample_count: int = 0
 
 
 class MissedWarning(BaseModel):
@@ -132,18 +131,6 @@ class MissedWarning(BaseModel):
     model: str
     obs_wind_advisory: str
     model_wind_advisory: str
-
-
-class MAERow(BaseModel):
-    """Mean absolute error per model/days-out (web-only)."""
-
-    model: str
-    days_out: int
-    ceiling_mae_ft: float | None = None
-    visibility_mae_m: float | None = None
-    wind_speed_mae_kt: float | None = None
-    temperature_mae_c: float | None = None
-    sample_count: int = 0
 
 
 class VerificationDigestData(BaseModel):
@@ -157,4 +144,3 @@ class VerificationDigestData(BaseModel):
     category_bias: list[CategoryBiasStats] = Field(default_factory=list)
     wind_advisory: list[WindAdvisoryStats] = Field(default_factory=list)
     missed_warnings: list[MissedWarning] = Field(default_factory=list)
-    mae_stats: list[MAERow] = Field(default_factory=list)

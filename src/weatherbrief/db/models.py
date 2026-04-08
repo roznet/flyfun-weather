@@ -613,6 +613,28 @@ class VerificationMonthlyStatsRow(Base):
     n_convection_false_alarm: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class VerificationCacheRow(Base):
+    """Pre-computed API responses for verification dashboard and maps.
+
+    Rebuilt after each standalone verification cycle. API endpoints serve
+    cached JSON directly instead of running expensive aggregation queries.
+    A staleness check (source_max_time vs live MAX) guards against stale data.
+    """
+
+    __tablename__ = "verification_cache"
+    __table_args__ = (
+        UniqueConstraint("cache_key", name="uq_vcache_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cache_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_max_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    data_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class VerificationCycleRow(Base):
     """Performance metrics for each verification collection cycle.
 

@@ -44,10 +44,18 @@ def get_forecast_map(
         hour: UTC hour (6, 9, 12, 15, 18)
         mode: Consensus mode — "worst" (most restrictive) or "majority" (most common)
     """
+    from weatherbrief.tasks.cache_builder import get_cached
     from weatherbrief.tasks.map_queries import get_forecast_map_data
 
     if hour not in _SAMPLE_HOURS:
         hour = min(_SAMPLE_HOURS, key=lambda h: abs(h - hour))
+
+    # Try cache first (consensus mode "worst" is default/cached)
+    if mode == "worst":
+        cache_key = f"forecast_map:{day}:{hour}"
+        cached = get_cached(db, cache_key)
+        if cached is not None:
+            return cached
 
     now = datetime.now(timezone.utc)
     target_date = (now + timedelta(days=day)).date()
@@ -69,7 +77,16 @@ def get_verification_map(
     airports_db: str = Depends(_airports_db),
 ):
     """Return per-airport verification accuracy stats for the map."""
+    from weatherbrief.tasks.cache_builder import get_cached, is_stale
     from weatherbrief.tasks.map_queries import get_verification_map_data
+
+    # Try cache (only for days_out 0 and 1 which are pre-cached)
+    if days_out in (0, 1):
+        cache_key = f"verif_map:{model}:{days_out}:{period}"
+        if not is_stale(db, cache_key, "standalone"):
+            cached = get_cached(db, cache_key)
+            if cached is not None:
+                return cached
 
     now = datetime.now(timezone.utc)
     hours = {"7d": 168, "30d": 720}[period]

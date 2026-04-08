@@ -527,19 +527,6 @@ class TestVerificationStatsSourceFilter:
         assert flight_rows[0].sample_count == 1
         assert standalone_rows[0].sample_count == 1
 
-    def test_mae_filters_by_source(self, db_session):
-        from weatherbrief.tasks.verification_stats import get_mae_stats
-
-        self._insert_scores(db_session)
-        since = NOW - timedelta(hours=1)
-        until = NOW + timedelta(hours=1)
-
-        flight_mae = get_mae_stats(db_session, since, until, source="flight")
-        standalone_mae = get_mae_stats(db_session, since, until, source="standalone")
-
-        assert len(flight_mae) == 1
-        assert len(standalone_mae) == 1
-
     def test_activity_summary_cycles_filtered(self, db_session):
         from weatherbrief.tasks.verification_stats import get_activity_summary
 
