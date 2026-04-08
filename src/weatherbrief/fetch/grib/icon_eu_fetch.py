@@ -62,7 +62,7 @@ ICON_EU_MODEL_LEVEL_MAX = 74
 # "fi" (geopotential) is NOT available on model levels — only on pressure levels.
 # Geopotential height is instead derived from pressure via the hypsometric equation
 # in the sounding analysis (or omitted — not critical for core analysis).
-ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v")
+ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
 
 # Single-level cloud diagnostic variables
 ICON_EU_CLOUD_DIAG_VARIABLES = (

@@ -865,7 +865,7 @@ class TestIconEuDecode:
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
 
         # These are the vars the chunked decoder knows how to process
-        decoder_vars = {"qc", "qi", "clc", "p", "t", "qv", "u", "v"}
+        decoder_vars = {"qc", "qi", "clc", "p", "t", "qv", "u", "v", "w"}
         for var in ICON_EU_VARIABLES:
             assert var in decoder_vars, f"{var} not handled by chunked decoder"
 
@@ -882,6 +882,7 @@ class TestIconEuDecode:
             "raw_specific_humidity_kg_kg": 0.003,
             "raw_u_wind_m_s": 5.0,
             "raw_v_wind_m_s": -10.0,
+            "raw_w_m_s": -0.5,
         }
         result = _convert_raw_sounding(raw, 700)
         assert result["temperature_c"] is not None
@@ -889,6 +890,34 @@ class TestIconEuDecode:
         assert result["dewpoint_c"] is not None
         assert result["wind_speed_kt"] is not None
         assert result["wind_direction_deg"] is not None
+        # W (m/s) should be converted to omega (Pa/s)
+        assert "vertical_velocity_pa_s" in result
+        # Downward W (-0.5 m/s) → positive omega (subsidence)
+        assert result["vertical_velocity_pa_s"] > 0
+
+    def test_w_to_omega_conversion(self):
+        """Physical W (m/s) converts to omega (Pa/s) via -ρgw."""
+        from weatherbrief.fetch.grib.decode import _convert_raw_sounding
+
+        raw = {
+            "raw_temperature_k": 270.0,
+            "raw_w_m_s": 1.0,  # 1 m/s upward
+        }
+        result = _convert_raw_sounding(raw, 500)
+        # omega = -ρ·g·w = -(500*100 / (287.05*270)) * 9.80665 * 1.0
+        # ρ = 50000 / 77503.5 ≈ 0.6451, omega ≈ -6.33 Pa/s
+        assert "vertical_velocity_pa_s" in result
+        omega = result["vertical_velocity_pa_s"]
+        assert omega < 0, "Upward W should give negative omega"
+        assert abs(omega - (-6.33)) < 0.1
+
+    def test_w_conversion_without_temperature(self):
+        """W conversion requires temperature — should be skipped if missing."""
+        from weatherbrief.fetch.grib.decode import _convert_raw_sounding
+
+        raw = {"raw_w_m_s": 1.0}
+        result = _convert_raw_sounding(raw, 500)
+        assert "vertical_velocity_pa_s" not in result
 
     def test_icon_cloud_diag_field_map(self):
         """ICON cloud diagnostic field map has correct entries."""

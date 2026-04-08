@@ -53,6 +53,7 @@ _ICON_FULL_VAR_MAP = {
     "qv": "raw_specific_humidity_kg_kg",
     "u": "raw_u_wind_m_s",
     "v": "raw_v_wind_m_s",
+    "w": "raw_w_m_s",  # Physical vertical velocity (m/s, upward positive)
 }
 
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
@@ -720,6 +721,7 @@ def decode_icon_eu_per_point_chunked(
         ("qv", "raw_specific_humidity_kg_kg"),
         ("u", "raw_u_wind_m_s"),
         ("v", "raw_v_wind_m_s"),
+        ("w", "raw_w_m_s"),
     ):
         raw = var_bytes.get(var_name, b"")
         if not raw:
@@ -885,6 +887,7 @@ def decode_icon_eu_per_point(
             "cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg",
             "raw_temperature_k", "raw_specific_humidity_kg_kg",
             "raw_u_wind_m_s", "raw_v_wind_m_s",
+            "raw_w_m_s",
         )
         for field_key in _ICON_INTERP_FIELDS:
             field_data = point_level_data.get(field_key, {})
@@ -1253,6 +1256,14 @@ def _convert_raw_sounding(
             out["wind_direction_deg"] = (math.atan2(-u, -v) * 180.0 / math.pi) % 360.0
         else:
             out["wind_direction_deg"] = 0.0
+
+    # Physical vertical velocity (m/s, ICON) → omega (Pa/s)
+    # omega = -ρ·g·w, where ρ = P/(Rd·T_k)
+    w_ms = raw.get("raw_w_m_s")
+    if w_ms is not None and t_k is not None:
+        _Rd = 287.05  # J/(kg·K), specific gas constant for dry air
+        rho = (pressure_hpa * 100.0) / (_Rd * t_k)
+        out["vertical_velocity_pa_s"] = -rho * _G * w_ms
 
     return out
 
