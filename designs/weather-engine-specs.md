@@ -49,13 +49,17 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Currently fetching:** CLMR, ICMR at all pressure levels; cloud diagnostics (LCC/MCC/HCC/TCC covers, PRES bases/tops, TMP cloud-top temps, GH ceiling)
 - **Available but not yet used:** TMP, HGT, UGRD, VGRD, VVEL, RH (could replace Open-Meteo entirely)
 
-### B. ECMWF (IFS HRES - Open Data) — FUTURE
-- **Bucket:** `s3://ecmwf-forecasts/`
-- **Path:** `/{YYYYMMDD}/{HH}z/0p4-beta/oper/{YYYYMMDD}{HH}0000-{FFF}h-oper-fc.grib2`
-- **Resolution:** 0.4° (~40km)
-- **Challenge:** No `.idx` files — would need to download full GRIB2 or use ecCodes filtering
-- **Missing:** Vertical velocity (ω) often absent in open data; derivable from divergence
-- **Value:** CLWMR equivalent for cross-model icing comparison
+### B. ECMWF IFS (Commercial via ECPDS) — IMPLEMENTED
+- **Delivery:** ECPDS push to local directory (`ECMWF_GRIB_DIR`, default `/data/ecmwf`). Read-only Docker volume mount.
+- **Model:** ifs-ens-cf (IFS Ensemble Control Forecast), 0.25° over Europe
+- **Files:** Two parts per forecast step — a1 (surface, 29 vars) and a2 (pressure levels, 10 vars × 25 levels)
+- **Cycles:** 00z/12z (oper stream, 0–192h), 06z/18z (scda stream, 0–144h)
+- **Publication delay:** ~6–8h after init time
+- **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default
+- **Currently enriching:** clwc/ciwc/cc (cloud liquid water, ice content, cloud cover per level), ceil/cbh/lcc/mcc/hcc/tcc (surface cloud diagnostics)
+- **Available for full sounding (future):** t, r, u, v, z, w, d at 25 pressure levels
+- **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point
+- **No HTTP, no cache** — local disk I/O, no byte-range download needed
 
 ### C. DWD ICON-EU (Regional Europe) — IMPLEMENTED
 - **Server:** `https://opendata.dwd.de/weather/nwp/icon-eu/grib/`

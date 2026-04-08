@@ -546,8 +546,8 @@ Sounding-derived cloud layers are mapped to ICAO bands (low < 6500ft, mid 6500�
 | Freezing level for ECMWF/MétéoFr/GEM | Not in API | Derived via linear interpolation of T profile through 0°C |
 | Precipitation probability | Requires ensemble spread data | Only available from GFS and ECMWF |
 | Stratiform vs. convective cloud split | Not in any Open-Meteo API | Must approximate for Ogimet icing index (see §4.4) |
-| CLWMR/ICMR for ECMWF/MétéoFr/UKMO/GEM | No GRIB2 enrichment implemented for these models | SFIP uses proxy variant; precipitation phase uses wet-bulb only |
-| Cloud diagnostics for ECMWF/MétéoFr/UKMO/GEM | No GRIB2 cloud diagnostic enrichment for these models | No NWP-native cloud base/top/ceiling. GFS has full diagnostics; ICON-EU has ceiling + convective base/top. |
+| CLWMR/ICMR for MétéoFr/UKMO/GEM | No GRIB2 enrichment implemented for these models | SFIP uses proxy variant; precipitation phase uses wet-bulb only |
+| Cloud diagnostics for MétéoFr/UKMO/GEM | No GRIB2 cloud diagnostic enrichment for these models | No NWP-native cloud base/top/ceiling. GFS has full diagnostics; ICON-EU has ceiling + convective base/top; ECMWF has ceil/cbh/cloud covers via ECPDS GRIB. |
 
 ### 4.4 Approximating Cloud Type Split for Icing Index
 
