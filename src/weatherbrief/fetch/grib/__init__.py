@@ -286,11 +286,11 @@ def _enrich_ecmwf(
                 if not cov:
                     pl_data[i] = {}
 
-            merged = _merge_cloud_water_into_sections(
+            replaced = _replace_ecmwf_pressure_levels(
                 ecmwf_sections, all_forecasts, route_points,
-                pl_data, "ecmwf", valid_utc=valid_time,
+                pl_data, valid_utc=valid_time,
             )
-            if merged > 0:
+            if replaced > 0:
                 enriched_steps += 1
 
         # Decode surface diagnostics (a1)
@@ -309,7 +309,7 @@ def _enrich_ecmwf(
 
     if enriched_steps > 0:
         logger.info(
-            "ECMWF GRIB enrichment applied (%d steps, base %s)",
+            "ECMWF GRIB full sounding replacement applied (%d steps, base %s)",
             enriched_steps, latest_bt.isoformat(),
         )
         return int(latest_bt.timestamp())
@@ -575,6 +575,65 @@ def _apply_cloud_diagnostics_to_sections(
             _apply_cloud_diagnostics(hourly, diag)
 
     return enriched_count
+
+
+def _replace_ecmwf_pressure_levels(
+    sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    decoded_points: list[dict[int, dict[str, float]]],
+    valid_utc: datetime | None = None,
+) -> int:
+    """Replace pressure_levels on ECMWF hourly forecasts with full GRIB sounding.
+
+    Unlike _merge_cloud_water_into_sections which patches individual fields
+    onto existing levels, this builds complete PressureLevelData objects from
+    the GRIB data and replaces the entire pressure_levels list.
+
+    Returns:
+        Number of hourly entries whose pressure levels were replaced.
+    """
+    from weatherbrief.fetch.grib.decode import build_ecmwf_pressure_levels
+
+    replaced_count = 0
+    for cs in sections:
+        for point_idx, wf in enumerate(cs.point_forecasts):
+            if point_idx >= len(decoded_points):
+                break
+            point_data = decoded_points[point_idx]
+            if not point_data:
+                continue
+
+            for hourly in wf.hourly:
+                if not _matches_valid_time(hourly.time, valid_utc):
+                    continue
+                new_levels = build_ecmwf_pressure_levels(point_data)
+                if new_levels:
+                    hourly.pressure_levels = new_levels
+                    replaced_count += 1
+
+    # Also replace for waypoint-only forecasts
+    wp_data_lookup: dict[str, dict[int, dict[str, float]]] = {}
+    for rp, pd in zip(route_points, decoded_points):
+        if rp.waypoint_icao and pd:
+            wp_data_lookup[rp.waypoint_icao] = pd
+
+    for wf in all_forecasts:
+        if wf.model != ModelSource.ECMWF:
+            continue
+        point_data = wp_data_lookup.get(wf.waypoint.icao)
+        if not point_data:
+            continue
+        for hourly in wf.hourly:
+            if not _matches_valid_time(hourly.time, valid_utc):
+                continue
+            new_levels = build_ecmwf_pressure_levels(point_data)
+            if new_levels:
+                hourly.pressure_levels = new_levels
+                replaced_count += 1
+
+    return replaced_count
+
 
 
 

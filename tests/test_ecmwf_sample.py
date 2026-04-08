@@ -638,6 +638,12 @@ class TestECMWFDecode:
         assert "cloud_liquid_water_kg_kg" in fields_700
         assert "ice_mixing_ratio_kg_kg" in fields_700
         assert "cloud_area_fraction_pct" in fields_700
+        # Full sounding fields (Phase 3)
+        assert "raw_temperature_k" in fields_700
+        assert "raw_relative_humidity_pct" in fields_700 or "raw_specific_humidity_kg_kg" in fields_700
+        assert "raw_u_wind_m_s" in fields_700
+        assert "raw_v_wind_m_s" in fields_700
+        # Note: geopotential (z/gh) may not be in all ECMWF orders
 
     def test_pressure_decode_uncovered_point(self):
         """A point outside all grids returns no data."""
@@ -718,6 +724,34 @@ class TestECMWFDecode:
         assert covered[0] and not covered[1]
         assert len(data[0]) == 25
         assert len(data[1]) == 0
+
+    def test_build_pressure_levels_from_sample(self):
+        """Build complete PressureLevelData objects from a real a2 file."""
+        from weatherbrief.fetch.grib.decode import (
+            build_ecmwf_pressure_levels,
+            decode_ecmwf_pressure_per_point,
+        )
+
+        a2 = self._find_a2_file()
+        if a2 is None:
+            pytest.skip("No a2 file found")
+
+        data, covered = decode_ecmwf_pressure_per_point(a2, [48.0], [11.5])
+        assert covered[0]
+
+        levels = build_ecmwf_pressure_levels(data[0])
+        assert len(levels) == 25
+
+        # Verify all key fields are populated on a mid-level
+        mid = next((pl for pl in levels if pl.pressure_hpa == 700), None)
+        assert mid is not None
+        assert mid.temperature_c is not None
+        assert mid.wind_speed_kt is not None
+        assert mid.cloud_liquid_water_kg_kg is not None
+
+        # Sorted descending
+        pressures = [pl.pressure_hpa for pl in levels]
+        assert pressures == sorted(pressures, reverse=True)
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,19 @@ _VAR_MAP = {
     "cc": "cloud_area_fraction_pct",      # ECMWF IFS cloud cover (0–1 fraction, ×100 in decode)
 }
 
+# Extended variable map for ECMWF full sounding replacement (Phase 3).
+# raw_ prefix indicates unit conversion is needed before building PressureLevelData.
+_ECMWF_FULL_VAR_MAP = {
+    **_VAR_MAP,
+    "t": "raw_temperature_k",
+    "r": "raw_relative_humidity_pct",
+    "q": "raw_specific_humidity_kg_kg",
+    "u": "raw_u_wind_m_s",
+    "v": "raw_v_wind_m_s",
+    "z": "raw_geopotential_m2_s2",
+    "w": "vertical_velocity_pa_s",
+}
+
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
 # cfgrib uses avg_ prefix for time-averaged stepType variables.
 # Field names use a flat namespace for build_cloud_diagnostics().
@@ -248,24 +261,27 @@ def _decode_pressure_vars_from_datasets(
     latitudes: list[float],
     longitudes: list[float],
     *,
+    var_map: dict[str, str] | None = None,
     frac_vars: set[str] | None = None,
     first_wins: bool = False,
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
     """Shared decode loop for pressure-level GRIB datasets.
 
-    Iterates datasets, maps variable names via _VAR_MAP, finds the pressure
+    Iterates datasets, maps variable names via var_map, finds the pressure
     coordinate, interpolates per point, and stores results.
 
     Args:
         datasets: cfgrib-opened xarray Datasets.
         latitudes: Route-point latitudes.
         longitudes: Route-point longitudes (already in the grid's convention).
+        var_map: GRIB shortName → field name mapping. Defaults to _VAR_MAP.
         frac_vars: Variable names (lowercase) that are 0–1 fractions needing ×100.
         first_wins: If True, skip a field at a level if already set (multi-grid).
 
     Returns:
         Tuple of (per-point results, coverage mask).
     """
+    active_map = var_map if var_map is not None else _VAR_MAP
     frac_vars = frac_vars or set()
     n_points = len(latitudes)
     results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
@@ -274,7 +290,7 @@ def _decode_pressure_vars_from_datasets(
     for ds in datasets:
         for var_name, xr_var in ds.data_vars.items():
             var_lower = str(var_name).lower()
-            field_name = _VAR_MAP.get(var_lower)
+            field_name = active_map.get(var_lower)
             if field_name is None:
                 continue
 
@@ -1134,6 +1150,7 @@ def decode_ecmwf_pressure_per_point(
     try:
         results, covered = _decode_pressure_vars_from_datasets(
             datasets, latitudes, longitudes,
+            var_map=_ECMWF_FULL_VAR_MAP,
             frac_vars=_ECMWF_FRAC_TO_PCT,
             first_wins=True,
         )
@@ -1144,6 +1161,98 @@ def decode_ecmwf_pressure_per_point(
     finally:
         for ds in datasets:
             ds.close()
+
+
+_G = 9.80665  # gravitational acceleration (m/s²)
+_KT_PER_MS = 1.94384  # knots per m/s
+
+
+def _convert_raw_sounding(
+    raw: dict[str, float],
+    pressure_hpa: int,
+) -> dict[str, float]:
+    """Convert raw GRIB sounding fields to PressureLevelData units.
+
+    Input keys use raw_ prefix from _ECMWF_FULL_VAR_MAP.
+    Output keys match PressureLevelData field names.
+    """
+    import math
+
+    out: dict[str, float] = {}
+
+    # Pass through fields that need no conversion
+    for key in ("cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg",
+                "cloud_area_fraction_pct", "vertical_velocity_pa_s"):
+        if key in raw:
+            out[key] = raw[key]
+
+    # Temperature: K → °C
+    t_k = raw.get("raw_temperature_k")
+    if t_k is not None:
+        out["temperature_c"] = t_k - 273.15
+
+    # Relative humidity
+    rh = raw.get("raw_relative_humidity_pct")
+    if rh is None:
+        # Fallback: derive RH from specific humidity + T + P
+        q = raw.get("raw_specific_humidity_kg_kg")
+        if q is not None and t_k is not None:
+            # Saturation vapor pressure (Magnus formula, hPa)
+            t_c = t_k - 273.15
+            e_sat = 6.112 * math.exp(17.67 * t_c / (t_c + 243.5))
+            # Mixing ratio from specific humidity
+            w = q / (1.0 - q) if q < 1.0 else q
+            # Saturation mixing ratio
+            w_sat = 0.622 * e_sat / (pressure_hpa - e_sat) if pressure_hpa > e_sat else 1.0
+            rh = min(100.0, max(0.0, (w / w_sat) * 100.0)) if w_sat > 0 else 0.0
+    if rh is not None:
+        out["relative_humidity_pct"] = rh
+
+    # Dewpoint from T + RH (Magnus formula)
+    if out.get("temperature_c") is not None and out.get("relative_humidity_pct") is not None:
+        t_c = out["temperature_c"]
+        rh_val = max(out["relative_humidity_pct"], 0.1)  # avoid log(0)
+        a, b = 17.67, 243.5
+        gamma = a * t_c / (b + t_c) + math.log(rh_val / 100.0)
+        out["dewpoint_c"] = b * gamma / (a - gamma)
+
+    # Geopotential → height
+    z = raw.get("raw_geopotential_m2_s2")
+    if z is not None:
+        out["geopotential_height_m"] = z / _G
+
+    # Wind u, v → speed (kt) and direction (deg)
+    u = raw.get("raw_u_wind_m_s")
+    v = raw.get("raw_v_wind_m_s")
+    if u is not None and v is not None:
+        speed_ms = math.sqrt(u * u + v * v)
+        out["wind_speed_kt"] = speed_ms * _KT_PER_MS
+        if speed_ms > 0.01:
+            out["wind_direction_deg"] = (math.atan2(-u, -v) * 180.0 / math.pi) % 360.0
+        else:
+            out["wind_direction_deg"] = 0.0
+
+    return out
+
+
+def build_ecmwf_pressure_levels(
+    point_data: dict[int, dict[str, float]],
+) -> list:
+    """Build PressureLevelData objects from decoded ECMWF GRIB data.
+
+    Converts raw GRIB fields (temperature in K, wind in m/s, geopotential
+    in m²/s²) to PressureLevelData units and returns a sorted list (highest
+    pressure / lowest altitude first).
+    """
+    from weatherbrief.models.analysis import PressureLevelData
+
+    levels = []
+    for p_hpa, raw_fields in sorted(point_data.items(), reverse=True):
+        converted = _convert_raw_sounding(raw_fields, p_hpa)
+        if not converted:
+            continue
+        levels.append(PressureLevelData(pressure_hpa=p_hpa, **converted))
+    return levels
 
 
 def decode_ecmwf_surface_per_point(

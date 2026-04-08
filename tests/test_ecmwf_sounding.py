@@ -1,0 +1,153 @@
+"""Tests for ECMWF GRIB full sounding conversion and pressure level replacement."""
+
+from __future__ import annotations
+
+import math
+
+import pytest
+
+from weatherbrief.fetch.grib.decode import (
+    _convert_raw_sounding,
+    build_ecmwf_pressure_levels,
+)
+
+
+class TestConvertRawSounding:
+    """Unit tests for _convert_raw_sounding()."""
+
+    def test_temperature_k_to_c(self):
+        result = _convert_raw_sounding({"raw_temperature_k": 273.15}, 850)
+        assert result["temperature_c"] == pytest.approx(0.0)
+
+        result = _convert_raw_sounding({"raw_temperature_k": 300.0}, 850)
+        assert result["temperature_c"] == pytest.approx(26.85)
+
+    def test_geopotential_to_height(self):
+        result = _convert_raw_sounding({"raw_geopotential_m2_s2": 9806.65}, 850)
+        assert result["geopotential_height_m"] == pytest.approx(1000.0)
+
+    def test_wind_north(self):
+        """Pure northerly wind: u=0, v=-10 → direction=360 (or 0)."""
+        result = _convert_raw_sounding(
+            {"raw_u_wind_m_s": 0.0, "raw_v_wind_m_s": -10.0}, 500,
+        )
+        assert result["wind_speed_kt"] == pytest.approx(10.0 * 1.94384)
+        assert result["wind_direction_deg"] == pytest.approx(360.0, abs=0.1) or \
+               result["wind_direction_deg"] == pytest.approx(0.0, abs=0.1)
+
+    def test_wind_west(self):
+        """Pure westerly wind (from west): u=+10, v=0 → direction=270."""
+        result = _convert_raw_sounding(
+            {"raw_u_wind_m_s": 10.0, "raw_v_wind_m_s": 0.0}, 500,
+        )
+        assert result["wind_direction_deg"] == pytest.approx(270.0, abs=0.1)
+
+    def test_wind_south(self):
+        """Pure southerly wind: u=0, v=10 → direction=180."""
+        result = _convert_raw_sounding(
+            {"raw_u_wind_m_s": 0.0, "raw_v_wind_m_s": 10.0}, 500,
+        )
+        assert result["wind_direction_deg"] == pytest.approx(180.0, abs=0.1)
+
+    def test_wind_calm(self):
+        result = _convert_raw_sounding(
+            {"raw_u_wind_m_s": 0.0, "raw_v_wind_m_s": 0.0}, 500,
+        )
+        assert result["wind_speed_kt"] == pytest.approx(0.0)
+        assert result["wind_direction_deg"] == 0.0
+
+    def test_relative_humidity_passthrough(self):
+        result = _convert_raw_sounding({"raw_relative_humidity_pct": 75.0}, 850)
+        assert result["relative_humidity_pct"] == 75.0
+
+    def test_dewpoint_from_t_and_rh(self):
+        result = _convert_raw_sounding(
+            {"raw_temperature_k": 293.15, "raw_relative_humidity_pct": 50.0}, 850,
+        )
+        # 20°C at 50% RH → dewpoint ~9.3°C
+        assert "dewpoint_c" in result
+        assert 8.0 < result["dewpoint_c"] < 11.0
+
+    def test_rh_from_specific_humidity(self):
+        """When r is absent, derive RH from q + T + P."""
+        result = _convert_raw_sounding(
+            {"raw_temperature_k": 293.15, "raw_specific_humidity_kg_kg": 0.007}, 1000,
+        )
+        assert "relative_humidity_pct" in result
+        assert 0 < result["relative_humidity_pct"] <= 100
+
+    def test_vertical_velocity_passthrough(self):
+        result = _convert_raw_sounding({"vertical_velocity_pa_s": -0.5}, 500)
+        assert result["vertical_velocity_pa_s"] == -0.5
+
+    def test_cloud_water_passthrough(self):
+        result = _convert_raw_sounding(
+            {"cloud_liquid_water_kg_kg": 1e-4, "ice_mixing_ratio_kg_kg": 2e-5}, 700,
+        )
+        assert result["cloud_liquid_water_kg_kg"] == 1e-4
+        assert result["ice_mixing_ratio_kg_kg"] == 2e-5
+
+    def test_empty_input(self):
+        result = _convert_raw_sounding({}, 500)
+        assert result == {}
+
+
+class TestBuildEcmwfPressureLevels:
+    """Unit tests for build_ecmwf_pressure_levels()."""
+
+    def _make_raw_level(self, t_k: float = 280.0, rh: float = 60.0) -> dict[str, float]:
+        return {
+            "raw_temperature_k": t_k,
+            "raw_relative_humidity_pct": rh,
+            "raw_u_wind_m_s": 5.0,
+            "raw_v_wind_m_s": -10.0,
+            "raw_geopotential_m2_s2": 15000.0,
+            "vertical_velocity_pa_s": -0.1,
+            "cloud_liquid_water_kg_kg": 1e-5,
+            "ice_mixing_ratio_kg_kg": 2e-6,
+            "cloud_area_fraction_pct": 30.0,
+        }
+
+    def test_builds_correct_count(self):
+        point_data = {p: self._make_raw_level() for p in [1000, 850, 700, 500, 300]}
+        levels = build_ecmwf_pressure_levels(point_data)
+        assert len(levels) == 5
+
+    def test_sorted_descending_pressure(self):
+        point_data = {p: self._make_raw_level() for p in [300, 700, 1000, 500, 850]}
+        levels = build_ecmwf_pressure_levels(point_data)
+        pressures = [pl.pressure_hpa for pl in levels]
+        assert pressures == [1000, 850, 700, 500, 300]
+
+    def test_all_fields_populated(self):
+        point_data = {850: self._make_raw_level()}
+        levels = build_ecmwf_pressure_levels(point_data)
+        pl = levels[0]
+        assert pl.pressure_hpa == 850
+        assert pl.temperature_c is not None
+        assert pl.relative_humidity_pct is not None
+        assert pl.dewpoint_c is not None
+        assert pl.wind_speed_kt is not None
+        assert pl.wind_direction_deg is not None
+        assert pl.geopotential_height_m is not None
+        assert pl.vertical_velocity_pa_s is not None
+        assert pl.cloud_liquid_water_kg_kg is not None
+        assert pl.ice_mixing_ratio_kg_kg is not None
+        assert pl.cloud_area_fraction_pct is not None
+
+    def test_empty_point_data(self):
+        levels = build_ecmwf_pressure_levels({})
+        assert levels == []
+
+    def test_25_levels(self):
+        """Simulate a realistic 25-level ECMWF sounding."""
+        ecmwf_levels = [
+            1000, 925, 850, 700, 600, 500, 400, 300, 250, 200,
+            150, 100, 50, 975, 950, 900, 875, 825, 800, 775,
+            750, 725, 675, 650, 625,
+        ]
+        point_data = {p: self._make_raw_level() for p in ecmwf_levels}
+        levels = build_ecmwf_pressure_levels(point_data)
+        assert len(levels) == 25
+        pressures = [pl.pressure_hpa for pl in levels]
+        assert pressures == sorted(ecmwf_levels, reverse=True)

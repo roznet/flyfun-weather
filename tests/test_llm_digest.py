@@ -11,9 +11,7 @@ from weatherbrief.digest.llm_config import DigestConfig
 from weatherbrief.digest.llm_digest import (
     DigestState,
     WeatherDigest,
-    assemble_context_node,
     build_digest_graph,
-    fetch_text_node,
     format_digest_markdown,
     run_digest,
 )
@@ -98,49 +96,6 @@ def test_format_digest_assessment_icons(sample_digest, sample_route):
     red_digest = sample_digest.model_copy(update={"assessment": "RED"})
     text = format_digest_markdown(red_digest, snapshot)
     assert "\U0001f534" in text  # red circle
-
-
-@patch("weatherbrief.digest.llm_digest.fetch_text_forecasts")
-def test_fetch_text_node_success(mock_fetch, minimal_snapshot):
-    """fetch_text_node returns text forecasts on success."""
-    from weatherbrief.fetch.text_forecasts import (
-        ForecastRegion,
-        TextForecastEntry,
-        TextForecasts,
-    )
-
-    mock_fetch.return_value = TextForecasts(
-        region=ForecastRegion.EUROPE,
-        source_label="DWD Synoptic Overview",
-        language_note="German — translate relevant content",
-        entries=[TextForecastEntry(label="Kurzfrist", text="Test short")],
-        fetched_at=datetime(2026, 2, 10, 12, 0, 0, tzinfo=timezone.utc),
-    )
-
-    result = fetch_text_node({"snapshot": minimal_snapshot})
-    assert result["text_forecasts"].entries[0].text == "Test short"
-
-
-@patch("weatherbrief.digest.llm_digest.fetch_text_forecasts")
-def test_fetch_text_node_failure(mock_fetch, minimal_snapshot):
-    """fetch_text_node returns None on failure."""
-    mock_fetch.side_effect = Exception("Fetch failed")
-
-    result = fetch_text_node({"snapshot": minimal_snapshot})
-    assert result["text_forecasts"] is None
-
-
-def test_assemble_context_node(minimal_snapshot):
-    """assemble_context_node produces a non-empty context string."""
-    target_time = datetime(2026, 2, 17, 9, 0, 0)
-    state: DigestState = {
-        "snapshot": minimal_snapshot,
-        "target_time": target_time,
-    }
-    result = assemble_context_node(state)
-    assert "context" in result
-    assert len(result["context"]) > 0
-    assert "EGTK" in result["context"]
 
 
 @patch("weatherbrief.digest.llm_digest.create_llm")
