@@ -1,18 +1,84 @@
 # Raw GRIB2 Weather Engine
 
-> Direct GRIB2 fetch from cloud storage to enrich Open-Meteo data with variables it doesn't provide
+> Direct GRIB2 fetch to enrich or replace Open-Meteo data with higher-resolution variables
 
 ## Intent
 
-Open-Meteo provides a convenient API but lacks key variables like **Cloud Liquid Water Mixing Ratio (CLWMR)** and **Ice Mixing Ratio (ICMR)** that directly measure supercooled water in clouds. By fetching raw GRIB2 data from public S3 buckets, we get these variables for much more accurate icing assessment.
+Open-Meteo provides a convenient API but lacks key variables (cloud liquid water, ice mixing ratio, cloud area fraction) and has limited pressure levels (13 for ECMWF, 19 for ICON). By fetching raw GRIB2 data, we get:
+- **Cloud microphysics** (CLWMR/ICMR/cloud fraction) for accurate icing assessment
+- **Full sounding replacement** (ECMWF: 25 levels, ICON: 40 model levels) for higher-resolution cross-sections
+- **Cloud diagnostics** (ceiling, layer covers, convective base/top) for NWP-based cloud analysis
 
-The GRIB2 engine is an **enrichment layer** — it supplements Open-Meteo, not replaces it. Open-Meteo remains the primary data source for temperature, wind, humidity, cloud cover, etc.
+The enrichment strategy differs by model:
+- **GFS:** Open-Meteo is primary (28 levels); GRIB **patches** cloud microphysics + diagnostics onto existing levels
+- **ECMWF/ICON:** GRIB **replaces the entire pressure-level sounding** with higher-resolution data; Open-Meteo provides surface fields only
+
+## Field Attribution Matrix
+
+### Raw NWP Fields (`PressureLevelData`) — Source by Model
+
+| Field | GFS | ECMWF | ICON |
+|-------|-----|-------|------|
+| **pressure_hpa** | Open-Meteo (28 lvls) | GRIB (25 lvls) | GRIB (interpolated from 40 model lvls) |
+| **temperature_c** | Open-Meteo | GRIB (`t`, K→°C) | GRIB (`t`, K→°C) |
+| **relative_humidity_pct** | Open-Meteo | GRIB (`r`) | GRIB (derived from `qv`+T+P) |
+| **dewpoint_c** | Open-Meteo | GRIB (derived from T+RH) | GRIB (derived from T+RH) |
+| **wind_speed_kt** | Open-Meteo | GRIB (`u`,`v` → speed) | GRIB (`u`,`v` → speed) |
+| **wind_direction_deg** | Open-Meteo | GRIB (`u`,`v` → dir) | GRIB (`u`,`v` → dir) |
+| **geopotential_height_m** | Open-Meteo | GRIB (`z` ÷ 9.80665) | **None** — not on ICON model levels |
+| **vertical_velocity_pa_s** | Open-Meteo | GRIB (`w`) | **None** — not currently fetched |
+| **cloud_liquid_water_kg_kg** | GRIB (`CLMR` patch) | GRIB (`clwc`) | GRIB (`qc`) |
+| **ice_mixing_ratio_kg_kg** | GRIB (`ICMR` patch) | GRIB (`ciwc`) | GRIB (`qi`) |
+| **cloud_area_fraction_pct** | — | GRIB (`cc`, 0–1→%) | GRIB (`clc`, already %) |
+
+### Derived Level Fields (`DerivedLevel`) — Computed in Sounding Analysis
+
+All models share the same computation pipeline; inputs vary by what the raw data provides.
+
+| Field | Computed from |
+|-------|--------------|
+| **altitude_ft** | geopotential_height_m, or std atmosphere fallback if missing |
+| **wet_bulb_c** | T + Td via MetPy |
+| **dewpoint_depression_c** | T − Td |
+| **theta_e_k** | T + Td + P via MetPy |
+| **lapse_rate_c_per_km** | ΔT/Δz between adjacent levels |
+| **omega_pa_s / w_fpm** | vertical_velocity_pa_s → ft/min via MetPy |
+| **richardson_number** | N²/S² (Brunt-Väisälä / wind shear²) |
+| **bv_freq_squared_per_s2** | (g/θ)(dθ/dz) |
+| **cloud_liquid_water_g_m3** | CLW × ρ_air × 1000 |
+| **cloud_liquid_water_g_kg** | CLW × 1000 |
+| **ice_mixing_ratio_g_kg** | ICE × 1000 |
+| **icing_index** (Ogimet-DD) | T curve × DD attenuation |
+| **icing_index_nwp** (Ogimet-NWP) | T curve × cloud_fraction × glaciation(CLW, ICE) |
+| **sfip_raw/100/severity** | Fuzzy logic: T + RH + CLW (or proxy) + omega |
+| **precip_phase** | Wet-bulb thresholds + warm-nose detection |
+
+### Surface Cloud Diagnostics (`NWPCloudDiagnostics`) — Source by Model
+
+| Field | GFS | ECMWF | ICON |
+|-------|-----|-------|------|
+| **ceiling_ft** | GRIB (GH) | GRIB (`ceil`, m→ft) | GRIB (`ceiling`, m→ft) |
+| **low.cover_pct** | GRIB (LCDC) | GRIB (`lcc`) | GRIB (`clcl`) |
+| **mid.cover_pct** | GRIB (MCDC) | GRIB (`mcc`) | GRIB (`clcm`) |
+| **high.cover_pct** | GRIB (HCDC) | **Gap** — `hcc` not in ECMWF order | GRIB (`clch`) |
+| **total_cover_pct** | GRIB (TCDC) | GRIB (`tcc`) | GRIB (`clct`) |
+| **convective base/top** | GRIB | — | GRIB (`hbas_con`, `htop_con`) |
+| **boundary_cover_pct** | GRIB | — | — |
+
+### Known Gaps
+
+| Gap | Model | Impact |
+|-----|-------|--------|
+| `hcc` (high cloud cover) | ECMWF | Not in commercial order — cloud diagnostics incomplete |
+| `geopotential_height_m` | ICON | Not on model levels → altitude uses std atmosphere fallback |
+| `vertical_velocity_pa_s` | ICON | Not fetched → no omega/w_fpm, SFIP uses proxy weights |
+| Surface vars (2t, 10u, CAPE, vis…) | ECMWF | 23 delivered vars not yet processed — still using Open-Meteo |
 
 ## What's Implemented
 
 ### GFS GRIB2 enrichment
 Via `fetch/grib/` (gfs_idx.py, grib_fetch.py, decode.py):
-- **Pressure-level variables:** CLMR (Cloud Liquid Water Mixing Ratio), ICMR (Ice Mixing Ratio) at all pressure levels
+- **Pressure-level variables:** CLMR (Cloud Liquid Water Mixing Ratio), ICMR (Ice Mixing Ratio) at all pressure levels — **patched onto existing Open-Meteo levels**
 - **Cloud diagnostics:** LCC/MCC/HCC/TCC (cloud cover by layer), PRES (cloud base/top per layer), TMP (cloud top temperatures), GH (cloud ceiling). Decoded into `NWPCloudDiagnostics` model.
 - Source: `noaa-gfs-bdp-pds.s3.amazonaws.com` (public, no auth)
 - Uses `.idx` companion files for HTTP Range byte-range downloads (only fetches needed messages)
@@ -20,18 +86,24 @@ Via `fetch/grib/` (gfs_idx.py, grib_fetch.py, decode.py):
 - Bilinear spatial interpolation to route points via cfgrib + xarray
 - Disk cache with 48h TTL at `data/.cache/grib/gfs/{date}_{cycle}z/`
 
+### ECMWF IFS GRIB2 enrichment
+Via `fetch/grib/` (ecmwf_fetch.py, decode.py):
+- **Full sounding replacement** — pressure levels (a2 files): t, r, u, v, z, w, d, cc, clwc, ciwc at 25 levels. **Replaces entire `pressure_levels` list**, discarding Open-Meteo levels.
+- **Cloud diagnostics** — surface (a1 files): ceil, cbh, lcc, mcc, tcc → `NWPCloudDiagnostics`
+- Source: ECPDS push delivery to local directory (`ECMWF_GRIB_DIR`)
+- No HTTP, no cache — local disk I/O
+- Unit conversions: K→°C, m²/s²→m (geopotential), 0–1→% (cloud fractions), m/s→kt (wind)
+
 ### ICON-EU GRIB2 enrichment
-Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py):
-- Variables: QC → `cloud_liquid_water_kg_kg`, QI → `ice_mixing_ratio_kg_kg`
+Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py, decode.py):
+- **Full sounding replacement** — model levels 35–74: t, qv, u, v, qc, qi, clc, p. Log-pressure interpolated to standard pressure levels. **Replaces entire `pressure_levels` list**.
+- **Cloud diagnostics** — single-level: ceiling, hbas_con, htop_con, clcl, clcm, clch, clct → `NWPCloudDiagnostics`
 - Source: `opendata.dwd.de/weather/nwp/icon-eu/grib/` (public, no auth)
-- Individual bz2-compressed files per variable/level/timestep (no .idx files)
-- Data on model levels (35–74) with P field for vertical interpolation
-- Log-pressure interpolation from model levels to ICON pressure levels (1000–300 hPa)
+- Individual bz2-compressed files per variable/level/timestep
 - Parallel download with ThreadPoolExecutor (8 workers)
 - Domain: 29.5–70.5°N, 23.5°W–62.5°E (Europe) — routes outside skip silently
 - Cycles: every 3h (00–21z), ~3h publication delay
 - Disk cache at `data/.cache/grib/icon-eu/{date}_{cycle}z/`
-- Download volume: ~240 files (~115 MB) per 2 bracketing forecast hours
 
 See [fetch.md](./fetch.md) for implementation details.
 
@@ -49,19 +121,21 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Currently fetching:** CLMR, ICMR at all pressure levels; cloud diagnostics (LCC/MCC/HCC/TCC covers, PRES bases/tops, TMP cloud-top temps, GH ceiling)
 - **Available but not yet used:** TMP, HGT, UGRD, VGRD, VVEL, RH (could replace Open-Meteo entirely)
 
-### B. ECMWF IFS (Commercial via ECPDS) — IMPLEMENTED
+### B. ECMWF IFS (Commercial via ECPDS) — IMPLEMENTED (full sounding)
 - **Delivery:** ECPDS push to local directory (`ECMWF_GRIB_DIR`, default `/data/ecmwf`). Read-only Docker volume mount.
 - **Model:** ifs-ens-cf (IFS Ensemble Control Forecast), 0.25° over Europe
 - **Files:** Two parts per forecast step — a1 (surface, 29 vars) and a2 (pressure levels, 10 vars × 25 levels)
 - **Cycles:** 00z/12z (oper stream, 0–192h), 06z/18z (scda stream, 0–144h)
 - **Publication delay:** ~6–8h after init time
 - **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default
-- **Currently enriching:** clwc/ciwc/cc (cloud liquid water, ice content, cloud cover per level), ceil/cbh/lcc/mcc/hcc/tcc (surface cloud diagnostics)
-- **Available for full sounding (future):** t, r, u, v, z, w, d at 25 pressure levels
+- **Pressure-level (a2):** t, r, u, v, z, w, d, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely)
+- **Surface (a1) — processed:** ceil, cbh, lcc, mcc, tcc → `NWPCloudDiagnostics`
+- **Surface (a1) — delivered but not yet processed:** 10fg, 10u, 10v, 2d, 2t, blh, capes, cp, deg0l, degm10l, fzra, hcct, kx, lsp, mlcape100, mlcin100, msl, mucape, ptype, sf, sp, totalx, tp, vis
+- **Gap:** `hcc` (high cloud cover) was not included in the order — `hcct` in delivery is "height of convective cloud top", not high cloud cover
 - **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point
 - **No HTTP, no cache** — local disk I/O, no byte-range download needed
 
-### C. DWD ICON-EU (Regional Europe) — IMPLEMENTED
+### C. DWD ICON-EU (Regional Europe) — IMPLEMENTED (full sounding)
 - **Server:** `https://opendata.dwd.de/weather/nwp/icon-eu/grib/`
 - **Model-level path:** `{HH}/{var}/icon-eu_europe_regular-lat-lon_model-level_{YYYYMMDDHH}_{FFF}_{LL}_{VAR}.grib2.bz2`
   - `HH`: Cycle hour (00, 03, 06, ..., 21)
@@ -72,10 +146,11 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Resolution:** ~6.5km, regular lat-lon grid (unlike ICON-Global's icosahedral grid)
 - **Domain:** 29.5–70.5°N, 23.5°W–62.5°E
 - **Variables fetched:**
-  - Model-level: QC (cloud liquid water), QI (ice mixing ratio), P (pressure for vertical interp)
-  - Single-level: CEILING (cloud ceiling), HBAS_CON/HTOP_CON (convective base/top), CLCL/CLCM/CLCH/CLCT (layer + total cloud cover %)
-- **Model levels → pressure levels:** Log-pressure interpolation using P field; targets ICON_PRESSURE_LEVELS
+  - Model-level: QC, QI, CLC, P, T, QV, U, V — **full sounding replacement** (replaces Open-Meteo pressure levels entirely)
+  - Single-level: CEILING, HBAS_CON/HTOP_CON, CLCL/CLCM/CLCH/CLCT → `NWPCloudDiagnostics`
+- **Model levels → pressure levels:** Log-pressure interpolation using P field; 40 model levels → standard pressure levels
 - **Single-level → NWPCloudDiagnostics:** Heights in meters converted to feet (× 3.28084)
+- **Gaps:** No geopotential (FI not on model levels), no vertical velocity (W not yet fetched)
 - **Publication delay:** ~3h after init time
 - **Data retention:** DWD deletes files after ~24h (only latest run available per cycle)
 - **Download:** Individual bz2-compressed files, parallel with 8 workers
@@ -112,11 +187,12 @@ Comprehensive listing of DWD ICON-EU opendata variables. Organized by level type
 | `QC` | Cloud liquid water mixing ratio | kg/kg | 35–74 | **Implemented** | Log-p interpolated to pressure levels. |
 | `QI` | Ice mixing ratio | kg/kg | 35–74 | **Implemented** | Same interpolation as QC. |
 | `P` | Pressure | Pa | 35–74 | **Implemented** | Used for vertical interpolation. |
-| `T` | Temperature | K | 1–74 | Available | Could replace Open-Meteo for ICON. |
-| `U` | U wind component | m/s | 1–74 | Available | East-west wind. |
-| `V` | V wind component | m/s | 1–74 | Available | North-south wind. |
-| `W` | Vertical velocity | m/s | 1–74 | Available | Physical vertical velocity (not omega). |
-| `QV` | Specific humidity | kg/kg | 35–74 | Available | Moisture content. |
+| `T` | Temperature | K | 35–74 | **Implemented** | Full sounding replacement (K→°C). |
+| `U` | U wind component | m/s | 35–74 | **Implemented** | Full sounding replacement (m/s→kt). |
+| `V` | V wind component | m/s | 35–74 | **Implemented** | Full sounding replacement (m/s→kt). |
+| `QV` | Specific humidity | kg/kg | 35–74 | **Implemented** | Used to derive RH via Magnus formula. |
+| `CLC` | Cloud area fraction | % | 35–74 | **Implemented** | Per-level cloud cover (0–100%). |
+| `W` | Vertical velocity | m/s | 1–74 | Available | Physical vertical velocity (not omega). **Gap** — not yet fetched. |
 | `QR` | Rain water mixing ratio | kg/kg | 35–74 | Available | Precipitation in column. |
 | `QS` | Snow mixing ratio | kg/kg | 35–74 | Available | Frozen precipitation in column. |
 
@@ -189,37 +265,30 @@ GRIB enrichment targets native model forecast hours only (e.g. every 3h for GFS 
 
 ### Near-term (high value, moderate effort)
 
-**1. Additional GFS variables** — The `.idx` infrastructure already supports any GFS variable. High-value additions:
-- `VVEL` (vertical velocity in Pa/s) — currently from Open-Meteo which may smooth it; raw GFS would give sharper CAT signal
+**1. ICON gaps: geopotential + vertical velocity** — ICON model levels lack FI (geopotential). Options: compute from hypsometric equation using T+P, or fetch from ICON-Global pressure levels. W (vertical velocity in m/s, not omega) is available on model levels but not yet fetched — adding it would enable SFIP full variant and CAT detection for ICON.
+
+**2. ECMWF surface variable processing** — 23 delivered surface variables are not yet processed (2t, 10u, 10v, CAPE variants, freezing level, visibility, precip type, etc.). These could supplement or replace Open-Meteo surface fields for ECMWF forecasts.
+
+**3. ECMWF order: add hcc** — High cloud cover (`hcc`) was not included in the commercial order. The delivered `hcct` is "height of convective cloud top", not high cloud cover. Need to amend the order.
+
+**4. Additional GFS variables** — The `.idx` infrastructure supports any GFS variable. High-value additions:
+- `VVEL` (vertical velocity in Pa/s) — raw GFS would give sharper CAT signal than Open-Meteo
 - `CAPE`, `CIN` — surface-based convective indices at 0.25° resolution
-- `VIS` — visibility at surface, useful for airport condition assessment
-- Full temperature/wind column — could replace Open-Meteo for GFS entirely, removing API dependency
+- Full temperature/wind column — could enable full sounding replacement for GFS too
 
-**2. Time interpolation (linear)** — Forward-fill from the preceding native hour is implemented for all GRIB fields (see Gap-Filling Strategy above). A future improvement would be to fetch *both* bracketing forecast hours and linearly interpolate between them for mid-hour targets. Infrastructure is already in place (`bracket_forecast_hours()` finds both hours). This would improve accuracy over forward-fill but doubles GRIB download volume.
+**5. Time interpolation (linear)** — Forward-fill is implemented for all GRIB fields. A future improvement would fetch *both* bracketing forecast hours and linearly interpolate. Infrastructure exists (`bracket_forecast_hours()`). Doubles download volume.
 
-**3. Concurrent downloads** — `fetch_byte_ranges()` currently downloads messages sequentially. `asyncio` or `concurrent.futures.ThreadPoolExecutor` would parallelize the ~50 HTTP Range requests.
-
-### Medium-term (high value, significant effort)
-
-**4. ECMWF GRIB2 enrichment** — Would enable cross-model LWC comparison for icing. Challenge: no `.idx` files, so need different byte-range strategy (download variable-filtered GRIB2 via ecCodes `MARS`-style requests or full file with filtering).
-
-**5. Derived vertical velocity from divergence** — For models missing ω (ECMWF open data):
-```
-∂ω/∂p = -(∂u/∂x + ∂v/∂y)
-```
-Integrate from surface upward using `metpy.calc.divergence(u, v)`. Requires full wind column.
-
-**6. Ellrod turbulence index** — Grid-based CAT metric superior to point-based Richardson number:
+**6. Ellrod turbulence index** — Grid-based CAT metric:
 ```
 TI = VWS × (DEF + CVG)
 ```
-Requires 2D wind fields (not just point values), so needs the raw GRIB2 grid, not interpolated points. Would give route-wide turbulence map. This is our best path to operationally-useful CAT prediction — the WAFS G-GTG product (which uses a similar but more sophisticated algorithm) is not accessible from S3 (see §G above). UGRD/VGRD are available in pgrb2 at all pressure levels via .idx.
+Requires 2D wind fields (not just point values), so needs raw GRIB2 grid, not interpolated points. UGRD/VGRD available in GFS pgrb2 via .idx.
 
 ### Long-term (speculative)
 
-**7. Full GRIB2-primary pipeline** — Replace Open-Meteo entirely for GFS with direct GRIB2 fetch. Pros: no API dependency, full variable access, native resolution. Cons: much more data to download (~30MB per forecast hour vs ~150KB from Open-Meteo), needs robust caching and error handling.
+**7. Full GRIB2-primary pipeline** — Replace Open-Meteo entirely for GFS with direct GRIB2 fetch. Pros: no API dependency, full variable access. Cons: ~30MB per forecast hour vs ~150KB from Open-Meteo.
 
-**8. ICON-Global icosahedral grid support** — ICON-Global's triangular grid needs scipy `griddata` or ICON-specific regridding (DWD provides weight files). High effort. Note: ICON-EU (regular lat-lon grid, ~6.5km) is already implemented and covers European flights.
+**8. ICON-Global icosahedral grid support** — Triangular grid needs special interpolation. ICON-EU (regular lat-lon, ~6.5km) covers European flights.
 
 ## Gotchas from Implementation
 
