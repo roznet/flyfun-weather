@@ -53,7 +53,6 @@ tasks/verification_stats.py             ← shared queries for digest + dashboar
 ├── get_notable_misses()
 ├── get_category_bias()
 ├── get_wind_advisory_stats()
-├── get_mae_stats()
 └── get_digest_data()                   ← orchestrator → VerificationDigestData
 
 tasks/airport_watchlist.py              ← standalone airport discovery
@@ -70,7 +69,7 @@ models/verification.py                  ← Pydantic models
 ├── VerificationSummary
 ├── VerificationDigestData              ← complete digest payload
 ├── ActivitySummary, CategoryAccuracyRow, NotableMiss
-├── CategoryBiasStats, WindAdvisoryStats, MissedWarning, MAERow
+├── CategoryBiasStats, WindAdvisoryStats, MissedWarning
 
 db/models.py                            ← SQLAlchemy tables
 ├── VerificationObservationRow          ← (icao, observation_time)
@@ -353,7 +352,7 @@ Disableable via `DISABLE_STANDALONE_VERIFICATION=1` env var. Instead of polling,
 
 ### Digest Data Model
 
-`VerificationDigestData` contains: `period_label`, `activity` (ActivitySummary), `category_accuracy_today` / `category_accuracy_7d` (CategoryAccuracyRow lists), `notable_misses` (with directional severity — optimistic vs pessimistic), `category_bias` (CategoryBiasStats per model), `wind_advisory` (WindAdvisoryStats), `missed_warnings` (MissedWarning list), `mae_stats` (MAERow list).
+`VerificationDigestData` contains: `period_label`, `activity` (ActivitySummary), `category_accuracy_today` / `category_accuracy_7d` (CategoryAccuracyRow lists), `notable_misses` (with directional severity — optimistic vs pessimistic), `category_bias` (CategoryBiasStats per model), `wind_advisory` (WindAdvisoryStats), `missed_warnings` (MissedWarning list).
 
 ### Admin Dashboard
 
@@ -369,7 +368,6 @@ All in `tasks/verification_stats.py`. Every query accepts a `source` parameter (
 - `get_category_bias()` — optimistic vs pessimistic miss rates per model
 - `get_wind_advisory_stats()` — wind advisory match rate
 - `get_missed_warnings()` — WARNINGs that models failed to predict
-- `get_mae_stats()` — MAE per model/days_out for temperature, ceiling, wind, visibility
 
 ## Collection Loop (Flight-Based)
 

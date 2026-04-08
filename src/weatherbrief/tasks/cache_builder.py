@@ -75,12 +75,26 @@ def get_source_max_time(db: Session, source: str) -> datetime | None:
     ).scalar()
 
 
+def get_snapshot_max_time(db: Session) -> datetime | None:
+    """Quick check: latest fetched_at in airport_forecast_snapshots."""
+    return db.execute(
+        select(func.max(AirportForecastSnapshotRow.fetched_at))
+    ).scalar()
+
+
 def is_stale(db: Session, cache_key: str, source: str) -> bool:
-    """Return True if the cache entry is missing or stale."""
+    """Return True if the cache entry is missing or stale.
+
+    For forecast map keys, compares against snapshot fetched_at instead of
+    verification scores.
+    """
     _, cached_max = get_cache_meta(db, cache_key)
     if cached_max is None:
         return True
-    live_max = get_source_max_time(db, source)
+    if source == "snapshot":
+        live_max = get_snapshot_max_time(db)
+    else:
+        live_max = get_source_max_time(db, source)
     if live_max is None:
         return True
     return live_max > cached_max

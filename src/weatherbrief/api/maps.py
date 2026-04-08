@@ -44,7 +44,7 @@ def get_forecast_map(
         hour: UTC hour (6, 9, 12, 15, 18)
         mode: Consensus mode — "worst" (most restrictive) or "majority" (most common)
     """
-    from weatherbrief.tasks.cache_builder import get_cached
+    from weatherbrief.tasks.cache_builder import get_cached, is_stale
     from weatherbrief.tasks.map_queries import get_forecast_map_data
 
     if hour not in _SAMPLE_HOURS:
@@ -53,9 +53,10 @@ def get_forecast_map(
     # Try cache first (consensus mode "worst" is default/cached)
     if mode == "worst":
         cache_key = f"forecast_map:{day}:{hour}"
-        cached = get_cached(db, cache_key)
-        if cached is not None:
-            return cached
+        if not is_stale(db, cache_key, "snapshot"):
+            cached = get_cached(db, cache_key)
+            if cached is not None:
+                return cached
 
     now = datetime.now(timezone.utc)
     target_date = (now + timedelta(days=day)).date()
