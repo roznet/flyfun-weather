@@ -728,7 +728,7 @@ class TestECMWFDecode:
     def test_build_pressure_levels_from_sample(self):
         """Build complete PressureLevelData objects from a real a2 file."""
         from weatherbrief.fetch.grib.decode import (
-            build_ecmwf_pressure_levels,
+            build_pressure_levels_from_grib,
             decode_ecmwf_pressure_per_point,
         )
 
@@ -739,7 +739,7 @@ class TestECMWFDecode:
         data, covered = decode_ecmwf_pressure_per_point(a2, [48.0], [11.5])
         assert covered[0]
 
-        levels = build_ecmwf_pressure_levels(data[0])
+        levels = build_pressure_levels_from_grib(data[0])
         assert len(levels) == 25
 
         # Verify all key fields are populated on a mid-level

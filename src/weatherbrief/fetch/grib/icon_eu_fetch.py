@@ -56,8 +56,10 @@ ICON_EU_PUBLISH_DELAY_HOURS = 3
 ICON_EU_MODEL_LEVEL_MIN = 35
 ICON_EU_MODEL_LEVEL_MAX = 74
 
-# Variables to fetch: cloud liquid water, ice mixing ratio, cloud fraction, pressure
-ICON_EU_VARIABLES = ("qc", "qi", "clc", "p")
+# Variables to fetch: sounding + cloud microphysics + pressure for vertical interpolation.
+# Note: "qv" (specific humidity) is used instead of "relhum" because relhum is only
+# available on pressure levels, not model levels on DWD Open Data.
+ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v")
 
 # Single-level cloud diagnostic variables
 ICON_EU_CLOUD_DIAG_VARIABLES = (

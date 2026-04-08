@@ -8,7 +8,7 @@ import pytest
 
 from weatherbrief.fetch.grib.decode import (
     _convert_raw_sounding,
-    build_ecmwf_pressure_levels,
+    build_pressure_levels_from_grib,
 )
 
 
@@ -93,7 +93,7 @@ class TestConvertRawSounding:
 
 
 class TestBuildEcmwfPressureLevels:
-    """Unit tests for build_ecmwf_pressure_levels()."""
+    """Unit tests for build_pressure_levels_from_grib()."""
 
     def _make_raw_level(self, t_k: float = 280.0, rh: float = 60.0) -> dict[str, float]:
         return {
@@ -110,18 +110,18 @@ class TestBuildEcmwfPressureLevels:
 
     def test_builds_correct_count(self):
         point_data = {p: self._make_raw_level() for p in [1000, 850, 700, 500, 300]}
-        levels = build_ecmwf_pressure_levels(point_data)
+        levels = build_pressure_levels_from_grib(point_data)
         assert len(levels) == 5
 
     def test_sorted_descending_pressure(self):
         point_data = {p: self._make_raw_level() for p in [300, 700, 1000, 500, 850]}
-        levels = build_ecmwf_pressure_levels(point_data)
+        levels = build_pressure_levels_from_grib(point_data)
         pressures = [pl.pressure_hpa for pl in levels]
         assert pressures == [1000, 850, 700, 500, 300]
 
     def test_all_fields_populated(self):
         point_data = {850: self._make_raw_level()}
-        levels = build_ecmwf_pressure_levels(point_data)
+        levels = build_pressure_levels_from_grib(point_data)
         pl = levels[0]
         assert pl.pressure_hpa == 850
         assert pl.temperature_c is not None
@@ -136,7 +136,7 @@ class TestBuildEcmwfPressureLevels:
         assert pl.cloud_area_fraction_pct is not None
 
     def test_empty_point_data(self):
-        levels = build_ecmwf_pressure_levels({})
+        levels = build_pressure_levels_from_grib({})
         assert levels == []
 
     def test_25_levels(self):
@@ -147,7 +147,7 @@ class TestBuildEcmwfPressureLevels:
             750, 725, 675, 650, 625,
         ]
         point_data = {p: self._make_raw_level() for p in ecmwf_levels}
-        levels = build_ecmwf_pressure_levels(point_data)
+        levels = build_pressure_levels_from_grib(point_data)
         assert len(levels) == 25
         pressures = [pl.pressure_hpa for pl in levels]
         assert pressures == sorted(ecmwf_levels, reverse=True)

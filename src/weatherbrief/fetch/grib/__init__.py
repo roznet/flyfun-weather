@@ -286,7 +286,7 @@ def _enrich_ecmwf(
                 if not cov:
                     pl_data[i] = {}
 
-            replaced = _replace_ecmwf_pressure_levels(
+            replaced = _replace_pressure_levels_from_grib(
                 ecmwf_sections, all_forecasts, route_points,
                 pl_data, valid_utc=valid_time,
             )
@@ -577,23 +577,27 @@ def _apply_cloud_diagnostics_to_sections(
     return enriched_count
 
 
-def _replace_ecmwf_pressure_levels(
+def _replace_pressure_levels_from_grib(
     sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
     route_points: list[RoutePoint],
     decoded_points: list[dict[int, dict[str, float]]],
     valid_utc: datetime | None = None,
+    model_source: ModelSource = ModelSource.ECMWF,
 ) -> int:
-    """Replace pressure_levels on ECMWF hourly forecasts with full GRIB sounding.
+    """Replace pressure_levels on hourly forecasts with full GRIB sounding.
 
     Unlike _merge_cloud_water_into_sections which patches individual fields
     onto existing levels, this builds complete PressureLevelData objects from
     the GRIB data and replaces the entire pressure_levels list.
 
+    Works for both ECMWF and ICON-EU GRIB data — the decoded dict format
+    is model-agnostic after vertical interpolation to pressure levels.
+
     Returns:
         Number of hourly entries whose pressure levels were replaced.
     """
-    from weatherbrief.fetch.grib.decode import build_ecmwf_pressure_levels
+    from weatherbrief.fetch.grib.decode import build_pressure_levels_from_grib
 
     replaced_count = 0
     for cs in sections:
@@ -607,7 +611,7 @@ def _replace_ecmwf_pressure_levels(
             for hourly in wf.hourly:
                 if not _matches_valid_time(hourly.time, valid_utc):
                     continue
-                new_levels = build_ecmwf_pressure_levels(point_data)
+                new_levels = build_pressure_levels_from_grib(point_data)
                 if new_levels:
                     hourly.pressure_levels = new_levels
                     replaced_count += 1
@@ -619,7 +623,7 @@ def _replace_ecmwf_pressure_levels(
             wp_data_lookup[rp.waypoint_icao] = pd
 
     for wf in all_forecasts:
-        if wf.model != ModelSource.ECMWF:
+        if wf.model != model_source:
             continue
         point_data = wp_data_lookup.get(wf.waypoint.icao)
         if not point_data:
@@ -627,7 +631,7 @@ def _replace_ecmwf_pressure_levels(
         for hourly in wf.hourly:
             if not _matches_valid_time(hourly.time, valid_utc):
                 continue
-            new_levels = build_ecmwf_pressure_levels(point_data)
+            new_levels = build_pressure_levels_from_grib(point_data)
             if new_levels:
                 hourly.pressure_levels = new_levels
                 replaced_count += 1
@@ -881,10 +885,11 @@ def _decode_and_merge_icon_eu(
                 clc_layers_per_point[i] = layers
 
         valid_utc = _forecast_hour_to_utc(ctx.init_date, ctx.init_hour, fhour)
-        total_enriched += _merge_cloud_water_into_sections(
-            icon_sections, all_forecasts, route_points, decoded_points, "icon",
-            valid_utc=valid_utc,
+        replaced = _replace_pressure_levels_from_grib(
+            icon_sections, all_forecasts, route_points, decoded_points,
+            valid_utc=valid_utc, model_source=ModelSource.ICON,
         )
+        total_enriched += replaced
         del decoded_points
         gc.collect()
 
@@ -893,7 +898,7 @@ def _decode_and_merge_icon_eu(
         return None, None
 
     logger.info(
-        "GRIB2 ICON enrichment: %d pressure levels enriched with cloud water",
+        "GRIB2 ICON full sounding replacement: %d hourly entries replaced",
         total_enriched,
     )
 

@@ -698,11 +698,17 @@ def decode_icon_eu_per_point_chunked(
     results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
     clc_cloud_layers = empty_clc_layers
 
-    # Step 2: Decode each cloud variable one at a time, interpolate, discard
+    # Step 2: Decode each variable one at a time, interpolate, discard.
+    # Cloud variables use final field names; sounding variables use raw_ prefix
+    # for later unit conversion via _convert_raw_sounding().
     for var_name, field_key in (
         ("qc", "cloud_liquid_water_kg_kg"),
         ("qi", "ice_mixing_ratio_kg_kg"),
         ("clc", "cloud_area_fraction_pct"),
+        ("t", "raw_temperature_k"),
+        ("qv", "raw_specific_humidity_kg_kg"),
+        ("u", "raw_u_wind_m_s"),
+        ("v", "raw_v_wind_m_s"),
     ):
         raw = var_bytes.get(var_name, b"")
         if not raw:
@@ -814,10 +820,17 @@ def decode_icon_eu_per_point(
                 # Map ICON-EU variable names
                 # cfgrib may decode the P field as "p" or "pres" depending
                 # on the GRIB shortName mapping.
+                _ICON_VAR_MAP = {
+                    **_VAR_MAP,
+                    "t": "raw_temperature_k",
+                    "qv": "raw_specific_humidity_kg_kg",
+                    "u": "raw_u_wind_m_s",
+                    "v": "raw_v_wind_m_s",
+                }
                 if name_lower in ("p", "pres"):
                     field_key = "pressure_pa"
-                elif name_lower in _VAR_MAP:
-                    field_key = _VAR_MAP[name_lower]
+                elif name_lower in _ICON_VAR_MAP:
+                    field_key = _ICON_VAR_MAP[name_lower]
                 else:
                     continue
 
@@ -864,7 +877,12 @@ def decode_icon_eu_per_point(
 
         results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
 
-        for field_key in ("cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg"):
+        _ICON_INTERP_FIELDS = (
+            "cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg",
+            "raw_temperature_k", "raw_specific_humidity_kg_kg",
+            "raw_u_wind_m_s", "raw_v_wind_m_s",
+        )
+        for field_key in _ICON_INTERP_FIELDS:
             field_data = point_level_data.get(field_key, {})
             if not field_data:
                 continue
@@ -1235,7 +1253,7 @@ def _convert_raw_sounding(
     return out
 
 
-def build_ecmwf_pressure_levels(
+def build_pressure_levels_from_grib(
     point_data: dict[int, dict[str, float]],
 ) -> list:
     """Build PressureLevelData objects from decoded ECMWF GRIB data.
