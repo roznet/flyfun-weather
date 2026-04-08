@@ -221,7 +221,7 @@ def _fill_levels_hourly(hourly_list: list[HourlyForecast]) -> int:
         if is_grib[i]:
             last_grib_levels = sorted_hours[i].pressure_levels
         elif last_grib_levels is not None:
-            sorted_hours[i].pressure_levels = last_grib_levels
+            sorted_hours[i].pressure_levels = list(last_grib_levels)
             filled += 1
 
     return filled

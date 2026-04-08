@@ -45,14 +45,14 @@ _ECMWF_FULL_VAR_MAP = {
 }
 
 # Extended variable map for ICON-EU full sounding replacement.
-# ICON uses "qv" for specific humidity and "fi" for geopotential (vs ECMWF's "q"/"z").
+# ICON uses "qv" for specific humidity (vs ECMWF's "q").
+# "fi" (geopotential) is NOT available on model levels from DWD — only pressure levels.
 _ICON_FULL_VAR_MAP = {
     **_VAR_MAP,
     "t": "raw_temperature_k",
     "qv": "raw_specific_humidity_kg_kg",
     "u": "raw_u_wind_m_s",
     "v": "raw_v_wind_m_s",
-    "fi": "raw_geopotential_m2_s2",
 }
 
 # Cloud diagnostic field mapping: (cfgrib_shortName, cfgrib_typeOfLevel) → field_name
@@ -720,7 +720,6 @@ def decode_icon_eu_per_point_chunked(
         ("qv", "raw_specific_humidity_kg_kg"),
         ("u", "raw_u_wind_m_s"),
         ("v", "raw_v_wind_m_s"),
-        ("fi", "raw_geopotential_m2_s2"),
     ):
         raw = var_bytes.get(var_name, b"")
         if not raw:
@@ -886,7 +885,6 @@ def decode_icon_eu_per_point(
             "cloud_liquid_water_kg_kg", "ice_mixing_ratio_kg_kg",
             "raw_temperature_k", "raw_specific_humidity_kg_kg",
             "raw_u_wind_m_s", "raw_v_wind_m_s",
-            "raw_geopotential_m2_s2",
         )
         for field_key in _ICON_INTERP_FIELDS:
             field_data = point_level_data.get(field_key, {})

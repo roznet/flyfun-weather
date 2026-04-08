@@ -1041,7 +1041,7 @@ def _merge_cloud_water_into_sections(
 ) -> int:
     """Merge decoded cloud water data into cross-section and waypoint forecasts.
 
-    Shared between GFS and ICON-EU enrichment paths.
+    Used by GFS enrichment (cloud-only, no full sounding replacement).
 
     Args:
         valid_utc: If set, only enrich hourly entries whose time matches
