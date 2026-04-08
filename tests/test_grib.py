@@ -802,19 +802,18 @@ class TestIconEuLevels:
         )
         assert result == {}
 
-    def test_uses_icon_pressure_levels_by_default(self):
-        """Default target levels are ICON_PRESSURE_LEVELS."""
-        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
-        from weatherbrief.fetch.variables import ICON_PRESSURE_LEVELS
+    def test_uses_extended_pressure_levels_by_default(self):
+        """Default target levels are EXTENDED_PRESSURE_LEVELS (28 levels)."""
+        from weatherbrief.fetch.grib.icon_eu_levels import TARGET_PRESSURE_LEVELS_HPA, interpolate_model_to_pressure_levels
 
-        # Wide pressure range covering all ICON levels (down to 30 hPa)
-        model_p = [3000.0, 100000.0]  # 30–1000 hPa
+        # Wide pressure range covering all levels
+        model_p = [3000.0, 100000.0]  # 30–1000 hPa in Pa
         model_v = [0.0001, 0.0010]
 
         result = interpolate_model_to_pressure_levels(model_p, model_v)
-        # Should have entries for all ICON pressure levels
-        for level in ICON_PRESSURE_LEVELS:
+        for level in TARGET_PRESSURE_LEVELS_HPA:
             assert level in result, f"Missing level {level}"
+        assert len(result) == len(TARGET_PRESSURE_LEVELS_HPA)
 
     def test_many_model_levels(self):
         """Handles realistic number of model levels (40)."""

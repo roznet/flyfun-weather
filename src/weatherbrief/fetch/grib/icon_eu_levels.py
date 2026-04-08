@@ -12,14 +12,15 @@ import logging
 
 import numpy as np
 
-from weatherbrief.fetch.variables import ICON_PRESSURE_LEVELS
+from weatherbrief.fetch.variables import EXTENDED_PRESSURE_LEVELS
 
 logger = logging.getLogger(__name__)
 
 # Target pressure levels for interpolation (hPa).
-# Matches the ICON levels from Open-Meteo so GRIB cloud water data lands
-# on levels that already have temperature/RH/wind from the API.
-TARGET_PRESSURE_LEVELS_HPA = ICON_PRESSURE_LEVELS
+# Use extended 28-level set for higher vertical resolution in the GA altitude
+# band (25 hPa spacing below FL180 vs 50-100 hPa gaps with the 19-level set).
+# ICON-EU's 40 model levels provide enough resolution to support this.
+TARGET_PRESSURE_LEVELS_HPA = EXTENDED_PRESSURE_LEVELS
 
 
 def interpolate_model_to_pressure_levels(
