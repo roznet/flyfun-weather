@@ -117,11 +117,15 @@ def revoke_token(
     """Revoke one of the current user's tokens."""
     token_row = (
         db.query(ApiTokenRow)
-        .filter(ApiTokenRow.id == token_id, ApiTokenRow.user_id == user_id)
+        .filter(
+            ApiTokenRow.id == token_id,
+            ApiTokenRow.user_id == user_id,
+            ApiTokenRow.revoked == False,  # noqa: E712
+        )
         .first()
     )
     if not token_row:
-        raise HTTPException(status_code=404, detail="Token not found")
+        raise HTTPException(status_code=404, detail="Token not found or already revoked")
 
     token_row.revoked = True
     db.flush()

@@ -439,7 +439,7 @@ def refresh_briefing(
 def get_airport_weather(
     icao_codes: Annotated[
         list[str],
-        Field(description="Airport ICAO codes, e.g. ['LFBO', 'LFML']. Max 10. European airports only."),
+        Field(description="Airport ICAO codes, e.g. ['LFBO', 'LFML']. Max 20. European airports only."),
     ],
     day: Annotated[
         int,

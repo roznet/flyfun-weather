@@ -228,7 +228,7 @@ def _resolve_airports(
 
 @router.get("/airport-weather")
 def get_airport_weather(
-    icao: list[str] = Query(max_length=10, description="ICAO codes (1-10)"),
+    icao: list[str] = Query(description="ICAO codes (1-20)"),
     day: int = Query(default=0, ge=0, le=3),
     hour: int = Query(default=12),
     _user_id: str = Depends(current_user_id),
@@ -243,6 +243,8 @@ def get_airport_weather(
     """
     if not icao:
         raise HTTPException(status_code=400, detail="At least one ICAO code required")
+    if len(icao) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 ICAO codes per request")
 
     resolved, unsupported = _resolve_airports(icao, airports_db)
     if not resolved:
@@ -279,7 +281,6 @@ def get_airport_weather(
             data = enrich_with_observations(db, forecast_hour, data)
 
     # Filter to requested airports
-    resolved_icaos = {r["icao"] for r in resolved}
     resolution_map = {r["icao"]: r for r in resolved if "requested_icao" in r}
 
     airports_out = []
