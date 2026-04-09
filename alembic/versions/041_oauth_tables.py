@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(64), primary_key=True),
         sa.Column("client_secret_hash", sa.String(64), nullable=False),
         sa.Column("client_name", sa.String(256), nullable=False, server_default=""),
-        sa.Column("redirect_uris_json", sa.Text(), nullable=False, server_default="[]"),
+        sa.Column("redirect_uris_json", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
 
