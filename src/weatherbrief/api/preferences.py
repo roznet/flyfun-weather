@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from flyfun_common.auth.config import is_dev_mode
+from flyfun_common.autorouter import get_autorouter_token
 from flyfun_common.credentials import (
     load_encrypted_creds,
     save_encrypted_creds,
@@ -53,6 +55,7 @@ class PreferencesResponse(BaseModel):
     digest_config: DigestConfig
     advisories: AdvisoryPreferences
     has_autorouter_creds: bool
+    autorouter_mode: str  # "oauth" (prod) or "password" (dev)
     gramet_enabled: bool
     llm_digest_enabled: bool
     icing_severity_enhance: bool
@@ -151,6 +154,29 @@ def _parse_digest_config_from_prefs(raw: str) -> DigestConfig:
     return DigestConfig(**dc)
 
 
+def _has_autorouter_creds(row: UserPreferencesRow) -> bool:
+    """Check if the user has autorouter credentials in the appropriate format."""
+    if not row.encrypted_creds_json:
+        return False
+    creds = load_encrypted_creds_from_row(row)
+    if not creds:
+        return False
+    if is_dev_mode():
+        return "username" in creds and "password" in creds
+    return "autorouter" in creds and bool(creds["autorouter"].get("access_token"))
+
+
+def load_encrypted_creds_from_row(row: UserPreferencesRow) -> dict | None:
+    """Decrypt credentials from a row without a DB query."""
+    if not row.encrypted_creds_json:
+        return None
+    try:
+        from flyfun_common.encryption import decrypt
+        return json.loads(decrypt(row.encrypted_creds_json))
+    except Exception:
+        return None
+
+
 def _build_response(row: UserPreferencesRow) -> PreferencesResponse:
     """Build a PreferencesResponse from a DB row."""
     toggles = _parse_service_toggles(row.app_prefs_json)
@@ -162,7 +188,8 @@ def _build_response(row: UserPreferencesRow) -> PreferencesResponse:
         defaults=_parse_defaults(row.app_prefs_json),
         digest_config=_parse_digest_config_from_prefs(row.app_prefs_json),
         advisories=_parse_advisory_prefs(row.app_prefs_json),
-        has_autorouter_creds=bool(row.encrypted_creds_json),
+        has_autorouter_creds=_has_autorouter_creds(row),
+        autorouter_mode="password" if is_dev_mode() else "oauth",
         pirep_can_view=prefs_data.get("pirep_can_view", False),
         pirep_can_publish=prefs_data.get("pirep_can_publish", False),
         **toggles,
@@ -236,7 +263,7 @@ def update_preferences(
 
     row.app_prefs_json = json.dumps(data)
 
-    if body.autorouter_username and body.autorouter_password:
+    if is_dev_mode() and body.autorouter_username and body.autorouter_password:
         save_encrypted_creds(db, user_id, {
             "username": body.autorouter_username,
             "password": body.autorouter_password,
@@ -254,20 +281,29 @@ def clear_autorouter_credentials(
     clear_encrypted_creds(db, user_id)
 
 
-def load_autorouter_credentials(db: Session, user_id: str) -> tuple[str, str] | None:
-    """Load and decrypt autorouter credentials for a user.
+def load_autorouter_token(db: Session, user_id: str) -> str | None:
+    """Load the autorouter access token for a user.
 
-    Returns (username, password) tuple or None if not configured.
-    Used by packs.py when preparing a refresh.
+    In production (OAuth mode): retrieves the token stored by the OAuth
+    authorization code flow via flyfun-common.
+    In dev mode: loads username/password from encrypted creds and exchanges
+    them for a token via the client_credentials grant.
+
+    Returns the bearer token string, or None if not configured.
     """
-    creds = load_encrypted_creds(db, user_id)
-    if not creds:
-        return None
-    try:
-        return creds["username"], creds["password"]
-    except KeyError:
-        logger.warning("Invalid autorouter credentials format for user %s", user_id)
-        return None
+    if is_dev_mode():
+        creds = load_encrypted_creds(db, user_id)
+        if not creds or "username" not in creds or "password" not in creds:
+            return None
+        try:
+            from euro_aip.utils.autorouter_credentials import AutorouterCredentialManager
+            mgr = AutorouterCredentialManager("/tmp/weatherbrief-dev-creds")
+            mgr.set_credentials(creds["username"], creds["password"])
+            return mgr.get_token()
+        except Exception:
+            logger.warning("Failed to exchange dev autorouter credentials for user %s", user_id)
+            return None
+    return get_autorouter_token(db, user_id)
 
 
 def load_user_locale(db: Session, user_id: str) -> str | None:

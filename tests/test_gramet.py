@@ -1,27 +1,24 @@
-"""Tests for Autorouter GRAMET client with mocked HTTP."""
+"""Tests for Autorouter GRAMET client (euro_aip) with mocked HTTP."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import responses
 
-from weatherbrief.fetch.gramet import GRAMET_URL
+from euro_aip.briefing.sources.autorouter_gramet import (
+    GRAMET_URL,
+    AutorouterGrametSource,
+)
 
 
 @responses.activate
-@patch("weatherbrief.fetch.gramet.AutorouterCredentialManager")
-def test_fetch_gramet(mock_cred_cls):
+def test_fetch_gramet():
     """GRAMET client calls API with correct params and returns content."""
-    from weatherbrief.fetch.gramet import AutorouterGramet
-
-    # Mock credential manager
     mock_cred = MagicMock()
     mock_cred.get_token.return_value = "test-token-123"
-    mock_cred_cls.return_value = mock_cred
 
-    # Mock HTTP response
     fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
     responses.add(
         responses.GET,
@@ -31,10 +28,10 @@ def test_fetch_gramet(mock_cred_cls):
         content_type="image/png",
     )
 
-    client = AutorouterGramet(cache_dir="/tmp/test-cache")
+    client = AutorouterGrametSource(mock_cred)
     departure = datetime(2026, 2, 14, 9, 0, 0)
     result = client.fetch_gramet(
-        icao_codes=["EGTK", "LFPB", "LSGS"],
+        waypoints=["EGTK", "LFPB", "LSGS"],
         altitude_ft=8000,
         departure_time=departure,
         duration_hours=4.5,
@@ -51,14 +48,10 @@ def test_fetch_gramet(mock_cred_cls):
 
 
 @responses.activate
-@patch("weatherbrief.fetch.gramet.AutorouterCredentialManager")
-def test_fetch_gramet_pdf(mock_cred_cls):
+def test_fetch_gramet_pdf():
     """GRAMET client supports PDF format."""
-    from weatherbrief.fetch.gramet import AutorouterGramet
-
     mock_cred = MagicMock()
     mock_cred.get_token.return_value = "test-token"
-    mock_cred_cls.return_value = mock_cred
 
     fake_pdf = b"%PDF-1.4" + b"\x00" * 100
     responses.add(
@@ -69,9 +62,9 @@ def test_fetch_gramet_pdf(mock_cred_cls):
         content_type="application/pdf",
     )
 
-    client = AutorouterGramet(cache_dir="/tmp/test-cache")
+    client = AutorouterGrametSource(mock_cred)
     result = client.fetch_gramet(
-        icao_codes=["EGTK", "LSGS"],
+        waypoints=["EGTK", "LSGS"],
         altitude_ft=6000,
         departure_time=datetime(2026, 2, 14, 9, 0),
         duration_hours=3.0,

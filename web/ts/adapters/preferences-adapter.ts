@@ -27,6 +27,7 @@ export interface PreferencesResponse {
   digest_config: DigestConfig;
   advisories: AdvisoryPreferences;
   has_autorouter_creds: boolean;
+  autorouter_mode: 'oauth' | 'password';
   gramet_enabled: boolean;
   llm_digest_enabled: boolean;
   icing_severity_enhance: boolean;
@@ -64,6 +65,12 @@ export async function savePreferences(update: PreferencesUpdate): Promise<Prefer
 export async function clearAutorouterCreds(): Promise<void> {
   return apiFetch<void>('/user/preferences/autorouter', {
     method: 'DELETE',
+  });
+}
+
+export async function unlinkAutorouter(): Promise<{ linked: boolean }> {
+  return apiFetch<{ linked: boolean }>('/autorouter/unlink', {
+    method: 'POST',
   });
 }
 

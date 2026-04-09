@@ -813,8 +813,9 @@ export function renderGramet(
       fetchPreferences()
         .then((prefs) => {
           if (!prefs.has_autorouter_creds) {
+            const key = prefs.autorouter_mode === 'password' ? 'gramet.noCredsDev' : 'gramet.noCreds';
             el.innerHTML =
-              `<p class="muted">${t('gramet.noCreds')}</p>`;
+              `<p class="muted">${t(key)}</p>`;
           } else {
             el.innerHTML = `<p class="muted">${t('gramet.notAvailable')}</p>`;
           }
@@ -832,6 +833,7 @@ export function renderGramet(
     <img src="${pngUrl}" alt="${t('gramet.altText')}" class="gramet-img" />
     <div class="gramet-actions">
       <a href="${pdfUrl}" download class="btn btn-sm">${t('gramet.downloadPdf')}</a>
+      <a href="https://www.autorouter.aero" target="_blank" class="btn btn-sm btn-outline">autorouter.aero</a>
     </div>
   `;
 }

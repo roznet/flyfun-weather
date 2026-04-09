@@ -49,7 +49,7 @@ class BriefingOptions:
     digest_config_name: str | None = None
     data_dir: Path | None = None
     output_dir: Path | None = None  # if set, write all artifacts here (pack mode)
-    autorouter_credentials: tuple[str, str] | None = None  # (username, password)
+    autorouter_token: str | None = None  # OAuth bearer token for Autorouter API
     user_id: str | None = None  # for per-user token cache isolation
     airports_db_path: str | None = None  # euro_aip database for runway data
     icing_severity_enhance: bool = False  # enable RH/PW icing severity upgrades
@@ -392,7 +392,7 @@ def execute_briefing(
             data_dir=data_dir,
             days_out=days_out,
             fetch_date=today,
-            autorouter_credentials=options.autorouter_credentials,
+            autorouter_token=options.autorouter_token,
             user_id=options.user_id,
         )
         if gramet_result.path:

@@ -7,6 +7,7 @@ import {
   fetchPreferences,
   savePreferences,
   clearAutorouterCreds,
+  unlinkAutorouter,
   fetchUsageSummary,
   fetchAdvisoryCatalog,
   fetchModelCatalog,
@@ -56,6 +57,7 @@ let profiles: ProfileResponse[] = [];
 let activeProfileId: number | null = null;
 let aircraftList: AircraftResponse[] = [];
 let editingAircraftId: number | null = null;
+let autorouterMode: 'oauth' | 'password' = 'oauth';
 
 /** Default advisory models: all default briefing models except best_match. */
 function defaultAdvisoryModelKeys(): string[] {
@@ -318,7 +320,9 @@ function translateStaticElements(): void {
   set('#tab-services .section:nth-child(1) h3', 'page.settings.language');
   set('#tab-services .section:nth-child(1) .section-hint', 'page.settings.languageHint');
   set('label[for="input-locale"]', 'page.settings.displayLanguage');
-  set('#tab-services .section:nth-child(2) h3', 'page.settings.autorouterTitle');
+  set('#autorouter-section h3', 'page.settings.autorouterTitle');
+  set('#ar-link-btn', 'page.settings.arLink');
+  set('#ar-unlink-btn', 'page.settings.arUnlink');
   set('label[for="input-ar-username"]', 'page.settings.username');
   set('label[for="input-ar-password"]', 'page.settings.password');
   set('#clear-autorouter-btn', 'page.settings.clear');
@@ -460,6 +464,16 @@ async function init(): Promise<void> {
     populateAccountForm(prefs);
   }
 
+  // Show success message if returning from OAuth linking
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('autorouter') === 'linked') {
+    showStatus(t('settings.arLinkedSuccess'));
+    // Clean up URL
+    window.history.replaceState({}, '', window.location.pathname);
+    // Switch to account tab to show the connected status
+    switchTab('services');
+  }
+
   // Load usage and credits (non-blocking)
   fetchUsageSummary()
     .then(renderUsage)
@@ -505,15 +519,27 @@ async function init(): Promise<void> {
     }
   });
 
-  // Clear autorouter credentials
+  // Clear autorouter credentials (password mode)
   const clearBtn = document.getElementById('clear-autorouter-btn');
   clearBtn?.addEventListener('click', async () => {
     try {
       await clearAutorouterCreds();
       (document.getElementById('input-ar-username') as HTMLInputElement).value = '';
       (document.getElementById('input-ar-password') as HTMLInputElement).value = '';
-      updateAutorouterStatus(false);
+      updateAutorouterStatus(false, 'password');
       showStatus(t('settings.credentialsCleared'));
+    } catch (err) {
+      showStatus(t('settings.failedClearCreds', { error: String(err) }), true);
+    }
+  });
+
+  // Unlink autorouter (OAuth mode)
+  const unlinkBtn = document.getElementById('ar-unlink-btn');
+  unlinkBtn?.addEventListener('click', async () => {
+    try {
+      await unlinkAutorouter();
+      updateAutorouterStatus(false, 'oauth');
+      showStatus(t('settings.arDisconnected'));
     } catch (err) {
       showStatus(t('settings.failedClearCreds', { error: String(err) }), true);
     }
@@ -545,7 +571,18 @@ function switchTab(tabId: string): void {
 }
 
 function populateAccountForm(prefs: PreferencesResponse): void {
-  updateAutorouterStatus(prefs.has_autorouter_creds);
+  // Show the correct autorouter controls based on mode
+  autorouterMode = prefs.autorouter_mode;
+  const oauthControls = document.getElementById('ar-oauth-controls');
+  const passwordControls = document.getElementById('ar-password-controls');
+  if (prefs.autorouter_mode === 'oauth') {
+    if (oauthControls) oauthControls.style.display = '';
+    if (passwordControls) passwordControls.style.display = 'none';
+  } else {
+    if (oauthControls) oauthControls.style.display = 'none';
+    if (passwordControls) passwordControls.style.display = '';
+  }
+  updateAutorouterStatus(prefs.has_autorouter_creds, prefs.autorouter_mode);
 
   // Locale picker — reflect server-stored preference
   const localeSelect = document.getElementById('input-locale') as HTMLSelectElement;
@@ -771,8 +808,6 @@ async function handleSave(): Promise<void> {
   };
 
   // Account-level settings
-  const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement).value.trim();
-  const arPassword = (document.getElementById('input-ar-password') as HTMLInputElement).value.trim();
   const selectedLocale = (document.getElementById('input-locale') as HTMLSelectElement)?.value || 'en';
 
   try {
@@ -783,17 +818,22 @@ async function handleSave(): Promise<void> {
       if (idx >= 0) profiles[idx] = updated;
     }
 
-    // Save account-level preferences (locale + autorouter creds)
+    // Save account-level preferences (locale + autorouter creds in dev mode)
     const accountUpdate: import('./adapters/preferences-adapter').PreferencesUpdate = {
       locale: selectedLocale,
     };
-    if (arUsername) accountUpdate.autorouter_username = arUsername;
-    if (arPassword) accountUpdate.autorouter_password = arPassword;
+    if (autorouterMode === 'password') {
+      const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement)?.value.trim();
+      const arPassword = (document.getElementById('input-ar-password') as HTMLInputElement)?.value.trim();
+      if (arUsername) accountUpdate.autorouter_username = arUsername;
+      if (arPassword) accountUpdate.autorouter_password = arPassword;
+    }
 
     const result = await savePreferences(accountUpdate);
-    updateAutorouterStatus(result.has_autorouter_creds);
-    if (arPassword) {
-      (document.getElementById('input-ar-password') as HTMLInputElement).value = '';
+    updateAutorouterStatus(result.has_autorouter_creds, autorouterMode);
+    if (autorouterMode === 'password') {
+      const arPwdInput = document.getElementById('input-ar-password') as HTMLInputElement;
+      if (arPwdInput?.value) arPwdInput.value = '';
     }
 
     // Apply locale change to UI (triggers reload of translation strings)
@@ -812,18 +852,25 @@ async function handleSave(): Promise<void> {
 
 // --- Autorouter status ---
 
-function updateAutorouterStatus(hasCreds: boolean): void {
+function updateAutorouterStatus(hasCreds: boolean, mode: 'oauth' | 'password' = 'oauth'): void {
   const badge = document.getElementById('ar-status-badge');
   if (!badge) return;
   if (hasCreds) {
-    badge.textContent = t('settings.configured');
+    badge.textContent = mode === 'oauth' ? t('settings.arConnected') : t('settings.configured');
     badge.className = 'badge badge-green';
   } else {
     badge.textContent = t('settings.notSet');
     badge.className = 'badge badge-none';
   }
-  const clearBtn = document.getElementById('clear-autorouter-btn') as HTMLButtonElement;
-  if (clearBtn) clearBtn.style.display = hasCreds ? 'inline-block' : 'none';
+  if (mode === 'oauth') {
+    const linkBtn = document.getElementById('ar-link-btn') as HTMLElement;
+    const unlinkBtn = document.getElementById('ar-unlink-btn') as HTMLButtonElement;
+    if (linkBtn) linkBtn.style.display = hasCreds ? 'none' : '';
+    if (unlinkBtn) unlinkBtn.style.display = hasCreds ? 'inline-block' : 'none';
+  } else {
+    const clearBtn = document.getElementById('clear-autorouter-btn') as HTMLButtonElement;
+    if (clearBtn) clearBtn.style.display = hasCreds ? 'inline-block' : 'none';
+  }
 }
 
 // --- Status messages ---

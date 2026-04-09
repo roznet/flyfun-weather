@@ -68,6 +68,7 @@ class TestPreferencesAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_autorouter_creds"] is False
+        assert data["autorouter_mode"] == "password"  # dev environment
         assert data["defaults"]["cruise_altitude_ft"] is None
         assert data["defaults"]["models"] is None
 

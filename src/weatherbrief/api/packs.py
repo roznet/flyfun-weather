@@ -419,10 +419,10 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     locale = None
     profile_name_for_digest = None
     if db is not None:
-        from weatherbrief.api.preferences import load_autorouter_credentials, load_user_locale
+        from weatherbrief.api.preferences import load_autorouter_token, load_user_locale
         from weatherbrief.api.profiles import load_profile_context
 
-        autorouter_creds = load_autorouter_credentials(db, user_id)
+        autorouter_creds = load_autorouter_token(db, user_id)
         locale = load_user_locale(db, user_id)
         profile_ctx = load_profile_context(db, flight.profile_id, user_id)
         profile_settings = profile_ctx.settings
@@ -473,7 +473,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         generate_skewt=False,
         generate_llm_digest=do_llm_digest,
         output_dir=pack_path,
-        autorouter_credentials=autorouter_creds,
+        autorouter_token=autorouter_creds,
         user_id=user_id,
         airports_db_path=db_path,
         icing_severity_enhance=do_icing_enhance,

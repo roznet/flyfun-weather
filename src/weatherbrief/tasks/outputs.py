@@ -57,28 +57,31 @@ def run_gramet(
     data_dir: Path | None = None,
     days_out: int = 0,
     fetch_date: str = "",
-    autorouter_credentials: tuple[str, str] | None = None,
+    autorouter_token: str | None = None,
     user_id: str | None = None,
 ) -> GrametResult:
     """Fetch GRAMET cross-section PDF from the Autorouter API."""
-    if not autorouter_credentials:
-        logger.debug("Skipping GRAMET: no autorouter credentials configured")
+    if not autorouter_token:
+        logger.debug("Skipping GRAMET: no autorouter token available")
         return GrametResult(error="GRAMET requires autorouter credentials")
 
     try:
-        from weatherbrief.fetch.gramet import AutorouterGramet
+        from euro_aip.briefing.sources.autorouter_gramet import AutorouterGrametSource
+        from euro_aip.utils.autorouter_credentials import AutorouterCredentialManager
+
+        cache_dir = str(Path.home() / ".cache" / "weatherbrief")
+        if user_id and data_dir:
+            cache_dir = str(data_dir / ".cache" / "autorouter" / user_id)
+
+        cred_manager = AutorouterCredentialManager(cache_dir)
+        cred_manager.set_token(autorouter_token)
+
+        gramet_client = AutorouterGrametSource(cred_manager)
         icao_codes = [wp.icao for wp in route.waypoints]
         duration_hours = route.flight_duration_hours or 2.0
 
-        kwargs: dict = {
-            "username": autorouter_credentials[0],
-            "password": autorouter_credentials[1],
-        }
-        if user_id and data_dir:
-            kwargs["cache_dir"] = str(data_dir / ".cache" / "autorouter" / user_id)
-        gramet_client = AutorouterGramet(**kwargs)
         data = gramet_client.fetch_gramet(
-            icao_codes=icao_codes,
+            waypoints=icao_codes,
             altitude_ft=route.cruise_altitude_ft,
             departure_time=departure_time,
             duration_hours=duration_hours,
@@ -100,7 +103,7 @@ def run_gramet(
         return GrametResult(path=out_path, fetched=True)
 
     except ImportError:
-        logger.warning("GRAMET fetch requires euro_aip with autorouter credentials")
+        logger.warning("GRAMET fetch requires euro_aip package")
         return GrametResult(error="GRAMET: euro_aip not available")
     except Exception as exc:
         logger.warning("GRAMET fetch failed: %s", exc, exc_info=True)

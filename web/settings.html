@@ -108,24 +108,32 @@
           </div>
         </div>
 
-        <div class="section">
-          <h3>Autorouter (GRAMET) Credentials</h3>
-          <p class="muted section-hint">
-            Enter your <a href="https://www.autorouter.aero" target="_blank">autorouter.aero</a>
-            credentials to enable GRAMET cross-section charts. Credentials are encrypted at rest.
+        <div class="section" id="autorouter-section">
+          <h3>Autorouter (GRAMET)</h3>
+          <p class="muted section-hint" id="ar-hint">
+            Link your <a href="https://www.autorouter.aero" target="_blank">autorouter.aero</a>
+            account to enable GRAMET cross-section charts.
           </p>
           <div class="section-hint">
             Status: <span id="ar-status-badge" class="badge badge-none">Not set</span>
-            <button type="button" id="clear-autorouter-btn" class="btn btn-danger btn-inline-clear">Clear</button>
           </div>
-          <div class="form-row">
-            <div class="form-group grow">
-              <label for="input-ar-username">Username</label>
-              <input type="text" id="input-ar-username" placeholder="autorouter username" autocomplete="username">
-            </div>
-            <div class="form-group grow">
-              <label for="input-ar-password">Password</label>
-              <input type="password" id="input-ar-password" placeholder="autorouter password" autocomplete="new-password">
+          <!-- OAuth mode (production) -->
+          <div id="ar-oauth-controls" style="display:none;">
+            <a id="ar-link-btn" class="btn btn-primary" href="/autorouter/link">Link Autorouter Account</a>
+            <button type="button" id="ar-unlink-btn" class="btn btn-danger btn-inline-clear" style="display:none;">Disconnect</button>
+          </div>
+          <!-- Password mode (dev) -->
+          <div id="ar-password-controls" style="display:none;">
+            <button type="button" id="clear-autorouter-btn" class="btn btn-danger btn-inline-clear" style="display:none;">Clear</button>
+            <div class="form-row">
+              <div class="form-group grow">
+                <label for="input-ar-username">Username</label>
+                <input type="text" id="input-ar-username" placeholder="autorouter username" autocomplete="username">
+              </div>
+              <div class="form-group grow">
+                <label for="input-ar-password">Password</label>
+                <input type="password" id="input-ar-password" placeholder="autorouter password" autocomplete="new-password">
+              </div>
             </div>
           </div>
         </div>
