@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # Re-export shared models so existing imports from weatherbrief.db.models still work
@@ -632,7 +633,9 @@ class VerificationCacheRow(Base):
     source_max_time: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
-    data_json: Mapped[str] = mapped_column(Text, nullable=False)
+    data_json: Mapped[str] = mapped_column(
+        Text().with_variant(MEDIUMTEXT, "mysql"), nullable=False,
+    )
 
 
 class VerificationCycleRow(Base):
