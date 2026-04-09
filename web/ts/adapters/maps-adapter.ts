@@ -68,8 +68,8 @@ export interface VerificationMapResponse {
 
 // --- Fetch functions ---
 
-export async function fetchForecastMap(day: number, hour: number, mode: string = 'worst'): Promise<ForecastMapResponse> {
-  const resp = await fetch(`${apiBase}/maps/forecast?day=${day}&hour=${hour}&mode=${mode}`, { credentials: 'include' });
+export async function fetchForecastMap(day: number, hour: number): Promise<ForecastMapResponse> {
+  const resp = await fetch(`${apiBase}/maps/forecast?day=${day}&hour=${hour}`, { credentials: 'include' });
   if (!resp.ok) throw new Error(`Forecast map: ${resp.status}`);
   return resp.json();
 }

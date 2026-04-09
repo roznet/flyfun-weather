@@ -146,12 +146,12 @@ def get_forecast_map_data(
     db: Session,
     forecast_hour: datetime,
     airports_db_path: str,
-    consensus_mode: str = "worst",
 ) -> dict[str, Any]:
     """Return forecast data for all watchlist airports at a given hour.
 
     Finds the latest model_init_time per model that has data for forecast_hour,
-    then returns per-airport, per-model forecasts with consensus.
+    then returns per-airport, per-model forecasts with worst-consensus.
+    Majority consensus is computed client-side from per-model data.
     """
     coords = _get_coords(airports_db_path)
 
@@ -204,7 +204,7 @@ def get_forecast_map_data(
             "lat": lat,
             "lon": lon,
             "models": models_data,
-            "consensus": _consensus(models_data, consensus_mode),
+            "consensus": _consensus(models_data),
         })
 
     return {

@@ -67,8 +67,7 @@ async function loadForecast(): Promise<void> {
   updateForecastDatetime();
   showInfo('Loading forecast...', 'map-info');
   try {
-    const mode = (fcModel === 'worst' || fcModel === 'majority') ? fcModel : 'worst';
-    forecastData = await fetchForecastMap(fcDay, fcHour, mode);
+    forecastData = await fetchForecastMap(fcDay, fcHour);
     if (forecastMap && forecastData) {
       forecastMap.setForecastData(forecastData, fcMetric, fcModel);
       const initTimes = Object.entries(forecastData.model_init_times)
@@ -147,15 +146,9 @@ function wireForecastControls(): void {
   });
 
   wireButtonGroup('model-picker', 'model', (v) => {
-    const prevModel = fcModel;
     fcModel = v;
-    // Consensus modes are computed server-side — reload when switching between them
-    const consensusModes = ['worst', 'majority'];
-    if (consensusModes.includes(v) && prevModel !== v) {
-      loadForecast();
-    } else {
-      rerender();
-    }
+    // All mode switches are client-side — per-model data is already in the response
+    rerender();
   });
 
   const metricSel = $('metric-picker') as HTMLSelectElement | null;

@@ -89,10 +89,55 @@ function isConsensusMode(model: string): boolean {
   return model === 'worst' || model === 'majority';
 }
 
+const CAT_ORDER: Record<string, number> = { VFR: 0, MVFR: 1, IFR: 2, LIFR: 3 };
+
+function computeConsensus(airport: ForecastAirport, mode: string): ConsensusForecast {
+  const models = Object.values(airport.models);
+  if (models.length === 0) return { flight_category: 'VFR', agreement: 'good' };
+
+  const cats = models.map(m => m.flight_category);
+
+  let consensusCat: string;
+  if (mode === 'majority') {
+    const counts = new Map<string, number>();
+    for (const c of cats) counts.set(c, (counts.get(c) ?? 0) + 1);
+    const maxCount = Math.max(...counts.values());
+    const tied = [...counts.entries()].filter(([, n]) => n === maxCount).map(([c]) => c);
+    consensusCat = tied.reduce((a, b) => (CAT_ORDER[a] ?? 0) >= (CAT_ORDER[b] ?? 0) ? a : b);
+  } else {
+    consensusCat = cats.reduce((a, b) => (CAT_ORDER[a] ?? 0) >= (CAT_ORDER[b] ?? 0) ? a : b);
+  }
+
+  // Use server-computed agreement (model divergence) — same regardless of consensus mode
+  const agreement = airport.consensus.agreement;
+
+  // Numeric means (same as server logic)
+  const result: ConsensusForecast = { flight_category: consensusCat, agreement };
+  for (const field of ['wind_speed_kt', 'ceiling_ft', 'cape_jkg', 'visibility_m'] as const) {
+    const vals = models.map(m => m[field]).filter((v): v is number => v != null);
+    if (vals.length) (result as any)[field] = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+  }
+  // Wind direction: circular mean
+  const dirs = models.map(m => m.wind_dir_deg).filter((v): v is number => v != null);
+  if (dirs.length) {
+    const sinSum = dirs.reduce((s, d) => s + Math.sin(d * Math.PI / 180), 0);
+    const cosSum = dirs.reduce((s, d) => s + Math.cos(d * Math.PI / 180), 0);
+    result.wind_dir_deg = ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
+  }
+
+  return result;
+}
+
+function getConsensus(airport: ForecastAirport, model: string): ConsensusForecast {
+  // For 'worst', use the pre-computed server consensus (avoids recomputation)
+  if (model === 'worst') return airport.consensus;
+  return computeConsensus(airport, model);
+}
+
 function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, model: string): string {
   const consensus = isConsensusMode(model);
   const modelData = consensus ? null : airport.models[model];
-  const data = consensus ? airport.consensus : modelData;
+  const data = consensus ? getConsensus(airport, model) : modelData;
   if (!data) return '#888';
 
   switch (metric) {
@@ -180,7 +225,7 @@ function getForecastTooltip(airport: ForecastAirport, model: string, metric: For
   const lines: string[] = [`<b>${airport.icao}</b>`];
 
   if (isConsensusMode(model)) {
-    const c = airport.consensus;
+    const c = getConsensus(airport, model);
     lines.push(`Category: <b>${c.flight_category}</b> (${c.agreement})`);
     if (metric !== 'flight_category') {
       // For consensus, build metric line from averaged consensus data or worst-of-models
@@ -366,7 +411,7 @@ export class WeatherMap {
       const color = getForecastColor(apt, metric, model);
       const isConsensus = isConsensusMode(model);
       const border = isConsensus
-        ? (AGREEMENT_COLORS[apt.consensus.agreement] || '#888')
+        ? (AGREEMENT_COLORS[getConsensus(apt, model).agreement] || '#888')
         : color;
 
       const marker = L.circleMarker([apt.lat, apt.lon], {

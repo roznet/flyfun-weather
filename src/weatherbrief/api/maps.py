@@ -32,17 +32,18 @@ def _airports_db(request: Request) -> str:
 def get_forecast_map(
     day: int = Query(default=0, ge=0, le=3),
     hour: int = Query(default=12),
-    mode: str = Query(default="worst", pattern=r"^(worst|majority)$"),
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
     airports_db: str = Depends(_airports_db),
 ):
     """Return forecast overview data for all watchlist airports.
 
+    Returns per-model forecasts with worst-consensus pre-computed.
+    Consensus mode switching (worst/majority) is handled client-side.
+
     Parameters:
         day: Days from today (0 = today, 1 = tomorrow, ...)
         hour: UTC hour (6, 9, 12, 15, 18)
-        mode: Consensus mode — "worst" (most restrictive) or "majority" (most common)
     """
     from weatherbrief.tasks.cache_builder import get_cached, is_stale
     from weatherbrief.tasks.map_queries import get_forecast_map_data
@@ -50,13 +51,11 @@ def get_forecast_map(
     if hour not in _SAMPLE_HOURS:
         hour = min(_SAMPLE_HOURS, key=lambda h: abs(h - hour))
 
-    # Try cache first (consensus mode "worst" is default/cached)
-    if mode == "worst":
-        cache_key = f"forecast_map:{day}:{hour}"
-        if not is_stale(db, cache_key, "snapshot"):
-            cached = get_cached(db, cache_key)
-            if cached is not None:
-                return cached
+    cache_key = f"forecast_map:{day}:{hour}"
+    if not is_stale(db, cache_key, "snapshot"):
+        cached = get_cached(db, cache_key)
+        if cached is not None:
+            return cached
 
     now = datetime.now(timezone.utc)
     target_date = (now + timedelta(days=day)).date()
@@ -65,7 +64,7 @@ def get_forecast_map(
         hour, 0, 0, tzinfo=timezone.utc,
     )
 
-    return get_forecast_map_data(db, forecast_hour, airports_db, consensus_mode=mode)
+    return get_forecast_map_data(db, forecast_hour, airports_db)
 
 
 @router.get("/verification")
