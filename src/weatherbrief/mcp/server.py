@@ -22,8 +22,9 @@ from typing import Annotated, Any
 
 import httpx
 from fastmcp import Context, FastMCP
+from fastmcp.server.auth import AccessToken, RemoteAuthProvider, TokenVerifier
 from fastmcp.server.dependencies import get_http_request
-from pydantic import Field
+from pydantic import AnyHttpUrl, Field
 
 from weatherbrief.mcp.client import WeatherbriefClient
 
@@ -36,9 +37,39 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 WEATHER_BASE_URL = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
+MCP_BASE_URL = os.getenv("MCP_BASE_URL", "https://mcp.flyfun.aero")
+
+
+class _WeatherbriefTokenVerifier(TokenVerifier):
+    """Accept any Bearer token — actual validation happens at the API layer."""
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not token or not token.strip():
+            return None
+        return AccessToken(
+            token=token,
+            client_id="weatherbrief",
+            scopes=["mcp"],
+        )
+
+
+def _build_auth() -> RemoteAuthProvider | None:
+    """Build OAuth auth provider for HTTP transport.
+
+    Points clients to weather.flyfun.aero as the authorization server
+    and serves RFC 9728 protected resource metadata on the MCP server.
+    """
+    return RemoteAuthProvider(
+        token_verifier=_WeatherbriefTokenVerifier(),
+        authorization_servers=[AnyHttpUrl(WEATHER_BASE_URL)],
+        base_url=MCP_BASE_URL,
+        resource_name="FlyFun Weather Briefings",
+    )
+
 
 mcp = FastMCP(
     name="weatherbrief",
+    auth=_build_auth(),
     instructions=(
         "Aviation weather briefing tools for GA flight planning in Europe. "
         "Provides multi-model weather forecasts, route advisories, AI weather "
