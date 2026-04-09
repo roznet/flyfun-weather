@@ -21,6 +21,11 @@ from flyfun_common.db.models import (  # noqa: F401
     UserPreferencesRow,
     CostLedgerRow,
 )
+from flyfun_common.oauth import (  # noqa: F401 — register OAuth tables on Base
+    OAuthClientRow,
+    OAuthAuthorizationCodeRow,
+    OAuthRefreshTokenRow,
+)
 
 
 class UserAircraftRow(Base):

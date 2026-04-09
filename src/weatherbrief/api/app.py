@@ -16,6 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from flyfun_common.auth import create_auth_router, get_jwt_secret, is_dev_mode
 from flyfun_common.autorouter import create_autorouter_router
+from flyfun_common.oauth import create_oauth_router
 from flyfun_common.db import (
     SessionLocal,
     ensure_dev_user,
@@ -254,6 +255,7 @@ def create_app() -> FastAPI:
         on_delete_user=_on_delete_user,
     )
     app.include_router(create_autorouter_router())
+    app.include_router(create_oauth_router())
     app.include_router(auth_router)
 
     # Dev-only endpoint: issue a JWT for the dev user without OAuth
