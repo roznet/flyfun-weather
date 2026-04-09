@@ -69,9 +69,12 @@ export async function clearAutorouterCreds(): Promise<void> {
 }
 
 export async function unlinkAutorouter(): Promise<{ linked: boolean }> {
-  return apiFetch<{ linked: boolean }>('/autorouter/unlink', {
-    method: 'POST',
-  });
+  const resp = await fetch('/autorouter/unlink', { method: 'POST' });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`API ${resp.status}: ${text}`);
+  }
+  return resp.json();
 }
 
 export async function completeSetup(): Promise<void> {
