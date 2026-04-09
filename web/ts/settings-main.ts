@@ -1222,6 +1222,10 @@ function initTokenSection(): void {
       return;
     }
 
+    // Hide any previously revealed token
+    const revealEl = document.getElementById('mcp-token-reveal')!;
+    revealEl.style.display = 'none';
+
     try {
       const result = await createToken(name);
       nameInput.value = '';

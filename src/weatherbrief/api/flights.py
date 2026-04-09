@@ -9,10 +9,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
+from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
     safe_path_component,
@@ -78,6 +80,16 @@ class AircraftInfo(BaseModel):
     nickname: str | None = None
 
 
+class BriefingStatusInfo(BaseModel):
+    """Summary of latest briefing pack, included in flight listings."""
+
+    assessment: str | None = None
+    assessment_reason: str | None = None
+    has_digest: bool = False
+    days_out: int | None = None
+    fetch_timestamp: str | None = None
+
+
 class FlightResponse(BaseModel):
     """Flight data in API responses."""
 
@@ -99,6 +111,7 @@ class FlightResponse(BaseModel):
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
     created_at: str
+    latest_briefing: BriefingStatusInfo | None = None
 
 
 def _is_admin_or_dev(request: Request, db: Session) -> bool:
@@ -143,6 +156,7 @@ def _flight_to_response(
     flight: Flight,
     db: Session | None = None,
     viewer_id: str | None = None,
+    latest_briefing: BriefingStatusInfo | None = None,
 ) -> FlightResponse:
     aircraft = None
     if db is not None and flight.aircraft_id:
@@ -167,7 +181,45 @@ def _flight_to_response(
         auto_refresh=flight.auto_refresh,
         auto_refresh_hour=flight.auto_refresh_hour,
         created_at=flight.created_at.isoformat(),
+        latest_briefing=latest_briefing,
     )
+
+
+def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingStatusInfo]:
+    """Fetch the latest briefing pack per flight in a single query."""
+    if not flight_ids:
+        return {}
+
+    # Subquery: max fetch_timestamp per flight
+    latest_ts = (
+        select(
+            BriefingPackRow.flight_id,
+            func.max(BriefingPackRow.fetch_timestamp).label("max_ts"),
+        )
+        .where(BriefingPackRow.flight_id.in_(flight_ids))
+        .group_by(BriefingPackRow.flight_id)
+        .subquery()
+    )
+
+    rows = db.execute(
+        select(BriefingPackRow)
+        .join(
+            latest_ts,
+            (BriefingPackRow.flight_id == latest_ts.c.flight_id)
+            & (BriefingPackRow.fetch_timestamp == latest_ts.c.max_ts),
+        )
+    ).scalars().all()
+
+    return {
+        row.flight_id: BriefingStatusInfo(
+            assessment=row.assessment,
+            assessment_reason=row.assessment_reason,
+            has_digest=row.has_digest,
+            days_out=row.days_out,
+            fetch_timestamp=row.fetch_timestamp.isoformat(),
+        )
+        for row in rows
+    }
 
 
 @router.get("", response_model=list[FlightResponse])
@@ -175,9 +227,13 @@ def list_all_flights(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """List all saved flights."""
+    """List all saved flights with latest briefing status."""
     flights = list_flights(db, user_id)
-    return [_flight_to_response(f, db, viewer_id=user_id) for f in flights]
+    pack_status = _get_latest_packs(db, [f.id for f in flights])
+    return [
+        _flight_to_response(f, db, viewer_id=user_id, latest_briefing=pack_status.get(f.id))
+        for f in flights
+    ]
 
 
 @router.post("", response_model=FlightResponse, status_code=201)

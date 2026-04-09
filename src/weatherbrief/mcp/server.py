@@ -119,7 +119,6 @@ def list_flights() -> dict[str, Any]:
 
     result = []
     for f in flights:
-        pack = client.get_latest_pack(f["id"])
         entry: dict[str, Any] = {
             "id": f["id"],
             "route_name": f["route_name"],
@@ -128,6 +127,7 @@ def list_flights() -> dict[str, Any]:
             "cruise_altitude_ft": f["cruise_altitude_ft"],
             "web_url": _flight_web_url(f["id"]),
         }
+        pack = f.get("latest_briefing")
         if pack:
             entry["assessment"] = pack.get("assessment")
             entry["assessment_reason"] = pack.get("assessment_reason")

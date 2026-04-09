@@ -254,31 +254,23 @@ def get_airport_weather(
             "note": "No supported European airports found. Coverage: Western, Central, and Eastern Europe.",
         }
 
-    # Get the forecast map data (from cache or live)
-    from weatherbrief.tasks.cache_builder import get_cached, is_stale
-    from weatherbrief.tasks.map_queries import (
-        enrich_with_observations,
-        get_forecast_map_data,
-    )
+    # Serve from pre-built cache only — the cache is rebuilt frequently
+    # by the background scheduler. Avoids expensive full-map queries
+    # when only a few airports are needed.
+    from weatherbrief.tasks.cache_builder import get_cached
 
     if hour not in _SAMPLE_HOURS:
         hour = min(_SAMPLE_HOURS, key=lambda h: abs(h - hour))
 
     cache_key = f"forecast_map:{day}:{hour}"
-    data = None
-    if not is_stale(db, cache_key, "snapshot"):
-        data = get_cached(db, cache_key)
+    data = get_cached(db, cache_key)
 
     if data is None:
-        now = datetime.now(timezone.utc)
-        target_date = (now + timedelta(days=day)).date()
-        forecast_hour = datetime(
-            target_date.year, target_date.month, target_date.day,
-            hour, 0, 0, tzinfo=timezone.utc,
+        raise HTTPException(
+            status_code=503,
+            detail=f"Forecast data for day={day} hour={hour} is not yet available. "
+            "The cache is rebuilt every ~30 minutes — try again shortly.",
         )
-        data = get_forecast_map_data(db, forecast_hour, airports_db)
-        if day == 0:
-            data = enrich_with_observations(db, forecast_hour, data)
 
     # Filter to requested airports
     resolution_map = {r["icao"]: r for r in resolved if "requested_icao" in r}
