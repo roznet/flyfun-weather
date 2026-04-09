@@ -40,6 +40,7 @@ from weatherbrief.api.feedback import router as feedback_router
 from weatherbrief.api.messages import admin_router as messages_admin_router, router as messages_router
 from weatherbrief.api.maps import router as maps_router
 from weatherbrief.api.models import router as models_router
+from weatherbrief.api.tokens import router as tokens_router
 from weatherbrief.api.usage import router as usage_router
 from flyfun_common.admin_hub import create_hub_router
 
@@ -252,8 +253,8 @@ def create_app() -> FastAPI:
         on_new_user=_on_new_user,
         on_delete_user=_on_delete_user,
     )
-    app.include_router(auth_router)
     app.include_router(create_autorouter_router())
+    app.include_router(auth_router)
 
     # Dev-only endpoint: issue a JWT for the dev user without OAuth
     if is_dev_mode():
@@ -280,6 +281,7 @@ def create_app() -> FastAPI:
     app.include_router(messages_router, prefix="/api")
     app.include_router(messages_admin_router, prefix="/api")
     app.include_router(maps_router, prefix="/api")
+    app.include_router(tokens_router, prefix="/api")
     app.include_router(models_router, prefix="/api")
     app.include_router(refresh_router, prefix="/api")
     app.include_router(transparency_router, prefix="/api")
