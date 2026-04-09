@@ -105,8 +105,8 @@
   "dwd.originalGerman": "Original German",
   "dwd.header": "DWD Synoptic Overview — ",
 
-  "gramet.noCreds": "No GRAMET available. To enable, link your Autorouter account in Account Settings.",
-  "gramet.noCredsDev": "No GRAMET available. To enable, enter your Autorouter credentials in Account Settings.",
+  "gramet.noCreds": "No GRAMET available. To enable, link your Autorouter account in <a href=\"/settings.html\">Account Settings</a>.",
+  "gramet.noCredsDev": "No GRAMET available. To enable, enter your Autorouter credentials in <a href=\"/settings.html\">Account Settings</a>.",
   "gramet.notAvailable": "GRAMET not available for this briefing.",
   "gramet.altText": "GRAMET Cross-Section",
   "gramet.downloadPdf": "Download GRAMET PDF",
