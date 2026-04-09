@@ -154,41 +154,25 @@ def _parse_digest_config_from_prefs(raw: str) -> DigestConfig:
     return DigestConfig(**dc)
 
 
-def _has_autorouter_creds(row: UserPreferencesRow) -> bool:
-    """Check if the user has autorouter credentials in the appropriate format."""
-    if not row.encrypted_creds_json:
-        return False
-    creds = load_encrypted_creds_from_row(row)
-    if not creds:
-        return False
-    if is_dev_mode():
-        return "username" in creds and "password" in creds
-    return "autorouter" in creds and bool(creds["autorouter"].get("access_token"))
-
-
-def load_encrypted_creds_from_row(row: UserPreferencesRow) -> dict | None:
-    """Decrypt credentials from a row without a DB query."""
-    if not row.encrypted_creds_json:
-        return None
-    try:
-        from flyfun_common.encryption import decrypt
-        return json.loads(decrypt(row.encrypted_creds_json))
-    except Exception:
-        return None
-
-
-def _build_response(row: UserPreferencesRow) -> PreferencesResponse:
+def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> PreferencesResponse:
     """Build a PreferencesResponse from a DB row."""
     toggles = _parse_service_toggles(row.app_prefs_json)
     try:
         prefs_data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
     except json.JSONDecodeError:
         prefs_data = {}
+
+    if is_dev_mode():
+        creds = load_encrypted_creds(db, user_id)
+        has_ar = bool(creds and "username" in creds and "password" in creds)
+    else:
+        has_ar = get_autorouter_token(db, user_id) is not None
+
     return PreferencesResponse(
         defaults=_parse_defaults(row.app_prefs_json),
         digest_config=_parse_digest_config_from_prefs(row.app_prefs_json),
         advisories=_parse_advisory_prefs(row.app_prefs_json),
-        has_autorouter_creds=_has_autorouter_creds(row),
+        has_autorouter_creds=has_ar,
         autorouter_mode="password" if is_dev_mode() else "oauth",
         pirep_can_view=prefs_data.get("pirep_can_view", False),
         pirep_can_publish=prefs_data.get("pirep_can_publish", False),
@@ -204,7 +188,7 @@ def get_preferences(
     """Get the current user's preferences."""
     row = _load_prefs(db, user_id)
     run_pending_migrations(db, row)
-    return _build_response(row)
+    return _build_response(row, db, user_id)
 
 
 @router.put("", response_model=PreferencesResponse)
@@ -269,7 +253,7 @@ def update_preferences(
             "password": body.autorouter_password,
         })
 
-    return _build_response(row)
+    return _build_response(row, db, user_id)
 
 
 @router.delete("/autorouter", status_code=204)
