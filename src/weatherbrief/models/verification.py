@@ -145,3 +145,72 @@ class VerificationDigestData(BaseModel):
     category_bias: list[CategoryBiasStats] = Field(default_factory=list)
     wind_advisory: list[WindAdvisoryStats] = Field(default_factory=list)
     missed_warnings: list[MissedWarning] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Admin digest models
+# ---------------------------------------------------------------------------
+
+
+class NewUserInfo(BaseModel):
+    """Minimal info about a newly registered user."""
+
+    email: str
+    display_name: str = ""
+
+
+class UsersSectionData(BaseModel):
+    """User stats for the admin digest."""
+
+    new_users: list[NewUserInfo] = Field(default_factory=list)
+    new_user_count: int = 0
+    active_user_count: int = 0
+    total_user_count: int = 0
+
+
+class FlightsBriefingsSectionData(BaseModel):
+    """Flight and briefing stats for the admin digest."""
+
+    new_flights: int = 0
+    total_briefings: int = 0
+    manual_briefings: int = 0
+    auto_briefings: int = 0
+    flights_single_briefing: int = 0
+    flights_refreshed: int = 0
+    gramet_count: int = 0
+    digest_count: int = 0
+
+
+class PerformanceSectionData(BaseModel):
+    """Cost, tokens, disk, and pipeline performance."""
+
+    total_cost_usd: float = 0.0
+    total_llm_input_tokens: int = 0
+    total_llm_output_tokens: int = 0
+    total_disk_bytes: int = 0
+    avg_elapsed_seconds: float | None = None
+    avg_queue_wait_seconds: float | None = None
+    briefing_count_for_perf: int = 0  # sample size for avg stats
+
+
+class VerificationSectionData(BaseModel):
+    """Condensed verification stats for the admin digest."""
+
+    category_accuracy: list[CategoryAccuracyRow] = Field(default_factory=list)
+    notable_miss_count: int = 0
+    wind_advisory: list[WindAdvisoryStats] = Field(default_factory=list)
+    dashboard_url: str = ""
+
+
+class AdminDigestData(BaseModel):
+    """Complete admin digest payload."""
+
+    period_label: str = ""
+    users: UsersSectionData = Field(default_factory=UsersSectionData)
+    flights_briefings: FlightsBriefingsSectionData = Field(
+        default_factory=FlightsBriefingsSectionData
+    )
+    performance: PerformanceSectionData = Field(default_factory=PerformanceSectionData)
+    verification: VerificationSectionData = Field(
+        default_factory=VerificationSectionData
+    )

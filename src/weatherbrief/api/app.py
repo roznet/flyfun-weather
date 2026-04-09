@@ -99,18 +99,14 @@ def _on_new_user(user, request, db):
     db.flush()
 
     try:
-        from weatherbrief.notify.admin_email import (
-            send_new_user_notification,
-            send_welcome_email,
-        )
+        from weatherbrief.notify.admin_email import send_welcome_email
 
         base_url = str(request.base_url).rstrip("/")
         if not is_dev_mode():
             base_url = base_url.replace("http://", "https://")
-        send_new_user_notification(user.email, user.display_name, user.id, base_url)
         send_welcome_email(user.email, user.display_name, base_url)
     except Exception:
-        logger.warning("Failed to send emails for new user %s", user.email, exc_info=True)
+        logger.warning("Failed to send welcome email for new user %s", user.email, exc_info=True)
 
 
 @asynccontextmanager

@@ -348,10 +348,10 @@ async def run_digest_loop(app_state) -> None:
 
 
 def _run_digest_once() -> None:
-    """Execute a single digest send (called in a thread)."""
+    """Execute a single admin digest send (called in a thread)."""
+    from weatherbrief.notify.admin_digest_email import send_admin_digest
     from weatherbrief.notify.admin_email import get_admin_emails
-    from weatherbrief.notify.verification_email import send_verification_digest
-    from weatherbrief.tasks.verification_stats import get_digest_data
+    from weatherbrief.tasks.admin_digest_stats import get_admin_digest_data
 
     admin_emails = get_admin_emails()
     if not admin_emails:
@@ -361,17 +361,15 @@ def _run_digest_once() -> None:
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=24)
     date_label = now.strftime("%Y-%m-%d")
+    base_url = os.environ.get("WEATHERBRIEF_BASE_URL", "https://weather.flyfun.aero")
 
     db = SessionLocal()
     try:
-        data = get_digest_data(db, since, now, period_label=date_label)
-
-        if data.activity.observations_collected == 0:
-            logger.info("Digest: no observations in last 24h, skipping email")
-            return
-
-        send_verification_digest(admin_emails, data)
-        logger.info("Digest: sent to %d admin(s)", len(admin_emails))
+        data = get_admin_digest_data(
+            db, since, now, period_label=date_label, base_url=base_url,
+        )
+        send_admin_digest(admin_emails, data)
+        logger.info("Admin digest: sent to %d admin(s)", len(admin_emails))
     finally:
         db.close()
 
