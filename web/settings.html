@@ -138,6 +138,35 @@
           </div>
         </div>
 
+        <!-- MCP Access section -->
+        <div class="section" id="mcp-section">
+          <h3>MCP Access</h3>
+          <p class="muted section-hint">
+            Generate API tokens to connect AI assistants (Claude Desktop, claude.ai) to your weather briefings via the
+            <a href="https://modelcontextprotocol.io" target="_blank">Model Context Protocol</a>.
+          </p>
+          <div id="mcp-token-list"></div>
+          <div id="mcp-new-token" style="margin-top:0.75rem">
+            <div class="form-row" style="align-items:flex-end; gap:0.5rem">
+              <div class="form-group grow">
+                <label for="mcp-token-name">Token Name</label>
+                <input type="text" id="mcp-token-name" placeholder="e.g. Claude Desktop" maxlength="256">
+              </div>
+              <div class="form-group">
+                <label>&nbsp;</label>
+                <button type="button" id="btn-create-token" class="btn btn-primary btn-sm">Generate Token</button>
+              </div>
+            </div>
+          </div>
+          <div id="mcp-token-reveal" class="token-reveal" style="display:none">
+            <p class="muted"><strong>Copy this token now</strong> — it won't be shown again.</p>
+            <div class="form-row" style="align-items:center; gap:0.5rem">
+              <code id="mcp-token-value" class="token-value"></code>
+              <button type="button" id="btn-copy-token" class="btn btn-secondary btn-sm">Copy</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Usage section (populated by JS) -->
         <div id="usage-section" class="section hidden-section">
           <h3>Usage</h3>

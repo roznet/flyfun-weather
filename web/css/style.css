@@ -785,6 +785,55 @@ label {
 .credit-positive { color: var(--green); }
 .credit-negative { color: var(--text-muted); }
 
+/* --- MCP tokens --- */
+
+.token-value {
+  display: block;
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  word-break: break-all;
+  user-select: all;
+}
+
+.token-reveal {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-success, #d4edda);
+  border: 1px solid var(--border-success, #c3e6cb);
+  border-radius: 6px;
+}
+
+[data-theme="dark"] .token-reveal {
+  background: #1a3a2a;
+  border-color: #2d5a3d;
+}
+
+.token-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.token-table th,
+.token-table td {
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.token-table th {
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
 /* --- Digest sections --- */
 
 .digest-section {

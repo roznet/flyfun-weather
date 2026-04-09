@@ -36,6 +36,12 @@ import {
   type AircraftResponse,
   type AircraftType,
 } from './adapters/aircraft-adapter';
+import {
+  fetchTokens,
+  createToken,
+  revokeToken,
+  type TokenListItem,
+} from './adapters/tokens-adapter';
 import { initTheme } from './theme';
 import { initI18n, t, setLocale, getLocale, getDateLocale } from './i18n/i18n';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
@@ -474,13 +480,14 @@ async function init(): Promise<void> {
     switchTab('services');
   }
 
-  // Load usage and credits (non-blocking)
+  // Load usage, credits, and tokens (non-blocking)
   fetchUsageSummary()
     .then(renderUsage)
     .catch(() => { /* usage section stays hidden */ });
   fetchCostSummary()
     .then(renderCosts)
     .catch(() => { /* costs section stays hidden */ });
+  initTokenSection();
 
   // Profile controls
   const profileSelect = document.getElementById('profile-select') as HTMLSelectElement;
@@ -1200,6 +1207,96 @@ function showTypeSuggestions(types: AircraftType[]): void {
 function hideTypeSuggestions(): void {
   const dropdown = document.getElementById('ac-type-suggestions');
   if (dropdown) dropdown.style.display = 'none';
+}
+
+// --- MCP token management ---
+
+function initTokenSection(): void {
+  refreshTokenList();
+
+  document.getElementById('btn-create-token')?.addEventListener('click', async () => {
+    const nameInput = document.getElementById('mcp-token-name') as HTMLInputElement;
+    const name = nameInput.value.trim();
+    if (!name) {
+      showStatus('Enter a name for the token', true);
+      return;
+    }
+
+    try {
+      const result = await createToken(name);
+      nameInput.value = '';
+
+      // Show the token value (one-time)
+      const revealEl = document.getElementById('mcp-token-reveal')!;
+      const valueEl = document.getElementById('mcp-token-value')!;
+      valueEl.textContent = result.token;
+      revealEl.style.display = '';
+
+      refreshTokenList();
+    } catch (err) {
+      showStatus(`${err}`, true);
+    }
+  });
+
+  document.getElementById('btn-copy-token')?.addEventListener('click', () => {
+    const valueEl = document.getElementById('mcp-token-value')!;
+    navigator.clipboard.writeText(valueEl.textContent || '').then(() => {
+      showStatus('Token copied to clipboard');
+    });
+  });
+}
+
+async function refreshTokenList(): Promise<void> {
+  const container = document.getElementById('mcp-token-list');
+  if (!container) return;
+
+  const tokens = await fetchTokens();
+  if (tokens.length === 0) {
+    container.innerHTML = '<p class="muted">No tokens yet.</p>';
+    return;
+  }
+
+  const locale = getDateLocale();
+  const rows = tokens.map(tok => {
+    const created = new Date(tok.created_at).toLocaleDateString(locale, {
+      day: 'numeric', month: 'short', year: 'numeric',
+    });
+    const lastUsed = tok.last_used_at
+      ? new Date(tok.last_used_at).toLocaleDateString(locale, {
+          day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+        })
+      : 'Never';
+    return `<tr>
+      <td>${escapeHtml(tok.name)}</td>
+      <td class="muted">${created}</td>
+      <td class="muted">${lastUsed}</td>
+      <td><button type="button" class="btn btn-danger btn-sm tok-revoke-btn" data-id="${tok.id}" data-name="${escapeHtml(tok.name)}">Revoke</button></td>
+    </tr>`;
+  }).join('');
+
+  container.innerHTML = `
+    <table class="token-table">
+      <thead><tr><th>Name</th><th>Created</th><th>Last Used</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  for (const btn of container.querySelectorAll<HTMLButtonElement>('.tok-revoke-btn')) {
+    btn.addEventListener('click', async () => {
+      const id = Number(btn.dataset.id);
+      const name = btn.dataset.name || 'this token';
+      if (!confirm(`Revoke "${name}"? Any MCP client using it will stop working.`)) return;
+      try {
+        await revokeToken(id);
+        refreshTokenList();
+        // Hide the reveal box if visible (in case they just created and are revoking)
+        const revealEl = document.getElementById('mcp-token-reveal');
+        if (revealEl) revealEl.style.display = 'none';
+        showStatus('Token revoked');
+      } catch (err) {
+        showStatus(`${err}`, true);
+      }
+    });
+  }
 }
 
 if (document.readyState === 'loading') {
