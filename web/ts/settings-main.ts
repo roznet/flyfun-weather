@@ -1222,17 +1222,13 @@ function initTokenSection(): void {
       return;
     }
 
-    // Hide any previously revealed token
     const revealEl = document.getElementById('mcp-token-reveal')!;
+    const valueEl = document.getElementById('mcp-token-value')!;
     revealEl.style.display = 'none';
 
     try {
       const result = await createToken(name);
       nameInput.value = '';
-
-      // Show the token value (one-time)
-      const revealEl = document.getElementById('mcp-token-reveal')!;
-      const valueEl = document.getElementById('mcp-token-value')!;
       valueEl.textContent = result.token;
       revealEl.style.display = '';
 

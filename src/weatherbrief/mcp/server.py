@@ -81,7 +81,10 @@ def _extract_token() -> str:
 
 
 def _get_client() -> WeatherbriefClient:
-    """Build a WeatherbriefClient using the token from the current request."""
+    """Build a WeatherbriefClient using the token from the current request.
+
+    Returns a context-manager — callers should use ``with _get_client() as client:``.
+    """
     return WeatherbriefClient(_extract_token())
 
 
@@ -110,8 +113,8 @@ def list_flights() -> dict[str, Any]:
     flights need attention or have stale briefings.
     """
     try:
-        client = _get_client()
-        flights = client.list_flights()
+        with _get_client() as client:
+            flights = client.list_flights()
     except httpx.HTTPStatusError as e:
         return _error_result(f"API error: {e.response.text}", e.response.status_code)
     except ValueError as e:
@@ -176,34 +179,35 @@ def create_flight(
     except ValueError as e:
         return _error_result(str(e))
 
-    try:
-        flight = client.create_flight(
-            waypoints=waypoints,
-            departure_time=departure_time,
-            cruise_altitude_ft=cruise_altitude_ft,
-            flight_duration_hours=flight_duration_hours,
-        )
-    except httpx.HTTPStatusError as e:
-        return _error_result(f"Failed to create flight: {e.response.text}", e.response.status_code)
+    with client:
+        try:
+            flight = client.create_flight(
+                waypoints=waypoints,
+                departure_time=departure_time,
+                cruise_altitude_ft=cruise_altitude_ft,
+                flight_duration_hours=flight_duration_hours,
+            )
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"Failed to create flight: {e.response.text}", e.response.status_code)
 
-    flight_id = flight["id"]
+        flight_id = flight["id"]
 
-    # Auto-trigger briefing refresh
-    refresh_status: dict[str, Any] = {"status": "not_triggered"}
-    try:
-        client.refresh_briefing(flight_id)
-        refresh_status = {
-            "status": "processing",
-            "estimated_seconds": 120,
-            "message": "Briefing is being generated. Call get_briefing in ~2 minutes.",
-        }
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 409:
-            refresh_status = {"status": "already_in_progress"}
-        elif e.response.status_code == 429:
-            refresh_status = {"status": "rate_limited", "message": e.response.text}
-        else:
-            refresh_status = {"status": "failed", "message": e.response.text}
+        # Auto-trigger briefing refresh
+        refresh_status: dict[str, Any] = {"status": "not_triggered"}
+        try:
+            client.refresh_briefing(flight_id)
+            refresh_status = {
+                "status": "processing",
+                "estimated_seconds": 120,
+                "message": "Briefing is being generated. Call get_briefing in ~2 minutes.",
+            }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 409:
+                refresh_status = {"status": "already_in_progress"}
+            elif e.response.status_code == 429:
+                refresh_status = {"status": "rate_limited", "message": e.response.text}
+            else:
+                refresh_status = {"status": "failed", "message": e.response.text}
 
     return {
         "flight": {
@@ -246,81 +250,82 @@ def get_briefing(
     except ValueError as e:
         return _error_result(str(e))
 
-    # Check if a refresh is in progress
-    try:
-        refresh_info = client.get_refresh_status(flight_id)
-        if refresh_info.get("active"):
+    with client:
+        # Check if a refresh is in progress
+        try:
+            refresh_info = client.get_refresh_status(flight_id)
+            if refresh_info.get("active"):
+                return {
+                    "status": "processing",
+                    "flight_id": flight_id,
+                    "message": "Briefing is being generated. Check again in ~1-2 minutes.",
+                    "web_url": _flight_web_url(flight_id),
+                }
+        except httpx.HTTPStatusError:
+            pass  # endpoint may return error, continue
+
+        # Get latest pack
+        try:
+            pack = client.get_latest_pack(flight_id)
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"API error: {e.response.text}", e.response.status_code)
+
+        if pack is None:
             return {
-                "status": "processing",
+                "status": "none",
                 "flight_id": flight_id,
-                "message": "Briefing is being generated. Check again in ~1-2 minutes.",
+                "message": "No briefing exists yet. Call refresh_briefing to generate one.",
                 "web_url": _flight_web_url(flight_id),
             }
-    except httpx.HTTPStatusError:
-        pass  # endpoint may return error, continue
 
-    # Get latest pack
-    try:
-        pack = client.get_latest_pack(flight_id)
-    except httpx.HTTPStatusError as e:
-        return _error_result(f"API error: {e.response.text}", e.response.status_code)
+        timestamp = pack["fetch_timestamp"]
 
-    if pack is None:
-        return {
-            "status": "none",
+        # Check freshness
+        try:
+            freshness = client.get_freshness(flight_id)
+            is_fresh = freshness.get("fresh", True)
+            stale_models = freshness.get("stale_models", [])
+        except httpx.HTTPStatusError:
+            is_fresh = True
+            stale_models = []
+
+        status = "ready" if is_fresh else "stale"
+
+        result: dict[str, Any] = {
+            "status": status,
             "flight_id": flight_id,
-            "message": "No briefing exists yet. Call refresh_briefing to generate one.",
+            "assessment": pack.get("assessment"),
+            "assessment_reason": pack.get("assessment_reason"),
+            "days_out": pack.get("days_out"),
+            "briefing_timestamp": timestamp,
             "web_url": _flight_web_url(flight_id),
         }
 
-    timestamp = pack["fetch_timestamp"]
+        if not is_fresh:
+            result["stale_models"] = stale_models
+            result["stale_note"] = (
+                "Weather models have updated since this briefing. "
+                "Call refresh_briefing for the latest data."
+            )
 
-    # Check freshness
-    try:
-        freshness = client.get_freshness(flight_id)
-        is_fresh = freshness.get("fresh", True)
-        stale_models = freshness.get("stale_models", [])
-    except httpx.HTTPStatusError:
-        is_fresh = True
-        stale_models = []
+        # Fetch advisories
+        advisories = client.get_advisories(flight_id, timestamp)
+        if advisories:
+            result["advisories"] = _summarize_advisories(advisories)
 
-    status = "ready" if is_fresh else "stale"
+        # Fetch digest
+        digest_json = client.get_digest_json(flight_id, timestamp)
+        if digest_json:
+            result["digest"] = digest_json
 
-    result: dict[str, Any] = {
-        "status": status,
-        "flight_id": flight_id,
-        "assessment": pack.get("assessment"),
-        "assessment_reason": pack.get("assessment_reason"),
-        "days_out": pack.get("days_out"),
-        "briefing_timestamp": timestamp,
-        "web_url": _flight_web_url(flight_id),
-    }
+        digest_text = client.get_digest_text(flight_id, timestamp)
+        if digest_text:
+            result["digest_text"] = digest_text
 
-    if not is_fresh:
-        result["stale_models"] = stale_models
-        result["stale_note"] = (
-            "Weather models have updated since this briefing. "
-            "Call refresh_briefing for the latest data."
-        )
-
-    # Fetch advisories
-    advisories = client.get_advisories(flight_id, timestamp)
-    if advisories:
-        result["advisories"] = _summarize_advisories(advisories)
-
-    # Fetch digest
-    digest_json = client.get_digest_json(flight_id, timestamp)
-    if digest_json:
-        result["digest"] = digest_json
-
-    digest_text = client.get_digest_text(flight_id, timestamp)
-    if digest_text:
-        result["digest_text"] = digest_text
-
-    # Fetch altitude table
-    alt_table = client.get_altitude_table(flight_id, timestamp)
-    if alt_table:
-        result["altitude_table"] = _summarize_altitude_table(alt_table)
+        # Fetch altitude table
+        alt_table = client.get_altitude_table(flight_id, timestamp)
+        if alt_table:
+            result["altitude_table"] = _summarize_altitude_table(alt_table)
 
     return result
 
@@ -387,29 +392,30 @@ def refresh_briefing(
     except ValueError as e:
         return _error_result(str(e))
 
-    try:
-        result = client.refresh_briefing(flight_id)
-    except httpx.HTTPStatusError as e:
-        code = e.response.status_code
-        if code == 409:
-            return {
-                "status": "already_in_progress",
-                "flight_id": flight_id,
-                "message": "A refresh is already running for this flight.",
-            }
-        if code == 429:
-            return {
-                "status": "rate_limited",
-                "flight_id": flight_id,
-                "message": e.response.text,
-            }
-        if code == 503:
-            return {
-                "status": "server_busy",
-                "flight_id": flight_id,
-                "message": "Server is busy with other refreshes. Try again shortly.",
-            }
-        return _error_result(f"Refresh failed: {e.response.text}", code)
+    with client:
+        try:
+            result = client.refresh_briefing(flight_id)
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if code == 409:
+                return {
+                    "status": "already_in_progress",
+                    "flight_id": flight_id,
+                    "message": "A refresh is already running for this flight.",
+                }
+            if code == 429:
+                return {
+                    "status": "rate_limited",
+                    "flight_id": flight_id,
+                    "message": e.response.text,
+                }
+            if code == 503:
+                return {
+                    "status": "server_busy",
+                    "flight_id": flight_id,
+                    "message": "Server is busy with other refreshes. Try again shortly.",
+                }
+            return _error_result(f"Refresh failed: {e.response.text}", code)
 
     # If data was already fresh, the refresh endpoint returns immediately
     data_status = result.get("data_status")
@@ -463,14 +469,12 @@ def get_airport_weather(
     return in the 'unsupported' list.
     """
     try:
-        client = _get_client()
-    except ValueError as e:
-        return _error_result(str(e))
-
-    try:
-        return client.get_airport_weather(icao_codes, day=day, hour_utc=hour_utc)
+        with _get_client() as client:
+            return client.get_airport_weather(icao_codes, day=day, hour_utc=hour_utc)
     except httpx.HTTPStatusError as e:
         return _error_result(f"API error: {e.response.text}", e.response.status_code)
+    except ValueError as e:
+        return _error_result(str(e))
 
 
 # ---------------------------------------------------------------------------

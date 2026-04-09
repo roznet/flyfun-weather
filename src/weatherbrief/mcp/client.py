@@ -19,38 +19,45 @@ API_BASE = os.getenv("WEATHERBRIEF_API_URL", "http://localhost:8020")
 _TIMEOUT = httpx.Timeout(connect=5, read=180, write=5, pool=5)
 
 
-def _client() -> httpx.Client:
-    """Create a short-lived httpx client."""
-    return httpx.Client(base_url=API_BASE, timeout=_TIMEOUT)
-
-
-def _headers(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 class WeatherbriefClient:
-    """Thin wrapper around the weatherbrief REST API."""
+    """Thin wrapper around the weatherbrief REST API.
+
+    Uses a single httpx.Client for the lifetime of the instance so that
+    tool calls that make multiple API requests (e.g. get_briefing) reuse
+    the same connection instead of opening a new one per request.
+    """
 
     def __init__(self, token: str) -> None:
         self.token = token
+        self._client = httpx.Client(
+            base_url=API_BASE,
+            timeout=_TIMEOUT,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "WeatherbriefClient":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
 
     def _get(self, path: str, params: dict | None = None) -> Any:
-        with _client() as c:
-            r = c.get(f"/api{path}", headers=_headers(self.token), params=params)
-            r.raise_for_status()
-            return r.json()
+        r = self._client.get(f"/api{path}", params=params)
+        r.raise_for_status()
+        return r.json()
 
     def _post(self, path: str, json: dict | None = None, params: dict | None = None) -> Any:
-        with _client() as c:
-            r = c.post(f"/api{path}", headers=_headers(self.token), json=json, params=params)
-            r.raise_for_status()
-            return r.json()
+        r = self._client.post(f"/api{path}", json=json, params=params)
+        r.raise_for_status()
+        return r.json()
 
     def _delete(self, path: str) -> int:
-        with _client() as c:
-            r = c.delete(f"/api{path}", headers=_headers(self.token))
-            r.raise_for_status()
-            return r.status_code
+        r = self._client.delete(f"/api{path}")
+        r.raise_for_status()
+        return r.status_code
 
     # -- Flights --
 
@@ -114,13 +121,11 @@ class WeatherbriefClient:
     def get_digest_text(self, flight_id: str, timestamp: str) -> str | None:
         """Get the markdown digest text."""
         try:
-            with _client() as c:
-                r = c.get(
-                    f"/api/flights/{flight_id}/packs/{timestamp}/digest",
-                    headers=_headers(self.token),
-                )
-                r.raise_for_status()
-                return r.text
+            r = self._client.get(
+                f"/api/flights/{flight_id}/packs/{timestamp}/digest",
+            )
+            r.raise_for_status()
+            return r.text
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return None
