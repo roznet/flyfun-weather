@@ -6,6 +6,7 @@ Usage:
     python -m weatherbrief.verify stats [--model MODEL] [--icao ICAO] [--source SOURCE]
     python -m weatherbrief.verify discover [--prefixes LF,ED,...]
     python -m weatherbrief.verify standalone [--once]
+    python -m weatherbrief.verify digest [--period 24h|7d] [--send] [--json]
 """
 
 from __future__ import annotations
@@ -325,6 +326,71 @@ def cmd_standalone(args):
     print(f"  Duration: {result.get('duration_ms', 0)}ms")
 
 
+def cmd_rebuild_cache(args):
+    """Rebuild the verification/forecast map cache."""
+    _init_db()
+    load_dotenv()
+
+    airports_db = os.environ.get("AIRPORTS_DB", "")
+    if not airports_db:
+        print("ERROR: AIRPORTS_DB environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    from flyfun_common.db import SessionLocal
+
+    from weatherbrief.tasks.cache_builder import rebuild_all
+
+    db = SessionLocal()
+    try:
+        result = rebuild_all(db, airports_db)
+        print("Cache rebuild complete:")
+        print(f"  Stats entries: {result['stats']}")
+        print(f"  Verification map entries: {result['verif_map']}")
+        print(f"  Forecast map entries: {result['forecast_map']}")
+        print(f"  Duration: {result['duration_ms']}ms")
+    finally:
+        db.close()
+
+
+def cmd_digest(args):
+    """Preview or send the admin digest."""
+    from datetime import timedelta
+
+    _init_db()
+    from flyfun_common.db import SessionLocal
+    from weatherbrief.tasks.admin_digest_stats import get_admin_digest_data
+
+    hours = {"24h": 24, "7d": 168}[args.period]
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=hours)
+    period_label = f"{args.period} — {now.strftime('%Y-%m-%d %H:%M')}Z"
+    base_url = os.environ.get("WEATHERBRIEF_BASE_URL", "https://weather.flyfun.aero")
+
+    db = SessionLocal()
+    try:
+        data = get_admin_digest_data(db, since, now, period_label=period_label, base_url=base_url)
+
+        if args.json:
+            print(json.dumps(data.model_dump(mode="json"), indent=2))
+        else:
+            # Print plain text version
+            from weatherbrief.notify.admin_digest_email import _build_plain
+            print(_build_plain(data))
+
+        if args.send:
+            from weatherbrief.notify.admin_digest_email import send_admin_digest
+            from weatherbrief.notify.admin_email import get_admin_emails
+
+            admin_emails = get_admin_emails()
+            if not admin_emails:
+                print("\nNo ADMIN_EMAILS configured, cannot send.")
+                sys.exit(1)
+            send_admin_digest(admin_emails, data)
+            print(f"\nSent to: {', '.join(admin_emails)}")
+    finally:
+        db.close()
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -389,6 +455,30 @@ def main():
         help="Run a single cycle (default)",
     )
 
+    # rebuild-cache
+    subparsers.add_parser(
+        "rebuild-cache",
+        help="Rebuild verification/forecast map cache",
+    )
+
+    # digest
+    p_digest = subparsers.add_parser(
+        "digest",
+        help="Preview or send the admin digest email",
+    )
+    p_digest.add_argument(
+        "--period", choices=["24h", "7d"], default="24h",
+        help="Time period (default: 24h)",
+    )
+    p_digest.add_argument(
+        "--send", action="store_true",
+        help="Actually send the email to ADMIN_EMAILS",
+    )
+    p_digest.add_argument(
+        "--json", action="store_true",
+        help="Output as JSON instead of plain text",
+    )
+
     args = parser.parse_args()
 
     if args.command == "collect":
@@ -405,6 +495,10 @@ def main():
         cmd_discover(args)
     elif args.command == "standalone":
         cmd_standalone(args)
+    elif args.command == "rebuild-cache":
+        cmd_rebuild_cache(args)
+    elif args.command == "digest":
+        cmd_digest(args)
 
 
 if __name__ == "__main__":

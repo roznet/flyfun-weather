@@ -886,3 +886,53 @@ def get_verification_airports(
         return load_watchlist(get_configs_dir())
     except FileNotFoundError:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Admin digest on demand
+# ---------------------------------------------------------------------------
+
+
+@router.post("/digest/send")
+def send_digest_now(
+    period: str = Query(default="24h", pattern=r"^(24h|7d)$"),
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Send the admin digest email on demand for the given period."""
+    from weatherbrief.notify.admin_digest_email import send_admin_digest
+    from weatherbrief.tasks.admin_digest_stats import get_admin_digest_data
+
+    admin_emails = get_admin_emails()
+    if not admin_emails:
+        raise HTTPException(status_code=400, detail="No ADMIN_EMAILS configured")
+
+    now = datetime.now(timezone.utc)
+    hours = {"24h": 24, "7d": 168}[period]
+    since = now - timedelta(hours=hours)
+    period_label = f"{period} — {now.strftime('%Y-%m-%d %H:%M')}Z"
+
+    base_url = os.environ.get("WEATHERBRIEF_BASE_URL", "https://weather.flyfun.aero")
+    data = get_admin_digest_data(db, since, now, period_label=period_label, base_url=base_url)
+    send_admin_digest(admin_emails, data)
+
+    return {"status": "sent", "recipients": admin_emails, "period": period}
+
+
+@router.get("/digest/preview")
+def preview_digest(
+    period: str = Query(default="24h", pattern=r"^(24h|7d)$"),
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Return the admin digest data as JSON (preview without sending)."""
+    from weatherbrief.tasks.admin_digest_stats import get_admin_digest_data
+
+    now = datetime.now(timezone.utc)
+    hours = {"24h": 24, "7d": 168}[period]
+    since = now - timedelta(hours=hours)
+    period_label = f"{period} — {now.strftime('%Y-%m-%d %H:%M')}Z"
+
+    base_url = os.environ.get("WEATHERBRIEF_BASE_URL", "https://weather.flyfun.aero")
+    data = get_admin_digest_data(db, since, now, period_label=period_label, base_url=base_url)
+    return data.model_dump(mode="json")
