@@ -90,24 +90,20 @@
     </div>
 
     <div class="help-section">
-      <h3>Autorouter Credentials</h3>
+      <h3>Autorouter Integration</h3>
       <p>
-        If you use the Autorouter integration (for GRAMET cross-section data), the app stores your
-        Autorouter username and password.
+        If you use the Autorouter integration (for GRAMET cross-section data), the app uses
+        <strong>OAuth2 authorization</strong> to connect to your Autorouter account. You are redirected
+        to autorouter.aero to authorize access &mdash; your Autorouter password is never shared with
+        or stored by this app.
       </p>
-      <h4>How they are stored</h4>
+      <h4>What is stored</h4>
       <p>
-        Credentials are <strong>encrypted at rest</strong> using Fernet symmetric encryption (AES-128-CBC).
-        The encryption key is stored separately from the database.
+        After authorization, an <strong>access token</strong> (valid for approximately one year) is stored
+        encrypted at rest using Fernet symmetric encryption (AES-128-CBC). This token allows the app to
+        fetch GRAMET data on your behalf. No username or password is stored.
       </p>
-      <h4>Honest disclosure</h4>
-      <p>
-        Anyone with access to the server (i.e., me) could technically decrypt these credentials, since
-        the encryption key lives on the same server. This means you need to <strong>trust me</strong>
-        not to look at or misuse them. I have no intention of doing so and never will, but I want to
-        be upfront about the technical reality.
-      </p>
-      <p>You can delete your Autorouter credentials at any time from your settings.</p>
+      <p>You can disconnect your Autorouter account at any time from your settings, which removes the stored token.</p>
     </div>
 
     <div class="help-section">
@@ -145,7 +141,7 @@
         </thead>
         <tbody>
           <tr><td style="padding:0.5em;">Open-Meteo</td><td style="padding:0.5em;">Coordinates, altitudes</td><td style="padding:0.5em;">Weather forecast data</td></tr>
-          <tr><td style="padding:0.5em;">Autorouter</td><td style="padding:0.5em;">Your credentials + route</td><td style="padding:0.5em;">GRAMET cross-section images</td></tr>
+          <tr><td style="padding:0.5em;">Autorouter</td><td style="padding:0.5em;">OAuth token + route</td><td style="padding:0.5em;">GRAMET cross-section images</td></tr>
           <tr><td style="padding:0.5em;">OpenAI / Anthropic</td><td style="padding:0.5em;">Weather data context (no personal info)</td><td style="padding:0.5em;">LLM-generated briefing digest</td></tr>
           <tr><td style="padding:0.5em;">SMTP / Resend</td><td style="padding:0.5em;">Your email + briefing summary</td><td style="padding:0.5em;">Email delivery</td></tr>
           <tr><td style="padding:0.5em;">Google / Apple OAuth</td><td style="padding:0.5em;">OAuth tokens</td><td style="padding:0.5em;">Authentication</td></tr>
