@@ -29,7 +29,7 @@ export interface ModelForecast {
 
 export interface ConsensusForecast {
   flight_category: string;
-  agreement: string;
+  agreement: Record<string, string>;
   wind_speed_kt?: number;
   wind_dir_deg?: number;
   ceiling_ft?: number;

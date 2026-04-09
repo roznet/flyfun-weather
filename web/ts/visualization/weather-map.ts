@@ -25,7 +25,7 @@ const RISK_COLORS: Record<string, string> = {
 };
 
 const AGREEMENT_COLORS: Record<string, string> = {
-  good: '#22c55e', moderate: '#f97316', poor: '#ef4444',
+  consistent: '#22c55e', mixed: '#f97316', divergent: '#ef4444',
 };
 
 function windSpeedColor(kt: number): string {
@@ -93,7 +93,7 @@ const CAT_ORDER: Record<string, number> = { VFR: 0, MVFR: 1, IFR: 2, LIFR: 3 };
 
 function computeConsensus(airport: ForecastAirport, mode: string): ConsensusForecast {
   const models = Object.values(airport.models);
-  if (models.length === 0) return { flight_category: 'VFR', agreement: 'good' };
+  if (models.length === 0) return { flight_category: 'VFR', agreement: {} };
 
   const cats = models.map(m => m.flight_category);
 
@@ -108,7 +108,7 @@ function computeConsensus(airport: ForecastAirport, mode: string): ConsensusFore
     consensusCat = cats.reduce((a, b) => (CAT_ORDER[a] ?? 0) >= (CAT_ORDER[b] ?? 0) ? a : b);
   }
 
-  // Use server-computed agreement (model divergence) — same regardless of consensus mode
+  // Use server-computed per-variable agreement — same regardless of consensus mode
   const agreement = airport.consensus.agreement;
 
   // Numeric means (same as server logic)
@@ -221,35 +221,76 @@ function getMetricLine(data: { [key: string]: any }, metric: ForecastMetric): st
   }
 }
 
+/** Get the agreement key in the consensus dict for a given metric. */
+function metricAgreementKey(metric: ForecastMetric): string {
+  switch (metric) {
+    case 'flight_category': return 'flight_category';
+    case 'wind_speed_kt': return 'wind_speed_kt';
+    case 'ceiling_ft': return 'ceiling_ft';
+    case 'cape_jkg': return 'cape_jkg';
+    case 'convective_risk': return 'cape_jkg';  // closest proxy
+    case 'visibility_m': return 'visibility_m';
+    case 'cloud_cover_pct': return 'cloud_cover_pct';
+    default: return 'flight_category';
+  }
+}
+
+function getAgreementForMetric(consensus: ConsensusForecast, metric: ForecastMetric): string | null {
+  const key = metricAgreementKey(metric);
+  return consensus.agreement[key] ?? null;
+}
+
+/** Format per-model value for a given metric. */
+function getModelMetricValue(d: ModelForecast, metric: ForecastMetric): string {
+  switch (metric) {
+    case 'flight_category': return d.flight_category;
+    case 'wind_speed_kt': return d.wind_speed_kt != null ? fmtWind(d.wind_speed_kt, d.wind_dir_deg, d.wind_gust_kt) : '—';
+    case 'ceiling_ft': return d.ceiling_ft != null ? fmtCeiling(d.ceiling_ft) : '—';
+    case 'visibility_m': return d.visibility_m != null ? fmtVisibility(d.visibility_m) : '—';
+    case 'cape_jkg': return d.cape_jkg != null ? `${Math.round(d.cape_jkg)} J/kg` : '—';
+    case 'convective_risk': return d.convective_risk || 'none';
+    case 'cloud_cover_pct': return d.cloud_cover_pct != null ? `${Math.round(d.cloud_cover_pct)}%` : '—';
+    default: return '—';
+  }
+}
+
 function getForecastTooltip(airport: ForecastAirport, model: string, metric: ForecastMetric): string {
   const lines: string[] = [`<b>${airport.icao}</b>`];
 
   if (isConsensusMode(model)) {
     const c = getConsensus(airport, model);
-    lines.push(`Category: <b>${c.flight_category}</b> (${c.agreement})`);
-    if (metric !== 'flight_category') {
-      // For consensus, build metric line from averaged consensus data or worst-of-models
-      if (metric === 'convective_risk') {
-        const riskOrder = ['none', 'marginal', 'low', 'moderate', 'high', 'extreme'];
-        let worst = 'none';
-        for (const md of Object.values(airport.models)) {
-          const r = md.convective_risk || 'none';
-          if (riskOrder.indexOf(r) > riskOrder.indexOf(worst)) worst = r;
-        }
-        lines.push(`Convective: ${worst}`);
-      } else {
-        const line = getMetricLine(c, metric);
-        if (line) lines.push(line);
+
+    // Consensus value for the selected metric
+    if (metric === 'flight_category') {
+      lines.push(`Category: <b>${c.flight_category}</b>`);
+    } else if (metric === 'convective_risk') {
+      const riskOrder = ['none', 'marginal', 'low', 'moderate', 'high', 'extreme'];
+      let worst = 'none';
+      for (const md of Object.values(airport.models)) {
+        const r = md.convective_risk || 'none';
+        if (riskOrder.indexOf(r) > riskOrder.indexOf(worst)) worst = r;
       }
+      lines.push(`Convective: <b>${worst}</b>`);
+    } else {
+      const line = getMetricLine(c, metric);
+      if (line) lines.push(line);
     }
+
+    // Agreement for selected metric
+    const agr = getAgreementForMetric(c, metric);
+    if (agr) lines.push(`Models: ${agr}`);
+
+    // Per-model values for the selected metric
     for (const [m, d] of Object.entries(airport.models)) {
-      lines.push(`<span style="color:var(--text-muted)">${m.toUpperCase()}: ${d.flight_category}</span>`);
+      const val = getModelMetricValue(d, metric);
+      lines.push(`<span style="color:var(--text-muted)">${m.toUpperCase()}: ${val}</span>`);
     }
   } else {
     const d = airport.models[model];
     if (!d) { lines.push('No data'); return lines.join('<br>'); }
-    lines.push(`Category: <b>${d.flight_category}</b>`);
-    if (metric !== 'flight_category') {
+    if (metric === 'flight_category') {
+      lines.push(`Category: <b>${d.flight_category}</b>`);
+    } else {
       const line = getMetricLine(d, metric);
       if (line) lines.push(line);
     }
@@ -411,7 +452,7 @@ export class WeatherMap {
       const color = getForecastColor(apt, metric, model);
       const isConsensus = isConsensusMode(model);
       const border = isConsensus
-        ? (AGREEMENT_COLORS[getConsensus(apt, model).agreement] || '#888')
+        ? (AGREEMENT_COLORS[getAgreementForMetric(getConsensus(apt, model), metric) ?? ''] || '#888')
         : color;
 
       const marker = L.circleMarker([apt.lat, apt.lon], {

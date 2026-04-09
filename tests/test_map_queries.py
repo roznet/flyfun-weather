@@ -213,7 +213,8 @@ class TestGetForecastMapData:
         result = get_forecast_map_data(db_session, NOW, "/fake/db")
         apt = result["airports"][0]
         assert apt["consensus"]["flight_category"] == "VFR"
-        assert apt["consensus"]["agreement"] == "good"
+        assert apt["consensus"]["agreement"]["flight_category"] == "consistent"
+        assert apt["consensus"]["agreement"]["wind_speed_kt"] == "consistent"
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
     def test_consensus_disagreement(self, _mock_coords, db_session):
@@ -235,8 +236,10 @@ class TestGetForecastMapData:
         apt = result["airports"][0]
         # Worst category should be IFR (from GFS)
         assert apt["consensus"]["flight_category"] == "IFR"
-        # Wind spread is 20kt → moderate or poor
-        assert apt["consensus"]["agreement"] in ("moderate", "poor")
+        # Wind spread is 20kt → mixed or divergent
+        assert apt["consensus"]["agreement"]["wind_speed_kt"] in ("mixed", "divergent")
+        # Flight category: GFS=IFR, others=VFR → mixed
+        assert apt["consensus"]["agreement"]["flight_category"] in ("mixed", "divergent")
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
     def test_skips_airports_without_coords(self, _mock_coords, db_session):
@@ -387,7 +390,10 @@ class TestConsensus:
         result = _consensus(per_model)
         assert result["flight_category"] == "VFR"
         # Ceiling spread 400ft < 500ft good threshold; wind 2kt < 5kt; CAPE 10 < 200
-        assert result["agreement"] == "good"
+        assert result["agreement"]["flight_category"] == "consistent"
+        assert result["agreement"]["wind_speed_kt"] == "consistent"
+        assert result["agreement"]["ceiling_ft"] == "consistent"
+        assert result["agreement"]["cape_jkg"] == "consistent"
         assert result["wind_speed_kt"] == pytest.approx(11.0)
 
     def test_worst_mode_picks_most_restrictive(self):
@@ -425,7 +431,7 @@ class TestConsensus:
         from weatherbrief.tasks.map_queries import _consensus
         result = _consensus({})
         assert result["flight_category"] == "VFR"
-        assert result["agreement"] == "good"
+        assert result["agreement"] == {}
 
 
 # ---------------------------------------------------------------------------

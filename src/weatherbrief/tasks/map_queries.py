@@ -96,14 +96,23 @@ def _snap_to_dict(snap: AirportForecastSnapshotRow) -> dict[str, Any]:
     }
 
 
+_AGREEMENT_LABELS = {"good": "consistent", "moderate": "mixed", "poor": "divergent"}
+
+
+def _agreement_label(level: str) -> str:
+    """Map internal agreement level to user-facing label."""
+    return _AGREEMENT_LABELS.get(level, level)
+
+
 def _consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any]:
     """Compute consensus across models for key variables.
 
     mode: "worst" = most restrictive category, "majority" = most common (worst as tiebreaker)
+    Returns per-variable agreement labels alongside consensus values.
     """
     models_with_data = list(per_model.keys())
     if not models_with_data:
-        return {"flight_category": "VFR", "agreement": "good"}
+        return {"flight_category": "VFR", "agreement": {}}
 
     cats = [FlightCategory(m["flight_category"]) for m in per_model.values()]
 
@@ -111,23 +120,27 @@ def _consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any
         counts = Counter(cats)
         max_count = max(counts.values())
         tied = [c for c, n in counts.items() if n == max_count]
-        # Most votes wins; on tie, pick worst (most restrictive)
         consensus_cat = FlightCategory.worst(tied).value
     else:
         consensus_cat = FlightCategory.worst(cats).value
 
-    # Overall agreement — check key variables
-    agreement = "good"
-    for var in ("wind_speed_kt", "ceiling_ft", "cape_jkg"):
+    # Per-variable agreement
+    agreement: dict[str, str] = {}
+    # Flight category agreement: based on whether models agree on the category
+    unique_cats = set(c.value for c in cats)
+    if len(unique_cats) == 1:
+        agreement["flight_category"] = _agreement_label("good")
+    elif len(unique_cats) == len(cats):
+        agreement["flight_category"] = _agreement_label("poor")
+    else:
+        agreement["flight_category"] = _agreement_label("moderate")
+
+    for var in ("wind_speed_kt", "ceiling_ft", "cape_jkg", "visibility_m", "cloud_cover_pct"):
         vals = {m: per_model[m].get(var) for m in models_with_data}
         vals = {m: v for m, v in vals.items() if v is not None}
         if len(vals) >= 2:
             div = compare_models(var, vals)
-            if div.agreement.value == "poor":
-                agreement = "poor"
-                break
-            elif div.agreement.value == "moderate" and agreement != "poor":
-                agreement = "moderate"
+            agreement[var] = _agreement_label(div.agreement.value)
 
     # Means for numeric fields
     result: dict[str, Any] = {
