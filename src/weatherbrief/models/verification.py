@@ -121,6 +121,7 @@ class WindAdvisoryStats(BaseModel):
 
     model: str
     accuracy_pct: float | None = None
+    sample_count: int = 0
 
 
 class MissedWarning(BaseModel):

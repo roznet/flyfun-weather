@@ -359,6 +359,7 @@ def get_wind_advisory_accuracy(
         WindAdvisoryStats(
             model=model,
             accuracy_pct=round(float(avg_match) * 100, 1) if avg_match is not None else None,
+            sample_count=int(count),
         )
         for model, avg_match, count in rows
     ]
