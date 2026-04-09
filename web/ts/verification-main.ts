@@ -18,7 +18,7 @@ import { initI18n } from './i18n/i18n';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 
 let currentPeriod: VerificationPeriod = '24h';
-let currentSource: VerificationSource = 'flight';
+let currentSource: VerificationSource = 'standalone';
 let currentCountry: string | undefined;
 let currentIcao: string | undefined;
 let airportsByCountry: Record<string, string[]> = {};
@@ -69,9 +69,27 @@ function setupSourceToggle(): void {
       currentSource = source;
       document.querySelectorAll('#source-toggle .toggle-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
+      updateLocationFilterVisibility();
       loadData();
     });
   });
+}
+
+function updateLocationFilterVisibility(): void {
+  const container = document.getElementById('location-filter');
+  if (!container) return;
+  if (currentSource === 'standalone') {
+    container.style.display = 'flex';
+  } else {
+    container.style.display = 'none';
+    // Clear filters when switching away from standalone
+    currentCountry = undefined;
+    currentIcao = undefined;
+    const countryEl = document.getElementById('country-select') as HTMLSelectElement | null;
+    const airportEl = document.getElementById('airport-select') as HTMLSelectElement | null;
+    if (countryEl) countryEl.value = '';
+    if (airportEl) { airportEl.value = ''; airportEl.style.display = 'none'; }
+  }
 }
 
 async function loadAirports(): Promise<void> {
