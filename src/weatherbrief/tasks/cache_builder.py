@@ -187,7 +187,10 @@ def rebuild_forecast_map_cache(db: Session, airports_db_path: str) -> int:
 
     Returns the number of cache entries written.
     """
-    from weatherbrief.tasks.map_queries import get_forecast_map_data
+    from weatherbrief.tasks.map_queries import (
+        enrich_with_observations,
+        get_forecast_map_data,
+    )
 
     now = datetime.now(timezone.utc)
     count = 0
@@ -214,6 +217,9 @@ def rebuild_forecast_map_cache(db: Session, airports_db_path: str) -> int:
                 continue
 
             data = get_forecast_map_data(db, forecast_hour, airports_db_path)
+            # D-0: enrich with latest METAR/TAF observations from verification
+            if day == 0:
+                data = enrich_with_observations(db, forecast_hour, data)
             cache_key = f"forecast_map:{day}:{hour}"
             _upsert(db, cache_key, data, snapshot_max)
             count += 1

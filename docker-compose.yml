@@ -31,6 +31,41 @@ services:
     networks:
       - shared-services
 
+  mcp-server:
+    build: .
+    container_name: weatherbrief-mcp
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "8021:8021"
+    env_file:
+      - .env
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      WEATHERBRIEF_API_URL: http://weatherbrief:8020
+      WEATHER_BASE_URL: https://weather.flyfun.aero
+      LOG_LEVEL: INFO
+    depends_on:
+      weatherbrief:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/mcp')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - shared-services
+    command: ["python", "-m", "weatherbrief.mcp.server", "--transport", "http", "--port", "8021"]
+
 networks:
   shared-services:
     external: true

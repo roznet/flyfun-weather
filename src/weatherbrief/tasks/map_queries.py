@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -20,7 +20,11 @@ from weatherbrief.analysis.comparison import (
     circular_spread,
     compare_models,
 )
-from weatherbrief.db.models import AirportForecastSnapshotRow, VerificationScoreRow
+from weatherbrief.db.models import (
+    AirportForecastSnapshotRow,
+    VerificationObservationRow,
+    VerificationScoreRow,
+)
 from weatherbrief.models.airport_conditions import FlightCategory
 from weatherbrief.tasks.airport_watchlist import (
     WatchlistAirport,
@@ -212,6 +216,66 @@ def get_forecast_map_data(
         "model_init_times": {m: t.isoformat() for m, t in init_times.items()},
         "airports": airports,
     }
+
+
+def enrich_with_observations(
+    db: Session,
+    forecast_hour: datetime,
+    forecast_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Add latest METAR/TAF observations to forecast map data.
+
+    For each airport in the forecast data, find the most recent observation
+    on the same date as forecast_hour.  This is called during cache rebuild
+    for D-0 entries only — observations are at most ~3 hours old.
+    """
+    airport_icaos = [a["icao"] for a in forecast_data.get("airports", [])]
+    if not airport_icaos:
+        return forecast_data
+
+    obs_date = forecast_hour.date()
+    start_of_day = datetime(obs_date.year, obs_date.month, obs_date.day,
+                            tzinfo=timezone.utc)
+    end_of_day = start_of_day + timedelta(days=1)
+
+    # Fetch all observations for the target date in one query
+    rows = db.execute(
+        select(VerificationObservationRow)
+        .where(VerificationObservationRow.icao.in_(airport_icaos))
+        .where(VerificationObservationRow.observation_time >= start_of_day)
+        .where(VerificationObservationRow.observation_time < end_of_day)
+        .order_by(VerificationObservationRow.observation_time.desc())
+    ).scalars().all()
+
+    # Keep only the latest observation per airport
+    obs_by_icao: dict[str, VerificationObservationRow] = {}
+    for row in rows:
+        if row.icao not in obs_by_icao:
+            obs_by_icao[row.icao] = row
+
+    for airport in forecast_data["airports"]:
+        obs = obs_by_icao.get(airport["icao"])
+        if obs is None:
+            continue
+        airport["observation"] = {
+            "metar_raw": obs.metar_raw,
+            "observation_time": obs.observation_time.isoformat(),
+            "flight_category": obs.flight_category,
+            "ceiling_ft": obs.ceiling_ft,
+            "visibility_m": obs.visibility_m,
+            "wind_speed_kt": obs.wind_speed_kt,
+            "wind_dir_deg": obs.wind_dir,
+            "wind_gust_kt": obs.wind_gust_kt,
+            "temperature_c": obs.temperature_c,
+            "dewpoint_c": obs.dewpoint_c,
+            "taf_raw": obs.taf_raw,
+            "taf_flight_category": obs.taf_flight_category,
+            "taf_ceiling_ft": obs.taf_ceiling_ft,
+            "taf_wind_speed_kt": obs.taf_wind_speed_kt,
+            "taf_wind_dir_deg": obs.taf_wind_dir,
+        }
+
+    return forecast_data
 
 
 # ---------------------------------------------------------------------------

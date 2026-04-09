@@ -1,0 +1,11 @@
+# Caddy snippet for mcp.flyfun.aero/weather → MCP server
+#
+# Add this handle block to the mcp.flyfun.aero site in shared-infra:
+#
+#   handle /weather* {
+#     uri replace /weather /mcp
+#     reverse_proxy localhost:8021 {
+#       header_up Host {host}
+#       header_up X-Real-IP {remote_host}
+#     }
+#   }
