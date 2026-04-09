@@ -171,8 +171,14 @@ export async function fetchPack(flightId: string, timestamp: string): Promise<Pa
   );
 }
 
-export async function refreshBriefing(flightId: string): Promise<PackMeta> {
-  return apiFetch<PackMeta>(
+export interface RefreshAccepted {
+  status: 'queued' | 'already_fresh';
+  flight_id: string;
+  message: string;
+}
+
+export async function refreshBriefing(flightId: string): Promise<RefreshAccepted> {
+  return apiFetch<RefreshAccepted>(
     `/flights/${encodeURIComponent(flightId)}/packs/refresh`,
     { method: 'POST' }
   );

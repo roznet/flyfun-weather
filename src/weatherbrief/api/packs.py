@@ -617,7 +617,22 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
     return meta
 
 
-@router.post("/refresh", response_model=PackMetaResponse)
+class RefreshAccepted(BaseModel):
+    """Response for accepted (queued) refresh requests."""
+
+    status: str  # "queued" | "already_fresh"
+    flight_id: str
+    message: str
+
+
+@router.post(
+    "/refresh",
+    response_model=RefreshAccepted,
+    status_code=202,
+    responses={
+        200: {"model": RefreshAccepted, "description": "Data already fresh"},
+    },
+)
 async def refresh_briefing(
     flight_id: str,
     request: Request,
@@ -628,8 +643,13 @@ async def refresh_briefing(
 ):
     """Trigger a new briefing fetch for a flight.
 
+    Queues the pipeline and returns immediately with 202. Poll
+    ``GET .../refresh/status`` or call ``get_briefing`` to check
+    progress.
+
     Checks model freshness first and skips the pipeline if data
-    hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
+    hasn't changed (returns 200).  Pass ``?force=true`` (admin/dev
+    only) to bypass.
     Pass ``?as_of_date=YYYY-MM-DD`` for historical flights to fetch
     forecasts as they were on that date.
     Returns 409 if a refresh is already in progress for this flight.
@@ -667,7 +687,15 @@ async def refresh_briefing(
             status = _build_data_status(latest.model_init_times)
             if status.fresh:
                 logger.info("Data is fresh for %s, skipping pipeline", flight_id)
-                return _meta_to_response(latest, data_status=status)
+                return Response(
+                    content=RefreshAccepted(
+                        status="already_fresh",
+                        flight_id=flight_id,
+                        message="Data is already current — no refresh needed.",
+                    ).model_dump_json(),
+                    status_code=200,
+                    media_type="application/json",
+                )
 
     # Duplicate / queue-depth check
     try:
@@ -682,47 +710,57 @@ async def refresh_briefing(
     if entry is None:
         raise HTTPException(status_code=409, detail="Refresh already in progress")
 
+    # Prepare pipeline inputs while we still have the request-scoped DB
+    is_privileged = _can_force_refresh(request, db)
     try:
-        from weatherbrief.pipeline import execute_briefing
-
         route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
-            is_privileged=_can_force_refresh(request, db),
+            is_privileged=is_privileged,
             as_of_time=as_of_time,
         )
+    except Exception:
+        refresh_registry.unregister(flight_id)
+        raise
 
+    # Fire pipeline in background — uses its own DB session (same as /refresh/stream)
+    def run_pipeline() -> None:
         refresh_registry.set_refreshing(flight_id)
+        try:
+            from weatherbrief.pipeline import execute_briefing
 
-        result = await asyncio.get_event_loop().run_in_executor(
-            _refresh_executor,
-            lambda: execute_briefing(
+            result = execute_briefing(
                 route=route,
                 departure_time=flight.departure_time,
                 options=options,
-            ),
-        )
-        # Capture timing before unregister
-        queue_wait, total_elapsed = refresh_registry.get_timing(flight_id)
-        result.usage.elapsed_seconds = total_elapsed
-        result.usage.queue_wait_seconds = queue_wait
-        result.usage.triggered_by = "user"
+            )
+            queue_wait, total_elapsed = refresh_registry.get_timing(flight_id)
+            result.usage.elapsed_seconds = total_elapsed
+            result.usage.queue_wait_seconds = queue_wait
+            result.usage.triggered_by = "user"
 
-        meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
-                                 user_id=user_id, model_metadata=model_metadata,
-                                 as_of_time=as_of_time)
-        return _meta_to_response(meta)
+            thread_db = SessionLocal()
+            try:
+                _finalize_refresh(
+                    flight_id, flight, fetch_ts, pack_path, result, thread_db,
+                    user_id=user_id, model_metadata=model_metadata,
+                    as_of_time=as_of_time,
+                )
+                thread_db.commit()
+            finally:
+                thread_db.close()
+            logger.info("Background refresh complete for %s", flight_id)
+        except Exception as exc:
+            logger.error("Background refresh failed for %s: %s", flight_id, exc, exc_info=True)
+        finally:
+            refresh_registry.unregister(flight_id)
 
-    except ImportError as exc:
-        logger.warning("Refresh failed (missing dependency): %s", exc)
-        raise HTTPException(status_code=503, detail=f"Missing dependency: {exc}")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        logger.error("Refresh failed: %s", exc, exc_info=True)
-        detail = f"Briefing fetch failed: {exc}" if is_dev_mode() else "Briefing fetch failed"
-        raise HTTPException(status_code=500, detail=detail)
-    finally:
-        refresh_registry.unregister(flight_id)
+    asyncio.get_event_loop().run_in_executor(_refresh_executor, run_pipeline)
+
+    return RefreshAccepted(
+        status="queued",
+        flight_id=flight_id,
+        message="Briefing refresh queued. Poll get_briefing or refresh/status for progress.",
+    )
 
 
 _refresh_executor = ThreadPoolExecutor(max_workers=2)

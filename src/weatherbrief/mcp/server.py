@@ -417,24 +417,17 @@ def refresh_briefing(
                 }
             return _error_result(f"Refresh failed: {e.response.text}", code)
 
-    # If data was already fresh, the refresh endpoint returns immediately
-    data_status = result.get("data_status")
-    if data_status and data_status.get("fresh"):
-        return {
-            "status": "already_fresh",
-            "flight_id": flight_id,
-            "message": "Data is already current — no refresh needed.",
-            "assessment": result.get("assessment"),
-            "web_url": _flight_web_url(flight_id),
-        }
-
-    return {
-        "status": "processing",
+    # API returns {"status": "queued"|"already_fresh", "flight_id": ..., "message": ...}
+    status = result.get("status", "queued")
+    resp: dict[str, Any] = {
+        "status": status,
         "flight_id": flight_id,
-        "estimated_seconds": 120,
-        "message": "Briefing refresh started. Call get_briefing in ~2 minutes.",
+        "message": result.get("message", ""),
         "web_url": _flight_web_url(flight_id),
     }
+    if status == "queued":
+        resp["estimated_seconds"] = 120
+    return resp
 
 
 # ---------------------------------------------------------------------------
