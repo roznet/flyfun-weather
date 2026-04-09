@@ -120,7 +120,7 @@ def _get_client() -> WeatherbriefClient:
 
 
 def _flight_web_url(flight_id: str) -> str:
-    return f"{WEATHER_BASE_URL}/flights/{flight_id}"
+    return f"{WEATHER_BASE_URL}/briefing.html?flight={flight_id}"
 
 
 def _error_result(message: str, code: int | None = None) -> dict:
