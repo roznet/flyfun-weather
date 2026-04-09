@@ -25,7 +25,7 @@ Phase 1 is complete. Phase 2 is implemented (including offline resilience harden
 - `PirepViewModel`: GPS pre-fill altitude, all fields unselected (no confirmation bias), smart field ordering, location from `FlightTrackingService`
 - `PirepOfflineStore` actor: JSON-file queue in Documents, batch sync via `/api/pireps/batch`, dedup by `client_uuid`
 - **Automatic offline queue flush**: on successful online PIREP submission, `offlineStore.sync(using: repository)` flushes all queued PIREPs — connectivity confirmed, so drain the queue
-- Network error detection: `.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost` → enqueue locally with synthetic `PirepResponse.offline`
+- Network error detection: `URLError` domain codes (`.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost`) detected via `underlyingError as? URLError` since `APIClient` wraps URL errors in `APIError` — the raw URL error code is on the underlying error, not the top-level error. Offline PIREPs enqueued with synthetic `PirepResponse.offline`
 - `BriefingRepository` protocol extended with `submitPirep`, `submitPirepsBatch`, `fetchPireps`
 
 **Pack management**:

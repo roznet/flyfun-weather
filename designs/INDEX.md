@@ -78,13 +78,13 @@ Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `Cros
 → Full doc: companion-app.md
 
 ### forecast-page
-Pan-European weather overview map with per-airport forecast visualization (6 metrics, consensus modes) and model accuracy heatmaps, powered by standalone verification snapshots. Three tabs: forecast overview, model accuracy, detailed stats.
+Pan-European weather overview map with per-airport forecast visualization (6 metrics, consensus modes) and model accuracy heatmaps, powered by standalone verification snapshots. Cache layer serves pre-computed JSON with staleness tracking; falls back to live queries.
 Key exports: `get_forecast_map_data`, `get_verification_map_data`, `WeatherMap`, `fetchForecastMap`
 → Full doc: forecast-page.md
 
 ### metar-taf-accuracy [project]
-Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone monitoring (~830 pan-European airports) with full/light cycle split (full at 06/18 UTC fetches forecasts + sounding enrichment, light at 09/12/15 UTC scores existing snapshots). Chunk-level retry, error recording, graceful degradation.
-Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `VerificationDigestData`, `VerificationObservation`
+Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone monitoring (~830 pan-European airports) with full/light cycle split (full at 06/18 UTC fetches forecasts + sounding enrichment, light at 09/12/15 UTC scores existing snapshots). Monthly rollup aggregation, dashboard cache layer with staleness tracking, chunk-level retry, error recording, graceful degradation.
+Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `run_monthly_rollup`, `rebuild_all`, `is_stale`, `VerificationDigestData`, `VerificationObservation`
 → Full doc: metar-taf-accuracy.md
 
 ### rzskewt

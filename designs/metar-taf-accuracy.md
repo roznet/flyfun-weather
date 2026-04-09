@@ -55,6 +55,21 @@ tasks/verification_stats.py             ← shared queries for digest + dashboar
 ├── get_wind_advisory_stats()
 └── get_digest_data()                   ← orchestrator → VerificationDigestData
 
+tasks/verification_rollup.py            ← monthly pre-aggregation
+├── completed_months()                  ← find months ready for rollup
+├── rollup_month()                      ← aggregate one month (idempotent)
+├── category_direction()                ← match/optimistic_1-2/pessimistic_1-2
+├── advisory_direction()                ← match/optimistic/pessimistic
+└── run_monthly_rollup()                ← entry point: find + process all
+
+tasks/cache_builder.py                  ← pre-computed API response cache
+├── rebuild_stats_cache()               ← stats:{source}:{period} (24h/7d/30d)
+├── rebuild_verification_map_cache()    ← verif_map:{model}:{days_out}:{period}
+├── rebuild_forecast_map_cache()        ← forecast_map:{day}:{hour}
+├── is_stale()                          ← compare source_max_time vs live MAX
+├── get_cached()                        ← load JSON blob by cache_key
+└── rebuild_all()                       ← entry point: rebuild all 3 cache types
+
 tasks/airport_watchlist.py              ← standalone airport discovery
 └── discover_airports()                 ← euro_aip DB + aviationweather.gov
 
@@ -78,8 +93,10 @@ db/models.py                            ← SQLAlchemy tables
 ├── FlightVerificationMapRow            ← thin linkage, CASCADE on flight delete
 ├── VerificationCycleRow                ← performance metrics per cycle
 ├── AirportForecastSnapshotRow          ← standalone NWP forecasts
+├── VerificationMonthlyStatsRow         ← pre-aggregated monthly rollup
+├── VerificationCacheRow                ← JSON cache for dashboard/map responses
 
-API: /api/verification/stats            ← admin dashboard data
+API: /api/verification/stats            ← admin dashboard data (cache-aware)
 CLI: python -m weatherbrief.verify      ← backfill, manual runs, export
 ```
 
@@ -222,6 +239,54 @@ CREATE TABLE airport_forecast_snapshots (
 );
 ```
 
+### `verification_monthly_stats` — Pre-Aggregated Monthly Rollup
+
+One row per (month, source, model, days_out, icao). Aggregated from raw scores once a month is complete (current UTC past month end). Idempotent — re-running deletes and recreates rows for a given month.
+
+```sql
+CREATE TABLE verification_monthly_stats (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    month           DATETIME NOT NULL,       -- first day of month (UTC)
+    source          VARCHAR(24) NOT NULL,    -- 'flight' or 'standalone'
+    model           VARCHAR(20) NOT NULL,    -- 'gfs', 'icon', 'ecmwf', 'taf'
+    days_out        INTEGER NOT NULL,        -- 0, 1, 2, ...
+    icao            VARCHAR(4) NOT NULL,
+    n_scores        INTEGER NOT NULL,
+    -- Category direction counts (match/optimistic_1/2/pessimistic_1/2)
+    n_cat_match     INTEGER, n_cat_optimistic_1 INTEGER, n_cat_optimistic_2 INTEGER,
+    n_cat_pessimistic_1 INTEGER, n_cat_pessimistic_2 INTEGER,
+    -- Advisory direction counts
+    n_advisory_match INTEGER, n_advisory_optimistic INTEGER, n_advisory_pessimistic INTEGER,
+    -- Continuous error metrics
+    ceiling_mae_ft FLOAT, ceiling_bias_ft FLOAT, visibility_mae_m FLOAT,
+    wind_speed_mae_kt FLOAT, temperature_mae_c FLOAT,
+    -- Hit/miss/false-alarm (model scores only, NULL for TAF)
+    n_precip_hit INTEGER, n_precip_miss INTEGER, n_precip_false_alarm INTEGER,
+    n_convection_hit INTEGER, n_convection_miss INTEGER, n_convection_false_alarm INTEGER,
+    UNIQUE(month, source, model, days_out, icao)
+);
+```
+
+**Category direction**: `category_direction(obs, fcst)` classifies each score as match, optimistic_1/2 (forecast better than reality — dangerous), or pessimistic_1/2 (forecast worse — conservative). TAF scores use the same classification via `lead_hours // 24` → `days_out` bucketing.
+
+### `verification_cache` — Pre-Computed API Response Cache
+
+Stores serialized JSON responses for expensive dashboard/map queries, with staleness tracking.
+
+```sql
+CREATE TABLE verification_cache (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    cache_key       VARCHAR(128) NOT NULL UNIQUE,  -- e.g. 'stats:standalone:7d'
+    computed_at     DATETIME NOT NULL,
+    source_max_time DATETIME,     -- MAX(observation_time) when cache was built
+    data_json       TEXT NOT NULL  -- complete JSON response
+);
+```
+
+**Cache keys**: `stats:{source}:{period}`, `verif_map:{model}:{days_out}:{period}`, `forecast_map:{day}:{hour}`.
+**Staleness**: `is_stale()` compares cached `source_max_time` against live `MAX(observation_time)` or `MAX(fetched_at)`. If live > cached, cache is stale. Missing entries are always stale.
+**Rebuild trigger**: `rebuild_all()` runs after each standalone verification cycle in `_run_standalone_once()`.
+
 ### `flight_verification_map` — Thin Flight Linkage
 
 Maps flights to corridor airports. Populated on first collection cycle via spatial query; reused on subsequent cycles to avoid re-querying. Only airports that have produced at least one METAR are kept — airports with no METAR data are skipped entirely and never inserted.
@@ -357,6 +422,18 @@ Disableable via `DISABLE_STANDALONE_VERIFICATION=1` env var. Instead of polling,
 ### Admin Dashboard
 
 `GET /api/verification/stats` serves JSON for the web dashboard (`web/verification.html`). Source-filtered: flight and standalone stats are queried independently, never mixed. Dashboard shows category accuracy by model/days_out, notable misses, MAE trends.
+
+**Cache layer**: Unfiltered requests (no country/airport filter) use `verification_cache` for fast responses. If the cache is stale or missing, falls back to live query. Filtered requests always run live (small result sets). Cache is rebuilt after each standalone verification cycle via `rebuild_all()` in `cache_builder.py`.
+
+### Monthly Rollup
+
+`tasks/verification_rollup.py` aggregates raw `verification_scores` and `taf_verification_scores` into `verification_monthly_stats` once a month completes. Groups by (source, model, days_out, icao) and computes:
+- Category direction counts (match/optimistic_1-2/pessimistic_1-2) — classifies whether forecast was too good (dangerous) or too conservative
+- Advisory direction counts (match/optimistic/pessimistic)
+- Continuous metrics: ceiling MAE + bias, visibility MAE, wind speed MAE, temperature MAE
+- Hit/miss/false-alarm for precipitation and convection (model scores only)
+
+Rollup is idempotent (delete + re-insert per month). Currently triggered manually; designed for offline/retention pipeline integration.
 
 ### Query Functions
 
@@ -799,6 +876,10 @@ GROUP BY model, days_out;
 | Daily digest at 06:00 UTC | Fixed time avoids multiple sends; early morning for overnight review |
 | Category bias (directional severity) | Distinguishes optimistic misses (model said VFR, was IFR) from pessimistic — optimistic misses are more dangerous |
 | Savepoint for observation inserts | Race condition protection — concurrent cycles may try to insert the same observation |
+| Monthly rollup after month ends | Only roll up completed months — avoids partial aggregates; idempotent delete+reinsert allows safe re-runs |
+| Category direction classification | Distinguishes optimistic (forecast too good — dangerous) from pessimistic (too conservative) with 1-step vs 2-step severity |
+| Dashboard cache with staleness | Expensive queries cached as JSON; staleness checked via MAX(observation_time) comparison; falls back to live on stale |
+| Composite index on (source, observation_time) | Migration 038 — prevents full table scans on dashboard queries that filter by source + time range |
 
 ## Implementation Status
 

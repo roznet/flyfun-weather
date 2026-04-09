@@ -13,16 +13,24 @@ Backend                                    Frontend
 ────────                                   ────────
 api/maps.py                                maps.html (template)
 ├── GET /maps/forecast                     maps-main.ts (controller)
-│   → map_queries.get_forecast_map_data()  ├── state mgmt (day/hour/model/metric)
-├── GET /maps/forecast/hours               ├── tab switching (forecast/accuracy/stats)
-│   → available hours for a day            └── data loading + rerender
-├── GET /maps/verification                 adapters/maps-adapter.ts (API client)
-│   → map_queries.get_verification_map_data()  ├── fetchForecastMap()
-                                           ├── fetchVerificationMap()
-Data source:                               └── fetchAvailableHours()
-  airport_forecast_snapshots table         visualization/weather-map.ts (Leaflet map)
-  verification_scores table                ├── setForecastData()
-  (from standalone verification pipeline)  └── setVerificationData()
+│   → cache or map_queries.get_forecast_   ├── state mgmt (day/hour/model/metric)
+│     map_data()                           ├── tab switching (forecast/accuracy/stats)
+├── GET /maps/forecast/hours               └── data loading + rerender
+│   → available hours for a day            adapters/maps-adapter.ts (API client)
+├── GET /maps/verification                 ├── fetchForecastMap()
+│   → cache or map_queries.get_            ├── fetchVerificationMap()
+│     verification_map_data()              └── fetchAvailableHours()
+                                           visualization/weather-map.ts (Leaflet map)
+Cache layer:                               ├── setForecastData()
+  verification_cache table (JSON blobs)    └── setVerificationData()
+  ├── forecast_map:{day}:{hour}
+  ├── verif_map:{model}:{days_out}:{period}
+  └── staleness: source_max_time vs live MAX
+
+Data source:
+  airport_forecast_snapshots table
+  verification_scores table
+  (from standalone verification pipeline)
 ```
 
 ## Tabs
@@ -52,6 +60,16 @@ Server-side in `map_queries.py::_consensus()`:
 - **Majority mode**: Most common category; ties broken by worst severity
 - **Agreement scoring**: Uses `compare_models()` divergence on wind/ceiling/CAPE → good/moderate/poor
 - **Numeric consensus**: Wind direction uses circular mean; others use arithmetic mean
+
+## Cache Layer
+
+Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md](./metar-taf-accuracy.md)) to serve pre-computed JSON responses. Cache is rebuilt after each standalone verification cycle via `cache_builder.rebuild_all()`.
+
+**Forecast map**: Cached for "worst" consensus mode only (default). Cache key: `forecast_map:{day}:{hour}`. Staleness checked against `MAX(AirportForecastSnapshotRow.fetched_at)`. Individual model or majority consensus always runs live.
+
+**Verification map**: Cached for days_out 0 and 1 only. Cache key: `verif_map:{model}:{days_out}:{period}`. Staleness checked against `MAX(VerificationScoreRow.observation_time)` filtered by source='standalone'. Other days_out values run live.
+
+**Fallback**: If cache is stale or missing, both endpoints fall back to live queries transparently.
 
 ## Key Queries
 
