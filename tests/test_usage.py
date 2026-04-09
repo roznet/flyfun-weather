@@ -6,9 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from weatherbrief.api.app import create_app
 from weatherbrief.api.usage import (
@@ -19,8 +17,7 @@ from weatherbrief.api.usage import (
     log_briefing_usage,
 )
 from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
-from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
-import weatherbrief.db.models  # noqa: F401  — register app tables on Base
+from flyfun_common.db.models import UserPreferencesRow, UserRow
 from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.pipeline import BriefingUsage
 
@@ -28,20 +25,9 @@ from weatherbrief.pipeline import BriefingUsage
 @pytest.fixture
 def app_db():
     """In-memory SQLite engine + session factory."""
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
-    )
-
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_conn, _connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    Base.metadata.create_all(engine)
-    Base.metadata.create_all(engine)
+    from conftest import make_app_engine
+    engine = make_app_engine()
     TestSession = sessionmaker(bind=engine)
-
     session = TestSession()
     session.add(UserRow(
         id=DEV_USER_ID, provider="local", provider_sub="dev",
@@ -51,7 +37,6 @@ def app_db():
     session.add(UserPreferencesRow(user_id=DEV_USER_ID))
     session.commit()
     session.close()
-
     yield TestSession
     engine.dispose()
 

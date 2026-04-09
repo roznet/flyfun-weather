@@ -8,16 +8,21 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
-from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 from starlette.testclient import TestClient
+
+
+@pytest.fixture
+def db_engine():
+    """Per-test engine — unit tests call db_session.commit()."""
+    from conftest import make_app_engine
+    engine = make_app_engine()
+    yield engine
+    engine.dispose()
 
 from weatherbrief.api.app import create_app  # must import first to avoid circular import
 from flyfun_common.db import DEV_USER_ID, get_db, current_user_id
-from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
-
-import weatherbrief.db.models  # noqa: F401
+from flyfun_common.db.models import UserPreferencesRow, UserRow
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
     VerificationObservationRow,
@@ -436,19 +441,9 @@ ADMIN_ID = "admin-user-001"
 @pytest.fixture
 def app_db():
     """In-memory SQLite engine + session factory for the test app."""
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
-    )
-
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_conn, _connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    Base.metadata.create_all(engine)
+    from conftest import make_app_engine
+    engine = make_app_engine()
     TestSession = sessionmaker(bind=engine)
-
     session = TestSession()
     session.add(UserRow(
         id=DEV_USER_ID, provider="local", provider_sub="dev",
@@ -464,7 +459,6 @@ def app_db():
     session.add(UserPreferencesRow(user_id=ADMIN_ID))
     session.commit()
     session.close()
-
     yield TestSession
     engine.dispose()
 

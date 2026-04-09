@@ -4,6 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
+
+@pytest.fixture
+def db_engine():
+    """Per-test engine — functions under test call session.commit()."""
+    from conftest import make_app_engine
+    engine = make_app_engine()
+    yield engine
+    engine.dispose()
+
+
 from weatherbrief.db.models import (
     VerificationCacheRow,
     VerificationObservationRow,

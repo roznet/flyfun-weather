@@ -8,14 +8,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from weatherbrief.api.app import create_app  # must import before flyfun_common.db
 from flyfun_common.db import DEV_USER_ID, current_user_id, get_db
-from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
-import weatherbrief.db.models  # noqa: F401
+from flyfun_common.db.models import UserPreferencesRow, UserRow
 from weatherbrief.db.models import (
     BriefingPackRow,
     FlightRow,
@@ -32,21 +29,6 @@ OTHER_USER_ID = "other-user-001"
 # ---------------------------------------------------------------------------
 
 
-def _make_engine():
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
-    )
-
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_conn, _connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    Base.metadata.create_all(engine)
-    return engine
-
-
 def _seed_user(session, user_id, *, pirep_view=True, pirep_publish=True):
     """Insert a user with PIREP permissions enabled."""
     session.add(UserRow(
@@ -61,13 +43,12 @@ def _seed_user(session, user_id, *, pirep_view=True, pirep_publish=True):
 
 @pytest.fixture
 def app_db():
-    engine = _make_engine()
+    from conftest import make_app_engine
+    engine = make_app_engine()
     TestSession = sessionmaker(bind=engine)
-
     session = TestSession()
     _seed_user(session, DEV_USER_ID)
     session.close()
-
     yield TestSession
     engine.dispose()
 

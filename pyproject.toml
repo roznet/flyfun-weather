@@ -49,3 +49,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: marks tests as slow (skipped by default, run with: pytest -m slow)",
+]

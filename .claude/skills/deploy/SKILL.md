@@ -25,6 +25,11 @@ The project directory on the server is `flyfun-weather`.
 ```bash
 source venv/bin/activate && python -m pytest tests/ --ignore=tests/test_llm_digest.py -q
 ```
+Slow GRIB decode tests are skipped by default (via `addopts` in pyproject.toml).
+Run pytest exactly **once** — if output seems slow, check `ps aux | grep pytest` before
+launching another instance. Multiple concurrent pytest processes thrash the CPU and make
+all of them crawl.
+
 If any test fails, **stop the deploy** and report the failures.
 
 **Run Playwright tests if frontend or API changed.** Check what changed since the last deploy:

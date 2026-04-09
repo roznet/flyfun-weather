@@ -6,15 +6,12 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from weatherbrief.api.app import create_app
 from flyfun_common.auth import COOKIE_NAME, create_token
 from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
-from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
-import weatherbrief.db.models  # noqa: F401  — register app tables on Base
+from flyfun_common.db.models import UserPreferencesRow, UserRow
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import save_flight
 
@@ -26,27 +23,14 @@ USER_B_ID = "user-bbb-222"
 @pytest.fixture
 def auth_db():
     """In-memory SQLite with two test users."""
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
-    )
-
-    @event.listens_for(engine, "connect")
-    def _pragma(dbapi_conn, _):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    Base.metadata.create_all(engine)
-    Base.metadata.create_all(engine)
+    from conftest import make_app_engine
+    engine = make_app_engine()
     TestSession = sessionmaker(bind=engine)
-
     session = TestSession()
-    # User A — approved
     session.add(UserRow(
         id=USER_A_ID, provider="google", provider_sub="goog-a",
         email="alice@test.com", display_name="Alice", approved=True,
     ))
-    # User B — approved
     session.add(UserRow(
         id=USER_B_ID, provider="google", provider_sub="goog-b",
         email="bob@test.com", display_name="Bob", approved=True,
@@ -56,7 +40,6 @@ def auth_db():
     session.add(UserPreferencesRow(user_id=USER_B_ID))
     session.commit()
     session.close()
-
     yield TestSession
     engine.dispose()
 

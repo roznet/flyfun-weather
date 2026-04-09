@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import responses
 
@@ -88,7 +89,8 @@ def test_fetch_forecast_parses_response():
 
 
 @responses.activate
-def test_fetch_all_models_continues_on_failure():
+@patch("weatherbrief.fetch.open_meteo.time.sleep")
+def test_fetch_all_models_continues_on_failure(_mock_sleep):
     """fetch_all_models continues when one model fails."""
     api_response = {
         "hourly": {
@@ -104,7 +106,7 @@ def test_fetch_all_models_continues_on_failure():
         json=api_response,
         status=200,
     )
-    # ECMWF fails
+    # ECMWF fails (all retries)
     responses.add(
         responses.GET,
         "https://api.open-meteo.com/v1/ecmwf",

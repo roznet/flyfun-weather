@@ -66,6 +66,7 @@ skip_no_samples = pytest.mark.skipif(
     not _has_samples(),
     reason=f"No ECMWF sample files in {SAMPLE_DIR}",
 )
+slow_grib = pytest.mark.slow
 
 # ---------------------------------------------------------------------------
 # Filename parser tests (run without data files)
@@ -315,6 +316,7 @@ class TestDirectoryScanner:
 # ---------------------------------------------------------------------------
 
 
+@slow_grib
 @skip_no_samples
 class TestSampleInventory:
     """Inventory the contents of sample GRIB files.
@@ -512,6 +514,7 @@ class TestSampleInventory:
 # ---------------------------------------------------------------------------
 
 
+@slow_grib
 @skip_no_samples
 class TestEcCodesFallback:
     """Test decoding with ecCodes directly if cfgrib has issues.
@@ -558,6 +561,7 @@ class TestEcCodesFallback:
 # ---------------------------------------------------------------------------
 
 
+@slow_grib
 @skip_no_samples
 class TestPipelineDecode:
     """Test that ECMWF files work through our existing decode infrastructure."""
@@ -600,6 +604,7 @@ class TestPipelineDecode:
 # ---------------------------------------------------------------------------
 
 
+@slow_grib
 @skip_no_samples
 class TestECMWFDecode:
     """Test the new ECMWF-specific decode functions against sample data."""

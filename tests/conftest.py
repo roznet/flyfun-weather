@@ -29,9 +29,9 @@ from weatherbrief.models import (
 )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def db_engine():
-    """In-memory SQLite engine for tests."""
+    """Session-scoped in-memory SQLite engine (schema created once)."""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
     )
@@ -56,6 +56,26 @@ def db_session(db_engine):
     yield session
     session.rollback()
     session.close()
+
+
+def make_app_engine():
+    """Create an in-memory SQLite engine for FastAPI integration tests.
+
+    Shared helper to avoid duplicating engine setup across test modules.
+    """
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    import weatherbrief.db.models  # noqa: F401
+    Base.metadata.create_all(engine)
+    return engine
 
 
 @pytest.fixture
