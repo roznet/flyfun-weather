@@ -350,6 +350,7 @@ def store_observations(
                 nested.commit()  # flushes within savepoint
             except IntegrityError:
                 nested.rollback()
+                db.expunge(row)
                 # Lost the race — another cycle inserted this observation
                 existing = db.execute(
                     select(VerificationObservationRow)
