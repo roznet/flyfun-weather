@@ -38,6 +38,14 @@ Structure your response as JSON with these exact fields:
   hedging everything.
 - If the ensemble says it's clearly fine, say so. If it's clearly unflyable,
   say that too.
+- **Ground every claim in the provided data.** Do not invent specific numbers
+  (e.g. pressure values, altitudes, percentages) that are not in the
+  quantitative data or text forecasts above. You may infer synoptic patterns
+  from the data (e.g. wind backing implying a frontal approach), but label
+  inferences as such — do not state them as observed fact.
+- **Never cite a source that was not provided.** If no text forecast section
+  appears in the data, do not reference DWD, NWS, or any text forecast.
+  Only cite sources whose content you can see above.
 - Text forecasts may be from NWS (Area Forecast Discussions, in English) or
   DWD (pre-translated from German). The DWD text covers Germany/Central
   Europe. For routes outside Germany, use DWD text only for large-scale
