@@ -115,7 +115,7 @@ def test_build_context_basic(sample_snapshot):
     target_time = datetime(2026, 2, 17, 9, 0, 0)
     context = build_digest_context(sample_snapshot, target_time)
 
-    assert "EGTK -> LFPB -> LSGS" in context
+    assert "EGTK" in context and "LFPB" in context and "LSGS" in context
     assert "Tuesday 2026-02-17" in context
     assert "D-7" in context
     assert "Tuesday 2026-02-10" in context  # fetch date

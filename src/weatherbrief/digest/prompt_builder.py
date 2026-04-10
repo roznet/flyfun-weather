@@ -25,6 +25,13 @@ if TYPE_CHECKING:
 _DIGEST_EXCLUDE_IDS = {"model_agreement"}
 
 
+def _fmt_coords(lat: float, lon: float) -> str:
+    """Format lat/lon with proper N/S E/W hemispheres."""
+    ns = "N" if lat >= 0 else "S"
+    ew = "E" if lon >= 0 else "W"
+    return f"{abs(lat):.1f}{ns}, {abs(lon):.1f}{ew}"
+
+
 def build_digest_context(
     snapshot: ForecastSnapshot,
     target_time: datetime,
@@ -46,7 +53,10 @@ def build_digest_context(
     sections: list[str] = []
 
     # --- Header ---
-    waypoints_str = " -> ".join(wp.icao for wp in snapshot.route.waypoints)
+    waypoints_str = " -> ".join(
+        f"{wp.icao} ({_fmt_coords(wp.lat, wp.lon)})" if wp.lat is not None else wp.icao
+        for wp in snapshot.route.waypoints
+    )
     days_label = f"D-{snapshot.days_out}" if snapshot.days_out > 0 else "D-0 (today)"
     capability = "VFR only" if flight_rules == "vfr_only" else "VFR + IFR"
     # Include day-of-week so the LLM doesn't miscalculate from the date
@@ -66,7 +76,8 @@ def build_digest_context(
     # --- Quantitative data per waypoint ---
     quant_lines: list[str] = ["=== QUANTITATIVE DATA ==="]
     for wp in snapshot.route.waypoints:
-        quant_lines.append(f"\n--- {wp.icao} ({wp.name}) ---")
+        coord_str = f" [{_fmt_coords(wp.lat, wp.lon)}]" if wp.lat is not None else ""
+        quant_lines.append(f"\n--- {wp.icao} ({wp.name}){coord_str} ---")
 
         wp_forecasts = [f for f in snapshot.forecasts if f.waypoint.icao == wp.icao]
         for wf in wp_forecasts:
