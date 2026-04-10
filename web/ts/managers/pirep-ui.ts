@@ -30,10 +30,9 @@ function hazardIcons(pirep: PirepResponse): string {
 }
 
 function ageCategory(observedAt: string): 'fresh' | 'recent' | 'stale' {
-  const ageMs = Date.now() - new Date(observedAt).getTime();
-  const ageMin = ageMs / 60000;
-  if (ageMin <= 30) return 'fresh';
-  if (ageMin <= 90) return 'recent';
+  const ageHrs = (Date.now() - new Date(observedAt).getTime()) / 3600000;
+  if (ageHrs <= 3) return 'fresh';
+  if (ageHrs <= 6) return 'recent';
   return 'stale';
 }
 
