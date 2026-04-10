@@ -151,7 +151,16 @@ def _fetch_and_translate_text(
             )
             blocks = get_dwd_day_blocks(dwd_text, target_date)
             if blocks:
-                dwd_translated = translate_dwd_blocks(blocks, config)
+                # Use synoptic extraction for non-German routes to avoid
+                # the briefer LLM misapplying German regional details
+                in_germany = any(
+                    47.0 <= wp.lat <= 55.0 and 5.5 <= wp.lon <= 15.5
+                    for wp in snapshot.route.waypoints
+                    if wp.lat is not None and wp.lon is not None
+                )
+                dwd_translated = translate_dwd_blocks(
+                    blocks, config, synoptic_extract=not in_germany,
+                )
         except Exception:
             logger.warning("DWD translation failed, falling back to raw text", exc_info=True)
 

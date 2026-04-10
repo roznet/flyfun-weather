@@ -215,11 +215,6 @@ def _format_dwd_translated_context(
     snapshot: ForecastSnapshot,
 ) -> str:
     """Format translated DWD text with geographic framing for LLM context."""
-    lines: list[str] = [
-        "=== TEXT FORECASTS (DWD Synoptic Overview, translated from German) ===",
-        "SOURCE: DWD (Deutscher Wetterdienst) — covers Germany and Central Europe.",
-    ]
-
     # Simple geographic overlap check using waypoint coordinates
     # Germany approximate bounding box: lat 47-55, lon 5.5-15.5
     in_germany = any(
@@ -227,17 +222,24 @@ def _format_dwd_translated_context(
         for wp in snapshot.route.waypoints
         if wp.lat is not None and wp.lon is not None
     )
+
     if in_germany:
-        lines.append(
+        lines: list[str] = [
+            "=== TEXT FORECASTS (DWD Synoptic Overview, translated from German) ===",
+            "SOURCE: DWD (Deutscher Wetterdienst) — covers Germany and Central Europe.",
             "NOTE: Your route partially crosses Germany — this forecast "
-            "is directly relevant for those segments."
-        )
+            "is directly relevant for those segments.",
+        ]
     else:
-        lines.append(
-            "NOTE: Your route does not cross Germany. Use this text for "
-            "large-scale synoptic pattern context only — timing and local "
-            "details may not apply to your route."
-        )
+        lines = [
+            "=== TEXT FORECASTS (DWD Synoptic Overview, large-scale extract) ===",
+            "SOURCE: DWD (Deutscher Wetterdienst) — extracted large-scale synoptic "
+            "features only. German regional details have been removed.",
+            "NOTE: Your route does not cross Germany. The text below contains only "
+            "named pressure systems, frontal positions with coordinates and timing, "
+            "air mass types, and large-scale flow patterns. Use these as synoptic "
+            "context — do NOT extrapolate or reposition features to your route area.",
+        ]
 
     for block, english in translated:
         date_str = block.date_iso.isoformat() if block.date_iso else "?"

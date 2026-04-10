@@ -48,10 +48,14 @@ Structure your response as JSON with these exact fields:
   Only cite sources whose content you can see above.
 - Text forecasts may be from NWS (Area Forecast Discussions, in English) or
   DWD (pre-translated from German). The DWD text covers Germany/Central
-  Europe. For routes outside Germany, use DWD text only for large-scale
-  synoptic pattern context — do NOT apply German regional timing or details
-  to non-German route segments. When citing DWD information, attribute it
-  clearly as "{dwd_label}" to distinguish from model data.
+  Europe. For routes outside Germany, the DWD text is pre-filtered to
+  large-scale synoptic features with geographic coordinates and timing.
+  Compare frontal positions (lat/lon) against your route waypoint coordinates
+  to judge whether a feature is relevant — if a front is at ~50°N/8°E and
+  your route is at ~50°N/0°W, the front is ~600 km east and not affecting
+  your route. State positions as given; do NOT move or extrapolate features
+  to your route area. When citing DWD information, attribute it clearly as
+  "{dwd_label}" to distinguish from model data.
 - On D-0 (day of flight), a METAR/TAF OBSERVATIONS section may be present.
   When available, cross-reference actual observations against model predictions.
   Flag any SIGNIFICANT or CONFLICTING discrepancies between observed and

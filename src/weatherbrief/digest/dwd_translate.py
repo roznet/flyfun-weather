@@ -31,6 +31,46 @@ and wind speeds exactly as given.
 - Use standard aviation/meteorology English terminology.\
 """
 
+_EXTRACT_SYNOPTIC_PROMPT = """\
+You are an aviation meteorologist extracting large-scale synoptic information \
+from a DWD (Deutscher Wetterdienst) forecast that was written for Germany.
+
+The pilot's route does NOT cross Germany, so German regional details are \
+irrelevant. Extract ONLY the large-scale synoptic features that could affect \
+weather across a wider European area.
+
+For each day section, output a concise English summary (3-5 sentences) covering:
+
+1. **Named pressure systems**: name, approximate position (use lat/lon or \
+compass bearings relative to landmarks like "north of Scotland", \
+"Bay of Biscay"), central pressure if given, track and speed.
+
+2. **Fronts**: type (warm/cold/occluded), current position in geographic \
+terms (NOT German Bundesländer or cities — use lat/lon, compass bearings, \
+or large geographic features like "central Mediterranean", "English Channel"). \
+Include temporal evolution: where the front is NOW and where it will be at \
+key times (e.g. "cold front along 5°E at 00Z, clearing east of 15°E by 18Z").
+
+3. **Air mass classification**: type (mP, mPS, cT, etc.) and advection \
+direction behind/ahead of fronts.
+
+4. **Large-scale flow**: general pattern (zonal, meridional, blocking ridge, \
+trough axis position).
+
+Rules:
+- Keep the === day header === structure from the input.
+- Preserve all numerical values (pressure in hPa, temperatures, wind speeds) \
+exactly as stated.
+- Do NOT include German regional details: no Bundesländer, German cities, \
+rivers, or mountain ranges. Replace with geographic coordinates or compass \
+references (e.g. "~50°N, 8°E" instead of "Hesse", "~48°N, 8°E" instead \
+of "southwestern Germany"). The pilot does not know German geography.
+- Do NOT invent positions — if the text only says "over southwestern Germany" \
+and gives no coordinates, use approximate coordinates like "~48°N, 8°E".
+- If temporal progression is described, always include it — this is critical \
+for pilots to judge whether features have passed their route by flight time.\
+"""
+
 _DEFAULT_CACHE_DIR = Path("data/.cache/dwd_translations")
 
 
@@ -42,8 +82,17 @@ def translate_dwd_blocks(
     blocks: list[DWDDayBlock],
     config: DigestConfig,
     cache_dir: Path | None = None,
+    *,
+    synoptic_extract: bool = False,
 ) -> list[tuple[DWDDayBlock, str]]:
     """Translate DWD day blocks to English.
+
+    Args:
+        synoptic_extract: When True, extract only large-scale synoptic
+            features (named systems, fronts with positions/timing, air masses)
+            instead of a faithful full translation.  Used for routes that
+            do not cross Germany so the briefer LLM receives geographically
+            honest context without German regional details to misapply.
 
     Returns list of (block, english_text) tuples.
     Uses content-hash caching to avoid re-translating identical text.
@@ -56,20 +105,27 @@ def translate_dwd_blocks(
 
     # Combine all blocks into a single translation request (cheaper than N calls)
     combined_de = _format_blocks_for_translation(blocks)
-    cache_file = cache_path / f"{_cache_key(combined_de)}.json"
+    # Include mode in cache key so full vs extracted are cached separately
+    mode_tag = "extract" if synoptic_extract else "translate"
+    content_hash = _cache_key(combined_de)
+    cache_file = cache_path / f"{content_hash}_{mode_tag}.json"
 
     # Check cache
     if cache_file.exists():
         try:
             cached = json.loads(cache_file.read_text())
-            if cached.get("german_hash") == _cache_key(combined_de):
-                logger.info("DWD translation cache hit: %s", cache_file.name)
+            if cached.get("german_hash") == content_hash:
+                logger.info("DWD %s cache hit: %s", mode_tag, cache_file.name)
                 return _split_translation(blocks, cached["english"])
         except (json.JSONDecodeError, KeyError):
             pass
 
-    # Translate
-    logger.info("Translating DWD text (%d blocks, %d chars)", len(blocks), len(combined_de))
+    # Translate or extract
+    prompt = _EXTRACT_SYNOPTIC_PROMPT if synoptic_extract else _TRANSLATE_SYSTEM_PROMPT
+    logger.info(
+        "DWD %s (%d blocks, %d chars)",
+        mode_tag, len(blocks), len(combined_de),
+    )
     llm = init_chat_model(
         model=config.translator.model,
         model_provider=config.translator.provider,
@@ -77,17 +133,18 @@ def translate_dwd_blocks(
     )
 
     result = llm.invoke([
-        {"role": "system", "content": _TRANSLATE_SYSTEM_PROMPT},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": combined_de},
     ])
     english = result.content
 
     # Cache
     cache_data = {
-        "german_hash": _cache_key(combined_de),
+        "german_hash": content_hash,
         "english": english,
         "translated_at": datetime.now(timezone.utc).isoformat(),
         "model": config.translator.model,
+        "mode": mode_tag,
     }
     try:
         cache_file.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2))
