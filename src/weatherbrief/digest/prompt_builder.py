@@ -40,6 +40,7 @@ def build_digest_context(
     route_advisories: RouteAdvisoriesManifest | None = None,
     flight_rules: str | None = None,
     dwd_translated: list[tuple[DWDDayBlock, str]] | None = None,
+    dwd_is_synoptic_extract: bool = False,
 ) -> str:
     """Build the full context string for the LLM briefer.
 
@@ -187,7 +188,9 @@ def build_digest_context(
 
     # --- Text forecasts ---
     if dwd_translated:
-        sections.append(_format_dwd_translated_context(dwd_translated, snapshot))
+        sections.append(_format_dwd_translated_context(
+            dwd_translated, synoptic_extract=dwd_is_synoptic_extract,
+        ))
     elif text_forecasts and text_forecasts.entries:
         header = (
             f"=== TEXT FORECASTS ({text_forecasts.source_label}, "
@@ -212,18 +215,11 @@ def build_digest_context(
 
 def _format_dwd_translated_context(
     translated: list[tuple[DWDDayBlock, str]],
-    snapshot: ForecastSnapshot,
+    *,
+    synoptic_extract: bool = False,
 ) -> str:
     """Format translated DWD text with geographic framing for LLM context."""
-    # Simple geographic overlap check using waypoint coordinates
-    # Germany approximate bounding box: lat 47-55, lon 5.5-15.5
-    in_germany = any(
-        47.0 <= wp.lat <= 55.0 and 5.5 <= wp.lon <= 15.5
-        for wp in snapshot.route.waypoints
-        if wp.lat is not None and wp.lon is not None
-    )
-
-    if in_germany:
+    if not synoptic_extract:
         lines: list[str] = [
             "=== TEXT FORECASTS (DWD Synoptic Overview, translated from German) ===",
             "SOURCE: DWD (Deutscher Wetterdienst) — covers Germany and Central Europe.",

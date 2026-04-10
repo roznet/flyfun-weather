@@ -119,7 +119,7 @@ def _fetch_and_translate_text(
 ) -> tuple:
     """Fetch text forecasts and translate DWD blocks if applicable.
 
-    Returns (text_forecasts, dwd_translated).
+    Returns (text_forecasts, dwd_translated, dwd_is_synoptic_extract).
     """
     from weatherbrief.fetch.dwd_text import DWDDayBlock
 
@@ -132,6 +132,7 @@ def _fetch_and_translate_text(
 
     # Translate DWD blocks for European routes
     dwd_translated: list[tuple[DWDDayBlock, str]] | None = None
+    synoptic_extract = False
     if text_forecasts is not None and text_forecasts.region.value == "europe":
         try:
             from weatherbrief.digest.dwd_translate import translate_dwd_blocks
@@ -158,13 +159,14 @@ def _fetch_and_translate_text(
                     for wp in snapshot.route.waypoints
                     if wp.lat is not None and wp.lon is not None
                 )
+                synoptic_extract = not in_germany
                 dwd_translated = translate_dwd_blocks(
-                    blocks, config, synoptic_extract=not in_germany,
+                    blocks, config, synoptic_extract=synoptic_extract,
                 )
         except Exception:
             logger.warning("DWD translation failed, falling back to raw text", exc_info=True)
 
-    return text_forecasts, dwd_translated
+    return text_forecasts, dwd_translated, synoptic_extract
 
 
 def run_digest(
@@ -183,7 +185,9 @@ def run_digest(
     outside the graph so only the context string is traced by LangSmith.
     """
     # --- Pre-graph data preparation (not traced) ---
-    text_forecasts, dwd_translated = _fetch_and_translate_text(snapshot, config)
+    text_forecasts, dwd_translated, dwd_is_synoptic_extract = (
+        _fetch_and_translate_text(snapshot, config)
+    )
 
     context = build_digest_context(
         snapshot=snapshot,
@@ -193,6 +197,7 @@ def run_digest(
         route_advisories=route_advisories,
         flight_rules=flight_rules,
         dwd_translated=dwd_translated,
+        dwd_is_synoptic_extract=dwd_is_synoptic_extract,
     )
 
     # --- LLM call via graph (traced — lightweight state) ---
