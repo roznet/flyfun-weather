@@ -17,7 +17,8 @@ The project directory on the server is `flyfun-weather`.
 4. **Run tests** (see below)
 5. **Check for pending Alembic migrations** (see below)
 6. **Check airport database freshness** (see below)
-7. Ask the user to confirm before proceeding
+7. **Check standalone verification cycle timing** (see below)
+8. Ask the user to confirm before proceeding
 
 ## Run tests
 
@@ -122,6 +123,27 @@ ssh <user>@<server> "sudo chown 2000:2000 ${REMOTE_HOST_DIR}/${REMOTE_DB_NAME}"
 ssh <user>@<server> "cd flyfun-weather && docker compose restart"
 ```
 - If the timestamps match or remote is newer, report "Airport DB is up to date" and move on
+
+## Check standalone verification cycle timing
+
+The standalone verification loop runs at sample hours [6, 9, 12, 15, 18] UTC (full cycles at 6 and 18, light cycles at the others). A deploy restarts the container, killing any in-progress cycle. Check whether a cycle might be running or about to start:
+
+```bash
+ssh <user>@<server> 'docker logs --since 10m weatherbrief 2>&1 | grep -iE "standalone|sleeping|Light cycle|Full cycle|phase"'
+```
+
+**Interpret the output:**
+- If you see `sleeping Xs until next sample hour` — the loop is idle. Parse the sleep duration and `started_at` to estimate when the next cycle fires. If it's more than 5 minutes away, safe to deploy.
+- If you see `Light cycle` or `Full cycle` log lines but no subsequent `sleeping` or `Recorded` line — a cycle is likely **in progress**. Warn the user: *"A standalone verification cycle appears to be running. Deploying now will interrupt it. Wait a few minutes or proceed?"*
+- If no standalone lines appear in the last 10 minutes — the loop is between cycles, safe to deploy.
+
+Full cycles (hours 6, 18) take ~2 minutes; light cycles take ~1 minute. If a cycle just started, suggest waiting 2-3 minutes.
+
+**If a cycle was interrupted** (user chose to deploy anyway, or the deploy already happened), offer to re-trigger it after the container is healthy:
+```bash
+ssh <user>@<server> "docker exec weatherbrief python -m weatherbrief.verify standalone"
+```
+This runs a single full cycle (fetch forecasts + observations + score) and exits. Safe to run alongside the loop — the loop's next scheduled cycle will proceed normally.
 
 ## Deploy steps
 
