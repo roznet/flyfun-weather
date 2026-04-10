@@ -317,7 +317,7 @@ def cmd_standalone(args):
 
     from weatherbrief.tasks.standalone_verification import run_standalone_cycle
 
-    result = run_standalone_cycle(watchlist, airports_db)
+    result = run_standalone_cycle(watchlist, airports_db, fetch_forecasts=not args.light)
     print(f"\nStandalone verification cycle complete:")
     print(f"  Models fetched: {result.get('models_fetched', 0)}")
     print(f"  Snapshots stored: {result.get('snapshots_stored', 0)}")
@@ -453,6 +453,10 @@ def main():
     p_standalone.add_argument(
         "--once", action="store_true", default=True,
         help="Run a single cycle (default)",
+    )
+    p_standalone.add_argument(
+        "--light", action="store_true",
+        help="Light cycle: observations + scoring only, skip forecast fetch",
     )
 
     # rebuild-cache
