@@ -80,7 +80,7 @@ export interface BriefingState {
 
   // UI state
   selectedModel: string;
-  selectedPointIndex: number;
+  selectedPointIndex: number | null;
   displayMode: DisplayMode;
   tierVisibility: Record<Tier, boolean>;
   vizSettings: VizSettings;
@@ -154,7 +154,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   freshness: null,
   freshnessLoading: false,
   selectedModel: 'gfs',
-  selectedPointIndex: 0,
+  selectedPointIndex: null,
   displayMode: loadDisplayMode(),
   tierVisibility: loadTierVisibility(),
   vizSettings: loadVizSettings(),
@@ -230,7 +230,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       if (raResult.status === 'fulfilled') routeAnalyses = raResult.value;
       if (epResult.status === 'fulfilled') elevationProfile = epResult.value;
       if (advResult.status === 'fulfilled') routeAdvisories = advResult.value;
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, altAdvisories: null, showingAlt: false, selectedPointIndex: 0, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, altAdvisories: null, showingAlt: false, selectedPointIndex: null, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();

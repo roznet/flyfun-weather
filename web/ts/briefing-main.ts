@@ -111,13 +111,8 @@ async function init(): Promise<void> {
     });
   }
 
-  // --- Helper to render slider-dependent sections ---
-  function renderSliderSections(state: BriefingState): void {
-    ui.renderRouteSlider(
-      state.routeAnalyses,
-      state.selectedPointIndex,
-      (idx) => store.getState().setSelectedPoint(idx),
-    );
+  // --- Helper to render point-dependent sections ---
+  function renderPointSections(state: BriefingState): void {
     ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers);
     ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
     ui.renderModelComparison(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
@@ -276,7 +271,7 @@ async function init(): Promise<void> {
         compareRenderer.setModelData(datasets);
         compareRenderer.setCompareLayer(layer);
         compareRenderer.setBandMode(state.vizSettings.compareBandMode ?? 'consensus-outline');
-        compareRenderer.setSelectedPointIndex(state.selectedPointIndex);
+        compareRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
         compareRenderer.render();
 
         // Attach or update compare interaction
@@ -325,7 +320,7 @@ async function init(): Promise<void> {
       const effectiveEnabled = { ...state.vizSettings.enabledLayers };
       for (const id of unavailable) effectiveEnabled[id] = false;
       vizRenderer.setLayers(allLayers, effectiveEnabled);
-      vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      vizRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
       vizRenderer.render();
 
       // --- Route graph ---
@@ -345,7 +340,7 @@ async function init(): Promise<void> {
 
         routeGraphRenderer.setData(data);
         routeGraphRenderer.setMetrics(leftMetric, rightMetric);
-        routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
+        routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
         routeGraphRenderer.render();
 
         // Attach or update route graph interaction
@@ -437,7 +432,7 @@ async function init(): Promise<void> {
       mapRenderer.setColorMetric(colorMetric);
       mapRenderer.setWidthMetric(widthMetric);
       mapRenderer.setAltitude(altFt);
-      mapRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      mapRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
       mapRenderer.render();
 
       // Attach or update map interaction
@@ -525,16 +520,16 @@ async function init(): Promise<void> {
 
   function updateVizOverlay(state: BriefingState): void {
     if (vizRenderer && state.routeAnalyses) {
-      vizRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      vizRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
     }
     if (compareRenderer && state.routeAnalyses) {
-      compareRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      compareRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
     }
     if (routeGraphRenderer && state.routeAnalyses && state.vizSettings.routeGraphVisible) {
-      routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
     }
     if (mapRenderer && state.routeAnalyses) {
-      mapRenderer.setSelectedPointIndex(state.selectedPointIndex);
+      mapRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
     }
   }
 
@@ -567,7 +562,7 @@ async function init(): Promise<void> {
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
       ui.renderDWDOverview(state.flight, state.currentPack);
       ui.renderGramet(state.flight, state.currentPack);
-      renderSliderSections(state);
+      renderPointSections(state);
       renderVisualization(state);
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
     }
@@ -601,13 +596,13 @@ async function init(): Promise<void> {
       );
     }
     if (state.selectedPointIndex !== prev.selectedPointIndex) {
-      renderSliderSections(state);
+      renderPointSections(state);
       updateVizOverlay(state);
     }
     if (state.displayMode !== prev.displayMode || state.tierVisibility !== prev.tierVisibility) {
       applyDisplayModeClass(state.displayMode);
       updateToggleButtons(state.displayMode);
-      renderSliderSections(state);
+      renderPointSections(state);
       if (state.displayMode !== prev.displayMode) {
         renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
@@ -628,7 +623,7 @@ async function init(): Promise<void> {
     if (state.vizSettings !== prev.vizSettings) {
       renderVisualization(state);
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
-      renderSliderSections(state);
+      renderPointSections(state);
     }
     if (state.loading !== prev.loading) {
       ui.renderLoading(state.loading);
@@ -932,7 +927,7 @@ async function init(): Promise<void> {
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode);
     ui.renderDWDOverview(s.flight, s.currentPack);
     ui.renderGramet(s.flight, s.currentPack);
-    renderSliderSections(s);
+    renderPointSections(s);
     renderVisualization(s);
     ui.renderLoading(s.loading);
 

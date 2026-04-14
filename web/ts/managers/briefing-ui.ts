@@ -21,7 +21,6 @@ import type {
   ThermodynamicIndices,
   VerticalRegime,
   WeatherDigest,
-  WindComponent,
 } from '../store/types';
 import type { DisplayMode, Tier } from '../types/metrics';
 import {
@@ -843,7 +842,7 @@ export function renderGramet(
 export function renderModelComparison(
   snapshot: ForecastSnapshot | null,
   routeAnalyses?: RouteAnalysesManifest | null,
-  selectedPointIndex?: number,
+  selectedPointIndex?: number | null,
   displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
 ): void {
@@ -997,7 +996,7 @@ function roundAlt(ft: number): number {
 export function renderSoundingAnalysis(
   snapshot: ForecastSnapshot | null,
   routeAnalyses?: RouteAnalysesManifest | null,
-  selectedPointIndex?: number,
+  selectedPointIndex?: number | null,
   displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
   enabledLayers?: Record<string, boolean>,
@@ -1590,81 +1589,6 @@ function renderAdvisoriesTable(adv: AltitudeAdvisories | null): string {
   `;
 }
 
-// --- Route Slider ---
-
-export function renderRouteSlider(
-  ra: RouteAnalysesManifest | null,
-  selectedIndex: number,
-  onSelect: (index: number) => void,
-): void {
-  const section = $('route-slider-section');
-  const container = $('route-slider-container');
-  if (!section || !container) return;
-
-  if (!ra || ra.analyses.length === 0) {
-    section.style.display = 'none';
-    return;
-  }
-
-  section.style.display = '';
-  const analyses = ra.analyses;
-  const maxIdx = analyses.length - 1;
-  const current = analyses[selectedIndex] || analyses[0];
-  const totalDist = ra.total_distance_nm;
-
-  // Build waypoint labels for the track
-  const waypointLabels = analyses
-    .filter((a) => a.waypoint_icao)
-    .map((a) => {
-      const pct = totalDist > 0 ? (a.distance_from_origin_nm / totalDist) * 100 : 0;
-      return `<span class="slider-waypoint-label" style="left: ${pct}%">${escapeHtml(a.waypoint_icao!)}</span>`;
-    })
-    .join('');
-
-  // Format time
-  // Append 'Z' so JS parses as UTC (backend sends naive ISO strings that are UTC by convention)
-  const timeIso = current.interpolated_time.endsWith('Z') ? current.interpolated_time : current.interpolated_time + 'Z';
-  const time = new Date(timeIso);
-  const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + 'Z';
-
-  // Wind info for first model
-  const modelKeys = Object.keys(current.wind_components);
-  let windInfo = '';
-  if (modelKeys.length > 0) {
-    const wc: WindComponent = current.wind_components[modelKeys[0]];
-    const hdTail = wc.headwind_kt >= 0 ? `HD ${wc.headwind_kt.toFixed(0)}` : `TL ${(-wc.headwind_kt).toFixed(0)}`;
-    windInfo = `Wind ${wc.wind_direction_deg.toFixed(0)}\u00B0/${wc.wind_speed_kt.toFixed(0)}kt (${hdTail})`;
-  }
-
-  const pointLabel = current.waypoint_icao
-    ? `${current.waypoint_icao} \u2014 ${current.waypoint_name || ''}`
-    : `${current.lat.toFixed(2)}\u00B0N ${Math.abs(current.lon).toFixed(2)}\u00B0${current.lon >= 0 ? 'E' : 'W'}`;
-
-  container.innerHTML = `
-    <div class="route-slider-info">
-      <span class="slider-point-label">${escapeHtml(pointLabel)}</span>
-      <span class="slider-distance">${current.distance_from_origin_nm.toFixed(0)} nm</span>
-      <span class="slider-time">${escapeHtml(timeStr)}</span>
-      <span class="slider-wind">${escapeHtml(windInfo)}</span>
-    </div>
-    <div class="route-slider-track">
-      <input type="range" id="route-slider" min="0" max="${maxIdx}" value="${selectedIndex}" class="route-slider-input">
-      <div class="slider-waypoint-labels">${waypointLabels}</div>
-    </div>
-    <div class="slider-endpoints">
-      <span>${escapeHtml(analyses[0].waypoint_icao || t('sounding.origin'))}</span>
-      <span>${escapeHtml(analyses[maxIdx].waypoint_icao || t('sounding.destination'))}</span>
-    </div>
-  `;
-
-  const slider = document.getElementById('route-slider') as HTMLInputElement;
-  if (slider) {
-    slider.addEventListener('input', () => {
-      onSelect(parseInt(slider.value, 10));
-    });
-  }
-}
-
 // --- Route-point sounding (single point) ---
 
 function renderSinglePointSounding(
@@ -1707,7 +1631,7 @@ export function renderSkewTs(
   snapshot: ForecastSnapshot | null,
   selectedModel: string,
   routeAnalyses?: RouteAnalysesManifest | null,
-  selectedPointIndex?: number,
+  selectedPointIndex?: number | null,
 ): void {
   const el = $('skewt-section');
   if (!el) return;
@@ -1722,7 +1646,11 @@ export function renderSkewTs(
 
   // Route-point mode: single Skew-T + Hodograph pair
   if (routeAnalyses && routeAnalyses.analyses.length > 0) {
-    const idx = selectedPointIndex ?? 0;
+    if (selectedPointIndex == null) {
+      el.innerHTML = `<p class="muted">${t('skewt.selectPoint')}</p>`;
+      return;
+    }
+    const idx = selectedPointIndex;
     const point = routeAnalyses.analyses[idx];
     if (point) {
       const label = point.waypoint_icao || `Point ${point.point_index}`;
@@ -1813,14 +1741,14 @@ export function renderError(error: string | null): void {
 /** Update the Windy link to reflect the currently selected point and model. */
 export function updateWindyLink(
   routeAnalyses: RouteAnalysesManifest | null,
-  selectedPointIndex: number,
+  selectedPointIndex: number | null,
   selectedModel: string,
 ): void {
   const container = document.getElementById('external-links') as HTMLElement | null;
   const link = document.getElementById('windy-link') as HTMLAnchorElement | null;
   if (!container || !link) return;
 
-  const point = routeAnalyses?.analyses?.[selectedPointIndex];
+  const point = selectedPointIndex != null ? routeAnalyses?.analyses?.[selectedPointIndex] : undefined;
   if (!point) {
     container.style.display = 'none';
     return;

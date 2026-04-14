@@ -148,6 +148,7 @@
   "sounding.origin": "Départ",
   "sounding.destination": "Destination",
   "skewt.notAvailable": "Diagrammes Skew-T non disponibles.",
+  "skewt.selectPoint": "Sélectionnez un point sur la coupe verticale pour afficher le diagramme Skew-T.",
   "skewt.tabNotAvailable": "Non disponible",
   "advisories.noAdvisories": "Aucun avis disponible",
   "advisories.recalculate": "Recalculer",

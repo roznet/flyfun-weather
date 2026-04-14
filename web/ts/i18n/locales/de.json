@@ -148,6 +148,7 @@
   "sounding.origin": "Abflug",
   "sounding.destination": "Ziel",
   "skewt.notAvailable": "Skew-T-Diagramme nicht verfügbar.",
+  "skewt.selectPoint": "Wählen Sie einen Punkt im Querschnitt aus, um das Skew-T-Diagramm anzuzeigen.",
   "skewt.tabNotAvailable": "Nicht verfügbar",
   "advisories.noAdvisories": "Keine Hinweise verfügbar",
   "advisories.recalculate": "Neu berechnen",

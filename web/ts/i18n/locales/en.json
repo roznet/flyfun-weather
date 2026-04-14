@@ -164,6 +164,7 @@
   "sounding.destination": "Destination",
 
   "skewt.notAvailable": "Skew-T diagrams not available.",
+  "skewt.selectPoint": "Select a point on the cross-section to see the Skew-T diagram.",
   "skewt.tabNotAvailable": "Not available",
 
   "advisories.noAdvisories": "No advisories available",
