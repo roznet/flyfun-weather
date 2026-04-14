@@ -399,16 +399,23 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
 
         lines.append(f"[{status_tag}] {name}: {detail}")
 
-        # Per-model breakdown
-        model_parts = []
-        for m in result.per_model:
-            m_status = m.status.value.upper()
-            if m.affected_pct > 0:
-                model_parts.append(f"{m.model}={m_status}: {m.affected_pct:.0f}% affected")
-            else:
-                model_parts.append(f"{m.model}={m_status}")
-        if model_parts:
-            lines.append(f"  {' | '.join(model_parts)}")
+        # Per-model breakdown — only show when models disagree
+        statuses = {m.status.value.upper() for m in result.per_model}
+        if len(statuses) > 1:
+            # Find outlier models (those differing from aggregate)
+            outliers = [
+                m for m in result.per_model
+                if m.status.value.upper() != status_tag
+            ]
+            if outliers:
+                parts = []
+                for m in outliers:
+                    m_status = m.status.value.upper()
+                    if m.affected_pct > 0:
+                        parts.append(f"{m.model} sees {m_status} ({m.affected_pct:.0f}% affected)")
+                    else:
+                        parts.append(f"{m.model} sees {m_status}")
+                lines.append(f"  (outlier: {'; '.join(parts)})")
 
     if len(lines) == 1:
         lines.append("No route advisories available.")

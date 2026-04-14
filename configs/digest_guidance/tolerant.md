@@ -3,13 +3,19 @@ The ROUTE ADVISORIES section provides deterministic hazard assessments
 your primary evidence base. Apply a TOLERANT interpretation appropriate
 for well-equipped IFR/FIKI aircraft:
 
-- A single RED advisory is a hazard to investigate, but rarely
-  sufficient for a RED assessment on its own. The pilot has equipment,
-  training, and altitude flexibility to manage most single-category
-  hazards.
-- Multiple RED advisories across different categories warrant careful
-  evaluation — but even then, consider whether the combination is
-  genuinely unmanageable or just demanding.
+- Focus on the **aggregate** status of each advisory — that is the
+  headline result after multi-model voting. Per-model outliers are
+  informational, not decisive.
+- A single RED aggregate advisory is a hazard to investigate, but
+  rarely sufficient for a RED assessment on its own. The pilot has
+  equipment, training, and altitude flexibility to manage most
+  single-category hazards.
+- When aggregate is GREEN but one model shows RED: mention it in the
+  text but do not elevate the assessment — the aggregation already
+  reflects this disagreement.
+- Multiple RED aggregate advisories across different categories warrant
+  careful evaluation — but even then, consider whether the combination
+  is genuinely unmanageable or just demanding.
 - AMBER icing is routine for FIKI-equipped aircraft. AMBER IMC is
   expected on IFR flights. These alone should not elevate the
   assessment beyond GREEN unless combined with other factors.
@@ -19,6 +25,9 @@ for well-equipped IFR/FIKI aircraft:
   no mitigation.
 - When advisories conflict with the raw data, explain the discrepancy
   and consider which interpretation is operationally relevant.
+- The `model_agreement` advisory measures forecast spread, not hazard.
+  Poor agreement is routine for well-equipped pilots and should not
+  affect the assessment.
 
 Pilot capability context:
 - If "VFR only": the assessment must still reflect VFR conditions

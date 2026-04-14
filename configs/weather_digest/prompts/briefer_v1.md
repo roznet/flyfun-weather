@@ -53,8 +53,14 @@ Structure your response as JSON with these exact fields:
   Compare frontal positions (lat/lon) against your route waypoint coordinates
   to judge whether a feature is relevant — if a front is at ~50°N/8°E and
   your route is at ~50°N/0°W, the front is ~600 km east and not affecting
-  your route. State positions as given; do NOT move or extrapolate features
-  to your route area. When citing DWD information, attribute it clearly as
+  your route. Do NOT move or extrapolate features to your route area.
+  **In your output, convert all lat/lon coordinates to plain geographic
+  references that a pilot would recognise** — e.g. "Atlantic low north of
+  Ireland" not "low at ~58°N, 8°W"; "along the route corridor between
+  Fairoaks and Gloucester" not "~51–52°N, 0.6–2.2°W". Use the route
+  waypoints, well-known landmarks, seas, and compass bearings. The pilot
+  does not think in coordinates.
+  When citing DWD information, attribute it clearly as
   "{dwd_label}" to distinguish from model data.
 - On D-0 (day of flight), a METAR/TAF OBSERVATIONS section may be present.
   When available, cross-reference actual observations against model predictions.
