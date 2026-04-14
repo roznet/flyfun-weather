@@ -46,6 +46,24 @@ For now, only warm-nose freezing rain is active — it's the high-confidence SLD
 
 ---
 
+## ECMWF GRIB ceiling field is inherently sparse
+
+**Added:** 2026-04-14
+**Location:** `src/weatherbrief/fetch/grib/decode.py` — `decode_ecmwf_surface_per_point()` / `build_ecmwf_cloud_diagnostics()`
+
+The ECMWF `ceil` (ceiling) field in the a1 surface GRIB is ~50% NaN. ECMWF only populates ceiling where there is significant cloud cover — clear or scattered areas have no value. Our bilinear interpolation returns None when any of the 4 surrounding grid points is NaN, so route points near the edge of a cloud mass often lose the ceiling even when a neighbouring grid cell has a value.
+
+**Observed:** Testing 20260413 HRES data, EGTF (51.35°N, -0.56°W) falls in a NaN gap despite a valid ceiling one grid cell away (6952m). KJFK shows ceiling via `cbh` (cloud base height, which is dense) but not via `ceil`.
+
+**Decision:** Accept this as-is. Ceiling being absent where skies are mostly clear is meteorologically correct — there is no meaningful ceiling to report. The `cbh` (cloud base height) and per-level `cc` (cloud cover fraction on pressure levels) provide cloud information at those points regardless.
+
+**Revisit if:**
+- Pilots report missing ceiling data in overcast conditions (would indicate a real gap, not a sparse-field artifact)
+- We want to switch `ceil` interpolation to `nearest` for better coverage at the cost of spatial precision
+- ECMWF changes their ceiling field to be dense (e.g. reporting 9999m sentinel for clear skies uniformly)
+
+---
+
 ## Resolved
 
 _(none yet)_
