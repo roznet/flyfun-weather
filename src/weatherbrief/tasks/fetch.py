@@ -14,7 +14,12 @@ from typing import Callable
 
 from weatherbrief.fetch.open_meteo import OpenMeteoClient
 from weatherbrief.fetch.route_points import interpolate_route
-from weatherbrief.fetch.variables import MODEL_ENDPOINTS, ModelRegion, detect_model_region
+from weatherbrief.fetch.variables import (
+    MODEL_ENDPOINTS,
+    ModelRegion,
+    detect_model_region,
+    route_covers_prefixes,
+)
 
 # Delay between Open-Meteo API calls to avoid rate limiting.
 # Paid API key has generous limits; free tier allows 600/min but be polite.
@@ -32,11 +37,20 @@ from weatherbrief.models import (
 logger = logging.getLogger(__name__)
 
 
-def _should_skip_for_region(endpoint, route_region: ModelRegion) -> bool:
-    """Return True if a model's coverage region doesn't match the route."""
-    if endpoint.region == ModelRegion.GLOBAL or route_region == ModelRegion.GLOBAL:
-        return False
-    return endpoint.region != route_region
+def _should_skip_for_region(endpoint, route_region: ModelRegion, route=None) -> bool:
+    """Return True if a model's coverage region doesn't match the route.
+
+    Two-level check:
+    1. Broad region (EUROPE / NORTH_AMERICA / GLOBAL)
+    2. Country-level ICAO prefix (e.g. MeteoFrance requires an LF airport)
+    """
+    if endpoint.region != ModelRegion.GLOBAL and route_region != ModelRegion.GLOBAL:
+        if endpoint.region != route_region:
+            return True
+    if endpoint.required_icao_prefixes and route is not None:
+        if not route_covers_prefixes(route, endpoint.required_icao_prefixes):
+            return True
+    return False
 
 
 @dataclass
@@ -196,7 +210,7 @@ def run_fetch(
                 (model.value, days_out_for_range, endpoint.max_days),
             )
             continue
-        if _should_skip_for_region(endpoint, route_region):
+        if _should_skip_for_region(endpoint, route_region, route):
             logger.info(
                 "Skipping %s: %s model not relevant for %s route",
                 model.value, endpoint.region.value, route_region.value,

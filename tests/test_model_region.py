@@ -9,6 +9,7 @@ from weatherbrief.fetch.variables import (
     ModelEndpoint,
     ModelRegion,
     detect_model_region,
+    route_covers_prefixes,
 )
 from weatherbrief.models import RouteConfig, Waypoint
 from weatherbrief.tasks.fetch import _should_skip_for_region
@@ -95,6 +96,70 @@ class TestShouldSkipForRegion:
         """If route is GLOBAL (mixed), don't skip anything."""
         ep = self._ep(ModelRegion.EUROPE)
         assert not _should_skip_for_region(ep, ModelRegion.GLOBAL)
+
+
+# --- required_icao_prefixes ---
+
+class TestRequiredIcaoPrefixes:
+    """Country-level ICAO prefix filtering (e.g. MeteoFrance → LF)."""
+
+    def test_route_covers_french_prefix(self):
+        route = _route("EGTK", "LFPB", "LSGS")
+        assert route_covers_prefixes(route, ["LF"])
+
+    def test_route_does_not_cover_french_prefix(self):
+        route = _route("EGTK", "EDDK", "LSGS")
+        assert not route_covers_prefixes(route, ["LF"])
+
+    def test_route_covers_uk_prefix(self):
+        route = _route("EGLL", "LFPB")
+        assert route_covers_prefixes(route, ["EG"])
+
+    def test_route_does_not_cover_uk_prefix(self):
+        route = _route("LFPB", "EDDK")
+        assert not route_covers_prefixes(route, ["EG"])
+
+    def test_empty_route(self):
+        assert not route_covers_prefixes(None, ["LF"])
+
+    def test_case_insensitive(self):
+        route = _route("lfpb", "eddk")
+        assert route_covers_prefixes(route, ["LF"])
+
+    def test_skip_meteofrance_on_non_french_route(self):
+        """MeteoFrance skipped for Germany-only route."""
+        ep = MODEL_ENDPOINTS["meteofrance"]
+        route = _route("EDDK", "EDDM")
+        assert _should_skip_for_region(ep, ModelRegion.EUROPE, route)
+
+    def test_keep_meteofrance_on_french_route(self):
+        """MeteoFrance kept when route touches France."""
+        ep = MODEL_ENDPOINTS["meteofrance"]
+        route = _route("EGTK", "LFPB")
+        assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
+
+    def test_skip_ukmo_on_non_uk_route(self):
+        """UKMO skipped for France-Germany route."""
+        ep = MODEL_ENDPOINTS["ukmo"]
+        route = _route("LFPB", "EDDK")
+        assert _should_skip_for_region(ep, ModelRegion.EUROPE, route)
+
+    def test_keep_ukmo_on_uk_route(self):
+        """UKMO kept when route touches UK."""
+        ep = MODEL_ENDPOINTS["ukmo"]
+        route = _route("EGLL", "LFPB")
+        assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
+
+    def test_no_prefix_requirement_never_skips(self):
+        """Models without required_icao_prefixes are unaffected."""
+        ep = MODEL_ENDPOINTS["icon"]
+        route = _route("EDDK", "EDDM")
+        assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
+
+    def test_prefix_check_skipped_when_no_route(self):
+        """Backward compat: no route passed → prefix check not applied."""
+        ep = MODEL_ENDPOINTS["meteofrance"]
+        assert not _should_skip_for_region(ep, ModelRegion.EUROPE, None)
 
 
 # --- MODEL_ENDPOINTS region assignments ---

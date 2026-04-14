@@ -122,6 +122,9 @@ class ModelEndpoint:
     default: bool = False
     # Geographic coverage region — used to skip irrelevant models for a route
     region: ModelRegion = ModelRegion.GLOBAL
+    # If set, route must contain at least one airport whose ICAO starts with
+    # one of these prefixes (e.g. ["LF"] for France, ["EG"] for UK).
+    required_icao_prefixes: list[str] | None = None
 
 
 MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
@@ -160,6 +163,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         unavailable_surface=["precipitation_probability", "lifted_index"],
         pressure_levels=list(UKMO_PRESSURE_LEVELS),
         region=ModelRegion.EUROPE,
+        required_icao_prefixes=["EG"],
     ),
     "meteofrance": ModelEndpoint(
         name="Météo-France",
@@ -171,6 +175,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         unavailable_pressure=["vertical_velocity"],
         pressure_levels=list(METEOFRANCE_PRESSURE_LEVELS),
         region=ModelRegion.EUROPE,
+        required_icao_prefixes=["LF"],
     ),
     "gem": ModelEndpoint(
         name="GEM",
@@ -203,6 +208,16 @@ def build_hourly_params(endpoint: ModelEndpoint) -> str:
 
 # ICAO prefixes that indicate North American airspace
 _NORTH_AMERICA_PREFIXES = ("K", "C", "P")
+
+
+def route_covers_prefixes(route, prefixes: list[str]) -> bool:
+    """Return True if at least one waypoint ICAO starts with any of the given prefixes."""
+    if not route or not route.waypoints:
+        return False
+    return any(
+        wp.icao.upper().startswith(tuple(prefixes))
+        for wp in route.waypoints
+    )
 
 
 def detect_model_region(route) -> ModelRegion:

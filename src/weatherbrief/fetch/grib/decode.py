@@ -12,7 +12,15 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import warnings
 from pathlib import Path
+
+# Silence xarray FutureWarning about combine compat default change (cfgrib trigger)
+warnings.filterwarnings(
+    "ignore",
+    message="In a future version of xarray the default value for compat",
+    category=FutureWarning,
+)
 
 logger = logging.getLogger(__name__)
 
