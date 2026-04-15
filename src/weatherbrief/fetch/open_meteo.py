@@ -215,12 +215,17 @@ class OpenMeteoClient:
         *,
         start_date: str | None = None,
         end_date: str | None = None,
+        chunk_size: int | None = None,
     ) -> list[WaypointForecast]:
         """Fetch forecast for multiple points, chunking to avoid URL limits.
 
         Open-Meteo accepts comma-separated latitude/longitude values and returns
         a list of per-location results.  When ``start_date`` / ``end_date`` are
         provided, only that time window is requested (reduces payload).
+
+        ``chunk_size`` overrides the default max points per request.  Callers
+        with short parameter lists (e.g. a single pressure level) can safely
+        use larger chunks since URL length is the real constraint.
 
         Returns one ``WaypointForecast`` per input point, in the same order.
         """
@@ -236,7 +241,7 @@ class OpenMeteoClient:
         )
 
         results: list[WaypointForecast] = []
-        chunk_size = self._MAX_POINTS_PER_REQUEST
+        chunk_size = chunk_size or self._MAX_POINTS_PER_REQUEST
         for chunk_start in range(0, len(points), chunk_size):
             chunk = points[chunk_start : chunk_start + chunk_size]
             if len(points) > chunk_size:
