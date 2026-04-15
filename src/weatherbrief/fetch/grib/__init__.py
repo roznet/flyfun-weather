@@ -229,6 +229,7 @@ def _enrich_ecmwf(
     )
     from weatherbrief.fetch.grib.ecmwf_fetch import (
         ecmwf_grib_dir,
+        find_best_ecmwf_run,
         scan_ecmwf_files,
     )
 
@@ -250,9 +251,15 @@ def _enrich_ecmwf(
             logger.info("No ECMWF GRIB runs before as_of_time=%s", as_of_time)
             return None
 
-    # Pick the latest run and filter to its files (single scan)
-    latest_bt = max(f.base_time for f in all_files)
-    run_files = [f for f in all_files if f.base_time == latest_bt]
+    # Pick the best run — prefers latest, but falls back to an older
+    # main run (00z/12z, 192h) when a short-cutoff run (06z/18z, 144h)
+    # can't cover the full flight window.
+    flight_end = departure_time + timedelta(hours=max(flight_duration_hours, 1))
+    run_files = find_best_ecmwf_run(all_files, cover_until=flight_end)
+    if not run_files:
+        logger.info("ECMWF GRIB: no suitable run found")
+        return None
+    latest_bt = run_files[0].base_time
 
     # Group files by step_hours, separate a1 (surface) and a2 (pressure)
     files_by_step: dict[int, dict[str, Path]] = {}

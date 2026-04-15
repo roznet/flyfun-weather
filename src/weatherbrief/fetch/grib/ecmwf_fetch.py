@@ -35,7 +35,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,13 @@ ECMWF_PUBLISH_DELAY_HOURS = 8
 # IFS ensemble control forecast cycles.
 # oper stream at 00z/12z (0-192h), scda stream at 06z/18z (0-144h).
 ECMWF_CYCLES = [0, 6, 12, 18]
+
+# Maximum forecast step (hours) per stream type.
+ECMWF_MAX_STEP_HOURS = {
+    "oper": 192,   # Main runs (00z, 12z)
+    "scda": 144,   # Short cutoff (06z, 18z)
+}
+ECMWF_MAX_STEP_DEFAULT = 144  # Conservative fallback
 
 # Known file extensions to strip before parsing the ECMWF filename.
 _KNOWN_SUFFIXES = (".grib2", ".grib", ".idx", ".bz2")
@@ -278,6 +285,64 @@ def find_latest_ecmwf_run(
     if not files:
         return None
     return max(f.base_time for f in files)
+
+
+def find_best_ecmwf_run(
+    all_files: list[ECMWFFileInfo],
+    cover_until: datetime,
+) -> list[ECMWFFileInfo]:
+    """Select the best ECMWF run whose horizon covers the flight window.
+
+    Tries runs in reverse chronological order.  Prefers the latest run
+    whose forecast horizon (base_time + max step for its stream) reaches
+    ``cover_until``.  Falls back to the latest run if none fully covers.
+
+    This mirrors the ICON-EU ``find_latest_icon_eu_run`` strategy: a 06z
+    scda run (max 144h) is skipped in favour of the previous 00z oper run
+    (max 192h) when the flight extends beyond 144h.
+
+    Args:
+        all_files: Pre-scanned file list (all runs, already filtered for
+            operational_only / as_of_time by the caller).
+        cover_until: The latest valid-time the run must cover.
+
+    Returns:
+        Files for the selected run (may be empty if all_files is empty).
+    """
+    if not all_files:
+        return []
+
+    # Group files by base_time
+    runs: dict[datetime, list[ECMWFFileInfo]] = {}
+    for f in all_files:
+        runs.setdefault(f.base_time, []).append(f)
+
+    # Try runs newest-first
+    for base_time in sorted(runs, reverse=True):
+        run_files = runs[base_time]
+        # Determine stream from any file in the run
+        stream = run_files[0].stream
+        max_step = ECMWF_MAX_STEP_HOURS.get(stream, ECMWF_MAX_STEP_DEFAULT)
+        horizon = base_time + timedelta(hours=max_step)
+        if horizon >= cover_until:
+            logger.info(
+                "ECMWF run selection: %s %s (horizon %dh covers flight end)",
+                base_time.isoformat(), stream, max_step,
+            )
+            return run_files
+        logger.debug(
+            "ECMWF run %s %s: horizon %dh doesn't reach flight end, skipping",
+            base_time.isoformat(), stream, max_step,
+        )
+
+    # No run fully covers — fall back to latest (partial coverage is better
+    # than none; the uncovered tail just won't get GRIB enrichment).
+    latest_bt = max(runs)
+    logger.info(
+        "ECMWF: no run covers flight end %s, falling back to latest %s",
+        cover_until.isoformat(), latest_bt.isoformat(),
+    )
+    return runs[latest_bt]
 
 
 def find_files_for_run(
