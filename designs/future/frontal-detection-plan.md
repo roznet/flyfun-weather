@@ -37,10 +37,10 @@ Frontal detection requires 2D gridded fields (not point soundings) to compute sp
 
 - **Resolution**: 0.5deg (~55km). At 1deg, TFP second derivatives (gradient of the gradient) would be computed over only 2-3 cells, making front classification noisy. 0.5deg gives 4-6 cells across a typical frontal zone, with well-resolved second derivatives. Compute cost is trivial (numpy on ~4000 points); the only real cost is API requests.
 - **Domain**: 35-60N, -12 to 28E (4131 grid points). Covers all defined analysis zones with margin.
-- **Variables per grid point**: `temperature_850hPa`, `wind_speed_850hPa`, `wind_direction_850hPa` (reconstructed to u/v). Just 3 variables at 1 level — tiny compared to full sounding fetches.
+- **Variables per grid point**: `temperature_850hPa`, `dewpoint_850hPa`, `wind_speed_850hPa`, `wind_direction_850hPa` (wind reconstructed to u/v, T+Td used for θe). Just 4 variables at 1 level — tiny compared to full sounding fetches.
 - **Fetch volume**: Open-Meteo returns hourly time series per request, so all forecast horizons come back in one response. At 1000 points per chunk, that's ~5 requests per model × 3 models = **~15 requests total**. At 2 runs/day, ~900 API calls/month — negligible against the 1M monthly plan.
 - **All three models provide 850hPa via Open-Meteo**: GFS (in extended levels), ECMWF (in 13-level set), ICON-EU (in 19-level set).
-- **Chunk size**: the existing `OpenMeteoClient.fetch_multi_point()` accepts a `chunk_size` parameter (default 150 for full soundings). The frontal grid fetch uses 1000 — with only 3 variables the `hourly` param is ~67 chars, leaving the URL budget almost entirely for coordinates (~12KB per request, well within limits).
+- **Chunk size**: the existing `OpenMeteoClient.fetch_multi_point()` accepts a `chunk_size` parameter (default 150 for full soundings). The frontal grid fetch uses 1000 — with only 4 variables the `hourly` param is ~90 chars, leaving the URL budget almost entirely for coordinates (~12KB per request, well within limits).
 
 **3. LLM digest integration (structured data + LLM narrative)**
 Two output types with different approaches:
@@ -115,15 +115,16 @@ FRONTAL_GRID = {
 
 Reuse the existing `OpenMeteoClient` infrastructure. For each model, fetch the full time series for all grid points:
 - `temperature_850hPa` (returned in Celsius by Open-Meteo)
+- `dewpoint_850hPa` (returned in Celsius — for θe computation, see §2.4)
 - `wind_speed_850hPa` (returned in **knots** — the client sets `wind_speed_unit=kn`), `wind_direction_850hPa` (degrees)
 
-**Confirmed availability**: all three models expose 850hPa temperature, wind speed, and wind direction via Open-Meteo. GFS has 27 pressure levels, ECMWF has 13, ICON-EU has 19 — all include 850hPa. The only per-model gap relevant here is vertical_velocity (unavailable for ICON), which we don't need.
+**Confirmed availability**: all three models expose 850hPa temperature, dewpoint, wind speed, and wind direction via Open-Meteo. GFS has 27 pressure levels, ECMWF has 13, ICON-EU has 19 — all include 850hPa. Dewpoint is either provided directly or derived from T + RH via the Magnus formula (already implemented in the codebase). The only per-model gap relevant here is vertical_velocity (unavailable for ICON), which we don't need.
 
 **Lightweight fetch path**: the existing `fetch_multi_point()` returns full `WaypointForecast` objects with all surface variables and all pressure levels — far more data than we need. Rather than forcing ~4000 grid points through the full sounding pipeline, add a dedicated `fetch_grid_fields()` method to `OpenMeteoClient` that:
-- Requests only `temperature_850hPa`, `wind_speed_850hPa`, `wind_direction_850hPa` (3 variables)
+- Requests only `temperature_850hPa`, `dewpoint_850hPa`, `wind_speed_850hPa`, `wind_direction_850hPa` (4 variables)
 - Skips all surface variables
 - Returns raw numpy arrays directly (no `WaypointForecast` construction)
-- Uses `chunk_size=1000` — with only 3 variables the `hourly` param is ~67 chars, leaving the URL budget almost entirely for coordinates. 1000 points × ~12 chars each ≈ 12KB URL, well within limits.
+- Uses `chunk_size=1000` — with only 4 variables the `hourly` param is ~90 chars, leaving the URL budget almost entirely for coordinates. 1000 points × ~12 chars each ≈ 12KB URL, well within limits.
 
 This keeps the frontal fetch fast and avoids building ~4000 heavyweight model objects.
 
@@ -140,6 +141,11 @@ def wind_to_uv(speed_kt: np.ndarray, direction_deg: np.ndarray):
     u = -speed_kmh * np.sin(direction_rad)
     v = -speed_kmh * np.cos(direction_rad)
     return u, v
+
+# Sanity check: westerly wind (270°) → u > 0, v ≈ 0
+# Southerly wind (180°) → u ≈ 0, v > 0
+# These cases (and their reverses) should be covered by unit tests
+# to catch sign errors in the meteorological convention.
 ```
 
 **Reshaping**: the lightweight fetch returns raw arrays per variable per grid point. Reshape into 2D grids:
@@ -155,11 +161,56 @@ def reshape_to_grid(raw: dict[str, list[list[float]]],
     Points are ordered lat-major (row by row from south to north).
     """
     T850 = np.array([pt[hour_index] for pt in raw['temperature_850hPa']]).reshape(n_lat, n_lon)
+    Td850 = np.array([pt[hour_index] for pt in raw['dewpoint_850hPa']]).reshape(n_lat, n_lon)
     ws = np.array([pt[hour_index] for pt in raw['wind_speed_850hPa']]).reshape(n_lat, n_lon)
     wd = np.array([pt[hour_index] for pt in raw['wind_direction_850hPa']]).reshape(n_lat, n_lon)
     u850, v850 = wind_to_uv(ws, wd)
-    return {'T850': T850, 'u850': u850, 'v850': v850}
+    theta_e = compute_theta_e(T850, Td850, pressure_hPa=850.0)
+    return {'T850': T850, 'Td850': Td850, 'theta_e': theta_e, 'u850': u850, 'v850': v850}
 ```
+
+**NaN handling — field preparation before any computation**: Open-Meteo can return `null` for individual hourly values (especially at longer horizons or near model boundaries). All NaN must be resolved *before* the field reaches `gaussian_filter` or `np.gradient`, because both functions handle NaN incorrectly:
+- `gaussian_filter` treats NaN as zero (or propagates it depending on scipy version), silently corrupting neighboring cells — not just producing NaN, but producing *wrong values* at valid cells.
+- `np.gradient` propagates NaN through central differences: one NaN cell produces NaN gradients at all 4 adjacent cells, and TFP second derivatives propagate further (~12+ cells affected).
+
+Letting NaN reach these functions is not a recoverable error — the corruption is silent and spreads.
+
+```python
+# grid.py
+
+def prepare_field(raw_field: np.ndarray,
+                  max_nan_fraction: float = 0.05) -> np.ndarray | None:
+    """
+    Resolve missing-data NaN before any computation.
+    Returns a clean field with no NaN, or None if too much is missing.
+    """
+    nan_mask = np.isnan(raw_field)
+    nan_frac = nan_mask.sum() / raw_field.size
+
+    if nan_frac >= max_nan_fraction:
+        return None  # skip this hour — log for monitoring
+
+    if nan_frac == 0:
+        return raw_field
+
+    # Nearest-neighbor fill: the most conservative interpolation for
+    # gradient analysis — it cannot invent gradients that don't exist
+    # in the data (unlike linear interpolation, which could create
+    # artificial slopes across filled regions).
+    from scipy.interpolate import griddata
+    valid = ~nan_mask
+    coords_valid = np.argwhere(valid)
+    coords_nan = np.argwhere(nan_mask)
+    filled = raw_field.copy()
+    filled[nan_mask] = griddata(
+        coords_valid, raw_field[valid], coords_nan, method='nearest'
+    )
+    return filled
+```
+
+The `reshape_to_grid()` function calls `prepare_field()` on each variable immediately after reshaping. If any variable returns `None` (≥5% missing), the entire forecast hour is skipped and logged so pipeline monitoring can detect systematic data gaps.
+
+**Fetch retry**: the grid fetch must use the existing `OpenMeteoClient` retry logic (exponential backoff). If a chunk fails after retries, the entire model's analysis for that run should be skipped rather than producing partial-grid results. The 5-chunk-per-model pattern means a single chunk failure leaves a spatial gap that would create artificial gradient boundaries.
 
 **Fetch volume**: Open-Meteo returns the full hourly time series in each response, so all forecast horizons come back at once. At 1000 points per chunk: ~5 requests per model, ~15 requests total for all three models. At 2 runs/day, that's ~900 API calls/month — negligible against the 1M monthly plan. Under 30 seconds with the lightweight path.
 
@@ -176,7 +227,26 @@ For **output and storage**, results are aggregated to 6h blocks (T+0, 6, 12, 18,
 
 T+72 is the cutoff for route tables and departure window calculations.
 
-### 1.4 ERA5 Fields for Validation
+### 1.4 Model Initialization Time Alignment
+
+Inter-model comparison (clearance timing spread, agreement tables) requires comparing fields at the **same valid time**, not the same forecast horizon. GFS, ECMWF, and ICON have different init times and delivery schedules:
+- **GFS**: init 00Z/06Z/12Z/18Z, data available ~3.5-4h after init
+- **ECMWF**: init 00Z/12Z, data available ~7-8h after init
+- **ICON-EU**: init 00Z/03Z/06Z/09Z/12Z/15Z/18Z/21Z, available ~2-3h after init
+
+When the pipeline runs (e.g., at 10Z triggered by ECMWF 00Z delivery), the latest available runs differ: ECMWF 00Z, GFS 06Z, ICON-EU 09Z. The valid time for "T+24" is different for each.
+
+**Approach**: align by valid time, not forecast horizon. The pipeline:
+1. Determines the target valid times (hourly from now through +72h)
+2. For each model, identifies the latest available init time
+3. Maps each target valid time to the corresponding forecast horizon for that model's init time
+4. Compares model outputs at matching valid times
+
+This means a GFS 06Z T+18 forecast is compared with ECMWF 00Z T+24 — both valid at 00Z+24h = the same physical moment. The `frontal_analysis` DB table stores `valid_time` (or derives it from `run_date + init_hour + horizon_h`) so briefing queries can join across models on valid time.
+
+Open-Meteo simplifies this: it always serves the latest available run for each model, and returns UTC timestamps for each hourly value. The pipeline can align on these timestamps directly rather than computing init-time offsets manually.
+
+### 1.5 ERA5 Fields for Validation
 
 For offline validation against Meteo-France carte des fronts, ERA5 reanalysis provides "ground truth" gridded fields. Add to CDS request if needed:
 
@@ -214,24 +284,42 @@ def compute_frontal_zones(T850: np.ndarray,
                            lat: np.ndarray,
                            lon: np.ndarray,
                            smooth_sigma: float = 0.5,
-                           gradient_threshold: float = 0.8) -> dict:
+                           gradient_threshold: float = 0.8,
+                           terrain_mask: np.ndarray = None) -> dict:
     """
     Detect frontal zones from 850hPa temperature field.
 
-    T850: 2D array (lat x lon) in Celsius
+    T850: 2D array (lat x lon) in Celsius — must be NaN-free
+        (missing data resolved by prepare_field() before this call).
     lat, lon: 1D coordinate arrays (degrees)
     smooth_sigma: Gaussian smoothing sigma in grid points. At 0.5deg resolution
         the grid is already fairly coarse, so minimal smoothing suffices.
         0.5 (= 0.25deg) removes single-cell noise without blurring narrow fronts.
     gradient_threshold: K per 100km — frontal zone threshold
+    terrain_mask: boolean (True=valid). Terrain cells are filled with
+        smoothly interpolated values before computation so they don't
+        create artificial gradients at boundaries. The mask is applied
+        to results at the end — see §2.4 for rationale.
 
     Returns dict with:
         'gradient': 2D gradient magnitude field (K per 100km)
-        'frontal_mask': boolean mask of frontal zones
+        'frontal_mask': boolean mask of frontal zones (terrain excluded)
         'tfp': thermal front parameter field
+        'T_smooth': smoothed, terrain-filled T850 — pass to classify_front_type()
     """
-    # Smooth temperature to remove single-cell noise
-    T_smooth = gaussian_filter(T850, sigma=smooth_sigma)
+    # Fill terrain cells before smoothing (see §2.4 for full rationale).
+    # Smooth interpolation from valid neighbors prevents artificial gradients
+    # at terrain boundaries. We don't care about the filled values themselves
+    # — only that they don't corrupt gradients at adjacent valid cells.
+    # The terrain mask is applied to the frontal_mask at the end.
+    T_input = T850
+    if terrain_mask is not None:
+        T_input = fill_terrain(T850, terrain_mask)
+
+    # Smooth temperature to remove single-cell noise.
+    # T_input is NaN-free (missing data resolved by prepare_field(),
+    # terrain filled above), so gaussian_filter operates correctly.
+    T_smooth = gaussian_filter(T_input, sigma=smooth_sigma)
 
     # Compute grid spacing in km — dlat is constant, dlon varies with latitude
     dlat_km = 111.0  # km per degree latitude (constant)
@@ -239,12 +327,16 @@ def compute_frontal_zones(T850: np.ndarray,
     # At 35N: ~91 km/deg, at 60N: ~55 km/deg — ~40% variation across domain
 
     # Temperature gradient components (K per km)
-    # Use latitude-varying spacing for the longitude (x) axis
-    dlat_spacing = dlat_km * np.abs(np.diff(lat).mean())  # scalar
-    dlon_spacing = dlon_km * np.abs(np.diff(lon).mean())  # 1D array (n_lat,)
+    # Use latitude-varying spacing for the longitude (x) axis.
+    # Both axes use np.gradient's built-in spacing for consistent
+    # finite-difference treatment (including one-sided at boundaries).
+    dlat_spacing = dlat_km * np.abs(np.diff(lat).mean())  # scalar (km)
+    dlon_spacing_per_row = dlon_km * np.abs(np.diff(lon).mean())  # 1D (n_lat,)
 
-    dT_dy, dT_dx = np.gradient(T_smooth, dlat_spacing, axis=0), \
-                    np.gradient(T_smooth, axis=1) / dlon_spacing[:, np.newaxis]
+    dT_dy = np.gradient(T_smooth, dlat_spacing, axis=0)
+    # For lon axis, spacing varies by latitude row — compute per-row
+    # then divide, since np.gradient doesn't accept per-row spacing.
+    dT_dx = np.gradient(T_smooth, axis=1) / dlon_spacing_per_row[:, np.newaxis]
 
     # Gradient magnitude (K per km)
     grad_mag = np.sqrt(dT_dx**2 + dT_dy**2)
@@ -252,8 +344,10 @@ def compute_frontal_zones(T850: np.ndarray,
     # Convert to K per 100km for threshold comparison
     grad_mag_100km = grad_mag * 100.0
 
-    # Frontal zone mask
+    # Frontal zone mask — exclude terrain cells from results
     frontal_mask = grad_mag_100km > gradient_threshold
+    if terrain_mask is not None:
+        frontal_mask &= terrain_mask
 
     # Thermal Front Parameter (TFP) — Hewson 1998 simplified
     # TFP = -nabla|nablaT| . (nablaT / |nablaT|)
@@ -262,7 +356,9 @@ def compute_frontal_zones(T850: np.ndarray,
     unit_grad_x = dT_dx / grad_norm
     unit_grad_y = dT_dy / grad_norm
 
-    d_gradmag_dy, d_gradmag_dx = np.gradient(grad_mag)
+    # Second derivatives must use physical spacing (km) to match unit vectors
+    d_gradmag_dy = np.gradient(grad_mag, dlat_spacing, axis=0)
+    d_gradmag_dx = np.gradient(grad_mag, axis=1) / dlon_spacing_per_row[:, np.newaxis]
     tfp = -(d_gradmag_dx * unit_grad_x + d_gradmag_dy * unit_grad_y)
 
     return {
@@ -278,7 +374,7 @@ def compute_frontal_zones(T850: np.ndarray,
 Classify each detected frontal zone as cold, warm, or occluded using temperature advection in physical units.
 
 ```python
-def classify_front_type(T850: np.ndarray,
+def classify_front_type(T_smooth: np.ndarray,
                          u850: np.ndarray,
                          v850: np.ndarray,
                          frontal_mask: np.ndarray,
@@ -295,6 +391,11 @@ def classify_front_type(T850: np.ndarray,
     Uses temperature advection: -V . nablaT
     Negative advection = cold front, positive = warm front.
 
+    T_smooth: the same smoothed (and terrain-filled) T850 field used by
+    compute_frontal_zones(). Must use the same field so the gradient
+    used for classification is consistent with the gradient used for
+    detection — using raw T850 here would operate on a different field.
+
     advection_threshold: K/hr — minimum advection magnitude to classify.
         At typical frontal wind speeds (30-50 km/h) and gradients
         (1-3 K/100km), advection is ~0.3-1.5 K/hr. 0.5 K/hr filters
@@ -310,14 +411,14 @@ def classify_front_type(T850: np.ndarray,
     dlat_spacing = dlat_km * np.abs(np.diff(lat).mean())
     dlon_spacing = dlon_km * np.abs(np.diff(lon).mean())  # 1D array
 
-    dT_dy = np.gradient(T850, dlat_spacing, axis=0)
-    dT_dx = np.gradient(T850, axis=1) / dlon_spacing[:, np.newaxis]
+    dT_dy = np.gradient(T_smooth, dlat_spacing, axis=0)
+    dT_dx = np.gradient(T_smooth, axis=1) / dlon_spacing[:, np.newaxis]
 
     # Temperature advection: -(u * dT/dx + v * dT/dy)
     # u850/v850 in km/h, dT/dx in K/km => advection in K/hr
     T_adv = -(u850 * dT_dx + v850 * dT_dy)
 
-    front_type = np.zeros_like(T850, dtype=int)
+    front_type = np.zeros(T_smooth.shape, dtype=int)
 
     cold_mask = frontal_mask & (T_adv < -advection_threshold)
     warm_mask = frontal_mask & (T_adv > advection_threshold)
@@ -329,6 +430,209 @@ def classify_front_type(T850: np.ndarray,
 
     return front_type
 ```
+
+### 2.3 Equivalent Potential Temperature (θe) for Moisture-Gradient Fronts
+
+T850 gradients reliably detect cold fronts but often miss warm fronts, where the temperature contrast is weak but the moisture contrast is sharp. Equivalent potential temperature (θe) incorporates both temperature and moisture, making it the better discriminator for warm fronts — and a useful complement to T850 for all front types.
+
+**θe computation**: from T850 (°C) and Td850 (dewpoint, °C) at 850hPa:
+
+```python
+# detect.py
+
+import metpy.calc as mpcalc
+from metpy.units import units
+
+def compute_theta_e(T850: np.ndarray, Td850: np.ndarray,
+                     pressure_hPa: float = 850.0) -> np.ndarray:
+    """
+    Compute equivalent potential temperature from T and Td at 850hPa.
+
+    Uses MetPy (already a project dependency for thermodynamic computations).
+    Returns θe in Kelvin as a 2D array matching input shape.
+    """
+    theta_e = mpcalc.equivalent_potential_temperature(
+        pressure_hPa * units.hPa,
+        T850 * units.degC,
+        Td850 * units.degC,
+    )
+    return theta_e.to('kelvin').magnitude
+```
+
+**Dual-gradient detection**: run the same gradient analysis on both T850 and θe fields, then combine:
+
+```python
+def compute_frontal_zones_dual(T850, theta_e, lat, lon,
+                                terrain_mask=None,
+                                t_gradient_threshold=0.8,
+                                te_gradient_threshold=4.0,
+                                **kwargs):
+    """
+    Detect frontal zones using both T850 and θe gradients.
+
+    A grid point is frontal if EITHER gradient exceeds its threshold.
+    Cold fronts show up in both fields; warm fronts primarily in θe.
+
+    te_gradient_threshold: K per 100km for θe. Higher than T threshold
+    because θe has a larger dynamic range. Across a typical front, θe
+    varies ~15-20K over ~200km (7.5-10 K/100km) vs ~5-8K for T850
+    (2.5-4 K/100km). Starting value 4.0 — at 2.0, nearly every θe
+    gradient in the domain would exceed threshold (air mass boundaries,
+    moisture plumes, sea-land contrasts all produce θe gradients of
+    2-3 K/100km without any front). 4.0 catches real fronts while
+    filtering synoptic-scale moisture variability. Calibrate alongside
+    the T threshold during Phase 1 validation — tune down if warm
+    fronts are missed, up if moisture boundaries trigger false positives.
+
+    Returns the same dict as compute_frontal_zones(), with additional
+    fields for the θe gradient and which detection triggered each point.
+    """
+    t_result = compute_frontal_zones(T850, lat, lon,
+                                      terrain_mask=terrain_mask,
+                                      gradient_threshold=t_gradient_threshold,
+                                      **kwargs)
+    te_result = compute_frontal_zones(theta_e, lat, lon,
+                                       terrain_mask=terrain_mask,
+                                       gradient_threshold=te_gradient_threshold,
+                                       **kwargs)
+
+    # Union of both masks — front detected by either method
+    combined_mask = t_result['frontal_mask'] | te_result['frontal_mask']
+
+    # Track which method triggered detection (useful for diagnostics)
+    detected_by = np.zeros_like(T850, dtype=np.uint8)
+    detected_by[t_result['frontal_mask']] |= 1   # bit 0 = T850
+    detected_by[te_result['frontal_mask']] |= 2   # bit 1 = θe
+
+    return {
+        **t_result,
+        'frontal_mask': combined_mask,
+        'te_gradient': te_result['gradient'],
+        'te_frontal_mask': te_result['frontal_mask'],
+        'detected_by': detected_by,
+    }
+```
+
+**Why this works**: a simple OR-union is the right fusion rule because T850 and θe catch *different* fronts:
+- **Cold fronts**: strong T850 gradient AND strong θe gradient → detected by both (no change vs T-only)
+- **Warm fronts**: weak T850 gradient but strong θe gradient → detected by θe (the key improvement)
+- **Noise**: random noise would need to exceed threshold in *either* field, slightly raising the false-positive rate. Mitigated by the terrain mask and the `_MIN_FRONTAL_FRACTION` zone threshold — isolated noisy cells don't cross the zone coverage threshold.
+
+**Fetch cost**: adding `dewpoint_850hPa` increases the `hourly` param from ~67 chars to ~90 chars — negligible. Chunk size of 1000 is still well within URL limits.
+
+**Threshold calibration**: the θe gradient threshold (starting at 4.0 K/100km) must be calibrated alongside the T threshold during Phase 1 validation. Use the Meteo-France carte des fronts, specifically looking at warm front segments that T850 alone misses. If 4.0 misses too many warm fronts, lower cautiously — but below 3.0, moisture boundaries (sea-land, dry/moist air mass contacts) start triggering false positives.
+
+**Impact on front classification**: `classify_front_type()` continues to use T850 advection (not θe advection) for cold/warm/occluded classification. The θe gradient only improves *detection* — determining whether a front exists. Once detected, the physical advection pattern still determines front type. Points detected only by θe (bit 1 in `detected_by`) are likely warm fronts, which provides a useful cross-check.
+
+### 2.4 Terrain Masking — Filtering Orographic False Positives
+
+The Alps, Pyrenees, and Scandinavian mountains create persistent T850 temperature gradients that are orographic, not frontal. At 850hPa (~1500m / ~4920ft), valleys in the Alps are below ground level — the model extrapolates T850 below terrain, creating artificial gradients that would be detected as permanent "fronts" in mountainous zones (`alps`, `iberia_north`, `scandinavia_south`).
+
+**Solution**: a two-step fill-then-mask approach. The terrain mask identifies grid points above 1500m. Before any computation, those cells are filled with values smoothly interpolated from surrounding valid cells. After all computation (smoothing, gradient, thresholding), the mask is applied to the *results* — fronts cannot be detected on terrain, but terrain cells don't corrupt gradients at neighboring valid cells. See "Integration with detection" below for the full rationale.
+
+The existing SRTM3 terrain framework (`weatherbrief.fetch.elevation`) provides 90m-resolution elevation lookups at arbitrary lat/lon points via `srtm.get_data().get_elevation(lat, lon)`.
+
+```python
+# grid.py
+
+import srtm
+from weatherbrief.fetch.elevation import SRTM_CACHE_DIR
+
+# 850hPa ≈ 1500m in standard atmosphere
+_TERRAIN_MASK_THRESHOLD_M = 1500
+
+def build_terrain_mask(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """
+    Build a boolean mask (True = valid, False = terrain above 850hPa).
+
+    Uses SRTM3 (90m resolution) for elevation lookups. At the 0.5deg
+    frontal grid (~55km spacing), each grid point represents a large area —
+    use the SRTM point elevation as representative. Points where terrain
+    exceeds 1500m are masked out so orographic temperature gradients
+    don't generate false frontal detections.
+
+    The mask is static for a given grid and can be computed once and reused.
+    """
+    elevation_data = srtm.get_data(
+        local_cache_dir=str(SRTM_CACHE_DIR), srtm3=True
+    )
+    mask = np.ones((len(lat), len(lon)), dtype=bool)
+
+    for i, la in enumerate(lat):
+        for j, lo in enumerate(lon):
+            elev = elevation_data.get_elevation(la, lo)
+            if elev is not None and elev > _TERRAIN_MASK_THRESHOLD_M:
+                mask[i, j] = False
+
+    return mask
+```
+
+**Integration with detection — fill-then-mask, not NaN**:
+
+The original approach was to set terrain cells to NaN before gradient computation, relying on NaN propagation through `np.gradient` to create a "buffer" at terrain boundaries. This has three problems:
+
+1. **`gaussian_filter` doesn't handle NaN.** If smoothing runs before NaN insertion, terrain-adjacent cells absorb the extrapolated below-ground values. If NaN is inserted before smoothing, `gaussian_filter` corrupts a blob proportional to the kernel size. Either order is wrong.
+2. **NaN propagation is uncontrolled.** One NaN cell produces NaN gradients at 4 neighbors. A cluster of mountain cells creates a large irregular excluded zone whose shape depends on cell arrangement, not physical reasoning. TFP second derivatives propagate further (~12+ cells).
+3. **It conflates two operations.** "Exclude this point from results" and "prevent this point from corrupting neighbor gradients" are different goals. NaN does both, but crudely — you can't tune the exclusion zone or the boundary behavior independently.
+
+The correct approach is **fill-then-mask**: fill terrain cells with smoothly interpolated values from surrounding valid cells *before* any computation, then apply the terrain mask to *results* at the end.
+
+```python
+# grid.py
+
+def fill_terrain(field: np.ndarray, terrain_mask: np.ndarray) -> np.ndarray:
+    """
+    Replace terrain-masked cells with values interpolated from valid neighbors.
+
+    The goal is NOT to produce a physical value at terrain cells — it's to
+    prevent artificial gradients at terrain boundaries. Linear interpolation
+    creates smooth transitions, so the gradient at a valley cell adjacent to
+    terrain reflects the large-scale field rather than the below-ground
+    extrapolation artifact.
+
+    The filled values never appear in results — compute_frontal_zones()
+    applies terrain_mask to the frontal_mask at the end, so only valid
+    lowland cells can be reported as frontal.
+    """
+    valid = terrain_mask  # True = below 1500m
+    if valid.all():
+        return field
+
+    from scipy.interpolate import griddata
+    coords_valid = np.argwhere(valid)
+    coords_invalid = np.argwhere(~valid)
+    filled = field.copy()
+    # Linear interpolation for smooth transitions — no artificial gradients
+    filled[~valid] = griddata(
+        coords_valid, field[valid], coords_invalid, method='linear'
+    )
+    # griddata returns NaN for points outside the convex hull of valid data
+    # (domain edges near terrain). Fall back to nearest for those.
+    still_nan = np.isnan(filled)
+    if still_nan.any():
+        filled[still_nan] = griddata(
+            coords_valid, field[valid], np.argwhere(still_nan), method='nearest'
+        )
+    return filled
+```
+
+**Why fill-then-mask is correct**: we don't care what value terrain cells hold after filling — they're excluded from results at the end. We only care that they don't create artificial gradients at their *neighbors*. Smooth fill achieves this: the gradient at a valley cell adjacent to terrain reflects the large-scale temperature field, not the extrapolated below-ground artifact. The only scenario where this could matter is a real front running along a terrain boundary — but that's exactly where T850 gradients are unreliable regardless, and where conservative detection is preferred.
+
+**Pipeline order**:
+```
+T850 (NaN-free after prepare_field())
+  → fill_terrain()          # smooth fill at terrain cells
+  → gaussian_filter()       # clean input, correct output everywhere
+  → np.gradient()           # valid gradients at all cells including terrain-adjacent
+  → gradient thresholding   # no NaN, just real values
+  → frontal_mask &= terrain_mask  # exclude terrain from results
+```
+
+No NaN reaches any computation step. Smoothing, gradient, and TFP all operate on a clean, continuous field.
+
+**Performance**: both `build_terrain_mask()` and `fill_terrain()` depend only on grid geometry and are cheap. The mask is computed once at startup (or cached to disk) and reused across all models and forecast hours. `fill_terrain()` runs once per field per forecast hour — `griddata` on ~1000 terrain cells among 4131 total takes <100ms. Total overhead is negligible.
+
+**Impact on affected zones**: the `alps` zone (45-49N, 6-16E) has ~30-40% of its grid points masked, but the remaining lowland points (Po Valley margin, Bavarian foreland, Rhine valley) are exactly where frontal detection matters for GA routing. Unlike the NaN approach, gradients at these valley cells are computed correctly — they see smooth interpolated values on the mountain side rather than extrapolated below-ground artifacts or NaN. Similarly, `iberia_north` loses Pyrenean ridge points but keeps the Ebro valley and Atlantic approaches with clean gradient computation at terrain edges.
 
 ---
 
@@ -473,11 +777,12 @@ def _zone_grid_count(lat: np.ndarray, lon: np.ndarray, bounds: dict) -> int:
 
 
 # Minimum fraction of zone grid points that must be frontal to count
-# as "front present". A real front is a *line*, not an area — a front
-# crossing a 4x8 deg zone diagonally might only touch ~25% of grid points.
-# 0.15 catches real fronts while filtering isolated gradient noise.
+# as "front present". A real front is a *line*, not an area — at 0.5deg
+# resolution with light smoothing, a front crossing a 9x17 zone diagonally
+# is only 1-2 cells wide, touching ~10-15% of grid points. 0.08 catches
+# narrow fronts while filtering isolated gradient noise.
 # Tune upward if false positives appear during validation.
-_MIN_FRONTAL_FRACTION = 0.15
+_MIN_FRONTAL_FRACTION = 0.08
 
 
 def find_fronts_in_regions(frontal_mask: np.ndarray,
@@ -485,11 +790,16 @@ def find_fronts_in_regions(frontal_mask: np.ndarray,
                             gradient: np.ndarray,
                             lat: np.ndarray,
                             lon: np.ndarray,
+                            terrain_mask: np.ndarray = None,
                             regions: dict = None) -> dict:
     """
     For each region, return whether a front is present, its type,
     and its intensity (peak gradient in region).
     regions defaults to ZONES if not provided.
+    terrain_mask: if provided, the frontal fraction denominator uses
+    only unmasked points (terrain below 850hPa) rather than total
+    zone area. This prevents terrain-heavy zones like 'alps' from
+    having artificially low frontal fractions.
     """
     if regions is None:
         regions = ZONES
@@ -503,7 +813,14 @@ def find_fronts_in_regions(frontal_mask: np.ndarray,
             (lon_grid >= bounds['lon'][0]) & (lon_grid <= bounds['lon'][1])
         )
 
-        n_region_points = region_mask.sum()
+        # Use unmasked points as denominator so terrain-heavy zones
+        # (alps, iberia_north) aren't penalised by masked-out points.
+        if terrain_mask is not None:
+            valid_region = region_mask & terrain_mask
+        else:
+            valid_region = region_mask
+
+        n_region_points = valid_region.sum()
         if n_region_points == 0:
             results[region_name] = {'present': False}
             continue
@@ -544,47 +861,65 @@ The most pilot-relevant metric: when does each model predict the front to clear 
 Since Open-Meteo returns hourly data and we fetch it all in one request, clearance timing uses **hourly resolution** internally. This catches fast-moving fronts that would slip between 6h snapshots (a front can transit a 3-4 degree zone in 4-6 hours).
 
 ```python
-def find_frontal_clearance_time(model_forecasts: dict,
+def find_frontal_clearance_time(zone_timeseries: dict,
                                  region_name: str,
-                                 lat: np.ndarray,
-                                 lon: np.ndarray,
                                  max_horizon: int = 72,
-                                 ) -> dict:
+                                 min_clear_hours: int = 3,
+                                 ) -> int | None:
     """
-    For each model, find the earliest forecast hour at which
-    the frontal zone clears the specified region.
+    Find the earliest forecast hour at which a front clears the
+    specified region for a single model.
 
-    Uses hourly resolution for precise clearance timing.
-    model_forecasts: {model: {hour: {'T850': ..., 'u850': ..., 'v850': ...}}}
-    Returns dict: {model: clearance_hour or None if front persists through max_horizon}
+    Reuses the pre-computed zone timeseries from build_zone_timeseries()
+    rather than recomputing detection per hour — the pipeline computes
+    the timeseries once and both clearance timing and front tracking
+    consume it.
+
+    min_clear_hours: require N consecutive clear hours before declaring
+    clearance. A front near threshold can briefly dip below detection
+    at one timestep then reappear — requiring 3 consecutive clear hours
+    filters these false clearances. The clearance time reported is the
+    first of the N clear hours.
+
+    Returns clearance hour or None if front persists through max_horizon.
     """
-    clearance_times = {}
+    entries = zone_timeseries.get(region_name, [])
+    consecutive_clear = 0
+    clearance_start = None
 
-    for model, forecasts in model_forecasts.items():
-        clearance_h = None
-        for h in range(0, max_horizon + 1):
-            if h not in forecasts:
-                continue
-            T850 = forecasts[h]['T850']
-            u850 = forecasts[h]['u850']
-            v850 = forecasts[h]['v850']
+    for entry in entries:
+        if entry['hour'] > max_horizon:
+            break
+        if not entry['present']:
+            if consecutive_clear == 0:
+                clearance_start = entry['hour']
+            consecutive_clear += 1
+            if consecutive_clear >= min_clear_hours:
+                return clearance_start
+        else:
+            consecutive_clear = 0
+            clearance_start = None
 
-            zones = compute_frontal_zones(T850, lat, lon)
-            front_type_grid = classify_front_type(
-                T850, u850, v850, zones['frontal_mask'], lat, lon
-            )
-            region_fronts = find_fronts_in_regions(
-                zones['frontal_mask'], front_type_grid, zones['gradient'],
-                lat, lon
-            )
+    return None
 
-            if not region_fronts[region_name]['present']:
-                clearance_h = h
-                break
 
-        clearance_times[model] = clearance_h
-
-    return clearance_times
+def find_clearance_times_all_models(
+        all_timeseries: dict[str, dict],
+        region_name: str,
+        max_horizon: int = 72,
+        min_clear_hours: int = 3,
+) -> dict:
+    """
+    For each model, find the clearance time from pre-computed timeseries.
+    all_timeseries: {model_name: zone_timeseries_dict}
+    Returns: {model: clearance_hour or None}
+    """
+    return {
+        model: find_frontal_clearance_time(
+            ts, region_name, max_horizon, min_clear_hours
+        )
+        for model, ts in all_timeseries.items()
+    }
 
 
 def compute_timing_spread(clearance_times: dict) -> dict:
@@ -617,9 +952,14 @@ To generate useful narratives ("cold front over northern France moving southeast
 def build_zone_timeseries(model_forecasts: dict,
                           lat: np.ndarray,
                           lon: np.ndarray,
-                          hours: range) -> dict:
+                          hours: range,
+                          terrain_mask: np.ndarray = None) -> dict:
     """
     For one model, compute frontal presence per zone per hour.
+
+    This is the single hourly detection loop — clearance timing,
+    front tracking, and zone labels all consume this output rather
+    than recomputing detection independently.
 
     Returns: {zone_name: [{hour, present, type, intensity}, ...]}
     """
@@ -629,14 +969,17 @@ def build_zone_timeseries(model_forecasts: dict,
         if h not in model_forecasts:
             continue
         fields = model_forecasts[h]
-        zones = compute_frontal_zones(fields['T850'], lat, lon)
+        zones = compute_frontal_zones_dual(
+            fields['T850'], fields['theta_e'], lat, lon,
+            terrain_mask=terrain_mask,
+        )
         front_type_grid = classify_front_type(
-            fields['T850'], fields['u850'], fields['v850'],
+            zones['T_smooth'], fields['u850'], fields['v850'],
             zones['frontal_mask'], lat, lon
         )
         region_results = find_fronts_in_regions(
             zones['frontal_mask'], front_type_grid, zones['gradient'],
-            lat, lon
+            lat, lon, terrain_mask=terrain_mask
         )
         for zone_name, result in region_results.items():
             timeseries[zone_name].append({
@@ -674,7 +1017,7 @@ def identify_front_events(timeseries: dict) -> list[dict]:
     ...
 ```
 
-**Zone adjacency** is derived statically from the zone bounds — two zones are adjacent if their bounding boxes share an edge or overlap. This is a one-time computation (~18x18 = 324 pairs to check).
+**Zone adjacency** is derived statically from zone bounds and terrain mask — two zones are adjacent if their bounding boxes share an edge or overlap **and** at least 20% of the shared-boundary grid points are unmasked (terrain below 1500m). This prevents front events from connecting zones that are physically separated by terrain (e.g., `alps` and `po_valley` share bounds but the boundary is heavily masked by Alpine terrain — front propagation can't connect them through masked cells). Adjacency is a one-time computation (~18x18 = 324 pairs to check).
 
 **Propagation direction** is estimated from the order in which zones see the front: if `north_france` sees it at T+6 and `south_france` at T+12, the front is moving southward. This is coarse (~200km zone resolution) but sufficient for narrative purposes.
 
@@ -866,9 +1209,13 @@ CREATE TABLE frontal_analysis (
     front_type VARCHAR(10),            -- cold, warm, occluded, NULL
     intensity FLOAT,                   -- peak gradient K/100km, NULL if no front
     coverage_fraction FLOAT,           -- fraction of zone with frontal activity
+    clearance_hour INTEGER,            -- hourly-precision clearance time (NULL if no front or not yet cleared)
     computed_at TIMESTAMP NOT NULL,
     UNIQUE(run_date, init_hour, model, horizon_h, zone_name)
 );
+-- Note: horizon_h is stored at 6h intervals for zone state, but clearance_hour
+-- uses hourly precision from the internal timeseries. This preserves the exact
+-- clearance time for departure window calculations without inflating row count.
 ```
 
 Briefings query this table for the latest available run. The UNIQUE constraint allows upserts when re-running analysis. To find the latest run:
@@ -914,12 +1261,12 @@ def compute_uncertainty_flag(max_frontal_spread_h: float,
 
 ### Phase 1 — Detection core + CLI (focus here first)
 
-- Implement `grid.py`: grid definition, lightweight Open-Meteo fetch for 0.5deg Europe grid, reshape to 2D arrays
-- Implement `detect.py`: `compute_frontal_zones()`, `classify_front_type()`
+- Implement `grid.py`: grid definition, lightweight Open-Meteo fetch for 0.5deg Europe grid (T850 + Td850 + wind), reshape to 2D arrays, θe computation, terrain mask via SRTM3
+- Implement `detect.py`: `compute_frontal_zones()` with terrain mask, `compute_frontal_zones_dual()` with T850+θe, `classify_front_type()`
 - Implement `zones.py`: zone definitions, `find_fronts_in_regions()` with fractional coverage threshold
-- Implement `cli.py`: `analyze` command with console output
+- Implement `cli.py`: `analyze` command with console output, TFP map plot for visual validation
 - **Validate interactively** against Meteo-France carte des fronts
-- Tune gradient threshold, verify front type classification
+- Tune T850 gradient threshold (starting 0.8 K/100km) and θe gradient threshold (starting 4.0 K/100km), verify front type classification, verify terrain fill-then-mask removes Alpine/Pyrenean false positives, check that θe improves warm front detection vs T-only
 
 ### Phase 2 — Route analysis, clearance timing, and front tracking
 
@@ -954,17 +1301,19 @@ def compute_uncertainty_flag(max_frontal_spread_h: float,
 |---|---|
 | `numpy` | Array operations, gradient computation |
 | `scipy.ndimage` | Gaussian smoothing for frontal detection |
+| `scipy.interpolate` | Terrain fill and missing-data interpolation (griddata) |
+| `metpy` | Equivalent potential temperature (θe) computation |
 | `matplotlib` + `cartopy` | Map plotting for CLI validation (optional) |
 
-No new dependencies beyond what's already in the project. Dynamic route assembly reuses existing flight waypoints instead of adding `pyproj`. Open-Meteo fetch reuses existing `OpenMeteoClient` with a new lightweight grid-fetch method.
+No new dependencies beyond what's already in the project. MetPy is already used for thermodynamic computations in `weatherbrief.analysis.sounding.thermodynamics`. Dynamic route assembly reuses existing flight waypoints instead of adding `pyproj`. Open-Meteo fetch reuses existing `OpenMeteoClient` with a new lightweight grid-fetch method. Terrain masking reuses the existing SRTM3 framework (`srtm` package, already installed).
 
 ---
 
 ## Important Caveats
 
-**Frontal detection limitations**: the T850 gradient method reliably detects strong fronts but will miss weak frontal boundaries and shallow cold pools. Occluded fronts are particularly unreliable. For shallow convective situations common over the Mediterranean in summer, surface-based frontal detection is less meaningful than upper-level diagnostics. Flag frontal intensity below threshold as "weak frontal activity" rather than asserting no front is present.
+**Frontal detection limitations**: the dual T850/θe gradient method reliably detects strong cold fronts (via T850) and warm fronts (via θe moisture gradients), but will miss weak frontal boundaries and shallow cold pools. Occluded fronts are particularly unreliable. For shallow convective situations common over the Mediterranean in summer, frontal detection is less meaningful than upper-level diagnostics. Flag frontal intensity below threshold as "weak frontal activity" rather than asserting no front is present.
 
-**Gradient threshold tuning**: the 0.8 K/100km threshold is a starting point. Too low = noise, too high = missed fronts. Calibrate against Meteo-France carte des fronts during Phase 1.
+**Gradient threshold tuning**: the T850 threshold (0.8 K/100km) and θe threshold (4.0 K/100km) are starting points. Too low = noise, too high = missed fronts. The θe threshold is set higher relative to its dynamic range because moisture boundaries (sea-land, air mass contacts) commonly produce θe gradients of 2-3 K/100km without any front — below 3.0 K/100km, false positives from non-frontal moisture variability become significant. Calibrate both against Meteo-France carte des fronts during Phase 1, paying particular attention to warm fronts where the θe threshold is the primary control.
 
 **Resolution and smoothing**: at 0.5deg resolution (~55km), the grid resolves synoptic-scale fronts with 4-6 cells across a typical gradient zone. The Gaussian smoothing sigma is set to 0.5 grid cells (= 0.25deg ≈ 28km) — just enough to suppress single-cell noise without blurring narrow fronts. If validation shows too much noise at sigma=0.5, increase cautiously — but at 0.5deg, over-smoothing is the bigger risk.
 
@@ -972,6 +1321,18 @@ No new dependencies beyond what's already in the project. Dynamic route assembly
 
 **Zone refinement**: the 18-zone set is sized for reliable detection (all zones >= 96 grid points at 0.5deg). If validation reveals that certain zones are too coarse (e.g. a front in eastern France but not western), zones can be split freely — even a half-zone has ~50+ grid points at 0.5deg. Let the data drive this decision.
 
+**Orographic gradients**: the Alps, Pyrenees, and Scandinavian mountains create persistent T850 gradients from below-terrain extrapolation. This is handled by the fill-then-mask approach (§2.4): terrain cells above 1500m are filled with smoothly interpolated values before computation so they don't create artificial gradients at neighboring valid cells, then excluded from results at the end. The mask is static and cheap to compute. If validation shows the 1500m threshold is too aggressive (masking too many points in mountain zones), it can be raised — but the default errs on the side of fewer false positives.
+
+**TFP usage**: the Thermal Front Parameter is computed but not used for zone-level frontal detection (which relies on gradient magnitude thresholds). TFP is retained for two purposes: (1) CLI map plotting, where TFP zero-crossings show front *lines* rather than broad gradient zones, giving sharper visual output for validation against Meteo-France carte des fronts; (2) potential future use for cross-section annotation if a non-misleading presentation is found. TFP is not fed to the LLM digest or route tables.
+
 **Mediterranean summer**: shallow convective situations are not well captured by T850 gradients. Frontal detection is most valuable in the Atlantic/continental regime (autumn through spring) when synoptic-scale fronts dominate European weather.
 
 **Open-Meteo usage**: ~15 requests per analysis run, ~900 calls/month at 2 runs/day — negligible against the 1M monthly API plan. Room to densify further or add models if needed.
+
+---
+
+## Future Enhancements to Consider
+
+Complementary improvement to evaluate after Phase 1 validation.
+
+**Gridded front speed tracking for better clearance predictions**: rather than inferring front propagation from coarse zone-to-zone timing (~200km resolution), track the gradient maximum position between consecutive hourly frames at grid resolution and compute actual front speed in km/h. This would improve clearance time estimates (extrapolate from measured speed rather than waiting for zone-level absence) and produce more physical narratives ("cold front moving SE at 40 km/h, expected to clear the Alps by 18Z"). The detection infrastructure (hourly gridded fields) already supports this — it's a post-processing step on the existing gradient fields.
