@@ -81,8 +81,8 @@ src/weatherbrief/frontal/
     grid.py       — grid definition, lightweight Open-Meteo fetch, reshape to 2D arrays
     detect.py     — TFP computation, front classification, gradient thresholds
     zones.py      — zone definitions, route templates, zone intersection logic
-    tracking.py   — front event tracking across zones/time, zone label classification
-    pipeline.py   — orchestrates fetch -> detect -> track -> store, used by both CLI and scheduler
+    tracking.py   — zone timeseries, zone label classification from local timeseries
+    pipeline.py   — orchestrates fetch -> detect -> label -> store, used by both CLI and scheduler
     cli.py        — CLI entry point for interactive testing and validation
 ```
 
@@ -142,6 +142,13 @@ def wind_to_uv(speed_kt: np.ndarray, direction_deg: np.ndarray):
     v = -speed_kmh * np.cos(direction_rad)
     return u, v
 
+# Note: wind direction is circular (359° ≈ 1°). To eliminate the
+# circular-averaging hazard structurally, call prepare_field() on
+# u/v components (after wind_to_uv) rather than on raw speed/direction.
+# Nearest-neighbor fill on u/v is safe — no circularity issue.
+# Never fill raw direction with linear interpolation: averaging 350°
+# and 10° as scalars gives 180° (southerly), not 0° (northerly).
+
 # Sanity check: westerly wind (270°) → u > 0, v ≈ 0
 # Southerly wind (180°) → u ≈ 0, v > 0
 # These cases (and their reverses) should be covered by unit tests
@@ -165,6 +172,17 @@ def reshape_to_grid(raw: dict[str, list[list[float]]],
     ws = np.array([pt[hour_index] for pt in raw['wind_speed_850hPa']]).reshape(n_lat, n_lon)
     wd = np.array([pt[hour_index] for pt in raw['wind_direction_850hPa']]).reshape(n_lat, n_lon)
     u850, v850 = wind_to_uv(ws, wd)
+
+    # NaN fill on u/v (not speed/direction) — see wind_to_uv note on circularity.
+    # prepare_field() is called on T850, Td850, u850, v850 — if any returns None
+    # (≥5% missing), the entire forecast hour is skipped.
+    T850 = prepare_field(T850)
+    Td850 = prepare_field(Td850)
+    u850 = prepare_field(u850)
+    v850 = prepare_field(v850)
+    if any(f is None for f in (T850, Td850, u850, v850)):
+        return None  # too much missing data — caller skips this hour
+
     theta_e = compute_theta_e(T850, Td850, pressure_hPa=850.0)
     return {'T850': T850, 'Td850': Td850, 'theta_e': theta_e, 'u850': u850, 'v850': v850}
 ```
@@ -197,6 +215,10 @@ def prepare_field(raw_field: np.ndarray,
     # gradient analysis — it cannot invent gradients that don't exist
     # in the data (unlike linear interpolation, which could create
     # artificial slopes across filled regions).
+    # Note: fill_terrain() uses linear interpolation for a different reason —
+    # terrain cells are large contiguous clusters where nearest-neighbor would
+    # create staircase artifacts. Missing-data NaN are typically isolated
+    # cells where nearest-neighbor is appropriate.
     from scipy.interpolate import griddata
     valid = ~nan_mask
     coords_valid = np.argwhere(valid)
@@ -205,12 +227,17 @@ def prepare_field(raw_field: np.ndarray,
     filled[nan_mask] = griddata(
         coords_valid, raw_field[valid], coords_nan, method='nearest'
     )
+    # Performance note: griddata rebuilds a KD-tree per call. With
+    # ~864 calls per run (4 vars × 72h × 3 models), this could add up
+    # if NaN is common. If profiling shows it's slow, switch to
+    # scipy.ndimage.distance_transform_edt + index lookup, which is
+    # faster for nearest-neighbor fill on regular grids.
     return filled
 ```
 
 The `reshape_to_grid()` function calls `prepare_field()` on each variable immediately after reshaping. If any variable returns `None` (≥5% missing), the entire forecast hour is skipped and logged so pipeline monitoring can detect systematic data gaps.
 
-**Fetch retry**: the grid fetch must use the existing `OpenMeteoClient` retry logic (exponential backoff). If a chunk fails after retries, the entire model's analysis for that run should be skipped rather than producing partial-grid results. The 5-chunk-per-model pattern means a single chunk failure leaves a spatial gap that would create artificial gradient boundaries.
+**Fetch retry and partial failure**: the grid fetch must use the existing `OpenMeteoClient` retry logic (exponential backoff). If a chunk fails after retries, the pipeline continues with the remaining chunks rather than skipping the entire model. Each chunk covers a contiguous block of grid points — a missing chunk leaves a spatial gap, but detection can still run on zones that have full coverage. The pipeline tracks which grid regions have data and skips zones whose bounding box overlaps the gap (those zones would have artificial gradient boundaries at the gap edge). Zones fully outside the gap are unaffected. This means a single chunk failure degrades gracefully — typically losing 2-4 zones rather than the entire model — preserving inter-model comparison for the remaining zones. Log which zones were skipped so pipeline monitoring can detect persistent chunk failures.
 
 **Fetch volume**: Open-Meteo returns the full hourly time series in each response, so all forecast horizons come back at once. At 1000 points per chunk: ~5 requests per model, ~15 requests total for all three models. At 2 runs/day, that's ~900 API calls/month — negligible against the 1M monthly plan. Under 30 seconds with the lightweight path.
 
@@ -245,6 +272,8 @@ When the pipeline runs (e.g., at 10Z triggered by ECMWF 00Z delivery), the lates
 This means a GFS 06Z T+18 forecast is compared with ECMWF 00Z T+24 — both valid at 00Z+24h = the same physical moment. The `frontal_analysis` DB table stores `valid_time` (or derives it from `run_date + init_hour + horizon_h`) so briefing queries can join across models on valid time.
 
 Open-Meteo simplifies this: it always serves the latest available run for each model, and returns UTC timestamps for each hourly value. The pipeline can align on these timestamps directly rather than computing init-time offsets manually.
+
+**Init time consistency**: Open-Meteo could update to a newer model run mid-fetch (e.g., GFS 12Z becomes available while chunked requests are in progress). This would mix init times within a single model's data. Mitigation: log the model run timestamp from the first chunk's response and verify subsequent chunks match — if they don't, re-fetch the mismatched chunks. Open-Meteo returns model init metadata in the JSON response.
 
 ### 1.5 ERA5 Fields for Validation
 
@@ -291,6 +320,8 @@ def compute_frontal_zones(T850: np.ndarray,
 
     T850: 2D array (lat x lon) in Celsius — must be NaN-free
         (missing data resolved by prepare_field() before this call).
+        Gradient thresholds are in K/100km, which equals °C/100km — no
+        conversion needed (θe fields are in Kelvin but same gradient units).
     lat, lon: 1D coordinate arrays (degrees)
     smooth_sigma: Gaussian smoothing sigma in grid points. At 0.5deg resolution
         the grid is already fairly coarse, so minimal smoothing suffices.
@@ -380,7 +411,8 @@ def classify_front_type(T_smooth: np.ndarray,
                          frontal_mask: np.ndarray,
                          lat: np.ndarray,
                          lon: np.ndarray,
-                         advection_threshold: float = 0.5) -> np.ndarray:
+                         advection_threshold: float = 0.5,
+                         detected_by: np.ndarray = None) -> np.ndarray:
     """
     For each frontal zone grid point, classify as:
         1 = cold front (cold air advancing)
@@ -403,6 +435,12 @@ def classify_front_type(T_smooth: np.ndarray,
 
     u850, v850: wind components in km/h (already converted from knots
     by wind_to_uv()).
+
+    detected_by: optional uint8 array from compute_frontal_zones_dual().
+        Bit 0 = T850 detection, bit 1 = θe detection. Points detected
+        only by θe (value == 2) with weak T advection are biased toward
+        warm front rather than occluded — these are precisely the warm
+        fronts that θe was added to catch. Validate during Phase 1.
     """
     # Compute temperature gradient in physical units (K/km)
     dlat_km = 111.0
@@ -423,6 +461,17 @@ def classify_front_type(T_smooth: np.ndarray,
     cold_mask = frontal_mask & (T_adv < -advection_threshold)
     warm_mask = frontal_mask & (T_adv > advection_threshold)
     occluded_mask = frontal_mask & ~cold_mask & ~warm_mask
+
+    # Points detected only by θe (bit 1 in detected_by) with weak T850
+    # advection are likely warm fronts — the whole reason θe detection
+    # exists is to catch warm fronts with weak T gradients. Bias these
+    # toward warm rather than defaulting to occluded.
+    # Validate this assumption during Phase 1 against carte des fronts.
+    if detected_by is not None:
+        theta_e_only = (detected_by == 2)  # bit 1 only, no T850 detection
+        reclassify = occluded_mask & theta_e_only
+        occluded_mask = occluded_mask & ~reclassify
+        warm_mask = warm_mask | reclassify
 
     front_type[cold_mask] = 1
     front_type[warm_mask] = 2
@@ -748,6 +797,13 @@ def find_route_zones(waypoints: list[tuple[float, float]]) -> list[str]:
 
     For CLI use without pre-computed waypoints, a simple great-circle
     interpolation can generate the waypoint list.
+
+    Note: some zones overlap at boundaries (e.g. north_france/south_france
+    share the 47N parallel). A waypoint in an overlap region is assigned
+    to the first matching zone in ZONES iteration order (insertion order).
+    This is deterministic but arbitrary — acceptable because both zones
+    would report the same front anyway. If this causes confusing route
+    tables, consider making zones non-overlapping at boundary parallels.
     """
     route_zones = []
     for lat, lon in waypoints:
@@ -782,6 +838,12 @@ def _zone_grid_count(lat: np.ndarray, lon: np.ndarray, bounds: dict) -> int:
 # is only 1-2 cells wide, touching ~10-15% of grid points. 0.08 catches
 # narrow fronts while filtering isolated gradient noise.
 # Tune upward if false positives appear during validation.
+#
+# Note: a fraction-only threshold is biased by zone size — a front
+# crossing balkans (289 pts) covers a smaller fraction than crossing
+# balearics (117 pts). Consider adding an absolute floor (e.g. 8-10
+# frontal points minimum) alongside the fraction if large zones
+# under-detect during validation.
 _MIN_FRONTAL_FRACTION = 0.08
 
 
@@ -881,6 +943,14 @@ def find_frontal_clearance_time(zone_timeseries: dict,
     filters these false clearances. The clearance time reported is the
     first of the N clear hours.
 
+    Known limitation: this finds the *first* sustained clearance but does
+    not check for re-entry by a secondary front. A zone that clears at
+    T+24 but gets hit by a new front at T+36 would report clearance at
+    T+24. For route-level departure windows, the caller should verify
+    that no zone along the route has frontal activity *after* the
+    reported clearance — or extend this function to return the last
+    clearance if multiple frontal passages occur.
+
     Returns clearance hour or None if front persists through max_horizon.
     """
     entries = zone_timeseries.get(region_name, [])
@@ -942,11 +1012,9 @@ def compute_timing_spread(clearance_times: dict) -> dict:
     }
 ```
 
-### 4.2 Front Tracking Across Zones and Time
+### 4.2 Zone Timeseries
 
-To generate useful narratives ("cold front over northern France moving southeast toward the Alps"), the pipeline needs to identify the **same front** across zones and time steps. This doesn't require sophisticated object tracking — a simple temporal continuity approach works at zone scale.
-
-**Approach**: build a per-zone time series of frontal presence, then group adjacent zones that share a front at overlapping times into **front events**.
+Build a per-zone, per-hour timeseries of frontal presence. This is the core data structure consumed by clearance timing, zone labels, and the LLM digest context.
 
 ```python
 def build_zone_timeseries(model_forecasts: dict,
@@ -957,9 +1025,9 @@ def build_zone_timeseries(model_forecasts: dict,
     """
     For one model, compute frontal presence per zone per hour.
 
-    This is the single hourly detection loop — clearance timing,
-    front tracking, and zone labels all consume this output rather
-    than recomputing detection independently.
+    This is the single hourly detection loop — clearance timing
+    and zone labels both consume this output rather than recomputing
+    detection independently.
 
     Returns: {zone_name: [{hour, present, type, intensity}, ...]}
     """
@@ -975,7 +1043,8 @@ def build_zone_timeseries(model_forecasts: dict,
         )
         front_type_grid = classify_front_type(
             zones['T_smooth'], fields['u850'], fields['v850'],
-            zones['frontal_mask'], lat, lon
+            zones['frontal_mask'], lat, lon,
+            detected_by=zones.get('detected_by'),
         )
         region_results = find_fronts_in_regions(
             zones['frontal_mask'], front_type_grid, zones['gradient'],
@@ -990,59 +1059,32 @@ def build_zone_timeseries(model_forecasts: dict,
             })
 
     return timeseries
-
-
-def identify_front_events(timeseries: dict) -> list[dict]:
-    """
-    Group connected frontal activity across zones and time into events.
-
-    A front event is a set of (zone, hour_range) pairs where:
-    - The front type is consistent (cold/warm/occluded)
-    - Zones are geographically adjacent (share a lat/lon boundary)
-    - The front appears in later zones at later times (propagation)
-
-    Returns list of events, each with:
-    - type: cold/warm/occluded
-    - zones: ordered list of zones the front passes through
-    - timing: {zone: (first_hour, last_hour)} per zone
-    - direction: estimated propagation direction (e.g. 'NW to SE')
-    """
-    # Implementation: connected-component analysis on the
-    # (zone, hour) graph where edges connect:
-    # 1. Same zone, consecutive hours with same front type
-    # 2. Adjacent zones where front appears within ±6h, same type
-    #
-    # Zone adjacency is precomputed from ZONES bounds (zones that
-    # share or overlap a lat/lon boundary).
-    ...
 ```
 
-**Zone adjacency** is derived statically from zone bounds and terrain mask — two zones are adjacent if their bounding boxes share an edge or overlap **and** at least 20% of the shared-boundary grid points are unmasked (terrain below 1500m). This prevents front events from connecting zones that are physically separated by terrain (e.g., `alps` and `po_valley` share bounds but the boundary is heavily masked by Alpine terrain — front propagation can't connect them through masked cells). Adjacency is a one-time computation (~18x18 = 324 pairs to check).
-
-**Propagation direction** is estimated from the order in which zones see the front: if `north_france` sees it at T+6 and `south_france` at T+12, the front is moving southward. This is coarse (~200km zone resolution) but sufficient for narrative purposes.
+**No cross-zone front event tracking**: the pipeline deliberately does not try to identify the "same front" across multiple zones (e.g., "this cold front in north_france is the same one that reaches alps 12h later"). Zone labels and clearance timing are computed from each zone's local timeseries. The LLM digest receives per-zone structured data and infers spatial relationships — it's good at synthesizing "cold front in north_france at T+6, cold front in south_france at T+12" into "cold front moving south through France." See "Cross-Zone Front Event Tracking" under Future Enhancements for options if this proves insufficient.
 
 ### 4.3 Zone Label Classification
 
-The zone labels (pre-frontal, warm sector, post-frontal, etc.) require knowing where a zone sits relative to a tracked front event. This builds on the front tracking from 4.2.
+Zone labels are derived from the **local timeseries** — no cross-zone front tracking required. Each zone's own history of frontal presence is sufficient for the operationally useful labels.
 
 ```python
 def classify_zone_label(zone_name: str,
                         hour: int,
-                        front_events: list[dict],
                         timeseries: dict) -> str:
     """
     Assign a synoptic label to a zone at a given hour based on its
-    relationship to tracked front events.
+    local frontal timeseries.
 
     Logic:
-    1. If a front is currently present in the zone → 'cold_frontal',
+    1. If a front is currently present → 'cold_frontal',
        'warm_frontal', or 'occluded' based on front type.
-    2. If a front was present but has cleared → 'post_frontal'
-       (within 12h of clearance).
-    3. If a front is approaching (present in an adjacent upstream
-       zone, or will arrive within 12h) → 'pre_frontal'.
-    4. If zone is between a warm front (ahead) and cold front
-       (behind) in the same event → 'warm_sector'.
+    2. If a front was present but has cleared within the last 12h
+       → 'post_frontal'.
+    3. If no front now but one arrives within the next 12h
+       → 'pre_frontal' (lookahead in the same zone's timeseries).
+    4. If the zone sees a warm front passage followed by a cold
+       front arrival (warm→clear→cold pattern in local timeseries)
+       and we're in the clear interval → 'warm_sector'.
     5. Otherwise → 'air_mass' (no front influence).
     """
     zone_data = timeseries[zone_name]
@@ -1059,25 +1101,33 @@ def classify_zone_label(zone_name: str,
     if recent_clearance:
         return 'post_frontal'
 
-    # Case 3: front approaching (pre-frontal)
-    approaching = _front_approaching(zone_name, hour, front_events,
-                                      lookahead_h=12)
-    if approaching:
+    # Case 3: front arriving soon (pre-frontal)
+    # Look forward in the same zone's timeseries — if a front appears
+    # within 12h, the zone is pre-frontal. No cross-zone tracking needed:
+    # a zone where a front will arrive is pre-frontal regardless of
+    # where the front currently is.
+    arriving = _front_arriving_soon(zone_data, hour, lookahead_h=12)
+    if arriving:
         return 'pre_frontal'
 
-    # Case 4: warm sector (between warm front ahead and cold front behind)
-    # Requires two front events of different types affecting the zone
-    # sequence within the forecast window
-    if _in_warm_sector(zone_name, hour, front_events):
+    # Case 4: warm sector — local warm→clear→cold pattern
+    # If zone had a warm front passage (cleared within lookback) and a
+    # cold front is arriving (within lookahead), the interval is the
+    # warm sector. This detects the classic pattern without needing to
+    # know the two fronts belong to the same cyclone system.
+    if (_find_recent_clearance_of_type(zone_data, hour, 'warm', lookback_h=18)
+            and _front_arriving_soon_of_type(zone_data, hour, 'cold', lookahead_h=18)):
         return 'warm_sector'
 
     # Case 5: no frontal influence
     return 'air_mass'
 ```
 
-**How "approaching" works**: for each front event, check if the front is currently in an adjacent zone upstream (relative to propagation direction) and is expected to reach this zone within `lookahead_h`. This uses the propagation timing from `identify_front_events()`.
+**Pre-frontal from local lookahead**: instead of checking adjacent zones for an "approaching" front (which requires cross-zone tracking), look forward in the same zone's own timeseries. If a front will be present in this zone at T+8, the zone is pre-frontal now. This is slightly less informative (can't say "approaching from the northwest") but is simpler and equally accurate for the label itself.
 
-**How "warm sector" works**: if the zone timeseries shows a warm front passage followed by an approaching cold front (from the same cyclone system), the interval between them is the warm sector. This is the classic warm-sector pattern and is the most operationally relevant label for GA pilots (low cloud, poor visibility, stable air).
+**Warm sector from local pattern**: the classic warm-sector signature — warm front passage followed by cold front arrival — is detectable purely from the zone's own timeseries. The 18h lookback/lookahead window is wide enough to catch typical warm-sector durations (6-18h) without requiring knowledge of which fronts are "the same system."
+
+**What's lost**: without cross-zone tracking, the pipeline can't produce "cold front expected to reach the Alps in 12h" directly. It can say "Alps is pre-frontal (front arriving in ~12h)" and the LLM can combine this with "cold front currently in south_france" to write the full narrative. The structured context gives the LLM all the per-zone data; spatial synthesis is something LLMs handle well.
 
 ---
 
@@ -1268,10 +1318,10 @@ def compute_uncertainty_flag(max_frontal_spread_h: float,
 - **Validate interactively** against Meteo-France carte des fronts
 - Tune T850 gradient threshold (starting 0.8 K/100km) and θe gradient threshold (starting 4.0 K/100km), verify front type classification, verify terrain fill-then-mask removes Alpine/Pyrenean false positives, check that θe improves warm front detection vs T-only
 
-### Phase 2 — Route analysis, clearance timing, and front tracking
+### Phase 2 — Route analysis, clearance timing, and zone labels
 
 - Add `find_frontal_clearance_time()` with hourly resolution, `compute_timing_spread()`
-- Implement `tracking.py`: `build_zone_timeseries()`, `identify_front_events()`, `classify_zone_label()`
+- Implement `tracking.py`: `build_zone_timeseries()`, `classify_zone_label()` (local timeseries only, no cross-zone tracking)
 - Add route template support to CLI (`route` command)
 - Add dynamic route assembly (`find_route_zones()`) reusing existing flight waypoints
 - Build route frontal table output
@@ -1325,6 +1375,12 @@ No new dependencies beyond what's already in the project. MetPy is already used 
 
 **TFP usage**: the Thermal Front Parameter is computed but not used for zone-level frontal detection (which relies on gradient magnitude thresholds). TFP is retained for two purposes: (1) CLI map plotting, where TFP zero-crossings show front *lines* rather than broad gradient zones, giving sharper visual output for validation against Meteo-France carte des fronts; (2) potential future use for cross-section annotation if a non-misleading presentation is found. TFP is not fed to the LLM digest or route tables.
 
+**Terrain-adjacent classification**: the fill-then-mask approach gives correct *gradients* at terrain-adjacent cells, but front *type classification* at those cells uses temperature advection computed from filled (fictional) temperature values combined with real winds. This could misclassify front type at cells immediately bordering masked terrain (e.g. Alpine valley cells). In practice this affects very few cells and only matters when a real front runs along a terrain boundary — a scenario where T850 is unreliable regardless. Monitor during validation; if systematic, consider extending the terrain mask by one cell for classification purposes.
+
+**Zone adjacency through terrain gaps**: if cross-zone front event tracking is added later (see "Cross-Zone Front Event Tracking" under Future Enhancements), zone adjacency must account for terrain. Some zone pairs share a boundary through partial terrain (e.g. `alps` and `central_germany` through the Bavarian foreland) — the adjacency definition should require a minimum fraction of unmasked boundary points to prevent front events from connecting zones physically separated by terrain. See the front event tracking discussion under Future Enhancements for full analysis.
+
+**Diurnal and seasonal false positives**: land-sea temperature contrasts at 850hPa can produce persistent gradients in coastal zones (`balearics`, `western_med`, `adriatic`) especially in summer. At 0.5° resolution these are largely smoothed out, but diurnal heating cycles and summer sea-land contrasts may approach the 0.8 K/100km threshold. The `_MIN_FRONTAL_FRACTION` zone threshold filters isolated gradient cells, but monitor coastal zones during summer validation. If false positives appear, consider a seasonal threshold adjustment or a static coastal gradient baseline subtraction.
+
 **Mediterranean summer**: shallow convective situations are not well captured by T850 gradients. Frontal detection is most valuable in the Atlantic/continental regime (autumn through spring) when synoptic-scale fronts dominate European weather.
 
 **Open-Meteo usage**: ~15 requests per analysis run, ~900 calls/month at 2 runs/day — negligible against the 1M monthly API plan. Room to densify further or add models if needed.
@@ -1333,6 +1389,36 @@ No new dependencies beyond what's already in the project. MetPy is already used 
 
 ## Future Enhancements to Consider
 
-Complementary improvement to evaluate after Phase 1 validation.
+Complementary improvements to evaluate after Phase 1 validation.
+
+### Cross-Zone Front Event Tracking
+
+The current design (§4.2–4.3) uses zone-local timeseries only — each zone's labels are derived from its own history, and the LLM synthesizes spatial relationships from per-zone structured data. If validation shows the LLM struggles to produce coherent spatial narratives (e.g., consistently failing to connect "cold front in north_france at T+6" with "cold front in south_france at T+12"), cross-zone front event tracking would be the upgrade.
+
+**What it adds**: explicit "front event" objects grouping the same front across zones and time. Enables direct statements like "cold front moving SE at ~40 km/h, currently over northern France, expected to reach the Alps by T+18." Also enables propagation speed estimates and more confident warm-sector detection (by linking warm and cold fronts from the same cyclone).
+
+**What it costs**: a zone adjacency graph (terrain-aware), a cross-zone grouping algorithm, and handling of fronts that change type as they propagate.
+
+Two candidate approaches were evaluated:
+
+**Option A — Connected-component on (zone, hour) graph**: build a graph where nodes are (zone, hour) pairs with frontal activity. Edges connect same-zone consecutive hours and adjacent-zone overlapping times (within ±N hours), constrained to matching front type. Run connected-components to find events.
+- *Pros*: simple (~50 lines), standard algorithm, naturally handles stalling fronts.
+- *Cons*: "same type" constraint is fragile — a front that's cold in one zone and occluded in the next (common across mountains) splits into two events. The ±6h cross-zone window is arbitrary and resolution-dependent. No built-in propagation direction — two fronts arriving from opposite sides could merge. Direction and speed must be inferred post-hoc.
+
+**Option B — Forward-chaining / greedy propagation**: start from the earliest frontal activity, follow forward in time using gradient direction to determine "downstream" zones. A front event grows until no continuation is found.
+- *Pros*: propagation direction is built-in from the start. Naturally handles type evolution (cold→occluded stays one event). More physical — tracks a front as it moves.
+- *Cons*: greedy — early decisions can't be revised if two fronts merge. More complex (~100 lines). Needs careful handling of stalling fronts and simultaneous active events to avoid cross-contamination.
+
+**Zone adjacency** (required by both options): derived statically from zone bounds and terrain mask — two zones are adjacent if their bounding boxes share an edge or overlap AND at least 20% of the shared-boundary grid points are unmasked (terrain below 1500m). This prevents connecting zones physically separated by terrain (e.g. `alps` and `po_valley` through heavily masked Alpine terrain). Some zone pairs sharing a boundary through partial terrain (e.g. `alps` and `central_germany` through the Bavarian foreland) may still connect — this is physically correct (fronts propagate through the foreland) but could create artifacts where a front appears to "jump" the Alps. Validate against real frontal passages.
+
+**Recommendation if implementing**: start with Option A (simpler, fewer failure modes) with a relaxed type constraint (cold↔occluded compatible, cold↔warm not). If the ±6h window proves too rigid, switch to Option B. Either way, this is a Phase 2+ enhancement — the zone-local approach should be validated first.
 
 **Gridded front speed tracking for better clearance predictions**: rather than inferring front propagation from coarse zone-to-zone timing (~200km resolution), track the gradient maximum position between consecutive hourly frames at grid resolution and compute actual front speed in km/h. This would improve clearance time estimates (extrapolate from measured speed rather than waiting for zone-level absence) and produce more physical narratives ("cold front moving SE at 40 km/h, expected to clear the Alps by 18Z"). The detection infrastructure (hourly gridded fields) already supports this — it's a post-processing step on the existing gradient fields.
+
+**Vorticity-based detection as a third criterion**: fronts are associated with vorticity maxima at 850hPa. Relative vorticity can be computed from the u/v fields already fetched (no additional data cost). Adding a vorticity check could reduce false positives from non-frontal baroclinic zones — persistent temperature gradients that aren't fronts typically lack the associated vorticity signature. Could be used as a filter on detected frontal zones rather than a standalone detector: require gradient threshold AND vorticity above a minimum. Low priority but the data is already available.
+
+**Temporal gradient change (frontogenesis/frontolysis)**: instead of just spatial gradient magnitude at each timestep, the *rate of change* of gradient between consecutive hours indicates whether a front is strengthening (frontogenesis) or weakening (frontolysis). Hourly fields make this trivial to compute. Benefits: (1) better clearance predictions — a front undergoing rapid frontolysis will clear sooner than the static gradient suggests; (2) pre-frontal warnings — frontogenesis ahead of a zone signals worsening conditions before the gradient exceeds the detection threshold; (3) more physical narratives ("weakening cold front").
+
+**Adaptive thresholds by season**: the European background T850 gradient is stronger in winter (~0.5 K/100km ambient) than summer (~0.2 K/100km). A fixed 0.8 K/100km threshold is more selective in summer (may miss weak summer fronts) and less selective in winter (may detect non-frontal baroclinic zones). Options: (a) seasonal threshold lookup table, (b) anomaly-based detection (subtract a climatological gradient field and threshold on the anomaly), (c) percentile-based threshold (detect the top N% of gradient values per analysis). Seasonal lookup is simplest; anomaly-based is most principled. Evaluate after accumulating validation data across seasons.
+
+**Front depth estimation from multi-level data**: using only 850hPa means shallow fronts (surface to 800hPa) and deep fronts (surface to 500hPa) are indistinguishable. For GA pilots, this matters — a shallow front may allow VFR on top at FL100, while a deep front means IFR all the way up. Adding 700hPa and 500hPa temperature fields (available from all three models via Open-Meteo) would allow estimating front depth by checking whether the gradient signal extends upward. This is a significant scope increase (3x the fields per level) but the fetch infrastructure supports it. The cross-section already shows vertical extent at route-point resolution, so this is lower priority — but would improve the zone-level narrative.
