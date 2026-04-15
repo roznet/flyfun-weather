@@ -37,6 +37,7 @@ function setupPeriodToggle(): void {
       const period = (btn as HTMLElement).dataset.period as AdminPeriod;
       if (period === currentPeriod) return;
       currentPeriod = period;
+      currentOffset = 0;
       document.querySelectorAll('#period-toggle .toggle-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       loadUsers();
@@ -317,7 +318,8 @@ function setupAgentCreateButton(): void {
   document.getElementById('btn-create-agent')?.addEventListener('click', handleCreateAgent);
 }
 
-let currentLimit = 25;
+const PAGE_SIZE = 25;
+let currentOffset = 0;
 
 async function loadUsers(): Promise<void> {
   const summaryBar = document.getElementById('summary-bar')!;
@@ -329,7 +331,7 @@ async function loadUsers(): Promise<void> {
   const errorEl = document.getElementById('error-message')!;
 
   try {
-    const response = await fetchAdminUsers(currentPeriod, currentLimit);
+    const response = await fetchAdminUsers(currentPeriod, PAGE_SIZE, currentOffset);
     const { summary, total_humans, users } = response;
 
     const humans = users.filter(u => u.type !== 'agent');
@@ -370,22 +372,30 @@ async function loadUsers(): Promise<void> {
       btn.addEventListener('click', handleApprove);
     });
 
-    // "Showing X of Y" footer
+    // Pagination footer
     const footer = document.getElementById('users-footer')!;
-    if (currentLimit > 0 && humans.length < total_humans) {
-      footer.innerHTML = `Showing ${humans.length} of ${total_humans} users — <a href="#" id="btn-show-all">Show all</a>`;
+    if (total_humans > PAGE_SIZE) {
+      const pageStart = currentOffset + 1;
+      const pageEnd = Math.min(currentOffset + humans.length, total_humans);
+      const parts: string[] = [`Showing ${pageStart}–${pageEnd} of ${total_humans} users`];
+      const links: string[] = [];
+      if (currentOffset > 0) {
+        links.push(`<a href="#" id="btn-prev-page">\u2190 Previous</a>`);
+      }
+      if (currentOffset + PAGE_SIZE < total_humans) {
+        links.push(`<a href="#" id="btn-next-page">Next \u2192</a>`);
+      }
+      if (links.length > 0) parts.push(links.join(' | '));
+      footer.innerHTML = parts.join(' — ');
       footer.style.display = '';
-      document.getElementById('btn-show-all')!.addEventListener('click', (e) => {
+      document.getElementById('btn-prev-page')?.addEventListener('click', (e) => {
         e.preventDefault();
-        currentLimit = 0;
+        currentOffset = Math.max(0, currentOffset - PAGE_SIZE);
         loadUsers();
       });
-    } else if (currentLimit === 0 && total_humans > 25) {
-      footer.innerHTML = `Showing all ${total_humans} users — <a href="#" id="btn-show-less">Show less</a>`;
-      footer.style.display = '';
-      document.getElementById('btn-show-less')!.addEventListener('click', (e) => {
+      document.getElementById('btn-next-page')?.addEventListener('click', (e) => {
         e.preventDefault();
-        currentLimit = 25;
+        currentOffset += PAGE_SIZE;
         loadUsers();
       });
     } else {

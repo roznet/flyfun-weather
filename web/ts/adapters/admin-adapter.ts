@@ -54,8 +54,8 @@ export interface CreateTokenResponse {
   token_id: number;
 }
 
-export async function fetchAdminUsers(period: AdminPeriod = '30d', limit = 25): Promise<AdminUsersResponse> {
-  return apiFetch<AdminUsersResponse>(`/admin/users?period=${period}&limit=${limit}`);
+export async function fetchAdminUsers(period: AdminPeriod = '30d', limit = 25, offset = 0): Promise<AdminUsersResponse> {
+  return apiFetch<AdminUsersResponse>(`/admin/users?period=${period}&limit=${limit}&offset=${offset}`);
 }
 
 export async function approveUser(userId: string): Promise<void> {

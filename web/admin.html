@@ -189,6 +189,32 @@
         <div id="pending-list"></div>
       </div>
 
+      <!-- All users -->
+      <div class="section">
+        <h3>Users</h3>
+        <div style="overflow-x:auto;">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Last Active</th>
+                <th style="text-align:center;">Briefings</th>
+                <th style="text-align:center;">GRAMET</th>
+                <th style="text-align:center;">LLM</th>
+                <th style="text-align:center;">Tokens</th>
+                <th style="text-align:center;">Disk</th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody">
+              <tr><td colspan="9" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="users-footer" class="users-footer muted" style="display:none;"></div>
+      </div>
+
       <!-- API Agents -->
       <div id="agents-section" class="section">
         <div class="section-header">
@@ -214,32 +240,6 @@
             </tbody>
           </table>
         </div>
-      </div>
-
-      <!-- All users -->
-      <div class="section">
-        <h3>Users</h3>
-        <div style="overflow-x:auto;">
-          <table class="admin-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Status</th>
-                <th>Last Active</th>
-                <th style="text-align:center;">Briefings</th>
-                <th style="text-align:center;">GRAMET</th>
-                <th style="text-align:center;">LLM</th>
-                <th style="text-align:center;">Tokens</th>
-                <th style="text-align:center;">Disk</th>
-              </tr>
-            </thead>
-            <tbody id="users-tbody">
-              <tr><td colspan="9" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div id="users-footer" class="users-footer muted" style="display:none;"></div>
       </div>
     </div>
 

@@ -94,6 +94,7 @@ def _user_disk_bytes(data_dir: Path, user_id: str) -> int:
 def list_users(
     period: str = Query(default="30d", pattern="^(30d|all)$"),
     limit: int = Query(default=25, ge=0),
+    offset: int = Query(default=0, ge=0),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -211,12 +212,14 @@ def list_users(
     total_briefings = sum(u["usage"]["briefings"] for u in user_list)
     total_tokens = sum(u["usage"]["total_tokens"] for u in user_list)
 
-    # Split humans / agents; limit humans only
+    # Split humans / agents; paginate humans only
     humans = [u for u in user_list if u["type"] != "agent"]
     agents = [u for u in user_list if u["type"] == "agent"]
     total_humans = len(humans)
     if limit > 0:
-        humans = humans[:limit]
+        humans = humans[offset:offset + limit]
+    elif offset > 0:
+        humans = humans[offset:]
 
     return {
         "period": period,
