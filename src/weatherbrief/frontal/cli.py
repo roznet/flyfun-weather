@@ -630,15 +630,141 @@ def _cmd_score(args: argparse.Namespace) -> None:
         print(f"    Type accuracy (hits only):      {type_acc:.0%} ({type_correct}/{type_total})")
 
 
+def _draw_zone_map(
+    ax, regions: dict, title: str,
+    lat: np.ndarray, lon: np.ndarray,
+    gradient_field: np.ndarray | None = None,
+    score_text: str | None = None,
+) -> None:
+    """Draw zone rectangles on a cartopy axes. Shared by validate columns."""
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    import matplotlib.patches as mpatches
+
+    COLORS = {"cold": "#2060C0", "warm": "#C03030", "occluded": "#7030A0",
+              "indeterminate": "#808080"}
+
+    ax.add_feature(cfeature.LAND, facecolor="#F0EDE4", zorder=0)
+    ax.add_feature(cfeature.OCEAN, facecolor="#D8E8F0", zorder=0)
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.6, color="#666666")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.4, linestyle=":", color="#999999")
+    ax.set_extent([-22, 30, 34, 62], crs=ccrs.PlateCarree())
+
+    if gradient_field is not None:
+        lon_grid, lat_grid = np.meshgrid(lon, lat)
+        ax.pcolormesh(
+            lon_grid, lat_grid, gradient_field,
+            cmap="Greys", vmin=0, vmax=5.0, alpha=0.15,
+            transform=ccrs.PlateCarree(), zorder=1,
+        )
+
+    annotations = []
+    for zone_name, bounds in ZONES.items():
+        r = regions.get(zone_name, {})
+        lat0, lat1 = bounds["lat"]
+        lon0, lon1 = bounds["lon"]
+        present = r.get("present", False)
+        ftype = r.get("type")
+
+        if present and ftype:
+            coverage = r.get("coverage_fraction", 0.3)
+            color = COLORS.get(ftype, "#808080")
+            alpha = min(0.15 + coverage * 1.5, 0.6)
+
+            rect = mpatches.Rectangle(
+                (lon0, lat0), lon1 - lon0, lat1 - lat0,
+                facecolor=color, alpha=alpha, edgecolor=color,
+                linewidth=1.5, transform=ccrs.PlateCarree(), zorder=2,
+            )
+            ax.add_patch(rect)
+
+            clat, clon = (lat0 + lat1) / 2, (lon0 + lon1) / 2
+            label = ftype[0].upper()
+            if ftype == "occluded":
+                label = "O"
+            ax.text(
+                clon, clat, label,
+                ha="center", va="center", fontsize=12,
+                fontweight="bold", color="white",
+                transform=ccrs.PlateCarree(), zorder=3,
+                bbox=dict(boxstyle="round,pad=0.2", facecolor=color, alpha=0.8),
+            )
+            intensity = r.get("intensity")
+            orient = r.get("orientation", "")
+            if intensity:
+                annotations.append(
+                    f"{bounds['display']}: {ftype} {intensity:.1f}K {orient}"
+                )
+            else:
+                annotations.append(f"{bounds['display']}: {ftype}")
+        else:
+            rect = mpatches.Rectangle(
+                (lon0, lat0), lon1 - lon0, lat1 - lat0,
+                facecolor="none", edgecolor="#CCCCCC",
+                linewidth=0.5, linestyle="--",
+                transform=ccrs.PlateCarree(), zorder=1,
+            )
+            ax.add_patch(rect)
+
+    ax.set_title(title, fontsize=12, fontweight="bold")
+
+    # Annotation text below map
+    bottom_text = "\n".join(annotations) if annotations else "No frontal activity"
+    if score_text:
+        bottom_text = score_text + "\n" + bottom_text
+    ax.text(
+        0.02, -0.02, bottom_text, transform=ax.transAxes,
+        fontsize=7, verticalalignment="top", fontfamily="monospace",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+    )
+
+
+def _score_one_time(
+    expected_zones: dict[str, str],
+    detected_regions: dict,
+) -> dict:
+    """Score detection vs expected for a single time step. Returns stats dict."""
+    hits, misses, false_alarms, correct_neg = 0, 0, 0, 0
+    type_correct, type_total = 0, 0
+
+    for zone_name in ZONES:
+        exp_type = expected_zones.get(zone_name)
+        det = detected_regions.get(zone_name, {})
+        det_present = det.get("present", False)
+        det_type = det.get("type")
+
+        if exp_type and det_present:
+            hits += 1
+            type_total += 1
+            if exp_type == "occluded" or exp_type == det_type:
+                type_correct += 1
+        elif exp_type and not det_present:
+            misses += 1
+        elif not exp_type and det_present:
+            false_alarms += 1
+        else:
+            correct_neg += 1
+
+    total = hits + misses + false_alarms
+    pod = hits / (hits + misses) if (hits + misses) > 0 else 1.0
+    far = false_alarms / (hits + false_alarms) if (hits + false_alarms) > 0 else 0.0
+    csi = hits / total if total > 0 else 1.0
+
+    return {
+        "hits": hits, "misses": misses, "false_alarms": false_alarms,
+        "pod": pod, "far": far, "csi": csi,
+        "type_acc": type_correct / type_total if type_total > 0 else 0.0,
+    }
+
+
 def _cmd_validate(args: argparse.Namespace) -> None:
-    """Generate side-by-side comparison: MF charts vs ECMWF + GFS detection."""
+    """Generate 4-column comparison: MF | Reference zones | ECMWF | GFS."""
     if len(args.charts) != len(args.times):
         print("Error: --charts and --times must have the same number of entries")
         sys.exit(1)
 
     try:
         import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
         import matplotlib.image as mpimg
         import matplotlib.patches as mpatches
         import matplotlib.pyplot as plt
@@ -657,10 +783,18 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     from weatherbrief.frontal.detect import compute_frontal_zones_dual, classify_front_type
     from weatherbrief.frontal.zones import find_fronts_in_regions
 
+    # Load expected zones if provided
+    expected_by_time: dict[str, dict] = {}
+    if args.expected:
+        import yaml
+
+        with open(args.expected) as f:
+            for case in yaml.safe_load(f):
+                expected_by_time[case["time"]] = case.get("zones", {})
+
     # Parse times and compute hour offsets
     chart_times = []
     for t in args.times:
-        # Parse "17/04 00Z" or "17/04 12Z" format
         parts = t.replace("Z", "").strip().split()
         day_month = parts[0]
         hour_utc = int(parts[1]) if len(parts) > 1 else 0
@@ -679,7 +813,7 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     lon = result["lon"]
     terrain_mask = result["terrain_mask"]
 
-    # Compute mean gradient per model for anomaly filtering
+    # Compute mean gradient per model
     model_mean_gradients = {}
     for model_key in models_to_run:
         model_mean_gradients[model_key] = _compute_mean_gradient(
@@ -688,7 +822,7 @@ def _cmd_validate(args: argparse.Namespace) -> None:
             terrain_mask,
         )
 
-    # Map chart times to hour offsets from the ECMWF init time
+    # Map chart times to hour offsets
     ecmwf_init = result["model_init_times"].get("ecmwf", 0)
     if ecmwf_init:
         from datetime import datetime, timezone as tz
@@ -696,43 +830,58 @@ def _cmd_validate(args: argparse.Namespace) -> None:
         init_dt = datetime.fromtimestamp(ecmwf_init, tz=tz.utc)
         chart_hours = []
         for day, month, hour_utc in chart_times:
-            # Assume same year as init
             chart_dt = init_dt.replace(month=month, day=day, hour=hour_utc)
             delta_h = int((chart_dt - init_dt).total_seconds() / 3600)
             chart_hours.append(delta_h)
     else:
         chart_hours = list(range(0, len(args.charts) * 12, 12))
 
-    # Colors
-    COLORS = {"cold": "#2060C0", "warm": "#C03030", "indeterminate": "#808080"}
-
     n_rows = len(args.charts)
-    fig = plt.figure(figsize=(30, 7.5 * n_rows))
+    n_cols = 4  # MF | Reference | ECMWF | GFS
+    fig = plt.figure(figsize=(38, 7.5 * n_rows))
 
     for row, (chart_path, time_str, hour_offset) in enumerate(
         zip(args.charts, args.times, chart_hours)
     ):
-        # Column 1: Meteo-France
-        ax_mf = fig.add_subplot(n_rows, 3, row * 3 + 1)
+        expected_zones = expected_by_time.get(time_str, {})
+
+        # Column 1: Meteo-France chart
+        ax_mf = fig.add_subplot(n_rows, n_cols, row * n_cols + 1)
         mf_img = mpimg.imread(chart_path)
         ax_mf.imshow(mf_img)
-        ax_mf.set_title(f"Météo-France — {time_str}", fontsize=13, fontweight="bold")
+        ax_mf.set_title(f"Météo-France — {time_str}", fontsize=12, fontweight="bold")
         ax_mf.axis("off")
 
-        # Columns 2-3: ECMWF and GFS
+        # Column 2: Reference zones from expected.yaml
+        ax_ref = fig.add_subplot(
+            n_rows, n_cols, row * n_cols + 2,
+            projection=ccrs.PlateCarree(),
+        )
+        ref_regions = {}
+        for zone_name in ZONES:
+            exp_type = expected_zones.get(zone_name)
+            if exp_type:
+                ref_regions[zone_name] = {
+                    "present": True, "type": exp_type,
+                    "coverage_fraction": 0.3,
+                }
+            else:
+                ref_regions[zone_name] = {"present": False}
+
+        _draw_zone_map(ax_ref, ref_regions, f"Expected — {time_str}", lat, lon)
+
+        # Columns 3-4: ECMWF and GFS detection with scores
         for col_idx, model_key in enumerate(models_to_run):
             ax = fig.add_subplot(
-                n_rows, 3, row * 3 + col_idx + 2,
+                n_rows, n_cols, row * n_cols + 3 + col_idx,
                 projection=ccrs.PlateCarree(),
             )
 
             fields = result["model_fields"].get(model_key, {}).get(hour_offset)
             if fields is None:
-                ax.set_title(f"{model_key.upper()} — {time_str} (no data)", fontsize=13)
-                ax.add_feature(cfeature.LAND, facecolor="#F0EDE4")
-                ax.add_feature(cfeature.OCEAN, facecolor="#D8E8F0")
-                ax.add_feature(cfeature.COASTLINE, linewidth=0.6, color="#666666")
-                ax.set_extent([-22, 30, 34, 62], crs=ccrs.PlateCarree())
+                _draw_zone_map(
+                    ax, {}, f"{model_key.upper()} — {time_str} (no data)", lat, lon,
+                )
                 continue
 
             zones_result = compute_frontal_zones_dual(
@@ -758,91 +907,44 @@ def _cmd_validate(args: argparse.Namespace) -> None:
                 terrain_mask=terrain_mask,
             )
 
-            # Draw map
-            ax.add_feature(cfeature.LAND, facecolor="#F0EDE4", zorder=0)
-            ax.add_feature(cfeature.OCEAN, facecolor="#D8E8F0", zorder=0)
-            ax.add_feature(cfeature.COASTLINE, linewidth=0.6, color="#666666")
-            ax.add_feature(cfeature.BORDERS, linewidth=0.4, linestyle=":", color="#999999")
-            ax.set_extent([-22, 30, 34, 62], crs=ccrs.PlateCarree())
-
-            # Background gradient
-            lon_grid, lat_grid = np.meshgrid(lon, lat)
-            ax.pcolormesh(
-                lon_grid, lat_grid, zones_result["gradient"],
-                cmap="Greys", vmin=0, vmax=5.0, alpha=0.15,
-                transform=ccrs.PlateCarree(), zorder=1,
-            )
-
-            # Zone rectangles
-            annotations = []
-            for zone_name, bounds in ZONES.items():
-                r = regions[zone_name]
-                lat0, lat1 = bounds["lat"]
-                lon0, lon1 = bounds["lon"]
-
-                if r["present"]:
-                    ftype = r["type"]
-                    coverage = r["coverage_fraction"]
-                    color = COLORS.get(ftype, "#808080")
-                    alpha = min(0.15 + coverage * 1.5, 0.6)
-
-                    rect = mpatches.Rectangle(
-                        (lon0, lat0), lon1 - lon0, lat1 - lat0,
-                        facecolor=color, alpha=alpha, edgecolor=color,
-                        linewidth=1.5, transform=ccrs.PlateCarree(), zorder=2,
-                    )
-                    ax.add_patch(rect)
-
-                    clat, clon = (lat0 + lat1) / 2, (lon0 + lon1) / 2
-                    ax.text(
-                        clon, clat, ftype[0].upper(),
-                        ha="center", va="center", fontsize=12,
-                        fontweight="bold", color="white",
-                        transform=ccrs.PlateCarree(), zorder=3,
-                        bbox=dict(boxstyle="round,pad=0.2", facecolor=color, alpha=0.8),
-                    )
-                    annotations.append(
-                        f"{bounds['display']}: {ftype} "
-                        f"{r['intensity']:.1f}K {r.get('orientation', '')}"
-                    )
-                else:
-                    rect = mpatches.Rectangle(
-                        (lon0, lat0), lon1 - lon0, lat1 - lat0,
-                        facecolor="none", edgecolor="#CCCCCC",
-                        linewidth=0.5, linestyle="--",
-                        transform=ccrs.PlateCarree(), zorder=1,
-                    )
-                    ax.add_patch(rect)
+            # Compute per-tile score
+            score_text = ""
+            if expected_zones:
+                scores = _score_one_time(expected_zones, regions)
+                score_text = (
+                    f"POD={scores['pod']:.0%} FAR={scores['far']:.0%} "
+                    f"CSI={scores['csi']:.0%}  "
+                    f"H={scores['hits']} M={scores['misses']} FA={scores['false_alarms']}"
+                )
 
             init_time = result["model_init_times"].get(model_key, 0)
             init_str = (
                 datetime.fromtimestamp(init_time, tz=tz.utc).strftime("%HZ")
                 if init_time else "?"
             )
-            ax.set_title(
-                f"{model_key.upper()} {init_str} — {time_str} (T+{hour_offset}h)",
-                fontsize=13, fontweight="bold",
-            )
 
-            annot_text = "\n".join(annotations) if annotations else "No frontal activity"
-            ax.text(
-                0.02, -0.02, annot_text, transform=ax.transAxes,
-                fontsize=7.5, verticalalignment="top", fontfamily="monospace",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+            _draw_zone_map(
+                ax, regions,
+                f"{model_key.upper()} {init_str} — {time_str} (T+{hour_offset}h)",
+                lat, lon,
+                gradient_field=zones_result["gradient"],
+                score_text=score_text,
             )
 
     # Legend
+    COLORS = {"cold": "#2060C0", "warm": "#C03030", "occluded": "#7030A0"}
     legend_elements = [
         mpatches.Patch(facecolor=COLORS["cold"], alpha=0.5, label="Cold front"),
         mpatches.Patch(facecolor=COLORS["warm"], alpha=0.5, label="Warm front"),
+        mpatches.Patch(facecolor=COLORS["occluded"], alpha=0.5, label="Occluded"),
     ]
     fig.legend(
-        handles=legend_elements, loc="lower center", ncol=2,
+        handles=legend_elements, loc="lower center", ncol=3,
         fontsize=12, frameon=True, fancybox=True,
     )
 
     fig.suptitle(
-        "Frontal Detection Validation: Météo-France vs Model Detection",
+        "Frontal Detection Validation: Météo-France | Expected | ECMWF | GFS",
         fontsize=16, fontweight="bold", y=0.995,
     )
     plt.tight_layout(rect=[0, 0.02, 1, 0.99], h_pad=3)
@@ -945,6 +1047,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.add_argument(
         "--output", default="data/frontal_validation.png",
         help="Output image path (default: data/frontal_validation.png)",
+    )
+    p_validate.add_argument(
+        "--expected",
+        help="Path to expected.yaml for reference zones and per-tile scoring",
     )
     p_validate.add_argument("--no-cache", action="store_true")
     p_validate.add_argument("--cache-dir")
