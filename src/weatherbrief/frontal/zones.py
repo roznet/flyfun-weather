@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 ZONES: dict[str, dict] = {
+    # Atlantic approach — early warning for incoming fronts
+    "atlantic_north": {"lat": (52, 60), "lon": (-20, -10), "display": "North Atlantic Approach"},
+    "atlantic_south": {"lat": (43, 52), "lon": (-20, -8), "display": "South Atlantic / Biscay Approach"},
     # British Isles
     "uk_south": {"lat": (49, 53), "lon": (-6, 3), "display": "Southern England & Channel"},
     "uk_north_ireland": {"lat": (53, 59), "lon": (-10, 0), "display": "Northern UK & Ireland"},
@@ -53,13 +56,13 @@ ZONES: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 ROUTE_TEMPLATES: dict[str, list[str]] = {
-    # UK departures
-    "uk_alps": ["uk_south", "north_france", "south_france", "alps"],
-    "uk_western_med": ["uk_south", "north_france", "south_france", "western_med"],
-    "uk_iberia": ["uk_south", "north_france", "bay_of_biscay", "iberia_north"],
-    "uk_balearics": ["uk_south", "north_france", "south_france", "balearics"],
-    "uk_italy": ["uk_south", "north_france", "alps", "po_valley"],
-    "uk_greece": ["uk_south", "north_france", "alps", "adriatic", "balkans"],
+    # UK departures — include Atlantic approach for early warning
+    "uk_alps": ["atlantic_north", "uk_south", "north_france", "south_france", "alps"],
+    "uk_western_med": ["atlantic_north", "uk_south", "north_france", "south_france", "western_med"],
+    "uk_iberia": ["atlantic_north", "uk_south", "north_france", "bay_of_biscay", "iberia_north"],
+    "uk_balearics": ["atlantic_north", "uk_south", "north_france", "south_france", "balearics"],
+    "uk_italy": ["atlantic_north", "uk_south", "north_france", "alps", "po_valley"],
+    "uk_greece": ["atlantic_north", "uk_south", "north_france", "alps", "adriatic", "balkans"],
     # Germany/Benelux departures
     "germany_alps": ["central_germany", "alps"],
     "germany_italy": ["central_germany", "alps", "po_valley"],
@@ -67,6 +70,9 @@ ROUTE_TEMPLATES: dict[str, list[str]] = {
     "germany_med": ["central_germany", "south_france", "western_med"],
     "benelux_med": ["benelux_north_sea", "north_france", "south_france", "western_med"],
     "benelux_iberia": ["benelux_north_sea", "north_france", "bay_of_biscay", "iberia_north"],
+    # Atlantic approach routes
+    "atlantic_uk": ["atlantic_north", "uk_north_ireland", "uk_south"],
+    "atlantic_iberia": ["atlantic_south", "bay_of_biscay", "iberia_north"],
     # Scandinavian departures
     "scandinavia_uk": ["scandinavia_south", "benelux_north_sea", "uk_south"],
     "scandinavia_alps": ["scandinavia_south", "n_germany_baltic", "central_germany", "alps"],

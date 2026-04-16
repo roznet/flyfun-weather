@@ -17,13 +17,13 @@ class TestBuildGridCoords:
     def test_shape(self):
         lat, lon = build_grid_coords()
         assert len(lat) == 51  # 35.0 to 60.0 in 0.5 steps
-        assert len(lon) == 81  # -12.0 to 28.0 in 0.5 steps
+        assert len(lon) == 97  # -20.0 to 28.0 in 0.5 steps
 
     def test_bounds(self):
         lat, lon = build_grid_coords()
         assert lat[0] == pytest.approx(35.0)
         assert lat[-1] == pytest.approx(60.0)
-        assert lon[0] == pytest.approx(-12.0)
+        assert lon[0] == pytest.approx(-20.0)
         assert lon[-1] == pytest.approx(28.0)
 
     def test_spacing(self):
@@ -36,7 +36,7 @@ class TestBuildGridPoints:
     def test_count(self):
         lat, lon = build_grid_coords()
         points = build_grid_points(lat, lon)
-        assert len(points) == 51 * 81
+        assert len(points) == 51 * 97
 
     def test_lat_major_order(self):
         lat = np.array([35.0, 35.5])

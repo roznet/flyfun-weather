@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 FRONTAL_GRID = {
     "lat_min": 35.0,
     "lat_max": 60.0,
-    "lon_min": -12.0,
+    "lon_min": -20.0,
     "lon_max": 28.0,
     "resolution": 0.5,
 }

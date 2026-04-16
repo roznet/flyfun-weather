@@ -14,7 +14,7 @@ from weatherbrief.frontal.zones import (
 )
 
 
-def _make_grid(lat_range=(35, 60), lon_range=(-12, 28)):
+def _make_grid(lat_range=(35, 60), lon_range=(-20, 28)):
     """Create the standard frontal grid for zone tests."""
     lat = np.arange(lat_range[0], lat_range[1] + 0.5, 0.5)
     lon = np.arange(lon_range[0], lon_range[1] + 0.5, 0.5)
@@ -35,7 +35,7 @@ class TestZoneDefinitions:
         for name, z in ZONES.items():
             assert z["lat"][0] >= 35.0, f"{name} lat_min below grid"
             assert z["lat"][1] <= 60.0, f"{name} lat_max above grid"
-            assert z["lon"][0] >= -12.0, f"{name} lon_min below grid"
+            assert z["lon"][0] >= -20.0, f"{name} lon_min below grid"
             assert z["lon"][1] <= 28.0, f"{name} lon_max above grid"
 
     def test_minimum_grid_points(self):
