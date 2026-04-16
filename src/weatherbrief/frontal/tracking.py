@@ -1,8 +1,12 @@
 """Zone timeseries construction and frontal clearance timing.
 
 Builds per-zone, per-hour frontal presence timeseries from pre-reshaped
-fields. Clearance timing functions scan these timeseries to find when
-fronts clear each zone, and compute inter-model timing spread.
+fields. Uses a two-pass approach: first computes the mean gradient field
+across all forecast hours (the "background"), then detects fronts as
+transient gradient anomalies above that background.
+
+This automatically filters persistent orographic gradients (Alps, Pyrenees,
+Dinaric Alps) and sea-land thermal contrasts without per-zone thresholds.
 """
 
 from __future__ import annotations
@@ -13,11 +17,59 @@ import numpy as np
 
 from weatherbrief.frontal.detect import (
     classify_front_type,
+    compute_frontal_zones,
     compute_frontal_zones_dual,
 )
 from weatherbrief.frontal.zones import ZONES, find_fronts_in_regions
 
 logger = logging.getLogger(__name__)
+
+# Anomaly threshold: gradient must exceed the time-mean by this much (K/100km).
+# A front passing through a zone for ~12h out of 72h barely moves the mean,
+# so its anomaly is close to its full gradient value. Persistent orographic
+# gradients have anomaly ~0 since they ARE the mean.
+_ANOMALY_THRESHOLD = 1.0
+
+# Absolute gradient floor: even with anomaly filtering, require the raw
+# gradient to exceed this. Prevents weak noise from triggering in zones
+# with very low background gradients.
+_ABSOLUTE_FLOOR = 2.0
+
+
+def _compute_mean_gradient(
+    model_forecasts: dict[int, dict],
+    lat: np.ndarray,
+    lon: np.ndarray,
+    hours: range | list[int],
+    terrain_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute time-mean T850 gradient field across all forecast hours.
+
+    This is the "background" gradient — persistent features like orographic
+    gradients and sea-land contrasts. Used as a baseline for anomaly detection.
+    """
+    gradient_sum = np.zeros((len(lat), len(lon)))
+    count = 0
+
+    for h in hours:
+        if h not in model_forecasts:
+            continue
+        fields = model_forecasts[h]
+        result = compute_frontal_zones(
+            fields["T850"], lat, lon, terrain_mask=terrain_mask,
+        )
+        gradient_sum += result["gradient"]
+        count += 1
+
+    if count == 0:
+        return gradient_sum
+
+    mean_gradient = gradient_sum / count
+    logger.info(
+        "Background gradient: mean=%.2f, max=%.2f K/100km (%d hours)",
+        mean_gradient.mean(), mean_gradient.max(), count,
+    )
+    return mean_gradient
 
 
 def build_zone_timeseries(
@@ -28,22 +80,39 @@ def build_zone_timeseries(
     terrain_mask: np.ndarray | None = None,
     t_gradient_threshold: float = 2.0,
     te_gradient_threshold: float = 4.0,
+    anomaly_threshold: float = _ANOMALY_THRESHOLD,
+    absolute_floor: float = _ABSOLUTE_FLOOR,
 ) -> dict[str, list[dict]]:
     """Build per-zone, per-hour timeseries of frontal presence for one model.
+
+    Two-pass approach:
+    1. Compute mean T850 gradient across all hours (background).
+    2. For each hour, detect fronts where gradient exceeds BOTH
+       the absolute floor AND the background + anomaly threshold.
+
+    This automatically filters persistent orographic/thermal gradients
+    without per-zone thresholds.
 
     Parameters
     ----------
     model_forecasts : {hour_index: fields_dict} where fields_dict has
         T850, Td850, theta_e, u850, v850 as (n_lat, n_lon) arrays.
-        Produced by reshape_to_fields() in grid.py.
     lat, lon : 1D coordinate arrays.
     hours : forecast hours to process.
     terrain_mask : boolean mask (True=valid).
+    anomaly_threshold : gradient must exceed background by this much (K/100km).
+    absolute_floor : minimum raw gradient to consider (K/100km).
 
     Returns
     -------
     {zone_name: [{hour, present, type, intensity, orientation}, ...]}
     """
+    # Pass 1: compute background gradient field
+    mean_gradient = _compute_mean_gradient(
+        model_forecasts, lat, lon, hours, terrain_mask,
+    )
+
+    # Pass 2: detect fronts with anomaly filtering
     timeseries: dict[str, list[dict]] = {zone: [] for zone in ZONES}
 
     for h in hours:
@@ -60,16 +129,27 @@ def build_zone_timeseries(
             t_gradient_threshold=t_gradient_threshold,
             te_gradient_threshold=te_gradient_threshold,
         )
+
+        # Apply anomaly filter: require gradient to be a transient spike
+        # above the time-mean background, not just absolutely high.
+        anomaly = zones_result["gradient"] - mean_gradient
+        anomaly_mask = (
+            (anomaly > anomaly_threshold)
+            & (zones_result["gradient"] > absolute_floor)
+        )
+        # Intersect with the dual detection mask (which already excludes terrain)
+        filtered_mask = zones_result["frontal_mask"] & anomaly_mask
+
         front_type_grid = classify_front_type(
             zones_result["dT_dx"],
             zones_result["dT_dy"],
             fields["u850"],
             fields["v850"],
-            zones_result["frontal_mask"],
+            filtered_mask,
             detected_by=zones_result.get("detected_by"),
         )
         region_results = find_fronts_in_regions(
-            zones_result["frontal_mask"],
+            filtered_mask,
             front_type_grid,
             zones_result["gradient"],
             zones_result["front_orientation"],
