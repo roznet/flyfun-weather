@@ -43,6 +43,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-mock>=3.0", "responses>=0.25"]
+frontal-dev = ["cartopy>=0.22"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -129,6 +129,14 @@ class OpenMeteoClient:
         resp.raise_for_status()
         return resp
 
+    def get_json(self, url: str, params: dict) -> dict:
+        """Public GET-with-retry returning parsed JSON.
+
+        Applies API key injection and retry logic. Used by frontal
+        grid fetch and other callers that build their own URLs.
+        """
+        return self._get_with_retry(url, params).json()
+
     def fetch_forecast(
         self, waypoint: Waypoint, model: ModelSource
     ) -> WaypointForecast:
