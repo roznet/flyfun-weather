@@ -60,8 +60,8 @@ This calibrates the gradient threshold (starting at 0.8 K/100km), validates fron
 
 ### Architecture: Two Sub-Problems
 
-1. **Detection algorithm**: computing the Thermal Front Parameter (TFP) from 850hPa temperature, classifying cold/warm/occluded using wind and temperature advection. Pure meteorological signal processing.
-2. **Route corridor framework**: a ~33-zone geographic library covering European GA chokepoints, route templates, dynamic zone assembly. Indexes frontal results by geographic region and produces pilot-facing outputs (route table, digest context, departure window).
+1. **Detection algorithm**: gradient-magnitude thresholding on 850hPa temperature and θe fields, classifying cold/warm/indeterminate using wind-driven temperature advection. Pure meteorological signal processing.
+2. **Route corridor framework**: an 18-zone geographic library covering European GA chokepoints, route templates, dynamic zone assembly. Indexes frontal results by geographic region and produces pilot-facing outputs (route table, digest context, departure window).
 
 ### Output Surfaces
 
@@ -79,6 +79,7 @@ This calibrates the gradient threshold (starting at 0.8 K/100km), validates fron
 src/weatherbrief/frontal/
     __init__.py
     grid.py       — grid definition, lightweight Open-Meteo fetch, reshape to 2D arrays
+    cache.py      — raw grid data cache for iterative development (keyed by model + init time)
     detect.py     — TFP computation, front classification, gradient thresholds
     zones.py      — zone definitions, route templates, zone intersection logic
     tracking.py   — zone timeseries, zone label classification from local timeseries
@@ -241,6 +242,43 @@ The `reshape_to_grid()` function calls `prepare_field()` on each variable immedi
 
 **Fetch volume**: Open-Meteo returns the full hourly time series in each response, so all forecast horizons come back at once. At 1000 points per chunk: ~5 requests per model, ~15 requests total for all three models. At 2 runs/day, that's ~900 API calls/month — negligible against the 1M monthly plan. Under 30 seconds with the lightweight path.
 
+**Raw data caching for development**: during Phase 1, the CLI is used iteratively — run analysis, inspect results, tune thresholds, re-run. Without caching, each iteration re-fetches ~15 API requests (~30s), which adds up fast during threshold calibration.
+
+The cache stores raw Open-Meteo responses to disk, keyed by `(model, init_time)`. When the CLI requests data for a model whose init time matches a cached entry, the fetch is skipped entirely. This means threshold tuning, zone adjustments, and detection code changes require zero API calls.
+
+```python
+# cache.py
+
+import json
+import hashlib
+from pathlib import Path
+
+# Default: project data dir / frontal_cache. CLI can override via --cache-dir.
+_DEFAULT_CACHE_DIR = Path("data/frontal_cache")
+
+def _cache_key(model: str, init_time: str) -> str:
+    """Cache key from model name and init time (e.g. 'ecmwf_2026041500')."""
+    return f"{model}_{init_time}"
+
+def save_raw_response(model: str, init_time: str, raw_data: dict,
+                      cache_dir: Path = _DEFAULT_CACHE_DIR) -> Path:
+    """Save raw Open-Meteo grid response to disk."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"{_cache_key(model, init_time)}.json"
+    path.write_text(json.dumps(raw_data))
+    return path
+
+def load_raw_response(model: str, init_time: str,
+                      cache_dir: Path = _DEFAULT_CACHE_DIR) -> dict | None:
+    """Load cached response, or None if not cached / stale."""
+    path = cache_dir / f"{_cache_key(model, init_time)}.json"
+    if path.exists():
+        return json.loads(path.read_text())
+    return None
+```
+
+The cache is **development-only** — the scheduled pipeline always fetches fresh data. The CLI enables it by default (`--no-cache` to force fresh fetch). Cache files are small (~2-4MB per model as JSON) and can be cleaned with `--clear-cache`. No TTL needed — the init_time in the key means a new model run naturally writes a new entry, and old entries are harmless (just disk space).
+
 ### 1.3 Forecast Horizons
 
 **Analysis horizons**: hourly from T+0 through T+72. Since Open-Meteo returns the full hourly time series in a single response, there's zero additional fetch cost to analyze every hour. Hourly resolution is important for clearance timing — a fast-moving front can transit a small zone in 3-4 hours, which 6h snapshots would miss entirely.
@@ -249,7 +287,7 @@ For **output and storage**, results are aggregated to 6h blocks (T+0, 6, 12, 18,
 
 **Horizon limits**:
 - **T+0 to T+48**: models reliably place major fronts, position errors ~100km. Full confidence in clearance timing.
-- **T+48 to T+72**: fronts still identifiable, position errors ~200-300km (comparable to method accuracy). Clearance timing usable but with wider uncertainty.
+- **T+48 to T+72**: fronts still identifiable, position errors ~300-500km in Atlantic regime (exceeds method accuracy). Clearance timing usable but with significantly wider uncertainty — inter-model spread at these horizons is the primary confidence signal.
 - **Beyond T+72**: individual fronts become unreliable. Not analyzed for clearance timing.
 
 T+72 is the cutoff for route tables and departure window calculations.
@@ -301,7 +339,11 @@ This is only needed for validation, not production.
 
 ### 2.1 Thermal Front Parameter Method
 
-Based on the **thermal front parameter (TFP)** method of Hewson (1998), simplified for operational use. The core idea: a front is a line of maximum horizontal temperature gradient at 850hPa.
+Inspired by the thermal front parameter (TFP) literature (Hewson 1998), but **simplified to gradient-magnitude thresholding** for zone-scale presence detection. The core idea: a frontal zone is a region where the horizontal temperature gradient at 850hPa exceeds a calibrated threshold.
+
+Hewson's full TFP method locates front *lines* via zero-crossings of the TFP field combined with gradient and second-derivative masking. That precision is unnecessary for our purpose — we need zone-scale presence ("is there a front in northern France?"), not line-drawing. Gradient thresholding is simpler, more robust at 0.5° resolution, and sufficient for zone-level detection with fractional coverage filtering.
+
+The TFP field is still computed and retained for **CLI map plotting only**, where TFP zero-crossings give sharper visual output for validation against Meteo-France carte des fronts. It is not used in the detection pipeline, zone results, or LLM digest.
 
 ```python
 # detect.py
@@ -392,41 +434,95 @@ def compute_frontal_zones(T850: np.ndarray,
     d_gradmag_dx = np.gradient(grad_mag, axis=1) / dlon_spacing_per_row[:, np.newaxis]
     tfp = -(d_gradmag_dx * unit_grad_x + d_gradmag_dy * unit_grad_y)
 
+    # Front orientation: the temperature gradient points perpendicular to the
+    # front (warm→cold). The front *line* runs parallel to isotherms, i.e.
+    # 90° from the gradient. Compute as compass bearing (0°=N, 90°=E).
+    # atan2(dT_dx, dT_dy) gives the gradient direction; add 90° for front
+    # orientation. Only meaningful at frontal points — elsewhere it's noise.
+    grad_direction = np.degrees(np.arctan2(dT_dx, dT_dy))  # gradient bearing
+    front_orientation = (grad_direction + 90.0) % 360.0     # front line bearing
+
     return {
         'gradient': grad_mag_100km,
         'frontal_mask': frontal_mask,
         'tfp': tfp,
         'T_smooth': T_smooth,
+        'front_orientation': front_orientation,
+        'dT_dx': dT_dx,
+        'dT_dy': dT_dy,
     }
 ```
 
-### 2.2 Front Classification: Cold vs Warm
-
-Classify each detected frontal zone as cold, warm, or occluded using temperature advection in physical units.
+**Front orientation**: the gradient direction at each frontal point gives the front's orientation for free — the front line runs perpendicular to the temperature gradient. This is computed as a compass bearing (0°=N, 90°=E, etc.) and averaged over each zone's frontal points to produce a single orientation label like "NE-SW" for the LLM narrative context. A zone-mean orientation is meaningful because real fronts are coherent — the gradient direction doesn't vary wildly across a zone's frontal points. The circular mean (averaging unit vectors, not raw angles) avoids the 359°/1° wraparound problem.
 
 ```python
-def classify_front_type(T_smooth: np.ndarray,
+# zones.py — added to find_fronts_in_regions() result per zone
+
+_COMPASS_LABELS = [
+    (  0, 'N-S'), ( 22.5, 'NNE-SSW'), ( 45, 'NE-SW'), ( 67.5, 'ENE-WSW'),
+    ( 90, 'E-W'), (112.5, 'ESE-WNW'), (135, 'SE-NW'), (157.5, 'SSE-NNW'),
+]
+
+def _orientation_label(front_orientation: np.ndarray,
+                       frontal_in_region: np.ndarray) -> str:
+    """
+    Compute mean front orientation over a zone's frontal points.
+    Returns a compass label like 'NE-SW'.
+
+    Uses circular mean (average of unit vectors) to handle wraparound.
+    Orientation is axial (0° ≡ 180°), so double the angle before averaging
+    to map to a full circle, then halve the result.
+    """
+    bearings = front_orientation[frontal_in_region]
+    # Axial mean: double angles, average as vectors, halve result
+    rad2 = np.radians(2 * bearings)
+    mean_angle = np.degrees(np.arctan2(np.mean(np.sin(rad2)),
+                                        np.mean(np.cos(rad2)))) / 2
+    mean_angle = mean_angle % 180  # normalize to [0, 180)
+
+    # Find closest compass label
+    best = min(_COMPASS_LABELS, key=lambda c: min(
+        abs(mean_angle - c[0]), 180 - abs(mean_angle - c[0])
+    ))
+    return best[1]
+```
+
+The orientation label is included in the zone result dict and in the structured LLM digest context — enabling narratives like "cold front oriented NE-SW across northern France" instead of just "cold front in northern France."
+
+Note: `dT_dx` and `dT_dy` are also returned from `compute_frontal_zones()` so that `classify_front_type()` can reuse them directly rather than recomputing the gradient (see §2.2).
+
+### 2.2 Front Classification: Cold vs Warm
+
+Classify each detected frontal zone as cold, warm, or indeterminate using temperature advection in physical units.
+
+```python
+def classify_front_type(dT_dx: np.ndarray,
+                         dT_dy: np.ndarray,
                          u850: np.ndarray,
                          v850: np.ndarray,
                          frontal_mask: np.ndarray,
-                         lat: np.ndarray,
-                         lon: np.ndarray,
                          advection_threshold: float = 0.5,
                          detected_by: np.ndarray = None) -> np.ndarray:
     """
     For each frontal zone grid point, classify as:
         1 = cold front (cold air advancing)
         2 = warm front (warm air advancing)
-        3 = occluded (indeterminate)
+        3 = indeterminate (advection near-zero or ambiguous)
         0 = not a front
 
     Uses temperature advection: -V . nablaT
     Negative advection = cold front, positive = warm front.
+    Points with weak advection are labeled "indeterminate" rather than
+    "occluded" — true occluded fronts require multi-level structure and
+    cyclone-relative geometry that single-level T850 cannot resolve.
+    Stationary fronts (high gradient, near-zero advection) also fall
+    into this category. The LLM can infer stationarity from the
+    timeseries (front present for many consecutive hours without clearing).
 
-    T_smooth: the same smoothed (and terrain-filled) T850 field used by
-    compute_frontal_zones(). Must use the same field so the gradient
-    used for classification is consistent with the gradient used for
-    detection — using raw T850 here would operate on a different field.
+    dT_dx, dT_dy: temperature gradient components (K/km) from
+    compute_frontal_zones(). Reusing the same gradient ensures
+    classification is consistent with detection — no risk of
+    divergence from recomputing with different parameters.
 
     advection_threshold: K/hr — minimum advection magnitude to classify.
         At typical frontal wind speeds (30-50 km/h) and gradients
@@ -436,22 +532,23 @@ def classify_front_type(T_smooth: np.ndarray,
     u850, v850: wind components in km/h (already converted from knots
     by wind_to_uv()).
 
+    Note on advection evaluation location: at the actual front axis,
+    wind is often nearly parallel to isotherms, making V·∇T ≈ 0.
+    This produces a ring of "indeterminate" classifications around
+    every front. To improve classification, evaluate advection 1-2
+    grid cells offset from each frontal point along the ∇T direction
+    (toward the warm side for cold front identification, cold side
+    for warm). Implementation: for each frontal point, step 1-2 cells
+    along (dT_dx, dT_dy) unit vector and sample advection there.
+    If offset advection is clearly negative → cold; clearly positive
+    → warm. Fall back to on-point advection if offset is out of bounds.
+
     detected_by: optional uint8 array from compute_frontal_zones_dual().
         Bit 0 = T850 detection, bit 1 = θe detection. Points detected
         only by θe (value == 2) with weak T advection are biased toward
-        warm front rather than occluded — these are precisely the warm
+        warm front rather than indeterminate — these are precisely the warm
         fronts that θe was added to catch. Validate during Phase 1.
     """
-    # Compute temperature gradient in physical units (K/km)
-    dlat_km = 111.0
-    dlon_km = 111.0 * np.cos(np.radians(lat))  # 1D array varying with latitude
-
-    dlat_spacing = dlat_km * np.abs(np.diff(lat).mean())
-    dlon_spacing = dlon_km * np.abs(np.diff(lon).mean())  # 1D array
-
-    dT_dy = np.gradient(T_smooth, dlat_spacing, axis=0)
-    dT_dx = np.gradient(T_smooth, axis=1) / dlon_spacing[:, np.newaxis]
-
     # Temperature advection: -(u * dT/dx + v * dT/dy)
     # u850/v850 in km/h, dT/dx in K/km => advection in K/hr
     T_adv = -(u850 * dT_dx + v850 * dT_dy)
@@ -460,22 +557,22 @@ def classify_front_type(T_smooth: np.ndarray,
 
     cold_mask = frontal_mask & (T_adv < -advection_threshold)
     warm_mask = frontal_mask & (T_adv > advection_threshold)
-    occluded_mask = frontal_mask & ~cold_mask & ~warm_mask
+    indeterminate_mask = frontal_mask & ~cold_mask & ~warm_mask
 
     # Points detected only by θe (bit 1 in detected_by) with weak T850
     # advection are likely warm fronts — the whole reason θe detection
     # exists is to catch warm fronts with weak T gradients. Bias these
-    # toward warm rather than defaulting to occluded.
+    # toward warm rather than defaulting to indeterminate.
     # Validate this assumption during Phase 1 against carte des fronts.
     if detected_by is not None:
         theta_e_only = (detected_by == 2)  # bit 1 only, no T850 detection
-        reclassify = occluded_mask & theta_e_only
-        occluded_mask = occluded_mask & ~reclassify
+        reclassify = indeterminate_mask & theta_e_only
+        indeterminate_mask = indeterminate_mask & ~reclassify
         warm_mask = warm_mask | reclassify
 
     front_type[cold_mask] = 1
     front_type[warm_mask] = 2
-    front_type[occluded_mask] = 3
+    front_type[indeterminate_mask] = 3
 
     return front_type
 ```
@@ -571,7 +668,7 @@ def compute_frontal_zones_dual(T850, theta_e, lat, lon,
 
 **Threshold calibration**: the θe gradient threshold (starting at 4.0 K/100km) must be calibrated alongside the T threshold during Phase 1 validation. Use the Meteo-France carte des fronts, specifically looking at warm front segments that T850 alone misses. If 4.0 misses too many warm fronts, lower cautiously — but below 3.0, moisture boundaries (sea-land, dry/moist air mass contacts) start triggering false positives.
 
-**Impact on front classification**: `classify_front_type()` continues to use T850 advection (not θe advection) for cold/warm/occluded classification. The θe gradient only improves *detection* — determining whether a front exists. Once detected, the physical advection pattern still determines front type. Points detected only by θe (bit 1 in `detected_by`) are likely warm fronts, which provides a useful cross-check.
+**Impact on front classification**: `classify_front_type()` continues to use T850 advection (not θe advection) for cold/warm/indeterminate classification. The θe gradient only improves *detection* — determining whether a front exists. Once detected, the physical advection pattern still determines front type. Points detected only by θe (bit 1 in `detected_by`) are likely warm fronts, which provides a useful cross-check.
 
 ### 2.4 Terrain Masking — Filtering Orographic False Positives
 
@@ -838,25 +935,27 @@ def _zone_grid_count(lat: np.ndarray, lon: np.ndarray, bounds: dict) -> int:
 # is only 1-2 cells wide, touching ~10-15% of grid points. 0.08 catches
 # narrow fronts while filtering isolated gradient noise.
 # Tune upward if false positives appear during validation.
-#
-# Note: a fraction-only threshold is biased by zone size — a front
-# crossing balkans (289 pts) covers a smaller fraction than crossing
-# balearics (117 pts). Consider adding an absolute floor (e.g. 8-10
-# frontal points minimum) alongside the fraction if large zones
-# under-detect during validation.
 _MIN_FRONTAL_FRACTION = 0.08
+
+# Absolute minimum frontal points alongside the fraction. A fraction-only
+# threshold is biased by zone size — a narrow front crossing balkans
+# (289 pts) covers ~5-8% vs ~20% in balearics (117 pts). The absolute
+# floor prevents large zones from systematically under-detecting.
+# Both thresholds must be met: fraction >= 0.08 AND count >= 8.
+_MIN_FRONTAL_POINTS = 8
 
 
 def find_fronts_in_regions(frontal_mask: np.ndarray,
                             front_type: np.ndarray,
                             gradient: np.ndarray,
+                            front_orientation: np.ndarray,
                             lat: np.ndarray,
                             lon: np.ndarray,
                             terrain_mask: np.ndarray = None,
                             regions: dict = None) -> dict:
     """
     For each region, return whether a front is present, its type,
-    and its intensity (peak gradient in region).
+    intensity (peak gradient), and orientation.
     regions defaults to ZONES if not provided.
     terrain_mask: if provided, the frontal fraction denominator uses
     only unmasked points (terrain below 850hPa) rather than total
@@ -891,7 +990,8 @@ def find_fronts_in_regions(frontal_mask: np.ndarray,
         n_frontal_points = frontal_in_region.sum()
         frontal_fraction = n_frontal_points / n_region_points
 
-        if frontal_fraction < _MIN_FRONTAL_FRACTION:
+        if (frontal_fraction < _MIN_FRONTAL_FRACTION
+                or n_frontal_points < _MIN_FRONTAL_POINTS):
             results[region_name] = {'present': False}
             continue
 
@@ -900,12 +1000,13 @@ def find_fronts_in_regions(frontal_mask: np.ndarray,
                                    minlength=4)
         dominant_type = np.argmax(type_counts[1:]) + 1
 
-        type_names = {1: 'cold', 2: 'warm', 3: 'occluded'}
+        type_names = {1: 'cold', 2: 'warm', 3: 'indeterminate'}
 
         results[region_name] = {
             'present': True,
             'type': type_names.get(dominant_type, 'unknown'),
             'intensity': float(gradient[frontal_in_region].max()),
+            'orientation': _orientation_label(front_orientation, frontal_in_region),
             'coverage_fraction': float(frontal_fraction),
         }
 
@@ -1042,12 +1143,14 @@ def build_zone_timeseries(model_forecasts: dict,
             terrain_mask=terrain_mask,
         )
         front_type_grid = classify_front_type(
-            zones['T_smooth'], fields['u850'], fields['v850'],
-            zones['frontal_mask'], lat, lon,
+            zones['dT_dx'], zones['dT_dy'],
+            fields['u850'], fields['v850'],
+            zones['frontal_mask'],
             detected_by=zones.get('detected_by'),
         )
         region_results = find_fronts_in_regions(
             zones['frontal_mask'], front_type_grid, zones['gradient'],
+            zones['front_orientation'],
             lat, lon, terrain_mask=terrain_mask
         )
         for zone_name, result in region_results.items():
@@ -1056,6 +1159,7 @@ def build_zone_timeseries(model_forecasts: dict,
                 'present': result['present'],
                 'type': result.get('type'),
                 'intensity': result.get('intensity'),
+                'orientation': result.get('orientation'),
             })
 
     return timeseries
@@ -1077,7 +1181,7 @@ def classify_zone_label(zone_name: str,
 
     Logic:
     1. If a front is currently present → 'cold_frontal',
-       'warm_frontal', or 'occluded' based on front type.
+       'warm_frontal', or 'indeterminate_frontal' based on front type.
     2. If a front was present but has cleared within the last 12h
        → 'post_frontal'.
     3. If no front now but one arrives within the next 12h
@@ -1093,7 +1197,7 @@ def classify_zone_label(zone_name: str,
     # Case 1: front currently present
     if current and current['present']:
         type_map = {'cold': 'cold_frontal', 'warm': 'warm_frontal',
-                    'occluded': 'occluded'}
+                    'indeterminate': 'indeterminate_frontal'}
         return type_map.get(current['type'], 'frontal_zone')
 
     # Case 2: front recently cleared (post-frontal)
@@ -1144,7 +1248,7 @@ ZONE_LABELS = {
     'warm_sector':      'Warm sector — low cloud, reduced visibility likely',
     'cold_frontal':     'Cold front passage — embedded convection risk',
     'warm_frontal':     'Warm front — extensive cloud and icing layer',
-    'occluded':         'Occluded front — complex cloud structure',
+    'indeterminate':    'Complex frontal zone — mixed or ambiguous front type',
     'post_frontal':     'Post-frontal — improving, possible showers and convection',
     'air_mass':         'Air mass — conditions governed by local thermodynamics',
     'clear_sector':     'Clear sector — settled conditions expected',
@@ -1159,14 +1263,14 @@ Instead of generating a template narrative directly, feed structured data to the
 
 ```
 Frontal analysis for route EGTF-LSGS (T+48):
-- cold front detected in zones: north_france (intensity 2.1), south_france (1.8), alps (1.9)
+- cold front detected in zones: north_france (intensity 2.1, oriented NE-SW), south_france (1.8, NE-SW), alps (1.9, NE-SW)
 - model agreement: GFS/ECMWF/ICON agree on front in north_france/south_france/alps
 - model disagreement: uk_south (ECMWF sees front, GFS/ICON don't)
 - clearance timing: GFS T+48h, ICON T+48h, ECMWF T+60h (12h spread)
 - zone labels: uk_south=clear_sector, north_france=cold_frontal, south_france=cold_frontal, alps=cold_frontal
 ```
 
-The LLM writes prose like: "A cold front extending from northern France through southern France to the Alps will dominate your route. Models agree on the front's presence but ECMWF keeps it active 12 hours longer than GFS and ICON..."
+The LLM writes prose like: "A cold front oriented NE-SW extending from northern France through southern France to the Alps will dominate your route. Models agree on the front's presence but ECMWF keeps it active 12 hours longer than GFS and ICON..."
 
 This complements the DWD surface chart as synoptic context input. Both are fed to the LLM; the DWD chart provides pressure centers and trough lines that T850 gradients don't capture.
 
@@ -1227,17 +1331,23 @@ python -m weatherbrief.frontal.cli digest-context --template uk_alps
 
 # Dry run — show grid points, zones, and what would be fetched without hitting Open-Meteo
 python -m weatherbrief.frontal.cli analyze --dry-run
+
+# Force fresh fetch (ignore cache)
+python -m weatherbrief.frontal.cli analyze --no-cache
+
+# Clear cached grid data
+python -m weatherbrief.frontal.cli clear-cache
 ```
 
 ### 6.3 Development Workflow
 
-1. **Implement detection core** (`detect.py`, `zones.py`, `grid.py`)
+1. **Implement detection core** (`detect.py`, `zones.py`, `grid.py`, `cache.py`)
 2. **Wire up CLI** (`cli.py`) — run interactively, inspect results
 3. **Validate against carte des fronts** — tune gradient threshold, check front types
-4. **Iterate** until detection is reliable across a range of synoptic situations
+4. **Iterate** until detection is reliable across a range of synoptic situations (cache means re-runs are instant)
 5. **Then** integrate into scheduled pipeline and briefing output
 
-The CLI remains useful post-deployment for debugging, manual inspection, and one-off analysis.
+The CLI remains useful post-deployment for debugging, manual inspection, and one-off analysis. Cache is CLI-only — the scheduled pipeline always fetches fresh data.
 
 ---
 
@@ -1256,7 +1366,7 @@ CREATE TABLE frontal_analysis (
     horizon_h INTEGER NOT NULL,        -- 0, 6, 12, 18, 24, 36, 48, 60, 72
     zone_name VARCHAR(30) NOT NULL,
     front_present BOOLEAN NOT NULL,
-    front_type VARCHAR(10),            -- cold, warm, occluded, NULL
+    front_type VARCHAR(15),            -- cold, warm, indeterminate, NULL
     intensity FLOAT,                   -- peak gradient K/100km, NULL if no front
     coverage_fraction FLOAT,           -- fraction of zone with frontal activity
     clearance_hour INTEGER,            -- hourly-precision clearance time (NULL if no front or not yet cleared)
@@ -1312,9 +1422,11 @@ def compute_uncertainty_flag(max_frontal_spread_h: float,
 ### Phase 1 — Detection core + CLI (focus here first)
 
 - Implement `grid.py`: grid definition, lightweight Open-Meteo fetch for 0.5deg Europe grid (T850 + Td850 + wind), reshape to 2D arrays, θe computation, terrain mask via SRTM3
-- Implement `detect.py`: `compute_frontal_zones()` with terrain mask, `compute_frontal_zones_dual()` with T850+θe, `classify_front_type()`
-- Implement `zones.py`: zone definitions, `find_fronts_in_regions()` with fractional coverage threshold
-- Implement `cli.py`: `analyze` command with console output, TFP map plot for visual validation
+- Implement `cache.py`: raw grid data cache keyed by (model, init_time) for iterative development
+- Implement `detect.py`: `compute_frontal_zones()` with terrain mask and front orientation, `compute_frontal_zones_dual()` with T850+θe, `classify_front_type()`
+- Implement `zones.py`: zone definitions, `find_fronts_in_regions()` with fractional coverage threshold and orientation labels
+- Implement `cli.py`: `analyze` command with console output, TFP map plot for visual validation, cache enabled by default
+- **Unit tests with synthetic fields**: construct known T850 fields (e.g., hyperbolic tangent step function) with controlled gradient, front position, and advection sign. Assert that detection recovers the known front position, classification returns the correct type, and terrain masking excludes the right cells. These are cheap regression tests that catch threshold-tuning breakage.
 - **Validate interactively** against Meteo-France carte des fronts
 - Tune T850 gradient threshold (starting 0.8 K/100km) and θe gradient threshold (starting 4.0 K/100km), verify front type classification, verify terrain fill-then-mask removes Alpine/Pyrenean false positives, check that θe improves warm front detection vs T-only
 
@@ -1361,19 +1473,19 @@ No new dependencies beyond what's already in the project. MetPy is already used 
 
 ## Important Caveats
 
-**Frontal detection limitations**: the dual T850/θe gradient method reliably detects strong cold fronts (via T850) and warm fronts (via θe moisture gradients), but will miss weak frontal boundaries and shallow cold pools. Occluded fronts are particularly unreliable. For shallow convective situations common over the Mediterranean in summer, frontal detection is less meaningful than upper-level diagnostics. Flag frontal intensity below threshold as "weak frontal activity" rather than asserting no front is present.
+**Frontal detection limitations**: the dual T850/θe gradient method reliably detects strong cold fronts (via T850) and warm fronts (via θe moisture gradients), but will miss weak frontal boundaries and shallow cold pools. True occluded fronts require multi-level structure and cyclone-relative geometry that single-level analysis cannot resolve — the `indeterminate` label is used honestly for ambiguous cases rather than claiming occlusion detection. Stationary fronts (high gradient, near-zero advection) also fall into the indeterminate category; the LLM can infer stationarity from the timeseries. For shallow convective situations common over the Mediterranean in summer, frontal detection is less meaningful than upper-level diagnostics. Flag frontal intensity below threshold as "weak frontal activity" rather than asserting no front is present.
 
 **Gradient threshold tuning**: the T850 threshold (0.8 K/100km) and θe threshold (4.0 K/100km) are starting points. Too low = noise, too high = missed fronts. The θe threshold is set higher relative to its dynamic range because moisture boundaries (sea-land, air mass contacts) commonly produce θe gradients of 2-3 K/100km without any front — below 3.0 K/100km, false positives from non-frontal moisture variability become significant. Calibrate both against Meteo-France carte des fronts during Phase 1, paying particular attention to warm fronts where the θe threshold is the primary control.
 
 **Resolution and smoothing**: at 0.5deg resolution (~55km), the grid resolves synoptic-scale fronts with 4-6 cells across a typical gradient zone. The Gaussian smoothing sigma is set to 0.5 grid cells (= 0.25deg ≈ 28km) — just enough to suppress single-cell noise without blurring narrow fronts. If validation shows too much noise at sigma=0.5, increase cautiously — but at 0.5deg, over-smoothing is the bigger risk.
 
-**Resolution vs. accuracy**: at 0.5deg resolution, the TFP method gives front positions accurate to ~75-100km. The zone boxes are 3-5deg wide. This is appropriate for "cold front over northern France" but the code should not imply more precision than the method delivers.
+**Resolution vs. accuracy**: at 0.5deg resolution, gradient thresholding gives front positions accurate to ~75-100km. The zone boxes are 3-5deg wide. This is appropriate for "cold front over northern France" but the code should not imply more precision than the method delivers. At T+48-72, model position errors (~300-500km) dominate over method accuracy — inter-model spread is the only reliable confidence signal at those horizons.
 
 **Zone refinement**: the 18-zone set is sized for reliable detection (all zones >= 96 grid points at 0.5deg). If validation reveals that certain zones are too coarse (e.g. a front in eastern France but not western), zones can be split freely — even a half-zone has ~50+ grid points at 0.5deg. Let the data drive this decision.
 
 **Orographic gradients**: the Alps, Pyrenees, and Scandinavian mountains create persistent T850 gradients from below-terrain extrapolation. This is handled by the fill-then-mask approach (§2.4): terrain cells above 1500m are filled with smoothly interpolated values before computation so they don't create artificial gradients at neighboring valid cells, then excluded from results at the end. The mask is static and cheap to compute. If validation shows the 1500m threshold is too aggressive (masking too many points in mountain zones), it can be raised — but the default errs on the side of fewer false positives.
 
-**TFP usage**: the Thermal Front Parameter is computed but not used for zone-level frontal detection (which relies on gradient magnitude thresholds). TFP is retained for two purposes: (1) CLI map plotting, where TFP zero-crossings show front *lines* rather than broad gradient zones, giving sharper visual output for validation against Meteo-France carte des fronts; (2) potential future use for cross-section annotation if a non-misleading presentation is found. TFP is not fed to the LLM digest or route tables.
+**TFP usage**: the Thermal Front Parameter is computed but not used for zone-level frontal detection (which relies on gradient-magnitude thresholding — see §2.1). TFP is retained for CLI map plotting only, where TFP zero-crossings show front *lines* rather than broad gradient zones, giving sharper visual output for validation against Meteo-France carte des fronts. TFP is not fed to the LLM digest or route tables.
 
 **Terrain-adjacent classification**: the fill-then-mask approach gives correct *gradients* at terrain-adjacent cells, but front *type classification* at those cells uses temperature advection computed from filled (fictional) temperature values combined with real winds. This could misclassify front type at cells immediately bordering masked terrain (e.g. Alpine valley cells). In practice this affects very few cells and only matters when a real front runs along a terrain boundary — a scenario where T850 is unreliable regardless. Monitor during validation; if systematic, consider extending the terrain mask by one cell for classification purposes.
 
@@ -1403,15 +1515,15 @@ Two candidate approaches were evaluated:
 
 **Option A — Connected-component on (zone, hour) graph**: build a graph where nodes are (zone, hour) pairs with frontal activity. Edges connect same-zone consecutive hours and adjacent-zone overlapping times (within ±N hours), constrained to matching front type. Run connected-components to find events.
 - *Pros*: simple (~50 lines), standard algorithm, naturally handles stalling fronts.
-- *Cons*: "same type" constraint is fragile — a front that's cold in one zone and occluded in the next (common across mountains) splits into two events. The ±6h cross-zone window is arbitrary and resolution-dependent. No built-in propagation direction — two fronts arriving from opposite sides could merge. Direction and speed must be inferred post-hoc.
+- *Cons*: "same type" constraint is fragile — a front that's cold in one zone and indeterminate in the next (common across mountains) splits into two events. The ±6h cross-zone window is arbitrary and resolution-dependent. No built-in propagation direction — two fronts arriving from opposite sides could merge. Direction and speed must be inferred post-hoc.
 
 **Option B — Forward-chaining / greedy propagation**: start from the earliest frontal activity, follow forward in time using gradient direction to determine "downstream" zones. A front event grows until no continuation is found.
-- *Pros*: propagation direction is built-in from the start. Naturally handles type evolution (cold→occluded stays one event). More physical — tracks a front as it moves.
+- *Pros*: propagation direction is built-in from the start. Naturally handles type evolution (cold→indeterminate stays one event). More physical — tracks a front as it moves.
 - *Cons*: greedy — early decisions can't be revised if two fronts merge. More complex (~100 lines). Needs careful handling of stalling fronts and simultaneous active events to avoid cross-contamination.
 
 **Zone adjacency** (required by both options): derived statically from zone bounds and terrain mask — two zones are adjacent if their bounding boxes share an edge or overlap AND at least 20% of the shared-boundary grid points are unmasked (terrain below 1500m). This prevents connecting zones physically separated by terrain (e.g. `alps` and `po_valley` through heavily masked Alpine terrain). Some zone pairs sharing a boundary through partial terrain (e.g. `alps` and `central_germany` through the Bavarian foreland) may still connect — this is physically correct (fronts propagate through the foreland) but could create artifacts where a front appears to "jump" the Alps. Validate against real frontal passages.
 
-**Recommendation if implementing**: start with Option A (simpler, fewer failure modes) with a relaxed type constraint (cold↔occluded compatible, cold↔warm not). If the ±6h window proves too rigid, switch to Option B. Either way, this is a Phase 2+ enhancement — the zone-local approach should be validated first.
+**Recommendation if implementing**: start with Option A (simpler, fewer failure modes) with a relaxed type constraint (cold↔indeterminate compatible, cold↔warm not). If the ±6h window proves too rigid, switch to Option B. Either way, this is a Phase 2+ enhancement — the zone-local approach should be validated first.
 
 **Gridded front speed tracking for better clearance predictions**: rather than inferring front propagation from coarse zone-to-zone timing (~200km resolution), track the gradient maximum position between consecutive hourly frames at grid resolution and compute actual front speed in km/h. This would improve clearance time estimates (extrapolate from measured speed rather than waiting for zone-level absence) and produce more physical narratives ("cold front moving SE at 40 km/h, expected to clear the Alps by 18Z"). The detection infrastructure (hourly gridded fields) already supports this — it's a post-processing step on the existing gradient fields.
 
@@ -1422,3 +1534,17 @@ Two candidate approaches were evaluated:
 **Adaptive thresholds by season**: the European background T850 gradient is stronger in winter (~0.5 K/100km ambient) than summer (~0.2 K/100km). A fixed 0.8 K/100km threshold is more selective in summer (may miss weak summer fronts) and less selective in winter (may detect non-frontal baroclinic zones). Options: (a) seasonal threshold lookup table, (b) anomaly-based detection (subtract a climatological gradient field and threshold on the anomaly), (c) percentile-based threshold (detect the top N% of gradient values per analysis). Seasonal lookup is simplest; anomaly-based is most principled. Evaluate after accumulating validation data across seasons.
 
 **Front depth estimation from multi-level data**: using only 850hPa means shallow fronts (surface to 800hPa) and deep fronts (surface to 500hPa) are indistinguishable. For GA pilots, this matters — a shallow front may allow VFR on top at FL100, while a deep front means IFR all the way up. Adding 700hPa and 500hPa temperature fields (available from all three models via Open-Meteo) would allow estimating front depth by checking whether the gradient signal extends upward. This is a significant scope increase (3x the fields per level) but the fetch infrastructure supports it. The cross-section already shows vertical extent at route-point resolution, so this is lower priority — but would improve the zone-level narrative.
+
+**925 hPa / surface level for shallow front detection**: the current single-level (850hPa) approach will miss shallow cold fronts (common over the UK) and may misplace warm fronts. Adding 925hPa or surface temperature would enable simple multi-level rules: front at 850 but not 925 → elevated front; front at 925 but weak at 850 → shallow/surface front. This requires checking whether Open-Meteo exposes 925hPa for all three models (GFS has it in 27 levels; ECMWF and ICON need verification). Lower complexity than the full multi-level depth estimation above — just one additional level with a simple agreement rule. Evaluate after Phase 1 if shallow front misses are a validated problem.
+
+**MSLP field for synoptic context**: pressure troughs and cyclone centers are not detectable from temperature gradients alone. Adding mean sea-level pressure gradient or Laplacian could help distinguish real fronts from non-frontal thermal boundaries (air mass contacts, sea-land contrasts). However, the DWD Bodenwetterkarten already provide pressure/trough context to the LLM digest, so this would be partially redundant. Consider if DWD charts are dropped or if standalone frontal analysis needs to be self-sufficient.
+
+**Gradient-weighted zone detection score**: instead of fraction-based detection (count of cells above threshold / total cells), use a gradient-intensity-weighted score: `sum(gradient within zone) > threshold`. This prevents missing narrow but strong fronts that have few cells above threshold but high peak gradients. The current approach (fraction + absolute floor) is simpler — evaluate this alternative if validation shows missed narrow intense fronts.
+
+**Aviation impact labels in structured context**: connect front types directly to aviation impact in the LLM digest context: cold front → convective risk / turbulence, warm front → stratiform cloud / icing, post-frontal → showery / gusty. Currently the LLM derives these associations from general knowledge, but explicit impact labels in the structured context would make the narrative more consistently pilot-focused. Could be added to the zone result dict without changing detection logic.
+
+**Run-level metadata table**: when moving to Phase 4 DB storage, add a `frontal_runs` parent table recording the gradient threshold, smoothing sigma, grid resolution, and code version used for each run. This enables comparing runs during threshold calibration to distinguish code changes from real weather evolution. Not needed for Phase 1 CLI development.
+
+**Front classification via gradient alignment**: instead of pure temperature advection magnitude for cold/warm classification, use the angle between wind vector and temperature gradient. Cold front: wind crosses gradient toward cold side; warm front: wind crosses toward warm side. This is more stable than advection magnitude (which depends on wind strength) and may reduce the indeterminate-ring problem around front axes. Evaluate alongside the offset-advection approach adopted in the plan — the two techniques could complement each other.
+
+**Percentile-based adaptive thresholds**: instead of fixed gradient thresholds, detect the top N% of gradient values per analysis (e.g., 85th or 90th percentile), with a minimum floor. This automatically adapts to seasonal variation (stronger winter background gradients vs weaker summer) and model-to-model differences. More principled than a seasonal lookup table. Risk: in a no-front situation, the top 15% of gradients would still be flagged — needs a minimum absolute gradient floor alongside the percentile. Evaluate after accumulating Phase 1 validation data across seasons.
