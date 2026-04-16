@@ -553,7 +553,7 @@ def classify_front_type(dT_dx: np.ndarray,
     # u850/v850 in km/h, dT/dx in K/km => advection in K/hr
     T_adv = -(u850 * dT_dx + v850 * dT_dy)
 
-    front_type = np.zeros(T_smooth.shape, dtype=int)
+    front_type = np.zeros(frontal_mask.shape, dtype=int)
 
     cold_mask = frontal_mask & (T_adv < -advection_threshold)
     warm_mask = frontal_mask & (T_adv > advection_threshold)
