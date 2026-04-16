@@ -464,6 +464,227 @@ def _cmd_route(args: argparse.Namespace) -> None:
     _print_route(result, zone_list, route_name)
 
 
+def _cmd_validate(args: argparse.Namespace) -> None:
+    """Generate side-by-side comparison: MF charts vs ECMWF + GFS detection."""
+    if len(args.charts) != len(args.times):
+        print("Error: --charts and --times must have the same number of entries")
+        sys.exit(1)
+
+    try:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        import matplotlib.image as mpimg
+        import matplotlib.patches as mpatches
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print(
+            "Error: cartopy is required. Install with: pip install -e '.[frontal-dev]'",
+            file=sys.stderr,
+        )
+        return
+
+    from weatherbrief.frontal.tracking import (
+        _ANOMALY_THRESHOLD,
+        _ABSOLUTE_FLOOR,
+        _compute_mean_gradient,
+    )
+    from weatherbrief.frontal.detect import compute_frontal_zones_dual, classify_front_type
+    from weatherbrief.frontal.zones import find_fronts_in_regions
+
+    # Parse times and compute hour offsets
+    chart_times = []
+    for t in args.times:
+        # Parse "17/04 00Z" or "17/04 12Z" format
+        parts = t.replace("Z", "").strip().split()
+        day_month = parts[0]
+        hour_utc = int(parts[1]) if len(parts) > 1 else 0
+        day, month = day_month.split("/")
+        chart_times.append((int(day), int(month), hour_utc))
+
+    # Run analysis for ECMWF and GFS
+    models_to_run = ["ecmwf", "gfs"]
+    result = _run_analysis(
+        models_to_run,
+        use_cache=not args.no_cache,
+        cache_dir=Path(args.cache_dir) if args.cache_dir else cache._DEFAULT_CACHE_DIR,
+    )
+
+    lat = result["lat"]
+    lon = result["lon"]
+    terrain_mask = result["terrain_mask"]
+
+    # Compute mean gradient per model for anomaly filtering
+    model_mean_gradients = {}
+    for model_key in models_to_run:
+        model_mean_gradients[model_key] = _compute_mean_gradient(
+            result["model_fields"][model_key], lat, lon,
+            range(len(result["timestamps"].get(model_key, []))),
+            terrain_mask,
+        )
+
+    # Map chart times to hour offsets from the ECMWF init time
+    ecmwf_init = result["model_init_times"].get("ecmwf", 0)
+    if ecmwf_init:
+        from datetime import datetime, timezone as tz
+
+        init_dt = datetime.fromtimestamp(ecmwf_init, tz=tz.utc)
+        chart_hours = []
+        for day, month, hour_utc in chart_times:
+            # Assume same year as init
+            chart_dt = init_dt.replace(month=month, day=day, hour=hour_utc)
+            delta_h = int((chart_dt - init_dt).total_seconds() / 3600)
+            chart_hours.append(delta_h)
+    else:
+        chart_hours = list(range(0, len(args.charts) * 12, 12))
+
+    # Colors
+    COLORS = {"cold": "#2060C0", "warm": "#C03030", "indeterminate": "#808080"}
+
+    n_rows = len(args.charts)
+    fig = plt.figure(figsize=(30, 7.5 * n_rows))
+
+    for row, (chart_path, time_str, hour_offset) in enumerate(
+        zip(args.charts, args.times, chart_hours)
+    ):
+        # Column 1: Meteo-France
+        ax_mf = fig.add_subplot(n_rows, 3, row * 3 + 1)
+        mf_img = mpimg.imread(chart_path)
+        ax_mf.imshow(mf_img)
+        ax_mf.set_title(f"Météo-France — {time_str}", fontsize=13, fontweight="bold")
+        ax_mf.axis("off")
+
+        # Columns 2-3: ECMWF and GFS
+        for col_idx, model_key in enumerate(models_to_run):
+            ax = fig.add_subplot(
+                n_rows, 3, row * 3 + col_idx + 2,
+                projection=ccrs.PlateCarree(),
+            )
+
+            fields = result["model_fields"].get(model_key, {}).get(hour_offset)
+            if fields is None:
+                ax.set_title(f"{model_key.upper()} — {time_str} (no data)", fontsize=13)
+                ax.add_feature(cfeature.LAND, facecolor="#F0EDE4")
+                ax.add_feature(cfeature.OCEAN, facecolor="#D8E8F0")
+                ax.add_feature(cfeature.COASTLINE, linewidth=0.6, color="#666666")
+                ax.set_extent([-22, 30, 34, 62], crs=ccrs.PlateCarree())
+                continue
+
+            zones_result = compute_frontal_zones_dual(
+                fields["T850"], fields["theta_e"], lat, lon,
+                terrain_mask=terrain_mask,
+            )
+            mean_grad = model_mean_gradients[model_key]
+            anomaly = zones_result["gradient"] - mean_grad
+            anomaly_mask = (
+                (anomaly > _ANOMALY_THRESHOLD)
+                & (zones_result["gradient"] > _ABSOLUTE_FLOOR)
+            )
+            filtered_mask = zones_result["frontal_mask"] & anomaly_mask
+
+            ft = classify_front_type(
+                zones_result["dT_dx"], zones_result["dT_dy"],
+                fields["u850"], fields["v850"],
+                filtered_mask, detected_by=zones_result.get("detected_by"),
+            )
+            regions = find_fronts_in_regions(
+                filtered_mask, ft, zones_result["gradient"],
+                zones_result["front_orientation"], lat, lon,
+                terrain_mask=terrain_mask,
+            )
+
+            # Draw map
+            ax.add_feature(cfeature.LAND, facecolor="#F0EDE4", zorder=0)
+            ax.add_feature(cfeature.OCEAN, facecolor="#D8E8F0", zorder=0)
+            ax.add_feature(cfeature.COASTLINE, linewidth=0.6, color="#666666")
+            ax.add_feature(cfeature.BORDERS, linewidth=0.4, linestyle=":", color="#999999")
+            ax.set_extent([-22, 30, 34, 62], crs=ccrs.PlateCarree())
+
+            # Background gradient
+            lon_grid, lat_grid = np.meshgrid(lon, lat)
+            ax.pcolormesh(
+                lon_grid, lat_grid, zones_result["gradient"],
+                cmap="Greys", vmin=0, vmax=5.0, alpha=0.15,
+                transform=ccrs.PlateCarree(), zorder=1,
+            )
+
+            # Zone rectangles
+            annotations = []
+            for zone_name, bounds in ZONES.items():
+                r = regions[zone_name]
+                lat0, lat1 = bounds["lat"]
+                lon0, lon1 = bounds["lon"]
+
+                if r["present"]:
+                    ftype = r["type"]
+                    coverage = r["coverage_fraction"]
+                    color = COLORS.get(ftype, "#808080")
+                    alpha = min(0.15 + coverage * 1.5, 0.6)
+
+                    rect = mpatches.Rectangle(
+                        (lon0, lat0), lon1 - lon0, lat1 - lat0,
+                        facecolor=color, alpha=alpha, edgecolor=color,
+                        linewidth=1.5, transform=ccrs.PlateCarree(), zorder=2,
+                    )
+                    ax.add_patch(rect)
+
+                    clat, clon = (lat0 + lat1) / 2, (lon0 + lon1) / 2
+                    ax.text(
+                        clon, clat, ftype[0].upper(),
+                        ha="center", va="center", fontsize=12,
+                        fontweight="bold", color="white",
+                        transform=ccrs.PlateCarree(), zorder=3,
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor=color, alpha=0.8),
+                    )
+                    annotations.append(
+                        f"{bounds['display']}: {ftype} "
+                        f"{r['intensity']:.1f}K {r.get('orientation', '')}"
+                    )
+                else:
+                    rect = mpatches.Rectangle(
+                        (lon0, lat0), lon1 - lon0, lat1 - lat0,
+                        facecolor="none", edgecolor="#CCCCCC",
+                        linewidth=0.5, linestyle="--",
+                        transform=ccrs.PlateCarree(), zorder=1,
+                    )
+                    ax.add_patch(rect)
+
+            init_time = result["model_init_times"].get(model_key, 0)
+            init_str = (
+                datetime.fromtimestamp(init_time, tz=tz.utc).strftime("%HZ")
+                if init_time else "?"
+            )
+            ax.set_title(
+                f"{model_key.upper()} {init_str} — {time_str} (T+{hour_offset}h)",
+                fontsize=13, fontweight="bold",
+            )
+
+            annot_text = "\n".join(annotations) if annotations else "No frontal activity"
+            ax.text(
+                0.02, -0.02, annot_text, transform=ax.transAxes,
+                fontsize=7.5, verticalalignment="top", fontfamily="monospace",
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+            )
+
+    # Legend
+    legend_elements = [
+        mpatches.Patch(facecolor=COLORS["cold"], alpha=0.5, label="Cold front"),
+        mpatches.Patch(facecolor=COLORS["warm"], alpha=0.5, label="Warm front"),
+    ]
+    fig.legend(
+        handles=legend_elements, loc="lower center", ncol=2,
+        fontsize=12, frameon=True, fancybox=True,
+    )
+
+    fig.suptitle(
+        "Frontal Detection Validation: Météo-France vs Model Detection",
+        fontsize=16, fontweight="bold", y=0.995,
+    )
+    plt.tight_layout(rect=[0, 0.02, 1, 0.99], h_pad=3)
+
+    fig.savefig(args.output, dpi=140, bbox_inches="tight")
+    print(f"Saved to {args.output}")
+
+
 def _cmd_clear_cache(args: argparse.Namespace) -> None:
     cache_dir = Path(args.cache_dir) if args.cache_dir else cache._DEFAULT_CACHE_DIR
     count = cache.clear_cache(cache_dir)
@@ -512,6 +733,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_route = sub.add_parser("route", help="Show route frontal table")
     p_route.add_argument("--template", help="Route template name")
 
+    # validate
+    p_validate = sub.add_parser(
+        "validate",
+        help="Compare detection against Meteo-France carte des fronts",
+    )
+    p_validate.add_argument(
+        "--charts", nargs="+", required=True,
+        help="Meteo-France chart image files (ordered by time)",
+    )
+    p_validate.add_argument(
+        "--times", nargs="+", required=True,
+        help="Chart valid times, e.g. '17/04 00Z' '17/04 12Z' (same order as --charts)",
+    )
+    p_validate.add_argument(
+        "--output", default="data/frontal_validation.png",
+        help="Output image path (default: data/frontal_validation.png)",
+    )
+    p_validate.add_argument("--no-cache", action="store_true")
+    p_validate.add_argument("--cache-dir")
+
     # clear-cache
     p_clear = sub.add_parser("clear-cache", help="Delete cached grid data")
     p_clear.add_argument("--cache-dir")
@@ -536,6 +777,7 @@ def main() -> None:
         "analyze": _cmd_analyze,
         "zones": _cmd_zones,
         "route": _cmd_route,
+        "validate": _cmd_validate,
         "clear-cache": _cmd_clear_cache,
     }
     commands[args.command](args)
