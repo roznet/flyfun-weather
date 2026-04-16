@@ -42,7 +42,6 @@
     uk_north_ireland: cold  # cold front through Ireland
     uk_south: cold          # cold front southern end near Channel
     bay_of_biscay: cold     # cold front tail
-    scandinavia_south: cold # cold front fragment over S Scandinavia
 
 - time: "18/04 00Z"
   hour_offset: 12
@@ -57,9 +56,7 @@
     uk_north_ireland: cold    # cold front through N UK
     uk_south: cold            # cold front S end
     benelux_north_sea: cold   # cold front crossing into North Sea
-    scandinavia_south: occluded  # occluded front over S Scandinavia
     bay_of_biscay: cold       # cold front tail
-    atlantic_south: cold      # Atlantic front approaching
 
 - time: "18/04 12Z"
   hour_offset: 24
@@ -76,9 +73,7 @@
     atlantic_south: cold      # cold front sweeping through mid-Atlantic
     uk_south: cold            # cold front fragment touching Channel
     north_france: cold        # cold front fragment
-    scandinavia_south: occluded
-    adriatic: cold            # cold front over Adriatic
-    balkans: cold             # extension of Adriatic front
+    balkans: cold             # cold front from separate system
 
 - time: "19/04 00Z"
   hour_offset: 36
