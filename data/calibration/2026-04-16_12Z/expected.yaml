@@ -1,0 +1,100 @@
+# Expected frontal zones from Météo-France carte des fronts
+# Source: reseau 16/04/2026 12 UTC
+# Annotated by visual inspection of surface analysis charts
+#
+# Types: cold, warm, occluded, stationary
+# Our detection only has cold/warm/indeterminate — occluded maps to either
+# cold or warm depending on which side dominates at 850hPa.
+#
+# "clear" zones are not listed — absence means clear.
+# Zones outside the MF chart domain (e.g. Balkans detail) are best-effort.
+
+- time: "17/04 00Z"
+  hour_offset: -12  # before ECMWF 12Z init — not in our forecast range
+  notes: >
+    Depression W of Scotland (~57N, 8W). Occluded front from depression
+    center curving N then cold front trailing SW through Ireland (~53N)
+    down to Bay of Biscay (~47N, 8W) and continuing as cold front to
+    ~43N, 15W in Atlantic. Warm front fragment E of depression toward
+    Norway. Ridge "R" over Benelux/Germany. Cold front fragments over
+    Balkans/Turkey (~40N, 25E). Anticyclone over central Atlantic.
+  zones:
+    atlantic_north: cold
+    uk_north_ireland: occluded
+    uk_south: cold         # cold front trailing through Channel approaches
+    bay_of_biscay: cold    # cold front tail
+    atlantic_south: cold   # cold front extending into Atlantic
+    balkans: cold          # fragments
+
+- time: "17/04 12Z"
+  hour_offset: 0
+  notes: >
+    Depression deepened, now ~58N 5W (N of Scotland). Occluded front
+    wrapping around depression center. Cold front moved E — now from
+    Scotland (~58N) S through Ireland/UK (~53N, 5W) to Bay of Biscay
+    (~48N, 10W) and into Atlantic. Cold front from separate depression
+    approaching Iberia from SW (~38N, 12W). Cold front fragments
+    Balkans. Ridge "R" still over Benelux/central Europe.
+    Separate cold front over Scandinavia (~60N, 10E).
+  zones:
+    atlantic_north: cold    # cold front approaching from W
+    atlantic_south: cold    # cold front in Atlantic toward Iberia
+    uk_north_ireland: cold  # cold front through Ireland
+    uk_south: cold          # cold front southern end near Channel
+    bay_of_biscay: cold     # cold front tail
+    scandinavia_south: cold # cold front fragment over S Scandinavia
+
+- time: "18/04 00Z"
+  hour_offset: 12
+  notes: >
+    Depression moved to ~60N, 0E (over North Sea). Occluded front from
+    center curving over Norway/Scandinavia. Cold front from depression
+    trailing S through UK (~53N, 2W) into North Sea, then SW to Bay of
+    Biscay (~46N, 8W). Ridge "R" holding over France. Cold front from
+    Atlantic depressions at ~38N still W of Iberia. Separate depression
+    in central Med (~38N, 15E).
+  zones:
+    uk_north_ireland: cold    # cold front through N UK
+    uk_south: cold            # cold front S end
+    benelux_north_sea: cold   # cold front crossing into North Sea
+    scandinavia_south: occluded  # occluded front over S Scandinavia
+    bay_of_biscay: cold       # cold front tail
+    atlantic_south: cold      # Atlantic front approaching
+
+- time: "18/04 12Z"
+  hour_offset: 24
+  notes: >
+    Depression moved to ~62N 5E (over Norway). Deep low developing W
+    of Iceland (~62N, 25W). Cold front from Iceland low sweeping SE
+    through mid-Atlantic (~50N, 20W) — still over ocean. Occluded front
+    from Norway low over Scandinavia. Cold front fragment touching
+    Channel/N France (~50N, 2W). Ridge "R" still over France, weakening.
+    Cold front over Adriatic/Balkans (~45N, 18E) from separate system.
+    Small depression near Sardinia.
+  zones:
+    atlantic_north: cold      # new cold front from Iceland low
+    atlantic_south: cold      # cold front sweeping through mid-Atlantic
+    uk_south: cold            # cold front fragment touching Channel
+    north_france: cold        # cold front fragment
+    scandinavia_south: occluded
+    adriatic: cold            # cold front over Adriatic
+    balkans: cold             # extension of Adriatic front
+
+- time: "19/04 00Z"
+  hour_offset: 36
+  notes: >
+    Iceland low deepened. Cold front now from ~55N 20W sweeping SE
+    through Atlantic to ~48N 15W then S to ~38N 18W. Separate
+    depression at ~52N 15W. Cold front reaching Bay of Biscay and
+    approaching N France. Anticyclone "A" over UK (1025hPa) — brief
+    ridge before front arrives. New depression over Poland/Balkans
+    (~52N 20E) with cold front trailing S through Balkans. Ridge "R"
+    shifted E to central Europe.
+  zones:
+    atlantic_north: cold      # cold front from Iceland low
+    atlantic_south: cold      # cold front extending S in Atlantic
+    bay_of_biscay: cold       # cold front arriving
+    north_france: cold        # cold front approaching
+    n_germany_baltic: cold    # cold front from Balkans depression
+    balkans: cold             # cold front through Balkans
+    central_germany: cold     # between the two frontal systems

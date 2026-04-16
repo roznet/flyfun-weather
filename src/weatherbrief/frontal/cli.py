@@ -464,6 +464,172 @@ def _cmd_route(args: argparse.Namespace) -> None:
     _print_route(result, zone_list, route_name)
 
 
+def _cmd_score(args: argparse.Namespace) -> None:
+    """Score detection against expected zones from calibration dataset."""
+    import yaml
+
+    case_dir = Path(args.case)
+    expected_path = case_dir / "expected.yaml"
+    if not expected_path.exists():
+        print(f"Error: {expected_path} not found", file=sys.stderr)
+        sys.exit(1)
+
+    with open(expected_path) as f:
+        expected_cases = yaml.safe_load(f)
+
+    from weatherbrief.frontal.detect import compute_frontal_zones_dual, classify_front_type
+    from weatherbrief.frontal.tracking import _compute_mean_gradient, _ANOMALY_THRESHOLD, _ABSOLUTE_FLOOR
+
+    lat, lon = build_grid_coords()
+    terrain_mask = build_terrain_mask(lat, lon)
+
+    # Override anomaly/floor from args
+    anomaly_threshold = args.anomaly
+    absolute_floor = args.floor
+
+    # Load raw data per model from calibration dir
+    all_zone_names = set(ZONES.keys())
+
+    for model_key in args.models:
+        raw_path = case_dir / "raw" / f"{model_key}.json"
+        if not raw_path.exists():
+            print(f"  Skipping {model_key}: {raw_path} not found")
+            continue
+
+        import json
+        raw = json.loads(raw_path.read_text())
+
+        # Reshape all hours
+        n_hours = len(list(raw.values())[0][0])
+        all_fields: dict[int, dict] = {}
+        for h in range(min(n_hours, 97)):
+            fields = reshape_to_fields(raw, lat, lon, h, terrain_mask)
+            if fields is not None:
+                all_fields[h] = fields
+
+        # Compute mean gradient for anomaly filtering
+        mean_gradient = _compute_mean_gradient(
+            all_fields, lat, lon, range(min(n_hours, 97)), terrain_mask,
+        )
+
+        print(f"\n{'='*72}")
+        print(f"  {model_key.upper()} — threshold={args.threshold} θe={args.te_threshold} "
+              f"anomaly={anomaly_threshold} floor={absolute_floor}")
+        print(f"{'='*72}")
+
+        total_hits = 0
+        total_misses = 0
+        total_false_alarms = 0
+        total_correct_neg = 0
+        type_correct = 0
+        type_total = 0
+
+        for case in expected_cases:
+            hour_offset = case.get("hour_offset", 0)
+            time_str = case["time"]
+            expected_zones = case.get("zones", {})
+
+            if hour_offset < 0:
+                continue  # before model init, skip
+
+            fields = all_fields.get(hour_offset)
+            if fields is None:
+                print(f"\n  {time_str} (T+{hour_offset}h): no data")
+                continue
+
+            # Run detection
+            zones_result = compute_frontal_zones_dual(
+                fields["T850"], fields["theta_e"], lat, lon,
+                terrain_mask=terrain_mask,
+                t_gradient_threshold=args.threshold,
+                te_gradient_threshold=args.te_threshold,
+            )
+            anomaly = zones_result["gradient"] - mean_gradient
+            anomaly_mask = (
+                (anomaly > anomaly_threshold)
+                & (zones_result["gradient"] > absolute_floor)
+            )
+            filtered_mask = zones_result["frontal_mask"] & anomaly_mask
+
+            ft = classify_front_type(
+                zones_result["dT_dx"], zones_result["dT_dy"],
+                fields["u850"], fields["v850"],
+                filtered_mask, detected_by=zones_result.get("detected_by"),
+            )
+            from weatherbrief.frontal.zones import find_fronts_in_regions
+            regions = find_fronts_in_regions(
+                filtered_mask, ft, zones_result["gradient"],
+                zones_result["front_orientation"], lat, lon,
+                terrain_mask=terrain_mask,
+            )
+
+            # Score
+            hits = []
+            misses = []
+            false_alarms = []
+            correct_neg = 0
+
+            for zone_name in all_zone_names:
+                expected_type = expected_zones.get(zone_name)
+                detected = regions.get(zone_name, {}).get("present", False)
+                detected_type = regions.get(zone_name, {}).get("type")
+
+                if expected_type and detected:
+                    hits.append(zone_name)
+                    # Check type match (occluded matches either cold or warm)
+                    if expected_type == "occluded" or expected_type == detected_type:
+                        type_correct += 1
+                    type_total += 1
+                elif expected_type and not detected:
+                    misses.append(zone_name)
+                elif not expected_type and detected:
+                    false_alarms.append(zone_name)
+                else:
+                    correct_neg += 1
+
+            total_hits += len(hits)
+            total_misses += len(misses)
+            total_false_alarms += len(false_alarms)
+            total_correct_neg += correct_neg
+
+            # Print per-time results
+            status = "✓" if not misses and not false_alarms else "~" if hits else "✗"
+            print(f"\n  {status} {time_str} (T+{hour_offset}h):")
+            if hits:
+                for z in hits:
+                    exp_t = expected_zones[z]
+                    det_t = regions[z]["type"]
+                    match = "✓" if exp_t == "occluded" or exp_t == det_t else "✗"
+                    print(f"      HIT  {ZONES[z]['display']:<32} "
+                          f"expected={exp_t:<10} detected={det_t} {match}")
+            if misses:
+                for z in misses:
+                    print(f"      MISS {ZONES[z]['display']:<32} "
+                          f"expected={expected_zones[z]}")
+            if false_alarms:
+                for z in false_alarms:
+                    det_t = regions[z]["type"]
+                    print(f"      FA   {ZONES[z]['display']:<32} "
+                          f"detected={det_t} (not expected)")
+
+        # Summary
+        total_expected = total_hits + total_misses
+        total_detected = total_hits + total_false_alarms
+        pod = total_hits / total_expected if total_expected > 0 else 0
+        far = total_false_alarms / total_detected if total_detected > 0 else 0
+        csi = total_hits / (total_hits + total_misses + total_false_alarms) if (total_hits + total_misses + total_false_alarms) > 0 else 0
+        type_acc = type_correct / type_total if type_total > 0 else 0
+
+        print(f"\n  {'─'*60}")
+        print(f"  SUMMARY:")
+        print(f"    Hits: {total_hits}  Misses: {total_misses}  "
+              f"False alarms: {total_false_alarms}  Correct negatives: {total_correct_neg}")
+        print(f"    POD (probability of detection): {pod:.0%}")
+        print(f"    FAR (false alarm ratio):        {far:.0%}")
+        print(f"    CSI (critical success index):   {csi:.0%}")
+        print(f"    Type accuracy (hits only):      {type_acc:.0%} ({type_correct}/{type_total})")
+
+
 def _cmd_validate(args: argparse.Namespace) -> None:
     """Generate side-by-side comparison: MF charts vs ECMWF + GFS detection."""
     if len(args.charts) != len(args.times):
@@ -733,6 +899,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_route = sub.add_parser("route", help="Show route frontal table")
     p_route.add_argument("--template", help="Route template name")
 
+    # score
+    p_score = sub.add_parser(
+        "score",
+        help="Score detection against expected zones from calibration data",
+    )
+    p_score.add_argument(
+        "--case", required=True,
+        help="Calibration case dir (e.g. data/calibration/2026-04-16_12Z)",
+    )
+    p_score.add_argument(
+        "--models", nargs="+", default=["ecmwf", "gfs"],
+        help="Models to score (default: ecmwf gfs)",
+    )
+    p_score.add_argument(
+        "--threshold", type=float, default=2.0,
+        help="T850 gradient threshold (K/100km)",
+    )
+    p_score.add_argument(
+        "--te-threshold", type=float, default=4.0,
+        help="θe gradient threshold (K/100km)",
+    )
+    p_score.add_argument(
+        "--anomaly", type=float, default=1.0,
+        help="Anomaly threshold (K/100km)",
+    )
+    p_score.add_argument(
+        "--floor", type=float, default=2.0,
+        help="Absolute gradient floor (K/100km)",
+    )
+
     # validate
     p_validate = sub.add_parser(
         "validate",
@@ -777,6 +973,7 @@ def main() -> None:
         "analyze": _cmd_analyze,
         "zones": _cmd_zones,
         "route": _cmd_route,
+        "score": _cmd_score,
         "validate": _cmd_validate,
         "clear-cache": _cmd_clear_cache,
     }
