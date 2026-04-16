@@ -121,13 +121,14 @@ Reuse the existing `OpenMeteoClient` infrastructure. For each model, fetch the f
 
 **Confirmed availability**: all three models expose 850hPa temperature, dewpoint, wind speed, and wind direction via Open-Meteo. GFS has 27 pressure levels, ECMWF has 13, ICON-EU has 19 — all include 850hPa. Dewpoint is either provided directly or derived from T + RH via the Magnus formula (already implemented in the codebase). The only per-model gap relevant here is vertical_velocity (unavailable for ICON), which we don't need.
 
-**Lightweight fetch path**: the existing `fetch_multi_point()` returns full `WaypointForecast` objects with all surface variables and all pressure levels — far more data than we need. Rather than forcing ~4000 grid points through the full sounding pipeline, add a dedicated `fetch_grid_fields()` method to `OpenMeteoClient` that:
+**Lightweight fetch path**: the existing `fetch_multi_point()` returns full `WaypointForecast` objects with all surface variables and all pressure levels — far more data than we need. Rather than forcing ~4000 grid points through the full sounding pipeline, add a **separate** `fetch_grid_fields()` method to `OpenMeteoClient` that:
+- Accepts bare `(lat, lon)` coordinate lists (not `RoutePoint` objects — grid points aren't route points)
 - Requests only `temperature_850hPa`, `dewpoint_850hPa`, `wind_speed_850hPa`, `wind_direction_850hPa` (4 variables)
 - Skips all surface variables
 - Returns raw numpy arrays directly (no `WaypointForecast` construction)
 - Uses `chunk_size=1000` — with only 4 variables the `hourly` param is ~90 chars, leaving the URL budget almost entirely for coordinates. 1000 points × ~12 chars each ≈ 12KB URL, well within limits.
 
-This keeps the frontal fetch fast and avoids building ~4000 heavyweight model objects.
+This is a separate method (not a mode flag on `fetch_multi_point()`) because the input types, output types, and chunk sizing are all different. It shares the same HTTP client, retry logic, and rate limiting. This keeps the frontal fetch fast and avoids building ~4000 heavyweight model objects.
 
 **U/V reconstruction**: Open-Meteo returns speed and direction (meteorological convention: direction wind is coming *from*, in degrees). Wind speed is in knots; convert to km/h for advection calculations (1 kt = 1.852 km/h), then to u/v components:
 ```python
@@ -311,7 +312,7 @@ This means a GFS 06Z T+18 forecast is compared with ECMWF 00Z T+24 — both vali
 
 Open-Meteo simplifies this: it always serves the latest available run for each model, and returns UTC timestamps for each hourly value. The pipeline can align on these timestamps directly rather than computing init-time offsets manually.
 
-**Init time consistency**: Open-Meteo could update to a newer model run mid-fetch (e.g., GFS 12Z becomes available while chunked requests are in progress). This would mix init times within a single model's data. Mitigation: log the model run timestamp from the first chunk's response and verify subsequent chunks match — if they don't, re-fetch the mismatched chunks. Open-Meteo returns model init metadata in the JSON response.
+**Init time consistency**: Open-Meteo could update to a newer model run mid-fetch (e.g., GFS 12Z becomes available while chunked requests are in progress). This would mix init times within a single model's data. Mitigation: fetch model init time from the existing `meta.json` endpoint (via `fetch_model_metadata()` in `model_status.py`) *before* starting the grid fetch. Record the init time. After all chunks are fetched, re-check `meta.json` — if the init time has changed, re-fetch all chunks. This is simpler and more reliable than per-chunk response inspection (Open-Meteo forecast responses don't include init time metadata — it's only available from the separate `meta.json` endpoint). At ~5 requests per model taking <10 seconds total, mid-fetch model updates are rare.
 
 ### 1.5 ERA5 Fields for Validation
 
@@ -1021,7 +1022,9 @@ def find_fronts_in_regions(frontal_mask: np.ndarray,
 
 The most pilot-relevant metric: when does each model predict the front to clear a given region?
 
-Since Open-Meteo returns hourly data and we fetch it all in one request, clearance timing uses **hourly resolution** internally. This catches fast-moving fronts that would slip between 6h snapshots (a front can transit a 3-4 degree zone in 4-6 hours).
+Clearance timing is **derived at query time** from the per-horizon DB rows (or from the in-memory zone timeseries during pipeline runs), not stored in the database. This keeps the schema as a pure fact layer and allows different consumers (departure window, LLM narrative, route table) to interpret frontal passages differently — e.g., finding flyable gaps between two fronts, computing route-wide clearance, or reporting per-zone clearance.
+
+Since Open-Meteo returns hourly data and we fetch it all in one request, clearance timing uses **hourly resolution** internally during pipeline computation. This catches fast-moving fronts that would slip between 6h snapshots (a front can transit a 3-4 degree zone in 4-6 hours). When derived from DB rows (stored at 6h intervals), clearance precision is 6h — sufficient for briefing outputs.
 
 ```python
 def find_frontal_clearance_time(zone_timeseries: dict,
@@ -1369,14 +1372,13 @@ CREATE TABLE frontal_analysis (
     front_type VARCHAR(15),            -- cold, warm, indeterminate, NULL
     intensity FLOAT,                   -- peak gradient K/100km, NULL if no front
     coverage_fraction FLOAT,           -- fraction of zone with frontal activity
-    clearance_hour INTEGER,            -- hourly-precision clearance time (NULL if no front or not yet cleared)
+    orientation VARCHAR(10),           -- front orientation label e.g. 'NE-SW', NULL if no front
     computed_at TIMESTAMP NOT NULL,
     UNIQUE(run_date, init_hour, model, horizon_h, zone_name)
 );
--- Note: horizon_h is stored at 6h intervals for zone state, but clearance_hour
--- uses hourly precision from the internal timeseries. This preserves the exact
--- clearance time for departure window calculations without inflating row count.
 ```
+
+**No `clearance_hour` column**: clearance timing is derived at query time from the per-horizon rows rather than stored. This avoids encoding assumptions about what "clearance" means into the schema — the same rows support single clearance, multiple frontal passages with flyable gaps between them, or "fronts persist through T+72." The briefing code and LLM context builder scan the horizon rows for each zone and derive whatever clearance/window summary fits the context. Different consumers (departure window, LLM narrative, route table) can interpret the timeseries differently without schema changes.
 
 Briefings query this table for the latest available run. The UNIQUE constraint allows upserts when re-running analysis. To find the latest run:
 
@@ -1465,9 +1467,9 @@ def compute_uncertainty_flag(max_frontal_spread_h: float,
 | `scipy.ndimage` | Gaussian smoothing for frontal detection |
 | `scipy.interpolate` | Terrain fill and missing-data interpolation (griddata) |
 | `metpy` | Equivalent potential temperature (θe) computation |
-| `matplotlib` + `cartopy` | Map plotting for CLI validation (optional) |
+| `matplotlib` + `cartopy` | Map plotting for CLI validation (optional, `[frontal-dev]` extra) |
 
-No new dependencies beyond what's already in the project. MetPy is already used for thermodynamic computations in `weatherbrief.analysis.sounding.thermodynamics`. Dynamic route assembly reuses existing flight waypoints instead of adding `pyproj`. Open-Meteo fetch reuses existing `OpenMeteoClient` with a new lightweight grid-fetch method. Terrain masking reuses the existing SRTM3 framework (`srtm` package, already installed).
+`cartopy` is the only new dependency — added as an optional extra (`pip install -e ".[frontal-dev]"`) since it requires GEOS/PROJ C libraries and is only needed for CLI map plotting during development/validation, not in production. MetPy is already used for thermodynamic computations in `weatherbrief.analysis.sounding.thermodynamics`. Dynamic route assembly reuses existing flight waypoints instead of adding `pyproj`. Open-Meteo fetch reuses existing `OpenMeteoClient` with a new lightweight grid-fetch method. Terrain masking reuses the existing SRTM3 framework (`srtm` package, already installed).
 
 ---
 
