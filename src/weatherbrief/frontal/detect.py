@@ -148,29 +148,42 @@ def classify_front_type(
     u850: np.ndarray,
     v850: np.ndarray,
     frontal_mask: np.ndarray,
-    advection_threshold: float = 0.5,
+    cross_front_threshold: float = 2.0,
     detected_by: np.ndarray | None = None,
 ) -> np.ndarray:
     """Classify frontal points as cold (1), warm (2), or indeterminate (3).
 
-    Uses temperature advection: -(u·dT/dx + v·dT/dy).
-    u850/v850 in km/h, dT/dx in K/km → advection in K/hr.
+    Uses the cross-front wind component: the wind projected onto the
+    temperature gradient direction. The gradient points cold→warm, so:
+    - Positive cross-front wind = blowing from cold to warm side = cold front
+    - Negative = blowing from warm to cold side = warm front
 
-    Points detected only by θe (bit 1 in detected_by) with weak T850
-    advection are biased toward warm — these are precisely the warm
-    fronts that θe was added to catch.
+    This is more stable than temperature advection (which depends on both
+    wind speed AND gradient magnitude). The cross-front component depends
+    only on the wind direction relative to the front orientation.
+
+    cross_front_threshold : minimum cross-front wind speed (km/h) to
+        classify. ~1 knot — filters truly ambiguous cases while
+        classifying ~85-90% of frontal points.
+
+    Points detected only by θe (bit 1 in detected_by) with weak cross-front
+    wind are biased toward warm — these are precisely the warm fronts that
+    θe was added to catch.
 
     Returns int array: 0=not front, 1=cold, 2=warm, 3=indeterminate.
     """
-    T_adv = -(u850 * dT_dx + v850 * dT_dy)
+    # Cross-front wind: wind component along gradient direction (cold→warm)
+    grad_mag = np.sqrt(dT_dx**2 + dT_dy**2)
+    grad_norm = np.where(grad_mag > 1e-10, grad_mag, 1e-10)
+    cross_front = (u850 * dT_dx + v850 * dT_dy) / grad_norm
 
     front_type = np.zeros(frontal_mask.shape, dtype=int)
 
-    cold_mask = frontal_mask & (T_adv < -advection_threshold)
-    warm_mask = frontal_mask & (T_adv > advection_threshold)
+    cold_mask = frontal_mask & (cross_front > cross_front_threshold)
+    warm_mask = frontal_mask & (cross_front < -cross_front_threshold)
     indeterminate_mask = frontal_mask & ~cold_mask & ~warm_mask
 
-    # θe-only points with weak advection → bias toward warm
+    # θe-only points with weak cross-front wind → bias toward warm
     if detected_by is not None:
         theta_e_only = detected_by == 2  # bit 1 only
         reclassify = indeterminate_mask & theta_e_only
