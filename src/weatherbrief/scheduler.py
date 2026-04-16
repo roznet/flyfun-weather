@@ -38,6 +38,8 @@ _VERIF_STARTUP_DELAY_SECONDS = 60  # let auto-refresh settle first
 _DIGEST_INTERVAL_SECONDS = 86_400  # 24 hours
 _DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
 _STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
+_ECMWF_WATCHER_POLL_SECONDS = 300  # 5 minutes
+_ECMWF_WATCHER_STARTUP_DELAY_SECONDS = 15  # run early — other loops may need ready data
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -411,6 +413,14 @@ def _run_retention_once() -> None:
     finally:
         db.close()
 
+    # Purge old ECMWF deliveries (72h default — keeps ~2 days of runs)
+    try:
+        from weatherbrief.fetch.grib.ecmwf_watcher import purge_old_ecmwf_deliveries
+
+        purge_old_ecmwf_deliveries()
+    except Exception:
+        logger.error("ECMWF delivery purge failed", exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Standalone verification loop
@@ -536,3 +546,36 @@ def _run_standalone_once(
             cache_db.close()
     except Exception:
         logger.error("Cache rebuild failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# ECMWF delivery watcher loop
+# ---------------------------------------------------------------------------
+
+
+async def run_ecmwf_watcher_loop(app_state) -> None:
+    """Watch for complete ECMWF deliveries — started as an asyncio task."""
+    logger.info(
+        "ECMWF watcher started (poll every %ds)", _ECMWF_WATCHER_POLL_SECONDS,
+    )
+    await asyncio.sleep(_ECMWF_WATCHER_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            newly_ready = await asyncio.to_thread(_run_ecmwf_watcher_once)
+            if newly_ready:
+                logger.info(
+                    "ECMWF watcher: %d new run(s) ready: %s",
+                    len(newly_ready),
+                    ", ".join(bt.isoformat() for bt in newly_ready),
+                )
+        except Exception:
+            logger.error("ECMWF watcher cycle failed", exc_info=True)
+        await asyncio.sleep(_ECMWF_WATCHER_POLL_SECONDS)
+
+
+def _run_ecmwf_watcher_once() -> list[datetime]:
+    """Execute a single ECMWF completeness check (called in a thread)."""
+    from weatherbrief.fetch.grib.ecmwf_watcher import check_ecmwf_completeness
+
+    return check_ecmwf_completeness()

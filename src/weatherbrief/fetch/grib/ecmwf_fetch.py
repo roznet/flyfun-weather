@@ -239,7 +239,7 @@ def scan_ecmwf_files(
     """
     scan_dir = data_dir or ecmwf_grib_dir()
     if not scan_dir.exists():
-        logger.info("ECMWF data directory does not exist: %s", scan_dir)
+        logger.debug("ECMWF data directory does not exist: %s", scan_dir)
         return []
 
     files: list[ECMWFFileInfo] = []
@@ -275,8 +275,14 @@ def find_latest_ecmwf_run(
     *,
     model: str | None = None,
     operational_only: bool = True,
+    require_ready: bool = True,
 ) -> datetime | None:
     """Find the most recent ECMWF forecast init time in the delivery directory.
+
+    Args:
+        require_ready: If True (default), only return runs that have a
+            sentinel file written by the ECMWF watcher.  Set to False for
+            debugging or when completeness checking is not needed.
 
     Returns:
         The latest base_time as an aware UTC datetime, or None if no files found.
@@ -284,12 +290,48 @@ def find_latest_ecmwf_run(
     files = scan_ecmwf_files(data_dir, model=model, operational_only=operational_only)
     if not files:
         return None
+
+    if require_ready:
+        files = filter_ready_runs(files, data_dir or ecmwf_grib_dir())
+        if not files:
+            return None
+
     return max(f.base_time for f in files)
+
+
+def filter_ready_runs(
+    files: list[ECMWFFileInfo],
+    data_dir: Path,
+) -> list[ECMWFFileInfo]:
+    """Filter file list to only include runs with a readiness sentinel.
+
+    Imports the watcher lazily to avoid circular dependencies.
+    """
+    from weatherbrief.fetch.grib.ecmwf_watcher import is_run_ready
+
+    ready_times: dict[datetime, bool] = {}
+    result = []
+    for f in files:
+        bt = f.base_time
+        if bt not in ready_times:
+            ready_times[bt] = is_run_ready(data_dir, base_time=bt)
+        if ready_times[bt]:
+            result.append(f)
+
+    if len(result) < len(files):
+        skipped = set(f.base_time for f in files) - set(f.base_time for f in result)
+        for bt in sorted(skipped):
+            logger.debug("ECMWF run %s not ready yet, skipping", bt.isoformat())
+
+    return result
 
 
 def find_best_ecmwf_run(
     all_files: list[ECMWFFileInfo],
     cover_until: datetime,
+    *,
+    require_ready: bool = True,
+    data_dir: Path | None = None,
 ) -> list[ECMWFFileInfo]:
     """Select the best ECMWF run whose horizon covers the flight window.
 
@@ -311,6 +353,12 @@ def find_best_ecmwf_run(
     """
     if not all_files:
         return []
+
+    if require_ready:
+        ready_dir = data_dir or ecmwf_grib_dir()
+        all_files = filter_ready_runs(all_files, ready_dir)
+        if not all_files:
+            return []
 
     # Group files by base_time
     runs: dict[datetime, list[ECMWFFileInfo]] = {}

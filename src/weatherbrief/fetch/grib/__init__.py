@@ -255,7 +255,9 @@ def _enrich_ecmwf(
     # main run (00z/12z, 192h) when a short-cutoff run (06z/18z, 144h)
     # can't cover the full flight window.
     flight_end = departure_time + timedelta(hours=max(flight_duration_hours, 1))
-    run_files = find_best_ecmwf_run(all_files, cover_until=flight_end)
+    run_files = find_best_ecmwf_run(
+        all_files, cover_until=flight_end, data_dir=grib_dir,
+    )
     if not run_files:
         logger.info("ECMWF GRIB: no suitable run found")
         return None

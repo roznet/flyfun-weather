@@ -293,7 +293,7 @@ class TestDirectoryScanner:
         for hour in (0, 12):
             name = f"A_B_ifs_od_oper_fc_20260407T{hour:02d}0000Z_20260408T000000Z_24.grib2"
             (tmp_path / name).write_bytes(b"")
-        latest = find_latest_ecmwf_run(tmp_path)
+        latest = find_latest_ecmwf_run(tmp_path, require_ready=False)
         assert latest == datetime(2026, 4, 7, 12, 0, 0, tzinfo=timezone.utc)
 
     def test_find_files_for_run(self, tmp_path):
@@ -770,3 +770,193 @@ def _grid_spacing(coords) -> float:
         return 0.0
     diffs = np.diff(np.sort(coords))
     return float(np.median(np.abs(diffs)))
+
+
+# ---------------------------------------------------------------------------
+# ECMWF watcher tests
+# ---------------------------------------------------------------------------
+
+
+class TestECMWFWatcher:
+    """Tests for ecmwf_watcher.py — completeness detection and purge."""
+
+    @staticmethod
+    def _make_run(tmp_path, stream, base_hour, steps, parts=("a1", "a2")):
+        """Create fake ECMWF files for a single run."""
+        bt_str = f"20260410T{base_hour:02d}0000Z"
+        for step in steps:
+            vt = f"20260410T{(base_hour + step) % 24:02d}0000Z"
+            for part in parts:
+                name = (
+                    f"X_{part}_ifs_od_{stream}_fc_{bt_str}_{vt}_{step}h"
+                )
+                (tmp_path / name).write_bytes(b"")
+
+    @staticmethod
+    def _write_config(tmp_path, oper_steps, scda_steps=None):
+        """Write a delivery_config.json."""
+        import json
+
+        config = {
+            "streams": {
+                "oper": {
+                    "cycles": [0, 12],
+                    "steps": oper_steps,
+                    "parts": ["a1", "a2"],
+                },
+            },
+            "publish_delay_hours": 0,
+            "completeness_timeout_hours": 0,
+        }
+        if scda_steps is not None:
+            config["streams"]["scda"] = {
+                "cycles": [6, 18],
+                "steps": scda_steps,
+                "parts": ["a1", "a2"],
+            }
+        (tmp_path / "delivery_config.json").write_text(json.dumps(config))
+
+    def test_complete_run_gets_sentinel(self, tmp_path):
+        """A run with all expected files gets a .ready_ sentinel."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import (
+            check_ecmwf_completeness,
+            is_run_ready,
+        )
+
+        steps = [0, 3, 6]
+        self._write_config(tmp_path, steps)
+        self._make_run(tmp_path, "oper", 0, steps)
+
+        newly_ready = check_ecmwf_completeness(tmp_path)
+        assert len(newly_ready) == 1
+
+        bt = datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc)
+        assert is_run_ready(tmp_path, base_time=bt)
+
+    def test_incomplete_run_no_sentinel(self, tmp_path):
+        """A run missing files does not get a sentinel (before timeout)."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import (
+            DeliveryConfig,
+            check_ecmwf_completeness,
+            is_run_ready,
+        )
+
+        steps = [0, 3, 6]
+        # Config expects 3 steps but we only deliver 2
+        import json
+
+        config = {
+            "streams": {
+                "oper": {
+                    "cycles": [0, 12],
+                    "steps": steps,
+                    "parts": ["a1", "a2"],
+                },
+            },
+            "publish_delay_hours": 9999,
+            "completeness_timeout_hours": 9999,
+        }
+        (tmp_path / "delivery_config.json").write_text(json.dumps(config))
+        self._make_run(tmp_path, "oper", 0, [0, 3])  # missing step 6
+
+        newly_ready = check_ecmwf_completeness(tmp_path)
+        assert len(newly_ready) == 0
+
+        bt = datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc)
+        assert not is_run_ready(tmp_path, base_time=bt)
+
+    def test_idempotent(self, tmp_path):
+        """Running check twice doesn't produce duplicate sentinels."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import check_ecmwf_completeness
+
+        steps = [0, 3]
+        self._write_config(tmp_path, steps)
+        self._make_run(tmp_path, "oper", 0, steps)
+
+        first = check_ecmwf_completeness(tmp_path)
+        second = check_ecmwf_completeness(tmp_path)
+        assert len(first) == 1
+        assert len(second) == 0
+
+    def test_partial_on_timeout(self, tmp_path):
+        """After timeout, an incomplete run gets a .partial sentinel."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import (
+            check_ecmwf_completeness,
+            is_run_partial,
+            is_run_ready,
+        )
+
+        steps = [0, 3, 6]
+        # timeout_hours=0 means immediate timeout
+        self._write_config(tmp_path, steps)
+        self._make_run(tmp_path, "oper", 0, [0, 3])  # missing step 6
+
+        newly_ready = check_ecmwf_completeness(tmp_path)
+        assert len(newly_ready) == 1
+
+        bt = datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc)
+        assert is_run_ready(tmp_path, base_time=bt)
+        assert is_run_partial(tmp_path, base_time=bt)
+
+    def test_find_latest_respects_ready(self, tmp_path):
+        """find_latest_ecmwf_run with require_ready skips non-ready runs."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import check_ecmwf_completeness
+
+        steps = [0, 3]
+        self._write_config(tmp_path, steps)
+
+        # 00z run — complete
+        self._make_run(tmp_path, "oper", 0, steps)
+        # 12z run — incomplete (only a1)
+        bt12_str = "20260410T120000Z"
+        for step in steps:
+            vt = f"20260410T{(12 + step) % 24:02d}0000Z"
+            name = f"X_a1_ifs_od_oper_fc_{bt12_str}_{vt}_{step}h"
+            (tmp_path / name).write_bytes(b"")
+
+        # Use huge timeout so 12z doesn't get partial sentinel
+        import json
+
+        config = {
+            "streams": {
+                "oper": {
+                    "cycles": [0, 12],
+                    "steps": steps,
+                    "parts": ["a1", "a2"],
+                },
+            },
+            "publish_delay_hours": 9999,
+            "completeness_timeout_hours": 9999,
+        }
+        (tmp_path / "delivery_config.json").write_text(json.dumps(config))
+
+        check_ecmwf_completeness(tmp_path)
+
+        # require_ready=True should return 00z (complete), not 12z
+        latest_ready = find_latest_ecmwf_run(tmp_path, require_ready=True)
+        assert latest_ready == datetime(2026, 4, 10, 0, 0, 0, tzinfo=timezone.utc)
+
+        # require_ready=False should return 12z
+        latest_any = find_latest_ecmwf_run(tmp_path, require_ready=False)
+        assert latest_any == datetime(2026, 4, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_purge_keeps_config(self, tmp_path):
+        """purge_old_ecmwf_deliveries never deletes delivery_config.json."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import purge_old_ecmwf_deliveries
+
+        steps = [0, 3]
+        self._write_config(tmp_path, steps)
+        self._make_run(tmp_path, "oper", 0, steps)
+
+        # Purge with 0h max_age — should delete data files but not config
+        removed = purge_old_ecmwf_deliveries(tmp_path, max_age_hours=0)
+        assert removed > 0
+        assert (tmp_path / "delivery_config.json").exists()
+
+    def test_no_config_graceful(self, tmp_path):
+        """Without delivery_config.json, watcher returns empty (no crash)."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import check_ecmwf_completeness
+
+        self._make_run(tmp_path, "oper", 0, [0, 3])
+        newly_ready = check_ecmwf_completeness(tmp_path)
+        assert newly_ready == []

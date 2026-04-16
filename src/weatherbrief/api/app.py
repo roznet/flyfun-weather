@@ -170,10 +170,24 @@ async def lifespan(app: FastAPI):
             run_standalone_verification_loop(app.state)
         )
 
+    ecmwf_watcher_task = None
+    if os.environ.get("DISABLE_ECMWF_WATCHER") != "1":
+        from weatherbrief.fetch.grib.ecmwf_fetch import ecmwf_grib_dir
+
+        ecmwf_dir = ecmwf_grib_dir()
+        if ecmwf_dir.exists():
+            from weatherbrief.scheduler import run_ecmwf_watcher_loop
+
+            ecmwf_watcher_task = asyncio.create_task(
+                run_ecmwf_watcher_loop(app.state)
+            )
+        else:
+            logger.info("ECMWF watcher skipped — %s does not exist", ecmwf_dir)
+
     yield
 
     for task in (scheduler_task, retention_task, verification_task,
-                 digest_task, standalone_task):
+                 digest_task, standalone_task, ecmwf_watcher_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):
