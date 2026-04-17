@@ -333,15 +333,21 @@ def reshape_to_fields(
     # Prepare fields — resolve NaN before any computation
     T850 = prepare_field(T850_raw)
     Td850 = prepare_field(Td850_raw)
-    ws = prepare_field(ws_raw)
-    wd = prepare_field(wd_raw)
 
-    if any(f is None for f in (T850, Td850, ws, wd)):
+    if any(f is None for f in (T850, Td850)):
         logger.warning("Hour index %d: too much missing data, skipping", hour_index)
         return None
 
-    # Convert wind to u/v AFTER NaN fill (on components, not raw direction)
-    u850, v850 = wind_to_uv(ws, wd)
+    # Convert wind to u/v BEFORE NaN fill — direction has circular
+    # wraparound (359° ≈ 1°) so nearest-neighbor on raw direction can
+    # introduce large jumps. Filling on Cartesian u/v is safe.
+    u850_raw, v850_raw = wind_to_uv(ws_raw, wd_raw)
+    u850 = prepare_field(u850_raw)
+    v850 = prepare_field(v850_raw)
+
+    if any(f is None for f in (u850, v850)):
+        logger.warning("Hour index %d: too much missing wind data, skipping", hour_index)
+        return None
 
     # Fill terrain before θe computation (same field goes into detection)
     if terrain_mask is not None:
