@@ -21,7 +21,7 @@ src/weatherbrief/frontal/
 ├── zones.py      — 18 European zones, 19 route templates, zone intersection
 ├── tracking.py   — two-pass anomaly filtering, zone timeseries, clearance timing
 ├── cache.py      — file cache keyed by (model, init_time) for dev iteration
-├── cli.py        — analyze, zones, route, score, validate subcommands
+├── cli.py        — analyze, zones, route, score, validate, diagnose subcommands
 └── __main__.py   — python -m weatherbrief.frontal.cli
 ```
 
@@ -76,12 +76,14 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
 - **`find_route_zones(waypoints)`**: Maps arbitrary route waypoints to zone sequence
 
 ### Anomaly Filtering (`tracking.py`)
-Two-pass approach that automatically filters persistent orographic/thermal gradients:
-1. **Background**: Mean T850 gradient across all forecast hours
-2. **Detection**: Front = gradient exceeds background + 1.0 K/100km AND absolute gradient ≥ 2.0 K/100km
+Two-pass, per-channel approach that automatically filters persistent orographic/thermal gradients:
+1. **Background**: Mean gradient across all forecast hours — computed separately for T850 and θe
+2. **Per-channel anomaly check**: Each point is filtered against the background of the channel that detected it (T-detected → T background, θe-detected → θe background). Points detected by both pass if either channel's anomaly check passes.
+3. **Thresholds scale per channel**: T850 anomaly ≥ 1.0 K/100km + floor ≥ 2.0; θe anomaly ≥ 2.0 K/100km + floor ≥ 4.0 (2× T, since θe gradients are naturally ~2× larger)
 
-This eliminates Alpine, Pyrenean, and sea-land gradients without per-zone tuning — a front passing through for ~12h out of 72h barely moves the mean.
+This eliminates Alpine, Pyrenean, and sea-land gradients without per-zone tuning — a front passing through for ~12h out of 72h barely moves the mean. The per-channel design prevents T background from killing θe-detected maritime/warm fronts (the original single-channel approach had POD ~24%).
 
+- **`apply_anomaly_filter()`**: Per-channel anomaly filtering, used by `build_zone_timeseries()` and CLI commands (`score`, `validate`, `diagnose`)
 - **`build_zone_timeseries()`**: Full pipeline for one model → `{zone: [{hour, present, type, intensity, orientation}, ...]}`
 - **Clearance timing**: `find_frontal_clearance_time()` — earliest hour with 3+ consecutive clear hours
 - **Timing spread**: `compute_timing_spread()` — inter-model agreement if spread ≤6h
@@ -92,7 +94,7 @@ This eliminates Alpine, Pyrenean, and sea-land gradients without per-zone tuning
 
 2. **Cross-front wind for type classification** (not temperature advection) — more stable because it depends only on wind direction relative to the front, not on wind speed × gradient magnitude.
 
-3. **Two-pass anomaly filtering** (not per-zone thresholds) — elegantly handles persistent orographic gradients. A front is a transient spike above the time-mean background. No manual tuning per zone needed.
+3. **Per-channel anomaly filtering** — each detection channel (T850, θe) is filtered against its own time-mean background with scaled thresholds. Prevents the T850 background from killing θe-detected fronts (which are often maritime/warm fronts with weak T gradient but strong moisture signal). θe thresholds default to 2× T thresholds.
 
 4. **Zone-scale aggregation** (not grid-point detection) — intentionally coarse. The system says "cold front over northern France" not "front at 48.5°N, 3.0°E". Coverage + absolute point thresholds prevent spurious tiny detections.
 
@@ -115,6 +117,10 @@ python -m weatherbrief.frontal.cli score --case data/calibration/2026-04-16_12Z
 
 # 4-column visual comparison (MF chart, expected, ECMWF, GFS)
 python -m weatherbrief.frontal.cli validate --expected data/calibration/.../expected.yaml
+
+# Deep diagnostic: replay pipeline for one zone/hour, print every intermediate value
+python -m weatherbrief.frontal.cli diagnose --case data/calibration/2026-04-16_12Z \
+  --model ecmwf --hour 0 --zone uk_south -v --plot
 ```
 
 ## Calibration
