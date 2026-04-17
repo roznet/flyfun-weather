@@ -143,6 +143,7 @@ def build_zone_timeseries(
     anomaly_threshold: float = _ANOMALY_THRESHOLD,
     absolute_floor: float = _ABSOLUTE_FLOOR,
     max_persistence: int = _MAX_PERSISTENCE,
+    tfp_dilation: int = 2,
 ) -> dict[str, list[dict]]:
     """Build per-zone, per-hour timeseries of frontal presence for one model.
 
@@ -195,6 +196,7 @@ def build_zone_timeseries(
             terrain_mask=terrain_mask,
             t_gradient_threshold=t_gradient_threshold,
             te_gradient_threshold=te_gradient_threshold,
+            tfp_dilation=tfp_dilation,
         )
 
         filtered_mask = apply_anomaly_filter(

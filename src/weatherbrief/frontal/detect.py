@@ -1,16 +1,54 @@
 """Frontal zone detection and front type classification.
 
-Gradient-magnitude thresholding on 850hPa T and θe fields for zone-scale
-frontal presence detection. Front classification via temperature advection.
-TFP computed for CLI plotting only — not used in detection pipeline.
+Gradient-magnitude thresholding on 850hPa T and θe fields with TFP
+(thermal front parameter) proximity filtering for zone-scale frontal
+presence detection. Front classification via cross-front wind.
+
+The TFP filter (Hewson 1998) requires frontal points to be near a
+gradient peak (TFP zero-crossing), not just in a region of high
+gradient. This distinguishes real fronts (sharp gradient line) from
+orographic/moisture boundaries (broad uniform gradient).
 """
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import binary_dilation, gaussian_filter
 
 from weatherbrief.frontal.grid import fill_terrain
+
+
+def _tfp_proximity_mask(tfp: np.ndarray, dilation: int = 2) -> np.ndarray:
+    """Mask of cells near TFP zero-crossings (gradient peaks).
+
+    A TFP zero-crossing marks the warm edge of a gradient maximum —
+    the front line in Hewson's framework. Points near a zero-crossing
+    are near a real front; points far from any zero-crossing are in a
+    broad gradient field (orographic, sea-land) with no sharp peak.
+
+    Requires ≥0.25° grid resolution for TFP second derivatives to be
+    meaningful. At 0.5°, TFP noise causes zero-crossings everywhere.
+
+    Parameters
+    ----------
+    tfp : 2D TFP field.
+    dilation : how many grid cells to expand around zero-crossings.
+        At 0.25° resolution, each cell is ~28km. dilation=3 covers
+        ~84km radius, appropriate for zone-scale front width at 850hPa.
+    """
+    tfp_sign = np.sign(tfp)
+    zero_crossing = np.zeros_like(tfp, dtype=bool)
+
+    # Check 4 neighbors for sign change
+    for axis, direction in [(0, 1), (0, -1), (1, 1), (1, -1)]:
+        shifted = np.roll(tfp_sign, direction, axis=axis)
+        zero_crossing |= (tfp_sign * shifted) < 0
+
+    if dilation > 0:
+        structure = np.ones((2 * dilation + 1, 2 * dilation + 1))
+        return binary_dilation(zero_crossing, structure=structure)
+
+    return zero_crossing
 
 
 def compute_frontal_zones(
@@ -20,24 +58,20 @@ def compute_frontal_zones(
     smooth_sigma: float = 0.5,
     gradient_threshold: float = 2.0,
     terrain_mask: np.ndarray | None = None,
+    tfp_dilation: int = -1,
 ) -> dict:
     """Detect frontal zones from a 2D scalar field (T850 or θe).
 
     Parameters
     ----------
     field : 2D array (lat × lon), NaN-free (resolved by prepare_field).
-        For T850: Celsius (gradient units K/100km = °C/100km).
-        For θe: Kelvin (same gradient units).
     lat, lon : 1D coordinate arrays (degrees).
-    smooth_sigma : Gaussian smoothing in grid points. 0.5 at 0.5° resolution
-        removes single-cell noise without blurring narrow fronts.
+    smooth_sigma : Gaussian smoothing in grid points.
     gradient_threshold : K per 100km — frontal zone threshold.
-        The plan's initial 0.8 is too low — background T850 gradients across
-        Europe are typically ~1 K/100km in spring (median ~0.83). At 0.8,
-        over 50% of the domain exceeds threshold. 2.0 captures ~8-10% of
-        the domain, which matches real frontal coverage.
-    terrain_mask : boolean (True=valid). Terrain cells should be filled
-        before calling this function; the mask is applied to results only.
+    terrain_mask : boolean (True=valid).
+    tfp_dilation : grid cells to expand around TFP zero-crossings.
+        Points must be within this distance of a gradient peak to count
+        as frontal. Set to -1 to disable TFP filtering (gradient-only).
 
     Returns
     -------
@@ -68,19 +102,37 @@ def compute_frontal_zones(
     grad_mag = np.sqrt(dT_dx**2 + dT_dy**2)
     grad_mag_100km = grad_mag * 100.0
 
-    # Frontal zone mask — exclude terrain from results
+    # Frontal zone mask — gradient threshold + terrain exclusion
     frontal_mask = grad_mag_100km > gradient_threshold
     if terrain_mask is not None:
         frontal_mask = frontal_mask & terrain_mask
 
-    # TFP: -∇|∇T| · (∇T / |∇T|) — for CLI plotting only
-    grad_norm = np.where(grad_mag > 1e-10, grad_mag, 1e-10)
-    unit_grad_x = dT_dx / grad_norm
-    unit_grad_y = dT_dy / grad_norm
+    # TFP: -∇|∇T| · (∇T / |∇T|) — Hewson 1998
+    # Zero-crossings locate gradient peaks (front lines).
+    # Use a more heavily smoothed field for TFP to suppress noise in
+    # the second derivatives. The detection gradient (above) uses light
+    # smoothing for sensitivity; the TFP needs clean second derivatives
+    # for selectivity.
+    tfp_sigma = max(smooth_sigma, 2.0)
+    T_tfp = gaussian_filter(field_input, sigma=tfp_sigma)
+    dT_tfp_dy = np.gradient(T_tfp, dlat_spacing, axis=0)
+    dT_tfp_dx = np.gradient(T_tfp, axis=1) / dlon_spacing_per_row[:, np.newaxis]
+    grad_mag_tfp = np.sqrt(dT_tfp_dx**2 + dT_tfp_dy**2)
 
-    d_gradmag_dy = np.gradient(grad_mag, dlat_spacing, axis=0)
-    d_gradmag_dx = np.gradient(grad_mag, axis=1) / dlon_spacing_per_row[:, np.newaxis]
+    grad_norm = np.where(grad_mag_tfp > 1e-10, grad_mag_tfp, 1e-10)
+    unit_grad_x = dT_tfp_dx / grad_norm
+    unit_grad_y = dT_tfp_dy / grad_norm
+
+    d_gradmag_dy = np.gradient(grad_mag_tfp, dlat_spacing, axis=0)
+    d_gradmag_dx = np.gradient(grad_mag_tfp, axis=1) / dlon_spacing_per_row[:, np.newaxis]
     tfp = -(d_gradmag_dx * unit_grad_x + d_gradmag_dy * unit_grad_y)
+
+    # TFP proximity filter: require points to be near a gradient peak
+    # (TFP zero-crossing), not just in a broad high-gradient region.
+    # This filters orographic and sea-land contrast gradients that have
+    # high magnitude but no sharp peak.
+    if tfp_dilation >= 0:
+        frontal_mask = frontal_mask & _tfp_proximity_mask(tfp, tfp_dilation)
 
     # Front orientation: gradient direction + 90° gives front line bearing
     grad_direction = np.degrees(np.arctan2(dT_dx, dT_dy))
