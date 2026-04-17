@@ -528,8 +528,6 @@ def _cmd_score(args: argparse.Namespace) -> None:
     with open(expected_path) as f:
         expected_cases = yaml.safe_load(f)
 
-    from weatherbrief.frontal.tracking import _compute_mean_gradient
-
     lat, lon = build_grid_coords()
     terrain_mask = build_terrain_mask(lat, lon)
 
@@ -550,14 +548,21 @@ def _cmd_score(args: argparse.Namespace) -> None:
             if fields is not None:
                 all_fields[h] = fields
 
-        # Compute mean gradients for per-channel anomaly filtering
-        hours_range = range(min(n_hours, 97))
-        mean_t_gradient = _compute_mean_gradient(
-            all_fields, lat, lon, hours_range, terrain_mask, field_name="T850",
+        # Build full timeseries (includes anomaly filtering + persistence filter)
+        zone_ts = build_zone_timeseries(
+            all_fields, lat, lon,
+            hours=range(min(n_hours, 97)),
+            terrain_mask=terrain_mask,
+            t_gradient_threshold=args.threshold,
+            te_gradient_threshold=args.te_threshold,
+            anomaly_threshold=args.anomaly,
+            absolute_floor=args.floor,
         )
-        mean_te_gradient = _compute_mean_gradient(
-            all_fields, lat, lon, hours_range, terrain_mask, field_name="theta_e",
-        )
+
+        # Index timeseries by hour for quick lookup
+        ts_by_hour: dict[str, dict[int, dict]] = {}
+        for zone_name, entries in zone_ts.items():
+            ts_by_hour[zone_name] = {e["hour"]: e for e in entries}
 
         print(f"\n{'='*72}")
         print(f"  {model_key.upper()} — threshold={args.threshold} θe={args.te_threshold} "
@@ -579,19 +584,23 @@ def _cmd_score(args: argparse.Namespace) -> None:
             if hour_offset < 0:
                 continue  # before model init, skip
 
-            fields = all_fields.get(hour_offset)
-            if fields is None:
+            if hour_offset not in all_fields:
                 print(f"\n  {time_str} (T+{hour_offset}h): no data")
                 continue
 
-            _, _, regions, _ = _detect_one_hour(
-                fields, lat, lon, terrain_mask,
-                mean_t_gradient, mean_te_gradient,
-                t_gradient_threshold=args.threshold,
-                te_gradient_threshold=args.te_threshold,
-                anomaly_threshold=args.anomaly,
-                absolute_floor=args.floor,
-            )
+            # Build regions dict from timeseries at this hour
+            regions = {}
+            for zone_name in ZONES:
+                entry = ts_by_hour.get(zone_name, {}).get(hour_offset)
+                if entry and entry["present"]:
+                    regions[zone_name] = {
+                        "present": True,
+                        "type": entry.get("type"),
+                        "intensity": entry.get("intensity"),
+                        "orientation": entry.get("orientation"),
+                    }
+                else:
+                    regions[zone_name] = {"present": False}
 
             scores = _score_one_time(expected_zones, regions)
 

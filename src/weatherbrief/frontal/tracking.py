@@ -125,6 +125,13 @@ def apply_anomaly_filter(
     return zones_result["frontal_mask"] & anomaly_mask
 
 
+# Persistence filter: maximum consecutive hours a zone can be flagged
+# before detections are suppressed. Real fronts pass through a zone in
+# ~6-12h. Persistent detections are typically orographic (Alps, Pyrenees)
+# or sea-land contrast artifacts.
+_MAX_PERSISTENCE = 72
+
+
 def build_zone_timeseries(
     model_forecasts: dict[int, dict],
     lat: np.ndarray,
@@ -135,6 +142,7 @@ def build_zone_timeseries(
     te_gradient_threshold: float = 4.0,
     anomaly_threshold: float = _ANOMALY_THRESHOLD,
     absolute_floor: float = _ABSOLUTE_FLOOR,
+    max_persistence: int = _MAX_PERSISTENCE,
 ) -> dict[str, list[dict]]:
     """Build per-zone, per-hour timeseries of frontal presence for one model.
 
@@ -221,6 +229,40 @@ def build_zone_timeseries(
                     "orientation": result.get("orientation"),
                 }
             )
+
+    return timeseries
+
+
+def _apply_persistence_filter(
+    timeseries: dict[str, list[dict]],
+    max_persistence: int = _MAX_PERSISTENCE,
+) -> dict[str, list[dict]]:
+    """Suppress zones flagged for too many consecutive hours.
+
+    Scans each zone's timeseries for runs of consecutive "present=True"
+    entries. If a run exceeds max_persistence hours, all entries in that
+    run are set to present=False.
+    """
+    for zone_name, entries in timeseries.items():
+        # Find runs of consecutive "present" hours
+        run_start = None
+        for i, entry in enumerate(entries):
+            if entry["present"]:
+                if run_start is None:
+                    run_start = i
+            else:
+                if run_start is not None:
+                    run_len = i - run_start
+                    if run_len > max_persistence:
+                        for j in range(run_start, i):
+                            entries[j]["present"] = False
+                    run_start = None
+        # Handle run that extends to the end
+        if run_start is not None:
+            run_len = len(entries) - run_start
+            if run_len > max_persistence:
+                for j in range(run_start, len(entries)):
+                    entries[j]["present"] = False
 
     return timeseries
 
