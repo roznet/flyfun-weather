@@ -1,0 +1,102 @@
+# Expected frontal zones from Meteo-France carte des fronts
+# Charts: 16/04 18Z through 19/04 00Z
+# ECMWF init: 16/04 18Z (hour_offsets relative to this)
+# GFS/ICON init: 17/04 00Z (6h later — score with --models ecmwf only)
+#
+# Key pattern: cold front trailing from depression W of Scotland,
+# sweeping E through Ireland → UK → Channel → N France over 48h.
+# Warm front from Atlantic depression visible in N Atlantic from 18/04,
+# approaching UK from W by 19/04.
+#
+# Types: cold, warm, occluded, stationary
+
+- time: "16/04 18Z"
+  hour_offset: 0
+  notes: >
+    Depression D ~57N 12W in N Atlantic. Warm front extending E from D
+    toward N Scotland/Norway. Cold front from D trailing S/SW through
+    Atlantic (~55N 12W to ~45N 15W). Occluded front over E Europe.
+    Ridge "R" over Bay of Biscay. Anticyclone "A" central Atlantic.
+  zones:
+    atlantic_north: cold      # cold front trailing S from depression
+    atlantic_south: cold      # cold front extending into mid-Atlantic
+
+- time: "17/04 00Z"
+  hour_offset: 6
+  notes: >
+    Depression D deepened ~57N 10W. Cold front from D now clearly
+    trailing S through Ireland (~53N 7W) into Bay of Biscay (~48N 8W).
+    Warm front from D extending E toward Scotland. Ridge "R" over France.
+  zones:
+    atlantic_north: cold      # cold front W of Ireland
+    uk_north_ireland: cold    # cold front through Ireland
+    bay_of_biscay: cold       # cold front tail reaching Biscay
+    atlantic_south: cold      # cold front in mid-Atlantic
+
+- time: "17/04 06Z"
+  hour_offset: 12
+  notes: >
+    Depression D deeper ~58N 8W. Cold front from D trailing S through
+    Ireland and approaching S UK. Occluded front wrapping around D.
+    New cold front approaching from far W Atlantic. Separate depression
+    in S Atlantic (~35N 25W).
+  zones:
+    atlantic_north: cold      # cold front W of Ireland
+    uk_north_ireland: cold    # cold front through Ireland
+    uk_south: cold            # cold front approaching S UK from W
+    bay_of_biscay: cold       # cold front tail
+    atlantic_south: cold      # cold front in S Atlantic
+
+- time: "17/04 12Z"
+  hour_offset: 18
+  notes: >
+    Depression D ~58N 5W over N Scotland. Cold front from D trailing S
+    through UK — front has moved E compared to 06Z, now through central
+    UK reaching Channel approaches. Ridge "R" still over France blocking
+    further advance. Cold front fragments in far Atlantic.
+  zones:
+    atlantic_north: cold      # front activity W of Scotland
+    uk_north_ireland: cold    # cold front through N UK/Ireland
+    uk_south: cold            # cold front reaching S UK/Channel
+    bay_of_biscay: cold       # cold front tail
+
+- time: "18/04 00Z"
+  hour_offset: 30
+  notes: >
+    Depression D moved to ~60N 0E (N Sea). Cold front from D trailing S
+    through E UK into Channel and North Sea. Front has clearly swept
+    through UK from W to E. Bay of Biscay still has cold front tail.
+    New Atlantic depression system developing W. Occluded front over
+    Scandinavia.
+  zones:
+    uk_north_ireland: cold    # cold front through N UK
+    uk_south: cold            # cold front through Channel
+    benelux_north_sea: cold   # cold front entering N Sea/Benelux
+    bay_of_biscay: cold       # cold front tail
+
+- time: "18/04 12Z"
+  hour_offset: 42
+  notes: >
+    Two depressions in W Atlantic (~55N 20W and ~50N 10W). Major cold
+    front from Iceland/N Atlantic depression extending SE from ~55N 25W
+    to ~45N 15W. Warm front from depression extending NE toward UK
+    (visible near ~52-55N 10-15W). Ridge/anticyclone over UK/France.
+    Cold front has passed through UK — now mostly clear over UK.
+  zones:
+    atlantic_north: cold      # major cold front from Iceland low
+    atlantic_south: cold      # cold front extending S in mid-Atlantic
+
+- time: "19/04 00Z"
+  hour_offset: 54
+  notes: >
+    Major cold front from Iceland depression extended further SE across
+    Atlantic. Warm front from depression clearly visible extending E
+    toward UK (~55N 10W to ~55N 0W) — entering uk_north_ireland as warm
+    front. Cold front from Scandinavian depression trailing S through
+    N Germany/Baltic. Depression near Iberia. High pressure "A" over UK.
+  zones:
+    atlantic_north: cold      # major cold front from Iceland
+    atlantic_south: cold      # cold front extending S in Atlantic
+    uk_north_ireland: warm    # warm front from Atlantic approaching UK
+    n_germany_baltic: cold    # cold front from Scandinavian system
+    benelux_north_sea: cold   # cold front fragments from N Europe
