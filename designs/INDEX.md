@@ -87,6 +87,11 @@ Dual-track METAR/TAF verification: flight-based collection (10-min poll during a
 Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `run_monthly_rollup`, `rebuild_all`, `is_stale`, `VerificationDigestData`, `VerificationObservation`
 → Full doc: metar-taf-accuracy.md
 
+### frontal-detection
+Zone-scale frontal presence detection from 850hPa gridded fields. Two-pass anomaly filtering, dual T850+θe gradient thresholding, 18 European zones, cross-front wind classification, clearance timing. CLI-only (not yet in pipeline).
+Key exports: `compute_frontal_zones_dual`, `classify_front_type`, `build_zone_timeseries`, `find_fronts_in_regions`, `find_frontal_clearance_time`, `compute_timing_spread`
+→ Full doc: frontal-detection.md
+
 ### rzskewt
 Swift package for Skew-T log-P diagrams. Extracted to own repo: `github.com/roznet/rztskew`. Full atmospheric thermodynamics, Canvas rendering, 47 unit tests. Design docs live in that repo's `designs/` directory.
 Key exports: `SkewTView`, `SkewTRenderer`, `SoundingProfile`, `Thermodynamics`
