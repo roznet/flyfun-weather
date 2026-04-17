@@ -433,6 +433,10 @@ def _cmd_analyze(args: argparse.Namespace) -> None:
 
     _print_analyze_table(result, models)
 
+    # Download latest DWD reference charts alongside analysis
+    print()
+    _cmd_charts(argparse.Namespace(chart=None, output_dir=None))
+
     if args.plot:
         plot_model = args.model or _DEFAULT_MODELS[0]
         plot_hour = args.hour if args.hour is not None else 0
@@ -1346,6 +1350,84 @@ def _plot_diagnose(
     print(f"\nPlot saved to {out}")
 
 
+_DWD_CHART_BASE = "https://www.dwd.de/DWD/wetter/wv_spez/hobbymet/wetterkarten"
+_DWD_CHARTS = {
+    "analysis": "bwk_bodendruck_na_ana.png",
+    "icon_036": "ico_tkboden_na_036.png",
+    "icon_048": "ico_tkboden_na_048.png",
+    "icon_060": "ico_tkboden_na_060.png",
+    "icon_084": "ico_tkboden_na_084.png",
+    "icon_108": "ico_tkboden_na_108.png",
+}
+_DWD_CHART_DIR = Path("data/dwd_charts")
+
+
+def _download_dwd_chart(name: str, filename: str, output_dir: Path) -> Path | None:
+    """Download a DWD chart with If-Modified-Since caching.
+
+    Returns the path to the (possibly cached) file, or None on failure.
+    """
+    import email.utils
+    import time
+
+    import httpx
+
+    url = f"{_DWD_CHART_BASE}/{filename}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check for existing cached file and its timestamp
+    cached = output_dir / filename
+    headers = {}
+    if cached.exists():
+        mtime = cached.stat().st_mtime
+        headers["If-Modified-Since"] = email.utils.formatdate(
+            mtime, usegmt=True,
+        )
+
+    try:
+        resp = httpx.get(url, headers=headers, timeout=30, follow_redirects=True)
+        if resp.status_code == 304:
+            lm = time.strftime(
+                "%Y-%m-%d %H:%MZ", time.gmtime(cached.stat().st_mtime),
+            )
+            print(f"  {name:<12} unchanged (cached {lm})")
+            return cached
+
+        resp.raise_for_status()
+        cached.write_bytes(resp.content)
+
+        # Set file mtime from Last-Modified header
+        last_mod = resp.headers.get("Last-Modified")
+        if last_mod:
+            import os
+            ts = email.utils.parsedate_to_datetime(last_mod).timestamp()
+            os.utime(cached, (ts, ts))
+            lm = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(ts))
+            print(f"  {name:<12} downloaded ({lm}, {len(resp.content)//1024}KB)")
+        else:
+            print(f"  {name:<12} downloaded ({len(resp.content)//1024}KB)")
+
+        return cached
+
+    except httpx.HTTPError as e:
+        print(f"  {name:<12} FAILED: {e}", file=sys.stderr)
+        return None
+
+
+def _cmd_charts(args: argparse.Namespace) -> None:
+    """Download DWD weather charts (analysis + ICON forecasts)."""
+    output_dir = Path(args.output_dir) if args.output_dir else _DWD_CHART_DIR
+
+    if args.chart:
+        charts = {args.chart: _DWD_CHARTS[args.chart]}
+    else:
+        charts = _DWD_CHARTS
+
+    print(f"Downloading DWD charts to {output_dir}/")
+    for name, filename in charts.items():
+        _download_dwd_chart(name, filename, output_dir)
+
+
 def _cmd_clear_cache(args: argparse.Namespace) -> None:
     cache_dir = Path(args.cache_dir) if args.cache_dir else cache._DEFAULT_CACHE_DIR
     count = cache.clear_cache(cache_dir)
@@ -1501,6 +1583,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show top gradient points with coordinates",
     )
 
+    # charts
+    p_charts = sub.add_parser(
+        "charts", help="Download DWD weather charts (analysis + ICON forecasts)",
+    )
+    p_charts.add_argument(
+        "--chart", choices=list(_DWD_CHARTS.keys()),
+        help="Download a specific chart (default: all)",
+    )
+    p_charts.add_argument(
+        "--output-dir", help=f"Output directory (default: {_DWD_CHART_DIR})",
+    )
+
     # clear-cache
     p_clear = sub.add_parser("clear-cache", help="Delete cached grid data")
     p_clear.add_argument("--cache-dir")
@@ -1528,6 +1622,7 @@ def main() -> None:
         "score": _cmd_score,
         "validate": _cmd_validate,
         "diagnose": _cmd_diagnose,
+        "charts": _cmd_charts,
         "clear-cache": _cmd_clear_cache,
     }
     commands[args.command](args)
