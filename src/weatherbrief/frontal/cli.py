@@ -478,7 +478,7 @@ def _cmd_score(args: argparse.Namespace) -> None:
         expected_cases = yaml.safe_load(f)
 
     from weatherbrief.frontal.detect import compute_frontal_zones_dual, classify_front_type
-    from weatherbrief.frontal.tracking import _compute_mean_gradient, _ANOMALY_THRESHOLD, _ABSOLUTE_FLOOR
+    from weatherbrief.frontal.tracking import _compute_mean_gradient, apply_anomaly_filter
 
     lat, lon = build_grid_coords()
     terrain_mask = build_terrain_mask(lat, lon)
@@ -507,9 +507,13 @@ def _cmd_score(args: argparse.Namespace) -> None:
             if fields is not None:
                 all_fields[h] = fields
 
-        # Compute mean gradient for anomaly filtering
-        mean_gradient = _compute_mean_gradient(
-            all_fields, lat, lon, range(min(n_hours, 97)), terrain_mask,
+        # Compute mean gradients for per-channel anomaly filtering
+        hours_range = range(min(n_hours, 97))
+        mean_t_gradient = _compute_mean_gradient(
+            all_fields, lat, lon, hours_range, terrain_mask, field_name="T850",
+        )
+        mean_te_gradient = _compute_mean_gradient(
+            all_fields, lat, lon, hours_range, terrain_mask, field_name="theta_e",
         )
 
         print(f"\n{'='*72}")
@@ -544,12 +548,10 @@ def _cmd_score(args: argparse.Namespace) -> None:
                 t_gradient_threshold=args.threshold,
                 te_gradient_threshold=args.te_threshold,
             )
-            anomaly = zones_result["gradient"] - mean_gradient
-            anomaly_mask = (
-                (anomaly > anomaly_threshold)
-                & (zones_result["gradient"] > absolute_floor)
+            filtered_mask = apply_anomaly_filter(
+                zones_result, mean_t_gradient, mean_te_gradient,
+                anomaly_threshold, absolute_floor,
             )
-            filtered_mask = zones_result["frontal_mask"] & anomaly_mask
 
             ft = classify_front_type(
                 zones_result["dT_dx"], zones_result["dT_dy"],
@@ -776,9 +778,8 @@ def _cmd_validate(args: argparse.Namespace) -> None:
         return
 
     from weatherbrief.frontal.tracking import (
-        _ANOMALY_THRESHOLD,
-        _ABSOLUTE_FLOOR,
         _compute_mean_gradient,
+        apply_anomaly_filter,
     )
     from weatherbrief.frontal.detect import compute_frontal_zones_dual, classify_front_type
     from weatherbrief.frontal.zones import find_fronts_in_regions
@@ -813,13 +814,18 @@ def _cmd_validate(args: argparse.Namespace) -> None:
     lon = result["lon"]
     terrain_mask = result["terrain_mask"]
 
-    # Compute mean gradient per model
-    model_mean_gradients = {}
+    # Compute mean gradients per model (both T and θe for per-channel anomaly)
+    model_mean_t_gradients = {}
+    model_mean_te_gradients = {}
     for model_key in models_to_run:
-        model_mean_gradients[model_key] = _compute_mean_gradient(
+        hours_range = range(len(result["timestamps"].get(model_key, [])))
+        model_mean_t_gradients[model_key] = _compute_mean_gradient(
             result["model_fields"][model_key], lat, lon,
-            range(len(result["timestamps"].get(model_key, []))),
-            terrain_mask,
+            hours_range, terrain_mask, field_name="T850",
+        )
+        model_mean_te_gradients[model_key] = _compute_mean_gradient(
+            result["model_fields"][model_key], lat, lon,
+            hours_range, terrain_mask, field_name="theta_e",
         )
 
     # Map chart times to hour offsets
@@ -888,13 +894,11 @@ def _cmd_validate(args: argparse.Namespace) -> None:
                 fields["T850"], fields["theta_e"], lat, lon,
                 terrain_mask=terrain_mask,
             )
-            mean_grad = model_mean_gradients[model_key]
-            anomaly = zones_result["gradient"] - mean_grad
-            anomaly_mask = (
-                (anomaly > _ANOMALY_THRESHOLD)
-                & (zones_result["gradient"] > _ABSOLUTE_FLOOR)
+            filtered_mask = apply_anomaly_filter(
+                zones_result,
+                model_mean_t_gradients[model_key],
+                model_mean_te_gradients[model_key],
             )
-            filtered_mask = zones_result["frontal_mask"] & anomaly_mask
 
             ft = classify_front_type(
                 zones_result["dT_dx"], zones_result["dT_dy"],
@@ -951,6 +955,395 @@ def _cmd_validate(args: argparse.Namespace) -> None:
 
     fig.savefig(args.output, dpi=140, bbox_inches="tight")
     print(f"Saved to {args.output}")
+
+
+def _cmd_diagnose(args: argparse.Namespace) -> None:
+    """Deep diagnostic of detection pipeline for a specific zone/hour/model."""
+    import json
+
+    from weatherbrief.frontal.detect import (
+        classify_front_type,
+        compute_frontal_zones,
+        compute_frontal_zones_dual,
+    )
+    from weatherbrief.frontal.tracking import _compute_mean_gradient
+    from weatherbrief.frontal.zones import (
+        _MIN_FRONTAL_FRACTION,
+        _MIN_FRONTAL_POINTS,
+        find_fronts_in_regions,
+    )
+
+    case_dir = Path(args.case)
+    model_key = args.model
+    hour = args.hour
+    zone_name = args.zone
+
+    if zone_name not in ZONES:
+        print(f"Unknown zone '{zone_name}'. Available:", file=sys.stderr)
+        for z in sorted(ZONES):
+            print(f"  {z:<28} {ZONES[z]['display']}", file=sys.stderr)
+        sys.exit(1)
+
+    zone_bounds = ZONES[zone_name]
+    print(f"\n{'='*72}")
+    print(f"  DIAGNOSE: {model_key.upper()} T+{hour}h — {zone_bounds['display']}")
+    print(f"  Zone bounds: lat {zone_bounds['lat']}, lon {zone_bounds['lon']}")
+    print(f"  Thresholds: T={args.threshold} θe={args.te_threshold} "
+          f"anomaly={args.anomaly} floor={args.floor}")
+    print(f"{'='*72}")
+
+    # Load raw data
+    raw_path = case_dir / "raw" / f"{model_key}.json"
+    if not raw_path.exists():
+        print(f"Error: {raw_path} not found", file=sys.stderr)
+        sys.exit(1)
+
+    raw = json.loads(raw_path.read_text())
+    lat, lon = build_grid_coords()
+    terrain_mask = build_terrain_mask(lat, lon)
+
+    # Reshape all hours for mean gradient
+    n_hours = len(list(raw.values())[0][0])
+    all_fields: dict[int, dict] = {}
+    for h in range(min(n_hours, 97)):
+        fields = reshape_to_fields(raw, lat, lon, h, terrain_mask)
+        if fields is not None:
+            all_fields[h] = fields
+
+    if hour not in all_fields:
+        print(f"Error: no data at hour {hour} (available: {sorted(all_fields.keys())[:10]}...)")
+        sys.exit(1)
+
+    fields = all_fields[hour]
+
+    # Zone mask
+    lat_grid, lon_grid = np.meshgrid(lat, lon, indexing="ij")
+    zone_mask = (
+        (lat_grid >= zone_bounds["lat"][0])
+        & (lat_grid <= zone_bounds["lat"][1])
+        & (lon_grid >= zone_bounds["lon"][0])
+        & (lon_grid <= zone_bounds["lon"][1])
+    )
+    valid_zone = zone_mask & terrain_mask if terrain_mask is not None else zone_mask
+    n_zone = int(zone_mask.sum())
+    n_valid = int(valid_zone.sum())
+
+    # ── Step 1: Raw fields ──
+    print(f"\n── Raw fields in zone ({n_valid} valid / {n_zone} total points) ──")
+    for name in ("T850", "Td850", "theta_e", "u850", "v850"):
+        vals = fields[name][valid_zone]
+        print(f"  {name:<10} min={vals.min():7.1f}  mean={vals.mean():7.1f}  "
+              f"max={vals.max():7.1f}  std={vals.std():5.1f}")
+
+    # ── Step 2: T850 gradient ──
+    t_result = compute_frontal_zones(
+        fields["T850"], lat, lon,
+        terrain_mask=terrain_mask,
+        gradient_threshold=args.threshold,
+    )
+    t_grad_zone = t_result["gradient"][valid_zone]
+    t_mask_zone = t_result["frontal_mask"][valid_zone]
+    n_t_frontal = int(t_mask_zone.sum())
+
+    print(f"\n── T850 gradient (threshold={args.threshold} K/100km) ──")
+    print(f"  Gradient    min={t_grad_zone.min():5.2f}  mean={t_grad_zone.mean():5.2f}  "
+          f"max={t_grad_zone.max():5.2f}  std={t_grad_zone.std():5.2f}")
+    print(f"  Points > threshold: {n_t_frontal} / {n_valid} "
+          f"({n_t_frontal/n_valid:.1%})")
+
+    # ── Step 3: θe gradient ──
+    te_result = compute_frontal_zones(
+        fields["theta_e"], lat, lon,
+        terrain_mask=terrain_mask,
+        gradient_threshold=args.te_threshold,
+    )
+    te_grad_zone = te_result["gradient"][valid_zone]
+    te_mask_zone = te_result["frontal_mask"][valid_zone]
+    n_te_frontal = int(te_mask_zone.sum())
+
+    print(f"\n── θe gradient (threshold={args.te_threshold} K/100km) ──")
+    print(f"  Gradient    min={te_grad_zone.min():5.2f}  mean={te_grad_zone.mean():5.2f}  "
+          f"max={te_grad_zone.max():5.2f}  std={te_grad_zone.std():5.2f}")
+    print(f"  Points > threshold: {n_te_frontal} / {n_valid} "
+          f"({n_te_frontal/n_valid:.1%})")
+
+    # ── Step 4: Dual detection (union) ──
+    dual_result = compute_frontal_zones_dual(
+        fields["T850"], fields["theta_e"], lat, lon,
+        terrain_mask=terrain_mask,
+        t_gradient_threshold=args.threshold,
+        te_gradient_threshold=args.te_threshold,
+    )
+    combined_zone = dual_result["frontal_mask"][valid_zone]
+    detected_by_zone = dual_result["detected_by"][valid_zone]
+    n_combined = int(combined_zone.sum())
+    n_t_only = int(((detected_by_zone == 1) & combined_zone).sum())
+    n_te_only = int(((detected_by_zone == 2) & combined_zone).sum())
+    n_both = int(((detected_by_zone == 3) & combined_zone).sum())
+
+    print(f"\n── Dual detection (union) ──")
+    print(f"  Combined:   {n_combined} / {n_valid} ({n_combined/n_valid:.1%})")
+    print(f"  T only:     {n_t_only}   θe only: {n_te_only}   Both: {n_both}")
+
+    # ── Step 5: Background mean gradients (per-channel) ──
+    hours_range = range(min(n_hours, 97))
+    mean_t_gradient = _compute_mean_gradient(
+        all_fields, lat, lon, hours_range, terrain_mask, field_name="T850",
+    )
+    mean_te_gradient = _compute_mean_gradient(
+        all_fields, lat, lon, hours_range, terrain_mask, field_name="theta_e",
+    )
+    mean_t_zone = mean_t_gradient[valid_zone]
+    mean_te_zone = mean_te_gradient[valid_zone]
+
+    print(f"\n── Background mean gradient (72h) ──")
+    print(f"  T850        min={mean_t_zone.min():5.2f}  mean={mean_t_zone.mean():5.2f}  "
+          f"max={mean_t_zone.max():5.2f}")
+    print(f"  θe          min={mean_te_zone.min():5.2f}  mean={mean_te_zone.mean():5.2f}  "
+          f"max={mean_te_zone.max():5.2f}")
+
+    # ── Step 6: Per-channel anomaly filtering ──
+    t_anomaly = dual_result["gradient"] - mean_t_gradient
+    te_anomaly = dual_result["te_gradient"] - mean_te_gradient
+    t_anomaly_zone = t_anomaly[valid_zone]
+    te_anomaly_zone = te_anomaly[valid_zone]
+    raw_t_grad_zone = dual_result["gradient"][valid_zone]
+    raw_te_grad_zone = dual_result["te_gradient"][valid_zone]
+
+    te_anom_thresh = args.anomaly * 2.0
+    te_floor_val = args.floor * 2.0
+    t_anom_pass = t_anomaly_zone > args.anomaly
+    t_floor_pass = raw_t_grad_zone > args.floor
+    te_anom_pass = te_anomaly_zone > te_anom_thresh
+    te_floor_pass = raw_te_grad_zone > te_floor_val
+
+    print(f"\n── Per-channel anomaly ──")
+    print(f"  T850  (anomaly>{args.anomaly}, floor>{args.floor})")
+    print(f"        anomaly min={t_anomaly_zone.min():+5.2f}  "
+          f"mean={t_anomaly_zone.mean():+5.2f}  max={t_anomaly_zone.max():+5.2f}")
+    print(f"        pass anomaly: {int(t_anom_pass.sum()):3d}  "
+          f"pass floor: {int(t_floor_pass.sum()):3d}  "
+          f"pass both: {int((t_anom_pass & t_floor_pass).sum()):3d}")
+    print(f"  θe    (anomaly>{te_anom_thresh}, floor>{te_floor_val})")
+    print(f"        anomaly min={te_anomaly_zone.min():+5.2f}  "
+          f"mean={te_anomaly_zone.mean():+5.2f}  max={te_anomaly_zone.max():+5.2f}")
+    print(f"        pass anomaly: {int(te_anom_pass.sum()):3d}  "
+          f"pass floor: {int(te_floor_pass.sum()):3d}  "
+          f"pass both: {int((te_anom_pass & te_floor_pass).sum()):3d}")
+
+    # ── Step 7: Filtered mask (dual ∩ per-channel anomaly) ──
+    from weatherbrief.frontal.tracking import apply_anomaly_filter
+    filtered_mask = apply_anomaly_filter(
+        dual_result, mean_t_gradient, mean_te_gradient,
+        args.anomaly, args.floor,
+    )
+    filtered_zone = filtered_mask[valid_zone]
+    n_filtered = int(filtered_zone.sum())
+
+    print(f"\n── Filtered mask (dual ∩ anomaly) ──")
+    print(f"  Frontal points surviving: {n_filtered} / {n_valid} "
+          f"({n_filtered/n_valid:.1%})")
+    print(f"  Lost to anomaly filter: {n_combined - n_filtered} "
+          f"(had {n_combined} from dual)")
+
+    # ── Step 8: Zone fraction check ──
+    frac = n_filtered / n_valid if n_valid > 0 else 0
+    passes_fraction = frac >= _MIN_FRONTAL_FRACTION
+    passes_points = n_filtered >= _MIN_FRONTAL_POINTS
+    detected = passes_fraction and passes_points
+
+    print(f"\n── Zone threshold check ──")
+    print(f"  Fraction:   {frac:.3f} (need ≥ {_MIN_FRONTAL_FRACTION})  "
+          f"{'PASS' if passes_fraction else 'FAIL'}")
+    print(f"  Points:     {n_filtered} (need ≥ {_MIN_FRONTAL_POINTS})     "
+          f"{'PASS' if passes_points else 'FAIL'}")
+    print(f"  ⇒ DETECTED: {'YES' if detected else 'NO'}")
+
+    # ── Step 9: Classification (if detected) ──
+    if detected:
+        front_type_grid = classify_front_type(
+            dual_result["dT_dx"], dual_result["dT_dy"],
+            fields["u850"], fields["v850"],
+            filtered_mask, detected_by=dual_result.get("detected_by"),
+        )
+        types_in_zone = front_type_grid[filtered_mask & zone_mask]
+        n_cold = int((types_in_zone == 1).sum())
+        n_warm = int((types_in_zone == 2).sum())
+        n_indet = int((types_in_zone == 3).sum())
+        dominant = "cold" if n_cold >= n_warm and n_cold >= n_indet else (
+            "warm" if n_warm >= n_indet else "indeterminate"
+        )
+
+        # Cross-front wind detail
+        grad_mag = np.sqrt(dual_result["dT_dx"]**2 + dual_result["dT_dy"]**2)
+        grad_norm = np.where(grad_mag > 1e-10, grad_mag, 1e-10)
+        cross_front = (fields["u850"] * dual_result["dT_dx"]
+                       + fields["v850"] * dual_result["dT_dy"]) / grad_norm
+        cf_zone = cross_front[filtered_mask & zone_mask]
+
+        print(f"\n── Front classification ──")
+        print(f"  Cold: {n_cold}  Warm: {n_warm}  Indeterminate: {n_indet}")
+        print(f"  ⇒ Dominant type: {dominant}")
+        print(f"  Cross-front wind  min={cf_zone.min():5.1f}  mean={cf_zone.mean():5.1f}  "
+              f"max={cf_zone.max():5.1f} km/h")
+    else:
+        print(f"\n── Front classification ──")
+        print(f"  (skipped — not detected)")
+
+    # ── Step 10: What killed detection? (if not detected) ──
+    if not detected and n_combined > 0:
+        print(f"\n── Diagnosis: why not detected? ──")
+        if n_combined > 0 and n_filtered == 0:
+            print(f"  Dual detection found {n_combined} points, but ALL were removed")
+            print(f"  by per-channel anomaly filtering.")
+            print(f"  T850: bg={mean_t_zone.mean():.2f}  current={raw_t_grad_zone.mean():.2f}  "
+                  f"max_anomaly={t_anomaly_zone.max():+.2f} (need >{args.anomaly})")
+            print(f"  θe:   bg={mean_te_zone.mean():.2f}  current={raw_te_grad_zone.mean():.2f}  "
+                  f"max_anomaly={te_anomaly_zone.max():+.2f} (need >{args.anomaly})")
+        elif n_filtered > 0 and not passes_fraction:
+            print(f"  {n_filtered} points survived all filters, but fraction "
+                  f"{frac:.3f} < {_MIN_FRONTAL_FRACTION}")
+            print(f"  The front is too narrow or at the zone boundary.")
+        elif n_filtered > 0 and not passes_points:
+            print(f"  {n_filtered} points survived, but fewer than {_MIN_FRONTAL_POINTS}")
+    elif not detected and n_combined == 0:
+        print(f"\n── Diagnosis: why not detected? ──")
+        print(f"  No points exceeded EITHER gradient threshold.")
+        print(f"  Max T850 gradient in zone:  {t_grad_zone.max():.2f} K/100km "
+              f"(need > {args.threshold})")
+        print(f"  Max θe gradient in zone:    {te_grad_zone.max():.2f} K/100km "
+              f"(need > {args.te_threshold})")
+
+    # ── Optional: point-level detail for top gradient locations ──
+    if args.verbose:
+        print(f"\n── Top 10 gradient points in zone (sorted by max channel gradient) ──")
+        # Sort by max of T and θe gradient within zone
+        max_grad = np.maximum(dual_result["gradient"], dual_result["te_gradient"])
+        max_grad[~valid_zone] = 0
+        flat_idx = np.argsort(max_grad.ravel())[::-1]
+        printed = 0
+        for idx in flat_idx:
+            if printed >= 10:
+                break
+            i, j = np.unravel_index(idx, max_grad.shape)
+            if not valid_zone[i, j]:
+                continue
+            g = dual_result["gradient"][i, j]
+            te_g = dual_result["te_gradient"][i, j]
+            t_bg = mean_t_gradient[i, j]
+            te_bg = mean_te_gradient[i, j]
+            t_a = t_anomaly[i, j]
+            te_a = te_anomaly[i, j]
+            fm = "F" if filtered_mask[i, j] else "."
+            db = dual_result["detected_by"][i, j]
+            src = {0: "none", 1: "T", 2: "θe", 3: "T+θe"}.get(db, "?")
+            print(f"  [{fm}] ({lat[i]:5.1f}°N, {lon[j]:6.1f}°E)  "
+                  f"T={g:5.2f}(bg{t_bg:4.2f} a{t_a:+5.2f})  "
+                  f"θe={te_g:5.2f}(bg{te_bg:4.2f} a{te_a:+5.2f})  "
+                  f"src={src}")
+            printed += 1
+
+    # ── Optional plot ──
+    if args.plot:
+        _plot_diagnose(
+            dual_result, mean_t_gradient, mean_te_gradient,
+            t_anomaly, te_anomaly, filtered_mask,
+            lat, lon, terrain_mask, zone_bounds, zone_name,
+            model_key, hour, args.output,
+        )
+
+
+def _plot_diagnose(
+    dual_result: dict,
+    mean_t_gradient: np.ndarray,
+    mean_te_gradient: np.ndarray,
+    t_anomaly: np.ndarray,
+    te_anomaly: np.ndarray,
+    filtered_mask: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    terrain_mask: np.ndarray | None,
+    zone_bounds: dict,
+    zone_name: str,
+    model_key: str,
+    hour: int,
+    output: str | None,
+) -> None:
+    """Generate 4-panel diagnostic plot: T/θe gradients + anomalies."""
+    try:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        import matplotlib.patches as mpatches
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print(
+            "Error: cartopy required. Install: pip install -e '.[frontal-dev]'",
+            file=sys.stderr,
+        )
+        return
+
+    lon_grid, lat_grid = np.meshgrid(lon, lat)
+    z_lat = zone_bounds["lat"]
+    z_lon = zone_bounds["lon"]
+    extent = [z_lon[0] - 5, z_lon[1] + 5, z_lat[0] - 3, z_lat[1] + 3]
+
+    panels = [
+        (dual_result["gradient"], "T850 gradient (K/100km)", "YlOrRd", 0, 5.0),
+        (t_anomaly, "T850 anomaly", "RdBu_r", -3.0, 3.0),
+        (dual_result["te_gradient"], "θe gradient (K/100km)", "YlOrRd", 0, 10.0),
+        (te_anomaly, "θe anomaly", "RdBu_r", -5.0, 5.0),
+    ]
+
+    fig, axes = plt.subplots(
+        2, 2, figsize=(18, 14),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+    )
+
+    for ax, (field, title, cmap, vmin, vmax) in zip(axes.flat, panels):
+        im = ax.pcolormesh(
+            lon_grid, lat_grid, field,
+            cmap=cmap, vmin=vmin, vmax=vmax,
+            transform=ccrs.PlateCarree(), alpha=0.8,
+        )
+        plt.colorbar(im, ax=ax, shrink=0.7)
+
+        # Dual mask (before anomaly)
+        ax.contour(
+            lon_grid, lat_grid,
+            dual_result["frontal_mask"].astype(float),
+            levels=[0.5], colors="blue", linewidths=1.0, linestyles="--",
+            transform=ccrs.PlateCarree(),
+        )
+        # Filtered mask (after per-channel anomaly)
+        ax.contour(
+            lon_grid, lat_grid,
+            filtered_mask.astype(float),
+            levels=[0.5], colors="red", linewidths=1.5,
+            transform=ccrs.PlateCarree(),
+        )
+
+        rect = mpatches.Rectangle(
+            (z_lon[0], z_lat[0]), z_lon[1] - z_lon[0], z_lat[1] - z_lat[0],
+            facecolor="none", edgecolor="black", linewidth=2,
+            transform=ccrs.PlateCarree(),
+        )
+        ax.add_patch(rect)
+
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5, linestyle=":")
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+        ax.set_title(title, fontsize=11, fontweight="bold")
+
+    fig.suptitle(
+        f"Diagnose: {model_key.upper()} T+{hour}h — {ZONES[zone_name]['display']}\n"
+        f"Blue dashed = dual mask, Red solid = filtered (post per-channel anomaly)",
+        fontsize=13, fontweight="bold",
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    out = output or f"data/diagnose_{model_key}_{zone_name}_T{hour}.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"\nPlot saved to {out}")
 
 
 def _cmd_clear_cache(args: argparse.Namespace) -> None:
@@ -1055,6 +1448,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.add_argument("--no-cache", action="store_true")
     p_validate.add_argument("--cache-dir")
 
+    # diagnose
+    p_diag = sub.add_parser(
+        "diagnose",
+        help="Deep diagnostic of detection pipeline for a specific zone/hour",
+    )
+    p_diag.add_argument(
+        "--case", required=True,
+        help="Calibration case dir (e.g. data/calibration/2026-04-16_12Z)",
+    )
+    p_diag.add_argument("--model", default="ecmwf", choices=["ecmwf", "gfs", "icon"])
+    p_diag.add_argument("--hour", type=int, required=True, help="Forecast hour offset")
+    p_diag.add_argument("--zone", required=True, help="Zone name (e.g. uk_south)")
+    p_diag.add_argument(
+        "--threshold", type=float, default=2.0,
+        help="T850 gradient threshold (K/100km)",
+    )
+    p_diag.add_argument(
+        "--te-threshold", type=float, default=4.0,
+        help="θe gradient threshold (K/100km)",
+    )
+    p_diag.add_argument("--anomaly", type=float, default=1.0)
+    p_diag.add_argument("--floor", type=float, default=2.0)
+    p_diag.add_argument("--plot", action="store_true", help="Generate diagnostic plot")
+    p_diag.add_argument("--output", help="Plot output path")
+    p_diag.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Show top gradient points with coordinates",
+    )
+
     # clear-cache
     p_clear = sub.add_parser("clear-cache", help="Delete cached grid data")
     p_clear.add_argument("--cache-dir")
@@ -1081,6 +1503,7 @@ def main() -> None:
         "route": _cmd_route,
         "score": _cmd_score,
         "validate": _cmd_validate,
+        "diagnose": _cmd_diagnose,
         "clear-cache": _cmd_clear_cache,
     }
     commands[args.command](args)

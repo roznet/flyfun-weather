@@ -42,11 +42,14 @@ def _compute_mean_gradient(
     lon: np.ndarray,
     hours: range | list[int],
     terrain_mask: np.ndarray | None = None,
+    field_name: str = "T850",
 ) -> np.ndarray:
-    """Compute time-mean T850 gradient field across all forecast hours.
+    """Compute time-mean gradient field for a given variable across all hours.
 
     This is the "background" gradient — persistent features like orographic
     gradients and sea-land contrasts. Used as a baseline for anomaly detection.
+
+    field_name : key in the fields dict ("T850" or "theta_e").
     """
     gradient_sum = np.zeros((len(lat), len(lon)))
     count = 0
@@ -56,7 +59,7 @@ def _compute_mean_gradient(
             continue
         fields = model_forecasts[h]
         result = compute_frontal_zones(
-            fields["T850"], lat, lon, terrain_mask=terrain_mask,
+            fields[field_name], lat, lon, terrain_mask=terrain_mask,
         )
         gradient_sum += result["gradient"]
         count += 1
@@ -66,10 +69,60 @@ def _compute_mean_gradient(
 
     mean_gradient = gradient_sum / count
     logger.info(
-        "Background gradient: mean=%.2f, max=%.2f K/100km (%d hours)",
-        mean_gradient.mean(), mean_gradient.max(), count,
+        "Background %s gradient: mean=%.2f, max=%.2f K/100km (%d hours)",
+        field_name, mean_gradient.mean(), mean_gradient.max(), count,
     )
     return mean_gradient
+
+
+def apply_anomaly_filter(
+    zones_result: dict,
+    mean_t_gradient: np.ndarray,
+    mean_te_gradient: np.ndarray,
+    anomaly_threshold: float = _ANOMALY_THRESHOLD,
+    absolute_floor: float = _ABSOLUTE_FLOOR,
+    te_anomaly_threshold: float | None = None,
+    te_absolute_floor: float | None = None,
+) -> np.ndarray:
+    """Per-channel anomaly filtering for dual-detected frontal points.
+
+    Each point is checked against the background of the channel that detected
+    it: T-detected points against the T background, θe-detected points against
+    the θe background. Points detected by both channels pass if either
+    channel's anomaly check passes.
+
+    θe gradients are naturally ~2× larger than T850 gradients (moisture
+    amplifies thermal contrasts). The θe thresholds default to 2× the T
+    thresholds to maintain equivalent filtering stringency.
+
+    Returns a boolean mask of points that survive filtering.
+    """
+    if te_anomaly_threshold is None:
+        te_anomaly_threshold = anomaly_threshold * 2.0
+    if te_absolute_floor is None:
+        te_absolute_floor = absolute_floor * 2.0
+
+    detected_by = zones_result["detected_by"]
+
+    t_anomaly = zones_result["gradient"] - mean_t_gradient
+    t_anomaly_ok = (
+        (t_anomaly > anomaly_threshold)
+        & (zones_result["gradient"] > absolute_floor)
+    )
+
+    te_anomaly = zones_result["te_gradient"] - mean_te_gradient
+    te_anomaly_ok = (
+        (te_anomaly > te_anomaly_threshold)
+        & (zones_result["te_gradient"] > te_absolute_floor)
+    )
+
+    anomaly_mask = np.zeros_like(zones_result["frontal_mask"])
+    has_t = (detected_by & 1) > 0
+    has_te = (detected_by & 2) > 0
+    anomaly_mask[has_t] |= t_anomaly_ok[has_t]
+    anomaly_mask[has_te] |= te_anomaly_ok[has_te]
+
+    return zones_result["frontal_mask"] & anomaly_mask
 
 
 def build_zone_timeseries(
@@ -86,12 +139,15 @@ def build_zone_timeseries(
     """Build per-zone, per-hour timeseries of frontal presence for one model.
 
     Two-pass approach:
-    1. Compute mean T850 gradient across all hours (background).
-    2. For each hour, detect fronts where gradient exceeds BOTH
-       the absolute floor AND the background + anomaly threshold.
+    1. Compute mean gradient for both T850 and θe across all hours (background).
+    2. For each hour, detect fronts where the gradient exceeds BOTH
+       the absolute floor AND the background + anomaly threshold,
+       checked per-channel (T points against T background, θe against θe).
 
-    This automatically filters persistent orographic/thermal gradients
-    without per-zone thresholds.
+    Per-channel anomaly filtering ensures θe-detected points (warm/moisture
+    fronts) are compared against the θe background — not penalised by the
+    T850 background which may be low for the same region. This follows the
+    Hewson (1998) approach where θw/θe is the primary detection field.
 
     Parameters
     ----------
@@ -107,12 +163,15 @@ def build_zone_timeseries(
     -------
     {zone_name: [{hour, present, type, intensity, orientation}, ...]}
     """
-    # Pass 1: compute background gradient field
-    mean_gradient = _compute_mean_gradient(
-        model_forecasts, lat, lon, hours, terrain_mask,
+    # Pass 1: compute background gradient fields for both channels
+    mean_t_gradient = _compute_mean_gradient(
+        model_forecasts, lat, lon, hours, terrain_mask, field_name="T850",
+    )
+    mean_te_gradient = _compute_mean_gradient(
+        model_forecasts, lat, lon, hours, terrain_mask, field_name="theta_e",
     )
 
-    # Pass 2: detect fronts with anomaly filtering
+    # Pass 2: detect fronts with per-channel anomaly filtering
     timeseries: dict[str, list[dict]] = {zone: [] for zone in ZONES}
 
     for h in hours:
@@ -130,15 +189,10 @@ def build_zone_timeseries(
             te_gradient_threshold=te_gradient_threshold,
         )
 
-        # Apply anomaly filter: require gradient to be a transient spike
-        # above the time-mean background, not just absolutely high.
-        anomaly = zones_result["gradient"] - mean_gradient
-        anomaly_mask = (
-            (anomaly > anomaly_threshold)
-            & (zones_result["gradient"] > absolute_floor)
+        filtered_mask = apply_anomaly_filter(
+            zones_result, mean_t_gradient, mean_te_gradient,
+            anomaly_threshold, absolute_floor,
         )
-        # Intersect with the dual detection mask (which already excludes terrain)
-        filtered_mask = zones_result["frontal_mask"] & anomaly_mask
 
         front_type_grid = classify_front_type(
             zones_result["dT_dx"],

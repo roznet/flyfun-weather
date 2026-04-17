@@ -202,8 +202,10 @@ python -m weatherbrief.frontal.cli score --case data/calibration/$CASE
 |-----------|---------|-------------|
 | `t_gradient_threshold` | 2.0 K/100km | T850 gradient must exceed this (absolute) |
 | `te_gradient_threshold` | 4.0 K/100km | θe gradient must exceed this (absolute) |
-| `anomaly_threshold` | 1.0 K/100km | Gradient must exceed the 72h time-mean by this much |
-| `absolute_floor` | 2.0 K/100km | Minimum raw gradient even after anomaly check |
+| `anomaly_threshold` | 1.0 K/100km | T850 gradient must exceed the 72h time-mean by this much |
+| `absolute_floor` | 2.0 K/100km | Minimum raw T850 gradient even after anomaly check |
+| `te_anomaly_threshold` | 2.0 K/100km | θe anomaly threshold (default: 2× T anomaly) |
+| `te_absolute_floor` | 4.0 K/100km | θe minimum floor (default: 2× T floor) |
 | `smooth_sigma` | 0.5 grid pts | Gaussian smoothing before gradient computation |
 | `cross_front_threshold` | 2.0 km/h | Minimum cross-front wind for cold/warm classification |
 | `_MIN_FRONTAL_FRACTION` | 0.08 (8%) | Minimum fraction of zone that must be frontal |
@@ -215,20 +217,25 @@ First calibration case: 2026-04-16 12Z (4 forecast times)
 
 | Model | POD | FAR | CSI | Type Acc |
 |-------|-----|-----|-----|----------|
-| ECMWF | 24% | 74% | 14% | 80% |
-| GFS | 33% | 73% | 18% | 86% |
+| ECMWF | 57% | 77% | 19% | 83% |
+| GFS | 62% | 76% | 21% | 69% |
+
+Previous scores (before per-channel anomaly fix): ECMWF POD=24%, GFS POD=33%.
 
 ### Key Issues Identified
 
-**Low POD — missing fronts**:
-- Atlantic/UK cold fronts not detected: T850 gradient is weak over ocean at 850hPa. These fronts are often more moisture-driven (θe) than temperature-driven. The θe channel should help but its threshold (4.0) may be too high for maritime fronts.
-- Fronts at zone boundaries: a front crossing the edge of a zone may not have enough coverage fraction to trigger detection.
+**POD improved significantly with per-channel anomaly filtering**: the original anomaly filter used only the T850 gradient for all points, which killed θe-detected maritime/warm fronts. The fix applies anomaly filtering per-channel (T points vs T background, θe points vs θe background), with θe thresholds scaled 2× to account for naturally higher θe gradients.
 
-**High FAR — false alarms**:
-- S France, Alps, N Iberia, Po Valley: orographic transient gradients survive anomaly filtering. These zones have high background variability that creates brief spikes above the time-mean.
-- N Iberia (Pyrenees): persistent problem zone — thermal contrast between Iberian plateau and Bay of Biscay creates genuine transient gradients that aren't fronts.
+**Remaining misses**:
+- Atlantic oceanic fronts: genuinely weak gradients at 850hPa over open ocean. T850 gradient max ~1.6 K/100km (below 2.0 threshold), θe gradient barely reaches 4.5. These fronts are more visible in surface analysis (isobars, wind shift) than at 850hPa.
+- uk_south at some timesteps: front is narrow and at zone boundary, fraction check fails even when a few points detect it.
 
-**Classification works when detection is correct**: 80-86% type accuracy shows the cross-front wind method is sound. The main classification gap is occluded fronts, which we can't distinguish from cold/warm at a single level.
+**High FAR — false alarms** (main remaining problem):
+- θe channel generates widespread transient anomalies in Mediterranean and continental zones. Even with 2× scaled thresholds, zones like Balearics, W Med, S France, N Iberia frequently trigger.
+- The persistence filter (proposed in calibration strategy) would help — orographic θe spikes that persist >36h should be suppressed.
+- S France, Alps, N Iberia, Po Valley: orographic transient gradients survive anomaly filtering.
+
+**Classification**: 83% type accuracy on ECMWF when detection is correct. Cross-front wind method is sound. GFS type accuracy lower (69%) — likely due to different wind field biases.
 
 ## Calibration Strategy
 
