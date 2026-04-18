@@ -381,7 +381,7 @@ All three visualizations synchronize through callbacks in `briefing-main.ts`:
 ### Store State
 
 `VizSettings` (persisted to localStorage) includes:
-- `layout`: `'cross-section' | 'map' | 'split'`
+- `layout`: `'cross-section' | 'compare' | 'split' | 'map'`
 - `mapColorMetric`: default `'icing-risk-at-level'`
 - `mapWidthMetric`: default `'cloud-cover-total'`
 - `mapAltitudeFt`: for level-dependent metrics (default = cruise altitude)
@@ -401,6 +401,36 @@ Single source of truth for all color/opacity functions used by cross-section ban
 - Map colors: `riskMapColor()`, `cloudCoverMapColor()`, `headwindMapColor()`, `capeMapColor()`, `freezingLevelMapColor()`, `ceilingMapColor()`, `temperatureMapColor()`, `crosswindMapColor()`, `agreementMapColor()`
 - Width: `linearWidth(value, max, minW, maxW)` — linear interpolation for segment width
 - Cloud opacity: modulated by coverage so SCT layers render lighter than OVC
+
+## Compare Mode
+
+Fourth layout mode (`'compare'`): renders a single layer across all models simultaneously, highlighting where models agree or disagree. Located in `web/ts/visualization/cross-section/compare-renderer.ts`.
+
+### Comparable Layers (`compare-layers.ts`)
+
+Two types of comparable layers:
+- **Band layers**: clouds (DD/NWP), icing (Ogimet-DD/NWP, SFIP), CAT, inversions, convective — use zone data from `compare-zone-access.ts`
+- **Line layers**: freezing level, −10°C, −20°C, LCL, LFC, EL — use `lineAccessor` to extract altitude values; rendered as min/max envelope + mean line
+
+### Band Rendering Modes (`CompareBandMode`)
+
+| Mode | Technique | Agreement signal |
+|------|-----------|-----------------|
+| **Overlay** | Each model's hatched layer drawn at `2.0/N` alpha on offscreen canvas, composited onto main | Overlapping areas compound darker naturally |
+| **Overlay Soft** | Each model's zones drawn as feathered gradient fills (`1.4/N` alpha, 15% edge feather) directly on canvas | Soft fills compound where models overlap — denser = more agreement; GRAMET-like aesthetic |
+| **Consensus** | Sweep-line merges zones across models into consensus intervals; fill alpha = `0.08 + 0.82 × ratio²` | Non-linear: single-model areas faint, full-agreement vivid |
+| **Consensus+Outlines** | Same as consensus, plus per-model zone boundary lines in distinct colors from `theme.compareModelColors` | Consensus fill + colored outlines show each model's exact boundaries |
+
+### Consensus Fill Alpha Curve
+
+`alpha = 0.08 + 0.82 × ratio²` where `ratio = agreeing_models / total_models`. With 3 models:
+- 1/3 agreement → alpha ≈ 0.17 (faint wash)
+- 2/3 agreement → alpha ≈ 0.44 (moderate)
+- 3/3 agreement → alpha ≈ 0.90 (vivid)
+
+### Layer Base Colors
+
+Consensus and overlay-soft modes use a single base RGB per layer from the theme. Both DD and NWP cloud layers use `theme.nwpClouds.brightRgb` for consistent appearance.
 
 ## Gotchas
 

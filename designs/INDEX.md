@@ -36,8 +36,8 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Three synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (9 scalar metrics incl. ceiling-DD/NWP), and Leaflet route map (17 metric-colored segment types with altitude slider and width variation). Switchable cross-section themes (standard, high-contrast) with cloud hatch patterns, theme preview, and theme-aware legends. Three layout modes, shared color scales, hover sync, compact/full layer mode, icing/cloud method groups.
-Key exports: `CrossSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
+Three synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (9 scalar metrics incl. ceiling-DD/NWP), and Leaflet route map (17 metric-colored segment types with altitude slider and width variation). Switchable cross-section themes (standard, high-contrast, gramet) with cloud hatch patterns, theme preview, and theme-aware legends. Four layout modes (cross-section, compare, split, map), shared color scales, hover sync, compact/full layer mode, icing/cloud method groups. Compare mode renders one layer across all models with four band modes (overlay, overlay-soft, consensus, consensus+outlines).
+Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
 
 ### route-graph
