@@ -78,7 +78,7 @@ Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `Cros
 → Full doc: companion-app.md
 
 ### forecast-page
-Pan-European weather overview map with per-airport forecast visualization (6 metrics, consensus modes) and model accuracy heatmaps, powered by standalone verification snapshots. Cache layer serves pre-computed JSON with staleness tracking; falls back to live queries.
+Pan-European weather overview map with per-airport forecast visualization (8 metrics incl. runway crosswind/headwind, consensus modes) and model accuracy heatmaps, powered by standalone verification snapshots. Cache layer serves pre-computed JSON with staleness tracking; falls back to live queries.
 Key exports: `get_forecast_map_data`, `get_verification_map_data`, `WeatherMap`, `fetchForecastMap`
 → Full doc: forecast-page.md
 

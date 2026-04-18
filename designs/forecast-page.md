@@ -37,7 +37,7 @@ Data source:
 
 ### Forecast Overview
 - ~830 airport markers on Leaflet map, color-coded by selectable metric
-- **Metrics**: Flight Category, Wind Speed, Ceiling, CAPE, Convective Risk, Cloud Cover
+- **Metrics**: Flight Category, Wind Speed, Crosswind, Headwind, Ceiling, CAPE, Convective Risk, Cloud Cover
 - **Controls**: Day (D-0 to D-3), hour (sample hours), model selector
 - **Model modes**: Worst consensus, Majority consensus, or individual model (GFS/ICON/ECMWF)
 - **Agreement indicator**: Border color shows model divergence (good/moderate/poor) in consensus modes
@@ -60,6 +60,7 @@ Server-side in `map_queries.py::_consensus()`:
 - **Majority mode**: Most common category; ties broken by worst severity
 - **Agreement scoring**: Uses `compare_models()` divergence on wind/ceiling/CAPE → good/moderate/poor
 - **Numeric consensus**: Wind direction uses circular mean; others use arithmetic mean
+- **Crosswind/headwind consensus**: Worst (max) value across models, matching the conservative approach of flight category consensus
 
 ## Cache Layer
 
@@ -77,7 +78,8 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 1. Find latest `model_init_time` per model that has data for the target forecast_hour
 2. Fetch all `AirportForecastSnapshotRow` for those (model, init_time, hour) combos
 3. Derive `flight_category` from ceiling + visibility via `classify_flight_category()`
-4. Group by airport → per-model data + computed consensus
+4. Enrich each snapshot with runway crosswind/headwind: load runway headings from airports DB, compute `compute_runway_winds()` per model, select best runway (min crosswind, max headwind), attach `crosswind_kt`, `headwind_kt`, `best_runway_id`, and gust equivalents
+5. Group by airport → per-model data + computed consensus
 
 ### Verification Map (`get_verification_map_data`)
 1. Filter `VerificationScoreRow` by source='standalone', days_out, time window, optional model
@@ -89,6 +91,8 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 |--------|-------|
 | Flight Category | VFR=green, MVFR=blue, IFR=red, LIFR=purple |
 | Wind Speed | Green (<10kt) → dark red (35+kt) |
+| Crosswind | Green (<5kt) → dark red (25+kt), best-runway selection |
+| Headwind | Green (<10kt) → dark red (30+kt), negative = tailwind, best-runway selection |
 | Ceiling | Green (>3000ft) → purple (<500ft) |
 | CAPE | Green (<100 J/kg) → dark red (2000+) |
 | Convective Risk | 5-level: none → extreme (green → dark red) |
@@ -100,7 +104,8 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 
 - **Hour availability**: Not all sample hours have data for all days — `fetchAvailableHours()` checks and disables unavailable hour buttons
 - **Consensus requires server round-trip**: Switching between worst/majority triggers API call (server computes consensus); switching to individual model is client-side only
-- **Per-model-only metrics**: `convective_risk` uses worst-across-models in consensus mode; `cloud_cover_pct` uses the average
+- **Per-model-only metrics**: `convective_risk` uses worst-across-models in consensus mode; `cloud_cover_pct` uses the average; `crosswind_kt`/`headwind_kt` use max (worst) across models
+- **Runway wind data**: Crosswind/headwind require runway headings from the airports database; airports without runway data show no crosswind/headwind values. Best runway is selected by minimizing crosswind then maximizing headwind
 - **Marker sizing**: Radius scales with zoom level (3-8px) for readability at all zoom levels
 - **All map endpoints require authentication**: Both forecast and verification data are available to any authenticated user
 
