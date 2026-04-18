@@ -1,0 +1,16 @@
+file,lon,lat,x,y,desc
+dwd_icon_gridded.png,-20,40,228,374,west of spain atlantic
+dwd_icon_gridded.png,0,40,412,440,around spain east coast
+dwd_icon_gridded.png,0,50,431,318,north of france around the channel coast
+dwd_icon_gridded.png,0,60,451,205,north east of scottland
+dwd_icon_gridded.png,20,40,606,440,greece north west
+dwd_icon_gridded.png,20,50,584,318,south of poland
+dwd_icon_gridded.png,20,60,564,205,east of sweden
+dwd_analysis_gridded_small.png,-20,40,625,1028,west of spain atlantic
+dwd_analysis_gridded_small.png,0,40,1128,1212,
+dwd_analysis_gridded_small.png,0,50,1188,879,
+dwd_analysis_gridded_small.png,0,60,1243,564,
+dwd_analysis_gridded_small.png,20,40,1664,1211,
+dwd_analysis_gridded_small.png,20,50,1603,877,
+dwd_analysis_gridded_small.png,20,60,1550,565,
+

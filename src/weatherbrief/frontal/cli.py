@@ -1423,32 +1423,41 @@ def _dwd_lonlat_to_pixel(
 ) -> tuple[int, int]:
     """Convert lon/lat to pixel coordinates on a DWD chart.
 
-    Uses a polar stereographic projection with a homography transform
-    calibrated from known coastline reference points.
+    Uses polar stereographic projections with homography transforms
+    calibrated from user-provided gridline intersection points.
 
     chart_type: "analysis" (4389×3114) or "icon" (800×653).
     """
     import pyproj
 
-    proj = pyproj.Proj(proj="stere", lat_0=90, lat_ts=90, lon_0=7)
+    # Each chart type has its own projection and homography, calibrated
+    # from 7 lat/lon gridline intersections identified by the user.
+    if chart_type == "icon":
+        # ICON forecast chart (800×653)
+        # Projection: stere lat_0=90 lat_ts=60 lon_0=5
+        # Max calibration error: 1.2px
+        proj = pyproj.Proj(proj="stere", lat_0=90, lat_ts=60, lon_0=5)
+        H = [
+            0.00010064544583772085, 8.021406574208543e-06, 505.2081110061641,
+            8.455010167934436e-06, -0.00010106842893807126, -114.44765418753545,
+            -3.747121446686481e-10, -3.0137722186545355e-10,
+        ]
+    else:
+        # Analysis chart (4389×3114)
+        # Projection: stere lat_0=90 lat_ts=90 lon_0=10
+        # Max calibration error: 3.0px
+        proj = pyproj.Proj(proj="stere", lat_0=90, lat_ts=90, lon_0=10)
+        H = [
+            0.0005145316041850823, 5.082539130306949e-06, 2793.4808547432303,
+            1.1777669359815649e-06, -0.0005125590704322343, -606.7192569143913,
+            8.930427981271965e-10, 1.7297125807436028e-09,
+        ]
 
-    # Homography params for the analysis chart (4389×3114)
-    # Calibrated from 6 coastline reference points
-    H = [
-        0.0007536365731518715, -4.794079919081806e-05, 2363.7573053790593,
-        9.791789023824895e-05, -0.0003644911892808183, -90.0169761652157,
-        1.1300877063483962e-07, 1.1602518965089984e-08,
-    ]
     a, b, c, d, e, f, g, h = H
-
     x, y = proj(lon, lat)
     denom = g * x + h * y + 1
     px = (a * x + b * y + c) / denom
     py = (d * x + e * y + f) / denom
-
-    if chart_type == "icon":
-        px *= 800 / 4389
-        py *= 653 / 3114
 
     return int(px), int(py)
 
