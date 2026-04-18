@@ -95,7 +95,7 @@ def compute_runway_winds(
             runway_id=rwy.id,
             heading_deg=rwy.heading_deg,
             crosswind_kt=round(abs(wc.crosswind_kt), 1),
-            headwind_kt=wc.headwind_kt,
+            headwind_kt=round(wc.headwind_kt, 1),
         ))
     return results
 
