@@ -1350,6 +1350,10 @@ def _plot_diagnose(
     print(f"\nPlot saved to {out}")
 
 
+# ---------------------------------------------------------------------------
+# DWD chart download and georeferencing
+# ---------------------------------------------------------------------------
+
 _DWD_CHART_BASE = "https://www.dwd.de/DWD/wetter/wv_spez/hobbymet/wetterkarten"
 _DWD_CHARTS = {
     "analysis": "bwk_bodendruck_na_ana.png",
@@ -1414,6 +1418,92 @@ def _download_dwd_chart(name: str, filename: str, output_dir: Path) -> Path | No
         return None
 
 
+def _dwd_lonlat_to_pixel(
+    lon: float, lat: float, chart_type: str = "analysis",
+) -> tuple[int, int]:
+    """Convert lon/lat to pixel coordinates on a DWD chart.
+
+    Uses a polar stereographic projection with a homography transform
+    calibrated from known coastline reference points.
+
+    chart_type: "analysis" (4389×3114) or "icon" (800×653).
+    """
+    import pyproj
+
+    proj = pyproj.Proj(proj="stere", lat_0=90, lat_ts=90, lon_0=7)
+
+    # Homography params for the analysis chart (4389×3114)
+    # Calibrated from 6 coastline reference points
+    H = [
+        0.0007536365731518715, -4.794079919081806e-05, 2363.7573053790593,
+        9.791789023824895e-05, -0.0003644911892808183, -90.0169761652157,
+        1.1300877063483962e-07, 1.1602518965089984e-08,
+    ]
+    a, b, c, d, e, f, g, h = H
+
+    x, y = proj(lon, lat)
+    denom = g * x + h * y + 1
+    px = (a * x + b * y + c) / denom
+    py = (d * x + e * y + f) / denom
+
+    if chart_type == "icon":
+        px *= 800 / 4389
+        py *= 653 / 3114
+
+    return int(px), int(py)
+
+
+def _draw_zones_on_dwd(
+    img_path: str | Path, output_path: str | Path,
+    chart_type: str = "analysis",
+) -> None:
+    """Draw zone boxes with labels on a DWD chart image."""
+    from PIL import Image, ImageDraw
+
+    img = Image.open(img_path)
+    draw = ImageDraw.Draw(img)
+    line_width = 4 if chart_type == "analysis" else 2
+
+    for zone_name, bounds in ZONES.items():
+        lat0, lat1 = bounds["lat"]
+        lon0, lon1 = bounds["lon"]
+
+        # Draw zone polygon (sample edges for curved projection)
+        points = []
+        n_edge = 10
+        for i in range(n_edge):
+            t = i / n_edge
+            points.append(_dwd_lonlat_to_pixel(
+                lon0 + t * (lon1 - lon0), lat0, chart_type,
+            ))
+        for i in range(n_edge):
+            t = i / n_edge
+            points.append(_dwd_lonlat_to_pixel(
+                lon1, lat0 + t * (lat1 - lat0), chart_type,
+            ))
+        for i in range(n_edge):
+            t = i / n_edge
+            points.append(_dwd_lonlat_to_pixel(
+                lon1 - t * (lon1 - lon0), lat1, chart_type,
+            ))
+        for i in range(n_edge):
+            t = i / n_edge
+            points.append(_dwd_lonlat_to_pixel(
+                lon0, lat1 - t * (lat1 - lat0), chart_type,
+            ))
+        points.append(points[0])
+
+        draw.line(points, fill="red", width=line_width)
+
+        # Label at center
+        cx, cy = _dwd_lonlat_to_pixel(
+            (lon0 + lon1) / 2, (lat0 + lat1) / 2, chart_type,
+        )
+        draw.text((cx - 40, cy - 6), bounds["display"][:20], fill="red")
+
+    img.save(output_path)
+
+
 def _cmd_charts(args: argparse.Namespace) -> None:
     """Download DWD weather charts (analysis + ICON forecasts)."""
     output_dir = Path(args.output_dir) if args.output_dir else _DWD_CHART_DIR
@@ -1426,6 +1516,14 @@ def _cmd_charts(args: argparse.Namespace) -> None:
     print(f"Downloading DWD charts to {output_dir}/")
     for name, filename in charts.items():
         _download_dwd_chart(name, filename, output_dir)
+
+    # Optionally overlay zones
+    if args.zones:
+        analysis_path = output_dir / _DWD_CHARTS["analysis"]
+        if analysis_path.exists():
+            out = output_dir / "analysis_with_zones.png"
+            _draw_zones_on_dwd(analysis_path, out, "analysis")
+            print(f"  Zone overlay → {out}")
 
 
 def _cmd_clear_cache(args: argparse.Namespace) -> None:
@@ -1593,6 +1691,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_charts.add_argument(
         "--output-dir", help=f"Output directory (default: {_DWD_CHART_DIR})",
+    )
+    p_charts.add_argument(
+        "--zones", action="store_true",
+        help="Overlay zone boxes on the analysis chart",
     )
 
     # clear-cache
