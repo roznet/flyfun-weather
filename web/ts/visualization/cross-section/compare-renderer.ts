@@ -112,6 +112,8 @@ export class CompareSectionRenderer {
       if (this.compareLayer.type === 'band') {
         if (this.bandMode === 'overlay') {
           this.renderBandLayerOverlay(ctx, transform, cssW, cssH, dpr);
+        } else if (this.bandMode === 'overlay-soft') {
+          this.renderOverlaySoft(ctx, transform);
         } else {
           this.renderConsensusBand(ctx, transform, this.bandMode === 'consensus-outline');
         }
@@ -190,6 +192,106 @@ export class CompareSectionRenderer {
       ctx.globalAlpha = alpha;
       ctx.drawImage(this.offscreenCanvas, 0, 0, cssW * dpr, cssH * dpr, 0, 0, cssW, cssH);
       ctx.restore();
+    }
+  }
+
+  /** Overlay Soft: each model's zones rendered as feathered gradient fills.
+   *  Where models overlap, the soft fills compound — denser = more agreement. */
+  private renderOverlaySoft(
+    ctx: CanvasRenderingContext2D,
+    transform: CoordTransform,
+  ): void {
+    if (!this.compareLayer) return;
+    const layerId = this.compareLayer.id;
+    const numModels = this.datasets.length;
+    if (numModels === 0) return;
+
+    const theme = getActiveTheme();
+    const baseRgb = this.getLayerBaseRgb(layerId, theme);
+    // Per-model alpha: enough to be visible solo, compounds on overlap
+    const modelAlpha = Math.min(0.7, Math.max(0.25, 1.4 / numModels));
+
+    const FEATHER_FRACTION = 0.15;
+
+    for (const dataset of this.datasets) {
+      const points = dataset.data.points;
+
+      for (let i = 0; i < points.length - 1; i++) {
+        const curr = points[i];
+        const next = points[i + 1];
+        const currZones = getZonesForLayer(layerId, curr);
+        const nextZones = getZonesForLayer(layerId, next);
+        const usedNext = new Set<number>();
+
+        const drawSoftZoneBand = (bandPoints: BandPointData[]) => {
+          // Find bounding Y for the gradient
+          let minY = Infinity, maxY = -Infinity;
+          for (const bp of bandPoints) {
+            if (bp.top == null || bp.base == null) continue;
+            const yTop = transform.altitudeToY(bp.top);
+            const yBase = transform.altitudeToY(bp.base);
+            minY = Math.min(minY, yTop, yBase);
+            maxY = Math.max(maxY, yTop, yBase);
+          }
+          const bandHeight = maxY - minY;
+          if (bandHeight <= 0) return;
+
+          const featherPx = Math.max(2, bandHeight * FEATHER_FRACTION);
+          const topStop = Math.min(featherPx / bandHeight, 0.3);
+          const botStop = Math.max(1.0 - featherPx / bandHeight, 0.7);
+
+          const color = `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, ${modelAlpha})`;
+          const transparent = `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, 0)`;
+
+          const grad = ctx.createLinearGradient(0, minY, 0, maxY);
+          grad.addColorStop(0, transparent);
+          grad.addColorStop(topStop, color);
+          grad.addColorStop(botStop, color);
+          grad.addColorStop(1, transparent);
+
+          drawSmoothBand(ctx, bandPoints, transform, grad as unknown as string);
+        };
+
+        // Match zones between adjacent points (same logic as zone-matching.ts)
+        for (const cz of currZones) {
+          let bestIdx = -1;
+          let bestOverlap = 0;
+          for (let j = 0; j < nextZones.length; j++) {
+            if (usedNext.has(j)) continue;
+            const overlap = Math.min(cz.topFt, nextZones[j].topFt) -
+                            Math.max(cz.baseFt, nextZones[j].baseFt);
+            if (overlap > bestOverlap) { bestOverlap = overlap; bestIdx = j; }
+          }
+
+          if (bestIdx >= 0) {
+            usedNext.add(bestIdx);
+            const nz = nextZones[bestIdx];
+            drawSoftZoneBand([
+              { distance: curr.distanceNm, base: cz.baseFt, top: cz.topFt },
+              { distance: next.distanceNm, base: nz.baseFt, top: nz.topFt },
+            ]);
+          } else {
+            const midDist = (curr.distanceNm + next.distanceNm) / 2;
+            const midAlt = (cz.baseFt + cz.topFt) / 2;
+            drawSoftZoneBand([
+              { distance: curr.distanceNm, base: cz.baseFt, top: cz.topFt },
+              { distance: midDist, base: midAlt, top: midAlt },
+            ]);
+          }
+        }
+
+        // Unmatched next zones
+        for (let j = 0; j < nextZones.length; j++) {
+          if (usedNext.has(j)) continue;
+          const nz = nextZones[j];
+          const midDist = (curr.distanceNm + next.distanceNm) / 2;
+          const midAlt = (nz.baseFt + nz.topFt) / 2;
+          drawSoftZoneBand([
+            { distance: midDist, base: midAlt, top: midAlt },
+            { distance: next.distanceNm, base: nz.baseFt, top: nz.topFt },
+          ]);
+        }
+      }
     }
   }
 

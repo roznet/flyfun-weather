@@ -406,6 +406,7 @@ export function renderCompareControls(
   html += '<select id="compare-band-mode-select" class="viz-model-select">';
   const bandModes: { value: CompareBandMode; label: string }[] = [
     { value: 'overlay', label: t('viz.bandMode.overlay') },
+    { value: 'overlay-soft', label: t('viz.bandMode.overlaySoft') },
     { value: 'consensus', label: t('viz.bandMode.consensus') },
     { value: 'consensus-outline', label: t('viz.bandMode.consensusOutline') },
   ];

@@ -212,6 +212,7 @@
   "viz.previewTheme": "Preview theme",
   "viz.bandMode": "Mode:",
   "viz.bandMode.overlay": "Overlay",
+  "viz.bandMode.overlaySoft": "Overlay Soft",
   "viz.bandMode.consensus": "Consensus",
   "viz.bandMode.consensusOutline": "Consensus+Outlines",
   "viz.routeGraph": "Route Graph",

@@ -3,7 +3,7 @@
 // --- Settings ---
 
 export type VizLayout = 'cross-section' | 'map' | 'split' | 'compare';
-export type CompareBandMode = 'overlay' | 'consensus' | 'consensus-outline';
+export type CompareBandMode = 'overlay' | 'overlay-soft' | 'consensus' | 'consensus-outline';
 
 export interface VizSettings {
   layout: VizLayout;
