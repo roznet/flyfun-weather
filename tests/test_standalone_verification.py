@@ -427,7 +427,10 @@ class TestScoreCycle:
 
 class TestPruneOldSnapshots:
 
-    def test_prunes_old(self, db_session):
+    @patch("weatherbrief.tasks.standalone_verification.datetime")
+    def test_prunes_old(self, mock_dt, db_session):
+        mock_dt.now.return_value = NOW
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         old_time = NOW - timedelta(days=15)
         _insert_snapshot(db_session, fetched_at=old_time, forecast_hour=old_time)
         _insert_snapshot(
@@ -442,7 +445,10 @@ class TestPruneOldSnapshots:
         assert len(remaining) == 1
         assert remaining[0].icao == "EDDF"
 
-    def test_nothing_to_prune(self, db_session):
+    @patch("weatherbrief.tasks.standalone_verification.datetime")
+    def test_nothing_to_prune(self, mock_dt, db_session):
+        mock_dt.now.return_value = NOW
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
         _insert_snapshot(db_session)
         assert _prune_old_snapshots(db_session) == 0
 

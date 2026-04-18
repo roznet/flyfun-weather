@@ -132,11 +132,12 @@ def _insert_verif_score(db_session, *, icao="LFPG", model="gfs",
 # ---------------------------------------------------------------------------
 
 
+@patch("weatherbrief.tasks.map_queries._get_runways", return_value={})
 class TestGetForecastMapData:
     """Tests for get_forecast_map_data()."""
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_returns_airports_with_forecasts(self, _mock_coords, db_session):
+    def test_returns_airports_with_forecasts(self, _mock_coords, _mock_rwy, db_session):
         from weatherbrief.tasks.map_queries import get_forecast_map_data
 
         # Insert snapshots for 2 airports, 2 models
@@ -161,7 +162,7 @@ class TestGetForecastMapData:
         assert apt["consensus"]["flight_category"] in ("VFR", "MVFR", "IFR", "LIFR")
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_empty_when_no_data(self, _mock_coords, db_session):
+    def test_empty_when_no_data(self, _mock_coords, _mock_rwy, db_session):
         from weatherbrief.tasks.map_queries import get_forecast_map_data
 
         result = get_forecast_map_data(db_session, NOW, "/fake/db")
@@ -169,7 +170,7 @@ class TestGetForecastMapData:
         assert result["model_init_times"] == {}
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_picks_latest_init_time(self, _mock_coords, db_session):
+    def test_picks_latest_init_time(self, _mock_coords, _mock_rwy, db_session):
         from weatherbrief.tasks.map_queries import get_forecast_map_data
 
         old_init = GFS_INIT - timedelta(hours=6)
@@ -187,7 +188,7 @@ class TestGetForecastMapData:
         assert apt["models"]["gfs"]["temperature_c"] == pytest.approx(15.0)
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_flight_category_derived(self, _mock_coords, db_session):
+    def test_flight_category_derived(self, _mock_coords, _mock_rwy, db_session):
         from weatherbrief.tasks.map_queries import get_forecast_map_data
 
         # Insert with low ceiling → should be IFR
@@ -200,7 +201,7 @@ class TestGetForecastMapData:
         assert apt["models"]["gfs"]["flight_category"] == "IFR"
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_consensus_agreement(self, _mock_coords, db_session):
+    def test_consensus_agreement(self, _mock_coords, _mock_rwy, db_session):
         from weatherbrief.tasks.map_queries import get_forecast_map_data
 
         # All models agree on VFR
@@ -217,7 +218,7 @@ class TestGetForecastMapData:
         assert apt["consensus"]["agreement"]["wind_speed_kt"] == "consistent"
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_consensus_disagreement(self, _mock_coords, db_session):
+    def test_consensus_disagreement(self, _mock_coords, _mock_rwy, db_session):
         from weatherbrief.tasks.map_queries import get_forecast_map_data
 
         # GFS says IFR, others say VFR — wind speed diverges too
@@ -242,7 +243,7 @@ class TestGetForecastMapData:
         assert apt["consensus"]["agreement"]["flight_category"] in ("mixed", "divergent")
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_skips_airports_without_coords(self, _mock_coords, db_session):
+    def test_skips_airports_without_coords(self, _mock_coords, _mock_rwy, db_session):
         from weatherbrief.tasks.map_queries import get_forecast_map_data
 
         # ZZZZ not in coords
@@ -500,11 +501,12 @@ def _make_client(app_db, tmp_path, monkeypatch, *, user_id=DEV_USER_ID):
     return TestClient(app, raise_server_exceptions=False)
 
 
+@patch("weatherbrief.tasks.map_queries._get_runways", return_value={})
 class TestForecastMapEndpoint:
     """Tests for GET /api/maps/forecast."""
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_returns_forecast_data(self, _mock_coords, app_db, tmp_path, monkeypatch):
+    def test_returns_forecast_data(self, _mock_coords, _mock_rwy, app_db, tmp_path, monkeypatch):
         client = _make_client(app_db, tmp_path, monkeypatch)
 
         # Seed snapshot at today's 12Z (endpoint uses current date)
@@ -522,7 +524,7 @@ class TestForecastMapEndpoint:
         assert data["airports"][0]["icao"] == "LFPG"
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_empty_for_future_hour(self, _mock_coords, app_db, tmp_path, monkeypatch):
+    def test_empty_for_future_hour(self, _mock_coords, _mock_rwy, app_db, tmp_path, monkeypatch):
         client = _make_client(app_db, tmp_path, monkeypatch)
 
         resp = client.get("/api/maps/forecast?day=3&hour=18")
@@ -530,7 +532,7 @@ class TestForecastMapEndpoint:
         assert resp.json()["airports"] == []
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_snaps_invalid_hour(self, _mock_coords, app_db, tmp_path, monkeypatch):
+    def test_snaps_invalid_hour(self, _mock_coords, _mock_rwy, app_db, tmp_path, monkeypatch):
         """Non-sample hour should snap to nearest sample hour."""
         client = _make_client(app_db, tmp_path, monkeypatch)
         resp = client.get("/api/maps/forecast?day=0&hour=10")
