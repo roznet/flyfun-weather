@@ -37,6 +37,24 @@ function windSpeedColor(kt: number): string {
   return '#991b1b';
 }
 
+function crosswindColor(kt: number): string {
+  if (kt < 5) return '#22c55e';
+  if (kt < 10) return '#84cc16';
+  if (kt < 15) return '#eab308';
+  if (kt < 20) return '#f97316';
+  if (kt < 25) return '#ef4444';
+  return '#991b1b';
+}
+
+function headwindColor(kt: number): string {
+  if (kt < 10) return '#22c55e';
+  if (kt < 15) return '#84cc16';
+  if (kt < 20) return '#eab308';
+  if (kt < 25) return '#f97316';
+  if (kt < 30) return '#ef4444';
+  return '#991b1b';
+}
+
 function ceilingColor(ft: number | null): string {
   if (ft === null) return '#888';
   if (ft < 500) return '#a855f7';  // LIFR
@@ -83,7 +101,7 @@ function maeColor(value: number, thresholdBad: number): string {
 
 // --- Forecast metric extraction ---
 
-export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'ceiling_ft' | 'cape_jkg' | 'convective_risk' | 'cloud_cover_pct' | 'visibility_m';
+export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'crosswind_kt' | 'headwind_kt' | 'ceiling_ft' | 'cape_jkg' | 'convective_risk' | 'cloud_cover_pct' | 'visibility_m';
 
 function isConsensusMode(model: string): boolean {
   return model === 'worst' || model === 'majority';
@@ -117,6 +135,11 @@ function computeConsensus(airport: ForecastAirport, mode: string): ConsensusFore
     const vals = models.map(m => m[field]).filter((v): v is number => v != null);
     if (vals.length) (result as any)[field] = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
   }
+  // Crosswind/headwind consensus: worst (max) across models
+  for (const field of ['crosswind_kt', 'headwind_kt'] as const) {
+    const vals = models.map(m => m[field]).filter((v): v is number => v != null);
+    if (vals.length) (result as any)[field] = Math.round(Math.max(...vals) * 10) / 10;
+  }
   // Wind direction: circular mean
   const dirs = models.map(m => m.wind_dir_deg).filter((v): v is number => v != null);
   if (dirs.length) {
@@ -145,6 +168,10 @@ function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, mode
       return CAT_COLORS[data.flight_category] || '#888';
     case 'wind_speed_kt':
       return windSpeedColor(data.wind_speed_kt ?? 0);
+    case 'crosswind_kt':
+      return data.crosswind_kt != null ? crosswindColor(data.crosswind_kt) : '#888';
+    case 'headwind_kt':
+      return data.headwind_kt != null ? headwindColor(data.headwind_kt) : '#888';
     case 'ceiling_ft':
       return ceilingColor(data.ceiling_ft ?? null);
     case 'cape_jkg':
@@ -202,10 +229,21 @@ function fmtWind(speed: number | null | undefined, dir: number | null | undefine
   return `${dirStr}${Math.round(speed)}${gustStr} kt`;
 }
 
+function fmtRunwayWind(value: number | null | undefined, gustValue: number | null | undefined, runwayId: string | null | undefined, label: string): string | null {
+  if (value == null) return null;
+  const gustStr = gustValue != null ? ` (G${Math.round(gustValue)})` : '';
+  const rwyStr = runwayId ? ` RWY ${runwayId}` : '';
+  return `${label}: ${Math.round(value)}${gustStr} kt${rwyStr}`;
+}
+
 function getMetricLine(data: { [key: string]: any }, metric: ForecastMetric): string | null {
   switch (metric) {
     case 'wind_speed_kt':
       return data.wind_speed_kt != null ? `Wind: ${fmtWind(data.wind_speed_kt, data.wind_dir_deg, data.wind_gust_kt)}` : null;
+    case 'crosswind_kt':
+      return fmtRunwayWind(data.crosswind_kt, data.gust_crosswind_kt, data.best_runway_id, 'Xwind');
+    case 'headwind_kt':
+      return fmtRunwayWind(data.headwind_kt, data.gust_headwind_kt, data.best_runway_id, 'Headwind');
     case 'ceiling_ft':
       return data.ceiling_ft != null ? `Ceiling: ${fmtCeiling(data.ceiling_ft)}` : null;
     case 'visibility_m':
@@ -226,6 +264,8 @@ function metricAgreementKey(metric: ForecastMetric): string {
   switch (metric) {
     case 'flight_category': return 'flight_category';
     case 'wind_speed_kt': return 'wind_speed_kt';
+    case 'crosswind_kt': return 'wind_speed_kt';  // closest proxy
+    case 'headwind_kt': return 'wind_speed_kt';   // closest proxy
     case 'ceiling_ft': return 'ceiling_ft';
     case 'cape_jkg': return 'cape_jkg';
     case 'convective_risk': return 'cape_jkg';  // closest proxy
@@ -245,6 +285,8 @@ function getModelMetricValue(d: ModelForecast, metric: ForecastMetric): string {
   switch (metric) {
     case 'flight_category': return d.flight_category;
     case 'wind_speed_kt': return d.wind_speed_kt != null ? fmtWind(d.wind_speed_kt, d.wind_dir_deg, d.wind_gust_kt) : '—';
+    case 'crosswind_kt': return fmtRunwayWind(d.crosswind_kt, d.gust_crosswind_kt, d.best_runway_id, 'Xwind') ?? '—';
+    case 'headwind_kt': return fmtRunwayWind(d.headwind_kt, d.gust_headwind_kt, d.best_runway_id, 'Hdwind') ?? '—';
     case 'ceiling_ft': return d.ceiling_ft != null ? fmtCeiling(d.ceiling_ft) : '—';
     case 'visibility_m': return d.visibility_m != null ? fmtVisibility(d.visibility_m) : '—';
     case 'cape_jkg': return d.cape_jkg != null ? `${Math.round(d.cape_jkg)} J/kg` : '—';
@@ -349,6 +391,28 @@ const FORECAST_LEGENDS: Record<ForecastMetric, { title: string; items: Array<{ c
       { color: '#f97316', label: '20-25' },
       { color: '#ef4444', label: '25-35' },
       { color: '#991b1b', label: '35+' },
+    ],
+  },
+  crosswind_kt: {
+    title: 'Best Rwy Crosswind (kt)',
+    items: [
+      { color: '#22c55e', label: '< 5' },
+      { color: '#84cc16', label: '5-10' },
+      { color: '#eab308', label: '10-15' },
+      { color: '#f97316', label: '15-20' },
+      { color: '#ef4444', label: '20-25' },
+      { color: '#991b1b', label: '25+' },
+    ],
+  },
+  headwind_kt: {
+    title: 'Best Rwy Headwind (kt)',
+    items: [
+      { color: '#22c55e', label: '< 10' },
+      { color: '#84cc16', label: '10-15' },
+      { color: '#eab308', label: '15-20' },
+      { color: '#f97316', label: '20-25' },
+      { color: '#ef4444', label: '25-30' },
+      { color: '#991b1b', label: '30+' },
     ],
   },
   ceiling_ft: {

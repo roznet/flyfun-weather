@@ -20,6 +20,11 @@ export interface ModelForecast {
   wind_speed_kt: number | null;
   wind_dir_deg: number | null;
   wind_gust_kt: number | null;
+  crosswind_kt: number | null;
+  headwind_kt: number | null;
+  best_runway_id: string | null;
+  gust_crosswind_kt: number | null;
+  gust_headwind_kt: number | null;
   cloud_cover_pct: number | null;
   cape_jkg: number | null;
   convective_risk: string;
@@ -32,6 +37,8 @@ export interface ConsensusForecast {
   agreement: Record<string, string>;
   wind_speed_kt?: number;
   wind_dir_deg?: number;
+  crosswind_kt?: number;
+  headwind_kt?: number;
   ceiling_ft?: number;
   cape_jkg?: number;
   visibility_m?: number;

@@ -15,17 +15,21 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from weatherbrief.analysis.airport_conditions import classify_flight_category
+from weatherbrief.analysis.airport_conditions import (
+    classify_flight_category,
+    compute_runway_winds,
+)
 from weatherbrief.analysis.comparison import (
     circular_spread,
     compare_models,
 )
+from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
-from weatherbrief.models.airport_conditions import FlightCategory
+from weatherbrief.models.airport_conditions import FlightCategory, RunwayEnd
 from weatherbrief.tasks.airport_watchlist import (
     WatchlistAirport,
     get_configs_dir,
@@ -44,6 +48,7 @@ _MODELS = ["gfs", "icon", "ecmwf"]
 # ---------------------------------------------------------------------------
 
 _coords_cache: dict[str, tuple[float, float]] | None = None
+_runway_cache: dict[str, list[RunwayEnd]] | None = None
 
 
 def _get_coords(airports_db_path: str) -> dict[str, tuple[float, float]]:
@@ -57,6 +62,17 @@ def _get_coords(airports_db_path: str) -> dict[str, tuple[float, float]]:
         airports = load_watchlist_with_coords(get_configs_dir(), airports_db_path)
         _coords_cache = {a.icao: (a.lat, a.lon) for a in airports}
     return _coords_cache
+
+
+def _get_runways(airports_db_path: str) -> dict[str, list[RunwayEnd]]:
+    """Return icao → runway ends mapping, cached in-process."""
+    global _runway_cache
+    if _runway_cache is None:
+        from weatherbrief.airports import get_runway_ends
+
+        coords = _get_coords(airports_db_path)
+        _runway_cache = get_runway_ends(list(coords.keys()), airports_db_path)
+    return _runway_cache
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +110,26 @@ def _snap_to_dict(snap: AirportForecastSnapshotRow) -> dict[str, Any]:
         "temperature_c": snap.temperature_2m_c,
         "flight_category": _flight_category(snap),
     }
+
+
+def _enrich_wind(d: dict, runway_ends: list[RunwayEnd]) -> None:
+    """Add crosswind/headwind for best runway to a snapshot dict."""
+    ws, wd = d.get("wind_speed_kt"), d.get("wind_dir_deg")
+    if not runway_ends or ws is None or wd is None:
+        return
+    all_rwy = compute_runway_winds(runway_ends, ws, wd)
+    if not all_rwy:
+        return
+    best = min(all_rwy, key=lambda r: (r.crosswind_kt, -r.headwind_kt))
+    d["crosswind_kt"] = best.crosswind_kt
+    d["headwind_kt"] = round(best.headwind_kt, 1)
+    d["best_runway_id"] = best.runway_id
+    # Gust components on the same best runway
+    gust = d.get("wind_gust_kt")
+    if gust is not None:
+        wc = compute_wind_components(gust, wd, best.heading_deg)
+        d["gust_crosswind_kt"] = round(abs(wc.crosswind_kt), 1)
+        d["gust_headwind_kt"] = round(wc.headwind_kt, 1)
 
 
 _AGREEMENT_LABELS = {"good": "consistent", "moderate": "mixed", "poor": "divergent"}
@@ -156,6 +192,14 @@ def _consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any
                 result[field] = round(mean, 1)
             else:
                 result[field] = round(sum(vals) / len(vals), 1)
+
+    # Crosswind/headwind consensus: worst (max) across models
+    for field in ("crosswind_kt", "headwind_kt"):
+        vals = [per_model[m].get(field) for m in models_with_data]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            result[field] = round(max(vals), 1)
+
     return result
 
 
@@ -209,6 +253,13 @@ def get_forecast_map_data(
         if snap.icao not in by_airport:
             by_airport[snap.icao] = {}
         by_airport[snap.icao][snap.model] = _snap_to_dict(snap)
+
+    # Enrich per-model data with runway crosswind/headwind
+    runways = _get_runways(airports_db_path)
+    for icao, models_data in by_airport.items():
+        rwy_ends = runways.get(icao, [])
+        for model_dict in models_data.values():
+            _enrich_wind(model_dict, rwy_ends)
 
     # Build response with coords and consensus
     airports = []
