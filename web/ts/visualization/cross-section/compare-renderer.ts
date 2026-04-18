@@ -165,12 +165,15 @@ export class CompareSectionRenderer {
     if (!crossSectionLayer) return;
 
     const numModels = this.datasets.length;
-    const alpha = Math.min(0.85, Math.max(0.15, 1.5 / numModels));
+    // Higher per-model alpha so overlapping areas compound more visibly
+    const alpha = Math.min(0.9, Math.max(0.25, 2.0 / numModels));
 
     const offCtx = this.offscreenCanvas.getContext('2d')!;
 
     const { plotArea } = transform;
 
+    // Use 'multiply' blending so overlapping model areas compound darker,
+    // making agreement areas visually distinct from single-model areas
     for (const dataset of this.datasets) {
       offCtx.save();
       offCtx.scale(dpr, dpr);
@@ -240,7 +243,8 @@ export class CompareSectionRenderer {
         const ratio = bestIdx >= 0
           ? (ci.count / numModels + consensusNext[bestIdx].count / numModels) / 2
           : ci.count / numModels;
-        const alpha = 0.15 + 0.55 * ratio;
+        // Non-linear: single-model faint, full-agreement vivid
+        const alpha = 0.08 + 0.82 * ratio * ratio;
         const fill = `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, ${alpha.toFixed(2)})`;
 
         if (bestIdx >= 0) {
@@ -266,7 +270,8 @@ export class CompareSectionRenderer {
         if (usedNext.has(j)) continue;
         const ni = consensusNext[j];
         const ratio = ni.count / numModels;
-        const alpha = 0.15 + 0.55 * ratio;
+        // Non-linear: single-model faint, full-agreement vivid
+        const alpha = 0.08 + 0.82 * ratio * ratio;
         const fill = `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, ${alpha.toFixed(2)})`;
         const midDist = (dist0 + dist1) / 2;
         const midAlt = (ni.baseFt + ni.topFt) / 2;
@@ -377,7 +382,6 @@ export class CompareSectionRenderer {
       case 'cat-bands':
         return parseRgbaToRgb(theme.cat.moderate) ?? [255, 152, 0];
       case 'cloud-bands':
-        return theme.clouds.denseRgb;
       case 'nwp-cloud-bands':
         return theme.nwpClouds.brightRgb;
       case 'inversion-bands':
