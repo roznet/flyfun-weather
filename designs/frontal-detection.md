@@ -21,7 +21,7 @@ src/weatherbrief/frontal/
 ├── zones.py      — 18 European zones, 19 route templates, zone intersection
 ├── tracking.py   — two-pass anomaly filtering, zone timeseries, clearance timing
 ├── cache.py      — file cache keyed by (model, init_time) for dev iteration
-├── cli.py        — analyze, zones, route, score, validate, diagnose subcommands
+├── cli.py        — analyze, zones, route, score, validate, diagnose, new-case, charts
 └── __main__.py   — python -m weatherbrief.frontal.cli
 ```
 
@@ -103,7 +103,7 @@ This eliminates Alpine, Pyrenean, and sea-land gradients without per-zone tuning
 ## CLI Usage
 
 ```bash
-# Full analysis with map plot
+# Full analysis (auto-downloads DWD charts)
 python -m weatherbrief.frontal.cli analyze --model ecmwf --plot
 
 # Zone activity at hour 24
@@ -112,25 +112,40 @@ python -m weatherbrief.frontal.cli zones --hour 24
 # Route frontal table with clearance timing
 python -m weatherbrief.frontal.cli route --template uk_alps
 
-# Score against calibration data (Météo-France carte des fronts)
-python -m weatherbrief.frontal.cli score --case data/calibration/2026-04-16_12Z
+# Create a new calibration case (fetches data + DWD charts + skeleton YAML)
+python -m weatherbrief.frontal.cli new-case
 
-# 4-column visual comparison (MF chart, expected, ECMWF, GFS)
-python -m weatherbrief.frontal.cli validate --expected data/calibration/.../expected.yaml
+# Score against calibration data
+python -m weatherbrief.frontal.cli score --case data/calibration/2026-04-17_00Z
 
-# Deep diagnostic: replay pipeline for one zone/hour, print every intermediate value
-python -m weatherbrief.frontal.cli diagnose --case data/calibration/2026-04-16_12Z \
+# 4-column visual comparison (reference chart, expected, ECMWF, GFS)
+python -m weatherbrief.frontal.cli validate --charts ... --times ... --expected ...
+
+# Deep diagnostic: replay pipeline for one zone/hour
+python -m weatherbrief.frontal.cli diagnose --case data/calibration/2026-04-17_00Z \
   --model ecmwf --hour 0 --zone uk_south -v --plot
+
+# Download DWD charts with zone overlay
+python -m weatherbrief.frontal.cli charts --zones
 ```
 
 ## Calibration
 
-Calibration data in `data/calibration/<date>_<run>/`:
-- `expected.yaml` — ground truth zones from Météo-France carte des fronts with front types
-- `raw/` — cached Open-Meteo responses for reproducible scoring
-- `reference/` — reference chart images
+**Reference charts**: DWD Bodenwetterkarte (surface analysis) and ICON forecast charts, downloaded via `charts` subcommand with `If-Modified-Since` HTTP caching. DWD charts have clear color-coded front lines (blue=cold, red=warm, purple=occluded) — preferred over Météo-France carte des fronts.
 
-The `score` subcommand computes POD (probability of detection), FAR (false alarm ratio), CSI (critical success index), and per-zone hit/miss/false-alarm counts.
+**Georeferencing**: Both DWD chart templates have fixed polar stereographic projections calibrated from user-provided gridline intersections (~1-3px accuracy). `_dwd_lonlat_to_pixel()` converts geographic coordinates to chart pixel positions for zone overlay rendering.
+
+**Calibration dataset** in `data/calibration/<case>/`:
+- `expected.yaml` — ground truth zones annotated from DWD charts with front types
+- `raw/` — cached Open-Meteo responses for reproducible scoring
+- `reference/` — DWD chart images + zone overlay
+
+**Workflow**: `new-case` creates a complete case directory (fetches model data, downloads DWD charts, generates zone overlay, creates skeleton YAML). The pilot annotates expected zones, then `score` computes POD/FAR/CSI.
+
+**Current baseline** (2 calibration cases, weak fronts):
+- Case 1 (2026-04-16): ECMWF POD=57%, FAR=77%, CSI=19%
+- Case 2 (2026-04-17): ECMWF POD=100%, FAR=77%, CSI=23%
+- Candidate higher thresholds (T=3.0, θe=6.0): FAR drops to ~57% at cost of missing weak fronts
 
 ## Gotchas
 

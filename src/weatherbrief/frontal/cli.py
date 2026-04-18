@@ -1513,6 +1513,129 @@ def _draw_zones_on_dwd(
     img.save(output_path)
 
 
+def _cmd_new_case(args: argparse.Namespace) -> None:
+    """Create a new calibration case from current model data and DWD charts."""
+    from datetime import datetime, timezone
+
+    from weatherbrief.fetch.model_status import fetch_model_metadata
+
+    case_name = args.name
+    if not case_name:
+        # Auto-name from current ECMWF init time
+        meta = fetch_model_metadata(models=["ecmwf"])
+        if "ecmwf" in meta:
+            init_dt = datetime.fromtimestamp(
+                meta["ecmwf"].last_init_time, tz=timezone.utc,
+            )
+            case_name = init_dt.strftime("%Y-%m-%d_%HZ")
+        else:
+            case_name = datetime.now(timezone.utc).strftime("%Y-%m-%d_%HZ")
+
+    case_dir = Path("data/calibration") / case_name
+    if case_dir.exists() and not args.force:
+        print(f"Case {case_dir} already exists. Use --force to overwrite.")
+        return
+
+    print(f"Creating calibration case: {case_dir}")
+
+    # 1. Fetch model data (uses cache if available)
+    cache_dir = Path(args.cache_dir) if args.cache_dir else cache._DEFAULT_CACHE_DIR
+    models = ["ecmwf", "gfs", "icon"]
+
+    result = _run_analysis(
+        models, use_cache=True, cache_dir=cache_dir,
+        t_threshold=args.threshold, te_threshold=args.te_threshold,
+    )
+
+    # 2. Copy cached raw data to case directory
+    raw_dir = case_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil
+
+    for model_key in models:
+        init_time = result["model_init_times"].get(model_key)
+        if not init_time:
+            continue
+        src = cache_dir / f"{model_key}_{init_time}.json"
+        if src.exists():
+            dst = raw_dir / f"{model_key}.json"
+            shutil.copy2(src, dst)
+            init_str = datetime.fromtimestamp(
+                init_time, tz=timezone.utc,
+            ).strftime("%Y-%m-%d %HZ")
+            print(f"  {model_key}: {init_str} → {dst.name}")
+        else:
+            print(f"  {model_key}: cache not found at {src}")
+
+    # 3. Download DWD charts to reference directory
+    ref_dir = case_dir / "reference"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+
+    print("\nDownloading DWD reference charts:")
+    for name, filename in _DWD_CHARTS.items():
+        path = _download_dwd_chart(name, filename, ref_dir)
+        if path and name == "analysis":
+            # Also save zone overlay version
+            overlay_path = ref_dir / "analysis_with_zones.png"
+            _draw_zones_on_dwd(path, overlay_path, "analysis")
+
+    # 4. Create skeleton expected.yaml
+    expected_path = case_dir / "expected.yaml"
+    if not expected_path.exists() or args.force:
+        # Compute hour offsets for DWD chart times
+        ecmwf_init = result["model_init_times"].get("ecmwf", 0)
+        init_dt = datetime.fromtimestamp(ecmwf_init, tz=timezone.utc)
+
+        skeleton = (
+            f"# Calibration case: {case_name}\n"
+            f"# ECMWF init: {init_dt.strftime('%Y-%m-%d %HZ')}\n"
+            f"# Reference: DWD Bodenwetterkarte + ICON forecast charts\n"
+            f"#\n"
+            f"# Annotate zones by visual inspection of DWD analysis chart.\n"
+            f"# Types: cold, warm, occluded, stationary\n"
+            f"# Only list zones where a front is clearly drawn.\n"
+            f"# Zone reference: reference/analysis_with_zones.png\n"
+            f"\n"
+            f"# DWD analysis chart (current surface analysis)\n"
+            f"- time: \"{init_dt.strftime('%d/%m %HZ')}\"\n"
+            f"  hour_offset: 0\n"
+            f"  notes: >\n"
+            f"    TODO: describe synoptic situation from DWD analysis chart\n"
+            f"  zones: {{}}\n"
+            f"    # example: uk_south: cold\n"
+        )
+
+        # Add ICON forecast chart entries
+        for name, filename in _DWD_CHARTS.items():
+            if not name.startswith("icon_"):
+                continue
+            hours = int(name.split("_")[1])
+            forecast_dt = init_dt + __import__("datetime").timedelta(hours=hours)
+            skeleton += (
+                f"\n"
+                f"# ICON forecast T+{hours}h ({filename})\n"
+                f"- time: \"{forecast_dt.strftime('%d/%m %HZ')}\"\n"
+                f"  hour_offset: {hours}\n"
+                f"  notes: >\n"
+                f"    TODO: describe from ICON forecast chart\n"
+                f"  zones: {{}}\n"
+            )
+
+        expected_path.write_text(skeleton)
+        print(f"\nCreated skeleton: {expected_path}")
+        print("  → Edit this file to annotate expected zones from the DWD charts")
+        print(f"  → Zone reference: {ref_dir / 'analysis_with_zones.png'}")
+    else:
+        print(f"\n{expected_path} already exists (not overwritten)")
+
+    print(f"\nCase ready at {case_dir}/")
+    print(f"Next steps:")
+    print(f"  1. Open {ref_dir / 'analysis_with_zones.png'} — identify fronts per zone")
+    print(f"  2. Edit {expected_path} — annotate zones")
+    print(f"  3. Score: python -m weatherbrief.frontal.cli score --case {case_dir}")
+
+
 def _cmd_charts(args: argparse.Namespace) -> None:
     """Download DWD weather charts (analysis + ICON forecasts)."""
     output_dir = Path(args.output_dir) if args.output_dir else _DWD_CHART_DIR
@@ -1690,6 +1813,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show top gradient points with coordinates",
     )
 
+    # new-case
+    p_new = sub.add_parser(
+        "new-case",
+        help="Create a new calibration case from current data + DWD charts",
+    )
+    p_new.add_argument(
+        "--name", help="Case name (default: auto from ECMWF init time)",
+    )
+    p_new.add_argument(
+        "--force", action="store_true",
+        help="Overwrite existing case",
+    )
+    p_new.add_argument("--cache-dir")
+    p_new.add_argument(
+        "--threshold", type=float, default=2.0,
+        help="T850 gradient threshold (K/100km)",
+    )
+    p_new.add_argument(
+        "--te-threshold", type=float, default=4.0,
+        help="θe gradient threshold (K/100km)",
+    )
+
     # charts
     p_charts = sub.add_parser(
         "charts", help="Download DWD weather charts (analysis + ICON forecasts)",
@@ -1733,6 +1878,7 @@ def main() -> None:
         "score": _cmd_score,
         "validate": _cmd_validate,
         "diagnose": _cmd_diagnose,
+        "new-case": _cmd_new_case,
         "charts": _cmd_charts,
         "clear-cache": _cmd_clear_cache,
     }

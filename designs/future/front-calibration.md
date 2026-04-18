@@ -37,20 +37,19 @@ cp data/frontal_cache/gfs_*.json data/calibration/{case_name}/raw/gfs.json
 cp data/frontal_cache/icon_*.json data/calibration/{case_name}/raw/icon.json
 ```
 
-### Météo-France Reference Charts
+### Reference Charts
 
-Source: https://donneespubliques.meteofrance.fr — carte des fronts (surface analysis with fronts and isobars). These are human-drawn by MF forecasters, considered ground truth for front positions.
+**Primary: DWD Bodenwetterkarte** — surface analysis with fronts drawn by DWD forecasters. Clear color-coded front lines (blue=cold, red=warm, purple=occluded), much easier to read than Météo-France carte des fronts (no confusion between isobars and front lines).
 
-Charts are issued for 00Z and 12Z, typically from the 12Z model run. Download the PNG files and save with descriptive names:
+- Analysis chart: `bwk_bodendruck_na_ana.png` — current hand-drawn surface analysis
+- ICON forecasts: `ico_tkboden_na_{036,048,060,084,108}.png` — model front positions
+- Source: `https://www.dwd.de/DWD/wetter/wv_spez/hobbymet/wetterkarten/`
+- Downloaded automatically by `new-case` and `charts` subcommands
+- HTTP `If-Modified-Since` caching — only re-downloads when DWD publishes new charts
 
-```bash
-mkdir -p data/calibration/{case_name}/reference
-cp ~/Downloads/chart1.png data/calibration/{case_name}/reference/17_04_00Z.png
-cp ~/Downloads/chart2.png data/calibration/{case_name}/reference/17_04_12Z.png
-# etc.
-```
+**Georeferencing**: Both chart templates have fixed polar stereographic projections. Pixel↔lonlat transforms calibrated from user-provided gridline intersection coordinates (~1-3px accuracy). Zone boxes can be overlaid on charts via `charts --zones`. Calibration reference points saved in `tmp/points.csv`.
 
-**Pending**: applied for Météo-France API access to automate chart downloads. When available, add a `fetch-mf-charts` CLI subcommand.
+**Secondary: Météo-France carte des fronts** — still usable but harder to read (isobars and fronts look similar). Used in the first two calibration cases.
 
 ### Expected Zones (expected.yaml)
 
@@ -161,40 +160,26 @@ python -m weatherbrief.frontal.cli clear-cache
 
 ## Adding a New Calibration Case
 
-Step-by-step workflow for each new set of MF charts:
+Automated with the `new-case` subcommand:
 
 ```bash
-# 1. Run analysis to fetch and cache current model data
-python -m weatherbrief.frontal.cli analyze
+# 1. Create case: fetches all models, downloads DWD charts, generates zone overlay
+python -m weatherbrief.frontal.cli new-case
+# Auto-names from ECMWF init time, or use --name 2026-04-18_06Z
 
-# 2. Create calibration case directory
-CASE="2026-04-17_12Z"  # use ECMWF init time
-mkdir -p data/calibration/$CASE/{raw,reference}
+# 2. Open the zone overlay to identify fronts per zone
+open data/calibration/2026-04-18_06Z/reference/analysis_with_zones.png
 
-# 3. Copy cached raw data
-cp data/frontal_cache/ecmwf_*.json data/calibration/$CASE/raw/ecmwf.json
-cp data/frontal_cache/gfs_*.json data/calibration/$CASE/raw/gfs.json
-cp data/frontal_cache/icon_*.json data/calibration/$CASE/raw/icon.json
+# 3. Edit expected.yaml — annotate zones from the DWD chart
+# The skeleton is pre-populated with chart times and hour offsets
 
-# 4. Copy MF chart images with descriptive names
-cp ~/Downloads/chart1.png data/calibration/$CASE/reference/17_04_12Z.png
-# ... etc
+# 4. Score
+python -m weatherbrief.frontal.cli score --case data/calibration/2026-04-18_06Z
 
-# 5. Create expected.yaml — annotate from visual inspection
-# (or ask Claude to draft from the chart images, then review)
-
-# 6. Generate validation image and review
-python -m weatherbrief.frontal.cli validate \
-  --charts data/calibration/$CASE/reference/*.png \
-  --times "17/04 12Z" "18/04 00Z" \
-  --expected data/calibration/$CASE/expected.yaml \
-  --output data/calibration/$CASE/validation.png
-
-# 7. Score
-python -m weatherbrief.frontal.cli score --case data/calibration/$CASE
-
-# 8. Iterate: correct expected.yaml, adjust thresholds, re-run
+# 5. Iterate: correct expected.yaml, adjust thresholds, re-run
 ```
+
+For visual validation with the 4-column comparison (reference | expected | ECMWF | GFS), use the `validate` subcommand as before.
 
 ## Current Algorithm Parameters
 
@@ -257,15 +242,27 @@ done
 
 ### Algorithm improvements to explore
 
-1. **Lower anomaly threshold for maritime zones**: Atlantic/UK zones have low background gradients — even a modest front creates a visible anomaly. Could use a zone-aware anomaly threshold or just lower the global one.
+### Tried and evaluated
 
-2. **Persistence filter for orographic zones**: if a zone flags as frontal for >36 consecutive hours, it's likely orographic noise, not a real front. Suppress those detections.
+1. **Per-channel anomaly filtering** ✅ IMPLEMENTED — each channel (T, θe) filtered against its own background. Fixed the original bug where T background killed θe-detected maritime fronts. POD improved from 24% to 57-100%.
 
-3. **θe channel tuning**: the θe threshold (4.0 K/100km) may be too high for maritime warm fronts but too low for Mediterranean moisture boundaries. Could try different θe thresholds for maritime vs continental zones, or use θe only for warm front detection (not cold).
+2. **Persistence filter** ❌ DIDN'T HELP — infrastructure exists (`_apply_persistence_filter`, default 72h) but disabled. Real fronts persist 30-50h in zones, false alarms 80-96h — no threshold separates them without killing real detections.
 
-4. **Minimum gradient contrast within zone**: instead of just requiring N% of a zone to exceed threshold, require a gradient *contrast* within the zone — front should show a peak surrounded by lower values, not a uniformly elevated zone (which suggests orographic).
+3. **TFP proximity filter (Hewson)** ❌ DIDN'T HELP — tested at both 0.5° and 0.25° resolution with various smoothing. TFP zero-crossings are too ubiquitous; false alarm zones have genuine gradient peaks from moisture boundaries. Infrastructure exists but disabled (`tfp_dilation=-1`).
 
-5. **Multi-case scoring**: when we have 3+ calibration cases, score across all cases simultaneously for more robust parameter selection. Avoid overfitting to one synoptic pattern.
+4. **Fraction-based suppression** ❌ TOO BLUNT — suppressing zones active >80% of time also removes zones with real fronts (bay_of_biscay, atlantic_south).
+
+5. **Higher detection thresholds** ⚡ PROMISING — T=3.0, θe=6.0, anomaly=2.0, floor=3.0 drops FAR from 77% to 57% at cost of missing weak fronts. For GA briefings, weak fronts are low consequence. Needs validation with strong-front cases before changing defaults.
+
+### Still to explore
+
+1. **Wind shift criterion** — require significant wind direction change across the gradient. Synoptic fronts have baroclinic wind shifts; moisture boundaries don't.
+
+2. **Spatial coherence** — require frontal signal to be coherent over ~200km minimum length. Fronts are linear; false alarms are patchy.
+
+3. **Multi-case scoring** — when we have 5+ cases spanning different synoptic regimes, score across all simultaneously. Current 2 cases are both weak-front patterns.
+
+4. **METAR FROPA validation** — use frontal passage reports from European METAR stations as aviation-native ground truth. Need to verify FROPA availability in EASA-region METARs.
 
 ## Data Backup
 
