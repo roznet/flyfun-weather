@@ -19,6 +19,7 @@ web/test-results
 tmp
 
 .claude/worktrees
+.claude/projects
 
 # Xcode
 xcuserdata/
