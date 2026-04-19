@@ -166,7 +166,7 @@ async function init(): Promise<void> {
     return {
       profiles: profiles.map(p => ({ id: p.id, name: p.name })),
       currentProfileId: state.flight.profile_id,
-      isOwner: state.flight.user_id === user.id,
+      isOwner: state.flight.user_id === user!.id,
       onChange: async (profileId: number) => {
         await store.getState().changeFlightProfile(profileId);
         // Re-fetch profiles list isn't needed — IDs don't change

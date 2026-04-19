@@ -163,7 +163,7 @@ export class PirepMap {
     this.markersGroup = L.layerGroup().addTo(this.map);
 
     // Disclaimer
-    const disclaimer = L.control({ position: 'bottomleft' });
+    const disclaimer = (L.control as any)({ position: 'bottomleft' });
     disclaimer.onAdd = () => {
       const div = L.DomUtil.create('div', 'pirep-map-disclaimer');
       div.innerHTML = 'Darkened areas: <strong>no reports</strong> — not clear skies.';
@@ -205,7 +205,7 @@ export class PirepMap {
   /** Call when the container becomes visible (tab switch) to fix tile rendering. */
   invalidateSize(): void {
     if (this.map) {
-      setTimeout(() => this.map.invalidateSize(), 100);
+      setTimeout(() => this.map!.invalidateSize(), 100);
     }
   }
 

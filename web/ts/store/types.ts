@@ -182,6 +182,7 @@ export interface VerticalMotionAssessment {
   max_w_fpm: number | null;
   max_w_level_ft: number | null;
   cat_risk_layers: CATRiskLayer[];
+  e_shear_layers: CATRiskLayer[];
   convective_contamination: boolean;
 }
 

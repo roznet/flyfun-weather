@@ -451,6 +451,15 @@ const GRAMET_THEME: CrossSectionTheme = {
     severe: 'rgba(220, 53, 69, 0.60)',
   },
 
+  convective: {
+    ...STANDARD_THEME.convective,
+    cbLabelColor: {
+      moderate: 'rgba(255, 180, 40, 1.0)',
+      high: 'rgba(255, 80, 60, 1.0)',
+      extreme: 'rgba(255, 50, 30, 1.0)',
+    },
+  },
+
   // Soft cloud config
   softClouds: {
     fillRgb: [255, 255, 255],
