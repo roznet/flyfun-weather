@@ -58,6 +58,7 @@ final class CachingBriefingRepository: BriefingRepository {
             }
             return flights
         } catch {
+            Self.logger.warning("Online flights() failed: \(error)")
             isServingCachedFlights = true
             // Fallback 1: cached flights.json
             if let data = await cache.readMetadata(name: "flights"),

@@ -20,6 +20,7 @@ final class FlightListViewModel {
     private(set) var cachedFlightIds: Set<String> = []
 
     private let repository: any BriefingRepository
+    private var isLoading = false
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "FlightList")
 
     init(repository: any BriefingRepository) {
@@ -27,6 +28,9 @@ final class FlightListViewModel {
     }
 
     func loadFlights() async {
+        guard !isLoading else { return }
+        isLoading = true
+        defer { isLoading = false }
         state = .loading
         do {
             let flights = try await repository.flights()
