@@ -4,6 +4,7 @@ import SwiftUI
 struct FlightListView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: FlightListViewModel?
     @State private var selectedFlight: FlightResponse?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -131,6 +132,11 @@ struct FlightListView: View {
             viewModel = vm
             await vm.loadFlights()
         }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active {
+                Task { await viewModel?.loadFlights() }
+            }
+        }
     }
 
     private var emptyStateView: some View {
@@ -146,6 +152,13 @@ struct FlightListView: View {
                     Label("New Flight", systemImage: "plus")
                 }
                 .buttonStyle(.borderedProminent)
+
+                Button {
+                    Task { await viewModel?.loadFlights() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
 
                 Button {
                     openURL(AppState.defaultBaseURL)

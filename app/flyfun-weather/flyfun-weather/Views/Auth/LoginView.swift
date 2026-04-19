@@ -41,7 +41,7 @@ struct LoginView: View {
                 Task { await handleAppleSignIn(result) }
             }
             .signInWithAppleButtonStyle(.black)
-            .frame(maxWidth: 280, minHeight: 50)
+            .frame(maxWidth: 280, minHeight: 50, maxHeight: 50)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .disabled(isSigningIn)
 
