@@ -32,7 +32,7 @@ import { initI18n, t } from './i18n/i18n';
 import { SkewTRenderer } from './visualization/skewt/renderer';
 import { renderSkewtOverlayControls } from './visualization/skewt/overlay-controls';
 import { attachSkewTInteraction, type SkewTInteractionHandle } from './visualization/skewt/interaction';
-import type { SoundingProfileData } from './visualization/skewt/types';
+
 
 async function loadFlightPireps(flightId: string): Promise<void> {
   const wrapper = document.getElementById('pireps-wrapper');
@@ -314,8 +314,8 @@ async function init(): Promise<void> {
         state.selectedModel,
       );
       if (data) {
-        ensureSkewtRenderer().setData(data as SoundingProfileData);
-        skewtInteraction?.update(data as SoundingProfileData);
+        ensureSkewtRenderer().setData(data);
+        skewtInteraction?.update(data);
       } else {
         ensureSkewtRenderer().clear();
         skewtInteraction?.update(null);

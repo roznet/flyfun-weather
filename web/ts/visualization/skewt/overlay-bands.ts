@@ -15,6 +15,7 @@ import type {
   IcingZone,
   InversionLayer,
 } from './types';
+import { altitudeToPressure } from './atmo-utils';
 
 // --- Cloud colors (matching cross-section theme) ---
 const CLOUD_DD_COLOR = 'rgba(140, 140, 150, ALPHA)';
@@ -74,18 +75,12 @@ export function getDefaultOverlayState(): Record<string, boolean> {
   return state;
 }
 
-/** Standard atmosphere: altitude (ft) → pressure (hPa). */
-function altToPressure(altFt: number): number {
-  const altM = altFt / 3.28084;
-  return 1013.25 * Math.pow(1 - 0.0065 * altM / 288.15, 5.2561);
-}
-
 /** Get pressure bounds for a layer, falling back to altitude conversion. */
 function getBandPressures(
   layer: { base_pressure_hpa?: number | null; top_pressure_hpa?: number | null; base_ft?: number; top_ft?: number },
 ): { topP: number; bottomP: number } | null {
-  const topP = layer.top_pressure_hpa ?? (layer.top_ft != null ? altToPressure(layer.top_ft) : null);
-  const bottomP = layer.base_pressure_hpa ?? (layer.base_ft != null ? altToPressure(layer.base_ft) : null);
+  const topP = layer.top_pressure_hpa ?? (layer.top_ft != null ? altitudeToPressure(layer.top_ft) : null);
+  const bottomP = layer.base_pressure_hpa ?? (layer.base_ft != null ? altitudeToPressure(layer.base_ft) : null);
   if (topP == null || bottomP == null) return null;
   return { topP, bottomP };
 }

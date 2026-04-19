@@ -11,6 +11,7 @@
 import { SkewTTransform } from './skewt-transform';
 import { SoundingProfileData, PlotArea } from './types';
 import { isDarkTheme, cssVar } from '../interaction-utils';
+import { altitudeToPressure } from './atmo-utils';
 
 // Standard pressure levels to label on the Y-axis
 const PRESSURE_LABELS = [1000, 925, 850, 700, 500, 400, 300, 250];
@@ -214,15 +215,7 @@ export function renderIndicesPanel(
   }
 }
 
-/** Approximate standard atmosphere: altitude (ft) → pressure (hPa). */
-function altitudeToPressure(altFt: number): number | null {
-  if (altFt < 0) return null;
-  // Barometric formula (troposphere, T0=288.15K, L=0.0065K/m)
-  const altM = altFt / 3.28084;
-  return 1013.25 * Math.pow(1 - 0.0065 * altM / 288.15, 5.2561);
-}
-
-/** Approximate: freezing level altitude (ft) → pressure (hPa). */
+/** Altitude (ft) or null → pressure (hPa) or null. */
 function pressureFromAltitude(altFt: number | null): number | null {
   if (altFt === null || altFt === undefined) return null;
   return altitudeToPressure(altFt);

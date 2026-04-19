@@ -11,6 +11,7 @@ import type {
   RouteObservations,
 } from '../store/types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
+import type { SoundingProfileData } from '../visualization/skewt/types';
 import { API_BASE, apiFetch } from '../utils';
 
 /** Typed error for refresh stream failures — avoids fragile string matching. */
@@ -420,9 +421,9 @@ export async function fetchSoundingProfile(
   timestamp: string,
   pointIndex: number,
   model: string,
-): Promise<unknown> {
+): Promise<SoundingProfileData> {
   const path = `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/sounding-profile/${pointIndex}/${encodeURIComponent(model)}`;
-  return apiFetch(path);
+  return apiFetch<SoundingProfileData>(path);
 }
 
 export function hodographUrl(

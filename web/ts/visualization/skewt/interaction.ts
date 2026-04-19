@@ -10,6 +10,7 @@
 import type { SkewTTransform } from './skewt-transform';
 import type { SoundingProfileData, SoundingProfileLevel } from './types';
 import { isDarkTheme } from '../interaction-utils';
+import { altitudeToPressure, pressureToAltitudeFt } from './atmo-utils';
 
 export interface SkewTInteractionCallbacks {
   /** Called with altitude in ft when hovering, undefined when leaving. */
@@ -64,7 +65,7 @@ export function attachSkewTInteraction(
     if (level) {
       showLevelTooltip(e, level, currentData);
       // Convert pressure to approximate altitude for cross-section sync
-      const altFt = level.altitude_ft ?? pressureToAltFt(pressureHPa);
+      const altFt = level.altitude_ft ?? pressureToAltitudeFt(pressureHPa);
       callbacks.onHoverAltitude?.(altFt);
     }
   }
@@ -101,8 +102,8 @@ export function attachSkewTInteraction(
 
     // External hover from cross-section
     if (externalAltFt !== null) {
-      const extP = altFtToPressure(externalAltFt);
-      if (transform.isPressureVisible(extP)) {
+      const extP = altitudeToPressure(externalAltFt);
+      if (extP !== null && transform.isPressureVisible(extP)) {
         const extY = transform.pressureToY(extP);
         ctx.strokeStyle = dark ? 'rgba(100,180,255,0.6)' : 'rgba(30,100,200,0.5)';
         ctx.lineWidth = 1;
@@ -130,8 +131,8 @@ export function attachSkewTInteraction(
     if (externalAltFt !== null) {
       const plot = transform.plotArea;
       const dark = isDarkTheme();
-      const extP = altFtToPressure(externalAltFt);
-      if (transform.isPressureVisible(extP)) {
+      const extP = altitudeToPressure(externalAltFt);
+      if (extP !== null && transform.isPressureVisible(extP)) {
         const extY = transform.pressureToY(extP);
         ctx.strokeStyle = dark ? 'rgba(100,180,255,0.6)' : 'rgba(30,100,200,0.5)';
         ctx.lineWidth = 1;
@@ -152,7 +153,7 @@ export function attachSkewTInteraction(
       document.body.appendChild(tooltip);
     }
 
-    const altFt = level.altitude_ft ?? pressureToAltFt(level.pressure_hpa);
+    const altFt = level.altitude_ft ?? pressureToAltitudeFt(level.pressure_hpa);
     const fl = Math.round(altFt / 100).toString().padStart(3, '0');
 
     let html = `<div class="skewt-tooltip-header">${level.pressure_hpa} hPa · FL${fl}</div>`;
@@ -230,12 +231,3 @@ function row(label: string, value: number | null | undefined, unit: string): str
   return `<div>${label}: ${fmt}${unit ? ' ' + unit : ''}</div>`;
 }
 
-function pressureToAltFt(p: number): number {
-  const altM = 288.15 / 0.0065 * (1 - Math.pow(p / 1013.25, 1 / 5.2561));
-  return altM * 3.28084;
-}
-
-function altFtToPressure(altFt: number): number {
-  const altM = altFt / 3.28084;
-  return 1013.25 * Math.pow(1 - 0.0065 * altM / 288.15, 5.2561);
-}
