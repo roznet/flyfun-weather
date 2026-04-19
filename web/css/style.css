@@ -1371,6 +1371,37 @@ label {
   max-width: 160px;
 }
 
+.skewt-overlay-controls .metric-info-btn,
+.skewt-panel-info,
+.skewt-index-info {
+  font-size: 0.65rem;
+  padding: 0 0.15rem;
+  margin-left: -0.1rem;
+  opacity: 0.45;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+  vertical-align: middle;
+}
+.skewt-overlay-controls .metric-info-btn:hover,
+.skewt-panel-info:hover,
+.skewt-index-info:hover {
+  opacity: 1;
+  color: var(--primary);
+}
+
+.skewt-indices-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+}
+.skewt-index-info {
+  font-size: 0.7rem !important;
+  padding: 0.1rem 0.3rem !important;
+}
+
 .external-links {
   font-size: 0.8rem;
   color: var(--muted);

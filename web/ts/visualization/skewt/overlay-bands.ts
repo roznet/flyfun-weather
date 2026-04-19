@@ -57,16 +57,17 @@ export interface SkewTOverlayDef {
   label: string;
   group: string;
   defaultEnabled: boolean;
+  metricId?: string;
 }
 
 export const SKEWT_OVERLAYS: SkewTOverlayDef[] = [
-  { id: 'clouds-nwp',  label: 'Clouds (NWP)',    group: 'clouds',    defaultEnabled: true },
-  { id: 'clouds-dd',   label: 'Clouds (DD)',      group: 'clouds',    defaultEnabled: false },
-  { id: 'icing-nwp',   label: 'Icing (Ogimet-NWP)', group: 'icing',  defaultEnabled: true },
-  { id: 'icing-dd',    label: 'Icing (Ogimet-DD)',   group: 'icing',  defaultEnabled: false },
-  { id: 'icing-sfip',  label: 'Icing (SFIP)',     group: 'icing',     defaultEnabled: false },
-  { id: 'inversions',  label: 'Inversions',       group: 'stability', defaultEnabled: true },
-  { id: 'convective',  label: 'Convective zone',  group: 'stability', defaultEnabled: false },
+  { id: 'clouds-nwp',  label: 'Clouds (NWP)',       group: 'clouds',    defaultEnabled: true,  metricId: 'skewt_clouds_nwp' },
+  { id: 'clouds-dd',   label: 'Clouds (DD)',         group: 'clouds',    defaultEnabled: false, metricId: 'skewt_clouds_dd' },
+  { id: 'icing-nwp',   label: 'Icing (Ogimet-NWP)', group: 'icing',     defaultEnabled: true,  metricId: 'icing_ogimet_nwp_risk' },
+  { id: 'icing-dd',    label: 'Icing (Ogimet-DD)',   group: 'icing',     defaultEnabled: false, metricId: 'icing_risk' },
+  { id: 'icing-sfip',  label: 'Icing (SFIP)',        group: 'icing',     defaultEnabled: false, metricId: 'sfip_risk' },
+  { id: 'inversions',  label: 'Inversions',          group: 'stability', defaultEnabled: true,  metricId: 'skewt_inversions' },
+  { id: 'convective',  label: 'Convective zone',     group: 'stability', defaultEnabled: false, metricId: 'skewt_convective' },
 ];
 
 export function getDefaultOverlayState(): Record<string, boolean> {

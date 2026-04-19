@@ -37,6 +37,8 @@ export interface VariableDef {
   /** Custom labels for the secondary line's negative and positive ends. */
   secondaryNegLabel?: string;
   secondaryPosLabel?: string;
+  /** Metric catalog ID for info popup. */
+  metricId?: string;
 }
 
 /** All available side panel variables. */
@@ -64,6 +66,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     posLabel: 'HW',
     secondaryNegLabel: '\u2190',  // ← from left
     secondaryPosLabel: '\u2192',  // → from right
+    metricId: 'skewt_headwind_crosswind',
   },
   {
     id: 'dewpoint_depression',
@@ -73,6 +76,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#e07020',
     getValue: lv => lv.dewpoint_depression_c,
     fixedRange: [0, 15],
+    metricId: 'dewpoint_depression_c',
   },
   {
     id: 'relative_humidity',
@@ -82,6 +86,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#2090d0',
     getValue: lv => lv.relative_humidity_pct,
     fixedRange: [0, 100],
+    metricId: 'skewt_relative_humidity',
   },
   {
     id: 'wind_speed',
@@ -90,6 +95,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     unit: 'kt',
     color: '#6060c0',
     getValue: lv => lv.wind_speed_kt,
+    metricId: 'wind_speed_kt',
   },
   {
     id: 'icing_index',
@@ -99,6 +105,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#6495ed',
     getValue: lv => lv.icing_index,
     fixedRange: [0, 100],
+    metricId: 'icing_risk',
   },
   {
     id: 'icing_index_nwp',
@@ -108,6 +115,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#4080d0',
     getValue: lv => lv.icing_index_nwp,
     fixedRange: [0, 100],
+    metricId: 'icing_ogimet_nwp_risk',
   },
   {
     id: 'sfip',
@@ -117,6 +125,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#d08020',
     getValue: lv => lv.sfip_100,
     fixedRange: [0, 100],
+    metricId: 'sfip_risk',
   },
   {
     id: 'cloud_liquid_water',
@@ -125,6 +134,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     unit: 'g/m³',
     color: '#20a0a0',
     getValue: lv => lv.cloud_liquid_water_g_m3,
+    metricId: 'skewt_cloud_liquid_water',
   },
   {
     id: 'ice_mixing_ratio',
@@ -133,6 +143,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     unit: 'g/kg',
     color: '#8080d0',
     getValue: lv => lv.ice_mixing_ratio_g_kg,
+    metricId: 'skewt_ice_mixing_ratio',
   },
   {
     id: 'lapse_rate',
@@ -142,6 +153,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#c04040',
     getValue: lv => lv.lapse_rate_c_per_km,
     zeroLine: true,
+    metricId: 'lapse_rate_c_km',
   },
   {
     id: 'richardson',
@@ -150,6 +162,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     unit: '',
     color: '#d0a020',
     getValue: lv => lv.richardson_number != null && lv.richardson_number < 100 ? lv.richardson_number : null,
+    metricId: 'richardson_number',
   },
   {
     id: 'vertical_velocity',
@@ -159,6 +172,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#40a040',
     getValue: lv => lv.w_fpm,
     zeroLine: true,
+    metricId: 'skewt_vertical_velocity',
   },
   {
     id: 'theta_e',
@@ -167,6 +181,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     unit: 'K',
     color: '#a04080',
     getValue: lv => lv.theta_e_k,
+    metricId: 'equivalent_potential_temperature_k',
   },
 ];
 
