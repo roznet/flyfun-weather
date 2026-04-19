@@ -35,14 +35,15 @@ _RI_MODERATE = 1.0
 _RI_LIGHT = 2.0
 
 # Omega thresholds (Pa/s) for classification
-_OMEGA_QUIESCENT = 1.0  # |omega| < 1 Pa/s → quiescent
-_OMEGA_CONVECTIVE = 10.0  # |omega| > 10 Pa/s → convective
-_OMEGA_SIGNIFICANT = 0.5  # minimum for sign-change counting
+# Typical synoptic omega: ±0.1–1.0 Pa/s; convective: >1 Pa/s
+_OMEGA_QUIESCENT = 0.1  # |omega| < 0.1 Pa/s → quiescent
+_OMEGA_CONVECTIVE = 1.0  # |omega| > 1 Pa/s → convective
+_OMEGA_SIGNIFICANT = 0.05  # minimum for sign-change counting
 
 # Convective contamination: mid-level (700-400 hPa) omega threshold
 _CONTAMINATION_PRESSURE_MIN = 400  # hPa (top)
 _CONTAMINATION_PRESSURE_MAX = 700  # hPa (bottom)
-_CONTAMINATION_OMEGA = 5.0  # |omega| > 5 Pa/s
+_CONTAMINATION_OMEGA = 0.5  # |omega| > 0.5 Pa/s
 
 # Strong vertical motion threshold
 _STRONG_W_FPM = 200.0

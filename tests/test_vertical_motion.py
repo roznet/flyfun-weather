@@ -31,11 +31,11 @@ def test_classify_unavailable_no_omega():
 
 
 def test_classify_quiescent():
-    """QUIESCENT when all |omega| < 1 Pa/s."""
+    """QUIESCENT when all |omega| < 0.1 Pa/s."""
     levels = [
-        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=0.2),
-        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.3),
-        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=0.1),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=0.02),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.03),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=0.01),
     ]
     assert classify_vertical_motion(levels) == VerticalMotionClass.QUIESCENT
 
@@ -43,9 +43,9 @@ def test_classify_quiescent():
 def test_classify_synoptic_ascent():
     """SYNOPTIC_ASCENT when coherent negative omega."""
     levels = [
-        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-2.0),
-        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-3.0),
-        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-1.5),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.2),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.3),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-0.15),
     ]
     assert classify_vertical_motion(levels) == VerticalMotionClass.SYNOPTIC_ASCENT
 
@@ -53,19 +53,19 @@ def test_classify_synoptic_ascent():
 def test_classify_synoptic_subsidence():
     """SYNOPTIC_SUBSIDENCE when coherent positive omega."""
     levels = [
-        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=2.0),
-        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=3.0),
-        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=1.5),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=0.2),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=0.3),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=0.15),
     ]
     assert classify_vertical_motion(levels) == VerticalMotionClass.SYNOPTIC_SUBSIDENCE
 
 
 def test_classify_convective():
-    """CONVECTIVE when |omega| > 10 Pa/s."""
+    """CONVECTIVE when |omega| > 1 Pa/s."""
     levels = [
-        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-2.0),
-        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-15.0),
-        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-3.0),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.2),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-0.3),
     ]
     assert classify_vertical_motion(levels) == VerticalMotionClass.CONVECTIVE
 
@@ -73,10 +73,10 @@ def test_classify_convective():
 def test_classify_oscillating():
     """OSCILLATING when >=2 significant sign changes."""
     levels = [
-        DerivedLevel(pressure_hpa=1000, altitude_ft=300, omega_pa_s=-2.0),
-        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=3.0),
-        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-2.5),
-        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=1.5),
+        DerivedLevel(pressure_hpa=1000, altitude_ft=300, omega_pa_s=-0.2),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=0.3),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.25),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=0.15),
     ]
     assert classify_vertical_motion(levels) == VerticalMotionClass.OSCILLATING
 
@@ -351,13 +351,13 @@ def test_deep_layer_prevented_by_index_gap():
 
 
 def test_convective_contamination_detected():
-    """Mid-level |omega| > 5 Pa/s triggers convective contamination."""
+    """Mid-level |omega| > 0.5 Pa/s triggers convective contamination."""
     levels = [
-        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-1.0),
-        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5),
-        DerivedLevel(pressure_hpa=600, altitude_ft=14000, omega_pa_s=-8.0),
-        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-6.0),
-        DerivedLevel(pressure_hpa=400, altitude_ft=24000, omega_pa_s=-2.0),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.1),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.15),
+        DerivedLevel(pressure_hpa=600, altitude_ft=14000, omega_pa_s=-0.8),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-0.6),
+        DerivedLevel(pressure_hpa=400, altitude_ft=24000, omega_pa_s=-0.2),
     ]
     assessment = assess_vertical_motion(levels)
     assert assessment.convective_contamination is True
@@ -366,10 +366,10 @@ def test_convective_contamination_detected():
 def test_no_convective_contamination():
     """No contamination when mid-level omega is moderate."""
     levels = [
-        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-1.0),
-        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-1.5),
-        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-3.0),
-        DerivedLevel(pressure_hpa=400, altitude_ft=24000, omega_pa_s=-2.0),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.1),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.15),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-0.3),
+        DerivedLevel(pressure_hpa=400, altitude_ft=24000, omega_pa_s=-0.2),
     ]
     assessment = assess_vertical_motion(levels)
     assert assessment.convective_contamination is False

@@ -27,7 +27,7 @@ DIVERGENCE_THRESHOLDS: dict[str, tuple[float, float]] = {
     "precipitable_water_mm": (5.0, 15.0),
     "lifted_index": (2.0, 5.0),
     "bulk_shear_0_6km_kt": (5.0, 15.0),
-    "max_omega_pa_s": (1.0, 5.0),
+    "max_omega_pa_s": (0.1, 0.5),
     "snowfall_cm": (0.5, 2.0),
     "rain_mm": (1.0, 5.0),
 }
