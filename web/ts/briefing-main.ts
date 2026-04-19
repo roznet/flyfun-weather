@@ -118,6 +118,9 @@ async function init(): Promise<void> {
 
   // --- Helper to render point-dependent sections ---
   function renderPointSections(state: BriefingState): void {
+    // Show the Skew-T section wrapper once we have route data
+    const skewtWrapper = document.querySelector('[data-section="skewt"]') as HTMLElement | null;
+    if (skewtWrapper) skewtWrapper.style.display = state.routeAnalyses ? '' : 'none';
     ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers);
     // Dynamic Skew-T (canvas) or static MetPy
     if (skewtViewMode === 'dynamic') {

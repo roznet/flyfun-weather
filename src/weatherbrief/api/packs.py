@@ -1919,7 +1919,9 @@ def _build_sounding_profile(
     # Build a lookup from derived_levels for enriching profile levels.
     # derived_levels are excluded from route_analyses.json to save space,
     # so we run analyze_sounding on-the-fly to get the full set.
+    # The result also provides parcel_path as fallback for old packs.
     derived_by_pressure: dict[int, dict] = {}
+    onthefly_result = None
     stored_dls = sounding_data.get("derived_levels", [])
     if stored_dls:
         for dl in stored_dls:
@@ -1928,9 +1930,9 @@ def _build_sounding_profile(
         # On-the-fly sounding analysis (~50-200ms) for icing indices, Ri, etc.
         try:
             from weatherbrief.analysis.sounding import analyze_sounding
-            result = analyze_sounding(hourly.pressure_levels, hourly)
-            if result and result.derived_levels:
-                for dl in result.derived_levels:
+            onthefly_result = analyze_sounding(hourly.pressure_levels, hourly)
+            if onthefly_result and onthefly_result.derived_levels:
+                for dl in onthefly_result.derived_levels:
                     derived_by_pressure[dl.pressure_hpa] = dl.model_dump()
         except Exception:
             import logging
@@ -2035,10 +2037,13 @@ def _build_sounding_profile(
         prev_alt_ft = alt_ft
         prev_temp_c = pl.temperature_c
 
-    # Parcel path
+    # Parcel path — from stored data, or fall back to on-the-fly analysis
+    stored_parcel = sounding_data.get("parcel_path", [])
+    if not stored_parcel and onthefly_result and onthefly_result.parcel_path:
+        stored_parcel = [pp.model_dump() for pp in onthefly_result.parcel_path]
     parcel_path = [
         ParcelPathPointResponse(pressure_hpa=pp["pressure_hpa"], temperature_c=pp["temperature_c"])
-        for pp in sounding_data.get("parcel_path", [])
+        for pp in stored_parcel
     ]
 
     # Label: waypoint ICAO or name
