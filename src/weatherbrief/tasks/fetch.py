@@ -67,6 +67,7 @@ class FetchResult:
     grib_enrichment_failed: bool = False
     grib_init_times: dict[str, int] = field(default_factory=dict)
     diagnostics: list[dict] = field(default_factory=list)
+    open_meteo_api_calls: int = 0
 
 
 def _build_fetch_diagnostics(
@@ -312,4 +313,5 @@ def run_fetch(
         grib_enrichment_failed=grib_enrichment_failed,
         grib_init_times=grib_init_times,
         diagnostics=diagnostics,
+        open_meteo_api_calls=client.call_count,
     )

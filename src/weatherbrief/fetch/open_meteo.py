@@ -76,6 +76,7 @@ class OpenMeteoClient:
         self._historical = historical
         self.timeout = 60 if historical else timeout  # historical API is slower
         self.session = requests.Session()
+        self.call_count = 0
         self._api_key = os.environ.get("OPENMETEO_API_KEY")
         self.has_api_key = bool(self._api_key)
         if self._api_key:
@@ -111,6 +112,7 @@ class OpenMeteoClient:
         """GET with retry on 429 rate-limit and 5xx server error responses."""
         url, params = self._prepare_request(url, params)
         for attempt in range(_MAX_RETRIES):
+            self.call_count += 1
             resp = self.session.get(url, params=params, timeout=self.timeout)
             if resp.status_code not in self._RETRYABLE_STATUS_CODES:
                 resp.raise_for_status()
@@ -125,6 +127,7 @@ class OpenMeteoClient:
             )
             time.sleep(wait)
         # Final attempt — let it raise on any error
+        self.call_count += 1
         resp = self.session.get(url, params=params, timeout=self.timeout)
         resp.raise_for_status()
         return resp

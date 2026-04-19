@@ -643,6 +643,30 @@ class VerificationCacheRow(Base):
     )
 
 
+class ApiUsageRow(Base):
+    """Tracks external API calls across all pipelines.
+
+    One row per pipeline run per service. Used for monthly subscription
+    limit monitoring (across all users) and per-user usage breakdown.
+    """
+
+    __tablename__ = "api_usage_log"
+    __table_args__ = (
+        Index("ix_api_usage_timestamp", "timestamp"),
+        Index("ix_api_usage_service", "service"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    service: Mapped[str] = mapped_column(String(32), nullable=False)  # open_meteo, ecmwf, ...
+    pipeline: Mapped[str] = mapped_column(String(32), nullable=False)  # briefing, verification, frontal, ...
+    api_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    flight_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
 class VerificationCycleRow(Base):
     """Performance metrics for each verification collection cycle.
 

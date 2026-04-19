@@ -604,9 +604,17 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
     save_pack_meta(db, meta)
 
     # Log usage and charge credits
-    if user_id is not None:
-        from weatherbrief.api.usage import log_briefing_usage
+    from weatherbrief.api.usage import log_api_usage, log_briefing_usage
 
+    log_api_usage(
+        db,
+        service="open_meteo",
+        pipeline="briefing",
+        api_calls=result.usage.open_meteo_calls,
+        user_id=user_id,
+        flight_id=flight_id,
+    )
+    if user_id is not None:
         pack_size = _measure_pack_size(pack_path)
         usage_row_id = log_briefing_usage(
             db, user_id, flight_id, result.usage, result_size_bytes=pack_size,

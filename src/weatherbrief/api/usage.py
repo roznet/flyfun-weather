@@ -11,7 +11,7 @@ from sqlalchemy import Integer, func
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
-from weatherbrief.db.models import BriefingUsageRow
+from weatherbrief.db.models import ApiUsageRow, BriefingUsageRow
 from weatherbrief.pipeline import BriefingUsage
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,68 @@ def log_briefing_usage(
         usage.gramet_fetched, usage.llm_digest,
     )
     return row.id
+
+
+def log_api_usage(
+    db: Session,
+    *,
+    service: str,
+    pipeline: str,
+    api_calls: int,
+    user_id: str | None = None,
+    flight_id: str | None = None,
+) -> None:
+    """Log external API calls for subscription limit monitoring."""
+    if api_calls <= 0:
+        return
+    db.add(ApiUsageRow(
+        service=service,
+        pipeline=pipeline,
+        api_calls=api_calls,
+        user_id=user_id,
+        flight_id=flight_id,
+    ))
+    db.flush()
+    logger.info(
+        "API usage: service=%s pipeline=%s calls=%d user=%s",
+        service, pipeline, api_calls, user_id or "-",
+    )
+
+
+class ApiUsageMonthly(BaseModel):
+    service: str
+    pipeline: str
+    total_calls: int
+
+
+class ApiUsageMonthSummary(BaseModel):
+    month: str
+    by_service: list[ApiUsageMonthly]
+    total_calls: int
+
+
+def get_api_usage_monthly(db: Session) -> ApiUsageMonthSummary:
+    """Aggregate API calls for the current month, grouped by service and pipeline."""
+    month = _month_start()
+    rows = (
+        db.query(
+            ApiUsageRow.service,
+            ApiUsageRow.pipeline,
+            func.coalesce(func.sum(ApiUsageRow.api_calls), 0).label("total"),
+        )
+        .filter(ApiUsageRow.timestamp >= month)
+        .group_by(ApiUsageRow.service, ApiUsageRow.pipeline)
+        .all()
+    )
+    by_service = [
+        ApiUsageMonthly(service=r.service, pipeline=r.pipeline, total_calls=int(r.total))
+        for r in rows
+    ]
+    return ApiUsageMonthSummary(
+        month=month.strftime("%Y-%m"),
+        by_service=by_service,
+        total_calls=sum(s.total_calls for s in by_service),
+    )
 
 
 def get_usage_summary(db: Session, user_id: str) -> UsageSummary:

@@ -370,7 +370,7 @@ def execute_briefing(
     result.grib_init_times = fetch_result.grib_init_times
     result.models_skipped_region = fetch_result.models_skipped_region
     result.diagnostics = fetch_result.diagnostics
-    result.usage.open_meteo_calls = len(fetch_result.cross_sections)
+    result.usage.open_meteo_calls = fetch_result.open_meteo_api_calls
     result.usage.grib_enrichment = fetch_result.grib_enriched
     result.usage.grib_enrichment_failed = fetch_result.grib_enrichment_failed
     result.usage.metar_taf_fetched = result_usage_metar

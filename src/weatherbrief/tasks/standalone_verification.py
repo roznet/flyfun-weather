@@ -125,11 +125,12 @@ def _fetch_forecasts_for_model(
     init_time: datetime,
     airports: list[WatchlistAirport],
     session: requests.Session,
-) -> list[dict]:
+) -> tuple[list[dict], int]:
     """Fetch Open-Meteo surface forecasts for all airports for one model.
 
-    Returns list of dicts, each with airport ICAO and per-sample-hour values.
-    Filters to SAMPLE_HOURS_UTC only.
+    Returns (snapshots, api_call_count) — list of dicts with airport ICAO
+    and per-sample-hour values filtered to SAMPLE_HOURS_UTC, plus the number
+    of actual HTTP requests made.
     """
     from weatherbrief.models.analysis import ModelSource, RoutePoint
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
@@ -226,7 +227,7 @@ def _fetch_forecasts_for_model(
 
                 all_results.append(snap)
 
-    return all_results
+    return all_results, client.call_count
 
 
 def _enrich_with_sounding(snap: dict, hourly, model: str) -> None:
@@ -705,6 +706,7 @@ def run_standalone_cycle(
     try:
         models_fetched = 0
         snapshots_stored = 0
+        total_api_calls = 0
 
         if not fetch_forecasts:
             logger.info("Light cycle — skipping forecast fetch, observations + scoring only")
@@ -737,8 +739,10 @@ def run_standalone_cycle(
             logger.info("Fetching %s forecasts (init %s) for %d airports",
                         model, init_time, len(airports))
 
-            snapshots = _fetch_forecasts_for_model(model, init_time, airports, session)
-            logger.info("Model %s: %d snapshot values from Open-Meteo", model, len(snapshots))
+            snapshots, api_calls = _fetch_forecasts_for_model(model, init_time, airports, session)
+            total_api_calls += api_calls
+            logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
+                        model, len(snapshots), api_calls)
 
             # GRIB enrichment for ceiling/cloud_base
             _enrich_with_grib(snapshots, model, init_time, airports, session)
@@ -767,6 +771,16 @@ def run_standalone_cycle(
         pruned = _prune_old_snapshots(db)
         if pruned:
             logger.info("Pruned %d old forecast snapshots", pruned)
+
+        # Log API usage
+        if total_api_calls > 0:
+            from weatherbrief.api.usage import log_api_usage
+            log_api_usage(
+                db,
+                service="open_meteo",
+                pipeline="verification",
+                api_calls=total_api_calls,
+            )
 
         # Record cycle metrics
         t_end = time.monotonic()
