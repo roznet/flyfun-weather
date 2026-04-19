@@ -83,15 +83,12 @@ struct SkewTDetailView: View {
                     .padding(.vertical, 4)
 
                     // Skew-T plot — match web app's pressure range (1050–250 hPa)
-                    // Landscape aspect ~9:5 to match metpy figsize, capped to viewport
+                    // Landscape aspect ~9:5 to match metpy figsize
                     SkewTView(
                         profile: response.toSoundingProfile(),
                         config: SkewTConfiguration(pTop: 250)
                     )
                     .aspectRatio(9.0 / 5.0, contentMode: .fit)
-                    .containerRelativeFrame(.vertical) { height, _ in
-                        height - 40
-                    }
                 }
             case .error(let error):
                 ContentUnavailableView("Sounding Unavailable",
