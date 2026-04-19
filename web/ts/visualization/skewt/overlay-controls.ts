@@ -25,6 +25,66 @@ function getVarMetricId(varId: string): string {
   return v?.metricId ?? '';
 }
 
+/** Common interface for renderers that expose side panel variable selection. */
+interface SidePanelVarHost {
+  getPrimaryVar(): string;
+  getSecondaryVar(): string | null;
+  setPrimaryVar(id: string): void;
+  setSecondaryVar(id: string | null): void;
+}
+
+/** Generate HTML for primary + secondary side panel dropdowns with info buttons. */
+function renderSidePanelSelectorHtml(primaryId: string, secondaryId: string | null): string {
+  let html = '<div class="skewt-panel-selector">';
+  html += '<span class="skewt-overlay-group-label">Side panel</span>';
+
+  // Primary dropdown + info button
+  html += '<select class="skewt-panel-dropdown" data-axis="primary" title="Primary variable (bottom axis)">';
+  for (const v of VARIABLE_REGISTRY) {
+    const sel = v.id === primaryId ? 'selected' : '';
+    html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
+  }
+  html += '</select>';
+  const primaryMetric = getVarMetricId(primaryId);
+  if (primaryMetric) {
+    html += `<button class="metric-info-btn skewt-panel-info" data-axis="primary" data-metric="${primaryMetric}" title="More info" aria-label="More info">\u24d8</button>`;
+  }
+
+  // Secondary dropdown + info button
+  html += '<select class="skewt-panel-dropdown" data-axis="secondary" title="Secondary variable (top axis)">';
+  html += `<option value=""${!secondaryId ? ' selected' : ''}>None</option>`;
+  for (const v of VARIABLE_REGISTRY) {
+    const sel = v.id === secondaryId ? 'selected' : '';
+    html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
+  }
+  html += '</select>';
+  const secondaryMetric = secondaryId ? getVarMetricId(secondaryId) : '';
+  html += `<button class="metric-info-btn skewt-panel-info" data-axis="secondary" data-metric="${secondaryMetric}" title="More info" aria-label="More info"${!secondaryMetric ? ' style="display:none"' : ''}>\u24d8</button>`;
+
+  html += '</div>';
+  return html;
+}
+
+/** Wire change listeners on side panel dropdowns, updating renderer and info buttons. */
+function wireSidePanelDropdowns(container: HTMLElement, renderer: SidePanelVarHost): void {
+  container.querySelectorAll<HTMLSelectElement>('.skewt-panel-dropdown').forEach(select => {
+    select.addEventListener('change', () => {
+      const axis = select.dataset.axis;
+      if (axis === 'primary') {
+        renderer.setPrimaryVar(select.value);
+      } else {
+        renderer.setSecondaryVar(select.value || null);
+      }
+      const infoBtn = container.querySelector(`.skewt-panel-info[data-axis="${axis}"]`) as HTMLElement | null;
+      if (infoBtn) {
+        const newMetricId = getVarMetricId(select.value);
+        infoBtn.dataset.metric = newMetricId;
+        infoBtn.style.display = newMetricId ? '' : 'none';
+      }
+    });
+  });
+}
+
 /** Render the overlay toggle controls and side panel selector. */
 export function renderSkewtOverlayControls(
   container: HTMLElement,
@@ -64,33 +124,7 @@ export function renderSkewtOverlayControls(
   html += '</div>';
 
   // Side panel variable dropdowns with dynamic info buttons
-  html += '<div class="skewt-panel-selector">';
-  html += '<span class="skewt-overlay-group-label">Side panel</span>';
-
-  // Primary dropdown + info button
-  html += `<select class="skewt-panel-dropdown" data-axis="primary" title="Primary variable (bottom axis)">`;
-  for (const v of VARIABLE_REGISTRY) {
-    const sel = v.id === primaryId ? 'selected' : '';
-    html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
-  }
-  html += `</select>`;
-  const primaryMetric = getVarMetricId(primaryId);
-  if (primaryMetric) {
-    html += `<button class="metric-info-btn skewt-panel-info" data-axis="primary" data-metric="${primaryMetric}" title="More info" aria-label="More info">\u24d8</button>`;
-  }
-
-  // Secondary dropdown + info button
-  html += `<select class="skewt-panel-dropdown" data-axis="secondary" title="Secondary variable (top axis)">`;
-  html += `<option value=""${!secondaryId ? ' selected' : ''}>None</option>`;
-  for (const v of VARIABLE_REGISTRY) {
-    const sel = v.id === secondaryId ? 'selected' : '';
-    html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
-  }
-  html += `</select>`;
-  const secondaryMetric = secondaryId ? getVarMetricId(secondaryId) : '';
-  html += `<button class="metric-info-btn skewt-panel-info" data-axis="secondary" data-metric="${secondaryMetric}" title="More info" aria-label="More info"${!secondaryMetric ? ' style="display:none"' : ''}>\u24d8</button>`;
-
-  html += '</div>';
+  html += renderSidePanelSelectorHtml(primaryId, secondaryId);
 
   // Indices info buttons row
   html += '<div class="skewt-indices-info">';
@@ -112,23 +146,7 @@ export function renderSkewtOverlayControls(
   });
 
   // Attach dropdown listeners — update adjacent info button on change
-  container.querySelectorAll<HTMLSelectElement>('.skewt-panel-dropdown').forEach(select => {
-    select.addEventListener('change', () => {
-      const axis = select.dataset.axis;
-      if (axis === 'primary') {
-        renderer.setPrimaryVar(select.value);
-      } else {
-        renderer.setSecondaryVar(select.value || null);
-      }
-      // Update the adjacent info button
-      const infoBtn = container.querySelector(`.skewt-panel-info[data-axis="${axis}"]`) as HTMLElement | null;
-      if (infoBtn) {
-        const newMetricId = getVarMetricId(select.value);
-        infoBtn.dataset.metric = newMetricId;
-        infoBtn.style.display = newMetricId ? '' : 'none';
-      }
-    });
-  });
+  wireSidePanelDropdowns(container, renderer);
 }
 
 /** Callbacks for Skew-T compare controls. */
@@ -177,31 +195,7 @@ export function renderSkewtCompareControls(
   html += '</div>';
 
   // Side panel variable dropdowns
-  html += '<div class="skewt-panel-selector">';
-  html += '<span class="skewt-overlay-group-label">Side panel</span>';
-
-  html += '<select class="skewt-panel-dropdown" data-axis="primary" title="Primary variable (bottom axis)">';
-  for (const v of VARIABLE_REGISTRY) {
-    const sel = v.id === primaryId ? 'selected' : '';
-    html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
-  }
-  html += '</select>';
-  const primaryMetric = getVarMetricId(primaryId);
-  if (primaryMetric) {
-    html += `<button class="metric-info-btn skewt-panel-info" data-axis="primary" data-metric="${primaryMetric}" title="More info" aria-label="More info">\u24d8</button>`;
-  }
-
-  html += '<select class="skewt-panel-dropdown" data-axis="secondary" title="Secondary variable (top axis)">';
-  html += `<option value=""${!secondaryId ? ' selected' : ''}>None</option>`;
-  for (const v of VARIABLE_REGISTRY) {
-    const sel = v.id === secondaryId ? 'selected' : '';
-    html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
-  }
-  html += '</select>';
-  const secondaryMetric = secondaryId ? getVarMetricId(secondaryId) : '';
-  html += `<button class="metric-info-btn skewt-panel-info" data-axis="secondary" data-metric="${secondaryMetric}" title="More info" aria-label="More info"${!secondaryMetric ? ' style="display:none"' : ''}>\u24d8</button>`;
-
-  html += '</div>';
+  html += renderSidePanelSelectorHtml(primaryId, secondaryId);
   html += '</div>';
 
   container.innerHTML = html;
@@ -222,22 +216,7 @@ export function renderSkewtCompareControls(
   if (levelsInput) levelsInput.addEventListener('change', () => callbacks.onLevelMarkersToggle());
 
   // Wire dropdown listeners
-  container.querySelectorAll<HTMLSelectElement>('.skewt-panel-dropdown').forEach(select => {
-    select.addEventListener('change', () => {
-      const axis = select.dataset.axis;
-      if (axis === 'primary') {
-        renderer.setPrimaryVar(select.value);
-      } else {
-        renderer.setSecondaryVar(select.value || null);
-      }
-      const infoBtn = container.querySelector(`.skewt-panel-info[data-axis="${axis}"]`) as HTMLElement | null;
-      if (infoBtn) {
-        const newMetricId = getVarMetricId(select.value);
-        infoBtn.dataset.metric = newMetricId;
-        infoBtn.style.display = newMetricId ? '' : 'none';
-      }
-    });
-  });
+  wireSidePanelDropdowns(container, renderer);
 }
 
 function groupLabel(group: string): string {
