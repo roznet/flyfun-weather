@@ -30,6 +30,7 @@ import { renderAltitudeSlider } from './visualization/route-map/altitude-slider'
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { SkewTRenderer } from './visualization/skewt/renderer';
+import { renderSkewtOverlayControls } from './visualization/skewt/overlay-controls';
 import type { SoundingProfileData } from './visualization/skewt/types';
 
 async function loadFlightPireps(flightId: string): Promise<void> {
@@ -247,6 +248,9 @@ async function init(): Promise<void> {
       const container = document.getElementById('skewt-canvas-container');
       if (!container) throw new Error('skewt-canvas-container not found');
       skewtRenderer = new SkewTRenderer(container);
+      // Render overlay toggle controls
+      const controlsEl = document.getElementById('skewt-overlay-controls');
+      if (controlsEl) renderSkewtOverlayControls(controlsEl, skewtRenderer);
     }
     return skewtRenderer;
   }

@@ -13,6 +13,7 @@ import { BackgroundLinesRenderer } from './background-lines';
 import { renderProfileCurves } from './profile-curves';
 import { renderAxes, renderLevelMarkers, renderIndicesPanel } from './axes';
 import { renderWindPanel, getWindPanelWidth, WindPanelLayout } from './wind-panel';
+import { renderOverlayBands, getDefaultOverlayState } from './overlay-bands';
 import { SoundingProfileData, DEFAULT_CONFIG, SkewTConfig, PlotArea } from './types';
 
 // Layout constants
@@ -29,11 +30,13 @@ export class SkewTRenderer {
   private data: SoundingProfileData | null = null;
   private config: SkewTConfig = DEFAULT_CONFIG;
   private backgroundLines = new BackgroundLinesRenderer();
+  private overlayState: Record<string, boolean>;
   private resizeObserver: ResizeObserver;
   private themeListener: (() => void) | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
+    this.overlayState = loadOverlayState();
 
     // Create canvas
     this.canvas = document.createElement('canvas');
@@ -119,21 +122,24 @@ export class SkewTRenderer {
     this.backgroundLines.render(ctx, transform, this.config, this.canvas.width, this.canvas.height, dpr);
     ctx.restore();
 
-    // 2. Level markers (LCL, LFC, EL, freezing, cruise)
+    // 2. Overlay bands (clouds, icing, inversions, convective)
+    renderOverlayBands(ctx, transform, this.data, this.overlayState);
+
+    // 3. Level markers (LCL, LFC, EL, freezing, cruise)
     renderLevelMarkers(ctx, transform, this.data);
 
-    // 3. Profile curves + CAPE/CIN shading
+    // 4. Profile curves + CAPE/CIN shading
     const lclP = this.data.indices?.lcl_pressure_hpa as number | null ?? null;
     const elP = this.data.indices?.el_pressure_hpa as number | null ?? null;
     renderProfileCurves(ctx, transform, this.data.levels, this.data.parcel_path, lclP, elP);
 
-    // 4. Axes and labels
+    // 5. Axes and labels
     renderAxes(ctx, transform);
 
-    // 5. Indices panel
+    // 6. Indices panel
     renderIndicesPanel(ctx, transform, this.data);
 
-    // 6. Wind panel
+    // 7. Wind panel
     if (windPanelWidth > 0) {
       const windLayout: WindPanelLayout = {
         left: skewtRight + WIND_PANEL_GAP,
@@ -169,6 +175,18 @@ export class SkewTRenderer {
     ctx.fillText(`${label} — ${model}`, MARGIN_LEFT, 4);
   }
 
+  /** Toggle an overlay layer and re-render. */
+  toggleOverlay(id: string): void {
+    this.overlayState[id] = !this.overlayState[id];
+    saveOverlayState(this.overlayState);
+    this.render();
+  }
+
+  /** Get current overlay enabled state. */
+  getOverlayState(): Record<string, boolean> {
+    return { ...this.overlayState };
+  }
+
   /** Clean up resources. */
   destroy(): void {
     this.resizeObserver.disconnect();
@@ -177,4 +195,19 @@ export class SkewTRenderer {
     }
     this.canvas.remove();
   }
+}
+
+const OVERLAY_STORAGE_KEY = 'wb_skewtOverlays';
+
+function loadOverlayState(): Record<string, boolean> {
+  const defaults = getDefaultOverlayState();
+  try {
+    const saved = localStorage.getItem(OVERLAY_STORAGE_KEY);
+    if (saved) return { ...defaults, ...JSON.parse(saved) };
+  } catch { /* ignore */ }
+  return defaults;
+}
+
+function saveOverlayState(state: Record<string, boolean>): void {
+  try { localStorage.setItem(OVERLAY_STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore */ }
 }

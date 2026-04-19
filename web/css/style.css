@@ -1283,6 +1283,43 @@ label {
   overflow: hidden;
 }
 
+.skewt-overlay-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  font-size: 0.78rem;
+}
+
+.skewt-overlay-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.skewt-overlay-group-label {
+  font-weight: 600;
+  color: var(--muted);
+  margin-right: 0.1rem;
+}
+
+.skewt-overlay-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.skewt-overlay-toggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.skewt-overlay-name {
+  white-space: nowrap;
+}
+
 .external-links {
   font-size: 0.8rem;
   color: var(--muted);
