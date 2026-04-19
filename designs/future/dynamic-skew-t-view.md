@@ -1,5 +1,7 @@
 # Dynamic Canvas Skew-T View
 
+> **Status**: Phases 1–4 implemented. See [designs/skewt-canvas.md](../skewt-canvas.md) for the current implementation design doc. This file retains the original planning detail and documents what's still future (multi-model overlay, zoom/pan, theme integration).
+
 > Interactive, client-rendered Skew-T log-P diagram for the web app, replacing the static MetPy PNG with a canvas-based view that supports layer overlays, side variable panels, multi-model comparison, and linked interaction with the cross-section.
 
 ## Motivation
@@ -81,9 +83,8 @@ class SoundingProfileResponse(BaseModel):
     icing_zones: list[dict] = []
     icing_ogimet_nwp_zones: list[dict] = []  # new
     sfip_zones: list[dict] = []              # new
-    ieng_icing_zones: list[dict] = []        # new
-    sld_zones: list[dict] = []               # new
     inversion_layers: list[dict] = []
+    # Future: ieng_icing_zones, sld_zones (Phase 4)
     convective: dict | None = None           # new
     label: str | None = None                 # ICAO or route point name
 ```
@@ -268,46 +269,40 @@ For multi-model: fetch `sounding-profile` for each selected model via `Promise.a
 
 ## Phases
 
-### Phase 1 — Core Canvas Skew-T
+### Phase 1 — Core Canvas Skew-T ✅ Implemented
 - Port `SkewTTransform` to TypeScript
 - Background line rendering (isotherms, adiabats, mixing ratios)
 - T/Td profile curves + parcel path
-- CAPE/CIN shading
+- CAPE/CIN shading (LCL→EL bounds)
 - Level markers (LCL, LFC, EL, freezing)
 - Indices panel
 - Headwind/crosswind side panel (default-on)
 - Axes (pressure left, FL right, temp bottom)
 - Extend `sounding-profile` endpoint with parcel path, NWP clouds, full icing zones, track_deg, derived level fields
 - Add `parcel_path` to `SoundingAnalysis` model (capture from existing `analyze_sounding()` computation)
-- Dynamic `import()` triggered by cross-section waypoint click
-- Toggle between MetPy PNG and canvas view
-- **Milestone**: feature parity with current MetPy Skew-T + headwind/crosswind panel
+- Route point click triggers Skew-T load (any point, not just named waypoints)
+- Toggle between MetPy PNG and canvas view (Dynamic/Static buttons)
 
-### Phase 2 — Layer Overlays
+### Phase 2 — Layer Overlays ✅ Implemented
 - Cloud bands (DD + NWP) as toggleable overlays
 - Icing zones (Ogimet-NWP, Ogimet-DD, SFIP) as toggleable overlays
 - Inversion bands
-- Convective zone highlight
-- Layer registry with toggle UI (same pattern as cross-section)
-- Sync preferred method with cross-section (icing/cloud method selection)
-- **Milestone**: overlays match cross-section layer semantics
+- Convective zone highlight (LFC→EL)
+- Checkbox toggle UI with state persisted to localStorage
+- Note: preferred method sync with cross-section not yet implemented
 
-### Phase 3 — Side Variable Panels + Theming
-- Generic `VariablePanel` component (vertical plot, shared Y-axis)
-- Variable registry with all `SoundingProfileLevel` fields
-- Panel add/remove UI
-- Start with: DD, wind speed, icing index, lapse rate
-- Expand to: RH, CLW, Ri, θe, vertical velocity
-- Unified `VizTheme` with `skewt` property group across all three themes (standard, high-contrast, gramet)
-- **Milestone**: side panels operational with 4+ variables, themed rendering
+### Phase 3 — Side Variable Panels ✅ Implemented (partial)
+- Dual-axis side panel (primary + secondary variable, single fixed-width 110px panel)
+- Variable registry with 12 variables (HW/XW, DD, RH, Wind, Ice-DD, Ice-NWP, SFIP, CLW, ICE, Γ, Ri, w, θe)
+- Dropdown selectors for primary/secondary variable
+- On-the-fly `analyze_sounding()` in endpoint for derived variables (~30ms)
+- Inline computation of DD, RH, lapse rate, θe, CLW, ICE, omega/w from raw data
+- **Not yet implemented**: Unified `VizTheme` rename + Skew-T theme property groups
 
-### Phase 4 — Interaction & Multi-Model
-- Click-to-inspect tooltip
-- Linked cursor with cross-section (shared event bus)
-- Multi-model overlay (2–3 models on same Skew-T)
-- Model divergence highlighting
-- Optional: vertical zoom/pan
-- **Milestone**: full interactive Skew-T with model comparison
+### Phase 4 — Interaction ✅ Implemented (partial)
+- Hover tooltip with all values at pressure level
+- Linked cursor: Skew-T ↔ cross-section (altitude-based)
+- **Not yet implemented**: Multi-model overlay, model divergence highlighting, vertical zoom/pan
 
 ## Reuse from Cross-Section
 

@@ -1,10 +1,12 @@
 # Visualization System
 
-> Three synchronized visualizations: canvas cross-section, canvas route graph, and Leaflet route map
+> Four synchronized visualizations: canvas cross-section, canvas route graph, Leaflet route map, and dynamic canvas Skew-T
 
 ## Intent
 
-Provide interactive visual analysis of weather along a flight route through three coordinated views: a vertical cross-section (clouds, icing, turbulence, terrain), a scalar route graph (wind, temperature, CAPE), and a geographic route map (metric-colored segments on a Leaflet map). All views share the same `VizRouteData` and synchronize hover/selection through the Zustand store.
+Provide interactive visual analysis of weather along a flight route through four coordinated views: a vertical cross-section (clouds, icing, turbulence, terrain), a scalar route graph (wind, temperature, CAPE), a geographic route map (metric-colored segments on a Leaflet map), and a dynamic Skew-T log-P diagram (per-point sounding inspection with overlay bands and side panels). The first three share `VizRouteData` and synchronize hover/selection through the Zustand store. The Skew-T loads on-demand when a route point is clicked, fetching its own `SoundingProfileData`, and links hover altitude with the cross-section.
+
+See [skewt-canvas.md](./skewt-canvas.md) for the full Skew-T design.
 
 ## Layout Modes
 

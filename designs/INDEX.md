@@ -36,9 +36,14 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Three synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (9 scalar metrics incl. ceiling-DD/NWP), and Leaflet route map (17 metric-colored segment types with altitude slider and width variation). Switchable cross-section themes (standard, high-contrast, gramet) with cloud hatch patterns, theme preview, and theme-aware legends. Four layout modes (cross-section, compare, split, map), shared color scales, hover sync, compact/full layer mode, icing/cloud method groups. Compare mode renders one layer across all models with four band modes (overlay, overlay-soft, consensus, consensus+outlines).
-Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
+Four synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (9 scalar metrics incl. ceiling-DD/NWP), Leaflet route map (17 metric-colored segment types with altitude slider and width variation), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable cross-section themes (standard, high-contrast, gramet) with cloud hatch patterns, theme preview, and theme-aware legends. Four layout modes (cross-section, compare, split, map), shared color scales, hover sync, compact/full layer mode, icing/cloud method groups. Compare mode renders one layer across all models with four band modes (overlay, overlay-soft, consensus, consensus+outlines).
+Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `SkewTRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
+
+### skewt-canvas
+Dynamic client-rendered Skew-T log-P diagram replacing static MetPy PNGs. Canvas-based with background grid (isotherms, adiabats, mixing ratios), T/Td/parcel path curves, CAPE/CIN shading, overlay bands (clouds, icing, inversions, convective), dual-axis side panel (12 variables incl. HW/XW), hover tooltip, and linked cursor with cross-section. On-the-fly sounding analysis for derived variables.
+Key exports: `SkewTRenderer`, `SkewTTransform`, `attachSkewTInteraction`, `VARIABLE_REGISTRY`, `SKEWT_OVERLAYS`
+→ Full doc: skewt-canvas.md
 
 ### route-graph
 2D chart below cross-section for scalar weather values along route. Dual Y-axes, extensible metric registry (9 metrics incl. ceiling-DD/NWP AGL), line and bar render types, hover sync with cross-section.
