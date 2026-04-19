@@ -157,19 +157,28 @@ export function renderCompareProfileCurves(
   ctx.rect(plot.left, plot.top, plot.width, plot.height);
   ctx.clip();
 
-  // 1. Optional CAPE/CIN from primary model only
+  // 1. Optional CAPE/CIN shading for all models (overlapping shows agreement)
   if (showCapeCin) {
-    const primary = datasets.find(d => d.isPrimary);
-    if (primary?.parcelPath?.length) {
-      renderCapeCinShading(ctx, transform, primary.levels, primary.parcelPath,
-        primary.lclP ?? null, primary.elP ?? null);
+    for (const ds of datasets) {
+      if (!ds.parcelPath?.length) continue;
+      ctx.globalAlpha = ds.isPrimary ? 1.0 : 0.55;
+      renderCapeCinShading(ctx, transform, ds.levels, ds.parcelPath,
+        ds.lclP ?? null, ds.elP ?? null);
     }
+    ctx.globalAlpha = 1.0;
   }
 
   // 2. Secondary models first (behind primary)
   for (const ds of datasets) {
     if (ds.isPrimary) continue;
     ctx.globalAlpha = 0.55;
+    // Parcel path
+    if (showCapeCin && ds.parcelPath?.length) {
+      const parcelPoints = ds.parcelPath.map(pp => ({
+        tempC: pp.temperature_c, pressureHPa: pp.pressure_hpa,
+      }));
+      drawProfileLine(ctx, transform, parcelPoints, ds.color, 1.0, PARCEL_DASH);
+    }
     const tPoints = ds.levels.map(lv => ({ tempC: lv.temperature_c, pressureHPa: lv.pressure_hpa }));
     drawProfileLine(ctx, transform, tPoints, ds.color, 1.5);
     const tdPoints = ds.levels
@@ -182,21 +191,19 @@ export function renderCompareProfileCurves(
   const primary = datasets.find(d => d.isPrimary);
   if (primary) {
     ctx.globalAlpha = 1.0;
+    // Parcel path
+    if (showCapeCin && primary.parcelPath?.length) {
+      const parcelPoints = primary.parcelPath.map(pp => ({
+        tempC: pp.temperature_c, pressureHPa: pp.pressure_hpa,
+      }));
+      drawProfileLine(ctx, transform, parcelPoints, primary.color, PARCEL_LINE_WIDTH, PARCEL_DASH);
+    }
     const tPoints = primary.levels.map(lv => ({ tempC: lv.temperature_c, pressureHPa: lv.pressure_hpa }));
     drawProfileLine(ctx, transform, tPoints, primary.color, 2.5);
     const tdPoints = primary.levels
       .filter(lv => lv.dewpoint_c !== null)
       .map(lv => ({ tempC: lv.dewpoint_c!, pressureHPa: lv.pressure_hpa }));
     drawProfileLine(ctx, transform, tdPoints, primary.color, 2.5, [4, 3]);
-
-    // Optional parcel path from primary
-    if (showCapeCin && primary.parcelPath?.length) {
-      const parcelPoints = primary.parcelPath.map(pp => ({
-        tempC: pp.temperature_c,
-        pressureHPa: pp.pressure_hpa,
-      }));
-      drawProfileLine(ctx, transform, parcelPoints, PARCEL_COLOR, PARCEL_LINE_WIDTH, PARCEL_DASH);
-    }
   }
 
   ctx.restore();

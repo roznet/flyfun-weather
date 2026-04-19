@@ -145,11 +145,10 @@ export class SkewTCompareRenderer {
 
     // 2. No overlay bands in compare mode
 
-    // 3. Optional level markers from primary model
+    // 3. Optional level markers from all models
     if (this.showLevelMarkersState) {
-      const primary = this.datasets.find(d => d.isPrimary);
-      if (primary) {
-        renderLevelMarkers(ctx, transform, primary.data);
+      for (const ds of this.datasets) {
+        renderLevelMarkers(ctx, transform, ds.data);
       }
     }
 
