@@ -712,9 +712,8 @@ async function init(): Promise<void> {
       }
     }
     if (state.selectedModel !== prev.selectedModel) {
-      ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
+      renderPointSections(state);
       renderVisualization(state);
-      ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
     }
     if (state.vizSettings !== prev.vizSettings) {
       renderVisualization(state);
