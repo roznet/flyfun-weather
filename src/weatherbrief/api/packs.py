@@ -1840,10 +1840,30 @@ class SoundingProfileLevel(BaseModel):
     dewpoint_c: float | None = None
     wind_speed_kt: float | None = None
     wind_direction_deg: float | None = None
+    # Extended DerivedLevel fields for side panels
+    relative_humidity_pct: float | None = None
+    dewpoint_depression_c: float | None = None
+    wet_bulb_c: float | None = None
+    theta_e_k: float | None = None
+    lapse_rate_c_per_km: float | None = None
+    icing_index: float | None = None
+    icing_index_nwp: float | None = None
+    sfip_100: float | None = None
+    cloud_liquid_water_g_m3: float | None = None
+    ice_mixing_ratio_g_kg: float | None = None
+    richardson_number: float | None = None
+    omega_pa_s: float | None = None
+    w_fpm: float | None = None
+
+
+class ParcelPathPointResponse(BaseModel):
+    """A single point on the parcel path for CAPE/CIN shading."""
+    pressure_hpa: float
+    temperature_c: float
 
 
 class SoundingProfileResponse(BaseModel):
-    """Raw sounding profile data for client-side Skew-T rendering."""
+    """Sounding profile data for client-side Skew-T rendering (web + iOS)."""
     point_index: int
     lat: float
     lon: float
@@ -1853,11 +1873,20 @@ class SoundingProfileResponse(BaseModel):
     time: str
     levels: list[SoundingProfileLevel]
     cruise_altitude_ft: int | None = None
-    # Overlay data from sounding analysis
+    track_deg: float | None = None
+    label: str | None = None
+    # Thermodynamic indices
     indices: dict | None = None
+    # Parcel path for CAPE/CIN shading
+    parcel_path: list[ParcelPathPointResponse] = Field(default_factory=list)
+    # Overlay data from sounding analysis
     cloud_layers: list[dict] = Field(default_factory=list)
+    nwp_cloud_layers: list[dict] = Field(default_factory=list)
     icing_zones: list[dict] = Field(default_factory=list)
+    icing_ogimet_nwp_zones: list[dict] = Field(default_factory=list)
+    sfip_zones: list[dict] = Field(default_factory=list)
     inversion_layers: list[dict] = Field(default_factory=list)
+    convective: dict | None = None
 
 
 def _build_sounding_profile(
@@ -1885,21 +1914,52 @@ def _build_sounding_profile(
     if not hourly or not hourly.pressure_levels:
         return None
 
+    sounding_data = point_data.get("sounding", {}).get(model, {})
+
+    # Build a lookup from derived_levels for enriching profile levels.
+    # derived_levels are excluded from route_analyses.json to save space,
+    # so we re-derive from cross-section pressure levels when available.
+    # However, sounding_data may still contain them for on-the-fly requests.
+    derived_by_pressure: dict[int, dict] = {}
+    for dl in sounding_data.get("derived_levels", []):
+        derived_by_pressure[dl.get("pressure_hpa", 0)] = dl
+
     levels = []
     for pl in sorted(hourly.pressure_levels, key=lambda x: x.pressure_hpa, reverse=True):
         if pl.temperature_c is None:
             continue
         alt_ft = pl.geopotential_height_m * 3.28084 if pl.geopotential_height_m is not None else None
+        dl = derived_by_pressure.get(pl.pressure_hpa, {})
         levels.append(SoundingProfileLevel(
             pressure_hpa=pl.pressure_hpa,
-            altitude_ft=alt_ft,
+            altitude_ft=alt_ft or dl.get("altitude_ft"),
             temperature_c=pl.temperature_c,
             dewpoint_c=pl.dewpoint_c,
             wind_speed_kt=pl.wind_speed_kt,
             wind_direction_deg=pl.wind_direction_deg,
+            relative_humidity_pct=dl.get("relative_humidity_pct"),
+            dewpoint_depression_c=dl.get("dewpoint_depression_c"),
+            wet_bulb_c=dl.get("wet_bulb_c"),
+            theta_e_k=dl.get("theta_e_k"),
+            lapse_rate_c_per_km=dl.get("lapse_rate_c_per_km"),
+            icing_index=dl.get("icing_index"),
+            icing_index_nwp=dl.get("icing_index_nwp"),
+            sfip_100=dl.get("sfip_100"),
+            cloud_liquid_water_g_m3=dl.get("cloud_liquid_water_g_m3"),
+            ice_mixing_ratio_g_kg=dl.get("ice_mixing_ratio_g_kg"),
+            richardson_number=dl.get("richardson_number"),
+            omega_pa_s=dl.get("omega_pa_s"),
+            w_fpm=dl.get("w_fpm"),
         ))
 
-    sounding_data = point_data.get("sounding", {}).get(model, {})
+    # Parcel path
+    parcel_path = [
+        ParcelPathPointResponse(pressure_hpa=pp["pressure_hpa"], temperature_c=pp["temperature_c"])
+        for pp in sounding_data.get("parcel_path", [])
+    ]
+
+    # Label: waypoint ICAO or name
+    label = point_data.get("waypoint_icao") or point_data.get("waypoint_name")
 
     return SoundingProfileResponse(
         point_index=point_index,
@@ -1911,10 +1971,17 @@ def _build_sounding_profile(
         time=point_data["interpolated_time"],
         levels=levels,
         cruise_altitude_ft=ra_data.get("cruise_altitude_ft"),
+        track_deg=point_data.get("track_deg"),
+        label=label,
         indices=sounding_data.get("indices"),
+        parcel_path=parcel_path,
         cloud_layers=sounding_data.get("cloud_layers", []),
+        nwp_cloud_layers=sounding_data.get("nwp_cloud_layers", []) or [],
         icing_zones=sounding_data.get("icing_zones", []),
+        icing_ogimet_nwp_zones=sounding_data.get("icing_ogimet_nwp_zones", []),
+        sfip_zones=sounding_data.get("sfip_zones", []),
         inversion_layers=sounding_data.get("inversion_layers", []),
+        convective=sounding_data.get("convective"),
     )
 
 

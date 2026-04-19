@@ -24,6 +24,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     InversionLayer,
     ModelDivergence,
     ModelSource,
+    ParcelPathPoint,
     NWPCloudDiagnostics,
     NWPCloudLayerDiag,
     PrecipIntensity,

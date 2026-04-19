@@ -7,13 +7,14 @@ ThermodynamicIndices + list[DerivedLevel] with plain-number values.
 from __future__ import annotations
 
 import logging
+from typing import NamedTuple
 
 import metpy.calc as mpcalc
 import numpy as np
 from metpy.units import units
 
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
-from weatherbrief.models import DerivedLevel, ThermodynamicIndices
+from weatherbrief.models import DerivedLevel, ParcelPathPoint, ThermodynamicIndices
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +63,22 @@ def _find_temperature_crossing(
     return None
 
 
-def compute_indices_core(profile: PreparedProfile) -> ThermodynamicIndices:
+class CoreIndicesResult(NamedTuple):
+    """Result of compute_indices_core: indices + optional parcel path array."""
+
+    indices: ThermodynamicIndices
+    parcel_path: list[ParcelPathPoint]
+
+
+def compute_indices_core(profile: PreparedProfile) -> CoreIndicesResult:
     """Compute core thermodynamic indices needed for ceiling and convective risk.
 
     This is the lightweight subset: LCL, parcel profile, LFC, EL,
     surface CAPE/CIN, lifted index, and freezing level.  Used by both
     the full briefing pipeline and standalone verification.
+
+    Returns a CoreIndicesResult with the indices and the parcel path array
+    (captured for client-side Skew-T CAPE/CIN rendering).
     """
     idx = ThermodynamicIndices()
     p = profile.pressure
@@ -131,7 +142,25 @@ def compute_indices_core(profile: PreparedProfile) -> ThermodynamicIndices:
     idx.minus10c_level_ft = _safe_round(_find_temperature_crossing(profile, -10.0))
     idx.minus20c_level_ft = _safe_round(_find_temperature_crossing(profile, -20.0))
 
-    return idx
+    # --- Capture parcel path for client-side CAPE/CIN rendering ---
+    parcel_path: list[ParcelPathPoint] = []
+    if parcel is not None:
+        try:
+            pressures = p.magnitude if hasattr(p, "magnitude") else np.array(p)
+            # MetPy parcel_profile returns Kelvin — convert to °C
+            temps_c = parcel.to("degC").magnitude if hasattr(parcel, "to") else np.array(parcel) - 273.15
+            for p_val, t_val in zip(pressures, temps_c):
+                if not np.isnan(t_val):
+                    parcel_path.append(
+                        ParcelPathPoint(
+                            pressure_hpa=round(float(p_val), 1),
+                            temperature_c=round(float(t_val), 2),
+                        )
+                    )
+        except Exception:
+            logger.debug("Parcel path capture failed", exc_info=True)
+
+    return CoreIndicesResult(indices=idx, parcel_path=parcel_path)
 
 
 def compute_indices_extended(
@@ -206,11 +235,11 @@ def compute_indices_extended(
         idx.bulk_shear_0_1km_kt = _compute_bulk_shear(u, v, heights_m, 0, 1000)
 
 
-def compute_indices(profile: PreparedProfile) -> ThermodynamicIndices:
+def compute_indices(profile: PreparedProfile) -> CoreIndicesResult:
     """Compute all thermodynamic indices (core + extended)."""
-    idx = compute_indices_core(profile)
-    compute_indices_extended(profile, idx)
-    return idx
+    result = compute_indices_core(profile)
+    compute_indices_extended(profile, result.indices)
+    return result
 
 
 def _safe_round(val: float | None, ndigits: int = 0) -> float | None:

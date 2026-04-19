@@ -414,6 +414,17 @@ export function routeSkewtUrl(
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/skewt/route/${pointIndex}/${encodeURIComponent(model)}`;
 }
 
+/** Fetch sounding profile JSON for client-side Skew-T rendering. */
+export async function fetchSoundingProfile(
+  flightId: string,
+  timestamp: string,
+  pointIndex: number,
+  model: string,
+): Promise<unknown> {
+  const path = `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/sounding-profile/${pointIndex}/${encodeURIComponent(model)}`;
+  return apiFetch(path);
+}
+
 export function hodographUrl(
   flightId: string,
   timestamp: string,

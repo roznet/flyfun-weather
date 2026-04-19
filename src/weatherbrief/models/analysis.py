@@ -365,6 +365,13 @@ class PrecipIntensity(str, Enum):
     HEAVY = "heavy"        # > 4 mm/h
 
 
+class ParcelPathPoint(BaseModel):
+    """A single point on the lifted parcel temperature profile."""
+
+    pressure_hpa: float
+    temperature_c: float
+
+
 class ThermodynamicIndices(BaseModel):
     """Profile-level thermodynamic indices computed via MetPy."""
 
@@ -587,6 +594,7 @@ class SoundingAnalysis(BaseModel):
     """Complete sounding analysis for one model at one waypoint/time."""
 
     indices: Optional[ThermodynamicIndices] = None
+    parcel_path: list[ParcelPathPoint] = Field(default_factory=list)
     derived_levels: list[DerivedLevel] = Field(default_factory=list)
     cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
     nwp_cloud_layers: list[EnhancedCloudLayer] | None = None

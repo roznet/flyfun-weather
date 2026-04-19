@@ -29,6 +29,8 @@ import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
+import { SkewTRenderer } from './visualization/skewt/renderer';
+import type { SoundingProfileData } from './visualization/skewt/types';
 
 async function loadFlightPireps(flightId: string): Promise<void> {
   const wrapper = document.getElementById('pireps-wrapper');
@@ -73,6 +75,7 @@ async function init(): Promise<void> {
 
   // Initialize metric info popup
   initInfoPopup();
+  initSkewtToggle();
   document.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.metric-info-btn') as HTMLElement | null;
     if (btn && !btn.classList.contains('advisory-info-btn')) {
@@ -114,7 +117,14 @@ async function init(): Promise<void> {
   // --- Helper to render point-dependent sections ---
   function renderPointSections(state: BriefingState): void {
     ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers);
-    ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
+    // Dynamic Skew-T (canvas) or static MetPy
+    if (skewtViewMode === 'dynamic') {
+      lastSkewtPointIndex = null; // force re-fetch when point/model changes
+      lastSkewtModel = null;
+      loadSkewtData(state);
+    } else {
+      ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
+    }
     ui.renderModelComparison(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility);
     ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
   }
@@ -199,6 +209,88 @@ async function init(): Promise<void> {
   let mapInteraction: MapInteractionHandle | null = null;
   let compareRenderer: CompareSectionRenderer | null = null;
   let compareInteraction: CompareInteractionHandle | null = null;
+
+  // --- Dynamic Skew-T renderer ---
+  let skewtRenderer: SkewTRenderer | null = null;
+  let skewtViewMode: 'dynamic' | 'static' = 'dynamic';
+  let lastSkewtPointIndex: number | null = null;
+  let lastSkewtModel: string | null = null;
+
+  function initSkewtToggle(): void {
+    const dynBtn = document.getElementById('skewt-view-dynamic');
+    const statBtn = document.getElementById('skewt-view-static');
+    if (dynBtn) dynBtn.addEventListener('click', () => setSkewtViewMode('dynamic'));
+    if (statBtn) statBtn.addEventListener('click', () => setSkewtViewMode('static'));
+  }
+
+  function setSkewtViewMode(mode: 'dynamic' | 'static'): void {
+    skewtViewMode = mode;
+    const dynBtn = document.getElementById('skewt-view-dynamic');
+    const statBtn = document.getElementById('skewt-view-static');
+    const canvasContainer = document.getElementById('skewt-canvas-container');
+    const staticSection = document.getElementById('skewt-section');
+    if (dynBtn) dynBtn.classList.toggle('active', mode === 'dynamic');
+    if (statBtn) statBtn.classList.toggle('active', mode === 'static');
+    if (canvasContainer) canvasContainer.style.display = mode === 'dynamic' ? 'block' : 'none';
+    if (staticSection) staticSection.style.display = mode === 'static' ? 'block' : 'none';
+    if (mode === 'dynamic') {
+      const state = store.getState();
+      loadSkewtData(state);
+    } else {
+      const state = store.getState();
+      ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
+    }
+  }
+
+  function ensureSkewtRenderer(): SkewTRenderer {
+    if (!skewtRenderer) {
+      const container = document.getElementById('skewt-canvas-container');
+      if (!container) throw new Error('skewt-canvas-container not found');
+      skewtRenderer = new SkewTRenderer(container);
+    }
+    return skewtRenderer;
+  }
+
+  async function loadSkewtData(state: BriefingState): Promise<void> {
+    if (skewtViewMode !== 'dynamic') return;
+    if (!state.flight || !state.currentPack || !state.routeAnalyses) {
+      ensureSkewtRenderer().clear();
+      return;
+    }
+
+    // Find the selected point — any route point works
+    const idx = state.selectedPointIndex;
+    if (idx == null) {
+      ensureSkewtRenderer().clear();
+      return;
+    }
+    const point = state.routeAnalyses.analyses[idx];
+    if (!point) {
+      ensureSkewtRenderer().clear();
+      return;
+    }
+
+    // Avoid re-fetching if same point and model
+    if (idx === lastSkewtPointIndex && state.selectedModel === lastSkewtModel) return;
+    lastSkewtPointIndex = idx;
+    lastSkewtModel = state.selectedModel;
+
+    try {
+      const data = await api.fetchSoundingProfile(
+        state.flight.id,
+        state.currentPack.fetch_timestamp,
+        point.point_index,
+        state.selectedModel,
+      );
+      if (data) {
+        ensureSkewtRenderer().setData(data as SoundingProfileData);
+      } else {
+        ensureSkewtRenderer().clear();
+      }
+    } catch {
+      ensureSkewtRenderer().clear();
+    }
+  }
 
   /** Apply the CSS layout class to the layout wrapper. */
   function applyLayoutClass(layout: string): void {

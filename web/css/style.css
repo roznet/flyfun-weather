@@ -1246,6 +1246,43 @@ label {
   font-size: 0.85rem;
 }
 
+.skewt-view-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.skewt-view-toggle .btn-toggle {
+  padding: 0.15rem 0.5rem;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.skewt-view-toggle .btn-toggle:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.skewt-view-toggle .btn-toggle.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.skewt-view-toggle .btn-toggle:hover:not(.active) {
+  background: var(--bg);
+}
+
+#skewt-canvas-container {
+  min-height: 350px;
+  max-height: 550px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
 .external-links {
   font-size: 0.8rem;
   color: var(--muted);

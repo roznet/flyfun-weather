@@ -179,7 +179,9 @@ def analyze_sounding_lite(
     if profile is None:
         return None
 
-    indices = compute_indices_core(profile)
+    core_result = compute_indices_core(profile)
+    indices = core_result.indices
+    parcel_path = core_result.parcel_path
     derived_levels = compute_derived_levels_core(profile)
 
     # Attach raw NWP values for convective assessment fallback
@@ -253,6 +255,7 @@ def analyze_sounding_lite(
 
     return SoundingAnalysis(
         indices=indices,
+        parcel_path=parcel_path,
         derived_levels=derived_levels,
         cloud_layers=cloud_layers,
         nwp_cloud_layers=[],
