@@ -232,7 +232,9 @@ async function init(): Promise<void> {
     const staticSection = document.getElementById('skewt-section');
     if (dynBtn) dynBtn.classList.toggle('active', mode === 'dynamic');
     if (statBtn) statBtn.classList.toggle('active', mode === 'static');
+    const overlayControls = document.getElementById('skewt-overlay-controls');
     if (canvasContainer) canvasContainer.style.display = mode === 'dynamic' ? 'block' : 'none';
+    if (overlayControls) overlayControls.style.display = mode === 'dynamic' ? 'block' : 'none';
     if (staticSection) staticSection.style.display = mode === 'static' ? 'block' : 'none';
     if (mode === 'dynamic') {
       const state = store.getState();
