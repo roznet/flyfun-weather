@@ -1360,6 +1360,32 @@ label {
   color: var(--text, #333);
 }
 
+.skewt-tooltip:has(.skewt-tooltip-compare) {
+  max-width: 360px;
+}
+
+.skewt-tooltip-compare {
+  border-collapse: collapse;
+  font-size: 0.7rem;
+}
+
+.skewt-tooltip-compare th {
+  font-weight: 500;
+  text-align: left;
+  padding: 1px 5px;
+  border-bottom: 1px solid var(--border, #ddd);
+}
+
+.skewt-tooltip-compare td {
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.chip-primary-badge {
+  font-size: 0.65rem;
+  color: #d4a017;
+}
+
 .skewt-panel-dropdown {
   font-size: 0.75rem;
   padding: 0.15rem 0.25rem;

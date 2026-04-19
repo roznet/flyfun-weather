@@ -30,8 +30,10 @@ import { renderAltitudeSlider } from './visualization/route-map/altitude-slider'
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { SkewTRenderer } from './visualization/skewt/renderer';
-import { renderSkewtOverlayControls } from './visualization/skewt/overlay-controls';
-import { attachSkewTInteraction, type SkewTInteractionHandle } from './visualization/skewt/interaction';
+import { renderSkewtOverlayControls, renderSkewtCompareControls } from './visualization/skewt/overlay-controls';
+import { attachSkewTInteraction, attachSkewTCompareInteraction, type SkewTInteractionHandle, type SkewTCompareInteractionHandle } from './visualization/skewt/interaction';
+import { SkewTCompareRenderer, type CompareModelDataset as SkewtCompareModelDataset } from './visualization/skewt/compare-renderer';
+import { getActiveTheme } from './visualization/cross-section/theme';
 
 
 async function loadFlightPireps(flightId: string): Promise<void> {
@@ -122,11 +124,14 @@ async function init(): Promise<void> {
     const skewtWrapper = document.querySelector('[data-section="skewt"]') as HTMLElement | null;
     if (skewtWrapper) skewtWrapper.style.display = state.routeAnalyses ? '' : 'none';
     ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers);
-    // Dynamic Skew-T (canvas) or static MetPy
+    // Dynamic Skew-T (canvas), compare, or static MetPy
     if (skewtViewMode === 'dynamic') {
       lastSkewtPointIndex = null; // force re-fetch when point/model changes
       lastSkewtModel = null;
       loadSkewtData(state);
+    } else if (skewtViewMode === 'compare') {
+      lastSkewtCompareKey = null; // force re-fetch
+      loadSkewtCompareData(state);
     } else {
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
     }
@@ -218,34 +223,67 @@ async function init(): Promise<void> {
   // --- Dynamic Skew-T renderer ---
   let skewtRenderer: SkewTRenderer | null = null;
   let skewtInteraction: SkewTInteractionHandle | null = null;
-  let skewtViewMode: 'dynamic' | 'static' = 'dynamic';
+  let skewtCompareRenderer: SkewTCompareRenderer | null = null;
+  let skewtCompareInteraction: SkewTCompareInteractionHandle | null = null;
+  let skewtViewMode: 'dynamic' | 'compare' | 'static' = 'dynamic';
   let lastSkewtPointIndex: number | null = null;
   let lastSkewtModel: string | null = null;
+  let lastSkewtCompareKey: string | null = null;
 
   function initSkewtToggle(): void {
     const dynBtn = document.getElementById('skewt-view-dynamic');
+    const cmpBtn = document.getElementById('skewt-view-compare');
     const statBtn = document.getElementById('skewt-view-static');
     if (dynBtn) dynBtn.addEventListener('click', () => setSkewtViewMode('dynamic'));
+    if (cmpBtn) cmpBtn.addEventListener('click', () => setSkewtViewMode('compare'));
     if (statBtn) statBtn.addEventListener('click', () => setSkewtViewMode('static'));
   }
 
-  function setSkewtViewMode(mode: 'dynamic' | 'static'): void {
+  function destroySkewtRenderer(): void {
+    if (skewtInteraction) { skewtInteraction.destroy(); skewtInteraction = null; }
+    if (skewtRenderer) { skewtRenderer.destroy(); skewtRenderer = null; }
+    lastSkewtPointIndex = null;
+    lastSkewtModel = null;
+  }
+
+  function destroySkewtCompareRenderer(): void {
+    if (skewtCompareInteraction) { skewtCompareInteraction.destroy(); skewtCompareInteraction = null; }
+    if (skewtCompareRenderer) { skewtCompareRenderer.destroy(); skewtCompareRenderer = null; }
+    lastSkewtCompareKey = null;
+  }
+
+  function setSkewtViewMode(mode: 'dynamic' | 'compare' | 'static'): void {
+    const prevMode = skewtViewMode;
     skewtViewMode = mode;
+
     const dynBtn = document.getElementById('skewt-view-dynamic');
+    const cmpBtn = document.getElementById('skewt-view-compare');
     const statBtn = document.getElementById('skewt-view-static');
     const canvasContainer = document.getElementById('skewt-canvas-container');
     const staticSection = document.getElementById('skewt-section');
-    if (dynBtn) dynBtn.classList.toggle('active', mode === 'dynamic');
-    if (statBtn) statBtn.classList.toggle('active', mode === 'static');
     const overlayControls = document.getElementById('skewt-overlay-controls');
-    if (canvasContainer) canvasContainer.style.display = mode === 'dynamic' ? 'block' : 'none';
+    const compareControls = document.getElementById('skewt-compare-controls');
+
+    if (dynBtn) dynBtn.classList.toggle('active', mode === 'dynamic');
+    if (cmpBtn) cmpBtn.classList.toggle('active', mode === 'compare');
+    if (statBtn) statBtn.classList.toggle('active', mode === 'static');
+
+    // Destroy outgoing renderer (canvas container is shared)
+    if (prevMode === 'dynamic' && mode !== 'dynamic') destroySkewtRenderer();
+    if (prevMode === 'compare' && mode !== 'compare') destroySkewtCompareRenderer();
+
+    // Show/hide containers
+    if (canvasContainer) canvasContainer.style.display = (mode === 'dynamic' || mode === 'compare') ? 'block' : 'none';
     if (overlayControls) overlayControls.style.display = mode === 'dynamic' ? 'block' : 'none';
+    if (compareControls) compareControls.style.display = mode === 'compare' ? 'block' : 'none';
     if (staticSection) staticSection.style.display = mode === 'static' ? 'block' : 'none';
+
+    const state = store.getState();
     if (mode === 'dynamic') {
-      const state = store.getState();
       loadSkewtData(state);
+    } else if (mode === 'compare') {
+      loadSkewtCompareData(state);
     } else {
-      const state = store.getState();
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
     }
   }
@@ -325,6 +363,132 @@ async function init(): Promise<void> {
       }
     } catch {
       ensureSkewtRenderer().clear();
+    }
+  }
+
+  function ensureSkewtCompareRenderer(): SkewTCompareRenderer {
+    if (!skewtCompareRenderer) {
+      const container = document.getElementById('skewt-canvas-container');
+      if (!container) throw new Error('skewt-canvas-container not found');
+      skewtCompareRenderer = new SkewTCompareRenderer(container);
+      // Attach compare interaction with linked cursor
+      skewtCompareInteraction = attachSkewTCompareInteraction(
+        skewtCompareRenderer.getOverlayCanvas(),
+        container,
+        () => skewtCompareRenderer!.getTransform(),
+        () => skewtCompareRenderer!.getDatasets(),
+        {
+          onHoverAltitude: (altFt) => {
+            if (vizRenderer) {
+              if (altFt !== undefined) {
+                const transform = vizRenderer.createTransform();
+                if (transform) {
+                  const y = transform.altitudeToY(altFt);
+                  vizRenderer.renderOverlay(undefined, y);
+                }
+              } else {
+                vizRenderer.renderOverlay();
+              }
+            }
+          },
+        },
+      );
+    }
+    return skewtCompareRenderer;
+  }
+
+  async function loadSkewtCompareData(state: BriefingState): Promise<void> {
+    if (skewtViewMode !== 'compare') return;
+    if (!state.flight || !state.currentPack || !state.routeAnalyses) {
+      ensureSkewtCompareRenderer().clear();
+      return;
+    }
+
+    const idx = state.selectedPointIndex;
+    if (idx == null) {
+      ensureSkewtCompareRenderer().clear();
+      return;
+    }
+    const point = state.routeAnalyses.analyses[idx];
+    if (!point) {
+      ensureSkewtCompareRenderer().clear();
+      return;
+    }
+
+    // Determine enabled models
+    store.getState().initCompareModels(state.routeAnalyses.models);
+    const compareModels = store.getState().vizSettings.compareModels;
+    const enabledModels = state.routeAnalyses.models.filter(m => compareModels[m] !== false);
+    if (enabledModels.length === 0) {
+      ensureSkewtCompareRenderer().clear();
+      return;
+    }
+
+    // Cache check: skip re-fetch if same point + same enabled models
+    const cacheKey = JSON.stringify({ idx, models: [...enabledModels].sort() });
+    if (cacheKey === lastSkewtCompareKey) return;
+    lastSkewtCompareKey = cacheKey;
+
+    // Fetch all models in parallel
+    const theme = getActiveTheme();
+    const allModels = state.routeAnalyses.models;
+
+    try {
+      const results = await Promise.all(
+        enabledModels.map(m =>
+          api.fetchSoundingProfile(state.flight!.id, state.currentPack!.fetch_timestamp, point.point_index, m)
+            .catch(() => null),
+        ),
+      );
+
+      const datasets: SkewtCompareModelDataset[] = [];
+      for (let i = 0; i < enabledModels.length; i++) {
+        if (results[i]) {
+          // Color by position in full model list for stability
+          const modelIndex = allModels.indexOf(enabledModels[i]);
+          const colorIndex = modelIndex >= 0 ? modelIndex : i;
+          datasets.push({
+            model: enabledModels[i],
+            data: results[i]!,
+            color: theme.compareModelColors[colorIndex % theme.compareModelColors.length],
+            isPrimary: enabledModels[i] === state.selectedModel,
+          });
+        }
+      }
+
+      // If primary model isn't in datasets (toggled off), mark first as primary
+      if (datasets.length > 0 && !datasets.some(d => d.isPrimary)) {
+        datasets[0].isPrimary = true;
+      }
+
+      const renderer = ensureSkewtCompareRenderer();
+      renderer.setModelData(datasets);
+      skewtCompareInteraction?.update(datasets);
+
+      // Build model color map for controls
+      const modelColors: Record<string, string> = {};
+      for (const ds of datasets) modelColors[ds.model] = ds.color;
+      // Include disabled models with their stable color
+      for (const m of allModels) {
+        if (!modelColors[m]) {
+          const mi = allModels.indexOf(m);
+          modelColors[m] = theme.compareModelColors[mi % theme.compareModelColors.length];
+        }
+      }
+
+      // Render compare controls
+      const controlsEl = document.getElementById('skewt-compare-controls');
+      if (controlsEl) {
+        renderSkewtCompareControls(controlsEl, renderer, allModels, compareModels, state.selectedModel, modelColors, {
+          onModelToggle: (model, enabled) => {
+            store.getState().setCompareModel(model, enabled);
+          },
+          onCapeCinToggle: () => renderer.toggleCapeCin(),
+          onLevelMarkersToggle: () => renderer.toggleLevelMarkers(),
+        });
+      }
+    } catch {
+      ensureSkewtCompareRenderer().clear();
     }
   }
 

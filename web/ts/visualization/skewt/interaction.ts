@@ -9,6 +9,7 @@
 
 import type { SkewTTransform } from './skewt-transform';
 import type { SoundingProfileData, SoundingProfileLevel } from './types';
+import type { CompareModelDataset } from './compare-renderer';
 import { isDarkTheme } from '../interaction-utils';
 import { altitudeToPressure, pressureToAltitudeFt } from './atmo-utils';
 
@@ -229,5 +230,218 @@ function row(label: string, value: number | null | undefined, unit: string): str
   if (value == null) return '';
   const fmt = Math.abs(value) >= 10 ? Math.round(value).toString() : value.toFixed(1);
   return `<div>${label}: ${fmt}${unit ? ' ' + unit : ''}</div>`;
+}
+
+// --- Compare mode interaction ---
+
+export interface SkewTCompareInteractionHandle {
+  setExternalHoverAlt(altFt: number | null): void;
+  update(datasets: CompareModelDataset[]): void;
+  destroy(): void;
+}
+
+/**
+ * Attach hover interaction for Skew-T compare mode.
+ * Tooltip shows per-model values at the hovered pressure level.
+ */
+export function attachSkewTCompareInteraction(
+  overlayCanvas: HTMLCanvasElement,
+  container: HTMLElement,
+  getTransform: () => SkewTTransform | null,
+  getDatasets: () => CompareModelDataset[],
+  callbacks: SkewTInteractionCallbacks,
+): SkewTCompareInteractionHandle {
+  overlayCanvas.style.pointerEvents = 'auto';
+  overlayCanvas.style.cursor = 'crosshair';
+
+  let tooltip: HTMLElement | null = null;
+  let currentDatasets = getDatasets();
+  let externalAltFt: number | null = null;
+
+  function handleMouseMove(e: MouseEvent): void {
+    const transform = getTransform();
+    if (!transform || currentDatasets.length === 0) return;
+
+    const rect = overlayCanvas.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const plot = transform.plotArea;
+
+    if (y < plot.top || y > plot.bottom) {
+      clearCompareOverlay(transform);
+      hideTooltip();
+      callbacks.onHoverAltitude?.(undefined);
+      return;
+    }
+
+    const pressureHPa = transform.yToPressure(y);
+    renderCompareHoverOverlay(transform, y);
+    showCompareTooltip(e, pressureHPa, currentDatasets);
+
+    // Use primary model's level for altitude sync
+    const primary = currentDatasets.find(d => d.isPrimary) ?? currentDatasets[0];
+    const level = findClosestLevel(primary.data.levels, pressureHPa);
+    if (level) {
+      const altFt = level.altitude_ft ?? pressureToAltitudeFt(pressureHPa);
+      callbacks.onHoverAltitude?.(altFt);
+    }
+  }
+
+  function handleMouseLeave(): void {
+    const transform = getTransform();
+    if (transform) clearCompareOverlay(transform);
+    hideTooltip();
+    callbacks.onHoverAltitude?.(undefined);
+  }
+
+  function renderCompareHoverOverlay(transform: SkewTTransform, hoverY: number): void {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    overlayCanvas.width = rect.width * dpr;
+    overlayCanvas.height = rect.height * dpr;
+    const ctx = overlayCanvas.getContext('2d')!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    const plot = transform.plotArea;
+    const dark = isDarkTheme();
+
+    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 0.8;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(plot.left, hoverY);
+    ctx.lineTo(plot.right, hoverY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (externalAltFt !== null) {
+      const extP = altitudeToPressure(externalAltFt);
+      if (extP !== null && transform.isPressureVisible(extP)) {
+        const extY = transform.pressureToY(extP);
+        ctx.strokeStyle = dark ? 'rgba(100,180,255,0.6)' : 'rgba(30,100,200,0.5)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([6, 3]);
+        ctx.beginPath();
+        ctx.moveTo(plot.left, extY);
+        ctx.lineTo(plot.right, extY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+
+  function clearCompareOverlay(transform: SkewTTransform): void {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    overlayCanvas.width = rect.width * dpr;
+    overlayCanvas.height = rect.height * dpr;
+    const ctx = overlayCanvas.getContext('2d')!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    if (externalAltFt !== null) {
+      const plot = transform.plotArea;
+      const dark = isDarkTheme();
+      const extP = altitudeToPressure(externalAltFt);
+      if (extP !== null && transform.isPressureVisible(extP)) {
+        const extY = transform.pressureToY(extP);
+        ctx.strokeStyle = dark ? 'rgba(100,180,255,0.6)' : 'rgba(30,100,200,0.5)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([6, 3]);
+        ctx.beginPath();
+        ctx.moveTo(plot.left, extY);
+        ctx.lineTo(plot.right, extY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+
+  function showCompareTooltip(e: MouseEvent, pressureHPa: number, datasets: CompareModelDataset[]): void {
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.className = 'skewt-tooltip';
+      document.body.appendChild(tooltip);
+    }
+
+    // Use primary model for altitude/FL
+    const primary = datasets.find(d => d.isPrimary) ?? datasets[0];
+    const refLevel = findClosestLevel(primary.data.levels, pressureHPa);
+    if (!refLevel) { hideTooltip(); return; }
+
+    const altFt = refLevel.altitude_ft ?? pressureToAltitudeFt(refLevel.pressure_hpa);
+    const fl = Math.round(altFt / 100).toString().padStart(3, '0');
+
+    let html = `<div class="skewt-tooltip-header">${refLevel.pressure_hpa} hPa \u00b7 FL${fl}</div>`;
+    html += '<table class="skewt-tooltip-compare">';
+    html += '<tr><th></th><th>T</th><th>Td</th><th>Wind</th>';
+    if (primary.data.track_deg != null) html += '<th>HW</th>';
+    html += '</tr>';
+
+    for (const ds of datasets) {
+      const level = findClosestLevel(ds.data.levels, pressureHPa);
+      if (!level) continue;
+
+      const bold = ds.isPrimary ? ' style="font-weight:600"' : '';
+      html += `<tr${bold}>`;
+      html += `<td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ds.color};margin-right:4px"></span>${ds.model.toUpperCase()}</td>`;
+      html += `<td>${fmtV(level.temperature_c, '°C')}</td>`;
+      html += `<td>${fmtV(level.dewpoint_c, '°C')}</td>`;
+      if (level.wind_speed_kt != null && level.wind_direction_deg != null) {
+        html += `<td>${Math.round(level.wind_direction_deg)}°/${Math.round(level.wind_speed_kt)}kt</td>`;
+        if (ds.data.track_deg != null) {
+          const rel = (level.wind_direction_deg - ds.data.track_deg) * Math.PI / 180;
+          const hw = level.wind_speed_kt * Math.cos(rel);
+          const hwLabel = hw > 0 ? 'HW' : 'TW';
+          html += `<td>${hwLabel}${Math.abs(Math.round(hw))}</td>`;
+        }
+      } else {
+        html += '<td>-</td>';
+        if (ds.data.track_deg != null) html += '<td>-</td>';
+      }
+      html += '</tr>';
+    }
+    html += '</table>';
+
+    tooltip.innerHTML = html;
+    tooltip.style.display = 'block';
+
+    const tx = e.clientX + 12;
+    const ty = e.clientY - 10;
+    const maxX = window.innerWidth - tooltip.offsetWidth - 8;
+    tooltip.style.left = `${Math.min(tx, maxX)}px`;
+    tooltip.style.top = `${ty}px`;
+  }
+
+  function hideTooltip(): void {
+    if (tooltip) tooltip.style.display = 'none';
+  }
+
+  overlayCanvas.addEventListener('mousemove', handleMouseMove);
+  overlayCanvas.addEventListener('mouseleave', handleMouseLeave);
+
+  return {
+    setExternalHoverAlt(altFt: number | null): void {
+      externalAltFt = altFt;
+      const transform = getTransform();
+      if (transform) clearCompareOverlay(transform);
+    },
+    update(datasets: CompareModelDataset[]): void {
+      currentDatasets = datasets;
+    },
+    destroy(): void {
+      overlayCanvas.removeEventListener('mousemove', handleMouseMove);
+      overlayCanvas.removeEventListener('mouseleave', handleMouseLeave);
+      if (tooltip) { tooltip.remove(); tooltip = null; }
+    },
+  };
+}
+
+function fmtV(value: number | null | undefined, unit: string): string {
+  if (value == null) return '-';
+  const fmt = Math.abs(value) >= 10 ? Math.round(value).toString() : value.toFixed(1);
+  return `${fmt}${unit}`;
 }
 

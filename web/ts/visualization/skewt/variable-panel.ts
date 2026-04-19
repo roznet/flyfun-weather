@@ -384,6 +384,213 @@ function renderVariableLine(
   return [xMin, xMax];
 }
 
+/** Dataset for multi-model compare side panel. */
+export interface CompareSidePanelDataset {
+  model: string;
+  levels: SoundingProfileLevel[];
+  color: string;
+  isPrimary: boolean;
+}
+
+/**
+ * Compute the X-axis range for a variable across one or more level arrays.
+ * Returns [min, max] or null if no valid data.
+ */
+function computeVariableRange(
+  allLevels: SoundingProfileLevel[][],
+  variable: VariableDef,
+  trackDeg: number | null,
+): [number, number] | null {
+  if (variable.fixedRange) return variable.fixedRange;
+
+  const allValues: number[] = [];
+  for (const levels of allLevels) {
+    for (const lv of levels) {
+      const val = variable.getValue(lv, trackDeg);
+      if (val !== null && val !== undefined && isFinite(val)) {
+        allValues.push(val);
+      }
+    }
+  }
+  if (allValues.length < 2) return null;
+
+  let xMin = Math.min(...allValues);
+  let xMax = Math.max(...allValues);
+  const margin = (xMax - xMin) * 0.1 || 1;
+  xMin -= margin;
+  xMax += margin;
+  if (variable.zeroLine) {
+    const absMax = Math.max(Math.abs(xMin), Math.abs(xMax));
+    xMin = -absMax;
+    xMax = absMax;
+  }
+  return [xMin, xMax];
+}
+
+/**
+ * Render multi-model side panel: per-model lines with unified range.
+ * Primary model gets thicker line; secondaries are thinner and translucent.
+ */
+export function renderCompareSidePanel(
+  ctx: CanvasRenderingContext2D,
+  transform: SkewTTransform,
+  datasets: CompareSidePanelDataset[],
+  primary: VariableDef,
+  secondary: VariableDef | null,
+  layout: SidePanelLayout,
+  trackDeg: number | null,
+): void {
+  const dark = isDarkTheme();
+  const axisColor = dark ? '#555' : '#999';
+  const bgColor = dark ? 'rgba(30, 30, 30, 0.3)' : 'rgba(245, 245, 245, 0.3)';
+
+  ctx.save();
+
+  // Background
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(layout.left, layout.top, layout.width, layout.height);
+  ctx.strokeStyle = axisColor;
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(layout.left, layout.top, layout.width, layout.height);
+
+  // Clip
+  ctx.beginPath();
+  ctx.rect(layout.left, layout.top, layout.width, layout.height);
+  ctx.clip();
+
+  // Unified range across all models
+  const allLevels = datasets.map(ds => ds.levels);
+  const primaryRange = computeVariableRange(allLevels, primary, trackDeg);
+
+  if (primaryRange) {
+    const xRange = primaryRange[1] - primaryRange[0] || 1;
+
+    // Zero line
+    if (primary.zeroLine && primaryRange[0] < 0 && primaryRange[1] > 0) {
+      const zeroX = layout.left + ((0 - primaryRange[0]) / xRange) * layout.width;
+      ctx.strokeStyle = dark ? '#555' : '#999';
+      ctx.lineWidth = 0.5;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(zeroX, layout.top);
+      ctx.lineTo(zeroX, layout.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Draw secondary models first
+    for (const ds of datasets) {
+      if (ds.isPrimary) continue;
+      ctx.globalAlpha = 0.55;
+      drawCompareVariableLine(ctx, transform, ds.levels, primary, layout, trackDeg, primaryRange, ds.color, 1.2);
+    }
+    // Primary on top
+    const primaryDs = datasets.find(d => d.isPrimary);
+    if (primaryDs) {
+      ctx.globalAlpha = 1.0;
+      drawCompareVariableLine(ctx, transform, primaryDs.levels, primary, layout, trackDeg, primaryRange, primaryDs.color, 2.0);
+    }
+    ctx.globalAlpha = 1.0;
+  }
+
+  // Secondary variable (if selected)
+  let secondaryRange: [number, number] | null = null;
+  if (secondary) {
+    secondaryRange = computeVariableRange(allLevels, secondary, trackDeg);
+    if (secondaryRange) {
+      for (const ds of datasets) {
+        if (ds.isPrimary) continue;
+        ctx.globalAlpha = 0.55;
+        drawCompareVariableLine(ctx, transform, ds.levels, secondary, layout, trackDeg, secondaryRange, ds.color, 1.2);
+      }
+      const primaryDs = datasets.find(d => d.isPrimary);
+      if (primaryDs) {
+        ctx.globalAlpha = 1.0;
+        drawCompareVariableLine(ctx, transform, primaryDs.levels, secondary, layout, trackDeg, secondaryRange, primaryDs.color, 2.0);
+      }
+      ctx.globalAlpha = 1.0;
+    }
+  }
+
+  ctx.restore();
+
+  // Axes labels
+  ctx.font = '9px -apple-system, BlinkMacSystemFont, sans-serif';
+
+  // Primary: bottom axis
+  if (primaryRange) {
+    const textColor = dark ? '#ccc' : '#444';
+    ctx.fillStyle = textColor;
+    ctx.textBaseline = 'top';
+    const y = layout.bottom + 2;
+    ctx.textAlign = 'left';
+    const leftLabel = primary.negLabel ? `${primary.negLabel} ${fmt(primaryRange[0])}` : fmt(primaryRange[0]);
+    ctx.fillText(leftLabel, layout.left, y);
+    ctx.textAlign = 'right';
+    const rightLabel = primary.posLabel ? `${fmt(primaryRange[1])} ${primary.posLabel}` : fmt(primaryRange[1]);
+    ctx.fillText(rightLabel, layout.left + layout.width, y);
+    ctx.textAlign = 'center';
+    ctx.fillText(`${primary.shortLabel} (${primary.unit})`, layout.left + layout.width / 2, y + 10);
+  }
+
+  // Secondary: top axis
+  if (secondary && secondaryRange) {
+    const textColor = dark ? '#ccc' : '#444';
+    ctx.fillStyle = textColor;
+    ctx.textBaseline = 'bottom';
+    const y = layout.top - 2;
+    ctx.textAlign = 'left';
+    ctx.fillText(fmt(secondaryRange[0]), layout.left, y);
+    ctx.textAlign = 'right';
+    ctx.fillText(fmt(secondaryRange[1]), layout.left + layout.width, y);
+    ctx.textAlign = 'center';
+    ctx.fillText(`${secondary.shortLabel} (${secondary.unit})`, layout.left + layout.width / 2, y - 10);
+  } else if (!secondary) {
+    const textColor = dark ? '#ccc' : '#444';
+    ctx.fillStyle = textColor;
+    ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'center';
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText(primary.shortLabel, layout.left + layout.width / 2, layout.top - 2);
+  }
+}
+
+/** Draw a single variable line with a specific color and width. */
+function drawCompareVariableLine(
+  ctx: CanvasRenderingContext2D,
+  transform: SkewTTransform,
+  levels: SoundingProfileLevel[],
+  variable: VariableDef,
+  layout: SidePanelLayout,
+  trackDeg: number | null,
+  range: [number, number],
+  color: string,
+  lineWidth: number,
+): void {
+  const xRange = range[1] - range[0] || 1;
+  const points: Array<{ pressure: number; value: number }> = [];
+  for (const lv of levels) {
+    const val = variable.getValue(lv, trackDeg);
+    if (val !== null && val !== undefined && isFinite(val)) {
+      points.push({ pressure: lv.pressure_hpa, value: val });
+    }
+  }
+  if (points.length < 2) return;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  let first = true;
+  for (const pt of points) {
+    const y = transform.pressureToY(pt.pressure);
+    const x = layout.left + ((pt.value - range[0]) / xRange) * layout.width;
+    if (first) { ctx.moveTo(x, y); first = false; }
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
 function fmt(v: number): string {
   if (Math.abs(v) >= 100) return Math.round(v).toString();
   if (Math.abs(v) >= 10) return v.toFixed(0);

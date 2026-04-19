@@ -127,6 +127,81 @@ function findClosestEnvTemp(
   return bestT;
 }
 
+/** Dataset for multi-model compare rendering. */
+export interface CompareProfileDataset {
+  model: string;
+  levels: SoundingProfileLevel[];
+  color: string;
+  isPrimary: boolean;
+  parcelPath?: ParcelPathPoint[];
+  lclP?: number | null;
+  elP?: number | null;
+}
+
+/**
+ * Render T/Td curves from multiple models on the same Skew-T.
+ * Each model gets one color: solid for T, dashed for Td.
+ * Secondary models drawn first (reduced opacity), primary on top.
+ */
+export function renderCompareProfileCurves(
+  ctx: CanvasRenderingContext2D,
+  transform: SkewTTransform,
+  datasets: CompareProfileDataset[],
+  showCapeCin: boolean,
+): void {
+  if (datasets.length === 0) return;
+
+  ctx.save();
+  const plot = transform.plotArea;
+  ctx.beginPath();
+  ctx.rect(plot.left, plot.top, plot.width, plot.height);
+  ctx.clip();
+
+  // 1. Optional CAPE/CIN from primary model only
+  if (showCapeCin) {
+    const primary = datasets.find(d => d.isPrimary);
+    if (primary?.parcelPath?.length) {
+      renderCapeCinShading(ctx, transform, primary.levels, primary.parcelPath,
+        primary.lclP ?? null, primary.elP ?? null);
+    }
+  }
+
+  // 2. Secondary models first (behind primary)
+  for (const ds of datasets) {
+    if (ds.isPrimary) continue;
+    ctx.globalAlpha = 0.55;
+    const tPoints = ds.levels.map(lv => ({ tempC: lv.temperature_c, pressureHPa: lv.pressure_hpa }));
+    drawProfileLine(ctx, transform, tPoints, ds.color, 1.5);
+    const tdPoints = ds.levels
+      .filter(lv => lv.dewpoint_c !== null)
+      .map(lv => ({ tempC: lv.dewpoint_c!, pressureHPa: lv.pressure_hpa }));
+    drawProfileLine(ctx, transform, tdPoints, ds.color, 1.5, [4, 3]);
+  }
+
+  // 3. Primary model on top (full opacity, thick)
+  const primary = datasets.find(d => d.isPrimary);
+  if (primary) {
+    ctx.globalAlpha = 1.0;
+    const tPoints = primary.levels.map(lv => ({ tempC: lv.temperature_c, pressureHPa: lv.pressure_hpa }));
+    drawProfileLine(ctx, transform, tPoints, primary.color, 2.5);
+    const tdPoints = primary.levels
+      .filter(lv => lv.dewpoint_c !== null)
+      .map(lv => ({ tempC: lv.dewpoint_c!, pressureHPa: lv.pressure_hpa }));
+    drawProfileLine(ctx, transform, tdPoints, primary.color, 2.5, [4, 3]);
+
+    // Optional parcel path from primary
+    if (showCapeCin && primary.parcelPath?.length) {
+      const parcelPoints = primary.parcelPath.map(pp => ({
+        tempC: pp.temperature_c,
+        pressureHPa: pp.pressure_hpa,
+      }));
+      drawProfileLine(ctx, transform, parcelPoints, PARCEL_COLOR, PARCEL_LINE_WIDTH, PARCEL_DASH);
+    }
+  }
+
+  ctx.restore();
+}
+
 /**
  * Render all profile curves: T, Td, parcel path, and CAPE/CIN shading.
  */
