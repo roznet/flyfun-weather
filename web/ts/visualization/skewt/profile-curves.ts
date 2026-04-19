@@ -66,6 +66,11 @@ function renderCapeCinShading(
 ): void {
   if (parcelPath.length < 2 || levels.length < 2) return;
 
+  // No EL means no convective instability — skip CAPE/CIN shading entirely.
+  // Without an EL the parcel never becomes buoyant, so shading would just
+  // paint misleading CIN from LCL to the top of the diagram.
+  if (elPressureHPa === null) return;
+
   for (let i = 0; i < parcelPath.length - 1; i++) {
     const pp0 = parcelPath[i];
     const pp1 = parcelPath[i + 1];
@@ -74,7 +79,7 @@ function renderCapeCinShading(
     if (lclPressureHPa !== null && pp0.pressure_hpa > lclPressureHPa) continue;
 
     // Above EL — no shading (parcel is back in stable air)
-    if (elPressureHPa !== null && pp1.pressure_hpa < elPressureHPa) continue;
+    if (pp1.pressure_hpa < elPressureHPa) continue;
 
     const envT0 = findClosestEnvTemp(levels, pp0.pressure_hpa);
     const envT1 = findClosestEnvTemp(levels, pp1.pressure_hpa);

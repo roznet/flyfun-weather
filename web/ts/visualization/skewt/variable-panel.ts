@@ -31,6 +31,12 @@ export interface VariableDef {
   fixedRange?: [number, number];
   /** Draw a zero line. */
   zeroLine?: boolean;
+  /** Custom labels for the negative and positive ends of the axis (zeroLine variables). */
+  negLabel?: string;
+  posLabel?: string;
+  /** Custom labels for the secondary line's negative and positive ends. */
+  secondaryNegLabel?: string;
+  secondaryPosLabel?: string;
 }
 
 /** All available side panel variables. */
@@ -54,6 +60,10 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
       return lv.wind_speed_kt * Math.sin(rel); // positive = from right
     },
     zeroLine: true,
+    negLabel: 'TW',
+    posLabel: 'HW',
+    secondaryNegLabel: '\u2190',  // ← from left
+    secondaryPosLabel: '\u2192',  // → from right
   },
   {
     id: 'dewpoint_depression',
@@ -229,15 +239,36 @@ export function renderSidePanel(
 
   // Primary: bottom axis
   if (primaryRange) {
-    ctx.fillStyle = primary.color;
     ctx.textBaseline = 'top';
     const y = layout.bottom + 2;
+    // Left label: negative end value + optional sign label
+    ctx.fillStyle = primary.color;
     ctx.textAlign = 'left';
-    ctx.fillText(fmt(primaryRange[0]), layout.left, y);
+    const leftLabel = primary.negLabel ? `${primary.negLabel} ${fmt(primaryRange[0])}` : fmt(primaryRange[0]);
+    ctx.fillText(leftLabel, layout.left, y);
+    // Right label: positive end value + optional sign label
     ctx.textAlign = 'right';
-    ctx.fillText(fmt(primaryRange[1]), layout.left + layout.width, y);
-    ctx.textAlign = 'center';
-    ctx.fillText(`${primary.shortLabel} (${primary.unit})`, layout.left + layout.width / 2, y + 10);
+    const rightLabel = primary.posLabel ? `${fmt(primaryRange[1])} ${primary.posLabel}` : fmt(primaryRange[1]);
+    ctx.fillText(rightLabel, layout.left + layout.width, y);
+    // Secondary sign labels (e.g. ← / → for crosswind) on second row
+    if (primary.secondaryNegLabel || primary.secondaryPosLabel) {
+      ctx.fillStyle = primary.secondaryColor ?? primary.color;
+      const y2 = y + 10;
+      if (primary.secondaryNegLabel) {
+        ctx.textAlign = 'left';
+        ctx.fillText(primary.secondaryNegLabel, layout.left, y2);
+      }
+      if (primary.secondaryPosLabel) {
+        ctx.textAlign = 'right';
+        ctx.fillText(primary.secondaryPosLabel, layout.left + layout.width, y2);
+      }
+      ctx.textAlign = 'center';
+      ctx.fillStyle = primary.color;
+      ctx.fillText(`(${primary.unit})`, layout.left + layout.width / 2, y2);
+    } else {
+      ctx.textAlign = 'center';
+      ctx.fillText(`${primary.shortLabel} (${primary.unit})`, layout.left + layout.width / 2, y + 10);
+    }
   }
 
   // Secondary: top axis
