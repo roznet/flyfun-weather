@@ -12,16 +12,17 @@ import { SkewTTransform } from './skewt-transform';
 import { BackgroundLinesRenderer } from './background-lines';
 import { renderProfileCurves } from './profile-curves';
 import { renderAxes, renderLevelMarkers, renderIndicesPanel } from './axes';
-import { renderWindPanel, getWindPanelWidth, WindPanelLayout } from './wind-panel';
 import { renderOverlayBands, getDefaultOverlayState } from './overlay-bands';
+import { renderSidePanel, getVariableById, SIDE_PANEL_WIDTH, type VariableDef } from './variable-panel';
 import { SoundingProfileData, DEFAULT_CONFIG, SkewTConfig, PlotArea } from './types';
 
 // Layout constants
 const MARGIN_LEFT = 40;
-const MARGIN_RIGHT = 40;
-const MARGIN_TOP = 20;
-const MARGIN_BOTTOM = 40;
-const WIND_PANEL_GAP = 8;
+const MARGIN_RIGHT = 6;
+const MARGIN_TOP = 24;
+const MARGIN_BOTTOM = 44;
+const PANEL_GAP = 8;
+const FL_LABEL_WIDTH = 40; // space between plot right edge and side panel for FL labels
 
 export class SkewTRenderer {
   private container: HTMLElement;
@@ -31,12 +32,17 @@ export class SkewTRenderer {
   private config: SkewTConfig = DEFAULT_CONFIG;
   private backgroundLines = new BackgroundLinesRenderer();
   private overlayState: Record<string, boolean>;
+  private primaryVarId: string;
+  private secondaryVarId: string | null;
   private resizeObserver: ResizeObserver;
   private themeListener: (() => void) | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
     this.overlayState = loadOverlayState();
+    const panels = loadSidePanels();
+    this.primaryVarId = panels.primary;
+    this.secondaryVarId = panels.secondary;
 
     // Create canvas
     this.canvas = document.createElement('canvas');
@@ -94,9 +100,10 @@ export class SkewTRenderer {
       return;
     }
 
-    // Compute layout: Skew-T plot area + wind panel
-    const windPanelWidth = this.data.track_deg !== null ? getWindPanelWidth() : 0;
-    const skewtRight = cssW - MARGIN_RIGHT - (windPanelWidth > 0 ? windPanelWidth + WIND_PANEL_GAP : 0);
+    // Compute layout: Skew-T plot area + FL labels gap + side panel
+    const hasSidePanel = !!this.primaryVarId;
+    const sidePanelTotalW = hasSidePanel ? FL_LABEL_WIDTH + SIDE_PANEL_WIDTH + PANEL_GAP : FL_LABEL_WIDTH;
+    const skewtRight = cssW - MARGIN_RIGHT - sidePanelTotalW;
 
     const plotArea: PlotArea = {
       left: MARGIN_LEFT,
@@ -139,16 +146,19 @@ export class SkewTRenderer {
     // 6. Indices panel
     renderIndicesPanel(ctx, transform, this.data);
 
-    // 7. Wind panel
-    if (windPanelWidth > 0) {
-      const windLayout: WindPanelLayout = {
-        left: skewtRight + WIND_PANEL_GAP,
-        width: windPanelWidth,
-        top: plotArea.top,
-        height: plotArea.height,
-        bottom: plotArea.bottom,
-      };
-      renderWindPanel(ctx, transform, this.data.levels, this.data.track_deg, windLayout);
+    // 7. Side panel (single fixed-width, dual-axis) — after FL label gap
+    if (hasSidePanel) {
+      const primaryVar = getVariableById(this.primaryVarId);
+      const secondaryVar = this.secondaryVarId ? getVariableById(this.secondaryVarId) : null;
+      if (primaryVar) {
+        renderSidePanel(ctx, transform, this.data.levels, primaryVar, secondaryVar ?? null, {
+          left: skewtRight + FL_LABEL_WIDTH + PANEL_GAP,
+          width: SIDE_PANEL_WIDTH,
+          top: plotArea.top,
+          height: plotArea.height,
+          bottom: plotArea.bottom,
+        }, this.data.track_deg);
+      }
     }
 
     // Title
@@ -187,6 +197,28 @@ export class SkewTRenderer {
     return { ...this.overlayState };
   }
 
+  /** Get the primary side panel variable ID. */
+  getPrimaryVar(): string { return this.primaryVarId; }
+
+  /** Get the secondary side panel variable ID (or null). */
+  getSecondaryVar(): string | null { return this.secondaryVarId; }
+
+  /** Set the primary side panel variable and re-render. */
+  setPrimaryVar(id: string): void {
+    this.primaryVarId = id;
+    saveSidePanels({ primary: id, secondary: this.secondaryVarId });
+    this.backgroundLines.invalidate();
+    this.render();
+  }
+
+  /** Set the secondary side panel variable (or null for none) and re-render. */
+  setSecondaryVar(id: string | null): void {
+    this.secondaryVarId = id;
+    saveSidePanels({ primary: this.primaryVarId, secondary: id });
+    this.backgroundLines.invalidate();
+    this.render();
+  }
+
   /** Clean up resources. */
   destroy(): void {
     this.resizeObserver.disconnect();
@@ -210,4 +242,26 @@ function loadOverlayState(): Record<string, boolean> {
 
 function saveOverlayState(state: Record<string, boolean>): void {
   try { localStorage.setItem(OVERLAY_STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore */ }
+}
+
+const SIDE_PANELS_KEY = 'wb_skewtSidePanels';
+
+interface SidePanelSelection {
+  primary: string;
+  secondary: string | null;
+}
+
+function loadSidePanels(): SidePanelSelection {
+  try {
+    const saved = localStorage.getItem(SIDE_PANELS_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.primary) return parsed;
+    }
+  } catch { /* ignore */ }
+  return { primary: 'headwind', secondary: null };
+}
+
+function saveSidePanels(sel: SidePanelSelection): void {
+  try { localStorage.setItem(SIDE_PANELS_KEY, JSON.stringify(sel)); } catch { /* ignore */ }
 }

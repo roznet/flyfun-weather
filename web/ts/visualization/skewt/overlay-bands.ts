@@ -26,12 +26,12 @@ const COVERAGE_ALPHA: Record<string, number> = {
   OVC: 0.50, ovc: 0.50,
 };
 
-// --- Icing colors ---
+// --- Icing colors (both cases — API returns lowercase) ---
 const ICING_COLORS: Record<string, string> = {
-  NONE: 'transparent',
-  LIGHT: 'rgba(100, 149, 237, 0.30)',
-  MODERATE: 'rgba(255, 165, 0, 0.40)',
-  SEVERE: 'rgba(220, 53, 69, 0.50)',
+  NONE: 'transparent', none: 'transparent',
+  LIGHT: 'rgba(100, 149, 237, 0.30)', light: 'rgba(100, 149, 237, 0.30)',
+  MODERATE: 'rgba(255, 165, 0, 0.40)', moderate: 'rgba(255, 165, 0, 0.40)',
+  SEVERE: 'rgba(220, 53, 69, 0.50)', severe: 'rgba(220, 53, 69, 0.50)',
 };
 
 // --- Inversion ---

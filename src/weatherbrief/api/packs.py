@@ -1918,18 +1918,99 @@ def _build_sounding_profile(
 
     # Build a lookup from derived_levels for enriching profile levels.
     # derived_levels are excluded from route_analyses.json to save space,
-    # so we re-derive from cross-section pressure levels when available.
-    # However, sounding_data may still contain them for on-the-fly requests.
+    # so we run analyze_sounding on-the-fly to get the full set.
     derived_by_pressure: dict[int, dict] = {}
-    for dl in sounding_data.get("derived_levels", []):
-        derived_by_pressure[dl.get("pressure_hpa", 0)] = dl
+    stored_dls = sounding_data.get("derived_levels", [])
+    if stored_dls:
+        for dl in stored_dls:
+            derived_by_pressure[dl.get("pressure_hpa", 0)] = dl
+    else:
+        # On-the-fly sounding analysis (~50-200ms) for icing indices, Ri, etc.
+        try:
+            from weatherbrief.analysis.sounding import analyze_sounding
+            result = analyze_sounding(hourly.pressure_levels, hourly)
+            if result and result.derived_levels:
+                for dl in result.derived_levels:
+                    derived_by_pressure[dl.pressure_hpa] = dl.model_dump()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).debug("On-the-fly sounding analysis failed", exc_info=True)
 
+    sorted_levels = sorted(hourly.pressure_levels, key=lambda x: x.pressure_hpa, reverse=True)
     levels = []
-    for pl in sorted(hourly.pressure_levels, key=lambda x: x.pressure_hpa, reverse=True):
+    prev_alt_ft: float | None = None
+    prev_temp_c: float | None = None
+    for pl in sorted_levels:
         if pl.temperature_c is None:
             continue
         alt_ft = pl.geopotential_height_m * 3.28084 if pl.geopotential_height_m is not None else None
         dl = derived_by_pressure.get(pl.pressure_hpa, {})
+
+        # Compute basic derived values inline when not available from stored analysis
+        dd = dl.get("dewpoint_depression_c")
+        rh = dl.get("relative_humidity_pct")
+        lapse = dl.get("lapse_rate_c_per_km")
+        if dd is None and pl.dewpoint_c is not None:
+            dd = round(pl.temperature_c - pl.dewpoint_c, 1)
+        if rh is None and pl.relative_humidity_pct is not None:
+            rh = pl.relative_humidity_pct
+        elif rh is None and pl.dewpoint_c is not None:
+            # Magnus formula: RH ≈ 100 × exp(17.67×Td/(Td+243.5) - 17.67×T/(T+243.5))
+            from math import exp
+            try:
+                rh = round(100.0 * exp(
+                    17.67 * pl.dewpoint_c / (pl.dewpoint_c + 243.5)
+                    - 17.67 * pl.temperature_c / (pl.temperature_c + 243.5)
+                ), 1)
+            except Exception:
+                pass
+        if lapse is None and prev_alt_ft is not None and alt_ft is not None and prev_temp_c is not None:
+            dz_km = (alt_ft - prev_alt_ft) / 3280.84
+            if abs(dz_km) > 0.01:
+                lapse = round((prev_temp_c - pl.temperature_c) / dz_km, 1)
+
+        # θe: Bolton (1980) approximation
+        theta_e = dl.get("theta_e_k")
+        if theta_e is None and pl.dewpoint_c is not None:
+            from math import exp as _exp, log as _log
+            try:
+                T_K = pl.temperature_c + 273.15
+                Td_K = pl.dewpoint_c + 273.15
+                # Mixing ratio from dewpoint
+                e = 6.112 * _exp(17.67 * pl.dewpoint_c / (pl.dewpoint_c + 243.5))
+                r = 0.622 * e / (pl.pressure_hpa - e)  # kg/kg
+                # Potential temperature
+                theta = T_K * (1000.0 / pl.pressure_hpa) ** 0.2854
+                # θe ≈ θ × exp(Lv × r / (cp × T))
+                theta_e = round(theta * _exp(2.501e6 * r / (1004.0 * T_K)), 1)
+            except Exception:
+                pass
+
+        # Omega / vertical velocity from raw pressure level data
+        omega = dl.get("omega_pa_s")
+        w_fpm = dl.get("w_fpm")
+        if omega is None and pl.vertical_velocity_pa_s is not None:
+            omega = round(pl.vertical_velocity_pa_s, 3)
+            # Convert omega (Pa/s) to w (ft/min): w ≈ -omega / (ρg) in m/s → ft/min
+            # Using standard density approximation: ρ ≈ p/(Rd×T)
+            if pl.temperature_c is not None:
+                T_K = pl.temperature_c + 273.15
+                rho = (pl.pressure_hpa * 100) / (287.05 * T_K)
+                w_ms = -pl.vertical_velocity_pa_s / (rho * 9.81)
+                w_fpm = round(w_ms * 196.85, 1)  # m/s → ft/min
+
+        # CLW from GRIB (already in kg/kg on PressureLevelData)
+        clw = dl.get("cloud_liquid_water_g_m3")
+        if clw is None and pl.cloud_liquid_water_kg_kg is not None and pl.temperature_c is not None:
+            T_K = pl.temperature_c + 273.15
+            rho = (pl.pressure_hpa * 100) / (287.05 * T_K)
+            clw = round(pl.cloud_liquid_water_kg_kg * rho * 1000, 4)  # kg/kg → g/m³
+
+        # ICE mixing ratio from GRIB
+        ice = dl.get("ice_mixing_ratio_g_kg")
+        if ice is None and pl.ice_mixing_ratio_kg_kg is not None:
+            ice = round(pl.ice_mixing_ratio_kg_kg * 1000, 4)  # kg/kg → g/kg
+
         levels.append(SoundingProfileLevel(
             pressure_hpa=pl.pressure_hpa,
             altitude_ft=alt_ft or dl.get("altitude_ft"),
@@ -1937,20 +2018,22 @@ def _build_sounding_profile(
             dewpoint_c=pl.dewpoint_c,
             wind_speed_kt=pl.wind_speed_kt,
             wind_direction_deg=pl.wind_direction_deg,
-            relative_humidity_pct=dl.get("relative_humidity_pct"),
-            dewpoint_depression_c=dl.get("dewpoint_depression_c"),
+            relative_humidity_pct=rh,
+            dewpoint_depression_c=dd,
             wet_bulb_c=dl.get("wet_bulb_c"),
-            theta_e_k=dl.get("theta_e_k"),
-            lapse_rate_c_per_km=dl.get("lapse_rate_c_per_km"),
+            theta_e_k=theta_e,
+            lapse_rate_c_per_km=lapse,
             icing_index=dl.get("icing_index"),
             icing_index_nwp=dl.get("icing_index_nwp"),
             sfip_100=dl.get("sfip_100"),
-            cloud_liquid_water_g_m3=dl.get("cloud_liquid_water_g_m3"),
-            ice_mixing_ratio_g_kg=dl.get("ice_mixing_ratio_g_kg"),
+            cloud_liquid_water_g_m3=clw,
+            ice_mixing_ratio_g_kg=ice,
             richardson_number=dl.get("richardson_number"),
-            omega_pa_s=dl.get("omega_pa_s"),
-            w_fpm=dl.get("w_fpm"),
+            omega_pa_s=omega,
+            w_fpm=w_fpm,
         ))
+        prev_alt_ft = alt_ft
+        prev_temp_c = pl.temperature_c
 
     # Parcel path
     parcel_path = [
