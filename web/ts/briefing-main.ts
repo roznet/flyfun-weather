@@ -31,6 +31,7 @@ import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { SkewTRenderer } from './visualization/skewt/renderer';
 import { renderSkewtOverlayControls } from './visualization/skewt/overlay-controls';
+import { attachSkewTInteraction, type SkewTInteractionHandle } from './visualization/skewt/interaction';
 import type { SoundingProfileData } from './visualization/skewt/types';
 
 async function loadFlightPireps(flightId: string): Promise<void> {
@@ -213,6 +214,7 @@ async function init(): Promise<void> {
 
   // --- Dynamic Skew-T renderer ---
   let skewtRenderer: SkewTRenderer | null = null;
+  let skewtInteraction: SkewTInteractionHandle | null = null;
   let skewtViewMode: 'dynamic' | 'static' = 'dynamic';
   let lastSkewtPointIndex: number | null = null;
   let lastSkewtModel: string | null = null;
@@ -253,6 +255,29 @@ async function init(): Promise<void> {
       // Render overlay toggle controls
       const controlsEl = document.getElementById('skewt-overlay-controls');
       if (controlsEl) renderSkewtOverlayControls(controlsEl, skewtRenderer);
+      // Attach hover interaction with linked cursor
+      skewtInteraction = attachSkewTInteraction(
+        skewtRenderer.getOverlayCanvas(),
+        container,
+        () => skewtRenderer!.getTransform(),
+        () => skewtRenderer!.getData(),
+        {
+          onHoverAltitude: (altFt) => {
+            // Linked cursor: draw horizontal line on cross-section at this altitude
+            if (vizRenderer) {
+              if (altFt !== undefined) {
+                const transform = vizRenderer.createTransform();
+                if (transform) {
+                  const y = transform.altitudeToY(altFt);
+                  vizRenderer.renderOverlay(undefined, y);
+                }
+              } else {
+                vizRenderer.renderOverlay();
+              }
+            }
+          },
+        },
+      );
     }
     return skewtRenderer;
   }
@@ -290,8 +315,10 @@ async function init(): Promise<void> {
       );
       if (data) {
         ensureSkewtRenderer().setData(data as SoundingProfileData);
+        skewtInteraction?.update(data as SoundingProfileData);
       } else {
         ensureSkewtRenderer().clear();
+        skewtInteraction?.update(null);
       }
     } catch {
       ensureSkewtRenderer().clear();
@@ -502,6 +529,12 @@ async function init(): Promise<void> {
               }
             } else if (mapRenderer && x === undefined) {
               mapRenderer.highlightSegment(-1);
+            }
+          },
+          onHoverAltitude: (altFt) => {
+            // Linked cursor: show altitude on Skew-T
+            if (skewtInteraction) {
+              skewtInteraction.setExternalHoverAlt(altFt ?? null);
             }
           },
         });

@@ -12,6 +12,8 @@ export interface InteractionCallbacks {
   onSelectPoint: (index: number) => void;
   /** Called on hover to sync crosshair with other visualizations. */
   onHover?: (x: number | undefined) => void;
+  /** Called on hover with altitude in ft for linked cursor (e.g. Skew-T). */
+  onHoverAltitude?: (altFt: number | undefined) => void;
 }
 
 /** Returned by attachInteraction — allows updating data without re-attaching listeners. */
@@ -47,6 +49,7 @@ export function attachInteraction(
       renderer.renderOverlay();
       hideTooltipEl(tooltip);
       callbacks.onHover?.(undefined);
+      callbacks.onHoverAltitude?.(undefined);
       return;
     }
 
@@ -55,6 +58,7 @@ export function attachInteraction(
 
     const distanceNm = transform.xToDistance(x);
     const hoverAltFt = transform.yToAltitude(y);
+    callbacks.onHoverAltitude?.(hoverAltFt);
     const idx = findNearestPointIndex(currentData.points, distanceNm);
     const point = currentData.points[idx];
     showTooltip(e, point, idx, distanceNm, hoverAltFt);
@@ -78,6 +82,7 @@ export function attachInteraction(
     renderer.renderOverlay();
     hideTooltipEl(tooltip);
     callbacks.onHover?.(undefined);
+    callbacks.onHoverAltitude?.(undefined);
   }
 
   function showTooltip(

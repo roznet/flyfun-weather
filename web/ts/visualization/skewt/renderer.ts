@@ -27,6 +27,7 @@ const FL_LABEL_WIDTH = 40; // space between plot right edge and side panel for F
 export class SkewTRenderer {
   private container: HTMLElement;
   private canvas: HTMLCanvasElement;
+  private overlayCanvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private data: SoundingProfileData | null = null;
   private config: SkewTConfig = DEFAULT_CONFIG;
@@ -34,6 +35,7 @@ export class SkewTRenderer {
   private overlayState: Record<string, boolean>;
   private primaryVarId: string;
   private secondaryVarId: string | null;
+  private lastTransform: SkewTTransform | null = null;
   private resizeObserver: ResizeObserver;
   private themeListener: (() => void) | null = null;
 
@@ -44,13 +46,21 @@ export class SkewTRenderer {
     this.primaryVarId = panels.primary;
     this.secondaryVarId = panels.secondary;
 
-    // Create canvas
+    // Ensure container is positioned for absolute children
+    if (getComputedStyle(container).position === 'static') {
+      container.style.position = 'relative';
+    }
+
+    // Create main canvas
     this.canvas = document.createElement('canvas');
-    this.canvas.style.width = '100%';
-    this.canvas.style.height = '100%';
-    this.canvas.style.display = 'block';
+    this.canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%';
     container.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
+
+    // Create overlay canvas (for hover crosshair — pointer events handled by interaction module)
+    this.overlayCanvas = document.createElement('canvas');
+    this.overlayCanvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%';
+    container.appendChild(this.overlayCanvas);
 
     // Respond to container resize
     this.resizeObserver = new ResizeObserver(() => {
@@ -117,6 +127,7 @@ export class SkewTRenderer {
     if (plotArea.width < 100 || plotArea.height < 100) return;
 
     const transform = new SkewTTransform(plotArea, this.config);
+    this.lastTransform = transform;
 
     // Sky background
     const dark = document.documentElement.dataset.theme === 'dark';
@@ -219,6 +230,15 @@ export class SkewTRenderer {
     this.render();
   }
 
+  /** Get the overlay canvas for interaction attachment. */
+  getOverlayCanvas(): HTMLCanvasElement { return this.overlayCanvas; }
+
+  /** Get the current transform (null if not rendered yet). */
+  getTransform(): SkewTTransform | null { return this.lastTransform; }
+
+  /** Get the current sounding data. */
+  getData(): SoundingProfileData | null { return this.data; }
+
   /** Clean up resources. */
   destroy(): void {
     this.resizeObserver.disconnect();
@@ -226,6 +246,7 @@ export class SkewTRenderer {
       window.removeEventListener('theme-changed', this.themeListener);
     }
     this.canvas.remove();
+    this.overlayCanvas.remove();
   }
 }
 

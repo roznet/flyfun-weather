@@ -1335,6 +1335,31 @@ label {
   font-size: 0.78rem;
 }
 
+.skewt-tooltip {
+  position: fixed;
+  z-index: 1000;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #ccc);
+  border-radius: 5px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  max-width: 200px;
+}
+
+.skewt-tooltip-header {
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border, #eee);
+  padding-bottom: 0.2rem;
+}
+
+.skewt-tooltip-body {
+  color: var(--text, #333);
+}
+
 .skewt-panel-dropdown {
   font-size: 0.75rem;
   padding: 0.15rem 0.25rem;
