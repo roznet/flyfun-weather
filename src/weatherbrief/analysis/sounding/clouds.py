@@ -13,8 +13,11 @@ from weatherbrief.models import (
     EnhancedCloudLayer,
     InversionLayer,
     NWPCloudDiagnostics,
+    PressureLevelData,
     ThermodynamicIndices,
 )
+
+_M_TO_FT = 3.28084
 
 # Dewpoint depression threshold for "in cloud" (degrees C)
 IN_CLOUD_DD_THRESHOLD = 3.0
@@ -134,27 +137,125 @@ def _nwp_pct_to_coverage(pct: float) -> CloudCoverage | None:
     return None
 
 
+def build_nwp_cloud_layers_from_fraction(
+    pressure_levels: list[PressureLevelData],
+    threshold_pct: float = 12.5,
+) -> list[EnhancedCloudLayer] | None:
+    """Build cloud layers from per-level model cloud fraction.
+
+    ECMWF IFS delivers ``cc`` and ICON delivers ``clc`` as a full 3D cloud
+    fraction (0–100%) at every pressure level. This is strictly richer than
+    bulk band percentages: we can extract actual deck base/top from the
+    model's own cloud scheme instead of inferring them from RH.
+
+    Algorithm: walk levels surface→TOA, group consecutive levels with
+    ``cloud_area_fraction_pct >= threshold_pct`` into a deck, compute
+    base/top altitude from ``geopotential_height_m``, and classify coverage
+    from the deck's peak fraction.
+
+    Returns None when no level carries ``cloud_area_fraction_pct`` (so the
+    caller can fall back to bulk-%/synthesized path for GFS, Open-Meteo).
+    Returns an empty list when CAF is present but all levels are below
+    threshold (genuinely clear column per the model).
+    """
+    if not pressure_levels:
+        return None
+
+    any_caf = any(lv.cloud_area_fraction_pct is not None for lv in pressure_levels)
+    if not any_caf:
+        return None
+
+    # Surface → TOA: descending pressure
+    sorted_levels = sorted(
+        pressure_levels, key=lambda lv: lv.pressure_hpa, reverse=True,
+    )
+
+    layers: list[EnhancedCloudLayer] = []
+    current: list[PressureLevelData] = []
+
+    def _flush() -> None:
+        if not current:
+            return
+        layer = _build_cc_layer(current)
+        if layer is not None:
+            layers.append(layer)
+        current.clear()
+
+    for lv in sorted_levels:
+        caf = lv.cloud_area_fraction_pct
+        if (caf is not None and caf >= threshold_pct
+                and lv.geopotential_height_m is not None):
+            current.append(lv)
+        else:
+            _flush()
+
+    _flush()
+    return layers
+
+
+def _build_cc_layer(cc_levels: list[PressureLevelData]) -> EnhancedCloudLayer | None:
+    """Build one EnhancedCloudLayer from consecutive cc-above-threshold levels."""
+    if not cc_levels:
+        return None
+
+    base = cc_levels[0]
+    top = cc_levels[-1]
+    if base.geopotential_height_m is None or top.geopotential_height_m is None:
+        return None
+
+    base_ft = base.geopotential_height_m * _M_TO_FT
+    top_ft = top.geopotential_height_m * _M_TO_FT
+
+    caf_vals = [lv.cloud_area_fraction_pct for lv in cc_levels
+                if lv.cloud_area_fraction_pct is not None]
+    t_vals = [lv.temperature_c for lv in cc_levels if lv.temperature_c is not None]
+    peak_caf = max(caf_vals) if caf_vals else 0.0
+    mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
+    coverage = _nwp_pct_to_coverage(peak_caf) or CloudCoverage.FEW
+
+    return EnhancedCloudLayer(
+        base_ft=round(base_ft),
+        top_ft=round(top_ft),
+        base_pressure_hpa=base.pressure_hpa,
+        top_pressure_hpa=top.pressure_hpa,
+        thickness_ft=round(top_ft - base_ft),
+        mean_temperature_c=mean_t,
+        coverage=coverage,
+        mean_dewpoint_depression_c=None,
+        source="nwp_3d",
+    )
+
+
 def build_nwp_cloud_layers(
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None,
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
     nwp_cloud_high_pct: float | None = None,
     *,
+    pressure_levels: list[PressureLevelData] | None = None,
     dd_cloud_layers: list[EnhancedCloudLayer] | None = None,
     inversion_layers: list[InversionLayer] | None = None,
     lcl_altitude_ft: float | None = None,
 ) -> list[EnhancedCloudLayer] | None:
     """Build cloud layers from NWP data.
 
-    Three tiers of quality:
-      1. **GRIB diagnostics** with base/top boundaries → ``source="grib"``
-      2. **Synthesized** from Open-Meteo cloud %, narrowed by DD cloud
+    Four tiers of quality (preferred order):
+      1. **Per-level 3D cloud fraction** (ECMWF ``cc`` / ICON ``clc``)
+         → ``source="nwp_3d"`` — real deck base/top from the model's own
+         cloud scheme, strictly richer than bulk bands.
+      2. **GRIB diagnostics** with base/top boundaries (GFS) → ``source="grib"``
+      3. **Synthesized** from Open-Meteo cloud %, narrowed by DD cloud
          envelope and inversions → ``source="synthesized"``
-      3. **None** when no cloud cover data is available at all
+      4. **None** when no cloud cover data is available at all
 
-    Returns None only when no cloud cover percentage is available.
-    Returns an empty list when data exists but all bands report zero coverage.
+    Returns None only when no cloud cover data is available.
+    Returns an empty list when data exists but no cloud levels met threshold.
     """
+    if pressure_levels:
+        layers_3d = build_nwp_cloud_layers_from_fraction(pressure_levels)
+        if layers_3d is not None:
+            return layers_3d
+
     layers = _build_grib_layers(
         nwp_cloud_diagnostics, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
     )

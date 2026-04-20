@@ -128,14 +128,14 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
 # ECMWF reports heights in meters, cloud covers as 0–1 fractions.
 # cfgrib shortName → internal field name
 _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
-    "ceil": "ceiling_m",             # meters, 9999 = no cloud sentinel
-    "cbh": "cloud_base_height_m",    # meters, 9999 = no cloud sentinel
-    "lcc": "low_cover_frac",         # 0–1 fraction, ×100 during build
-    "mcc": "mid_cover_frac",         # 0–1 fraction, ×100 during build
-    "tcc": "total_cover_frac",       # 0–1 fraction, ×100 during build
-    "hcc": "high_cover_frac",       # 0–1 fraction, ×100 during build
-    # Note: deg0l (freezing level) is available but NWPCloudDiagnostics has
-    # no freezing_level_ft field. Add when the model is extended.
+    "ceil": "ceiling_m",                   # meters, 9999 = no cloud sentinel
+    "cbh": "cloud_base_height_m",          # meters, 9999 = no cloud sentinel
+    "hcct": "convective_cloud_top_m",      # meters, 9999 = no cloud sentinel
+    "deg0l": "freezing_level_m",           # meters (geopotential height above MSL)
+    "lcc": "low_cover_frac",               # 0–1 fraction, ×100 during build
+    "mcc": "mid_cover_frac",               # 0–1 fraction, ×100 during build
+    "tcc": "total_cover_frac",             # 0–1 fraction, ×100 during build
+    "hcc": "high_cover_frac",              # 0–1 fraction, ×100 during build
 }
 
 # Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
@@ -1468,6 +1468,8 @@ def build_ecmwf_cloud_diagnostics(
 
     ceiling_ft = _m_to_ft("ceiling_m")
     cloud_base_ft = _m_to_ft("cloud_base_height_m")
+    convective_top_ft = _m_to_ft("convective_cloud_top_m")
+    freezing_level_ft = _m_to_ft("freezing_level_m")
     low_cover = _frac_to_pct("low_cover_frac")
     mid_cover = _frac_to_pct("mid_cover_frac")
     high_cover = _frac_to_pct("high_cover_frac")
@@ -1476,6 +1478,8 @@ def build_ecmwf_cloud_diagnostics(
     has_any = (
         ceiling_ft is not None
         or cloud_base_ft is not None
+        or convective_top_ft is not None
+        or freezing_level_ft is not None
         or low_cover is not None
         or mid_cover is not None
         or high_cover is not None
@@ -1490,4 +1494,6 @@ def build_ecmwf_cloud_diagnostics(
         high=NWPCloudLayerDiag(cover_pct=high_cover),
         total_cover_pct=total_cover,
         ceiling_ft=ceiling_ft,
+        convective_top_ft=convective_top_ft,
+        freezing_level_ft=freezing_level_ft,
     )

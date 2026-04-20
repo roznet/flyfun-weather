@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 # to avoid urllib3 "Connection pool is full, discarding connection" warnings.
 _POOL_MAXSIZE = 12
 
+_M_TO_FT = 3.28084
+
 
 def _grib_session() -> requests.Session:
     """Create a requests session with a connection pool sized for parallel GRIB downloads."""
@@ -59,6 +61,9 @@ def _apply_cloud_diagnostics(hourly: HourlyForecast, diag: NWPCloudDiagnostics) 
     preserved — they provide hourly-interpolated coverage that is more temporally
     accurate than forward-filled GRIB values on non-native hours."""
     hourly.nwp_cloud_diagnostics = diag
+    # ECMWF deg0l: model-native freezing level overrides Open-Meteo's value.
+    if diag.freezing_level_ft is not None:
+        hourly.freezing_level_m = diag.freezing_level_ft / _M_TO_FT
 
 
 def _forecast_hour_to_utc(init_date: str, init_hour: int, fhour: int) -> datetime:

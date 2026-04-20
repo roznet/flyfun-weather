@@ -350,6 +350,7 @@ def _analyze_sounding_heavy(
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+        pressure_levels=levels,
         dd_cloud_layers=dd_cloud_layers,
         inversion_layers=inversion_layers,
         lcl_altitude_ft=indices.lcl_altitude_ft,
@@ -395,6 +396,10 @@ def _analyze_sounding_heavy(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
+    # NWP icing — direct model CLW/CIW condensate detection
+    from weatherbrief.analysis.sounding.nwp_icing import assess_nwp_icing_zones
+    icing_nwp_zones = assess_nwp_icing_zones(derived_levels)
+
     # Precipitation phase classification
     precipitation = assess_precipitation(
         derived_levels,
@@ -421,6 +426,7 @@ def _analyze_sounding_heavy(
     result.icing_zones = icing_zones
     result.icing_ogimet_dd_zones = icing_zones
     result.icing_ogimet_nwp_zones = icing_ogimet_nwp_zones
+    result.icing_nwp_zones = icing_nwp_zones
     result.sfip_zones = sfip_zones
     result.ieng_icing_zones = ieng_icing_zones
     result.sld_zones = sld_zones

@@ -195,6 +195,22 @@ def assess_convective_nwp(
             if risk == ConvectiveRisk.NONE and cape >= 10:
                 risk = ConvectiveRisk.MARGINAL
         method = "nwp_hybrid"
+    elif (
+        nwp_diagnostics.convective_top_ft is not None
+        and indices.lcl_altitude_ft is not None
+    ):
+        # LCL-anchored (e.g. ECMWF hcct): model gives convective top height
+        # but no base — use LCL as the convective base proxy. Risk from CAPE
+        # thresholds; base = LCL, top = hcct.
+        risk = ConvectiveRisk.NONE
+        if cape is not None:
+            for threshold, level in _CAPE_THRESHOLDS:
+                if cape >= threshold:
+                    risk = level
+                    break
+            if risk == ConvectiveRisk.NONE and cape >= 10:
+                risk = ConvectiveRisk.MARGINAL
+        method = "nwp_lcl_top"
     else:
         return None
 
@@ -205,6 +221,11 @@ def assess_convective_nwp(
         idx = risk_levels.index(risk)
         if idx > 0:
             risk = risk_levels[idx - 1]
+
+    # LCL-anchored path uses LCL as the convective base proxy
+    base_ft = nwp_diagnostics.convective_base_ft
+    if method == "nwp_lcl_top":
+        base_ft = indices.lcl_altitude_ft
 
     return ConvectiveAssessment(
         risk_level=risk,
@@ -218,7 +239,7 @@ def assess_convective_nwp(
         k_index=indices.k_index,
         total_totals=indices.total_totals,
         severe_modifiers=modifiers,
-        base_ft=nwp_diagnostics.convective_base_ft,
+        base_ft=base_ft,
         top_ft=nwp_diagnostics.convective_top_ft,
         cover_pct=cover,
         method=method,
