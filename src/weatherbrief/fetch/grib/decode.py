@@ -1198,6 +1198,7 @@ def decode_ecmwf_pressure_per_point(
 
 _G = 9.80665  # gravitational acceleration (m/s²)
 _KT_PER_MS = 1.94384  # knots per m/s
+_RD_DRY_AIR = 287.05  # specific gas constant for dry air, J/(kg·K)
 
 
 def _convert_raw_sounding(
@@ -1269,8 +1270,7 @@ def _convert_raw_sounding(
     # omega = -ρ·g·w, where ρ = P/(Rd·T_k)
     w_ms = raw.get("raw_w_m_s")
     if w_ms is not None and t_k is not None:
-        _Rd = 287.05  # J/(kg·K), specific gas constant for dry air
-        rho = (pressure_hpa * 100.0) / (_Rd * t_k)
+        rho = (pressure_hpa * 100.0) / (_RD_DRY_AIR * t_k)
         out["vertical_velocity_pa_s"] = -rho * _G * w_ms
 
     return out
@@ -1307,21 +1307,6 @@ def build_pressure_levels_from_grib(
     ]
 
 
-_RD_DRY_AIR = 287.05  # specific gas constant for dry air, J/(kg·K)
-
-
-def _pressure_to_altitude_m_isa(pressure_hpa: float) -> float:
-    """ISA standard-atmosphere altitude in meters for a given pressure (hPa)."""
-    import math
-
-    P0, T0, L = 1013.25, 288.15, 0.0065
-    M, R_gas = 0.0289644, 8.31447
-    exp = R_gas * L / (_G * M)
-    if pressure_hpa <= 0:
-        return math.inf
-    return (T0 / L) * (1.0 - (pressure_hpa / P0) ** exp)
-
-
 def _fill_missing_geopotential_height(
     converted_by_p: dict[int, dict[str, float]],
 ) -> None:
@@ -1339,8 +1324,22 @@ def _fill_missing_geopotential_height(
 
     No-op if every level already has geopotential, or if temperature is
     missing anywhere in the column (can't integrate reliably).
+
+    STOPGAP: this is a basic approximation used until the ECMWF commercial
+    order is amended to deliver ``z`` at all pressure levels — at which
+    point the ``all-present`` guard below makes this function a no-op and
+    real ``z`` flows through unchanged. If this path ever becomes the
+    long-term plan, two known simplifications would need to be revisited:
+    (a) layer-mean uses dry-air temperature instead of virtual temperature
+    — ~0.5–1% underestimate in warm moist air, accumulating ~30–50 m
+    surface→500 hPa; (b) the ISA anchor at the surface-most pressure level
+    is not terrain-aware — fine over flat Europe, off by the terrain-vs-ISA
+    delta at high-elevation airfields. The right long-term fix for (b)
+    would be to anchor using surface ``z`` + ``sp`` from the a1 GRIB.
     """
     import math
+
+    from weatherbrief.models.analysis import pressure_hpa_to_altitude_m
 
     if not converted_by_p:
         return
@@ -1357,7 +1356,7 @@ def _fill_missing_geopotential_height(
     # Anchor: use real value if present at the surface-most level, else ISA.
     anchor = converted_by_p[sorted_p[0]]
     if anchor.get("geopotential_height_m") is None:
-        anchor["geopotential_height_m"] = _pressure_to_altitude_m_isa(sorted_p[0])
+        anchor["geopotential_height_m"] = pressure_hpa_to_altitude_m(sorted_p[0])
 
     for i in range(1, len(sorted_p)):
         p_lower = sorted_p[i - 1]

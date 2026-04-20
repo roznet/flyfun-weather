@@ -55,11 +55,11 @@ def altitude_to_pressure_hpa(altitude_ft: int) -> int:
     return round(pressure)
 
 
-def pressure_pa_to_altitude_ft(pa: float) -> float:
-    """Convert pressure in Pascals to altitude in feet using standard atmosphere.
+def pressure_hpa_to_altitude_m(hpa: float) -> float:
+    """Convert pressure in hPa to altitude in meters using standard atmosphere.
 
     Uses the hypsometric formula for the troposphere (valid up to ~36,000 ft).
-    Same formula as altitude_to_pressure_hpa, inverted.
+    Inverse of altitude_to_pressure_hpa.
     """
     P0 = 1013.25  # sea level pressure hPa
     T0 = 288.15  # sea level temperature K
@@ -68,12 +68,15 @@ def pressure_pa_to_altitude_ft(pa: float) -> float:
     M = 0.0289644  # molar mass of air kg/mol
     R = 8.31447  # gas constant J/(mol·K)
 
-    hpa = pa / 100.0
     if hpa <= 0:
         return 0.0
     exp = R * L / (g * M)
-    altitude_m = (T0 / L) * (1 - (hpa / P0) ** exp)
-    return altitude_m * 3.28084
+    return (T0 / L) * (1 - (hpa / P0) ** exp)
+
+
+def pressure_pa_to_altitude_ft(pa: float) -> float:
+    """Convert pressure in Pascals to altitude in feet using standard atmosphere."""
+    return pressure_hpa_to_altitude_m(pa / 100.0) * 3.28084
 
 
 class NWPCloudLayerDiag(BaseModel):

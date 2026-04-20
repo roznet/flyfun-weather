@@ -15,6 +15,7 @@ from metpy.units import units
 
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
 from weatherbrief.models import DerivedLevel, ParcelPathPoint, ThermodynamicIndices
+from weatherbrief.models.analysis import pressure_hpa_to_altitude_m
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +34,7 @@ def _mag(quantity) -> float | None:
 
 def _pressure_to_altitude_ft(pressure_hpa: float) -> float:
     """Approximate pressure to altitude conversion (standard atmosphere)."""
-    # ISA: h = (T0/L) * (1 - (P/P0)^(R*L/(g*M)))
-    P0, T0, L = 1013.25, 288.15, 0.0065
-    g, M, R = 9.80665, 0.0289644, 8.31447
-    exp = R * L / (g * M)
-    altitude_m = (T0 / L) * (1 - (pressure_hpa / P0) ** exp)
-    return altitude_m * M_TO_FT
+    return pressure_hpa_to_altitude_m(pressure_hpa) * M_TO_FT
 
 
 def _find_temperature_crossing(
