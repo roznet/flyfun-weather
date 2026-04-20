@@ -5,13 +5,20 @@
 
 import { SkewTTransform } from './skewt-transform';
 import { SoundingProfileLevel, ParcelPathPoint } from './types';
+import { isDarkTheme } from '../interaction-utils';
 
-// Profile curve colors
+// Profile curve colors — dark mode needs higher alpha for visibility
+function capeColor(): string {
+  return isDarkTheme() ? 'rgba(255, 80, 80, 0.30)' : 'rgba(220, 60, 60, 0.12)';
+}
+function cinColor(): string {
+  return isDarkTheme() ? 'rgba(80, 80, 255, 0.30)' : 'rgba(60, 60, 220, 0.12)';
+}
+function parcelColor(): string {
+  return isDarkTheme() ? 'rgba(200, 200, 200, 0.7)' : 'rgba(40, 40, 40, 0.7)';
+}
 const TEMP_COLOR = '#e03030';         // Red — temperature
 const DEWPOINT_COLOR = '#30a030';     // Green — dewpoint
-const PARCEL_COLOR = 'rgba(40, 40, 40, 0.7)'; // Dark gray — parcel path
-const CAPE_COLOR = 'rgba(220, 60, 60, 0.12)'; // Red tint — CAPE
-const CIN_COLOR = 'rgba(60, 60, 220, 0.12)';  // Blue tint — CIN
 
 const PROFILE_LINE_WIDTH = 2.0;
 const PARCEL_LINE_WIDTH = 1.5;
@@ -92,7 +99,7 @@ function renderCapeCinShading(
 
     // CAPE (red) = positive buoyancy between LFC and EL
     // CIN (blue) = negative buoyancy between LCL and LFC
-    const fillColor = avgBuoyancy > 0 ? CAPE_COLOR : CIN_COLOR;
+    const fillColor = avgBuoyancy > 0 ? capeColor() : cinColor();
 
     const pxParcel0 = transform.toPixel(pp0.temperature_c, pp0.pressure_hpa);
     const pxParcel1 = transform.toPixel(pp1.temperature_c, pp1.pressure_hpa);
@@ -237,7 +244,7 @@ export function renderProfileCurves(
       tempC: pp.temperature_c,
       pressureHPa: pp.pressure_hpa,
     }));
-    drawProfileLine(ctx, transform, parcelPoints, PARCEL_COLOR, PARCEL_LINE_WIDTH, PARCEL_DASH);
+    drawProfileLine(ctx, transform, parcelPoints, parcelColor(), PARCEL_LINE_WIDTH, PARCEL_DASH);
   }
 
   // 3. Dewpoint curve (green)
