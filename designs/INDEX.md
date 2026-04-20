@@ -77,10 +77,38 @@ Per-briefing cost computation in USD (LLM tokens + infrastructure + storage + ma
 Key exports: `compute_cost`, `CostBreakdown`, `CostConfig`, `charge_briefing`, `get_active_cost_config`
 → Full doc: cost-attribution-design.md
 
-### companion-app
-iOS/iPad companion app: Phase 1 (online viewer) complete, Phase 2 (offline + resilience) complete, Phase 3 M0+M1 (aircraft registry, PIREP submit/view) implemented. Auth (Apple + Google + dev login), advisory dashboard, cross-section Canvas renderer, native Skew-T (RZSkewT package), multi-tier offline fallback, cached flight indicators, PIREP offline queue with auto-flush on connectivity.
+### ios-app-overview
+iOS/iPad companion app entry point: Phase 1 (online viewer) complete, Phase 2 (offline + resilience) complete, Phase 3 M0+M1 (aircraft registry, PIREP submit/view) implemented. Auth (Apple + Google + dev login), advisory dashboard, cross-section Canvas renderer, native Skew-T (RZSkewT package), multi-tier offline fallback, cached flight indicators, PIREP offline queue with auto-flush on connectivity. Start here — links to all other ios-app-* docs.
 Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `CrossSectionRenderer`, `PirepViewModel`, `PirepOfflineStore`
-→ Full doc: companion-app.md
+→ Full doc: ios-app-overview.md
+
+### ios-app-architecture
+Tech stack (SwiftUI, SwiftData, MapKit, iOS 18+), MVVM + Repository pattern, layer responsibilities, Google OAuth + Apple Sign In flow, library reuse (RZFlight, RZUtils, RZSkewT).
+→ Full doc: ios-app-architecture.md
+
+### ios-app-data-models
+Swift `@Model` classes: `Flight`, `PackMeta`, `BriefingPayload`, `ModelCrossSection`, `Observation`, `FlightSession`, `TrackPoint`. First-class PIREPs (nullable `flightId`/`session`), client UUIDs for idempotent sync, forecast snapshot embedded with each observation.
+→ Full doc: ios-app-data-models.md
+
+### ios-app-server-api
+Server API contract: existing endpoints consumed (auth, flights, packs, snapshot, advisories, SSE refresh, sounding profiles), Phase 2 `/companion` lightweight sync endpoint, Phase 3 top-level `/api/observations` + flight-scoped accessors + WebSocket, server data model (`FlightSession`, `Observation`), spatial query design.
+→ Full doc: ios-app-server-api.md
+
+### ios-app-features
+End-state feature set + vision: briefing sync (lightweight offline payload + on-demand artifacts), PIREP filing modes (proactive prompts, in-flight manual, standalone), voice PIREP via Siri, passive data collection, observation timeline, community PIREP feed, live online sharing, post-flight verification.
+→ Full doc: ios-app-features.md
+
+### ios-app-ui
+Cockpit UI design principles (one-handed, large tap targets, high-contrast, non-blocking), screen layouts (briefing viewer, in-flight mode, in-flight map), report card variants (prompted side-card, full bottom sheet with "All correct" shortcut).
+→ Full doc: ios-app-ui.md
+
+### ios-app-sync-prompting
+Sync engine spec (offline queue, `NWPathMonitor` flush, append-only semantics, WebSocket real-time) + forecast-driven prompting engine (route progress tracker, 7 trigger types with entry/exit/cooldown, priority queue, forecast lookup from cross-section data).
+→ Full doc: ios-app-sync-prompting.md
+
+### ios-app-roadmap
+3-phase roadmap: Phase 1 (online viewer — DONE), Phase 2 (offline + push — resilience done, push pending), Phase 3 (3a manual + sync, 3b prompting, 3c live sharing). Cross-section renderer layer waves. Decisions made and open questions.
+→ Full doc: ios-app-roadmap.md
 
 ### forecast-page
 Pan-European weather overview map with per-airport forecast visualization (8 metrics incl. runway crosswind/headwind, consensus modes) and model accuracy heatmaps, powered by standalone verification snapshots. Cache layer serves pre-computed JSON with staleness tracking; falls back to live queries.
