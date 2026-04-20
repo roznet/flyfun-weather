@@ -1,5 +1,5 @@
 {
-  "originHash" : "4b6e0a69c3a547c57d747f81ca6fea1ae0be9071120f612ae8ff40c621d0ae2b",
+  "originHash" : "d8d3578ebda9dd48c17320e841492b4b8b85537aca70824a94f2d5e81e3c0ddf",
   "pins" : [
     {
       "identity" : "fmdb",
@@ -43,7 +43,7 @@
       "location" : "https://github.com/roznet/rzskewt.git",
       "state" : {
         "branch" : "main",
-        "revision" : "1a576bf4e19f7d217343b6fc375281ea7eb3d351"
+        "revision" : "c7e7764e0a19f5967df58231c62ebb49f5a1f80d"
       }
     },
     {
