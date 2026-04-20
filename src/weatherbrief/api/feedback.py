@@ -11,10 +11,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.admin import require_admin
+from weatherbrief.api.throttle import feedback_burst_limiter, feedback_daily_limiter
 from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import FeedbackRow
+from weatherbrief.triage.security import scan_for_exfil
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,7 @@ class NotesUpdate(BaseModel):
 
 class SendReplyRequest(BaseModel):
     reply: Optional[str] = Field(None, max_length=5000)
+    override_safety_check: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +86,9 @@ def submit_feedback(
     db: Session = Depends(get_db),
 ):
     """Submit feedback for a specific briefing pack."""
+    feedback_burst_limiter.check(user_id)
+    feedback_daily_limiter.check(user_id)
+
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
 
     # Parse pack_timestamp string to datetime (nullable)
@@ -234,6 +240,20 @@ def send_feedback_reply_email(
     reply_text = body.reply if body.reply is not None else row.admin_reply
     if not reply_text or not reply_text.strip():
         raise HTTPException(400, "No reply text to send")
+
+    exfil_hits = scan_for_exfil(reply_text)
+    if exfil_hits and not body.override_safety_check:
+        logger.warning("Feedback #%d send blocked by exfil scan: %s", feedback_id, exfil_hits)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "reply_flagged_by_safety_scan",
+                "patterns": exfil_hits,
+                "hint": "Review the reply for secrets/paths, then re-submit with override_safety_check=true to send.",
+            },
+        )
+    if exfil_hits:
+        logger.warning("Feedback #%d sent with override; flagged patterns: %s", feedback_id, exfil_hits)
 
     # Update the stored reply if an override was provided
     if body.reply is not None:

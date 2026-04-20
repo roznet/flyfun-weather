@@ -205,6 +205,13 @@ class FeedbackRow(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    triage_prompt: Mapped[str | None] = mapped_column(
+        Text().with_variant(MEDIUMTEXT, "mysql"), nullable=True
+    )
+    triage_raw_response: Mapped[str | None] = mapped_column(
+        Text().with_variant(MEDIUMTEXT, "mysql"), nullable=True
+    )
+
     user: Mapped[UserRow] = relationship(UserRow)
 
 

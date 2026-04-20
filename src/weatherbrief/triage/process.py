@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pwd
 import re
 import subprocess
 import time
@@ -18,6 +19,7 @@ from flyfun_common.db import SessionLocal, get_engine
 from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import FeedbackRow
 from weatherbrief.triage.prompt import load_prompt
+from weatherbrief.triage.security import scan_for_exfil
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,35 @@ TRIAGE_SCHEMA = {
 
 RATE_LIMIT_WINDOW_DAYS = 7
 RATE_LIMIT_MAX = 10
+
+SANDBOX_USER = "triage"
+SANDBOX_BYPASS_ENV = "TRIAGE_ALLOW_UNSAFE"
+
+
+def _assert_sandboxed() -> None:
+    """Refuse to run unless we are the dedicated `triage` system user.
+
+    The triage worker feeds attacker-controlled text into ``claude -p`` with
+    Read/Grep/Glob tools enabled. If run from a normal developer account, the
+    LLM's Read tool can reach ``.env``, ``~/.aws/credentials``, and any other
+    absolute path the current UID can open. See designs/triage-sandbox.md.
+    """
+    user = pwd.getpwuid(os.geteuid()).pw_name
+    if user == SANDBOX_USER:
+        return
+    if os.environ.get(SANDBOX_BYPASS_ENV):
+        logger.warning(
+            "Triage running as %r with %s set — skipping sandbox check. "
+            "Only do this against a scratch DB with no real secrets reachable.",
+            user, SANDBOX_BYPASS_ENV,
+        )
+        return
+    raise RuntimeError(
+        f"Refusing to run triage as user {user!r}. "
+        f"Triage must run as the {SANDBOX_USER!r} system user from "
+        f"/mnt/flyfun_data/sandboxes/triage (see designs/triage-sandbox.md). "
+        f"Set {SANDBOX_BYPASS_ENV}=1 only for local dev against a scratch DB."
+    )
 
 
 def _check_rate_limit(db: Session, user_id: str) -> bool:
@@ -97,7 +128,10 @@ def _run_claude(
         prompt,
         "--output-format", "json",
         "--json-schema", json.dumps(TRIAGE_SCHEMA),
-        "--tools", "Read,Grep,Glob,Agent",
+        # No Agent tool — prevents the triage LLM from spawning sub-agents
+        # with different tool sets. Read/Grep/Glob is enough to investigate
+        # a bug report against source.
+        "--tools", "Read,Grep,Glob",
         "--model", "sonnet",
         "--max-turns", "20",
         "--max-budget-usd", "1.00",
@@ -115,10 +149,10 @@ def _run_claude(
             cwd=worktree_path,
         )
     except subprocess.TimeoutExpired as exc:
-        partial = (exc.stdout or "") + "\n" + (exc.stderr or "")
+        partial = ((exc.stdout or "") + "\n" + (exc.stderr or "")).strip()
         if log_file:
             _write_log(log_file, partial)
-        raise _TimeoutWithOutput(timeout, partial.strip()) from None
+        raise _TimeoutWithOutput(timeout, partial) from None
 
     elapsed = time.monotonic() - t0
     stdout = result.stdout
@@ -132,7 +166,9 @@ def _run_claude(
             f"{result.stderr[:500] if result.stderr else '(no stderr)'}"
         )
 
-    return _parse_claude_output(stdout, elapsed)
+    parsed = _parse_claude_output(stdout, elapsed)
+    parsed["raw_response"] = stdout
+    return parsed
 
 
 def _write_log(path: str, content: str) -> None:
@@ -230,6 +266,14 @@ def _apply_result(fb: FeedbackRow, parsed: dict) -> None:
     fb.confidence = result.get("confidence")
     fb.processed_at = datetime.now(timezone.utc)
 
+    exfil_hits = sorted(set(
+        scan_for_exfil(fb.ai_analysis) + scan_for_exfil(fb.admin_reply)
+    ))
+    if exfil_hits:
+        warning = f"⚠ exfil-scan flagged: {', '.join(exfil_hits)}"
+        fb.admin_notes = f"{fb.admin_notes}\n\n{warning}" if fb.admin_notes else warning
+        logger.warning("Feedback #%d triage output flagged: %s", fb.id, exfil_hits)
+
 
 def _record_triage_cost(db: Session, fb: FeedbackRow, parsed: dict) -> None:
     """Record the Claude triage cost in the shared cost ledger."""
@@ -269,6 +313,8 @@ def process(
 
     Returns the number of items successfully processed.
     """
+    _assert_sandboxed()
+
     worktree_path = os.environ.get(
         "TRIAGE_WORKTREE_PATH",
         os.environ.get("WORKING_DIR", os.getcwd()),
@@ -318,9 +364,11 @@ def process(
                 continue
 
             t0 = time.monotonic()
+            prompt: str | None = None
             try:
                 prompt_dict = _feedback_to_prompt_dict(fb, user)
                 prompt = load_prompt(prompt_dict)
+                fb.triage_prompt = prompt
                 parsed = _run_claude(
                     prompt,
                     timeout=timeout,
@@ -329,6 +377,7 @@ def process(
                 )
                 processing_time = time.monotonic() - t0
 
+                fb.triage_raw_response = parsed.get("raw_response")
                 _apply_result(fb, parsed)
                 _record_triage_cost(db, fb, parsed)
                 db.flush()
@@ -344,6 +393,7 @@ def process(
             except _TimeoutWithOutput as exc:
                 logger.warning("Feedback #%d timed out after %ds", fb.id, exc.timeout_s)
                 fb.admin_notes = f"Triage timeout after {exc.timeout_s}s"
+                fb.triage_raw_response = exc.partial_output or None
                 db.flush()
             except Exception as exc:
                 logger.exception("Feedback #%d triage failed", fb.id)

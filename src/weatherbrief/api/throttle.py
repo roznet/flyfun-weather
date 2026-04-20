@@ -83,3 +83,12 @@ pirep_burst_limiter = SlidingWindowRateLimiter(max_requests=1, window_seconds=12
 
 pirep_daily_limiter = SlidingWindowRateLimiter(max_requests=50, window_seconds=86400)
 """PIREP submission — max 50 per 24 hours."""
+
+feedback_burst_limiter = SlidingWindowRateLimiter(max_requests=1, window_seconds=60)
+"""Feedback submission — max 1 per minute. Blocks double-click floods and
+prevents rapid-fire mail amplification via admin notifications."""
+
+feedback_daily_limiter = SlidingWindowRateLimiter(max_requests=20, window_seconds=86400)
+"""Feedback submission — max 20 per 24 hours. Hard cap on admin mailbox
+amplification and on DB rows that the triage worker will later have to ignore
+(worker cap is 10 per 7 days — this is a pre-insert belt)."""
