@@ -52,7 +52,27 @@ Post-50r1 both arrive as `stream=oper`. Options:
 - Parse init hour from filename timestamp to determine forecast horizon
 - Use file metadata (step range) instead of stream name
 
-### 3. Confirm ECPDS Subscription
+### 3. Check Step Cadence & Update `delivery_config.json`
+
+Our current subscription (IFS-ENS-CF) delivers **3-hourly throughout** (0, 3,
+6, …, 144/192). The HRES/Set I schedule uses hourly 0–90, then 3-hourly
+93–144, then 6-hourly 150–360. With HRES merging into the ENS control, the
+post-50r1 product might switch to hourly cadence for the first 90 steps.
+
+**Check with test data (expver 0080):**
+- List the delivered steps — still 3-hourly, or now hourly 0–90?
+- If hourly: update `delivery_config.json` step list (57 → ~109 steps for
+  oper, 49 → ~109 for scda/oper-06/18z). File count per run doubles.
+- The sentinel watcher is count-based (`actual >= expected`). With hourly
+  steps, delivery arrives in two batches (~15 min gap between 0–90 and
+  93–144). This is well within the 2h `completeness_timeout_hours` so no
+  logic change needed — just the correct step list in the config.
+
+**Current production config** (`/mnt/flyfun_data/ecmwf/data/delivery_config.json`):
+- `oper`: 57 steps × 2 parts = 114 files
+- `scda`: 49 steps × 2 parts = 98 files
+
+### 4. Confirm ECPDS Subscription
 
 Contact ECMWF to confirm:
 - Our delivery will continue under the new stream/type naming
