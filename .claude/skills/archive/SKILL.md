@@ -36,12 +36,15 @@ Verify that the Release/production build will NOT use localhost. Check `app/flyf
 
 ### 2b — App tests
 
-Run the Xcode test suite:
+Run the Xcode test suite. Use a generic simulator destination so the check
+doesn't fail on a machine that happens not to have a specific device model
+installed:
+
 ```bash
 xcodebuild test \
   -project app/flyfun-weather/flyfun-weather.xcodeproj \
   -scheme flyfun-weather \
-  -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
+  -destination "generic/platform=iOS Simulator" \
   -quiet \
   2>&1 | tail -30
 ```
@@ -72,12 +75,19 @@ Search for common debug patterns that shouldn't ship:
 
 ### 2g — Info.plist privacy descriptions
 
-Verify required usage descriptions are present in `app/flyfun-weather/flyfun-weather/SupportingFiles/Info.plist`:
+Verify required keys are present in `app/flyfun-weather/flyfun-weather/SupportingFiles/Info.plist`:
 - `NSLocationWhenInUseUsageDescription` (for flight tracking)
+- `ITSAppUsesNonExemptEncryption` set to `false` (declares HTTPS-only usage so App Store Connect doesn't demand annual export compliance docs)
 
-Verify `PrivacyInfo.xcprivacy` exists at `app/flyfun-weather/flyfun-weather/PrivacyInfo.xcprivacy`.
+Verify `PrivacyInfo.xcprivacy` exists at `app/flyfun-weather/flyfun-weather/PrivacyInfo.xcprivacy` and declares at minimum the data types the web privacy page (`web/privacy.html`) claims are collected:
+- `NSPrivacyCollectedDataTypeEmailAddress`
+- `NSPrivacyCollectedDataTypeName`
+- `NSPrivacyCollectedDataTypeUserID`
+- `NSPrivacyCollectedDataTypePreciseLocation` (must be `Linked=true` — PIREPs upload location tied to the user on the server)
+- `NSPrivacyCollectedDataTypeOtherUserContent` (flight routes, waypoints, PIREP notes, feedback)
+- `NSPrivacyCollectedDataTypeProductInteraction` (API call counts, LLM token usage)
 
-If any are missing, stop and warn.
+If any required key/declaration is missing, stop and warn. Divergence between `PrivacyInfo.xcprivacy` and `web/privacy.html` is a common reviewer nit, so they must stay in sync.
 
 ### 2h — Local package overrides
 
