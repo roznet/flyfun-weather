@@ -596,7 +596,7 @@ class TestRunStandaloneCycle:
     @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=3)
     @patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=100)
     @patch("weatherbrief.tasks.standalone_verification._enrich_with_grib")
-    @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=[{"dummy": True}])
+    @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=([{"dummy": True}], 1))
     @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
     @patch("flyfun_common.db.SessionLocal")
     def test_full_cycle_orchestration(
@@ -678,7 +678,7 @@ class TestRunStandaloneCycle:
     @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=3)
     @patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=100)
     @patch("weatherbrief.tasks.standalone_verification._enrich_with_grib")
-    @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=[{"dummy": True}])
+    @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=([{"dummy": True}], 1))
     @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
     @patch("flyfun_common.db.SessionLocal")
     def test_full_cycle_returns_cycle_type(
