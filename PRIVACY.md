@@ -1,6 +1,6 @@
 # FlyFun Weather — Privacy & Data Practices
 
-*Last updated: 2026-04-01*
+*Last updated: 2026-04-20*
 
 This document explains what data the app collects, why, and what I do (and don't do) with it.
 FlyFun Weather is a personal project — I'm a single developer, not a company.
@@ -69,18 +69,14 @@ Your email is used **solely** for delivering these briefing notifications and ac
 
 ---
 
-## Autorouter Credentials
+## Autorouter Integration
 
-If you use the Autorouter integration (for GRAMET cross-section data), the app stores your Autorouter username and password.
+If you use the Autorouter integration (for GRAMET cross-section data), the app uses **OAuth2 authorization** to connect to your Autorouter account. You are redirected to autorouter.aero to authorize access — your Autorouter password is never shared with or stored by this app.
 
-**How they are stored:**
-- Credentials are **encrypted at rest** using Fernet symmetric encryption (AES-128-CBC)
-- The encryption key is stored separately from the database
+**What is stored:**
+After authorization, an **access token** (valid for approximately one year) is stored encrypted at rest using Fernet symmetric encryption (AES-128-CBC). This token allows the app to fetch GRAMET data on your behalf. No username or password is stored.
 
-**Honest disclosure:**
-Anyone with access to the server (i.e., me) could technically decrypt these credentials, since the encryption key lives on the same server. This means you need to **trust me** not to look at or misuse them. I have no intention of doing so and never will, but I want to be upfront about the technical reality.
-
-You can delete your Autorouter credentials at any time from your settings.
+You can disconnect your Autorouter account at any time from your settings, which removes the stored token.
 
 ---
 
@@ -107,20 +103,6 @@ There are **no third-party analytics**, no tracking pixels, no cookies beyond th
 ### Cost Model
 
 The app tracks the real cost of each briefing (LLM tokens, infrastructure share, storage) and exposes this via a public **transparency endpoint** (`/api/transparency`) that anyone can query. You can also see your own usage and cost breakdown in the app.
-
----
-
-## Pricing Philosophy
-
-FlyFun Weather is intended to **remain free**. I built it for myself and fellow pilots, not as a business.
-
-If the app grows to a point where costs become significant (one can dream), I plan to:
-
-- Set up a **voluntary donation** system
-- Maintain **full transparency** on actual costs using the usage data described above
-- Never gate features behind a paywall
-
-I will not monetize your data, sell your information, or introduce advertising.
 
 ---
 
