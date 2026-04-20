@@ -49,7 +49,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     shortLabel: 'HW/XW',
     unit: 'kt',
     color: '#d04040',
-    secondaryColor: '#d09020',
+    secondaryColor: '#2080d0',
     secondaryLabel: 'XW',
     getValue: (lv, trackDeg) => {
       if (lv.wind_speed_kt == null || lv.wind_direction_deg == null || trackDeg == null) return null;
@@ -299,13 +299,31 @@ export function renderSidePanel(
     ctx.fillText(`${secondary.shortLabel} (${secondary.unit})`, layout.left + layout.width / 2, y - 10);
   } else if (!secondary) {
     // Title at top when no secondary
-    ctx.fillStyle = primary.color;
     ctx.textBaseline = 'bottom';
-    ctx.textAlign = 'center';
     ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
-    let title = primary.shortLabel;
-    if (primary.secondaryLabel) title += ` / ${primary.secondaryLabel}`;
-    ctx.fillText(title, layout.left + layout.width / 2, layout.top - 2);
+    const titleY = layout.top - 2;
+    const centerX = layout.left + layout.width / 2;
+    if (primary.secondaryLabel && primary.secondaryColor) {
+      // Two-color title so the label matches each line's color
+      const sep = ' / ';
+      const wA = ctx.measureText(primary.shortLabel).width;
+      const wSep = ctx.measureText(sep).width;
+      const wB = ctx.measureText(primary.secondaryLabel).width;
+      ctx.textAlign = 'left';
+      let x = centerX - (wA + wSep + wB) / 2;
+      ctx.fillStyle = primary.color;
+      ctx.fillText(primary.shortLabel, x, titleY);
+      x += wA;
+      ctx.fillStyle = textColor;
+      ctx.fillText(sep, x, titleY);
+      x += wSep;
+      ctx.fillStyle = primary.secondaryColor;
+      ctx.fillText(primary.secondaryLabel, x, titleY);
+    } else {
+      ctx.fillStyle = primary.color;
+      ctx.textAlign = 'center';
+      ctx.fillText(primary.shortLabel, centerX, titleY);
+    }
   }
 }
 
