@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -420,6 +421,18 @@ def _run_retention_once() -> None:
         purge_old_ecmwf_deliveries()
     except Exception:
         logger.error("ECMWF delivery purge failed", exc_info=True)
+
+    # Purge old GRIB download cache (GFS + ICON-EU, 24h TTL)
+    try:
+        from weatherbrief.fetch.grib.cache import purge_old_runs
+
+        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        for model in ("gfs", "icon-eu"):
+            removed = purge_old_runs(data_dir, model=model)
+            if removed:
+                logger.info("Purged %d old %s GRIB cache dirs", removed, model)
+    except Exception:
+        logger.error("GRIB cache purge failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

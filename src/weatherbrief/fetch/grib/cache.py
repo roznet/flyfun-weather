@@ -4,7 +4,7 @@ Cache layout:
     {data_dir}/.cache/grib/{model}/{YYYYMMDD}_{HH}z/
         f{FFF}_{var}_{bbox_hash}.grib2
 
-TTL: 48 hours (model runs every 6h, but keep for comparison).
+TTL: 24 hours — each model run is self-contained, no cross-run comparison needed.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Cache entries older than this are purged
-CACHE_TTL_SECONDS = 48 * 3600  # 48 hours
+CACHE_TTL_SECONDS = 24 * 3600  # 24 hours
 
 
 def cache_dir_for_run(
