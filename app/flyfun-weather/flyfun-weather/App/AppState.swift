@@ -46,6 +46,7 @@ final class AppState {
     private(set) var apiClient: APIClient?
     private(set) var repository: (any BriefingRepository)?
     let pirepOfflineStore = PirepOfflineStore()
+    let userPreferences = UserPreferencesStore()
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AppState")
 
@@ -102,6 +103,7 @@ final class AppState {
         secureStorage.wrappedValue = nil
         apiClient = nil
         repository = nil
+        userPreferences.clear()
     }
 
     /// Delete the user's account on the server, then log out locally.
@@ -138,6 +140,13 @@ final class AppState {
         }
     }
 
+    /// Refresh user preferences from the server. Safe to call while offline
+    /// (silently keeps the cached value).
+    func refreshUserPreferences() async {
+        guard let apiClient else { return }
+        await userPreferences.refresh(using: apiClient)
+    }
+
     // MARK: - Private
 
     /// Typed accessor for cache operations (download/delete).
@@ -151,5 +160,6 @@ final class AppState {
         let online = OnlineBriefingRepository(client: client)
         let cache = BriefingCacheStore()
         repository = CachingBriefingRepository(client: client, online: online, cache: cache)
+        Task { await userPreferences.refresh(using: client) }
     }
 }

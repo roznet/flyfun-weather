@@ -35,7 +35,7 @@ struct BriefingContainerView: View {
             if let viewModel {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
-                        if isInFlightWindow {
+                        if isInFlightWindow && appState.userPreferences.preferences.pirepCanPublish {
                             Button {
                                 showingPirepSheet = true
                             } label: {
@@ -254,6 +254,7 @@ private struct RefreshBannerView: View {
 private struct BriefingContentView: View {
     @Bindable var viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         TabView(selection: $viewModel.selectedTab) {
@@ -273,9 +274,11 @@ private struct BriefingContentView: View {
                 DigestView(viewModel: viewModel)
             }
 
-            Tab("PIREPs", systemImage: "cloud.sun", value: BriefingTab.pireps) {
-                PirepListView(pirepsState: viewModel.pirepsState) {
-                    await viewModel.loadPireps()
+            if appState.userPreferences.preferences.pirepCanView {
+                Tab("PIREPs", systemImage: "cloud.sun", value: BriefingTab.pireps) {
+                    PirepListView(pirepsState: viewModel.pirepsState) {
+                        await viewModel.loadPireps()
+                    }
                 }
             }
         }
