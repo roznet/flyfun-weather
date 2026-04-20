@@ -32,7 +32,7 @@ from weatherbrief.fetch.grib.grib_fetch import (
 from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
 from weatherbrief.analysis.sounding.icing import (
     _lwc_to_icing_severity,
-    assess_icing_zones,
+    assess_icing_zones_ogimet_dd,
 )
 from weatherbrief.models import (
     DerivedLevel,
@@ -199,54 +199,50 @@ def test_lwc_severity_thresholds():
     assert _lwc_to_icing_severity(1.0) == IcingRisk.SEVERE
 
 
-def test_lwc_icing_detection():
-    """Icing zone detected from direct LWC data, even without cloud proximity."""
+def test_ogimet_dd_in_cloud_layer():
+    """Ogimet-DD detects icing when level is within a cloud layer."""
     levels = [
         DerivedLevel(
             pressure_hpa=700, altitude_ft=10000,
-            temperature_c=-7.0, dewpoint_c=-15.0,  # dry! no cloud nearby
-            dewpoint_depression_c=8.0,
-            cloud_liquid_water_g_m3=0.3,  # but LWC says there's liquid water
+            temperature_c=-7.0, dewpoint_c=-7.3,
+            dewpoint_depression_c=0.3,
         ),
     ]
-    # No cloud layers — Ogimet would skip this level
-    zones = assess_icing_zones(levels, [])
+    zones = assess_icing_zones_ogimet_dd(
+        levels,
+        [EnhancedCloudLayer(base_ft=9000, top_ft=11000)],
+    )
     assert len(zones) == 1
-    assert zones[0].risk == IcingRisk.MODERATE
+    assert zones[0].risk in (IcingRisk.MODERATE, IcingRisk.SEVERE)
     assert zones[0].icing_type == IcingType.MIXED
 
 
-def test_lwc_icing_warm_temperature():
-    """LWC with warm temperature (>0°C) does not produce icing."""
+def test_ogimet_dd_warm_no_icing():
+    """No icing above 0°C even inside cloud layer."""
     levels = [
         DerivedLevel(
             pressure_hpa=850, altitude_ft=5000,
             temperature_c=3.0, dewpoint_c=1.0,
             dewpoint_depression_c=2.0,
-            cloud_liquid_water_g_m3=0.5,  # liquid water but warm
         ),
     ]
-    zones = assess_icing_zones(levels, [])
+    zones = assess_icing_zones_ogimet_dd(
+        levels, [EnhancedCloudLayer(base_ft=4000, top_ft=6000)],
+    )
     assert len(zones) == 0
 
 
-def test_lwc_fallback_to_ogimet():
-    """Without LWC data, falls back to Ogimet index (existing behavior)."""
+def test_ogimet_dd_outside_cloud_no_icing():
+    """No icing when level is outside cloud layers, even with icing temperatures."""
     levels = [
         DerivedLevel(
             pressure_hpa=700, altitude_ft=10000,
             temperature_c=-7.0, dewpoint_c=-8.0,
             dewpoint_depression_c=1.0,
-            # No cloud_liquid_water_g_m3 set
         ),
     ]
-    zones = assess_icing_zones(
-        levels,
-        [EnhancedCloudLayer(base_ft=9000, top_ft=11000)],
-    )
-    assert len(zones) == 1
-    # Should use Ogimet index (same as existing behavior)
-    assert zones[0].risk in (IcingRisk.MODERATE, IcingRisk.SEVERE)
+    zones = assess_icing_zones_ogimet_dd(levels, [])
+    assert len(zones) == 0
 
 
 # --- Data model tests ---

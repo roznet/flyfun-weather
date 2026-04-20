@@ -1,7 +1,7 @@
 """Shared utilities for icing assessment methods (Ogimet and SFIP).
 
-Centralises cloud-proximity checks, NWP cloud altitude lookups,
-icing-type classification, and zone-grouping logic so that all three
+Centralises cloud-layer gating, NWP cloud altitude lookups,
+icing-type classification, and zone-grouping logic so that all
 icing methods behave consistently.
 """
 
@@ -19,17 +19,43 @@ from weatherbrief.models import (
 )
 
 
-# ── Cloud-proximity check ───────────────────────────────────────────
+# ── Cloud layer gating ─────────────────────────────────────────────
 
-
-# Dewpoint depression thresholds for cloud proximity gating.
-# DD < BKN threshold → unconditionally in-cloud (BKN/OVC equivalent).
-# DD < SCT threshold → possibly in cloud (SCT equivalent, used by SFIP proxy).
-DD_BKN_THRESHOLD = 2.0
-DD_SCT_THRESHOLD = 3.0
 
 # Vertical margin around cloud layer boundaries
 CLOUD_MARGIN_FT = 500.0
+
+
+def is_in_cloud_layer(
+    level: DerivedLevel,
+    cloud_layers: list[EnhancedCloudLayer],
+    margin_ft: float = CLOUD_MARGIN_FT,
+) -> bool:
+    """Check if a level's altitude falls within any cloud layer ± margin.
+
+    Used for icing gating — consistent with cloud display layers.
+    Pass *dd_cloud_layers* (DD-detected + NWP-filtered) for DD-gated
+    methods, or *nwp_cloud_layers* (pure model) for NWP-gated methods.
+
+    No per-level DD re-check: the cloud layer list already encodes the
+    detection method's decisions (DD threshold, NWP coverage filter, etc.).
+    """
+    if level.altitude_ft is None:
+        return False
+    for cl in cloud_layers:
+        if (cl.base_ft - margin_ft) <= level.altitude_ft <= (cl.top_ft + margin_ft):
+            return True
+    return False
+
+
+# ── Legacy cloud-proximity check (used by old assess_icing_zones) ──
+
+
+# Dewpoint depression thresholds — kept for backward compatibility
+# with assess_icing_zones() (old pass-1/pass-2 hybrid, no longer
+# called in the pipeline but still referenced by tests).
+DD_BKN_THRESHOLD = 2.0
+DD_SCT_THRESHOLD = 3.0
 
 
 def is_near_cloud(
@@ -41,14 +67,11 @@ def is_near_cloud(
 ) -> bool:
     """Check if a level is in or near cloud.
 
-    Args:
-        level: Derived level to check.
-        clouds: Detected cloud layers.
-        dd_threshold: DD below which the level is unconditionally in-cloud.
-            Use ``DD_BKN_THRESHOLD`` (2.0) for Ogimet methods (ignores SCT),
-            ``DD_SCT_THRESHOLD`` (3.0) for SFIP proxy (wider net).
-        skip_sct: When True, scattered cloud layers are not counted for
-            the altitude-proximity check (pilots can see and avoid).
+    .. deprecated::
+        Use :func:`is_in_cloud_layer` instead.  This function mixes
+        per-level DD re-checking with layer proximity, which duplicates
+        cloud detection logic and can disagree with the NWP-filtered
+        cloud layers used for display.
 
     Returns:
         True when the level's DD is below *dd_threshold* or the level's

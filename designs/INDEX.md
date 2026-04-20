@@ -22,7 +22,7 @@ Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `Au
 → Full doc: fetch.md
 
 ### analysis
-Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, DD/NWP cloud methods, three icing methods — Ogimet-DD/Ogimet-NWP/SFIP-NWP, inversions, convective, vertical motion/CAT), altitude advisories, model divergence scoring. Icing and cloud methods selectable via user preferences.
+Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, DD/NWP cloud methods, four icing methods — Ogimet-DD/Ogimet-NWP/SFIP-NWP/IENG-NWP, inversions, convective, vertical motion/CAT), altitude advisories, model divergence scoring. Icing gated by `is_in_cloud_layer()` consistent with cloud display layers. Icing and cloud methods selectable via user preferences.
 Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`, `assess_vertical_motion`, `detect_inversions`
 → Full doc: analysis.md
 

@@ -372,10 +372,10 @@ def _analyze_sounding_heavy(
         cape_jkg=eff_cape,
     )
 
-    # Ogimet-NWP icing
+    # Ogimet-NWP icing (gated by NWP cloud layers)
     icing_ogimet_nwp_zones = assess_icing_zones_ogimet_nwp(
         derived_levels,
-        cloud_layers,
+        nwp_cloud_layers or [],
         cape_jkg=eff_cape,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
@@ -383,10 +383,10 @@ def _analyze_sounding_heavy(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
-    # IENG icing
+    # IENG icing (gated by NWP cloud layers)
     ieng_icing_zones = assess_icing_zones_ieng(
         derived_levels,
-        cloud_layers,
+        nwp_cloud_layers or [],
         cape_jkg=eff_cape,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,

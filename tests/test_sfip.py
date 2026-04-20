@@ -332,14 +332,16 @@ def test_zones_with_clw():
 
 
 def test_zones_without_clw():
-    """Proxy variant without CLW data produces zones when in cloud."""
+    """Proxy variant without CLW data produces zones when in cloud layer."""
     levels = [
         _level(800, 6500, -6.0, -7.0, 96.0, 1.0),
         _level(750, 8000, -9.0, -10.0, 97.0, 1.0),
         _level(700, 10000, -12.0, -13.0, 95.0, 1.0),
     ]
+    clouds = [EnhancedCloudLayer(base_ft=6000, top_ft=10500)]
     zones = assess_sfip_zones(
         levels,
+        cloud_layers=clouds,
         nwp_cloud_mid_pct=80.0,
     )
     assert len(zones) >= 1
@@ -429,8 +431,8 @@ def test_zone_icing_type():
 
 
 def test_comparison_both_indices():
-    """Same profile produces both Ogimet and SFIP zones (may differ)."""
-    from weatherbrief.analysis.sounding.icing import assess_icing_zones
+    """Same profile produces both Ogimet-DD and SFIP zones (may differ)."""
+    from weatherbrief.analysis.sounding.icing import assess_icing_zones_ogimet_dd
 
     levels = [
         DerivedLevel(
@@ -446,7 +448,7 @@ def test_comparison_both_indices():
     ]
     clouds = [EnhancedCloudLayer(base_ft=9000, top_ft=13000)]
 
-    ogimet_zones = assess_icing_zones(levels, clouds)
+    ogimet_zones = assess_icing_zones_ogimet_dd(levels, clouds)
     sfip_zones = assess_sfip_zones(levels, cloud_layers=clouds)
 
     assert len(ogimet_zones) >= 1
@@ -498,22 +500,35 @@ def test_proxy_no_cloud_layers_no_dd_gated():
     assert len(zones) == 0
 
 
-def test_proxy_near_cloud_by_dd():
-    """Proxy variant: DD < 3°C passes cloud gating even without cloud layers."""
+def test_proxy_in_cloud_layer():
+    """Proxy variant: levels inside a cloud layer produce zones."""
+    clouds = [EnhancedCloudLayer(base_ft=9500, top_ft=12500)]
     levels = [
-        _level(700, 10000, -8.0, -9.0, 96.0, 1.0),  # DD=1, in cloud
+        _level(700, 10000, -8.0, -9.0, 96.0, 1.0),
         _level(650, 12000, -12.0, -13.0, 95.0, 1.0),
     ]
-    zones = assess_sfip_zones(levels, nwp_cloud_mid_pct=80.0)
+    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
     assert len(zones) >= 1
     assert all(z.variant.startswith("proxy") for z in zones)
 
 
-def test_proxy_near_cloud_by_layer_proximity():
-    """Proxy variant: within 500ft of cloud layer passes gating, even with DD > 3."""
+def test_proxy_outside_cloud_layer():
+    """Proxy variant: levels outside cloud layers are gated out."""
+    clouds = [EnhancedCloudLayer(base_ft=3000, top_ft=5000)]
+    levels = [
+        # DD < 3°C (moist air) but above the cloud layer — should NOT produce SFIP
+        _level(700, 10000, -8.0, -9.0, 96.0, 1.0),
+        _level(650, 12000, -12.0, -13.0, 95.0, 1.0),
+    ]
+    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    assert len(zones) == 0
+
+
+def test_proxy_near_cloud_layer_margin():
+    """Proxy variant: within 500ft margin of cloud layer passes gating."""
     clouds = [EnhancedCloudLayer(base_ft=9500, top_ft=12500)]
     levels = [
-        # DD=4 (> 3, so DD alone would gate it out), but altitude within cloud layer
+        # DD=4 (dry) but altitude within cloud layer boundaries
         _level(700, 10000, -8.0, -12.0, 80.0, 4.0),
         _level(650, 12000, -12.0, -16.0, 78.0, 4.0),
     ]

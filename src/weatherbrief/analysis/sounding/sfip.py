@@ -15,9 +15,8 @@ from __future__ import annotations
 import math
 
 from weatherbrief.analysis.sounding.icing_common import (
-    DD_SCT_THRESHOLD,
     group_icing_levels,
-    is_near_cloud,
+    is_in_cloud_layer,
     nwp_cloud_cover_at_altitude,
 )
 from weatherbrief.models import (
@@ -308,19 +307,6 @@ def _classify_icing_type(temperature_c: float) -> IcingType:
     return IcingType.NONE
 
 
-# ── Cloud proximity (proxy variant gating) ───────────────────────────
-
-
-def _is_near_cloud(level: DerivedLevel, clouds: list[EnhancedCloudLayer]) -> bool:
-    """Check if a level is within or very near a cloud layer.
-
-    Delegates to ``icing_common.is_near_cloud`` with DD < 3°C threshold
-    (wider than Ogimet's 2°C) and SCT layers included (skip_sct=False).
-    The proxy variant needs a wider net since it has no pass-2 NWP fallback.
-    """
-    return is_near_cloud(level, clouds, dd_threshold=DD_SCT_THRESHOLD, skip_sct=False)
-
-
 # ── Zone builder ─────────────────────────────────────────────────────
 
 
@@ -336,8 +322,9 @@ def assess_sfip_zones(
 
     Cloud gating per variant:
       - Full (CLW available): levels with CLW <= 0 are gated out in compute_sfip_level.
-      - Proxy (no CLW): levels must be near a detected cloud layer (DD < 3°C
-        or within 500ft of an EnhancedCloudLayer).
+      - Proxy (no CLW): level must be within a cloud layer (±500 ft).
+        The caller controls which cloud detection method is used by
+        passing DD-detected+NWP-filtered layers or pure NWP layers.
 
     Stores per-level SFIP results on DerivedLevel objects.
     Returns list of SfipZone ordered by ascending altitude.
@@ -356,9 +343,9 @@ def assess_sfip_zones(
         if lv.relative_humidity_pct is None or lv.dewpoint_depression_c is None:
             continue
 
-        # Proxy variant cloud gating: skip levels not near cloud
+        # Proxy variant cloud gating: skip levels outside cloud layers
         is_proxy = lv.cloud_liquid_water_g_kg is None
-        if is_proxy and not _is_near_cloud(lv, clouds):
+        if is_proxy and not is_in_cloud_layer(lv, clouds):
             continue
 
         cloud_cover = _cloud_cover_for_level(

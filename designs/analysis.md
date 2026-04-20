@@ -123,33 +123,45 @@ layers = detect_inversions(derived_levels)
 
 ### Icing (`sounding/icing.py`, `sounding/sfip.py`, `sounding/icing_common.py`)
 
-Three icing methods, selectable via `icing_method` user setting. All three are always computed and stored; the selected method determines which `icing_zones` are used by advisory evaluators. Shared utilities (cloud-proximity checks, NWP cloud altitude lookup, icing type classification, zone grouping) live in `icing_common.py`.
+Three icing methods, selectable via `icing_method` user setting. All three are always computed and stored; the selected method determines which `icing_zones` are used by advisory evaluators. Shared utilities (cloud layer gating, NWP cloud altitude lookup, icing type classification, zone grouping) live in `icing_common.py`.
+
+#### Cloud Gating Architecture
+
+All icing methods use the same cloud gating function `is_in_cloud_layer()` from `icing_common.py` — a pure altitude-within-range check against `EnhancedCloudLayer` lists:
+
+```python
+def is_in_cloud_layer(level, cloud_layers, margin_ft=500) -> bool:
+    """True if level.altitude_ft is within any cloud layer ± margin."""
+```
+
+No per-level DD re-checking. The cloud layer list already encodes the detection method's decisions (DD threshold, NWP coverage filter, etc.). Two cloud detection methods exist and are used for gating:
+
+| Cloud method | Layers | How built | Display |
+|-------------|--------|-----------|---------|
+| **DD** | `cloud_layers` | `detect_cloud_layers(DD<3°C)` → `apply_nwp_coverage(drop if NWP<12.5%)` | Gray bands |
+| **NWP** | `nwp_cloud_layers` | `build_nwp_cloud_layers(GRIB diagnostics or synthesized from %)` | Blue bands |
+
+**Consistency with display:** icing can only be computed where cloud is drawn. If no cloud band is displayed at a given altitude, no icing is computed there. This prevents false alarms in moist-but-clear air (DD<3°C but NWP says <12.5% cloud).
+
+Each icing method is paired with a cloud detection method: `{formula}–{cloud_method}`.
 
 #### Ogimet-DD (default) — `assess_icing_zones_ogimet_dd()`
 
-Continuous Ogimet icing index with dewpoint depression (DD) attenuation as the cloud signal.
+Ogimet index gated by DD cloud layers, with DD severity modulation.
 
-```python
-zones = assess_icing_zones_ogimet_dd(derived_levels, cloud_layers, cape_jkg=cape, ...)
-```
+**Gating:** `is_in_cloud_layer(level, dd_cloud_layers)` — uses DD-detected + NWP-filtered cloud layers (same gray bands drawn on the cross-section).
 
-**Formula:** `effective_index = ogimet_index(T) × dd_attenuation_factor(DD)`
+**Severity:** `effective_index = ogimet_index(T) × dd_attenuation_factor(DD)` — cosine taper from 1.0 at DD=0°C to 0.0 at DD≥2°C modulates severity within cloud (denser cloud → more icing).
 
-The DD attenuation provides a smooth cloud signal: cosine taper from 1.0 at DD=0°C to 0.0 at DD≥2°C. No binary cloud gate — severity degrades smoothly as DD increases.
-
-**2-pass cloud gating (for zone formation):**
-- **Pass 1 (standard):** Three conditions for icing — (a) LWC-direct: CLWMR > 0 in icing-temp range; (b) DD-based: DD < 2°C (BKN/OVC equivalent); (c) cloud proximity: within 500ft of BKN/OVC layer. Scattered (DD 2–3°C) skipped — avoidable in VMC.
-- **Pass 2 (NWP fallback):** Re-checks levels in 0 to −20°C that pass 1 missed. If NWP cloud cover > 50% at the corresponding altitude band → assess. Catches sub-grid microphysics the sounding missed.
+Per-level index stored in `icing_index` on DerivedLevel.
 
 #### Ogimet-NWP (alternative) — `assess_icing_zones_ogimet_nwp()`
 
-Same Ogimet index but uses NWP model cloud cover as the cloud signal instead of DD.
+Ogimet index gated by NWP cloud layers, scaled by cloud fraction and glaciation.
 
-**Formula:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)`
+**Gating:** `is_in_cloud_layer(level, nwp_cloud_layers)` — uses pure NWP model cloud layers (same blue bands drawn on the cross-section).
 
-Altitude-aware: `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) checks **all** diagnostic layers regardless of ICAO band and returns the highest matching cloud cover. Falls back to bulk band percentages when diagnostics unavailable.
-
-**DD cloud proximity gate (no-diagnostics fallback):** When `NWPCloudDiagnostics` are absent (ECMWF, GEM, etc.), bulk NWP band percentages cover entire ICAO altitude bands — e.g. 15% low cloud is applied uniformly from SFC to 6500ft regardless of where the cloud actually is. To prevent false-positive icing at cloud-free altitudes, levels are gated by `is_near_cloud()` (shared in `icing_common.py`): the level must have DD < 2°C or be within 500ft of a detected BKN/OVC cloud layer. Models with GRIB2 diagnostics (GFS, ICON-EU) use precise base/top boundaries instead and skip this gate.
+**Severity:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude) × glaciation_factor(CLW, ICMR)` — NWP cloud cover percentage modulates severity; glaciation factor (when CLW/ICMR available) reduces index in glaciated cloud. `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) checks all diagnostic layers regardless of ICAO band, falling back to bulk band percentages when diagnostics unavailable.
 
 Per-level index stored in `icing_index_nwp` on DerivedLevel (separate from `icing_index` used by Ogimet-DD).
 
@@ -157,14 +169,25 @@ Per-level index stored in `icing_index_nwp` on DerivedLevel (separate from `icin
 
 Simplified Forecast Icing Potential — fuzzy-logic index (Belo-Pereira 2015, Morcrette et al. 2019). Same family used by Windy.com and European met services.
 
-- **Fuzzy logic** — four membership functions (T, RH, CLW, vertical velocity) combined with weights
+**Gating:** Two variants:
+- **Full variant** (CLW available from GRIB): `CLW > 0` gate inside `compute_sfip_level()` — direct evidence of liquid water
+- **Proxy variant** (no CLW): `is_in_cloud_layer(level, dd_cloud_layers)` — uses DD-detected + NWP-filtered cloud layers
+
+**Fuzzy logic** — four membership functions (T, RH, CLW, vertical velocity) combined with weights:
 - **Six variants**: `full`/`full_no_vv` (SFIP_O, GFS/ICON-EU — has real CLW from GRIB) `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; `proxy`/`proxy_no_vv` (SFIP_4, other models) `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; `interp`/`interp_no_vv` (same as full but CLW spatially/vertically interpolated). The `_no_vv` suffix indicates omega is unavailable (M_VV = 0).
 - **Glaciation factor** (GFS/ICON-EU only): `CLW/(CLW+ICMR)` reduces icing when cloud is glaciated
-- **Altitude-aware NWP cloud check**: `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) checks all diagnostic layers regardless of ICAO band; prevents false positives from bulk ICAO-band percentages
 - **Icing type**: uses shared `classify_icing_type()` with wet-bulb temperature (same thresholds as Ogimet)
 - Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (one of six above)
 
 **Temperature membership (M_T):** Piecewise linear ramp to peak 1.0 in [−5, −14]°C, then exponential decay below −14°C: `exp(−k × (|T| − 14))` with `k=0.4` (`_TEMP_DECAY_K`). SLW concentration drops roughly exponentially with decreasing temperature as ice nucleation dominates. This aligns SFIP's effective range with the Ogimet layered formula (which cuts off at −14°C) while maintaining a smooth tail for mixed-phase icing. Reference values: −15°C → 0.67, −17°C → 0.30, −20°C → 0.09. Temperature gating: [0, −25]°C.
+
+#### IENG-NWP — `assess_icing_zones_ieng()`
+
+Temperature curve scaled by NWP cloud fraction. Simpler, coverage-proportional alternative to Ogimet-NWP.
+
+**Gating:** `is_in_cloud_layer(level, nwp_cloud_layers)` — uses pure NWP model cloud layers.
+
+**Severity:** `effective = layered_index(T) × nwp_cloud_fraction(altitude)` — no glaciation correction.
 
 #### Shared Ogimet Index Formulas
 
@@ -191,23 +214,14 @@ Physically-based continuous index peaking at −7°C, matching observed supercoo
 
 #### Icing Type Classification
 
-All three methods use `classify_icing_type()` from `icing_common.py`. Uses wet-bulb temperature (dry-bulb fallback). Thresholds shifted ~1°C colder than dry-bulb equivalents because accretion surface temperature is closer to wet-bulb in cloud:
+All methods use `classify_icing_type()` from `icing_common.py`. Uses wet-bulb temperature (dry-bulb fallback). Thresholds shifted ~1°C colder than dry-bulb equivalents because accretion surface temperature is closer to wet-bulb in cloud:
 - CLEAR: −4°C to 0°C
 - MIXED: −11°C to −4°C
 - RIME: < −11°C
 
-#### Severity Enhancement
-
-Optional (`icing_severity_enhance=False` default). RH/moisture-based upgrades:
-- ≥3 levels with RH > 95% + NWP cloud ≥50% → LIGHT → MODERATE
-- Same + mean T ≤ −5°C → MODERATE → SEVERE
-- Precipitable water > 25mm → LIGHT → MODERATE
-
-Default changed from True to False — was producing too-conservative results for typical GA.
-
 #### Zone Formation
 
-- Adjacent levels grouped into zones (gap ≤ 100 hPa / 30 hPa pressure gap between levels)
+- Adjacent levels grouped into zones (gap ≤ 100 hPa pressure gap between levels)
 - Minimum zone thickness: single-level zones expanded to ±500ft (1000ft total) for cross-section visibility
 - SLD detection: warm-nose freezing rain only (active). Collision-coalescence mechanism disabled — over-triggers on common deep stratiform clouds. See `designs/future/known-issues.md`.
 
