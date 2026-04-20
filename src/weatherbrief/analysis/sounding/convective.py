@@ -23,14 +23,6 @@ _CAPE_THRESHOLDS = [
     (50, ConvectiveRisk.LOW),
 ]
 
-# NWP convective cover thresholds for risk classification
-_NWP_COVER_THRESHOLDS = [
-    (75, ConvectiveRisk.HIGH),
-    (50, ConvectiveRisk.MODERATE),
-    (25, ConvectiveRisk.LOW),
-    (10, ConvectiveRisk.MARGINAL),
-]
-
 # CIN threshold above which convection is capped
 CIN_CAP_THRESHOLD = -200  # J/kg (strong cap)
 
@@ -173,12 +165,16 @@ def assess_convective_nwp(
     modifiers = _severity_modifiers(indices, cape)
 
     if cover is not None:
-        # Full NWP path: risk from convective cover percentage
+        # Full NWP path: risk from CAPE (same as thermo), cover is informational.
+        # NWP provides better convective geometry (base/top) than thermo (LFC/EL).
         risk = ConvectiveRisk.NONE
-        for threshold, level in _NWP_COVER_THRESHOLDS:
-            if cover >= threshold:
-                risk = level
-                break
+        if cape is not None:
+            for threshold, level in _CAPE_THRESHOLDS:
+                if cape >= threshold:
+                    risk = level
+                    break
+            if risk == ConvectiveRisk.NONE and cape >= 10:
+                risk = ConvectiveRisk.MARGINAL
         method = "nwp"
     elif (
         nwp_diagnostics.convective_base_ft is not None
@@ -202,10 +198,18 @@ def assess_convective_nwp(
     else:
         return None
 
+    # Suppress by one level if strong CIN cap (same as thermo path)
+    cin = indices.cin_surface_jkg
+    if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
+        risk_levels = list(ConvectiveRisk)
+        idx = risk_levels.index(risk)
+        if idx > 0:
+            risk = risk_levels[idx - 1]
+
     return ConvectiveAssessment(
         risk_level=risk,
         cape_jkg=cape,
-        cin_jkg=indices.cin_surface_jkg,
+        cin_jkg=cin,
         lcl_altitude_ft=indices.lcl_altitude_ft,
         lfc_altitude_ft=indices.lfc_altitude_ft,
         el_altitude_ft=indices.el_altitude_ft,

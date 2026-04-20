@@ -180,46 +180,49 @@ def test_nwp_returns_none_when_no_cover_no_bounds():
     assert assess_convective_nwp(indices, diag) is None
 
 
-def test_nwp_risk_marginal_at_10():
-    """10% convective cover → MARGINAL."""
-    indices = ThermodynamicIndices(cape_surface_jkg=0.0)
+def test_nwp_risk_from_cape_not_cover():
+    """NWP full path uses CAPE thresholds, not cover — cover is informational."""
+    # High CAPE + low cover → HIGH (not LOW as cover thresholds would give)
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0)
     diag = NWPCloudDiagnostics(convective_cover_pct=15.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
-    assert result.risk_level == ConvectiveRisk.MARGINAL
+    assert result.risk_level == ConvectiveRisk.HIGH
+    assert result.cover_pct == 15.0  # preserved as context
 
 
-def test_nwp_risk_low_at_25():
-    """25% convective cover → LOW."""
-    indices = ThermodynamicIndices()
-    diag = NWPCloudDiagnostics(convective_cover_pct=30.0)
-    result = assess_convective_nwp(indices, diag)
-    assert result is not None
-    assert result.risk_level == ConvectiveRisk.LOW
-
-
-def test_nwp_risk_moderate_at_50():
-    """50% convective cover → MODERATE."""
-    indices = ThermodynamicIndices()
-    diag = NWPCloudDiagnostics(convective_cover_pct=55.0)
-    result = assess_convective_nwp(indices, diag)
-    assert result is not None
-    assert result.risk_level == ConvectiveRisk.MODERATE
-
-
-def test_nwp_risk_high_at_75():
-    """75% convective cover → HIGH."""
-    indices = ThermodynamicIndices()
+def test_nwp_low_cape_high_cover_not_dangerous():
+    """Low CAPE + high cover → low risk despite widespread convection."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
     diag = NWPCloudDiagnostics(convective_cover_pct=80.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
-    assert result.risk_level == ConvectiveRisk.HIGH
+    assert result.risk_level == ConvectiveRisk.MARGINAL  # CAPE 40 >= 10 → marginal
+    assert result.cover_pct == 80.0
 
 
-def test_nwp_risk_none_below_10():
-    """< 10% convective cover → NONE."""
+def test_nwp_cape_thresholds():
+    """NWP full path follows same CAPE thresholds as thermo."""
+    diag = NWPCloudDiagnostics(convective_cover_pct=50.0)
+
+    for cape, expected in [
+        (2500, ConvectiveRisk.EXTREME),
+        (1200, ConvectiveRisk.HIGH),
+        (400, ConvectiveRisk.MODERATE),
+        (80, ConvectiveRisk.LOW),
+        (15, ConvectiveRisk.MARGINAL),
+        (0, ConvectiveRisk.NONE),
+    ]:
+        indices = ThermodynamicIndices(cape_surface_jkg=float(cape))
+        result = assess_convective_nwp(indices, diag)
+        assert result is not None
+        assert result.risk_level == expected, f"CAPE={cape}: expected {expected}, got {result.risk_level}"
+
+
+def test_nwp_no_cape_no_risk():
+    """No CAPE data with cover → NONE risk."""
     indices = ThermodynamicIndices()
-    diag = NWPCloudDiagnostics(convective_cover_pct=5.0)
+    diag = NWPCloudDiagnostics(convective_cover_pct=80.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
     assert result.risk_level == ConvectiveRisk.NONE
@@ -244,7 +247,7 @@ def test_nwp_preserves_thermo_indices():
 
 def test_nwp_method_field():
     """method is 'nwp' and cover_pct is populated."""
-    indices = ThermodynamicIndices()
+    indices = ThermodynamicIndices(cape_surface_jkg=500.0)
     diag = NWPCloudDiagnostics(
         convective_cover_pct=40.0,
         convective_base_ft=2000.0,
@@ -352,6 +355,18 @@ def test_nwp_full_path_preferred_over_hybrid():
     assert result is not None
     assert result.method == "nwp"  # not "nwp_hybrid"
     assert result.cover_pct == 30.0
+
+
+def test_nwp_cin_suppression():
+    """Strong CIN cap reduces NWP risk by one level."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=1500.0,  # HIGH
+        cin_surface_jkg=-250.0,   # strong cap
+    )
+    diag = NWPCloudDiagnostics(convective_cover_pct=50.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.MODERATE  # HIGH → MODERATE
 
 
 # ---------------------------------------------------------------------------

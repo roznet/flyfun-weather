@@ -26,6 +26,21 @@ _RISK_ORDER = [
 ]
 
 
+def _coverage_suffix(max_cover_pct: float | None) -> str:
+    """Append coverage label when NWP convective cover data is available."""
+    if max_cover_pct is None:
+        return ""
+    if max_cover_pct >= 75:
+        label = "extensive"
+    elif max_cover_pct >= 50:
+        label = "widespread"
+    elif max_cover_pct >= 25:
+        label = "scattered"
+    else:
+        label = "isolated"
+    return f", {label} ({int(max_cover_pct)}% cover)"
+
+
 @register
 class ConvectiveEvaluator:
     """Evaluates convective activity along the route."""
@@ -108,6 +123,7 @@ class ConvectiveEvaluator:
             has_high = False
             worst_risk = ConvectiveRisk.NONE
             below_cruise_count = 0  # risky points skipped because tops below cruise
+            max_cover_pct: float | None = None
 
             for rpa in ctx.analyses:
                 sounding = rpa.sounding.get(model)
@@ -138,14 +154,18 @@ class ConvectiveEvaluator:
                 if conv.risk_level in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
                     has_high = True
 
+                if conv.cover_pct is not None:
+                    max_cover_pct = max(max_cover_pct or 0, conv.cover_pct)
+
             ext = format_extent(affected, total, ctx.total_distance_nm)
             loc = ctx.locale
+            cover_suffix = _coverage_suffix(max_cover_pct)
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             elif has_high:
                 status = AdvisoryStatus.RED
-                detail = adv_t("convective.risk_over", loc, risk=worst_risk.value.upper(), extent=ext)
+                detail = adv_t("convective.risk_over", loc, risk=worst_risk.value.upper(), extent=ext) + cover_suffix
             elif affected == 0:
                 status = AdvisoryStatus.GREEN
                 if below_cruise_count > 0:
@@ -157,7 +177,7 @@ class ConvectiveEvaluator:
                 # LOW risk alone can't escalate to RED — cap at AMBER
                 if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
                     status = AdvisoryStatus.AMBER
-                detail = adv_t("convective.risk_over", loc, risk=worst_risk.value.upper(), extent=ext)
+                detail = adv_t("convective.risk_over", loc, risk=worst_risk.value.upper(), extent=ext) + cover_suffix
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
