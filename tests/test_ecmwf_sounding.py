@@ -151,3 +151,70 @@ class TestBuildEcmwfPressureLevels:
         assert len(levels) == 25
         pressures = [pl.pressure_hpa for pl in levels]
         assert pressures == sorted(ecmwf_levels, reverse=True)
+
+
+class TestHypsometricGeopotentialFallback:
+    """`build_pressure_levels_from_grib` derives GH when `z` is absent."""
+
+    def _raw_no_z(self, t_k: float) -> dict[str, float]:
+        """Raw level without geopotential (simulates ECMWF feed missing `z`)."""
+        return {"raw_temperature_k": t_k, "raw_relative_humidity_pct": 50.0}
+
+    def test_fills_gh_when_all_missing(self):
+        """Column with no `z` anywhere gets GH derived hypsometrically."""
+        # Isothermal-ish 260 K column, 3 levels.
+        point_data = {
+            1000: self._raw_no_z(t_k=288.0),
+            850:  self._raw_no_z(t_k=278.0),
+            500:  self._raw_no_z(t_k=255.0),
+        }
+        levels = build_pressure_levels_from_grib(point_data)
+        heights = {pl.pressure_hpa: pl.geopotential_height_m for pl in levels}
+        # All levels should now have GH populated.
+        assert all(h is not None for h in heights.values())
+        # Surface anchor near ISA ~110m at 1000 hPa.
+        assert 50 < heights[1000] < 200
+        # Altitudes must be monotonically increasing with decreasing pressure.
+        assert heights[1000] < heights[850] < heights[500]
+        # 500 hPa should be near the ISA ~5570m (±20% is plenty for a dry-air
+        # hypsometric approximation with isothermal-ish mean T).
+        assert 4500 < heights[500] < 6500
+
+    def test_preserves_real_gh_when_present(self):
+        """When `z` is present at some levels, those values are not overwritten."""
+        point_data = {
+            1000: {
+                "raw_temperature_k": 288.0,
+                "raw_geopotential_m2_s2": 9806.65,  # → 1000 m (unrealistic but distinct)
+            },
+            850: {"raw_temperature_k": 278.0},
+        }
+        levels = build_pressure_levels_from_grib(point_data)
+        heights = {pl.pressure_hpa: pl.geopotential_height_m for pl in levels}
+        # Anchor stays at the GRIB-provided 1000 m (not ISA-overridden).
+        assert heights[1000] == pytest.approx(1000.0, abs=1.0)
+        # Level above derived on top of that anchor.
+        assert heights[850] > heights[1000]
+
+    def test_skipped_when_temperature_missing(self):
+        """If any level lacks T, hypsometric fill is skipped entirely."""
+        point_data = {
+            1000: {"raw_relative_humidity_pct": 50.0},  # no T
+            850:  self._raw_no_z(t_k=278.0),
+        }
+        levels = build_pressure_levels_from_grib(point_data)
+        # Both levels present but GH stays None because column can't be integrated.
+        heights = {pl.pressure_hpa: pl.geopotential_height_m for pl in levels}
+        assert heights[1000] is None
+        assert heights[850] is None
+
+    def test_noop_when_all_levels_have_real_gh(self):
+        """Real GH values are preserved exactly when every level has `z`."""
+        point_data = {
+            1000: {"raw_temperature_k": 288.0, "raw_geopotential_m2_s2": 981.0},
+            850:  {"raw_temperature_k": 278.0, "raw_geopotential_m2_s2": 14000.0},
+        }
+        levels = build_pressure_levels_from_grib(point_data)
+        heights = {pl.pressure_hpa: pl.geopotential_height_m for pl in levels}
+        assert heights[1000] == pytest.approx(981.0 / 9.80665, abs=1e-6)
+        assert heights[850] == pytest.approx(14000.0 / 9.80665, abs=1e-6)

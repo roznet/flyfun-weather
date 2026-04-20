@@ -1284,16 +1284,96 @@ def build_pressure_levels_from_grib(
     Converts raw GRIB fields (temperature in K, wind in m/s, geopotential
     in m²/s²) to PressureLevelData units and returns a sorted list (highest
     pressure / lowest altitude first).
+
+    Where ``geopotential_height_m`` is missing (e.g. the ECMWF commercial
+    feed does not include ``z`` at every pressure level, or ICON model
+    levels which don't carry geopotential), it is derived via the
+    hypsometric equation from temperature + pressure.
     """
     from weatherbrief.models.analysis import PressureLevelData
 
-    levels = []
-    for p_hpa, raw_fields in sorted(point_data.items(), reverse=True):
+    # First pass: convert each level's raw fields to output units.
+    converted_by_p: dict[int, dict[str, float]] = {}
+    for p_hpa, raw_fields in point_data.items():
         converted = _convert_raw_sounding(raw_fields, p_hpa)
-        if not converted:
+        if converted:
+            converted_by_p[p_hpa] = converted
+
+    _fill_missing_geopotential_height(converted_by_p)
+
+    return [
+        PressureLevelData(pressure_hpa=p_hpa, **converted)
+        for p_hpa, converted in sorted(converted_by_p.items(), reverse=True)
+    ]
+
+
+_RD_DRY_AIR = 287.05  # specific gas constant for dry air, J/(kg·K)
+
+
+def _pressure_to_altitude_m_isa(pressure_hpa: float) -> float:
+    """ISA standard-atmosphere altitude in meters for a given pressure (hPa)."""
+    import math
+
+    P0, T0, L = 1013.25, 288.15, 0.0065
+    M, R_gas = 0.0289644, 8.31447
+    exp = R_gas * L / (_G * M)
+    if pressure_hpa <= 0:
+        return math.inf
+    return (T0 / L) * (1.0 - (pressure_hpa / P0) ** exp)
+
+
+def _fill_missing_geopotential_height(
+    converted_by_p: dict[int, dict[str, float]],
+) -> None:
+    """Derive ``geopotential_height_m`` via the hypsometric equation.
+
+    Mutates the per-level dicts in-place. Iterates from highest pressure
+    (surface) to lowest (TOA), anchoring the column at the surface level
+    using ISA if no real geopotential is present, then integrating upward
+    with layer-mean temperature::
+
+        Δz = (R_d / g) · T_mean · ln(p_lower / p_upper)
+
+    Levels that already carry a real ``geopotential_height_m`` are preserved
+    (so if the feed starts delivering ``z`` at more levels, those values win).
+
+    No-op if every level already has geopotential, or if temperature is
+    missing anywhere in the column (can't integrate reliably).
+    """
+    import math
+
+    if not converted_by_p:
+        return
+
+    if all(d.get("geopotential_height_m") is not None for d in converted_by_p.values()):
+        return
+
+    if not all(d.get("temperature_c") is not None for d in converted_by_p.values()):
+        return
+
+    # Surface (highest pressure) → TOA (lowest pressure).
+    sorted_p = sorted(converted_by_p.keys(), reverse=True)
+
+    # Anchor: use real value if present at the surface-most level, else ISA.
+    anchor = converted_by_p[sorted_p[0]]
+    if anchor.get("geopotential_height_m") is None:
+        anchor["geopotential_height_m"] = _pressure_to_altitude_m_isa(sorted_p[0])
+
+    for i in range(1, len(sorted_p)):
+        p_lower = sorted_p[i - 1]
+        p_upper = sorted_p[i]
+        lower = converted_by_p[p_lower]
+        upper = converted_by_p[p_upper]
+
+        if upper.get("geopotential_height_m") is not None:
             continue
-        levels.append(PressureLevelData(pressure_hpa=p_hpa, **converted))
-    return levels
+
+        t_lower_k = lower["temperature_c"] + 273.15
+        t_upper_k = upper["temperature_c"] + 273.15
+        t_mean_k = 0.5 * (t_lower_k + t_upper_k)
+
+        dz = (_RD_DRY_AIR * t_mean_k / _G) * math.log(p_lower / p_upper)
+        upper["geopotential_height_m"] = lower["geopotential_height_m"] + dz
 
 
 def decode_ecmwf_surface_per_point(
