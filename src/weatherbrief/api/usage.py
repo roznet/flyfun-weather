@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -186,39 +186,56 @@ def log_api_usage(
     )
 
 
-class ApiUsageMonthly(BaseModel):
+class ApiUsageBucket(BaseModel):
     service: str
     pipeline: str
     total_calls: int
 
 
-class ApiUsageMonthSummary(BaseModel):
-    month: str
-    by_service: list[ApiUsageMonthly]
+class ApiUsagePeriod(BaseModel):
+    label: str
+    by_service: list[ApiUsageBucket]
     total_calls: int
 
 
-def get_api_usage_monthly(db: Session) -> ApiUsageMonthSummary:
-    """Aggregate API calls for the current month, grouped by service and pipeline."""
-    month = _month_start()
-    rows = (
-        db.query(
-            ApiUsageRow.service,
-            ApiUsageRow.pipeline,
-            func.coalesce(func.sum(ApiUsageRow.api_calls), 0).label("total"),
-        )
-        .filter(ApiUsageRow.timestamp >= month)
-        .group_by(ApiUsageRow.service, ApiUsageRow.pipeline)
-        .all()
+class ApiUsageResponse(BaseModel):
+    current_month: ApiUsagePeriod
+    last_30d: ApiUsagePeriod
+    all_time: ApiUsagePeriod
+
+
+def _query_api_usage(db: Session, since: datetime | None = None) -> list[ApiUsageBucket]:
+    q = db.query(
+        ApiUsageRow.service,
+        ApiUsageRow.pipeline,
+        func.coalesce(func.sum(ApiUsageRow.api_calls), 0).label("total"),
     )
-    by_service = [
-        ApiUsageMonthly(service=r.service, pipeline=r.pipeline, total_calls=int(r.total))
+    if since is not None:
+        q = q.filter(ApiUsageRow.timestamp >= since)
+    rows = q.group_by(ApiUsageRow.service, ApiUsageRow.pipeline).all()
+    return [
+        ApiUsageBucket(service=r.service, pipeline=r.pipeline, total_calls=int(r.total))
         for r in rows
     ]
-    return ApiUsageMonthSummary(
-        month=month.strftime("%Y-%m"),
-        by_service=by_service,
-        total_calls=sum(s.total_calls for s in by_service),
+
+
+def _make_period(label: str, buckets: list[ApiUsageBucket]) -> ApiUsagePeriod:
+    return ApiUsagePeriod(
+        label=label, by_service=buckets,
+        total_calls=sum(b.total_calls for b in buckets),
+    )
+
+
+def get_api_usage_summary(db: Session) -> ApiUsageResponse:
+    """Aggregate API calls for current month, last 30 days, and all time."""
+    month = _month_start()
+    now = datetime.now(timezone.utc)
+    thirty_days_ago = now - timedelta(days=30)
+
+    return ApiUsageResponse(
+        current_month=_make_period(month.strftime("%Y-%m"), _query_api_usage(db, month)),
+        last_30d=_make_period("last 30 days", _query_api_usage(db, thirty_days_ago)),
+        all_time=_make_period("all time", _query_api_usage(db)),
     )
 
 

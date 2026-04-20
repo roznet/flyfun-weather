@@ -828,10 +828,10 @@ def get_api_usage(
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Return monthly API call totals grouped by service and pipeline."""
-    from weatherbrief.api.usage import get_api_usage_monthly
+    """Return API call totals grouped by service and pipeline."""
+    from weatherbrief.api.usage import get_api_usage_summary
 
-    return get_api_usage_monthly(db)
+    return get_api_usage_summary(db)
 
 
 # ---------------------------------------------------------------------------

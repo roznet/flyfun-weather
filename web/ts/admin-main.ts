@@ -4,9 +4,10 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
   revokeAgent, fetchAdminFeedback, fetchAdminMetrics, fetchHubUsers,
-  updateFeedbackStatus, saveFeedbackReply, sendFeedbackReply, saveFeedbackNotes, reopenFeedback,
+  fetchApiUsage, updateFeedbackStatus, saveFeedbackReply, sendFeedbackReply,
+  saveFeedbackNotes, reopenFeedback,
   type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
-  type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse,
+  type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse, type ApiUsageResponse,
 } from './adapters/admin-adapter';
 import { renderUserInfo, escapeHtml, formatDate } from './utils';
 import { initTheme } from './theme';
@@ -28,6 +29,8 @@ async function init(): Promise<void> {
   setupTabs();
   setupPeriodToggle();
   // Load both tabs in parallel
+  // Load API usage first so summary bar can include the API call count
+  await loadApiUsage();
   await Promise.all([loadUsers(), loadFeedback()]);
 }
 
@@ -51,6 +54,7 @@ let messagesLoaded = false;
 let systemsPeriod: AdminPeriod = '30d';
 let systemsSort: 'last_active' | 'total_cost' = 'last_active';
 let systemsData: HubResponse | null = null;
+let apiUsageData: ApiUsageResponse | null = null;
 
 function setupTabs(): void {
   document.querySelectorAll('.settings-tabs .tab-btn').forEach((btn) => {
@@ -528,11 +532,15 @@ function renderSummaryBar(el: HTMLElement, s: AdminSummary): void {
     ? `~${Math.round(s.total_tokens / 1000)}K`
     : String(s.total_tokens);
   const pl = periodLabel();
+  const apiCalls = apiUsageData
+    ? (currentPeriod === 'all' ? apiUsageData.all_time : apiUsageData.last_30d).total_calls
+    : 0;
   el.style.display = '';
   el.innerHTML = `
     <div class="summary-card"><div class="value">${s.total_users}</div><div class="label">Users</div></div>
     <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Briefings (${pl})</div></div>
     <div class="summary-card"><div class="value">${tokens}</div><div class="label">Tokens (${pl})</div></div>
+    <div class="summary-card"><div class="value">${apiCalls.toLocaleString()}</div><div class="label">API Calls (${pl})</div></div>
     <div class="summary-card"><div class="value">${formatBytes(s.total_disk_bytes)}</div><div class="label">Disk</div></div>
   `;
 }
@@ -931,6 +939,16 @@ function showMessageModal(existing?: { id: number; date: string; title: string; 
     alert(`Failed to delete: ${String(err)}`);
   }
 };
+
+// --- API Usage summary ---
+
+async function loadApiUsage(): Promise<void> {
+  try {
+    apiUsageData = await fetchApiUsage();
+  } catch {
+    // Non-critical — summary bar will show 0
+  }
+}
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);

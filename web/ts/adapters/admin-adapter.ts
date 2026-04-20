@@ -256,6 +256,30 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
   return apiFetch<AdminMetrics>('/admin/metrics');
 }
 
+// --- API Usage ---
+
+export interface ApiUsageBucket {
+  service: string;
+  pipeline: string;
+  total_calls: number;
+}
+
+export interface ApiUsagePeriod {
+  label: string;
+  by_service: ApiUsageBucket[];
+  total_calls: number;
+}
+
+export interface ApiUsageResponse {
+  current_month: ApiUsagePeriod;
+  last_30d: ApiUsagePeriod;
+  all_time: ApiUsagePeriod;
+}
+
+export async function fetchApiUsage(): Promise<ApiUsageResponse> {
+  return apiFetch<ApiUsageResponse>('/admin/api-usage');
+}
+
 // --- Verification Stats ---
 
 export interface VerificationActivity {
