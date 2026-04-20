@@ -62,7 +62,8 @@ All models share the same computation pipeline; inputs vary by what the raw data
 | **mid.cover_pct** | GRIB (MCDC) | GRIB (`mcc`) | GRIB (`clcm`) |
 | **high.cover_pct** | GRIB (HCDC) | GRIB (`hcc`) | GRIB (`clch`) |
 | **total_cover_pct** | GRIB (TCDC) | GRIB (`tcc`) | GRIB (`clct`) |
-| **convective base/top** | GRIB | — | GRIB (`hbas_con`, `htop_con`) |
+| **convective base/top** | GRIB | Top only (`hcct`); base = LCL proxy | GRIB (`hbas_con`, `htop_con`) |
+| **freezing_level_ft** | — | GRIB (`deg0l`) → overwrites `hourly.freezing_level_m` | — |
 | **boundary_cover_pct** | GRIB | — | — |
 
 ### Known Gaps
@@ -89,7 +90,7 @@ Via `fetch/grib/` (gfs_idx.py, grib_fetch.py, decode.py):
 ### ECMWF IFS GRIB2 enrichment
 Via `fetch/grib/` (ecmwf_fetch.py, decode.py):
 - **Full sounding replacement** — pressure levels (a2 files): t, r, u, v, z, w, d, cc, clwc, ciwc at 25 levels. **Replaces entire `pressure_levels` list**, discarding Open-Meteo levels.
-- **Cloud diagnostics** — surface (a1 files): ceil, cbh, lcc, mcc, tcc → `NWPCloudDiagnostics`
+- **Cloud diagnostics** — surface (a1 files): ceil, cbh, lcc, mcc, hcc, tcc, hcct, deg0l → `NWPCloudDiagnostics` (hcct populates `convective_top_ft`; deg0l populates `freezing_level_ft` and overwrites `hourly.freezing_level_m`)
 - Source: ECPDS push delivery to local directory (`ECMWF_GRIB_DIR`)
 - No HTTP, no cache — local disk I/O
 - Unit conversions: K→°C, m²/s²→m (geopotential), 0–1→% (cloud fractions), m/s→kt (wind)
@@ -129,8 +130,8 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Publication delay:** ~6–8h after init time
 - **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default
 - **Pressure-level (a2):** t, r, u, v, z, w, d, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely). `z` is currently delivered only at 1 hPa; GH on the other 24 levels is filled by hypsometric integration from T+P until the order amendment lands.
-- **Surface (a1) — processed:** ceil, cbh, lcc, mcc, hcc, tcc → `NWPCloudDiagnostics`
-- **Surface (a1) — delivered but not yet processed:** 10fg, 10u, 10v, 2d, 2t, blh, capes, cp, deg0l, degm10l, fzra, hcct, kx, lsp, mlcape100, mlcin100, msl, mucape, ptype, sf, sp, totalx, tp, vis
+- **Surface (a1) — processed:** ceil, cbh, lcc, mcc, hcc, tcc, hcct, deg0l → `NWPCloudDiagnostics`
+- **Surface (a1) — delivered but not yet processed:** 10fg, 10u, 10v, 2d, 2t, blh, capes, cp, degm10l, fzra, kx, lsp, mlcape100, mlcin100, msl, mucape, ptype, sf, sp, totalx, tp, vis
 - **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point
 - **No HTTP, no cache** — local disk I/O, no byte-range download needed
 

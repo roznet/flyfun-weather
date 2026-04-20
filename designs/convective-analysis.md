@@ -135,13 +135,20 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 - Tower bounds from GRIB2 `convective_base_ft`/`convective_top_ft`
 - **Output:** `method="nwp_hybrid"`, `cover_pct=None`
 
-- **Tower bounds:** `convective_base_ft`, `convective_top_ft` from GRIB2 (both paths)
+**LCL-anchored path** (ECMWF — has `hcct` top only, no base, no cover):
+- Risk derived from `_effective_cape()` same as hybrid path
+- Tower base = `indices.lcl_altitude_ft` (LCL proxies for convective cloud base)
+- Tower top = `nwp_diagnostics.convective_top_ft` (from ECMWF `hcct`)
+- Returns None when LCL is unavailable (insufficient sounding data)
+- **Output:** `method="nwp_lcl_top"`, `cover_pct=None`
+
 - **Severity modifiers:** same as thermo (computed from same indices)
 
 | Model | NWP Convective Result | Notes |
 |-------|----------------------|-------|
 | **GFS** | Full NWP (risk from cover %, base/top from GRIB) | Only model with convective cover % |
 | **ICON-EU** | Hybrid NWP (CAPE risk + GRIB base/top) | `method="nwp_hybrid"` |
+| **ECMWF** | LCL-anchored (CAPE risk + LCL base + hcct top) | `method="nwp_lcl_top"` |
 | **Others** | None | No diagnostics at all |
 
 ### Stage 5: Resolution

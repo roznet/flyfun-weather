@@ -27,7 +27,7 @@ Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_ad
 → Full doc: analysis.md
 
 ### advisories
-Route advisory system: 13 deterministic evaluators across 5 categories (icing, cloud, turbulence, airport conditions, feasibility) with per-model severity grading, user-tunable parameters, registry auto-discovery, aggregation modes (worst/majority), icing/cloud method swapping, altitude-aware convective filtering, and recalculation without re-fetching.
+Route advisory system: 14 deterministic evaluators across 6 categories (icing, cloud, turbulence, convective, airport conditions, feasibility, model quality incl. DD-vs-NWP within-model agreement) with per-model severity grading, user-tunable parameters, registry auto-discovery, aggregation modes (worst/majority), icing/cloud method swapping, altitude-aware convective filtering, and recalculation without re-fetching.
 Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`
 → Full doc: advisories.md
 

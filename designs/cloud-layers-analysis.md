@@ -23,36 +23,42 @@ Every model receives hourly cloud cover percentages via Open-Meteo:
 
 These are **bulk band percentages** — a single value per ICAO band with no vertical placement within the band.
 
-### GRIB2 Enrichment (GFS and ICON-EU only)
+### GRIB2 Enrichment (GFS, ICON-EU, ECMWF)
 
 | Field | GFS | ICON-EU | ECMWF | MétéoFr | UKMO | GEM |
 |-------|-----|---------|-------|---------|------|-----|
-| **Low cloud cover %** | Yes (lcc) | Yes (clcl) | **No** | **No** | **No** | **No** |
-| **Mid cloud cover %** | Yes (mcc) | Yes (clcm) | **No** | **No** | **No** | **No** |
-| **High cloud cover %** | Yes (hcc) | Yes (clch) | **No** | **No** | **No** | **No** |
-| **Total cloud cover %** | Yes (tcc) | Yes (clct) | **No** | **No** | **No** | **No** |
+| **Low cloud cover %** | Yes (lcc) | Yes (clcl) | Yes (lcc) | **No** | **No** | **No** |
+| **Mid cloud cover %** | Yes (mcc) | Yes (clcm) | Yes (mcc) | **No** | **No** | **No** |
+| **High cloud cover %** | Yes (hcc) | Yes (clch) | Yes (hcc) | **No** | **No** | **No** |
+| **Total cloud cover %** | Yes (tcc) | Yes (clct) | Yes (tcc) | **No** | **No** | **No** |
 | **Boundary cloud %** | Yes | No | **No** | **No** | **No** | **No** |
+| **Per-level cloud fraction** | **No** | Yes (clc, 3D) | Yes (cc, 3D) | **No** | **No** | **No** |
 | **Low base/top (Pa→ft)** | Yes | **No** | **No** | **No** | **No** | **No** |
 | **Mid base/top (Pa→ft)** | Yes | **No** | **No** | **No** | **No** | **No** |
 | **High base/top (Pa→ft)** | Yes | **No** | **No** | **No** | **No** | **No** |
 | **Low/mid/high top temp** | Yes (K→°C) | **No** | **No** | **No** | **No** | **No** |
 | **Convective cover %** | Yes | **No** | **No** | **No** | **No** | **No** |
-| **Convective base/top** | Yes (Pa→ft) | Yes (m→ft) | **No** | **No** | **No** | **No** |
-| **Ceiling height** | Yes (gpm→ft) | Yes (m→ft) | **No** | **No** | **No** | **No** |
+| **Convective base/top** | Yes (Pa→ft) | Yes (m→ft) | **Top only** (hcct) | **No** | **No** | **No** |
+| **Ceiling height** | Yes (gpm→ft) | Yes (m→ft) | Yes (ceil/cbh) | **No** | **No** | **No** |
+| **Freezing level (surface)** | **No** | **No** | Yes (deg0l) | **No** | **No** | **No** |
 
-**Key distinction:** GFS provides full per-layer boundaries (base_ft, top_ft) for all three ICAO bands. ICON-EU provides cover percentages per band but **no layer boundaries** — only ceiling height and convective base/top.
+**Key distinctions:**
+- GFS: full per-layer boundaries (base_ft, top_ft) for all three ICAO bands — altitude-precise.
+- ICON-EU and ECMWF: per-level 3D cloud fraction (`clc` / `cc`) lets us extract real deck base/top from the model's own cloud scheme — **richer than GFS's pre-computed bands** (not confined to ICAO altitude bins).
+- ECMWF has no convective base and no per-band tops; convective assessment uses `hcct` anchored at LCL (see [convective-analysis.md](./convective-analysis.md)).
+- ECMWF `deg0l` is wired onto `hourly.freezing_level_m` during enrichment, so `indices.nwp_freezing_level_ft` carries a model-native value rather than Open-Meteo's.
 
 ### Model Classification
 
-| Model | NWP Cloud Diagnostics | Has Layer Boundaries | Has Convective Layer | Effective Cloud Resolution |
-|-------|-----------------------|---------------------|---------------------|---------------------------|
-| **GFS** | Full | Yes (all 3 bands) | Yes (cover + base/top) | Altitude-precise |
-| **Best Match** | Full (via GFS) | Yes | Yes | Altitude-precise |
-| **ICON-EU** | Partial | **No** (cover only) | Partial (base/top only) | ICAO-band bulk |
-| **ECMWF** | None | No | No | ICAO-band bulk |
-| **MétéoFr** | None | No | No | ICAO-band bulk |
-| **UKMO** | None | No | No | ICAO-band bulk |
-| **GEM** | None | No | No | ICAO-band bulk |
+| Model | NWP Cloud Diagnostics | Preferred Cloud Source | Effective Resolution |
+|-------|-----------------------|------------------------|----------------------|
+| **GFS** | Bulk bands w/ base/top + convective | GRIB bulk bands | Altitude-precise (ICAO-bounded) |
+| **Best Match** | Full (via GFS) | GRIB bulk bands | Altitude-precise |
+| **ECMWF** | 3D `cc` + bulk bands + hcct + deg0l | **3D cloud fraction** | Altitude-precise (per-level) |
+| **ICON-EU** | 3D `clc` + bulk bands + ceiling + convective | **3D cloud fraction** | Altitude-precise (per-level) |
+| **MétéoFr** | None | Open-Meteo bulk %, synthesized | ICAO-band bulk |
+| **UKMO** | None | Open-Meteo bulk %, synthesized | ICAO-band bulk |
+| **GEM** | None | Open-Meteo bulk %, synthesized | ICAO-band bulk |
 
 ---
 
@@ -103,34 +109,28 @@ Open-Meteo `cloud_cover_*_pct` values are NOT spatially interpolated — each po
 
 `clouds.py:build_nwp_cloud_layers()` → `list[EnhancedCloudLayer] | None`
 
-Three-tier approach ensures all models produce NWP cloud layers when cloud cover data exists:
+Four-tier approach, tried in this preference order:
 
-**Tier 1 — GRIB diagnostics (GFS):** Uses native model boundaries (base_ft, top_ft) and coverage from GRIB2. Each layer tagged `source="grib"`.
+**Tier 0 — Per-level 3D cloud fraction (ECMWF `cc`, ICON-EU `clc`):** `build_nwp_cloud_layers_from_fraction(pressure_levels)` scans `cloud_area_fraction_pct` vertically, groups contiguous levels above 12.5% into decks, and emits `EnhancedCloudLayer` with real base/top from level geopotential heights. Tagged `source="nwp_3d"`. Preferred when any level carries `cloud_area_fraction_pct` — strictly richer than GRIB-bulk because deck boundaries come from the model's own cloud scheme at sounding-level resolution.
 
-**Tier 2 — Synthesized layers (ICON-EU, ECMWF, MétéoFr, UKMO, GEM):** When GRIB boundaries are absent but Open-Meteo cloud cover percentages exist, synthesizes layers by narrowing ICAO bands using:
-- DD cloud envelope (sounding cloud layers overlapping the ICAO band constrain base/top)
-- Inversion capping (strong inversions ≥2°C cap cloud tops within the band)
-- LCL floor (low band base raised to LCL when available)
-- Minimum cloud cover threshold: 25% (bands below this are skipped)
-Each layer tagged `source="synthesized"`.
+**Tier 1 — GRIB bulk bands (GFS):** `_build_grib_layers()` uses GFS's native per-band boundaries (`HGHL/HGHM/HGHH` → base_ft/top_ft) and `LCDC/MCDC/HCDC` coverage. Each layer tagged `source="grib"`.
+
+**Tier 2 — Synthesized layers (Open-Meteo-only models):** When neither Tier 0 nor Tier 1 applies but Open-Meteo bulk `cloud_cover_*_pct` exists, synthesizes layers by narrowing ICAO bands using DD cloud envelope + inversion capping (≥2°C) + LCL floor. Minimum cover 25%. Tagged `source="synthesized"`.
 
 **Tier 3 — No data:** Returns None only when no cloud cover data exists at all.
 
-- **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT
-- **Includes convective layer** when base/top are available (both tiers)
+- **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (Tier 0 uses peak deck CAF; Tiers 1–2 use bulk band %)
 - **Output:** Stored in `SoundingAnalysis.nwp_cloud_layers`
-- **Source tracking:** Each `EnhancedCloudLayer` carries a `source` field ("dd", "grib", or "synthesized")
-- **Method tracking:** `SoundingAnalysis.cloud_method_effective` records what was actually used ("dd", "nwp", or "nwp_synthesized")
+- **Source tracking:** `EnhancedCloudLayer.source` ∈ {"dd", "nwp_3d", "grib", "synthesized"}
+- **Method tracking:** `cloud_method_effective` records "dd", "nwp" (grib or nwp_3d), or "nwp_synthesized"
 
 | Model | NWP Cloud Layers Result | Source Tag | Notes |
 |-------|------------------------|------------|-------|
 | **GFS** | Full layer list with boundaries | `grib` | All 3 bands + convective from GRIB2 |
 | **Best Match** | Full layer list (via GFS) | `grib` | Same as GFS |
-| **ICON-EU** | Synthesized bands + convective | `synthesized` | Low/mid/high narrowed by DD+inversions; convective from GRIB |
-| **ECMWF** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
-| **MétéoFr** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
-| **UKMO** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
-| **GEM** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
+| **ECMWF** | Per-deck layers from 3D `cc` | `nwp_3d` | Real model cloud scheme, not constrained to ICAO bands |
+| **ICON-EU** | Per-deck layers from 3D `clc` + convective from GRIB | `nwp_3d` | Same as ECMWF; convective layer added when present |
+| **MétéoFr / UKMO / GEM** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
 
 ### Stage 5: Cloud Top Uncertainty
 
@@ -321,26 +321,27 @@ Visualization:
   NWP cloud bands     → blue tint, precise boundaries (all 3 bands + convective)
 ```
 
-### ICON-EU (Partial GRIB)
+### ECMWF / ICON-EU (3D Cloud Fraction)
 
 ```
-Open-Meteo → cloud_cover_{low,mid,high}_pct (hourly)
-GRIB2      → NWPCloudDiagnostics (partial)
-             ├─ low/mid/high: cover_pct only (no base/top)
-             ├─ convective: base_ft + top_ft (no cover_pct)
-             ├─ ceiling_ft
+Open-Meteo → cloud_cover_{low,mid,high}_pct (hourly, fallback)
+GRIB2      → per-level cc/clc at each pressure level (0–100%)
+             NWPCloudDiagnostics:
+             ├─ low/mid/high: bulk cover_pct
+             ├─ ECMWF: cbh, hcct (convective top only), deg0l (→ hourly.freezing_level_m)
+             ├─ ICON: convective base+top, ceiling
              └─ total_cover_pct
 Analysis:
-  DD cloud layers     → always available
-  NWP cloud layers    → synthesized from Open-Meteo + DD envelope + inversions (source="synthesized")
-                         + convective layer from GRIB (when available)
-  nwp_cloud_at_alt    → ICAO-band bulk fallback (no layer boundaries)
+  DD cloud layers     → always available (sounding-derived)
+  NWP cloud layers    → per-deck from 3D cc/clc scan (source="nwp_3d")
+                         + convective layer from ICON GRIB (when present)
+  nwp_cloud_at_alt    → ICAO-band bulk fallback (cc not yet plumbed here)
 Visualization:
   DD cloud bands      → gray gradient (always)
-  NWP cloud bands     → server-computed synthesized layers (blue tint)
+  NWP cloud bands     → real per-deck boundaries (blue tint)
 ```
 
-### ECMWF / MétéoFr / UKMO / GEM (Open-Meteo Only)
+### MétéoFr / UKMO / GEM (Open-Meteo Only)
 
 ```
 Open-Meteo → cloud_cover_{low,mid,high}_pct (hourly)

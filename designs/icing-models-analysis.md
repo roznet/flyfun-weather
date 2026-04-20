@@ -30,10 +30,11 @@ Shared utilities live in `sounding/icing_common.py`: cloud-proximity checks, NWP
 | DD | Derived (T−Td) | all | all | all | all | all | all |
 | Wet-bulb | MetPy derived | all | all | all | all | all | all |
 | Omega (ω) | Open-Meteo API | yes | yes | **NO** | **NO** | yes | **NO** |
-| CLWMR | GRIB2 enrichment | 50hPa lvls | **NO** | EU only | **NO** | **NO** | **NO** |
-| ICMR | GRIB2 enrichment | 50hPa lvls | **NO** | EU only | **NO** | **NO** | **NO** |
+| CLWMR | GRIB2 enrichment | 50hPa lvls | 25 lvls (Europe) | EU only | **NO** | **NO** | **NO** |
+| ICMR | GRIB2 enrichment | 50hPa lvls | 25 lvls (Europe) | EU only | **NO** | **NO** | **NO** |
+| Per-level cloud fraction (cc/clc) | GRIB2 enrichment | **NO** | yes (Europe) | EU only | **NO** | **NO** | **NO** |
 | NWP cloud low/mid/high | Open-Meteo API | yes | yes | yes | yes | yes | yes |
-| NWP cloud diagnostics | GRIB2 enrichment | yes (full) | **NO** | EU only (partial) | **NO** | **NO** | **NO** |
+| NWP cloud diagnostics | GRIB2 enrichment | yes (full bulk + base/top) | bulk + cbh + hcct + deg0l (no per-band base/top) | EU only (bulk + ceiling + convective) | **NO** | **NO** | **NO** |
 | CAPE | Open-Meteo API | yes (SB) | yes (MU) | yes (ML) | yes | yes | yes |
 
 ### Interpolation Chain
@@ -67,13 +68,13 @@ Shared utilities live in `sounding/icing_common.py`: cloud-proximity checks, NWP
 
 **Signal:** `effective = ogimet_index(T) × cloud_fraction(alt) × glaciation(CLW, ICMR)`
 
-| Input | GFS | ECMWF/MétéoFr/UKMO/GEM | ICON (EU) |
-|-------|-----|------------------------|-----------|
-| NWP cloud diagnostics | Full (base/top per layer) | **None** → ICAO band fallback | Partial (ceiling + convective) |
-| DD cloud proximity gate | Not needed (has diagnostics) | **Required** (`need_dd_gate=True`) | Not needed (EU) |
-| CLW/ICMR glaciation | Yes (reduces glaciated cloud) | **None** (factor=1.0) | Yes (EU) |
+| Input | GFS | ECMWF (Europe) | ICON (EU) | MétéoFr/UKMO/GEM |
+|-------|-----|----------------|-----------|------------------|
+| NWP cloud layers (gating) | Full GRIB bulk bands (base/top) | Per-deck from 3D `cc` (source="nwp_3d") | Per-deck from 3D `clc` + convective | Synthesized from Open-Meteo + DD envelope |
+| DD cloud proximity gate | Not needed | Not needed (real deck boundaries) | Not needed | Not needed (synth bands exist) |
+| CLW/ICMR glaciation | Yes (reduces glaciated cloud) | Yes (CLW/CIW from a2 GRIB) | Yes (EU) | **None** (factor=1.0) |
 
-**Degradation path:** Without diagnostics, bulk ICAO band percentages smear cloud across entire altitude ranges. The DD proximity gate mitigates this but is imprecise.
+**Degradation path:** For Open-Meteo-only models (MétéoFr/UKMO/GEM), synthesized bands cover ICAO altitude ranges narrowed by the DD cloud envelope. Still imprecise vs. real GRIB boundaries.
 
 Per-level index stored in `icing_index_nwp` (separate from `icing_index` used by DD) to prevent overwrite.
 
@@ -85,7 +86,7 @@ Per-level index stored in `icing_index_nwp` (separate from `icing_index` used by
 |-------|---------|---------|-----------------|
 | GFS | full | 0.35T + 0.15RH + 0.35CLW + 0.15VV | None |
 | ICON (EU) | full_no_vv | 0.35T + 0.15RH + 0.35CLW + 0.15×0 | **No omega** → VV always 0 |
-| ECMWF | proxy | 0.40T + 0.25RH + 0.25proxy + 0.10VV | No CLW, no ICMR |
+| ECMWF (Europe) | full | 0.35T + 0.15RH + 0.35CLW + 0.15VV | None (CLW/CIW from ECMWF IFS GRIB a2) |
 | MétéoFr | proxy_no_vv | 0.40T + 0.25RH + 0.25proxy + 0.10×0 | No CLW, no ICMR, **no omega** |
 | UKMO | proxy | 0.40T + 0.25RH + 0.25proxy + 0.10VV | No CLW, no ICMR |
 | GEM | proxy_no_vv | 0.40T + 0.25RH + 0.25proxy + 0.10×0 | No CLW, no ICMR, **no omega** |
@@ -201,4 +202,4 @@ Similarly, ICON (`full_no_vv`) could use `0.41T + 0.18RH + 0.41CLW` instead of w
 
 ### Proxy variant accuracy
 
-The proxy CLW membership (`membership_clw_proxy`) combines DD score and NWP cloud cover. This is a significantly less precise signal than actual CLWMR. For models without GRIB2 enrichment (ECMWF, MétéoFr, UKMO, GEM), SFIP should be interpreted with lower confidence.
+The proxy CLW membership (`membership_clw_proxy`) combines DD score and NWP cloud cover. This is a significantly less precise signal than actual CLWMR. For models without GRIB2 enrichment (MétéoFr, UKMO, GEM — and ECMWF outside Europe), SFIP should be interpreted with lower confidence.

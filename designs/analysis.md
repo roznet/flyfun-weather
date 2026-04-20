@@ -84,22 +84,23 @@ layers = detect_cloud_layers(derived_levels, lcl_altitude_ft=idx.lcl_altitude_ft
 - Coverage from mean dewpoint depression: < 1°C → OVC, 1-2°C → BKN, 2-3°C → SCT
 - Records base/top altitudes, thickness, mean temperature
 
-**NWP (Model Diagnostics) — alternative.** Three-tier approach ensures all models produce NWP layers.
+**NWP (Model Diagnostics) — alternative.** Four-tier approach, preferred → fallback.
 
 ```python
 nwp_layers = build_nwp_cloud_layers(
     diagnostics, cloud_cover_low, cloud_cover_mid, cloud_cover_high,
+    pressure_levels=levels,
     dd_cloud_layers=cloud_layers, inversion_layers=inversions, lcl_altitude_ft=lcl_ft,
 )
 ```
 
-- **Tier 1 (GRIB):** GFS — uses native model boundaries, tagged `source="grib"`
-- **Tier 2 (Synthesized):** All other models — narrows ICAO bands using DD cloud envelope + inversion capping (≥2°C) + LCL floor, tagged `source="synthesized"`. Minimum cover threshold: 25%.
-- **Tier 3:** Returns None only when no cloud cover data at all
-- NWP coverage mapping: ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT
-- Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000–45000ft)
-- Each `EnhancedCloudLayer` carries `source` field ("dd"/"grib"/"synthesized")
-- `SoundingAnalysis.cloud_method_effective` tracks what method was actually used ("dd", "nwp", "nwp_synthesized")
+- **Tier 0 (3D cloud fraction):** ECMWF `cc` / ICON-EU `clc` — `build_nwp_cloud_layers_from_fraction()` scans `cloud_area_fraction_pct` per pressure level, groups contiguous levels ≥12.5% into decks, base/top from `geopotential_height_m`. Tagged `source="nwp_3d"`. Preferred whenever any level carries CAF.
+- **Tier 1 (GRIB bulk bands):** GFS — uses native model boundaries (HGHL/HGHM/HGHH + LCDC/MCDC/HCDC), tagged `source="grib"`.
+- **Tier 2 (Synthesized):** Open-Meteo-only models — narrows ICAO bands using DD cloud envelope + inversion capping (≥2°C) + LCL floor, tagged `source="synthesized"`. Minimum cover 25%.
+- **Tier 3:** Returns None only when no cloud cover data at all.
+- Coverage mapping: ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (Tier 0 uses peak deck CAF).
+- Each `EnhancedCloudLayer` carries `source` field ("dd"/"nwp_3d"/"grib"/"synthesized").
+- `SoundingAnalysis.cloud_method_effective` tracks what method was actually used ("dd", "nwp", "nwp_synthesized").
 
 **Cloud top uncertainty enrichment:** For convective (CAPE > 500): `theoretical_max_top_ft = EL`. For stratiform: `theoretical_max_top_ft = -20°C level`. Only set when exceeding sounding-derived cloud top.
 

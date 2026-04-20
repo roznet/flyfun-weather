@@ -235,8 +235,8 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 2. Parse filenames to extract run metadata (model, base time, step, a1/a2 part)
 3. Pick the latest operational run; filter steps to the flight window (±3h margin)
 4. **Pressure levels (a2 files):** Decode clwc/ciwc/cc at 25 pressure levels per point. Multi-grid files (main Europe + Nordic extension) handled via first-wins: each point uses whichever sub-grid covers it
-5. **Surface diagnostics (a1 files):** Decode ceil, cbh, lcc/mcc/hcc/tcc. Heights in meters (9999m = no-cloud sentinel → None). Fractions 0–1 → converted to 0–100%
-6. Merge cloud water into ECMWF cross-sections; attach `NWPCloudDiagnostics`
+5. **Surface diagnostics (a1 files):** Decode ceil, cbh, lcc/mcc/hcc/tcc, `hcct` (convective cloud top), `deg0l` (freezing level). Heights in meters (9999m = no-cloud sentinel → None). Fractions 0–1 → converted to 0–100%.
+6. Merge cloud water into ECMWF cross-sections; attach `NWPCloudDiagnostics`. When `deg0l` is present, `_apply_cloud_diagnostics()` also overwrites `hourly.freezing_level_m` with the GRIB-native value so `indices.nwp_freezing_level_ft` carries the model's own freezing level rather than Open-Meteo's.
 
 **Cloud cover override strategy:** When GRIB diagnostics are available, `_apply_cloud_diagnostics()` overwrites the Open-Meteo `cloud_cover_low/mid/high_pct` values with GRIB-native values. This ensures all cloud data for a given model comes from the same initialization run. GFS takes priority over ICON-EU for points where both provide data.
 

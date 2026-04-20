@@ -98,11 +98,12 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 |-------|---------|------------|
 | `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km. **Raw NWP values:** nwp_cape_jkg, nwp_cape_type (sb/ml/mu/unknown), nwp_cin_jkg, nwp_lifted_index, nwp_freezing_level_ft, cape_raw_vs_calc_divergent |
 | `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3, cloud_liquid_water_g_kg, ice_mixing_ratio_g_kg, icing_index (Ogimet-DD 0–100), icing_index_nwp (Ogimet-NWP 0–100), sfip_raw, sfip_100, sfip_severity, sfip_variant, clw_interpolated |
-| `EnhancedCloudLayer` | Cloud layer from dewpoint depression or NWP diagnostics | base/top (ft + hPa), thickness, mean_temperature_c, coverage (SCT/BKN/OVC), source ("dd"/"grib"/"synthesized") |
+| `EnhancedCloudLayer` | Cloud layer from dewpoint depression or NWP diagnostics | base/top (ft + hPa), thickness, mean_temperature_c, coverage (FEW/SCT/BKN/OVC), source ("dd"/"nwp_3d"/"grib"/"synthesized") |
+| `NWPCloudDiagnostics` | NWP-surface diagnostics (GRIB) | low/mid/high (NWPCloudLayerDiag each), convective_cover_pct, convective_base_ft, convective_top_ft, total_cover_pct, boundary_cover_pct, ceiling_ft, freezing_level_ft (ECMWF `deg0l`) |
 | `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |
 | `IcingZone` | Grouped icing zone (Ogimet-DD or Ogimet-NWP) | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_temperature_c, mean_wet_bulb_c, mean_rh_pct, mean_icing_index |
 | `SfipZone` | Grouped SFIP icing zone | base/top (ft + hPa), risk, icing_type, mean_sfip_100, mean_temperature_c, mean_rh_pct, variant ("full"/"full_no_vv"/"interp"/"interp_no_vv"/"proxy"/"proxy_no_vv") |
-| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list, base_ft/top_ft (unified bounds), cover_pct (NWP only), method ("thermo"/"nwp"/"nwp_hybrid") |
+| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list, base_ft/top_ft (unified bounds), cover_pct (NWP only), method ("thermo"/"nwp"/"nwp_hybrid"/"nwp_lcl_top") |
 | `VerticalMotionClass` | Enum: vertical motion profile type | QUIESCENT, SYNOPTIC_ASCENT, SYNOPTIC_SUBSIDENCE, CONVECTIVE, OSCILLATING, UNAVAILABLE |
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
 | `CATRiskLayer` | CAT risk identified by Richardson number | base_ft, top_ft, base/top_pressure_hpa, richardson_number, risk |
