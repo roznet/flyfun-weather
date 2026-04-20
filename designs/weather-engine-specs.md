@@ -60,7 +60,7 @@ All models share the same computation pipeline; inputs vary by what the raw data
 | **ceiling_ft** | GRIB (GH) | GRIB (`ceil`, m→ft) | GRIB (`ceiling`, m→ft) |
 | **low.cover_pct** | GRIB (LCDC) | GRIB (`lcc`) | GRIB (`clcl`) |
 | **mid.cover_pct** | GRIB (MCDC) | GRIB (`mcc`) | GRIB (`clcm`) |
-| **high.cover_pct** | GRIB (HCDC) | **Gap** — `hcc` not in ECMWF order | GRIB (`clch`) |
+| **high.cover_pct** | GRIB (HCDC) | GRIB (`hcc`) | GRIB (`clch`) |
 | **total_cover_pct** | GRIB (TCDC) | GRIB (`tcc`) | GRIB (`clct`) |
 | **convective base/top** | GRIB | — | GRIB (`hbas_con`, `htop_con`) |
 | **boundary_cover_pct** | GRIB | — | — |
@@ -69,8 +69,8 @@ All models share the same computation pipeline; inputs vary by what the raw data
 
 | Gap | Model | Impact |
 |-----|-------|--------|
-| `hcc` (high cloud cover) | ECMWF | Not in commercial order — cloud diagnostics incomplete |
-| `geopotential_height_m` | ICON | Not on model levels → altitude uses std atmosphere fallback |
+| `z` on pressure levels | ECMWF | Commercial feed delivers `z` only at 1 hPa — GH on 25 levels derived via hypsometric equation from T+P (accurate ~1%). Order amendment pending. |
+| `geopotential_height_m` | ICON | Not on model levels → derived via hypsometric equation from T+P (same path as ECMWF). |
 | `vertical_velocity_pa_s` | ICON | Not fetched → no omega/w_fpm, SFIP uses proxy weights |
 | Surface vars (2t, 10u, CAPE, vis…) | ECMWF | 23 delivered vars not yet processed — still using Open-Meteo |
 
@@ -123,15 +123,14 @@ See [fetch.md](./fetch.md) for implementation details.
 
 ### B. ECMWF IFS (Commercial via ECPDS) — IMPLEMENTED (full sounding)
 - **Delivery:** ECPDS push to local directory (`ECMWF_GRIB_DIR`, default `/data/ecmwf`). Read-only Docker volume mount.
-- **Model:** ifs-ens-cf (IFS Ensemble Control Forecast), 0.25° over Europe
-- **Files:** Two parts per forecast step — a1 (surface, 29 vars) and a2 (pressure levels, 10 vars × 25 levels)
+- **Model:** ifs-ens-cf (IFS Ensemble Control Forecast), 0.25° over Europe + US
+- **Files:** Two parts per forecast step — a1 (surface, 30 vars) and a2 (pressure levels, 10 vars × 25 levels)
 - **Cycles:** 00z/12z (oper stream, 0–192h), 06z/18z (scda stream, 0–144h)
 - **Publication delay:** ~6–8h after init time
 - **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default
-- **Pressure-level (a2):** t, r, u, v, z, w, d, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely)
-- **Surface (a1) — processed:** ceil, cbh, lcc, mcc, tcc → `NWPCloudDiagnostics`
+- **Pressure-level (a2):** t, r, u, v, z, w, d, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely). `z` is currently delivered only at 1 hPa; GH on the other 24 levels is filled by hypsometric integration from T+P until the order amendment lands.
+- **Surface (a1) — processed:** ceil, cbh, lcc, mcc, hcc, tcc → `NWPCloudDiagnostics`
 - **Surface (a1) — delivered but not yet processed:** 10fg, 10u, 10v, 2d, 2t, blh, capes, cp, deg0l, degm10l, fzra, hcct, kx, lsp, mlcape100, mlcin100, msl, mucape, ptype, sf, sp, totalx, tp, vis
-- **Gap:** `hcc` (high cloud cover) was not included in the order — `hcct` in delivery is "height of convective cloud top", not high cloud cover
 - **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point
 - **No HTTP, no cache** — local disk I/O, no byte-range download needed
 
@@ -265,11 +264,11 @@ GRIB enrichment targets native model forecast hours only (e.g. every 3h for GFS 
 
 ### Near-term (high value, moderate effort)
 
-**1. ICON gaps: geopotential + vertical velocity** — ICON model levels lack FI (geopotential). Options: compute from hypsometric equation using T+P, or fetch from ICON-Global pressure levels. W (vertical velocity in m/s, not omega) is available on model levels but not yet fetched — adding it would enable SFIP full variant and CAT detection for ICON.
+**1. ICON vertical velocity** — W (vertical velocity in m/s, not omega) is available on model levels but not yet fetched — adding it would enable SFIP full variant and CAT detection for ICON. Geopotential on model levels is now derived via hypsometric equation from T+P (shared with ECMWF).
 
 **2. ECMWF surface variable processing** — 23 delivered surface variables are not yet processed (2t, 10u, 10v, CAPE variants, freezing level, visibility, precip type, etc.). These could supplement or replace Open-Meteo surface fields for ECMWF forecasts.
 
-**3. ECMWF order: add hcc** — High cloud cover (`hcc`) was not included in the commercial order. The delivered `hcct` is "height of convective cloud top", not high cloud cover. Need to amend the order.
+**3. ECMWF order: add `z` on all 25 pressure levels** — Currently `z` (paramId 129) is delivered only at `isobaricInhPa=1.0 hPa` (single level). Other pressure-level vars (t, r, u, v, w, d, cc, clwc, ciwc) are at all 25 levels as ordered. Interim hypsometric fill from T+P is accurate within ~1% but real `z` is preferred.
 
 **4. Additional GFS variables** — The `.idx` infrastructure supports any GFS variable. High-value additions:
 - `VVEL` (vertical velocity in Pa/s) — raw GFS would give sharper CAT signal than Open-Meteo
