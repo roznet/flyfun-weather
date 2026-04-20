@@ -604,7 +604,6 @@ class SoundingAnalysis(BaseModel):
     nwp_cloud_layers: list[EnhancedCloudLayer] | None = None
     icing_zones: list[IcingZone] = Field(default_factory=list)
     icing_ogimet_nwp_zones: list[IcingZone] = Field(default_factory=list)
-    icing_nwp_zones: list[IcingZone] = Field(default_factory=list)
     sfip_zones: list[SfipZone] = Field(default_factory=list)
     ieng_icing_zones: list[IcingZone] = Field(default_factory=list)
     sld_zones: list[SldZone] = Field(default_factory=list)
