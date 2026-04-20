@@ -169,9 +169,9 @@ Per-level index stored in `icing_index_nwp` on DerivedLevel (separate from `icin
 
 Simplified Forecast Icing Potential — fuzzy-logic index (Belo-Pereira 2015, Morcrette et al. 2019). Same family used by Windy.com and European met services.
 
-**Gating:** Two variants:
-- **Full variant** (CLW available from GRIB): `CLW > 0` gate inside `compute_sfip_level()` — direct evidence of liquid water
-- **Proxy variant** (no CLW): `is_in_cloud_layer(level, dd_cloud_layers)` — uses DD-detected + NWP-filtered cloud layers
+**Gating:** Each variant uses the cloud detection method matching its data source:
+- **Full variant** (CLW available from GRIB): `is_in_cloud_layer(level, nwp_cloud_layers)` — CLW is model output, gate by model cloud layers.  Additionally, `CLW <= 0` is gated out inside `compute_sfip_level()`.
+- **Proxy variant** (no CLW): `is_in_cloud_layer(level, dd_cloud_layers)` — sounding-derived signal, gate by DD-detected + NWP-filtered cloud layers
 
 **Fuzzy logic** — four membership functions (T, RH, CLW, vertical velocity) combined with weights:
 - **Six variants**: `full`/`full_no_vv` (SFIP_O, GFS/ICON-EU — has real CLW from GRIB) `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; `proxy`/`proxy_no_vv` (SFIP_4, other models) `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; `interp`/`interp_no_vv` (same as full but CLW spatially/vertically interpolated). The `_no_vv` suffix indicates omega is unavailable (M_VV = 0).

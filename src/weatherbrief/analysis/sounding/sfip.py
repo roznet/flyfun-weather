@@ -312,7 +312,8 @@ def _classify_icing_type(temperature_c: float) -> IcingType:
 
 def assess_sfip_zones(
     levels: list[DerivedLevel],
-    cloud_layers: list[EnhancedCloudLayer] | None = None,
+    dd_cloud_layers: list[EnhancedCloudLayer] | None = None,
+    nwp_cloud_layers: list[EnhancedCloudLayer] | None = None,
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
     nwp_cloud_high_pct: float | None = None,
@@ -321,10 +322,11 @@ def assess_sfip_zones(
     """Compute SFIP at each level and group into icing zones.
 
     Cloud gating per variant:
-      - Full (CLW available): levels with CLW <= 0 are gated out in compute_sfip_level.
-      - Proxy (no CLW): level must be within a cloud layer (±500 ft).
-        The caller controls which cloud detection method is used by
-        passing DD-detected+NWP-filtered layers or pure NWP layers.
+      - Full (CLW available): level must be within an NWP cloud layer
+        (CLW is model output → gate by model cloud layers).  CLW <= 0
+        is additionally gated out in compute_sfip_level.
+      - Proxy (no CLW): level must be within a DD cloud layer
+        (sounding-derived + NWP-filtered → same gray bands on cross-section).
 
     Stores per-level SFIP results on DerivedLevel objects.
     Returns list of SfipZone ordered by ascending altitude.
@@ -332,7 +334,8 @@ def assess_sfip_zones(
     if not levels:
         return []
 
-    clouds = cloud_layers or []
+    dd_clouds = dd_cloud_layers or []
+    nwp_clouds = nwp_cloud_layers or []
 
     # Compute SFIP for each level
     sfip_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = []
@@ -343,9 +346,11 @@ def assess_sfip_zones(
         if lv.relative_humidity_pct is None or lv.dewpoint_depression_c is None:
             continue
 
-        # Proxy variant cloud gating: skip levels outside cloud layers
+        # Cloud layer gating: full → NWP layers, proxy → DD layers
         is_proxy = lv.cloud_liquid_water_g_kg is None
-        if is_proxy and not is_in_cloud_layer(lv, clouds):
+        if is_proxy and not is_in_cloud_layer(lv, dd_clouds):
+            continue
+        if not is_proxy and not is_in_cloud_layer(lv, nwp_clouds):
             continue
 
         cloud_cover = _cloud_cover_for_level(

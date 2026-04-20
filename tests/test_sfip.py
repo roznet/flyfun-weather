@@ -317,15 +317,20 @@ def _level(pressure, alt, temp, dp, rh, dd, clw=None, icmr=None, omega=None):
     )
 
 
+def _nwp_cloud(base_ft, top_ft):
+    """Helper for NWP cloud layer used in full-variant tests."""
+    return EnhancedCloudLayer(base_ft=base_ft, top_ft=top_ft, source="grib")
+
+
 def test_zones_with_clw():
-    """Full variant with CLW data produces zones."""
+    """Full variant with CLW data produces zones when in NWP cloud."""
     levels = [
         _level(850, 5000, -3.0, -4.0, 92.0, 1.0, clw=0.08),
         _level(800, 6500, -6.0, -7.0, 95.0, 1.0, clw=0.15),
         _level(750, 8000, -9.0, -10.0, 96.0, 1.0, clw=0.20),
         _level(700, 10000, -12.0, -13.0, 93.0, 1.0, clw=0.10),
     ]
-    zones = assess_sfip_zones(levels)
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(4000, 11000)])
     assert len(zones) >= 1
     assert zones[0].variant.startswith("full")
     assert zones[0].risk != IcingRisk.NONE
@@ -341,7 +346,7 @@ def test_zones_without_clw():
     clouds = [EnhancedCloudLayer(base_ft=6000, top_ft=10500)]
     zones = assess_sfip_zones(
         levels,
-        cloud_layers=clouds,
+        dd_cloud_layers=clouds,
         nwp_cloud_mid_pct=80.0,
     )
     assert len(zones) >= 1
@@ -374,7 +379,7 @@ def test_zones_grouping():
         _level(800, 6500, -6.0, -7.0, 96.0, 1.0, clw=0.15),
         _level(750, 8000, -9.0, -10.0, 97.0, 1.0, clw=0.20),
     ]
-    zones = assess_sfip_zones(levels)
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(6000, 9000)])
     assert len(zones) == 1
     assert zones[0].base_ft == 6500
     assert zones[0].top_ft == 8000
@@ -386,7 +391,7 @@ def test_zones_split_by_gap():
         _level(850, 5000, -3.0, -4.0, 96.0, 1.0, clw=0.15),
         _level(600, 14000, -15.0, -16.0, 95.0, 1.0, clw=0.15),
     ]
-    zones = assess_sfip_zones(levels)
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(4000, 15000)])
     assert len(zones) == 2
 
 
@@ -395,7 +400,7 @@ def test_per_level_fields_stored():
     levels = [
         _level(700, 10000, -8.0, -9.0, 96.0, 1.0, clw=0.15),
     ]
-    assess_sfip_zones(levels)
+    assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(9000, 11000)])
     assert levels[0].sfip_raw is not None
     assert levels[0].sfip_100 is not None
     assert levels[0].sfip_100 > 0
@@ -413,7 +418,7 @@ def test_zone_mean_sfip():
         _level(800, 6500, -6.0, -7.0, 96.0, 1.0, clw=0.15),
         _level(750, 8000, -9.0, -10.0, 97.0, 1.0, clw=0.20),
     ]
-    zones = assess_sfip_zones(levels)
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(6000, 9000)])
     assert len(zones) == 1
     assert zones[0].mean_sfip_100 is not None
     assert zones[0].mean_sfip_100 > 0
@@ -425,7 +430,7 @@ def test_zone_icing_type():
         _level(700, 10000, -12.0, -13.0, 96.0, 1.0, clw=0.15),
         _level(650, 12000, -15.0, -16.0, 95.0, 1.0, clw=0.10),
     ]
-    zones = assess_sfip_zones(levels)
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(9000, 13000)])
     assert len(zones) == 1
     assert zones[0].icing_type == IcingType.RIME
 
@@ -449,7 +454,7 @@ def test_comparison_both_indices():
     clouds = [EnhancedCloudLayer(base_ft=9000, top_ft=13000)]
 
     ogimet_zones = assess_icing_zones_ogimet_dd(levels, clouds)
-    sfip_zones = assess_sfip_zones(levels, cloud_layers=clouds)
+    sfip_zones = assess_sfip_zones(levels, dd_cloud_layers=clouds, nwp_cloud_layers=clouds)
 
     assert len(ogimet_zones) >= 1
     assert len(sfip_zones) >= 1
@@ -468,15 +473,25 @@ def test_full_variant_clw_zero_gated():
     assert len(zones) == 0
 
 
-def test_full_variant_clw_positive_not_gated():
-    """Full variant: CLW > 0 produces zones (no cloud gating)."""
+def test_full_variant_clw_positive_in_nwp_cloud():
+    """Full variant: CLW > 0 within NWP cloud layer produces zones."""
     levels = [
         _level(700, 10000, -8.0, -9.0, 96.0, 1.0, clw=0.15),
         _level(650, 12000, -12.0, -13.0, 95.0, 1.0, clw=0.10),
     ]
-    zones = assess_sfip_zones(levels)
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(9000, 13000)])
     assert len(zones) >= 1
     assert all(z.variant.startswith("full") for z in zones)
+
+
+def test_full_variant_clw_positive_outside_nwp_cloud():
+    """Full variant: CLW > 0 outside NWP cloud layer → no zones."""
+    levels = [
+        _level(700, 10000, -8.0, -9.0, 96.0, 1.0, clw=0.15),
+        _level(650, 12000, -12.0, -13.0, 95.0, 1.0, clw=0.10),
+    ]
+    zones = assess_sfip_zones(levels, nwp_cloud_layers=[_nwp_cloud(2000, 4000)])
+    assert len(zones) == 0
 
 
 def test_level_full_variant_clw_zero_returns_none():
@@ -507,7 +522,7 @@ def test_proxy_in_cloud_layer():
         _level(700, 10000, -8.0, -9.0, 96.0, 1.0),
         _level(650, 12000, -12.0, -13.0, 95.0, 1.0),
     ]
-    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    zones = assess_sfip_zones(levels, dd_cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
     assert len(zones) >= 1
     assert all(z.variant.startswith("proxy") for z in zones)
 
@@ -520,7 +535,7 @@ def test_proxy_outside_cloud_layer():
         _level(700, 10000, -8.0, -9.0, 96.0, 1.0),
         _level(650, 12000, -12.0, -13.0, 95.0, 1.0),
     ]
-    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    zones = assess_sfip_zones(levels, dd_cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
     assert len(zones) == 0
 
 
@@ -532,7 +547,7 @@ def test_proxy_near_cloud_layer_margin():
         _level(700, 10000, -8.0, -12.0, 80.0, 4.0),
         _level(650, 12000, -12.0, -16.0, 78.0, 4.0),
     ]
-    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    zones = assess_sfip_zones(levels, dd_cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
     assert len(zones) >= 1
     assert all(z.variant.startswith("proxy") for z in zones)
 
@@ -544,7 +559,7 @@ def test_proxy_far_from_cloud_layer_gated():
         _level(850, 5000, -3.0, -8.0, 70.0, 5.0),  # Far below cloud, dry
         _level(800, 6500, -6.0, -12.0, 65.0, 6.0),
     ]
-    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    zones = assess_sfip_zones(levels, dd_cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
     assert len(zones) == 0
 
 
@@ -555,7 +570,7 @@ def test_proxy_cloud_margin_500ft():
     levels = [
         _level(700, 9600, -8.0, -12.0, 78.0, 4.0),  # DD > 3, but within margin
     ]
-    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    zones = assess_sfip_zones(levels, dd_cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
     # Should produce a zone (within 500ft of cloud base)
     assert len(zones) >= 1
 
@@ -567,7 +582,7 @@ def test_proxy_outside_margin_gated():
     levels = [
         _level(750, 9000, -8.0, -12.0, 78.0, 4.0),  # DD > 3, outside margin
     ]
-    zones = assess_sfip_zones(levels, cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
+    zones = assess_sfip_zones(levels, dd_cloud_layers=clouds, nwp_cloud_mid_pct=80.0)
     assert len(zones) == 0
 
 

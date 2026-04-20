@@ -355,10 +355,11 @@ def _analyze_sounding_heavy(
         lcl_altitude_ft=indices.lcl_altitude_ft,
     )
 
-    # SFIP icing index
+    # SFIP icing index (full → NWP-gated, proxy → DD-gated)
     sfip_zones = assess_sfip_zones(
         derived_levels,
-        cloud_layers=cloud_layers,
+        dd_cloud_layers=cloud_layers,
+        nwp_cloud_layers=nwp_cloud_layers or [],
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
