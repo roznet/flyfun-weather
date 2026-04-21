@@ -120,7 +120,7 @@ export function renderFlightInfo(
           <span class="info-label">Route</span>
           <span class="info-value">
             <input type="text" id="edit-waypoints" class="edit-input" value="${escapeHtml(flight.waypoints.join(' '))}" placeholder="e.g. EGTK LFPB LSGS" style="width:100%;font-family:monospace;">
-            <div class="muted" style="font-size:0.75rem;margin-top:2px;">Origin (${escapeHtml(flight.waypoints[0] || '')}) and destination (${escapeHtml(flight.waypoints[flight.waypoints.length - 1] || '')}) cannot change</div>
+            <div id="edit-route-note" class="edit-structural-note" style="display:none;"></div>
           </span>
         </div>
         <div class="info-row">
@@ -137,7 +137,10 @@ export function renderFlightInfo(
         </div>
         <div class="info-row">
           <span class="info-label">Date</span>
-          <span class="info-value">${formatDate(flight.target_date)}</span>
+          <span class="info-value">
+            <input type="date" id="edit-date" class="edit-input" value="${escapeHtml(flight.target_date)}">
+            <div id="edit-date-note" class="edit-structural-note" style="display:none;"></div>
+          </span>
         </div>
         <div class="info-row">
           <span class="info-label">Time</span>
@@ -184,6 +187,8 @@ export function renderFlightInfo(
         </div>
         <div class="info-row edit-actions">
           <button class="btn btn-primary btn-sm" id="edit-save">Save</button>
+          <button class="btn btn-primary btn-sm" id="edit-move" style="display:none;">Move flight</button>
+          <button class="btn btn-secondary btn-sm" id="edit-duplicate" style="display:none;">Duplicate as new</button>
           <button class="btn btn-sm" id="edit-cancel">Cancel</button>
         </div>
       </div>

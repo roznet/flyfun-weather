@@ -57,6 +57,27 @@ export async function bulkDeleteFlights(ids: string[]): Promise<BulkDeleteRespon
   });
 }
 
+export interface MoveFlightRequest {
+  departure_time?: string;
+  waypoints?: string[];
+  cruise_altitude_ft?: number;
+  flight_ceiling_ft?: number;
+  flight_duration_hours?: number;
+}
+
+export async function moveFlight(
+  flightId: string,
+  req: MoveFlightRequest,
+): Promise<FlightResponse> {
+  return apiFetch<FlightResponse>(
+    `/flights/${encodeURIComponent(flightId)}/move`,
+    {
+      method: 'POST',
+      body: JSON.stringify(req),
+    },
+  );
+}
+
 export interface UpdateFlightRequest {
   profile_id?: number;
   aircraft_id?: number;

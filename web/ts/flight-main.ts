@@ -8,9 +8,10 @@ import * as ui from './managers/flight-detail-ui';
 import { RouteMapInset } from './components/route-map-inset';
 import { renderUserInfo } from './utils';
 import { initTheme } from './theme';
-import { initI18n } from './i18n/i18n';
+import { initI18n, t } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
-import { interpretAndConfirmRoute, validateOriginDestination } from './components/route-interpret';
+import { interpretAndConfirmRoute } from './components/route-interpret';
+import { createFlight, moveFlight } from './adapters/api-adapter';
 
 async function init(): Promise<void> {
   await initI18n();
@@ -115,8 +116,62 @@ async function init(): Promise<void> {
     }
   }
 
+  /** Read the current edit-form state and detect whether the user changed any
+   *  structural field (date, origin, destination). Mid-route waypoint changes
+   *  are NOT structural — they're handled by PATCH/Save. */
+  function detectStructuralChange(): { dateChanged: boolean; routeChanged: boolean; newWaypoints: string[]; newDate: string } {
+    const flight = store.getState().flight;
+    const dateEl = document.getElementById('edit-date') as HTMLInputElement;
+    const wpEl = document.getElementById('edit-waypoints') as HTMLInputElement;
+    const newDate = dateEl?.value || flight?.target_date || '';
+    const wpRaw = (wpEl?.value || '').trim();
+    const newWaypoints = wpRaw
+      ? wpRaw.split(/[\s,]+/).filter(Boolean).map(w => w.toUpperCase())
+      : (flight?.waypoints || []);
+    const dateChanged = !!flight && newDate !== flight.target_date;
+    const oldOrigin = flight?.waypoints[0] || '';
+    const oldDest = flight?.waypoints[flight.waypoints.length - 1] || '';
+    const newOrigin = newWaypoints[0] || '';
+    const newDest = newWaypoints[newWaypoints.length - 1] || '';
+    const routeChanged = !!flight && (newOrigin !== oldOrigin || newDest !== oldDest);
+    return { dateChanged, routeChanged, newWaypoints, newDate };
+  }
+
+  /** Update Save vs Move/Duplicate button visibility + inline notes based on
+   *  whether the user has changed a structural field. */
+  function updateStructuralUi(): void {
+    const { dateChanged, routeChanged } = detectStructuralChange();
+    const structural = dateChanged || routeChanged;
+
+    const saveBtn = document.getElementById('edit-save') as HTMLButtonElement | null;
+    const moveBtn = document.getElementById('edit-move') as HTMLButtonElement | null;
+    const dupBtn = document.getElementById('edit-duplicate') as HTMLButtonElement | null;
+    if (saveBtn) saveBtn.style.display = structural ? 'none' : '';
+    if (moveBtn) moveBtn.style.display = structural ? '' : 'none';
+    if (dupBtn) dupBtn.style.display = structural ? '' : 'none';
+
+    const dateNote = document.getElementById('edit-date-note');
+    if (dateNote) {
+      dateNote.style.display = dateChanged ? '' : 'none';
+      if (dateChanged) {
+        const packCount = store.getState().packs.length;
+        dateNote.textContent = t('flightDetail.dateChangedNote', { count: packCount });
+      }
+    }
+    const routeNote = document.getElementById('edit-route-note');
+    if (routeNote) {
+      routeNote.style.display = routeChanged ? '' : 'none';
+      if (routeChanged) {
+        const packCount = store.getState().packs.length;
+        routeNote.textContent = t('flightDetail.routeChangedNote', { count: packCount });
+      }
+    }
+  }
+
   function wireEditForm(): void {
     const saveBtn = document.getElementById('edit-save');
+    const moveBtn = document.getElementById('edit-move');
+    const dupBtn = document.getElementById('edit-duplicate');
     const cancelBtn = document.getElementById('edit-cancel');
 
     // Initialize internal UTC times from the flight
@@ -148,6 +203,37 @@ async function init(): Promise<void> {
     altHourEl?.addEventListener('change', syncUtcFromLocal);
     altMinuteEl?.addEventListener('change', syncUtcFromLocal);
 
+    // Wire structural-field listeners → toggle Save vs Move/Duplicate buttons
+    const dateEl = document.getElementById('edit-date') as HTMLInputElement;
+    const wpEl = document.getElementById('edit-waypoints') as HTMLInputElement;
+    dateEl?.addEventListener('change', updateStructuralUi);
+    dateEl?.addEventListener('input', updateStructuralUi);
+    wpEl?.addEventListener('input', updateStructuralUi);
+    wpEl?.addEventListener('blur', updateStructuralUi);
+    updateStructuralUi();  // initial state
+
+    /** Build the merged structural payload for Move and Duplicate. Returns null if
+     *  waypoints fail interpretation (errors already shown to user). */
+    async function buildStructuralPayload(): Promise<{
+      departure_time: string;
+      waypoints: string[];
+    } | null> {
+      if (!flight) return null;
+      syncUtcFromLocal();
+
+      const wpRaw = (wpEl?.value || '').trim();
+      let waypoints: string[] = flight.waypoints;
+      if (wpRaw && wpRaw.toUpperCase() !== flight.waypoints.join(' ').toUpperCase()) {
+        const result = await interpretAndConfirmRoute(wpRaw, (msg) => ui.renderError(msg));
+        if (!result || !result.confirmed) return null;
+        waypoints = result.waypoints;
+      }
+
+      const newDate = dateEl?.value || flight.target_date;
+      const departureTime = `${newDate}T${editUtcHour.toString().padStart(2, '0')}:${editUtcMinute.toString().padStart(2, '0')}:00Z`;
+      return { departure_time: departureTime, waypoints };
+    }
+
     saveBtn?.addEventListener('click', async () => {
       if (!flight) return;
 
@@ -157,9 +243,7 @@ async function init(): Promise<void> {
       const ceilEl = document.getElementById('edit-ceiling') as HTMLInputElement;
       const durEl = document.getElementById('edit-duration') as HTMLInputElement;
       const altEnabledEl = document.getElementById('edit-alt-enabled') as HTMLInputElement;
-      const waypointsEl = document.getElementById('edit-waypoints') as HTMLInputElement;
 
-      // Sync final UTC values from displayed local time
       syncUtcFromLocal();
 
       const profileId = profileEl ? parseInt(profileEl.value, 10) : undefined;
@@ -168,35 +252,20 @@ async function init(): Promise<void> {
       const ceiling = parseInt(ceilEl.value, 10);
       const duration = parseFloat(durEl.value);
 
-      // Build ISO datetime from internal UTC
+      // Save handles non-structural changes only — date/origin/dest stay the same.
       const departureTime = `${flight.target_date}T${editUtcHour.toString().padStart(2, '0')}:${editUtcMinute.toString().padStart(2, '0')}:00Z`;
-
-      // Build alt departure time (or empty string to clear)
       const altEnabled = altEnabledEl?.checked ?? false;
       const altDepartureTime = altEnabled
         ? `${flight.target_date}T${editAltUtcHour.toString().padStart(2, '0')}:${editAltUtcMinute.toString().padStart(2, '0')}:00Z`
         : '';
 
-      // Handle route editing with smart interpretation
+      // Mid-route waypoint changes still go through Save (origin/dest unchanged → not structural).
       let newWaypoints: string[] | undefined;
-      const wpRaw = waypointsEl?.value?.trim();
-      if (wpRaw) {
-        const currentRoute = flight.waypoints.join(' ');
-        // Only interpret if route text has changed
-        if (wpRaw.toUpperCase() !== currentRoute.toUpperCase()) {
-          const result = await interpretAndConfirmRoute(wpRaw, (msg) => {
-            ui.renderError(msg);
-          });
-          if (!result || !result.confirmed) return;
-
-          // Validate origin/destination haven't changed
-          const validationError = validateOriginDestination(flight.waypoints, result.waypoints);
-          if (validationError) {
-            ui.renderError(validationError);
-            return;
-          }
-          newWaypoints = result.waypoints;
-        }
+      const wpRaw = wpEl?.value?.trim();
+      if (wpRaw && wpRaw.toUpperCase() !== flight.waypoints.join(' ').toUpperCase()) {
+        const result = await interpretAndConfirmRoute(wpRaw, (msg) => ui.renderError(msg));
+        if (!result || !result.confirmed) return;
+        newWaypoints = result.waypoints;
       }
 
       await store.getState().saveFlight({
@@ -210,9 +279,45 @@ async function init(): Promise<void> {
         ...(newWaypoints ? { waypoints: newWaypoints } : {}),
       });
 
-      // If route changed, reload waypoints for the map
-      if (newWaypoints) {
-        store.getState().loadWaypoints();
+      if (newWaypoints) store.getState().loadWaypoints();
+    });
+
+    moveBtn?.addEventListener('click', async () => {
+      if (!flight) return;
+      const payload = await buildStructuralPayload();
+      if (!payload) return;
+      const packCount = store.getState().packs.length;
+      const msg = packCount > 0
+        ? t('flightDetail.moveConfirmWithPacks', { count: packCount })
+        : t('flightDetail.moveConfirmNoPacks');
+      if (!confirm(msg)) return;
+      try {
+        const newFlight = await moveFlight(flight.id, payload);
+        window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
+      } catch (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        ui.renderError(m.replace(/^API \d+:\s*/, ''));
+      }
+    });
+
+    dupBtn?.addEventListener('click', async () => {
+      if (!flight) return;
+      const payload = await buildStructuralPayload();
+      if (!payload) return;
+      try {
+        const newFlight = await createFlight({
+          waypoints: payload.waypoints,
+          departure_time: payload.departure_time,
+          cruise_altitude_ft: flight.cruise_altitude_ft,
+          flight_ceiling_ft: flight.flight_ceiling_ft,
+          flight_duration_hours: flight.flight_duration_hours,
+          profile_id: flight.profile_id ?? undefined,
+          aircraft_id: flight.aircraft_id ?? undefined,
+        });
+        window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
+      } catch (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        ui.renderError(m.replace(/^API \d+:\s*/, ''));
       }
     });
 

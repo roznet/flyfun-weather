@@ -250,14 +250,15 @@ label {
   max-width: 240px;
 }
 
-.duplicate-banner {
+.edit-structural-note {
   background: var(--bg-elev);
   border-left: 3px solid var(--primary);
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.75rem;
-  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
   color: var(--text);
   border-radius: 3px;
+  line-height: 1.4;
 }
 
 .time-input-group {

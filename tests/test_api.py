@@ -289,6 +289,90 @@ class TestFlightsAPI:
         assert resp.status_code == 200
         assert resp.json() == {"deleted": [], "not_found": []}
 
+    # --- Move flight (atomic re-create with new structural fields) ---
+
+    def test_move_flight_changes_date(self, client, sample_flight):
+        """Move with a new departure date returns a new flight ID and the old one is gone."""
+        new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move",
+            json={"departure_time": new_dt},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] != sample_flight.id
+        assert data["departure_time"].startswith(new_dt[:10])
+        assert data["cruise_altitude_ft"] == sample_flight.cruise_altitude_ft
+        assert client.get(f"/api/flights/{sample_flight.id}").status_code == 404
+
+    def test_move_flight_changes_route(self, client, sample_flight):
+        """Move with new origin/dest creates a flight with a different route."""
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move",
+            json={"waypoints": ["EGTF", "EGLF"]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["waypoints"] == ["EGTF", "EGLF"]
+        assert data["route_name"] == "egtf_eglf"
+        assert data["id"] != sample_flight.id
+        assert client.get(f"/api/flights/{sample_flight.id}").status_code == 404
+
+    def test_move_flight_no_change_rejected(self, client, sample_flight):
+        """Move with no structural change returns 422 (would generate the same ID)."""
+        resp = client.post(f"/api/flights/{sample_flight.id}/move", json={})
+        assert resp.status_code == 422
+        assert client.get(f"/api/flights/{sample_flight.id}").status_code == 200
+
+    def test_move_flight_collision_rolls_back(self, client, sample_flight, app_db):
+        """If the new ID would collide with another existing flight, abort with 409 and don't touch the source."""
+        session = app_db()
+        other_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2))
+        other = Flight(
+            id=_make_flight_id("egtk_lsgs", other_dt.strftime("%Y-%m-%d"), time="09:00"),
+            user_id=DEV_USER_ID, route_name="egtk_lsgs",
+            waypoints=["EGTK", "LFPB", "LSGS"],
+            departure_time=other_dt,
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, flight_duration_hours=4.5,
+            created_at=_NOW - timedelta(days=1),
+        )
+        save_flight(session, other, DEV_USER_ID)
+        session.commit()
+        session.close()
+
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move",
+            json={"departure_time": other_dt.isoformat()},
+        )
+        assert resp.status_code == 409
+        assert client.get(f"/api/flights/{sample_flight.id}").status_code == 200
+        assert client.get(f"/api/flights/{other.id}").status_code == 200
+
+    def test_move_flight_not_owner(self, client, app_db):
+        """Cannot move someone else's flight."""
+        session = app_db()
+        session.add(UserRow(
+            id="other-user", provider="local", provider_sub="other",
+            email="other@localhost", display_name="Other", approved=True,
+        ))
+        session.flush()
+        flight = Flight(
+            id=_make_flight_id("egtf_eglf", _FUTURE_DEPARTURE_DATE, user="other-user"),
+            user_id="other-user", route_name="egtf_eglf", waypoints=["EGTF", "EGLF"],
+            departure_time=_FUTURE_DEPARTURE_DT,
+            cruise_altitude_ft=7000, flight_ceiling_ft=15000, flight_duration_hours=0.5,
+            created_at=_NOW - timedelta(days=1),
+        )
+        save_flight(session, flight, "other-user")
+        session.commit()
+        session.close()
+
+        resp = client.post(
+            f"/api/flights/{flight.id}/move",
+            json={"departure_time": (_FUTURE_DEPARTURE_DT + timedelta(days=1)).isoformat()},
+        )
+        assert resp.status_code == 404
+
 
 # --- Packs ---
 
