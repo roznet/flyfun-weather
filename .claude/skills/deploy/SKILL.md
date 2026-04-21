@@ -11,14 +11,27 @@ The project directory on the server is `flyfun-weather`.
 
 ## Pre-flight checks
 
-1. Ensure the working tree is clean (`git status`)
-2. Ensure we are on the `main` branch
-3. Show the commits that will be deployed: `git log --oneline origin/main..HEAD`
-4. **Run tests** (see below)
-5. **Check for pending Alembic migrations** (see below)
-6. **Check airport database freshness** (see below)
-7. **Check standalone verification cycle timing** (see below)
-8. Ask the user to confirm before proceeding
+> **CRITICAL — what "to deploy" means.** A deploy ships whatever is on `origin/main` to the server. The right comparison is **server's deployed commit → `origin/main`**, NOT local working tree → `origin/main`. Past mistakes:
+> - Using `git log origin/main..HEAD` to show "commits to deploy" — this shows what's *local but not pushed*, which is the opposite of what we want. If local is up to date with `origin/main`, that command is empty even when the server is many commits behind.
+> - Stopping the deploy because the working tree is dirty — uncommitted files are unrelated to what's on `origin/main`. List them so the user can decide whether to ignore them, but don't block.
+>
+> The two anchor SHAs for the whole deploy are:
+> - `LOCAL_SHA` = `git rev-parse origin/main` (after `git fetch`) — what we will deploy
+> - `SERVER_SHA` = `ssh <user>@<server> "cd flyfun-weather && git rev-parse HEAD"` — what is currently running
+>
+> Use these two everywhere a comparison is needed (commit list, migrations diff, changed-paths for Playwright).
+
+1. `git fetch origin` so `origin/main` is current
+2. Ensure we are on the `main` branch (`git branch --show-current`)
+3. Capture `SERVER_SHA` and `LOCAL_SHA` (definitions above)
+4. Show the commits that will be deployed: `git log --oneline ${SERVER_SHA}..${LOCAL_SHA}`
+   - If empty → server is already up to date; tell the user and stop (nothing to deploy).
+5. Show uncommitted local changes (`git status --short`) — **just list them**, do not block. Ask the user only if they look related to work that should be in this deploy.
+6. **Run tests** (see below)
+7. **Check for pending Alembic migrations** (see below)
+8. **Check airport database freshness** (see below)
+9. **Check standalone verification cycle timing** (see below)
+10. Ask the user to confirm before proceeding
 
 ## Run tests
 
@@ -33,9 +46,9 @@ all of them crawl.
 
 If any test fails, **stop the deploy** and report the failures.
 
-**Run Playwright tests if frontend or API changed.** Check what changed since the last deploy:
+**Run Playwright tests if frontend or API changed.** Check what changed since the last deploy — this means **server → origin/main**, not local working tree:
 ```bash
-git diff origin/main..HEAD --name-only
+git diff ${SERVER_SHA}..${LOCAL_SHA} --name-only
 ```
 Run Playwright if ANY of these paths have changes:
 - `web/` (frontend code, templates, static files)
@@ -50,15 +63,12 @@ If Playwright tests fail, **warn the user** but don't block — failures may be 
 
 ## Check for Alembic migrations
 
-Get the commit currently deployed on the server:
+Using the `SERVER_SHA` and `LOCAL_SHA` captured in pre-flight, check if any migration files changed between what's running and what we're about to deploy:
 ```
-ssh <user>@<server> "cd flyfun-weather && git rev-parse HEAD"
+git diff ${SERVER_SHA}..${LOCAL_SHA} -- alembic/versions/
 ```
 
-Then check if any migration files changed between that commit and the local HEAD:
-```
-git diff <server_commit>..HEAD -- alembic/versions/
-```
+> Do **not** use `HEAD` here — `HEAD` may include local commits not yet pushed, which won't reach the server. Always diff against `origin/main` (= `LOCAL_SHA`).
 
 If new or changed migration files are found, **warn the user prominently** that migrations will need to run after deploy.
 
@@ -147,7 +157,12 @@ This runs a single full cycle (fetch forecasts + observations + score) and exits
 
 ## Deploy steps
 
-1. Push to remote: `git push origin main`
+1. Only push if there are local commits ahead of `origin/main` AND the user has confirmed they should be part of this deploy:
+   ```
+   git log --oneline origin/main..HEAD   # if non-empty, ask before pushing
+   git push origin main
+   ```
+   In the common case (local already in sync with `origin/main`), skip this step entirely.
 2. SSH to the server and deploy:
    ```
    ssh <user>@<server> "cd flyfun-weather && git pull && docker compose up -d --build"
