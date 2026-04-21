@@ -207,7 +207,7 @@
       <h4>Flight Profiles</h4>
       <ul>
         <li><strong>Flight Defaults</strong> &mdash; set default cruise altitude, ceiling, speed, and flight-rules capability for new flights.</li>
-        <li><strong>Forecast Models</strong> &mdash; choose which NWP models are fetched on each briefing refresh. By default, Best Match, GFS, ECMWF IFS, and DWD ICON are enabled.</li>
+        <li><strong>Forecast Models</strong> &mdash; choose which NWP models are fetched on each briefing refresh. By default, GFS, ECMWF IFS, and DWD ICON are enabled.</li>
         <li><strong>Optional Services</strong> &mdash; enable or disable GRAMET cross-section charts and the AI Digest synopsis.</li>
         <li><strong>Advisories</strong> &mdash; configure summary rating aggregation (worst-case vs majority), analysis methods for icing, cloud, and convective advisories, enable/disable individual advisories, and fine-tune thresholds (e.g. icing temperature band, crosswind limits).</li>
         <li><strong>Advisory Models</strong> &mdash; select which models are used for advisory evaluation (must be a subset of your enabled forecast models).</li>
@@ -245,22 +245,13 @@
         </thead>
         <tbody>
           <tr>
-            <td>Best Match*</td>
-            <td>Open-Meteo</td>
-            <td>Global</td>
-            <td>varies by location</td>
-            <td>16 days</td>
-            <td>28</td>
-            <td><a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener">Open-Meteo</a></td>
-          </tr>
-          <tr>
             <td>GFS</td>
             <td>NOAA (US)</td>
             <td>Global</td>
             <td>0.25&deg; (~25 km)</td>
             <td>16 days</td>
-            <td>28</td>
-            <td><a href="https://open-meteo.com/en/docs/gfs-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+            <td>28&Dagger;</td>
+            <td>Direct GRIB (NOAA S3) + <a href="https://open-meteo.com/en/docs/gfs-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
             <td>ECMWF IFS</td>
@@ -277,8 +268,8 @@
             <td>Global</td>
             <td>11 km; 7 km over Europe</td>
             <td>7 days</td>
-            <td>19</td>
-            <td><a href="https://open-meteo.com/en/docs/dwd-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+            <td>19&Dagger;</td>
+            <td>Direct GRIB (DWD ICON-EU) + <a href="https://open-meteo.com/en/docs/dwd-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
             <td>UK Met Office</td>
@@ -309,10 +300,6 @@
           </tr>
         </tbody>
       </table>
-      <p class="muted" style="margin-top: 0.5rem;">
-        *<strong>Best Match</strong> is Open-Meteo's automatic blend &mdash; it picks the
-        highest-resolution model available at each location rather than running a single model.
-      </p>
       <p class="muted" style="margin-top: 0.25rem;">
         <strong>Levels</strong> = number of pressure levels used for upper-air analysis
         (soundings, cross-sections). More levels give finer vertical detail.
@@ -324,6 +311,13 @@
         Open-Meteo data for those locations. Outside that area or beyond 7 days, we fall
         back to the 13-level Open-Meteo feed. Cloud liquid/ice water content and per-level
         cloud fraction are only available inside the direct-GRIB coverage.
+      </p>
+      <p class="muted" style="margin-top: 0.25rem;">
+        &Dagger;<strong>GFS and DWD ICON</strong> are enriched with direct GRIB data for
+        cloud liquid water, ice mixing ratio, and NWP cloud diagnostics (ceiling, convective
+        base/top, per-layer cloud covers). GFS enrichment is global; ICON enrichment covers
+        Europe only (29.5&ndash;70.5&deg;N, 23.5&deg;W&ndash;62.5&deg;E) within ~5 days. Level
+        counts are unchanged &mdash; the upgrade is in the microphysics and cloud structure.
       </p>
     </div>
 

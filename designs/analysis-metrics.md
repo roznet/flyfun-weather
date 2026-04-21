@@ -73,7 +73,7 @@ Pressure levels vary by model (range 1000–150 hPa, ~SFC to ~FL450):
 | GFS / Best-Match | 1000, 975, 950, ..., 300, 250, 200, 150 | 28 | 25 hPa spacing below 500, extends to FL450 |
 | ECMWF (Open-Meteo) | 1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50 | 13 | Fallback when outside direct-GRIB coverage or beyond 7-day range |
 | ECMWF (direct GRIB) | 1000, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10, 7, 5, 3, 2, 1 | 25 | ECPDS push, Europe + US, 0–192h (oper) / 0–144h (scda). Replaces the 13-level Open-Meteo sounding for covered points. |
-| ICON | 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300 | 12 | 250/200/150 return null (Open-Meteo). Replaced by ICON-EU GRIB sounding over Europe. |
+| ICON | 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30 | 19 | Open-Meteo (verified Mar 2026). Still no intermediate levels between 800–300 hPa. GRIB enrichment adds CLW/ICMR/cloud diagnostics via DWD ICON-EU model-level data (Europe only). |
 | Météo-France | 1000, 950, 925, ..., 300, 250, 200, 150 | 19 | |
 | UKMO | 1000, 975, 950, ..., 300, 250, 200, 150 | 20 | Supports vertical_velocity |
 | GEM | 1000, 950, 925, ..., 300, 250, 200, 150 | 20 | |
