@@ -78,44 +78,101 @@ sudo find . -type f -exec chmod 0640 {} \;
 
 ### 5. Triage venv (owned by triage)
 
+The venv lives at `/mnt/flyfun_data/sandboxes/triage/venv`, owned by the
+`triage` user (so pip can write into it) while the enclosing sandbox
+source tree remains read-only to `triage`.
+
+The `weatherbrief` package is installed **non-editable** from a writable
+staging copy in `/tmp`, not directly from the sandbox source. Editable
+installs and the default `pip install <path>` both try to create
+`<path>/src/weatherbrief.egg-info/` during the build, which fails because
+the sandbox source tree is read-only to triage by design. Staging into
+`/tmp/triage-build` lets the build run in a writable location; the
+resulting package is copied into the venv's `site-packages/`, and the
+sandbox source tree stays pristine. `claude -p` reads from the sandbox
+source tree at runtime, not from the venv.
+
 ```bash
+# 1. Pre-create the venv dir owned by triage (parent is not triage-writable by design)
+sudo install -d -o triage -g triage -m 0755 /mnt/flyfun_data/sandboxes/triage/venv
+
+# 2. Build the venv and upgrade pip
 sudo -u triage python3 -m venv /mnt/flyfun_data/sandboxes/triage/venv
-# Give triage write on its own venv dir
-sudo chown -R triage:triage /mnt/flyfun_data/sandboxes/triage/venv
-sudo -u triage /mnt/flyfun_data/sandboxes/triage/venv/bin/pip install \
-    -e /mnt/flyfun_data/sandboxes/triage
+sudo -u triage /mnt/flyfun_data/sandboxes/triage/venv/bin/pip install --upgrade pip
+
+# 3. Stage the package in /tmp and install from there
+sudo -u triage bash -c '
+  rm -rf /tmp/triage-build &&
+  mkdir /tmp/triage-build &&
+  cp -r /mnt/flyfun_data/sandboxes/triage/src /tmp/triage-build/ &&
+  cp /mnt/flyfun_data/sandboxes/triage/pyproject.toml /tmp/triage-build/ &&
+  /mnt/flyfun_data/sandboxes/triage/venv/bin/pip install /tmp/triage-build &&
+  rm -rf /tmp/triage-build
+'
 ```
+
+The `/home/triage/.cache/pip is not writable` warning from pip is cosmetic —
+triage has no home dir, so downloads are not cached. If you refresh the
+venv often and want to silence it, set `PIP_CACHE_DIR=/tmp/triage-pip-cache`
+and pre-create that dir as triage.
 
 ### 6. Scoped MySQL user
 
-Run as MySQL root (e.g. `docker compose exec shared-mysql mysql -uroot -p`):
+The SQL lives in the shared-infra repo at
+`digitalocean/shared-infra/init-scripts/04-create-weatherbrief-triage-user.sql`
+(same directory as the existing weatherbrief, wordpress, and flyfunboarding
+DB bootstraps). Edit the placeholder password first, then run once against
+the live shared-mysql:
 
-```sql
-CREATE USER 'weatherbrief_triage'@'127.0.0.1' IDENTIFIED BY '<strong-password>';
-GRANT SELECT                 ON weatherbrief.users       TO 'weatherbrief_triage'@'127.0.0.1';
-GRANT SELECT, UPDATE         ON weatherbrief.feedback    TO 'weatherbrief_triage'@'127.0.0.1';
-GRANT SELECT, INSERT         ON weatherbrief.cost_ledger TO 'weatherbrief_triage'@'127.0.0.1';
-FLUSH PRIVILEGES;
+```bash
+cd ~/digitalocean/shared-infra
+# Edit init-scripts/04-create-weatherbrief-triage-user.sql and replace
+# CHANGE_ME with a strong password.
+docker compose exec -T mysql mysql -uroot -p \
+    < init-scripts/04-create-weatherbrief-triage-user.sql
 ```
 
-Adjust the host part (`'127.0.0.1'`) to match how the triage user connects —
-if you reach MySQL via the compose-published port on 127.0.0.1, this is
-correct; if via a docker bridge IP, use that CIDR.
+The grants (SELECT on `users`, SELECT+UPDATE on `feedback`, SELECT+INSERT
+on `cost_ledger`) are the minimum `triage/process.py` needs. No DDL, no
+access to `api_tokens`, `briefing_packs`, `user_preferences`, `oauth_*`,
+etc.
+
+Verify from the host:
+
+```bash
+mysql -u weatherbrief_triage -p -h 127.0.0.1 -P 3306 weatherbrief \
+    -e "SELECT COUNT(*) FROM feedback;"
+```
+
+Expected: a row count — **not** `ERROR 1045 (28000): Access denied`.
 
 ### 7. Env file
 
-Place the triage env at `/etc/triage/env`:
+The triage env lives at `/mnt/flyfun_data/sandboxes/triage/.env` — right
+inside the sandbox. `triage/__main__.py` calls `load_dotenv()`, which
+auto-loads it when the CLI is invoked with CWD at the sandbox root, so
+the wrapper script doesn't need to source anything.
 
 ```bash
-sudo mkdir -p /etc/triage
-sudo tee /etc/triage/env > /dev/null <<'EOF'
+sudo -u triage tee /mnt/flyfun_data/sandboxes/triage/.env > /dev/null <<'EOF'
 ANTHROPIC_API_KEY=sk-ant-...
-DATABASE_URL=mysql+pymysql://weatherbrief_triage:<pw>@127.0.0.1:<port>/weatherbrief
+DATABASE_URL=mysql+pymysql://weatherbrief_triage:<pw>@127.0.0.1:3306/weatherbrief
 LOG_LEVEL=INFO
 EOF
-sudo chown triage:triage /etc/triage/env
-sudo chmod 0400 /etc/triage/env
+sudo chown triage:triage /mnt/flyfun_data/sandboxes/triage/.env
+sudo chmod 0400 /mnt/flyfun_data/sandboxes/triage/.env
 ```
+
+Security posture: the `.env` is readable only by the `triage` user, 0400.
+A prompt-injected LLM running as `triage` can still read it (same-UID
+access to `/proc/self/environ` and to the file itself) — that is the
+accepted residual risk documented at the top of this file. Moving the
+file to `/etc/` or elsewhere does not change that risk, so co-locating
+it with the sandbox is preferred for operational simplicity.
+
+The file is already in the main repo's `.gitignore`, so the sparse
+checkout won't fight it — `git pull` leaves it alone, `git status` in
+the sandbox shows nothing.
 
 ### 8. Wrapper script
 
@@ -148,16 +205,59 @@ brice ALL=(triage) NOPASSWD: /mnt/flyfun_data/sandboxes/triage/venv/bin/python
 
 ## Ongoing operations
 
-### Refreshing the sandbox
+### Refreshing the sandbox source
 
 When code changes on main and you want the triage LLM to see it:
 
 ```bash
 cd /mnt/flyfun_data/sandboxes/triage
-sudo -u brice git pull --ff-only
-# if pyproject changed:
-sudo -u triage venv/bin/pip install -e .
+git pull --ff-only
+
+# After pull, reset perms on any newly-added files (clone/pull leaves them brice:brice).
+# Exclude .env from the file chmod — it must stay 0400 triage:triage.
+sudo chown -R brice:triage .
+sudo chown triage:triage .env
+sudo find . -type d -exec chmod 0750 {} \;
+sudo find . -type f ! -name '.env' -exec chmod 0640 {} \;
+sudo chmod 0400 .env
 ```
+
+Note: updating the sandbox source tree is enough for `claude -p` to see
+new code, because it reads files at runtime. The triage venv's installed
+copy of `weatherbrief` only runs the DB-side glue (`triage/process.py`,
+`triage/prompt.py`, `triage/security.py`, `db/models.py`); if you edit
+those, re-run the staging install (next section).
+
+### Refreshing the venv
+
+The venv pins `flyfun-common` and `euro-aip` at whatever was latest on
+PyPI at install time. For new minor/bug-fix releases of those packages,
+upgrade in place:
+
+```bash
+sudo -u triage /mnt/flyfun_data/sandboxes/triage/venv/bin/pip install \
+    --upgrade flyfun-common euro-aip
+```
+
+For anything else (new dep in `pyproject.toml`, major bump of an existing
+dep, or a change to code in `src/weatherbrief/triage/` or `src/weatherbrief/db/models.py`):
+re-run the staging install, which rebuilds the `weatherbrief` package in
+the venv from current sandbox source and lets pip re-resolve deps:
+
+```bash
+sudo -u triage bash -c '
+  rm -rf /tmp/triage-build &&
+  mkdir /tmp/triage-build &&
+  cp -r /mnt/flyfun_data/sandboxes/triage/src /tmp/triage-build/ &&
+  cp /mnt/flyfun_data/sandboxes/triage/pyproject.toml /tmp/triage-build/ &&
+  /mnt/flyfun_data/sandboxes/triage/venv/bin/pip install --upgrade /tmp/triage-build &&
+  rm -rf /tmp/triage-build
+'
+```
+
+To fully rebuild from scratch (e.g. after a Python minor version bump on
+the host), delete `/mnt/flyfun_data/sandboxes/triage/venv/` and redo
+section 5.
 
 ### Running triage
 
