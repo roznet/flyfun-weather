@@ -200,12 +200,14 @@ Runs **only after** the health check returns 200 — never close issues if the d
    )
    ```
 
-2. For each PR, extract issues referenced with `Addresses`/`Refs`/`References`/`Related to` (case-insensitive). For each that is still OPEN, comment and close:
+2. For each PR, extract issues referenced with `Addresses`/`Refs`/`References`/`Related to`/`Closes`/`Fixes`/`Resolves` (case-insensitive — note we include the auto-close keywords too, so already-closed issues still get a "Deployed" comment for the reporter). For each:
+   - If **OPEN**: comment + close.
+   - If **CLOSED** (e.g. closed automatically at merge): comment only — don't reopen.
    ```bash
    for pr in $PRS; do
      body=$(gh pr view "$pr" --json body --jq .body)
      issues=$(printf '%s\n' "$body" \
-       | grep -oiE '(addresses|refs?|references|related to)[[:space:]]+#[0-9]+' \
+       | grep -oiE '(addresses|refs?|references|related to|closes?|closed|fix(es|ed)?|resolves?|resolved)[[:space:]]+#[0-9]+' \
        | grep -oE '[0-9]+' | sort -u)
      for issue in $issues; do
        state=$(gh issue view "$issue" --json state --jq .state 2>/dev/null)
@@ -213,10 +215,19 @@ Runs **only after** the health check returns 200 — never close issues if the d
          gh issue comment "$issue" --body "Deployed to https://weather.flyfun.aero — give it a try and let us know how it works."
          gh issue close "$issue"
          echo "  closed #${issue} (from PR #${pr})"
+       elif [ "$state" = "CLOSED" ]; then
+         # Only comment if we haven't already posted a "Deployed" notice (avoid dupes on re-deploys).
+         already=$(gh issue view "$issue" --json comments --jq '.comments[] | select(.body | test("Deployed to https://weather.flyfun.aero")) | .id' | head -1)
+         if [ -z "$already" ]; then
+           gh issue comment "$issue" --body "Deployed to https://weather.flyfun.aero — give it a try and let us know how it works."
+           echo "  notified #${issue} (already closed, from PR #${pr})"
+         fi
        fi
      done
    done
    ```
+
+> **Gotcha**: GitHub's auto-close keywords (`Closes`/`Fixes`/`Resolves`) fire on **either** the PR body or the merged commit message. With "Rebase and merge", original commit messages are preserved — so even if the PR body uses `Addresses #N`, a `Closes #N` in the commit message body will close the issue at merge time. When writing commit messages for close-on-deploy PRs, use `Addresses #N` (or just `#N`) in the commit body too.
 
 3. Summarize what was closed at the end (or say "no Addresses-linked issues to close" if the list is empty).
 
