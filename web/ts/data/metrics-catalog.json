@@ -472,9 +472,9 @@
       { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No convective threat." },
       { "min": null, "max": null, "label": "Marginal", "risk": "marginal", "meaning": "Shallow convection possible. Scattered showers but no thunderstorms." },
       { "min": null, "max": null, "label": "Low", "risk": "low", "meaning": "Weak showers possible. Manageable." },
-      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Thunderstorms possible with trigger. Plan alternates." },
-      { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Vigorous storms likely. Significant turbulence." },
-      { "min": null, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Severe weather expected. Delay or cancel." }
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Thunderstorms possible with trigger. Plan alternates. Shown as TCU on the cross-section." },
+      { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Vigorous storms likely. Significant turbulence. Shown as CB on the cross-section." },
+      { "min": null, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Severe weather expected. Delay or cancel. Shown as +TS on the cross-section." }
     ]
   },
   "nwp_convective_risk": {
@@ -483,7 +483,7 @@
     "vibe": "Where the model predicts convective cloud",
     "primary_goal": "Show the NWP model's own convective cloud prediction — base, top, and coverage percentage.",
     "best_used_for": "Seeing where the model's convective parameterisation places storms. This is what Autorouter GRAMET uses. More spatially accurate than thermodynamic indices because the model accounts for moisture convergence, orographic lifting, and mesoscale forcing that raw CAPE/CIN miss.",
-    "limitations": "Only available when the model provides convective cloud diagnostics (GFS, ICON). The convective scheme is a parameterisation, not an explicit simulation — it can miss isolated storms or misplace them. Coverage percentage is a model estimate, not observed.",
+    "limitations": "Needs the model's convective cloud diagnostics: full base+top from GFS (global) and ICON (Europe); ECMWF gives convective top only (base falls back to LCL). Not currently available for Météo-France, UKMO, or GEM. The convective scheme is a parameterisation, not an explicit simulation — it can miss isolated storms or misplace them. Coverage percentage is a model estimate, not observed.",
     "theory": "Uses the NWP model's convective cloud parameterisation output directly. The model runs its own convective scheme (e.g., Simplified Arakawa-Schubert for GFS, Tiedtke for ICON) to predict where convective clouds form, their base and top altitudes, and coverage fraction. This accounts for large-scale forcing, moisture transport, and orography that single-column thermodynamic analysis cannot capture. Risk level is derived from coverage percentage and cloud depth.",
     "wikipedia": "https://en.wikipedia.org/wiki/Cumulus_parameterization",
     "llm_prompt": "explain how NWP models parameterise convection using schemes like Arakawa-Schubert or Tiedtke, and how their convective cloud output compares to thermodynamic indices like CAPE",
@@ -491,9 +491,9 @@
       { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No convective cloud predicted." },
       { "min": null, "max": null, "label": "Marginal", "risk": "marginal", "meaning": "Trace convective cloud. Shallow cumulus." },
       { "min": null, "max": null, "label": "Low", "risk": "low", "meaning": "Scattered convective cloud. Light showers possible." },
-      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant convective coverage. Thunderstorms likely." },
-      { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Widespread deep convection. Route avoidance recommended." },
-      { "min": null, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Intense convective system. Delay or cancel." }
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant convective coverage. Thunderstorms likely. Shown as TCU on the cross-section." },
+      { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Widespread deep convection. Route avoidance recommended. Shown as CB on the cross-section." },
+      { "min": null, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Intense convective system. Delay or cancel. Shown as +TS on the cross-section." }
     ]
   },
   "icing_risk": {
@@ -535,7 +535,7 @@
     "vibe": "Ogimet icing scaled by NWP cloud cover",
     "primary_goal": "Classify icing severity using NWP model cloud cover percentage as the cloud signal.",
     "best_used_for": "Comparing against Ogimet-DD. This is the same approach used by Autorouter GRAMET — when cloud cover is 50%, the icing index is halved.",
-    "limitations": "Does not account for droplet size (SLD). Relies on NWP cloud cover which may differ between models. Not available for ECMWF (no cloud layer data from Open-Meteo).",
+    "limitations": "Does not account for droplet size (SLD). Relies on NWP cloud cover which may differ between models. ECMWF cloud fraction per level comes from direct GRIB (cc variable) over Europe and US out to ~7 days; outside that area/range we fall back to bulk NWP cloud cover.",
     "theory": "Uses the Ogimet continuous icing index — a parabolic formula peaking at −7°C that maps temperature to icing severity across the 0 to −14°C range (layered) or 0 to −20°C (convective). The cloud signal comes from NWP model cloud cover percentage at the level's altitude — 50% cloud = 50% of index. This is the same approach used by Autorouter GRAMET. No dewpoint depression gating. Thresholds: effective index >0 = light, ≥30 = moderate, ≥80 = severe.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
     "llm_prompt": "explain how the Ogimet-NWP icing method scales the icing index by NWP cloud cover percentage, and how it compares to the DD-attenuation approach",
@@ -551,9 +551,9 @@
     "unit": "0–100",
     "vibe": "The fuzzy-logic ice detector",
     "primary_goal": "Forecast icing potential using fuzzy-logic membership functions, the algorithm family behind Windy.com and European met service icing products.",
-    "best_used_for": "Comparing against Ogimet as a second opinion. Especially useful with GFS data where cloud liquid water (CLW) is available for direct icing detection rather than relying on temperature proxies.",
+    "best_used_for": "Comparing against Ogimet as a second opinion. Especially useful when cloud liquid water (CLW) is available for direct icing detection — currently for GFS globally, ECMWF over Europe and US out to ~7 days, and ICON over Europe out to 5 days.",
     "limitations": "Proxy variant (without CLW) is less accurate than the full variant. Temperature range limited to 0 to −25°C. Does not account for droplet size (SLD). Severity thresholds are GA-tuned and may not match airliner certification categories. The full variant uses GRIB2 cloud liquid water and ice mixing ratio which may come from a different model run than the Open-Meteo temperature and humidity profiles — check the freshness bar for init time discrepancies.",
-    "theory": "Combines four fuzzy-logic membership functions with weighted averaging. Temperature membership peaks at 1.0 in [−5, −14]°C and tapers to zero at 0°C and −25°C. RH membership ramps from 0 at 50% to 1.0 at 100%. Cloud liquid water membership ramps over [0, 0.2] g/kg. Vertical velocity boosts the score for ascent (negative omega) and penalizes subsidence. Two variants: Full (SFIP_O) uses actual CLW from GFS GRIB2 data with weights T=0.35, RH=0.15, CLW=0.35, VV=0.15. Proxy (SFIP_4) substitutes a dewpoint-depression + NWP cloud cover proxy when CLW is unavailable, with weights T=0.40, RH=0.25, proxy=0.25, VV=0.10. A glaciation factor reduces the score when ice mixing ratio dominates over liquid water. Cloud gating prevents false alarms: the full variant requires CLW > 0, the proxy variant requires proximity to a detected cloud layer.",
+    "theory": "Combines four fuzzy-logic membership functions with weighted averaging. Temperature membership peaks at 1.0 in [−5, −14]°C and tapers to zero at 0°C and −25°C. RH membership ramps from 0 at 50% to 1.0 at 100%. Cloud liquid water membership ramps over [0, 0.2] g/kg. Vertical velocity boosts the score for ascent (negative omega) and penalizes subsidence. Two variants: Full (SFIP_O) uses actual CLW from GRIB2 data (GFS, ECMWF, or ICON) with weights T=0.35, RH=0.15, CLW=0.35, VV=0.15. Proxy (SFIP_4) substitutes a dewpoint-depression + NWP cloud cover proxy when CLW is unavailable, with weights T=0.40, RH=0.25, proxy=0.25, VV=0.10. A glaciation factor reduces the score when ice mixing ratio dominates over liquid water. Cloud gating prevents false alarms: the full variant requires CLW > 0, the proxy variant requires proximity to a detected cloud layer.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
     "llm_prompt": "explain the SFIP (Simplified Forecast Icing Potential) fuzzy-logic icing algorithm, how it combines temperature, relative humidity, cloud liquid water, and vertical velocity membership functions, and the difference between the full CLW variant and the proxy variant",
     "thresholds": [
@@ -719,7 +719,7 @@
     "primary_goal": "Visualise NWP model cloud layers with soft, feathered edges. Uses the same NWP cloud detection as the NWP Layers method.",
     "best_used_for": "The recommended default cloud visualisation. Combines the NWP model's cloud prediction (which captures sub-grid processes the sounding misses) with the GRAMET-style soft rendering. This is what the GRAMET preset uses.",
     "limitations": "Same as NWP Layers: coverage is model-predicted, not observed. When GRIB diagnostics aren't available, falls back to synthesised layers from Open-Meteo cloud percentages narrowed by the dewpoint depression envelope.",
-    "theory": "Cloud layers from the NWP model's cloud scheme — either direct GRIB diagnostics (GFS: explicit base/top per cloud tier) or synthesised from Open-Meteo low/mid/high cloud percentages constrained by the sounding's dewpoint depression envelope and capped at inversions. Rendering uses vertical gradient fills with feathered edges and coverage-proportional opacity, identical to Soft DD but using NWP cloud data instead of sounding-derived layers.",
+    "theory": "Cloud layers from the NWP model's cloud scheme — either direct GRIB diagnostics (GFS explicit base/top per tier; ICON-EU and ECMWF cloud covers + ceiling) or synthesised from Open-Meteo low/mid/high cloud percentages constrained by the sounding's dewpoint depression envelope and capped at inversions. Rendering uses vertical gradient fills with feathered edges and coverage-proportional opacity, identical to Soft DD but using NWP cloud data instead of sounding-derived layers.",
     "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
     "thresholds": [
       { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Semi-transparent fill. Patches of cloud." },
@@ -765,9 +765,9 @@
     "unit": "ft",
     "vibe": "The weather model's direct ceiling prediction",
     "primary_goal": "Show the model-predicted cloud ceiling height.",
-    "best_used_for": "Direct NWP ceiling estimate — often more reliable than sounding-derived for coverage, especially from GFS and ICON-EU.",
-    "limitations": "Model grid resolution smooths out local effects. GFS reports geopotential height at cloud ceiling; ICON-EU reports geometric height. Neither accounts for terrain-induced fog or valley inversions.",
-    "theory": "Cloud ceiling height directly from the NWP model's cloud diagnostics. GFS provides ceiling as geopotential height (gpm) converted to feet. ICON-EU provides ceiling as geometric height (meters) converted to feet. The model ceiling uses its own cloud parameterisation, which can differ from the sounding-derived ceiling because it uses sub-grid physics to estimate cloud at scales smaller than the grid spacing.",
+    "best_used_for": "Direct NWP ceiling estimate — often more reliable than sounding-derived for coverage, from GFS, ICON-EU, and ECMWF (within its direct-GRIB coverage area).",
+    "limitations": "Model grid resolution smooths out local effects. GFS reports geopotential height at cloud ceiling; ICON-EU and ECMWF report geometric height. None account for terrain-induced fog or valley inversions.",
+    "theory": "Cloud ceiling height directly from the NWP model's cloud diagnostics. GFS provides ceiling as geopotential height (gpm) converted to feet. ICON-EU and ECMWF provide ceiling as geometric height (meters) converted to feet. The model ceiling uses its own cloud parameterisation, which can differ from the sounding-derived ceiling because it uses sub-grid physics to estimate cloud at scales smaller than the grid spacing.",
     "wikipedia": "https://en.wikipedia.org/wiki/Ceiling_(cloud)",
     "thresholds": [
       { "min": 0, "max": 200, "label": "LIFR", "risk": "severe", "meaning": "Very low ceiling. Low IFR conditions." },

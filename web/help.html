@@ -268,8 +268,8 @@
             <td>Global</td>
             <td>0.25&deg; (~25 km)</td>
             <td>10 days</td>
-            <td>13</td>
-            <td><a href="https://open-meteo.com/en/docs/ecmwf-api" target="_blank" rel="noopener">Open-Meteo</a></td>
+            <td>25&dagger; / 13</td>
+            <td>Direct GRIB (ECPDS) + <a href="https://open-meteo.com/en/docs/ecmwf-api" target="_blank" rel="noopener">Open-Meteo</a></td>
           </tr>
           <tr>
             <td>DWD ICON</td>
@@ -314,9 +314,16 @@
         highest-resolution model available at each location rather than running a single model.
       </p>
       <p class="muted" style="margin-top: 0.25rem;">
-        <strong>Levels</strong> = number of pressure levels between 1000&ndash;150 hPa used for
-        upper-air analysis (soundings, cross-sections). More levels give finer vertical detail.
+        <strong>Levels</strong> = number of pressure levels used for upper-air analysis
+        (soundings, cross-sections). More levels give finer vertical detail.
         <strong>Range</strong> = maximum forecast horizon.
+      </p>
+      <p class="muted" style="margin-top: 0.25rem;">
+        &dagger;<strong>ECMWF IFS</strong> soundings use 25 levels (1000&ndash;1 hPa) fetched
+        directly from ECMWF over Europe and the US within the first ~7 days, replacing the
+        Open-Meteo data for those locations. Outside that area or beyond 7 days, we fall
+        back to the 13-level Open-Meteo feed. Cloud liquid/ice water content and per-level
+        cloud fraction are only available inside the direct-GRIB coverage.
       </p>
     </div>
 
