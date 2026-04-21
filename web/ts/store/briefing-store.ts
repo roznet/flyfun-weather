@@ -22,6 +22,14 @@ function loadDisplayMode(): DisplayMode {
   return 'compact';
 }
 
+function loadSelectedModel(): string {
+  try {
+    const v = localStorage.getItem('wb_selectedModel');
+    if (v) return v;
+  } catch { /* ignore */ }
+  return 'gfs';
+}
+
 function loadTierVisibility(): Record<Tier, boolean> {
   try {
     const v = localStorage.getItem('wb_tierVisibility');
@@ -153,7 +161,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   elevationProfile: null,
   freshness: null,
   freshnessLoading: false,
-  selectedModel: 'gfs',
+  selectedModel: loadSelectedModel(),
   selectedPointIndex: null,
   displayMode: loadDisplayMode(),
   tierVisibility: loadTierVisibility(),
@@ -403,6 +411,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setSelectedModel: (model: string) => {
     set({ selectedModel: model });
+    try { localStorage.setItem('wb_selectedModel', model); } catch { /* ignore */ }
   },
 
   setSelectedPoint: (index: number) => {
