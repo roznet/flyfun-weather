@@ -27,6 +27,7 @@
   "flights.btnClearSelection": "Limpiar",
   "flights.btnDeleteSelected": "Eliminar seleccionados",
   "flights.bulkDeleteConfirm": "¿Eliminar {count} vuelo(s) seleccionado(s)? Se eliminará todo el historial de briefings.",
+  "flights.bulkDeletePartial": "{deleted} vuelo(s) eliminado(s); {notFound} no se pudieron eliminar.",
   "flights.form.errorDate": "Introduzca una fecha.",
   "flights.form.errorWaypoints": "La ruta debe ser una lista de al menos 2 puntos de ruta separados por espacios (ej. EGTK POGOL LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Cada punto de ruta debe tener de 2 a 5 caracteres alfanuméricos (aeropuertos, navaids o fixes). Inválidos: {codes}",

@@ -27,6 +27,7 @@
   "flights.btnClearSelection": "Effacer",
   "flights.btnDeleteSelected": "Supprimer la sélection",
   "flights.bulkDeleteConfirm": "Supprimer {count} vol(s) sélectionné(s) ? Tout l'historique des briefings sera supprimé.",
+  "flights.bulkDeletePartial": "{deleted} vol(s) supprimé(s) ; {notFound} n'ont pas pu être supprimés.",
   "flights.form.errorDate": "Veuillez saisir une date.",
   "flights.form.errorWaypoints": "La route doit comporter au moins 2 points de passage séparés par des espaces (ex. EGTK POGOL LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Chaque point de passage doit comporter 2 à 5 caractères alphanumériques (aérodromes, navaids ou fixes). Invalide(s) : {codes}",
