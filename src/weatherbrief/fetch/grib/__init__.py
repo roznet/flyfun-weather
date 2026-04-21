@@ -178,7 +178,7 @@ def enrich_forecasts(
             icon_dl_future.result()  # ensure downloads are cached
 
     if ecmwf_grib_ts is not None:
-        grib_init_times["ecmwf_grib"] = ecmwf_grib_ts
+        grib_init_times["ecmwf"] = ecmwf_grib_ts
 
     # Phase 2: Decode ICON-EU sequentially (memory-heavy, GFS is done).
     if icon_ctx is not None:
