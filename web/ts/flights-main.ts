@@ -437,20 +437,44 @@ async function init(): Promise<void> {
   const store = flightsStore;
 
   // --- Subscribe to state changes ---
+  const bulkDeleteHandler = async () => {
+    try {
+      const result = await store.getState().bulkDeleteSelected();
+      if (result.notFound > 0) {
+        ui.renderError(
+          `Deleted ${result.deleted} flight(s); ${result.notFound} could not be deleted.`,
+        );
+      }
+    } catch {
+      // Error already surfaced via store.error
+    }
+  };
+  const selectionHandlers = {
+    onToggle: (id: string) => store.getState().toggleSelected(id),
+    onSelectAllPast: (ids: string[]) => store.getState().setSelected(
+      [...store.getState().selectedIds, ...ids],
+    ),
+    onBulkDelete: bulkDeleteHandler,
+    onClearSelection: () => store.getState().clearSelection(),
+  };
+
   store.subscribe((state, prev) => {
     if (
       state.flights !== prev.flights ||
       state.latestPacks !== prev.latestPacks ||
-      state.activeRefreshes !== prev.activeRefreshes
+      state.activeRefreshes !== prev.activeRefreshes ||
+      state.selectedIds !== prev.selectedIds
     ) {
       ui.renderFlightList(
         state.flights,
         state.latestPacks,
         state.activeRefreshes,
+        state.selectedIds,
         (id) => navigateToBriefing(id),
         (id) => navigateToFlight(id),
         (id) => navigateToDuplicate(id),
         (id) => store.getState().deleteFlight(id),
+        selectionHandlers,
       );
     }
     if (state.flights !== prev.flights) {

@@ -45,6 +45,18 @@ export async function deleteFlight(id: string): Promise<void> {
   });
 }
 
+export interface BulkDeleteResponse {
+  deleted: string[];
+  not_found: string[];
+}
+
+export async function bulkDeleteFlights(ids: string[]): Promise<BulkDeleteResponse> {
+  return apiFetch<BulkDeleteResponse>('/flights/bulk-delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+}
+
 export interface UpdateFlightRequest {
   profile_id?: number;
   aircraft_id?: number;

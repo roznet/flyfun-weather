@@ -231,6 +231,64 @@ class TestFlightsAPI:
         resp = client.delete("/api/flights/nonexistent")
         assert resp.status_code == 404
 
+    def test_bulk_delete_flights(self, client, app_db):
+        """Bulk-delete removes owned flights and reports unknown/unowned ids."""
+        session = app_db()
+        # Create a second user whose flight must not be touched
+        session.add(UserRow(
+            id="other-user", provider="local", provider_sub="other",
+            email="other@localhost", display_name="Other User", approved=True,
+        ))
+        session.flush()
+        # Owned flight A
+        flight_a = Flight(
+            id=_make_flight_id("egtk_lsgs", _FUTURE_DEPARTURE_DATE, time="09:00"),
+            user_id=DEV_USER_ID, route_name="egtk_lsgs", waypoints=["EGTK", "LSGS"],
+            departure_time=_FUTURE_DEPARTURE_DT,
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, flight_duration_hours=4.5,
+            created_at=_NOW - timedelta(days=1),
+        )
+        # Owned flight B
+        flight_b = Flight(
+            id=_make_flight_id("egtk_lsgs", _FUTURE_DEPARTURE_DATE, time="14:00"),
+            user_id=DEV_USER_ID, route_name="egtk_lsgs", waypoints=["EGTK", "LSGS"],
+            departure_time=_FUTURE_DEPARTURE_DT.replace(hour=14),
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, flight_duration_hours=4.5,
+            created_at=_NOW - timedelta(days=1),
+        )
+        # Flight owned by someone else — must not be deleted
+        flight_other = Flight(
+            id=_make_flight_id("egtf_eglf", _FUTURE_DEPARTURE_DATE, user="other-user"),
+            user_id="other-user", route_name="egtf_eglf", waypoints=["EGTF", "EGLF"],
+            departure_time=_FUTURE_DEPARTURE_DT,
+            cruise_altitude_ft=7000, flight_ceiling_ft=15000, flight_duration_hours=0.5,
+            created_at=_NOW - timedelta(days=1),
+        )
+        save_flight(session, flight_a, DEV_USER_ID)
+        save_flight(session, flight_b, DEV_USER_ID)
+        save_flight(session, flight_other, "other-user")
+        session.commit()
+        session.close()
+
+        resp = client.post("/api/flights/bulk-delete", json={
+            "ids": [flight_a.id, flight_b.id, flight_other.id, "does-not-exist"],
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert sorted(data["deleted"]) == sorted([flight_a.id, flight_b.id])
+        assert sorted(data["not_found"]) == sorted([flight_other.id, "does-not-exist"])
+
+        # The other user's flight must still exist
+        session = app_db()
+        from weatherbrief.storage.flights import load_flight
+        assert load_flight(session, flight_other.id).id == flight_other.id
+        session.close()
+
+    def test_bulk_delete_empty(self, client):
+        resp = client.post("/api/flights/bulk-delete", json={"ids": []})
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": [], "not_found": []}
+
 
 # --- Packs ---
 
