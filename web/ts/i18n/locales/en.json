@@ -19,7 +19,10 @@
   "flights.refreshingBadge": "Refreshing",
   "flights.btnBriefing": "Briefing",
   "flights.btnEdit": "Edit",
+  "flights.btnDuplicate": "Duplicate",
   "flights.btnDelete": "Delete",
+  "flights.duplicateBanner": "Duplicating from {route} — pick a new date below.",
+  "flights.recentRoutesPlaceholder": "Recent routes…",
 
   "flights.form.errorDate": "Please enter a date.",
   "flights.form.errorWaypoints": "Route must be at least 2 waypoints separated by spaces (e.g. EGTK POGOL LFQA LSGS).",
