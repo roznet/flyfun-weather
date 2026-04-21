@@ -581,6 +581,46 @@ def parse_flight_plan(
     )
 
 
+class BulkDeleteRequest(BaseModel):
+    """Request body for bulk-deleting flights."""
+
+    ids: list[str] = Field(..., max_length=200)
+
+
+class BulkDeleteResponse(BaseModel):
+    """Result of a bulk delete: which IDs were deleted, which were not found or not owned."""
+
+    deleted: list[str] = []
+    not_found: list[str] = []
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+def bulk_delete_flights(
+    req: BulkDeleteRequest,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Delete multiple flights in one request. Silently skips IDs that don't exist
+    or aren't owned by the current user (returned in `not_found`)."""
+    deleted: list[str] = []
+    not_found: list[str] = []
+    for flight_id in req.ids:
+        try:
+            flight = load_flight(db, flight_id)
+        except KeyError:
+            not_found.append(flight_id)
+            continue
+        if flight.user_id != user_id:
+            not_found.append(flight_id)
+            continue
+        try:
+            delete_flight(db, flight_id)
+            deleted.append(flight_id)
+        except KeyError:
+            not_found.append(flight_id)
+    return BulkDeleteResponse(deleted=deleted, not_found=not_found)
+
+
 @router.get("/{flight_id}", response_model=FlightResponse)
 def get_flight(
     flight_id: str,

@@ -24,6 +24,7 @@ function renderFlightCard(
   f: FlightResponse,
   pack: PackMeta | null,
   refreshEntry: RefreshEntry | undefined,
+  selected: boolean,
 ): string {
   const wps = f.waypoints.length > 0
     ? f.waypoints
@@ -49,22 +50,30 @@ function renderFlightCard(
     ? `<div class="flight-route-detail">${escapeHtml(route)}</div>`
     : '';
 
+  const checkedAttr = selected ? ' checked' : '';
+  const selectedClass = selected ? ' selected' : '';
+
   return `
-    <div class="flight-card" data-id="${escapeHtml(f.id)}">
-      <div class="flight-header">
-        ${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
-        <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
-        <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
-      </div>
-      ${routeLine}
-      <div class="flight-status">
-        ${refreshBadge}${packInfo}
-      </div>
-      <div class="flight-actions">
-        <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>
-        <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">${t('flights.btnEdit')}</button>
-        <button class="btn btn-secondary btn-duplicate" data-id="${escapeHtml(f.id)}">${t('flights.btnDuplicate')}</button>
-        <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">${t('flights.btnDelete')}</button>
+    <div class="flight-card${selectedClass}" data-id="${escapeHtml(f.id)}">
+      <label class="flight-select" title="${escapeHtml(t('flights.selectToggle'))}">
+        <input type="checkbox" class="flight-select-checkbox" data-id="${escapeHtml(f.id)}"${checkedAttr}>
+      </label>
+      <div class="flight-card-main">
+        <div class="flight-header">
+          ${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
+          <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
+          <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
+        </div>
+        ${routeLine}
+        <div class="flight-status">
+          ${refreshBadge}${packInfo}
+        </div>
+        <div class="flight-actions">
+          <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>
+          <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">${t('flights.btnEdit')}</button>
+          <button class="btn btn-secondary btn-duplicate" data-id="${escapeHtml(f.id)}">${t('flights.btnDuplicate')}</button>
+          <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">${t('flights.btnDelete')}</button>
+        </div>
       </div>
     </div>
   `;
@@ -72,14 +81,23 @@ function renderFlightCard(
 
 // --- Render functions ---
 
+export interface SelectionHandlers {
+  onToggle: (id: string) => void;
+  onSelectAllPast: (pastIds: string[]) => void;
+  onBulkDelete: () => void;
+  onClearSelection: () => void;
+}
+
 export function renderFlightList(
   flights: FlightResponse[],
   latestPacks: Record<string, PackMeta | null>,
   activeRefreshes: Record<string, RefreshEntry>,
+  selectedIds: Set<string>,
   onBriefing: (id: string) => void,
   onEdit: (id: string) => void,
   onDuplicate: (id: string) => void,
   onDelete: (id: string) => void,
+  selection: SelectionHandlers,
 ): void {
   const container = $('flight-list');
   if (!container) return;
@@ -90,6 +108,7 @@ export function renderFlightList(
         <p>${t('flights.empty')}</p>
       </div>
     `;
+    renderSelectionBar(0, [], selection);
     return;
   }
 
@@ -105,14 +124,14 @@ export function renderFlightList(
   }
 
   const activeCards = active.map(f =>
-    renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id]),
+    renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id], selectedIds.has(f.id)),
   ).join('');
 
   let pastSection = '';
   if (past.length > 0) {
     const expandedClass = pastExpanded ? '' : ' collapsed';
     const pastCards = past.map(f =>
-      renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id]),
+      renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id], selectedIds.has(f.id)),
     ).join('');
     pastSection = `
       <div class="past-flights-section${expandedClass}">
@@ -157,6 +176,61 @@ export function renderFlightList(
         onDelete(id);
       }
     });
+  });
+
+  // Wire checkboxes
+  container.querySelectorAll('.flight-select-checkbox').forEach((box) => {
+    box.addEventListener('change', (e) => {
+      e.stopPropagation();
+      selection.onToggle((box as HTMLElement).dataset.id!);
+    });
+    // Don't let the card intercept the click
+    box.addEventListener('click', (e) => e.stopPropagation());
+  });
+
+  renderSelectionBar(selectedIds.size, past.map(f => f.id), selection);
+}
+
+/** Render the floating action bar shown when one or more flights are selected. */
+function renderSelectionBar(
+  selectedCount: number,
+  pastIds: string[],
+  selection: SelectionHandlers,
+): void {
+  let bar = document.getElementById('selection-bar') as HTMLDivElement | null;
+
+  if (selectedCount === 0) {
+    bar?.remove();
+    return;
+  }
+
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'selection-bar';
+    bar.className = 'selection-bar';
+    document.body.appendChild(bar);
+  }
+
+  const showSelectPast = pastIds.length > 0;
+  bar.innerHTML = `
+    <span class="selection-count">${t('flights.selected', { count: selectedCount })}</span>
+    <div class="selection-actions">
+      ${showSelectPast ? `<button type="button" class="btn btn-outline btn-sm btn-select-past">${t('flights.btnSelectAllPast')}</button>` : ''}
+      <button type="button" class="btn btn-outline btn-sm btn-clear-selection">${t('flights.btnClearSelection')}</button>
+      <button type="button" class="btn btn-danger btn-sm btn-bulk-delete">${t('flights.btnDeleteSelected')}</button>
+    </div>
+  `;
+
+  bar.querySelector('.btn-select-past')?.addEventListener('click', () => {
+    selection.onSelectAllPast(pastIds);
+  });
+  bar.querySelector('.btn-clear-selection')?.addEventListener('click', () => {
+    selection.onClearSelection();
+  });
+  bar.querySelector('.btn-bulk-delete')?.addEventListener('click', () => {
+    if (confirm(t('flights.bulkDeleteConfirm', { count: selectedCount }))) {
+      selection.onBulkDelete();
+    }
   });
 }
 

@@ -14,6 +14,7 @@ export interface FlightsState {
   // UI state
   loading: boolean;
   error: string | null;
+  selectedIds: Set<string>;  // flights ticked for bulk actions
 
   // Actions
   loadFlights: () => Promise<void>;
@@ -29,6 +30,10 @@ export interface FlightsState {
     aircraftId?: number;
   }) => Promise<FlightResponse>;
   deleteFlight: (id: string) => Promise<void>;
+  toggleSelected: (id: string) => void;
+  setSelected: (ids: string[]) => void;
+  clearSelection: () => void;
+  bulkDeleteSelected: () => Promise<{ deleted: number; notFound: number }>;
 }
 
 export const flightsStore = createStore<FlightsState>((set, get) => ({
@@ -37,6 +42,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   activeRefreshes: {},
   loading: false,
   error: null,
+  selectedIds: new Set(),
 
   loadFlights: async () => {
     set({ loading: true, error: null });
@@ -113,6 +119,37 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       set({ loading: false });
     } catch (err) {
       set({ loading: false, error: `Failed to delete flight: ${err}` });
+    }
+  },
+
+  toggleSelected: (id) => {
+    const next = new Set(get().selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    set({ selectedIds: next });
+  },
+
+  setSelected: (ids) => {
+    set({ selectedIds: new Set(ids) });
+  },
+
+  clearSelection: () => {
+    set({ selectedIds: new Set() });
+  },
+
+  bulkDeleteSelected: async () => {
+    const ids = Array.from(get().selectedIds);
+    if (ids.length === 0) return { deleted: 0, notFound: 0 };
+    set({ loading: true, error: null });
+    try {
+      const resp = await api.bulkDeleteFlights(ids);
+      set({ selectedIds: new Set() });
+      await get().loadFlights();
+      set({ loading: false });
+      return { deleted: resp.deleted.length, notFound: resp.not_found.length };
+    } catch (err) {
+      set({ loading: false, error: `Failed to delete flights: ${err}` });
+      throw err;
     }
   },
 }));

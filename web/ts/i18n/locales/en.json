@@ -23,6 +23,12 @@
   "flights.btnDelete": "Delete",
   "flights.duplicateBanner": "Duplicating from {route} — pick a new date below.",
   "flights.recentRoutesPlaceholder": "Recent routes…",
+  "flights.selectToggle": "Select flight",
+  "flights.selected": "{count} selected",
+  "flights.btnSelectAllPast": "Select all past",
+  "flights.btnClearSelection": "Clear",
+  "flights.btnDeleteSelected": "Delete selected",
+  "flights.bulkDeleteConfirm": "Delete {count} selected flight(s)? This removes all their briefing history.",
 
   "flights.form.errorDate": "Please enter a date.",
   "flights.form.errorWaypoints": "Route must be at least 2 waypoints separated by spaces (e.g. EGTK POGOL LFQA LSGS).",
