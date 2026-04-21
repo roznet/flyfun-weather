@@ -1,7 +1,7 @@
 /** Flights page entry point — wires store, UI manager, and event handlers. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { fetchFlight, fetchRouteDistance, parseFpl, type WaypointInfo } from './adapters/api-adapter';
+import { fetchRouteDistance, parseFpl, type WaypointInfo } from './adapters/api-adapter';
 import type { FlightResponse } from './store/types';
 import { fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
 import { interpretAndConfirmRoute } from './components/route-interpret';
@@ -129,59 +129,6 @@ async function fetchRouteAndUpdateUI(): Promise<void> {
   }
 }
 
-/** Prefill the create form from an existing flight. Leaves the date field empty
- *  so the user must pick a new date — duplicating onto the same date would
- *  otherwise collide with the source flight's ID hash. */
-async function prefillFromFlight(flight: FlightResponse): Promise<void> {
-  const wpInput = document.getElementById('input-waypoints') as HTMLInputElement;
-  if (wpInput) wpInput.value = flight.waypoints.join(' ');
-
-  const altInput = document.getElementById('input-altitude') as HTMLInputElement;
-  if (altInput) altInput.value = String(flight.cruise_altitude_ft);
-
-  const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
-  if (ceilInput) ceilInput.value = String(flight.flight_ceiling_ft);
-
-  const durInput = document.getElementById('input-duration') as HTMLInputElement;
-  if (durInput) {
-    durInput.value = String(flight.flight_duration_hours);
-    durationManuallyEdited = true;
-  }
-
-  const profileSel = document.getElementById('input-profile') as HTMLSelectElement;
-  if (profileSel && flight.profile_id != null) {
-    profileSel.value = String(flight.profile_id);
-  }
-
-  const aircraftSel = document.getElementById('input-aircraft') as HTMLSelectElement;
-  if (aircraftSel && flight.aircraft_id != null) {
-    aircraftSel.value = String(flight.aircraft_id);
-  }
-
-  // Preserve time-of-day from source. Stored as UTC; display in UTC initially
-  // (timezone dropdown will re-project once route distance resolves).
-  const dt = new Date(flight.departure_time);
-  internalUtcHour = dt.getUTCHours();
-  internalUtcMinute = dt.getUTCMinutes();
-  const hourSel = document.getElementById('input-hour') as HTMLSelectElement;
-  const minSel = document.getElementById('input-minute') as HTMLSelectElement;
-  if (hourSel) hourSel.value = String(internalUtcHour);
-  if (minSel) minSel.value = String(nearestMinuteOption(internalUtcMinute));
-
-  // Clear date and focus it so the user picks a new one.
-  const dateInput = document.getElementById('input-date') as HTMLInputElement;
-  if (dateInput) {
-    dateInput.value = '';
-    dateInput.focus();
-  }
-
-  // Fetch route distance to populate timezones and validate waypoints.
-  await fetchRouteAndUpdateUI();
-
-  // Re-apply the source's UTC time in whatever timezone got selected.
-  utcToLocalDisplay(internalUtcHour, internalUtcMinute);
-}
-
 /** Populate the Recent Routes dropdown from the user's flight history.
  *  Shows the most-recent distinct waypoint sets (up to 8). Hidden if fewer
  *  than 2 distinct routes are available. */
@@ -216,21 +163,6 @@ function populateRouteHistory(flights: FlightResponse[]): void {
       return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
     }).join('');
   select.style.display = '';
-}
-
-/** Show a banner at the top of the create panel indicating duplicate mode. */
-function showDuplicateBanner(sourceFlight: FlightResponse): void {
-  const panel = document.querySelector('.create-panel');
-  if (!panel) return;
-  const existing = panel.querySelector('.duplicate-banner');
-  existing?.remove();
-  const banner = document.createElement('div');
-  banner.className = 'duplicate-banner';
-  const route = sourceFlight.waypoints.length > 0
-    ? sourceFlight.waypoints.join(' → ')
-    : sourceFlight.route_name;
-  banner.textContent = t('flights.duplicateBanner', { route });
-  panel.insertBefore(banner, panel.firstChild);
 }
 
 /** Translate static HTML elements on the flights page. */
@@ -473,7 +405,6 @@ async function init(): Promise<void> {
         state.selectedIds,
         (id) => navigateToBriefing(id),
         (id) => navigateToFlight(id),
-        (id) => navigateToDuplicate(id),
         (id) => store.getState().deleteFlight(id),
         selectionHandlers,
       );
@@ -503,27 +434,15 @@ async function init(): Promise<void> {
     // Selectors stay empty; flights still work without them
   }
 
-  // --- Populate hour dropdown (needed before duplicate prefill) ---
-  const hourSelectEarly = document.getElementById('input-hour') as HTMLSelectElement;
-  if (hourSelectEarly && hourSelectEarly.options.length === 0) {
+  // --- Populate hour dropdown ---
+  const hourSelect = document.getElementById('input-hour') as HTMLSelectElement;
+  if (hourSelect) {
     for (let h = 0; h < 24; h++) {
       const opt = document.createElement('option');
       opt.value = String(h);
       opt.textContent = h.toString().padStart(2, '0');
       if (h === 9) opt.selected = true;
-      hourSelectEarly.appendChild(opt);
-    }
-  }
-
-  // --- Duplicate mode: prefill form from source flight ---
-  const duplicateFromId = new URLSearchParams(window.location.search).get('duplicate_from');
-  if (duplicateFromId) {
-    try {
-      const source = await fetchFlight(duplicateFromId);
-      showDuplicateBanner(source);
-      await prefillFromFlight(source);
-    } catch (err) {
-      ui.renderError(`Could not load source flight: ${err}`);
+      hourSelect.appendChild(opt);
     }
   }
 
@@ -771,9 +690,6 @@ function navigateToBriefing(flightId: string): void {
   window.location.href = `/briefing.html?flight=${encodeURIComponent(flightId)}`;
 }
 
-function navigateToDuplicate(flightId: string): void {
-  window.location.href = `/index.html?duplicate_from=${encodeURIComponent(flightId)}`;
-}
 
 // Boot
 if (document.readyState === 'loading') {

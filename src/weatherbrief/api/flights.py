@@ -114,6 +114,32 @@ class FlightResponse(BaseModel):
     latest_briefing: BriefingStatusInfo | None = None
 
 
+def _compute_flight_id(
+    *,
+    route_name: str,
+    departure_time: datetime,
+    cruise_altitude_ft: int,
+    flight_ceiling_ft: int,
+    flight_duration_hours: float,
+    user_id: str,
+) -> str:
+    """Build the canonical flight ID. Same params → same ID; collisions are rejected by the create endpoint."""
+    params_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "time": departure_time.strftime("%H:%M"),
+                "alt": cruise_altitude_ft,
+                "ceil": flight_ceiling_ft,
+                "dur": flight_duration_hours,
+                "user": user_id,
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()[:4]
+    target_date_str = departure_time.strftime("%Y-%m-%d")
+    return f"{safe_path_component(route_name)}-{target_date_str}-{params_hash}"
+
+
 def _is_admin_or_dev(request: Request, db: Session) -> bool:
     """Return True if the request comes from an admin user or dev mode is active."""
     if is_dev_mode():
@@ -301,21 +327,14 @@ def create_flight(
     )
     flight_duration_hours = req.flight_duration_hours if req.flight_duration_hours is not None else 0.0
 
-    # Build a short hash from distinguishing parameters so the same route+date
-    # can have multiple flights with different time/altitude/user.
-    params_hash = hashlib.sha256(
-        json.dumps(
-            {
-                "time": departure_time.strftime("%H:%M"),
-                "alt": cruise_altitude_ft,
-                "ceil": flight_ceiling_ft,
-                "dur": flight_duration_hours,
-                "user": user_id,
-            },
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()[:4]
-    flight_id = f"{safe_path_component(route_name)}-{target_date_str}-{params_hash}"
+    flight_id = _compute_flight_id(
+        route_name=route_name,
+        departure_time=departure_time,
+        cruise_altitude_ft=cruise_altitude_ft,
+        flight_ceiling_ft=flight_ceiling_ft,
+        flight_duration_hours=flight_duration_hours,
+        user_id=user_id,
+    )
 
     # Check if already exists
     try:
@@ -619,6 +638,157 @@ def bulk_delete_flights(
         except KeyError:
             not_found.append(flight_id)
     return BulkDeleteResponse(deleted=deleted, not_found=not_found)
+
+
+class MoveFlightRequest(BaseModel):
+    """Request body for moving a flight (atomic create-new + delete-old).
+
+    All fields are optional; unspecified ones inherit from the source flight.
+    The new flight gets a fresh ID computed from the (possibly updated) values.
+    """
+
+    departure_time: str | None = None  # ISO 8601 with timezone
+    waypoints: list[str] | None = None  # min 2; new origin/dest allowed (unlike PATCH)
+    cruise_altitude_ft: int | None = None
+    flight_ceiling_ft: int | None = None
+    flight_duration_hours: float | None = None
+
+    @field_validator("departure_time")
+    @classmethod
+    def validate_departure_time(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            dt = datetime.fromisoformat(v)
+        except ValueError:
+            raise ValueError("departure_time must be a valid ISO 8601 datetime")
+        if dt.tzinfo is None:
+            raise ValueError("departure_time must include a timezone")
+        return v
+
+    @field_validator("waypoints")
+    @classmethod
+    def validate_waypoints(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        if len(v) < 2:
+            raise ValueError("At least 2 waypoints are required")
+        for wp in v:
+            if not WAYPOINT_RE.match(wp.upper()):
+                raise ValueError(
+                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters"
+                )
+        return v
+
+
+@router.post("/{flight_id}/move", response_model=FlightResponse)
+def move_flight(
+    flight_id: str,
+    req: MoveFlightRequest,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Atomically replace a flight with a new one carrying updated structural fields.
+
+    Use this when changing date, origin, or destination — the existing PATCH endpoint
+    rejects those because they're encoded in the flight ID. Move creates the new flight,
+    deletes the old one (cascading its packs and on-disk artifacts), and commits both
+    in a single transaction. If the new ID would collide with another existing flight,
+    aborts with 409 and nothing changes.
+    """
+    source = _load_owned_flight(db, flight_id, user_id)
+
+    # Merge requested updates with source flight's existing values.
+    new_waypoints = (
+        [w.upper().strip() for w in req.waypoints]
+        if req.waypoints is not None
+        else list(source.waypoints)
+    )
+    if req.departure_time is not None:
+        new_departure_time = datetime.fromisoformat(req.departure_time)
+        if new_departure_time.tzinfo is None:
+            new_departure_time = new_departure_time.replace(tzinfo=timezone.utc)
+    else:
+        new_departure_time = source.departure_time
+
+    new_alt = req.cruise_altitude_ft if req.cruise_altitude_ft is not None else source.cruise_altitude_ft
+    new_ceil = req.flight_ceiling_ft if req.flight_ceiling_ft is not None else source.flight_ceiling_ft
+    new_dur = req.flight_duration_hours if req.flight_duration_hours is not None else source.flight_duration_hours
+
+    # Validate waypoints exist in the airport DB (only when changed).
+    if req.waypoints is not None:
+        db_path = getattr(request.app.state, "db_path", "")
+        if db_path:
+            from weatherbrief.airports import resolve_waypoints
+
+            try:
+                resolve_waypoints(new_waypoints, db_path)
+            except KeyError as exc:
+                raise HTTPException(status_code=422, detail=exc.args[0])
+
+    # Past-departure rule mirrors create_flight: only admins can move into the past.
+    if new_departure_time < datetime.now(timezone.utc):
+        if not _is_admin_or_dev(request, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Only admins can move a flight into the past",
+            )
+
+    # Re-derive route_name only when waypoints actually changed; otherwise keep
+    # the source's stored name (which may be non-derived, e.g. set explicitly
+    # at create time or imported from an FPL).
+    new_route_name = (
+        "_".join(w.lower() for w in new_waypoints)
+        if req.waypoints is not None
+        else source.route_name
+    )
+    new_id = _compute_flight_id(
+        route_name=new_route_name,
+        departure_time=new_departure_time,
+        cruise_altitude_ft=new_alt,
+        flight_ceiling_ft=new_ceil,
+        flight_duration_hours=new_dur,
+        user_id=user_id,
+    )
+
+    if new_id == flight_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Move requires at least one structural change (date, origin/dest, altitude, ceiling, duration).",
+        )
+    # Reject if new ID collides with a different existing flight.
+    try:
+        load_flight(db, new_id)
+        raise HTTPException(
+            status_code=409,
+            detail=f"A flight with ID '{new_id}' already exists.",
+        )
+    except KeyError:
+        pass
+
+    new_flight = Flight(
+        id=new_id,
+        user_id=user_id,
+        profile_id=source.profile_id,
+        aircraft_id=source.aircraft_id,
+        route_name=new_route_name,
+        waypoints=new_waypoints,
+        departure_time=new_departure_time,
+        cruise_altitude_ft=new_alt,
+        flight_ceiling_ft=new_ceil,
+        flight_duration_hours=new_dur,
+        private=source.private,
+        auto_refresh=source.auto_refresh,
+        auto_refresh_hour=source.auto_refresh_hour,
+        created_at=datetime.now(tz=timezone.utc),
+    )
+
+    # Single transaction: delete old (cascades packs + artifacts), insert new.
+    delete_flight(db, flight_id)
+    save_flight(db, new_flight, user_id)
+
+    return _flight_to_response(new_flight, db, viewer_id=user_id)
 
 
 @router.get("/{flight_id}", response_model=FlightResponse)
