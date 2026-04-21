@@ -29,6 +29,7 @@
   "flights.btnClearSelection": "Clear",
   "flights.btnDeleteSelected": "Delete selected",
   "flights.bulkDeleteConfirm": "Delete {count} selected flight(s)? This removes all their briefing history.",
+  "flights.bulkDeletePartial": "Deleted {deleted} flight(s); {notFound} could not be deleted.",
 
   "flights.form.errorDate": "Please enter a date.",
   "flights.form.errorWaypoints": "Route must be at least 2 waypoints separated by spaces (e.g. EGTK POGOL LFQA LSGS).",

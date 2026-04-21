@@ -441,9 +441,10 @@ async function init(): Promise<void> {
     try {
       const result = await store.getState().bulkDeleteSelected();
       if (result.notFound > 0) {
-        ui.renderError(
-          `Deleted ${result.deleted} flight(s); ${result.notFound} could not be deleted.`,
-        );
+        ui.renderError(t('flights.bulkDeletePartial', {
+          deleted: result.deleted,
+          notFound: result.notFound,
+        }));
       }
     } catch {
       // Error already surfaced via store.error
