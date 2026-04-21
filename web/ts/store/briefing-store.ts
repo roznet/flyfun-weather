@@ -230,7 +230,19 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       if (raResult.status === 'fulfilled') routeAnalyses = raResult.value;
       if (epResult.status === 'fulfilled') elevationProfile = epResult.value;
       if (advResult.status === 'fulfilled') routeAdvisories = advResult.value;
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, altAdvisories: null, showingAlt: false, selectedPointIndex: null, loading: false });
+
+      // Reconcile selectedModel against this pack's available models.
+      // Why: packs fetched with a non-default model set (e.g. ECMWF only) would
+      // otherwise leave selectedModel on its stale default ('gfs'), producing empty
+      // cross-section layers and 404s on the on-demand Skew-T endpoint.
+      const available = routeAnalyses?.models ?? [];
+      let selectedModel = get().selectedModel;
+      if (available.length > 0 && !available.includes(selectedModel)) {
+        selectedModel = available.includes('gfs') ? 'gfs'
+                      : available.includes('ecmwf') ? 'ecmwf'
+                      : available[0];
+      }
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, selectedModel, altAdvisories: null, showingAlt: false, selectedPointIndex: null, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
