@@ -180,6 +180,52 @@ This runs a single full cycle (fetch forecasts + observations + score) and exits
    curl -s -o /dev/null -w '%{http_code}' https://weather.flyfun.aero/health
    ```
 
+## Close "Addresses" issues after deploy
+
+PRs that close an issue on **deploy** (as opposed to on merge) use `Addresses #N` / `Refs #N` / `Related to #N` in their body — these keywords do NOT trigger GitHub's auto-close on merge, so the issue is still open now. Once the deploy is live and healthy, post a comment and close those issues.
+
+> Why a keyword whitelist: `Closes`/`Fixes`/`Resolves` already closed the issue at merge time. Plain `#N` mentions may be passing references ("see #50 for context") and should NOT trigger a close. Only the explicit `Addresses`/`Refs`/`References`/`Related to` set is treated as close-on-deploy intent.
+
+### Steps
+
+Runs **only after** the health check returns 200 — never close issues if the deploy didn't actually go live. Uses `SERVER_SHA` (pre-deploy) and `LOCAL_SHA` (just deployed) from pre-flight.
+
+1. Collect the PR numbers whose commits are in this deploy:
+   ```bash
+   REPO="roznet/flyfun-weather"
+   PRS=$(
+     for sha in $(git log --format=%H "${SERVER_SHA}..${LOCAL_SHA}"); do
+       gh api "repos/${REPO}/commits/${sha}/pulls" --jq '.[].number' 2>/dev/null
+     done | sort -u
+   )
+   ```
+
+2. For each PR, extract issues referenced with `Addresses`/`Refs`/`References`/`Related to` (case-insensitive). For each that is still OPEN, comment and close:
+   ```bash
+   for pr in $PRS; do
+     body=$(gh pr view "$pr" --json body --jq .body)
+     issues=$(printf '%s\n' "$body" \
+       | grep -oiE '(addresses|refs?|references|related to)[[:space:]]+#[0-9]+' \
+       | grep -oE '[0-9]+' | sort -u)
+     for issue in $issues; do
+       state=$(gh issue view "$issue" --json state --jq .state 2>/dev/null)
+       if [ "$state" = "OPEN" ]; then
+         gh issue comment "$issue" --body "Deployed to https://weather.flyfun.aero — give it a try and let us know how it works."
+         gh issue close "$issue"
+         echo "  closed #${issue} (from PR #${pr})"
+       fi
+     done
+   done
+   ```
+
+3. Summarize what was closed at the end (or say "no Addresses-linked issues to close" if the list is empty).
+
+### Skip conditions
+
+- No PRs in the deploy range (e.g. data-only changes): skip silently.
+- `gh auth status` fails: skip and tell the user so they can do it manually.
+- Deploy failed or health check didn't return 200: **do not close** — the issues aren't actually live for users yet.
+
 ## If something goes wrong
 
 - Check logs: `ssh <user>@<server> "docker logs --tail 50 weatherbrief"`
