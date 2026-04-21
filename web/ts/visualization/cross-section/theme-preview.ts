@@ -171,7 +171,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
   ctx.strokeStyle = theme.convective.edgeColor['moderate'] ?? 'rgba(200,100,0,0.5)';
   ctx.lineWidth = 1.5;
   ctx.strokeRect(towerX, towerTop, towerW, towerH);
-  drawLabel(ctx, 'CB', towerX + towerW / 2, towerTop + towerH / 2, bg);
+  drawLabel(ctx, 'TCU', towerX + towerW / 2, towerTop + towerH / 2, bg);
 
   // Inversion band
   const invY = catY + 28;

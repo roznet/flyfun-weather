@@ -85,10 +85,13 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
           ctx.fillRect(xLeft - anvilExtend, yTop, colWidth + anvilExtend * 2, STRIP_HEIGHT);
         }
 
-        // 6. CB label (moderate+ only — low towers don't warrant CB marking)
+        // 6. Convection label (moderate+ only). Clamp into visible plot area —
+        // tall towers may exceed the displayed ceiling.
         if (risk !== 'low' && risk !== 'marginal' && colWidth > 18) {
           const cx = (xLeft + xRight) / 2;
-          const cy = yTop + towerHeight * 0.3;
+          const visTop = Math.max(yTop, plotArea.top);
+          const visBase = Math.min(yBase, plotArea.top + plotArea.height);
+          const cy = visTop + (visBase - visTop) * 0.25;
           drawCBLabel(ctx, cx, cy, risk);
         }
       }

@@ -1,4 +1,4 @@
-/** Thermo convective risk visualization: tower columns from LFC to EL + hatching + CB labels.
+/** Thermo convective risk visualization: tower columns from LFC to EL + hatching + TCU/CB/+TS labels.
  *
  * Uses thermodynamic base_ft (LFC or LCL fallback) and top_ft (EL) from the
  * ConvectiveAssessment. Skips points where bounds are missing.
@@ -150,10 +150,14 @@ function drawTower(
     ctx.fillRect(xLeft - anvilExtend, yTop, colWidth + anvilExtend * 2, STRIP_HEIGHT);
   }
 
-  // 6. CB label inside tower (moderate+ only — low towers don't warrant CB marking)
+  // 6. Convection label inside tower (moderate+ only — low towers don't warrant marking).
+  // Clamp into the visible plot area: tall EL-anchored towers commonly exceed the
+  // displayed ceiling, which would otherwise place the label above plotArea.top.
   if (risk !== 'low' && risk !== 'marginal' && colWidth > 18) {
     const cx = (xLeft + xRight) / 2;
-    const cy = yTop + towerHeight * 0.3; // Upper third of tower
+    const visTop = Math.max(yTop, plotArea.top);
+    const visBase = Math.min(yBase, plotArea.top + plotArea.height);
+    const cy = visTop + (visBase - visTop) * 0.25;
     drawCBLabel(ctx, cx, cy, risk);
   }
 }
@@ -187,7 +191,14 @@ export function drawHatching(
   ctx.restore();
 }
 
-/** Draw a "CB" marker label with risk-colored pill. */
+/** Map convective risk to METAR-style cloud/phenomenon code. */
+function riskToLabel(risk: string): string {
+  if (risk === 'extreme') return '+TS';
+  if (risk === 'high') return 'CB';
+  return 'TCU';
+}
+
+/** Draw a convection marker label (TCU/CB/+TS) with risk-colored pill. */
 export function drawCBLabel(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -201,7 +212,7 @@ export function drawCBLabel(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const text = 'CB';
+  const text = riskToLabel(risk);
   const metrics = ctx.measureText(text);
   const pw = metrics.width + 6;
   const ph = 14;
