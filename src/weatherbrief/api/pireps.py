@@ -265,7 +265,7 @@ def _resolve_airport(icao: str, request: Request) -> tuple[float, float]:
         raise HTTPException(status_code=503, detail="Airport database not configured")
     try:
         from weatherbrief.airports import resolve_waypoints
-        waypoints = resolve_waypoints([icao.upper()], db_path)
+        waypoints, _ = resolve_waypoints([icao.upper()], db_path)
         return (waypoints[0].lat, waypoints[0].lon)
     except (KeyError, IndexError):
         raise HTTPException(status_code=400, detail=f"Unknown airport: {icao}")

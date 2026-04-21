@@ -20,8 +20,9 @@ def test_resolve_waypoints(mock_load):
     }
     mock_load.return_value = mock_model(airports)
 
-    result = resolve_waypoints(["EGTK", "LSGS"], "/fake/db.sqlite")
+    result, rejected = resolve_waypoints(["EGTK", "LSGS"], "/fake/db.sqlite")
 
+    assert rejected == []
     assert len(result) == 2
     assert result[0].icao == "EGTK"
     assert result[0].lat == 51.8361

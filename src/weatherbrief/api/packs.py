@@ -377,7 +377,7 @@ def _build_route_config(flight, db_path):
 
     if not flight.waypoints:
         raise ValueError("Flight has no waypoints defined")
-    waypoint_objs = resolve_waypoints(flight.waypoints, db_path)
+    waypoint_objs, _ = resolve_waypoints(flight.waypoints, db_path)
     return RouteConfig(
         name=flight.route_name or " \u2192 ".join(flight.waypoints),
         waypoints=waypoint_objs,

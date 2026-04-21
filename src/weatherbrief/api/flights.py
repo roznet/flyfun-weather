@@ -355,9 +355,17 @@ def create_flight(
             from weatherbrief.airports import resolve_waypoints
 
             try:
-                resolve_waypoints(waypoints, db_path)
+                _, _rejected = resolve_waypoints(waypoints, db_path)
             except KeyError as exc:
                 raise HTTPException(status_code=422, detail=exc.args[0])
+            if _rejected:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Waypoint(s) resolved too far from route: "
+                        f"{', '.join(_rejected)}"
+                    ),
+                )
 
     # Parse departure_time
     departure_time = datetime.fromisoformat(req.departure_time)
@@ -478,7 +486,7 @@ def compute_route_distance(
         raise HTTPException(status_code=500, detail="Airport database not configured")
 
     try:
-        resolved = resolve_waypoints(req.waypoints, db_path)
+        resolved, _ = resolve_waypoints(req.waypoints, db_path)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=exc.args[0])
 
@@ -562,16 +570,27 @@ def interpret_route(
                 skipped.append(token)
         else:
             try:
-                resolve_waypoints(test_list, db_path)
-                interpreted.append(token)
+                _, progressive_rejected = resolve_waypoints(test_list, db_path)
             except KeyError:
                 skipped.append(token)
+                continue
+            # Token resolves but lands too far off the running route → skip.
+            if token.upper() in {r.upper() for r in progressive_rejected}:
+                skipped.append(token)
+            else:
+                interpreted.append(token)
 
-    # Resolve the interpreted waypoints to get full info
+    # Final resolve — authoritative list of survivors + rejected.
     waypoint_infos: list[WaypointInfo] = []
     if len(interpreted) >= 2:
         try:
-            resolved = resolve_waypoints(interpreted, db_path)
+            resolved, final_rejected = resolve_waypoints(interpreted, db_path)
+            if final_rejected:
+                rej_set = {r.upper() for r in final_rejected}
+                # Move late-rejected tokens to skipped and rebuild interpreted
+                # from the resolver's surviving list so the two stay in sync.
+                skipped.extend(r for r in interpreted if r.upper() in rej_set)
+                interpreted = [wp.icao for wp in resolved]
             waypoint_infos = [
                 WaypointInfo(
                     icao=wp.icao,
@@ -1057,9 +1076,17 @@ def update_flight(
             from weatherbrief.airports import resolve_waypoints
 
             try:
-                resolve_waypoints(new_waypoints, db_path)
+                _, _rejected = resolve_waypoints(new_waypoints, db_path)
             except KeyError as exc:
                 raise HTTPException(status_code=422, detail=exc.args[0])
+            if _rejected:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Waypoint(s) resolved too far from route: "
+                        f"{', '.join(_rejected)}"
+                    ),
+                )
         # Enforce same origin and destination
         old_origin = original_flight.waypoints[0] if original_flight.waypoints else None
         old_dest = original_flight.waypoints[-1] if original_flight.waypoints else None
