@@ -198,10 +198,13 @@ def assess_convective_nwp(
     elif (
         nwp_diagnostics.convective_top_ft is not None
         and indices.lcl_altitude_ft is not None
+        and nwp_diagnostics.convective_top_ft > indices.lcl_altitude_ft
     ):
         # LCL-anchored (e.g. ECMWF hcct): model gives convective top height
         # but no base — use LCL as the convective base proxy. Risk from CAPE
-        # thresholds; base = LCL, top = hcct.
+        # thresholds; base = LCL, top = hcct. Guard against hcct ≤ LCL
+        # (rare elevated-convection artefact) so downstream never sees
+        # base ≥ top.
         risk = ConvectiveRisk.NONE
         if cape is not None:
             for threshold, level in _CAPE_THRESHOLDS:

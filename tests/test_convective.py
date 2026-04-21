@@ -357,6 +357,31 @@ def test_nwp_full_path_preferred_over_hybrid():
     assert result.cover_pct == 30.0
 
 
+def test_nwp_lcl_top_uses_lcl_as_base():
+    """LCL-anchored path (ECMWF hcct): base=LCL when no convective_base_ft."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=800.0,
+        lcl_altitude_ft=3500.0,
+    )
+    diag = NWPCloudDiagnostics(convective_top_ft=28000.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_lcl_top"
+    assert result.base_ft == 3500.0
+    assert result.top_ft == 28000.0
+    assert result.risk_level == ConvectiveRisk.MODERATE  # 800 >= 300
+
+
+def test_nwp_lcl_top_returns_none_when_hcct_below_lcl():
+    """LCL-anchored guard: hcct ≤ LCL yields None, not base > top."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=500.0,
+        lcl_altitude_ft=8000.0,
+    )
+    diag = NWPCloudDiagnostics(convective_top_ft=6000.0)
+    assert assess_convective_nwp(indices, diag) is None
+
+
 def test_nwp_cin_suppression():
     """Strong CIN cap reduces NWP risk by one level."""
     indices = ThermodynamicIndices(
