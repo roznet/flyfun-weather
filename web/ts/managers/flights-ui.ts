@@ -63,6 +63,7 @@ function renderFlightCard(
       <div class="flight-actions">
         <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>
         <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">${t('flights.btnEdit')}</button>
+        <button class="btn btn-secondary btn-duplicate" data-id="${escapeHtml(f.id)}">${t('flights.btnDuplicate')}</button>
         <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">${t('flights.btnDelete')}</button>
       </div>
     </div>
@@ -77,6 +78,7 @@ export function renderFlightList(
   activeRefreshes: Record<string, RefreshEntry>,
   onBriefing: (id: string) => void,
   onEdit: (id: string) => void,
+  onDuplicate: (id: string) => void,
   onDelete: (id: string) => void,
 ): void {
   const container = $('flight-list');
@@ -141,6 +143,11 @@ export function renderFlightList(
   container.querySelectorAll('.btn-edit').forEach((btn) => {
     btn.addEventListener('click', () => {
       onEdit((btn as HTMLElement).dataset.id!);
+    });
+  });
+  container.querySelectorAll('.btn-duplicate').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      onDuplicate((btn as HTMLElement).dataset.id!);
     });
   });
   container.querySelectorAll('.btn-delete').forEach((btn) => {

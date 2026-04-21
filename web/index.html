@@ -27,7 +27,12 @@
       <form id="create-flight-form">
         <div class="form-row">
           <div class="form-group grow">
-            <label for="input-waypoints">Waypoints (airports, navaids, fixes)</label>
+            <div class="label-row">
+              <label for="input-waypoints">Waypoints (airports, navaids, fixes)</label>
+              <select id="input-route-history" class="route-history-select" style="display:none;">
+                <option value="">Recent routes…</option>
+              </select>
+            </div>
             <input type="text" id="input-waypoints" placeholder="EGTF POGOL LFQA LSGS" required>
           </div>
         </div>

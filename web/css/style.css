@@ -228,6 +228,38 @@ label {
 
 .form-group.grow { flex: 1; }
 
+.label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+
+.label-row label {
+  margin-bottom: 0;
+}
+
+.route-history-select {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  max-width: 240px;
+}
+
+.duplicate-banner {
+  background: var(--bg-elev);
+  border-left: 3px solid var(--primary);
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  border-radius: 3px;
+}
+
 .time-input-group {
   display: flex;
   align-items: center;
