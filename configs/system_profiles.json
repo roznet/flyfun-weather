@@ -25,7 +25,6 @@
           "enabled": {
             "icing_escape": true,
             "fiki_icing": false,
-            "freezing_level": true,
             "cloud_top": true,
             "vmc_cruise": true,
             "turbulence": true,
@@ -75,7 +74,6 @@
           "enabled": {
             "icing_escape": true,
             "fiki_icing": false,
-            "freezing_level": true,
             "cloud_top": true,
             "vmc_cruise": true,
             "turbulence": true,
@@ -127,7 +125,6 @@
           "enabled": {
             "icing_escape": true,
             "fiki_icing": true,
-            "freezing_level": true,
             "cloud_top": true,
             "vmc_cruise": true,
             "turbulence": true,

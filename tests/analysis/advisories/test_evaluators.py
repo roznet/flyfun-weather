@@ -8,7 +8,6 @@ from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
 from weatherbrief.analysis.advisories.vmc_cruise import VMCCruiseEvaluator
 from weatherbrief.analysis.advisories.turbulence import TurbulenceEvaluator
 from weatherbrief.analysis.advisories.convective import ConvectiveEvaluator
-from weatherbrief.analysis.advisories.freezing_level import FreezingLevelEvaluator
 from weatherbrief.analysis.advisories.cloud_top import CloudTopEvaluator
 from weatherbrief.analysis.advisories.model_agreement import ModelAgreementEvaluator
 from weatherbrief.analysis.advisories.vfr_feasibility import VFRFeasibilityEvaluator
@@ -92,38 +91,6 @@ class TestConvective:
         result = ConvectiveEvaluator.evaluate(convective_context, {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50})
         # All 10 points have MODERATE risk → 100% > red threshold
         assert result.aggregate_status == AdvisoryStatus.RED
-
-
-class TestFreezingLevel:
-    def test_green_high_freezing(self, clear_context: RouteContext):
-        """Freezing level at 5000ft, terrain at 500ft — well clear."""
-        result = FreezingLevelEvaluator.evaluate(clear_context, {"margin_ft": 1000, "tight_margin_ft": 2000})
-        assert result.aggregate_status == AdvisoryStatus.GREEN
-
-    def test_red_low_freezing_high_terrain(self, icing_no_escape_context: RouteContext):
-        """Freezing level at 3500ft, terrain up to 5000ft — RED."""
-        result = FreezingLevelEvaluator.evaluate(
-            icing_no_escape_context,
-            {"margin_ft": 1000, "tight_margin_ft": 2000},
-        )
-        assert result.aggregate_status == AdvisoryStatus.RED
-
-    def test_green_below_min_route_pct(self, icing_no_escape_context: RouteContext):
-        """Even with tight clearance, stays GREEN if below min_route_pct."""
-        result = FreezingLevelEvaluator.evaluate(
-            icing_no_escape_context,
-            {"margin_ft": 1000, "tight_margin_ft": 2000, "min_route_pct": 99},
-        )
-        assert result.aggregate_status == AdvisoryStatus.GREEN
-
-    def test_amber_tight_margin_above_min_pct(self, icing_no_escape_context: RouteContext):
-        """Tight margin triggers AMBER when above min_route_pct threshold."""
-        # Use a very large margin so all points are "below tight" but none "below margin"
-        result = FreezingLevelEvaluator.evaluate(
-            icing_no_escape_context,
-            {"margin_ft": -10000, "tight_margin_ft": 10000, "min_route_pct": 5},
-        )
-        assert result.aggregate_status == AdvisoryStatus.AMBER
 
 
 class TestCloudTop:

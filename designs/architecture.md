@@ -106,7 +106,6 @@ src/weatherbrief/
 │   │   ├── fiki_icing.py    # FIKI icing layer thickness
 │   │   ├── flight_category.py # Airport ceiling/visibility (tunable MVFR/IFR thresholds)
 │   │   ├── airport_wind.py  # Airport crosswind + gust assessment
-│   │   ├── freezing_level.py # Freezing level vs terrain
 │   │   ├── icing_escape.py  # Non-FIKI icing escape viability
 │   │   ├── ifr_feasibility.py # Composite IFR go/no-go (airport + icing + convective)
 │   │   ├── model_agreement.py # Cross-model divergence

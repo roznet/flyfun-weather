@@ -46,38 +46,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "{risk} sobre {extent}",
     },
 
-    # --- freezing_level ---
-    "freezing_level.below_margin": {
-        "en": "Freezing level below terrain + {margin}ft over {extent}",
-        "fr": "Isotherme 0°C sous terrain + {margin}ft sur {extent}",
-        "de": "Nullgradgrenze unter Gelände + {margin}ft über {extent}",
-        "es": "Nivel de congelación bajo terreno + {margin}ft sobre {extent}",
-    },
-    "freezing_level.min_clearance": {
-        "en": " (min clearance {clearance}ft)",
-        "fr": " (dégagement min {clearance}ft)",
-        "de": " (min. Abstand {clearance}ft)",
-        "es": " (separación mín {clearance}ft)",
-    },
-    "freezing_level.tight_margin": {
-        "en": "Tight freezing level margin over {extent}",
-        "fr": "Marge isotherme 0°C serrée sur {extent}",
-        "de": "Knappe Nullgradgrenze über {extent}",
-        "es": "Margen ajustado nivel de congelación sobre {extent}",
-    },
-    "freezing_level.well_above": {
-        "en": "Freezing level well above terrain (min clearance {clearance}ft)",
-        "fr": "Isotherme 0°C bien au-dessus du terrain (dégagement min {clearance}ft)",
-        "de": "Nullgradgrenze deutlich über Gelände (min. Abstand {clearance}ft)",
-        "es": "Nivel de congelación bien sobre terreno (separación mín {clearance}ft)",
-    },
-    "freezing_level.above_terrain": {
-        "en": "Freezing level above terrain",
-        "fr": "Isotherme 0°C au-dessus du terrain",
-        "de": "Nullgradgrenze über Gelände",
-        "es": "Nivel de congelación sobre terreno",
-    },
-
     # --- flight_category ---
     # Uses "Dep {icao}: {cat}" pattern — Dep/Arr kept as compact labels
 
