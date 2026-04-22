@@ -9,7 +9,7 @@ import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import type { DisplayMode } from './types/metrics';
-import { renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
+import { copyFlightShareLink, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
@@ -838,18 +838,14 @@ async function init(): Promise<void> {
     onCopyShareLink: async () => {
       const flight = store.getState().flight;
       if (!flight) return;
-      const url = `${window.location.origin}/flight.html?id=${encodeURIComponent(flight.id)}`;
-      try {
-        await navigator.clipboard.writeText(url);
-        const btn = document.getElementById('share-btn') as HTMLButtonElement | null;
-        if (btn) {
-          const original = btn.title;
-          btn.title = t('flightDetail.copyShareLinkCopied');
-          btn.classList.add('btn-icon-flash');
-          setTimeout(() => { btn.title = original; btn.classList.remove('btn-icon-flash'); }, 1500);
-        }
-      } catch {
-        prompt(t('flightDetail.copyShareLinkFallback'), url);
+      const copied = await copyFlightShareLink(flight.id);
+      if (!copied) return;  // fell back to prompt(); skip the toolbar flash
+      const btn = document.getElementById('share-btn') as HTMLButtonElement | null;
+      if (btn) {
+        const original = btn.title;
+        btn.title = t('flightDetail.copyShareLinkCopied');
+        btn.classList.add('btn-icon-flash');
+        setTimeout(() => { btn.title = original; btn.classList.remove('btn-icon-flash'); }, 1500);
       }
     },
   };

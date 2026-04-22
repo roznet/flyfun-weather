@@ -352,15 +352,16 @@ def subscribe_flight(session: Session, flight_id: str, user_id: str) -> bool:
     if existing is not None:
         return False
 
-    session.add(FlightSubscriptionRow(flight_id=flight_id, user_id=user_id))
+    # Wrap the insert in a SAVEPOINT so only this statement rolls back if two
+    # concurrent subscribe calls race past the existence check and the loser
+    # trips the uq_flight_subs_flight_user constraint. A full session.rollback()
+    # here would discard any prior work on this session (safe today since the
+    # endpoint only does a SELECT first, but fragile for future callers).
     try:
-        session.flush()
+        with session.begin_nested():
+            session.add(FlightSubscriptionRow(flight_id=flight_id, user_id=user_id))
         return True
     except IntegrityError:
-        # Two concurrent subscribe calls raced past the existence check; the
-        # uq_flight_subs_flight_user constraint tripped on the loser. Treat
-        # the duplicate as idempotent success (the row now exists).
-        session.rollback()
         return False
 
 

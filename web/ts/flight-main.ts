@@ -6,7 +6,7 @@ import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter
 import { flightDetailStore } from './store/flight-detail-store';
 import * as ui from './managers/flight-detail-ui';
 import { RouteMapInset } from './components/route-map-inset';
-import { renderUserInfo } from './utils';
+import { copyFlightShareLink, renderUserInfo } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
@@ -340,18 +340,14 @@ async function init(): Promise<void> {
     banner.querySelector('.btn-copy-share-link')?.addEventListener('click', async () => {
       const flight = store.getState().flight;
       if (!flight) return;
-      const url = `${window.location.origin}/flight.html?id=${encodeURIComponent(flight.id)}`;
-      try {
-        await navigator.clipboard.writeText(url);
-        const btn = banner.querySelector('.btn-copy-share-link') as HTMLButtonElement | null;
-        if (btn) {
-          const original = btn.textContent;
-          btn.textContent = t('flightDetail.copyShareLinkCopied');
-          btn.disabled = true;
-          setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2000);
-        }
-      } catch {
-        prompt(t('flightDetail.copyShareLinkFallback'), url);
+      const copied = await copyFlightShareLink(flight.id);
+      if (!copied) return;  // fell back to prompt(); user has already seen the URL
+      const btn = banner.querySelector('.btn-copy-share-link') as HTMLButtonElement | null;
+      if (btn) {
+        const original = btn.textContent;
+        btn.textContent = t('flightDetail.copyShareLinkCopied');
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2000);
       }
     });
   }

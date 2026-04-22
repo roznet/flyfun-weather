@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page, type Route } from '@playwright/test';
 
 const FUTURE_DATE = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
 const FLIGHT_ID = `egtf_eglf-${FUTURE_DATE}-aaaa`;
@@ -31,14 +31,14 @@ function flight(role: 'owner' | 'subscriber', overrides: Record<string, unknown>
   };
 }
 
-async function mockBaseAuth(page: any) {
-  await page.route('**/auth/me', (route: any) => route.fulfill({
+async function mockBaseAuth(page: Page) {
+  await page.route('**/auth/me', (route: Route) => route.fulfill({
     json: { id: 'u1', email: 't@e.com', name: 'T', approved: true, is_admin: false, setup_completed: true },
   }));
-  await page.route('**/api/user/profiles', (route: any) => route.fulfill({ json: [] }));
-  await page.route('**/api/user/aircraft', (route: any) => route.fulfill({ json: [] }));
-  await page.route('**/api/refresh/active', (route: any) => route.fulfill({ json: [] }));
-  await page.route('**/api/flights/route-distance', (route: any) => route.fulfill({
+  await page.route('**/api/user/profiles', (route: Route) => route.fulfill({ json: [] }));
+  await page.route('**/api/user/aircraft', (route: Route) => route.fulfill({ json: [] }));
+  await page.route('**/api/refresh/active', (route: Route) => route.fulfill({ json: [] }));
+  await page.route('**/api/flights/route-distance', (route: Route) => route.fulfill({
     json: { total_distance_nm: 20, waypoints: [
       { icao: 'EGTF', name: 'Fairoaks', lat: 51.3, lon: -0.55, timezone: 'Europe/London' },
       { icao: 'EGLF', name: 'Farnborough', lat: 51.28, lon: -0.77, timezone: 'Europe/London' },
@@ -49,11 +49,11 @@ async function mockBaseAuth(page: any) {
 test('owner sees Edit + Copy share link, no Subscribe', async ({ page }) => {
   const payload = flight('owner');
   await mockBaseAuth(page);
-  await page.route(`**/api/flights/${FLIGHT_ID}`, (route: any) => {
+  await page.route(`**/api/flights/${FLIGHT_ID}`, (route: Route) => {
     if (route.request().method() === 'GET') return route.fulfill({ json: payload });
     return route.fallback();
   });
-  await page.route(`**/api/flights/${FLIGHT_ID}/packs`, (route: any) => route.fulfill({ json: [] }));
+  await page.route(`**/api/flights/${FLIGHT_ID}/packs`, (route: Route) => route.fulfill({ json: [] }));
 
   const errors: string[] = [];
   page.on('pageerror', err => errors.push(String(err)));
@@ -70,11 +70,11 @@ test('owner sees Edit + Copy share link, no Subscribe', async ({ page }) => {
 test('non-owner sees Shared banner, Subscribe, no Edit', async ({ page }) => {
   const payload = flight('subscriber', { is_subscribed: false });
   await mockBaseAuth(page);
-  await page.route(`**/api/flights/${FLIGHT_ID}`, (route: any) => {
+  await page.route(`**/api/flights/${FLIGHT_ID}`, (route: Route) => {
     if (route.request().method() === 'GET') return route.fulfill({ json: payload });
     return route.fallback();
   });
-  await page.route(`**/api/flights/${FLIGHT_ID}/packs`, (route: any) => route.fulfill({ json: [] }));
+  await page.route(`**/api/flights/${FLIGHT_ID}/packs`, (route: Route) => route.fulfill({ json: [] }));
 
   const errors: string[] = [];
   page.on('pageerror', err => errors.push(String(err)));
@@ -91,11 +91,11 @@ test('non-owner sees Shared banner, Subscribe, no Edit', async ({ page }) => {
 test('subscriber sees Unsubscribe and can toggle to subscribed state', async ({ page }) => {
   let current = flight('subscriber', { is_subscribed: true });
   await mockBaseAuth(page);
-  await page.route(`**/api/flights/${FLIGHT_ID}`, (route: any) => {
+  await page.route(`**/api/flights/${FLIGHT_ID}`, (route: Route) => {
     if (route.request().method() === 'GET') return route.fulfill({ json: current });
     return route.fallback();
   });
-  await page.route(`**/api/flights/${FLIGHT_ID}/subscribe`, (route: any) => {
+  await page.route(`**/api/flights/${FLIGHT_ID}/subscribe`, (route: Route) => {
     const method = route.request().method();
     if (method === 'DELETE') {
       current = { ...current, is_subscribed: false };
@@ -107,7 +107,7 @@ test('subscriber sees Unsubscribe and can toggle to subscribed state', async ({ 
     }
     return route.fallback();
   });
-  await page.route(`**/api/flights/${FLIGHT_ID}/packs`, (route: any) => route.fulfill({ json: [] }));
+  await page.route(`**/api/flights/${FLIGHT_ID}/packs`, (route: Route) => route.fulfill({ json: [] }));
 
   const errors: string[] = [];
   page.on('pageerror', err => errors.push(String(err)));
