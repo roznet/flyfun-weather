@@ -5,7 +5,7 @@ import type { WaypointInfo } from '../adapters/api-adapter';
 import type { AircraftResponse } from '../adapters/aircraft-adapter';
 import type { ProfileResponse } from '../adapters/profiles-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRoute } from '../utils';
-import { getDateLocale } from '../i18n/i18n';
+import { getDateLocale, t } from '../i18n/i18n';
 import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
 
 // --- Assessment badge ---
@@ -311,7 +311,8 @@ export function renderHeader(
   const title = flightTitle(wps);
   const route = wps.length > 2 ? flightRoute(wps) : '';
 
-  const editBtn = editing
+  const isOwner = flight.role === 'owner';
+  const editBtn = (editing || !isOwner)
     ? ''
     : '<button class="btn btn-sm" id="btn-edit-flight">Edit</button>';
 
@@ -325,6 +326,50 @@ export function renderHeader(
       ${routeLine}
     </div>
   `;
+}
+
+// --- Sharing banner ---
+
+export function renderSharingBanner(flight: FlightResponse | null): void {
+  const el = $('flight-sharing-banner');
+  if (!el) return;
+  if (!flight) {
+    el.innerHTML = '';
+    el.style.display = 'none';
+    return;
+  }
+
+  const isOwner = flight.role === 'owner';
+  if (isOwner) {
+    // Private flights can't be shared — recipients would hit 404. Disable
+    // the button (matching the briefing page) rather than just adding a
+    // text note; the title/aria-label explain why.
+    const disabledAttr = flight.private ? ' disabled' : '';
+    const btnTitle = flight.private ? t('briefing.sharePrivateTitle') : t('briefing.shareTitle');
+    const privateNote = flight.private
+      ? `<span class="muted sharing-private-note">${t('flightDetail.sharingPrivateNote')}</span>`
+      : '';
+    el.innerHTML = `
+      <div class="sharing-banner sharing-banner-owner">
+        <button class="btn btn-sm btn-copy-share-link" type="button" title="${escapeHtml(btnTitle)}" aria-label="${escapeHtml(btnTitle)}"${disabledAttr}>${t('flightDetail.copyShareLink')}</button>
+        ${privateNote}
+      </div>
+    `;
+  } else {
+    const ownerLabel = flight.owner_display_name
+      ? t('flightDetail.sharedBy', { owner: escapeHtml(flight.owner_display_name) })
+      : t('flightDetail.sharedByUnknown');
+    const subscribeBtn = flight.is_subscribed
+      ? `<button class="btn btn-sm btn-unsubscribe-flight" type="button">${t('flightDetail.btnUnsubscribe')}</button>`
+      : `<button class="btn btn-sm btn-subscribe-flight" type="button">${t('flightDetail.btnSubscribe')}</button>`;
+    el.innerHTML = `
+      <div class="sharing-banner sharing-banner-subscriber">
+        <span class="sharing-owner-label">${ownerLabel}</span>
+        ${subscribeBtn}
+      </div>
+    `;
+  }
+  el.style.display = '';
 }
 
 // --- Latest assessment ---

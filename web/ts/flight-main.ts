@@ -6,7 +6,7 @@ import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter
 import { flightDetailStore } from './store/flight-detail-store';
 import * as ui from './managers/flight-detail-ui';
 import { RouteMapInset } from './components/route-map-inset';
-import { renderUserInfo } from './utils';
+import { copyFlightShareLink, renderUserInfo } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
@@ -326,11 +326,39 @@ async function init(): Promise<void> {
     });
   }
 
+  function wireSharingControls(): void {
+    const banner = document.getElementById('flight-sharing-banner');
+    if (!banner) return;
+    banner.querySelector('.btn-subscribe-flight')?.addEventListener('click', () => {
+      void store.getState().subscribe();
+    });
+    banner.querySelector('.btn-unsubscribe-flight')?.addEventListener('click', () => {
+      if (confirm(t('flightDetail.unsubscribeConfirm'))) {
+        void store.getState().unsubscribe();
+      }
+    });
+    banner.querySelector('.btn-copy-share-link')?.addEventListener('click', async () => {
+      const flight = store.getState().flight;
+      if (!flight) return;
+      const copied = await copyFlightShareLink(flight.id);
+      if (!copied) return;  // fell back to prompt(); user has already seen the URL
+      const btn = banner.querySelector('.btn-copy-share-link') as HTMLButtonElement | null;
+      if (btn) {
+        const original = btn.textContent;
+        btn.textContent = t('flightDetail.copyShareLinkCopied');
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2000);
+      }
+    });
+  }
+
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
     if (state.flight !== prev.flight || state.editing !== prev.editing || state.waypoints !== prev.waypoints) {
       ui.renderHeader(state.flight, state.editing);
       ui.renderFlightInfo(state.flight, state.editing, profiles, state.waypoints, aircraftList);
+      ui.renderSharingBanner(state.flight);
+      wireSharingControls();
       if (state.editing) {
         wireEditForm();
       } else {
@@ -365,6 +393,8 @@ async function init(): Promise<void> {
   const s = store.getState();
   ui.renderHeader(s.flight, s.editing);
   ui.renderFlightInfo(s.flight, s.editing, profiles, s.waypoints);
+  ui.renderSharingBanner(s.flight);
+  wireSharingControls();
   wireEditButtons();
 
   if (s.waypoints.length > 0 && mapInset) {

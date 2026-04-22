@@ -132,6 +132,39 @@ export async function updatePrivacy(
   );
 }
 
+export interface SubscribeResponse {
+  flight_id: string;
+  user_id: string;
+  created: boolean;
+}
+
+export async function subscribeFlight(flightId: string): Promise<SubscribeResponse> {
+  return apiFetch<SubscribeResponse>(
+    `/flights/${encodeURIComponent(flightId)}/subscribe`,
+    { method: 'POST' },
+  );
+}
+
+export async function unsubscribeFlight(flightId: string): Promise<void> {
+  return apiFetch<void>(
+    `/flights/${encodeURIComponent(flightId)}/subscribe`,
+    { method: 'DELETE' },
+  );
+}
+
+/** Subscribe and refetch the flight in one call. Callers (three different
+ *  stores) wrap this in their own loading/error state. */
+export async function subscribeAndRefetch(flightId: string): Promise<FlightResponse> {
+  await subscribeFlight(flightId);
+  return fetchFlight(flightId);
+}
+
+/** Unsubscribe and refetch the flight in one call. */
+export async function unsubscribeAndRefetch(flightId: string): Promise<FlightResponse> {
+  await unsubscribeFlight(flightId);
+  return fetchFlight(flightId);
+}
+
 export interface WaypointInfo {
   icao: string;
   name: string;

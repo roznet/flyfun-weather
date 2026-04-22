@@ -9,7 +9,7 @@ import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import type { DisplayMode } from './types/metrics';
-import { renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
+import { copyFlightShareLink, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
@@ -831,10 +831,41 @@ async function init(): Promise<void> {
     }
   }
 
+  // --- Shared handlers for sharing/subscription controls (toolbar + shared-by line). ---
+  const sharingHandlers = {
+    onSubscribe: () => void store.getState().subscribe(),
+    onUnsubscribe: () => void store.getState().unsubscribe(),
+    onCopyShareLink: async () => {
+      const flight = store.getState().flight;
+      if (!flight) return;
+      const copied = await copyFlightShareLink(flight.id);
+      if (!copied) return;  // fell back to prompt(); skip the toolbar flash
+      const btn = document.getElementById('share-btn') as HTMLButtonElement | null;
+      if (btn) {
+        const original = btn.title;
+        btn.title = t('flightDetail.copyShareLinkCopied');
+        btn.classList.add('btn-icon-flash');
+        // Re-query in the timeout: renderBriefingSharing may have replaced
+        // the button via cloneNode between the click and now, in which case
+        // `btn` points to a detached element and the flash would stick on
+        // the new clone. Re-querying gets the live element.
+        setTimeout(() => {
+          const live = document.getElementById('share-btn') as HTMLButtonElement | null;
+          if (!live) return;
+          live.title = original;
+          live.classList.remove('btn-icon-flash');
+        }, 1500);
+      }
+    },
+  };
+
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
       ui.renderHeader(state.flight, state.snapshot);
+    }
+    if (state.flight !== prev.flight) {
+      ui.renderBriefingSharing(state.flight, sharingHandlers);
     }
     if (state.packs !== prev.packs || state.currentPack !== prev.currentPack) {
       ui.renderHistoryDropdown(
@@ -1217,6 +1248,8 @@ async function init(): Promise<void> {
   }).then(() => {
     const s = store.getState();
     ui.renderHeader(s.flight, s.snapshot);
+    // renderBriefingSharing already ran via the store subscriber above when
+    // flight was set; don't re-invoke (it would waste a clone+replace cycle).
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack, s.flight);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
@@ -1233,20 +1266,17 @@ async function init(): Promise<void> {
       loadFlightPireps(s.flight.id);
     }
 
-    // Show refresh button only for the flight owner; disable for past flights
-    // (admins can still refresh past flights for historical briefings)
+    // Refresh button visibility is handled by renderBriefingSharing above
+    // (role-based). Here we only set the disabled/title state for past flights
+    // (admins can still refresh past flights for historical briefings).
     const past = s.flight
       ? isFlightPast(s.flight.target_date, s.flight.target_time_utc, s.flight.flight_duration_hours)
       : false;
-    if (refreshBtn && s.flight?.user_id === user.id) {
-      refreshBtn.style.display = '';
-      if (past && !user.is_admin) {
-        refreshBtn.disabled = true;
-        refreshBtn.title = t('briefing.flightPastTitle');
-      } else if (past && user.is_admin) {
-        refreshBtn.disabled = false;
-        refreshBtn.title = t('briefing.historicalRefreshTitle');
-      }
+    if (refreshBtn && s.flight?.user_id === user.id && past) {
+      refreshBtn.disabled = !user.is_admin;
+      refreshBtn.title = user.is_admin
+        ? t('briefing.historicalRefreshTitle')
+        : t('briefing.flightPastTitle');
     }
 
     // Render privacy toggle
@@ -1275,7 +1305,8 @@ async function init(): Promise<void> {
       }
     });
 
-    // Auto-refresh on first visit (no packs yet), otherwise check freshness
+    // Auto-refresh on first visit (no packs yet), otherwise check freshness.
+    // Subscribers can't trigger refreshes — the owner_id check already gates this.
     if (s.packs.length === 0 && s.flight?.user_id === user.id && !past) {
       store.getState().refresh();
     } else if (s.packs.length > 0) {

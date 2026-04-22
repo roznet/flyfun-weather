@@ -455,6 +455,52 @@ label {
 .badge-red { background: var(--red-bg); color: var(--red); }
 .badge-none { background: var(--bg); color: var(--text-muted); }
 .badge-past { background: var(--bg); color: var(--text-muted); font-weight: normal; }
+.badge-shared {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+[data-theme="dark"] .badge-shared {
+  background: #3b2e5f;
+  color: #c4b5fd;
+}
+
+/* --- Shared flight cards --- */
+.flight-card-shared {
+  border-left: 3px solid #a78bfa;
+}
+.flight-shared-owner {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+/* --- Sharing banner on flight detail page --- */
+.sharing-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border-radius: var(--radius);
+  background: var(--bg-subtle, var(--bg));
+  border: 1px solid var(--border, #e5e7eb);
+  font-size: 0.9rem;
+}
+.sharing-banner-subscriber {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+}
+[data-theme="dark"] .sharing-banner-subscriber {
+  background: #2a1f47;
+  border-color: #4c3a7a;
+}
+.sharing-owner-label {
+  flex: 1;
+  color: var(--text-muted);
+}
+.sharing-private-note {
+  font-size: 0.8rem;
+}
 .badge-refreshing {
   background: #dbeafe;
   color: #2563eb;
@@ -695,6 +741,53 @@ label {
   border-bottom: 1px solid var(--border);
   margin-bottom: 1rem;
 }
+
+/* Icon-only toolbar buttons (PDF, Email, Feedback, Share) */
+.toolbar-icon-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.btn-icon:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn-icon:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn-icon svg { display: block; }
+.btn-icon.btn-icon-flash {
+  background: var(--green-bg);
+  color: var(--green);
+  border-color: var(--green);
+}
+
+/* "Shared by X" line below the toolbar on the briefing page */
+.briefing-shared-by {
+  margin: -0.5rem 0 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.briefing-shared-by .badge-shared { font-size: 0.7rem; }
 
 #briefing-header {
   display: flex;

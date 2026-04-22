@@ -10,6 +10,7 @@ import { getDefaultEnabled, getPreset } from '../visualization/cross-section/lay
 import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-section/theme';
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
+import { errorToMessage } from '../utils';
 
 // --- localStorage persistence helpers ---
 
@@ -134,6 +135,8 @@ export interface BriefingState {
   toggleAltView: () => void;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   updateFlightPrivacy: (isPrivate: boolean) => void;
+  subscribe: () => Promise<void>;
+  unsubscribe: () => Promise<void>;
   setLayout: (layout: VizLayout) => void;
   setMapColorMetric: (metricId: string) => void;
   setMapWidthMetric: (metricId: string) => void;
@@ -561,6 +564,30 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     set({ flight: { ...flight, private: isPrivate } });
+  },
+
+  subscribe: async () => {
+    const flight = get().flight;
+    if (!flight) return;
+    set({ loading: true, error: null });
+    try {
+      const updated = await api.subscribeAndRefetch(flight.id);
+      set({ flight: updated, loading: false });
+    } catch (err) {
+      set({ loading: false, error: errorToMessage(err) });
+    }
+  },
+
+  unsubscribe: async () => {
+    const flight = get().flight;
+    if (!flight) return;
+    set({ loading: true, error: null });
+    try {
+      const updated = await api.unsubscribeAndRefetch(flight.id);
+      set({ flight: updated, loading: false });
+    } catch (err) {
+      set({ loading: false, error: errorToMessage(err) });
+    }
   },
 
   setLayout: (layout: VizLayout) => {

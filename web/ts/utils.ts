@@ -214,6 +214,36 @@ export function flightRoute(waypoints: string[]): string {
   return waypoints.join(' \u2192 ');
 }
 
+/** Normalize an unknown caught value into a user-facing error string.
+ *  Strips the `API 404:` / `API 422:` prefix added by `apiFetch` so the
+ *  surfaced message is just the backend `detail` text. */
+export function errorToMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw.replace(/^API \d+:\s*/, '');
+}
+
+/** Build the shareable URL that recipients open to see a flight. Lands on
+ *  the flight detail page, which has the Subscribe banner for non-owners. */
+export function flightShareUrl(flightId: string): string {
+  return `${window.location.origin}/flight.html?id=${encodeURIComponent(flightId)}`;
+}
+
+/** Copy the flight share URL to the clipboard. Falls back to a `prompt()`
+ *  with the URL pre-filled on browsers where the clipboard API is unavailable
+ *  (e.g. plain http origins). Returns true on clipboard success, false on
+ *  fallback — callers can use this to decide whether to flash a "copied"
+ *  indicator. Throws only on truly unexpected errors. */
+export async function copyFlightShareLink(flightId: string): Promise<boolean> {
+  const url = flightShareUrl(flightId);
+  try {
+    await navigator.clipboard.writeText(url);
+    return true;
+  } catch {
+    prompt(t('flightDetail.copyShareLinkFallback'), url);
+    return false;
+  }
+}
+
 /** Auto-dismiss timeout for status messages (ms). */
 export const STATUS_DISMISS_MS = 3000;
 

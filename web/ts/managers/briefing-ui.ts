@@ -305,6 +305,96 @@ export function renderFreshnessBar(
   }
 }
 
+// --- Sharing controls (briefing page) ---
+
+export interface BriefingSharingHandlers {
+  onSubscribe: () => void;
+  onUnsubscribe: () => void;
+  onCopyShareLink: () => void;
+}
+
+/** Show/hide toolbar controls based on role and wire the subscribe/share buttons.
+ *  Called whenever the flight changes. */
+export function renderBriefingSharing(
+  flight: FlightResponse | null,
+  handlers: BriefingSharingHandlers,
+): void {
+  const shareBtn = $('share-btn') as HTMLButtonElement | null;
+  const subscribeControl = $('briefing-subscribe-control');
+  const sharedByLine = $('briefing-shared-by');
+  const refreshBtn = $('refresh-btn') as HTMLButtonElement | null;
+
+  if (!flight) {
+    if (shareBtn) shareBtn.style.display = 'none';
+    if (subscribeControl) { subscribeControl.style.display = 'none'; subscribeControl.innerHTML = ''; }
+    if (sharedByLine) { sharedByLine.style.display = 'none'; sharedByLine.innerHTML = ''; }
+    return;
+  }
+
+  const isOwner = flight.role === 'owner';
+
+  // Owner: show share icon (disabled when private). Subscriber: hide it.
+  if (shareBtn) {
+    if (isOwner) {
+      shareBtn.style.display = '';
+      shareBtn.disabled = flight.private;
+      shareBtn.title = flight.private ? t('briefing.sharePrivateTitle') : t('briefing.shareTitle');
+      shareBtn.setAttribute('aria-label', shareBtn.title);
+      // Replace listener via clone to avoid duplicate handlers on re-render.
+      const fresh = shareBtn.cloneNode(true) as HTMLButtonElement;
+      shareBtn.parentNode?.replaceChild(fresh, shareBtn);
+      fresh.addEventListener('click', handlers.onCopyShareLink);
+    } else {
+      shareBtn.style.display = 'none';
+    }
+  }
+
+  // Refresh button visibility is role-based and owned entirely here, so it
+  // stays correct across re-renders (subscribe/unsubscribe, role flip). The
+  // disabled/title state for past flights is set separately in briefing-main.
+  if (refreshBtn) {
+    refreshBtn.style.display = isOwner ? '' : 'none';
+  }
+
+  // Subscribe / Unsubscribe button (subscriber only).
+  if (subscribeControl) {
+    if (isOwner) {
+      subscribeControl.style.display = 'none';
+      subscribeControl.innerHTML = '';
+    } else {
+      subscribeControl.style.display = '';
+      const label = flight.is_subscribed
+        ? t('flightDetail.btnUnsubscribe')
+        : t('flightDetail.btnSubscribe');
+      const cls = flight.is_subscribed ? 'btn-subscribe-briefing btn-outline' : 'btn-subscribe-briefing btn-primary';
+      subscribeControl.innerHTML = `<button class="btn btn-sm ${cls}" type="button">${label}</button>`;
+      const btn = subscribeControl.querySelector('button');
+      btn?.addEventListener('click', () => {
+        if (flight.is_subscribed) {
+          if (confirm(t('flightDetail.unsubscribeConfirm'))) handlers.onUnsubscribe();
+        } else {
+          handlers.onSubscribe();
+        }
+      });
+    }
+  }
+
+  // "Shared by Alice Pilot" line below the toolbar (subscriber only).
+  if (sharedByLine) {
+    if (isOwner) {
+      sharedByLine.style.display = 'none';
+      sharedByLine.innerHTML = '';
+    } else {
+      const ownerName = flight.owner_display_name || '';
+      sharedByLine.style.display = '';
+      sharedByLine.innerHTML = `
+        <span class="badge badge-shared">${t('flights.sharedBadge')}</span>
+        <span>${ownerName ? t('flightDetail.sharedBy', { owner: escapeHtml(ownerName) }) : t('flightDetail.sharedByUnknown')}</span>
+      `;
+    }
+  }
+}
+
 // --- Privacy toggle ---
 
 export function renderPrivacyToggle(

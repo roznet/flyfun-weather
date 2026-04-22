@@ -4,6 +4,7 @@ import { createStore } from 'zustand/vanilla';
 import type { FlightResponse, PackMeta } from './types';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
+import { errorToMessage } from '../utils';
 
 export interface FlightsState {
   // Data
@@ -30,6 +31,7 @@ export interface FlightsState {
     aircraftId?: number;
   }) => Promise<FlightResponse>;
   deleteFlight: (id: string) => Promise<void>;
+  unsubscribeFlight: (id: string) => Promise<void>;
   toggleSelected: (id: string) => void;
   setSelected: (ids: string[]) => void;
   clearSelection: () => void;
@@ -119,6 +121,17 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       set({ loading: false });
     } catch (err) {
       set({ loading: false, error: `Failed to delete flight: ${err}` });
+    }
+  },
+
+  unsubscribeFlight: async (id) => {
+    set({ loading: true, error: null });
+    try {
+      await api.unsubscribeFlight(id);
+      await get().loadFlights();
+      set({ loading: false });
+    } catch (err) {
+      set({ loading: false, error: errorToMessage(err) });
     }
   },
 

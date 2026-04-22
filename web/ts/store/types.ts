@@ -27,6 +27,9 @@ export interface FlightResponse {
   auto_refresh: boolean;
   auto_refresh_hour: number | null;
   created_at: string;
+  role: 'owner' | 'subscriber';
+  owner_display_name: string | null;
+  is_subscribed: boolean;
 }
 
 export interface CreateFlightRequest {
