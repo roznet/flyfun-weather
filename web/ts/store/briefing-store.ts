@@ -134,6 +134,8 @@ export interface BriefingState {
   toggleAltView: () => void;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   updateFlightPrivacy: (isPrivate: boolean) => void;
+  subscribe: () => Promise<void>;
+  unsubscribe: () => Promise<void>;
   setLayout: (layout: VizLayout) => void;
   setMapColorMetric: (metricId: string) => void;
   setMapWidthMetric: (metricId: string) => void;
@@ -561,6 +563,30 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     set({ flight: { ...flight, private: isPrivate } });
+  },
+
+  subscribe: async () => {
+    const flight = get().flight;
+    if (!flight) return;
+    try {
+      await api.subscribeFlight(flight.id);
+      const updated = await api.fetchFlight(flight.id);
+      set({ flight: updated });
+    } catch (err) {
+      set({ error: `Failed to subscribe: ${err}` });
+    }
+  },
+
+  unsubscribe: async () => {
+    const flight = get().flight;
+    if (!flight) return;
+    try {
+      await api.unsubscribeFlight(flight.id);
+      const updated = await api.fetchFlight(flight.id);
+      set({ flight: updated });
+    } catch (err) {
+      set({ error: `Failed to unsubscribe: ${err}` });
+    }
   },
 
   setLayout: (layout: VizLayout) => {

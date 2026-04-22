@@ -56,6 +56,8 @@
   "flights.fpl.cancel": "Cancelar",
   "flights.fpl.import": "Importar",
   "flights.fpl.pasteFpl": "Pegar FPL",
+  "briefing.shareTitle": "Copiar enlace de compartir",
+  "briefing.sharePrivateTitle": "Privado — cambia a público en ajustes para compartir",
   "briefing.noFlightSpecified": "No se ha especificado ningún vuelo. Vuelva a la lista de vuelos.",
   "briefing.noBriefings": "Aún no hay briefings",
   "briefing.noAssessment": "No hay evaluación disponible",

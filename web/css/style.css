@@ -742,6 +742,53 @@ label {
   margin-bottom: 1rem;
 }
 
+/* Icon-only toolbar buttons (PDF, Email, Feedback, Share) */
+.toolbar-icon-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.btn-icon:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn-icon:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn-icon svg { display: block; }
+.btn-icon.btn-icon-flash {
+  background: var(--green-bg);
+  color: var(--green);
+  border-color: var(--green);
+}
+
+/* "Shared by X" line below the toolbar on the briefing page */
+.briefing-shared-by {
+  margin: -0.5rem 0 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.briefing-shared-by .badge-shared { font-size: 0.7rem; }
+
 #briefing-header {
   display: flex;
   gap: 0.75rem;

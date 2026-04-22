@@ -831,10 +831,36 @@ async function init(): Promise<void> {
     }
   }
 
+  // --- Shared handlers for sharing/subscription controls (toolbar + shared-by line). ---
+  const sharingHandlers = {
+    onSubscribe: () => void store.getState().subscribe(),
+    onUnsubscribe: () => void store.getState().unsubscribe(),
+    onCopyShareLink: async () => {
+      const flight = store.getState().flight;
+      if (!flight) return;
+      const url = `${window.location.origin}/flight.html?id=${encodeURIComponent(flight.id)}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        const btn = document.getElementById('share-btn') as HTMLButtonElement | null;
+        if (btn) {
+          const original = btn.title;
+          btn.title = t('flightDetail.copyShareLinkCopied');
+          btn.classList.add('btn-icon-flash');
+          setTimeout(() => { btn.title = original; btn.classList.remove('btn-icon-flash'); }, 1500);
+        }
+      } catch {
+        prompt(t('flightDetail.copyShareLinkFallback'), url);
+      }
+    },
+  };
+
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
       ui.renderHeader(state.flight, state.snapshot);
+    }
+    if (state.flight !== prev.flight) {
+      ui.renderBriefingSharing(state.flight, sharingHandlers);
     }
     if (state.packs !== prev.packs || state.currentPack !== prev.currentPack) {
       ui.renderHistoryDropdown(
@@ -1217,6 +1243,7 @@ async function init(): Promise<void> {
   }).then(() => {
     const s = store.getState();
     ui.renderHeader(s.flight, s.snapshot);
+    ui.renderBriefingSharing(s.flight, sharingHandlers);
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack, s.flight);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
@@ -1275,7 +1302,8 @@ async function init(): Promise<void> {
       }
     });
 
-    // Auto-refresh on first visit (no packs yet), otherwise check freshness
+    // Auto-refresh on first visit (no packs yet), otherwise check freshness.
+    // Subscribers can't trigger refreshes — the owner_id check already gates this.
     if (s.packs.length === 0 && s.flight?.user_id === user.id && !past) {
       store.getState().refresh();
     } else if (s.packs.length > 0) {
