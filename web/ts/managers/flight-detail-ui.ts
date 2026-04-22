@@ -341,12 +341,17 @@ export function renderSharingBanner(flight: FlightResponse | null): void {
 
   const isOwner = flight.role !== 'subscriber';
   if (isOwner) {
+    // Private flights can't be shared — recipients would hit 404. Disable
+    // the button (matching the briefing page) rather than just adding a
+    // text note; the title/aria-label explain why.
+    const disabledAttr = flight.private ? ' disabled' : '';
+    const btnTitle = flight.private ? t('briefing.sharePrivateTitle') : t('briefing.shareTitle');
     const privateNote = flight.private
       ? `<span class="muted sharing-private-note">${t('flightDetail.sharingPrivateNote')}</span>`
       : '';
     el.innerHTML = `
       <div class="sharing-banner sharing-banner-owner">
-        <button class="btn btn-sm btn-copy-share-link" type="button">${t('flightDetail.copyShareLink')}</button>
+        <button class="btn btn-sm btn-copy-share-link" type="button" title="${escapeHtml(btnTitle)}" aria-label="${escapeHtml(btnTitle)}"${disabledAttr}>${t('flightDetail.copyShareLink')}</button>
         ${privateNote}
       </div>
     `;

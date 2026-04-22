@@ -140,6 +140,19 @@ Aircraft and flight profiles are **independent** — aircraft provides physical 
 | last_auto_refresh_at | DATETIME(6) NULL | Timestamp of last auto-refresh (for scheduling) |
 | created_at | DATETIME | |
 
+### flight_subscriptions
+
+Read-only sharing of a flight between pilots. A subscription lets a non-owner see the owner's latest briefing on their own flight list and flight/briefing pages. Subscribers cannot edit, refresh, or delete the flight; write endpoints still gate on `row.user_id == viewer_id`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INT AUTO_INCREMENT PK | |
+| flight_id | VARCHAR(256) FK NOT NULL | → flights.id, CASCADE on delete |
+| user_id | VARCHAR(64) FK NOT NULL | → users.id, CASCADE on delete |
+| created_at | DATETIME(6) NOT NULL | Aware UTC |
+
+Unique `(flight_id, user_id)` prevents double-subscription; `subscribe_flight` catches the resulting `IntegrityError` inside a SAVEPOINT to make concurrent POSTs idempotent. Privacy flip is enforced at query time in `list_flights_with_role`: subscribed flights disappear from the recipient's list when `flights.private = TRUE`.
+
 ### briefing_packs
 
 | Column | Type | Notes |
