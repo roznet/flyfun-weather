@@ -189,11 +189,17 @@ def _resolve_aircraft_info(
 
 
 def _resolve_owner_display_name(db: Session, owner_id: str) -> str | None:
-    """Look up a flight owner's display name for the subscriber/non-owner view."""
+    """Look up a flight owner's display name for the subscriber/non-owner view.
+
+    Returns None when the owner has not set a display name — the frontend
+    falls back to `flightDetail.sharedByUnknown`. We deliberately do NOT
+    fall back to the email address, which would leak the owner's email to
+    every subscriber.
+    """
     row = db.get(UserRow, owner_id)
     if row is None:
         return None
-    return row.display_name or row.email
+    return row.display_name or None
 
 
 def _flight_to_response(

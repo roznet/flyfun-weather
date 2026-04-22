@@ -292,12 +292,14 @@ def list_flights_with_role(
     from flyfun_common.db.models import UserRow
 
     owner = aliased(UserRow)
+    # Deliberately do not select owner.email: the frontend falls back to
+    # `flightDetail.sharedByUnknown` when display_name is missing, and
+    # leaking the owner's email to every subscriber is a privacy bug.
     stmt = (
         select(
             FlightRow,
             FlightSubscriptionRow.user_id.label("sub_user_id"),
             owner.display_name,
-            owner.email,
         )
         .outerjoin(
             FlightSubscriptionRow,
@@ -316,11 +318,11 @@ def list_flights_with_role(
     )
     results = session.execute(stmt).all()
     out: list[tuple[Flight, Literal["owner", "subscriber"], str | None]] = []
-    for row, _sub_user_id, display_name, email in results:
+    for row, _sub_user_id, display_name in results:
         if row.user_id == viewer_id:
             out.append((_row_to_flight(row), "owner", None))
         else:
-            out.append((_row_to_flight(row), "subscriber", display_name or email))
+            out.append((_row_to_flight(row), "subscriber", display_name or None))
     return out
 
 
