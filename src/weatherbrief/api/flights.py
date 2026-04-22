@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
@@ -117,7 +118,7 @@ class FlightResponse(BaseModel):
     auto_refresh_hour: int | None = None
     created_at: str
     latest_briefing: BriefingStatusInfo | None = None
-    role: str = "owner"  # "owner" | "subscriber"
+    role: Literal["owner", "subscriber"] = "owner"
     owner_display_name: str | None = None  # set when role == "subscriber"
     is_subscribed: bool = False  # True when the viewer has subscribed to this flight
 
@@ -203,6 +204,7 @@ def _flight_to_response(
     latest_briefing: BriefingStatusInfo | None = None,
     role: str | None = None,
     subscribed: bool | None = None,
+    owner_display_name: str | None = None,
 ) -> FlightResponse:
     aircraft = None
     if db is not None and flight.aircraft_id:
@@ -212,8 +214,9 @@ def _flight_to_response(
     if effective_role is None:
         effective_role = "owner" if (viewer_id is not None and flight.user_id == viewer_id) else "subscriber"
 
-    owner_display_name = None
-    if effective_role == "subscriber" and db is not None:
+    # Only resolve from DB when caller didn't pre-fetch it (single-flight endpoints).
+    # The list endpoint joins users in one query and passes the name in.
+    if owner_display_name is None and effective_role == "subscriber" and db is not None:
         owner_display_name = _resolve_owner_display_name(db, flight.user_id)
 
     if subscribed is None and db is not None and viewer_id is not None and effective_role == "subscriber":
@@ -295,7 +298,7 @@ def list_all_flights(
     private (see storage.flights.list_flights_with_role).
     """
     paired = list_flights_with_role(db, user_id)
-    pack_status = _get_latest_packs(db, [f.id for f, _ in paired])
+    pack_status = _get_latest_packs(db, [f.id for f, _, _ in paired])
     return [
         _flight_to_response(
             f,
@@ -304,8 +307,9 @@ def list_all_flights(
             latest_briefing=pack_status.get(f.id),
             role=role,
             subscribed=(role == "subscriber"),
+            owner_display_name=owner_name,
         )
-        for f, role in paired
+        for f, role, owner_name in paired
     ]
 
 

@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, aliased
 
 from weatherbrief.db.models import (
     BriefingPackRow,
@@ -276,20 +277,33 @@ def list_flights(session: Session, user_id: str) -> list[Flight]:
 
 def list_flights_with_role(
     session: Session, viewer_id: str
-) -> list[tuple[Flight, str]]:
-    """List owned ∪ subscribed flights with a role tag.
+) -> list[tuple[Flight, str, str | None]]:
+    """List owned ∪ subscribed flights with role + owner display name.
 
     Subscribed flights are excluded when the owner has flipped the flight to
-    private. Returns (flight, role) tuples where role is "owner" or "subscriber",
-    sorted by departure_time descending.
+    private. Returns (flight, role, owner_display_name) tuples; owner_display_name
+    is populated only when role == "subscriber" (callers don't need it for
+    flights the viewer already owns). Sorted by departure_time descending.
+
+    Joins the users table so callers don't have to issue a separate query
+    per flight to resolve the owner's display name.
     """
+    from flyfun_common.db.models import UserRow
+
+    owner = aliased(UserRow)
     stmt = (
-        select(FlightRow, FlightSubscriptionRow.user_id.label("sub_user_id"))
+        select(
+            FlightRow,
+            FlightSubscriptionRow.user_id.label("sub_user_id"),
+            owner.display_name,
+            owner.email,
+        )
         .outerjoin(
             FlightSubscriptionRow,
             (FlightSubscriptionRow.flight_id == FlightRow.id)
             & (FlightSubscriptionRow.user_id == viewer_id),
         )
+        .outerjoin(owner, owner.id == FlightRow.user_id)
         .where(
             or_(
                 FlightRow.user_id == viewer_id,
@@ -300,10 +314,12 @@ def list_flights_with_role(
         .order_by(FlightRow.departure_time.desc())
     )
     results = session.execute(stmt).all()
-    out: list[tuple[Flight, str]] = []
-    for row, sub_user_id in results:
-        role = "owner" if row.user_id == viewer_id else "subscriber"
-        out.append((_row_to_flight(row), role))
+    out: list[tuple[Flight, str, str | None]] = []
+    for row, _sub_user_id, display_name, email in results:
+        if row.user_id == viewer_id:
+            out.append((_row_to_flight(row), "owner", None))
+        else:
+            out.append((_row_to_flight(row), "subscriber", display_name or email))
     return out
 
 
@@ -337,8 +353,15 @@ def subscribe_flight(session: Session, flight_id: str, user_id: str) -> bool:
         return False
 
     session.add(FlightSubscriptionRow(flight_id=flight_id, user_id=user_id))
-    session.flush()
-    return True
+    try:
+        session.flush()
+        return True
+    except IntegrityError:
+        # Two concurrent subscribe calls raced past the existence check; the
+        # uq_flight_subs_flight_user constraint tripped on the loser. Treat
+        # the duplicate as idempotent success (the row now exists).
+        session.rollback()
+        return False
 
 
 def unsubscribe_flight(session: Session, flight_id: str, user_id: str) -> bool:
