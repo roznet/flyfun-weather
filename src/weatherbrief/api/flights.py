@@ -307,6 +307,10 @@ def list_all_flights(
     """
     paired = list_flights_with_role(db, user_id)
     pack_status = _get_latest_packs(db, [f.id for f, _, _ in paired])
+    # `role == "subscriber"` implies is_subscribed=True by construction:
+    # list_flights_with_role only emits a non-owned flight when the viewer has
+    # an active subscription row. If that ever changes (e.g., public-flight
+    # discovery), the tuple should carry is_subscribed explicitly.
     return [
         _flight_to_response(
             f,

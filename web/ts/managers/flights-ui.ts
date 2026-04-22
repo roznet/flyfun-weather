@@ -35,8 +35,14 @@ function renderFlightCard(
   const pastBadge = past ? `<span class="badge badge-past">${t('flights.pastBadge')}</span> ` : '';
 
   const isShared = f.role === 'subscriber';
+  // When owner_display_name is null (no display_name set on the owner),
+  // fall back to the generic shared-flight label instead of rendering
+  // "Shared by " with a dangling trailing space.
+  const sharedBadgeTitle = f.owner_display_name
+    ? t('flights.sharedBadgeTitle', { owner: escapeHtml(f.owner_display_name) })
+    : t('flightDetail.sharedByUnknown');
   const sharedBadge = isShared
-    ? `<span class="badge badge-shared" title="${t('flights.sharedBadgeTitle', { owner: escapeHtml(f.owner_display_name || '') })}">${t('flights.sharedBadge')}</span> `
+    ? `<span class="badge badge-shared" title="${sharedBadgeTitle}">${t('flights.sharedBadge')}</span> `
     : '';
   const ownerLine = isShared && f.owner_display_name
     ? `<div class="flight-shared-owner">${t('flights.sharedBy', { owner: escapeHtml(f.owner_display_name) })}</div>`
