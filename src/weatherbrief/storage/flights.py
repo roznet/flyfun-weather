@@ -11,10 +11,15 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from weatherbrief.db.models import BriefingPackRow, FlightProfileRow, FlightRow
+from weatherbrief.db.models import (
+    BriefingPackRow,
+    FlightProfileRow,
+    FlightRow,
+    FlightSubscriptionRow,
+)
 from weatherbrief.models import BriefingPackMeta, Flight, FlightProfile
 
 logger = logging.getLogger(__name__)
@@ -267,6 +272,98 @@ def list_flights(session: Session, user_id: str) -> list[Flight]:
     )
     rows = session.execute(stmt).scalars().all()
     return [_row_to_flight(r) for r in rows]
+
+
+def list_flights_with_role(
+    session: Session, viewer_id: str
+) -> list[tuple[Flight, str]]:
+    """List owned ∪ subscribed flights with a role tag.
+
+    Subscribed flights are excluded when the owner has flipped the flight to
+    private. Returns (flight, role) tuples where role is "owner" or "subscriber",
+    sorted by departure_time descending.
+    """
+    stmt = (
+        select(FlightRow, FlightSubscriptionRow.user_id.label("sub_user_id"))
+        .outerjoin(
+            FlightSubscriptionRow,
+            (FlightSubscriptionRow.flight_id == FlightRow.id)
+            & (FlightSubscriptionRow.user_id == viewer_id),
+        )
+        .where(
+            or_(
+                FlightRow.user_id == viewer_id,
+                (FlightSubscriptionRow.user_id == viewer_id)
+                & (FlightRow.private.is_(False)),
+            )
+        )
+        .order_by(FlightRow.departure_time.desc())
+    )
+    results = session.execute(stmt).all()
+    out: list[tuple[Flight, str]] = []
+    for row, sub_user_id in results:
+        role = "owner" if row.user_id == viewer_id else "subscriber"
+        out.append((_row_to_flight(row), role))
+    return out
+
+
+# --- Subscription CRUD ---
+
+
+class SubscriptionError(Exception):
+    """Raised when a subscription action is invalid (e.g. owner subscribing)."""
+
+
+def subscribe_flight(session: Session, flight_id: str, user_id: str) -> bool:
+    """Subscribe a user to a flight. Idempotent.
+
+    Returns True if a new subscription was created, False if it already existed.
+    Raises KeyError if the flight doesn't exist, and SubscriptionError if the
+    user is the flight owner.
+    """
+    flight = session.get(FlightRow, flight_id)
+    if flight is None:
+        raise KeyError(f"Flight not found: {flight_id}")
+    if flight.user_id == user_id:
+        raise SubscriptionError("Owners cannot subscribe to their own flights")
+
+    existing = session.execute(
+        select(FlightSubscriptionRow).where(
+            FlightSubscriptionRow.flight_id == flight_id,
+            FlightSubscriptionRow.user_id == user_id,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return False
+
+    session.add(FlightSubscriptionRow(flight_id=flight_id, user_id=user_id))
+    session.flush()
+    return True
+
+
+def unsubscribe_flight(session: Session, flight_id: str, user_id: str) -> bool:
+    """Remove a subscription. Returns True if a row was removed, False otherwise."""
+    row = session.execute(
+        select(FlightSubscriptionRow).where(
+            FlightSubscriptionRow.flight_id == flight_id,
+            FlightSubscriptionRow.user_id == user_id,
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+    session.delete(row)
+    session.flush()
+    return True
+
+
+def is_subscribed(session: Session, flight_id: str, user_id: str) -> bool:
+    """Return True if the user has an active subscription to this flight."""
+    return session.execute(
+        select(FlightSubscriptionRow.id).where(
+            FlightSubscriptionRow.flight_id == flight_id,
+            FlightSubscriptionRow.user_id == user_id,
+        )
+    ).first() is not None
 
 
 def delete_flight(session: Session, flight_id: str) -> None:

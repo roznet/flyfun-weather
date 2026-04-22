@@ -119,6 +119,37 @@ class FlightRow(Base):
     )
 
 
+class FlightSubscriptionRow(Base):
+    """Read-only subscription to another user's flight.
+
+    Owners cannot subscribe to their own flights. Privacy flip on the parent
+    flight filters it out of subscriber list queries (see storage/flights.py).
+    """
+
+    __tablename__ = "flight_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("flight_id", "user_id", name="uq_flight_subs_flight_user"),
+        Index("ix_flight_subs_flight", "flight_id"),
+        Index("ix_flight_subs_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    flight_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("flights.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    flight: Mapped[FlightRow] = relationship(FlightRow)
+    user: Mapped[UserRow] = relationship(UserRow)
+
+
 class BriefingPackRow(Base):
     __tablename__ = "briefing_packs"
 

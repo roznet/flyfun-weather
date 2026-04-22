@@ -132,6 +132,26 @@ export async function updatePrivacy(
   );
 }
 
+export interface SubscribeResponse {
+  flight_id: string;
+  user_id: string;
+  created: boolean;
+}
+
+export async function subscribeFlight(flightId: string): Promise<SubscribeResponse> {
+  return apiFetch<SubscribeResponse>(
+    `/flights/${encodeURIComponent(flightId)}/subscribe`,
+    { method: 'POST' },
+  );
+}
+
+export async function unsubscribeFlight(flightId: string): Promise<void> {
+  return apiFetch<void>(
+    `/flights/${encodeURIComponent(flightId)}/subscribe`,
+    { method: 'DELETE' },
+  );
+}
+
 export interface WaypointInfo {
   icao: string;
   name: string;

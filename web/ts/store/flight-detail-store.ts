@@ -25,6 +25,8 @@ export interface FlightDetailState {
   startEditing: () => void;
   cancelEditing: () => void;
   saveFlight: (req: UpdateFlightRequest) => Promise<UpdateFlightResponse | null>;
+  subscribe: () => Promise<void>;
+  unsubscribe: () => Promise<void>;
   clearInvalidation: () => void;
 }
 
@@ -98,6 +100,34 @@ export const flightDetailStore = createStore<FlightDetailState>((set, get) => ({
       const msg = err instanceof Error ? err.message : String(err);
       set({ saving: false, error: msg.replace(/^API \d+:\s*/, '') });
       return null;
+    }
+  },
+
+  subscribe: async () => {
+    const { flight } = get();
+    if (!flight) return;
+    set({ saving: true, error: null });
+    try {
+      await api.subscribeFlight(flight.id);
+      const updated = await api.fetchFlight(flight.id);
+      set({ flight: updated, saving: false });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      set({ saving: false, error: msg.replace(/^API \d+:\s*/, '') });
+    }
+  },
+
+  unsubscribe: async () => {
+    const { flight } = get();
+    if (!flight) return;
+    set({ saving: true, error: null });
+    try {
+      await api.unsubscribeFlight(flight.id);
+      const updated = await api.fetchFlight(flight.id);
+      set({ flight: updated, saving: false });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      set({ saving: false, error: msg.replace(/^API \d+:\s*/, '') });
     }
   },
 

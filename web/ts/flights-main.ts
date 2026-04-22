@@ -407,6 +407,7 @@ async function init(): Promise<void> {
         (id) => navigateToFlight(id),
         (id) => store.getState().deleteFlight(id),
         selectionHandlers,
+        (id) => store.getState().unsubscribeFlight(id),
       );
     }
     if (state.flights !== prev.flights) {

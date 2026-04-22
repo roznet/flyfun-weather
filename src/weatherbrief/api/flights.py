@@ -17,11 +17,16 @@ from flyfun_common.db import current_user_id, get_db
 from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
-    safe_path_component,
+    SubscriptionError,
     delete_flight,
+    is_subscribed,
     list_flights,
+    list_flights_with_role,
     load_flight,
+    safe_path_component,
     save_flight,
+    subscribe_flight,
+    unsubscribe_flight,
 )
 
 router = APIRouter(prefix="/flights", tags=["flights"])
@@ -112,6 +117,9 @@ class FlightResponse(BaseModel):
     auto_refresh_hour: int | None = None
     created_at: str
     latest_briefing: BriefingStatusInfo | None = None
+    role: str = "owner"  # "owner" | "subscriber"
+    owner_display_name: str | None = None  # set when role == "subscriber"
+    is_subscribed: bool = False  # True when the viewer has subscribed to this flight
 
 
 def _compute_flight_id(
@@ -178,15 +186,40 @@ def _resolve_aircraft_info(
     )
 
 
+def _resolve_owner_display_name(db: Session, owner_id: str) -> str | None:
+    """Look up a flight owner's display name for the subscriber/non-owner view."""
+    from flyfun_common.db.models import UserRow
+
+    row = db.get(UserRow, owner_id)
+    if row is None:
+        return None
+    return row.display_name or row.email
+
+
 def _flight_to_response(
     flight: Flight,
     db: Session | None = None,
     viewer_id: str | None = None,
     latest_briefing: BriefingStatusInfo | None = None,
+    role: str | None = None,
+    subscribed: bool | None = None,
 ) -> FlightResponse:
     aircraft = None
     if db is not None and flight.aircraft_id:
         aircraft = _resolve_aircraft_info(db, flight.aircraft_id, viewer_id=viewer_id)
+
+    effective_role = role
+    if effective_role is None:
+        effective_role = "owner" if (viewer_id is not None and flight.user_id == viewer_id) else "subscriber"
+
+    owner_display_name = None
+    if effective_role == "subscriber" and db is not None:
+        owner_display_name = _resolve_owner_display_name(db, flight.user_id)
+
+    if subscribed is None and db is not None and viewer_id is not None and effective_role == "subscriber":
+        subscribed = is_subscribed(db, flight.id, viewer_id)
+    elif subscribed is None:
+        subscribed = False
 
     return FlightResponse(
         id=flight.id,
@@ -208,6 +241,9 @@ def _flight_to_response(
         auto_refresh_hour=flight.auto_refresh_hour,
         created_at=flight.created_at.isoformat(),
         latest_briefing=latest_briefing,
+        role=effective_role,
+        owner_display_name=owner_display_name,
+        is_subscribed=subscribed,
     )
 
 
@@ -253,12 +289,23 @@ def list_all_flights(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """List all saved flights with latest briefing status."""
-    flights = list_flights(db, user_id)
-    pack_status = _get_latest_packs(db, [f.id for f in flights])
+    """List owned + subscribed flights with latest briefing status.
+
+    Subscribed flights are filtered out when the owner has flipped them to
+    private (see storage.flights.list_flights_with_role).
+    """
+    paired = list_flights_with_role(db, user_id)
+    pack_status = _get_latest_packs(db, [f.id for f, _ in paired])
     return [
-        _flight_to_response(f, db, viewer_id=user_id, latest_briefing=pack_status.get(f.id))
-        for f in flights
+        _flight_to_response(
+            f,
+            db,
+            viewer_id=user_id,
+            latest_briefing=pack_status.get(f.id),
+            role=role,
+            subscribed=(role == "subscriber"),
+        )
+        for f, role in paired
     ]
 
 
@@ -800,6 +847,48 @@ def get_flight(
     """Get flight details. Any authenticated user can view public flights."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     return _flight_to_response(flight, db, viewer_id=user_id)
+
+
+class SubscribeResponse(BaseModel):
+    """Result of a subscribe call. ``created`` is False when already subscribed."""
+
+    flight_id: str
+    user_id: str
+    created: bool
+
+
+@router.post("/{flight_id}/subscribe", response_model=SubscribeResponse)
+def subscribe_to_flight(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Subscribe the current user to another pilot's flight.
+
+    404 — flight not found, or flight is private and viewer is not the owner
+    409 — viewer is the flight owner (cannot subscribe to own flights)
+    200 — idempotent: new subscription created or already existed
+    """
+    # Access check first: subscribers can only subscribe to public flights they can see.
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    try:
+        created = subscribe_flight(db, flight_id, user_id)
+    except SubscriptionError:
+        raise HTTPException(
+            status_code=409,
+            detail="You own this flight — owners cannot subscribe to their own flights.",
+        )
+    return SubscribeResponse(flight_id=flight_id, user_id=user_id, created=created)
+
+
+@router.delete("/{flight_id}/subscribe", status_code=204)
+def unsubscribe_from_flight(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Remove the current user's subscription. Idempotent — returns 204 either way."""
+    unsubscribe_flight(db, flight_id, user_id)
 
 
 class UpdateAutoRefreshRequest(BaseModel):

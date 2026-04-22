@@ -374,6 +374,166 @@ class TestFlightsAPI:
         assert resp.status_code == 404
 
 
+# --- Flight subscriptions ---
+
+
+def _seed_other_user_flight(
+    app_db,
+    *,
+    owner_id: str = "owner-user",
+    owner_name: str = "Flight Owner",
+    owner_email: str = "owner@example.com",
+    private: bool = False,
+    route_name: str = "egtf_eglf",
+    waypoints: tuple[str, ...] = ("EGTF", "EGLF"),
+) -> Flight:
+    """Create a second user and a flight they own, returning the Flight.
+
+    The viewer (DEV_USER_ID) is *not* the owner — they can subscribe.
+    """
+    session = app_db()
+    if session.get(UserRow, owner_id) is None:
+        session.add(UserRow(
+            id=owner_id, provider="local", provider_sub=owner_id,
+            email=owner_email, display_name=owner_name, approved=True,
+        ))
+        session.flush()
+    flight = Flight(
+        id=_make_flight_id(route_name, _FUTURE_DEPARTURE_DATE, user=owner_id),
+        user_id=owner_id, route_name=route_name, waypoints=list(waypoints),
+        departure_time=_FUTURE_DEPARTURE_DT,
+        cruise_altitude_ft=7000, flight_ceiling_ft=15000, flight_duration_hours=1.0,
+        private=private,
+        created_at=_NOW - timedelta(days=1),
+    )
+    save_flight(session, flight, owner_id)
+    session.commit()
+    session.close()
+    return flight
+
+
+class TestFlightSubscriptions:
+    def test_subscribe_public_flight(self, client, app_db):
+        """Subscribing to a public flight owned by someone else returns 200 and flags the flight as shared."""
+        other = _seed_other_user_flight(app_db)
+
+        resp = client.post(f"/api/flights/{other.id}/subscribe")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["created"] is True
+        assert body["flight_id"] == other.id
+
+        # Now appears in list with subscriber role + owner display name
+        flights = client.get("/api/flights").json()
+        shared = [f for f in flights if f["id"] == other.id]
+        assert len(shared) == 1
+        assert shared[0]["role"] == "subscriber"
+        assert shared[0]["owner_display_name"] == "Flight Owner"
+        assert shared[0]["is_subscribed"] is True
+
+    def test_subscribe_idempotent(self, client, app_db):
+        """Subscribing twice is a no-op; second call reports created=False."""
+        other = _seed_other_user_flight(app_db)
+        first = client.post(f"/api/flights/{other.id}/subscribe")
+        assert first.status_code == 200
+        assert first.json()["created"] is True
+
+        second = client.post(f"/api/flights/{other.id}/subscribe")
+        assert second.status_code == 200
+        assert second.json()["created"] is False
+
+    def test_subscribe_own_flight_rejected(self, client, sample_flight):
+        """Owners cannot subscribe to their own flights — 409."""
+        resp = client.post(f"/api/flights/{sample_flight.id}/subscribe")
+        assert resp.status_code == 409
+
+    def test_subscribe_private_flight_not_found(self, client, app_db):
+        """Private flights return 404 to non-owners even at the subscribe endpoint."""
+        other = _seed_other_user_flight(app_db, private=True)
+        resp = client.post(f"/api/flights/{other.id}/subscribe")
+        assert resp.status_code == 404
+
+    def test_subscribe_unknown_flight(self, client):
+        resp = client.post("/api/flights/does-not-exist/subscribe")
+        assert resp.status_code == 404
+
+    def test_unsubscribe_removes_from_list(self, client, app_db):
+        other = _seed_other_user_flight(app_db)
+        assert client.post(f"/api/flights/{other.id}/subscribe").status_code == 200
+        assert any(f["id"] == other.id for f in client.get("/api/flights").json())
+
+        resp = client.delete(f"/api/flights/{other.id}/subscribe")
+        assert resp.status_code == 204
+
+        flights = client.get("/api/flights").json()
+        assert not any(f["id"] == other.id for f in flights)
+
+    def test_unsubscribe_idempotent(self, client, app_db):
+        other = _seed_other_user_flight(app_db)
+        # Unsubscribing when not subscribed is still 204.
+        resp = client.delete(f"/api/flights/{other.id}/subscribe")
+        assert resp.status_code == 204
+
+    def test_privacy_flip_hides_subscribed_flight(self, client, app_db):
+        """When the owner flips a subscribed flight to private it disappears from the subscriber list."""
+        other = _seed_other_user_flight(app_db)
+        assert client.post(f"/api/flights/{other.id}/subscribe").status_code == 200
+        assert any(f["id"] == other.id for f in client.get("/api/flights").json())
+
+        # Owner flips private directly in the DB to avoid needing a second auth session.
+        session = app_db()
+        from weatherbrief.db.models import FlightRow
+        row = session.get(FlightRow, other.id)
+        row.private = True
+        session.commit()
+        session.close()
+
+        flights = client.get("/api/flights").json()
+        assert not any(f["id"] == other.id for f in flights), (
+            "Private shared flights must disappear from subscriber lists"
+        )
+        # Detail endpoint now 404s for the subscriber too.
+        assert client.get(f"/api/flights/{other.id}").status_code == 404
+
+    def test_subscription_survives_owner_unrelated_edits(self, client, app_db):
+        """Subscription is not disturbed by owner edits that don't flip privacy."""
+        other = _seed_other_user_flight(app_db)
+        assert client.post(f"/api/flights/{other.id}/subscribe").status_code == 200
+
+        # Flip auto_refresh directly to simulate an owner-only field change.
+        session = app_db()
+        from weatherbrief.db.models import FlightRow
+        row = session.get(FlightRow, other.id)
+        row.auto_refresh = True
+        session.commit()
+        session.close()
+
+        flights = client.get("/api/flights").json()
+        shared = [f for f in flights if f["id"] == other.id]
+        assert len(shared) == 1
+        assert shared[0]["role"] == "subscriber"
+
+    def test_owned_flight_list_role(self, client, sample_flight):
+        """Own flights show role=owner and is_subscribed=False."""
+        flights = client.get("/api/flights").json()
+        mine = [f for f in flights if f["id"] == sample_flight.id]
+        assert len(mine) == 1
+        assert mine[0]["role"] == "owner"
+        assert mine[0]["is_subscribed"] is False
+        assert mine[0]["owner_display_name"] is None
+
+    def test_subscriber_cannot_delete_or_refresh(self, client, app_db):
+        """Subscribers get 404 from owner-only endpoints (delete, move)."""
+        other = _seed_other_user_flight(app_db)
+        assert client.post(f"/api/flights/{other.id}/subscribe").status_code == 200
+
+        assert client.delete(f"/api/flights/{other.id}").status_code == 404
+        assert client.post(
+            f"/api/flights/{other.id}/move",
+            json={"departure_time": (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()},
+        ).status_code == 404
+
+
 # --- Packs ---
 
 

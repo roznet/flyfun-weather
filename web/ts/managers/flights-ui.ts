@@ -34,6 +34,14 @@ function renderFlightCard(
   const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
   const pastBadge = past ? `<span class="badge badge-past">${t('flights.pastBadge')}</span> ` : '';
 
+  const isShared = f.role === 'subscriber';
+  const sharedBadge = isShared
+    ? `<span class="badge badge-shared" title="${escapeHtml(t('flights.sharedBadgeTitle', { owner: f.owner_display_name || '' }))}">${t('flights.sharedBadge')}</span> `
+    : '';
+  const ownerLine = isShared && f.owner_display_name
+    ? `<div class="flight-shared-owner">${t('flights.sharedBy', { owner: escapeHtml(f.owner_display_name) })}</div>`
+    : '';
+
   let refreshBadge = '';
   if (refreshEntry) {
     const label = refreshEntry.status === 'queued' ? t('flights.queuedBadge') : t('flights.refreshingBadge');
@@ -53,25 +61,34 @@ function renderFlightCard(
   const checkedAttr = selected ? ' checked' : '';
   const selectedClass = selected ? ' selected' : '';
 
+  const ownerOnlyActions = isShared
+    ? `<button class="btn btn-outline btn-unsubscribe" data-id="${escapeHtml(f.id)}">${t('flights.btnUnsubscribe')}</button>`
+    : `<button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">${t('flights.btnEdit')}</button>
+       <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">${t('flights.btnDelete')}</button>`;
+  // Subscribed flights can't be bulk-deleted — hide the checkbox too.
+  const selectControl = isShared
+    ? ''
+    : `<label class="flight-select" title="${escapeHtml(t('flights.selectToggle'))}">
+         <input type="checkbox" class="flight-select-checkbox" data-id="${escapeHtml(f.id)}"${checkedAttr}>
+       </label>`;
+
   return `
-    <div class="flight-card${selectedClass}" data-id="${escapeHtml(f.id)}">
-      <label class="flight-select" title="${escapeHtml(t('flights.selectToggle'))}">
-        <input type="checkbox" class="flight-select-checkbox" data-id="${escapeHtml(f.id)}"${checkedAttr}>
-      </label>
+    <div class="flight-card${selectedClass}${isShared ? ' flight-card-shared' : ''}" data-id="${escapeHtml(f.id)}">
+      ${selectControl}
       <div class="flight-card-main">
         <div class="flight-header">
-          ${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
+          ${sharedBadge}${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
           <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
           <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
         </div>
+        ${ownerLine}
         ${routeLine}
         <div class="flight-status">
           ${refreshBadge}${packInfo}
         </div>
         <div class="flight-actions">
           <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>
-          <button class="btn btn-secondary btn-edit" data-id="${escapeHtml(f.id)}">${t('flights.btnEdit')}</button>
-          <button class="btn btn-danger btn-delete" data-id="${escapeHtml(f.id)}">${t('flights.btnDelete')}</button>
+          ${ownerOnlyActions}
         </div>
       </div>
     </div>
@@ -96,6 +113,7 @@ export function renderFlightList(
   onEdit: (id: string) => void,
   onDelete: (id: string) => void,
   selection: SelectionHandlers,
+  onUnsubscribe?: (id: string) => void,
 ): void {
   const container = $('flight-list');
   if (!container) return;
@@ -170,6 +188,14 @@ export function renderFlightList(
       }
     });
   });
+  container.querySelectorAll('.btn-unsubscribe').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = (btn as HTMLElement).dataset.id!;
+      if (onUnsubscribe && confirm(t('flights.unsubscribeConfirm'))) {
+        onUnsubscribe(id);
+      }
+    });
+  });
 
   // Wire checkboxes
   container.querySelectorAll('.flight-select-checkbox').forEach((box) => {
@@ -181,7 +207,12 @@ export function renderFlightList(
     box.addEventListener('click', (e) => e.stopPropagation());
   });
 
-  renderSelectionBar(selectedIds.size, past.map(f => f.id), selection);
+  // Subscribed flights aren't bulk-deletable — exclude them from "select all past".
+  renderSelectionBar(
+    selectedIds.size,
+    past.filter(f => f.role !== 'subscriber').map(f => f.id),
+    selection,
+  );
 }
 
 /** Render the floating action bar shown when one or more flights are selected. */
