@@ -85,7 +85,9 @@ def resolve_waypoints(
     route_string = " ".join(codes)
     route = resolver.resolve(route_string)
 
-    # Older euro_aip releases lack the detour filter — treat as "nothing rejected".
+    # euro_aip emits rejected entries as dicts: {"name", "reason", "detour_nm",
+    # "leg_nm", "threshold_nm"}. Older releases lack the field entirely — the
+    # getattr fallback treats that as "nothing rejected".
     rejected_names = [
         str(r["name"]) for r in getattr(route, "rejected_waypoints", [])
     ]
