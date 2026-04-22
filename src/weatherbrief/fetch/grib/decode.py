@@ -49,6 +49,7 @@ _ECMWF_FULL_VAR_MAP = {
     "u": "raw_u_wind_m_s",
     "v": "raw_v_wind_m_s",
     "z": "raw_geopotential_m2_s2",
+    "gh": "geopotential_height_m",  # Delivered on every pressure level post-amendment (gpm ≈ m).
     "w": "vertical_velocity_pa_s",
 }
 
@@ -1250,10 +1251,16 @@ def _convert_raw_sounding(
         gamma = a * t_c / (b + t_c) + math.log(rh_val / 100.0)
         out["dewpoint_c"] = b * gamma / (a - gamma)
 
-    # Geopotential → height
-    z = raw.get("raw_geopotential_m2_s2")
-    if z is not None:
-        out["geopotential_height_m"] = z / _G
+    # Geopotential height: prefer delivered gh (gpm ≈ m), fall back to z/g.
+    # ECMWF delivers z only at level 1 by catalogue design; for pre-amendment
+    # archives or ICON the hypsometric fill below is the final safety net.
+    gh_m = raw.get("geopotential_height_m")
+    if gh_m is not None:
+        out["geopotential_height_m"] = gh_m
+    else:
+        z = raw.get("raw_geopotential_m2_s2")
+        if z is not None:
+            out["geopotential_height_m"] = z / _G
 
     # Wind u, v → speed (kt) and direction (deg)
     u = raw.get("raw_u_wind_m_s")
@@ -1325,17 +1332,19 @@ def _fill_missing_geopotential_height(
     No-op if every level already has geopotential, or if temperature is
     missing anywhere in the column (can't integrate reliably).
 
-    STOPGAP: this is a basic approximation used until the ECMWF commercial
-    order is amended to deliver ``z`` at all pressure levels — at which
-    point the ``all-present`` guard below makes this function a no-op and
-    real ``z`` flows through unchanged. If this path ever becomes the
-    long-term plan, two known simplifications would need to be revisited:
+    Used as a safety net when the source doesn't deliver geopotential on
+    every pressure level — e.g. ICON model levels (DWD never ships it) and
+    pre-amendment ECMWF archives (only ``z`` at level 1). For current ECMWF
+    full-coverage runs the ``gh`` field is decoded directly and the
+    ``all-present`` guard below makes this function a no-op.
+
+    Two known simplifications apply when this codepath is taken:
     (a) layer-mean uses dry-air temperature instead of virtual temperature
     — ~0.5–1% underestimate in warm moist air, accumulating ~30–50 m
     surface→500 hPa; (b) the ISA anchor at the surface-most pressure level
     is not terrain-aware — fine over flat Europe, off by the terrain-vs-ISA
-    delta at high-elevation airfields. The right long-term fix for (b)
-    would be to anchor using surface ``z`` + ``sp`` from the a1 GRIB.
+    delta at high-elevation airfields. The right fix for (b) would be to
+    anchor using surface ``z`` + ``sp`` from the a1 GRIB.
     """
     import math
 
