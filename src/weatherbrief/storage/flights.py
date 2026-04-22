@@ -10,6 +10,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -277,7 +278,7 @@ def list_flights(session: Session, user_id: str) -> list[Flight]:
 
 def list_flights_with_role(
     session: Session, viewer_id: str
-) -> list[tuple[Flight, str, str | None]]:
+) -> list[tuple[Flight, Literal["owner", "subscriber"], str | None]]:
     """List owned ∪ subscribed flights with role + owner display name.
 
     Subscribed flights are excluded when the owner has flipped the flight to

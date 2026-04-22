@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
+from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
@@ -189,8 +190,6 @@ def _resolve_aircraft_info(
 
 def _resolve_owner_display_name(db: Session, owner_id: str) -> str | None:
     """Look up a flight owner's display name for the subscriber/non-owner view."""
-    from flyfun_common.db.models import UserRow
-
     row = db.get(UserRow, owner_id)
     if row is None:
         return None
