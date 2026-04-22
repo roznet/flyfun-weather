@@ -85,7 +85,10 @@ def resolve_waypoints(
     route_string = " ".join(codes)
     route = resolver.resolve(route_string)
 
-    rejected_names = [str(r["name"]) for r in route.rejected_waypoints]
+    # Older euro_aip releases lack the detour filter — treat as "nothing rejected".
+    rejected_names = [
+        str(r["name"]) for r in getattr(route, "rejected_waypoints", [])
+    ]
 
     # Collect all resolved points in order: departure, waypoints, destination
     all_points = []
