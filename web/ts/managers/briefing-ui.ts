@@ -350,10 +350,13 @@ export function renderBriefingSharing(
     }
   }
 
-  // Subscriber: hide refresh button; feedback still allowed (they can comment on
-  // what they see). Auto-refresh + privacy bars are already owner-gated.
-  if (refreshBtn && !isOwner) {
-    refreshBtn.style.display = 'none';
+  // Subscriber: hide refresh button; feedback still allowed (they can comment
+  // on what they see). Auto-refresh + privacy bars are already owner-gated.
+  // Must be two-way: briefing-main later sets display='' for owners on initial
+  // load, but subsequent flight-object updates re-run this renderer and would
+  // otherwise leave the button permanently hidden if the role ever flips back.
+  if (refreshBtn) {
+    refreshBtn.style.display = isOwner ? '' : 'none';
   }
 
   // Subscribe / Unsubscribe button (subscriber only).

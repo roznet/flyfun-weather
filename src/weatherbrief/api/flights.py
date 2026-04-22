@@ -199,30 +199,34 @@ def _resolve_owner_display_name(db: Session, owner_id: str) -> str | None:
 
 def _flight_to_response(
     flight: Flight,
-    db: Session | None = None,
-    viewer_id: str | None = None,
+    db: Session,
+    viewer_id: str,
     latest_briefing: BriefingStatusInfo | None = None,
     role: str | None = None,
     subscribed: bool | None = None,
     owner_display_name: str | None = None,
 ) -> FlightResponse:
+    # viewer_id is required: the role derivation below compares flight.user_id
+    # against it, and with viewer_id=None we would silently classify the
+    # owner's own flights as "subscriber". All current callers pass it; the
+    # required signature keeps it that way.
     aircraft = None
-    if db is not None and flight.aircraft_id:
+    if flight.aircraft_id:
         aircraft = _resolve_aircraft_info(db, flight.aircraft_id, viewer_id=viewer_id)
 
-    effective_role = role
-    if effective_role is None:
-        effective_role = "owner" if (viewer_id is not None and flight.user_id == viewer_id) else "subscriber"
+    effective_role = role if role is not None else ("owner" if flight.user_id == viewer_id else "subscriber")
 
     # Only resolve from DB when caller didn't pre-fetch it (single-flight endpoints).
     # The list endpoint joins users in one query and passes the name in.
-    if owner_display_name is None and effective_role == "subscriber" and db is not None:
+    if owner_display_name is None and effective_role == "subscriber":
         owner_display_name = _resolve_owner_display_name(db, flight.user_id)
 
-    if subscribed is None and db is not None and viewer_id is not None and effective_role == "subscriber":
-        subscribed = is_subscribed(db, flight.id, viewer_id)
-    elif subscribed is None:
-        subscribed = False
+    if subscribed is None:
+        subscribed = (
+            is_subscribed(db, flight.id, viewer_id)
+            if effective_role == "subscriber"
+            else False
+        )
 
     return FlightResponse(
         id=flight.id,
