@@ -4,6 +4,7 @@ import { createStore } from 'zustand/vanilla';
 import type { FlightResponse, PackMeta } from './types';
 import type { WaypointInfo, UpdateFlightRequest, UpdateFlightResponse } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
+import { errorToMessage } from '../utils';
 
 export interface FlightDetailState {
   // Data
@@ -108,12 +109,10 @@ export const flightDetailStore = createStore<FlightDetailState>((set, get) => ({
     if (!flight) return;
     set({ saving: true, error: null });
     try {
-      await api.subscribeFlight(flight.id);
-      const updated = await api.fetchFlight(flight.id);
+      const updated = await api.subscribeAndRefetch(flight.id);
       set({ flight: updated, saving: false });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      set({ saving: false, error: msg.replace(/^API \d+:\s*/, '') });
+      set({ saving: false, error: errorToMessage(err) });
     }
   },
 
@@ -122,12 +121,10 @@ export const flightDetailStore = createStore<FlightDetailState>((set, get) => ({
     if (!flight) return;
     set({ saving: true, error: null });
     try {
-      await api.unsubscribeFlight(flight.id);
-      const updated = await api.fetchFlight(flight.id);
+      const updated = await api.unsubscribeAndRefetch(flight.id);
       set({ flight: updated, saving: false });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      set({ saving: false, error: msg.replace(/^API \d+:\s*/, '') });
+      set({ saving: false, error: errorToMessage(err) });
     }
   },
 

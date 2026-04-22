@@ -891,7 +891,15 @@ def unsubscribe_from_flight(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Remove the current user's subscription. Idempotent — returns 204 either way."""
+    """Remove the current user's subscription. Idempotent — returns 204 either way.
+
+    Intentionally skips the _load_flight_or_404 access check that subscribe does.
+    Unsubscribe only deletes rows matching (flight_id, user_id), so a user can
+    only ever drop their own row — no privilege escalation is possible — and the
+    204 on an unknown flight_id is the documented idempotent behavior so a
+    recipient whose shared flight was deleted or flipped private can still
+    clean up their own subscription state.
+    """
     unsubscribe_flight(db, flight_id, user_id)
 
 

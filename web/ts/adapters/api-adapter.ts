@@ -152,6 +152,19 @@ export async function unsubscribeFlight(flightId: string): Promise<void> {
   );
 }
 
+/** Subscribe and refetch the flight in one call. Callers (three different
+ *  stores) wrap this in their own loading/error state. */
+export async function subscribeAndRefetch(flightId: string): Promise<FlightResponse> {
+  await subscribeFlight(flightId);
+  return fetchFlight(flightId);
+}
+
+/** Unsubscribe and refetch the flight in one call. */
+export async function unsubscribeAndRefetch(flightId: string): Promise<FlightResponse> {
+  await unsubscribeFlight(flightId);
+  return fetchFlight(flightId);
+}
+
 export interface WaypointInfo {
   icao: string;
   name: string;

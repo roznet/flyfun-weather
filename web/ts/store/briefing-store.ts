@@ -10,6 +10,7 @@ import { getDefaultEnabled, getPreset } from '../visualization/cross-section/lay
 import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-section/theme';
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
+import { errorToMessage } from '../utils';
 
 // --- localStorage persistence helpers ---
 
@@ -569,11 +570,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     try {
-      await api.subscribeFlight(flight.id);
-      const updated = await api.fetchFlight(flight.id);
+      const updated = await api.subscribeAndRefetch(flight.id);
       set({ flight: updated });
     } catch (err) {
-      set({ error: `Failed to subscribe: ${err}` });
+      set({ error: errorToMessage(err) });
     }
   },
 
@@ -581,11 +581,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     try {
-      await api.unsubscribeFlight(flight.id);
-      const updated = await api.fetchFlight(flight.id);
+      const updated = await api.unsubscribeAndRefetch(flight.id);
       set({ flight: updated });
     } catch (err) {
-      set({ error: `Failed to unsubscribe: ${err}` });
+      set({ error: errorToMessage(err) });
     }
   },
 

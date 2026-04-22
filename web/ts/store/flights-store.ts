@@ -4,6 +4,7 @@ import { createStore } from 'zustand/vanilla';
 import type { FlightResponse, PackMeta } from './types';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
+import { errorToMessage } from '../utils';
 
 export interface FlightsState {
   // Data
@@ -130,7 +131,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       await get().loadFlights();
       set({ loading: false });
     } catch (err) {
-      set({ loading: false, error: `Failed to unsubscribe: ${err}` });
+      set({ loading: false, error: errorToMessage(err) });
     }
   },
 

@@ -214,6 +214,14 @@ export function flightRoute(waypoints: string[]): string {
   return waypoints.join(' \u2192 ');
 }
 
+/** Normalize an unknown caught value into a user-facing error string.
+ *  Strips the `API 404:` / `API 422:` prefix added by `apiFetch` so the
+ *  surfaced message is just the backend `detail` text. */
+export function errorToMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw.replace(/^API \d+:\s*/, '');
+}
+
 /** Build the shareable URL that recipients open to see a flight. Lands on
  *  the flight detail page, which has the Subscribe banner for non-owners. */
 export function flightShareUrl(flightId: string): string {
