@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -28,6 +28,43 @@ def test_resolve_waypoints(mock_load):
     assert result[0].lat == 51.8361
     assert result[1].icao == "LSGS"
     assert result[1].lon == 7.3267
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints_rejects_off_route_middle(mock_load):
+    """Detour-rejected middles are dropped from the result and surfaced in
+    `rejected`, not reported as missing (no spurious KeyError)."""
+    airports = {
+        "EGTK": mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
+        "LSGS": mock_airport("LSGS", "Sion", 46.2192, 7.3267),
+    }
+    mock_load.return_value = mock_model(airports)
+
+    fake_route = MagicMock()
+    fake_route.departure_coords = (51.8361, -1.32)
+    fake_route.destination_coords = (46.2192, 7.3267)
+    fake_route.waypoints = []  # ABB rejected — not in resolved middles
+    fake_route.waypoint_coords = []
+    fake_route.rejected_waypoints = [
+        {
+            "name": "ABB",
+            "reason": "detour_exceeds_threshold",
+            "detour_nm": 400.0,
+            "leg_nm": 500.0,
+            "threshold_nm": 250.0,
+        }
+    ]
+
+    with patch(
+        "euro_aip.models.route_resolver.RouteResolver.resolve",
+        return_value=fake_route,
+    ):
+        result, rejected = resolve_waypoints(
+            ["EGTK", "ABB", "LSGS"], "/fake/db.sqlite"
+        )
+
+    assert rejected == ["ABB"]
+    assert [wp.icao for wp in result] == ["EGTK", "LSGS"]
 
 
 @patch("weatherbrief.airports._load_airport_model")
