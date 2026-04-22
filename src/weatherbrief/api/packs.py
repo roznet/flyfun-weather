@@ -377,7 +377,12 @@ def _build_route_config(flight, db_path):
 
     if not flight.waypoints:
         raise ValueError("Flight has no waypoints defined")
-    waypoint_objs, _ = resolve_waypoints(flight.waypoints, db_path)
+    waypoint_objs, rejected = resolve_waypoints(flight.waypoints, db_path)
+    if rejected:
+        logger.warning(
+            "Flight %s: briefing route dropped %d off-route waypoint(s) from %s: %s",
+            getattr(flight, "id", "?"), len(rejected), flight.waypoints, rejected,
+        )
     return RouteConfig(
         name=flight.route_name or " \u2192 ".join(flight.waypoints),
         waypoints=waypoint_objs,

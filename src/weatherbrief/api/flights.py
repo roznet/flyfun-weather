@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Literal
@@ -31,6 +32,8 @@ from weatherbrief.storage.flights import (
 )
 
 router = APIRouter(prefix="/flights", tags=["flights"])
+
+logger = logging.getLogger(__name__)
 
 from weatherbrief.api.validation import WAYPOINT_RE
 
@@ -486,9 +489,15 @@ def compute_route_distance(
         raise HTTPException(status_code=500, detail="Airport database not configured")
 
     try:
-        resolved, _ = resolve_waypoints(req.waypoints, db_path)
+        resolved, rejected = resolve_waypoints(req.waypoints, db_path)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=exc.args[0])
+
+    if rejected:
+        logger.warning(
+            "compute_route_distance: dropped %d off-route waypoint(s) from %s: %s",
+            len(rejected), req.waypoints, rejected,
+        )
 
     total_nm = 0.0
     for wp_a, wp_b in zip(resolved, resolved[1:]):
@@ -552,8 +561,9 @@ def interpret_route(
     # Filter to valid waypoint patterns (2-5 alphanumeric chars)
     candidate_tokens = [t for t in tokens if WAYPOINT_RE.match(t)]
 
-    # Validate each candidate: use single-point lookup until we have 2+
-    # points, then switch to full route resolution for proper disambiguation
+    # Validate each candidate against the DB; detour filtering happens in the
+    # final resolve below, which rejects middle waypoints that sit too far
+    # off the departure→destination route.
     interpreted: list[str] = []
     skipped: list[str] = []
 
@@ -561,24 +571,10 @@ def interpret_route(
         # Skip consecutive duplicates (e.g. "ABDIL ABDIL" after filtering)
         if interpreted and interpreted[-1] == token:
             continue
-        test_list = interpreted + [token]
-        if len(test_list) < 2:
-            # Not enough points for route resolver, validate individually
-            if is_known_waypoint(token, db_path):
-                interpreted.append(token)
-            else:
-                skipped.append(token)
+        if is_known_waypoint(token, db_path):
+            interpreted.append(token)
         else:
-            try:
-                _, progressive_rejected = resolve_waypoints(test_list, db_path)
-            except KeyError:
-                skipped.append(token)
-                continue
-            # Token resolves but lands too far off the running route → skip.
-            if token.upper() in {r.upper() for r in progressive_rejected}:
-                skipped.append(token)
-            else:
-                interpreted.append(token)
+            skipped.append(token)
 
     # Final resolve — authoritative list of survivors + rejected.
     waypoint_infos: list[WaypointInfo] = []
