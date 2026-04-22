@@ -4,6 +4,7 @@ __pycache__/
 /dist/
 /build/
 web/dist/
+web/data
 .pytest_cache/
 venv/
 
