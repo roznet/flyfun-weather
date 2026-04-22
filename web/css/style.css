@@ -251,6 +251,7 @@ label {
 }
 
 .edit-structural-note {
+  flex-basis: 100%;
   background: var(--bg-elev);
   border-left: 3px solid var(--primary);
   padding: 0.4rem 0.6rem;
@@ -3828,6 +3829,7 @@ label {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  flex-wrap: wrap;
 }
 
 /* Edit mode */
