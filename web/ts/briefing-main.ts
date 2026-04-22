@@ -1256,20 +1256,17 @@ async function init(): Promise<void> {
       loadFlightPireps(s.flight.id);
     }
 
-    // Show refresh button only for the flight owner; disable for past flights
-    // (admins can still refresh past flights for historical briefings)
+    // Refresh button visibility is handled by renderBriefingSharing above
+    // (role-based). Here we only set the disabled/title state for past flights
+    // (admins can still refresh past flights for historical briefings).
     const past = s.flight
       ? isFlightPast(s.flight.target_date, s.flight.target_time_utc, s.flight.flight_duration_hours)
       : false;
-    if (refreshBtn && s.flight?.user_id === user.id) {
-      refreshBtn.style.display = '';
-      if (past && !user.is_admin) {
-        refreshBtn.disabled = true;
-        refreshBtn.title = t('briefing.flightPastTitle');
-      } else if (past && user.is_admin) {
-        refreshBtn.disabled = false;
-        refreshBtn.title = t('briefing.historicalRefreshTitle');
-      }
+    if (refreshBtn && s.flight?.user_id === user.id && past) {
+      refreshBtn.disabled = !user.is_admin;
+      refreshBtn.title = user.is_admin
+        ? t('briefing.historicalRefreshTitle')
+        : t('briefing.flightPastTitle');
     }
 
     // Render privacy toggle

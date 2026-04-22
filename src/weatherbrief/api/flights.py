@@ -22,7 +22,6 @@ from weatherbrief.storage.flights import (
     SubscriptionError,
     delete_flight,
     is_subscribed,
-    list_flights,
     list_flights_with_role,
     load_flight,
     safe_path_component,
