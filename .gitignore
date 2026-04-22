@@ -21,6 +21,7 @@ tmp
 
 .claude/worktrees
 .claude/projects
+.claude/scheduled_tasks.lock
 
 # Xcode
 xcuserdata/
