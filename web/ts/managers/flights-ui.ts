@@ -36,7 +36,7 @@ function renderFlightCard(
 
   const isShared = f.role === 'subscriber';
   const sharedBadge = isShared
-    ? `<span class="badge badge-shared" title="${escapeHtml(t('flights.sharedBadgeTitle', { owner: f.owner_display_name || '' }))}">${t('flights.sharedBadge')}</span> `
+    ? `<span class="badge badge-shared" title="${t('flights.sharedBadgeTitle', { owner: escapeHtml(f.owner_display_name || '') })}">${t('flights.sharedBadge')}</span> `
     : '';
   const ownerLine = isShared && f.owner_display_name
     ? `<div class="flight-shared-owner">${t('flights.sharedBy', { owner: escapeHtml(f.owner_display_name) })}</div>`

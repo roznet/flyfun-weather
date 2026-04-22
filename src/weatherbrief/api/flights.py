@@ -202,7 +202,7 @@ def _flight_to_response(
     db: Session,
     viewer_id: str,
     latest_briefing: BriefingStatusInfo | None = None,
-    role: str | None = None,
+    role: Literal["owner", "subscriber"] | None = None,
     subscribed: bool | None = None,
     owner_display_name: str | None = None,
 ) -> FlightResponse:

@@ -569,22 +569,24 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   subscribe: async () => {
     const flight = get().flight;
     if (!flight) return;
+    set({ loading: true, error: null });
     try {
       const updated = await api.subscribeAndRefetch(flight.id);
-      set({ flight: updated });
+      set({ flight: updated, loading: false });
     } catch (err) {
-      set({ error: errorToMessage(err) });
+      set({ loading: false, error: errorToMessage(err) });
     }
   },
 
   unsubscribe: async () => {
     const flight = get().flight;
     if (!flight) return;
+    set({ loading: true, error: null });
     try {
       const updated = await api.unsubscribeAndRefetch(flight.id);
-      set({ flight: updated });
+      set({ flight: updated, loading: false });
     } catch (err) {
-      set({ error: errorToMessage(err) });
+      set({ loading: false, error: errorToMessage(err) });
     }
   },
 
