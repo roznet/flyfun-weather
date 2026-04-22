@@ -431,6 +431,34 @@ class TestFlightSubscriptions:
         assert shared[0]["owner_display_name"] == "Flight Owner"
         assert shared[0]["is_subscribed"] is True
 
+    def test_get_flight_subscriber_fields(self, client, app_db):
+        """GET /api/flights/{id} returns subscriber role + owner name + is_subscribed.
+
+        Exercises the single-flight code path (_resolve_owner_display_name +
+        is_subscribed DB lookup) which the list endpoint short-circuits via
+        its outer join.
+        """
+        other = _seed_other_user_flight(app_db)
+        client.post(f"/api/flights/{other.id}/subscribe")
+
+        resp = client.get(f"/api/flights/{other.id}")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["role"] == "subscriber"
+        assert body["is_subscribed"] is True
+        assert body["owner_display_name"] == "Flight Owner"
+
+    def test_get_flight_subscriber_owner_without_display_name(self, client, app_db):
+        """Owner with empty display_name surfaces as None — email is NOT leaked."""
+        other = _seed_other_user_flight(
+            app_db, owner_id="anon-owner", owner_name="", owner_email="anon@example.com",
+        )
+        client.post(f"/api/flights/{other.id}/subscribe")
+
+        resp = client.get(f"/api/flights/{other.id}")
+        assert resp.status_code == 200
+        assert resp.json()["owner_display_name"] is None
+
     def test_subscribe_idempotent(self, client, app_db):
         """Subscribing twice is a no-op; second call reports created=False."""
         other = _seed_other_user_flight(app_db)

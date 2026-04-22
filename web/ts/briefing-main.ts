@@ -845,7 +845,16 @@ async function init(): Promise<void> {
         const original = btn.title;
         btn.title = t('flightDetail.copyShareLinkCopied');
         btn.classList.add('btn-icon-flash');
-        setTimeout(() => { btn.title = original; btn.classList.remove('btn-icon-flash'); }, 1500);
+        // Re-query in the timeout: renderBriefingSharing may have replaced
+        // the button via cloneNode between the click and now, in which case
+        // `btn` points to a detached element and the flash would stick on
+        // the new clone. Re-querying gets the live element.
+        setTimeout(() => {
+          const live = document.getElementById('share-btn') as HTMLButtonElement | null;
+          if (!live) return;
+          live.title = original;
+          live.classList.remove('btn-icon-flash');
+        }, 1500);
       }
     },
   };
@@ -1239,7 +1248,8 @@ async function init(): Promise<void> {
   }).then(() => {
     const s = store.getState();
     ui.renderHeader(s.flight, s.snapshot);
-    ui.renderBriefingSharing(s.flight, sharingHandlers);
+    // renderBriefingSharing already ran via the store subscriber above when
+    // flight was set; don't re-invoke (it would waste a clone+replace cycle).
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
     ui.renderAssessment(s.currentPack, s.flight);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
