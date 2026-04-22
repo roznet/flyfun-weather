@@ -1292,10 +1292,11 @@ def build_pressure_levels_from_grib(
     in m²/s²) to PressureLevelData units and returns a sorted list (highest
     pressure / lowest altitude first).
 
-    Where ``geopotential_height_m`` is missing (e.g. the ECMWF commercial
-    feed does not include ``z`` at every pressure level, or ICON model
-    levels which don't carry geopotential), it is derived via the
-    hypsometric equation from temperature + pressure.
+    Where ``geopotential_height_m`` is missing after ``_convert_raw_sounding``
+    (e.g. ICON model levels, which DWD never ships geopotential for, or
+    pre-amendment ECMWF archives), it is derived via the hypsometric equation
+    from temperature + pressure. Current ECMWF runs deliver ``gh`` on every
+    pressure level, so this fill is a no-op for them.
     """
     from weatherbrief.models.analysis import PressureLevelData
 
