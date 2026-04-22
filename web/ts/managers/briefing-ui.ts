@@ -323,7 +323,6 @@ export function renderBriefingSharing(
   const subscribeControl = $('briefing-subscribe-control');
   const sharedByLine = $('briefing-shared-by');
   const refreshBtn = $('refresh-btn') as HTMLButtonElement | null;
-  const feedbackBtn = $('feedback-btn') as HTMLButtonElement | null;
 
   if (!flight) {
     if (shareBtn) shareBtn.style.display = 'none';
