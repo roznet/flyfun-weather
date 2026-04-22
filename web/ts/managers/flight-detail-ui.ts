@@ -311,7 +311,7 @@ export function renderHeader(
   const title = flightTitle(wps);
   const route = wps.length > 2 ? flightRoute(wps) : '';
 
-  const isOwner = flight.role !== 'subscriber';
+  const isOwner = flight.role === 'owner';
   const editBtn = (editing || !isOwner)
     ? ''
     : '<button class="btn btn-sm" id="btn-edit-flight">Edit</button>';
@@ -339,7 +339,7 @@ export function renderSharingBanner(flight: FlightResponse | null): void {
     return;
   }
 
-  const isOwner = flight.role !== 'subscriber';
+  const isOwner = flight.role === 'owner';
   if (isOwner) {
     // Private flights can't be shared — recipients would hit 404. Disable
     // the button (matching the briefing page) rather than just adding a

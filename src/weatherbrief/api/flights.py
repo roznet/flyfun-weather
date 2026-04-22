@@ -885,6 +885,9 @@ def subscribe_to_flight(
             status_code=409,
             detail="You own this flight — owners cannot subscribe to their own flights.",
         )
+    except KeyError:
+        # TOCTOU: flight was deleted between the access check and the insert.
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
     return SubscribeResponse(flight_id=flight_id, user_id=user_id, created=created)
 
 

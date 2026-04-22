@@ -315,7 +315,7 @@ def list_flights_with_role(
         .order_by(FlightRow.departure_time.desc())
     )
     results = session.execute(stmt).all()
-    out: list[tuple[Flight, str, str | None]] = []
+    out: list[tuple[Flight, Literal["owner", "subscriber"], str | None]] = []
     for row, _sub_user_id, display_name, email in results:
         if row.user_id == viewer_id:
             out.append((_row_to_flight(row), "owner", None))

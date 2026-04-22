@@ -332,7 +332,7 @@ export function renderBriefingSharing(
     return;
   }
 
-  const isOwner = flight.role !== 'subscriber';
+  const isOwner = flight.role === 'owner';
 
   // Owner: show share icon (disabled when private). Subscriber: hide it.
   if (shareBtn) {
