@@ -26,6 +26,22 @@ class TestConvertRawSounding:
         result = _convert_raw_sounding({"raw_geopotential_m2_s2": 9806.65}, 850)
         assert result["geopotential_height_m"] == pytest.approx(1000.0)
 
+    def test_gh_passthrough(self):
+        """ECMWF-delivered gh (gpm) flows through unchanged — no /g division."""
+        result = _convert_raw_sounding(
+            {"geopotential_height_m": 1456.0, "raw_temperature_k": 278.0}, 850,
+        )
+        assert result["geopotential_height_m"] == pytest.approx(1456.0)
+
+    def test_gh_wins_over_z(self):
+        """At level 1 hPa both gh and z arrive; gh is authoritative."""
+        result = _convert_raw_sounding(
+            {"geopotential_height_m": 1500.0, "raw_geopotential_m2_s2": 9806.65},
+            850,
+        )
+        # Would be 1000.0 via z/g; gh wins.
+        assert result["geopotential_height_m"] == pytest.approx(1500.0)
+
     def test_wind_north(self):
         """Pure northerly wind: u=0, v=-10 → direction=360 (or 0)."""
         result = _convert_raw_sounding(
@@ -218,3 +234,18 @@ class TestHypsometricGeopotentialFallback:
         heights = {pl.pressure_hpa: pl.geopotential_height_m for pl in levels}
         assert heights[1000] == pytest.approx(981.0 / 9.80665, abs=1e-6)
         assert heights[850] == pytest.approx(14000.0 / 9.80665, abs=1e-6)
+
+    def test_gh_full_coverage_no_t_required(self):
+        """When every level has delivered `gh`, no T is needed and values are preserved."""
+        # Simulate the post-amendment ECMWF full-coverage path: every level
+        # carries geopotential_height_m directly from the GRIB, no temperature.
+        point_data = {
+            1000: {"geopotential_height_m": 110.0},
+            850:  {"geopotential_height_m": 1475.0},
+            500:  {"geopotential_height_m": 5570.0},
+        }
+        levels = build_pressure_levels_from_grib(point_data)
+        heights = {pl.pressure_hpa: pl.geopotential_height_m for pl in levels}
+        assert heights[1000] == pytest.approx(110.0)
+        assert heights[850] == pytest.approx(1475.0)
+        assert heights[500] == pytest.approx(5570.0)
