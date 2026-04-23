@@ -22,6 +22,7 @@ from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
     SubscriptionError,
+    bulk_delete_flights as _bulk_delete_flights,
     delete_flight,
     is_subscribed,
     list_flights_with_role,
@@ -747,22 +748,9 @@ def bulk_delete_flights(
 ):
     """Delete multiple flights in one request. Silently skips IDs that don't exist
     or aren't owned by the current user (returned in `not_found`)."""
-    deleted: list[str] = []
-    not_found: list[str] = []
-    for flight_id in req.ids:
-        try:
-            flight = load_flight(db, flight_id)
-        except KeyError:
-            not_found.append(flight_id)
-            continue
-        if flight.user_id != user_id:
-            not_found.append(flight_id)
-            continue
-        try:
-            delete_flight(db, flight_id)
-            deleted.append(flight_id)
-        except KeyError:
-            not_found.append(flight_id)
+    deleted = _bulk_delete_flights(db, req.ids, user_id)
+    deleted_set = set(deleted)
+    not_found = [fid for fid in req.ids if fid not in deleted_set]
     return BulkDeleteResponse(deleted=deleted, not_found=not_found)
 
 

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -406,6 +406,50 @@ def delete_flight(session: Session, flight_id: str) -> None:
 
     session.delete(row)  # cascades to briefing_packs
     session.flush()
+
+
+def bulk_delete_flights(
+    session: Session, flight_ids: list[str], user_id: str
+) -> list[str]:
+    """Delete multiple flights owned by ``user_id`` in a single SQL statement.
+
+    Returns the list of actually-deleted IDs. IDs that don't exist or aren't
+    owned by the user are silently skipped. Artifact directories for all
+    associated packs are removed from disk after the DB delete succeeds.
+
+    DB-level FK CASCADE (SQLite with ``PRAGMA foreign_keys=ON``, MySQL InnoDB)
+    removes briefing_packs and flight_subscriptions rows.
+    """
+    if not flight_ids:
+        return []
+
+    stmt = (
+        select(FlightRow.id, BriefingPackRow.artifact_path)
+        .outerjoin(BriefingPackRow, BriefingPackRow.flight_id == FlightRow.id)
+        .where(FlightRow.id.in_(flight_ids), FlightRow.user_id == user_id)
+    )
+    owned_ids: set[str] = set()
+    artifact_paths: list[str] = []
+    for flight_id, artifact_path in session.execute(stmt).all():
+        owned_ids.add(flight_id)
+        if artifact_path:
+            artifact_paths.append(artifact_path)
+
+    if not owned_ids:
+        return []
+
+    session.execute(
+        delete(FlightRow).where(
+            FlightRow.id.in_(owned_ids),
+            FlightRow.user_id == user_id,
+        )
+    )
+    session.flush()
+
+    for path in artifact_paths:
+        _rmtree(Path(path))
+
+    return list(owned_ids)
 
 
 # --- BriefingPack operations ---
