@@ -47,12 +47,15 @@
 
     // Propagate ?next= from this page onto the provider login hrefs so the
     // server can bounce the user back after OAuth. Validation happens
-    // server-side (flyfun-common); defensive encode here.
+    // server-side (flyfun-common).
     const nextParam = new URLSearchParams(window.location.search).get('next');
     if (nextParam) {
-      const suffix = '?next=' + encodeURIComponent(nextParam);
-      document.getElementById('btn-google').href += suffix;
-      document.getElementById('btn-apple').href += suffix;
+      for (const id of ['btn-google', 'btn-apple']) {
+        const a = document.getElementById(id);
+        const url = new URL(a.href);
+        url.searchParams.set('next', nextParam);
+        a.href = url.pathname + url.search;
+      }
     }
 
     // Show only the login buttons for configured providers

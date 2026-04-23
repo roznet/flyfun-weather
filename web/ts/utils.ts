@@ -296,9 +296,11 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       let detail403 = '';
       try { detail403 = JSON.parse(body403).detail || ''; } catch { /* */ }
       // Only redirect for auth-level rejections (suspended account),
-      // not feature-gating 403s (e.g. PIREP permissions).
+      // not feature-gating 403s (e.g. PIREP permissions). No ?next=: the
+      // user is already authenticated, re-logging won't lift the block,
+      // and bouncing them back to the 403ing page would tight-loop.
       if (detail403 === 'Account suspended' || detail403 === 'Account is not approved') {
-        redirectToLogin();
+        location.href = '/login.html';
         throw new Error('Account suspended');
       }
       throw new Error(`API 403: ${detail403 || body403}`);
