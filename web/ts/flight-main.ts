@@ -6,7 +6,7 @@ import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter
 import { flightDetailStore } from './store/flight-detail-store';
 import * as ui from './managers/flight-detail-ui';
 import { RouteMapInset } from './components/route-map-inset';
-import { copyFlightShareLink, renderUserInfo } from './utils';
+import { copyFlightShareLink, redirectToLogin, renderUserInfo } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
@@ -18,7 +18,7 @@ async function init(): Promise<void> {
   // Auth check
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   initTheme();

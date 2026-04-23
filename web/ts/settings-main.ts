@@ -2,7 +2,7 @@
 
 import { fetchCurrentUser, deleteAccount } from './adapters/auth-adapter';
 import { fetchCostSummary, type CostSummary } from './adapters/credits-adapter';
-import { renderUserInfo, escapeHtml, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
+import { redirectToLogin, renderUserInfo, escapeHtml, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
 import {
   fetchPreferences,
   savePreferences,
@@ -418,7 +418,7 @@ async function init(): Promise<void> {
   translateStaticElements();
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   initTheme();

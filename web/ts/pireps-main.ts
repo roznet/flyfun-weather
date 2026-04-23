@@ -9,7 +9,7 @@ import {
   type PirepFilterState,
 } from './managers/pirep-ui';
 import { PirepMap } from './visualization/pirep-map';
-import { renderUserInfo, $, escapeHtml } from './utils';
+import { redirectToLogin, renderUserInfo, $, escapeHtml } from './utils';
 import { initI18n } from './i18n/i18n';
 
 let pirepMap: PirepMap | null = null;
@@ -76,7 +76,7 @@ async function init(): Promise<void> {
   await initI18n();
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   renderUserInfo(user, 'pireps');
