@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from airport_mocks import mock_airport, mock_model
-from weatherbrief.airports import is_known_waypoint, resolve_waypoints
+from weatherbrief.airports import (
+    RejectedWaypoint,
+    is_known_waypoint,
+    resolve_waypoints,
+)
 from weatherbrief.models import Waypoint
 
 
@@ -63,13 +67,57 @@ def test_resolve_waypoints_rejects_off_route_middle(mock_load):
             ["EGTK", "ABB", "LSGS"], "/fake/db.sqlite"
         )
 
-    assert rejected == ["ABB"]
+    assert rejected == [RejectedWaypoint(name="ABB", reason="detour")]
     assert [wp.icao for wp in result] == ["EGTK", "LSGS"]
 
 
 @patch("weatherbrief.airports._load_airport_model")
-def test_resolve_waypoints_missing(mock_load):
-    """Raises KeyError for unknown ICAO codes."""
+def test_resolve_waypoints_unknown_middle_goes_to_rejected(mock_load):
+    """Middle tokens the resolver silently drops (no DB match under route
+    context) now land in ``rejected`` with reason='unknown' instead of
+    raising KeyError. This is the IFR-style collision case: is_known_waypoint
+    might accept a global navaid match, but ``resolver.resolve`` in route
+    context can't place it."""
+    airports = {
+        "EGTK": mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
+        "LSGS": mock_airport("LSGS", "Sion", 46.2192, 7.3267),
+    }
+    mock_load.return_value = mock_model(airports)
+
+    fake_route = MagicMock()
+    fake_route.departure_coords = (51.8361, -1.32)
+    fake_route.destination_coords = (46.2192, 7.3267)
+    fake_route.waypoints = []  # IFR neither placed nor rejected
+    fake_route.waypoint_coords = []
+    fake_route.rejected_waypoints = []
+
+    with patch(
+        "euro_aip.models.route_resolver.RouteResolver.resolve",
+        return_value=fake_route,
+    ):
+        result, rejected = resolve_waypoints(
+            ["EGTK", "IFR", "LSGS"], "/fake/db.sqlite"
+        )
+
+    assert rejected == [RejectedWaypoint(name="IFR", reason="unknown")]
+    assert [wp.icao for wp in result] == ["EGTK", "LSGS"]
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints_missing_departure_raises(mock_load):
+    """Missing departure still raises KeyError — departure is mandatory."""
+    airports = {
+        "EGTK": mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
+    }
+    mock_load.return_value = mock_model(airports)
+
+    with pytest.raises(KeyError, match="ZZZZ"):
+        resolve_waypoints(["ZZZZ", "EGTK"], "/fake/db.sqlite")
+
+
+@patch("weatherbrief.airports._load_airport_model")
+def test_resolve_waypoints_missing_destination_raises(mock_load):
+    """Missing destination still raises KeyError — destination is mandatory."""
     airports = {
         "EGTK": mock_airport("EGTK", "Oxford Kidlington", 51.8361, -1.32),
     }

@@ -859,3 +859,25 @@ class TestInterpretRoute:
         data = resp.json()
         assert data["interpreted"] == []
         assert set(data["skipped"]) == {"ZZZZ", "YYYY"}
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_field15_keywords_skipped(self, mock_load, client):
+        """ICAO Field-15 syntax tokens (IFR/DCT/airways/speed-level) are
+        classified as non-waypoints by the parser and surfaced in `skipped`
+        without hitting the DB. Regression test for the IFR-vs-navaid-collision
+        bug where `IFR` coincidentally matched a global navaid code."""
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(
+            client,
+            "EGBJ N0152F100 IFR DCT M150 LFOV",
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # Endpoints survive, syntax tokens are set aside
+        assert data["interpreted"] == ["EGBJ", "LFOV"]
+        # N0152F100 (speed/level) is metadata, not surfaced.
+        # IFR (flight-rule), DCT (direct), M150 (airway) are shown so pilot
+        # sees what was parsed.
+        assert set(data["skipped"]) == {"IFR", "DCT", "M150"}

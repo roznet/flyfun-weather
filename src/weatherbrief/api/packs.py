@@ -380,8 +380,9 @@ def _build_route_config(flight, db_path):
     waypoint_objs, rejected = resolve_waypoints(flight.waypoints, db_path)
     if rejected:
         logger.warning(
-            "Flight %s: briefing route dropped %d off-route waypoint(s) from %s: %s",
-            getattr(flight, "id", "?"), len(rejected), flight.waypoints, rejected,
+            "Flight %s: briefing route dropped %d waypoint(s) from %s: %s",
+            getattr(flight, "id", "?"), len(rejected), flight.waypoints,
+            [(r.name, r.reason) for r in rejected],
         )
     return RouteConfig(
         name=flight.route_name or " \u2192 ".join(flight.waypoints),
