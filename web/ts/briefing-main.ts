@@ -9,7 +9,7 @@ import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import type { DisplayMode } from './types/metrics';
-import { copyFlightShareLink, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
+import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
@@ -60,7 +60,7 @@ async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   initTheme();

@@ -12,7 +12,7 @@ import {
   type MissedWarning,
   type CategoryBiasStats,
 } from './adapters/admin-adapter';
-import { renderUserInfo, escapeHtml } from './utils';
+import { redirectToLogin, renderUserInfo, escapeHtml } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
@@ -27,7 +27,7 @@ async function init(): Promise<void> {
   await initI18n();
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   initTheme();

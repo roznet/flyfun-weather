@@ -9,7 +9,7 @@ import { fetchModelCatalog } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
-import { escapeHtml, renderUserInfo, initModelCatalog } from './utils';
+import { escapeHtml, redirectToLogin, renderUserInfo, initModelCatalog } from './utils';
 import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
@@ -360,7 +360,7 @@ async function init(): Promise<void> {
   // Auth check — redirect to login if not authenticated
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   initTheme();

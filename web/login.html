@@ -44,6 +44,16 @@
       document.getElementById('pending-message').style.display = 'block';
     }
 
+    // Propagate ?next= from this page onto the provider login hrefs so the
+    // server can bounce the user back after OAuth. Validation happens
+    // server-side (flyfun-common); defensive encode here.
+    const nextParam = new URLSearchParams(window.location.search).get('next');
+    if (nextParam) {
+      const suffix = '?next=' + encodeURIComponent(nextParam);
+      document.getElementById('btn-google').href += suffix;
+      document.getElementById('btn-apple').href += suffix;
+    }
+
     // Show only the login buttons for configured providers
     fetch('/auth/providers')
       .then(r => r.json())

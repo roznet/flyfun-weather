@@ -12,7 +12,7 @@ import type {
 } from '../store/types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { SoundingProfileData } from '../visualization/skewt/types';
-import { API_BASE, apiFetch } from '../utils';
+import { API_BASE, apiFetch, redirectToLogin } from '../utils';
 
 /** Typed error for refresh stream failures — avoids fragile string matching. */
 export class RefreshStreamError extends Error {
@@ -293,7 +293,7 @@ export async function refreshBriefingStream(
 
   if (!resp.ok) {
     if (resp.status === 401) {
-      window.location.href = '/login.html';
+      redirectToLogin();
       throw new Error('Session expired');
     }
     const body = await resp.text();

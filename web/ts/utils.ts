@@ -258,6 +258,21 @@ export async function copyFlightShareLink(
 /** Auto-dismiss timeout for status messages (ms). */
 export const STATUS_DISMISS_MS = 3000;
 
+// --- Login redirect with next-URL preservation ---
+
+/** Redirect to /login.html, preserving the current path+query in `?next=` so
+ *  the server can bounce the user back after OAuth. Skips `next` when already
+ *  on root or the login page itself. */
+export function redirectToLogin(): void {
+  const path = location.pathname;
+  if (path === '/' || path === '/login.html') {
+    location.href = '/login.html';
+    return;
+  }
+  const next = path + location.search;
+  location.href = '/login.html?next=' + encodeURIComponent(next);
+}
+
 // --- Shared API fetch ---
 
 export const API_BASE = '/api';
@@ -273,7 +288,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   });
   if (!resp.ok) {
     if (resp.status === 401) {
-      window.location.href = '/login.html';
+      redirectToLogin();
       throw new Error('Session expired');
     }
     if (resp.status === 403) {
@@ -283,7 +298,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       // Only redirect for auth-level rejections (suspended account),
       // not feature-gating 403s (e.g. PIREP permissions).
       if (detail403 === 'Account suspended' || detail403 === 'Account is not approved') {
-        window.location.href = '/login.html';
+        redirectToLogin();
         throw new Error('Account suspended');
       }
       throw new Error(`API 403: ${detail403 || body403}`);

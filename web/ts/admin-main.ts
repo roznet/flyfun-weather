@@ -9,7 +9,7 @@ import {
   type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
   type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse, type ApiUsageResponse,
 } from './adapters/admin-adapter';
-import { renderUserInfo, escapeHtml, formatDate } from './utils';
+import { redirectToLogin, renderUserInfo, escapeHtml, formatDate } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 
@@ -19,7 +19,7 @@ async function init(): Promise<void> {
   await initI18n();
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   initTheme();

@@ -6,7 +6,7 @@ import {
   type ForecastMapResponse, type VerificationMapResponse,
 } from './adapters/maps-adapter';
 import { WeatherMap, type ForecastMetric, type VerifMetric } from './visualization/weather-map';
-import { renderUserInfo, $ } from './utils';
+import { redirectToLogin, renderUserInfo, $ } from './utils';
 import { initI18n } from './i18n/i18n';
 
 let forecastMap: WeatherMap | null = null;
@@ -223,7 +223,7 @@ async function main(): Promise<void> {
 
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   renderUserInfo(user, 'maps');

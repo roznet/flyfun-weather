@@ -7,7 +7,7 @@ import {
   type UserCostTransaction,
   type UserCostBreakdown,
 } from './adapters/admin-adapter';
-import { renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt } from './utils';
+import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 
@@ -35,7 +35,7 @@ async function init(): Promise<void> {
   await initI18n();
   const user = await fetchCurrentUser();
   if (!user) {
-    window.location.href = '/login.html';
+    redirectToLogin();
     return;
   }
   initTheme();
