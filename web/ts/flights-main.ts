@@ -384,6 +384,9 @@ async function init(): Promise<void> {
   };
   const selectionHandlers = {
     onToggle: (id: string) => store.getState().toggleSelected(id),
+    onSelectAll: (ids: string[]) => store.getState().setSelected(
+      [...store.getState().selectedIds, ...ids],
+    ),
     onSelectAllPast: (ids: string[]) => store.getState().setSelected(
       [...store.getState().selectedIds, ...ids],
     ),

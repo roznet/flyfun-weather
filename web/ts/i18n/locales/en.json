@@ -29,6 +29,7 @@
   "flightDetail.moveConfirmNoPacks": "Move this flight? The new flight will start with no briefings.",
   "flights.selectToggle": "Select flight",
   "flights.selected": "{count} selected",
+  "flights.btnSelectAll": "Select all",
   "flights.btnSelectAllPast": "Select all past",
   "flights.btnClearSelection": "Clear",
   "flights.btnDeleteSelected": "Delete selected",
@@ -46,6 +47,7 @@
   "flightDetail.unsubscribeConfirm": "Remove this shared flight from your list?",
   "flightDetail.copyShareLink": "Copy share link",
   "flightDetail.copyShareLinkCopied": "Link copied",
+  "flightDetail.copyShareLinkAlert": "A link to this briefing has been copied to your clipboard. Paste it in your favorite sharing app (email, message, etc.).",
   "flightDetail.copyShareLinkFallback": "Copy this link to share:",
   "flightDetail.sharingPrivateNote": "Private flights aren't visible to subscribers. Toggle in settings to share.",
 

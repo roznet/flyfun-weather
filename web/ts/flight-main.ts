@@ -338,9 +338,10 @@ async function init(): Promise<void> {
       }
     });
     banner.querySelector('.btn-copy-share-link')?.addEventListener('click', async () => {
-      const flight = store.getState().flight;
+      const { flight, packs } = store.getState();
       if (!flight) return;
-      const copied = await copyFlightShareLink(flight.id);
+      const latestPack = packs.length > 0 ? packs[0] : null;
+      const copied = await copyFlightShareLink(flight.id, latestPack?.fetch_timestamp);
       if (!copied) return;  // fell back to prompt(); user has already seen the URL
       const btn = banner.querySelector('.btn-copy-share-link') as HTMLButtonElement | null;
       if (btn) {

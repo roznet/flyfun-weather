@@ -105,6 +105,7 @@ function renderFlightCard(
 
 export interface SelectionHandlers {
   onToggle: (id: string) => void;
+  onSelectAll: (allIds: string[]) => void;
   onSelectAllPast: (pastIds: string[]) => void;
   onBulkDelete: () => void;
   onClearSelection: () => void;
@@ -130,7 +131,7 @@ export function renderFlightList(
         <p>${t('flights.empty')}</p>
       </div>
     `;
-    renderSelectionBar(0, [], selection);
+    renderSelectionBar(0, [], [], selection);
     return;
   }
 
@@ -213,10 +214,13 @@ export function renderFlightList(
     box.addEventListener('click', (e) => e.stopPropagation());
   });
 
-  // Subscribed flights aren't bulk-deletable — exclude them from "select all past".
+  // Subscribed flights aren't bulk-deletable — exclude them from "select all"/"select all past".
+  const selectableActive = active.filter(f => f.role !== 'subscriber').map(f => f.id);
+  const selectablePast = past.filter(f => f.role !== 'subscriber').map(f => f.id);
   renderSelectionBar(
     selectedIds.size,
-    past.filter(f => f.role !== 'subscriber').map(f => f.id),
+    [...selectableActive, ...selectablePast],
+    selectablePast,
     selection,
   );
 }
@@ -224,6 +228,7 @@ export function renderFlightList(
 /** Render the floating action bar shown when one or more flights are selected. */
 function renderSelectionBar(
   selectedCount: number,
+  allIds: string[],
   pastIds: string[],
   selection: SelectionHandlers,
 ): void {
@@ -241,16 +246,21 @@ function renderSelectionBar(
     document.body.appendChild(bar);
   }
 
+  const showSelectAll = allIds.length > 0;
   const showSelectPast = pastIds.length > 0;
   bar.innerHTML = `
     <span class="selection-count">${t('flights.selected', { count: selectedCount })}</span>
     <div class="selection-actions">
+      ${showSelectAll ? `<button type="button" class="btn btn-outline btn-sm btn-select-all">${t('flights.btnSelectAll')}</button>` : ''}
       ${showSelectPast ? `<button type="button" class="btn btn-outline btn-sm btn-select-past">${t('flights.btnSelectAllPast')}</button>` : ''}
       <button type="button" class="btn btn-outline btn-sm btn-clear-selection">${t('flights.btnClearSelection')}</button>
       <button type="button" class="btn btn-danger btn-sm btn-bulk-delete">${t('flights.btnDeleteSelected')}</button>
     </div>
   `;
 
+  bar.querySelector('.btn-select-all')?.addEventListener('click', () => {
+    selection.onSelectAll(allIds);
+  });
   bar.querySelector('.btn-select-past')?.addEventListener('click', () => {
     selection.onSelectAllPast(pastIds);
   });

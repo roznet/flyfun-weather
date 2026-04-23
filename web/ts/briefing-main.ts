@@ -836,9 +836,9 @@ async function init(): Promise<void> {
     onSubscribe: () => void store.getState().subscribe(),
     onUnsubscribe: () => void store.getState().unsubscribe(),
     onCopyShareLink: async () => {
-      const flight = store.getState().flight;
+      const { flight, currentPack } = store.getState();
       if (!flight) return;
-      const copied = await copyFlightShareLink(flight.id);
+      const copied = await copyFlightShareLink(flight.id, currentPack?.fetch_timestamp);
       if (!copied) return;  // fell back to prompt(); skip the toolbar flash
       const btn = document.getElementById('share-btn') as HTMLButtonElement | null;
       if (btn) {

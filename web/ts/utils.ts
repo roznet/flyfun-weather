@@ -222,21 +222,32 @@ export function errorToMessage(err: unknown): string {
   return raw.replace(/^API \d+:\s*/, '');
 }
 
-/** Build the shareable URL that recipients open to see a flight. Lands on
- *  the flight detail page, which has the Subscribe banner for non-owners. */
-export function flightShareUrl(flightId: string): string {
+/** Build the shareable URL that recipients open to see a flight. When
+ *  `packTimestamp` is given, the link points at that specific briefing pack
+ *  on the briefing page so the recipient sees the exact briefing the sender
+ *  was looking at. Otherwise it lands on the flight detail page, which has
+ *  the Subscribe banner for non-owners. */
+export function flightShareUrl(flightId: string, packTimestamp?: string | null): string {
+  if (packTimestamp) {
+    return `${window.location.origin}/briefing.html?flight=${encodeURIComponent(flightId)}&pack=${encodeURIComponent(packTimestamp)}`;
+  }
   return `${window.location.origin}/flight.html?id=${encodeURIComponent(flightId)}`;
 }
 
-/** Copy the flight share URL to the clipboard. Falls back to a `prompt()`
- *  with the URL pre-filled on browsers where the clipboard API is unavailable
- *  (e.g. plain http origins). Returns true on clipboard success, false on
- *  fallback — callers can use this to decide whether to flash a "copied"
- *  indicator. Throws only on truly unexpected errors. */
-export async function copyFlightShareLink(flightId: string): Promise<boolean> {
-  const url = flightShareUrl(flightId);
+/** Copy the flight (or specific briefing pack) share URL to the clipboard and
+ *  show a confirmation popup explaining the link was copied. Falls back to a
+ *  `prompt()` with the URL pre-filled on browsers where the clipboard API is
+ *  unavailable (e.g. plain http origins). Returns true on clipboard success,
+ *  false on fallback — callers can use this to decide whether to flash a
+ *  "copied" indicator. */
+export async function copyFlightShareLink(
+  flightId: string,
+  packTimestamp?: string | null,
+): Promise<boolean> {
+  const url = flightShareUrl(flightId, packTimestamp);
   try {
     await navigator.clipboard.writeText(url);
+    alert(t('flightDetail.copyShareLinkAlert'));
     return true;
   } catch {
     prompt(t('flightDetail.copyShareLinkFallback'), url);
