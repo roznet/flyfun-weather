@@ -3,12 +3,30 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
+from typing import Literal
 
 from euro_aip.storage.database_storage import DatabaseStorage
 from timezonefinder import TimezoneFinder
 
 from weatherbrief.models import RunwayEnd, Waypoint
+
+
+RejectReason = Literal["detour", "unknown"]
+
+
+@dataclass(frozen=True)
+class RejectedWaypoint:
+    """A middle waypoint that didn't make the resolved route.
+
+    - ``detour``: resolved to a real point but too far off the direct route
+      (RouteResolver's detour filter).
+    - ``unknown``: not found in the DB under the current route context.
+    """
+
+    name: str
+    reason: RejectReason
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +66,7 @@ def is_known_waypoint(code: str, db_path: str) -> bool:
 
 def resolve_waypoints(
     codes: list[str], db_path: str
-) -> tuple[list[Waypoint], list[str]]:
+) -> tuple[list[Waypoint], list[RejectedWaypoint]]:
     """Resolve waypoint codes to Waypoints using euro_aip RouteResolver.
 
     Accepts ICAO airport codes (4 letters), navaid codes (2-3 letters),
@@ -56,9 +74,12 @@ def resolve_waypoints(
     destination midpoint, then progressive proximity) to disambiguate
     navaids that exist in multiple regions (e.g. "ABB" in Europe vs US).
 
-    Middle waypoints whose resolved coordinates fall too far from the
-    route (per RouteResolver's detour filter) are dropped and returned
-    in the rejected list instead of raising.
+    Middle waypoints that don't survive resolution are returned in the
+    ``rejected`` list with a reason — either ``detour`` (resolved but too
+    far off the direct route) or ``unknown`` (no DB match under the route
+    context). Callers decide how to react: strict endpoints (create, move,
+    update) surface these as 422; lenient endpoints (briefing, distance)
+    log and continue with the survivors.
 
     Args:
         codes: Ordered list of waypoint codes (min 2).
@@ -68,12 +89,13 @@ def resolve_waypoints(
         Tuple of (waypoints, rejected):
           - waypoints: resolved Waypoint objects in order, always includes
             departure and destination.
-          - rejected: token names that resolved but were filtered out for
-            being too far off route (empty list when nothing was filtered).
+          - rejected: middle tokens that didn't resolve, each tagged with
+            a reason. Empty when the full list was accepted.
 
     Raises:
-        KeyError: If departure, destination, or any middle code is not
-            found in the database at all.
+        KeyError: If the departure or destination code can't be placed
+            on the map — those are mandatory. Missing middles go into
+            ``rejected`` instead.
     """
     from euro_aip.models.route_resolver import RouteResolver
 
@@ -85,37 +107,34 @@ def resolve_waypoints(
     route_string = " ".join(codes)
     route = resolver.resolve(route_string)
 
-    # euro_aip emits rejected entries as dicts: {"name", "reason", "detour_nm",
-    # "leg_nm", "threshold_nm"}. Older releases lack the field entirely — the
-    # getattr fallback treats that as "nothing rejected".
-    rejected_names = [
-        str(r["name"]) for r in getattr(route, "rejected_waypoints", [])
+    # euro_aip emits detour-rejected entries as dicts: {"name", "reason",
+    # "detour_nm", "leg_nm", "threshold_nm"}. Older releases lack the field
+    # entirely — the getattr fallback treats that as "nothing rejected".
+    rejected: list[RejectedWaypoint] = [
+        RejectedWaypoint(name=str(r["name"]), reason="detour")
+        for r in getattr(route, "rejected_waypoints", [])
     ]
 
-    # Collect all resolved points in order: departure, waypoints, destination
-    all_points = []
-    if route.departure_coords:
-        all_points.append((codes[0], route.departure_coords))
-    else:
+    if not route.departure_coords:
         raise KeyError(f"We did not find in our database: {codes[0]}")
-
-    for name, coord in zip(route.waypoints, route.waypoint_coords):
-        all_points.append((name, coord))
-
-    if route.destination_coords:
-        all_points.append((codes[-1], route.destination_coords))
-    else:
+    if not route.destination_coords:
         raise KeyError(f"We did not find in our database: {codes[-1]}")
 
-    # Middle tokens that were neither resolved nor rejected = genuinely unknown.
-    resolved_middle = set(route.waypoints)
-    rejected_set = {n.upper() for n in rejected_names}
-    missing = [
-        c for c in codes[1:-1]
-        if c.upper() not in resolved_middle and c.upper() not in rejected_set
-    ]
-    if missing:
-        raise KeyError(f"We did not find in our database: {', '.join(missing)}")
+    # Middle tokens that the resolver neither placed nor rejected: the
+    # resolver silently dropped them because no DB entry matched under
+    # route context. Surface them as ``unknown`` so callers see a single
+    # categorized rejection list.
+    resolved_middle_upper = {n.upper() for n in route.waypoints}
+    detour_rejected_upper = {r.name.upper() for r in rejected}
+    for c in codes[1:-1]:
+        cu = c.upper()
+        if cu not in resolved_middle_upper and cu not in detour_rejected_upper:
+            rejected.append(RejectedWaypoint(name=c, reason="unknown"))
+
+    all_points: list[tuple[str, object]] = [(codes[0], route.departure_coords)]
+    for name, coord in zip(route.waypoints, route.waypoint_coords):
+        all_points.append((name, coord))
+    all_points.append((codes[-1], route.destination_coords))
 
     waypoints: list[Waypoint] = []
     for name, coord in all_points:
@@ -129,7 +148,7 @@ def resolve_waypoints(
             Waypoint(icao=name.upper(), name=name.upper(), lat=lat, lon=lon)
         )
 
-    return waypoints, rejected_names
+    return waypoints, rejected
 
 
 def get_runway_ends(icao_codes: list[str], db_path: str) -> dict[str, list[RunwayEnd]]:

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
+from weatherbrief.airports import RejectedWaypoint
 from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
@@ -124,6 +125,23 @@ class FlightResponse(BaseModel):
     role: Literal["owner", "subscriber"] = "owner"
     owner_display_name: str | None = None  # set when role == "subscriber"
     is_subscribed: bool = False  # True when the viewer has subscribed to this flight
+
+
+def _rejected_waypoints_message(rejected: list[RejectedWaypoint]) -> str:
+    """Human-readable 422 detail for resolve_waypoints rejections.
+
+    Separates ``unknown`` (typo / not-in-DB) from ``detour`` (off-route)
+    so the pilot knows how to fix the input. Accepts a list of
+    ``airports.RejectedWaypoint``.
+    """
+    unknown = [r.name for r in rejected if r.reason == "unknown"]
+    detour = [r.name for r in rejected if r.reason == "detour"]
+    parts: list[str] = []
+    if unknown:
+        parts.append(f"We did not find in our database: {', '.join(unknown)}")
+    if detour:
+        parts.append(f"Waypoint(s) resolved too far from route: {', '.join(detour)}")
+    return "; ".join(parts) if parts else "Route could not be resolved"
 
 
 def _compute_flight_id(
@@ -364,10 +382,7 @@ def create_flight(
             if _rejected:
                 raise HTTPException(
                     status_code=422,
-                    detail=(
-                        "Waypoint(s) resolved too far from route: "
-                        f"{', '.join(_rejected)}"
-                    ),
+                    detail=_rejected_waypoints_message(_rejected),
                 )
 
     # Parse departure_time
@@ -495,8 +510,9 @@ def compute_route_distance(
 
     if rejected:
         logger.warning(
-            "compute_route_distance: dropped %d off-route waypoint(s) from %s: %s",
-            len(rejected), req.waypoints, rejected,
+            "compute_route_distance: dropped %d waypoint(s) from %s: %s",
+            len(rejected), req.waypoints,
+            [(r.name, r.reason) for r in rejected],
         )
 
     total_nm = 0.0
@@ -544,49 +560,84 @@ def interpret_route(
     request: Request,
     user_id: str = Depends(current_user_id),
 ):
-    """Interpret a raw route string, resolving known waypoints and skipping unknown tokens.
+    """Interpret a raw ICAO Field-15 route string into a resolved waypoint list.
 
-    Accepts free-form route text (e.g. from a flight plan paste). Extracts tokens
-    matching waypoint patterns, resolves each against the airport/navaid database,
-    and returns the list of recognized waypoints plus any skipped tokens.
+    Pipeline:
+      1. ``parse_field15`` classifies each token (WAYPOINT / AIRWAY /
+         SPEED_LEVEL / FLIGHT_RULE / DIRECT / UNKNOWN).
+      2. Keep only WAYPOINT tokens — IFR, DCT, airway labels, speed/level
+         suffixes are syntactic and never hit the DB.
+      3. ``resolve_waypoints`` does the authoritative pass with route
+         context, returning a survivors list plus reason-tagged rejects.
+
+    All non-waypoint syntax and all rejected tokens are surfaced in
+    ``skipped`` so the preview popup can show the pilot exactly what
+    survived.
     """
-    from weatherbrief.airports import get_timezone, is_known_waypoint, resolve_waypoints
+    from euro_aip.models.field15 import parse_field15, TokenKind
+
+    from weatherbrief.airports import (
+        get_timezone,
+        is_known_waypoint,
+        resolve_waypoints,
+    )
 
     db_path = getattr(request.app.state, "db_path", "")
     if not db_path:
         raise HTTPException(status_code=500, detail="Airport database not configured")
 
-    # Extract tokens that look like waypoint codes
-    tokens = [t.upper() for t in re.split(r"[\s,\-/]+", req.raw_route.strip()) if t]
-    # Filter to valid waypoint patterns (2-5 alphanumeric chars)
-    candidate_tokens = [t for t in tokens if WAYPOINT_RE.match(t)]
+    tokens = parse_field15(req.raw_route)
+    # Everything parse_field15 extracted — matches the
+    # InterpretRouteResponse docstring ("all tokens extracted from the
+    # input") and gives consumers (e.g. an iOS prefill-correction UI)
+    # the full picture of what was parsed, including airway / flight-rule
+    # / direct / speed-level syntax.
+    original_tokens = [t.value for t in tokens]
 
-    # Validate each candidate against the DB; detour filtering happens in the
-    # final resolve below, which rejects middle waypoints that sit too far
-    # off the departure→destination route.
-    interpreted: list[str] = []
+    candidate_waypoints: list[str] = []
     skipped: list[str] = []
-
-    for token in candidate_tokens:
-        # Skip consecutive duplicates (e.g. "ABDIL ABDIL" after filtering)
-        if interpreted and interpreted[-1] == token:
-            continue
-        if is_known_waypoint(token, db_path):
-            interpreted.append(token)
+    for t in tokens:
+        if t.kind is TokenKind.WAYPOINT:
+            # Skip consecutive duplicates (e.g. pasted ``ABDIL ABDIL``)
+            if candidate_waypoints and candidate_waypoints[-1] == t.value:
+                continue
+            candidate_waypoints.append(t.value)
         else:
-            skipped.append(token)
+            # Everything non-waypoint (AIRWAY / FLIGHT_RULE / DIRECT /
+            # SPEED_LEVEL / UNKNOWN) is surfaced in ``skipped`` so the pilot
+            # can see every token that didn't make it into the route — and
+            # so the client can rely on ``interpreted ∪ skipped`` covering
+            # every element of ``original_tokens``.
+            skipped.append(t.value)
 
-    # Final resolve — authoritative list of survivors + rejected.
+    # Pass-through when we have 0-1 candidates — resolver needs >=2 for a
+    # route. The loop below overwrites this from the resolver on the >=2 path.
+    interpreted: list[str] = list(candidate_waypoints)
     waypoint_infos: list[WaypointInfo] = []
-    if len(interpreted) >= 2:
+    if len(candidate_waypoints) >= 2:
         try:
-            resolved, final_rejected = resolve_waypoints(interpreted, db_path)
-            if final_rejected:
-                rej_set = {r.upper() for r in final_rejected}
-                # Move late-rejected tokens to skipped and rebuild interpreted
-                # from the resolver's surviving list so the two stay in sync.
-                skipped.extend(r for r in interpreted if r.upper() in rej_set)
-                interpreted = [wp.icao for wp in resolved]
+            resolved, rejected = resolve_waypoints(candidate_waypoints, db_path)
+        except KeyError:
+            # Departure or destination not placed — the route is a non-starter.
+            # Fall back to a per-token DB check so the popup shows the pilot
+            # which codes are unknown (typo) vs. known-but-not-enough.
+            interpreted = [
+                c for c in candidate_waypoints if is_known_waypoint(c, db_path)
+            ]
+            skipped.extend(
+                c for c in candidate_waypoints if c not in interpreted
+            )
+        else:
+            if rejected:
+                rej_set = {r.name.upper() for r in rejected}
+                # Move late-rejected tokens (detour or unknown-under-context)
+                # to skipped.
+                skipped.extend(
+                    c for c in candidate_waypoints if c.upper() in rej_set
+                )
+            # Always rebuild from the resolver so ``interpreted`` stays in
+            # lock-step with ``waypoint_infos`` (same order, same casing).
+            interpreted = [wp.icao for wp in resolved]
             waypoint_infos = [
                 WaypointInfo(
                     icao=wp.icao,
@@ -597,12 +648,9 @@ def interpret_route(
                 )
                 for wp in resolved
             ]
-        except KeyError:
-            # Should not happen since we pre-filtered, but handle gracefully
-            pass
 
     return InterpretRouteResponse(
-        original_tokens=candidate_tokens,
+        original_tokens=original_tokens,
         interpreted=interpreted,
         skipped=skipped,
         waypoints=waypoint_infos,
@@ -801,9 +849,14 @@ def move_flight(
             from weatherbrief.airports import resolve_waypoints
 
             try:
-                resolve_waypoints(new_waypoints, db_path)
+                _, _rejected = resolve_waypoints(new_waypoints, db_path)
             except KeyError as exc:
                 raise HTTPException(status_code=422, detail=exc.args[0])
+            if _rejected:
+                raise HTTPException(
+                    status_code=422,
+                    detail=_rejected_waypoints_message(_rejected),
+                )
 
     # Past-departure rule mirrors create_flight: only admins can move into the past.
     if new_departure_time < datetime.now(timezone.utc):
@@ -1078,10 +1131,7 @@ def update_flight(
             if _rejected:
                 raise HTTPException(
                     status_code=422,
-                    detail=(
-                        "Waypoint(s) resolved too far from route: "
-                        f"{', '.join(_rejected)}"
-                    ),
+                    detail=_rejected_waypoints_message(_rejected),
                 )
         # Enforce same origin and destination
         old_origin = original_flight.waypoints[0] if original_flight.waypoints else None
