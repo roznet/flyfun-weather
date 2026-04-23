@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
+from weatherbrief.airports import RejectedWaypoint
 from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.models import Flight
 from weatherbrief.storage.flights import (
@@ -126,7 +127,7 @@ class FlightResponse(BaseModel):
     is_subscribed: bool = False  # True when the viewer has subscribed to this flight
 
 
-def _rejected_waypoints_message(rejected) -> str:
+def _rejected_waypoints_message(rejected: list[RejectedWaypoint]) -> str:
     """Human-readable 422 detail for resolve_waypoints rejections.
 
     Separates ``unknown`` (typo / not-in-DB) from ``detour`` (off-route)
@@ -586,7 +587,6 @@ def interpret_route(
         raise HTTPException(status_code=500, detail="Airport database not configured")
 
     tokens = parse_field15(req.raw_route)
-    original_tokens = [t.value for t in tokens]
 
     candidate_waypoints: list[str] = []
     skipped: list[str] = []
@@ -596,13 +596,18 @@ def interpret_route(
             if candidate_waypoints and candidate_waypoints[-1] == t.value:
                 continue
             candidate_waypoints.append(t.value)
-        elif t.kind in (TokenKind.SPEED_LEVEL,):
+        elif t.kind is TokenKind.SPEED_LEVEL:
             # Metadata, not a waypoint — drop silently (not surfaced as skipped).
             continue
         else:
             # AIRWAY / FLIGHT_RULE / DIRECT / UNKNOWN — show the pilot what
             # we set aside so they can sanity-check the parse.
             skipped.append(t.value)
+
+    # ``original_tokens`` has always meant "candidate waypoints before
+    # filtering" (back when the regex grabbed only 2-5 alphanumerics). Keep
+    # that semantic so clients consuming the field see the same shape.
+    original_tokens = list(candidate_waypoints)
 
     interpreted = list(candidate_waypoints)
     waypoint_infos: list[WaypointInfo] = []
