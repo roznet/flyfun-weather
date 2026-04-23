@@ -13,6 +13,7 @@ const baseFlight = (id: string, date: string) => ({
   cruise_altitude_ft: 8000, flight_ceiling_ft: 18000, flight_duration_hours: 4.5,
   private: false, auto_refresh: false, auto_refresh_hour: null,
   created_at: '2026-04-20T10:00:00+00:00',
+  role: 'owner' as const, owner_display_name: null, is_subscribed: false,
 });
 
 async function mockBaseAuth(page: any) {
