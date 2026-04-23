@@ -108,59 +108,90 @@ function isConsensusMode(model: string): boolean {
 }
 
 const CAT_ORDER: Record<string, number> = { VFR: 0, MVFR: 1, IFR: 2, LIFR: 3 };
+const RISK_ORDER = ['none', 'marginal', 'low', 'moderate', 'high', 'extreme'];
+
+// --- Aggregation helpers (numeric) ---
+
+function max(vals: number[]): number { return Math.max(...vals); }
+function min(vals: number[]): number { return Math.min(...vals); }
+function median(vals: number[]): number {
+  const sorted = [...vals].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+function circularMean(degs: number[]): number {
+  const sinSum = degs.reduce((s, d) => s + Math.sin(d * Math.PI / 180), 0);
+  const cosSum = degs.reduce((s, d) => s + Math.cos(d * Math.PI / 180), 0);
+  return ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
+}
+
+// For each numeric metric, how to combine per-model values for Worst (most adverse)
+// and Majority (typical/central). Median is robust to outliers — for 3 models it's the
+// middle one after sorting.
+const NUMERIC_CONSENSUS: Record<
+  'wind_speed_kt' | 'crosswind_kt' | 'headwind_kt' | 'ceiling_ft' | 'cape_jkg' | 'visibility_m' | 'cloud_cover_pct',
+  { worst: (v: number[]) => number; majority: (v: number[]) => number }
+> = {
+  wind_speed_kt:   { worst: max, majority: median },
+  crosswind_kt:    { worst: max, majority: median },
+  headwind_kt:     { worst: max, majority: median },
+  ceiling_ft:      { worst: min, majority: median },
+  cape_jkg:        { worst: max, majority: median },
+  visibility_m:    { worst: min, majority: median },
+  cloud_cover_pct: { worst: max, majority: median },
+};
+
+// Ordinal aggregation for category + risk.
+// Worst: take the worst-ranked value.
+// Majority: modal (most common); if tied or all unique, pick worst among tied candidates.
+function ordinalConsensus(values: string[], order: Record<string, number> | string[], mode: string): string {
+  const rank = Array.isArray(order)
+    ? (v: string) => order.indexOf(v)
+    : (v: string) => order[v] ?? 0;
+  if (mode === 'worst') {
+    return values.reduce((a, b) => rank(a) >= rank(b) ? a : b);
+  }
+  // majority: modal with worse tiebreak
+  const counts = new Map<string, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  const maxCount = Math.max(...counts.values());
+  const tied = [...counts.entries()].filter(([, n]) => n === maxCount).map(([v]) => v);
+  return tied.reduce((a, b) => rank(a) >= rank(b) ? a : b);
+}
 
 function computeConsensus(airport: ForecastAirport, mode: string): ConsensusForecast {
   const models = Object.values(airport.models);
   if (models.length === 0) return { flight_category: 'VFR', agreement: {} };
 
   const cats = models.map(m => m.flight_category);
+  const risks = models.map(m => m.convective_risk || 'none');
 
-  let consensusCat: string;
-  if (mode === 'majority') {
-    const counts = new Map<string, number>();
-    for (const c of cats) counts.set(c, (counts.get(c) ?? 0) + 1);
-    const maxCount = Math.max(...counts.values());
-    const tied = [...counts.entries()].filter(([, n]) => n === maxCount).map(([c]) => c);
-    consensusCat = tied.reduce((a, b) => (CAT_ORDER[a] ?? 0) >= (CAT_ORDER[b] ?? 0) ? a : b);
-  } else {
-    consensusCat = cats.reduce((a, b) => (CAT_ORDER[a] ?? 0) >= (CAT_ORDER[b] ?? 0) ? a : b);
-  }
+  const result: ConsensusForecast = {
+    flight_category: ordinalConsensus(cats, CAT_ORDER, mode),
+    convective_risk: ordinalConsensus(risks, RISK_ORDER, mode),
+    agreement: airport.consensus.agreement,
+  };
 
-  // Use server-computed per-variable agreement — same regardless of consensus mode
-  const agreement = airport.consensus.agreement;
-
-  // Numeric means (same as server logic)
-  const result: ConsensusForecast = { flight_category: consensusCat, agreement };
-  for (const field of ['wind_speed_kt', 'ceiling_ft', 'cape_jkg', 'visibility_m'] as const) {
+  for (const [field, fns] of Object.entries(NUMERIC_CONSENSUS) as Array<[keyof typeof NUMERIC_CONSENSUS, typeof NUMERIC_CONSENSUS[keyof typeof NUMERIC_CONSENSUS]]>) {
     const vals = models.map(m => m[field]).filter((v): v is number => v != null);
-    if (vals.length) (result as any)[field] = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+    if (!vals.length) continue;
+    const fn = mode === 'worst' ? fns.worst : fns.majority;
+    (result as any)[field] = Math.round(fn(vals) * 10) / 10;
   }
-  // Crosswind/headwind consensus: worst (max) across models
-  for (const field of ['crosswind_kt', 'headwind_kt'] as const) {
-    const vals = models.map(m => m[field]).filter((v): v is number => v != null);
-    if (vals.length) (result as any)[field] = Math.round(Math.max(...vals) * 10) / 10;
-  }
-  // Wind direction: circular mean
+
   const dirs = models.map(m => m.wind_dir_deg).filter((v): v is number => v != null);
-  if (dirs.length) {
-    const sinSum = dirs.reduce((s, d) => s + Math.sin(d * Math.PI / 180), 0);
-    const cosSum = dirs.reduce((s, d) => s + Math.cos(d * Math.PI / 180), 0);
-    result.wind_dir_deg = ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
-  }
+  if (dirs.length) result.wind_dir_deg = circularMean(dirs);
 
   return result;
 }
 
 function getConsensus(airport: ForecastAirport, model: string): ConsensusForecast {
-  // For 'worst', use the pre-computed server consensus (avoids recomputation)
-  if (model === 'worst') return airport.consensus;
   return computeConsensus(airport, model);
 }
 
 function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, model: string): string {
   const consensus = isConsensusMode(model);
-  const modelData = consensus ? null : airport.models[model];
-  const data = consensus ? getConsensus(airport, model) : modelData;
+  const data = consensus ? getConsensus(airport, model) : airport.models[model];
   if (!data) return '#888';
 
   switch (metric) {
@@ -176,34 +207,12 @@ function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, mode
       return ceilingColor(data.ceiling_ft ?? null);
     case 'cape_jkg':
       return capeColor(data.cape_jkg ?? 0);
-    case 'convective_risk': {
-      // In consensus mode, pick the worst risk across models
-      if (consensus) {
-        const riskOrder = ['none', 'marginal', 'low', 'moderate', 'high', 'extreme'];
-        let worst = 'none';
-        for (const md of Object.values(airport.models)) {
-          const r = md.convective_risk || 'none';
-          if (riskOrder.indexOf(r) > riskOrder.indexOf(worst)) worst = r;
-        }
-        return RISK_COLORS[worst] || '#888';
-      }
-      return RISK_COLORS[modelData?.convective_risk || 'none'] || '#888';
-    }
-    case 'visibility_m': {
-      if (consensus) {
-        const vals = Object.values(airport.models).map(m => m.visibility_m).filter((v): v is number => v != null);
-        return visibilityColor(vals.length ? Math.min(...vals) : 99999);
-      }
-      return visibilityColor(modelData?.visibility_m ?? 99999);
-    }
-    case 'cloud_cover_pct': {
-      // In consensus mode, average cloud cover across models
-      if (consensus) {
-        const vals = Object.values(airport.models).map(m => m.cloud_cover_pct).filter((v): v is number => v != null);
-        return cloudCoverColor(vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0);
-      }
-      return cloudCoverColor(modelData?.cloud_cover_pct ?? 0);
-    }
+    case 'convective_risk':
+      return RISK_COLORS[data.convective_risk || 'none'] || '#888';
+    case 'visibility_m':
+      return visibilityColor(data.visibility_m ?? 99999);
+    case 'cloud_cover_pct':
+      return cloudCoverColor(data.cloud_cover_pct ?? 0);
     default:
       return '#888';
   }
@@ -229,33 +238,46 @@ function fmtWind(speed: number | null | undefined, dir: number | null | undefine
   return `${dirStr}${Math.round(speed)}${gustStr} kt`;
 }
 
-function fmtRunwayWind(value: number | null | undefined, gustValue: number | null | undefined, runwayId: string | null | undefined, label: string): string | null {
-  if (value == null) return null;
-  const gustStr = gustValue != null ? ` (G${Math.round(gustValue)})` : '';
-  const rwyStr = runwayId ? ` RWY ${runwayId}` : '';
-  return `${label}: ${Math.round(value)}${gustStr} kt${rwyStr}`;
-}
+const METRIC_LABEL: Record<ForecastMetric, string> = {
+  flight_category: 'Category',
+  wind_speed_kt: 'Wind',
+  crosswind_kt: 'Xwind',
+  headwind_kt: 'Headwind',
+  ceiling_ft: 'Ceiling',
+  cape_jkg: 'CAPE',
+  convective_risk: 'Convective',
+  visibility_m: 'Visibility',
+  cloud_cover_pct: 'Cloud cover',
+};
 
-function getMetricLine(data: { [key: string]: any }, metric: ForecastMetric): string | null {
+/** Format the value of a metric (no label) for tooltip display. */
+function formatMetricValue(data: { [key: string]: any }, metric: ForecastMetric): string {
   switch (metric) {
+    case 'flight_category':
+      return data.flight_category ?? '—';
     case 'wind_speed_kt':
-      return data.wind_speed_kt != null ? `Wind: ${fmtWind(data.wind_speed_kt, data.wind_dir_deg, data.wind_gust_kt)}` : null;
+      return data.wind_speed_kt != null ? fmtWind(data.wind_speed_kt, data.wind_dir_deg, data.wind_gust_kt) : '—';
     case 'crosswind_kt':
-      return fmtRunwayWind(data.crosswind_kt, data.gust_crosswind_kt, data.best_runway_id, 'Xwind');
-    case 'headwind_kt':
-      return fmtRunwayWind(data.headwind_kt, data.gust_headwind_kt, data.best_runway_id, 'Headwind');
+    case 'headwind_kt': {
+      const v = data[metric];
+      if (v == null) return '—';
+      const gust = metric === 'crosswind_kt' ? data.gust_crosswind_kt : data.gust_headwind_kt;
+      const gustStr = gust != null ? ` (G${Math.round(gust)})` : '';
+      const rwyStr = data.best_runway_id ? ` RWY ${data.best_runway_id}` : '';
+      return `${Math.round(v)}${gustStr} kt${rwyStr}`;
+    }
     case 'ceiling_ft':
-      return data.ceiling_ft != null ? `Ceiling: ${fmtCeiling(data.ceiling_ft)}` : null;
+      return data.ceiling_ft != null ? fmtCeiling(data.ceiling_ft) : '—';
     case 'visibility_m':
-      return data.visibility_m != null ? `Visibility: ${fmtVisibility(data.visibility_m)}` : null;
+      return data.visibility_m != null ? fmtVisibility(data.visibility_m) : '—';
     case 'cape_jkg':
-      return data.cape_jkg != null ? `CAPE: ${Math.round(data.cape_jkg)} J/kg` : null;
+      return data.cape_jkg != null ? `${Math.round(data.cape_jkg)} J/kg` : '—';
     case 'convective_risk':
-      return `Convective: ${data.convective_risk || 'none'}`;
+      return data.convective_risk || 'none';
     case 'cloud_cover_pct':
-      return data.cloud_cover_pct != null ? `Cloud cover: ${Math.round(data.cloud_cover_pct)}%` : null;
+      return data.cloud_cover_pct != null ? `${Math.round(data.cloud_cover_pct)}%` : '—';
     default:
-      return null;
+      return '—';
   }
 }
 
@@ -280,62 +302,26 @@ function getAgreementForMetric(consensus: ConsensusForecast, metric: ForecastMet
   return consensus.agreement[key] ?? null;
 }
 
-/** Format per-model value for a given metric. */
-function getModelMetricValue(d: ModelForecast, metric: ForecastMetric): string {
-  switch (metric) {
-    case 'flight_category': return d.flight_category;
-    case 'wind_speed_kt': return d.wind_speed_kt != null ? fmtWind(d.wind_speed_kt, d.wind_dir_deg, d.wind_gust_kt) : '—';
-    case 'crosswind_kt': return fmtRunwayWind(d.crosswind_kt, d.gust_crosswind_kt, d.best_runway_id, 'Xwind') ?? '—';
-    case 'headwind_kt': return fmtRunwayWind(d.headwind_kt, d.gust_headwind_kt, d.best_runway_id, 'Hdwind') ?? '—';
-    case 'ceiling_ft': return d.ceiling_ft != null ? fmtCeiling(d.ceiling_ft) : '—';
-    case 'visibility_m': return d.visibility_m != null ? fmtVisibility(d.visibility_m) : '—';
-    case 'cape_jkg': return d.cape_jkg != null ? `${Math.round(d.cape_jkg)} J/kg` : '—';
-    case 'convective_risk': return d.convective_risk || 'none';
-    case 'cloud_cover_pct': return d.cloud_cover_pct != null ? `${Math.round(d.cloud_cover_pct)}%` : '—';
-    default: return '—';
-  }
-}
-
 function getForecastTooltip(airport: ForecastAirport, model: string, metric: ForecastMetric): string {
   const lines: string[] = [`<b>${airport.icao}</b>`];
+  const label = METRIC_LABEL[metric];
 
   if (isConsensusMode(model)) {
     const c = getConsensus(airport, model);
+    const modeName = model === 'worst' ? 'Worst' : 'Majority';
 
-    // Consensus value for the selected metric
-    if (metric === 'flight_category') {
-      lines.push(`Category: <b>${c.flight_category}</b>`);
-    } else if (metric === 'convective_risk') {
-      const riskOrder = ['none', 'marginal', 'low', 'moderate', 'high', 'extreme'];
-      let worst = 'none';
-      for (const md of Object.values(airport.models)) {
-        const r = md.convective_risk || 'none';
-        if (riskOrder.indexOf(r) > riskOrder.indexOf(worst)) worst = r;
-      }
-      lines.push(`Convective: <b>${worst}</b>`);
-    } else {
-      const line = getMetricLine(c, metric);
-      if (line) lines.push(line);
-    }
+    lines.push(`${modeName} ${label.toLowerCase()}: <b>${formatMetricValue(c, metric)}</b>`);
 
-    // Agreement for selected metric
     const agr = getAgreementForMetric(c, metric);
     if (agr) lines.push(`Models: ${agr}`);
 
-    // Per-model values for the selected metric
     for (const [m, d] of Object.entries(airport.models)) {
-      const val = getModelMetricValue(d, metric);
-      lines.push(`<span style="color:var(--text-muted)">${m.toUpperCase()}: ${val}</span>`);
+      lines.push(`<span style="color:var(--text-muted)">${m.toUpperCase()}: ${formatMetricValue(d, metric)}</span>`);
     }
   } else {
     const d = airport.models[model];
     if (!d) { lines.push('No data'); return lines.join('<br>'); }
-    if (metric === 'flight_category') {
-      lines.push(`Category: <b>${d.flight_category}</b>`);
-    } else {
-      const line = getMetricLine(d, metric);
-      if (line) lines.push(line);
-    }
+    lines.push(`${label}: <b>${formatMetricValue(d, metric)}</b>`);
   }
   return lines.join('<br>');
 }
@@ -467,6 +453,7 @@ export class WeatherMap {
   private markersGroup: L.LayerGroup | null = null;
   private legendEl: HTMLElement | null = null;
   private tileLayer: L.TileLayer | null = null;
+  private zoomHandler: (() => void) | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -498,13 +485,25 @@ export class WeatherMap {
   }
 
   private markerRadius(): number {
-    if (!this.map) return 5;
+    if (!this.map) return 7;
     const z = this.map.getZoom();
-    if (z <= 4) return 3;
-    if (z <= 5) return 4;
-    if (z <= 6) return 5;
-    if (z <= 7) return 6;
-    return 8;
+    if (z <= 4) return 5;
+    if (z <= 5) return 6;
+    if (z <= 6) return 7;
+    if (z <= 7) return 9;
+    return 11;
+  }
+
+  private attachZoomHandler(): void {
+    if (!this.map) return;
+    if (this.zoomHandler) this.map.off('zoomend', this.zoomHandler);
+    this.zoomHandler = () => {
+      const nr = this.markerRadius();
+      this.markersGroup?.eachLayer((layer) => {
+        if (layer instanceof L.CircleMarker) layer.setRadius(nr);
+      });
+    };
+    this.map.on('zoomend', this.zoomHandler);
   }
 
   setForecastData(data: ForecastMapResponse, metric: ForecastMetric, model: string): void {
@@ -532,15 +531,7 @@ export class WeatherMap {
       marker.addTo(this.markersGroup);
     }
 
-    // Update marker sizes on zoom
-    this.map.off('zoomend.markers');
-    this.map.on('zoomend.markers', () => {
-      const nr = this.markerRadius();
-      this.markersGroup?.eachLayer((layer) => {
-        if (layer instanceof L.CircleMarker) layer.setRadius(nr);
-      });
-    });
-
+    this.attachZoomHandler();
     this.renderLegend(FORECAST_LEGENDS[metric]);
   }
 
@@ -571,13 +562,7 @@ export class WeatherMap {
       marker.addTo(this.markersGroup);
     }
 
-    this.map.off('zoomend.markers');
-    this.map.on('zoomend.markers', () => {
-      const nr = this.markerRadius();
-      this.markersGroup?.eachLayer((layer) => {
-        if (layer instanceof L.CircleMarker) layer.setRadius(nr);
-      });
-    });
+    this.attachZoomHandler();
 
     // Verification legend
     const verifLegends: Record<VerifMetric, { title: string; items: Array<{ color: string; label: string }> }> = {

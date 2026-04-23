@@ -42,6 +42,8 @@ export interface ConsensusForecast {
   ceiling_ft?: number;
   cape_jkg?: number;
   visibility_m?: number;
+  cloud_cover_pct?: number;
+  convective_risk?: string;
 }
 
 export interface ForecastMapResponse {
