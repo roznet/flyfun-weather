@@ -587,6 +587,12 @@ def interpret_route(
         raise HTTPException(status_code=500, detail="Airport database not configured")
 
     tokens = parse_field15(req.raw_route)
+    # Everything parse_field15 extracted — matches the
+    # InterpretRouteResponse docstring ("all tokens extracted from the
+    # input") and gives consumers (e.g. an iOS prefill-correction UI)
+    # the full picture of what was parsed, including airway / flight-rule
+    # / direct / speed-level syntax.
+    original_tokens = [t.value for t in tokens]
 
     candidate_waypoints: list[str] = []
     skipped: list[str] = []
@@ -604,12 +610,9 @@ def interpret_route(
             # we set aside so they can sanity-check the parse.
             skipped.append(t.value)
 
-    # ``original_tokens`` has always meant "candidate waypoints before
-    # filtering" (back when the regex grabbed only 2-5 alphanumerics). Keep
-    # that semantic so clients consuming the field see the same shape.
-    original_tokens = list(candidate_waypoints)
-
-    interpreted = list(candidate_waypoints)
+    # Pass-through when we have 0-1 candidates — resolver needs >=2 for a
+    # route. The loop below overwrites this from the resolver on the >=2 path.
+    interpreted: list[str] = list(candidate_waypoints)
     waypoint_infos: list[WaypointInfo] = []
     if len(candidate_waypoints) >= 2:
         try:
@@ -628,11 +631,13 @@ def interpret_route(
             if rejected:
                 rej_set = {r.name.upper() for r in rejected}
                 # Move late-rejected tokens (detour or unknown-under-context)
-                # to skipped and rebuild interpreted from survivors.
+                # to skipped.
                 skipped.extend(
                     c for c in candidate_waypoints if c.upper() in rej_set
                 )
-                interpreted = [wp.icao for wp in resolved]
+            # Always rebuild from the resolver so ``interpreted`` stays in
+            # lock-step with ``waypoint_infos`` (same order, same casing).
+            interpreted = [wp.icao for wp in resolved]
             waypoint_infos = [
                 WaypointInfo(
                     icao=wp.icao,
