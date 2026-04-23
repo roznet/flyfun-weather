@@ -1,0 +1,37 @@
+name: Alembic migrations
+
+on:
+  pull_request:
+    paths:
+      - 'alembic/versions/**'
+      - 'alembic.ini'
+
+jobs:
+  single-head:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install alembic sqlalchemy
+      - name: Check alembic has exactly one head
+        run: |
+          python - <<'PY'
+          import sys
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+
+          cfg = Config("alembic.ini")
+          script = ScriptDirectory.from_config(cfg)
+          heads = script.get_heads()
+          if len(heads) != 1:
+              print(f"FAIL: expected 1 alembic head, got {len(heads)}: {heads}")
+              print("Two migrations probably descend from the same parent — this")
+              print("happens when a long-lived branch picks a revision number that")
+              print("gets taken on main before the branch is merged.")
+              print("Fix: renumber the conflicting migration to descend from the")
+              print("current head instead (update revision + down_revision + filename).")
+              sys.exit(1)
+          print(f"OK: single alembic head: {heads[0]}")
+          PY

@@ -72,6 +72,12 @@ git diff ${SERVER_SHA}..${LOCAL_SHA} -- alembic/versions/
 
 If new or changed migration files are found, **warn the user prominently** that migrations will need to run after deploy.
 
+**Also verify a single alembic head.** A long-lived branch may add a migration numbered `N` while main has independently grown past `N`, leaving two heads both descending from the same parent. `alembic upgrade head` will fail with `Multiple head revisions` in that case. CI (`.github/workflows/alembic-check.yml`) enforces this on PRs, but run it locally as a belt-and-suspenders check against what's about to deploy:
+```bash
+source venv/bin/activate && alembic heads | grep -c '(head)'
+```
+Must print `1`. If it prints `2+`, the migration with the lower number needs to be renumbered to descend from the current head (update `revision`, `down_revision`, and the filename).
+
 ## Disk usage check
 
 Before deploying, check disk usage on the server:
