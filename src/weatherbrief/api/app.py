@@ -14,7 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from flyfun_common.auth import create_auth_router, get_jwt_secret, is_dev_mode
+from flyfun_common.auth import (
+    SlidingSessionMiddleware,
+    create_auth_router,
+    get_jwt_secret,
+    is_dev_mode,
+)
 from flyfun_common.autorouter import create_autorouter_router
 from flyfun_common.oauth import create_oauth_router
 from flyfun_common.db import (
@@ -226,6 +231,10 @@ def create_app() -> FastAPI:
         same_site="none",
         https_only=not is_dev_mode(),
     )
+
+    # Rolling JWT cookie — refreshes flyfun_auth when it drops below the
+    # refresh threshold so active users stay logged in up to the hard cap.
+    app.add_middleware(SlidingSessionMiddleware)
 
     if is_dev_mode():
         app.add_middleware(
