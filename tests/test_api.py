@@ -877,7 +877,7 @@ class TestInterpretRoute:
         data = resp.json()
         # Endpoints survive, syntax tokens are set aside
         assert data["interpreted"] == ["EGBJ", "LFOV"]
-        # N0152F100 (speed/level) is metadata, not surfaced.
-        # IFR (flight-rule), DCT (direct), M150 (airway) are shown so pilot
-        # sees what was parsed.
-        assert set(data["skipped"]) == {"IFR", "DCT", "M150"}
+        # All non-waypoint tokens surface in skipped so the pilot sees
+        # every parsed token and ``interpreted ∪ skipped`` covers
+        # ``original_tokens``.
+        assert set(data["skipped"]) == {"N0152F100", "IFR", "DCT", "M150"}

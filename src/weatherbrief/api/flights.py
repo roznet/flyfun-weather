@@ -602,12 +602,12 @@ def interpret_route(
             if candidate_waypoints and candidate_waypoints[-1] == t.value:
                 continue
             candidate_waypoints.append(t.value)
-        elif t.kind is TokenKind.SPEED_LEVEL:
-            # Metadata, not a waypoint — drop silently (not surfaced as skipped).
-            continue
         else:
-            # AIRWAY / FLIGHT_RULE / DIRECT / UNKNOWN — show the pilot what
-            # we set aside so they can sanity-check the parse.
+            # Everything non-waypoint (AIRWAY / FLIGHT_RULE / DIRECT /
+            # SPEED_LEVEL / UNKNOWN) is surfaced in ``skipped`` so the pilot
+            # can see every token that didn't make it into the route — and
+            # so the client can rely on ``interpreted ∪ skipped`` covering
+            # every element of ``original_tokens``.
             skipped.append(t.value)
 
     # Pass-through when we have 0-1 candidates — resolver needs >=2 for a
