@@ -227,9 +227,15 @@ def fill_terrain(field: np.ndarray, terrain_mask: np.ndarray) -> np.ndarray:
 def compute_theta_e(
     T850: np.ndarray, Td850: np.ndarray, pressure_hPa: float = 850.0,
 ) -> np.ndarray:
-    """Equivalent potential temperature from T and Td at 850hPa.
+    """Equivalent potential temperature from T and Td at the given pressure.
 
-    Uses MetPy (already a project dependency). Returns θe in Kelvin.
+    Uses MetPy (already a project dependency). ``pressure_hPa`` defaults
+    to 850 hPa for frontal-detection back-compat, but Hewson precompute
+    calls this with 925 / 850 / 700 hPa — the parameter must be passed
+    explicitly when the inputs are from another level or the θe values
+    will be wrong. The ``T850`` / ``Td850`` parameter names are historical
+    (the function originated as 850-only); the values may come from any
+    level the caller chooses. Returns θe in Kelvin.
     """
     import metpy.calc as mpcalc
     from metpy.units import units

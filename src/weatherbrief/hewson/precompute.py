@@ -313,8 +313,16 @@ def load_snapshot(path: Path | str) -> dict:
 
     Convenience wrapper for readers (map endpoint, cross-section bands,
     advisory evaluators). Keys mirror the NPZ file — see module docstring
-    for the schema. Arrays are materialized in memory on load; snapshots
-    are small (≲500 KB) so no memory-mapping complexity is needed.
+    for the schema. Arrays are materialized in memory on load.
+
+    Size note: a default snapshot is ~46 MB compressed (3 h stride × 40
+    timesteps × 3 levels × 6 metrics × float32, see § 5 of the design
+    doc). ``np.load`` decompresses each array on first access, which can
+    take ~100–300 ms for the full dict on a cold disk. Callers running
+    inside an async event loop (FastAPI route handlers etc.) must invoke
+    this from ``asyncio.to_thread`` or an equivalent threadpool offload,
+    or index the NPZ lazily (``with np.load(path) as npz: npz['metric_L'][h]``)
+    to decompress only the slice they need.
     """
     with np.load(Path(path)) as npz:
         return {k: npz[k] for k in npz.files}
