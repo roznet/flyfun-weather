@@ -56,15 +56,16 @@ ECMWF_MICROPHYSICS_VARS = {
     "cc",     # Cloud cover fraction per level (0-1, convert to 0-100%)
 }
 
-# Full sounding variables available on pressure levels.
+# Full sounding variables available on pressure levels (post-2026-04-22
+# amendment: d dropped, gh added at all 25 levels).
 ECMWF_SOUNDING_VARS = {
     "t",      # Temperature (K)
     "r",      # Relative humidity (%)
     "u",      # U wind component (m/s)
     "v",      # V wind component (m/s)
-    "z",      # Geopotential (m²/s²)
+    "z",      # Geopotential (m²/s²), delivered at 1 hPa only (catalogue limit)
+    "gh",     # Geopotential height (gpm), at all 25 pressure levels
     "w",      # Vertical velocity / omega (Pa/s)
-    "d",      # Divergence (1/s)
     "cc",     # Cloud cover fraction (0-1)
     "clwc",   # Cloud liquid water content (kg/kg)
     "ciwc",   # Cloud ice water content (kg/kg)
