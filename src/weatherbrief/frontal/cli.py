@@ -2109,6 +2109,73 @@ def _cmd_charts(args: argparse.Namespace) -> None:
             print(f"  Zone overlay → {out}")
 
 
+def _cmd_route_hewson(args: argparse.Namespace) -> None:
+    """Sample Hewson diagnostic fields along a route of ICAO waypoints."""
+    from weatherbrief.airports import resolve_waypoints
+    from weatherbrief.frontal.case import load_case
+    from weatherbrief.frontal.route_sampling import sample_hewson_at_route
+
+    case = load_case(Path(args.case))
+    if args.model not in case.models:
+        print(
+            f"Error: model '{args.model}' not in case (available: {case.models})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    codes = args.waypoints.split()
+    if len(codes) < 2:
+        print("Error: provide at least 2 waypoints", file=sys.stderr)
+        sys.exit(1)
+
+    waypoints, rejected = resolve_waypoints(codes, args.airports_db)
+    if rejected:
+        for r in rejected:
+            print(f"  (rejected {r.name}: {r.reason})", file=sys.stderr)
+
+    samples = sample_hewson_at_route(
+        case, args.model,
+        [(wp.lat, wp.lon) for wp in waypoints],
+        hours=args.hour,
+    )
+
+    # Thresholds from designs/future/hewson-fields-aviation-advisories.md §3.
+    # θe (raw) has no meaningful threshold — pass warn=None to skip coloring.
+    def _fmt(value: float, warn: float | None, alert: float | None, units: str) -> str:
+        if np.isnan(value):
+            return f"   NaN {units}"
+        label = f"{value:7.2f} {units}"
+        if warn is None or alert is None:
+            return label
+        mag = abs(value)
+        if mag >= alert:
+            return f"\033[91m{label}\033[0m"   # red
+        if mag >= warn:
+            return f"\033[93m{label}\033[0m"   # yellow
+        return label
+
+    header = (
+        f"Case: {case.case_name}  model={args.model}  hour={args.hour}"
+    )
+    print(header)
+    print("-" * len(header))
+    print(
+        f"{'ICAO':<6} {'lat':>7} {'lon':>8}  "
+        f"{'θe (K)':>14} {'|∇θe|':>22} {'−∇²θe':>22} "
+        f"{'TFP':>22} {'adv':>22} {'∂θe/∂t':>22}"
+    )
+    for wp, s in zip(waypoints, samples):
+        print(
+            f"{wp.icao:<6} {wp.lat:7.3f} {wp.lon:8.3f}  "
+            f"{_fmt(s['theta_e'],      None, None, 'K      '):>14} "
+            f"{_fmt(s['gradient'],     4,    8,    'K/100km'):>22} "
+            f"{_fmt(s['neg_laplacian'],2,    5,    'K/100² '):>22} "
+            f"{_fmt(s['tfp'],          2,    5,    'K/100² '):>22} "
+            f"{_fmt(s['advection'],    1,    2,    'K/h    '):>22} "
+            f"{_fmt(s['tendency'],     0.5,  1,    'K/h    '):>22}"
+        )
+
+
 def _cmd_redraw_zones(args: argparse.Namespace) -> None:
     """Redraw analysis_with_zones.png for a case using its current expected.yaml."""
     case_dir = Path(args.case)
@@ -2393,6 +2460,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Which expected.yaml entry to visualize (default: 0 = analysis)",
     )
 
+    # route-hewson
+    p_route_hewson = sub.add_parser(
+        "route-hewson",
+        help="Sample Hewson diagnostics along a route of ICAO waypoints",
+    )
+    p_route_hewson.add_argument(
+        "--case", required=True,
+        help="Calibration case dir (e.g. data/calibration/2023-11-02_era5_ciaran)",
+    )
+    p_route_hewson.add_argument(
+        "--model", default="era5",
+        help="Model key as present in the case (default: era5)",
+    )
+    p_route_hewson.add_argument(
+        "--waypoints", required=True,
+        help='Space-separated ICAO codes (e.g. "LFPG LFSB LIMC")',
+    )
+    p_route_hewson.add_argument(
+        "--hour", type=float, default=0.0,
+        help="Forecast hour offset from case start (fractional ok). Default 0.",
+    )
+    p_route_hewson.add_argument(
+        "--airports-db",
+        default="data/nav.db",
+        help="Path to euro_aip airports SQLite DB (default: data/nav.db)",
+    )
+
     # clear-cache
     p_clear = sub.add_parser("clear-cache", help="Delete cached grid data")
     p_clear.add_argument("--cache-dir")
@@ -2424,6 +2518,7 @@ def main() -> None:
         "charts": _cmd_charts,
         "redraw-zones": _cmd_redraw_zones,
         "plot-hewson": _cmd_plot_hewson,
+        "route-hewson": _cmd_route_hewson,
         "clear-cache": _cmd_clear_cache,
     }
     commands[args.command](args)
