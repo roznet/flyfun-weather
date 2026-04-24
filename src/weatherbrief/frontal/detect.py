@@ -194,6 +194,89 @@ def compute_frontal_zones_dual(
     }
 
 
+def compute_hewson_diagnostics(
+    field: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    u: np.ndarray,
+    v: np.ndarray,
+    terrain_mask: np.ndarray | None = None,
+    smooth_sigma: float = 0.5,
+    heavy_sigma: float = 2.0,
+) -> dict:
+    """Compute all Hewson 1998 / Hewson & Titley 2010 diagnostic fields.
+
+    These are the raw ingredients of the full Hewson formula, computed
+    without any threshold or mask logic. Intended for visualization and
+    threshold calibration before plumbing new criteria into detection.
+
+    Formulas (with τ = field, ∇̂τ = ∇τ/|∇τ|):
+        gradient       = |∇τ|                            K / 100km
+        tfp            = −∇|∇τ| · ∇̂τ                    K / (100km)²
+        neg_laplacian  = −∇²τ                            K / (100km)²
+        advection      = −V · ∇τ                          K / h
+
+    Light smoothing (smooth_sigma) is used for the gradient (sensitivity).
+    Heavy smoothing (heavy_sigma) is used for TFP and the Laplacian so
+    the second derivatives survive at 0.5° resolution.
+
+    Returned dict keys:
+        field_smooth, gradient, tfp, neg_laplacian, advection,
+        dT_dx, dT_dy  (in K/km for reuse by callers).
+    """
+    field_input = field
+    if terrain_mask is not None:
+        field_input = fill_terrain(field, terrain_mask)
+
+    field_smooth = gaussian_filter(field_input, sigma=smooth_sigma)
+    field_heavy = gaussian_filter(field_input, sigma=heavy_sigma)
+
+    dlat_km = 111.0
+    dlon_km = 111.0 * np.cos(np.radians(lat))
+    dlat_spacing = dlat_km * np.abs(np.diff(lat).mean())
+    dlon_spacing_per_row = dlon_km * np.abs(np.diff(lon).mean())
+    dlon_col = dlon_spacing_per_row[:, np.newaxis]
+
+    # Light-smoothed gradient (K/km, then /100 → K/100km)
+    dT_dy = np.gradient(field_smooth, dlat_spacing, axis=0)
+    dT_dx = np.gradient(field_smooth, axis=1) / dlon_col
+    grad_mag = np.sqrt(dT_dx**2 + dT_dy**2)
+    grad_mag_100km = grad_mag * 100.0
+
+    # Heavy-smoothed derivatives for TFP and Laplacian
+    dH_dy = np.gradient(field_heavy, dlat_spacing, axis=0)
+    dH_dx = np.gradient(field_heavy, axis=1) / dlon_col
+    grad_heavy = np.sqrt(dH_dx**2 + dH_dy**2)
+
+    grad_norm = np.where(grad_heavy > 1e-10, grad_heavy, 1e-10)
+    unit_x = dH_dx / grad_norm
+    unit_y = dH_dy / grad_norm
+
+    # TFP = −∇|∇τ| · ∇̂τ, scaled to K / (100km)²
+    d_gradmag_dy = np.gradient(grad_heavy, dlat_spacing, axis=0)
+    d_gradmag_dx = np.gradient(grad_heavy, axis=1) / dlon_col
+    tfp = -(d_gradmag_dx * unit_x + d_gradmag_dy * unit_y) * 100.0 * 100.0
+
+    # −∇²τ on heavy field, scaled to K / (100km)²
+    d2_dy2 = np.gradient(dH_dy, dlat_spacing, axis=0)
+    d2_dx2 = np.gradient(dH_dx, axis=1) / dlon_col
+    neg_laplacian = -(d2_dx2 + d2_dy2) * 100.0 * 100.0
+
+    # Advection −V · ∇τ on the light-smoothed gradient.
+    # u, v in km/h; dT_d? in K/km → advection in K/h.
+    advection = -(u * dT_dx + v * dT_dy)
+
+    return {
+        "field_smooth": field_smooth,
+        "gradient": grad_mag_100km,
+        "tfp": tfp,
+        "neg_laplacian": neg_laplacian,
+        "advection": advection,
+        "dT_dx": dT_dx,
+        "dT_dy": dT_dy,
+    }
+
+
 def classify_front_type(
     dT_dx: np.ndarray,
     dT_dy: np.ndarray,

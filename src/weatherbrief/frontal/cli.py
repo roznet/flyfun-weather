@@ -1257,6 +1257,295 @@ def _cmd_diagnose(args: argparse.Namespace) -> None:
         )
 
 
+def _cmd_plot_hewson(args: argparse.Namespace) -> None:
+    """Render the full set of Hewson 1998 / Hewson & Titley 2010 diagnostic fields."""
+    import json
+
+    from weatherbrief.frontal.detect import (
+        classify_front_type,
+        compute_frontal_zones_dual,
+        compute_hewson_diagnostics,
+    )
+
+    case_dir = Path(args.case)
+    model_key = args.model
+    hour = args.hour
+    field_name = args.field
+
+    if field_name not in ("T850", "theta_e"):
+        print(f"Error: --field must be T850 or theta_e (got {field_name})", file=sys.stderr)
+        sys.exit(1)
+
+    raw_path = case_dir / "raw" / f"{model_key}.json"
+    if not raw_path.exists():
+        print(f"Error: {raw_path} not found", file=sys.stderr)
+        sys.exit(1)
+
+    raw = json.loads(raw_path.read_text())
+    lat, lon = build_grid_coords()
+    terrain_mask = build_terrain_mask(lat, lon)
+
+    n_hours = len(list(raw.values())[0][0])
+    all_fields: dict[int, dict] = {}
+    for h in range(min(n_hours, 97)):
+        fields = reshape_to_fields(raw, lat, lon, h, terrain_mask)
+        if fields is not None:
+            all_fields[h] = fields
+
+    if hour not in all_fields:
+        print(f"Error: no data at hour {hour}", file=sys.stderr)
+        sys.exit(1)
+
+    fields = all_fields[hour]
+
+    # Hewson diagnostics on chosen τ
+    diag = compute_hewson_diagnostics(
+        fields[field_name], lat, lon,
+        u=fields["u850"], v=fields["v850"],
+        terrain_mask=terrain_mask,
+    )
+
+    # Time tendency from adjacent hours (centered diff if possible)
+    if (hour + 1) in all_fields and (hour - 1) in all_fields:
+        tendency = (all_fields[hour + 1][field_name] - all_fields[hour - 1][field_name]) / 2
+        tendency_label = f"∂τ/∂t (centered, K/h)"
+    elif (hour + 1) in all_fields:
+        tendency = all_fields[hour + 1][field_name] - fields[field_name]
+        tendency_label = f"∂τ/∂t (forward, K/h)"
+    elif (hour - 1) in all_fields:
+        tendency = fields[field_name] - all_fields[hour - 1][field_name]
+        tendency_label = f"∂τ/∂t (backward, K/h)"
+    else:
+        tendency = None
+        tendency_label = "∂τ/∂t (unavailable)"
+
+    # Current production detection mask (for overlay on each panel)
+    dual = compute_frontal_zones_dual(
+        fields["T850"], fields["theta_e"], lat, lon,
+        terrain_mask=terrain_mask,
+        t_gradient_threshold=args.threshold,
+        te_gradient_threshold=args.te_threshold,
+    )
+    classified = classify_front_type(
+        dual["dT_dx"], dual["dT_dy"],
+        fields["u850"], fields["v850"],
+        dual["frontal_mask"],
+        detected_by=dual["detected_by"],
+    )
+
+    # Expected zones for this case/hour (if annotated)
+    expected_fronts = _load_expected_fronts(case_dir, hour_offset=hour)
+
+    output = args.output
+    if not output:
+        output = str(case_dir / f"hewson_{model_key}_{field_name}_T{hour}.png")
+
+    _plot_hewson(
+        field_name=field_name, field_raw=fields[field_name],
+        diag=diag, tendency=tendency, tendency_label=tendency_label,
+        frontal_mask=dual["frontal_mask"], classified=classified,
+        expected_fronts=expected_fronts,
+        lat=lat, lon=lon, terrain_mask=terrain_mask,
+        model_key=model_key, hour=hour, output=output,
+    )
+
+
+def _plot_hewson(
+    field_name: str,
+    field_raw: np.ndarray,
+    diag: dict,
+    tendency: np.ndarray | None,
+    tendency_label: str,
+    frontal_mask: np.ndarray,
+    classified: np.ndarray,
+    expected_fronts: dict[str, str],
+    lat: np.ndarray,
+    lon: np.ndarray,
+    terrain_mask: np.ndarray | None,
+    model_key: str,
+    hour: int,
+    output: str,
+) -> None:
+    """Render a 2×3 Hewson diagnostics figure."""
+    try:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        import matplotlib.patches as mpatches
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print(
+            "Error: cartopy required. Install: pip install -e '.[frontal-dev]'",
+            file=sys.stderr,
+        )
+        return
+
+    lon_grid, lat_grid = np.meshgrid(lon, lat)
+    extent = [-20, 28, 35, 62]
+
+    field_label = "θe" if field_name == "theta_e" else "T850"
+
+    # Sensible ranges for θe (K) and T850 (°C)
+    if field_name == "theta_e":
+        field_min = np.nanpercentile(diag["field_smooth"], 5)
+        field_max = np.nanpercentile(diag["field_smooth"], 95)
+    else:
+        field_min = np.nanpercentile(diag["field_smooth"], 5)
+        field_max = np.nanpercentile(diag["field_smooth"], 95)
+
+    fig, axes = plt.subplots(
+        2, 3, figsize=(22, 12),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+    )
+
+    def _decorate(ax):
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.7)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.4, linestyle=":")
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+        # Zone boxes
+        for zone_name, bounds in ZONES.items():
+            lat0, lat1 = bounds["lat"]
+            lon0, lon1 = bounds["lon"]
+            ls = "-" if zone_name in expected_fronts else "--"
+            lw = 1.2 if zone_name in expected_fronts else 0.5
+            ec = "black" if zone_name in expected_fronts else "gray"
+            ax.plot(
+                [lon0, lon1, lon1, lon0, lon0],
+                [lat0, lat0, lat1, lat1, lat0],
+                color=ec, linewidth=lw, linestyle=ls,
+                transform=ccrs.PlateCarree(),
+            )
+
+    def _mask_overlay(ax):
+        """Current-production mask as a red contour + classified dots."""
+        ax.contour(
+            lon_grid, lat_grid, frontal_mask.astype(float),
+            levels=[0.5], colors="red", linewidths=1.2,
+            transform=ccrs.PlateCarree(),
+        )
+        # Classified points: cold=blue, warm=magenta, indeterminate=gray
+        for cls_val, color, marker in [(1, "#1f5fd9", "v"), (2, "#d93131", "^"), (3, "gray", ".")]:
+            ys, xs = np.where(classified == cls_val)
+            if len(xs) == 0:
+                continue
+            ax.scatter(
+                lon[xs], lat[ys],
+                s=8, c=color, marker=marker, alpha=0.75,
+                edgecolors="none", transform=ccrs.PlateCarree(),
+            )
+
+    # Panel 1 — τ field
+    ax = axes[0, 0]
+    im = ax.pcolormesh(
+        lon_grid, lat_grid, diag["field_smooth"],
+        cmap="RdYlBu_r", vmin=field_min, vmax=field_max,
+        transform=ccrs.PlateCarree(), alpha=0.8,
+    )
+    plt.colorbar(im, ax=ax, shrink=0.7, label=f"{field_label}")
+    _mask_overlay(ax)
+    _decorate(ax)
+    ax.set_title(f"1. τ = {field_label} (smoothed)", fontweight="bold")
+
+    # Panel 2 — |∇τ|  (the current detector signal)
+    ax = axes[0, 1]
+    grad_max = 10.0 if field_name == "theta_e" else 5.0
+    im = ax.pcolormesh(
+        lon_grid, lat_grid, diag["gradient"],
+        cmap="YlOrRd", vmin=0, vmax=grad_max,
+        transform=ccrs.PlateCarree(), alpha=0.85,
+    )
+    plt.colorbar(im, ax=ax, shrink=0.7, label="K / 100km")
+    _mask_overlay(ax)
+    _decorate(ax)
+    ax.set_title(f"2. |∇τ| — gradient magnitude  [mask criterion]", fontweight="bold")
+
+    # Panel 3 — −∇²τ  (Hewson concavity mask, currently unused)
+    ax = axes[0, 2]
+    lap = diag["neg_laplacian"]
+    vlim = float(np.nanpercentile(np.abs(lap), 98))
+    im = ax.pcolormesh(
+        lon_grid, lat_grid, lap,
+        cmap="RdBu_r", vmin=-vlim, vmax=vlim,
+        transform=ccrs.PlateCarree(), alpha=0.85,
+    )
+    plt.colorbar(im, ax=ax, shrink=0.7, label="K / (100km)²")
+    # Positive contour line — Hewson's warm-side inflection
+    ax.contour(
+        lon_grid, lat_grid, lap,
+        levels=[0], colors="black", linewidths=0.6,
+        transform=ccrs.PlateCarree(),
+    )
+    _mask_overlay(ax)
+    _decorate(ax)
+    ax.set_title(f"3. −∇²τ  [Hewson concavity, NOT IN DETECTION]", fontweight="bold")
+
+    # Panel 4 — TFP with zero-crossings
+    ax = axes[1, 0]
+    tfp = diag["tfp"]
+    vlim_tfp = float(np.nanpercentile(np.abs(tfp), 98))
+    im = ax.pcolormesh(
+        lon_grid, lat_grid, tfp,
+        cmap="PuOr_r", vmin=-vlim_tfp, vmax=vlim_tfp,
+        transform=ccrs.PlateCarree(), alpha=0.85,
+    )
+    plt.colorbar(im, ax=ax, shrink=0.7, label="K / (100km)²")
+    ax.contour(
+        lon_grid, lat_grid, tfp,
+        levels=[0], colors="black", linewidths=0.8, linestyles="dashed",
+        transform=ccrs.PlateCarree(),
+    )
+    _mask_overlay(ax)
+    _decorate(ax)
+    ax.set_title(f"4. TFP(τ)  — zero-crossings = Hewson locator", fontweight="bold")
+
+    # Panel 5 — advection −V·∇τ
+    ax = axes[1, 1]
+    adv = diag["advection"]
+    vlim_adv = float(np.nanpercentile(np.abs(adv), 98))
+    im = ax.pcolormesh(
+        lon_grid, lat_grid, adv,
+        cmap="RdBu_r", vmin=-vlim_adv, vmax=vlim_adv,
+        transform=ccrs.PlateCarree(), alpha=0.85,
+    )
+    plt.colorbar(im, ax=ax, shrink=0.7, label="K / h  (red=warm adv, blue=cold adv)")
+    _mask_overlay(ax)
+    _decorate(ax)
+    ax.set_title(f"5. −V · ∇τ  [classification candidate]", fontweight="bold")
+
+    # Panel 6 — time tendency ∂τ/∂t
+    ax = axes[1, 2]
+    if tendency is not None:
+        vlim_t = float(np.nanpercentile(np.abs(tendency), 98))
+        im = ax.pcolormesh(
+            lon_grid, lat_grid, tendency,
+            cmap="RdBu_r", vmin=-vlim_t, vmax=vlim_t,
+            transform=ccrs.PlateCarree(), alpha=0.85,
+        )
+        plt.colorbar(im, ax=ax, shrink=0.7, label="K / h")
+    _mask_overlay(ax)
+    _decorate(ax)
+    ax.set_title(f"6. {tendency_label}  [mobile-front filter]", fontweight="bold")
+
+    # Legend for the scatter overlay
+    legend_handles = [
+        mpatches.Patch(color="#1f5fd9", label="Detected: cold (▼)"),
+        mpatches.Patch(color="#d93131", label="Detected: warm (▲)"),
+        mpatches.Patch(color="gray", label="Detected: indeterminate"),
+        mpatches.Patch(edgecolor="black", facecolor="none", label="Expected-front zone (solid box)"),
+    ]
+    fig.legend(
+        handles=legend_handles, loc="lower center",
+        bbox_to_anchor=(0.5, -0.02), ncol=4, fontsize=10,
+    )
+
+    fig.suptitle(
+        f"Hewson diagnostics — {model_key.upper()} T+{hour}h — τ = {field_label}",
+        fontsize=15, fontweight="bold",
+    )
+    plt.tight_layout(rect=[0, 0.02, 1, 0.96])
+    fig.savefig(output, dpi=130, bbox_inches="tight")
+    print(f"Plot saved to {output}")
+
+
 def _plot_diagnose(
     dual_result: dict,
     mean_t_gradient: np.ndarray,
@@ -1462,22 +1751,60 @@ def _dwd_lonlat_to_pixel(
     return int(px), int(py)
 
 
+_FRONT_FILL_RGBA = {
+    "cold": (0, 100, 255, 90),
+    "warm": (255, 40, 40, 90),
+    "occluded": (170, 50, 200, 90),
+    "stationary": (120, 120, 120, 90),
+}
+
+
+def _load_label_font(size: int):
+    """Load a bold TTF for zone labels, fall back to PIL default."""
+    from PIL import ImageFont
+
+    candidates = [
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    return ImageFont.load_default()
+
+
 def _draw_zones_on_dwd(
     img_path: str | Path, output_path: str | Path,
     chart_type: str = "analysis",
+    expected_fronts: dict[str, str] | None = None,
 ) -> None:
-    """Draw zone boxes with labels on a DWD chart image."""
+    """Draw zone boxes with labels on a DWD chart image.
+
+    expected_fronts : optional mapping zone_name → front type
+        ('cold', 'warm', 'occluded', 'stationary'). Zones present in
+        the mapping are filled with a semi-transparent color-coded
+        overlay for quick visual verification against the reference
+        chart.
+    """
     from PIL import Image, ImageDraw
 
-    img = Image.open(img_path)
-    draw = ImageDraw.Draw(img)
+    img = Image.open(img_path).convert("RGBA")
     line_width = 4 if chart_type == "analysis" else 2
+    font_size = 48 if chart_type == "analysis" else 16
+    font = _load_label_font(font_size)
+
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    expected_fronts = expected_fronts or {}
 
     for zone_name, bounds in ZONES.items():
         lat0, lat1 = bounds["lat"]
         lon0, lon1 = bounds["lon"]
 
-        # Draw zone polygon (sample edges for curved projection)
+        # Sample the zone polygon along each edge (projection curves it)
         points = []
         n_edge = 10
         for i in range(n_edge):
@@ -1502,15 +1829,53 @@ def _draw_zones_on_dwd(
             ))
         points.append(points[0])
 
-        draw.line(points, fill="red", width=line_width)
+        front_type = expected_fronts.get(zone_name)
+        if front_type:
+            fill = _FRONT_FILL_RGBA.get(front_type, _FRONT_FILL_RGBA["stationary"])
+            draw.polygon(points, fill=fill)
 
-        # Label at center
+        draw.line(points, fill=(220, 0, 0, 255), width=line_width)
+
+        # Centered label with a white halo box for legibility
         cx, cy = _dwd_lonlat_to_pixel(
             (lon0 + lon1) / 2, (lat0 + lat1) / 2, chart_type,
         )
-        draw.text((cx - 40, cy - 6), bounds["display"][:20], fill="red")
+        label = bounds["display"]
+        if front_type:
+            label = f"{label} ({front_type[0].upper()})"
+        bbox = draw.textbbox((0, 0), label, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        pad = max(4, font_size // 8)
+        draw.rectangle(
+            (cx - tw // 2 - pad, cy - th // 2 - pad,
+             cx + tw // 2 + pad, cy + th // 2 + pad),
+            fill=(255, 255, 255, 200),
+        )
+        draw.text(
+            (cx - tw // 2, cy - th // 2 - bbox[1]),
+            label, fill=(180, 0, 0, 255), font=font,
+        )
 
-    img.save(output_path)
+    Image.alpha_composite(img, overlay).convert("RGB").save(output_path)
+
+
+def _load_expected_fronts(case_dir: Path, hour_offset: int = 0) -> dict[str, str]:
+    """Read expected.yaml and return zone→front_type for the given hour_offset.
+
+    Returns an empty dict if the file is missing, the entry is absent,
+    or its zones block is empty.
+    """
+    import yaml
+
+    expected_path = case_dir / "expected.yaml"
+    if not expected_path.exists():
+        return {}
+    with open(expected_path) as f:
+        entries = yaml.safe_load(f) or []
+    for entry in entries:
+        if entry.get("hour_offset") == hour_offset:
+            return entry.get("zones") or {}
+    return {}
 
 
 def _cmd_new_case(args: argparse.Namespace) -> None:
@@ -1573,12 +1938,16 @@ def _cmd_new_case(args: argparse.Namespace) -> None:
     ref_dir.mkdir(parents=True, exist_ok=True)
 
     print("\nDownloading DWD reference charts:")
+    expected_fronts = _load_expected_fronts(case_dir, hour_offset=0)
     for name, filename in _DWD_CHARTS.items():
         path = _download_dwd_chart(name, filename, ref_dir)
         if path and name == "analysis":
             # Also save zone overlay version
             overlay_path = ref_dir / "analysis_with_zones.png"
-            _draw_zones_on_dwd(path, overlay_path, "analysis")
+            _draw_zones_on_dwd(
+                path, overlay_path, "analysis",
+                expected_fronts=expected_fronts,
+            )
 
     # 4. Create skeleton expected.yaml
     expected_path = case_dir / "expected.yaml"
@@ -1656,6 +2025,36 @@ def _cmd_charts(args: argparse.Namespace) -> None:
             out = output_dir / "analysis_with_zones.png"
             _draw_zones_on_dwd(analysis_path, out, "analysis")
             print(f"  Zone overlay → {out}")
+
+
+def _cmd_redraw_zones(args: argparse.Namespace) -> None:
+    """Redraw analysis_with_zones.png for a case using its current expected.yaml."""
+    case_dir = Path(args.case)
+    ref_dir = case_dir / "reference"
+    analysis_path = ref_dir / _DWD_CHARTS["analysis"]
+    if not analysis_path.exists():
+        print(f"Error: {analysis_path} not found", file=sys.stderr)
+        sys.exit(1)
+
+    expected_fronts = _load_expected_fronts(case_dir, hour_offset=args.hour_offset)
+    unknown = sorted(set(expected_fronts) - set(ZONES))
+    if unknown:
+        print(
+            f"Warning: expected.yaml references unknown zones (ignored): {', '.join(unknown)}",
+            file=sys.stderr,
+        )
+        expected_fronts = {k: v for k, v in expected_fronts.items() if k in ZONES}
+    overlay_path = ref_dir / "analysis_with_zones.png"
+    _draw_zones_on_dwd(
+        analysis_path, overlay_path, "analysis",
+        expected_fronts=expected_fronts,
+    )
+    if expected_fronts:
+        print(f"Redrew {overlay_path} with {len(expected_fronts)} annotated zone(s):")
+        for zone, ftype in sorted(expected_fronts.items()):
+            print(f"  {zone}: {ftype}")
+    else:
+        print(f"Redrew {overlay_path} (no annotated zones at hour_offset={args.hour_offset})")
 
 
 def _cmd_clear_cache(args: argparse.Namespace) -> None:
@@ -1851,6 +2250,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overlay zone boxes on the analysis chart",
     )
 
+    # plot-hewson
+    p_hewson = sub.add_parser(
+        "plot-hewson",
+        help="Render full Hewson 1998 diagnostic fields (τ, |∇τ|, −∇²τ, TFP, advection, tendency)",
+    )
+    p_hewson.add_argument(
+        "--case", required=True,
+        help="Calibration case dir (e.g. data/calibration/2026-04-24_00Z)",
+    )
+    p_hewson.add_argument(
+        "--model", default="ecmwf", choices=["ecmwf", "gfs", "icon"],
+    )
+    p_hewson.add_argument("--hour", type=int, default=0)
+    p_hewson.add_argument(
+        "--field", default="theta_e", choices=["theta_e", "T850"],
+        help="Thermal field τ to diagnose (default: theta_e — Hewson's primary quantity)",
+    )
+    p_hewson.add_argument(
+        "--threshold", type=float, default=2.0,
+        help="T850 gradient threshold for the overlaid production mask",
+    )
+    p_hewson.add_argument(
+        "--te-threshold", type=float, default=4.0,
+        help="θe gradient threshold for the overlaid production mask",
+    )
+    p_hewson.add_argument("--output", help="Output PNG path (default: under case dir)")
+
+    # redraw-zones
+    p_redraw = sub.add_parser(
+        "redraw-zones",
+        help="Regenerate analysis_with_zones.png from the case's expected.yaml",
+    )
+    p_redraw.add_argument(
+        "--case", required=True,
+        help="Calibration case dir (e.g. data/calibration/2026-04-24_00Z)",
+    )
+    p_redraw.add_argument(
+        "--hour-offset", type=int, default=0,
+        help="Which expected.yaml entry to visualize (default: 0 = analysis)",
+    )
+
     # clear-cache
     p_clear = sub.add_parser("clear-cache", help="Delete cached grid data")
     p_clear.add_argument("--cache-dir")
@@ -1880,6 +2320,8 @@ def main() -> None:
         "diagnose": _cmd_diagnose,
         "new-case": _cmd_new_case,
         "charts": _cmd_charts,
+        "redraw-zones": _cmd_redraw_zones,
+        "plot-hewson": _cmd_plot_hewson,
         "clear-cache": _cmd_clear_cache,
     }
     commands[args.command](args)
