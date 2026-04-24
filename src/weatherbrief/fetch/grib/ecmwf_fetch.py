@@ -73,16 +73,12 @@ ECMWF_SOUNDING_VARS = {
 # Publication delay: ifs-ens-cf typically available ~6-8h after init.
 ECMWF_PUBLISH_DELAY_HOURS = 8
 
-# IFS ensemble control forecast cycles.
-# oper stream at 00z/12z (0-192h), scda stream at 06z/18z (0-144h).
+# IFS ensemble control forecast cycles. Per-cycle horizon depends on the
+# subscription and is NOT inferred from the stream name: we compute it from
+# the max step observed on disk per run (see find_best_ecmwf_run). This
+# avoids drift every time ECMWF changes cycle naming (e.g. scda/fc -> oper/fc
+# at 06/18z from IFS Cycle 50r1, 12-May-2026) or we amend our order.
 ECMWF_CYCLES = [0, 6, 12, 18]
-
-# Maximum forecast step (hours) per stream type.
-ECMWF_MAX_STEP_HOURS = {
-    "oper": 192,   # Main runs (00z, 12z)
-    "scda": 144,   # Short cutoff (06z, 18z)
-}
-ECMWF_MAX_STEP_DEFAULT = 144  # Conservative fallback
 
 # Known file extensions to strip before parsing the ECMWF filename.
 _KNOWN_SUFFIXES = (".grib2", ".grib", ".idx", ".bz2")
@@ -347,12 +343,14 @@ def find_best_ecmwf_run(
     """Select the best ECMWF run whose horizon covers the flight window.
 
     Tries runs in reverse chronological order.  Prefers the latest run
-    whose forecast horizon (base_time + max step for its stream) reaches
-    ``cover_until``.  Falls back to the latest run if none fully covers.
+    whose observed horizon (base_time + max step_hours present on disk)
+    reaches ``cover_until``.  Falls back to the latest run if none fully
+    covers — the uncovered tail simply misses GRIB enrichment.
 
-    This mirrors the ICON-EU ``find_latest_icon_eu_run`` strategy: a 06z
-    scda run (max 144h) is skipped in favour of the previous 00z oper run
-    (max 192h) when the flight extends beyond 144h.
+    The horizon is read from the files themselves rather than a stream-name
+    lookup.  This keeps selection correct across subscription changes (e.g.
+    2026-04-22 amendment trimming 00/12z from 192h to 168h) and cycle-name
+    changes (IFS Cycle 50r1, 12-May-2026, merges 06/18z scda into oper).
 
     Args:
         all_files: Pre-scanned file list (all runs, already filtered for
@@ -379,29 +377,35 @@ def find_best_ecmwf_run(
     # Try runs newest-first
     for base_time in sorted(runs, reverse=True):
         run_files = runs[base_time]
-        # Determine stream from any file in the run
-        stream = run_files[0].stream
-        max_step = ECMWF_MAX_STEP_HOURS.get(stream, ECMWF_MAX_STEP_DEFAULT)
+        max_step = max(f.step_hours for f in run_files)
         horizon = base_time + timedelta(hours=max_step)
         if horizon >= cover_until:
             logger.info(
-                "ECMWF run selection: %s %s (horizon %dh covers flight end)",
-                base_time.isoformat(), stream, max_step,
+                "ECMWF run selection: %s %s (observed horizon %dh covers flight end)",
+                base_time.isoformat(), run_files[0].stream, max_step,
             )
             return run_files
         logger.debug(
-            "ECMWF run %s %s: horizon %dh doesn't reach flight end, skipping",
-            base_time.isoformat(), stream, max_step,
+            "ECMWF run %s %s: observed horizon %dh doesn't reach flight end, skipping",
+            base_time.isoformat(), run_files[0].stream, max_step,
         )
 
-    # No run fully covers — fall back to latest (partial coverage is better
-    # than none; the uncovered tail just won't get GRIB enrichment).
-    latest_bt = max(runs)
+    # No run fully covers — fall back to the run whose horizon reaches
+    # *furthest into the future* (minimizing the uncovered tail), with ties
+    # broken by recency of the init time.  A 12z run with 168h horizon can
+    # reach later in time than an 18z run with 144h, so "latest base_time"
+    # is not the right fallback.
+    def _horizon(bt: datetime) -> datetime:
+        return bt + timedelta(hours=max(f.step_hours for f in runs[bt]))
+
+    best_bt = max(runs, key=lambda bt: (_horizon(bt), bt))
+    best_max_step = max(f.step_hours for f in runs[best_bt])
     logger.info(
-        "ECMWF: no run covers flight end %s, falling back to latest %s",
-        cover_until.isoformat(), latest_bt.isoformat(),
+        "ECMWF: no run covers flight end %s, falling back to %s (observed horizon %dh, reaches %s)",
+        cover_until.isoformat(), best_bt.isoformat(), best_max_step,
+        _horizon(best_bt).isoformat(),
     )
-    return runs[latest_bt]
+    return runs[best_bt]
 
 
 def find_files_for_run(

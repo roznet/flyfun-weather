@@ -19,7 +19,7 @@ is safe to run even before the data arrives.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -348,6 +348,142 @@ class TestDirectoryScanner:
         files = find_files_for_run(bt, tmp_path)
         assert len(files) == 2
         assert all(f.base_time == bt for f in files)
+
+
+# ---------------------------------------------------------------------------
+# Run selection tests (find_best_ecmwf_run) — observed-max-step logic
+# ---------------------------------------------------------------------------
+
+
+class TestRunSelection:
+    """find_best_ecmwf_run must compute horizon from files on disk, not
+    from stream names.  Covers three real-world regimes: pre-amendment 49r1
+    (192h at 00/12z, scda at 06/18z), post-amendment 49r1 (168h at 00/12z),
+    and 50r1 (scda merged into oper at all inits)."""
+
+    @staticmethod
+    def _make_run(tmp_path, base_hour, steps, stream="oper", date="20260422"):
+        """Create empty files for a run with the given steps."""
+        bt_str = f"{date}T{base_hour:02d}0000Z"
+        for step in steps:
+            # valid_time is synthetic — parser doesn't care beyond parseability
+            total = base_hour + step
+            d = int(date[-2:]) + total // 24
+            h = total % 24
+            vt = f"{date[:-2]}{d:02d}T{h:02d}0000Z"
+            name = f"brg_a1_ifs-ens-cf_od_{stream}_fc_{bt_str}_{vt}_{step}h"
+            (tmp_path / name).write_bytes(b"")
+
+    def test_latest_run_covers_selected(self, tmp_path):
+        """Latest run fully covering cover_until is selected."""
+        from weatherbrief.fetch.grib.ecmwf_fetch import find_best_ecmwf_run
+        self._make_run(tmp_path, 12, list(range(0, 169, 3)), stream="oper")
+        all_files = scan_ecmwf_files(tmp_path)
+        bt12 = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+        # Flight ending 160h after 12z → within 168h horizon → pick 12z
+        picked = find_best_ecmwf_run(
+            all_files, cover_until=bt12 + timedelta(hours=160), require_ready=False,
+        )
+        assert picked and picked[0].base_time == bt12
+
+    def test_post_amendment_picks_earlier_when_latest_short(self, tmp_path):
+        """Post-amendment regime: 00/12z go to 168h, 06/18z to 144h.
+
+        Flight ending 160h after latest 06z → 06z observed horizon is
+        144h → skip 06z → pick earlier 00z (observed 168h)."""
+        from weatherbrief.fetch.grib.ecmwf_fetch import find_best_ecmwf_run
+        self._make_run(tmp_path, 0,  list(range(0, 169, 3)), stream="oper")
+        self._make_run(tmp_path, 6,  list(range(0, 145, 3)), stream="scda")
+        all_files = scan_ecmwf_files(tmp_path)
+        bt00 = datetime(2026, 4, 22,  0, 0, tzinfo=timezone.utc)
+        bt06 = datetime(2026, 4, 22,  6, 0, tzinfo=timezone.utc)
+        # Cover until 06z+160h = 00z+166h; 06z has only 144h, 00z has 168h
+        picked = find_best_ecmwf_run(
+            all_files, cover_until=bt06 + timedelta(hours=160), require_ready=False,
+        )
+        assert picked, "Expected fallback to 00z run"
+        assert picked[0].base_time == bt00
+
+    def test_fifty_r1_scda_as_oper_no_mishorizon(self, tmp_path):
+        """50r1: 06/18z arrive with stream=oper but only reach 144h.
+
+        Old code (stream-based lookup) would think any oper run reached
+        192h and select 06z; observed-max-step correctly sees 144h and
+        falls back to an earlier 00z with a longer horizon."""
+        from weatherbrief.fetch.grib.ecmwf_fetch import find_best_ecmwf_run
+        self._make_run(tmp_path, 0,  list(range(0, 169, 3)), stream="oper")
+        # 06z in 50r1 world: stream=oper, but horizon is 144h
+        self._make_run(tmp_path, 6,  list(range(0, 145, 3)), stream="oper")
+        all_files = scan_ecmwf_files(tmp_path)
+        bt00 = datetime(2026, 4, 22,  0, 0, tzinfo=timezone.utc)
+        bt06 = datetime(2026, 4, 22,  6, 0, tzinfo=timezone.utc)
+        picked = find_best_ecmwf_run(
+            all_files, cover_until=bt06 + timedelta(hours=160), require_ready=False,
+        )
+        assert picked, "Expected fallback to 00z"
+        assert picked[0].base_time == bt00, (
+            "06z oper with observed 144h should not be mistaken for 192h"
+        )
+
+    def test_pre_amendment_192h_still_works(self, tmp_path):
+        """Pre-amendment 49r1: 00/12z go to 192h. A flight at 180h after
+        00z should pick 00z (not fall back further)."""
+        from weatherbrief.fetch.grib.ecmwf_fetch import find_best_ecmwf_run
+        self._make_run(tmp_path, 0,  list(range(0, 193, 3)), stream="oper")
+        self._make_run(tmp_path, 6,  list(range(0, 145, 3)), stream="scda")
+        all_files = scan_ecmwf_files(tmp_path)
+        bt00 = datetime(2026, 4, 22,  0, 0, tzinfo=timezone.utc)
+        picked = find_best_ecmwf_run(
+            all_files, cover_until=bt00 + timedelta(hours=180), require_ready=False,
+        )
+        assert picked and picked[0].base_time == bt00
+
+    def test_no_run_covers_falls_back_to_longest_horizon(self, tmp_path):
+        """When no run reaches cover_until, return the run whose horizon
+        reaches furthest into the future — NOT simply the latest base_time.
+
+        Real case from Apr 22 post-amendment prod: at a flight ending
+        >192h out, 18z (scda, 144h → reaches 18z+144h = next-day 18z) is
+        the most recent init, but 12z (oper, 168h → reaches 12z+168h =
+        next-day 12z + 6h) actually covers later, so pick 12z."""
+        from weatherbrief.fetch.grib.ecmwf_fetch import find_best_ecmwf_run
+        self._make_run(tmp_path,  0, list(range(0, 169, 3)), stream="oper")
+        self._make_run(tmp_path,  6, list(range(0, 145, 3)), stream="scda")
+        self._make_run(tmp_path, 12, list(range(0, 169, 3)), stream="oper")
+        self._make_run(tmp_path, 18, list(range(0, 145, 3)), stream="scda")
+        all_files = scan_ecmwf_files(tmp_path)
+        bt12 = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+        # Flight extending way past any single-run horizon.
+        picked = find_best_ecmwf_run(
+            all_files,
+            cover_until=bt12 + timedelta(hours=500),
+            require_ready=False,
+        )
+        assert picked, "Expected fallback to a run"
+        # 12z (oper, 168h) reaches 12z+168h; 18z (scda, 144h) reaches
+        # only 18z+144h = 12z + 150h. 12z's horizon is later by 18h.
+        assert picked[0].base_time == bt12, (
+            "Fallback should pick longest-horizon run, not latest base_time"
+        )
+
+    def test_tie_break_on_horizon_prefers_recent(self, tmp_path):
+        """Two runs with identical horizons → prefer the more recent init."""
+        from weatherbrief.fetch.grib.ecmwf_fetch import find_best_ecmwf_run
+        # Both 00z and 12z at 168h → horizons are 168h apart, so they
+        # aren't actually tied in time. Force a tie by making 12z go to
+        # 156h so that 00z + 168h == 12z + 156h.
+        self._make_run(tmp_path,  0, list(range(0, 169, 3)), stream="oper")
+        self._make_run(tmp_path, 12, list(range(0, 157, 3)), stream="oper")
+        all_files = scan_ecmwf_files(tmp_path)
+        bt12 = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+        picked = find_best_ecmwf_run(
+            all_files,
+            cover_until=bt12 + timedelta(hours=500),
+            require_ready=False,
+        )
+        assert picked and picked[0].base_time == bt12, (
+            "On horizon tie, the more recent init wins"
+        )
 
 
 # ---------------------------------------------------------------------------

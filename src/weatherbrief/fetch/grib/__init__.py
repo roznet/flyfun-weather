@@ -256,9 +256,9 @@ def _enrich_ecmwf(
             logger.info("No ECMWF GRIB runs before as_of_time=%s", as_of_time)
             return None
 
-    # Pick the best run — prefers latest, but falls back to an older
-    # main run (00z/12z, 192h) when a short-cutoff run (06z/18z, 144h)
-    # can't cover the full flight window.
+    # Pick the best run — prefers latest, but falls back to an earlier
+    # run with a longer observed horizon when the latest can't cover the
+    # full flight window (e.g. a 06/18z short-cutoff run vs an earlier 00/12z).
     flight_end = departure_time + timedelta(hours=max(flight_duration_hours, 1))
     run_files = find_best_ecmwf_run(
         all_files, cover_until=flight_end, data_dir=grib_dir,
