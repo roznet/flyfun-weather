@@ -398,25 +398,18 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 
 **Goal**: production-grade precompute at 0.25° × 925/850/700 hPa.
 
-**What exists:**
-- `scripts/smoke_era5_hewson.py` on the ERA5 server (`brice@server:/mnt/data/downloads/era5_download/`) — proven to fetch one day × 3 levels × 4 times in ~1 min
-- `load_era5_fields(grib, timestamp, level_hPa)` accepts any of 925/850/700 — multi-level is a call-site change, not a loader change
+**Shipped (2026-04-24):**
+- `scripts/smoke_era5_hewson.py` on the ERA5 server — proven to fetch one day × 3 levels × 4 times in ~1 min
+- `scripts/download_era5_hewson.py` on the server — monthly loop, one GRIB per month
+- Bulk fetch done: 1 year 2025-02 → 2026-02 (~700 MB, rsynced to `data/era5/hewson/`)
+- `load_era5_fields(grib, timestamp, level_hPa)` accepts any of 925/850/700
+- **Multi-level Case storage**: `build_case_from_era5(..., level_hPa: int | list[int])`, `Case.fields(model, hour, level_hPa=...)`, `Case.available_levels(model)`. NPZ uses flat level-suffixed keys (`T_925, T_850, T_700, Td_*, theta_e_*, u_*, v_*`) for multi-level; legacy single-level 850 format preserved for back-compat (cases with no `levels` field in meta.json default to `[850]`). Inner dict keys stay `T850, Td850, theta_e, u850, v850` regardless of actual level — `850` is historical, values are from the requested level. Tests in `tests/test_frontal_case.py`.
 
-**What to build:**
-- `scripts/download_era5_hewson.py` — adapt `download_era5_t850.py` on the server. Loop over months (configurable `--from-month YYYY-MM --to-month YYYY-MM`), with `--max-concurrent` like the Z500 downloader. Store as one monthly GRIB per file (same pattern).
-- Bulk fetch on server: **Oct 2024 → Mar 2025** (6 months, winter/spring — captures Atlantic cyclone season). Expected size ~150-200 MB. Wall-time ~1 hour.
-- Rsync to local `data/era5/hewson/`
-- Extend `build_case_from_era5` to accept `level_hPa: list[int]` and store multi-level NPZ:
-  ```
-  raw/era5.npz:
-      T_925, Td_925, theta_e_925, u_925, v_925,   # 925 hPa
-      T_850, Td_850, theta_e_850, u_850, v_850,   # 850 hPa
-      T_700, Td_700, theta_e_700, u_700, v_700,   # 700 hPa
-      valid_times
-  ```
-- `Case.fields(model, hour, level_hPa=850)` optional level argument (defaults to 850 for back-compat)
+**Still to build:**
+- CLI: `new-case --source era5 --levels 925,850,700` — wire the list arg through to `build_case_from_era5` (currently accessible only via library).
+- Rebuild the Ciarán case at 3 levels to prove the path end-to-end on a real debug case.
 
-**Live-data precompute** (future split-off):
+**Live-data precompute** (future split-off, gated on Phase D):
 - New `src/weatherbrief/hewson/precompute.py` runs on cron: fetch → compute → NPZ snapshot per model per cycle
 - Cadence 00Z + 12Z per model
 - Retention: 48 h (see `fetch.md` for the existing retention pattern)
@@ -463,9 +456,9 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 | Storage decision | ✅ NPZ (Zarr deferred) |
 | Retention decision | ✅ 48 h cache |
 | ERA5 smoke test | ✅ Storm Ciarán 2023-11-02 validated |
-| ERA5 bulk fetch | ✅ Done (1 year, 2025-02 → 2026-02, on `/mnt/data/downloads/era5_download/data/hewson/` — pending rsync to `data/era5/hewson/`) |
-| **Phase A** (route sampling) | ✅ Done (2026-04-24) — `route_sampling.py`, `route-hewson` CLI, unit tests all green |
-| Phase B (multi-level + precompute) | Requires Phase A |
+| ERA5 bulk fetch | ⏳ In flight on server — 2025-02 → 2026-02 (1 year, ~700 MB, covers summer convective + winter cyclonic) |
+| **Phase A** (route sampling) | Next up — unblocked |
+| Phase B (multi-level + precompute) | 🟡 Storage done (2026-04-24) — CLI surface + Ciarán rebuild next; live-precompute gated on Phase D |
 | Phase C (advisory evaluators) | Requires Phase B |
 | Phase D (map layer) | Requires Phase B; can ship before C |
 | wetter3.de archive (retrospective DWD charts) | Known gap — not blocking |
