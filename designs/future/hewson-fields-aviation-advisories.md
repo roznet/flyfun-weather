@@ -361,9 +361,15 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 - **Source-agnostic CLI**: `new-case --source {open_meteo,era5}`; `plot-hewson`, `score`, `diagnose`, `redraw-zones` all accept any model present in the case including `era5`
 - **ERA5 download pipeline**: `scripts/smoke_era5_hewson.py` (CDS request validated), `scripts/download_era5_hewson.py` (not yet written — see Phase A pickup)
 
-### Phase A — Route sampling on single-level data (next — unblocked)
+### Phase A — Route sampling on single-level data ✅ DONE (2026-04-24)
 
-**Goal**: validate spatial + temporal interpolation with zero API cost, on the data we already have.
+**Shipped**:
+- `src/weatherbrief/frontal/route_sampling.py` — `sample_hewson_at_route(case, model, waypoints, hours)` returning per-waypoint dict of `{lat, lon, hour, theta_e, gradient, tfp, neg_laplacian, advection, tendency}`. Bilinear spatial interp + linear temporal interp between bounding available hours. Fractional hours supported. Out-of-grid or out-of-range returns NaN per field (not an exception).
+- `route-hewson` CLI subcommand — resolves ICAO codes via `weatherbrief.airports.resolve_waypoints` (uses `data/nav.db`); prints per-waypoint table with thresholds color-coded per §3.
+- `tests/test_frontal_route_sampling.py` — 12 tests covering bilinear math (linear-field exactness, cell-center averaging, out-of-grid NaN) and full sampling glue (integer hours, fractional interp, per-waypoint hours, unknown model, range guards).
+- Smoke-tested against Storm Ciarán ERA5 case: cold advection at LFPG behind front, warm advection + rising tendency at LOWW ahead of it.
+
+**Goal (original)**: validate spatial + temporal interpolation with zero API cost, on the data we already have.
 
 **What already exists:**
 - `Case.fields(model, hour)` returns `(n_lat, n_lon)` arrays per hour — clean input for sampling
@@ -457,8 +463,8 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 | Storage decision | ✅ NPZ (Zarr deferred) |
 | Retention decision | ✅ 48 h cache |
 | ERA5 smoke test | ✅ Storm Ciarán 2023-11-02 validated |
-| ERA5 bulk fetch | ⏳ In flight on server — 2025-02 → 2026-02 (1 year, ~700 MB, covers summer convective + winter cyclonic) |
-| **Phase A** (route sampling) | Next up — unblocked |
+| ERA5 bulk fetch | ✅ Done (1 year, 2025-02 → 2026-02, on `/mnt/data/downloads/era5_download/data/hewson/` — pending rsync to `data/era5/hewson/`) |
+| **Phase A** (route sampling) | ✅ Done (2026-04-24) — `route_sampling.py`, `route-hewson` CLI, unit tests all green |
 | Phase B (multi-level + precompute) | Requires Phase A |
 | Phase C (advisory evaluators) | Requires Phase B |
 | Phase D (map layer) | Requires Phase B; can ship before C |
