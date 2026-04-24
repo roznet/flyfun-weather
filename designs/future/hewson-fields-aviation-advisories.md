@@ -457,6 +457,7 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 | Storage decision | ✅ NPZ (Zarr deferred) |
 | Retention decision | ✅ 48 h cache |
 | ERA5 smoke test | ✅ Storm Ciarán 2023-11-02 validated |
+| ERA5 bulk fetch | ⏳ In flight on server — 2025-02 → 2026-02 (1 year, ~700 MB, covers summer convective + winter cyclonic) |
 | **Phase A** (route sampling) | Next up — unblocked |
 | Phase B (multi-level + precompute) | Requires Phase A |
 | Phase C (advisory evaluators) | Requires Phase B |
