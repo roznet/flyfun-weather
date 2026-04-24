@@ -173,7 +173,7 @@ def _verify(target: Path) -> int:
         if line.split() and line.split()[0] in _EXPECTED_SHORT_NAMES
     )
 
-    print(f"Messages found (t/d/u/v): {msg_count}  (expected: {expected_msgs})")
+    print(f"Messages found (t/q/u/v): {msg_count}  (expected: {expected_msgs})")
     if msg_count == expected_msgs:
         print("✅ All expected fields present.")
         return 0

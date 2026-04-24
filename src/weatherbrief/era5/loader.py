@@ -66,31 +66,35 @@ def load_era5_fields(
     with existing frontal code even when called with `level_hPa=925` or
     `700`. The `level` key records the actual level.
     """
-    ds = xr.open_dataset(str(grib_path), engine="cfgrib")
-
     # Normalize timestamp
     if isinstance(timestamp, str):
         timestamp = np.datetime64(timestamp)
     elif isinstance(timestamp, datetime):
         timestamp = np.datetime64(timestamp)
 
-    # Select time and level
-    try:
-        slice_ = ds.sel(time=timestamp, isobaricInhPa=level_hPa)
-    except KeyError as e:
-        available_times = ds.time.values
-        available_levels = ds.isobaricInhPa.values
-        raise ValueError(
-            f"Timestamp {timestamp} or level {level_hPa} not in GRIB. "
-            f"Available times: {available_times[:3]}...{available_times[-1:]}, "
-            f"levels: {list(available_levels)}"
-        ) from e
+    # Context manager ensures the GRIB file handle is released. When
+    # build_case_from_era5 calls this in a loop the leaks add up.
+    with xr.open_dataset(str(grib_path), engine="cfgrib") as ds:
+        try:
+            slice_ = ds.sel(time=timestamp, isobaricInhPa=level_hPa)
+        except KeyError as e:
+            available_times = ds.time.values
+            available_levels = ds.isobaricInhPa.values
+            raise ValueError(
+                f"Timestamp {timestamp} or level {level_hPa} not in GRIB. "
+                f"Available times: {available_times[:3]}...{available_times[-1:]}, "
+                f"levels: {list(available_levels)}"
+            ) from e
 
-    # Raw ERA5 arrays (SI units)
-    T_K = slice_["t"].values            # K
-    q = slice_["q"].values              # kg/kg
-    u_ms = slice_["u"].values           # m/s
-    v_ms = slice_["v"].values           # m/s
+        # Extract .values inside the with-block so arrays materialise
+        # before the dataset is closed.
+        T_K = slice_["t"].values            # K
+        q = slice_["q"].values              # kg/kg
+        u_ms = slice_["u"].values           # m/s
+        v_ms = slice_["v"].values           # m/s
+        slice_time = slice_.time.values
+        slice_lat = slice_.latitude.values
+        slice_lon = slice_.longitude.values
 
     # Convert to our pipeline's conventions
     T_C = T_K - 273.15                  # °C
@@ -113,9 +117,9 @@ def load_era5_fields(
         dewpoint=Td_C * units.degC,
     ).to("kelvin").magnitude
 
-    # Coordinates
-    lat = slice_.latitude.values          # (n_lat,), descending (60→35)
-    lon = slice_.longitude.values          # (n_lon,), ascending (-20→28)
+    # Coordinates (from the closed dataset's copies)
+    lat = slice_lat
+    lon = slice_lon
 
     # ERA5 lat is typically descending. Flip if so, to match our convention
     # (frontal/grid.py uses ascending lat 35→60).
@@ -136,5 +140,5 @@ def load_era5_fields(
         "lat": lat.astype(np.float64),
         "lon": lon.astype(np.float64),
         "level": level_hPa,
-        "time": slice_.time.values,
+        "time": slice_time,
     }

@@ -1337,8 +1337,15 @@ def _cmd_plot_hewson(args: argparse.Namespace) -> None:
         detected_by=dual["detected_by"],
     )
 
-    # Expected zones for this case/hour (if annotated)
+    # Expected zones for this case/hour (if annotated) — guard against typos
     expected_fronts = _load_expected_fronts(case_dir, hour_offset=hour)
+    unknown = sorted(set(expected_fronts) - set(ZONES))
+    if unknown:
+        print(
+            f"Warning: expected.yaml references unknown zones (ignored): {', '.join(unknown)}",
+            file=sys.stderr,
+        )
+        expected_fronts = {k: v for k, v in expected_fronts.items() if k in ZONES}
 
     output = args.output
     if not output:
@@ -1388,13 +1395,12 @@ def _plot_hewson(
 
     field_label = "θe" if field_name == "theta_e" else "T850"
 
-    # Sensible ranges for θe (K) and T850 (°C)
-    if field_name == "theta_e":
-        field_min = np.nanpercentile(diag["field_smooth"], 5)
-        field_max = np.nanpercentile(diag["field_smooth"], 95)
-    else:
-        field_min = np.nanpercentile(diag["field_smooth"], 5)
-        field_max = np.nanpercentile(diag["field_smooth"], 95)
+    # Adaptive percentile range — works for both θe (K, ~280-340) and
+    # T850 (°C, ~-40 to +20). Fixed bounds would let us compare
+    # across hours at a glance, but data-adaptive keeps the colormap
+    # full-range for whatever snapshot is being shown.
+    field_min = float(np.nanpercentile(diag["field_smooth"], 5))
+    field_max = float(np.nanpercentile(diag["field_smooth"], 95))
 
     fig, axes = plt.subplots(
         2, 3, figsize=(22, 12),
