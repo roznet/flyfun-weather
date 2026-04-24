@@ -218,6 +218,12 @@ def compute_hewson_diagnostics(
         neg_laplacian  = −∇²τ                            K / (100km)²
         advection      = −V · ∇τ                          K / h
 
+    Unit contract: u and v MUST be in **km/h** (to match ∇τ in K/km and
+    yield advection in K/h). Pass m/s wind and the advection output is
+    off by 3.6×. All current callers (ERA5 loader, frontal `wind_to_uv`,
+    reshape_to_fields) convert to km/h before calling — future call
+    sites must do the same.
+
     Light smoothing (smooth_sigma) is used for the gradient (sensitivity).
     Heavy smoothing (heavy_sigma) is used for TFP and the Laplacian so
     the second derivatives survive the grid spacing. Defaults target
