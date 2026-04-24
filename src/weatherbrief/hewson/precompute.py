@@ -256,6 +256,10 @@ def _build_one_snapshot(
             fields = reshape_to_fields(raw, lat, lon, h, terrain_mask, level_hPa=L)
             if fields is None:
                 continue
+            # reshape_to_fields returns level-specific winds under the
+            # historical u850/v850 keys regardless of the actual level
+            # (see frontal/grid.py reshape_to_fields docstring) — values
+            # here are from level L, not 850 hPa.
             diag = compute_hewson_diagnostics(
                 fields["theta_e"], lat, lon,
                 fields["u850"], fields["v850"],
