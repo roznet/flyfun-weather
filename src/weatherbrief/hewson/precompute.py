@@ -182,6 +182,12 @@ class SnapshotResult:
     ``snapshots`` keys are model names; values are the written NPZ path (or
     ``None`` for dry-run / fetch failure). ``skipped`` maps model → reason
     for models that were skipped (already-fresh snapshot, fetch failure).
+    ``api_calls_total`` is the aggregate HTTP call count from
+    ``OpenMeteoClient.call_count`` across all models in this run — read
+    once at end of ``run_once`` so the scheduler loop can push it to
+    ``ApiUsageRow`` via :func:`weatherbrief.api.usage.log_api_usage`
+    (matches the ``pipeline="verification"`` precedent in
+    ``tasks/standalone_verification.py``).
     """
 
     snapshots: dict[str, Path | None] = field(default_factory=dict)
@@ -189,6 +195,7 @@ class SnapshotResult:
     init_times: dict[str, int] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     purged: int = 0
+    api_calls_total: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -503,12 +510,15 @@ def run_once(
             output_dir=output_dir, retention_hours=retention_hours,
         )
 
+    result.api_calls_total = getattr(client, "call_count", 0)
     result.elapsed_seconds = time.monotonic() - started
     logger.info(
-        "Hewson precompute: done (%.1fs) — %d written, %d skipped, %d purged",
+        "Hewson precompute: done (%.1fs) — %d written, %d skipped, "
+        "%d purged, %d Open-Meteo API calls",
         result.elapsed_seconds,
         len([p for p in result.snapshots.values() if p is not None]),
         len(result.skipped),
         result.purged,
+        result.api_calls_total,
     )
     return result

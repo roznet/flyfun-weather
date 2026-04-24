@@ -648,14 +648,46 @@ async def run_hewson_precompute_loop(app_state) -> None:
 
 
 def _run_hewson_precompute_once() -> None:
-    """Execute a single Hewson precompute cycle (called in a thread)."""
+    """Execute a single Hewson precompute cycle (called in a thread).
+
+    After the compute + write, persists the Open-Meteo call count to
+    ``ApiUsageRow`` via :func:`weatherbrief.api.usage.log_api_usage` so
+    the precompute's API consumption shows up in the shared usage
+    dashboard alongside the other pipelines (briefing / verification /
+    standalone). Matches the pattern in
+    :mod:`weatherbrief.tasks.standalone_verification`.
+    """
     from weatherbrief.hewson import run_once
 
     result = run_once()
     logger.info(
-        "Hewson precompute: %d written, %d skipped, %d purged (%.1fs)",
+        "Hewson precompute: %d written, %d skipped, %d purged, "
+        "%d Open-Meteo calls (%.1fs)",
         len([p for p in result.snapshots.values() if p is not None]),
         len(result.skipped),
         result.purged,
+        result.api_calls_total,
         result.elapsed_seconds,
     )
+
+    if result.api_calls_total > 0:
+        from flyfun_common.db import SessionLocal
+
+        from weatherbrief.api.usage import log_api_usage
+
+        db = SessionLocal()
+        try:
+            log_api_usage(
+                db,
+                service="open_meteo",
+                pipeline="hewson_precompute",
+                api_calls=result.api_calls_total,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.error(
+                "Hewson precompute: failed to log API usage", exc_info=True,
+            )
+        finally:
+            db.close()
