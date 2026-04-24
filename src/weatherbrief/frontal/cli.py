@@ -580,10 +580,10 @@ def _cmd_score(args: argparse.Namespace) -> None:
         type_correct = 0
         type_total = 0
 
-        for case in expected_cases:
-            hour_offset = case.get("hour_offset", 0)
-            time_str = case["time"]
-            expected_zones = case.get("zones", {})
+        for expected_entry in expected_cases:
+            hour_offset = expected_entry.get("hour_offset", 0)
+            time_str = expected_entry["time"]
+            expected_zones = expected_entry.get("zones", {})
 
             if hour_offset < 0:
                 continue  # before model init, skip
@@ -1085,7 +1085,9 @@ def _cmd_diagnose(args: argparse.Namespace) -> None:
     print(f"  T only:     {n_t_only}   θe only: {n_te_only}   Both: {n_both}")
 
     # ── Step 5: Background mean gradients (per-channel) ──
-    hours_range = range(min(n_hours, 97))
+    # Use the case's actual available hours rather than assuming a
+    # contiguous 0..96 range (ERA5 cases have 6-hourly, not hourly, data).
+    hours_range = sorted(all_fields.keys())
     mean_t_gradient = _compute_mean_gradient(
         all_fields, lat, lon, hours_range, terrain_mask, field_name="T850",
     )
