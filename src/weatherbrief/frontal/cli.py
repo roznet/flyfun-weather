@@ -524,6 +524,8 @@ def _cmd_score(args: argparse.Namespace) -> None:
     """Score detection against expected zones from calibration dataset."""
     import yaml
 
+    from weatherbrief.frontal.case import load_case
+
     case_dir = Path(args.case)
     expected_path = case_dir / "expected.yaml"
     if not expected_path.exists():
@@ -533,30 +535,27 @@ def _cmd_score(args: argparse.Namespace) -> None:
     with open(expected_path) as f:
         expected_cases = yaml.safe_load(f)
 
-    lat, lon = build_grid_coords()
+    case = load_case(case_dir)
+    lat, lon = case.lat, case.lon
     terrain_mask = build_terrain_mask(lat, lon)
 
-    for model_key in args.models:
-        raw_path = case_dir / "raw" / f"{model_key}.json"
-        if not raw_path.exists():
-            print(f"  Skipping {model_key}: {raw_path} not found")
+    # If the user didn't pass --models, default to what's in the case
+    models_to_score = args.models if args.models else case.models
+
+    for model_key in models_to_score:
+        if model_key not in case.models:
+            print(f"  Skipping {model_key}: not present in case (has {case.models})")
             continue
 
-        import json
-        raw = json.loads(raw_path.read_text())
-
-        # Reshape all hours
-        n_hours = len(list(raw.values())[0][0])
-        all_fields: dict[int, dict] = {}
-        for h in range(min(n_hours, 97)):
-            fields = reshape_to_fields(raw, lat, lon, h, terrain_mask)
-            if fields is not None:
-                all_fields[h] = fields
+        all_fields = case.fields_all_hours(model_key)
+        if not all_fields:
+            print(f"  Skipping {model_key}: no usable hours in raw data")
+            continue
 
         # Build full timeseries (includes anomaly filtering + persistence filter)
         zone_ts = build_zone_timeseries(
             all_fields, lat, lon,
-            hours=range(min(n_hours, 97)),
+            hours=sorted(all_fields.keys()),
             terrain_mask=terrain_mask,
             t_gradient_threshold=args.threshold,
             te_gradient_threshold=args.te_threshold,
@@ -964,8 +963,6 @@ def _cmd_validate(args: argparse.Namespace) -> None:
 
 def _cmd_diagnose(args: argparse.Namespace) -> None:
     """Deep diagnostic of detection pipeline for a specific zone/hour/model."""
-    import json
-
     from weatherbrief.frontal.detect import (
         classify_front_type,
         compute_frontal_zones,
@@ -997,26 +994,23 @@ def _cmd_diagnose(args: argparse.Namespace) -> None:
           f"anomaly={args.anomaly} floor={args.floor}")
     print(f"{'='*72}")
 
-    # Load raw data
-    raw_path = case_dir / "raw" / f"{model_key}.json"
-    if not raw_path.exists():
-        print(f"Error: {raw_path} not found", file=sys.stderr)
+    # Load raw data via unified Case
+    from weatherbrief.frontal.case import load_case
+    case = load_case(case_dir)
+    if model_key not in case.models:
+        print(
+            f"Error: model '{model_key}' not in case (available: {case.models})",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    raw = json.loads(raw_path.read_text())
-    lat, lon = build_grid_coords()
+    lat, lon = case.lat, case.lon
     terrain_mask = build_terrain_mask(lat, lon)
 
-    # Reshape all hours for mean gradient
-    n_hours = len(list(raw.values())[0][0])
-    all_fields: dict[int, dict] = {}
-    for h in range(min(n_hours, 97)):
-        fields = reshape_to_fields(raw, lat, lon, h, terrain_mask)
-        if fields is not None:
-            all_fields[h] = fields
-
+    all_fields = case.fields_all_hours(model_key)
     if hour not in all_fields:
-        print(f"Error: no data at hour {hour} (available: {sorted(all_fields.keys())[:10]}...)")
+        avail = sorted(all_fields.keys())
+        print(f"Error: no data at hour {hour} (available: {avail[:10]}{'...' if len(avail) > 10 else ''})")
         sys.exit(1)
 
     fields = all_fields[hour]
@@ -1260,8 +1254,7 @@ def _cmd_diagnose(args: argparse.Namespace) -> None:
 
 def _cmd_plot_hewson(args: argparse.Namespace) -> None:
     """Render the full set of Hewson 1998 / Hewson & Titley 2010 diagnostic fields."""
-    import json
-
+    from weatherbrief.frontal.case import load_case
     from weatherbrief.frontal.detect import (
         classify_front_type,
         compute_frontal_zones_dual,
@@ -1269,7 +1262,16 @@ def _cmd_plot_hewson(args: argparse.Namespace) -> None:
     )
 
     case_dir = Path(args.case)
+    case = load_case(case_dir)
+
     model_key = args.model
+    if model_key not in case.models:
+        print(
+            f"Error: model '{model_key}' not in case (available: {case.models})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     hour = args.hour
     field_name = args.field
 
@@ -1277,24 +1279,17 @@ def _cmd_plot_hewson(args: argparse.Namespace) -> None:
         print(f"Error: --field must be T850 or theta_e (got {field_name})", file=sys.stderr)
         sys.exit(1)
 
-    raw_path = case_dir / "raw" / f"{model_key}.json"
-    if not raw_path.exists():
-        print(f"Error: {raw_path} not found", file=sys.stderr)
-        sys.exit(1)
-
-    raw = json.loads(raw_path.read_text())
-    lat, lon = build_grid_coords()
+    lat, lon = case.lat, case.lon
     terrain_mask = build_terrain_mask(lat, lon)
 
-    n_hours = len(list(raw.values())[0][0])
-    all_fields: dict[int, dict] = {}
-    for h in range(min(n_hours, 97)):
-        fields = reshape_to_fields(raw, lat, lon, h, terrain_mask)
-        if fields is not None:
-            all_fields[h] = fields
-
+    all_fields = case.fields_all_hours(model_key)
     if hour not in all_fields:
-        print(f"Error: no data at hour {hour}", file=sys.stderr)
+        avail = sorted(all_fields.keys())
+        print(
+            f"Error: no data at hour {hour}. Available: {avail[:10]}"
+            f"{'...' if len(avail) > 10 else ''}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     fields = all_fields[hour]
@@ -1306,16 +1301,24 @@ def _cmd_plot_hewson(args: argparse.Namespace) -> None:
         terrain_mask=terrain_mask,
     )
 
-    # Time tendency from adjacent hours (centered diff if possible)
-    if (hour + 1) in all_fields and (hour - 1) in all_fields:
-        tendency = (all_fields[hour + 1][field_name] - all_fields[hour - 1][field_name]) / 2
-        tendency_label = f"∂τ/∂t (centered, K/h)"
-    elif (hour + 1) in all_fields:
-        tendency = all_fields[hour + 1][field_name] - fields[field_name]
-        tendency_label = f"∂τ/∂t (forward, K/h)"
-    elif (hour - 1) in all_fields:
-        tendency = fields[field_name] - all_fields[hour - 1][field_name]
-        tendency_label = f"∂τ/∂t (backward, K/h)"
+    # Time tendency from nearest available adjacent hours.
+    # Step size is implicit in the hour labels (hourly for Open-Meteo,
+    # 6-hourly for ERA5 smoke).
+    avail_hours = sorted(all_fields.keys())
+    prev_h = max((h for h in avail_hours if h < hour), default=None)
+    next_h = min((h for h in avail_hours if h > hour), default=None)
+    if prev_h is not None and next_h is not None:
+        dt = next_h - prev_h
+        tendency = (all_fields[next_h][field_name] - all_fields[prev_h][field_name]) / dt
+        tendency_label = f"∂τ/∂t (centered Δt={dt}h, K/h)"
+    elif next_h is not None:
+        dt = next_h - hour
+        tendency = (all_fields[next_h][field_name] - fields[field_name]) / dt
+        tendency_label = f"∂τ/∂t (forward Δt={dt}h, K/h)"
+    elif prev_h is not None:
+        dt = hour - prev_h
+        tendency = (fields[field_name] - all_fields[prev_h][field_name]) / dt
+        tendency_label = f"∂τ/∂t (backward Δt={dt}h, K/h)"
     else:
         tendency = None
         tendency_label = "∂τ/∂t (unavailable)"
@@ -1880,14 +1883,23 @@ def _load_expected_fronts(case_dir: Path, hour_offset: int = 0) -> dict[str, str
 
 
 def _cmd_new_case(args: argparse.Namespace) -> None:
-    """Create a new calibration case from current model data and DWD charts."""
+    """Create a new calibration case from either live Open-Meteo or an ERA5 GRIB."""
     from datetime import datetime, timezone
 
+    from weatherbrief.frontal.case import (
+        build_case_from_era5,
+        build_case_from_open_meteo,
+    )
+
+    if args.source == "era5":
+        _new_case_era5(args)
+        return
+
+    # Open-Meteo path (default)
     from weatherbrief.fetch.model_status import fetch_model_metadata
 
     case_name = args.name
     if not case_name:
-        # Auto-name from current ECMWF init time
         meta = fetch_model_metadata(models=["ecmwf"])
         if "ecmwf" in meta:
             init_dt = datetime.fromtimestamp(
@@ -1902,108 +1914,173 @@ def _cmd_new_case(args: argparse.Namespace) -> None:
         print(f"Case {case_dir} already exists. Use --force to overwrite.")
         return
 
-    print(f"Creating calibration case: {case_dir}")
+    print(f"Creating Open-Meteo calibration case: {case_dir}")
 
-    # 1. Fetch model data (uses cache if available)
     cache_dir = Path(args.cache_dir) if args.cache_dir else cache._DEFAULT_CACHE_DIR
     models = ["ecmwf", "gfs", "icon"]
 
+    # Fetch via existing pipeline — cached for reuse
     result = _run_analysis(
         models, use_cache=True, cache_dir=cache_dir,
         t_threshold=args.threshold, te_threshold=args.te_threshold,
     )
 
-    # 2. Copy cached raw data to case directory
-    raw_dir = case_dir / "raw"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-
-    import shutil
-
+    # Convert raw cached JSON → per-model NPZ under case dir
+    raw_responses: dict[str, dict] = {}
+    import json
     for model_key in models:
         init_time = result["model_init_times"].get(model_key)
         if not init_time:
+            print(f"  {model_key}: no init_time — skipping")
             continue
-        src = cache_dir / f"{model_key}_{init_time}.json"
-        if src.exists():
-            dst = raw_dir / f"{model_key}.json"
-            shutil.copy2(src, dst)
-            init_str = datetime.fromtimestamp(
-                init_time, tz=timezone.utc,
-            ).strftime("%Y-%m-%d %HZ")
-            print(f"  {model_key}: {init_str} → {dst.name}")
-        else:
-            print(f"  {model_key}: cache not found at {src}")
+        raw_path = cache_dir / f"{model_key}_{init_time}.json"
+        if not raw_path.exists():
+            print(f"  {model_key}: cache not found at {raw_path}")
+            continue
+        raw_responses[model_key] = json.loads(raw_path.read_text())
+        init_str = datetime.fromtimestamp(init_time, tz=timezone.utc).strftime("%Y-%m-%d %HZ")
+        print(f"  {model_key}: {init_str}")
 
-    # 3. Download DWD charts to reference directory
+    build_case_from_open_meteo(
+        case_dir,
+        raw_responses=raw_responses,
+        init_times={m: result["model_init_times"].get(m, 0) for m in raw_responses},
+        timestamps={m: result["timestamps"].get(m, []) for m in raw_responses},
+        lat=result["lat"], lon=result["lon"],
+        terrain_mask=result["terrain_mask"],
+        case_name=case_name,
+    )
+
+    # Reference charts + skeleton
     ref_dir = case_dir / "reference"
-    ref_dir.mkdir(parents=True, exist_ok=True)
-
     print("\nDownloading DWD reference charts:")
     expected_fronts = _load_expected_fronts(case_dir, hour_offset=0)
     for name, filename in _DWD_CHARTS.items():
         path = _download_dwd_chart(name, filename, ref_dir)
         if path and name == "analysis":
-            # Also save zone overlay version
             overlay_path = ref_dir / "analysis_with_zones.png"
             _draw_zones_on_dwd(
                 path, overlay_path, "analysis",
                 expected_fronts=expected_fronts,
             )
 
-    # 4. Create skeleton expected.yaml
-    expected_path = case_dir / "expected.yaml"
-    if not expected_path.exists() or args.force:
-        # Compute hour offsets for DWD chart times
-        ecmwf_init = result["model_init_times"].get("ecmwf", 0)
-        init_dt = datetime.fromtimestamp(ecmwf_init, tz=timezone.utc)
-
-        skeleton = (
-            f"# Calibration case: {case_name}\n"
-            f"# ECMWF init: {init_dt.strftime('%Y-%m-%d %HZ')}\n"
-            f"# Reference: DWD Bodenwetterkarte + ICON forecast charts\n"
-            f"#\n"
-            f"# Annotate zones by visual inspection of DWD analysis chart.\n"
-            f"# Types: cold, warm, occluded, stationary\n"
-            f"# Only list zones where a front is clearly drawn.\n"
-            f"# Zone reference: reference/analysis_with_zones.png\n"
-            f"\n"
-            f"# DWD analysis chart (current surface analysis)\n"
-            f"- time: \"{init_dt.strftime('%d/%m %HZ')}\"\n"
-            f"  hour_offset: 0\n"
-            f"  notes: >\n"
-            f"    TODO: describe synoptic situation from DWD analysis chart\n"
-            f"  zones: {{}}\n"
-            f"    # example: uk_south: cold\n"
-        )
-
-        # Add ICON forecast chart entries
-        for name, filename in _DWD_CHARTS.items():
-            if not name.startswith("icon_"):
-                continue
-            hours = int(name.split("_")[1])
-            forecast_dt = init_dt + __import__("datetime").timedelta(hours=hours)
-            skeleton += (
-                f"\n"
-                f"# ICON forecast T+{hours}h ({filename})\n"
-                f"- time: \"{forecast_dt.strftime('%d/%m %HZ')}\"\n"
-                f"  hour_offset: {hours}\n"
-                f"  notes: >\n"
-                f"    TODO: describe from ICON forecast chart\n"
-                f"  zones: {{}}\n"
-            )
-
-        expected_path.write_text(skeleton)
-        print(f"\nCreated skeleton: {expected_path}")
-        print("  → Edit this file to annotate expected zones from the DWD charts")
-        print(f"  → Zone reference: {ref_dir / 'analysis_with_zones.png'}")
-    else:
-        print(f"\n{expected_path} already exists (not overwritten)")
+    ecmwf_init = result["model_init_times"].get("ecmwf", 0)
+    init_dt = datetime.fromtimestamp(ecmwf_init, tz=timezone.utc)
+    _write_expected_yaml_skeleton(case_dir, init_dt, force=args.force)
 
     print(f"\nCase ready at {case_dir}/")
-    print(f"Next steps:")
     print(f"  1. Open {ref_dir / 'analysis_with_zones.png'} — identify fronts per zone")
-    print(f"  2. Edit {expected_path} — annotate zones")
+    print(f"  2. Edit {case_dir / 'expected.yaml'} — annotate zones")
     print(f"  3. Score: python -m weatherbrief.frontal.cli score --case {case_dir}")
+
+
+def _new_case_era5(args: argparse.Namespace) -> None:
+    """Build a calibration case from an ERA5 GRIB file."""
+    from datetime import datetime, timedelta, timezone
+
+    from weatherbrief.frontal.case import build_case_from_era5
+    from weatherbrief.frontal.grid import build_grid_coords, build_terrain_mask
+
+    if not args.grib:
+        print("Error: --grib is required when --source era5", file=sys.stderr)
+        sys.exit(1)
+    if not args.date:
+        print("Error: --date YYYY-MM-DD is required when --source era5", file=sys.stderr)
+        sys.exit(1)
+
+    grib_path = Path(args.grib)
+    if not grib_path.exists():
+        print(f"Error: GRIB not found at {grib_path}", file=sys.stderr)
+        sys.exit(1)
+
+    case_name = args.name or f"{args.date}_era5"
+    case_dir = Path("data/calibration") / case_name
+    if case_dir.exists() and not args.force:
+        print(f"Case {case_dir} already exists. Use --force to overwrite.")
+        return
+
+    print(f"Creating ERA5 calibration case: {case_dir}")
+    print(f"  GRIB:  {grib_path}")
+    print(f"  Date:  {args.date}")
+    print(f"  Level: {args.level} hPa")
+
+    lat, lon = build_grid_coords()
+    terrain_mask = build_terrain_mask(lat, lon)
+
+    build_case_from_era5(
+        case_dir, grib_path,
+        case_name=case_name,
+        level_hPa=args.level,
+        terrain_mask=terrain_mask,
+    )
+
+    # Reference charts for the annotation-anchor time (00Z of --date)
+    ref_dir = case_dir / "reference"
+    print("\nDownloading DWD reference charts:")
+    expected_fronts = _load_expected_fronts(case_dir, hour_offset=0)
+    for name, filename in _DWD_CHARTS.items():
+        path = _download_dwd_chart(name, filename, ref_dir)
+        if path and name == "analysis":
+            overlay_path = ref_dir / "analysis_with_zones.png"
+            _draw_zones_on_dwd(
+                path, overlay_path, "analysis",
+                expected_fronts=expected_fronts,
+            )
+
+    # Anchor timestamp: midnight of the requested date
+    anchor_dt = datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    _write_expected_yaml_skeleton(case_dir, anchor_dt, force=args.force)
+
+    print(f"\nCase ready at {case_dir}/")
+    print(f"  1. Open {ref_dir / 'analysis_with_zones.png'} — identify fronts per zone")
+    print(f"  2. Edit {case_dir / 'expected.yaml'} — annotate zones")
+    print(f"  3. Plot: python -m weatherbrief.frontal.cli plot-hewson --case {case_dir} --model era5 --hour 0")
+
+
+def _write_expected_yaml_skeleton(
+    case_dir: Path, anchor_dt: "datetime", force: bool = False,
+) -> None:
+    """Write a skeleton expected.yaml with one entry per DWD chart offset."""
+    from datetime import timedelta
+
+    expected_path = case_dir / "expected.yaml"
+    if expected_path.exists() and not force:
+        print(f"\n{expected_path} already exists (not overwritten)")
+        return
+
+    skeleton = (
+        f"# Calibration case anchor: {anchor_dt.strftime('%Y-%m-%d %HZ')}\n"
+        f"# Reference: DWD Bodenwetterkarte + ICON forecast charts\n"
+        f"#\n"
+        f"# Annotate zones by visual inspection of DWD analysis chart.\n"
+        f"# Types: cold, warm, occluded, stationary\n"
+        f"# Only list zones where a front is clearly drawn.\n"
+        f"# Zone reference: reference/analysis_with_zones.png\n"
+        f"\n"
+        f"# DWD analysis chart (surface analysis at anchor time)\n"
+        f"- time: \"{anchor_dt.strftime('%d/%m %HZ')}\"\n"
+        f"  hour_offset: 0\n"
+        f"  notes: >\n"
+        f"    TODO: describe synoptic situation from DWD analysis chart\n"
+        f"  zones: {{}}\n"
+        f"    # example: uk_south: cold\n"
+    )
+    for name, filename in _DWD_CHARTS.items():
+        if not name.startswith("icon_"):
+            continue
+        hours = int(name.split("_")[1])
+        forecast_dt = anchor_dt + timedelta(hours=hours)
+        skeleton += (
+            f"\n"
+            f"# ICON forecast T+{hours}h ({filename})\n"
+            f"- time: \"{forecast_dt.strftime('%d/%m %HZ')}\"\n"
+            f"  hour_offset: {hours}\n"
+            f"  notes: >\n"
+            f"    TODO: describe from ICON forecast chart\n"
+            f"  zones: {{}}\n"
+        )
+    expected_path.write_text(skeleton)
+    print(f"\nCreated skeleton: {expected_path}")
 
 
 def _cmd_charts(args: argparse.Namespace) -> None:
@@ -2132,8 +2209,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Calibration case dir (e.g. data/calibration/2026-04-16_12Z)",
     )
     p_score.add_argument(
-        "--models", nargs="+", default=["ecmwf", "gfs"],
-        help="Models to score (default: ecmwf gfs)",
+        "--models", nargs="+", default=None,
+        help="Models to score (default: all models present in the case)",
     )
     p_score.add_argument(
         "--threshold", type=float, default=2.0,
@@ -2193,7 +2270,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--case", required=True,
         help="Calibration case dir (e.g. data/calibration/2026-04-16_12Z)",
     )
-    p_diag.add_argument("--model", default="ecmwf", choices=["ecmwf", "gfs", "icon"])
+    p_diag.add_argument("--model", default="ecmwf",
+                        help="Model key from the case (ecmwf/gfs/icon/era5)")
     p_diag.add_argument("--hour", type=int, required=True, help="Forecast hour offset")
     p_diag.add_argument("--zone", required=True, help="Zone name (e.g. uk_south)")
     p_diag.add_argument(
@@ -2216,23 +2294,41 @@ def build_parser() -> argparse.ArgumentParser:
     # new-case
     p_new = sub.add_parser(
         "new-case",
-        help="Create a new calibration case from current data + DWD charts",
+        help="Create a new calibration case from Open-Meteo live data or an ERA5 GRIB",
     )
     p_new.add_argument(
-        "--name", help="Case name (default: auto from ECMWF init time)",
+        "--source", choices=["open_meteo", "era5"], default="open_meteo",
+        help="Data source (default: open_meteo fetches the latest live models)",
+    )
+    p_new.add_argument(
+        "--name", help="Case name (default: auto from ECMWF init time or --date)",
     )
     p_new.add_argument(
         "--force", action="store_true",
         help="Overwrite existing case",
     )
+    # Open-Meteo-only options
     p_new.add_argument("--cache-dir")
     p_new.add_argument(
         "--threshold", type=float, default=2.0,
-        help="T850 gradient threshold (K/100km)",
+        help="T850 gradient threshold (K/100km) — Open-Meteo flow only",
     )
     p_new.add_argument(
         "--te-threshold", type=float, default=4.0,
-        help="θe gradient threshold (K/100km)",
+        help="θe gradient threshold (K/100km) — Open-Meteo flow only",
+    )
+    # ERA5-only options
+    p_new.add_argument(
+        "--grib",
+        help="Path to ERA5 GRIB file (required for --source era5)",
+    )
+    p_new.add_argument(
+        "--date",
+        help="Case anchor date YYYY-MM-DD (required for --source era5)",
+    )
+    p_new.add_argument(
+        "--level", type=int, default=850,
+        help="Pressure level hPa to extract from ERA5 GRIB (default 850)",
     )
 
     # charts
@@ -2261,7 +2357,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Calibration case dir (e.g. data/calibration/2026-04-24_00Z)",
     )
     p_hewson.add_argument(
-        "--model", default="ecmwf", choices=["ecmwf", "gfs", "icon"],
+        "--model", default="ecmwf",
+        help="Model key as present in the case (ecmwf/gfs/icon for open_meteo, era5 for era5)",
     )
     p_hewson.add_argument("--hour", type=int, default=0)
     p_hewson.add_argument(
