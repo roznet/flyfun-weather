@@ -35,22 +35,13 @@ FRONTAL_GRID = {
     "resolution": 0.25,
 }
 
-# 850 hPa variables — the default for zone-scale frontal detection
-_GRID_VARIABLES = (
-    "temperature_850hPa,"
-    "dewpoint_850hPa,"
-    "wind_speed_850hPa,"
-    "wind_direction_850hPa"
-)
-
-
 def _variables_for_levels(levels: list[int]) -> str:
     """Open-Meteo comma-separated variable list for the given pressure levels.
 
     For each level L, requests temperature/dewpoint/wind-speed/wind-direction
     at ``{var}_{L}hPa``. Used when fetching multi-level grids for Hewson
-    precompute; callers fetching only 850 hPa can pass ``[850]`` or rely on
-    the ``_GRID_VARIABLES`` default.
+    precompute; frontal-CLI callers passing ``levels=None`` fall through to
+    the ``fetch_grid_fields`` default of ``[850]`` via this same function.
     """
     parts: list[str] = []
     for L in levels:

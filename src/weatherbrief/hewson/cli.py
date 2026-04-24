@@ -88,8 +88,9 @@ def _cmd_list(args: argparse.Namespace) -> int:
             continue
         print(f"\n  {subdir.name}/")
         for path in entries:
-            size_kb = path.stat().st_size / 1024
-            total_bytes += path.stat().st_size
+            st = path.stat()
+            size_kb = st.st_size / 1024
+            total_bytes += st.st_size
             total_count += 1
             if args.verbose:
                 try:

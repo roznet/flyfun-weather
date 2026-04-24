@@ -237,17 +237,21 @@ def _fake_model_metadata(models):
 
 @pytest.fixture
 def patched_metadata():
-    """Patch fetch_model_metadata both in hewson and frontal call sites."""
+    """Patch fetch_model_metadata at its source module.
+
+    precompute.py imports fetch_model_metadata locally inside the functions
+    that need it (not at module scope), so patching the source module is
+    the only intercept that actually fires — a second patch on
+    ``weatherbrief.hewson.precompute.fetch_model_metadata`` would need
+    ``create=True`` because the attribute doesn't exist, and even with
+    ``create=True`` would only create an orphan attribute the production
+    code never looks up.
+    """
     with patch(
-        "weatherbrief.hewson.precompute.fetch_model_metadata",
+        "weatherbrief.fetch.model_status.fetch_model_metadata",
         side_effect=_fake_model_metadata,
-        create=True,
     ):
-        with patch(
-            "weatherbrief.fetch.model_status.fetch_model_metadata",
-            side_effect=_fake_model_metadata,
-        ):
-            yield
+        yield
 
 
 @pytest.fixture
