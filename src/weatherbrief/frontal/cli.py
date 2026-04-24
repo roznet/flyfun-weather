@@ -413,13 +413,14 @@ def _cmd_analyze(args: argparse.Namespace) -> None:
         lat, lon = build_grid_coords()
         print(f"Grid: {len(lat)} lat × {len(lon)} lon = {len(lat) * len(lon)} points")
         print(f"Lat: {lat[0]:.1f} to {lat[-1]:.1f}, Lon: {lon[0]:.1f} to {lon[-1]:.1f}")
-        print(f"Resolution: {lat[1] - lat[0]:.1f}°")
+        resolution = float(lat[1] - lat[0])
+        print(f"Resolution: {resolution:.2f}°")
         print(f"Models: {', '.join(models)}")
         print(f"Zones: {len(ZONES)}")
         for name, bounds in ZONES.items():
             display = bounds["display"]
-            n_lat = int((bounds["lat"][1] - bounds["lat"][0]) / 0.5) + 1
-            n_lon = int((bounds["lon"][1] - bounds["lon"][0]) / 0.5) + 1
+            n_lat = int((bounds["lat"][1] - bounds["lat"][0]) / resolution) + 1
+            n_lon = int((bounds["lon"][1] - bounds["lon"][0]) / resolution) + 1
             print(f"  {name:<28} {display:<32} {n_lat}×{n_lon}={n_lat * n_lon} pts")
         return
 

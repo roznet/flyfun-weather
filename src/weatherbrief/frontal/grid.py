@@ -1,8 +1,13 @@
 """Grid definition, Open-Meteo fetch, field preparation, and terrain masking.
 
-Defines the 0.5° European grid for frontal detection, fetches 850hPa fields
-via the existing OpenMeteoClient HTTP infrastructure, and prepares raw data
-into NaN-free 2D numpy arrays ready for gradient computation.
+Defines the 0.25° European grid (standard lat-lon multiples, aligned with
+ERA5's default regridded output). Fetches 850hPa fields via the existing
+OpenMeteoClient HTTP infrastructure, and prepares raw data into NaN-free
+2D numpy arrays ready for gradient computation.
+
+The 0.25° grid is chosen so that Open-Meteo (ECMWF/GFS/ICON regridded to
+0.25°) and ERA5 (CDS-regridded to 0.25°) both deliver data at identical
+grid points, eliminating cross-source interpolation noise.
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ FRONTAL_GRID = {
     "lat_max": 60.0,
     "lon_min": -20.0,
     "lon_max": 28.0,
-    "resolution": 0.5,
+    "resolution": 0.25,
 }
 
 # 850hPa variables — the only 4 we need for frontal detection
@@ -53,8 +58,13 @@ _TERRAIN_MASK_THRESHOLD_M = 1500
 def build_grid_coords() -> tuple[np.ndarray, np.ndarray]:
     """Return 1D lat and lon arrays for the frontal analysis grid.
 
-    lat: 35.0, 35.5, ..., 60.0  (51 points)
-    lon: -12.0, -11.5, ..., 28.0 (81 points)
+    At 0.25° resolution:
+      lat: 35.0, 35.25, ..., 60.0  (101 points)
+      lon: -20.0, -19.75, ..., 28.0  (193 points)
+      total: 19,493 grid points.
+
+    Aligned with ERA5's default regridded output and standard 0.25°
+    lat-lon multiples, so Open-Meteo and ERA5 deliver at identical points.
     """
     g = FRONTAL_GRID
     lat = np.arange(g["lat_min"], g["lat_max"] + g["resolution"] / 2, g["resolution"])
