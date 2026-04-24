@@ -37,6 +37,10 @@ dependencies = [
     "SRTM.py>=0.3.7",
     "PyMuPDF>=1.24",
     "cfgrib>=0.9.12",
+    # eccodes 2.45+ is needed to decode GRIB2 tablesVersion=35, used by
+    # IFS Cycle 50r1 (12-May-2026). Older versions fail with opaque
+    # "unknown parameter" errors on pressure-level messages.
+    "eccodes>=2.45",
     "xarray>=2024.1",
     "timezonefinder>=6.2",
 ]
