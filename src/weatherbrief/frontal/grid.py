@@ -35,13 +35,34 @@ FRONTAL_GRID = {
     "resolution": 0.25,
 }
 
-# 850hPa variables — the only 4 we need for frontal detection
+# 850 hPa variables — the default for zone-scale frontal detection
 _GRID_VARIABLES = (
     "temperature_850hPa,"
     "dewpoint_850hPa,"
     "wind_speed_850hPa,"
     "wind_direction_850hPa"
 )
+
+
+def _variables_for_levels(levels: list[int]) -> str:
+    """Open-Meteo comma-separated variable list for the given pressure levels.
+
+    For each level L, requests temperature/dewpoint/wind-speed/wind-direction
+    at ``{var}_{L}hPa``. Used when fetching multi-level grids for Hewson
+    precompute; callers fetching only 850 hPa can pass ``[850]`` or rely on
+    the ``_GRID_VARIABLES`` default.
+    """
+    parts: list[str] = []
+    for L in levels:
+        parts.extend(
+            (
+                f"temperature_{L}hPa",
+                f"dewpoint_{L}hPa",
+                f"wind_speed_{L}hPa",
+                f"wind_direction_{L}hPa",
+            )
+        )
+    return ",".join(parts)
 
 # Chunk size for grid fetch. The hourly param is short (~90 chars) but each
 # coordinate pair takes ~12 chars plus URL-encoding overhead (%2C = 3 chars).
@@ -231,20 +252,34 @@ def fetch_grid_fields(
     model_key: str,
     lat: np.ndarray,
     lon: np.ndarray,
+    levels: list[int] | None = None,
+    forecast_days: int | None = None,
 ) -> tuple[dict[str, list], list[str], int]:
-    """Fetch 850hPa fields for the full frontal grid from Open-Meteo.
+    """Fetch pressure-level fields for the full frontal grid from Open-Meteo.
 
     Builds URLs and chunks requests using the client's HTTP infrastructure.
     Returns (raw_data, timestamps, init_time_unix):
         raw_data: {variable_name: [[hourly values per point], ...]}
         timestamps: list of ISO timestamp strings
         init_time_unix: model initialization time (unix seconds)
+
+    ``levels`` defaults to ``[850]`` — the single-level frontal detection
+    default. Pass ``[925, 850, 700]`` for Hewson precompute. Variable names
+    in the returned dict are level-suffixed (e.g. ``temperature_850hPa``,
+    ``temperature_700hPa``) so multi-level responses stay unambiguous.
+
+    ``forecast_days`` caps how many days of hourly data to pull; defaults
+    to ``min(endpoint.max_days, 4)`` which gives the frontal CLI its
+    usual ~72 h horizon. Hewson precompute passes ``5`` to reach the 120 h
+    §4.3 horizon.
     """
     from weatherbrief.fetch.model_status import fetch_model_metadata
     from weatherbrief.fetch.variables import MODEL_ENDPOINTS
 
     endpoint = MODEL_ENDPOINTS[model_key]
     points = build_grid_points(lat, lon)
+    levels = list(levels) if levels else [850]
+    hourly_vars = _variables_for_levels(levels)
 
     # Record model init time before fetch
     meta = fetch_model_metadata(models=[model_key])
@@ -254,6 +289,9 @@ def fetch_grid_fields(
     all_responses: list[dict] = []
     timestamps: list[str] | None = None
 
+    days = forecast_days if forecast_days is not None else min(endpoint.max_days, 4)
+    days = max(1, min(days, endpoint.max_days))
+
     for chunk_start in range(0, len(points), _GRID_CHUNK_SIZE):
         chunk = points[chunk_start : chunk_start + _GRID_CHUNK_SIZE]
         chunk_idx = chunk_start // _GRID_CHUNK_SIZE + 1
@@ -262,17 +300,17 @@ def fetch_grid_fields(
         params: dict[str, object] = {
             "latitude": ",".join(str(p[0]) for p in chunk),
             "longitude": ",".join(str(p[1]) for p in chunk),
-            "hourly": _GRID_VARIABLES,
+            "hourly": hourly_vars,
             "wind_speed_unit": "kn",
             "timezone": "UTC",
-            "forecast_days": min(endpoint.max_days, 4),  # ~72h + margin
+            "forecast_days": days,
         }
         if endpoint.model_param:
             params["models"] = endpoint.model_param
 
         logger.info(
-            "Fetching %s chunk %d/%d (%d points)",
-            model_key, chunk_idx, total_chunks, len(chunk),
+            "Fetching %s chunk %d/%d (%d points, levels=%s)",
+            model_key, chunk_idx, total_chunks, len(chunk), levels,
         )
         response_json = client.get_json(endpoint.base_url, params)
 
@@ -296,7 +334,7 @@ def fetch_grid_fields(
         )
 
     # Reshape: collect all hourly arrays per variable
-    variables = [v.strip() for v in _GRID_VARIABLES.split(",")]
+    variables = [v.strip() for v in hourly_vars.split(",")]
     raw_data: dict[str, list] = {v: [] for v in variables}
 
     for point_data in all_responses:
@@ -318,13 +356,32 @@ def reshape_to_fields(
     lon: np.ndarray,
     hour_index: int,
     terrain_mask: np.ndarray | None = None,
+    level_hPa: int = 850,
 ) -> dict | None:
     """Extract one forecast hour from raw response, reshape to 2D arrays.
 
     Returns dict with T850, Td850, theta_e, u850, v850 as (n_lat, n_lon)
     arrays, or None if too much data is missing.
+
+    ``level_hPa`` selects the pressure level to read from ``raw`` (which
+    may contain multiple levels from a single multi-level fetch). The
+    output dict keys retain the historical ``T850/Td850/u850/v850`` names
+    regardless of the source level — this matches the Case-storage
+    convention (see ``frontal/case.py``). The θe calculation uses the
+    selected level's pressure.
     """
     n_lat, n_lon = len(lat), len(lon)
+    t_var = f"temperature_{level_hPa}hPa"
+    td_var = f"dewpoint_{level_hPa}hPa"
+    ws_var = f"wind_speed_{level_hPa}hPa"
+    wd_var = f"wind_direction_{level_hPa}hPa"
+
+    missing = [v for v in (t_var, td_var, ws_var, wd_var) if v not in raw]
+    if missing:
+        raise KeyError(
+            f"reshape_to_fields: raw dict missing variables {missing} — "
+            f"did the fetch request level {level_hPa} hPa?"
+        )
 
     def _extract(var_name: str) -> np.ndarray:
         values = []
@@ -335,43 +392,49 @@ def reshape_to_fields(
                 values.append(np.nan)
         return np.array(values).reshape(n_lat, n_lon)
 
-    T850_raw = _extract("temperature_850hPa")
-    Td850_raw = _extract("dewpoint_850hPa")
-    ws_raw = _extract("wind_speed_850hPa")
-    wd_raw = _extract("wind_direction_850hPa")
+    T_raw = _extract(t_var)
+    Td_raw = _extract(td_var)
+    ws_raw = _extract(ws_var)
+    wd_raw = _extract(wd_var)
 
     # Prepare fields — resolve NaN before any computation
-    T850 = prepare_field(T850_raw)
-    Td850 = prepare_field(Td850_raw)
+    T = prepare_field(T_raw)
+    Td = prepare_field(Td_raw)
 
-    if any(f is None for f in (T850, Td850)):
-        logger.warning("Hour index %d: too much missing data, skipping", hour_index)
+    if any(f is None for f in (T, Td)):
+        logger.warning(
+            "Hour %d level %d hPa: too much missing T/Td data, skipping",
+            hour_index, level_hPa,
+        )
         return None
 
     # Convert wind to u/v BEFORE NaN fill — direction has circular
     # wraparound (359° ≈ 1°) so nearest-neighbor on raw direction can
     # introduce large jumps. Filling on Cartesian u/v is safe.
-    u850_raw, v850_raw = wind_to_uv(ws_raw, wd_raw)
-    u850 = prepare_field(u850_raw)
-    v850 = prepare_field(v850_raw)
+    u_raw, v_raw = wind_to_uv(ws_raw, wd_raw)
+    u = prepare_field(u_raw)
+    v = prepare_field(v_raw)
 
-    if any(f is None for f in (u850, v850)):
-        logger.warning("Hour index %d: too much missing wind data, skipping", hour_index)
+    if any(f is None for f in (u, v)):
+        logger.warning(
+            "Hour %d level %d hPa: too much missing wind data, skipping",
+            hour_index, level_hPa,
+        )
         return None
 
     # Fill terrain before θe computation (same field goes into detection)
     if terrain_mask is not None:
-        T850 = fill_terrain(T850, terrain_mask)
-        Td850 = fill_terrain(Td850, terrain_mask)
-        u850 = fill_terrain(u850, terrain_mask)
-        v850 = fill_terrain(v850, terrain_mask)
+        T = fill_terrain(T, terrain_mask)
+        Td = fill_terrain(Td, terrain_mask)
+        u = fill_terrain(u, terrain_mask)
+        v = fill_terrain(v, terrain_mask)
 
-    theta_e = compute_theta_e(T850, Td850)
+    theta_e = compute_theta_e(T, Td, pressure_hPa=float(level_hPa))
 
     return {
-        "T850": T850,
-        "Td850": Td850,
+        "T850": T,
+        "Td850": Td,
         "theta_e": theta_e,
-        "u850": u850,
-        "v850": v850,
+        "u850": u,
+        "v850": v,
     }

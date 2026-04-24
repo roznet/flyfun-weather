@@ -131,6 +131,28 @@ Matches what our briefings already use. Open-Meteo delivers 120–240 h for the 
 
 ECMWF's main runs; GFS and ICON also publish 00Z/12Z as primary. Between cycles, briefings read the last snapshot; 12 h staleness is fine for smooth advective fields.
 
+### 4.4a Snapshot temporal resolution: **3 h stride** (decided 2026-04-24, after live GFS validation)
+
+Open-Meteo delivers hourly; we decimate to every 3rd forecast hour before the Hewson compute loop. At 120 h horizon that is 40 timesteps per snapshot instead of 120.
+
+Tradeoffs considered on the real GFS 12 Z cycle:
+
+| Stride | Timesteps | NPZ size | Compute time | Slider UX | Advisory blur |
+|---|---|---|---|---|---|
+| 1 h | 120 | 139 MB | ~190 s | smoothest | ~15 km |
+| **3 h** | **40** | **46 MB** | **~65 s** | mainstream (matches Windy/SYNOP) | **~50 km** |
+| 6 h | 21 | 24 MB | ~30 s | sparse | ~100 km |
+
+**Picked 3 h** because:
+- ~50 km interpolation blur on a moving front is well inside the "±50–100 km TFP positional uncertainty" ceiling stated in § 8 (we cannot claim more precision than that anyway)
+- Matches SYNOP reporting cadence, which is also what pro forecaster tools ship
+- 3× size and 3× compute savings over 1 h, without the advisory-accuracy penalty 6 h introduces
+- Per-flight advisories and cross-section bands that want finer granularity compute from per-briefing GRIB at flight time (§ 6.2 stencil path), not from the synoptic-view snapshot
+
+**Not picked**: 1 h was expressive but expensive (139 MB × 12 snapshots = 1.7 GB peak on disk, ~13 min/cycle). 6 h was cheap but the spatial blur on fast-moving fronts was past the advisory error budget.
+
+The NPZ stores the stride in a `stride_hours` field so readers can self-describe without hard-coded assumptions. Overridable via `python -m weatherbrief.hewson precompute --stride-hours N` for debug / high-fidelity one-off runs.
+
 ### 4.5 Storage format: **NPZ now → Zarr when needed**
 
 **Start with NPZ** (numpy's native compressed binary zip):
@@ -163,41 +185,75 @@ Recent two cycles on disk per model; older cycles purged. Matches the existing p
 
 ## 5. Data-volume sizing
 
-Per model per cycle at **0.25° × 3 levels × 120 h × 6 fields × float16**:
+**Measured on the real GFS 2026-04-24 12 Z cycle** at `0.25° × 3 levels × 120 h horizon × 6 metrics × float32`, with **3 h stride** (see § 4.4a) so 40 timesteps land in the snapshot:
 
-| Metric | Value |
-|---|---|
-| Grid points per level per hour | 19,493 (101 lat × 193 lon) |
-| Values per snapshot | 1.78 M × 6 = 10.7 M |
-| Raw bytes (float16) | ~85 MB |
-| Compressed NPZ | ~25 MB |
-| Latest state, all 3 models | ~75 MB |
-| Daily write volume | ~150 MB |
-| Fetch wall-time per cycle | ~1.5 min |
-| Compute wall-time per cycle | ~5 min |
-| 48 h cache footprint | ~300 MB |
+| Metric | Measured (1 model, 3 h stride) | Full cycle (3 models) |
+|---|---|---|
+| Grid points per timestep per level | 19,493 (101 × 193) | — |
+| Timesteps (120 h / 3 h) | 40 | — |
+| Raw bytes (float32, 18 metric stacks) | ~57 MB | ~170 MB |
+| Compressed NPZ | **~46 MB** | ~140 MB (3 snapshots) |
+| Fetch wall-time | ~65 s | ~3 min |
+| Compute wall-time | ~65 s | ~3 min |
+| Full-cycle wall time | ~130 s | **~6.5 min** |
+| 48 h on-disk peak (2 cycles × 3 models) | — | **~550 MB** |
 
-Small enough that the "precompute" pipeline can keep everything in a handful of files and load the whole snapshot into memory when a briefing needs it.
+Earlier drafts of this section quoted "~25 MB compressed / ~300 MB peak / ~6.5 min total" — that was based on **float16 × 1 h stride** (which we intentionally avoid for precision) combined with a miscounting of the horizon (stated 120 h but math used 1 h). Above is the real footprint at the shipped defaults.
+
+**Historical calibration on real data**:
+- 1 h stride × float32 × 120 h = 139 MB / snapshot (single GFS run). Too big for the map payoff.
+- 3 h stride × float32 × 40 timesteps = **46 MB / snapshot** (measured). Shipped default.
+- 6 h stride × float32 × 21 timesteps ≈ 24 MB / snapshot. Considered; rejected because a 6 h gap blurs advection interpolation across ~100 km of front motion, which weakens the advisory-evaluator accuracy budget in § 8.
+
+Advisory evaluators and cross-section bands that need finer temporal resolution compute directly from per-briefing GRIB at flight time (§ 6.2 stencil path), not from this synoptic-view snapshot.
 
 ## 6. Architecture
 
-### 6.1 Precompute pipeline (hooks into existing 6 h frontal fetch)
+### 6.1 Precompute pipeline (dedicated scheduler loop)
 
-**Key decision (2026-04-24)**: don't stand up a new cron. The frontal-detection pipeline already fetches the full 0.25° European grid every 6 h to feed DWD frontal zones. Hewson computation piggybacks on that fetch — same grid, ~5 min of added compute, separate NPZ output. Source-agnostic: today the fetch is Open-Meteo; when native-GRIB ingestion for ECMWF/ICON/GFS lands it becomes a call-site swap.
+**Key decision (2026-04-24, revised)**: the frontal-detection module is CLI-only — there is **no existing 6 h cron** to piggyback on (the earlier draft of this section assumed one; that was wrong). Hewson precompute is therefore a **new, independent loop** inside `scheduler.py`, following the same pattern as the five existing loops (`run_retention_loop`, `run_verification_loop`, `run_standalone_verification_loop`, `run_digest_loop`, `run_ecmwf_watcher_loop`).
+
+**Timing**: fires at **05 Z** and **17 Z**, giving ~5 h after each 00 Z / 12 Z init for Open-Meteo to publish all three models, while keeping a 1 h margin before the 06 Z / 18 Z `run_standalone_verification_loop` full cycles (heavy forecast fetch + scoring) to avoid CPU/network overlap. Other loops in the scheduler are light enough not to matter (ECMWF watcher is disk-only, retention is once/day, etc.).
+
+**Disable switch**: `DISABLE_HEWSON_PRECOMPUTE=1` (mirrors the existing `DISABLE_*` flags).
+
+**Shared entry point**: the async loop and the `python -m weatherbrief.hewson precompute` CLI both call the same `weatherbrief.hewson.precompute.run_once(...)` — one implementation, two surfaces. Ad-hoc debugging, manual re-runs, and scheduled runs exercise identical code.
 
 ```
-existing 6 h frontal grid fetch (all models)
-  ↓  (grid already in memory for frontal zones)
-compute_hewson_diagnostics() for each (level ∈ {925, 850, 700}, hour)
-  ↓
-np.savez_compressed("data/hewson/<model>/<init>.npz",
-                     theta_e, gradient, neg_laplacian, tfp,
-                     advection, tendency)
-  ↓
-retain 48 h, purge older
+run_hewson_precompute_loop          ┐
+  (scheduler.py, 05 Z / 17 Z)       │→ weatherbrief.hewson.precompute.run_once(...)
+python -m weatherbrief.hewson       │      ↓
+  precompute [--model / --dry-run / │   fetch_grid_fields(levels=[925, 850, 700])
+   --force / --output-dir]          ┘      ↓
+                                        reshape_to_fields per (hour, level)
+                                           ↓
+                                        compute_hewson_diagnostics + tendency
+                                           ↓
+                                        np.savez_compressed(
+                                            "${DATA_DIR}/hewson/<model>/<init_iso_z>.npz",
+                                            theta_e_{925,850,700},
+                                            gradient_{925,850,700},
+                                            neg_laplacian_{925,850,700},
+                                            tfp_{925,850,700},
+                                            advection_{925,850,700},
+                                            tendency_{925,850,700},
+                                            valid_times, lat, lon,
+                                            init_time_unix, levels,
+                                            stride_hours,   # = 3 by default
+                                        )
+                                           ↓
+                                        purge_old_snapshots(retention_hours=48)
 ```
 
-Snapshot size at 0.25° × 101×193 × 3 levels × 6 metrics × float32 ≈ **1.4 MB raw / ~500 KB compressed**. With 48 h retention × 3 models × 2 cycles/day ≈ **~24 MB total on disk**. Trivial.
+**Source-agnostic**: the fetch goes through `fetch_grid_fields` in `frontal/grid.py`, so when native-GRIB ingestion for ECMWF/ICON/GFS lands it's a call-site swap inside that function — `run_once` and everything downstream is unchanged.
+
+**Filename format**: ISO 8601 with `Z` suffix (`2026-04-24T12:00:00Z.npz`) — matches the ECMWF watcher manifests, sortable, human-readable.
+
+**Data directory**: `${DATA_DIR:-data}/hewson/<model>/` — follows the convention used by `storage/snapshots.py`, `tasks/outputs.py`, etc. In production `DATA_DIR=/mnt/flyfun_data/weather/data`.
+
+**Terrain mask caching**: the SRTM3 build is ~seconds; we cache it to `${DATA_DIR}/hewson/terrain_mask.npz` on first run and load thereafter (shape + coords verified on load so grid changes invalidate the cache).
+
+Snapshot size at 0.25° × 101×193 × 3 levels × 40 timesteps × 6 metrics × float32 ≈ **57 MB raw / ~46 MB compressed** per model per cycle (measured on the 2026-04-24 12 Z GFS run at shipped defaults). With 48 h retention × 3 models × 2 cycles/day ≈ **~550 MB on disk peak**. See § 5 for the full table and § 4.4a for why 3 h stride not 1 h.
 
 ### 6.2 Read paths (on-demand)
 
@@ -502,11 +558,14 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 - Validates Phase B's precompute output end-to-end without advisory-wording churn
 - Sidesteps the current calibration blocker (moisture gap — see §10a.1)
 
-**Phase D.0 — Precompute cron** ([task #8]):
-- Hook into the existing 6 h frontal grid fetch (no new cron)
-- Compute `theta_e, gradient, neg_laplacian, tfp, advection, tendency` at **925/850/700 hPa only**
-- Save snapshot NPZ per `(model, init)` under `data/hewson/<model>/<init>.npz`, retain 48 h
-- Source-agnostic: swaps Open-Meteo → native GRIB later without contract change
+**Phase D.0 — Precompute loop** ✅ DONE (2026-04-24, [task #8]):
+- New `run_hewson_precompute_loop` in `scheduler.py`, firing at **05 Z** / **17 Z** (avoids collision with the 06 Z / 18 Z `run_standalone_verification_loop` full cycles — see §6.1)
+- New module `src/weatherbrief/hewson/` with `run_once()` as the shared entry point for the loop and the `python -m weatherbrief.hewson precompute` CLI (one implementation, two surfaces)
+- Generalised `fetch_grid_fields` / `reshape_to_fields` in `frontal/grid.py` to accept `levels=[925, 850, 700]` with 850-only back-compat for the frontal CLI
+- Computes `theta_e, gradient, neg_laplacian, tfp, advection, tendency` at **925/850/700 hPa**
+- Saves snapshot NPZ per `(model, init)` under `${DATA_DIR}/hewson/<model>/<init_iso_z>.npz`, retains 48 h
+- ISO 8601 Z filenames, terrain mask cached to disk, `DISABLE_HEWSON_PRECOMPUTE=1` escape hatch
+- Source-agnostic: when native-GRIB ingestion lands it's a call-site swap inside `fetch_grid_fields`
 
 **Phase D.1 — Backend endpoint** ([task #9]):
 - `GET /api/hewson-map?model=ecmwf&init=<t>&level=850&metric=advection&hour=24` → JSON or binary grid of shape (n_lat, n_lon)
@@ -559,15 +618,15 @@ Opens after Phase D so the map + cross-section surface has something to show moi
 | **Architecture consolidation (0.25°, ERA5 loader, unified Case)** | ✅ Done (PR #91, merged) |
 | Resolution decision | ✅ 0.25° — consistent across all three models (ECMWF order at 0.25°, GFS/ICON ingestion at 0.25°) |
 | Level decision | ✅ 925 / 850 / 700 hPa (3 levels; 500/400 explicitly rejected as upper-IFR out-of-scope) |
-| Cadence decision | ✅ 2×/day (00Z, 12Z) — hooks into existing 6h frontal fetch, not a new cron |
+| Cadence decision | ✅ 2×/day — dedicated scheduler loop fires at 05 Z / 17 Z (~5 h after each 00/12 Z init, 1 h buffer before 06/18 Z full-cycle verification) |
 | Storage decision | ✅ NPZ flat level-suffixed keys; ~24 MB total across 48h × 3 models |
 | Retention decision | ✅ 48 h cache |
 | ERA5 bulk fetch | ✅ Done (1 year, 2025-02 → 2026-02, ~700 MB on disk at `data/era5/hewson/`) |
 | **Phase A** (route sampling) | ✅ Done (PR #93 open) — `sample_hewson_at_route`, `route-hewson` CLI, retrospective scripts |
 | **Phase B.1** (multi-level Case storage) | ✅ Done (PR #94 open) — multi-level NPZ, back-compat, 10 tests |
 | Phase B.2 (CLI `--levels`, rebuild Ciarán at 3 levels) | 🟡 Small follow-up; can slot anywhere |
-| **Phase D.0** (precompute cron) | 🎯 **NEXT** — hooks into existing 6h frontal fetch |
-| Phase D.1 (backend endpoint) | Requires D.0 |
+| **Phase D.0** (precompute loop) | ✅ Done (2026-04-24) — `run_hewson_precompute_loop` + `weatherbrief.hewson.run_once()` + `python -m weatherbrief.hewson` CLI |
+| Phase D.1 (backend endpoint) | 🎯 **NEXT** — requires D.0 (done) |
 | Phase D.2 (map layer + tooltips) | Requires D.1 |
 | Phase D.3 (cross-section bands) | Requires D.0 |
 | Phase D.4 (stencil in GRIB era) | Gated on native-GRIB ingestion being live for the user's briefing model |
@@ -575,9 +634,9 @@ Opens after Phase D so the map + cross-section surface has something to show moi
 | Phase E (moisture cross-check) | After Phase D — RH₉₂₅, LCC, TP, CAPE, debrief feature #92 |
 | Retrospective validation | ✅ Pairwise cancel test 3/3 (all pilot-cancellation days scored higher than replacement-flown days) — best calibration signal we have |
 
-## 12a. Quick pickup from fresh context (for Phase D start)
+## 12a. Quick pickup from fresh context (for Phase D.1 start)
 
-After PRs #93 (Phase A) and #94 (Phase B) merge, the next session picks up here.
+Phase D.0 is done. The next session picks up D.1 — the backend endpoint that serves per-(model, init, level, hour, metric) slices to the forecast-page map.
 
 ### What's already on main
 
@@ -587,59 +646,46 @@ After PRs #93 (Phase A) and #94 (Phase B) merge, the next session picks up here.
 - `route-hewson` CLI subcommand that resolves ICAO codes and prints per-waypoint values
 - Retrospective scripts: `scripts/analyze_flight_log.py` and `scripts/analyze_cancellations.py`
 - 1 year of ERA5 GRIBs at `data/era5/hewson/` (gitignored)
+- **Phase D.0**: `src/weatherbrief/hewson/` module (`precompute.py`, `cli.py`, `__main__.py`), `run_hewson_precompute_loop` in `scheduler.py` at 05 Z / 17 Z, NPZ snapshots at `${DATA_DIR}/hewson/<model>/<init_iso_z>.npz`. Back-compat-preserving `levels=` / `level_hPa=` kwargs added to `fetch_grid_fields` and `reshape_to_fields` in `frontal/grid.py`.
 
-### What Phase D needs (starting with task #8 — precompute cron)
+### What Phase D.1 needs
 
-The job is to hook Hewson computation into the **existing 6h frontal grid fetch** so that every cycle produces a snapshot NPZ at `data/hewson/<model>/<init>.npz`.
+Build an authenticated endpoint that serves one `(model, init, level, hour, metric)` slice from a precompute snapshot as JSON or binary.
 
 **Entry points to find first**:
-- Existing frontal fetch pipeline — grep `fetch_grid_fields` in `src/weatherbrief/frontal/grid.py` and its callers
-- The cron / scheduler — look at how DWD frontal zones are currently refreshed every 6h (check `designs/fetch.md` and `data/frontal_cache/`)
-- Snapshot storage — the retrospective already writes `data/era5/terrain_mask.npz` as a cached artefact; follow that path pattern
+- `src/weatherbrief/hewson/precompute.py::load_snapshot(path)` — returns the dict of arrays; map endpoint just indexes into `snap[f"{metric}_{level}"][hour]`
+- `src/weatherbrief/hewson/precompute.py::snapshot_path(model, init_time_unix, ...)` — canonical disk location
+- `src/weatherbrief/api/packs.py` — pack-access auth pattern to reuse (§ 7.3 says "reuses pack-access auth pattern")
+- Existing gridded-layer frontends: today the forecast map is point-only, so this will be the first Canvas-overlay pattern (§ 7.5)
 
-**Snapshot schema** (confirmed §6.1):
-```python
-np.savez_compressed(
-    f"data/hewson/{model}/{init_iso}.npz",
-    # per level ∈ {925, 850, 700}:
-    theta_e_925=..., gradient_925=..., neg_laplacian_925=...,
-    tfp_925=..., advection_925=..., tendency_925=...,
-    theta_e_850=..., gradient_850=..., # ... same set ...
-    theta_e_700=..., gradient_700=..., # ... same set ...
-    valid_times=...,  # for temporal interp
-    lat=..., lon=...,
-)
+**Endpoint contract (§ 7.3 sketch)**:
+```
+GET /api/hewson-map?model=ecmwf&init=<t>&level=850&metric=advection&hour=24
+  → JSON or binary array of shape (n_lat, n_lon)
 ```
 
-**Reproduce Storm Ciarán to sanity-check**:
+**Sanity-check the precompute output** before building the endpoint:
 ```bash
-# Multi-level case (Phase B):
-python -m weatherbrief.frontal.cli new-case \
-    --source era5 --grib data/era5/era5_hewson_smoke_2023-11-02.grib \
-    --date 2023-11-02 --level 850
-
-# Plot:
-python -m weatherbrief.frontal.cli plot-hewson \
-    --case data/calibration/2023-11-02_era5 \
-    --model era5 --hour 12 --field theta_e
+python -m weatherbrief.hewson precompute --models ecmwf --dry-run   # no-write test
+python -m weatherbrief.hewson precompute --models ecmwf             # real run
+python -m weatherbrief.hewson list -v                               # verify schema
 ```
 
-### Key files for Phase D pickup
+### Key files for Phase D.1 pickup
 
-- `src/weatherbrief/frontal/detect.py` — `compute_hewson_diagnostics()` (math to call per-cycle)
-- `src/weatherbrief/frontal/grid.py` — `fetch_grid_fields`, `build_terrain_mask`
-- `src/weatherbrief/frontal/case.py` — Case/meta persistence pattern (reuse NPZ conventions)
-- `src/weatherbrief/frontal/route_sampling.py` — `bilinear_sample` for cross-section bands reading the snapshot
-- `web/ts/visualization/cross-section/renderer.ts` + `layer-registry.ts` — cross-section layer pattern to follow for §7.9
+- `src/weatherbrief/hewson/precompute.py` — `load_snapshot`, `snapshot_path`, `resolve_output_dir`
+- `src/weatherbrief/api/packs.py` — pack-access auth + serialization patterns
+- `src/weatherbrief/api/app.py` — lifespan already wires `run_hewson_precompute_loop`
+- `web/ts/visualization/cross-section/renderer.ts` + `layer-registry.ts` — cross-section layer pattern to follow for § 7.9 (Phase D.3)
 - `designs/forecast-page.md` — where the map layer lives (point-marker pattern today; gridded-canvas layer is net new)
-- **This doc** — decisions and rationale; §10a is the list of known gaps so the next pass doesn't re-discover them
+- **This doc** — decisions and rationale; § 10a is the list of known gaps so the next pass doesn't re-discover them
 
-### Open questions left for Phase D
+### Open questions left for Phase D.1+
 
-- How does the existing 6h frontal-zone refresh invoke itself? Find its entry point so Hewson piggybacks cleanly (vs adding a second scheduler).
-- Snapshot format: pure NPZ flat-keys (per §6.1) or migrate to Zarr now? → NPZ per §4.5 — Zarr only when the map serves subsets over the network.
-- Map layer client: single gridded CanvasLayer for all 6 metrics (redraw on metric change), or 6 pre-rendered PNG tiles served statically? → start with JSON/binary + canvas (per §7.5), revisit tiling if latency needs it.
-- Pilot-facing tooltip text: draw from §2 directly (short form) or maintain a separate `docs/hewson-pilot-guide.md`? → start inline per §7.4, promote to a doc if it grows.
+- Serialization: JSON array (~80 KB/slice, simple) or quantized int8 + scale (~20 KB, needs client-side dequant)? → start with JSON per § 7.2, revisit if map latency needs it.
+- Cache headers: `Cache-Control: max-age=...` based on init time, since a given `(model, init)` slice is immutable. Let the CDN do the work.
+- Map layer client: single gridded CanvasLayer for all 6 metrics (redraw on metric change), or 6 pre-rendered PNG tiles served statically? → start with JSON/binary + canvas (per § 7.5), revisit tiling if latency needs it.
+- Pilot-facing tooltip text: draw from § 2 directly (short form) or maintain a separate `docs/hewson-pilot-guide.md`? → start inline per § 7.4, promote to a doc if it grows.
 
 ## 13. Related docs
 
