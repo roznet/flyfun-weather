@@ -64,7 +64,9 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
     print(
         f"Done in {result.elapsed_seconds:.1f}s — "
         f"{len([p for p in result.snapshots.values() if p])} written, "
-        f"{len(result.skipped)} skipped, {result.purged} purged"
+        f"{len(result.skipped)} skipped, {result.purged} purged, "
+        f"{result.api_calls_total} Open-Meteo API calls "
+        f"(not logged to DB — CLI runs do not hit ApiUsageRow)"
     )
     return 0
 

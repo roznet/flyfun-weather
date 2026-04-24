@@ -306,6 +306,33 @@ def test_run_once_writes_snapshot_with_expected_schema(
     )
 
 
+def test_run_once_captures_api_call_count(
+    tmp_path, patched_metadata, patched_terrain_mask,
+):
+    # Fake client counts fetch_grid_fields calls via ``self.calls`` — for
+    # the real client that would be ``OpenMeteoClient.call_count``. Either
+    # way, run_once should surface a non-zero total on the result.
+    class _Counting(_FakeOpenMeteoClient):
+        call_count = 0
+
+        def get_json(self, url, params):
+            type(self).call_count += 1
+            return super().get_json(url, params)
+
+    _Counting.call_count = 0
+    client = _Counting(n_hours=2)
+    result = run_once(
+        models=["gfs"],
+        output_dir=tmp_path,
+        forecast_days=1,
+        stride_hours=1,
+        skip_existing=False,
+        client=client,
+    )
+    assert result.api_calls_total > 0
+    assert result.api_calls_total == _Counting.call_count
+
+
 def test_run_once_stride_hours_decimates(
     tmp_path, patched_metadata, patched_terrain_mask,
 ):
