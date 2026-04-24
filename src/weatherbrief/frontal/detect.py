@@ -112,8 +112,10 @@ def compute_frontal_zones(
     # Use a more heavily smoothed field for TFP to suppress noise in
     # the second derivatives. The detection gradient (above) uses light
     # smoothing for sensitivity; the TFP needs clean second derivatives
-    # for selectivity.
-    tfp_sigma = max(smooth_sigma, 2.0)
+    # for selectivity. σ=4.0 cells ≈ 1° effective Gaussian σ at 0.25°
+    # (matches the σ=2.0 × 0.5° choice from the legacy 0.5° grid, and
+    # the heavy_sigma=4.0 default used in compute_hewson_diagnostics).
+    tfp_sigma = max(smooth_sigma, 4.0)
     T_tfp = gaussian_filter(field_input, sigma=tfp_sigma)
     dT_tfp_dy = np.gradient(T_tfp, dlat_spacing, axis=0)
     dT_tfp_dx = np.gradient(T_tfp, axis=1) / dlon_spacing_per_row[:, np.newaxis]

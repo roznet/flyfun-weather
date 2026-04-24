@@ -351,6 +351,19 @@ def build_case_from_era5(
     first = load_era5_fields(grib_path, timestamps[0], level_hPa=level_hPa)
     lat, lon = first["lat"], first["lon"]
 
+    # Validate terrain_mask shape up front rather than letting
+    # fill_terrain fail deep inside scipy with a cryptic error.
+    # The caller is expected to have built the mask for the frontal
+    # grid; this catches domain/resolution mismatches early.
+    if terrain_mask is not None and terrain_mask.shape != first["T850"].shape:
+        raise ValueError(
+            f"terrain_mask shape {terrain_mask.shape} does not match "
+            f"ERA5 grid shape {first['T850'].shape}. Rebuild the mask "
+            f"with build_terrain_mask(case_lat, case_lon) using the "
+            f"GRIB's own coordinates, or ensure the GRIB domain matches "
+            f"FRONTAL_GRID."
+        )
+
     save_case_meta(
         case_dir,
         case_name=case_name,
