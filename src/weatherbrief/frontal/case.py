@@ -29,12 +29,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
-
-if TYPE_CHECKING:
-    from weatherbrief.era5.loader import load_era5_fields as _
 
 logger = logging.getLogger(__name__)
 

@@ -1277,10 +1277,6 @@ def _cmd_plot_hewson(args: argparse.Namespace) -> None:
     hour = args.hour
     field_name = args.field
 
-    if field_name not in ("T850", "theta_e"):
-        print(f"Error: --field must be T850 or theta_e (got {field_name})", file=sys.stderr)
-        sys.exit(1)
-
     lat, lon = case.lat, case.lon
     terrain_mask = build_terrain_mask(lat, lon)
 
