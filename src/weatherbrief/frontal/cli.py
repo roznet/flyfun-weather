@@ -134,6 +134,15 @@ def _run_analysis(
         )
         model_timeseries[model_key] = ts
 
+    # Surface the Open-Meteo call count so ad-hoc runs can see their own
+    # API consumption. This CLI intentionally does NOT call log_api_usage
+    # (ApiUsageRow) — that's reserved for automated paths (the briefing
+    # pipeline via tasks/fetch.py, and the scheduler loops in
+    # tasks/standalone_verification.py and hewson/precompute.py). If this
+    # pipeline is ever wired into an automated path, add log_api_usage
+    # with service="open_meteo", pipeline="frontal" at the call site there.
+    logger.info("Frontal analysis: %d Open-Meteo API calls", client.call_count)
+
     return {
         "lat": lat,
         "lon": lon,
@@ -142,6 +151,7 @@ def _run_analysis(
         "model_fields": model_fields,
         "model_init_times": model_init_times,
         "timestamps": model_timestamps,
+        "api_calls": client.call_count,
     }
 
 
