@@ -347,6 +347,9 @@ def build_case_from_era5(
     with xr.open_dataset(str(grib_path), engine="cfgrib") as ds:
         timestamps = [np.datetime64(t) for t in ds.time.values]
 
+    if not timestamps:
+        raise ValueError(f"No timestamps found in {grib_path} — empty GRIB?")
+
     fields_by_time: list[dict] = []
     lat: np.ndarray | None = None
     lon: np.ndarray | None = None
