@@ -42,7 +42,7 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
 ## Key Components
 
 ### Grid (`grid.py`)
-- **Domain**: 35-60°N, -20 to 28°E at 0.5° resolution (4,131 points)
+- **Domain**: 35-60°N, -20 to 28°E at **0.25° resolution** (101 × 193 = 19,493 points). Aligned with ERA5's default CDS regridding so ERA5 and Open-Meteo land on identical grid points (see `designs/future/hewson-fields-aviation-advisories.md` for rationale).
 - **Fetch**: Lightweight `fetch_grid_fields()` on `OpenMeteoClient` — only 4 variables (T850, Td850, wind speed/dir), `chunk_size=500`, returns raw arrays (no WaypointForecast objects)
 - **Field prep**: `prepare_field()` — nearest-neighbor NaN fill, rejects fields with >5% missing. Must run before any gradient computation (gaussian_filter silently corrupts NaN neighbors)
 - **Terrain**: `build_terrain_mask()` from SRTM3 data (>1500m masked), `fill_terrain()` for linear interpolation across masked cells
@@ -68,10 +68,10 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
   - Returns: 0=not front, 1=cold, 2=warm, 3=indeterminate
 
 ### Zones (`zones.py`)
-- **18 zones** covering European GA chokepoints — each ≥3×4° (≥96 grid points at 0.5°)
+- **18 zones** covering European GA chokepoints — each ≥3×4°. A bare 3×4° box at 0.25° is 13×17 = 221 points; our smallest real zones (balearics, uk_south) carry 400–700 points.
 - **19 route templates** (e.g., `uk_alps`, `germany_med`) — ordered zone lists for common GA corridors
 - **`find_fronts_in_regions()`**: Aggregates grid detections to zone scale
-  - Threshold: ≥8% coverage AND ≥8 absolute points (prevents spurious tiny detections)
+  - Threshold: ≥8% coverage AND ≥32 absolute points (4× the old 8-point floor, preserving the same fraction-of-minimum-zone threshold at the 4× denser grid)
   - Computes dominant front type (vote), max intensity, mean orientation (circular mean with axial doubling)
 - **`find_route_zones(waypoints)`**: Maps arbitrary route waypoints to zone sequence
 
@@ -142,10 +142,14 @@ python -m weatherbrief.frontal.cli charts --zones
 
 **Workflow**: `new-case` creates a complete case directory (fetches model data, downloads DWD charts, generates zone overlay, creates skeleton YAML). The pilot annotates expected zones, then `score` computes POD/FAR/CSI.
 
-**Current baseline** (2 calibration cases, weak fronts):
-- Case 1 (2026-04-16): ECMWF POD=57%, FAR=77%, CSI=19%
-- Case 2 (2026-04-17): ECMWF POD=100%, FAR=77%, CSI=23%
+**Current baseline**: not re-established at 0.25°. Prior scoring ran at 0.5° with the old `_MIN_FRONTAL_POINTS = 8` threshold on two weak-front cases that have since been deleted as part of the grid-resolution upgrade. Baselines will be re-computed once the ERA5 retrospective dataset (see `designs/future/hewson-fields-aviation-advisories.md`) provides strong-front and synoptically-diverse calibration cases.
+
+Historical reference (0.5°, 8-point floor, the two deleted cases):
+- Case 2026-04-16: ECMWF POD=57%, FAR=77%, CSI=19%
+- Case 2026-04-17: ECMWF POD=100%, FAR=77%, CSI=23%
 - Candidate higher thresholds (T=3.0, θe=6.0): FAR drops to ~57% at cost of missing weak fronts
+
+These informed our pivot away from zone-level detection toward per-leg Hewson advisories — the numbers aren't operational-ready and won't be before the new calibration set lands.
 
 ## Gotchas
 
