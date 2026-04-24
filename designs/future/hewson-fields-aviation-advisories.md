@@ -181,34 +181,47 @@ Small enough that the "precompute" pipeline can keep everything in a handful of 
 
 ## 6. Architecture
 
-### 6.1 Precompute pipeline (offline, cron)
+### 6.1 Precompute pipeline (hooks into existing 6 h frontal fetch)
+
+**Key decision (2026-04-24)**: don't stand up a new cron. The frontal-detection pipeline already fetches the full 0.25° European grid every 6 h to feed DWD frontal zones. Hewson computation piggybacks on that fetch — same grid, ~5 min of added compute, separate NPZ output. Source-agnostic: today the fetch is Open-Meteo; when native-GRIB ingestion for ECMWF/ICON/GFS lands it becomes a call-site swap.
 
 ```
-scheduled twice a day per model
-  ↓
-fetch_multi_level_grid(model, init_time, levels=[925,850,700])
-  ↓  (Open-Meteo chunked, ~30 requests per model)
-compute_hewson_diagnostics() on each (level, hour)
+existing 6 h frontal grid fetch (all models)
+  ↓  (grid already in memory for frontal zones)
+compute_hewson_diagnostics() for each (level ∈ {925, 850, 700}, hour)
   ↓
 np.savez_compressed("data/hewson/<model>/<init>.npz",
-                     gradient=..., advection=..., ...)
+                     theta_e, gradient, neg_laplacian, tfp,
+                     advection, tendency)
   ↓
-retain last 2 cycles, purge older
+retain 48 h, purge older
 ```
 
-### 6.2 Briefing read path (on-demand)
+Snapshot size at 0.25° × 101×193 × 3 levels × 6 metrics × float32 ≈ **1.4 MB raw / ~500 KB compressed**. With 48 h retention × 3 models × 2 cycles/day ≈ **~24 MB total on disk**. Trivial.
+
+### 6.2 Read paths (on-demand)
+
+Three surfaces consume the precompute snapshot — each reads what it needs:
 
 ```
-briefing pipeline → load_snapshot(model, latest_init)
-  ↓
-sample_hewson_at_route(snapshot, route_points)
-  ↓                                  ↑
-  (tri-interpolation: lat/lon, log-p, hour)
-  ↓
-per-waypoint + per-leg summaries → advisory evaluators
-  ↓
-advisories.json + cross-section + map layer
+Map layer (§7):
+    /api/hewson-map → full (n_lat, n_lon) grid at one (model, init, level, hour, metric)
+
+Cross-section bands (§7.9, Open-Meteo era):
+    bilinear-sample snapshot at each waypoint × {925, 850, 700}
+    → 3 discrete-altitude bands overlaid on the existing cross-section canvas
+
+Cross-section stencil (§7.9, GRIB era):
+    per-briefing stencil in the native GRIB at each waypoint × all 25+ native pressure levels
+    → continuous-altitude Hewson on the cross-section
+    (Gated on native-GRIB ingestion; NOT from the precompute grid)
+
+Advisory evaluators (Phase C):
+    sample_hewson_at_route(snapshot, route_points) + altitude-appropriate level
+    → per-leg max/mean → §3 thresholds → advisories.json
 ```
+
+Rationale for the stencil split: the precompute is tuned for the map (3 levels is enough — pilot picks one at a time). The cross-section wants continuous altitude, which the 3-level precompute can't give. The briefing pipeline already parses the full-native-levels GRIB per route for cloud rendering — a stencil extraction around each waypoint at those same levels costs almost nothing.
 
 ### 6.3 Route sampling — three axes
 
@@ -269,10 +282,11 @@ One lookup into the precompute snapshot. ~1 ms response.
 ### 7.4 Frontend controls
 
 - **Metric dropdown**: θe, |∇θe|, −∇²θe, TFP, −V·∇θe, ∂θe/∂t (6 options; grouped by purpose)
-- **Level selector**: `925 / 850 / 700` hPa — with pilot-friendly labels `2,500 / 5,000 / 10,000 ft`
+- **Level selector**: `925 / 850 / 700` hPa — with pilot-friendly labels `2,500 / 5,000 / 10,000 ft`. Explicitly 3 levels, not 5: 500/400 hPa are upper-IFR and out of scope for GA.
 - **Time slider**: reuse the one from model-accuracy heatmap
 - **Opacity slider**: stack under existing per-airport markers
 - **Colormap**: baked per metric (diverging RdBu for advection/tendency, sequential YlOrRd for gradient) — **same mapping as the `plot-hewson` CLI** so debug + pilot-facing views are identical.
+- **Per-metric info popover** — a small (i) icon on the metric dropdown. Tapping opens the pilot-facing interpretation for that metric (ranges, decision rules), drawn from §2. This surfaces as "learning in context" so pilots can absorb meaning while they use the tool rather than reading a separate guide.
 
 ### 7.5 Rendering
 
@@ -283,6 +297,28 @@ At low zoom, cells are visible as pixelated boxes. Accepted — scientifically h
 ### 7.6 Legal
 
 Carry over the existing "advisory-only / not for operational use" disclaimer pattern from the rest of the briefing.
+
+### 7.9 Cross-section Hewson overlay
+
+Sibling to the map layer — overlays Hewson information on the existing route cross-section canvas (`web/ts/visualization/cross-section/renderer.ts`, layer-registry pattern). Adds new `CrossSectionLayer` implementations alongside the existing cloud / icing / CAT / inversion layers.
+
+**Two-phase build-out**:
+
+**Phase D.1 (Open-Meteo era — now)**:
+- Reads the **precompute snapshot** at each waypoint × {925, 850, 700} via bilinear-sample
+- Renders 3 horizontal **bands** at 2,500 / 5,000 / 10,000 ft, coloured by the selected metric
+- Same colormap as the map (consistency)
+- Metric picker shared with the map — changing the map metric changes the cross-section bands
+- Cost: <1 ms per briefing (just three bilinear samples per waypoint)
+
+**Phase D.2 (GRIB era — later, gated on native-GRIB ingestion)**:
+- Per-briefing **stencil** sampling: around each waypoint, extract a 3×3 (or 5×5 for cleaner 2nd derivatives) stencil from the briefing's already-loaded GRIB at each of the **25+ native pressure levels** the ingestion subsets
+- Compute Hewson diagnostics on the stencil per waypoint × per level
+- Gives **continuous-altitude Hewson** on the cross-section (not just 3 bands)
+- Cost: tens of ms even for a 20-waypoint route × 25 levels, because GRIB is already parsed and stencil math is trivial
+- Reuses the same `CrossSectionLayer` surfaces — UI doesn't change, data source upgrades silently
+
+The 3-level precompute is kept small on purpose: it exists to feed the map, and the map shows one level at a time anyway. Adding levels to the precompute just to support the cross-section would be wasteful when the cross-section can draw from richer per-briefing data.
 
 ## 8. Accuracy expectations
 
@@ -339,6 +375,48 @@ DTN, Baron, Meteologix, Weatherous → sophisticated interactive tools, but targ
 ### 10.5 Our angle
 
 Not trying to be MF or DWD. Building **GA-pilot-facing advisories with plain-English output, route-aware, tied to the pilot's actual flight**. Genuinely underserved because no commercial stack has both the aviation focus and the willingness to ship derived advisories.
+
+## 10a. Known limitations — what Hewson alone does not tell you
+
+Surfaced during the 2026-04-24 retrospective pass. None are blockers for shipping Phase D, but each points at a follow-up track.
+
+### 10a.1 Hewson ≠ cloud
+
+`|∇θe|` measures thermal air-mass boundaries at one pressure level. It **doesn't** directly measure cloud presence. A dry cold front and a moist cold front produce the same gradient magnitude; only one comes with IFR ceilings.
+
+Implication: a loud map might overlay a **dry** synoptic feature that had no operational impact. Or: a boring map might hide **local IMC** (morning stratus, fog). In the 27/28-Apr retrospective pair, the actual blocker on the 27th was local IMC at LFMD which the 850 hPa θe field simply didn't see — it's above the stratus layer.
+
+**Fix track (Phase E moisture cross-check)**:
+- Compute `RH₉₂₅` from existing T + q (zero new fetch — we already have what we need)
+- Fetch ERA5 / briefing-pipeline **low cloud cover (LCC)** and **total precipitation (TP)** — single-level fields, small additional bytes
+- Optionally **CAPE** for convective outlook
+- Combined filter: "Hewson loud **and** LCC > X **and** RH₉₂₅ > Y" → real weather. "Hewson loud, moisture low" → dry ribbon, probably flyable.
+
+### 10a.2 850 hPa is too high for low IMC
+
+850 hPa ≈ 5,000 ft. A morning stratus layer at 1,500 ft or fog below the inversion won't show in `θe₈₅₀`. The map is fundamentally about **free-atmosphere** weather, not boundary-layer weather.
+
+Implication: never claim the map tells you about local ceilings/vis. That's METAR/TAF territory. Hewson's job is to say "a significant weather *system* is approaching/over your route" — surface conditions need separate inputs.
+
+### 10a.3 Route-aggregator sensitive to single cells
+
+The retrospective scripts use `grad_max` (max across 12 route sample points) to summarise a route — which is dominated by one outlier cell. The route-mean / P95 is more honest. Proposed tweak for the analysis scripts:
+
+```
+grad_summary = P95(sample_points)   # instead of max(…)
+```
+
+Single-line change; keep the pair-wise cancel test (currently 3/3) as regression.
+
+### 10a.4 Excitement score over-indexes on summer θe
+
+Current score fires `convective-outlook` at `θe > 315 K`, which flags most summer flights regardless of actual convection. `θe` alone can't predict convection without **lapse rate** (which we'd need a second pressure level to compute, or CAPE). Two options:
+- Raise threshold to `θe > 325 K` (tuned to pilot-calibrated cancellations)
+- Drop the convective term from the score until we have CAPE
+
+Both park until we do the Phase E moisture work.
+
+---
 
 ## 11. Phased rollout
 
@@ -414,90 +492,154 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 - Cadence 00Z + 12Z per model
 - Retention: 48 h (see `fetch.md` for the existing retention pattern)
 
-### Phase C — Advisory evaluators
+### Phase D — Interactive map + cross-section overlay (NEXT)
+
+**Goal**: ship forecast-page visualization per §7 (map overlay) + §7.9 (cross-section bands), so pilots can see the Hewson fields *now*, without waiting for the advisory-text calibration loop.
+
+**Rationale for D before C**: the map + cross-section expose the raw signal with pilot-facing tooltips (§7.4, §2). This:
+- Gives pilots useful information from day one (teaching intuition by display)
+- Lets us observe which fields actually matter for *their* decisions before we commit thresholds in code (Phase C)
+- Validates Phase B's precompute output end-to-end without advisory-wording churn
+- Sidesteps the current calibration blocker (moisture gap — see §10a.1)
+
+**Phase D.0 — Precompute cron** ([task #8]):
+- Hook into the existing 6 h frontal grid fetch (no new cron)
+- Compute `theta_e, gradient, neg_laplacian, tfp, advection, tendency` at **925/850/700 hPa only**
+- Save snapshot NPZ per `(model, init)` under `data/hewson/<model>/<init>.npz`, retain 48 h
+- Source-agnostic: swaps Open-Meteo → native GRIB later without contract change
+
+**Phase D.1 — Backend endpoint** ([task #9]):
+- `GET /api/hewson-map?model=ecmwf&init=<t>&level=850&metric=advection&hour=24` → JSON or binary grid of shape (n_lat, n_lon)
+- Reuses pack-access auth pattern from `packs.py`
+
+**Phase D.2 — Map layer** ([task #10]):
+- First **gridded** Leaflet CanvasLayer on the forecast page (today the forecast map is point-only, so this is the reusable pattern for future gridded overlays)
+- Controls per §7.4: metric dropdown, 3-level selector with ft labels, hour slider, opacity
+- Per-metric info popover tied to §2 pilot interpretations
+
+**Phase D.3 — Cross-section bands** ([task #11]):
+- New `CrossSectionLayer` implementations per §7.9 Phase D.1
+- Bilinear-samples the precompute snapshot at each waypoint × {925, 850, 700}
+- Draws 3 horizontal bands at 2,500 / 5,000 / 10,000 ft, shared colormap with map
+- Shares metric picker with the map — changing one changes the other
+
+**Phase D.4 — Stencil-in-GRIB era** ([task #12], later, gated on native-GRIB ingestion):
+- Per-briefing stencil sampling at all 25+ native pressure levels per §7.9 Phase D.2
+- Turns the cross-section's 3 discrete bands into continuous altitude — silently, via data-source swap
+
+### Phase C — Advisory evaluators (after D)
 
 **Goal**: the six advisories from §3 wired into `evaluate_all()`.
 
 - Six new evaluators in `src/weatherbrief/advisories/evaluators/` following the existing registry pattern (see `designs/advisories.md`)
-- Tri-axis sampling: for each route point × flight altitude (mapped to pressure level) × ETA → get Hewson field values
-- Per-leg aggregation: max / mean / integral of each field across segment sample points
-- Threshold logic per §3 table
+- Tri-axis sampling: for each route point × flight altitude (mapped to pressure level) × ETA → get Hewson field values (reuses `sample_hewson_at_route` from Phase A)
+- Per-leg aggregation: max / mean / **P95** of each field across segment sample points (P95 not max — see §10a.3)
+- Threshold logic per §3 table, refined with pilot feedback from Phase D telemetry
 - Integration: new advisories show up alongside the existing 14 in the briefing
 
-### Phase D — Interactive map layer
+### Phase E — Moisture cross-check + stretch (future)
 
-**Goal**: forecast-page visualization per §7.
+Opens after Phase D so the map + cross-section surface has something to show moisture *on*.
 
-- Backend `/api/hewson-map?model=...&init=...&level=...&metric=...&hour=...` endpoint
-- Frontend layer on `WeatherMap` component (see `designs/forecast-page.md`)
-- Metric / level / time / opacity controls
-- Colormap synced with `plot-hewson` CLI debug plot
-
-**Phase ordering note**: C and D are independent after B. For early pilot feedback, **ship D first** — the map is more visually compelling and helps validate Phase B output without the advisory-wording churn.
-
-### Phase E (future, speculative)
-
+- **RH₉₂₅** derived from existing T/q — zero new fetch (§10a.1)
+- **Low cloud cover (LCC)** + **total precipitation (TP)** fetched alongside existing pipeline variables — small delta
+- **CAPE** for convection
+- **Combined filter for Phase C advisories**: "Hewson signal ∧ moisture present" → real weather; "Hewson ∧ dry" → suppress advisory (or show as educational)
 - **600 hPa** added if demand justifies
 - **METAR-trend validation** track in the verification digest
-- **Native GRIB** ingest (ECMWF Cycle 50r1 already on the droplet, ICON-EU full) to remove Open-Meteo interpolation layer
-- **Cross-section layer** for advection / tendency (new layer in `visualization`)
+- **Debrief feature** (issue #92) — pilot-owned dataset for real-time calibration
 - **Surface θe** for convective outlook (needs 2 m T + Td)
-- **wetter3.de archive integration** — replace live DWD download with archive pull when case `--date` is in the past (currently the new-case CLI downloads today's DWD chart regardless of case date)
+- **wetter3.de archive integration** — replace live DWD download with archive pull when case `--date` is in the past
 
 ## 12. Status snapshot
 
 | Item | Status |
 |---|---|
-| **Phase 1 + 2 (Hewson diagnostics + CLI)** | ✅ Done (2026-04-24) |
-| **Architecture consolidation (0.25°, ERA5 loader, unified Case)** | ✅ Done (2026-04-24) |
-| Resolution decision | ✅ 0.25° |
-| Level decision | ✅ 925 / 850 / 700 hPa |
-| Cadence decision | ✅ 2×/day (00Z, 12Z) |
-| Storage decision | ✅ NPZ (Zarr deferred) |
+| **Phase 1 + 2 (Hewson diagnostics + CLI)** | ✅ Done (PR #91, merged) |
+| **Architecture consolidation (0.25°, ERA5 loader, unified Case)** | ✅ Done (PR #91, merged) |
+| Resolution decision | ✅ 0.25° — consistent across all three models (ECMWF order at 0.25°, GFS/ICON ingestion at 0.25°) |
+| Level decision | ✅ 925 / 850 / 700 hPa (3 levels; 500/400 explicitly rejected as upper-IFR out-of-scope) |
+| Cadence decision | ✅ 2×/day (00Z, 12Z) — hooks into existing 6h frontal fetch, not a new cron |
+| Storage decision | ✅ NPZ flat level-suffixed keys; ~24 MB total across 48h × 3 models |
 | Retention decision | ✅ 48 h cache |
-| ERA5 smoke test | ✅ Storm Ciarán 2023-11-02 validated |
-| ERA5 bulk fetch | ⏳ In flight on server — 2025-02 → 2026-02 (1 year, ~700 MB, covers summer convective + winter cyclonic) |
-| **Phase A** (route sampling) | Next up — unblocked |
-| Phase B (multi-level + precompute) | 🟡 Storage done (2026-04-24) — CLI surface + Ciarán rebuild next; live-precompute gated on Phase D |
-| Phase C (advisory evaluators) | Requires Phase B |
-| Phase D (map layer) | Requires Phase B; can ship before C |
-| wetter3.de archive (retrospective DWD charts) | Known gap — not blocking |
+| ERA5 bulk fetch | ✅ Done (1 year, 2025-02 → 2026-02, ~700 MB on disk at `data/era5/hewson/`) |
+| **Phase A** (route sampling) | ✅ Done (PR #93 open) — `sample_hewson_at_route`, `route-hewson` CLI, retrospective scripts |
+| **Phase B.1** (multi-level Case storage) | ✅ Done (PR #94 open) — multi-level NPZ, back-compat, 10 tests |
+| Phase B.2 (CLI `--levels`, rebuild Ciarán at 3 levels) | 🟡 Small follow-up; can slot anywhere |
+| **Phase D.0** (precompute cron) | 🎯 **NEXT** — hooks into existing 6h frontal fetch |
+| Phase D.1 (backend endpoint) | Requires D.0 |
+| Phase D.2 (map layer + tooltips) | Requires D.1 |
+| Phase D.3 (cross-section bands) | Requires D.0 |
+| Phase D.4 (stencil in GRIB era) | Gated on native-GRIB ingestion being live for the user's briefing model |
+| Phase C (advisory evaluators) | After Phase D, informed by what pilots actually use from the map/cross-section |
+| Phase E (moisture cross-check) | After Phase D — RH₉₂₅, LCC, TP, CAPE, debrief feature #92 |
+| Retrospective validation | ✅ Pairwise cancel test 3/3 (all pilot-cancellation days scored higher than replacement-flown days) — best calibration signal we have |
 
-## 12a. Quick pickup from fresh context
+## 12a. Quick pickup from fresh context (for Phase D start)
 
-If you're resuming this work in a new session, here's the minimum to load:
+After PRs #93 (Phase A) and #94 (Phase B) merge, the next session picks up here.
 
-```bash
-# From repo root
-# 1. Read the current state of the case pipeline
-python -m weatherbrief.frontal.cli --help
-# → see new-case / plot-hewson / score / redraw-zones
+### What's already on main
 
-# 2. Reproduce Storm Ciarán end-to-end (GRIB already on disk):
-python -m weatherbrief.frontal.cli plot-hewson \
-    --case data/calibration/2023-11-02_era5_ciaran \
-    --model era5 --hour 12 --field theta_e
-# → data/calibration/2023-11-02_era5_ciaran/hewson_era5_theta_e_T12.png
+- Hewson diagnostics math (`compute_hewson_diagnostics`) + `plot-hewson` CLI
+- Multi-level Case storage (NPZ with level-suffixed keys)
+- Route sampling library: `sample_hewson_at_route(case, model, waypoints, hours)` and `bilinear_sample` helper in `src/weatherbrief/frontal/route_sampling.py`
+- `route-hewson` CLI subcommand that resolves ICAO codes and prints per-waypoint values
+- Retrospective scripts: `scripts/analyze_flight_log.py` and `scripts/analyze_cancellations.py`
+- 1 year of ERA5 GRIBs at `data/era5/hewson/` (gitignored)
 
-# 3. To re-fetch ERA5 (server-side):
-ssh brice@server
-cd /mnt/data/downloads/era5_download
-. venv/bin/activate
-python smoke_era5_hewson.py --output-dir ./data/ --date 2024-01-22
-# rsync -avz brice@server:/mnt/data/downloads/era5_download/data/era5_hewson_smoke_2024-01-22.grib data/era5/
+### What Phase D needs (starting with task #8 — precompute cron)
+
+The job is to hook Hewson computation into the **existing 6h frontal grid fetch** so that every cycle produces a snapshot NPZ at `data/hewson/<model>/<init>.npz`.
+
+**Entry points to find first**:
+- Existing frontal fetch pipeline — grep `fetch_grid_fields` in `src/weatherbrief/frontal/grid.py` and its callers
+- The cron / scheduler — look at how DWD frontal zones are currently refreshed every 6h (check `designs/fetch.md` and `data/frontal_cache/`)
+- Snapshot storage — the retrospective already writes `data/era5/terrain_mask.npz` as a cached artefact; follow that path pattern
+
+**Snapshot schema** (confirmed §6.1):
+```python
+np.savez_compressed(
+    f"data/hewson/{model}/{init_iso}.npz",
+    # per level ∈ {925, 850, 700}:
+    theta_e_925=..., gradient_925=..., neg_laplacian_925=...,
+    tfp_925=..., advection_925=..., tendency_925=...,
+    theta_e_850=..., gradient_850=..., # ... same set ...
+    theta_e_700=..., gradient_700=..., # ... same set ...
+    valid_times=...,  # for temporal interp
+    lat=..., lon=...,
+)
 ```
 
-**Key files** for Phase A pickup:
-- `src/weatherbrief/frontal/case.py` — Case abstraction (start here)
-- `src/weatherbrief/frontal/detect.py` — `compute_hewson_diagnostics()` (math we're sampling)
-- `src/weatherbrief/frontal/cli.py:_cmd_plot_hewson` — closest existing CLI pattern
-- `src/weatherbrief/era5/loader.py` — if touching level logic
-- This doc — decisions and rationale
+**Reproduce Storm Ciarán to sanity-check**:
+```bash
+# Multi-level case (Phase B):
+python -m weatherbrief.frontal.cli new-case \
+    --source era5 --grib data/era5/era5_hewson_smoke_2023-11-02.grib \
+    --date 2023-11-02 --level 850
 
-**Open questions** intentionally left for Phase A:
-- How to resolve waypoints (ICAO/IATA codes vs lat/lon tuples)? Use `rzflight`'s `KnownAirports`.
-- Per-leg aggregation: sample N points between waypoints? N = 10 gives ~5 nm resolution on a 50 nm leg, matches our 0.25° grid.
-- Tendency when adjacent hours not present? Forward or backward diff — already handled in `_cmd_plot_hewson`.
+# Plot:
+python -m weatherbrief.frontal.cli plot-hewson \
+    --case data/calibration/2023-11-02_era5 \
+    --model era5 --hour 12 --field theta_e
+```
+
+### Key files for Phase D pickup
+
+- `src/weatherbrief/frontal/detect.py` — `compute_hewson_diagnostics()` (math to call per-cycle)
+- `src/weatherbrief/frontal/grid.py` — `fetch_grid_fields`, `build_terrain_mask`
+- `src/weatherbrief/frontal/case.py` — Case/meta persistence pattern (reuse NPZ conventions)
+- `src/weatherbrief/frontal/route_sampling.py` — `bilinear_sample` for cross-section bands reading the snapshot
+- `web/ts/visualization/cross-section/renderer.ts` + `layer-registry.ts` — cross-section layer pattern to follow for §7.9
+- `designs/forecast-page.md` — where the map layer lives (point-marker pattern today; gridded-canvas layer is net new)
+- **This doc** — decisions and rationale; §10a is the list of known gaps so the next pass doesn't re-discover them
+
+### Open questions left for Phase D
+
+- How does the existing 6h frontal-zone refresh invoke itself? Find its entry point so Hewson piggybacks cleanly (vs adding a second scheduler).
+- Snapshot format: pure NPZ flat-keys (per §6.1) or migrate to Zarr now? → NPZ per §4.5 — Zarr only when the map serves subsets over the network.
+- Map layer client: single gridded CanvasLayer for all 6 metrics (redraw on metric change), or 6 pre-rendered PNG tiles served statically? → start with JSON/binary + canvas (per §7.5), revisit tiling if latency needs it.
+- Pilot-facing tooltip text: draw from §2 directly (short form) or maintain a separate `docs/hewson-pilot-guide.md`? → start inline per §7.4, promote to a doc if it grows.
 
 ## 13. Related docs
 
