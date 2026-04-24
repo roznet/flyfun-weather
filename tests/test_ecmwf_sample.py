@@ -42,6 +42,11 @@ _SAMPLE_DIR_LOCAL = Path(__file__).parent / "data" / "ecmwf_samples"
 
 SAMPLE_DIR = Path(_SAMPLE_DIR_ENV) if _SAMPLE_DIR_ENV else _SAMPLE_DIR_LOCAL
 
+# Optional dirs for field-presence regression tests — let developers point
+# at real prod and TPREd rsync mirrors without polluting SAMPLE_DIR logic.
+ECMWF_PROD_DIR = Path(os.environ["ECMWF_PROD_GRIB_DIR"]) if "ECMWF_PROD_GRIB_DIR" in os.environ else None
+ECMWF_TEST_DIR = Path(os.environ["ECMWF_TEST_GRIB_DIR"]) if "ECMWF_TEST_GRIB_DIR" in os.environ else None
+
 
 def _grib_files() -> list[Path]:
     """Collect all ECMWF GRIB files from the sample directory.
@@ -1135,3 +1140,197 @@ class TestECMWFWatcher:
         self._make_run(tmp_path, "oper", 0, [0, 3])
         newly_ready = check_ecmwf_completeness(tmp_path)
         assert newly_ready == []
+
+
+# ---------------------------------------------------------------------------
+# Field-presence regression tests
+#
+# These run against real prod + TPREd mirrors on the developer's machine.
+# They exist to catch subscription drift (a field going missing) and 50r1
+# regressions (a shortName changing meaning or disappearing).
+#
+# Set either or both env vars to point at local rsync'd data:
+#   ECMWF_PROD_GRIB_DIR=~/tmp/ecmwf/data
+#   ECMWF_TEST_GRIB_DIR=~/tmp/ecmwf/test_data
+# Tests skip gracefully when the respective var is unset.
+# ---------------------------------------------------------------------------
+
+
+# Expected a1 surface fields per our ECMWF order (unchanged between
+# original order, post-amendment, and 50r1 TPREd — the amendment only
+# changed a2 and cadence, not the a1 field list).
+EXPECTED_A1_SHORTNAMES = frozenset({
+    "10fg", "10u", "10v", "2d", "2t",
+    "blh", "capes", "cbh", "ceil", "cp", "deg0l", "degm10l",
+    "fzra", "hcc", "hcct", "kx", "lcc", "lsp", "mcc",
+    "mlcape100", "mlcin100", "msl", "mucape", "ptype",
+    "sf", "sp", "tcc", "totalx", "tp", "vis",
+})
+
+# a2 pressure-level fields the pipeline depends on — present in every
+# regime (pre-amend 49r1, post-amend 49r1, 50r1 TPREd).
+EXPECTED_A2_CORE_SHORTNAMES = frozenset({
+    "cc", "ciwc", "clwc", "r", "t", "u", "v", "w",
+})
+
+# tablesVersion codes we know how to decode. Expand cautiously — each
+# new version is a GRIB2 dictionary bump and warrants a manual verify.
+KNOWN_TABLES_VERSIONS = frozenset({32, 33, 34, 35})
+
+
+def _scan_shortnames(path: Path) -> tuple[set[str], set[int]]:
+    """Return (shortNames, tablesVersions) across all messages in file."""
+    import eccodes
+    names: set[str] = set()
+    tvs: set[int] = set()
+    with open(path, "rb") as f:
+        while True:
+            gid = eccodes.codes_grib_new_from_file(f)
+            if gid is None:
+                break
+            try:
+                try:
+                    names.add(eccodes.codes_get(gid, "shortName"))
+                except Exception:
+                    pass
+                try:
+                    tvs.add(int(eccodes.codes_get(gid, "tablesVersion")))
+                except Exception:
+                    pass
+            finally:
+                eccodes.codes_release(gid)
+    return names, tvs
+
+
+def _first_file_by_feed(data_dir: Path, feed: str) -> Path | None:
+    """Most-recent file matching feed (a1/a2), skipping .idx sidecars.
+
+    Picks by the parsed base_time so a mirror containing multiple
+    dates returns the latest regime (e.g. post-amendment if both
+    pre- and post-amendment data are present)."""
+    if data_dir is None or not data_dir.exists():
+        return None
+    best: tuple[datetime, Path] | None = None
+    for p in data_dir.rglob("*"):
+        if not p.is_file() or p.name.endswith(".idx") or p.name.startswith("."):
+            continue
+        info = parse_ecmwf_filename(p)
+        if info is None or info.feed != feed:
+            continue
+        if best is None or info.base_time > best[0]:
+            best = (info.base_time, p)
+    return best[1] if best else None
+
+
+class TestFieldPresenceRegression:
+    """Field-level assertions on real prod + TPREd data.
+
+    Run locally with::
+
+        ECMWF_PROD_GRIB_DIR=~/tmp/ecmwf/data \\
+        ECMWF_TEST_GRIB_DIR=~/tmp/ecmwf/test_data \\
+        pytest tests/test_ecmwf_sample.py::TestFieldPresenceRegression -v
+
+    Without the env vars, every test in this class is skipped — so CI
+    stays green without the samples.
+    """
+
+    def test_prod_a1_has_all_expected_fields(self):
+        """Post-amendment 49r1 prod a1 contains all 30 expected shortNames."""
+        if ECMWF_PROD_DIR is None:
+            pytest.skip("ECMWF_PROD_GRIB_DIR not set")
+        a1 = _first_file_by_feed(ECMWF_PROD_DIR, "a1")
+        if a1 is None:
+            pytest.skip(f"No a1 file found in {ECMWF_PROD_DIR}")
+        names, _ = _scan_shortnames(a1)
+        missing = EXPECTED_A1_SHORTNAMES - names
+        assert not missing, f"a1 missing expected fields: {missing}"
+
+    def test_prod_a2_has_gh_not_d(self):
+        """Post-amendment 49r1 a2 has `gh` (added) and no `d` (dropped)."""
+        if ECMWF_PROD_DIR is None:
+            pytest.skip("ECMWF_PROD_GRIB_DIR not set")
+        a2 = _first_file_by_feed(ECMWF_PROD_DIR, "a2")
+        if a2 is None:
+            pytest.skip(f"No a2 file found in {ECMWF_PROD_DIR}")
+        names, _ = _scan_shortnames(a2)
+        missing_core = EXPECTED_A2_CORE_SHORTNAMES - names
+        assert not missing_core, f"a2 missing core sounding vars: {missing_core}"
+        assert "gh" in names, "prod a2 should contain gh post-amendment"
+        assert "d" not in names, "prod a2 should NOT contain d post-amendment"
+
+    def test_tpred_a1_has_all_expected_fields(self):
+        """TPREd a1 contains all 30 expected shortNames (50r1 didn't change a1)."""
+        if ECMWF_TEST_DIR is None:
+            pytest.skip("ECMWF_TEST_GRIB_DIR not set")
+        a1 = _first_file_by_feed(ECMWF_TEST_DIR, "a1")
+        if a1 is None:
+            pytest.skip(f"No a1 file found in {ECMWF_TEST_DIR}")
+        names, _ = _scan_shortnames(a1)
+        missing = EXPECTED_A1_SHORTNAMES - names
+        assert not missing, f"TPREd a1 missing expected fields: {missing}"
+
+    def test_tpred_a2_pre_amendment_shape(self):
+        """TPREd a2 reflects the *pre-amendment* order: has `d`, no `gh`.
+
+        When/if ECMWF updates TPREd to match the amended PREd subscription,
+        this test will flip — change the asserts. That flip is a signal
+        the subscription sync completed and we can mark ready-to-migrate.
+        """
+        if ECMWF_TEST_DIR is None:
+            pytest.skip("ECMWF_TEST_GRIB_DIR not set")
+        a2 = _first_file_by_feed(ECMWF_TEST_DIR, "a2")
+        if a2 is None:
+            pytest.skip(f"No a2 file found in {ECMWF_TEST_DIR}")
+        names, _ = _scan_shortnames(a2)
+        missing_core = EXPECTED_A2_CORE_SHORTNAMES - names
+        assert not missing_core, f"TPREd a2 missing core sounding vars: {missing_core}"
+        assert "d" in names, "TPREd a2 still reflects pre-amendment order (has d)"
+        assert "gh" not in names, (
+            "TPREd a2 is pre-amendment (no gh). If this fails, TPREd has "
+            "been updated to the amended subscription — flip the asserts."
+        )
+
+    def test_tables_version_known(self):
+        """tablesVersion on every sampled file must be one we've verified
+        decodes cleanly. Catches ECMWF bumping the table without us
+        updating eccodes/cfgrib pins."""
+        results = []
+        for label, d in (("prod", ECMWF_PROD_DIR), ("test", ECMWF_TEST_DIR)):
+            if d is None:
+                continue
+            for feed in ("a1", "a2"):
+                p = _first_file_by_feed(d, feed)
+                if p is None:
+                    continue
+                _, tvs = _scan_shortnames(p)
+                results.append((label, feed, tvs))
+                unknown = tvs - KNOWN_TABLES_VERSIONS
+                assert not unknown, (
+                    f"{label}/{feed} uses unknown tablesVersion {unknown}; "
+                    f"update KNOWN_TABLES_VERSIONS and verify eccodes decodes it"
+                )
+        if not results:
+            pytest.skip("Neither ECMWF_PROD_GRIB_DIR nor ECMWF_TEST_GRIB_DIR set")
+
+    def test_cfgrib_decodes_tpred(self):
+        """cfgrib.open_datasets must succeed on a tablesVersion=35 TPREd file."""
+        import cfgrib
+        if ECMWF_TEST_DIR is None:
+            pytest.skip("ECMWF_TEST_GRIB_DIR not set")
+        a2 = _first_file_by_feed(ECMWF_TEST_DIR, "a2")
+        if a2 is None:
+            pytest.skip(f"No a2 file found in {ECMWF_TEST_DIR}")
+        datasets = cfgrib.open_datasets(str(a2))
+        assert len(datasets) > 0, "cfgrib returned no datasets"
+        # Confirm we can read a data variable from at least one dataset
+        core_found = False
+        for ds in datasets:
+            for name in ds.data_vars:
+                if str(name) in EXPECTED_A2_CORE_SHORTNAMES:
+                    _ = ds[name].values  # forces decode
+                    core_found = True
+                    break
+            if core_found:
+                break
+        assert core_found, "No core sounding var decoded from TPREd a2"
