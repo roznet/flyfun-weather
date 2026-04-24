@@ -64,6 +64,8 @@ class Case:
     valid_times: dict[str, np.ndarray]      # model → (n_time,) datetime64[ns]
     init_times: dict[str, int]              # model → unix seconds; 0 for ERA5
     _meta: dict = field(default_factory=dict, repr=False)
+    # Cache of available_hours results per model — lazy, computed once.
+    _hours_cache: dict[str, list[int]] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------
     # Field access
@@ -72,13 +74,21 @@ class Case:
         """Hour offsets (from valid_times[0]) available for this model.
 
         For Open-Meteo: every hour 0..N. For ERA5 smoke: 0, 6, 12, 18.
+        Cached after first call; callers can loop over hours without
+        paying O(n) cast cost per iteration.
         """
+        cached = self._hours_cache.get(model)
+        if cached is not None:
+            return cached
+
         vt = self.valid_times[model]
         t0_ns = int(vt[0].astype("datetime64[ns]").astype("int64"))
-        return [
+        hours = [
             int((int(t.astype("datetime64[ns]").astype("int64")) - t0_ns) // int(3.6e12))
             for t in vt
         ]
+        self._hours_cache[model] = hours
+        return hours
 
     def fields(self, model: str, hour: int) -> dict | None:
         """Return field dict for one model × one hour-offset, or None."""
@@ -336,11 +346,10 @@ def build_case_from_era5(
     grib_path = Path(grib_path)
 
     # Peek at the GRIB to learn which timestamps are present
-    ds = xr.open_dataset(str(grib_path), engine="cfgrib")
-    timestamps = [np.datetime64(t) for t in ds.time.values]
+    with xr.open_dataset(str(grib_path), engine="cfgrib") as ds:
+        timestamps = [np.datetime64(t) for t in ds.time.values]
     first = load_era5_fields(grib_path, timestamps[0], level_hPa=level_hPa)
     lat, lon = first["lat"], first["lon"]
-    ds.close()
 
     save_case_meta(
         case_dir,

@@ -1,8 +1,10 @@
 """Analysis zone definitions, route templates, and zone intersection logic.
 
-18 geographic boxes covering European GA chokepoints. Each zone is at least
-3×4 degrees, giving ≥384 grid points at 0.25° resolution for reliable
-gradient analysis and fractional coverage thresholding.
+18 geographic boxes covering European GA chokepoints. Each zone is at
+least 3×4 degrees — a bare 3×4° box contains (13×17=) 221 grid points
+at 0.25°, and our smallest zones (e.g. balearics, uk_south) carry
+400-700 valid points. Plenty for the fractional coverage threshold and
+for second-derivative-based discriminators.
 """
 
 from __future__ import annotations
@@ -135,9 +137,9 @@ def _orientation_label(
 _MIN_FRONTAL_FRACTION = 0.08
 
 # Absolute minimum alongside the fraction — prevents large zones from
-# systematically under-detecting. Scaled for 0.25° grid where a minimum
-# 3×4° zone holds ~384 valid points (vs ~96 at 0.5°); 32 preserves the
-# ~8% discriminating threshold that 8 points gave at 0.5°.
+# systematically under-detecting. Scales ~4× from the 8 points we used
+# at 0.5°, preserving roughly the same fraction-of-minimum-zone
+# threshold (~8 / ~100 at 0.5°  →  ~32 / ~400 at 0.25°).
 _MIN_FRONTAL_POINTS = 32
 
 

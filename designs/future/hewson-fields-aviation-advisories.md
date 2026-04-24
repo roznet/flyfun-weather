@@ -344,74 +344,160 @@ Not trying to be MF or DWD. Building **GA-pilot-facing advisories with plain-Eng
 
 Phases are independent and shippable one at a time. Each produces something testable.
 
-### Phase 1 + 2 — DONE (2026-04-24)
+### Phase 1 + 2 — DONE (2026-04-24, PR #91)
 
 - `compute_hewson_diagnostics()` in `detect.py` returning all Hewson fields
 - `plot-hewson` CLI subcommand rendering 2×3 panel figure
-- Single level (850 hPa)
+- Calibration UX: `redraw-zones` CLI + color-coded DWD zone overlay
 - CLI-only, not in the briefing pipeline
 
-### Phase A — Route sampling on existing single-level data
+### Architecture consolidation — DONE (2026-04-24, PR #91)
 
-**Goal**: validate the interpolation math and plumbing with zero API cost.
+What was pivotal about this session — we made the pipeline source-agnostic before investing in calibration:
 
-- `sample_hewson_at_route(snapshot, route_points)` — bilinear spatial + linear temporal interpolation
-- Single level (850 hPa) only
-- Debug CLI `route-hewson --case ... --route "LFPG LFSB LIMC"` prints per-waypoint values
-- **Output**: we can trust the interpolation before investing in multi-level fetch
+- **Universal 0.25° grid**: `FRONTAL_GRID.resolution = 0.25`; 19,493-point European grid aligned with ERA5's default regridded output and Open-Meteo's 0.25° lat-lon grid
+- **ERA5 loader**: `src/weatherbrief/era5/loader.py` — reads ERA5 GRIB, converts SI units, derives θe, returns the same field dict shape as `reshape_to_fields()`
+- **Unified case format**: `src/weatherbrief/frontal/case.py` — `Case` dataclass with `load_case()`, `save_case_meta()`, `save_model_fields()`. Each case carries its own grid (`meta.json`) and per-model NPZ. Works for both Open-Meteo forecast cycles (multiple models, hourly) and ERA5 analyses (single "era5" model, 6-hourly)
+- **Source-agnostic CLI**: `new-case --source {open_meteo,era5}`; `plot-hewson`, `score`, `diagnose`, `redraw-zones` all accept any model present in the case including `era5`
+- **ERA5 download pipeline**: `scripts/smoke_era5_hewson.py` (CDS request validated), `scripts/download_era5_hewson.py` (not yet written — see Phase A pickup)
 
-### Phase B — Multi-level fetch + precompute pipeline
+### Phase A — Route sampling on single-level data (next — unblocked)
 
-**Goal**: the actual precompute pipeline at 0.25°.
+**Goal**: validate spatial + temporal interpolation with zero API cost, on the data we already have.
 
-- Extend `fetch_grid_fields` to multi-level (925/850/700)
-- Resolution bumped to 0.25° (101×193 grid)
-- New `precompute.py`: orchestrates fetch → compute → store as NPZ
-- Scheduled via cron at 00Z/12Z per model
-- 48 h cache retention (purge older)
+**What already exists:**
+- `Case.fields(model, hour)` returns `(n_lat, n_lon)` arrays per hour — clean input for sampling
+- `Case.lat`, `Case.lon` — grid coords from `meta.json`
+- The Storm Ciarán ERA5 case at `data/calibration/2023-11-02_era5_ciaran/` works end-to-end
+
+**What to build:**
+- `src/weatherbrief/frontal/route_sampling.py` — new module
+  - `sample_hewson_at_route(case, model, route_points) -> list[dict]`
+  - Bilinear spatial interpolation on the Case's lat/lon grid
+  - Linear temporal interpolation between adjacent `available_hours`
+  - Per-waypoint output: `{lat, lon, hour, gradient, tfp, neg_laplacian, advection, tendency}`
+- New CLI `route-hewson --case <dir> --model <m> --waypoints "LFPG LFSB LIMC"`
+  - Resolves waypoints via existing `rzflight` / `KnownAirports` (see design doc `rzflight`)
+  - Prints per-waypoint field values with thresholds colored
+- **Unit tests** for the interpolation math: known linear field → known analytic sampling result
+
+**Pickup checklist for Phase A**:
+1. Open `src/weatherbrief/frontal/case.py` — see `Case.fields(model, hour)` + `Case.available_hours(model)`
+2. Open `src/weatherbrief/frontal/detect.py` — `compute_hewson_diagnostics()` is the function we're sampling outputs of
+3. Resolve waypoint lat/lon via `rzflight` — existing project, see `mcp__library-docs__get_design_doc library=rzflight topic=waypoints`
+4. Sample outputs into a structured dict; render with `python -m weatherbrief.frontal.cli route-hewson ...`
+5. Add tests in `tests/frontal/test_route_sampling.py` with synthetic linear/sinusoidal fields
+
+### Phase B — Multi-level ERA5 fetch + precompute pipeline
+
+**Goal**: production-grade precompute at 0.25° × 925/850/700 hPa.
+
+**What exists:**
+- `scripts/smoke_era5_hewson.py` on the ERA5 server (`brice@server:/mnt/data/downloads/era5_download/`) — proven to fetch one day × 3 levels × 4 times in ~1 min
+- `load_era5_fields(grib, timestamp, level_hPa)` accepts any of 925/850/700 — multi-level is a call-site change, not a loader change
+
+**What to build:**
+- `scripts/download_era5_hewson.py` — adapt `download_era5_t850.py` on the server. Loop over months (configurable `--from-month YYYY-MM --to-month YYYY-MM`), with `--max-concurrent` like the Z500 downloader. Store as one monthly GRIB per file (same pattern).
+- Bulk fetch on server: **Oct 2024 → Mar 2025** (6 months, winter/spring — captures Atlantic cyclone season). Expected size ~150-200 MB. Wall-time ~1 hour.
+- Rsync to local `data/era5/hewson/`
+- Extend `build_case_from_era5` to accept `level_hPa: list[int]` and store multi-level NPZ:
+  ```
+  raw/era5.npz:
+      T_925, Td_925, theta_e_925, u_925, v_925,   # 925 hPa
+      T_850, Td_850, theta_e_850, u_850, v_850,   # 850 hPa
+      T_700, Td_700, theta_e_700, u_700, v_700,   # 700 hPa
+      valid_times
+  ```
+- `Case.fields(model, hour, level_hPa=850)` optional level argument (defaults to 850 for back-compat)
+
+**Live-data precompute** (future split-off):
+- New `src/weatherbrief/hewson/precompute.py` runs on cron: fetch → compute → NPZ snapshot per model per cycle
+- Cadence 00Z + 12Z per model
+- Retention: 48 h (see `fetch.md` for the existing retention pattern)
 
 ### Phase C — Advisory evaluators
 
-**Goal**: the six advisories from §3 wired into the briefing pipeline.
+**Goal**: the six advisories from §3 wired into `evaluate_all()`.
 
-- Six new evaluators in `advisories/` module following existing patterns
-- Tri-axis sampling of precomputed snapshot for each route
-- Per-leg summaries → advisory trigger logic
-- Integration with existing `evaluate_all()` aggregation
+- Six new evaluators in `src/weatherbrief/advisories/evaluators/` following the existing registry pattern (see `designs/advisories.md`)
+- Tri-axis sampling: for each route point × flight altitude (mapped to pressure level) × ETA → get Hewson field values
+- Per-leg aggregation: max / mean / integral of each field across segment sample points
+- Threshold logic per §3 table
+- Integration: new advisories show up alongside the existing 14 in the briefing
 
 ### Phase D — Interactive map layer
 
 **Goal**: forecast-page visualization per §7.
 
-- Backend `/api/hewson-map` endpoint
-- Frontend layer on existing `WeatherMap` component
+- Backend `/api/hewson-map?model=...&init=...&level=...&metric=...&hour=...` endpoint
+- Frontend layer on `WeatherMap` component (see `designs/forecast-page.md`)
 - Metric / level / time / opacity controls
-- Colormap synced with CLI debug plot
+- Colormap synced with `plot-hewson` CLI debug plot
 
-**Phase ordering note**: C and D are independent after B. If we want the map up first for pilot feedback, D can ship before C. Advisories without a map feel disembodied; map without advisories is still useful on its own.
+**Phase ordering note**: C and D are independent after B. For early pilot feedback, **ship D first** — the map is more visually compelling and helps validate Phase B output without the advisory-wording churn.
 
 ### Phase E (future, speculative)
 
 - **600 hPa** added if demand justifies
 - **METAR-trend validation** track in the verification digest
-- **Native GRIB** ingest (ECMWF Cycle 50r1, ICON-EU full) to remove Open-Meteo interpolation layer
+- **Native GRIB** ingest (ECMWF Cycle 50r1 already on the droplet, ICON-EU full) to remove Open-Meteo interpolation layer
 - **Cross-section layer** for advection / tendency (new layer in `visualization`)
 - **Surface θe** for convective outlook (needs 2 m T + Td)
+- **wetter3.de archive integration** — replace live DWD download with archive pull when case `--date` is in the past (currently the new-case CLI downloads today's DWD chart regardless of case date)
 
 ## 12. Status snapshot
 
 | Item | Status |
 |---|---|
-| Phase 1 + 2 | ✅ Done (2026-04-24) |
+| **Phase 1 + 2 (Hewson diagnostics + CLI)** | ✅ Done (2026-04-24) |
+| **Architecture consolidation (0.25°, ERA5 loader, unified Case)** | ✅ Done (2026-04-24) |
 | Resolution decision | ✅ 0.25° |
 | Level decision | ✅ 925 / 850 / 700 hPa |
 | Cadence decision | ✅ 2×/day (00Z, 12Z) |
 | Storage decision | ✅ NPZ (Zarr deferred) |
 | Retention decision | ✅ 48 h cache |
-| Phase A | Not started |
-| Phase B | Not started |
-| Phase C | Not started |
-| Phase D | Not started |
+| ERA5 smoke test | ✅ Storm Ciarán 2023-11-02 validated |
+| **Phase A** (route sampling) | Next up — unblocked |
+| Phase B (multi-level + precompute) | Requires Phase A |
+| Phase C (advisory evaluators) | Requires Phase B |
+| Phase D (map layer) | Requires Phase B; can ship before C |
+| wetter3.de archive (retrospective DWD charts) | Known gap — not blocking |
+
+## 12a. Quick pickup from fresh context
+
+If you're resuming this work in a new session, here's the minimum to load:
+
+```bash
+# From repo root
+# 1. Read the current state of the case pipeline
+python -m weatherbrief.frontal.cli --help
+# → see new-case / plot-hewson / score / redraw-zones
+
+# 2. Reproduce Storm Ciarán end-to-end (GRIB already on disk):
+python -m weatherbrief.frontal.cli plot-hewson \
+    --case data/calibration/2023-11-02_era5_ciaran \
+    --model era5 --hour 12 --field theta_e
+# → data/calibration/2023-11-02_era5_ciaran/hewson_era5_theta_e_T12.png
+
+# 3. To re-fetch ERA5 (server-side):
+ssh brice@server
+cd /mnt/data/downloads/era5_download
+. venv/bin/activate
+python smoke_era5_hewson.py --output-dir ./data/ --date 2024-01-22
+# rsync -avz brice@server:/mnt/data/downloads/era5_download/data/era5_hewson_smoke_2024-01-22.grib data/era5/
+```
+
+**Key files** for Phase A pickup:
+- `src/weatherbrief/frontal/case.py` — Case abstraction (start here)
+- `src/weatherbrief/frontal/detect.py` — `compute_hewson_diagnostics()` (math we're sampling)
+- `src/weatherbrief/frontal/cli.py:_cmd_plot_hewson` — closest existing CLI pattern
+- `src/weatherbrief/era5/loader.py` — if touching level logic
+- This doc — decisions and rationale
+
+**Open questions** intentionally left for Phase A:
+- How to resolve waypoints (ICAO/IATA codes vs lat/lon tuples)? Use `rzflight`'s `KnownAirports`.
+- Per-leg aggregation: sample N points between waypoints? N = 10 gives ~5 nm resolution on a 50 nm leg, matches our 0.25° grid.
+- Tendency when adjacent hours not present? Forward or backward diff — already handled in `_cmd_plot_hewson`.
 
 ## 13. Related docs
 

@@ -202,7 +202,7 @@ def compute_hewson_diagnostics(
     v: np.ndarray,
     terrain_mask: np.ndarray | None = None,
     smooth_sigma: float = 0.5,
-    heavy_sigma: float = 2.0,
+    heavy_sigma: float = 4.0,
 ) -> dict:
     """Compute all Hewson 1998 / Hewson & Titley 2010 diagnostic fields.
 
@@ -218,7 +218,10 @@ def compute_hewson_diagnostics(
 
     Light smoothing (smooth_sigma) is used for the gradient (sensitivity).
     Heavy smoothing (heavy_sigma) is used for TFP and the Laplacian so
-    the second derivatives survive at 0.5° resolution.
+    the second derivatives survive the grid spacing. Defaults target
+    the 0.25° grid: σ=4.0 cells ≈ 1° effective σ, which matches the
+    1° effective σ that σ=2.0 gave on the legacy 0.5° grid. Callers
+    using the 0.5° pipeline should pass heavy_sigma=2.0 explicitly.
 
     Returned dict keys:
         field_smooth, gradient, tfp, neg_laplacian, advection,
