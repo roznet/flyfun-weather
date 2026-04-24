@@ -37,10 +37,9 @@ _PURGE_SKIP_SUFFIXES = frozenset({".json", ".log", ".md", ".txt"})
 
 
 @dataclass
-class StreamConfig:
-    """Expected delivery manifest for one ECMWF stream."""
+class CycleConfig:
+    """Expected delivery manifest for one ECMWF init-hour cycle."""
 
-    cycles: list[int]
     steps: list[int]
     parts: list[str]
 
@@ -51,9 +50,16 @@ class StreamConfig:
 
 @dataclass
 class DeliveryConfig:
-    """Full ECMWF delivery configuration loaded from delivery_config.json."""
+    """Full ECMWF delivery configuration loaded from delivery_config.json.
 
-    streams: dict[str, StreamConfig]
+    Keyed by init hour (0, 6, 12, 18) rather than stream name because the
+    IFS Cycle 50r1 rollout (12-May-2026) merges scda/fc into oper/fc — all
+    four cycles then arrive with the same stream label, so stream-name
+    keying would flag 06/18z as perpetually partial against the 168h
+    oper expectation.
+    """
+
+    cycles: dict[int, CycleConfig]
     publish_delay_hours: float
     completeness_timeout_hours: float
 
@@ -61,7 +67,13 @@ class DeliveryConfig:
     def load(cls, data_dir: Path | None = None) -> DeliveryConfig | None:
         """Load delivery config from the ECMWF data directory.
 
-        Returns None if the config file doesn't exist (graceful degradation).
+        Accepts two schema shapes for deploy-ordering safety:
+          - New: top-level "cycles" keyed by init hour (preferred).
+          - Legacy: top-level "streams" keyed by stream name with an inner
+            "cycles" list — expanded into one CycleConfig per init hour.
+
+        Returns None if the config file doesn't exist or can't be parsed
+        (graceful degradation — completeness checking just disables).
         """
         config_path = (data_dir or ecmwf_grib_dir()) / _CONFIG_FILENAME
         if not config_path.exists():
@@ -74,25 +86,39 @@ class DeliveryConfig:
 
         try:
             raw = json.loads(config_path.read_text())
-            streams = {}
-            for name, spec in raw["streams"].items():
-                streams[name] = StreamConfig(
-                    cycles=spec["cycles"],
-                    steps=spec["steps"],
-                    parts=spec["parts"],
-                )
+            cycles = cls._parse_cycles(raw)
             return cls(
-                streams=streams,
+                cycles=cycles,
                 publish_delay_hours=raw.get("publish_delay_hours", 8),
                 completeness_timeout_hours=raw.get("completeness_timeout_hours", 2),
             )
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, ValueError):
             logger.error(
                 "Failed to parse ECMWF delivery config: %s",
                 config_path,
                 exc_info=True,
             )
             return None
+
+    @staticmethod
+    def _parse_cycles(raw: dict) -> dict[int, CycleConfig]:
+        if "cycles" in raw:
+            return {
+                int(hour): CycleConfig(steps=spec["steps"], parts=spec["parts"])
+                for hour, spec in raw["cycles"].items()
+            }
+        if "streams" in raw:
+            logger.info(
+                "delivery_config.json: legacy 'streams' schema — update to "
+                "'cycles' keyed by init hour before IFS 50r1 (12-May-2026).",
+            )
+            out: dict[int, CycleConfig] = {}
+            for spec in raw["streams"].values():
+                cfg = CycleConfig(steps=spec["steps"], parts=spec["parts"])
+                for hour in spec["cycles"]:
+                    out[int(hour)] = cfg
+            return out
+        raise KeyError("delivery_config.json must define either 'cycles' or 'streams'")
 
 
 def _sentinel_name(base_time: datetime) -> str:
@@ -153,29 +179,31 @@ def check_ecmwf_completeness(
     if not files:
         return []
 
-    # Group files by (base_time, stream)
-    runs: dict[tuple[datetime, str], list[ECMWFFileInfo]] = {}
+    # Group files by base_time (init hour determines the expected manifest
+    # post-50r1; stream is informational only).
+    runs: dict[datetime, list[ECMWFFileInfo]] = {}
     for f in files:
-        key = (f.base_time, f.stream)
-        runs.setdefault(key, []).append(f)
+        runs.setdefault(f.base_time, []).append(f)
 
     now = datetime.now(timezone.utc)
     newly_ready: list[datetime] = []
 
-    for (base_time, stream), run_files in runs.items():
+    for base_time, run_files in runs.items():
         # Skip if already has a sentinel
         if is_run_ready(d, base_time=base_time):
             continue
 
-        stream_config = config.streams.get(stream)
-        if stream_config is None:
+        cycle_config = config.cycles.get(base_time.hour)
+        if cycle_config is None:
             logger.debug(
-                "ECMWF stream %r not in delivery config, skipping", stream,
+                "ECMWF init hour %d not in delivery config, skipping",
+                base_time.hour,
             )
             continue
 
-        expected = stream_config.expected_file_count
+        expected = cycle_config.expected_file_count
         actual = len(run_files)
+        stream = run_files[0].stream  # informational; may mix post-50r1
 
         if actual >= expected:
             # Complete — write sentinel
