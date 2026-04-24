@@ -189,10 +189,19 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("ECMWF watcher skipped — %s does not exist", ecmwf_dir)
 
+    hewson_precompute_task = None
+    if os.environ.get("DISABLE_HEWSON_PRECOMPUTE", "").strip() not in ("1", "true"):
+        from weatherbrief.scheduler import run_hewson_precompute_loop
+
+        hewson_precompute_task = asyncio.create_task(
+            run_hewson_precompute_loop(app.state)
+        )
+
     yield
 
     for task in (scheduler_task, retention_task, verification_task,
-                 digest_task, standalone_task, ecmwf_watcher_task):
+                 digest_task, standalone_task, ecmwf_watcher_task,
+                 hewson_precompute_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):

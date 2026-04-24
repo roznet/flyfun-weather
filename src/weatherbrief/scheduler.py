@@ -41,6 +41,11 @@ _DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
 _STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
 _ECMWF_WATCHER_POLL_SECONDS = 300  # 5 minutes
 _ECMWF_WATCHER_STARTUP_DELAY_SECONDS = 15  # run early — other loops may need ready data
+# Hewson precompute fires once per init cycle. 05Z and 17Z pick up the 00Z /
+# 12Z inits after ~5 h — Open-Meteo has all 3 models published by then, and
+# we keep 1 h buffer before the 06Z / 18Z standalone-verification full cycles.
+_HEWSON_SAMPLE_HOURS_UTC = [5, 17]
+_HEWSON_STARTUP_DELAY_SECONDS = 300  # let other loops settle; Hewson is cold-cache anyway
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -592,3 +597,65 @@ def _run_ecmwf_watcher_once() -> list[datetime]:
     from weatherbrief.fetch.grib.ecmwf_watcher import check_ecmwf_completeness
 
     return check_ecmwf_completeness()
+
+
+# ---------------------------------------------------------------------------
+# Hewson precompute loop
+# ---------------------------------------------------------------------------
+
+
+async def run_hewson_precompute_loop(app_state) -> None:
+    """Fire Hewson diagnostic precompute at fixed UTC hours.
+
+    Runs at ``_HEWSON_SAMPLE_HOURS_UTC`` (05Z / 17Z by default), chosen to
+    sit ~5 h after each ``00Z/12Z`` init (Open-Meteo has all 3 models
+    published by then) and 1 h before the 06Z/18Z full-cycle verification
+    run (avoids CPU/network overlap). See
+    ``designs/future/hewson-fields-aviation-advisories.md`` § 6.1.
+
+    The heavy lifting is in :func:`weatherbrief.hewson.precompute.run_once`,
+    which is also the CLI entry point — so debugging and ad-hoc re-runs
+    exercise identical code.
+
+    Disableable via ``DISABLE_HEWSON_PRECOMPUTE=1``.
+    """
+    if os.environ.get("DISABLE_HEWSON_PRECOMPUTE", "").strip() in ("1", "true"):
+        logger.info("Hewson precompute disabled via env var")
+        return
+
+    logger.info(
+        "Hewson precompute loop started (sample hours: %s UTC)",
+        _HEWSON_SAMPLE_HOURS_UTC,
+    )
+    await asyncio.sleep(_HEWSON_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            sleep_secs = _seconds_until_next_sample_hour(_HEWSON_SAMPLE_HOURS_UTC)
+            logger.info(
+                "Hewson precompute: sleeping %ds until next sample hour",
+                sleep_secs,
+            )
+            await asyncio.sleep(sleep_secs)
+            await asyncio.to_thread(_run_hewson_precompute_once)
+            # Advance past the current sample hour before the next loop so
+            # we don't re-trigger in the same minute.
+            await asyncio.sleep(60)
+        except Exception:
+            logger.error("Hewson precompute cycle failed", exc_info=True)
+            # Back off 15 min on failure (same as standalone verification)
+            await asyncio.sleep(900)
+
+
+def _run_hewson_precompute_once() -> None:
+    """Execute a single Hewson precompute cycle (called in a thread)."""
+    from weatherbrief.hewson import run_once
+
+    result = run_once()
+    logger.info(
+        "Hewson precompute: %d written, %d skipped, %d purged (%.1fs)",
+        len([p for p in result.snapshots.values() if p is not None]),
+        len(result.skipped),
+        result.purged,
+        result.elapsed_seconds,
+    )
