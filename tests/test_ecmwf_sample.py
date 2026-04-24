@@ -1141,6 +1141,108 @@ class TestECMWFWatcher:
         newly_ready = check_ecmwf_completeness(tmp_path)
         assert newly_ready == []
 
+    # ---- New-format 'cycles' schema (post-50r1 ready) ----
+
+    @staticmethod
+    def _write_cycles_config(tmp_path, by_hour):
+        """Write a delivery_config.json using the new 'cycles' schema.
+
+        by_hour: dict[int, list[int]] — init hour → steps list.
+        """
+        import json
+
+        config = {
+            "cycles": {
+                str(hour): {"steps": steps, "parts": ["a1", "a2"]}
+                for hour, steps in by_hour.items()
+            },
+            "publish_delay_hours": 0,
+            "completeness_timeout_hours": 0,
+        }
+        (tmp_path / "delivery_config.json").write_text(json.dumps(config))
+
+    def test_cycles_schema_marks_complete(self, tmp_path):
+        """New 'cycles' schema: a 00z run matching its per-cycle steps is complete."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import (
+            check_ecmwf_completeness, is_run_ready,
+        )
+        self._write_cycles_config(tmp_path, {0: [0, 3, 6], 6: [0, 3]})
+        self._make_run(tmp_path, "oper", 0, [0, 3, 6])
+
+        newly_ready = check_ecmwf_completeness(tmp_path)
+        assert len(newly_ready) == 1
+        bt = datetime(2026, 4, 10, 0, 0, tzinfo=timezone.utc)
+        assert is_run_ready(tmp_path, base_time=bt)
+
+    def test_cycles_schema_per_hour_expectations(self, tmp_path):
+        """Each cycle hour has its own expected step list."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import (
+            check_ecmwf_completeness, is_run_ready,
+        )
+        # 00z expects 3 steps, 06z expects 2 steps.
+        self._write_cycles_config(tmp_path, {0: [0, 3, 6], 6: [0, 3]})
+        self._make_run(tmp_path, "oper", 0, [0, 3, 6])  # 00z complete
+        self._make_run(tmp_path, "scda", 6, [0, 3])     # 06z complete (2 != 3)
+
+        newly_ready = check_ecmwf_completeness(tmp_path)
+        assert len(newly_ready) == 2
+        bt00 = datetime(2026, 4, 10, 0, 0, tzinfo=timezone.utc)
+        bt06 = datetime(2026, 4, 10, 6, 0, tzinfo=timezone.utc)
+        assert is_run_ready(tmp_path, base_time=bt00)
+        assert is_run_ready(tmp_path, base_time=bt06)
+
+    def test_cycles_schema_fifty_r1_all_oper(self, tmp_path):
+        """Post-50r1 regression: 06z arrives with stream=oper but only
+        delivers its short-horizon step list. Without per-cycle config,
+        the watcher would compare 06z's 2 files against 00z's 3-file
+        expected and mark the 06z run as perpetually partial."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import (
+            check_ecmwf_completeness, is_run_ready, is_run_partial,
+        )
+        self._write_cycles_config(tmp_path, {0: [0, 3, 6], 6: [0, 3]})
+        # Both runs arrive as stream=oper (the 50r1 world).
+        self._make_run(tmp_path, "oper", 0, [0, 3, 6])
+        self._make_run(tmp_path, "oper", 6, [0, 3])
+
+        newly_ready = check_ecmwf_completeness(tmp_path)
+        assert len(newly_ready) == 2
+        bt06 = datetime(2026, 4, 10, 6, 0, tzinfo=timezone.utc)
+        assert is_run_ready(tmp_path, base_time=bt06)
+        assert not is_run_partial(tmp_path, base_time=bt06), (
+            "06z complete under new schema — should NOT be marked partial"
+        )
+
+    def test_missing_cycle_hour_in_config_skips(self, tmp_path):
+        """Runs whose init hour isn't configured are skipped gracefully."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import (
+            check_ecmwf_completeness, is_run_ready,
+        )
+        # Only 00z and 12z are configured, but a 09z run arrives.
+        self._write_cycles_config(tmp_path, {0: [0, 3], 12: [0, 3]})
+        self._make_run(tmp_path, "oper", 9, [0, 3])
+
+        newly_ready = check_ecmwf_completeness(tmp_path)
+        assert newly_ready == []
+        bt = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
+        assert not is_run_ready(tmp_path, base_time=bt)
+
+    def test_legacy_streams_config_still_loads(self, tmp_path):
+        """Legacy 'streams' config expands into per-cycle entries.
+
+        Deploy-ordering safety: a new watcher binary running against an
+        old config must not break the pipeline. Exercises the legacy
+        expansion in DeliveryConfig._parse_cycles."""
+        from weatherbrief.fetch.grib.ecmwf_watcher import DeliveryConfig
+        self._write_config(tmp_path, [0, 3, 6], scda_steps=[0, 3])
+
+        cfg = DeliveryConfig.load(tmp_path)
+        assert cfg is not None
+        assert set(cfg.cycles) == {0, 6, 12, 18}
+        assert cfg.cycles[0].steps == [0, 3, 6]
+        assert cfg.cycles[12].steps == [0, 3, 6]
+        assert cfg.cycles[6].steps == [0, 3]
+        assert cfg.cycles[18].steps == [0, 3]
+
 
 # ---------------------------------------------------------------------------
 # Field-presence regression tests
