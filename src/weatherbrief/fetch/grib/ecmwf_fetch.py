@@ -19,12 +19,15 @@ File naming convention (from ECMWF):
     cc:     Feed name / part (a1 = surface, a2 = pressure levels)
     nnn:    Model identifier (e.g. ifs-ens-cf, aifs-ens)
     cl:     Data class (od = operational)
-    ssss:   Stream name (oper = main runs 00/12z, scda = short cutoff 06/18z)
+    ssss:   Stream name (oper = main runs 00/12z, scda = short cutoff 06/18z;
+            from IFS Cycle 50r1 / 12-May-2026, scda merges into oper for all
+            cycles, so 06/18z forecasts also arrive with stream=oper)
     t:      Data type (e.g. fc = forecast)
     1st timestamp:  Base date/time (forecast init), ISO 8601
     2nd timestamp:  Valid date/time, ISO 8601
     h:      Forecast step (hours)
-    expver: Experiment version (omitted for operational)
+    expver: Experiment version (omitted for prod operational;
+            "X0080" for TPREd / 50r1 Release Candidate phase)
 
 Files may have no extension (ECPDS default) or .grib2/.grib.
 """
@@ -100,7 +103,7 @@ _FILENAME_RE = re.compile(
     r"_(?P<base_time>\d{8}T\d{6}Z)"
     r"_(?P<valid_time>\d{8}T\d{6}Z)"
     r"_(?P<step>[^_]+)"
-    r"(?:_(?P<expver>\d+))?"
+    r"(?:_(?P<expver>[A-Z]?\d+))?"
     r"$"
 )
 
@@ -157,8 +160,16 @@ class ECMWFFileInfo:
 
         ECMWF delivers operational files with expver "0001" (4-digit) but
         the filename may truncate to "1".  Confirmed from sample data.
+
+        TPREd Release Candidate feeds (IFS Cycle 50r1, 12-May-2026) use
+        expver "X0080". Treated as experimental by default so prod stays
+        strict; set ECMWF_ACCEPT_RCP_EXPVER=1 in staging to consume them.
         """
-        return self.experiment in (None, "1", "0001")
+        if self.experiment in (None, "1", "0001"):
+            return True
+        if self.experiment == "X0080" and os.environ.get("ECMWF_ACCEPT_RCP_EXPVER") == "1":
+            return True
+        return False
 
 
 def _parse_timestamp(ts: str) -> datetime:
