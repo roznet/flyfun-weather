@@ -94,7 +94,7 @@ Ask the user to confirm the cleanup before running it. After cleanup, re-check `
 
 ## Check airport database freshness
 
-The airport/navaid database (`nav.db` / `airports.db`) is built locally and must be copied to the server when updated. Compare the `model_metadata` timestamps to detect drift.
+The airport/navaid database (`nav.db`, built by the `euro_aip` submodule inside `rzflight`) is copied to the server when updated. Both dev and prod point `AIRPORTS_DB` at `nav.db`; there is no longer any dev/prod filename drift (the droplet used to call it `airports.db` — aligned to `nav.db` on 2026-04-24). Compare the `model_metadata` timestamps to detect staleness.
 
 **Resolve local DB path** from `.env` (expand `${WORKING_DIR}` manually):
 ```bash
@@ -121,7 +121,7 @@ conn.close()
 # Get HOST_DATA_DIR and DB basename from server .env
 REMOTE_HOST_DIR=$(ssh <user>@<server> "grep '^HOST_DATA_DIR=' flyfun-weather/.env | cut -d= -f2")
 REMOTE_DB_NAME=$(ssh <user>@<server> "grep '^AIRPORTS_DB=' flyfun-weather/.env | cut -d= -f2 | xargs basename")
-# e.g. /mnt/flyfun_data/weather/data/airports.db
+# e.g. /mnt/flyfun_data/weather/data/nav.db
 ```
 
 **Compare timestamps:**
