@@ -72,7 +72,7 @@ Pressure levels vary by model (range 1000–150 hPa, ~SFC to ~FL450):
 |-------|--------|-------|------|
 | GFS / Best-Match | 1000, 975, 950, ..., 300, 250, 200, 150 | 28 | 25 hPa spacing below 500, extends to FL450 |
 | ECMWF (Open-Meteo) | 1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50 | 13 | Fallback when outside direct-GRIB coverage or beyond 7-day range |
-| ECMWF (direct GRIB) | 1000, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10, 7, 5, 3, 2, 1 | 25 | ECPDS push, Europe + US, 0–192h (oper) / 0–144h (scda). Replaces the 13-level Open-Meteo sounding for covered points. |
+| ECMWF (direct GRIB) | 1000, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10, 7, 5, 3, 2, 1 | 25 | ECPDS push, Europe + US, 0–168h at 00/12z, 0–144h at 06/18z. Replaces the 13-level Open-Meteo sounding for covered points. Horizon is derived from files on disk, not stream name (robust to the 50r1 `scda`→`oper` merge). |
 | ICON | 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30 | 19 | Open-Meteo (verified Mar 2026). Still no intermediate levels between 800–300 hPa. GRIB enrichment adds CLW/ICMR/cloud diagnostics via DWD ICON-EU model-level data (Europe only). |
 | Météo-France | 1000, 950, 925, ..., 300, 250, 200, 150 | 19 | |
 | UKMO | 1000, 975, 950, ..., 300, 250, 200, 150 | 20 | Supports vertical_velocity |
@@ -182,7 +182,7 @@ Surface (a1) single-level scalar fields. Stored in `NWPCloudDiagnostics` model.
 
 **Surface fields delivered but not yet processed:** `10fg` (wind gusts), `10u`/`10v` (10m wind), `2t`/`2d` (screen T/Td), `blh` (boundary layer height), `capes` (CAPE-shear), `cp` (convective precipitation), `degm10l` (-10°C level), `fzra` (freezing rain accum), `kx` (K-index), `totalx` (Total Totals), `lsp` (large-scale precip), `msl`/`sp` (pressure), `ptype` (precip type code), `sf` (snowfall), `tp` (total precip), `vis` (visibility). `kx`, `totalx`, and `cp` are the highest-value follow-ups — they directly indicate model-observed thunderstorm activity (the fields Windy uses to drive ECMWF thunder icons).
 
-**ECMWF specifics:** ECPDS push delivery to `ECMWF_GRIB_DIR` (no HTTP, no cache). Coverage is the `ifs-ens-cf` subscription grid: Europe + US at 0.25°. Cycles: oper (00z/12z) deliver 0–192h, scda (06z/18z) deliver 0–144h. Publication delay ~6–8h after init. Forecast steps every 3h — intermediate hours within the flight window get forward-filled from the preceding native step (`fetch/grib/fill.py::_forward_fill_pressure_levels`); linear time interpolation is a future improvement. Files may contain multiple geographic sub-grids; cfgrib splits them into separate Datasets and the decoder uses first-wins per point.
+**ECMWF specifics:** ECPDS push delivery to `ECMWF_GRIB_DIR` (no HTTP, no cache). Coverage is the `ifs-ens-cf` subscription grid: Europe + US at 0.25°. Cycles: 00/12z deliver 0–168h, 06/18z deliver 0–144h (horizon is read from files on disk, not from stream name — robust to the 50r1 `scda`→`oper` merge on 12-May-2026). Publication delay ~6–8h after init. Post-amendment cadence is hourly 0–90h then 3h tail on pressure-level data; surface fields are 3h throughout. Intermediate hours within the flight window get forward-filled from the preceding native step (`fetch/grib/fill.py::_forward_fill_pressure_levels`); linear time interpolation is a future improvement. Files may contain multiple geographic sub-grids; cfgrib splits them into separate Datasets and the decoder uses first-wins per point.
 
 ---
 
@@ -415,7 +415,7 @@ The `_no_vv` suffix indicates omega (vertical velocity) is unavailable for the m
 
 \* ICON uses full variant only when route is within ICON-EU domain (Europe). Falls back to proxy for routes outside the domain.
 
-† ECMWF uses full variant only when route and flight window fall within the ECPDS GRIB coverage (Europe + US, 0–192h for 00z/12z oper, 0–144h for 06z/18z scda). Outside coverage, no direct GRIB is applied and SFIP falls back to `proxy` (ω from Open-Meteo API still available).
+† ECMWF uses full variant only when route and flight window fall within the ECPDS GRIB coverage (Europe + US, 0–168h for 00/12z, 0–144h for 06/18z). Outside coverage, no direct GRIB is applied and SFIP falls back to `proxy` (ω from Open-Meteo API still available).
 
 ### 3.3 Convective Assessment
 
@@ -550,7 +550,7 @@ Shows data source for each key quantity per model. **Bold** = derived when API f
 
 † ICON GRIB2 enrichment only available when route is within ICON-EU domain (Europe: 29.5–70.5°N, 23.5°W–62.5°E).
 
-‡ ECMWF GRIB2 enrichment (ECPDS commercial feed) only available when route falls within the ifs-ens-cf coverage grid (Europe + US) and the flight window is within the run's forecast range (0–192h oper / 0–144h scda). Outside coverage, ECMWF falls back to Open-Meteo's 13-level sounding and SFIP uses the proxy variant.
+‡ ECMWF GRIB2 enrichment (ECPDS commercial feed) only available when route falls within the ifs-ens-cf coverage grid (Europe + US) and the flight window is within the run's forecast range (0–168h at 00/12z, 0–144h at 06/18z). Outside coverage, ECMWF falls back to Open-Meteo's 13-level sounding and SFIP uses the proxy variant.
 
 ### 4.2 Key Derivation Methods
 

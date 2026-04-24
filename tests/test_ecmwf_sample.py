@@ -1415,15 +1415,23 @@ class TestFieldPresenceRegression:
         if not results:
             pytest.skip("Neither ECMWF_PROD_GRIB_DIR nor ECMWF_TEST_GRIB_DIR set")
 
-    def test_cfgrib_decodes_tpred(self):
-        """cfgrib.open_datasets must succeed on a tablesVersion=35 TPREd file."""
+    def test_cfgrib_decodes_tpred(self, tmp_path):
+        """cfgrib.open_datasets must succeed on a tablesVersion=35 TPREd file.
+
+        Redirects cfgrib's .idx sidecar files into tmp_path so we don't
+        pollute the user's rsync'd TPREd mirror (cfgrib otherwise writes
+        .idx next to the source GRIB whenever the mount is writable).
+        """
         import cfgrib
         if ECMWF_TEST_DIR is None:
             pytest.skip("ECMWF_TEST_GRIB_DIR not set")
         a2 = _first_file_by_feed(ECMWF_TEST_DIR, "a2")
         if a2 is None:
             pytest.skip(f"No a2 file found in {ECMWF_TEST_DIR}")
-        datasets = cfgrib.open_datasets(str(a2))
+        datasets = cfgrib.open_datasets(
+            str(a2),
+            backend_kwargs={"indexpath": str(tmp_path / "{short_hash}.idx")},
+        )
         assert len(datasets) > 0, "cfgrib returned no datasets"
         # Confirm we can read a data variable from at least one dataset
         core_found = False

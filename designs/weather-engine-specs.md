@@ -126,10 +126,10 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Delivery:** ECPDS push to local directory (`ECMWF_GRIB_DIR`, default `/data/ecmwf`). Read-only Docker volume mount.
 - **Model:** ifs-ens-cf (IFS Ensemble Control Forecast), 0.25° over Europe + US
 - **Files:** Two parts per forecast step — a1 (surface, 30 vars) and a2 (pressure levels, 10 vars × 25 levels)
-- **Cycles:** 00z/12z (oper stream, 0–192h), 06z/18z (scda stream, 0–144h)
+- **Cycles:** 00z/06z/12z/18z. Horizon per cycle is derived from the max step observed on disk, not from the stream name (see `find_best_ecmwf_run` in `fetch/grib/ecmwf_fetch.py`). Subscription shape post-2026-04-22 amendment: 00/12z → 168h, 06/18z → 144h. From IFS Cycle 50r1 (12-May-2026), all four cycles arrive with `stream=oper` — the `scda` label is gone. Init hour, not stream, determines the expected manifest (`delivery_config.json` is keyed by cycle hour).
 - **Publication delay:** ~6–8h after init time
-- **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default
-- **Pressure-level (a2):** t, r, u, v, z, w, d, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely). `z` is currently delivered only at 1 hPa; GH on the other 24 levels is filled by hypsometric integration from T+P until the order amendment lands.
+- **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default. `expver` is absent on prod operational files, and `X0080` on TPREd Release Candidate files (ECMWF_ACCEPT_RCP_EXPVER=1 opt-in for staging).
+- **Pressure-level (a2):** t, r, u, v, z, w, gh, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely). Post-amendment (2026-04-22): `d` (divergence) was dropped, `gh` (geopotential height) added at all 25 levels, removing the hypsometric fallback from the decode path. `z` is still delivered only at 1 hPa (catalogue limitation).
 - **Surface (a1) — processed:** ceil, cbh, lcc, mcc, hcc, tcc, hcct, deg0l → `NWPCloudDiagnostics`
 - **Surface (a1) — delivered but not yet processed:** 10fg, 10u, 10v, 2d, 2t, blh, capes, cp, degm10l, fzra, kx, lsp, mlcape100, mlcin100, msl, mucape, ptype, sf, sp, totalx, tp, vis
 - **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point

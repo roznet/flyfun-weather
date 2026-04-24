@@ -2,8 +2,20 @@
 
 > Adapt our ECMWF GRIB ingestion pipeline for IFS Cycle 50r1 changes.
 
-**Status:** Pending — cycle goes live May 12, 2026.  
-**Reference:** https://confluence.ecmwf.int/display/FCST/Implementation+of+IFS+Cycle+50r1  
+**Status:** Implemented in PR #89 (2026-04-24). Cycle goes live 12-May-2026.
+This document is retained as the historical plan; current authoritative
+reference is `weather-engine-specs.md` and `analysis-metrics.md`.
+
+Notable deltas from the plan below, discovered during implementation:
+- Horizon is now derived from the max step observed on disk per run,
+  not from parsed init-hour or stream name (see `find_best_ecmwf_run`).
+- 00/12z horizon is 168h post-2026-04-22 amendment, not 192h.
+- `delivery_config.json` was re-keyed by init hour (0/6/12/18) instead
+  of stream name — cleaner and future-proof for similar rename events.
+- TPREd test feed was mis-provisioned by ECMWF on first delivery; they
+  are re-sending with the correct spec.
+
+**Reference:** https://confluence.ecmwf.int/display/FCST/Implementation+of+IFS+Cycle+50r1
 **Test data:** expver `0080`, available at https://data.ecmwf.int/forecasts/testdata/
 
 ## What's Changing
