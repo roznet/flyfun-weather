@@ -127,6 +127,45 @@ class TestFilenameParser:
         assert info.experiment == "0001"
         assert info.is_operational
 
+    def test_parse_tpred_rcp_expver_x0080(self, monkeypatch):
+        """50r1 TPREd test feed: expver X0080 (Release Candidate phase).
+
+        Real filename from the 2026-04-24 TPREd drop. Parser must capture
+        'X0080' in .experiment; is_operational rejects it by default but
+        accepts it when ECMWF_ACCEPT_RCP_EXPVER=1 (staging opt-in).
+        """
+        path = Path(
+            "brg_a1_ifs-ens-cf_od_oper_fc_20260422T000000Z_20260422T060000Z_6h_X0080"
+        )
+        info = parse_ecmwf_filename(path)
+        assert info is not None
+        assert info.experiment == "X0080"
+        assert info.stream == "oper"
+        assert info.step_hours == 6
+
+        # Default (env flag unset) — treated as experimental, prod stays strict.
+        monkeypatch.delenv("ECMWF_ACCEPT_RCP_EXPVER", raising=False)
+        assert not info.is_operational
+
+        # Staging opt-in — env flag lifts X0080 to operational.
+        monkeypatch.setenv("ECMWF_ACCEPT_RCP_EXPVER", "1")
+        assert info.is_operational
+
+        # Any other value of the flag does NOT lift — only the literal "1".
+        monkeypatch.setenv("ECMWF_ACCEPT_RCP_EXPVER", "true")
+        assert not info.is_operational
+
+    def test_other_experimental_expver_never_operational(self, monkeypatch):
+        """ECMWF_ACCEPT_RCP_EXPVER must not whitelist arbitrary experiments."""
+        path = Path(
+            "ABC_XY_ifs_od_oper_fc_20260407T000000Z_20260407T060000Z_6_0042"
+        )
+        info = parse_ecmwf_filename(path)
+        assert info is not None
+        assert info.experiment == "0042"
+        monkeypatch.setenv("ECMWF_ACCEPT_RCP_EXPVER", "1")
+        assert not info.is_operational
+
     def test_parse_aifs_ens(self):
         """Parse AIFS ensemble model filename."""
         path = Path(
