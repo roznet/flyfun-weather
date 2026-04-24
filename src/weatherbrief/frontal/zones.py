@@ -1,7 +1,7 @@
 """Analysis zone definitions, route templates, and zone intersection logic.
 
 18 geographic boxes covering European GA chokepoints. Each zone is at least
-3x4 degrees, giving ≥96 grid points at 0.5° resolution for reliable
+3×4 degrees, giving ≥384 grid points at 0.25° resolution for reliable
 gradient analysis and fractional coverage thresholding.
 """
 
@@ -129,13 +129,16 @@ def _orientation_label(
 # ---------------------------------------------------------------------------
 
 # Minimum fraction of zone grid points that must be frontal to count
-# as "front present". A real front is 1-2 cells wide at 0.5° resolution,
-# touching ~10-15% of a typical zone.
+# as "front present". A real front is 1-2 cells wide at 0.5° (or 2-4 at
+# 0.25°), touching ~10-15% of a typical zone. Fraction is
+# grid-resolution-agnostic.
 _MIN_FRONTAL_FRACTION = 0.08
 
 # Absolute minimum alongside the fraction — prevents large zones from
-# systematically under-detecting.
-_MIN_FRONTAL_POINTS = 8
+# systematically under-detecting. Scaled for 0.25° grid where a minimum
+# 3×4° zone holds ~384 valid points (vs ~96 at 0.5°); 32 preserves the
+# ~8% discriminating threshold that 8 points gave at 0.5°.
+_MIN_FRONTAL_POINTS = 32
 
 
 def find_fronts_in_regions(
