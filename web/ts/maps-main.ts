@@ -399,9 +399,12 @@ async function changeActiveMetric(): Promise<void> {
     return;
   }
 
-  // All-metrics not ready — fast-fetch the single new metric.
+  // All-metrics not ready — fast-fetch the single new metric. Bump the
+  // token so any in-flight loadSynoptic() fetch (carrying the previous
+  // metric for this hour) is discarded when it lands; otherwise it could
+  // overwrite the canvas with the wrong metric for the active picker.
   if (!synInit) return;
-  const myToken = synLoadToken;  // don't bump; we're piggybacking on the in-flight load
+  const myToken = ++synLoadToken;
   try {
     const slice = await fetchHewsonSlice({
       model: synModel,
@@ -415,7 +418,25 @@ async function changeActiveMetric(): Promise<void> {
     synopticMap.setOpacity(synOpacity);
   } catch (err) {
     console.warn('Hewson metric refetch failed:', err);
+    return;
   }
+
+  // We discarded the in-flight all-metrics from the previous loadSynoptic()
+  // by bumping the token; refetch so hover recovers without making the
+  // user wiggle a control.
+  fetchHewsonAllMetrics({
+    model: synModel,
+    init: synInit,
+    level: synLevel,
+    hour: synHour,
+  }).then((grid) => {
+    if (myToken !== synLoadToken) return;
+    synActiveGrid = grid;
+    synopticMap?.setHoverGrid(grid);
+  }).catch((err) => {
+    if (myToken !== synLoadToken) return;
+    console.warn('Hewson all-metrics background fetch failed:', err);
+  });
 }
 
 function showSynopticInfo(): void {

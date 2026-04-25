@@ -268,7 +268,10 @@ def get_slice(
         lon = npz["lon"]
 
     # Slice for an immutable (model, init) snapshot — long cache is safe.
-    response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+    # ``private`` (not ``public``): the response is auth-gated, so shared
+    # proxies / CDNs must not store it. ``immutable`` is still correct
+    # because the (model, init) tuple identifies a frozen snapshot.
+    response.headers["Cache-Control"] = "private, max-age=86400, immutable"
 
     return {
         "model": model,
@@ -329,7 +332,10 @@ def get_all_metrics(
             detail=f"Snapshot has no metrics at level={level} (was it built with this level?)",
         )
 
-    response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+    # ``private`` (not ``public``): the response is auth-gated, so shared
+    # proxies / CDNs must not store it. ``immutable`` is still correct
+    # because the (model, init) tuple identifies a frozen snapshot.
+    response.headers["Cache-Control"] = "private, max-age=86400, immutable"
 
     return {
         "model": model,

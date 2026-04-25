@@ -137,7 +137,7 @@ export const COLORMAPS: Record<HewsonMetric, ColormapSpec> = {
     unit: 'K / (100 km)²',
     label: 'TFP (front side)',
     blurb:
-      'TFP > 0 warm side, conditions deteriorating · ≈ 0 at sharpest part · < 0 cold side, improving.',
+      'TFP > 0 warm-air side · TFP ≈ 0 at the front line (zero crossing) · TFP < 0 cold-air side — position indicator, not tendency.',
   },
   // Advection thresholds from § 2.5: 1 K/h significant, 2 K/h rapid. Storm
   // scale ±5: Ciarán hit ±21 K/h but ±5 still places "1 K/h significant"
