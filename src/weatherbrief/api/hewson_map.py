@@ -36,7 +36,8 @@ from typing import Any
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from flyfun_common.db import current_user_id
+from flyfun_common.db import current_user_id  # noqa: F401  (referenced in docstring)
+from weatherbrief.api.admin import require_admin
 from weatherbrief.hewson.precompute import (
     DEFAULT_LEVELS,
     DEFAULT_STRIDE_HOURS,
@@ -47,6 +48,12 @@ from weatherbrief.hewson.precompute import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/hewson-map", tags=["hewson-map"])
+
+
+# Synoptic Forecast is admin-only while we calibrate. To release publicly,
+# change this to ``current_user_id`` (one edit; the frontend tab visibility
+# gate in maps-main.ts also keys off ``user.is_admin``).
+_synoptic_auth = require_admin
 
 
 VALID_METRICS: tuple[str, ...] = (
@@ -151,7 +158,7 @@ def _read_snapshot_meta(path: Path) -> dict[str, Any] | None:
 
 @router.get("/manifest")
 def get_manifest(
-    _user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(_synoptic_auth),
 ):
     """List every Hewson snapshot currently on disk, grouped by model.
 
@@ -296,7 +303,7 @@ def get_slice(
     level: int = Query(..., description="Pressure level in hPa: 925, 850, or 700"),
     metric: str = Query(..., description=" | ".join(VALID_METRICS)),
     hour: int = Query(..., ge=0, description="Forecast hour offset from init"),
-    _user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(_synoptic_auth),
 ):
     """Return one ``(n_lat, n_lon)`` slice of a Hewson snapshot.
 
@@ -359,7 +366,7 @@ def get_all_metrics(
     init: str = Query(...),
     level: int = Query(...),
     hour: int = Query(..., ge=0),
-    _user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(_synoptic_auth),
 ):
     """Return every metric grid for one (model, init, level, hour) in one
     response. Used by the cursor-following tooltip on the synoptic map: the

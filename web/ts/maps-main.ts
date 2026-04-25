@@ -606,6 +606,16 @@ async function main(): Promise<void> {
   }
   renderUserInfo(user, 'maps');
 
+  // Synoptic Forecast is admin-gated while it's being calibrated.
+  // Hide the tab button entirely for non-admins so they don't see a
+  // 403-throwing dead end. To release publicly, drop this gate (and
+  // change _synoptic_auth in src/weatherbrief/api/hewson_map.py from
+  // require_admin back to current_user_id).
+  if (!user.is_admin) {
+    document.querySelector('#tabs .tab-btn[data-tab="synoptic"]')?.remove();
+    $('panel-synoptic')?.remove();
+  }
+
   // Experimental banner toggle
   $('experimental-toggle')?.addEventListener('click', () => {
     const detail = $('experimental-detail');
