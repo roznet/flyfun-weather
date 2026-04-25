@@ -16,7 +16,11 @@ const HEWSON_METRIC_ORDER: HewsonMetric[] = [
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
+// CARTO's terms require their attribution alongside OSM when serving from
+// basemaps.cartocdn.com. Mirror the per-theme split used in
+// route-map-inset.ts / route-map/renderer.ts.
+const LIGHT_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>';
+const DARK_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
 
 function isDark(): boolean {
   return document.documentElement.dataset.theme === 'dark';
@@ -45,8 +49,9 @@ export class SynopticMap {
       zoomControl: true,
     });
 
-    this.tileLayer = L.tileLayer(isDark() ? DARK_TILES : LIGHT_TILES, {
-      attribution: ATTR,
+    const dark = isDark();
+    this.tileLayer = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
+      attribution: dark ? DARK_ATTR : LIGHT_ATTR,
       maxZoom: 18,
     }).addTo(this.map);
 
@@ -67,8 +72,16 @@ export class SynopticMap {
     this.map.on('click', this.handleMouseMove);
 
     document.addEventListener('theme-changed', () => {
-      if (!this.tileLayer) return;
-      this.tileLayer.setUrl(isDark() ? DARK_TILES : LIGHT_TILES);
+      if (!this.tileLayer || !this.map) return;
+      const dark = isDark();
+      this.tileLayer.setUrl(dark ? DARK_TILES : LIGHT_TILES);
+      // Update attribution on theme switch — getAttribution() override
+      // mirrors route-map-inset.ts so the control reflects the active tile
+      // provider after a swap.
+      this.tileLayer.getAttribution = () => dark ? DARK_ATTR : LIGHT_ATTR;
+      this.map.attributionControl.removeAttribution(LIGHT_ATTR);
+      this.map.attributionControl.removeAttribution(DARK_ATTR);
+      this.map.attributionControl.addAttribution(dark ? DARK_ATTR : LIGHT_ATTR);
     });
   }
 

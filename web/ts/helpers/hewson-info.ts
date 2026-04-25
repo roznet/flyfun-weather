@@ -86,7 +86,7 @@ export function renderHewsonInfo(metric: HewsonMetric): string {
         <p>${entry.limitations}</p>
       </div>` : ''}
       ${entry.wikipedia ? `<div class="popup-section popup-learn-more">
-        <a href="${entry.wikipedia}" target="_blank" rel="noopener noreferrer">Learn more on Wikipedia ↗</a>
+        <a href="${escapeAttr(entry.wikipedia)}" target="_blank" rel="noopener noreferrer">Learn more on Wikipedia ↗</a>
       </div>` : ''}
       <div class="popup-section popup-discuss-ai" data-metric-name="${escapeAttr(entry.name)}"${entry.llm_prompt ? ` data-llm-prompt="${escapeAttr(entry.llm_prompt)}"` : ''}>
         <div class="popup-discuss-header">
