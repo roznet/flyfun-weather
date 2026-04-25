@@ -250,6 +250,9 @@ function wireEvents(
       if (s.decision === d) return;
       s.decision = d;
       // Clear the inactive side's data so a wrong-shape submit can't happen.
+      // Asymmetric on purpose: cancelled and monitoring both leave outcomes
+      // empty, and we keep reasons across cancelled↔monitoring so the chips
+      // round-trip if the user toggles between the two.
       if (d === 'flown') {
         s.reasons.clear();
       } else {
