@@ -28,7 +28,6 @@ rest of the API).
 from __future__ import annotations
 
 import logging
-import math
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
