@@ -5,7 +5,7 @@ and serves one ``(model, init, level, metric, hour)`` slice at a time to the
 forecast-page map (Phase D.1 of the Hewson rollout — see
 ``designs/future/hewson-fields-aviation-advisories.md`` § 7.3 / § 12a).
 
-Two endpoints:
+Three endpoints:
 
   GET /api/hewson-map/manifest
       → list of (model, init_time, levels, valid_times, grid bounds) tuples
@@ -15,7 +15,13 @@ Two endpoints:
       → one (n_lat, n_lon) slice as JSON, with lat/lon coords and the
         valid_time the slice corresponds to
 
-Both require an authenticated user (``current_user_id`` Depends, same as the
+  GET /api/hewson-map/all-metrics
+      → all six metric grids for one (model, init, level, hour) in a
+        single response — feeds the cursor-following tooltip on the
+        Synoptic Forecast tab, fetched in the background after the
+        single-metric slice has rendered
+
+All require an authenticated user (``current_user_id`` Depends, same as the
 rest of the API).
 """
 
@@ -34,6 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from flyfun_common.db import current_user_id
 from weatherbrief.hewson.precompute import (
     DEFAULT_LEVELS,
+    DEFAULT_STRIDE_HOURS,
     resolve_output_dir,
     snapshot_path,
 )
@@ -116,7 +123,7 @@ def _read_snapshot_meta(path: Path) -> dict[str, Any] | None:
         with np.load(path) as npz:
             init_time_unix = int(npz["init_time_unix"])
             levels = [int(L) for L in npz["levels"]]
-            stride_hours = int(npz["stride_hours"]) if "stride_hours" in npz.files else 1
+            stride_hours = int(npz["stride_hours"]) if "stride_hours" in npz.files else DEFAULT_STRIDE_HOURS
             valid_times = npz["valid_times"]
             lat = npz["lat"]
             lon = npz["lon"]
@@ -253,7 +260,7 @@ def _open_snapshot(path: Path):
 def _resolve_hour_index(npz, hour: int) -> tuple[int, int, str]:
     """Validate the ``hour`` param against the snapshot's stride/horizon
     and return ``(idx, stride_hours, valid_time_iso)``."""
-    stride_hours = int(npz["stride_hours"]) if "stride_hours" in npz.files else 1
+    stride_hours = int(npz["stride_hours"]) if "stride_hours" in npz.files else DEFAULT_STRIDE_HOURS
     valid_times = npz["valid_times"]
     n_time = valid_times.shape[0]
 

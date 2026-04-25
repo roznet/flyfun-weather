@@ -101,8 +101,18 @@ function wirePopupButtons(): void {
     btn.addEventListener('click', () => {
       navigator.clipboard.writeText(prompt).then(() => {
         if (toast) {
+          toast.textContent = 'Prompt copied! Paste it into the chat.';
           toast.hidden = false;
           setTimeout(() => { toast.hidden = true; }, 3000);
+        }
+      }).catch(() => {
+        // Clipboard can reject (permission denied, insecure context).
+        // Surface that to the pilot so they don't open the AI chat with
+        // an empty buffer.
+        if (toast) {
+          toast.textContent = 'Copy failed — paste manually from the modal.';
+          toast.hidden = false;
+          setTimeout(() => { toast.hidden = true; }, 4000);
         }
       });
     });

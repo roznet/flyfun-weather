@@ -140,6 +140,7 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
         rows: [
           { range: '< 2', label: 'Negligible', risk: 'none', meaning: 'Uniform boundary-layer air.' },
           { range: '2–4', label: 'Weak gradient', risk: 'low', meaning: 'Minor wind shift, scattered low cloud.' },
+          { range: '4–6', label: 'Moderate gradient', risk: 'low', meaning: 'Discernible boundary, but at this level often a coastal/terrain effect rather than a true front.' },
           { range: '6–8', label: 'Classical front', risk: 'moderate', meaning: 'Cloud band, possible precipitation. Could also be coast/terrain.' },
           { range: '> 8', label: 'Strong front', risk: 'high', meaning: 'Well-defined surface signature.' },
           { range: '> 12', label: 'Very sharp', risk: 'severe', meaning: 'Sharp surface boundary. Expect SIGMETs in the area.' },
