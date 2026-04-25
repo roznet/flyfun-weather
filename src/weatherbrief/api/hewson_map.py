@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import math
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -97,7 +98,13 @@ def _nan_to_none(arr: np.ndarray) -> list:
 
 def _read_snapshot_meta(path: Path) -> dict[str, Any] | None:
     """Read the cheap metadata fields from a snapshot without touching the
-    bulky metric arrays. Returns ``None`` if the file can't be parsed."""
+    bulky metric arrays. Returns ``None`` if the file can't be parsed.
+
+    A partially-written NPZ (from a crashed precompute) raises
+    ``zipfile.BadZipFile`` from inside ``np.load``, which inherits from
+    ``Exception`` rather than ``OSError`` — so it must be caught
+    explicitly. ``EOFError`` covers truncated files too.
+    """
     try:
         with np.load(path) as npz:
             init_time_unix = int(npz["init_time_unix"])
@@ -106,7 +113,7 @@ def _read_snapshot_meta(path: Path) -> dict[str, Any] | None:
             valid_times = npz["valid_times"]
             lat = npz["lat"]
             lon = npz["lon"]
-    except (OSError, KeyError, ValueError):
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile, EOFError):
         logger.warning("Hewson manifest: failed to parse %s", path, exc_info=True)
         return None
 
@@ -196,6 +203,32 @@ def _resolve_snapshot_path(model: str, init: str) -> tuple[Path, int]:
     return path, init_time_unix
 
 
+def _open_snapshot(path: Path):
+    """``np.load(path)`` with corrupt-file errors converted to a 404.
+
+    A snapshot whose zipfile is malformed (typically from a crashed
+    precompute mid-write) is treated as "missing" rather than 500ing —
+    the next clean precompute cycle replaces it.
+
+    ``np.load`` is lazy on ``.npz`` files: the returned ``NpzFile`` only
+    parses the zip catalog on first ``.files`` access. We touch ``.files``
+    here so the BadZipFile fires at this layer rather than deep inside a
+    handler.
+    """
+    try:
+        npz = np.load(path)
+        _ = npz.files  # force zip-catalog read
+        return npz
+    except (zipfile.BadZipFile, EOFError, OSError, ValueError):
+        # ValueError covers numpy's "not a valid npz/npy" path on garbage
+        # input; BadZipFile + EOFError cover truncated zips.
+        logger.warning("Hewson endpoint: corrupt snapshot at %s", path, exc_info=True)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Snapshot at {path.name} is unreadable",
+        )
+
+
 def _resolve_hour_index(npz, hour: int) -> tuple[int, int, str]:
     """Validate the ``hour`` param against the snapshot's stride/horizon
     and return ``(idx, stride_hours, valid_time_iso)``."""
@@ -256,7 +289,7 @@ def get_slice(
     path, init_time_unix = _resolve_snapshot_path(model, init)
     key = f"{metric}_{level}"
     # Lazy NPZ access — only decompress the slice we need, not all 18+ stacks.
-    with np.load(path) as npz:
+    with _open_snapshot(path) as npz:
         if key not in npz.files:
             raise HTTPException(
                 status_code=404,
@@ -313,7 +346,7 @@ def get_all_metrics(
     _validate_common_params(model, level)
     path, init_time_unix = _resolve_snapshot_path(model, init)
 
-    with np.load(path) as npz:
+    with _open_snapshot(path) as npz:
         idx, stride_hours, valid_time_iso = _resolve_hour_index(npz, hour)
         lat = npz["lat"]
         lon = npz["lon"]

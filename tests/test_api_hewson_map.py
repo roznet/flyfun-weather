@@ -350,6 +350,40 @@ def test_get_slice_requires_auth(client_anon, hewson_data_dir):
     assert resp.status_code == 401
 
 
+def test_corrupt_snapshot_returns_404(client, hewson_data_dir):
+    """A truncated/corrupt NPZ (e.g. from a precompute crash mid-write)
+    must surface as 404, not a 500. Manifest must skip it silently."""
+    target = snapshot_path("ecmwf", _INIT_UNIX, output_dir=hewson_data_dir / "hewson")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"not a valid zip")
+
+    # Slice endpoint
+    resp = client.get(
+        "/api/hewson-map",
+        params={
+            "model": "ecmwf", "init": _INIT_ISO,
+            "level": 850, "metric": "advection", "hour": 0,
+        },
+    )
+    assert resp.status_code == 404
+
+    # All-metrics endpoint
+    resp = client.get(
+        "/api/hewson-map/all-metrics",
+        params={
+            "model": "ecmwf", "init": _INIT_ISO,
+            "level": 850, "hour": 0,
+        },
+    )
+    assert resp.status_code == 404
+
+    # Manifest must not 500 — corrupt files are skipped, others (none here)
+    # would still be listed. Empty result for ecmwf is fine.
+    resp = client.get("/api/hewson-map/manifest")
+    assert resp.status_code == 200
+    assert "ecmwf" not in resp.json()["models"]
+
+
 # ---------------------------------------------------------------------------
 # All-metrics endpoint (cursor-tooltip backend)
 # ---------------------------------------------------------------------------
