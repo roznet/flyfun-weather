@@ -131,6 +131,27 @@ export class HewsonGridLayer extends L.Layer {
     const viewS = bounds.getSouth() - dLat;
     const viewN = bounds.getNorth() + dLat;
 
+    // Precompute column edge X coordinates once per redraw. In Web Mercator
+    // the X-projection depends only on longitude, so the same xLeft/xRight
+    // applies to every row. At the default zoom (~20k cells visible) this
+    // collapses ~40k projection calls per pan frame down to ~400.
+    const colCount = lon.length;
+    const xLeft = new Float32Array(colCount);
+    const xRight = new Float32Array(colCount);
+    const colVisible = new Uint8Array(colCount);
+    for (let j = 0; j < colCount; j++) {
+      const lo = lon[j];
+      colVisible[j] = lo >= viewW && lo <= viewE ? 1 : 0;
+      if (!colVisible[j]) continue;
+      // lat[0] is fine here — Web Mercator X is independent of latitude.
+      const ptW = map.latLngToContainerPoint([lat[0], lo - halfLon]);
+      const ptE = map.latLngToContainerPoint([lat[0], lo + halfLon]);
+      const xl = Math.min(ptW.x, ptE.x);
+      const xr = Math.max(ptW.x, ptE.x);
+      xLeft[j] = xl;
+      xRight[j] = xr;
+    }
+
     for (let i = 0; i < lat.length; i++) {
       const la = lat[i];
       if (la < viewS || la > viewN) continue;
@@ -144,20 +165,14 @@ export class HewsonGridLayer extends L.Layer {
       const h = yBot - yTop + 1;
 
       const row = values[i];
-      for (let j = 0; j < lon.length; j++) {
-        const lo = lon[j];
-        if (lo < viewW || lo > viewE) continue;
+      for (let j = 0; j < colCount; j++) {
+        if (!colVisible[j]) continue;
         const v = row[j];
         if (v === null || !Number.isFinite(v)) continue;
 
-        const ptW = map.latLngToContainerPoint([la, lo - halfLon]);
-        const ptE = map.latLngToContainerPoint([la, lo + halfLon]);
-        const xLeft = Math.min(ptW.x, ptE.x);
-        const xRight = Math.max(ptW.x, ptE.x);
-        const w = xRight - xLeft + 1;
-
+        const w = xRight[j] - xLeft[j] + 1;
         ctx.fillStyle = colorFor(metric, v, vmin, vmax);
-        ctx.fillRect(xLeft, yTop, w, h);
+        ctx.fillRect(xLeft[j], yTop, w, h);
       }
     }
   };
