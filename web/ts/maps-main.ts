@@ -206,7 +206,7 @@ function wireVerificationControls(): void {
 
 // --- Synoptic tab ---
 
-function currentSynapshot(): HewsonManifestSnapshot | null {
+function currentSnapshot(): HewsonManifestSnapshot | null {
   if (!synManifest || !synInit) return null;
   const list = synManifest.models[synModel] ?? [];
   return list.find((s) => s.init_time === synInit) ?? null;
@@ -259,7 +259,7 @@ function repopulateInitPicker(): void {
 function reconfigureLevelPicker(): void {
   const group = $('syn-level-picker');
   if (!group) return;
-  const snap = currentSynapshot();
+  const snap = currentSnapshot();
   const available = new Set(snap?.levels ?? [925, 850, 700]);
   let activeStillValid = false;
   for (const btn of group.querySelectorAll<HTMLButtonElement>('button')) {
@@ -283,7 +283,7 @@ function reconfigureHourSlider(): void {
   const slider = $('syn-hour-slider') as HTMLInputElement | null;
   const valEl = $('syn-hour-value');
   if (!slider) return;
-  const snap = currentSynapshot();
+  const snap = currentSnapshot();
   if (!snap) {
     slider.min = '0'; slider.max = '0'; slider.step = '3'; slider.value = '0';
     if (valEl) valEl.textContent = '+0 h';

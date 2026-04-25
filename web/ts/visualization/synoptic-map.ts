@@ -118,12 +118,9 @@ export class SynopticMap {
     const grid = this.hoverGrid;
 
     // Snap to the nearest grid cell. lat/lon arrays are uniform (0.25°
-    // by default) so a direct linear lookup is cheap and exact.
+    // by default) so a direct linear index calculation is cheap and exact.
     const lat = grid.lat;
     const lon = grid.lon;
-    const dLat = lat.length >= 2 ? Math.abs(lat[1] - lat[0]) : 0.25;
-    const dLon = lon.length >= 2 ? Math.abs(lon[1] - lon[0]) : 0.25;
-
     const i = Math.round((e.latlng.lat - lat[0]) / (lat[lat.length - 1] - lat[0]) * (lat.length - 1));
     const j = Math.round((e.latlng.lng - lon[0]) / (lon[lon.length - 1] - lon[0]) * (lon.length - 1));
     if (i < 0 || i >= lat.length || j < 0 || j >= lon.length) {

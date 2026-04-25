@@ -114,6 +114,10 @@ def build_synoptic_from_case(
             fields = case.fields(ERA5_MODEL_KEY, hour, level_hPa=L)
             if fields is None:
                 continue
+            # ``case.fields(..., level_hPa=L)`` always returns the legacy
+            # ``u850``/``v850`` keys regardless of the requested level —
+            # the values are from level L (see Case.fields docstring in
+            # frontal/case.py). Diagnostics are correctly computed at L.
             diag = compute_hewson_diagnostics(
                 fields["theta_e"], case.lat, case.lon,
                 fields["u850"], fields["v850"],
