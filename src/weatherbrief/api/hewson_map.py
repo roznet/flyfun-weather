@@ -210,11 +210,13 @@ def _open_snapshot(path: Path):
     precompute mid-write) is treated as "missing" rather than 500ing —
     the next clean precompute cycle replaces it.
 
-    ``np.load`` is lazy on ``.npz`` files: the returned ``NpzFile`` only
-    parses the zip catalog on first ``.files`` access. We touch ``.files``
-    here so the BadZipFile fires at this layer rather than deep inside a
-    handler.
+    Current numpy raises BadZipFile / ValueError synchronously from
+    ``np.load`` itself for malformed npz, so the explicit ``.files``
+    touch is belt-and-braces — but if a future numpy version makes the
+    parse lazy, the touch ensures the failure surfaces here. We close
+    the partially-opened ``NpzFile`` defensively in that case.
     """
+    npz = None
     try:
         npz = np.load(path)
         _ = npz.files  # force zip-catalog read
@@ -222,6 +224,8 @@ def _open_snapshot(path: Path):
     except (zipfile.BadZipFile, EOFError, OSError, ValueError):
         # ValueError covers numpy's "not a valid npz/npy" path on garbage
         # input; BadZipFile + EOFError cover truncated zips.
+        if npz is not None:
+            npz.close()
         logger.warning("Hewson endpoint: corrupt snapshot at %s", path, exc_info=True)
         raise HTTPException(
             status_code=404,

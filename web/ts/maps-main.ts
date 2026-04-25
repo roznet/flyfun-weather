@@ -351,6 +351,17 @@ async function loadSynoptic(): Promise<void> {
   //     all six values without round-tripping per mousemove. We don't await —
   //     the canvas is already rendered above; this just enables hover when
   //     it lands. Errors are non-fatal; map remains interactive without hover.
+  fetchAllMetricsInBackground(myToken);
+}
+
+/** Fire an /all-metrics fetch in the background and wire its response to
+ * synActiveGrid + the hover layer. On success drops the "loading hover…"
+ * suffix from the info bar. Stale responses (token mismatch) are silently
+ * discarded; failures leave the map interactive without hover. Used by
+ * both loadSynoptic() and changeActiveMetric() (which discards the
+ * original load's all-metrics by bumping the token). */
+function fetchAllMetricsInBackground(myToken: number): void {
+  if (!synInit) return;
   fetchHewsonAllMetrics({
     model: synModel,
     init: synInit,
@@ -360,6 +371,7 @@ async function loadSynoptic(): Promise<void> {
     if (myToken !== synLoadToken) return;  // stale response — discard
     synActiveGrid = grid;
     synopticMap?.setHoverGrid(grid);
+    const info = $('map-info-synoptic');
     if (info) {
       const validDt = new Date(grid.valid_time);
       const validLabel = validDt.toUTCString().slice(0, 22);
@@ -422,21 +434,10 @@ async function changeActiveMetric(): Promise<void> {
   }
 
   // We discarded the in-flight all-metrics from the previous loadSynoptic()
-  // by bumping the token; refetch so hover recovers without making the
-  // user wiggle a control.
-  fetchHewsonAllMetrics({
-    model: synModel,
-    init: synInit,
-    level: synLevel,
-    hour: synHour,
-  }).then((grid) => {
-    if (myToken !== synLoadToken) return;
-    synActiveGrid = grid;
-    synopticMap?.setHoverGrid(grid);
-  }).catch((err) => {
-    if (myToken !== synLoadToken) return;
-    console.warn('Hewson all-metrics background fetch failed:', err);
-  });
+  // by bumping the token; refetch so hover recovers (and the info-bar's
+  // "loading hover…" suffix is cleared) without making the user wiggle a
+  // control.
+  fetchAllMetricsInBackground(myToken);
 }
 
 function showSynopticInfo(): void {
