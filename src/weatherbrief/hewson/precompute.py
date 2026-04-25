@@ -143,7 +143,7 @@ def _load_or_build_terrain_mask(
 # ---------------------------------------------------------------------------
 
 
-def _tendency_k_per_hour(
+def tendency_k_per_hour(
     theta_e_stack: np.ndarray, step_hours: int = 1,
 ) -> np.ndarray:
     """Centred-difference ∂θe/∂t in K/h from a (n_time, n_lat, n_lon) stack.
@@ -281,7 +281,7 @@ def _build_one_snapshot(
     # Derive tendency across the decimated stack — step_hours matches stride
     # so the result is still K per hour regardless of cadence.
     for L in levels:
-        per_level[L]["tendency"] = _tendency_k_per_hour(
+        per_level[L]["tendency"] = tendency_k_per_hour(
             per_level[L]["theta_e"], step_hours=stride_hours,
         )
 
@@ -293,7 +293,7 @@ def _build_one_snapshot(
 # ---------------------------------------------------------------------------
 
 
-def _write_snapshot(
+def write_snapshot(
     path: Path,
     init_time_unix: int,
     valid_times: np.ndarray,
@@ -489,7 +489,7 @@ def run_once(
                 )
                 result.snapshots[model] = None
             else:
-                _write_snapshot(
+                write_snapshot(
                     path, init_time, valid_times, lat, lon,
                     levels, stride_hours, per_level,
                 )

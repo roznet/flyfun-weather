@@ -18,7 +18,7 @@ import pytest
 from weatherbrief.hewson.precompute import (
     DEFAULT_LEVELS,
     _init_to_iso_z,
-    _tendency_k_per_hour,
+    tendency_k_per_hour,
     load_snapshot,
     purge_old_snapshots,
     resolve_output_dir,
@@ -70,7 +70,7 @@ def test_tendency_centered_difference():
     stack = np.stack([np.full((3, 3), 10.0 + 2.0 * h) for h in range(5)]).astype(
         np.float32
     )
-    tend = _tendency_k_per_hour(stack)
+    tend = tendency_k_per_hour(stack)
     assert tend.shape == stack.shape
     assert np.allclose(tend, 2.0)
 
@@ -80,7 +80,7 @@ def test_tendency_edges_one_sided():
     # (10-0)/2 = 5, hour 4 edge is 30-20 = 10.
     vals = [0.0, 0.0, 10.0, 20.0, 30.0]
     stack = np.stack([np.full((2, 2), v) for v in vals]).astype(np.float32)
-    tend = _tendency_k_per_hour(stack)
+    tend = tendency_k_per_hour(stack)
     assert tend[0, 0, 0] == pytest.approx(0.0)
     assert tend[1, 0, 0] == pytest.approx(5.0)
     assert tend[-1, 0, 0] == pytest.approx(10.0)
@@ -88,7 +88,7 @@ def test_tendency_edges_one_sided():
 
 def test_tendency_single_hour_is_nan():
     stack = np.full((1, 2, 2), 5.0, dtype=np.float32)
-    tend = _tendency_k_per_hour(stack)
+    tend = tendency_k_per_hour(stack)
     assert np.all(np.isnan(tend))
 
 
@@ -98,14 +98,14 @@ def test_tendency_scales_with_step_hours():
     stack = np.stack(
         [np.full((2, 2), 6.0 * t) for t in (0, 3, 6, 9)]
     ).astype(np.float32)
-    tend = _tendency_k_per_hour(stack, step_hours=3)
+    tend = tendency_k_per_hour(stack, step_hours=3)
     assert np.allclose(tend, 6.0)
 
 
 def test_tendency_rejects_nonpositive_step():
     stack = np.zeros((3, 2, 2), dtype=np.float32)
     with pytest.raises(ValueError):
-        _tendency_k_per_hour(stack, step_hours=0)
+        tendency_k_per_hour(stack, step_hours=0)
 
 
 # ---------------------------------------------------------------------------

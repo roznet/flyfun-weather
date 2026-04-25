@@ -24,8 +24,8 @@ from weatherbrief.frontal.case import Case, load_case
 from weatherbrief.frontal.detect import compute_hewson_diagnostics
 from weatherbrief.frontal.grid import build_terrain_mask
 from weatherbrief.hewson.precompute import (
-    _tendency_k_per_hour,
-    _write_snapshot,
+    tendency_k_per_hour,
+    write_snapshot,
     resolve_output_dir,
     snapshot_path,
 )
@@ -131,7 +131,7 @@ def build_synoptic_from_case(
 
     # Tendency across the time stack — one-sided at edges per the live path.
     for L in levels:
-        per_level[L]["tendency"] = _tendency_k_per_hour(
+        per_level[L]["tendency"] = tendency_k_per_hour(
             per_level[L]["theta_e"], step_hours=stride_hours,
         )
 
@@ -143,7 +143,7 @@ def build_synoptic_from_case(
 
     out_path = snapshot_path(ERA5_MODEL_KEY, init_time_unix, output_dir)
 
-    _write_snapshot(
+    write_snapshot(
         out_path,
         init_time_unix,
         np.asarray(valid_times, dtype="datetime64[ns]"),

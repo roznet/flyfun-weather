@@ -104,18 +104,23 @@ def app_db():
 
 
 @pytest.fixture
-def client(app_db, tmp_path, monkeypatch):
+def hewson_env(tmp_path, monkeypatch):
+    """Common env-var setup shared by client/client_anon. Adding a new
+    DISABLE_* flag should only require touching this one place."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET", "test-secret-for-hewson-map")
-    monkeypatch.setenv("DISABLE_SCHEDULER", "1")
-    monkeypatch.setenv("DISABLE_RETENTION", "1")
-    monkeypatch.setenv("DISABLE_VERIFICATION", "1")
-    monkeypatch.setenv("DISABLE_DIGEST", "1")
-    monkeypatch.setenv("DISABLE_STANDALONE_VERIFICATION", "1")
-    monkeypatch.setenv("DISABLE_ECMWF_WATCHER", "1")
-    monkeypatch.setenv("DISABLE_HEWSON_PRECOMPUTE", "1")
+    for flag in (
+        "DISABLE_SCHEDULER", "DISABLE_RETENTION", "DISABLE_VERIFICATION",
+        "DISABLE_DIGEST", "DISABLE_STANDALONE_VERIFICATION",
+        "DISABLE_ECMWF_WATCHER", "DISABLE_HEWSON_PRECOMPUTE",
+    ):
+        monkeypatch.setenv(flag, "1")
 
+
+def _build_test_app(app_db):
+    """Construct an app + dep overrides for the DB; auth override is
+    applied by the caller (only ``client`` wants it)."""
     app = create_app()
 
     def _override_get_db():
@@ -130,39 +135,20 @@ def client(app_db, tmp_path, monkeypatch):
             session.close()
 
     app.dependency_overrides[get_db] = _override_get_db
-    app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
+    return app
 
+
+@pytest.fixture
+def client(app_db, hewson_env):
+    app = _build_test_app(app_db)
+    app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
     return TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture
-def client_anon(app_db, tmp_path, monkeypatch):
+def client_anon(app_db, hewson_env):
     """Same as ``client`` but without an auth override — for 401 checks."""
-    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("JWT_SECRET", "test-secret-for-hewson-map")
-    monkeypatch.setenv("DISABLE_SCHEDULER", "1")
-    monkeypatch.setenv("DISABLE_RETENTION", "1")
-    monkeypatch.setenv("DISABLE_VERIFICATION", "1")
-    monkeypatch.setenv("DISABLE_DIGEST", "1")
-    monkeypatch.setenv("DISABLE_STANDALONE_VERIFICATION", "1")
-    monkeypatch.setenv("DISABLE_ECMWF_WATCHER", "1")
-    monkeypatch.setenv("DISABLE_HEWSON_PRECOMPUTE", "1")
-
-    app = create_app()
-
-    def _override_get_db():
-        session = app_db()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    app.dependency_overrides[get_db] = _override_get_db
+    app = _build_test_app(app_db)
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -359,6 +345,112 @@ def test_get_slice_requires_auth(client_anon, hewson_data_dir):
         params={
             "model": "ecmwf", "init": _INIT_ISO,
             "level": 850, "metric": "advection", "hour": 0,
+        },
+    )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# All-metrics endpoint (cursor-tooltip backend)
+# ---------------------------------------------------------------------------
+
+
+def test_all_metrics_happy_path(client, hewson_data_dir):
+    _write_synthetic_snapshot(hewson_data_dir / "hewson")
+    resp = client.get(
+        "/api/hewson-map/all-metrics",
+        params={
+            "model": "ecmwf", "init": _INIT_ISO,
+            "level": 850, "hour": 6,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["model"] == "ecmwf"
+    assert body["init_time"] == _INIT_ISO
+    assert body["level"] == 850
+    assert body["hour"] == 6
+    assert body["stride_hours"] == _STRIDE_HOURS
+    assert body["lat"] == _LAT.tolist()
+    assert body["lon"] == _LON.tolist()
+
+    # All 6 metrics present, none missing.
+    assert set(body["metrics"].keys()) == set(_METRICS)
+    assert body["missing_metrics"] == []
+
+    # Spot-check shape and a known cell. advection tag=4, level 850 offset=1,
+    # hour 6 → idx=2 → h_factor=20. Expected (0,0): 4*100 + 1 + 20 + 0 = 421.
+    adv = body["metrics"]["advection"]
+    assert len(adv) == _LAT.size
+    assert len(adv[0]) == _LON.size
+    assert adv[0][0] == pytest.approx(421.0, abs=1e-3)
+
+    # NaN cell from the fixture (tendency at 850, hour 0, [0][0]) is null in
+    # this hour=6 response slot — at hour=6 the value is finite (the fixture
+    # only plants NaN at hour 0).
+    assert body["metrics"]["tendency"][0][0] is not None
+
+    # Auth-gated → private cache directive.
+    cache = resp.headers.get("cache-control", "")
+    assert "private" in cache and "immutable" in cache
+
+
+def test_all_metrics_partial_when_metric_key_missing(client, hewson_data_dir, tmp_path):
+    """A snapshot missing one metric for the level still returns 200; the
+    missing metric appears in `missing_metrics` but other metrics render."""
+    # Build a normal snapshot and delete one metric stack from it before
+    # the endpoint reads it. Easiest: rewrite the NPZ without the dropped key.
+    path = _write_synthetic_snapshot(hewson_data_dir / "hewson")
+    with np.load(path) as npz:
+        keep = {k: npz[k] for k in npz.files if k != "tendency_850"}
+    np.savez_compressed(path, **keep)
+
+    resp = client.get(
+        "/api/hewson-map/all-metrics",
+        params={
+            "model": "ecmwf", "init": _INIT_ISO,
+            "level": 850, "hour": 0,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "tendency" not in body["metrics"]
+    assert "tendency" in body["missing_metrics"]
+    # Other metrics still present.
+    assert "gradient" in body["metrics"]
+    assert "advection" in body["metrics"]
+
+
+def test_all_metrics_404_when_snapshot_missing(client):
+    resp = client.get(
+        "/api/hewson-map/all-metrics",
+        params={
+            "model": "ecmwf", "init": _INIT_ISO,
+            "level": 850, "hour": 0,
+        },
+    )
+    assert resp.status_code == 404
+
+
+def test_all_metrics_400_invalid_level(client):
+    resp = client.get(
+        "/api/hewson-map/all-metrics",
+        params={
+            "model": "ecmwf", "init": _INIT_ISO,
+            "level": 500, "hour": 0,
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_all_metrics_requires_auth(client_anon, hewson_data_dir):
+    _write_synthetic_snapshot(hewson_data_dir / "hewson")
+    resp = client_anon.get(
+        "/api/hewson-map/all-metrics",
+        params={
+            "model": "ecmwf", "init": _INIT_ISO,
+            "level": 850, "hour": 0,
         },
     )
     assert resp.status_code == 401
