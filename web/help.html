@@ -223,6 +223,7 @@
     <!-- Data Sources -->
     <div class="help-section">
       <h3>Data Sources &amp; Models</h3>
+      <h4>Forecast Models</h4>
       <p>
         Flyfun Weather fetches data from the following NWP models via
         <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.
@@ -319,6 +320,128 @@
         Europe only (29.5&ndash;70.5&deg;N, 23.5&deg;W&ndash;62.5&deg;E) within ~5 days. Level
         counts are unchanged &mdash; the upgrade is in the microphysics and cloud structure.
       </p>
+
+      <h4 style="margin-top: 1.5rem;">Waypoint &amp; Navigation Data</h4>
+      <p>
+        When you enter a waypoint that isn't an airport (a 5-letter fix, a navaid identifier,
+        or a free-route point), Flyfun Weather looks it up in a local navigation database
+        built from four free, public sources. The database is rebuilt on the 28-day
+        AIRAC/NASR cycle and currently contains <strong>~95,900 waypoints</strong> after
+        deduplication.
+      </p>
+      <table class="help-table">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Coverage</th>
+            <th>Format</th>
+            <th>Link</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Eurocontrol FRA</td>
+            <td>~8,100 ECAC waypoints (FRA-significant 5LNC + NAVAIDs), per-AIRAC</td>
+            <td>Excel .xlsx</td>
+            <td><a href="https://www.eurocontrol.int/publication/free-route-airspace-fra-points-list-ecac-area" target="_blank" rel="noopener">eurocontrol.int</a></td>
+          </tr>
+          <tr>
+            <td>OpenNav</td>
+            <td>~16,000 waypoints across 32 European countries (broader than FRA)</td>
+            <td>HTML scrape</td>
+            <td><a href="https://opennav.com/waypoint" target="_blank" rel="noopener">opennav.com</a></td>
+          </tr>
+          <tr>
+            <td>OurAirports NAVAIDs</td>
+            <td>~9,900 worldwide NAVAIDs (VOR/DME/NDB/TACAN/VORTAC)</td>
+            <td>CSV</td>
+            <td><a href="https://github.com/davidmegginson/ourairports-data" target="_blank" rel="noopener">ourairports-data</a></td>
+          </tr>
+          <tr>
+            <td>FAA NASR Fixes</td>
+            <td>~70,200 US named fixes (intersections, RNAV, reporting points)</td>
+            <td>Zipped CSV</td>
+            <td><a href="https://www.faa.gov/air_traffic/flight_info/aeronav/aero_data/NASR_Subscription/" target="_blank" rel="noopener">faa.gov NASR</a></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top: 0.25rem;">
+        All four sources are free, require no authentication, and refresh on the 28-day
+        AIRAC/NASR cycle. When the same identifier appears in multiple sources, the
+        deduplication priority is
+        <strong>Eurocontrol FRA &rarr; OpenNav &rarr; OurAirports &rarr; FAA NASR</strong>
+        &mdash; FRA wins ties because it carries the richest metadata (FIR codes, level
+        availability).
+      </p>
+
+      <h4 style="margin-top: 1.5rem;">Observations &amp; Other Sources</h4>
+      <table class="help-table">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Provider</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>METAR / TAF</td>
+            <td>
+              NOAA Aviation Weather Center
+              (<a href="https://aviationweather.gov/data/api/" target="_blank" rel="noopener">aviationweather.gov API</a>)
+            </td>
+            <td>
+              Primary source for live observations and terminal forecasts. For a manual
+              cross-check (especially in Europe), see
+              <a href="https://www.ogimet.com/" target="_blank" rel="noopener">Ogimet</a>.
+            </td>
+          </tr>
+          <tr>
+            <td>GRAMET cross-section</td>
+            <td>
+              <a href="https://www.autorouter.aero" target="_blank" rel="noopener">autorouter.aero</a>
+            </td>
+            <td>
+              Requires you to connect your personal autorouter account in
+              <a href="/settings.html">Settings</a>. The GRAMET image is fetched on your
+              behalf using your credentials.
+            </td>
+          </tr>
+          <tr>
+            <td>DWD synoptic discussion</td>
+            <td>
+              Deutscher Wetterdienst
+              (<a href="https://opendata.dwd.de/weather/text_forecasts/txt/" target="_blank" rel="noopener">opendata.dwd.de</a>)
+            </td>
+            <td>
+              Short-range and medium-range synoptic text bulletins for European weather
+              context.
+            </td>
+          </tr>
+          <tr>
+            <td>NWS Area Forecast Discussion</td>
+            <td>
+              NOAA / NWS
+              (<a href="https://aviationweather.gov/data/api/" target="_blank" rel="noopener">aviationweather.gov</a>,
+              <a href="https://www.weather.gov/documentation/services-web-api" target="_blank" rel="noopener">api.weather.gov</a>)
+            </td>
+            <td>
+              Local forecaster discussions from the relevant NWS office, used when the
+              route includes US airports.
+            </td>
+          </tr>
+          <tr>
+            <td>AI synopsis &amp; translations</td>
+            <td>
+              <a href="https://www.anthropic.com/claude" target="_blank" rel="noopener">Anthropic Claude</a>
+            </td>
+            <td>
+              Plain-language briefing summary and DWD German-to-English translation.
+              Optional &mdash; toggle in <a href="/settings.html">Settings</a>.
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- Early Access (hidden when signed in) -->
