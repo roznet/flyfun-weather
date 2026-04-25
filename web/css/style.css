@@ -2238,7 +2238,8 @@ label {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
-  z-index: 300;
+  /* Above Leaflet panes (max ~700) and the synoptic-legend (1000) */
+  z-index: 9999;
   justify-content: center;
   align-items: flex-start;
   padding: 3rem 1rem;

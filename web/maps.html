@@ -46,7 +46,7 @@
 
     .map-legend {
       position: absolute; bottom: 30px; left: 10px; z-index: 1000;
-      background: var(--card-bg); border: 1px solid var(--border);
+      background: var(--surface); border: 1px solid var(--border);
       border-radius: 6px; padding: 0.5rem 0.7rem; font-size: 0.75rem;
       max-width: 200px; color: var(--text);
     }
@@ -85,6 +85,41 @@
       width: 100%; border: none; border-radius: 8px;
       height: calc(100vh - 200px); min-height: 500px;
     }
+
+    /* Synoptic Forecast tab */
+    .synoptic-controls input[type="range"] { vertical-align: middle; }
+    .synoptic-controls .range-with-value {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+    }
+    .synoptic-controls .range-value {
+      font-variant-numeric: tabular-nums; min-width: 3.5rem;
+      color: var(--text); font-weight: 600;
+    }
+    .synoptic-info-btn {
+      cursor: pointer; font-weight: 700; width: 18px; height: 18px;
+      border-radius: 50%; border: 1.5px solid var(--text-muted);
+      color: var(--text-muted); background: transparent;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; padding: 0;
+    }
+    .synoptic-info-btn:hover { color: var(--text); border-color: var(--text); }
+
+    .synoptic-legend {
+      position: absolute; bottom: 30px; left: 10px; z-index: 1000;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.5rem 0.7rem;
+      font-size: 0.75rem; color: var(--text);
+      width: 230px;
+    }
+    .synoptic-legend-title { font-weight: 600; margin-bottom: 0.3rem; }
+    .synoptic-legend-bar {
+      height: 12px; width: 100%; border-radius: 3px;
+      border: 1px solid var(--border);
+    }
+    .synoptic-legend-ticks {
+      display: flex; justify-content: space-between;
+      margin-top: 0.2rem; font-variant-numeric: tabular-nums;
+    }
   </style>
 </head>
 <body>
@@ -112,6 +147,7 @@
     <div class="settings-tabs" id="tabs">
       <button class="tab-btn active" data-tab="forecast">Forecast Overview</button>
       <button class="tab-btn" data-tab="verification">Model Accuracy Map</button>
+      <button class="tab-btn" data-tab="synoptic">Synoptic Forecast</button>
       <button class="tab-btn" data-tab="stats">Accuracy Stats</button>
     </div>
 
@@ -197,6 +233,57 @@
         <div id="map-container-verif" style="width:100%; height:calc(100vh - 280px); min-height:400px; border-radius:8px; border:1px solid var(--border); overflow:hidden;"></div>
       </div>
       <div class="map-info" id="map-info-verif"></div>
+    </div>
+
+    <!-- Tab: Synoptic Forecast (Hewson gridded fields) -->
+    <div id="panel-synoptic" class="tab-panel">
+      <div class="maps-controls synoptic-controls" id="controls-synoptic">
+        <label>Model</label>
+        <div class="btn-group" id="syn-model-picker">
+          <button class="btn-toggle active" data-model="ecmwf">ECMWF</button>
+          <button class="btn-toggle" data-model="gfs">GFS</button>
+          <button class="btn-toggle" data-model="icon">ICON</button>
+        </div>
+        <label>Init</label>
+        <select id="syn-init-picker"></select>
+        <label>Level</label>
+        <div class="btn-group" id="syn-level-picker">
+          <button class="btn-toggle" data-level="925">925 hPa<br><span style="font-size:0.7em;opacity:0.7">2,500 ft</span></button>
+          <button class="btn-toggle active" data-level="850">850 hPa<br><span style="font-size:0.7em;opacity:0.7">5,000 ft</span></button>
+          <button class="btn-toggle" data-level="700">700 hPa<br><span style="font-size:0.7em;opacity:0.7">10,000 ft</span></button>
+        </div>
+        <label>Field</label>
+        <select id="syn-metric-picker">
+          <optgroup label="Air-mass character">
+            <option value="theta_e">θe — equivalent potential T</option>
+          </optgroup>
+          <optgroup label="Boundaries (frontal zones)">
+            <option value="gradient" selected>|∇θe| — boundary intensity</option>
+            <option value="neg_laplacian">−∇²θe — sharpness</option>
+            <option value="tfp">TFP — front side</option>
+          </optgroup>
+          <optgroup label="Time changes">
+            <option value="advection">−V·∇θe — warm/cold advection</option>
+            <option value="tendency">∂θe/∂t — local tendency</option>
+          </optgroup>
+        </select>
+        <button class="synoptic-info-btn" id="syn-info-btn" title="What does this field mean?">i</button>
+        <label>Hour</label>
+        <span class="range-with-value">
+          <input type="range" id="syn-hour-slider" min="0" max="0" step="3" value="0" style="width:200px">
+          <span class="range-value" id="syn-hour-value">+0 h</span>
+        </span>
+        <label>Opacity</label>
+        <span class="range-with-value">
+          <input type="range" id="syn-opacity-slider" min="0" max="100" value="50" style="width:120px">
+          <span class="range-value" id="syn-opacity-value">50%</span>
+        </span>
+      </div>
+
+      <div class="map-wrapper">
+        <div id="map-container-synoptic" style="width:100%; height:calc(100vh - 280px); min-height:400px; border-radius:8px; border:1px solid var(--border); overflow:hidden; position:relative;"></div>
+      </div>
+      <div class="map-info" id="map-info-synoptic"></div>
     </div>
 
     <!-- Tab: Accuracy Stats (embedded verification page) -->
