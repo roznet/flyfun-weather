@@ -209,7 +209,7 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
       { range: 'TFP < 0', label: 'Cold-air side', risk: 'low', meaning: 'You are between the front line and the cold-side boundary.' },
     ],
     pilot_notes: `<p>Combined with wind direction and the −V·∇θe map, TFP tells you whether the front is moving toward you or away. Two pilots in the same TFP-positive area can experience very different weather depending on whether they're flying with or against the front's motion.</p>`,
-    limitations: `TFP at <strong>850</strong> is canonical (Hewson's original work). At <strong>925</strong> it is noisier (bumpy boundary-layer θe). At <strong>700</strong> the field is smoother but the front is <em>aloft</em> — surface position can be displaced 50–150 km from the 700 zero-contour because fronts tilt with height (warm fronts slope forward, cold fronts slope backward).`,
+    limitations: `TFP at <strong>850</strong> is canonical (Hewson's original work). At <strong>925</strong> it is noisier (bumpy boundary-layer θe). At <strong>700</strong> the field is smoother but the front is <em>aloft</em> — surface position can be displaced 50–150 km from the 700 zero-contour because fronts tilt with height. Both warm and cold fronts tilt backward toward the cold air mass with altitude — warm fronts gently (~1:100–200), cold fronts more steeply (~1:50–75).`,
     llm_prompt: 'explain the Thermal Front Parameter (TFP) from Hewson 1998 — its mathematical definition as the directional derivative of |∇θe| along the gradient, what its zero crossing represents, why it is a position indicator rather than a tendency indicator, and how forecasters use the locating equation alongside it',
   },
 
