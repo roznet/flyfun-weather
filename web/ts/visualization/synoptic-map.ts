@@ -163,11 +163,14 @@ export class SynopticMap {
     const rows = HEWSON_METRIC_ORDER
       .filter((m) => grid.metrics[m] !== undefined)
       .map((m) => {
-        const v = grid.metrics[m][i][j];
+        // Defensive: a malformed response with fewer rows than lat.length
+        // would otherwise throw a TypeError inside a Leaflet mouse handler.
+        const row = grid.metrics[m]?.[i];
+        const v = row !== undefined ? row[j] : null;
         const spec = COLORMAPS[m];
         const label = spec?.label.split(' ')[0] ?? m;  // "θe", "|∇θe|", ...
         const unit = spec?.unit ?? '';
-        const text = (v === null || !Number.isFinite(v))
+        const text = (v === null || v === undefined || !Number.isFinite(v))
           ? '—'
           : `${formatValue(m, v as number)} ${unit}`;
         return `<div class="synoptic-hover-row"><span class="synoptic-hover-label">${escapeHtml(label)}</span><span class="synoptic-hover-value">${escapeHtml(text)}</span></div>`;

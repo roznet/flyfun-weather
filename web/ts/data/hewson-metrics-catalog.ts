@@ -272,12 +272,40 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
       <p>The first term is what advection alone predicts. The rest captures <strong>diurnal heating/cooling, latent heat release in convection, and radiative cooling</strong>. The interesting case is when ∂θe/∂t and −V·∇θe <em>disagree</em> — that tells you the air mass itself is being modified, not just being moved.</p>
     `,
     what_map_shows: `Diverging — where θe is rising or falling. Computed by central differences across the snapshot's 3 h timesteps.`,
-    flat_thresholds: [
-      { range: '> 1 K/h', label: 'Rising fast', risk: 'high', meaning: 'Warm sector arriving, or daytime heating in the boundary layer.' },
-      { range: '0 to 1 K/h', label: 'Rising', risk: 'low', meaning: 'Slow warming. Cross-check with advection.' },
-      { range: '≈ 0', label: 'Stable', risk: 'none', meaning: 'Current pattern persists.' },
-      { range: '−1 to 0 K/h', label: 'Falling', risk: 'low', meaning: 'Slow cooling.' },
-      { range: '< −1 K/h', label: 'Falling fast', risk: 'high', meaning: 'Post-frontal clearing, evening cooling, or cold pool spreading.' },
+    level_thresholds: [
+      {
+        level: 925, altitude_label: '~2,500 ft',
+        note: 'Diurnal cycle is large here — ±1–2 K/h just from sun/night, with no synoptic change. Treat tendency at 925 hPa as "advection + diurnal"; subtract the time-of-day effect mentally before reading it as an air-mass signal.',
+        rows: [
+          { range: '> 2 K/h', label: 'Rising fast', risk: 'high', meaning: 'Warm sector arrival OR strong daytime heating; cross-check with −V·∇θe to tell which.' },
+          { range: '0 to 2 K/h', label: 'Rising', risk: 'low', meaning: 'Likely diurnal; significant only if persisting overnight or against the sun.' },
+          { range: '≈ 0', label: 'Stable', risk: 'none', meaning: 'Current pattern persists.' },
+          { range: '−2 to 0 K/h', label: 'Falling', risk: 'low', meaning: 'Likely diurnal cooling; overnight or cold-pool drainage.' },
+          { range: '< −2 K/h', label: 'Falling fast', risk: 'high', meaning: 'Post-frontal clearing or strong cold-pool spread (compare with advection).' },
+        ],
+      },
+      {
+        level: 850, altitude_label: '~5,000 ft',
+        note: 'Above the boundary layer — virtually all signal is genuine air-mass change. The "advection vs tendency" comparison is most reliable here.',
+        rows: [
+          { range: '> 1 K/h', label: 'Rising fast', risk: 'high', meaning: 'Warm sector arriving — ceilings likely to drop over the next 1–3 h.' },
+          { range: '0 to 1 K/h', label: 'Rising', risk: 'low', meaning: 'Slow warming. Cross-check with advection.' },
+          { range: '≈ 0', label: 'Stable', risk: 'none', meaning: 'Current pattern persists.' },
+          { range: '−1 to 0 K/h', label: 'Falling', risk: 'low', meaning: 'Slow cooling.' },
+          { range: '< −1 K/h', label: 'Falling fast', risk: 'high', meaning: 'Post-frontal clearing, evening cooling, or cold pool spreading.' },
+        ],
+      },
+      {
+        level: 700, altitude_label: '~10,000 ft',
+        note: 'Free troposphere — small magnitudes are still meaningful. Fast 700 tendency typically leads the surface signal by 6–12 h.',
+        rows: [
+          { range: '> 0.7 K/h', label: 'Rising fast', risk: 'high', meaning: 'Strong upper-level warming; warm-air advection often precedes a surface front.' },
+          { range: '0 to 0.7 K/h', label: 'Rising', risk: 'low', meaning: 'Gradual upper-level warming.' },
+          { range: '≈ 0', label: 'Stable', risk: 'none', meaning: 'Current pattern persists.' },
+          { range: '−0.7 to 0 K/h', label: 'Falling', risk: 'low', meaning: 'Gradual upper-level cooling.' },
+          { range: '< −0.7 K/h', label: 'Falling fast', risk: 'high', meaning: 'Strong upper-level cooling — often after an occluded front.' },
+        ],
+      },
     ],
     pilot_notes: `
       <p>Compare ∂θe/∂t to −V·∇θe at the same point:</p>

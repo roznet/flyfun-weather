@@ -191,10 +191,20 @@ def _resolve_snapshot_path(model: str, init: str) -> tuple[Path, int]:
     """Parse the init timestamp and return ``(path, init_time_unix)``.
 
     Raises 404 if the snapshot file isn't on disk; raises 400 from
-    ``_parse_init`` if the init string is malformed.
+    ``_parse_init`` if the init string is malformed; raises 400 if the
+    constructed path escapes the snapshot root (belt-and-suspenders on
+    top of the syntactic checks in ``_validate_common_params``).
     """
     init_time_unix = _parse_init(init)
     path = snapshot_path(model, init_time_unix)
+    root = resolve_output_dir()
+    # Resolve both before comparing — protects against symlinks / .. that
+    # somehow slipped past the syntactic guards in _validate_common_params.
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid model {model!r}",
+        )
     if not path.exists():
         raise HTTPException(
             status_code=404,
