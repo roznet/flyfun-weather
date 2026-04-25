@@ -5,14 +5,48 @@ import {
   fetchForecastMap, fetchVerificationMap, fetchAvailableHours,
   type ForecastMapResponse, type VerificationMapResponse,
 } from './adapters/maps-adapter';
+import {
+  fetchHewsonManifest, fetchHewsonSlice, fetchHewsonAllMetrics,
+  type HewsonManifest, type HewsonManifestSnapshot,
+  type HewsonAllMetricsSlice,
+} from './adapters/hewson-map-adapter';
 import { WeatherMap, type ForecastMetric, type VerifMetric } from './visualization/weather-map';
+import { SynopticMap } from './visualization/synoptic-map';
+import { type HewsonMetric, type ColorScale, vRangeFor } from './visualization/hewson-colormaps';
+import { initInfoPopup, showPopupContent } from './components/info-popup';
+import { renderHewsonInfo } from './helpers/hewson-info';
 import { redirectToLogin, renderUserInfo, $ } from './utils';
 import { initI18n } from './i18n/i18n';
 
 let forecastMap: WeatherMap | null = null;
 let verifMap: WeatherMap | null = null;
-let currentTab: 'forecast' | 'verification' | 'stats' = 'forecast';
+let synopticMap: SynopticMap | null = null;
+type Tab = 'forecast' | 'verification' | 'synoptic' | 'stats';
+let currentTab: Tab = 'forecast';
 let statsLoaded = false;
+
+// Synoptic state
+let synManifest: HewsonManifest | null = null;
+let synModel = 'ecmwf';
+let synInit: string | null = null;       // ISO 8601 with Z, picked from manifest
+let synLevel = 850;
+let synMetric: HewsonMetric = 'gradient';
+let synHour = 0;
+let synOpacity = 0.5;
+let synScale: ColorScale = 'default';
+// Cached multi-metric grid for the active (model, init, level, hour) — used
+// by the cursor tooltip and (when present) lets metric-change skip a
+// network call. Fetched in the background after the fast initial render.
+let synActiveGrid: HewsonAllMetricsSlice | null = null;
+// "Token" identifying the current (model, init, level, hour) request. Async
+// fetches check this on completion and discard their results if the user
+// has moved on — prevents a stale all-metrics response from poisoning the
+// hover cache after the user changed hour mid-fetch.
+let synLoadToken = 0;
+
+function currentLoadKey(): string {
+  return `${synModel}|${synInit}|${synLevel}|${synHour}`;
+}
 
 // Forecast state
 let forecastData: ForecastMapResponse | null = null;
@@ -170,9 +204,351 @@ function wireVerificationControls(): void {
   });
 }
 
+// --- Synoptic tab ---
+
+function currentSnapshot(): HewsonManifestSnapshot | null {
+  if (!synManifest || !synInit) return null;
+  const list = synManifest.models[synModel] ?? [];
+  return list.find((s) => s.init_time === synInit) ?? null;
+}
+
+function repopulateModelPicker(): void {
+  const group = $('syn-model-picker');
+  if (!group || !synManifest) return;
+  const models = Object.keys(synManifest.models).sort();
+  group.innerHTML = '';
+  for (const m of models) {
+    const btn = document.createElement('button');
+    btn.className = 'btn-toggle';
+    btn.dataset.model = m;
+    if (m === synModel) btn.classList.add('active');
+    btn.textContent = m.toUpperCase();
+    group.appendChild(btn);
+  }
+}
+
+function repopulateInitPicker(): void {
+  const sel = $('syn-init-picker') as HTMLSelectElement | null;
+  if (!sel || !synManifest) return;
+  const list = synManifest.models[synModel] ?? [];
+  // Newest first
+  const sorted = [...list].sort((a, b) => b.init_time_unix - a.init_time_unix);
+  sel.innerHTML = '';
+  for (const snap of sorted) {
+    const opt = document.createElement('option');
+    opt.value = snap.init_time;
+    // Compact label: "24 Apr 12Z" — for ERA5 the date can be any year.
+    const dt = new Date(snap.init_time);
+    const dd = String(dt.getUTCDate()).padStart(2, '0');
+    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getUTCMonth()];
+    const hh = String(dt.getUTCHours()).padStart(2, '0');
+    const yr = dt.getUTCFullYear();
+    const thisYr = new Date().getUTCFullYear();
+    opt.textContent = yr === thisYr ? `${dd} ${mon} ${hh}Z` : `${dd} ${mon} ${yr} ${hh}Z`;
+    sel.appendChild(opt);
+  }
+  // Pick newest if current init isn't in this model's list
+  if (!sorted.find((s) => s.init_time === synInit)) {
+    synInit = sorted[0]?.init_time ?? null;
+  }
+  if (synInit) sel.value = synInit;
+  reconfigureLevelPicker();
+  reconfigureHourSlider();
+}
+
+function reconfigureLevelPicker(): void {
+  const group = $('syn-level-picker');
+  if (!group) return;
+  const snap = currentSnapshot();
+  const available = new Set(snap?.levels ?? [925, 850, 700]);
+  let activeStillValid = false;
+  for (const btn of group.querySelectorAll<HTMLButtonElement>('button')) {
+    const lvl = parseInt(btn.dataset.level || '0');
+    const ok = available.has(lvl);
+    btn.disabled = !ok;
+    btn.classList.toggle('disabled', !ok);
+    if (lvl === synLevel && ok) activeStillValid = true;
+  }
+  // If the current level isn't in the snapshot, pick the first available.
+  if (!activeStillValid && snap) {
+    const fallback = snap.levels.includes(850) ? 850 : snap.levels[0];
+    if (fallback !== undefined) {
+      synLevel = fallback;
+      setActive('syn-level-picker', String(synLevel), 'level');
+    }
+  }
+}
+
+function reconfigureHourSlider(): void {
+  const slider = $('syn-hour-slider') as HTMLInputElement | null;
+  const valEl = $('syn-hour-value');
+  if (!slider) return;
+  const snap = currentSnapshot();
+  if (!snap) {
+    slider.min = '0'; slider.max = '0'; slider.step = '3'; slider.value = '0';
+    if (valEl) valEl.textContent = '+0 h';
+    return;
+  }
+  const max = (snap.n_hours - 1) * snap.stride_hours;
+  slider.min = '0';
+  slider.max = String(max);
+  slider.step = String(snap.stride_hours);
+  // Clamp existing hour to the new range, snapped to stride
+  let h = Math.min(synHour, max);
+  h = Math.round(h / snap.stride_hours) * snap.stride_hours;
+  synHour = h;
+  slider.value = String(h);
+  if (valEl) valEl.textContent = `+${h} h`;
+}
+
+async function loadSynoptic(): Promise<void> {
+  if (!synopticMap) return;
+  const info = $('map-info-synoptic');
+  if (!synInit) {
+    if (info) info.textContent = 'No precomputed snapshot available for this model.';
+    synopticMap.clear();
+    synActiveGrid = null;
+    return;
+  }
+
+  // Bump the token, invalidating any in-flight fetches.
+  const myToken = ++synLoadToken;
+  // Tear down stale hover state — no all-metrics for the new (model, init,
+  // level, hour) yet, so the tooltip should disable until the background
+  // fetch completes.
+  synActiveGrid = null;
+  synopticMap.setHoverGrid(null);
+
+  if (info) info.textContent = 'Loading…';
+
+  // --- 1. Fast path: single-metric slice (~80 KB) for the canvas overlay.
+  let firstSlice;
+  try {
+    firstSlice = await fetchHewsonSlice({
+      model: synModel,
+      init: synInit,
+      level: synLevel,
+      metric: synMetric,
+      hour: synHour,
+    });
+  } catch (err) {
+    if (myToken !== synLoadToken) return;
+    if (info) info.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+    return;
+  }
+  if (myToken !== synLoadToken) return;  // user moved on
+
+  const { vmin, vmax } = vRangeFor(synMetric, synScale);
+  synopticMap.setSlice(firstSlice, vmin, vmax);
+  synopticMap.setOpacity(synOpacity);
+  if (info) {
+    const validDt = new Date(firstSlice.valid_time);
+    const validLabel = validDt.toUTCString().slice(0, 22);
+    info.textContent = `${synModel.toUpperCase()} ${firstSlice.init_time.slice(0, 13)}Z · valid ${validLabel} (+${synHour} h) · ${firstSlice.level} hPa · loading hover…`;
+  }
+
+  // --- 2. Background: all-metrics (~2.3 MB) so the cursor tooltip can read
+  //     all six values without round-tripping per mousemove. We don't await —
+  //     the canvas is already rendered above; this just enables hover when
+  //     it lands. Errors are non-fatal; map remains interactive without hover.
+  fetchAllMetricsInBackground(myToken);
+}
+
+/** Fire an /all-metrics fetch in the background and wire its response to
+ * synActiveGrid + the hover layer. On success drops the "loading hover…"
+ * suffix from the info bar. Stale responses (token mismatch) are silently
+ * discarded; failures leave the map interactive without hover. Used by
+ * both loadSynoptic() and changeActiveMetric() (which discards the
+ * original load's all-metrics by bumping the token). */
+function fetchAllMetricsInBackground(myToken: number): void {
+  if (!synInit) return;
+  fetchHewsonAllMetrics({
+    model: synModel,
+    init: synInit,
+    level: synLevel,
+    hour: synHour,
+  }).then((grid) => {
+    if (myToken !== synLoadToken) return;  // stale response — discard
+    synActiveGrid = grid;
+    synopticMap?.setHoverGrid(grid);
+    const info = $('map-info-synoptic');
+    if (info) {
+      const validDt = new Date(grid.valid_time);
+      const validLabel = validDt.toUTCString().slice(0, 22);
+      info.textContent = `${synModel.toUpperCase()} ${grid.init_time.slice(0, 13)}Z · valid ${validLabel} (+${synHour} h) · ${grid.level} hPa`;
+    }
+  }).catch((err) => {
+    if (myToken !== synLoadToken) return;
+    console.warn('Hewson all-metrics background fetch failed:', err);
+    // Leave the canvas + status as-is; hover just stays disabled.
+  });
+}
+
+/** Render a different metric using the cached all-metrics grid (no
+ * network), or fall back to a single-metric refetch if the cache isn't
+ * ready yet (background load still in flight). */
+async function changeActiveMetric(): Promise<void> {
+  if (!synopticMap) return;
+  const { vmin, vmax } = vRangeFor(synMetric, synScale);
+
+  if (synActiveGrid) {
+    const values = synActiveGrid.metrics[synMetric];
+    if (!values) {
+      // Snapshot is missing this metric (legacy build). Clear the canvas
+      // and surface an explicit message — silently returning would leave
+      // the picker showing one metric and the map showing another.
+      synopticMap.clear();
+      const info = $('map-info-synoptic');
+      if (info) info.textContent = `Metric "${synMetric}" not available in this snapshot.`;
+      return;
+    }
+    const single = {
+      model: synActiveGrid.model,
+      init_time: synActiveGrid.init_time,
+      valid_time: synActiveGrid.valid_time,
+      level: synActiveGrid.level,
+      metric: synMetric,
+      hour: synActiveGrid.hour,
+      stride_hours: synActiveGrid.stride_hours,
+      lat: synActiveGrid.lat,
+      lon: synActiveGrid.lon,
+      values,
+    };
+    synopticMap.setSlice(single, vmin, vmax);
+    synopticMap.setOpacity(synOpacity);
+    return;
+  }
+
+  // All-metrics not ready — fast-fetch the single new metric. Bump the
+  // token so any in-flight loadSynoptic() fetch (carrying the previous
+  // metric for this hour) is discarded when it lands; otherwise it could
+  // overwrite the canvas with the wrong metric for the active picker.
+  if (!synInit) return;
+  const myToken = ++synLoadToken;
+  try {
+    const slice = await fetchHewsonSlice({
+      model: synModel,
+      init: synInit,
+      level: synLevel,
+      metric: synMetric,
+      hour: synHour,
+    });
+    if (myToken !== synLoadToken) return;
+    synopticMap.setSlice(slice, vmin, vmax);
+    synopticMap.setOpacity(synOpacity);
+  } catch (err) {
+    console.warn('Hewson metric refetch failed:', err);
+    return;
+  }
+
+  // We discarded the in-flight all-metrics from the previous loadSynoptic()
+  // by bumping the token; refetch so hover recovers (and the info-bar's
+  // "loading hover…" suffix is cleared) without making the user wiggle a
+  // control.
+  fetchAllMetricsInBackground(myToken);
+}
+
+function showSynopticInfo(): void {
+  showPopupContent(renderHewsonInfo(synMetric));
+}
+
+function wireSynopticControls(): void {
+  wireButtonGroup('syn-model-picker', 'model', (v) => {
+    synModel = v;
+    repopulateInitPicker();
+    loadSynoptic();
+  });
+
+  const initSel = $('syn-init-picker') as HTMLSelectElement | null;
+  initSel?.addEventListener('change', () => {
+    synInit = initSel.value || null;
+    reconfigureHourSlider();
+    loadSynoptic();
+  });
+
+  wireButtonGroup('syn-level-picker', 'level', (v) => {
+    synLevel = parseInt(v);
+    loadSynoptic();
+  });
+
+  const metricSel = $('syn-metric-picker') as HTMLSelectElement | null;
+  metricSel?.addEventListener('change', () => {
+    synMetric = metricSel.value as HewsonMetric;
+    changeActiveMetric();
+  });
+
+  const hourSlider = $('syn-hour-slider') as HTMLInputElement | null;
+  const hourVal = $('syn-hour-value');
+  hourSlider?.addEventListener('input', () => {
+    synHour = parseInt(hourSlider.value);
+    if (hourVal) hourVal.textContent = `+${synHour} h`;
+  });
+  hourSlider?.addEventListener('change', () => {
+    synHour = parseInt(hourSlider.value);
+    loadSynoptic();
+  });
+
+  const opSlider = $('syn-opacity-slider') as HTMLInputElement | null;
+  const opVal = $('syn-opacity-value');
+  opSlider?.addEventListener('input', () => {
+    const pct = parseInt(opSlider.value);
+    synOpacity = pct / 100;
+    if (opVal) opVal.textContent = `${pct}%`;
+    synopticMap?.setOpacity(synOpacity);
+  });
+
+  $('syn-info-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showSynopticInfo();
+  });
+
+  wireButtonGroup('syn-scale-picker', 'scale', (v) => {
+    synScale = v as ColorScale;
+    // No refetch needed — just rescale the existing canvas + legend.
+    if (synopticMap) {
+      const { vmin, vmax } = vRangeFor(synMetric, synScale);
+      synopticMap.setVRange(synMetric, vmin, vmax);
+    }
+  });
+}
+
+async function initSynopticTab(): Promise<void> {
+  // Lazy map init — Leaflet needs the panel visible first.
+  if (!synopticMap) {
+    const container = $('map-container-synoptic');
+    if (container) {
+      synopticMap = new SynopticMap(container);
+      synopticMap.init();
+    }
+  } else {
+    synopticMap.invalidateSize();
+  }
+
+  if (!synManifest) {
+    const info = $('map-info-synoptic');
+    if (info) info.textContent = 'Looking up available snapshots…';
+    try {
+      synManifest = await fetchHewsonManifest();
+    } catch (err) {
+      if (info) info.textContent = `Failed to load manifest: ${err instanceof Error ? err.message : err}`;
+      return;
+    }
+    // Pick the first model that has data — fallback if ECMWF isn't precomputed yet
+    const modelsWithData = Object.keys(synManifest.models);
+    if (modelsWithData.length === 0) {
+      if (info) info.textContent = 'No Hewson snapshots on disk yet — run the precompute loop.';
+      return;
+    }
+    if (!modelsWithData.includes(synModel)) synModel = modelsWithData[0];
+    repopulateModelPicker();
+    repopulateInitPicker();
+  }
+  loadSynoptic();
+}
+
 // --- Tab switching ---
 
-function switchTab(tab: 'forecast' | 'verification' | 'stats'): void {
+function switchTab(tab: Tab): void {
   currentTab = tab;
 
   // Tab buttons
@@ -205,6 +581,8 @@ function switchTab(tab: 'forecast' | 'verification' | 'stats'): void {
       if (!verifData) loadVerification();
       else rerender();
     }, 50);
+  } else if (tab === 'synoptic') {
+    setTimeout(() => { initSynopticTab(); }, 50);
   } else if (tab === 'stats') {
     if (!statsLoaded) {
       const frame = $('stats-frame') as HTMLIFrameElement | null;
@@ -228,6 +606,16 @@ async function main(): Promise<void> {
   }
   renderUserInfo(user, 'maps');
 
+  // Synoptic Forecast is admin-gated while it's being calibrated.
+  // Hide the tab button entirely for non-admins so they don't see a
+  // 403-throwing dead end. To release publicly, drop this gate (and
+  // change _synoptic_auth in src/weatherbrief/api/hewson_map.py from
+  // require_admin back to current_user_id).
+  if (!user.is_admin) {
+    document.querySelector('#tabs .tab-btn[data-tab="synoptic"]')?.remove();
+    $('panel-synoptic')?.remove();
+  }
+
   // Experimental banner toggle
   $('experimental-toggle')?.addEventListener('click', () => {
     const detail = $('experimental-detail');
@@ -240,15 +628,19 @@ async function main(): Promise<void> {
   forecastMap = new WeatherMap(container);
   forecastMap.init();
 
+  // Set up the briefing-style info modal (used by the synoptic tab's (i)).
+  initInfoPopup();
+
   // Wire controls
   wireForecastControls();
   wireVerificationControls();
+  wireSynopticControls();
 
   // Tab clicks
   $('tabs')?.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.tab-btn') as HTMLElement | null;
     if (!btn) return;
-    const tab = btn.getAttribute('data-tab') as 'forecast' | 'verification' | 'stats';
+    const tab = btn.getAttribute('data-tab') as Tab;
     if (tab) switchTab(tab);
   });
 
