@@ -118,6 +118,16 @@ def build_synoptic_from_case(
             # ``u850``/``v850`` keys regardless of the requested level —
             # the values are from level L (see Case.fields docstring in
             # frontal/case.py). Diagnostics are correctly computed at L.
+            # Assert the contract so a future Case.fields() rename
+            # (e.g. switching to neutral ``u``/``v``) fails loudly here
+            # rather than silently miscomputing diagnostics for non-850
+            # levels.
+            if "u850" not in fields or "v850" not in fields:
+                raise RuntimeError(
+                    f"Case.fields() returned unexpected keys "
+                    f"{sorted(fields.keys())!r}; era5_case.py expects the "
+                    f"legacy u850/v850 convention. Update both modules in lockstep.",
+                )
             diag = compute_hewson_diagnostics(
                 fields["theta_e"], case.lat, case.lon,
                 fields["u850"], fields["v850"],

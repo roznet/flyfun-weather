@@ -490,6 +490,21 @@ def test_all_metrics_requires_auth(client_anon, hewson_data_dir):
     assert resp.status_code == 401
 
 
+def test_all_metrics_400_unsafe_model(client):
+    """Path-like model names are rejected at the syntactic check —
+    same guard as the slice endpoint, separately exercised so a
+    regression to _validate_common_params is caught on both routes."""
+    resp = client.get(
+        "/api/hewson-map/all-metrics",
+        params={
+            "model": "../etc", "init": _INIT_ISO,
+            "level": 850, "hour": 0,
+        },
+    )
+    assert resp.status_code == 400
+    assert "model" in resp.json()["detail"].lower()
+
+
 # ---------------------------------------------------------------------------
 # Manifest endpoint
 # ---------------------------------------------------------------------------

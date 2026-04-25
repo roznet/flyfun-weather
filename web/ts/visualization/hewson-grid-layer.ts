@@ -89,10 +89,18 @@ export class HewsonGridLayer extends L.Layer {
 
     const size = map.getSize();
     const dpr = window.devicePixelRatio || 1;
-    this.canvas.width = size.x * dpr;
-    this.canvas.height = size.y * dpr;
-    this.canvas.style.width = size.x + 'px';
-    this.canvas.style.height = size.y + 'px';
+    const newW = size.x * dpr;
+    const newH = size.y * dpr;
+    // Setting width/height clears the canvas — even when assigned the same
+    // value. Leaflet fires `move` continuously during pan, so reallocating
+    // the GPU texture every frame is wasted work. Only resize when the
+    // viewport actually changes; otherwise just clear in place.
+    if (this.canvas.width !== newW || this.canvas.height !== newH) {
+      this.canvas.width = newW;
+      this.canvas.height = newH;
+      this.canvas.style.width = size.x + 'px';
+      this.canvas.style.height = size.y + 'px';
+    }
 
     // Re-align canvas to the map container origin (so panning works).
     const topLeft = map.containerPointToLayerPoint([0, 0]);
