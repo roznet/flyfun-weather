@@ -1,9 +1,10 @@
 /** Zustand vanilla store for the Flights management page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { FlightResponse, PackMeta } from './types';
+import type { DebriefStats, FlightResponse, PackMeta } from './types';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
+import { fetchDebriefStats } from '../adapters/debrief-adapter';
 import { errorToMessage } from '../utils';
 
 export interface FlightsState {
@@ -11,6 +12,7 @@ export interface FlightsState {
   flights: FlightResponse[];
   latestPacks: Record<string, PackMeta | null>; // flight_id → latest pack
   activeRefreshes: Record<string, RefreshEntry>; // flight_id → active refresh entry
+  debriefStats: DebriefStats | null;
 
   // UI state
   loading: boolean;
@@ -19,6 +21,7 @@ export interface FlightsState {
 
   // Actions
   loadFlights: () => Promise<void>;
+  loadDebriefStats: () => Promise<void>;
   pollActiveRefreshes: () => Promise<void>;
   createFlight: (waypoints: string[], targetDate: string, opts?: {
     routeName?: string;
@@ -42,6 +45,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   flights: [],
   latestPacks: {},
   activeRefreshes: {},
+  debriefStats: null,
   loading: false,
   error: null,
   selectedIds: new Set(),
@@ -69,6 +73,15 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
     }
   },
 
+  loadDebriefStats: async () => {
+    try {
+      const stats = await fetchDebriefStats();
+      set({ debriefStats: stats });
+    } catch {
+      // Non-critical — leave stats null on failure (panel just doesn't render).
+    }
+  },
+
   pollActiveRefreshes: async () => {
     try {
       const entries = await api.fetchActiveRefreshes();
@@ -76,7 +89,18 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       for (const e of entries) {
         map[e.flight_id] = e;
       }
-      set({ activeRefreshes: map });
+      // Skip set() if contents are identical — otherwise a fresh empty {}
+      // every 5s churns object identity and triggers a full list re-render,
+      // which wipes inline state (e.g. an open debrief form).
+      const current = get().activeRefreshes;
+      const currentKeys = Object.keys(current);
+      const newKeys = Object.keys(map);
+      const sameShape =
+        currentKeys.length === newKeys.length &&
+        newKeys.every((k) => current[k]?.status === map[k]?.status);
+      if (!sameShape) {
+        set({ activeRefreshes: map });
+      }
     } catch {
       // Non-critical — silently ignore polling errors
     }

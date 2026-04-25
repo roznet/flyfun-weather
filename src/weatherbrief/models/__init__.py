@@ -82,5 +82,7 @@ from weatherbrief.models.observations import (  # noqa: F401
 from weatherbrief.models.storage import (  # noqa: F401
     BriefingPackMeta,
     Flight,
+    FlightDebrief,
     FlightProfile,
+    NOTE_MAX_LEN,
 )

@@ -1,9 +1,13 @@
 /** DOM management for the Flights list page. */
 
-import type { FlightResponse, PackMeta } from '../store/types';
-import type { RefreshEntry } from '../adapters/api-adapter';
+import type { DebriefStats, FlightResponse, PackMeta } from '../store/types';
+import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRoute } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
+import { renderDebriefForm } from '../components/debrief-form';
+import { renderDebriefPill, renderDebriefSummary } from '../components/debrief-summary';
+import { renderDebriefStats } from '../components/debrief-stats';
+import { flaggedTagsFromAdvisories } from '../components/debrief-taxonomy';
 
 /** Assessment badge color class. */
 function assessmentClass(assessment: string | null): string {
@@ -18,6 +22,9 @@ function assessmentClass(assessment: string | null): string {
 
 /** Track whether the past-flights section is expanded. */
 let pastExpanded = false;
+
+/** Recent section starts expanded — it's the nudge to debrief. */
+let recentExpanded = true;
 
 /** Render a single flight card. */
 function renderFlightCard(
@@ -78,6 +85,20 @@ function renderFlightCard(
          <input type="checkbox" class="flight-select-checkbox" data-id="${escapeHtml(f.id)}"${checkedAttr}>
        </label>`;
 
+  // Owner-only debrief pill (read-only summary). Only shown for past flights
+  // — future ones can't have been flown yet.
+  let debriefPill = '';
+  if (!isShared && past && f.debrief) {
+    debriefPill = ` ${renderDebriefPill(f.debrief)}`;
+  }
+
+  // Recent-section CTA: clicking expands an inline form below the row.
+  // Only rendered for owner-past-undebriefed flights in the recent section.
+  const isRecent = f.section === 'recent';
+  const debriefAction = isRecent && !isShared && !f.debrief
+    ? `<button class="btn btn-secondary btn-debrief" data-id="${escapeHtml(f.id)}">${t('debrief.openCta')}</button>`
+    : '';
+
   return `
     <div class="flight-card${selectedClass}${isShared ? ' flight-card-shared' : ''}" data-id="${escapeHtml(f.id)}">
       ${selectControl}
@@ -85,7 +106,7 @@ function renderFlightCard(
         <div class="flight-header">
           ${sharedBadge}${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
           <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
-          <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>
+          <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>${debriefPill}
         </div>
         ${ownerLine}
         ${routeLine}
@@ -94,8 +115,10 @@ function renderFlightCard(
         </div>
         <div class="flight-actions">
           <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>
+          ${debriefAction}
           ${ownerOnlyActions}
         </div>
+        <div class="debrief-host" data-flight-id="${escapeHtml(f.id)}"></div>
       </div>
     </div>
   `;
@@ -121,6 +144,8 @@ export function renderFlightList(
   onDelete: (id: string) => void,
   selection: SelectionHandlers,
   onUnsubscribe?: (id: string) => void,
+  stats?: DebriefStats | null,
+  onDebriefChanged?: () => void,
 ): void {
   const container = $('flight-list');
   if (!container) return;
@@ -135,20 +160,43 @@ export function renderFlightList(
     return;
   }
 
-  // Split into active and past flights
-  const active: FlightResponse[] = [];
+  // Bucket by server-supplied section (falls back to past/active split for
+  // older API responses missing the field).
+  const future: FlightResponse[] = [];
+  const recent: FlightResponse[] = [];
   const past: FlightResponse[] = [];
   for (const f of flights) {
-    if (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time)) {
-      past.push(f);
-    } else {
-      active.push(f);
-    }
+    const s = f.section
+      ?? (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time)
+        ? 'past' : 'future');
+    if (s === 'future') future.push(f);
+    else if (s === 'recent') recent.push(f);
+    else past.push(f);
   }
 
-  const activeCards = active.map(f =>
+  const futureCards = future.map(f =>
     renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id], selectedIds.has(f.id)),
   ).join('');
+
+  let recentSection = '';
+  if (recent.length > 0) {
+    const expandedClass = recentExpanded ? '' : ' collapsed';
+    const recentCards = recent.map(f =>
+      renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id], selectedIds.has(f.id)),
+    ).join('');
+    recentSection = `
+      <div class="recent-flights-section${expandedClass}">
+        <button class="recent-flights-toggle" id="recent-flights-toggle">
+          ${t('debrief.recentHeader')} (${recent.length})
+        </button>
+        <div class="recent-flights-list">${recentCards}</div>
+      </div>
+    `;
+  }
+
+  const statsSection = stats
+    ? `<div class="debrief-stats-section">${renderDebriefStats(stats)}</div>`
+    : '';
 
   let pastSection = '';
   if (past.length > 0) {
@@ -166,7 +214,7 @@ export function renderFlightList(
     `;
   }
 
-  container.innerHTML = activeCards + pastSection;
+  container.innerHTML = futureCards + recentSection + statsSection + pastSection;
 
   // Wire toggle
   const toggleBtn = document.getElementById('past-flights-toggle');
@@ -174,6 +222,13 @@ export function renderFlightList(
     pastExpanded = !pastExpanded;
     const section = toggleBtn.closest('.past-flights-section');
     section?.classList.toggle('collapsed', !pastExpanded);
+  });
+
+  const recentToggleBtn = document.getElementById('recent-flights-toggle');
+  recentToggleBtn?.addEventListener('click', () => {
+    recentExpanded = !recentExpanded;
+    const section = recentToggleBtn.closest('.recent-flights-section');
+    section?.classList.toggle('collapsed', !recentExpanded);
   });
 
   // Wire up event listeners
@@ -214,7 +269,52 @@ export function renderFlightList(
     box.addEventListener('click', (e) => e.stopPropagation());
   });
 
+  // Wire debrief CTAs (Recent section).
+  container.querySelectorAll('.btn-debrief').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = (btn as HTMLElement).dataset.id!;
+      const flight = flights.find(f => f.id === id);
+      if (!flight) return;
+      const card = (btn as HTMLElement).closest('.flight-card');
+      const host = card?.querySelector('.debrief-host') as HTMLElement | null;
+      if (!host) return;
+      // Toggle: if already open, close it.
+      if (host.dataset.open === '1') {
+        host.dataset.open = '';
+        host.innerHTML = '';
+        return;
+      }
+      host.dataset.open = '1';
+      host.innerHTML = `<div class="debrief-loading">${escapeHtml(t('debrief.loading'))}</div>`;
+      // Lazy-fetch advisories for the latest pack so the form knows which
+      // categories to surface as outcome questions. Empty list if the pack
+      // doesn't have advisories or the call fails.
+      const pack = latestPacks[id];
+      let flaggedCategories: ReturnType<typeof flaggedTagsFromAdvisories> = [];
+      if (pack && pack.has_advisories) {
+        try {
+          const manifest = await fetchRouteAdvisories(id, pack.fetch_timestamp);
+          flaggedCategories = flaggedTagsFromAdvisories(manifest);
+        } catch {
+          flaggedCategories = [];
+        }
+      }
+      // Bail if user closed it while we were fetching.
+      if (host.dataset.open !== '1') return;
+      renderDebriefForm(host, {
+        existing: flight.debrief ?? null,
+        flaggedCategories,
+        onSaved: () => { host.dataset.open = ''; host.innerHTML = ''; onDebriefChanged?.(); },
+        onDeleted: () => { host.dataset.open = ''; host.innerHTML = ''; onDebriefChanged?.(); },
+        onCancelled: () => { host.dataset.open = ''; host.innerHTML = ''; },
+      });
+    });
+  });
+
   // Subscribed flights aren't bulk-deletable — exclude them from "select all"/"select all past".
+  // "Active" here = future + recent (everything pre-departure plus the recent
+  // undebriefed window the pilot can still act on).
+  const active = [...future, ...recent];
   const selectableActive = active.filter(f => f.role !== 'subscriber').map(f => f.id);
   const selectablePast = past.filter(f => f.role !== 'subscriber').map(f => f.id);
   renderSelectionBar(

@@ -31,6 +31,7 @@ from flyfun_common.db import (
 from flyfun_common.db.models import UserPreferencesRow
 
 from weatherbrief.api.aircraft import router as aircraft_router
+from weatherbrief.api.debriefs import router as debriefs_router
 from weatherbrief.api.pireps import router as pireps_router
 from weatherbrief.api.flights import router as flights_router
 from weatherbrief.api.packs import refresh_router, router as packs_router
@@ -302,6 +303,7 @@ def create_app() -> FastAPI:
             return {"token": token}
 
     app.include_router(aircraft_router, prefix="/api")
+    app.include_router(debriefs_router, prefix="/api")
     app.include_router(pireps_router, prefix="/api")
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")

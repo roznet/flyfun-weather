@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow, FlightRow, PirepRow, UserRow
+from weatherbrief.storage.debriefs import list_debriefed_flight_ids
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,11 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
         ).scalars().all()
     )
 
+    # Flight IDs with a debrief — exempt all of their packs from T2 (the
+    # lightweight briefing.json is what calibration needs; T1 still strips
+    # heavy artifacts to save disk).
+    debriefed_flight_ids = list_debriefed_flight_ids(db)
+
     # Query all packs joined to their flight (for departure_time + user_id).
     stmt = (
         select(BriefingPackRow, FlightRow.departure_time, FlightRow.user_id)
@@ -109,11 +115,12 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
 
         inactive = user_id in inactive_user_ids
         t2_days = config.t2_inactive_days if inactive else config.t2_active_days
+        is_debriefed = pack.flight_id in debriefed_flight_ids
 
         try:
             pack_dir = Path(pack.artifact_path) if pack.artifact_path else None
 
-            if age_days >= t2_days:
+            if age_days >= t2_days and not is_debriefed:
                 freed = _purge_full_pack(pack, pack_dir, config.dry_run)
                 stats.packs_t2 += 1
                 stats.bytes_freed += freed

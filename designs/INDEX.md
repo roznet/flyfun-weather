@@ -128,3 +128,8 @@ Key exports: `compute_frontal_zones_dual`, `classify_front_type`, `build_zone_ti
 ### rzskewt
 Swift package for Skew-T log-P diagrams. Extracted to own repo: `github.com/roznet/rztskew`. Full atmospheric thermodynamics, Canvas rendering, 47 unit tests. Design docs live in that repo's `designs/` directory.
 Key exports: `SkewTView`, `SkewTRenderer`, `SoundingProfile`, `Thermodynamics`
+
+### debrief
+Pilot post-flight judgement (cancelled/flown) on past flights — Phase 1 of #92. Sidecar `flight_debriefs` table with shared 8-tag taxonomy, hybrid chips+text entry with auto-toggle, per-user summary stats panel, three-section flight list (future/recent/past). Debriefed flights' packs are exempt from T2 retention so calibration can re-analyse against ERA5 later.
+Key exports: `FlightDebrief`, `Decision`, `ConditionTag`, `OutcomeValue`, `compute_stats`, `upsert_debrief`, `list_debriefed_flight_ids`
+→ Full doc: debrief.md

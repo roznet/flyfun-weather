@@ -5,7 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+
+from weatherbrief.debriefs.taxonomy import (
+    OUTCOME_CATEGORIES,
+    ConditionTag,
+    Decision,
+    OutcomeValue,
+)
 
 
 class FlightProfile(BaseModel):
@@ -80,3 +87,69 @@ class BriefingPackMeta(BaseModel):
     def is_historical(self) -> bool:
         """True when the briefing was generated for a past departure date."""
         return self.days_out < 0
+
+
+NOTE_MAX_LEN = 300
+
+
+class FlightDebrief(BaseModel):
+    """Pilot post-flight judgement against one flight.
+
+    Outcomes-dict keys are the categories that were *queried* at debrief
+    time (those with an advisory raised on the briefing); values default to
+    ``CONSISTENT``. Categories absent from the dict were not queried — they
+    do not count toward per-category accuracy stats.
+    """
+
+    flight_id: str
+    decision: Decision
+    reasons: list[ConditionTag] = Field(default_factory=list)
+    outcomes: dict[ConditionTag, OutcomeValue] = Field(default_factory=dict)
+    note: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("reasons", mode="before")
+    @classmethod
+    def _dedupe_reasons(cls, v):
+        if isinstance(v, list):
+            seen: set = set()
+            out: list = []
+            for item in v:
+                key = item.value if isinstance(item, ConditionTag) else item
+                if key not in seen:
+                    seen.add(key)
+                    out.append(item)
+            return out
+        return v
+
+    @field_validator("note")
+    @classmethod
+    def _note_length(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > NOTE_MAX_LEN:
+            raise ValueError(f"note must be at most {NOTE_MAX_LEN} characters")
+        return v
+
+    @model_validator(mode="after")
+    def _decision_shape(self) -> FlightDebrief:
+        if self.decision is Decision.FLOWN and self.reasons:
+            raise ValueError("reasons must be empty when decision is 'flown'")
+        if self.decision is Decision.CANCELLED and self.outcomes:
+            raise ValueError("outcomes must be empty when decision is 'cancelled'")
+        if self.decision is Decision.MONITORING:
+            # Monitoring flights aren't real go/no-go decisions, so neither
+            # field has meaning. Note is still allowed (pilot may want to
+            # remember why they set it up).
+            if self.reasons:
+                raise ValueError("reasons must be empty when decision is 'monitoring'")
+            if self.outcomes:
+                raise ValueError("outcomes must be empty when decision is 'monitoring'")
+        for tag in self.outcomes:
+            if tag not in OUTCOME_CATEGORIES:
+                raise ValueError(f"{tag.value} is not a valid outcome category")
+        return self

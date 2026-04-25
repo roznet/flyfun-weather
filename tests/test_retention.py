@@ -419,3 +419,97 @@ class TestRunRetention:
         assert stats.packs_t1 == 1
         assert stats.packs_t2 == 1
         assert stats.errors == 0
+
+
+class TestDebriefExemption:
+    """Flights with a debrief skip T2 entirely; T1 still applies."""
+
+    def _add_debrief(self, db_session, flight_id, decision="cancelled"):
+        from weatherbrief.debriefs.taxonomy import ConditionTag, Decision
+        from weatherbrief.storage.debriefs import upsert_debrief
+
+        upsert_debrief(
+            db_session,
+            flight_id=flight_id,
+            decision=Decision(decision),
+            reasons=[ConditionTag.IMC] if decision == "cancelled" else None,
+        )
+
+    def test_t2_age_pack_kept_when_debriefed(self, db_session, dev_user, tmp_path):
+        """A pack older than t2 with a debrief survives — only T1 applies."""
+        pack_dir = _make_pack_dir(tmp_path)
+        user = db_session.get(UserRow, dev_user)
+        user.last_login_at = _now()
+        _insert_flight(db_session, dev_user, departure_days_ago=200)
+        pack = _insert_pack(db_session, "flight-1", pack_dir)
+        pack_id = pack.id
+        self._add_debrief(db_session, "flight-1")
+
+        config = RetentionConfig(t1_days=30, t2_active_days=180, t2_inactive_days=90)
+        stats = run_retention(db_session, config)
+
+        # Pack row + dir survive (T2 skipped); heavy artifacts removed (T1 applied).
+        assert stats.packs_t2 == 0
+        assert stats.packs_t1 == 1
+        db_session.expire_all()
+        assert db_session.get(BriefingPackRow, pack_id) is not None
+        assert pack_dir.exists()
+        assert (pack_dir / "briefing.json").exists()
+        assert not (pack_dir / "cross_section.json").exists()
+
+    def test_t1_still_strips_when_debriefed(self, db_session, dev_user, tmp_path):
+        """At T1 age (no T2 yet), debriefed packs lose heavy artifacts as normal."""
+        pack_dir = _make_pack_dir(tmp_path)
+        user = db_session.get(UserRow, dev_user)
+        user.last_login_at = _now()
+        _insert_flight(db_session, dev_user, departure_days_ago=40)
+        _insert_pack(db_session, "flight-1", pack_dir)
+        self._add_debrief(db_session, "flight-1", decision="flown")
+
+        config = RetentionConfig(t1_days=30, t2_active_days=180, t2_inactive_days=90)
+        stats = run_retention(db_session, config)
+
+        assert stats.packs_t1 == 1
+        assert stats.packs_t2 == 0
+        assert not (pack_dir / "cross_section.json").exists()
+        assert (pack_dir / "briefing.json").exists()
+
+    def test_undebriefed_old_pack_still_purged(self, db_session, dev_user, tmp_path):
+        """Sanity: without a debrief, the same old pack still gets T2."""
+        pack_dir = _make_pack_dir(tmp_path)
+        user = db_session.get(UserRow, dev_user)
+        user.last_login_at = _now()
+        _insert_flight(db_session, dev_user, departure_days_ago=200)
+        pack = _insert_pack(db_session, "flight-1", pack_dir)
+        pack_id = pack.id
+
+        config = RetentionConfig(t1_days=30, t2_active_days=180, t2_inactive_days=90)
+        stats = run_retention(db_session, config)
+
+        assert stats.packs_t2 == 1
+        db_session.expire_all()
+        assert db_session.get(BriefingPackRow, pack_id) is None
+
+    def test_debrief_exempts_all_packs_for_flight(self, db_session, dev_user, tmp_path):
+        """Multiple packs (refreshes) for the same flight all survive T2."""
+        user = db_session.get(UserRow, dev_user)
+        user.last_login_at = _now()
+        _insert_flight(db_session, dev_user, departure_days_ago=200)
+
+        (tmp_path / "p1").mkdir()
+        (tmp_path / "p2").mkdir()
+        dir1 = _make_pack_dir(tmp_path / "p1")
+        dir2 = _make_pack_dir(tmp_path / "p2")
+        p1 = _insert_pack(db_session, "flight-1", dir1)
+        p2 = _insert_pack(db_session, "flight-1", dir2)
+        p1_id, p2_id = p1.id, p2.id
+
+        self._add_debrief(db_session, "flight-1")
+
+        config = RetentionConfig(t1_days=30, t2_active_days=180, t2_inactive_days=90)
+        stats = run_retention(db_session, config)
+
+        assert stats.packs_t2 == 0
+        db_session.expire_all()
+        assert db_session.get(BriefingPackRow, p1_id) is not None
+        assert db_session.get(BriefingPackRow, p2_id) is not None

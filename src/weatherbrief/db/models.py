@@ -117,6 +117,42 @@ class FlightRow(Base):
     packs: Mapped[list[BriefingPackRow]] = relationship(
         back_populates="flight", cascade="all, delete-orphan"
     )
+    debrief: Mapped["FlightDebriefRow | None"] = relationship(
+        back_populates="flight", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class FlightDebriefRow(Base):
+    """Pilot post-flight judgement (cancelled / flown), one per flight.
+
+    Sidecar table — kept independent from FlightRow so the row can be
+    upserted without touching the flight definition. Cascade-deletes when
+    the flight is removed; the presence of any row exempts all of the
+    flight's packs from T2 retention (see tasks/retention.py).
+    """
+
+    __tablename__ = "flight_debriefs"
+
+    flight_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("flights.id", ondelete="CASCADE"), primary_key=True
+    )
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    reasons_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcomes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    flight: Mapped[FlightRow] = relationship(back_populates="debrief")
 
 
 class FlightSubscriptionRow(Base):
