@@ -105,5 +105,6 @@ export function renderHewsonInfo(metric: HewsonMetric): string {
 }
 
 function escapeAttr(s: string): string {
-  return s.replace(/"/g, '&quot;').replace(/&(?!quot;)/g, '&amp;');
+  // Standard order: & first (so &amp; doesn't double-escape), then quotes.
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }

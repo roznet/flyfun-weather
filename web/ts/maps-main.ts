@@ -197,6 +197,21 @@ function currentSynapshot(): HewsonManifestSnapshot | null {
   return list.find((s) => s.init_time === synInit) ?? null;
 }
 
+function repopulateModelPicker(): void {
+  const group = $('syn-model-picker');
+  if (!group || !synManifest) return;
+  const models = Object.keys(synManifest.models).sort();
+  group.innerHTML = '';
+  for (const m of models) {
+    const btn = document.createElement('button');
+    btn.className = 'btn-toggle';
+    btn.dataset.model = m;
+    if (m === synModel) btn.classList.add('active');
+    btn.textContent = m.toUpperCase();
+    group.appendChild(btn);
+  }
+}
+
 function repopulateInitPicker(): void {
   const sel = $('syn-init-picker') as HTMLSelectElement | null;
   if (!sel || !synManifest) return;
@@ -207,12 +222,14 @@ function repopulateInitPicker(): void {
   for (const snap of sorted) {
     const opt = document.createElement('option');
     opt.value = snap.init_time;
-    // Compact label: "24 Apr 12Z"
+    // Compact label: "24 Apr 12Z" — for ERA5 the date can be any year.
     const dt = new Date(snap.init_time);
     const dd = String(dt.getUTCDate()).padStart(2, '0');
     const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getUTCMonth()];
     const hh = String(dt.getUTCHours()).padStart(2, '0');
-    opt.textContent = `${dd} ${mon} ${hh}Z`;
+    const yr = dt.getUTCFullYear();
+    const thisYr = new Date().getUTCFullYear();
+    opt.textContent = yr === thisYr ? `${dd} ${mon} ${hh}Z` : `${dd} ${mon} ${yr} ${hh}Z`;
     sel.appendChild(opt);
   }
   // Pick newest if current init isn't in this model's list
@@ -220,7 +237,31 @@ function repopulateInitPicker(): void {
     synInit = sorted[0]?.init_time ?? null;
   }
   if (synInit) sel.value = synInit;
+  reconfigureLevelPicker();
   reconfigureHourSlider();
+}
+
+function reconfigureLevelPicker(): void {
+  const group = $('syn-level-picker');
+  if (!group) return;
+  const snap = currentSynapshot();
+  const available = new Set(snap?.levels ?? [925, 850, 700]);
+  let activeStillValid = false;
+  for (const btn of group.querySelectorAll<HTMLButtonElement>('button')) {
+    const lvl = parseInt(btn.dataset.level || '0');
+    const ok = available.has(lvl);
+    btn.disabled = !ok;
+    btn.classList.toggle('disabled', !ok);
+    if (lvl === synLevel && ok) activeStillValid = true;
+  }
+  // If the current level isn't in the snapshot, pick the first available.
+  if (!activeStillValid && snap) {
+    const fallback = snap.levels.includes(850) ? 850 : snap.levels[0];
+    if (fallback !== undefined) {
+      synLevel = fallback;
+      setActive('syn-level-picker', String(synLevel), 'level');
+    }
+  }
 }
 
 function reconfigureHourSlider(): void {
@@ -356,10 +397,8 @@ async function initSynopticTab(): Promise<void> {
       if (info) info.textContent = 'No Hewson snapshots on disk yet — run the precompute loop.';
       return;
     }
-    if (!modelsWithData.includes(synModel)) {
-      synModel = modelsWithData[0];
-      setActive('syn-model-picker', synModel, 'model');
-    }
+    if (!modelsWithData.includes(synModel)) synModel = modelsWithData[0];
+    repopulateModelPicker();
     repopulateInitPicker();
   }
   loadSynoptic();

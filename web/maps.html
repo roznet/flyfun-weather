@@ -239,14 +239,12 @@
     <div id="panel-synoptic" class="tab-panel">
       <div class="maps-controls synoptic-controls" id="controls-synoptic">
         <label>Model</label>
-        <div class="btn-group" id="syn-model-picker">
-          <button class="btn-toggle active" data-model="ecmwf">ECMWF</button>
-          <button class="btn-toggle" data-model="gfs">GFS</button>
-          <button class="btn-toggle" data-model="icon">ICON</button>
-        </div>
+        <!-- Buttons populated from /api/hewson-map/manifest at first tab show -->
+        <div class="btn-group" id="syn-model-picker"></div>
         <label>Init</label>
         <select id="syn-init-picker"></select>
         <label>Level</label>
+        <!-- Hardcoded buttons; disabled per-snapshot based on the manifest's "levels" array -->
         <div class="btn-group" id="syn-level-picker">
           <button class="btn-toggle" data-level="925">925 hPa<br><span style="font-size:0.7em;opacity:0.7">2,500 ft</span></button>
           <button class="btn-toggle active" data-level="850">850 hPa<br><span style="font-size:0.7em;opacity:0.7">5,000 ft</span></button>

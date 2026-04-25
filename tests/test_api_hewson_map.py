@@ -263,11 +263,25 @@ def test_get_slice_404_when_snapshot_missing(client):
     assert "no snapshot" in resp.json()["detail"].lower()
 
 
-def test_get_slice_400_invalid_model(client):
+def test_get_slice_404_unknown_model(client):
+    """Unknown models return 404 (no snapshot on disk), not 400. The frontend
+    discovers valid models via /manifest, which scans subdirs dynamically."""
     resp = client.get(
         "/api/hewson-map",
         params={
             "model": "wrf", "init": _INIT_ISO,
+            "level": 850, "metric": "advection", "hour": 0,
+        },
+    )
+    assert resp.status_code == 404
+
+
+def test_get_slice_400_unsafe_model(client):
+    """Path-like model names are rejected at the syntactic check."""
+    resp = client.get(
+        "/api/hewson-map",
+        params={
+            "model": "../etc", "init": _INIT_ISO,
             "level": 850, "metric": "advection", "hour": 0,
         },
     )

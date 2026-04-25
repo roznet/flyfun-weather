@@ -23,6 +23,7 @@ export class HewsonGridLayer extends L.Layer {
   private pane: HTMLElement | null = null;
   private state: RenderState | null = null;
   private opacity = 0.5;
+  private map: L.Map | null = null;
 
   /** Replace the slice and trigger a redraw. */
   setSlice(slice: HewsonSlice, vmin?: number, vmax?: number): void {
@@ -54,6 +55,7 @@ export class HewsonGridLayer extends L.Layer {
   }
 
   onAdd(map: L.Map): this {
+    this.map = map;
     if (!map.getPane('hewsonGridPane')) {
       this.pane = map.createPane('hewsonGridPane');
       this.pane.style.zIndex = '350';
@@ -77,11 +79,12 @@ export class HewsonGridLayer extends L.Layer {
     map.off('move zoom viewreset resize', this.redraw, this);
     if (this.canvas?.parentNode) this.canvas.parentNode.removeChild(this.canvas);
     this.canvas = null;
+    this.map = null;
     return this;
   }
 
   private redraw = (): void => {
-    const map = (this as any)._map as L.Map | undefined;
+    const map = this.map;
     if (!map || !this.canvas) return;
 
     const size = map.getSize();

@@ -11,6 +11,8 @@ Usage:
     python -m weatherbrief.hewson precompute --levels 925,850,700 --force
     python -m weatherbrief.hewson list
     python -m weatherbrief.hewson purge --retention-hours 24
+    python -m weatherbrief.hewson era5-case \
+        --case data/calibration/2023-11-02_era5_ciaran --label ciaran
 """
 
 from __future__ import annotations
@@ -110,6 +112,18 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_era5_case(args: argparse.Namespace) -> int:
+    from weatherbrief.hewson.era5_case import build_synoptic_from_case
+
+    out_path = build_synoptic_from_case(
+        case_dir=args.case,
+        output_dir=args.output_dir,
+        levels=args.levels,
+    )
+    print(f"Wrote {out_path}")
+    return 0
+
+
 def _cmd_purge(args: argparse.Namespace) -> int:
     removed = purge_old_snapshots(
         model=args.model,
@@ -190,6 +204,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--retention-hours", type=int, default=DEFAULT_RETENTION_HOURS,
     )
     p_pu.set_defaults(func=_cmd_purge)
+
+    # era5-case
+    p_e5 = sub.add_parser(
+        "era5-case",
+        help="Build a synoptic snapshot from an existing ERA5 calibration Case "
+             "(historical events, dev-only).",
+    )
+    p_e5.add_argument(
+        "--case", type=Path, required=True,
+        help="Path to a Case directory (must contain meta.json and raw/era5.npz).",
+    )
+    p_e5.add_argument(
+        "--levels", type=_parse_levels, default=None,
+        help="Restrict to a subset of levels (default: all in the case).",
+    )
+    p_e5.add_argument(
+        "--output-dir", type=Path, default=None,
+        help="Override snapshot root (default: ${DATA_DIR}/hewson)",
+    )
+    p_e5.set_defaults(func=_cmd_era5_case)
 
     return parser
 

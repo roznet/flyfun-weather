@@ -33,7 +33,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from flyfun_common.db import current_user_id
 from weatherbrief.hewson.precompute import (
     DEFAULT_LEVELS,
-    DEFAULT_MODELS,
     resolve_output_dir,
     snapshot_path,
 )
@@ -139,23 +138,26 @@ def get_manifest(
     Used by the frontend to populate model/init/level/hour pickers without
     needing to know the on-disk layout. Cheap: reads only metadata fields,
     not the metric arrays.
+
+    Scans every subdirectory under the snapshot root (not just the live
+    forecast models) so ERA5 / historical-event cases dropped in by the
+    ``era5-case`` CLI surface automatically. The ``terrain_mask.npz`` file
+    that lives alongside the per-model dirs is filtered out by checking
+    for ``.npz`` siblings inside the subdirectory.
     """
     root = resolve_output_dir()
     if not root.exists():
         return {"models": {}}
 
     out: dict[str, list[dict[str, Any]]] = {}
-    for model in sorted(DEFAULT_MODELS):
-        subdir = root / model
-        if not subdir.is_dir():
-            continue
+    for subdir in sorted(p for p in root.iterdir() if p.is_dir()):
         snaps: list[dict[str, Any]] = []
         for path in sorted(subdir.glob("*.npz")):
             meta = _read_snapshot_meta(path)
             if meta is not None:
                 snaps.append(meta)
         if snaps:
-            out[model] = snaps
+            out[subdir.name] = snaps
     return {"models": out}
 
 
@@ -182,10 +184,13 @@ def get_slice(
     The ``(model, init)`` tuple identifies an immutable snapshot file —
     response is cacheable for a long time.
     """
-    if model not in DEFAULT_MODELS:
+    # Cheap syntactic checks first; missing snapshots fall through to 404
+    # below. Model is validated only for shape (no path separators) so ERA5
+    # / historical-event cases work without a hardcoded whitelist.
+    if not model or "/" in model or "\\" in model or model.startswith("."):
         raise HTTPException(
             status_code=400,
-            detail=f"model must be one of {DEFAULT_MODELS}; got {model!r}",
+            detail=f"model must be a simple identifier; got {model!r}",
         )
     if level not in DEFAULT_LEVELS:
         raise HTTPException(

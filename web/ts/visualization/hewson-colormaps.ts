@@ -60,19 +60,23 @@ const PuOr_r = [
 ];
 
 export const COLORMAPS: Record<HewsonMetric, ColormapSpec> = {
-  // θe spans roughly 270–325 K in European weather; this default keeps the
-  // diverging midpoint near 295 K which is close to the climatological mean.
+  // θe at 850 hPa runs ~285-325 K in mid-latitudes, with tropical /
+  // convection-prone air starting around 335 K (per Hewson catalog
+  // calibration in hewson-metrics-catalog.ts). vmax=340 keeps the full
+  // tropical range visible without clipping.
   theta_e: {
     type: 'diverging',
     ramp: RdYlBu_r,
     defaultVmin: 270,
-    defaultVmax: 320,
+    defaultVmax: 340,
     unit: 'K',
     label: 'θe (equivalent potential temperature)',
     blurb:
-      '> 320 K = tropical/subtropical air (convection risk). 290–310 K normal mid-latitude. < 280 K cold polar.',
+      '> 335 K tropical/subtropical · 290–325 K mid-latitude · < 285 K polar (thresholds at 850 hPa).',
   },
   // Gradient is one-sided; CLI uses vmax=10 K/100 km for thermal fronts.
+  // Hewson 1998 thresholds (at 850 hPa): 4–6 K/100 km is "classical front",
+  // > 9 is sharp. See hewson-metrics-catalog.ts for the full per-level table.
   gradient: {
     type: 'sequential',
     ramp: YlOrRd,
@@ -81,7 +85,7 @@ export const COLORMAPS: Record<HewsonMetric, ColormapSpec> = {
     unit: 'K / 100 km',
     label: '|∇θe| (boundary intensity)',
     blurb:
-      '< 2 benign · 2–4 noticeable · 4–8 significant boundary (cloud/precip) · > 8 classical front · > 12 sharp front (SIGMET-worthy).',
+      '< 1 negligible · 1–3 weak · 4–6 classical front · > 6 strong · > 9 very sharp (thresholds at 850 hPa).',
   },
   // 2nd-derivative fields use ±2 K/(100 km)² as the "sharp transition" gate.
   neg_laplacian: {
