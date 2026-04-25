@@ -77,7 +77,7 @@ TS mirror in `web/ts/components/debrief-taxonomy.ts` must stay in sync
 ### Section assignment
 
 - **future**: `departure_time >= now`
-- **recent**: most-recent `RECENT_SECTION_CAP` (= 2) past undebriefed flights whose `departure_time` is newer than the user's most-recently-debriefed flight. Empty when caught up.
+- **recent**: most-recent `RECENT_SECTION_CAP` (= 2) past undebriefed flights whose `departure_time` is within the last `RECENT_SECTION_MAX_AGE_DAYS` (= 30) days. Independent of debrief history — debriefing one flight doesn't pull a third into the slot, but anything older than the window drops to Past so the nudge stays bounded.
 - **past**: everything else
 
 The cap is hard-coded in `api/flights.py` for Phase 1; revisit if usage

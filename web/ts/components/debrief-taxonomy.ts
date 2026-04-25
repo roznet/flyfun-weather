@@ -81,7 +81,12 @@ export function matchTagsInText(text: string): Set<ConditionTagId> {
 
 /** Advisory id → debrief tag. Per-id rather than per-category because some
  *  categories (e.g. ``airport``) cover both wind and visibility-style
- *  concerns. ``model`` advisories aren't weather phenomena → no mapping. */
+ *  concerns. ``model`` advisories aren't weather phenomena → no mapping.
+ *
+ *  Phase 2 gap: no advisory currently maps to FRZ or VIS, so those tags
+ *  can't be auto-flagged on the outcome form even when the pilot
+ *  experienced them. Either add advisory ids covering freezing precip /
+ *  visibility, or surface those two tags via a separate hookup path. */
 const ADVISORY_TAG_MAP: Record<string, ConditionTagId> = {
   icing_escape:      'ICE',
   fiki_icing:        'ICE',
