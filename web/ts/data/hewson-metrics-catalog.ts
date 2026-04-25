@@ -84,7 +84,9 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
         level: 925, altitude_label: '~2,500 ft',
         rows: [
           { range: '< 290', label: 'Polar / arctic', risk: 'low', meaning: 'Cold continental or arctic origin. Showers + in-cloud icing in winter.' },
+          { range: '290–295', label: 'Cold transition', risk: 'low', meaning: 'Winter cold pool or post-frontal cold air. Stable, often clear and chilly.' },
           { range: '295–330', label: 'Mid-latitude', risk: 'none', meaning: 'Ordinary European boundary-layer air across the year.' },
+          { range: '330–335', label: 'Warm transition', risk: 'moderate', meaning: 'Pre-tropical surface air; building CAPE if a trigger is around.' },
           { range: '> 335', label: 'Tropical / subtropical', risk: 'high', meaning: 'Warm humid airmass — convection-prone.' },
         ],
       },
@@ -93,7 +95,9 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
         note: 'The classical synoptic level. A normal UK summer afternoon sits around 305–315 K — not tropical. Tropical / convection-prone air starts around 335 K here.',
         rows: [
           { range: '< 285', label: 'Polar', risk: 'low', meaning: 'Cold polar / arctic. Showers, in-cloud icing.' },
+          { range: '285–290', label: 'Cold transition', risk: 'low', meaning: 'Cold-shoulder mid-latitude air — winter cold pool or post-frontal regime.' },
           { range: '290–325', label: 'Mid-latitude', risk: 'none', meaning: 'Ordinary mid-latitude air. UK summer ≈ 305–315 K.' },
+          { range: '325–335', label: 'Warm transition', risk: 'moderate', meaning: 'Pre-convective regime — CAPE building, but not yet tropical. Watch for thunderstorm triggers.' },
           { range: '> 335', label: 'Tropical / subtropical', risk: 'high', meaning: 'Operationally convection-prone — Mediterranean / Saharan / tropical maritime origin.' },
         ],
       },
@@ -101,7 +105,9 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
         level: 700, altitude_label: '~10,000 ft',
         rows: [
           { range: '< 275', label: 'Polar', risk: 'low', meaning: 'Cold mid-tropospheric air aloft.' },
+          { range: '275–280', label: 'Cold transition', risk: 'low', meaning: 'Cool free troposphere — stable, often post-frontal.' },
           { range: '280–310', label: 'Mid-latitude', risk: 'none', meaning: 'Free-troposphere European air.' },
+          { range: '310–320', label: 'Warm transition', risk: 'moderate', meaning: 'Pre-tropical mid-troposphere — often the leading signal of warm advection 6–24 h ahead of the surface.' },
           { range: '> 320', label: 'Tropical / subtropical', risk: 'high', meaning: 'Tropical mid-troposphere — leads warm advection at lower levels by 6–24 h.' },
         ],
       },

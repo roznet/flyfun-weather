@@ -393,7 +393,15 @@ async function changeActiveMetric(): Promise<void> {
 
   if (synActiveGrid) {
     const values = synActiveGrid.metrics[synMetric];
-    if (!values) return;
+    if (!values) {
+      // Snapshot is missing this metric (legacy build). Clear the canvas
+      // and surface an explicit message — silently returning would leave
+      // the picker showing one metric and the map showing another.
+      synopticMap.clear();
+      const info = $('map-info-synoptic');
+      if (info) info.textContent = `Metric "${synMetric}" not available in this snapshot.`;
+      return;
+    }
     const single = {
       model: synActiveGrid.model,
       init_time: synActiveGrid.init_time,
