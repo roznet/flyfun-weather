@@ -59,6 +59,8 @@ export interface HewsonCatalogEntry {
   /** Where this field can mislead. */
   limitations?: string;
   wikipedia?: string;
+  /** "explain how/why ..." continuation pasted into the AI prompt. */
+  llm_prompt?: string;
 }
 
 export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
@@ -115,6 +117,7 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
     `,
     limitations: `θe at one level can't see vertical structure (need multiple levels). It's also free-atmosphere weather — local boundary-layer phenomena (fog at 1,500 ft, low stratus) won't appear in θe at 850.`,
     wikipedia: 'https://en.wikipedia.org/wiki/Equivalent_potential_temperature',
+    llm_prompt: 'explain how θe (equivalent potential temperature) is conserved through dry and moist adiabatic processes, why it works as an air-mass tracer for VFR/IFR planning, and how comparing θe at 925, 850 and 700 hPa over the same point reveals air-mass character and convective potential',
   },
 
   // -------------------------------------------------------------------------
@@ -168,6 +171,7 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
     `,
     limitations: `These thresholds are at our 0.25° grid with the smoothing in compute_hewson_diagnostics. Higher-resolution / less-smoothed data can produce stronger raw values for the same physical front.`,
     wikipedia: 'https://en.wikipedia.org/wiki/Weather_front',
+    llm_prompt: 'explain how the magnitude of the θe gradient identifies frontal zones in synoptic analysis, why Hewson 1998 placed the "classical front" threshold at 4–6 K/100 km at 850 hPa, and how grid resolution and smoothing scale affect the raw values pilots see on a forecast map',
   },
 
   // -------------------------------------------------------------------------
@@ -185,6 +189,8 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
     ],
     pilot_notes: `<p>High −∇²θe combined with high |∇θe| = sharp <em>and</em> strong front — least friendly for VFR. (Note: "expect SIGMETs in the area" is the right framing — SIGMETs are issued for specific phenomena, not gradient magnitudes.)</p>`,
     limitations: `At 925 the field is noisy from coastline / terrain artefacts — interpret cautiously. At 850 and 700 it's the cleanest "is this front sharp?" signal.`,
+    wikipedia: 'https://en.wikipedia.org/wiki/Frontogenesis',
+    llm_prompt: 'explain how the negative Laplacian of θe distinguishes sharp narrow-band fronts (squall-line type) from broad gradient zones, and how this maps to Hewson\'s frontogenesis framework where second derivatives identify zones of locally maximum gradient',
   },
 
   // -------------------------------------------------------------------------
@@ -193,12 +199,7 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
     unit: 'K / (100 km)²',
     vibe: 'Where exactly is the front line drawn?',
     what_it_is: `
-      <p>Hewson's locator for the front <em>line</em>. Defined as the gradient of |∇θe| projected onto the direction of ∇θe. Geometrically:</p>
-      <ul>
-        <li>TFP <strong>maximum</strong>: warm-side boundary of the frontal zone</li>
-        <li>TFP <strong>zero crossing</strong> (going + → − as you move warm→cold): <strong>the front line itself</strong></li>
-        <li>TFP <strong>minimum</strong>: cold-side boundary of the frontal zone</li>
-      </ul>
+      <p>Hewson's locator for the front <em>line</em>. Mathematically: the gradient of |∇θe| projected onto the direction of ∇θe. The function reaches its <strong>maximum</strong> on the warm-side boundary of the frontal zone, <strong>zero-crosses</strong> (positive → negative as you move warm→cold) at the front line itself, and reaches its <strong>minimum</strong> on the cold-side boundary.</p>
       <p>So TFP is a <strong>position indicator</strong>, not a tendency indicator. Whether conditions are deteriorating or improving for you depends on which way the front is moving — that's an advection question. Use −V·∇θe and ∂θe/∂t for tendency; use TFP to see <em>where the front line is</em>.</p>
     `,
     what_map_shows: `Diverging field. The <strong>zero contour</strong> (going + → −) is the analyzed front line; the sign tells you which side of the frontal zone you're on.`,
@@ -209,6 +210,7 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
     ],
     pilot_notes: `<p>Combined with wind direction and the −V·∇θe map, TFP tells you whether the front is moving toward you or away. Two pilots in the same TFP-positive area can experience very different weather depending on whether they're flying with or against the front's motion.</p>`,
     limitations: `TFP at <strong>850</strong> is canonical (Hewson's original work). At <strong>925</strong> it is noisier (bumpy boundary-layer θe). At <strong>700</strong> the field is smoother but the front is <em>aloft</em> — surface position can be displaced 50–150 km from the 700 zero-contour because fronts tilt with height (warm fronts slope forward, cold fronts slope backward).`,
+    llm_prompt: 'explain the Thermal Front Parameter (TFP) from Hewson 1998 — its mathematical definition as the directional derivative of |∇θe| along the gradient, what its zero crossing represents, why it is a position indicator rather than a tendency indicator, and how forecasters use the locating equation alongside it',
   },
 
   // -------------------------------------------------------------------------
@@ -256,6 +258,7 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
       <p>Useful pattern: warm advection at 700 + 850 with cold advection at 925 = warm front aloft over cold pool → high icing, persistent IFR.</p>
     `,
     wikipedia: 'https://en.wikipedia.org/wiki/Advection',
+    llm_prompt: 'explain how horizontal advection of θe (−V·∇θe) predicts ceilings, visibility and icing trends ahead of warm and cold fronts, why the sign convention works the way it does (positive = warm advection), and how to recognise occluded or stationary boundaries from a high-gradient / low-advection signature',
   },
 
   // -------------------------------------------------------------------------
@@ -285,5 +288,6 @@ export const HEWSON_CATALOG: Record<HewsonMetric, HewsonCatalogEntry> = {
       </ul>
     `,
     limitations: `At <strong>925</strong> the diurnal cycle is large — expect ±1–2 K/h just from sun/night, even without synoptic change. At <strong>850 and 700</strong>, virtually all signal is genuine air-mass change.`,
+    llm_prompt: 'explain how the local tendency ∂θe/∂t differs from the advection term −V·∇θe in the full θe budget equation, how their disagreement reveals diabatic processes (daytime heating, latent heat release in convection, radiative cooling), and what operational situations make this decomposition useful for thunderstorm and overnight-cooling forecasting',
   },
 };

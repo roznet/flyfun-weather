@@ -2317,6 +2317,25 @@ label {
   line-height: 1.5;
 }
 
+.popup-section ul,
+.popup-section ol {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0.3rem 0 0.4rem;
+  padding-left: 1.2rem;
+}
+.popup-section ul li,
+.popup-section ol li {
+  margin: 0.15rem 0;
+}
+.popup-section ul {
+  list-style-type: disc;
+}
+.popup-section ul li::marker {
+  color: var(--text-muted);
+  font-size: 0.75em;
+}
+
 .popup-limitations {
   opacity: 0.8;
 }

@@ -88,6 +88,22 @@ export function renderHewsonInfo(metric: HewsonMetric): string {
       ${entry.wikipedia ? `<div class="popup-section popup-learn-more">
         <a href="${entry.wikipedia}" target="_blank" rel="noopener noreferrer">Learn more on Wikipedia ↗</a>
       </div>` : ''}
+      <div class="popup-section popup-discuss-ai" data-metric-name="${escapeAttr(entry.name)}"${entry.llm_prompt ? ` data-llm-prompt="${escapeAttr(entry.llm_prompt)}"` : ''}>
+        <div class="popup-discuss-header">
+          <span class="popup-discuss-label">Discuss with AI</span>
+          <span class="popup-discuss-hint">A prompt is copied to clipboard — just paste it in the new chat</span>
+        </div>
+        <div class="popup-discuss-buttons">
+          <a href="https://claude.ai/new" target="_blank" rel="noopener noreferrer" class="popup-ai-btn popup-ai-claude" data-ai="claude">Claude</a>
+          <a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer" class="popup-ai-btn popup-ai-chatgpt" data-ai="chatgpt">ChatGPT</a>
+          <a href="https://gemini.google.com/app" target="_blank" rel="noopener noreferrer" class="popup-ai-btn popup-ai-gemini" data-ai="gemini">Gemini</a>
+        </div>
+        <div class="popup-discuss-toast" hidden>Prompt copied! Paste it into the chat.</div>
+      </div>
     </div>
   `;
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/"/g, '&quot;').replace(/&(?!quot;)/g, '&amp;');
 }

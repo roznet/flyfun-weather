@@ -56,7 +56,9 @@ export function showLayerInfo(layerId: string, metricId: string): void {
   wirePopupButtons();
 }
 
-/** Show the popup with arbitrary HTML content. Used by advisory info buttons. */
+/** Show the popup with arbitrary HTML content. Used by advisory info buttons
+ * and the synoptic-tab Hewson info popups. If the supplied HTML includes a
+ * .popup-discuss-ai block, the AI-prompt buttons will be wired automatically. */
 export function showPopupContent(html: string): void {
   if (!popupEl || !backdropEl) return;
 
@@ -66,11 +68,7 @@ export function showPopupContent(html: string): void {
   `;
 
   backdropEl.classList.add('active');
-
-  const closeBtn = popupEl.querySelector('.metric-popup-close');
-  if (closeBtn) {
-    closeBtn.addEventListener('click', hideMetricInfo);
-  }
+  wirePopupButtons();
 }
 
 export function hideMetricInfo(): void {
