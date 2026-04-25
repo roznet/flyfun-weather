@@ -23,16 +23,34 @@ export interface ColormapSpec {
   type: 'sequential' | 'diverging';
   /** 9 evenly-spaced hex anchors in [0, 1]. */
   ramp: string[];
-  /** Default lower bound for color mapping. */
+  /** Default lower bound for color mapping (calibrated to advisory triggers). */
   defaultVmin: number;
   /** Default upper bound. For diverging metrics this is the symmetric |max|. */
   defaultVmax: number;
+  /** Storm-scale lower bound — wider range so extreme events have visual headroom. */
+  stormVmin: number;
+  /** Storm-scale upper bound. */
+  stormVmax: number;
   /** Pilot-facing units (used in legend). */
   unit: string;
   /** Pilot-facing display name (legend title, popovers). */
   label: string;
   /** Short pilot-facing interpretation drawn from § 2 of the design doc. */
   blurb: string;
+}
+
+/** Which colormap range preset to use. */
+export type ColorScale = 'default' | 'storm';
+
+/** Resolve (vmin, vmax) for a metric × scale. */
+export function vRangeFor(
+  metric: HewsonMetric,
+  scale: ColorScale,
+): { vmin: number; vmax: number } {
+  const spec = COLORMAPS[metric];
+  return scale === 'storm'
+    ? { vmin: spec.stormVmin, vmax: spec.stormVmax }
+    : { vmin: spec.defaultVmin, vmax: spec.defaultVmax };
 }
 
 // Matplotlib RdBu_r (cold blue → white → warm red).
@@ -63,12 +81,15 @@ export const COLORMAPS: Record<HewsonMetric, ColormapSpec> = {
   // θe at 850 hPa runs ~285-325 K in mid-latitudes, with tropical /
   // convection-prone air starting around 335 K (per Hewson catalog
   // calibration in hewson-metrics-catalog.ts). vmax=340 keeps the full
-  // tropical range visible without clipping.
+  // tropical range visible without clipping. Storm scale is identical —
+  // θe magnitudes don't extend much beyond 340 even in extremes.
   theta_e: {
     type: 'diverging',
     ramp: RdYlBu_r,
     defaultVmin: 270,
     defaultVmax: 340,
+    stormVmin: 270,
+    stormVmax: 340,
     unit: 'K',
     label: 'θe (equivalent potential temperature)',
     blurb:
@@ -77,22 +98,30 @@ export const COLORMAPS: Record<HewsonMetric, ColormapSpec> = {
   // Gradient is one-sided; CLI uses vmax=10 K/100 km for thermal fronts.
   // Hewson 1998 thresholds (at 850 hPa): 4–6 K/100 km is "classical front",
   // > 9 is sharp. See hewson-metrics-catalog.ts for the full per-level table.
+  // Storm scale: vmax=20, so Ciarán-class peaks (~45) saturate but rare events
+  // have visual headroom over routine fronts.
   gradient: {
     type: 'sequential',
     ramp: YlOrRd,
     defaultVmin: 0,
     defaultVmax: 10,
+    stormVmin: 0,
+    stormVmax: 20,
     unit: 'K / 100 km',
     label: '|∇θe| (boundary intensity)',
     blurb:
       '< 1 negligible · 1–3 weak · 4–6 classical front · > 6 strong · > 9 very sharp (thresholds at 850 hPa).',
   },
   // 2nd-derivative fields use ±2 K/(100 km)² as the "sharp transition" gate.
+  // Storm scale ±5 — Ciarán's peaks reach ±13, but ±5 keeps sharp/smooth
+  // separation visible for routine fronts.
   neg_laplacian: {
     type: 'diverging',
     ramp: RdBu_r,
     defaultVmin: -2,
     defaultVmax: 2,
+    stormVmin: -5,
+    stormVmax: 5,
     unit: 'K / (100 km)²',
     label: '−∇²θe (sharpness)',
     blurb:
@@ -103,27 +132,36 @@ export const COLORMAPS: Record<HewsonMetric, ColormapSpec> = {
     ramp: PuOr_r,
     defaultVmin: -2,
     defaultVmax: 2,
+    stormVmin: -5,
+    stormVmax: 5,
     unit: 'K / (100 km)²',
     label: 'TFP (front side)',
     blurb:
       'TFP > 0 warm side, conditions deteriorating · ≈ 0 at sharpest part · < 0 cold side, improving.',
   },
-  // Advection thresholds from § 2.5: 1 K/h significant, 2 K/h rapid.
+  // Advection thresholds from § 2.5: 1 K/h significant, 2 K/h rapid. Storm
+  // scale ±5: Ciarán hit ±21 K/h but ±5 still places "1 K/h significant"
+  // visibly in the middle of the bar, with extreme storms saturating.
   advection: {
     type: 'diverging',
     ramp: RdBu_r,
     defaultVmin: -2,
     defaultVmax: 2,
+    stormVmin: -5,
+    stormVmax: 5,
     unit: 'K / h',
     label: '−V·∇θe (warm/cold advection)',
     blurb:
       'Red = warm advection (ceilings drop, icing risk rises). Blue = cold advection (clearing, gusty showers).',
   },
+  // Tendency rarely reaches advection-scale magnitudes; ±3 covers Ciarán's ±4.6.
   tendency: {
     type: 'diverging',
     ramp: RdBu_r,
     defaultVmin: -2,
     defaultVmax: 2,
+    stormVmin: -3,
+    stormVmax: 3,
     unit: 'K / h',
     label: '∂θe/∂t (tendency)',
     blurb:

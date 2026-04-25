@@ -162,7 +162,69 @@ def get_manifest(
 
 
 # ---------------------------------------------------------------------------
-# Slice
+# Shared param validation + snapshot lookup
+# ---------------------------------------------------------------------------
+
+
+def _validate_common_params(model: str, level: int) -> None:
+    """Apply the cheap syntactic checks shared by every read endpoint."""
+    if not model or "/" in model or "\\" in model or model.startswith("."):
+        raise HTTPException(
+            status_code=400,
+            detail=f"model must be a simple identifier; got {model!r}",
+        )
+    if level not in DEFAULT_LEVELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"level must be one of {DEFAULT_LEVELS}; got {level}",
+        )
+
+
+def _resolve_snapshot_path(model: str, init: str) -> tuple[Path, int]:
+    """Parse the init timestamp and return ``(path, init_time_unix)``.
+
+    Raises 404 if the snapshot file isn't on disk; raises 400 from
+    ``_parse_init`` if the init string is malformed.
+    """
+    init_time_unix = _parse_init(init)
+    path = snapshot_path(model, init_time_unix)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No snapshot for model={model} init={init}",
+        )
+    return path, init_time_unix
+
+
+def _resolve_hour_index(npz, hour: int) -> tuple[int, int, str]:
+    """Validate the ``hour`` param against the snapshot's stride/horizon
+    and return ``(idx, stride_hours, valid_time_iso)``."""
+    stride_hours = int(npz["stride_hours"]) if "stride_hours" in npz.files else 1
+    valid_times = npz["valid_times"]
+    n_time = valid_times.shape[0]
+
+    if hour % stride_hours != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"hour={hour} is not aligned to this snapshot's stride "
+                f"({stride_hours} h). Valid hours are 0, {stride_hours}, "
+                f"{2 * stride_hours}, ..."
+            ),
+        )
+    idx = hour // stride_hours
+    if idx >= n_time:
+        max_hour = (n_time - 1) * stride_hours
+        raise HTTPException(
+            status_code=400,
+            detail=f"hour={hour} is past the snapshot horizon (max {max_hour})",
+        )
+    valid_time_iso = np.datetime_as_string(valid_times[idx], unit="s", timezone="UTC")
+    return idx, stride_hours, valid_time_iso
+
+
+# ---------------------------------------------------------------------------
+# Slice (one metric)
 # ---------------------------------------------------------------------------
 
 
@@ -184,33 +246,14 @@ def get_slice(
     The ``(model, init)`` tuple identifies an immutable snapshot file —
     response is cacheable for a long time.
     """
-    # Cheap syntactic checks first; missing snapshots fall through to 404
-    # below. Model is validated only for shape (no path separators) so ERA5
-    # / historical-event cases work without a hardcoded whitelist.
-    if not model or "/" in model or "\\" in model or model.startswith("."):
-        raise HTTPException(
-            status_code=400,
-            detail=f"model must be a simple identifier; got {model!r}",
-        )
-    if level not in DEFAULT_LEVELS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"level must be one of {DEFAULT_LEVELS}; got {level}",
-        )
+    _validate_common_params(model, level)
     if metric not in VALID_METRICS:
         raise HTTPException(
             status_code=400,
             detail=f"metric must be one of {VALID_METRICS}; got {metric!r}",
         )
 
-    init_time_unix = _parse_init(init)
-    path = snapshot_path(model, init_time_unix)
-    if not path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"No snapshot for model={model} init={init}",
-        )
-
+    path, init_time_unix = _resolve_snapshot_path(model, init)
     key = f"{metric}_{level}"
     # Lazy NPZ access — only decompress the slice we need, not all 18+ stacks.
     with np.load(path) as npz:
@@ -219,31 +262,10 @@ def get_slice(
                 status_code=404,
                 detail=f"Snapshot is missing {key!r} (was it built with this level?)",
             )
-        stride_hours = int(npz["stride_hours"]) if "stride_hours" in npz.files else 1
-        valid_times = npz["valid_times"]
-        n_time = valid_times.shape[0]
-
-        if hour % stride_hours != 0:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"hour={hour} is not aligned to this snapshot's stride "
-                    f"({stride_hours} h). Valid hours are 0, {stride_hours}, "
-                    f"{2 * stride_hours}, ..."
-                ),
-            )
-        idx = hour // stride_hours
-        if idx >= n_time:
-            max_hour = (n_time - 1) * stride_hours
-            raise HTTPException(
-                status_code=400,
-                detail=f"hour={hour} is past the snapshot horizon (max {max_hour})",
-            )
-
+        idx, stride_hours, valid_time_iso = _resolve_hour_index(npz, hour)
         slice_arr = npz[key][idx]
         lat = npz["lat"]
         lon = npz["lon"]
-        valid_time_iso = np.datetime_as_string(valid_times[idx], unit="s", timezone="UTC")
 
     # Slice for an immutable (model, init) snapshot — long cache is safe.
     response.headers["Cache-Control"] = "public, max-age=86400, immutable"
@@ -259,4 +281,67 @@ def get_slice(
         "lat": lat.tolist(),
         "lon": lon.tolist(),
         "values": _nan_to_none(slice_arr),
+    }
+
+
+# ---------------------------------------------------------------------------
+# All-metrics slice (one (model, init, level, hour), every metric in one call)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/all-metrics")
+def get_all_metrics(
+    response: Response,
+    model: str = Query(...),
+    init: str = Query(...),
+    level: int = Query(...),
+    hour: int = Query(..., ge=0),
+    _user_id: str = Depends(current_user_id),
+):
+    """Return every metric grid for one (model, init, level, hour) in one
+    response. Used by the cursor-following tooltip on the synoptic map: the
+    frontend caches this once per hour change and reads all six values from
+    memory on mousemove.
+
+    Larger payload than the single-metric ``/`` endpoint (~6× depending on
+    NaN density), but saves five network round-trips every time the user
+    changes model / init / level / hour.
+    """
+    _validate_common_params(model, level)
+    path, init_time_unix = _resolve_snapshot_path(model, init)
+
+    with np.load(path) as npz:
+        idx, stride_hours, valid_time_iso = _resolve_hour_index(npz, hour)
+        lat = npz["lat"]
+        lon = npz["lon"]
+        metrics_out: dict[str, Any] = {}
+        missing: list[str] = []
+        for metric in VALID_METRICS:
+            key = f"{metric}_{level}"
+            if key not in npz.files:
+                missing.append(metric)
+                continue
+            metrics_out[metric] = _nan_to_none(npz[key][idx])
+
+    if not metrics_out:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Snapshot has no metrics at level={level} (was it built with this level?)",
+        )
+
+    response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+
+    return {
+        "model": model,
+        "init_time": _format_init(init_time_unix),
+        "valid_time": valid_time_iso,
+        "level": level,
+        "hour": hour,
+        "stride_hours": stride_hours,
+        "lat": lat.tolist(),
+        "lon": lon.tolist(),
+        "metrics": metrics_out,
+        # Some legacy snapshots may be missing a metric; surface this so
+        # the client can hide tooltip rows for those.
+        "missing_metrics": missing,
     }

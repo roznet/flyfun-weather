@@ -46,6 +46,28 @@ export interface HewsonSliceParams {
   hour: number;
 }
 
+export interface HewsonAllMetricsSlice {
+  model: string;
+  init_time: string;
+  valid_time: string;
+  level: number;
+  hour: number;
+  stride_hours: number;
+  lat: number[];
+  lon: number[];
+  /** Per-metric (n_lat, n_lon) grid. Cells outside the grid mask come back as null. */
+  metrics: Record<string, (number | null)[][]>;
+  /** Metrics that weren't present in this snapshot (e.g. legacy snapshots). */
+  missing_metrics: string[];
+}
+
+export interface HewsonAllMetricsParams {
+  model: string;
+  init: string;
+  level: number;
+  hour: number;
+}
+
 // --- Fetch functions ---
 
 export async function fetchHewsonManifest(): Promise<HewsonManifest> {
@@ -67,6 +89,26 @@ export async function fetchHewsonSlice(p: HewsonSliceParams): Promise<HewsonSlic
     let detail: string | undefined;
     try { detail = (await resp.json())?.detail; } catch { /* ignore */ }
     throw new Error(detail ?? `Hewson slice: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+export async function fetchHewsonAllMetrics(
+  p: HewsonAllMetricsParams,
+): Promise<HewsonAllMetricsSlice> {
+  const qs = new URLSearchParams({
+    model: p.model,
+    init: p.init,
+    level: String(p.level),
+    hour: String(p.hour),
+  });
+  const resp = await fetch(
+    `${apiBase}/hewson-map/all-metrics?${qs}`, { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    let detail: string | undefined;
+    try { detail = (await resp.json())?.detail; } catch { /* ignore */ }
+    throw new Error(detail ?? `Hewson all-metrics: ${resp.status}`);
   }
   return resp.json();
 }

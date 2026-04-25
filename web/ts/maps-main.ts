@@ -6,12 +6,13 @@ import {
   type ForecastMapResponse, type VerificationMapResponse,
 } from './adapters/maps-adapter';
 import {
-  fetchHewsonManifest, fetchHewsonSlice,
+  fetchHewsonManifest, fetchHewsonSlice, fetchHewsonAllMetrics,
   type HewsonManifest, type HewsonManifestSnapshot,
+  type HewsonAllMetricsSlice,
 } from './adapters/hewson-map-adapter';
 import { WeatherMap, type ForecastMetric, type VerifMetric } from './visualization/weather-map';
 import { SynopticMap } from './visualization/synoptic-map';
-import { type HewsonMetric } from './visualization/hewson-colormaps';
+import { type HewsonMetric, type ColorScale, vRangeFor } from './visualization/hewson-colormaps';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderHewsonInfo } from './helpers/hewson-info';
 import { redirectToLogin, renderUserInfo, $ } from './utils';
@@ -32,6 +33,20 @@ let synLevel = 850;
 let synMetric: HewsonMetric = 'gradient';
 let synHour = 0;
 let synOpacity = 0.5;
+let synScale: ColorScale = 'default';
+// Cached multi-metric grid for the active (model, init, level, hour) — used
+// by the cursor tooltip and (when present) lets metric-change skip a
+// network call. Fetched in the background after the fast initial render.
+let synActiveGrid: HewsonAllMetricsSlice | null = null;
+// "Token" identifying the current (model, init, level, hour) request. Async
+// fetches check this on completion and discard their results if the user
+// has moved on — prevents a stale all-metrics response from poisoning the
+// hover cache after the user changed hour mid-fetch.
+let synLoadToken = 0;
+
+function currentLoadKey(): string {
+  return `${synModel}|${synInit}|${synLevel}|${synHour}`;
+}
 
 // Forecast state
 let forecastData: ForecastMapResponse | null = null;
@@ -292,9 +307,101 @@ async function loadSynoptic(): Promise<void> {
   if (!synInit) {
     if (info) info.textContent = 'No precomputed snapshot available for this model.';
     synopticMap.clear();
+    synActiveGrid = null;
     return;
   }
+
+  // Bump the token, invalidating any in-flight fetches.
+  const myToken = ++synLoadToken;
+  // Tear down stale hover state — no all-metrics for the new (model, init,
+  // level, hour) yet, so the tooltip should disable until the background
+  // fetch completes.
+  synActiveGrid = null;
+  synopticMap.setHoverGrid(null);
+
   if (info) info.textContent = 'Loading…';
+
+  // --- 1. Fast path: single-metric slice (~80 KB) for the canvas overlay.
+  let firstSlice;
+  try {
+    firstSlice = await fetchHewsonSlice({
+      model: synModel,
+      init: synInit,
+      level: synLevel,
+      metric: synMetric,
+      hour: synHour,
+    });
+  } catch (err) {
+    if (myToken !== synLoadToken) return;
+    if (info) info.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+    return;
+  }
+  if (myToken !== synLoadToken) return;  // user moved on
+
+  const { vmin, vmax } = vRangeFor(synMetric, synScale);
+  synopticMap.setSlice(firstSlice, vmin, vmax);
+  synopticMap.setOpacity(synOpacity);
+  if (info) {
+    const validDt = new Date(firstSlice.valid_time);
+    const validLabel = validDt.toUTCString().slice(0, 22);
+    info.textContent = `${synModel.toUpperCase()} ${firstSlice.init_time.slice(0, 13)}Z · valid ${validLabel} (+${synHour} h) · ${firstSlice.level} hPa · loading hover…`;
+  }
+
+  // --- 2. Background: all-metrics (~2.3 MB) so the cursor tooltip can read
+  //     all six values without round-tripping per mousemove. We don't await —
+  //     the canvas is already rendered above; this just enables hover when
+  //     it lands. Errors are non-fatal; map remains interactive without hover.
+  fetchHewsonAllMetrics({
+    model: synModel,
+    init: synInit,
+    level: synLevel,
+    hour: synHour,
+  }).then((grid) => {
+    if (myToken !== synLoadToken) return;  // stale response — discard
+    synActiveGrid = grid;
+    synopticMap?.setHoverGrid(grid);
+    if (info) {
+      const validDt = new Date(grid.valid_time);
+      const validLabel = validDt.toUTCString().slice(0, 22);
+      info.textContent = `${synModel.toUpperCase()} ${grid.init_time.slice(0, 13)}Z · valid ${validLabel} (+${synHour} h) · ${grid.level} hPa`;
+    }
+  }).catch((err) => {
+    if (myToken !== synLoadToken) return;
+    console.warn('Hewson all-metrics background fetch failed:', err);
+    // Leave the canvas + status as-is; hover just stays disabled.
+  });
+}
+
+/** Render a different metric using the cached all-metrics grid (no
+ * network), or fall back to a single-metric refetch if the cache isn't
+ * ready yet (background load still in flight). */
+async function changeActiveMetric(): Promise<void> {
+  if (!synopticMap) return;
+  const { vmin, vmax } = vRangeFor(synMetric, synScale);
+
+  if (synActiveGrid) {
+    const values = synActiveGrid.metrics[synMetric];
+    if (!values) return;
+    const single = {
+      model: synActiveGrid.model,
+      init_time: synActiveGrid.init_time,
+      valid_time: synActiveGrid.valid_time,
+      level: synActiveGrid.level,
+      metric: synMetric,
+      hour: synActiveGrid.hour,
+      stride_hours: synActiveGrid.stride_hours,
+      lat: synActiveGrid.lat,
+      lon: synActiveGrid.lon,
+      values,
+    };
+    synopticMap.setSlice(single, vmin, vmax);
+    synopticMap.setOpacity(synOpacity);
+    return;
+  }
+
+  // All-metrics not ready — fast-fetch the single new metric.
+  if (!synInit) return;
+  const myToken = synLoadToken;  // don't bump; we're piggybacking on the in-flight load
   try {
     const slice = await fetchHewsonSlice({
       model: synModel,
@@ -303,15 +410,11 @@ async function loadSynoptic(): Promise<void> {
       metric: synMetric,
       hour: synHour,
     });
-    synopticMap.setSlice(slice);
+    if (myToken !== synLoadToken) return;
+    synopticMap.setSlice(slice, vmin, vmax);
     synopticMap.setOpacity(synOpacity);
-    if (info) {
-      const validDt = new Date(slice.valid_time);
-      const validLabel = validDt.toUTCString().slice(0, 22);
-      info.textContent = `${synModel.toUpperCase()} ${slice.init_time.slice(0, 13)}Z · valid ${validLabel} (+${synHour} h) · ${slice.level} hPa`;
-    }
   } catch (err) {
-    if (info) info.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+    console.warn('Hewson metric refetch failed:', err);
   }
 }
 
@@ -341,7 +444,7 @@ function wireSynopticControls(): void {
   const metricSel = $('syn-metric-picker') as HTMLSelectElement | null;
   metricSel?.addEventListener('change', () => {
     synMetric = metricSel.value as HewsonMetric;
-    loadSynoptic();
+    changeActiveMetric();
   });
 
   const hourSlider = $('syn-hour-slider') as HTMLInputElement | null;
@@ -367,6 +470,15 @@ function wireSynopticControls(): void {
   $('syn-info-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
     showSynopticInfo();
+  });
+
+  wireButtonGroup('syn-scale-picker', 'scale', (v) => {
+    synScale = v as ColorScale;
+    // No refetch needed — just rescale the existing canvas + legend.
+    if (synopticMap) {
+      const { vmin, vmax } = vRangeFor(synMetric, synScale);
+      synopticMap.setVRange(synMetric, vmin, vmax);
+    }
   });
 }
 

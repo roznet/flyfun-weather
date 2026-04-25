@@ -120,6 +120,31 @@
       display: flex; justify-content: space-between;
       margin-top: 0.2rem; font-variant-numeric: tabular-nums;
     }
+
+    /* Cursor-following tooltip on the synoptic map. */
+    .synoptic-hover-tip {
+      position: absolute; pointer-events: none; z-index: 1100;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.4rem 0.6rem;
+      font-size: 0.75rem; color: var(--text);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      min-width: 180px; max-width: 240px;
+      font-variant-numeric: tabular-nums;
+    }
+    .synoptic-hover-header {
+      font-weight: 600; margin-bottom: 0.3rem;
+      padding-bottom: 0.25rem; border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+    }
+    .synoptic-hover-cell {
+      font-weight: 400; color: var(--text-muted); font-size: 0.7rem;
+    }
+    .synoptic-hover-row {
+      display: flex; justify-content: space-between; gap: 0.5rem;
+      line-height: 1.35;
+    }
+    .synoptic-hover-label { color: var(--text-muted); }
+    .synoptic-hover-value { font-weight: 600; }
   </style>
 </head>
 <body>
@@ -266,6 +291,11 @@
           </optgroup>
         </select>
         <button class="synoptic-info-btn" id="syn-info-btn" title="What does this field mean?">i</button>
+        <label>Scale</label>
+        <div class="btn-group" id="syn-scale-picker" title="Default = advisory thresholds. Storm = wider range so extreme events stand out.">
+          <button class="btn-toggle active" data-scale="default">Default</button>
+          <button class="btn-toggle" data-scale="storm">Storm</button>
+        </div>
         <label>Hour</label>
         <span class="range-with-value">
           <input type="range" id="syn-hour-slider" min="0" max="0" step="3" value="0" style="width:200px">
