@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -19,7 +19,9 @@ from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
 from weatherbrief.db.models import BriefingPackRow
-from weatherbrief.models import Flight
+from weatherbrief.models import Flight, FlightDebrief
+from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
+from weatherbrief.api.debriefs import DebriefResponse
 from weatherbrief.storage.flights import (
     SubscriptionError,
     bulk_delete_flights as _bulk_delete_flights,
@@ -126,6 +128,15 @@ class FlightResponse(BaseModel):
     role: Literal["owner", "subscriber"] = "owner"
     owner_display_name: str | None = None  # set when role == "subscriber"
     is_subscribed: bool = False  # True when the viewer has subscribed to this flight
+    debrief: DebriefResponse | None = None  # owned past flights only
+    section: Literal["future", "recent", "past"] = "past"
+
+
+# Number of flights surfaced in the "recent" section as a debrief nudge,
+# and how far back to look. Hard-coded for Phase 1; revisit when usage
+# patterns suggest a larger window or a per-user setting.
+RECENT_SECTION_CAP = 2
+RECENT_SECTION_MAX_AGE_DAYS = 30
 
 
 def _rejected_waypoints_message(rejected: list[RejectedWaypoint]) -> str:
@@ -231,6 +242,8 @@ def _flight_to_response(
     role: Literal["owner", "subscriber"] | None = None,
     subscribed: bool | None = None,
     owner_display_name: str | None = None,
+    debrief: FlightDebrief | None = None,
+    section: Literal["future", "recent", "past"] | None = None,
 ) -> FlightResponse:
     # viewer_id is required: the role derivation below compares flight.user_id
     # against it, and with viewer_id=None we would silently classify the
@@ -252,6 +265,18 @@ def _flight_to_response(
             is_subscribed(db, flight.id, viewer_id)
             if effective_role == "subscriber"
             else False
+        )
+
+    # Owners see their own debriefs; subscribers don't see others' debriefs.
+    if debrief is None and effective_role == "owner":
+        debrief = _get_debrief(db, flight.id)
+    debrief_resp = DebriefResponse.from_model(debrief) if debrief else None
+
+    if section is None:
+        section = _classify_section(
+            flight,
+            has_debrief=debrief is not None,
+            recent_set=set(),  # single-flight call: no recent context available
         )
 
     return FlightResponse(
@@ -277,7 +302,64 @@ def _flight_to_response(
         role=effective_role,
         owner_display_name=owner_display_name,
         is_subscribed=subscribed,
+        debrief=debrief_resp,
+        section=section,
     )
+
+
+def _classify_section(
+    flight: Flight,
+    *,
+    has_debrief: bool,
+    recent_set: set[str],
+    now: datetime | None = None,
+) -> Literal["future", "recent", "past"]:
+    """Bucket a flight into one of the three list sections.
+
+    The ``recent`` decision needs cross-flight context (the user's debrief
+    history), so callers compute ``recent_set`` once via
+    ``_compute_recent_section`` and pass it in.
+    """
+    now = now or datetime.now(timezone.utc)
+    if flight.departure_time >= now:
+        return "future"
+    if flight.id in recent_set:
+        return "recent"
+    return "past"
+
+
+def _compute_recent_section(
+    owned_flights_with_debrief: list[tuple[Flight, FlightDebrief | None]],
+    *,
+    cap: int = RECENT_SECTION_CAP,
+    max_age_days: int = RECENT_SECTION_MAX_AGE_DAYS,
+    now: datetime | None = None,
+) -> set[str]:
+    """Pick which owned past undebriefed flights belong in ``recent``.
+
+    Rule: the most recent ``cap`` past flights without a debrief whose
+    ``departure_time`` is within the last ``max_age_days``. The cap is
+    independent of debrief history — debriefing one flight doesn't push
+    the next-most-recent undebriefed one out of the section, so a user
+    with two recent flights can debrief them both back-to-back. Anything
+    older than the window drops to the Past section so the nudge stays
+    bounded.
+
+    Pure function — input is the (flight, debrief) tuples for *owned*
+    flights only; subscribed flights never enter the recent section.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max_age_days)
+
+    candidates = [
+        f
+        for f, d in owned_flights_with_debrief
+        if d is None
+        and f.departure_time < now
+        and f.departure_time >= cutoff
+    ]
+    candidates.sort(key=lambda f: f.departure_time, reverse=True)
+    return {f.id for f in candidates[:cap]}
 
 
 def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingStatusInfo]:
@@ -322,29 +404,48 @@ def list_all_flights(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """List owned + subscribed flights with latest briefing status.
+    """List owned + subscribed flights with latest briefing status, debrief, and section.
 
     Subscribed flights are filtered out when the owner has flipped them to
     private (see storage.flights.list_flights_with_role).
     """
     paired = list_flights_with_role(db, user_id)
     pack_status = _get_latest_packs(db, [f.id for f, _, _ in paired])
-    # `role == "subscriber"` implies is_subscribed=True by construction:
-    # list_flights_with_role only emits a non-owned flight when the viewer has
-    # an active subscription row. If that ever changes (e.g., public-flight
-    # discovery), the tuple should carry is_subscribed explicitly.
-    return [
-        _flight_to_response(
-            f,
-            db,
-            viewer_id=user_id,
-            latest_briefing=pack_status.get(f.id),
-            role=role,
-            subscribed=(role == "subscriber"),
-            owner_display_name=owner_name,
-        )
-        for f, role, owner_name in paired
+    debrief_map = _bulk_debriefs_for_owned(db, paired, user_id)
+
+    owned_pairs: list[tuple[Flight, FlightDebrief | None]] = [
+        (f, debrief_map.get(f.id)) for f, role, _ in paired if role == "owner"
     ]
+    recent_set = _compute_recent_section(owned_pairs)
+
+    out: list[FlightResponse] = []
+    for f, role, owner_name in paired:
+        debrief = debrief_map.get(f.id) if role == "owner" else None
+        section = _classify_section(f, has_debrief=debrief is not None, recent_set=recent_set)
+        out.append(
+            _flight_to_response(
+                f,
+                db,
+                viewer_id=user_id,
+                latest_briefing=pack_status.get(f.id),
+                role=role,
+                subscribed=(role == "subscriber"),
+                owner_display_name=owner_name,
+                debrief=debrief,
+                section=section,
+            )
+        )
+    return out
+
+
+def _bulk_debriefs_for_owned(
+    db: Session,
+    paired: list[tuple[Flight, str, str | None]],
+    viewer_id: str,
+) -> dict[str, FlightDebrief]:
+    """One query for all owned-flight debriefs in a list response."""
+    owned_ids = [f.id for f, role, _ in paired if role == "owner" and f.user_id == viewer_id]
+    return bulk_get_debriefs(db, owned_ids)
 
 
 @router.post("", response_model=FlightResponse, status_code=201)

@@ -13,6 +13,7 @@ import { escapeHtml, redirectToLogin, renderUserInfo, initModelCatalog } from '.
 import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
+import { initInfoPopup } from './components/info-popup';
 import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';
@@ -365,6 +366,7 @@ async function init(): Promise<void> {
   }
   initTheme();
   renderUserInfo(user, 'flights');
+  initInfoPopup();
 
   const store = flightsStore;
 
@@ -394,12 +396,20 @@ async function init(): Promise<void> {
     onClearSelection: () => store.getState().clearSelection(),
   };
 
+  const refreshAfterDebrief = () => {
+    // Re-load flights so the debriefed row moves out of "recent" and the
+    // stats panel updates.
+    void store.getState().loadFlights();
+    void store.getState().loadDebriefStats();
+  };
+
   store.subscribe((state, prev) => {
     if (
       state.flights !== prev.flights ||
       state.latestPacks !== prev.latestPacks ||
       state.activeRefreshes !== prev.activeRefreshes ||
-      state.selectedIds !== prev.selectedIds
+      state.selectedIds !== prev.selectedIds ||
+      state.debriefStats !== prev.debriefStats
     ) {
       ui.renderFlightList(
         state.flights,
@@ -411,6 +421,8 @@ async function init(): Promise<void> {
         (id) => store.getState().deleteFlight(id),
         selectionHandlers,
         (id) => store.getState().unsubscribeFlight(id),
+        state.debriefStats,
+        refreshAfterDebrief,
       );
     }
     if (state.flights !== prev.flights) {
@@ -599,6 +611,8 @@ async function init(): Promise<void> {
     // Start polling active refreshes after flights load
     store.getState().pollActiveRefreshes();
   });
+  // Stats are independent of the flights load — fire and forget.
+  store.getState().loadDebriefStats();
 
   // Poll active refreshes every 5 seconds
   const refreshPollInterval = setInterval(() => {

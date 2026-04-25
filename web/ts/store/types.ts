@@ -30,6 +30,40 @@ export interface FlightResponse {
   role: 'owner' | 'subscriber';
   owner_display_name: string | null;
   is_subscribed: boolean;
+  debrief?: DebriefResponse | null;
+  section?: 'future' | 'recent' | 'past';
+}
+
+export type DebriefDecision = 'cancelled' | 'flown' | 'monitoring';
+export type ConditionTagId = 'IMC' | 'ICE' | 'WIND' | 'TS' | 'TURB' | 'FRZ' | 'VIS' | 'OPS';
+export type OutcomeValue = 'consistent' | 'better' | 'worse';
+
+export interface DebriefResponse {
+  flight_id: string;
+  decision: DebriefDecision;
+  reasons: ConditionTagId[];
+  outcomes: Partial<Record<ConditionTagId, OutcomeValue>>;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DebriefStatsCategory {
+  queried_count: number;
+  consistent: number;
+  better: number;
+  worse: number;
+}
+
+export interface DebriefStats {
+  window_days: number;
+  total_flights_in_window: number;
+  flown_count: number;
+  cancelled_count: number;
+  monitoring_count: number;
+  pending_debrief_count: number;
+  cancellation_reasons: Partial<Record<ConditionTagId, number>>;
+  category_accuracy: Partial<Record<ConditionTagId, DebriefStatsCategory>>;
 }
 
 export interface CreateFlightRequest {

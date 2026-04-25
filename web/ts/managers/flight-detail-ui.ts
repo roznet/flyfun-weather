@@ -1,12 +1,14 @@
 /** DOM management for the Flight Detail page. */
 
-import type { FlightResponse, PackMeta } from '../store/types';
+import type { ConditionTagId, DebriefResponse, FlightResponse, PackMeta } from '../store/types';
 import type { WaypointInfo } from '../adapters/api-adapter';
 import type { AircraftResponse } from '../adapters/aircraft-adapter';
 import type { ProfileResponse } from '../adapters/profiles-adapter';
-import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRoute } from '../utils';
+import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRoute, isFlightPast } from '../utils';
 import { getDateLocale, t } from '../i18n/i18n';
 import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
+import { renderDebriefForm } from '../components/debrief-form';
+import { renderDebriefSummary } from '../components/debrief-summary';
 
 // --- Assessment badge ---
 
@@ -469,5 +471,64 @@ export function renderError(error: string | null): void {
     el.textContent = error || '';
     el.style.display = error ? 'block' : 'none';
   }
+}
+
+// --- Debrief section ---
+
+/** Render the debrief panel — banner / summary / editor — for a past flight.
+ *
+ * Hides the entire section for future or non-owned flights. The editor
+ * mounts into ``#debrief-host`` on demand (clicking Add/Edit). After save
+ * or delete, ``onChanged`` is invoked so the page can refetch.
+ */
+export function renderDebriefSection(
+  flight: FlightResponse | null,
+  flaggedCategories: ConditionTagId[],
+  onChanged: () => void,
+): void {
+  const section = $('debrief-section');
+  const banner = $('debrief-banner');
+  const summary = $('debrief-summary');
+  const host = $('debrief-host') as HTMLElement | null;
+  if (!section || !banner || !summary || !host) return;
+
+  // Visibility rules: owner + past flight only.
+  const isOwner = flight?.role === 'owner';
+  const isPast = flight && isFlightPast(
+    flight.target_date, flight.target_time_utc, flight.flight_duration_hours, flight.departure_time,
+  );
+  if (!flight || !isOwner || !isPast) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = 'block';
+  host.dataset.flightId = flight.id;
+
+  const debrief = flight.debrief ?? null;
+  if (debrief) {
+    banner.innerHTML = `<button type="button" class="btn btn-secondary" id="debrief-edit-btn">${t('debrief.editCta')}</button>`;
+    summary.innerHTML = renderDebriefSummary(debrief);
+  } else {
+    banner.innerHTML = `<button type="button" class="btn btn-primary" id="debrief-edit-btn">${t('debrief.addCta')}</button>`;
+    summary.innerHTML = '';
+  }
+
+  const openEditor = () => {
+    if (host.dataset.open === '1') {
+      host.dataset.open = '';
+      host.innerHTML = '';
+      return;
+    }
+    host.dataset.open = '1';
+    renderDebriefForm(host, {
+      existing: debrief,
+      flaggedCategories,
+      onSaved: () => { host.dataset.open = ''; host.innerHTML = ''; onChanged(); },
+      onDeleted: () => { host.dataset.open = ''; host.innerHTML = ''; onChanged(); },
+      onCancelled: () => { host.dataset.open = ''; host.innerHTML = ''; },
+    });
+  };
+  document.getElementById('debrief-edit-btn')?.addEventListener('click', openEditor);
 }
 

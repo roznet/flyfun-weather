@@ -11,7 +11,10 @@ import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
 import { interpretAndConfirmRoute } from './components/route-interpret';
-import { createFlight, moveFlight } from './adapters/api-adapter';
+import { createFlight, fetchRouteAdvisories, moveFlight } from './adapters/api-adapter';
+import { flaggedTagsFromAdvisories } from './components/debrief-taxonomy';
+import { initInfoPopup } from './components/info-popup';
+import type { ConditionTagId } from './store/types';
 
 async function init(): Promise<void> {
   await initI18n();
@@ -23,6 +26,7 @@ async function init(): Promise<void> {
   }
   initTheme();
   renderUserInfo(user);
+  initInfoPopup();
 
   const store = flightDetailStore;
 
@@ -353,18 +357,49 @@ async function init(): Promise<void> {
     });
   }
 
+  const refreshFlight = () => {
+    void store.getState().loadFlight(flightId);
+  };
+
+  // Cached flagged categories for the latest pack — null until resolved.
+  // Pre-fetched after packs land so opening the debrief form is instant.
+  let flaggedCategories: ConditionTagId[] = [];
+
+  const loadFlaggedCategories = async () => {
+    const packs = store.getState().packs;
+    const latest = packs.length > 0 ? packs[0] : null;
+    if (!latest || !latest.has_advisories) {
+      flaggedCategories = [];
+      return;
+    }
+    try {
+      const manifest = await fetchRouteAdvisories(flightId, latest.fetch_timestamp);
+      flaggedCategories = flaggedTagsFromAdvisories(manifest);
+    } catch {
+      flaggedCategories = [];
+    }
+  };
+
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
     if (state.flight !== prev.flight || state.editing !== prev.editing || state.waypoints !== prev.waypoints) {
       ui.renderHeader(state.flight, state.editing);
       ui.renderFlightInfo(state.flight, state.editing, profiles, state.waypoints, aircraftList);
       ui.renderSharingBanner(state.flight);
+      ui.renderDebriefSection(state.flight, flaggedCategories, refreshFlight);
       wireSharingControls();
       if (state.editing) {
         wireEditForm();
       } else {
         wireEditButtons();
       }
+    }
+    if (state.packs !== prev.packs) {
+      // Re-fetch flagged categories whenever packs change, then re-render
+      // the debrief section so the form reflects the current advisories.
+      void loadFlaggedCategories().then(() => {
+        ui.renderDebriefSection(store.getState().flight, flaggedCategories, refreshFlight);
+      });
     }
     if (state.waypoints !== prev.waypoints) {
       if (mapInset && state.waypoints.length > 0) {
@@ -395,6 +430,7 @@ async function init(): Promise<void> {
   ui.renderHeader(s.flight, s.editing);
   ui.renderFlightInfo(s.flight, s.editing, profiles, s.waypoints);
   ui.renderSharingBanner(s.flight);
+  ui.renderDebriefSection(s.flight, flaggedCategories, refreshFlight);
   wireSharingControls();
   wireEditButtons();
 
@@ -406,6 +442,12 @@ async function init(): Promise<void> {
   ui.renderLatestAssessment(latestPack);
   ui.renderBriefingHistory(s.packs, flightId);
   ui.renderLoading(s.loading);
+
+  // Pre-fetch advisories for the latest pack and refresh the debrief form
+  // host with the resolved flagged categories.
+  void loadFlaggedCategories().then(() => {
+    ui.renderDebriefSection(store.getState().flight, flaggedCategories, refreshFlight);
+  });
 
   // Invalidate map size after layout settles
   requestAnimationFrame(() => {

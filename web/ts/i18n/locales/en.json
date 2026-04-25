@@ -607,5 +607,12 @@
   "messages.loadFailed": "Failed to load messages.",
   "messages.category.feature": "New",
   "messages.category.change": "Change",
-  "messages.category.fix": "Fix"
+  "messages.category.fix": "Fix",
+
+  "debrief.openCta": "Debrief →",
+  "debrief.recentHeader": "Recent — please debrief",
+  "debrief.editCta": "Edit debrief",
+  "debrief.addCta": "Add debrief",
+  "debrief.loading": "Loading advisories…",
+  "debrief.infoBtn": "About this form"
 }
