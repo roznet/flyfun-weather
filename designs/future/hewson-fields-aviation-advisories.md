@@ -626,17 +626,17 @@ Opens after Phase D so the map + cross-section surface has something to show moi
 | **Phase B.1** (multi-level Case storage) | ✅ Done (PR #94 open) — multi-level NPZ, back-compat, 10 tests |
 | Phase B.2 (CLI `--levels`, rebuild Ciarán at 3 levels) | 🟡 Small follow-up; can slot anywhere |
 | **Phase D.0** (precompute loop) | ✅ Done (2026-04-24) — `run_hewson_precompute_loop` + `weatherbrief.hewson.run_once()` + `python -m weatherbrief.hewson` CLI |
-| Phase D.1 (backend endpoint) | 🎯 **NEXT** — requires D.0 (done) |
-| Phase D.2 (map layer + tooltips) | Requires D.1 |
-| Phase D.3 (cross-section bands) | Requires D.0 |
+| **Phase D.1** (backend endpoints) | ✅ Done (2026-04-25, PR #96) — `/api/hewson-map`, `/api/hewson-map/manifest`, `/api/hewson-map/all-metrics`; admin-gated via `_synoptic_auth = require_admin` while calibrating |
+| **Phase D.2** (map layer + tooltips + ERA5 cases) | ✅ Done (2026-04-25, PR #96) — Synoptic Forecast tab on `/maps.html`, canvas grid overlay, cursor-following tooltip with all 6 metrics, default/storm scale toggle, briefing-style (i) modal with Discuss-with-AI prompts, `era5-case` CLI for historical events (Storm Ciarán test case) |
+| Phase D.3 (cross-section bands) | 🎯 **NEXT** — requires D.0 (done) |
 | Phase D.4 (stencil in GRIB era) | Gated on native-GRIB ingestion being live for the user's briefing model |
 | Phase C (advisory evaluators) | After Phase D, informed by what pilots actually use from the map/cross-section |
 | Phase E (moisture cross-check) | After Phase D — RH₉₂₅, LCC, TP, CAPE, debrief feature #92 |
 | Retrospective validation | ✅ Pairwise cancel test 3/3 (all pilot-cancellation days scored higher than replacement-flown days) — best calibration signal we have |
 
-## 12a. Quick pickup from fresh context (for Phase D.1 start)
+## 12a. Quick pickup from fresh context (for Phase D.3 start)
 
-Phase D.0 is done. The next session picks up D.1 — the backend endpoint that serves per-(model, init, level, hour, metric) slices to the forecast-page map.
+Phases D.0 / D.1 / D.2 are done and merged via PR #96. The next session picks up **D.3 — the cross-section bands** that overlay the same precomputed Hewson fields on the route cross-section canvas.
 
 ### What's already on main
 
@@ -646,46 +646,28 @@ Phase D.0 is done. The next session picks up D.1 — the backend endpoint that s
 - `route-hewson` CLI subcommand that resolves ICAO codes and prints per-waypoint values
 - Retrospective scripts: `scripts/analyze_flight_log.py` and `scripts/analyze_cancellations.py`
 - 1 year of ERA5 GRIBs at `data/era5/hewson/` (gitignored)
-- **Phase D.0**: `src/weatherbrief/hewson/` module (`precompute.py`, `cli.py`, `__main__.py`), `run_hewson_precompute_loop` in `scheduler.py` at 05 Z / 17 Z, NPZ snapshots at `${DATA_DIR}/hewson/<model>/<init_iso_z>.npz`. Back-compat-preserving `levels=` / `level_hPa=` kwargs added to `fetch_grid_fields` and `reshape_to_fields` in `frontal/grid.py`.
+- **Phase D.0**: `src/weatherbrief/hewson/` module — `precompute.py`, `cli.py`, `era5_case.py`, `__main__.py`. `run_hewson_precompute_loop` in `scheduler.py` at 05 Z / 17 Z. NPZ snapshots at `${DATA_DIR}/hewson/<model>/<init_iso_z>.npz`. Back-compat-preserving `levels=` / `level_hPa=` kwargs added to `fetch_grid_fields` and `reshape_to_fields` in `frontal/grid.py`.
+- **Phase D.1**: `src/weatherbrief/api/hewson_map.py` — three endpoints (`/api/hewson-map`, `/manifest`, `/all-metrics`). Lazy NPZ access, corrupt-file → 404, path-traversal guard, `Cache-Control: private, max-age=86400, immutable`. Admin-gated via `_synoptic_auth` alias.
+- **Phase D.2**: Synoptic Forecast tab on `/maps.html`. `web/ts/visualization/synoptic-map.ts` + `hewson-grid-layer.ts` (canvas overlay) + `hewson-colormaps.ts` (matplotlib-equivalent ramps with default/storm scale) + `hewson-metrics-catalog.ts` (per-level pilot-facing thresholds) + `hewson-info.ts` (briefing-style modal). Cursor-following tooltip reads `/all-metrics` cached per (model, init, level, hour). Progressive load: single-metric slice first, all-metrics in the background. Token-based stale-fetch cancellation.
+- **ERA5 historical cases**: `python -m weatherbrief.hewson era5-case --case <dir>` builds a synoptic snapshot from any calibration Case directory; surfaces in the same UI under model="era5". Storm Ciarán (2023-11-02) is the test case.
 
-### What Phase D.1 needs
+### What Phase D.3 needs
 
-Build an authenticated endpoint that serves one `(model, init, level, hour, metric)` slice from a precompute snapshot as JSON or binary.
+Cross-section bands per § 7.9. Sample the precompute snapshot at each waypoint × {925, 850, 700} via bilinear, draw 3 horizontal coloured bands at 2,500 / 5,000 / 10,000 ft on the route cross-section canvas. Reuse the same colormap and metric picker as the map.
 
 **Entry points to find first**:
-- `src/weatherbrief/hewson/precompute.py::load_snapshot(path)` — returns the dict of arrays; map endpoint just indexes into `snap[f"{metric}_{level}"][hour]`
-- `src/weatherbrief/hewson/precompute.py::snapshot_path(model, init_time_unix, ...)` — canonical disk location
-- `src/weatherbrief/api/packs.py` — pack-access auth pattern to reuse (§ 7.3 says "reuses pack-access auth pattern")
-- Existing gridded-layer frontends: today the forecast map is point-only, so this will be the first Canvas-overlay pattern (§ 7.5)
+- `web/ts/visualization/cross-section/renderer.ts` + `layer-registry.ts` — the existing layer pattern to follow (cloud / icing / CAT / inversion are sibling layers)
+- `src/weatherbrief/frontal/route_sampling.py::bilinear_sample` — already implemented; reuse for the per-waypoint × per-level lookup
+- `web/ts/visualization/hewson-colormaps.ts` — colormap and (vmin, vmax) ranges to reuse
+- `web/ts/data/hewson-metrics-catalog.ts` — pilot info for the cross-section's (i) modal
+- This PR's `web/ts/maps-main.ts` — for the metric/scale-picker UI patterns to mirror in the cross-section controls
 
-**Endpoint contract (§ 7.3 sketch)**:
-```
-GET /api/hewson-map?model=ecmwf&init=<t>&level=850&metric=advection&hour=24
-  → JSON or binary array of shape (n_lat, n_lon)
-```
+### Open questions deferred from D.1/D.2
 
-**Sanity-check the precompute output** before building the endpoint:
-```bash
-python -m weatherbrief.hewson precompute --models ecmwf --dry-run   # no-write test
-python -m weatherbrief.hewson precompute --models ecmwf             # real run
-python -m weatherbrief.hewson list -v                               # verify schema
-```
-
-### Key files for Phase D.1 pickup
-
-- `src/weatherbrief/hewson/precompute.py` — `load_snapshot`, `snapshot_path`, `resolve_output_dir`
-- `src/weatherbrief/api/packs.py` — pack-access auth + serialization patterns
-- `src/weatherbrief/api/app.py` — lifespan already wires `run_hewson_precompute_loop`
-- `web/ts/visualization/cross-section/renderer.ts` + `layer-registry.ts` — cross-section layer pattern to follow for § 7.9 (Phase D.3)
-- `designs/forecast-page.md` — where the map layer lives (point-marker pattern today; gridded-canvas layer is net new)
-- **This doc** — decisions and rationale; § 10a is the list of known gaps so the next pass doesn't re-discover them
-
-### Open questions left for Phase D.1+
-
-- Serialization: JSON array (~80 KB/slice, simple) or quantized int8 + scale (~20 KB, needs client-side dequant)? → start with JSON per § 7.2, revisit if map latency needs it.
-- Cache headers: `Cache-Control: max-age=...` based on init time, since a given `(model, init)` slice is immutable. Let the CDN do the work.
-- Map layer client: single gridded CanvasLayer for all 6 metrics (redraw on metric change), or 6 pre-rendered PNG tiles served statically? → start with JSON/binary + canvas (per § 7.5), revisit tiling if latency needs it.
-- Pilot-facing tooltip text: draw from § 2 directly (short form) or maintain a separate `docs/hewson-pilot-guide.md`? → start inline per § 7.4, promote to a doc if it grows.
+- ✅ Serialization: started with JSON. ~80 KB single metric, ~2.3 MB for all-metrics. Acceptable on local dev; would benefit from FastAPI `GZipMiddleware` (~250 KB compressed) for slow connections. Not in PR #96; easy follow-up.
+- ✅ Map client: single gridded CanvasLayer with redraw on metric change — chosen and shipped.
+- ✅ Pilot tooltip text: inline catalog (`hewson-metrics-catalog.ts`) — chosen and shipped.
+- Cross-section: 3 discrete bands (D.3 / Open-Meteo era) → continuous-altitude stencil (D.4 / GRIB era) — silent data-source upgrade when native GRIB ingestion lands.
 
 ## 13. Related docs
 
