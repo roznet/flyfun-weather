@@ -369,6 +369,35 @@ def test_ogimet_nwp_empty_input():
     assert assess_icing_zones_ogimet_nwp([], []) == []
 
 
+def test_ogimet_nwp_none_clouds_returns_empty():
+    """``clouds=None`` (no native NWP envelope) → no zones, even with icing-prone levels.
+
+    Required by the strict-native contract: Ogimet-NWP refuses to
+    fabricate icing zones from bulk percentages alone, because the
+    cross-section couldn't render a corresponding cloud band.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-7.5, dewpoint_depression_c=0.5),
+    ]
+    zones = assess_icing_zones_ogimet_nwp(
+        levels, None, nwp_cloud_mid_pct=80.0,
+    )
+    assert zones == []
+
+
+def test_ieng_none_clouds_returns_empty():
+    """``clouds=None`` → no IENG zones (same rationale as Ogimet-NWP)."""
+    from weatherbrief.analysis.sounding.icing import assess_icing_zones_ieng
+
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-7.5, dewpoint_depression_c=0.5),
+    ]
+    assert assess_icing_zones_ieng(levels, None, nwp_cloud_mid_pct=80.0) == []
+    assert assess_icing_zones_ieng(levels, [], nwp_cloud_mid_pct=80.0) == []
+
+
 def test_ogimet_nwp_zero_cloud_pct_no_icing():
     """0% NWP cloud cover in matching band → no icing despite cloud layer."""
     levels = [

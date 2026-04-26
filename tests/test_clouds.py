@@ -242,6 +242,24 @@ def test_build_nwp_cloud_layers_fallback_cover_pct():
     assert layers[0].coverage == CloudCoverage.BKN
 
 
+def test_build_nwp_cloud_layers_no_native_returns_none():
+    """No GRIB diag and no per-level cc → returns None (no synth fallback).
+
+    Previously the function would synthesize layers from Open-Meteo
+    bulk cover percentages narrowed by DD evidence. The strict-native
+    contract drops that path: bulk %s alone don't constitute a model-
+    native cloud envelope, so the function reports "no NWP layer data"
+    rather than fabricating one.
+    """
+    layers = build_nwp_cloud_layers(
+        nwp_cloud_diagnostics=None,
+        nwp_cloud_low_pct=80.0,  # bulk cover present but no native source
+        nwp_cloud_mid_pct=50.0,
+        nwp_cloud_high_pct=20.0,
+    )
+    assert layers is None
+
+
 def test_build_nwp_cloud_layers_dd_none():
     """NWP layers have mean_dewpoint_depression_c = None."""
     diag = NWPCloudDiagnostics(

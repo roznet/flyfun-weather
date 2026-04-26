@@ -42,7 +42,7 @@ export const nwpCloudBandsLayer: CrossSectionLayer = {
   metricId: 'nwp_cloud_cover',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
-    const hasData = data.points.some((p) => p.nwpCloudLayers.length > 0);
+    const hasData = data.points.some((p) => (p.nwpCloudLayers ?? []).length > 0);
     if (!hasData) return;
 
     const hatch = getActiveTheme().clouds;
@@ -50,7 +50,7 @@ export const nwpCloudBandsLayer: CrossSectionLayer = {
     // Single point fallback
     if (data.points.length === 1) {
       const p = data.points[0];
-      for (const cl of p.nwpCloudLayers) {
+      for (const cl of p.nwpCloudLayers ?? []) {
         const pct = coverageToPct(cl.coverage);
         const fill = nwpCloudFill(pct);
         const bandPoints: BandPointData[] = [{ distance: p.distanceNm, base: cl.baseFt, top: cl.topFt }];
@@ -60,7 +60,7 @@ export const nwpCloudBandsLayer: CrossSectionLayer = {
     }
 
     renderMatchedZones(ctx, transform, data, {
-      getZones: (p) => p.nwpCloudLayers,
+      getZones: (p) => p.nwpCloudLayers ?? [],
       getColor: (cl, matched) => {
         const avgPct = matched
           ? (coverageToPct(cl.coverage) + coverageToPct(matched.coverage)) / 2

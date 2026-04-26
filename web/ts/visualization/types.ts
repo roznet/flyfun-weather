@@ -128,6 +128,12 @@ export interface VizPoint {
   nwpConvectiveBaseFt: number | null;
   nwpConvectiveTopFt: number | null;
   nwpConvectiveCoverPct: number | null;
+  /**
+   * True when the model produced a convective_nwp assessment (regardless
+   * of risk level). Distinguishes "computed, no convection" (true) from
+   * "no NWP data" (false) — use for toggle availability gating.
+   */
+  hasNwpConvective: boolean;
   // Map-specific scalars
   cloudCoverTotalPct: number;
   cloudCoverLowPct: number;
@@ -136,8 +142,14 @@ export interface VizPoint {
   crosswindKt: number;
   capeSurfaceJkg: number;
   worstModelAgreement: string;
-  // NWP cloud layers (from GRIB diagnostics or synthesized from Open-Meteo + DD)
-  nwpCloudLayers: VizCloudLayer[];
+  /**
+   * Native NWP cloud layers (GRIB diagnostics or per-level cc).
+   * `null` when the model has no native NWP cloud envelope at all —
+   * use this to gate the cross-section "NWP Layers" toggle.
+   * `[]` when a native source is available but produced no layers
+   * (genuine clear-sky forecast).
+   */
+  nwpCloudLayers: VizCloudLayer[] | null;
   // GFS cloud diagnostics (null when not available)
   nwpCloudDiag: VizCloudDiag | null;
   // Ceiling values (ft MSL)

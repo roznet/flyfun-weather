@@ -131,10 +131,10 @@ export function attachInteraction(
     // --- NWP Cloud bands ---
     if (en('nwp-cloud-bands')) {
       const nwpLines: string[] = [];
-      for (const cl of point.nwpCloudLayers) {
+      for (const cl of point.nwpCloudLayers ?? []) {
         if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
-          const tag = cl.source === 'synthesized' ? ' (synth)' : cl.source === 'grib' ? '' : '';
-          nwpLines.push(`NWP: ${cl.coverage} ${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)}${tag}`);
+          // After the synth removal, source is "grib" or "nwp_3d"; no tag needed.
+          nwpLines.push(`NWP: ${cl.coverage} ${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)}`);
         }
       }
       if (nwpLines.length > 0) sections.push(nwpLines.join('<br>'));

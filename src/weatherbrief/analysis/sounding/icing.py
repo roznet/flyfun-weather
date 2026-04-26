@@ -413,7 +413,7 @@ def assess_icing_zones_ogimet_dd(
 
 def assess_icing_zones_ogimet_nwp(
     levels: list[DerivedLevel],
-    clouds: list[EnhancedCloudLayer],
+    clouds: list[EnhancedCloudLayer] | None,
     cape_jkg: float | None = None,
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
@@ -428,10 +428,16 @@ def assess_icing_zones_ogimet_nwp(
     layers (pure model output).  Within cloud, NWP cloud cover percentage
     modulates severity and glaciation factor reduces index in glaciated cloud.
 
+    Returns ``[]`` immediately when ``clouds`` is None or empty: the
+    Ogimet-NWP variant requires a model-native cloud envelope, and we
+    refuse to fabricate icing zones from bulk percentages alone — that
+    would produce icing calls in altitudes the cross-section can't
+    visually anchor to a cloud band.
+
     Stores per-level index in ``lv.icing_index_nwp`` (separate from
     ``icing_index`` used by Ogimet-DD) to avoid overwriting.
     """
-    if not levels:
+    if not levels or not clouds:
         return []
 
     layered_frac, convective_frac = _cape_to_cloud_split(cape_jkg)
@@ -489,7 +495,7 @@ def assess_icing_zones_ogimet_nwp(
 
 def assess_icing_zones_ieng(
     levels: list[DerivedLevel],
-    clouds: list[EnhancedCloudLayer],
+    clouds: list[EnhancedCloudLayer] | None,
     cape_jkg: float | None = None,
     nwp_cloud_low_pct: float | None = None,
     nwp_cloud_mid_pct: float | None = None,
@@ -501,8 +507,12 @@ def assess_icing_zones_ieng(
     Cloud gating uses ``is_in_cloud_layer`` — the caller passes NWP cloud
     layers (pure model output).  Within cloud, NWP cloud cover percentage
     modulates severity.  No glaciation correction.
+
+    Returns ``[]`` immediately when ``clouds`` is None or empty: same
+    rationale as Ogimet-NWP — refuse to compute icing without a
+    model-native cloud envelope.
     """
-    if not levels:
+    if not levels or not clouds:
         return []
 
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = []

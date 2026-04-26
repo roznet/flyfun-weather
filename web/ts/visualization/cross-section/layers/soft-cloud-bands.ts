@@ -122,11 +122,11 @@ export const softNwpCloudBandsLayer: CrossSectionLayer = {
   metricId: 'soft_cloud_nwp',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
-    const maxLayers = data.points.reduce((max, p) => Math.max(max, p.nwpCloudLayers.length), 0);
+    const maxLayers = data.points.reduce((max, p) => Math.max(max, (p.nwpCloudLayers ?? []).length), 0);
     if (maxLayers === 0) return;
 
     renderMatchedZones(ctx, transform, data, {
-      getZones: (p) => p.nwpCloudLayers,
+      getZones: (p) => p.nwpCloudLayers ?? [],
       getColor: () => 'transparent',
       onBand: (ctx, bandPoints, transform, cl) => {
         softCloudFill(ctx, bandPoints, transform, cl);
