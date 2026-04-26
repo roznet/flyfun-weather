@@ -89,10 +89,11 @@ export interface UpdateFlightRequest {
   flight_duration_hours?: number;
   waypoints?: string[];
   // Pair with `waypoints` to keep the original Field-15 input in sync.
-  // Omit it on a direct waypoint edit and the server clears the stored
-  // raw_route — which is what we want, since the old string no longer
-  // matches the new chip list.
-  raw_route?: string | null;
+  // Omit on a direct waypoint edit and the server clears the stored
+  // raw_route (the old string no longer matches the new chip list).
+  // No `| null` — the server treats null and missing identically; the
+  // type would imply a "null clears" path that doesn't exist.
+  raw_route?: string;
 }
 
 export interface UpdateFlightResponse extends FlightResponse {

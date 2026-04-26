@@ -131,6 +131,13 @@ function showRouteConfirmPopup(
           <span>${resp.skipped.map(s => `<code>${escapeHtml(s)}</code>`).join(', ')}</span>
         </div>`
       : '';
+    // Map only renders with >=2 points (need a polyline). Suppress the
+    // 240px container entirely below that — otherwise the popup would
+    // show a blank box (e.g. preview path with one waypoint).
+    const showMap = resp.waypoints.length >= 2;
+    const mapBlock = showMap
+      ? `<div id="route-confirm-map" style="height:240px;width:100%;margin-top:0.75rem;border-radius:6px;overflow:hidden;border:1px solid var(--border,#e5e7eb);"></div>`
+      : '';
 
     // Save mode: Accept/Cancel — the click outcome carries meaning back to
     // the caller (Accept = use these waypoints).
@@ -157,7 +164,7 @@ function showRouteConfirmPopup(
           <span>${interpretedHtml}</span>
         </div>
         ${skippedRow}
-        <div id="route-confirm-map" style="height:240px;width:100%;margin-top:0.75rem;border-radius:6px;overflow:hidden;border:1px solid var(--border,#e5e7eb);"></div>
+        ${mapBlock}
       </div>
       <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
         ${buttonsHtml}

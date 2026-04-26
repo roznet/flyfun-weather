@@ -53,8 +53,10 @@ class Flight(BaseModel):
     # are edited directly, overwritten when a new raw string is parsed.
     raw_route: str | None = None
     # euro_aip version that derived ``waypoints`` from ``raw_route``
-    # (e.g. ``0.9.0``). Lets a future re-derive job spot flights that
-    # would benefit from a newer parser. NULL whenever raw_route is NULL.
+    # (e.g. ``"euro_aip/0.9.0"`` — the ``library/version`` shape comes
+    # from ``_euro_aip_parser_version`` in the API layer). Lets a future
+    # re-derive job spot flights that would benefit from a newer parser.
+    # NULL whenever raw_route is NULL.
     parser_version: str | None = None
     created_at: datetime
 

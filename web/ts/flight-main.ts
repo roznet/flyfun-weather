@@ -321,15 +321,14 @@ async function init(): Promise<void> {
         : t('flightDetail.moveConfirmNoPacks');
       if (!confirm(msg)) return;
       try {
-        const newFlight = await moveFlight(flight.id, {
-          ...payload,
-          // Mirror dupBtn's fallback: if the pilot didn't edit the
-          // route input, carry the source flight's stored raw_route
-          // forward so a date-only move doesn't drop the annotation.
-          // The server-side move handler also preserves in this case,
-          // but explicit-is-better than depending on it.
-          raw_route: payload.raw_route ?? (flight.raw_route ?? undefined),
-        });
+        // raw_route is included only when the pilot actually edited the
+        // route input (via ``payload.raw_route``). The server preserves
+        // ``source.raw_route``/``source.parser_version`` on its own when
+        // the route is unchanged — sending ``flight.raw_route`` here
+        // would push the server into the "new raw" branch and re-stamp
+        // ``parser_version`` to the current euro_aip release, defeating
+        // its role as a re-derive marker.
+        const newFlight = await moveFlight(flight.id, payload);
         window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
@@ -350,11 +349,14 @@ async function init(): Promise<void> {
           flight_duration_hours: flight.flight_duration_hours,
           profile_id: flight.profile_id ?? undefined,
           aircraft_id: flight.aircraft_id ?? undefined,
-          // Carry the raw input only when the pilot edited it. Otherwise
-          // fall back to the source flight's stored raw_route, which may
-          // be NULL for iOS/MCP-created flights — that's fine, the new
-          // flight then also has no raw_route, matching the source.
-          raw_route: payload.raw_route ?? (flight.raw_route ?? undefined),
+          // raw_route only when the pilot actually edited the input.
+          // Forwarding ``flight.raw_route`` from the source would make
+          // the create endpoint stamp ``parser_version`` to the current
+          // euro_aip release, falsely claiming the new flight's
+          // waypoints were parsed by the current parser. The new flight
+          // therefore starts with NULL raw_route on a copy-without-edit
+          // — annotation is lost, but the re-derive marker stays honest.
+          raw_route: payload.raw_route,
         });
         window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
       } catch (err) {
