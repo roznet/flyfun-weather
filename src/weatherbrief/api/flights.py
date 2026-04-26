@@ -1321,18 +1321,24 @@ def update_flight(
             # Update route_name to reflect new waypoints
             row.route_name = "_".join(w.lower() for w in new_waypoints)
             route_changed = True
-            # Sync raw_route with the new waypoint list:
-            #   client sent raw_route → store it + re-stamp parser version
-            #   client sent only waypoints → clear raw_route (the previous
-            #     stored string no longer matches; better NULL than stale)
-            if req.raw_route is not None:
-                row.raw_route = req.raw_route.strip() or None
-                row.parser_version = (
-                    _euro_aip_parser_version() if row.raw_route else None
-                )
-            else:
-                row.raw_route = None
-                row.parser_version = None
+
+        # Sync raw_route whenever waypoints were supplied — the raw string
+        # annotates the resolved list, so it's in scope even if the resolved
+        # values happen to match what's already stored. (Without this, an
+        # iOS-created flight that the pilot later annotates from the web
+        # with the equivalent Field-15 string would silently drop the raw.)
+        # Mirrors move_flight's outer-scope handling of the same field.
+        #   raw_route in body → store it + stamp parser version
+        #   raw_route omitted → clear (better NULL than a string that may
+        #                              no longer reflect what the user typed)
+        if req.raw_route is not None:
+            row.raw_route = req.raw_route.strip() or None
+            row.parser_version = (
+                _euro_aip_parser_version() if row.raw_route else None
+            )
+        else:
+            row.raw_route = None
+            row.parser_version = None
 
     # Profile change — apply the new profile's altitude/ceiling to the flight
     if req.profile_id is not None and req.profile_id != original_flight.profile_id:
