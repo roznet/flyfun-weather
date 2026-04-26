@@ -276,6 +276,10 @@ def test_run_once_writes_snapshot_with_expected_schema(
         output_dir=tmp_path,
         forecast_days=1,
         stride_hours=1,  # keep every hour so all 4 timestamps land in NPZ
+        # The fake init (2026-04-24) ages past the default 48h retention as
+        # wall-clock advances; bump retention so the same-call purge doesn't
+        # delete the snapshot we just wrote.
+        retention_hours=10**6,
         skip_existing=False,
         client=client,
     )
@@ -347,6 +351,9 @@ def test_run_once_stride_hours_decimates(
         output_dir=tmp_path,
         forecast_days=1,
         stride_hours=3,
+        # See note in test_run_once_writes_snapshot_with_expected_schema —
+        # disable purge so the fake-init snapshot survives the run.
+        retention_hours=10**6,
         skip_existing=False,
         client=client,
     )

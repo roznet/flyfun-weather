@@ -16,8 +16,8 @@ from weatherbrief.frontal.grid import (
 class TestBuildGridCoords:
     def test_shape(self):
         lat, lon = build_grid_coords()
-        assert len(lat) == 51  # 35.0 to 60.0 in 0.5 steps
-        assert len(lon) == 97  # -20.0 to 28.0 in 0.5 steps
+        assert len(lat) == 101  # 35.0 to 60.0 in 0.25 steps
+        assert len(lon) == 193  # -20.0 to 28.0 in 0.25 steps
 
     def test_bounds(self):
         lat, lon = build_grid_coords()
@@ -28,15 +28,15 @@ class TestBuildGridCoords:
 
     def test_spacing(self):
         lat, lon = build_grid_coords()
-        assert np.diff(lat).mean() == pytest.approx(0.5)
-        assert np.diff(lon).mean() == pytest.approx(0.5)
+        assert np.diff(lat).mean() == pytest.approx(0.25)
+        assert np.diff(lon).mean() == pytest.approx(0.25)
 
 
 class TestBuildGridPoints:
     def test_count(self):
         lat, lon = build_grid_coords()
         points = build_grid_points(lat, lon)
-        assert len(points) == 51 * 97
+        assert len(points) == 101 * 193
 
     def test_lat_major_order(self):
         lat = np.array([35.0, 35.5])
