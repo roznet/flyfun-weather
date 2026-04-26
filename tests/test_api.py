@@ -852,6 +852,31 @@ class TestUpdateFlightRawRoute:
         assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
         assert data["parser_version"] is not None
 
+    def test_update_same_waypoints_with_raw_route_stores_it(self, client):
+        """iOS-then-annotate scenario: a flight created without a raw_route
+        (iOS/MCP path) gets edited from the web with a Field-15 string whose
+        resolved waypoints equal the stored list. The raw_route must still
+        land — the input string is the new piece of information, even though
+        the waypoint list didn't change."""
+        # Create without raw_route (mimics iOS/MCP)
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        flight = resp.json()
+        assert flight["raw_route"] is None
+
+        # Annotate with an equivalent Field-15 string from the web
+        resp = client.patch(f"/api/flights/{flight['id']}", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "raw_route": "EGTK DCT LFPB DCT LSGS",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
+        assert data["parser_version"] is not None
+
 
 # --- Interpret Route ---
 
