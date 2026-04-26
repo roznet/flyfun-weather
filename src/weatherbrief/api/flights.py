@@ -583,13 +583,9 @@ def create_flight(
 
 
 def _euro_aip_parser_version() -> str:
-    """Stamp tying a stored ``raw_route`` to the parser that derived it.
-
-    Read at request time (not import time) so a hot-reloaded euro_aip
-    during dev shows the new version on the next save without restarting
-    the server. ``unknown`` is the safe fallback if euro_aip ever ships
-    without ``__version__``.
-    """
+    """Stamp tying a stored ``raw_route`` to the parser that derived it."""
+    # Read at request time so a hot-reloaded euro_aip in dev picks up the
+    # new version on the next save without a server restart.
     import euro_aip
     version = getattr(euro_aip, "__version__", None) or "unknown"
     return f"euro_aip/{version}"
