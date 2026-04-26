@@ -34,8 +34,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 STANDALONE_MODELS = ["gfs", "icon", "ecmwf"]
-SAMPLE_HOURS_UTC = [6, 9, 12, 15, 18]  # light cycles at 09/12/15, full at 06/18
-FULL_CYCLE_HOURS_UTC = {6, 18}  # full forecast fetch + scoring at synoptic boundary hours
+SAMPLE_HOURS_UTC = [6, 9, 12, 15, 18]  # verification target hours (cycle_time, forecast-bucket UI)
+FULL_CYCLE_HOURS_UTC = {6, 18}  # legacy: combined fetch+score; kept for CLI/tests, no longer scheduled
+
+# Fetch loop fires ~30 min after each ECMWF delivery (00Z lands ~06:35,
+# 12Z lands ~18:35). Picks up the freshest GFS/ICON/ECMWF inits before the
+# next verification cycle reads from DB.
+FORECAST_FETCH_HOURS_UTC = [7, 19]
+
+# Verification loop fires on the synoptic-bucket hours. cycle_time = wall
+# clock, so METARs are pulled near each bucket and scored against whatever
+# snapshots are already in DB (most recent fetch wins).
+VERIFICATION_HOURS_UTC = [6, 9, 12, 15, 18]
 
 # Model forecast horizon — 4 days is enough for actionable verification stats
 MODEL_FORECAST_DAYS = {
@@ -684,19 +694,38 @@ def run_standalone_cycle(
     airports_db_path: str,
     *,
     fetch_forecasts: bool = True,
+    score_observations: bool = True,
 ) -> dict:
-    """Run one standalone verification cycle.
+    """Run one standalone cycle.
 
-    When *fetch_forecasts* is True (full cycle), runs Phases A-E including
-    Open-Meteo forecast fetching.  When False (light cycle), skips straight
-    to observations + scoring — no external API calls except aviationweather.gov.
+    Three modes by flag combination:
+
+      * ``fetch_forecasts=True, score_observations=True`` → ``"full"``: combined
+        fetch + score (legacy; used by CLI and manual runs).
+      * ``fetch_forecasts=True, score_observations=False`` → ``"forecast"``:
+        fetch + store snapshots only. Used by the forecast-fetch loop, which
+        fires after ECMWF deliveries land.
+      * ``fetch_forecasts=False, score_observations=True`` → ``"light"``:
+        METAR/TAF fetch + scoring only. Used by the verification loop, which
+        scores observations against whatever snapshots are already in DB.
+
+    The remaining ``(False, False)`` combination is rejected.
 
     Returns a summary dict with counts and timing.
     """
+    if not fetch_forecasts and not score_observations:
+        raise ValueError("must enable at least one of fetch_forecasts or score_observations")
+
     from flyfun_common.db import SessionLocal
     from weatherbrief.fetch.model_status import fetch_model_metadata
 
-    cycle_type = "full" if fetch_forecasts else "light"
+    if fetch_forecasts and score_observations:
+        cycle_type = "full"
+    elif fetch_forecasts:
+        cycle_type = "forecast"
+    else:
+        cycle_type = "light"
+
     t_start = time.monotonic()
     now = datetime.now(timezone.utc)
 
@@ -707,67 +736,71 @@ def run_standalone_cycle(
         models_fetched = 0
         snapshots_stored = 0
         total_api_calls = 0
+        obs_stored = 0
+        scores_created = 0
+        pruned = 0
 
-        if not fetch_forecasts:
-            logger.info("Light cycle — skipping forecast fetch, observations + scoring only")
-        else:
-            # Phase A+B: Fetch and store forecasts per model
-            # Process one model at a time to limit memory usage — each model's
-            # snapshots are stored and freed before fetching the next.
+        if fetch_forecasts:
+            # Phase A+B: Fetch and store forecasts per model. One model at a
+            # time to bound memory — each model's snapshots are stored and
+            # freed before the next fetch.
             metadata = fetch_model_metadata(STANDALONE_MODELS)
+            for model in STANDALONE_MODELS:
+                meta = metadata.get(model)
+                if meta is None:
+                    logger.warning("No metadata for model %s, skipping", model)
+                    continue
 
-        for model in (STANDALONE_MODELS if fetch_forecasts else []):
-            meta = metadata.get(model)
-            if meta is None:
-                logger.warning("No metadata for model %s, skipping", model)
-                continue
+                init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
 
-            init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
+                existing = db.execute(
+                    select(AirportForecastSnapshotRow.id)
+                    .where(AirportForecastSnapshotRow.model == model)
+                    .where(AirportForecastSnapshotRow.model_init_time == init_time)
+                    .limit(1)
+                ).scalar_one_or_none()
 
-            # Check if we already have snapshots for this init time
-            existing = db.execute(
-                select(AirportForecastSnapshotRow.id)
-                .where(AirportForecastSnapshotRow.model == model)
-                .where(AirportForecastSnapshotRow.model_init_time == init_time)
-                .limit(1)
-            ).scalar_one_or_none()
+                if existing is not None:
+                    logger.info("Model %s init %s already stored, skipping fetch", model, init_time)
+                    continue
 
-            if existing is not None:
-                logger.info("Model %s init %s already stored, skipping fetch", model, init_time)
-                continue
+                logger.info("Fetching %s forecasts (init %s) for %d airports",
+                            model, init_time, len(airports))
 
-            logger.info("Fetching %s forecasts (init %s) for %d airports",
-                        model, init_time, len(airports))
+                snapshots, api_calls = _fetch_forecasts_for_model(model, init_time, airports, session)
+                total_api_calls += api_calls
+                logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
+                            model, len(snapshots), api_calls)
 
-            snapshots, api_calls = _fetch_forecasts_for_model(model, init_time, airports, session)
-            total_api_calls += api_calls
-            logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
-                        model, len(snapshots), api_calls)
+                _enrich_with_grib(snapshots, model, init_time, airports, session)
 
-            # GRIB enrichment for ceiling/cloud_base
-            _enrich_with_grib(snapshots, model, init_time, airports, session)
-
-            # Store immediately, commit, and free memory
-            stored = _store_snapshots(snapshots, db)
-            db.commit()
-            snapshots_stored += stored
-            logger.info("Model %s: stored %d snapshots", model, stored)
-            del snapshots
-            models_fetched += 1
+                stored = _store_snapshots(snapshots, db)
+                db.commit()
+                snapshots_stored += stored
+                logger.info("Model %s: stored %d snapshots", model, stored)
+                del snapshots
+                models_fetched += 1
+        else:
+            logger.info("Skipping forecast fetch (score-only cycle)")
 
         t_fetch_done = time.monotonic()
 
-        # Phase C: Fetch METAR/TAF
-        obs_stored = _fetch_and_store_observations(airports, airports_db_path, db)
-        t_obs_done = time.monotonic()
-        logger.info("Stored %d new observations", obs_stored)
+        if score_observations:
+            # Phase C: Fetch METAR/TAF
+            obs_stored = _fetch_and_store_observations(airports, airports_db_path, db)
+            t_obs_done = time.monotonic()
+            logger.info("Stored %d new observations", obs_stored)
 
-        # Phase D: Score
-        scores_created = _score_cycle(now, airports, airports_db_path, db)
-        t_score_done = time.monotonic()
-        logger.info("Created %d scores", scores_created)
+            # Phase D: Score against snapshots already in DB.
+            scores_created = _score_cycle(now, airports, airports_db_path, db)
+            t_score_done = time.monotonic()
+            logger.info("Created %d scores", scores_created)
+        else:
+            t_obs_done = t_fetch_done
+            t_score_done = t_fetch_done
+            logger.info("Skipping observations + scoring (fetch-only cycle)")
 
-        # Phase E: Prune
+        # Phase E: Prune (always — cheap, keeps the table bounded).
         pruned = _prune_old_snapshots(db)
         if pruned:
             logger.info("Pruned %d old forecast snapshots", pruned)

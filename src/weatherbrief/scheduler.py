@@ -41,10 +41,10 @@ _DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
 _STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
 _ECMWF_WATCHER_POLL_SECONDS = 300  # 5 minutes
 _ECMWF_WATCHER_STARTUP_DELAY_SECONDS = 15  # run early — other loops may need ready data
-# Hewson precompute fires once per init cycle. 05Z and 17Z pick up the 00Z /
-# 12Z inits after ~5 h — Open-Meteo has all 3 models published by then, and
-# we keep 1 h buffer before the 06Z / 18Z standalone-verification full cycles.
-_HEWSON_SAMPLE_HOURS_UTC = [5, 17]
+# Hewson precompute fires once per init cycle. 06Z and 18Z pick up the 00Z /
+# 12Z inits after ~6 h — Open-Meteo has all 3 models published by then, and
+# we keep ~1 h buffer before the 07Z / 19Z standalone forecast-fetch cycles.
+_HEWSON_SAMPLE_HOURS_UTC = [6, 18]
 _HEWSON_STARTUP_DELAY_SECONDS = 300  # let other loops settle; Hewson is cold-cache anyway
 
 
@@ -336,7 +336,7 @@ async def run_digest_loop(app_state) -> None:
     Waits until the target hour (default 06:00 UTC), sends the digest,
     then sleeps until the same hour the next day.
     """
-    target_hour = int(os.environ.get("DIGEST_HOUR_UTC", "6"))
+    target_hour = int(os.environ.get("DIGEST_HOUR_UTC", "8"))
     logger.info("Digest loop started (daily at %02d:00 UTC)", target_hour)
     await asyncio.sleep(_DIGEST_STARTUP_DELAY_SECONDS)
 
@@ -441,51 +441,90 @@ def _run_retention_once() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Standalone verification loop
+# Forecast fetch + standalone verification loops
+#
+# Two independent loops driven by the standalone subsystem:
+#
+#   * Forecast fetch fires at FORECAST_FETCH_HOURS_UTC (07/19 — ~30 min after
+#     ECMWF 00Z/12Z deliveries land). Stores fresh snapshots only.
+#   * Verification fires at VERIFICATION_HOURS_UTC (06/09/12/15/18). Pulls
+#     METAR/TAF and scores against whatever snapshots are already in DB.
+#
+# They're decoupled so verification picks up the right METARs at synoptic
+# bucket hours, while forecast fetch waits for the late ECMWF delivery.
 # ---------------------------------------------------------------------------
 
 
-async def run_standalone_verification_loop(app_state) -> None:
-    """Run standalone airport verification at configured sample hours.
+async def run_forecast_fetch_loop(app_state) -> None:
+    """Fetch standalone forecast snapshots at configured fetch hours.
 
-    Instead of polling every N minutes, computes the next sample hour
-    and sleeps until then — no wasted cycles.
-
-    Disableable via DISABLE_STANDALONE_VERIFICATION=1 env var.
+    Disableable via DISABLE_FORECAST_FETCH=1 env var.
     """
-    from weatherbrief.tasks.standalone_verification import (
-        FULL_CYCLE_HOURS_UTC,
-        SAMPLE_HOURS_UTC,
+    from weatherbrief.tasks.standalone_verification import FORECAST_FETCH_HOURS_UTC
+
+    if os.environ.get("DISABLE_FORECAST_FETCH", "").strip() in ("1", "true"):
+        logger.info("Forecast fetch disabled via env var")
+        return
+
+    logger.info(
+        "Forecast fetch loop started (fetch hours: %s UTC)",
+        FORECAST_FETCH_HOURS_UTC,
     )
+    await asyncio.sleep(_STANDALONE_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            sleep_secs = _seconds_until_next_sample_hour(FORECAST_FETCH_HOURS_UTC)
+            logger.info(
+                "Forecast fetch: sleeping %ds until next fetch hour", sleep_secs,
+            )
+            await asyncio.sleep(sleep_secs)
+            await asyncio.to_thread(
+                _run_standalone_once, app_state,
+                True,   # fetch_forecasts
+                False,  # score_observations
+            )
+            await asyncio.sleep(60)  # advance past the current hour
+        except Exception:
+            logger.error("Forecast fetch cycle failed", exc_info=True)
+            await asyncio.sleep(900)
+
+
+async def run_standalone_verification_loop(app_state) -> None:
+    """Score METAR/TAF observations at configured verification hours.
+
+    Reads forecast snapshots already in DB (populated by the fetch loop) —
+    does not call Open-Meteo / GRIB. Disableable via
+    DISABLE_STANDALONE_VERIFICATION=1 env var.
+    """
+    from weatherbrief.tasks.standalone_verification import VERIFICATION_HOURS_UTC
 
     if os.environ.get("DISABLE_STANDALONE_VERIFICATION", "").strip() in ("1", "true"):
         logger.info("Standalone verification disabled via env var")
         return
 
     logger.info(
-        "Standalone verification loop started (sample hours: %s UTC, "
-        "full cycle hours: %s UTC)",
-        SAMPLE_HOURS_UTC, sorted(FULL_CYCLE_HOURS_UTC),
+        "Standalone verification loop started (verification hours: %s UTC)",
+        VERIFICATION_HOURS_UTC,
     )
     await asyncio.sleep(_STANDALONE_STARTUP_DELAY_SECONDS)
 
     while True:
         try:
-            sleep_secs = _seconds_until_next_sample_hour(SAMPLE_HOURS_UTC)
-            logger.info("Standalone verification: sleeping %ds until next sample hour",
-                        sleep_secs)
-            await asyncio.sleep(sleep_secs)
-            current_hour = datetime.now(timezone.utc).hour
-            fetch_forecasts = current_hour in FULL_CYCLE_HOURS_UTC
-            await asyncio.to_thread(
-                _run_standalone_once, app_state, fetch_forecasts,
+            sleep_secs = _seconds_until_next_sample_hour(VERIFICATION_HOURS_UTC)
+            logger.info(
+                "Standalone verification: sleeping %ds until next verification hour",
+                sleep_secs,
             )
-            # After running, sleep briefly to ensure we advance past the
-            # current sample hour and don't re-trigger immediately.
-            await asyncio.sleep(60)
+            await asyncio.sleep(sleep_secs)
+            await asyncio.to_thread(
+                _run_standalone_once, app_state,
+                False,  # fetch_forecasts
+                True,   # score_observations
+            )
+            await asyncio.sleep(60)  # advance past the current hour
         except Exception:
             logger.error("Standalone verification cycle failed", exc_info=True)
-            # On failure, wait 15 min before retrying
             await asyncio.sleep(900)
 
 
@@ -509,12 +548,17 @@ def _seconds_until_next_sample_hour(sample_hours: list[int]) -> float:
 
 def _run_standalone_once(
     app_state,
-    fetch_forecasts: bool = True,
+    fetch_forecasts: bool,
+    score_observations: bool,
 ) -> None:
-    """Execute a single standalone verification cycle (called in a thread)."""
+    """Execute a single standalone cycle (called in a thread).
+
+    Used by both the forecast-fetch loop (fetch=True, score=False) and the
+    verification loop (fetch=False, score=True).
+    """
     db_path = getattr(app_state, "db_path", "")
     if not db_path:
-        logger.warning("Standalone verification: no AIRPORTS_DB configured")
+        logger.warning("Standalone cycle: no AIRPORTS_DB configured")
         return
 
     from weatherbrief.tasks.airport_watchlist import (
@@ -527,20 +571,22 @@ def _run_standalone_once(
         airports = load_watchlist_with_coords(get_configs_dir(), db_path)
     except FileNotFoundError:
         logger.warning(
-            "Standalone verification: airport watchlist not found. "
+            "Standalone cycle: airport watchlist not found. "
             "Run: python -m weatherbrief.verify discover"
         )
         return
 
     if not airports:
-        logger.warning("Standalone verification: empty watchlist")
+        logger.warning("Standalone cycle: empty watchlist")
         return
 
     result = run_standalone_cycle(
-        airports, db_path, fetch_forecasts=fetch_forecasts,
+        airports, db_path,
+        fetch_forecasts=fetch_forecasts,
+        score_observations=score_observations,
     )
     logger.info(
-        "Standalone verification %s cycle: %d models, %d snapshots, "
+        "Standalone %s cycle: %d models, %d snapshots, "
         "%d observations, %d scores (%dms)",
         result["cycle_type"],
         result["models_fetched"], result["snapshots_stored"],
@@ -548,7 +594,8 @@ def _run_standalone_once(
         result["duration_ms"],
     )
 
-    # Rebuild dashboard + map caches after cycle completes
+    # Rebuild dashboard + map caches after cycle completes (snapshots changed
+    # for fetch cycles, scores changed for verification cycles — both feed UI).
     try:
         from flyfun_common.db import SessionLocal
         from weatherbrief.tasks.cache_builder import rebuild_all
@@ -557,8 +604,8 @@ def _run_standalone_once(
         try:
             cache_result = rebuild_all(cache_db, db_path)
             logger.info(
-                "Standalone verification: cache rebuilt (%dms)",
-                cache_result["duration_ms"],
+                "Standalone %s cycle: cache rebuilt (%dms)",
+                result["cycle_type"], cache_result["duration_ms"],
             )
         finally:
             cache_db.close()
@@ -607,10 +654,10 @@ def _run_ecmwf_watcher_once() -> list[datetime]:
 async def run_hewson_precompute_loop(app_state) -> None:
     """Fire Hewson diagnostic precompute at fixed UTC hours.
 
-    Runs at ``_HEWSON_SAMPLE_HOURS_UTC`` (05Z / 17Z by default), chosen to
-    sit ~5 h after each ``00Z/12Z`` init (Open-Meteo has all 3 models
-    published by then) and 1 h before the 06Z/18Z full-cycle verification
-    run (avoids CPU/network overlap). See
+    Runs at ``_HEWSON_SAMPLE_HOURS_UTC`` (06Z / 18Z by default), chosen to
+    sit ~6 h after each ``00Z/12Z`` init (Open-Meteo has all 3 models
+    published by then) and ~1 h before the 07Z/19Z standalone forecast-fetch
+    cycles (avoids CPU/network overlap). See
     ``designs/future/hewson-fields-aviation-advisories.md`` § 6.1.
 
     The heavy lifting is in :func:`weatherbrief.hewson.precompute.run_once`,

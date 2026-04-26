@@ -169,6 +169,14 @@ async def lifespan(app: FastAPI):
 
         digest_task = asyncio.create_task(run_digest_loop(app.state))
 
+    forecast_fetch_task = None
+    if os.environ.get("DISABLE_FORECAST_FETCH") not in ("1", "true"):
+        from weatherbrief.scheduler import run_forecast_fetch_loop
+
+        forecast_fetch_task = asyncio.create_task(
+            run_forecast_fetch_loop(app.state)
+        )
+
     standalone_task = None
     if os.environ.get("DISABLE_STANDALONE_VERIFICATION") not in ("1", "true"):
         from weatherbrief.scheduler import run_standalone_verification_loop
@@ -202,8 +210,8 @@ async def lifespan(app: FastAPI):
     yield
 
     for task in (scheduler_task, retention_task, verification_task,
-                 digest_task, standalone_task, ecmwf_watcher_task,
-                 hewson_precompute_task):
+                 digest_task, forecast_fetch_task, standalone_task,
+                 ecmwf_watcher_task, hewson_precompute_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):

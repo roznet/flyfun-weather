@@ -407,13 +407,18 @@ Standalone fetches surface + pressure-level variables for ~830 airports per full
 
 ### Scheduler Integration
 
-Disableable via `DISABLE_STANDALONE_VERIFICATION=1` env var. Instead of polling, computes next sample hour and sleeps until then. At each sample hour, determines cycle type: `fetch_forecasts = hour in {6, 18}`. On failure, retries after 15 minutes. Startup delay: 240 seconds. Post-cycle 60s cooldown prevents immediate re-trigger.
+The standalone subsystem now runs as **two independent loops** (disable individually with `DISABLE_FORECAST_FETCH=1` / `DISABLE_STANDALONE_VERIFICATION=1`):
+
+- **Forecast fetch** — fires at `FORECAST_FETCH_HOURS_UTC = [7, 19]`. Runs `run_standalone_cycle(fetch_forecasts=True, score_observations=False)`. Timed ~30 min after ECMWF 00Z/12Z deliveries land (~06:35 / 18:35 UTC) so each fetch picks up the freshest GFS/ICON/ECMWF inits.
+- **Verification** — fires at `VERIFICATION_HOURS_UTC = [6, 9, 12, 15, 18]`. Runs `run_standalone_cycle(fetch_forecasts=False, score_observations=True)`. `cycle_time = wall clock`, so METARs are pulled near each synoptic bucket and scored against whatever snapshots are already in DB (most recent fetch wins).
+
+Both loops compute next fire hour and sleep until then (no polling), retry after 15 min on failure, use 240 s startup delay, and trigger a `cache_builder.rebuild_all` after each successful cycle. The legacy combined cycle (`fetch_forecasts=True, score_observations=True`, source `standalone_full`) is still callable from CLI/tests but is no longer scheduled.
 
 ## Verification Stats & Digest
 
 ### Daily Digest Email
 
-`notify/verification_email.py` sends a daily HTML + plaintext email at 06:00 UTC (configurable via `DIGEST_HOUR_UTC` env var). Admin-only while testing. Accuracy color thresholds: green ≥80%, amber 60-80%, red <60%.
+`notify/verification_email.py` sends a daily HTML + plaintext email at 08:00 UTC (configurable via `DIGEST_HOUR_UTC` env var; default chosen to land after the 07Z full-cycle results). Admin-only while testing. Accuracy color thresholds: green ≥80%, amber 60-80%, red <60%.
 
 ### Digest Data Model
 
