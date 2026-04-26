@@ -652,7 +652,11 @@ class InterpretRouteResponse(BaseModel):
 
     original_tokens: list[str] = []  # all tokens extracted from the input
     interpreted: list[str] = []  # waypoints that resolved successfully
-    skipped: list[str] = []  # tokens that didn't resolve
+    # Tokens we couldn't place on the map: typos, unsupported coord formats,
+    # or DB-context misses. Pure ICAO Field-15 syntax (DCT/IFR/VFR/airway
+    # labels/speed-level) is silently dropped — those are expected and a
+    # "not recognized" label on them confuses pilots.
+    skipped: list[str] = []
     waypoints: list[WaypointInfo] = []  # resolved waypoint details
 
 
@@ -672,9 +676,11 @@ def interpret_route(
       3. ``resolve_waypoints`` does the authoritative pass with route
          context, returning a survivors list plus reason-tagged rejects.
 
-    All non-waypoint syntax and all rejected tokens are surfaced in
-    ``skipped`` so the preview popup can show the pilot exactly what
-    survived.
+    Only tokens we couldn't place on the map (UNKNOWN + late-stage
+    resolver rejections) reach ``skipped``. Pure Field-15 syntax
+    (DCT, IFR/VFR, airway labels, speed/level groups) is silently
+    dropped — surfacing it as "not recognized" misleads pilots into
+    thinking they typed something wrong.
     """
     from euro_aip.models.field15 import parse_field15, TokenKind
 
@@ -704,13 +710,15 @@ def interpret_route(
             if candidate_waypoints and candidate_waypoints[-1] == t.value:
                 continue
             candidate_waypoints.append(t.value)
-        else:
-            # Everything non-waypoint (AIRWAY / FLIGHT_RULE / DIRECT /
-            # SPEED_LEVEL / UNKNOWN) is surfaced in ``skipped`` so the pilot
-            # can see every token that didn't make it into the route — and
-            # so the client can rely on ``interpreted ∪ skipped`` covering
-            # every element of ``original_tokens``.
+        elif t.kind is TokenKind.UNKNOWN:
+            # Tokens that don't fit any Field-15 grammar — typos, or
+            # shapes we don't yet handle (e.g. inline coords like
+            # 4629N01541E). Surface them so the pilot can see what
+            # didn't make the cut.
             skipped.append(t.value)
+        # AIRWAY / FLIGHT_RULE / DIRECT / SPEED_LEVEL fall through:
+        # syntactic noise the parser correctly identified — silently
+        # dropped from the user-visible list.
 
     # Pass-through when we have 0-1 candidates — resolver needs >=2 for a
     # route. The loop below overwrites this from the resolver on the >=2 path.

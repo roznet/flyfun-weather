@@ -861,11 +861,13 @@ class TestInterpretRoute:
         assert set(data["skipped"]) == {"ZZZZ", "YYYY"}
 
     @patch("weatherbrief.airports._load_airport_model")
-    def test_field15_keywords_skipped(self, mock_load, client):
-        """ICAO Field-15 syntax tokens (IFR/DCT/airways/speed-level) are
-        classified as non-waypoints by the parser and surfaced in `skipped`
-        without hitting the DB. Regression test for the IFR-vs-navaid-collision
-        bug where `IFR` coincidentally matched a global navaid code."""
+    def test_field15_keywords_silently_dropped(self, mock_load, client):
+        """ICAO Field-15 syntax (IFR/DCT/airways/speed-level) is silently
+        dropped from `skipped` — it's expected noise, not a pilot mistake.
+        Regression test for the IFR-vs-navaid-collision bug where `IFR`
+        coincidentally matched a global navaid code (it must still NOT be
+        sent to the resolver), and for the UX bug where the popup showed
+        "DCT, DCT, DCT not recognized" which confused pilots."""
         mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
@@ -875,9 +877,28 @@ class TestInterpretRoute:
         )
         assert resp.status_code == 200
         data = resp.json()
-        # Endpoints survive, syntax tokens are set aside
+        # Endpoints survive
         assert data["interpreted"] == ["EGBJ", "LFOV"]
-        # All non-waypoint tokens surface in skipped so the pilot sees
-        # every parsed token and ``interpreted ∪ skipped`` covers
-        # ``original_tokens``.
-        assert set(data["skipped"]) == {"N0152F100", "IFR", "DCT", "M150"}
+        # Pure Field-15 syntax never reaches the user-visible skip list.
+        assert data["skipped"] == []
+        # But original_tokens still records everything the parser saw.
+        assert set(data["original_tokens"]) == {
+            "EGBJ", "N0152F100", "IFR", "DCT", "M150", "LFOV",
+        }
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_unknown_grammar_token_skipped(self, mock_load, client):
+        """Tokens that don't match any Field-15 grammar (typos, inline GPS
+        coords, mixed alnum) surface in `skipped` so the pilot sees them.
+        The 5-letter typo path is covered by `test_unknown_token_skipped`
+        — this one exercises the parser's UNKNOWN bucket directly."""
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        # 4629N01541E is an ICAO inline coord — currently UNKNOWN to the
+        # parser (we don't yet resolve it to lat/lon).
+        resp = self._post(client, "EGBJ 4629N01541E LFOV")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGBJ", "LFOV"]
+        assert data["skipped"] == ["4629N01541E"]
