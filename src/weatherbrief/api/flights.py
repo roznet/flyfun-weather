@@ -553,8 +553,13 @@ def create_flight(
 
     # Stamp the parser version only when we actually have a raw_route.
     # No raw_route → no derivation happened on the server → no version
-    # to record (iOS/MCP path).
-    raw_route = req.raw_route.strip() if req.raw_route else None
+    # to record (iOS/MCP path). ``strip() or None`` collapses the empty
+    # and whitespace-only cases to NULL — same idiom as update/move,
+    # avoiding the contradictory ``(raw_route="", parser_version=None)``
+    # state that would result from storing a whitespace-only string.
+    raw_route = (
+        (req.raw_route.strip() or None) if req.raw_route is not None else None
+    )
     parser_version = _euro_aip_parser_version() if raw_route else None
 
     flight = Flight(
