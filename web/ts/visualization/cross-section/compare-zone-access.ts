@@ -35,7 +35,7 @@ export function getZonesForLayer(layerId: string, point: VizPoint): ZoneSlice[] 
         .map((cl) => ({ baseFt: cl.baseFt, topFt: cl.topFt, severity: cl.coverage }));
 
     case 'nwp-cloud-bands':
-      return point.nwpCloudLayers
+      return (point.nwpCloudLayers ?? [])
         .map((cl) => ({ baseFt: cl.baseFt, topFt: cl.topFt, severity: cl.coverage }));
 
     case 'cat-bands':

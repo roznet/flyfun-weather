@@ -344,16 +344,13 @@ def _analyze_sounding_heavy(
     # Temperature inversion detection
     inversion_layers = detect_inversions(derived_levels)
 
-    # NWP cloud layers from model diagnostics
+    # NWP cloud layers from model diagnostics (None if no native NWP source)
     nwp_cloud_layers = build_nwp_cloud_layers(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
         pressure_levels=levels,
-        dd_cloud_layers=dd_cloud_layers,
-        inversion_layers=inversion_layers,
-        lcl_altitude_ft=indices.lcl_altitude_ft,
     )
 
     # SFIP icing index (full → NWP-gated, proxy → DD-gated)
@@ -374,10 +371,10 @@ def _analyze_sounding_heavy(
         cape_jkg=eff_cape,
     )
 
-    # Ogimet-NWP icing (gated by NWP cloud layers)
+    # Ogimet-NWP icing (gated by NWP cloud layers; returns [] if none)
     icing_ogimet_nwp_zones = assess_icing_zones_ogimet_nwp(
         derived_levels,
-        nwp_cloud_layers or [],
+        nwp_cloud_layers,
         cape_jkg=eff_cape,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
@@ -385,10 +382,10 @@ def _analyze_sounding_heavy(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
-    # IENG icing (gated by NWP cloud layers)
+    # IENG icing (gated by NWP cloud layers; returns [] if none)
     ieng_icing_zones = assess_icing_zones_ieng(
         derived_levels,
-        nwp_cloud_layers or [],
+        nwp_cloud_layers,
         cape_jkg=eff_cape,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,

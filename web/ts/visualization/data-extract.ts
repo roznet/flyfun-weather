@@ -76,12 +76,19 @@ function extractPoint(
     meanDewpointDepressionC: cl.mean_dewpoint_depression_c ?? undefined,
   }));
 
-  const nwpCloudLayers: VizCloudLayer[] = (sounding?.nwp_cloud_layers ?? []).map((cl) => ({
-    baseFt: cl.base_ft,
-    topFt: cl.top_ft,
-    coverage: cl.coverage,
-    source: cl.source ?? 'dd',
-  }));
+  // nwp_cloud_layers is intentionally nullable from the backend:
+  //   null → model has no native NWP cloud envelope (gate toggle off)
+  //   []   → native source available, model says clear sky
+  //   [...] → render layers
+  const rawNwpCloudLayers = sounding?.nwp_cloud_layers ?? null;
+  const nwpCloudLayers: VizCloudLayer[] | null = rawNwpCloudLayers === null
+    ? null
+    : rawNwpCloudLayers.map((cl) => ({
+        baseFt: cl.base_ft,
+        topFt: cl.top_ft,
+        coverage: cl.coverage,
+        source: cl.source ?? 'dd',
+      }));
 
   const icingZones: VizIcingZone[] = (sounding?.icing_zones ?? []).map((iz) => ({
     baseFt: iz.base_ft,
@@ -187,6 +194,7 @@ function extractPoint(
     nwpConvectiveBaseFt: sounding?.convective_nwp?.base_ft ?? null,
     nwpConvectiveTopFt: sounding?.convective_nwp?.top_ft ?? null,
     nwpConvectiveCoverPct: sounding?.convective_nwp?.cover_pct ?? null,
+    hasNwpConvective: sounding?.convective_nwp != null,
     cloudCoverTotalPct,
     cloudCoverLowPct: sounding?.cloud_cover_low_pct ?? 0,
     cloudCoverMidPct: sounding?.cloud_cover_mid_pct ?? 0,
@@ -209,21 +217,29 @@ function extractPoint(
 export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const unavailable = new Set<string>();
 
-  const hasNwpCloudLayers = data.points.some((p) => p.nwpCloudLayers.length > 0);
-  const hasOgimetNwp = data.points.some((p) => p.icingOgimetNwpZones.length > 0);
+  // "NWP Layers" toggle: enabled when ANY point has native NWP cloud
+  // info (even if []). Distinguishes "model says clear sky" (toggle on,
+  // empty) from "no NWP enrichment" (toggle disabled).
+  const hasNwpCloudData = data.points.some((p) => p.nwpCloudLayers !== null);
+  // Ogimet-NWP / IENG: their backends now return [] when no native NWP
+  // layers exist (no fabricated zones). So gating on "any native NWP
+  // cloud data" is the right signal — same as the cloud toggle.
+  const hasNwpConvective = data.points.some((p) => p.hasNwpConvective);
   const hasSfip = data.points.some((p) => p.sfipZones.length > 0);
-  const hasNwpConvective = data.points.some((p) => p.nwpConvectiveBaseFt !== null);
+  const hasOgimetNwp = data.points.some((p) => p.icingOgimetNwpZones.length > 0);
   const hasIeng = data.points.some((p) => p.iengIcingZones.length > 0);
   const hasSld = data.points.some((p) => p.sldZones.length > 0);
   const hasEShear = data.points.some((p) => p.eShearLayers.length > 0);
 
-  if (!hasNwpCloudLayers) unavailable.add('nwp-cloud-bands');
-  if (!hasOgimetNwp) unavailable.add('icing-ogimet-nwp-bands');
+  if (!hasNwpCloudData) unavailable.add('nwp-cloud-bands');
+  if (!hasNwpCloudData) unavailable.add('icing-ogimet-nwp-bands');
+  if (!hasNwpCloudData) unavailable.add('ieng-icing-bands');
   if (!hasSfip) unavailable.add('sfip-bands');
-  if (!hasIeng) unavailable.add('ieng-icing-bands');
   if (!hasSld) unavailable.add('sld-bands');
   if (!hasEShear) unavailable.add('e-shear-bands');
   if (!hasNwpConvective) unavailable.add('nwp-convective-bg');
+  // Suppress unused-var warnings — kept for symmetry / future re-use
+  void hasOgimetNwp; void hasIeng;
 
   return unavailable;
 }

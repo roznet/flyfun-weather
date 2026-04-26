@@ -11,7 +11,6 @@ from weatherbrief.models import (
     CloudCoverage,
     DerivedLevel,
     EnhancedCloudLayer,
-    InversionLayer,
     NWPCloudDiagnostics,
     PressureLevelData,
     ThermodynamicIndices,
@@ -233,41 +232,35 @@ def build_nwp_cloud_layers(
     nwp_cloud_high_pct: float | None = None,
     *,
     pressure_levels: list[PressureLevelData] | None = None,
-    dd_cloud_layers: list[EnhancedCloudLayer] | None = None,
-    inversion_layers: list[InversionLayer] | None = None,
-    lcl_altitude_ft: float | None = None,
 ) -> list[EnhancedCloudLayer] | None:
-    """Build cloud layers from NWP data.
+    """Build cloud layers from native NWP sources only.
 
-    Four tiers of quality (preferred order):
+    Two sources, tried in order of richness:
       1. **Per-level 3D cloud fraction** (ECMWF ``cc`` / ICON ``clc``)
          → ``source="nwp_3d"`` — real deck base/top from the model's own
-         cloud scheme, strictly richer than bulk bands.
+         cloud scheme.
       2. **GRIB diagnostics** with base/top boundaries (GFS) → ``source="grib"``
-      3. **Synthesized** from Open-Meteo cloud %, narrowed by DD cloud
-         envelope and inversions → ``source="synthesized"``
-      4. **None** when no cloud cover data is available at all
 
-    Returns None only when no cloud cover data is available.
-    Returns an empty list when data exists but no cloud levels met threshold.
+    Returns ``None`` when neither source is available — the model has no
+    native NWP cloud envelope. Callers must treat this as "no NWP layer
+    data," not "model says clear sky."
+
+    Returns an empty list when a native source is available but no level
+    exceeded the threshold (genuine clear-sky forecast).
+
+    Open-Meteo bulk ``cloud_cover_low/mid/high_pct`` are intentionally NOT
+    used here: synthesizing layers from bulk percentages narrowed by DD
+    evidence produces a hybrid that isn't really a model-native layer, and
+    consumers downstream (Ogimet-NWP / IENG icing, the cross-section NWP
+    toggle) need a clean "native or absent" signal.
     """
     if pressure_levels:
         layers_3d = build_nwp_cloud_layers_from_fraction(pressure_levels)
         if layers_3d is not None:
             return layers_3d
 
-    layers = _build_grib_layers(
+    return _build_grib_layers(
         nwp_cloud_diagnostics, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
-    )
-    if layers is not None:
-        return layers
-
-    # No GRIB boundaries — synthesize from Open-Meteo percentages + DD heuristics
-    return _synthesize_nwp_layers(
-        nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
-        dd_cloud_layers=dd_cloud_layers or [],
-        inversion_layers=inversion_layers or [],
-        lcl_altitude_ft=lcl_altitude_ft,
     )
 
 
@@ -339,7 +332,7 @@ def _build_grib_layers(
     return layers
 
 
-# ── Synthesized NWP layers ─────────────────────────────────────────
+# ── ICAO band constants used by apply_nwp_coverage ─────────────────
 
 
 # ICAO altitude band boundaries (ft)
@@ -347,136 +340,9 @@ _LOW_TOP_FT = 6500
 _MID_TOP_FT = 20000
 _HIGH_TOP_FT = 45000
 
-# Minimum NWP cloud cover (%) to produce a synthesized layer.
-# 12.5% ≈ FEW (1-2 oktas).  Lower than this is trace cloud that adds
-# noise to the cross-section without actionable icing/visibility info.
+# Minimum NWP cloud cover (%) below which a band segment is treated as clear.
+# 12.5% ≈ FEW (1-2 oktas).
 _MIN_COVER_PCT = 12.5
-
-# Minimum inversion strength (°C) to cap cloud top
-_INVERSION_CAP_THRESHOLD_C = 2.0
-
-
-def _synthesize_nwp_layers(
-    nwp_cloud_low_pct: float | None,
-    nwp_cloud_mid_pct: float | None,
-    nwp_cloud_high_pct: float | None,
-    *,
-    dd_cloud_layers: list[EnhancedCloudLayer],
-    inversion_layers: list[InversionLayer],
-    lcl_altitude_ft: float | None,
-) -> list[EnhancedCloudLayer] | None:
-    """Synthesize NWP cloud layers from Open-Meteo percentages.
-
-    Uses DD-derived cloud envelope and inversions to narrow the full
-    ICAO band into plausible vertical bounds.  When no DD evidence
-    exists in a band, the band is skipped (not rendered) to avoid
-    painting the entire altitude range.
-
-    Returns None if no cloud cover data is available at all.
-    """
-    bands: list[tuple[float | None, float, float]] = [
-        (nwp_cloud_low_pct, 0, _LOW_TOP_FT),
-        (nwp_cloud_mid_pct, _LOW_TOP_FT, _MID_TOP_FT),
-        (nwp_cloud_high_pct, _MID_TOP_FT, _HIGH_TOP_FT),
-    ]
-
-    has_any_data = any(pct is not None for pct, _, _ in bands)
-    if not has_any_data:
-        return None
-
-    layers: list[EnhancedCloudLayer] = []
-
-    for cover_pct, band_floor, band_ceiling in bands:
-        if cover_pct is None or cover_pct < _MIN_COVER_PCT:
-            continue
-
-        base_ft, top_ft = _narrow_band(
-            band_floor, band_ceiling,
-            dd_cloud_layers, inversion_layers, lcl_altitude_ft,
-        )
-        if base_ft >= top_ft:
-            continue  # No DD evidence in this band — skip
-
-        layers.append(EnhancedCloudLayer(
-            base_ft=round(base_ft),
-            top_ft=round(top_ft),
-            coverage=_nwp_pct_to_coverage(cover_pct),
-            mean_dewpoint_depression_c=None,
-            source="synthesized",
-        ))
-
-    layers.sort(key=lambda lyr: lyr.base_ft)
-    return layers
-
-
-def _narrow_band(
-    band_floor: float,
-    band_ceiling: float,
-    dd_cloud_layers: list[EnhancedCloudLayer],
-    inversion_layers: list[InversionLayer],
-    lcl_altitude_ft: float | None,
-) -> tuple[float, float]:
-    """Narrow an ICAO band using DD cloud envelope and inversions.
-
-    Returns (base_ft, top_ft).  Returns (floor, floor) when no DD
-    cloud layers overlap the band — the caller should skip this band.
-    """
-    # Find DD cloud envelope overlapping this band
-    envelope = _cloud_envelope_in_band(dd_cloud_layers, band_floor, band_ceiling)
-    if envelope is None:
-        return band_floor, band_floor  # No sounding evidence — skip
-
-    base_ft, top_ft = envelope
-
-    # Low band: use LCL as cloud base when available and above terrain
-    if band_floor == 0 and lcl_altitude_ft is not None:
-        if lcl_altitude_ft > band_floor and lcl_altitude_ft < band_ceiling:
-            base_ft = min(base_ft, lcl_altitude_ft)
-
-    # Cap top at lowest capping inversion within the envelope
-    cap = _find_capping_inversion(inversion_layers, base_ft, top_ft)
-    if cap is not None:
-        top_ft = cap
-
-    return base_ft, top_ft
-
-
-def _cloud_envelope_in_band(
-    cloud_layers: list[EnhancedCloudLayer],
-    floor_ft: float,
-    ceiling_ft: float,
-) -> tuple[float, float] | None:
-    """Compute (lowest base, highest top) of DD cloud layers overlapping [floor, ceiling].
-
-    Returns None if no cloud layer overlaps the band.
-    """
-    min_base = ceiling_ft
-    max_top = floor_ft
-
-    for cl in cloud_layers:
-        if cl.top_ft > floor_ft and cl.base_ft < ceiling_ft:
-            min_base = min(min_base, max(cl.base_ft, floor_ft))
-            max_top = max(max_top, min(cl.top_ft, ceiling_ft))
-
-    if max_top > min_base:
-        return min_base, max_top
-    return None
-
-
-def _find_capping_inversion(
-    inversions: list[InversionLayer],
-    floor_ft: float,
-    ceiling_ft: float,
-) -> float | None:
-    """Find the lowest inversion within [floor, ceiling] that exceeds the strength threshold."""
-    lowest: float | None = None
-    for inv in inversions:
-        if (inv.strength_c >= _INVERSION_CAP_THRESHOLD_C
-                and inv.base_ft > floor_ft
-                and inv.base_ft < ceiling_ft):
-            if lowest is None or inv.base_ft < lowest:
-                lowest = inv.base_ft
-    return lowest
 
 
 def apply_nwp_coverage(
