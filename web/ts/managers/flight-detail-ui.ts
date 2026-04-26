@@ -121,7 +121,10 @@ export function renderFlightInfo(
         <div class="info-row">
           <span class="info-label">Route</span>
           <span class="info-value">
-            <input type="text" id="edit-waypoints" class="edit-input" value="${escapeHtml(flight.waypoints.join(' '))}" placeholder="e.g. EGTK LFPB LSGS" style="width:100%;font-family:monospace;">
+            <div style="display:flex;gap:0.5rem;align-items:stretch;">
+              <input type="text" id="edit-waypoints" class="edit-input" value="${escapeHtml(flight.waypoints.join(' '))}" placeholder="e.g. EGTK LFPB LSGS" style="flex:1;font-family:monospace;">
+              <button type="button" id="edit-preview-route" class="btn btn-outline btn-sm" title="Preview interpreted route on a map">Interpret</button>
+            </div>
             <div id="edit-route-note" class="edit-structural-note" style="display:none;"></div>
           </span>
         </div>

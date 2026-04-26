@@ -1,9 +1,14 @@
 /**
  * Route interpretation component — smart waypoint parsing with confirmation popup.
  *
- * Accepts raw route text, calls the interpret-route API to resolve known waypoints,
- * and shows a preview popup (with a small map of the resolved route) so the pilot
- * can verify the interpretation before committing.
+ * Two entry points:
+ *   - interpretAndConfirmRoute: save-flow gate. Auto-accepts when nothing
+ *     was skipped; otherwise shows a popup with Accept/Cancel.
+ *   - previewRoute: preview-only path. Always shows the popup with a single
+ *     Close button so the pilot can inspect the resolved chain + map without
+ *     committing to a save.
+ *
+ * Both flows render the resolved route on a small Leaflet inset.
  */
 
 import { interpretRoute, type InterpretRouteResponse } from '../adapters/api-adapter';
@@ -18,12 +23,13 @@ export interface RouteInterpretResult {
   confirmed: boolean;
 }
 
+type PopupMode = 'save' | 'preview';
+
 /**
  * Interpret a raw route string and, when the resolver had to skip
  * something, show a preview popup with the resolved route on a small
  * map so the pilot can verify before committing. Clean routes (zero
- * skipped tokens) proceed silently — same trigger as before; the
- * map preview is the popup's value-add when it does appear.
+ * skipped tokens) proceed silently.
  *
  * Returns the interpreted waypoints if confirmed (or auto-accepted),
  * or null if cancelled/failed.
@@ -50,7 +56,33 @@ export async function interpretAndConfirmRoute(
     return { waypoints: resp.interpreted, confirmed: true };
   }
 
-  return showRouteConfirmPopup(rawRoute, resp);
+  return showRouteConfirmPopup(rawRoute, resp, 'save');
+}
+
+/**
+ * Preview-only entry point — always shows the popup so the pilot can
+ * see what was interpreted (and visualise it on a map) without
+ * triggering a save. The "Close" button just dismisses; nothing the
+ * pilot does in here changes form state.
+ */
+export async function previewRoute(
+  rawRoute: string,
+  onError: (msg: string) => void,
+): Promise<void> {
+  let resp: InterpretRouteResponse;
+  try {
+    resp = await interpretRoute(rawRoute);
+  } catch (err) {
+    onError(err instanceof Error ? err.message.replace(/^API \d+:\s*/, '') : String(err));
+    return;
+  }
+
+  if (resp.interpreted.length === 0) {
+    onError(t('flights.form.errorWaypoints'));
+    return;
+  }
+
+  await showRouteConfirmPopup(rawRoute, resp, 'preview');
 }
 
 /**
@@ -79,6 +111,7 @@ export function validateOriginDestination(
 function showRouteConfirmPopup(
   rawRoute: string,
   resp: InterpretRouteResponse,
+  mode: PopupMode,
 ): Promise<RouteInterpretResult> {
   return new Promise((resolve) => {
     const backdrop = document.createElement('div');
@@ -99,6 +132,18 @@ function showRouteConfirmPopup(
         </div>`
       : '';
 
+    // Save mode: Accept/Cancel — the click outcome carries meaning back to
+    // the caller (Accept = use these waypoints).
+    // Preview mode: single Close — the popup is just visualisation; the
+    // returned promise resolves with confirmed=false so callers don't
+    // accidentally treat a preview dismiss as a save trigger.
+    const buttonsHtml = mode === 'save'
+      ? `
+        <button type="button" id="route-confirm-cancel" class="btn btn-outline btn-sm">Cancel</button>
+        <button type="button" id="route-confirm-accept" class="btn btn-primary btn-sm">Accept</button>`
+      : `
+        <button type="button" id="route-confirm-cancel" class="btn btn-primary btn-sm">Close</button>`;
+
     modal.innerHTML = `
       <button class="metric-popup-close" aria-label="${t('popup.close')}">×</button>
       <h3>Route Interpreted</h3>
@@ -115,8 +160,7 @@ function showRouteConfirmPopup(
         <div id="route-confirm-map" style="height:240px;width:100%;margin-top:0.75rem;border-radius:6px;overflow:hidden;border:1px solid var(--border,#e5e7eb);"></div>
       </div>
       <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
-        <button type="button" id="route-confirm-cancel" class="btn btn-outline btn-sm">Cancel</button>
-        <button type="button" id="route-confirm-accept" class="btn btn-primary btn-sm">Accept</button>
+        ${buttonsHtml}
       </div>
     `;
 

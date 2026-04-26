@@ -10,7 +10,7 @@ import { copyFlightShareLink, redirectToLogin, renderUserInfo } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
-import { interpretAndConfirmRoute } from './components/route-interpret';
+import { interpretAndConfirmRoute, previewRoute } from './components/route-interpret';
 import { createFlight, fetchRouteAdvisories, moveFlight } from './adapters/api-adapter';
 import { flaggedTagsFromAdvisories } from './components/debrief-taxonomy';
 import { initInfoPopup } from './components/info-popup';
@@ -215,6 +215,19 @@ async function init(): Promise<void> {
     wpEl?.addEventListener('input', updateStructuralUi);
     wpEl?.addEventListener('blur', updateStructuralUi);
     updateStructuralUi();  // initial state
+
+    // Interpret button: preview the resolved route + map without committing.
+    // Wired here (not in flight-detail-ui) so it lives next to the other
+    // edit-panel handlers and shares the same wpEl handle.
+    const editPreviewBtn = document.getElementById('edit-preview-route') as HTMLButtonElement | null;
+    editPreviewBtn?.addEventListener('click', () => {
+      const wpRaw = (wpEl?.value || '').trim();
+      if (!wpRaw) {
+        ui.renderError(t('flights.form.errorWaypoints'));
+        return;
+      }
+      void previewRoute(wpRaw, (msg) => ui.renderError(msg));
+    });
 
     /** Build the merged structural payload for Move and Duplicate. Returns null if
      *  waypoints fail interpretation (errors already shown to user).
