@@ -877,6 +877,81 @@ class TestUpdateFlightRawRoute:
         assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
         assert data["parser_version"] is not None
 
+    def test_update_same_waypoints_without_raw_route_preserves(self, client):
+        """Round-trip PATCH: a client re-asserts the current waypoints (e.g.
+        an idempotent save) without supplying raw_route. The stored raw_route
+        is still valid for the same list, so it must be left alone — clearing
+        it would be wrong (loses annotation) and would lie about provenance."""
+        flight = self._create_with_raw(client)
+        resp = client.patch(f"/api/flights/{flight['id']}", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],  # same as stored
+            "cruise_altitude_ft": 9500,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
+        assert data["parser_version"] is not None
+        assert data["cruise_altitude_ft"] == 9500
+
+
+class TestMoveFlightRawRoute:
+    """raw_route sync semantics on POST /api/flights/{id}/move.
+
+    Move atomically replaces a flight, so raw_route handling mirrors
+    update_flight: preserve when the route is unchanged, overwrite when
+    a fresh raw_route lands, clear when the route changed without one.
+    """
+
+    def _create_with_raw(self, client, raw="EGTK DCT LFPB DCT LSGS"):
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "raw_route": raw,
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        return resp.json()
+
+    def test_move_date_only_preserves_raw_route(self, client):
+        """Date-only move with the source's waypoints in the body (the web
+        moveBtn always sends them) must preserve the source's raw_route.
+        Regression test for the bug where the server cleared raw_route
+        whenever waypoints were sent without a fresh raw."""
+        flight = self._create_with_raw(client)
+        new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()
+        resp = client.post(f"/api/flights/{flight['id']}/move", json={
+            "departure_time": new_dt,
+            "waypoints": flight["waypoints"],  # same waypoints, like moveBtn
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
+        assert data["parser_version"] is not None
+
+    def test_move_route_change_without_raw_route_clears(self, client):
+        """Route actually changed and no fresh raw was supplied — the stored
+        string would lie about the new list, so clear it."""
+        flight = self._create_with_raw(client)
+        resp = client.post(f"/api/flights/{flight['id']}/move", json={
+            "waypoints": ["EGTF", "EGLF"],
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["waypoints"] == ["EGTF", "EGLF"]
+        assert data["raw_route"] is None
+        assert data["parser_version"] is None
+
+    def test_move_route_change_with_raw_route_stores_new(self, client):
+        """Fresh raw_route in the body wins regardless of route change."""
+        flight = self._create_with_raw(client)
+        resp = client.post(f"/api/flights/{flight['id']}/move", json={
+            "waypoints": ["EGTF", "EGLF"],
+            "raw_route": "EGTF DCT EGLF",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["raw_route"] == "EGTF DCT EGLF"
+        assert data["parser_version"] is not None
+
 
 # --- Interpret Route ---
 
