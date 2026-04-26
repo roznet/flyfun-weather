@@ -705,16 +705,18 @@ def interpret_route(
     candidate_waypoints: list[str] = []
     skipped: list[str] = []
     for t in tokens:
-        if t.kind is TokenKind.WAYPOINT:
-            # Skip consecutive duplicates (e.g. pasted ``ABDIL ABDIL``)
+        if t.kind in (TokenKind.WAYPOINT, TokenKind.COORDINATE):
+            # COORDINATE tokens (e.g. 4629N01541E) are real route points —
+            # the resolver places them geometrically without a DB lookup.
+            # Treat them like named waypoints from this layer's perspective.
+            # Skip consecutive duplicates (e.g. pasted ``ABDIL ABDIL``).
             if candidate_waypoints and candidate_waypoints[-1] == t.value:
                 continue
             candidate_waypoints.append(t.value)
         elif t.kind is TokenKind.UNKNOWN:
-            # Tokens that don't fit any Field-15 grammar — typos, or
-            # shapes we don't yet handle (e.g. inline coords like
-            # 4629N01541E). Surface them so the pilot can see what
-            # didn't make the cut.
+            # Tokens that don't fit any Field-15 grammar — typos or
+            # shapes the parser doesn't recognise. Surface them so the
+            # pilot can see what didn't make the cut.
             skipped.append(t.value)
         # AIRWAY / FLIGHT_RULE / DIRECT / SPEED_LEVEL fall through:
         # syntactic noise the parser correctly identified — silently
