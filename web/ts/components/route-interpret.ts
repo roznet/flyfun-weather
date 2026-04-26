@@ -2,10 +2,12 @@
  * Route interpretation component — smart waypoint parsing with confirmation popup.
  *
  * Accepts raw route text, calls the interpret-route API to resolve known waypoints,
- * and shows a confirmation popup if any tokens were skipped.
+ * and shows a preview popup (with a small map of the resolved route) so the pilot
+ * can verify the interpretation before committing.
  */
 
 import { interpretRoute, type InterpretRouteResponse } from '../adapters/api-adapter';
+import { RouteMapInset } from './route-map-inset';
 import { escapeHtml } from '../utils';
 import { t } from '../i18n/i18n';
 
@@ -17,10 +19,14 @@ export interface RouteInterpretResult {
 }
 
 /**
- * Interpret a raw route string and, if tokens were skipped, show a confirmation popup.
- * Returns the interpreted waypoints if confirmed, or null if cancelled/failed.
+ * Interpret a raw route string and, when the resolver had to skip
+ * something, show a preview popup with the resolved route on a small
+ * map so the pilot can verify before committing. Clean routes (zero
+ * skipped tokens) proceed silently — same trigger as before; the
+ * map preview is the popup's value-add when it does appear.
  *
- * If no tokens were skipped, returns immediately without showing a popup.
+ * Returns the interpreted waypoints if confirmed (or auto-accepted),
+ * or null if cancelled/failed.
  */
 export async function interpretAndConfirmRoute(
   rawRoute: string,
@@ -39,12 +45,11 @@ export async function interpretAndConfirmRoute(
     return null;
   }
 
-  // No tokens skipped — proceed directly
+  // Clean route — accept silently
   if (resp.skipped.length === 0) {
     return { waypoints: resp.interpreted, confirmed: true };
   }
 
-  // Tokens were skipped — show confirmation popup
   return showRouteConfirmPopup(rawRoute, resp);
 }
 
@@ -81,12 +86,21 @@ function showRouteConfirmPopup(
 
     const modal = document.createElement('div');
     modal.className = 'metric-popup';
+    // Slightly wider than default so the map has room to show the route
+    modal.style.maxWidth = '560px';
+    modal.style.width = '95vw';
 
-    const skippedHtml = resp.skipped.map(s => `<code>${escapeHtml(s)}</code>`).join(', ');
-    const interpretedHtml = resp.interpreted.map(s => `<strong>${escapeHtml(s)}</strong>`).join(' \u2192 ');
+    const interpretedHtml = resp.interpreted.map(s => `<strong>${escapeHtml(s)}</strong>`).join(' → ');
+    const skippedRow = resp.skipped.length > 0
+      ? `
+        <div style="margin-bottom:0.5rem;color:var(--amber,#b45309);">
+          <span class="info-label">Skipped (not recognized):</span>
+          <span>${resp.skipped.map(s => `<code>${escapeHtml(s)}</code>`).join(', ')}</span>
+        </div>`
+      : '';
 
     modal.innerHTML = `
-      <button class="metric-popup-close" aria-label="${t('popup.close')}">\u00d7</button>
+      <button class="metric-popup-close" aria-label="${t('popup.close')}">×</button>
       <h3>Route Interpreted</h3>
       <div style="margin:0.75rem 0;">
         <div style="margin-bottom:0.5rem;">
@@ -97,10 +111,8 @@ function showRouteConfirmPopup(
           <span class="info-label">Route interpreted:</span>
           <span>${interpretedHtml}</span>
         </div>
-        <div style="margin-bottom:0.5rem;color:var(--amber,#b45309);">
-          <span class="info-label">Skipped (not recognized):</span>
-          <span>${skippedHtml}</span>
-        </div>
+        ${skippedRow}
+        <div id="route-confirm-map" style="height:240px;width:100%;margin-top:0.75rem;border-radius:6px;overflow:hidden;border:1px solid var(--border,#e5e7eb);"></div>
       </div>
       <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
         <button type="button" id="route-confirm-cancel" class="btn btn-outline btn-sm">Cancel</button>
@@ -114,8 +126,24 @@ function showRouteConfirmPopup(
     // Stop clicks inside modal from closing
     modal.addEventListener('click', (e) => e.stopPropagation());
 
+    // Mount the map after the container is in the DOM (Leaflet measures
+    // clientWidth/Height during init). The interpret-route response
+    // includes lat/lon for every resolved waypoint, so we don't need
+    // a second lookup.
+    const mapContainer = modal.querySelector('#route-confirm-map') as HTMLElement | null;
+    let mapInset: RouteMapInset | null = null;
+    if (mapContainer && resp.waypoints.length >= 2) {
+      mapInset = new RouteMapInset(mapContainer);
+      // Defer to next frame so layout settles and the container has a real size.
+      requestAnimationFrame(() => {
+        mapInset?.render(resp.waypoints);
+        mapInset?.invalidateSize();
+      });
+    }
+
     const close = (confirmed: boolean) => {
       document.removeEventListener('keydown', onEsc);
+      mapInset?.destroy();
       backdrop.remove();
       resolve({
         waypoints: resp.interpreted,
