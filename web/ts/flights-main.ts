@@ -4,7 +4,7 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchRouteDistance, parseFpl, type WaypointInfo } from './adapters/api-adapter';
 import type { FlightResponse } from './store/types';
 import { fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
-import { interpretAndConfirmRoute } from './components/route-interpret';
+import { interpretAndConfirmRoute, previewRoute } from './components/route-interpret';
 import { fetchModelCatalog } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
@@ -538,6 +538,17 @@ async function init(): Promise<void> {
   waypointsInput?.addEventListener('blur', () => {
     durationManuallyEdited = false;
     fetchRouteAndUpdateUI();
+  });
+
+  // --- Interpret button: preview the resolved route + map without saving ---
+  const previewBtn = document.getElementById('btn-preview-route') as HTMLButtonElement | null;
+  previewBtn?.addEventListener('click', () => {
+    const wpRaw = waypointsInput?.value.trim() ?? '';
+    if (!wpRaw) {
+      ui.renderError(t('flights.form.errorWaypoints'));
+      return;
+    }
+    void previewRoute(wpRaw, (msg) => ui.renderError(msg));
   });
 
   // --- Recent routes dropdown: fill waypoints input on selection ---
