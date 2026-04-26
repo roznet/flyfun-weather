@@ -63,6 +63,7 @@ export interface MoveFlightRequest {
   cruise_altitude_ft?: number;
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
+  raw_route?: string;
 }
 
 export async function moveFlight(
@@ -87,6 +88,11 @@ export interface UpdateFlightRequest {
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
   waypoints?: string[];
+  // Pair with `waypoints` to keep the original Field-15 input in sync.
+  // Omit it on a direct waypoint edit and the server clears the stored
+  // raw_route — which is what we want, since the old string no longer
+  // matches the new chip list.
+  raw_route?: string | null;
 }
 
 export interface UpdateFlightResponse extends FlightResponse {

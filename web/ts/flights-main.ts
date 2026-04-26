@@ -523,6 +523,7 @@ async function init(): Promise<void> {
           flightDurationHours: duration,
           profileId: !isNaN(profileId!) ? profileId : undefined,
           aircraftId: !isNaN(aircraftId!) ? aircraftId : undefined,
+          rawRoute: wpRaw,
         });
         // Navigate to briefing page for the new flight
         navigateToBriefing(flight.id);

@@ -217,25 +217,34 @@ async function init(): Promise<void> {
     updateStructuralUi();  // initial state
 
     /** Build the merged structural payload for Move and Duplicate. Returns null if
-     *  waypoints fail interpretation (errors already shown to user). */
+     *  waypoints fail interpretation (errors already shown to user).
+     *  ``raw_route`` is included only when the pilot actually edited the input,
+     *  so an unchanged route preserves the source flight's stored string. */
     async function buildStructuralPayload(): Promise<{
       departure_time: string;
       waypoints: string[];
+      raw_route?: string;
     } | null> {
       if (!flight) return null;
       syncUtcFromLocal();
 
       const wpRaw = (wpEl?.value || '').trim();
       let waypoints: string[] = flight.waypoints;
+      let rawRoute: string | undefined;
       if (wpRaw && wpRaw.toUpperCase() !== flight.waypoints.join(' ').toUpperCase()) {
         const result = await interpretAndConfirmRoute(wpRaw, (msg) => ui.renderError(msg));
         if (!result || !result.confirmed) return null;
         waypoints = result.waypoints;
+        rawRoute = wpRaw;
       }
 
       const newDate = dateEl?.value || flight.target_date;
       const departureTime = `${newDate}T${editUtcHour.toString().padStart(2, '0')}:${editUtcMinute.toString().padStart(2, '0')}:00Z`;
-      return { departure_time: departureTime, waypoints };
+      return {
+        departure_time: departureTime,
+        waypoints,
+        ...(rawRoute ? { raw_route: rawRoute } : {}),
+      };
     }
 
     saveBtn?.addEventListener('click', async () => {
@@ -265,11 +274,13 @@ async function init(): Promise<void> {
 
       // Mid-route waypoint changes still go through Save (origin/dest unchanged → not structural).
       let newWaypoints: string[] | undefined;
+      let newRawRoute: string | undefined;
       const wpRaw = wpEl?.value?.trim();
       if (wpRaw && wpRaw.toUpperCase() !== flight.waypoints.join(' ').toUpperCase()) {
         const result = await interpretAndConfirmRoute(wpRaw, (msg) => ui.renderError(msg));
         if (!result || !result.confirmed) return;
         newWaypoints = result.waypoints;
+        newRawRoute = wpRaw;
       }
 
       await store.getState().saveFlight({
@@ -281,6 +292,7 @@ async function init(): Promise<void> {
         flight_ceiling_ft: ceiling,
         flight_duration_hours: duration,
         ...(newWaypoints ? { waypoints: newWaypoints } : {}),
+        ...(newRawRoute ? { raw_route: newRawRoute } : {}),
       });
 
       if (newWaypoints) store.getState().loadWaypoints();
@@ -317,6 +329,11 @@ async function init(): Promise<void> {
           flight_duration_hours: flight.flight_duration_hours,
           profile_id: flight.profile_id ?? undefined,
           aircraft_id: flight.aircraft_id ?? undefined,
+          // Carry the raw input only when the pilot edited it. Otherwise
+          // fall back to the source flight's stored raw_route, which may
+          // be NULL for iOS/MCP-created flights — that's fine, the new
+          // flight then also has no raw_route, matching the source.
+          raw_route: payload.raw_route ?? (flight.raw_route ?? undefined),
         });
         window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
       } catch (err) {
