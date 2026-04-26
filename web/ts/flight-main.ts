@@ -321,7 +321,15 @@ async function init(): Promise<void> {
         : t('flightDetail.moveConfirmNoPacks');
       if (!confirm(msg)) return;
       try {
-        const newFlight = await moveFlight(flight.id, payload);
+        const newFlight = await moveFlight(flight.id, {
+          ...payload,
+          // Mirror dupBtn's fallback: if the pilot didn't edit the
+          // route input, carry the source flight's stored raw_route
+          // forward so a date-only move doesn't drop the annotation.
+          // The server-side move handler also preserves in this case,
+          // but explicit-is-better than depending on it.
+          raw_route: payload.raw_route ?? (flight.raw_route ?? undefined),
+        });
         window.location.href = `/flight.html?id=${encodeURIComponent(newFlight.id)}`;
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);

@@ -1040,20 +1040,25 @@ def move_flight(
     except KeyError:
         pass
 
-    # raw_route on the moved flight: preserve when route is unchanged,
-    # overwrite when client sent a fresh raw_route, clear when waypoints
-    # changed but no new raw_route was supplied (stored string would lie).
-    if req.waypoints is None:
-        new_raw_route = source.raw_route
-        new_parser_version = source.parser_version
-    elif req.raw_route is not None:
+    # raw_route on the moved flight:
+    #   raw_route in body                     → store + stamp parser version
+    #   raw_route omitted, route changed      → clear (stale, would lie)
+    #   raw_route omitted, route unchanged    → preserve (still valid)
+    # The "route unchanged" branch covers both "waypoints absent" and
+    # "waypoints supplied but equal to source" — without the latter,
+    # the web ``moveBtn`` (which always sends ``waypoints``) would lose
+    # the source's raw_route on a date-only move.
+    if req.raw_route is not None:
         new_raw_route = req.raw_route.strip() or None
         new_parser_version = (
             _euro_aip_parser_version() if new_raw_route else None
         )
-    else:
+    elif new_waypoints != source.waypoints:
         new_raw_route = None
         new_parser_version = None
+    else:
+        new_raw_route = source.raw_route
+        new_parser_version = source.parser_version
 
     new_flight = Flight(
         id=new_id,
@@ -1322,23 +1327,20 @@ def update_flight(
             row.route_name = "_".join(w.lower() for w in new_waypoints)
             route_changed = True
 
-        # Sync raw_route whenever waypoints were supplied — the raw string
-        # annotates the resolved list, so it's in scope even if the resolved
-        # values happen to match what's already stored. (Without this, an
-        # iOS-created flight that the pilot later annotates from the web
-        # with the equivalent Field-15 string would silently drop the raw.)
-        # Mirrors move_flight's outer-scope handling of the same field.
-        #   raw_route in body → store it + stamp parser version
-        #   raw_route omitted → clear (better NULL than a string that may
-        #                              no longer reflect what the user typed)
-        if req.raw_route is not None:
-            row.raw_route = req.raw_route.strip() or None
-            row.parser_version = (
-                _euro_aip_parser_version() if row.raw_route else None
-            )
-        else:
-            row.raw_route = None
-            row.parser_version = None
+    # raw_route sync — independent of whether waypoints were in the body,
+    # so a client can annotate an existing flight with a fresh raw_route
+    # (iOS-then-annotate) or update altitude/etc. without disturbing it.
+    #   raw_route in body                  → store + stamp parser version
+    #   raw_route omitted, route changed   → clear (stale, would lie)
+    #   raw_route omitted, route unchanged → leave alone (still valid)
+    if req.raw_route is not None:
+        row.raw_route = req.raw_route.strip() or None
+        row.parser_version = (
+            _euro_aip_parser_version() if row.raw_route else None
+        )
+    elif route_changed:
+        row.raw_route = None
+        row.parser_version = None
 
     # Profile change — apply the new profile's altitude/ceiling to the flight
     if req.profile_id is not None and req.profile_id != original_flight.profile_id:
