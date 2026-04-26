@@ -58,6 +58,8 @@ def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
         auto_refresh=flight.auto_refresh,
         auto_refresh_hour=flight.auto_refresh_hour,
         last_auto_refresh_at=flight.last_auto_refresh_at,
+        raw_route=flight.raw_route,
+        parser_version=flight.parser_version,
         created_at=flight.created_at,
     )
 
@@ -79,6 +81,8 @@ def _row_to_flight(row: FlightRow) -> Flight:
         auto_refresh=row.auto_refresh,
         auto_refresh_hour=row.auto_refresh_hour,
         last_auto_refresh_at=row.last_auto_refresh_at,
+        raw_route=row.raw_route,
+        parser_version=row.parser_version,
         created_at=row.created_at,
     )
 
