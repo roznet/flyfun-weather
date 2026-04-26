@@ -913,10 +913,16 @@ class TestMoveFlightRawRoute:
 
     def test_move_date_only_preserves_raw_route(self, client):
         """Date-only move with the source's waypoints in the body (the web
-        moveBtn always sends them) must preserve the source's raw_route.
-        Regression test for the bug where the server cleared raw_route
-        whenever waypoints were sent without a fresh raw."""
+        moveBtn always sends them) must preserve the source's raw_route
+        AND parser_version verbatim — no re-stamp. Regression test for two
+        bugs: (1) the server cleared raw_route whenever waypoints were
+        sent without a fresh raw, and (2) the frontend used to forward
+        ``flight.raw_route`` as a "defence" fallback, which pushed the
+        server into the "new raw" branch and silently re-stamped
+        parser_version to the current euro_aip release — defeating the
+        re-derive marker."""
         flight = self._create_with_raw(client)
+        original_parser_version = flight["parser_version"]
         new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()
         resp = client.post(f"/api/flights/{flight['id']}/move", json={
             "departure_time": new_dt,
@@ -925,7 +931,8 @@ class TestMoveFlightRawRoute:
         assert resp.status_code == 200
         data = resp.json()
         assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
-        assert data["parser_version"] is not None
+        # Same parser_version as the source — not re-stamped on the move.
+        assert data["parser_version"] == original_parser_version
 
     def test_move_route_change_without_raw_route_clears(self, client):
         """Route actually changed and no fresh raw was supplied — the stored
