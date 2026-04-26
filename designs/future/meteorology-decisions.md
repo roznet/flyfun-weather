@@ -142,3 +142,110 @@ reality. Key questions:
   `icing_ogimet_dd_zones` now serialized to `route_analyses.json`
 - `src/weatherbrief/models/analysis.py` — comment update reflecting
   serialization change
+
+---
+
+## 2. Ogimet icing zone width: convective contribution at moderate CAPE
+
+**Date:** 2026-04-26
+**Status:** Documented as-is (no algorithm change)
+**Context:** Pilot review of an LFLW→LEHC briefing flagged Ogimet icing zones
+extending ~8500 ft (10000–18580 ft for ECMWF), much wider than what GRAMET
+displays for the same conditions. Investigated to confirm the calculation is
+correct.
+
+### Background
+
+The Ogimet icing index has two components, blended by CAPE:
+
+```
+raw = layered_frac · layered_index(T) + convective_frac · convective_index(T, ρv)
+```
+
+- `_compute_layered_index` (icing.py:70): parabola peaking at −7 °C, returns 0
+  outside −14 °C ≤ T ≤ 0 °C.
+- `_compute_convective_index` (icing.py:78): vapor-density-driven term,
+  returns 0 outside −20 °C ≤ T ≤ 0 °C, requires moisture decrease from
+  cloud base (`vapor_density_base − vapor_density > 0`).
+- `_cape_to_cloud_split` (icing.py:100):
+  - CAPE < 100  → layered=1.0, convective=0.0
+  - CAPE < 500  → 0.8 / 0.2
+  - CAPE < 1500 → **0.5 / 0.5**
+  - else        → 0.2 / 0.8
+
+The investigation case: CAPE = 509.6 J/kg → layered/convective split = 0.5/0.5.
+At 500 hPa (T = −17.1 °C), `layered_index = 0` (out of the −14..0 range), but
+`convective_index > 0` (moisture differential is positive, T = −17 °C is
+within the −20..0 convective window). Half-weighted, the level is admitted to
+the icing zone, pushing the top from 14012 ft (last layered-eligible level) to
+18580 ft. **+4500 ft of zone width entirely from the convective term firing
+on a stratiform-looking sounding.**
+
+### Method comparison on the same flight (LFLW, ECMWF, 2026-04-26)
+
+| Method | Width | Convective gate |
+|---|---|---|
+| Ogimet-DD | 8554 ft | Always on at CAPE > 100 — **no cloud-type or coverage gate** |
+| Ogimet-NWP | 8554 ft | Same as DD |
+| IENG | 3986 ft | Gated by `nwp_cloud_diagnostics.convective_cover_pct`. ECMWF often has this null → IENG falls back to layered-only |
+| SFIP "full" | 8554 ft | Gated by per-level CLW > 0. Model says supercooled liquid is present at −17 °C → level qualifies. |
+
+So three distinct visual widths fall out of three different convective gates,
+all algorithmically correct for their respective definitions.
+
+### Decision
+
+**Keep Ogimet (DD and NWP) as-is.** The convective contribution at moderate
+CAPE is part of the standard Ogimet formulation as we found it in the
+literature; changing it muddies the algorithm provenance. Pilots who want
+the narrower view can switch the icing method to IENG or SFIP-proxy in the
+cross-section, both of which gate convective contribution more tightly.
+
+### Implications
+
+- **Ogimet zones can extend ~4500 ft above the layered (−14..0) range** when
+  CAPE > 100 and there's a moisture gradient through the cloud. This will
+  feel "wide" compared to commercial products like GRAMET that likely either
+  (a) don't include a convective term, (b) require explicit convective cloud
+  presence, or (c) cap the icing band at a narrower T range (e.g. −15..−2 °C).
+- **Method-to-method variance is genuine signal**, not bug — the spread from
+  3986 ft (IENG) to 8554 ft (Ogimet, SFIP-full) at the same waypoint reflects
+  three different definitions of "is there icing here." The user-facing
+  takeaway is: pick a method whose conservatism matches the operational
+  context.
+- **Cross-section visual mismatch with GRAMET is expected.** GRAMET is a
+  black-box product with proprietary criteria; we shouldn't be surprised if
+  our conservative Ogimet bands look fatter.
+
+### Tightening options (rejected for now)
+
+If real-world validation later shows Ogimet over-predicts:
+
+1. **Mirror IENG's convective gate in Ogimet**: only fire the convective
+   component when `convective_cover_pct ≥ threshold` (e.g. 25 %). On flights
+   without explicit convective cloud the diagnostic is often null, so this
+   would degrade Ogimet to layered-only most of the time. Tightest available
+   change.
+2. **Tighten convective T range**: cap the convective contribution to a
+   warmer band (e.g. −15..−2 °C instead of −20..0 °C). Half-step compromise.
+3. **Lower convective weight at moderate CAPE**: change the
+   `_cape_to_cloud_split` table so that 500 J/kg gets, say, 0.3 weight
+   instead of 0.5. Less invasive than (1) or (2) but harder to defend
+   meteorologically.
+
+All three are calibration choices that need PIREP-based validation before
+landing. For now we surface multiple methods and let the operator choose.
+
+### Real-world validation needed
+
+PIREPs at altitudes where Ogimet says icing but layered-only does not (e.g.
+−15 to −20 °C in cloud) would tell us whether the convective extension is
+catching real icing or false-alarming. If most PIREPs at those altitudes
+are RIME-only and weak, we'd lean toward option (2). If they're MIXED or
+absent, option (1) is justified.
+
+### Files (no changes)
+
+Algorithm code in `src/weatherbrief/analysis/sounding/icing.py` is unchanged.
+This entry exists to document the decision so the next reviewer doesn't
+re-investigate the same width and conclude it's a bug.
