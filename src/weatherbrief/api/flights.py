@@ -39,7 +39,7 @@ router = APIRouter(prefix="/flights", tags=["flights"])
 
 logger = logging.getLogger(__name__)
 
-from weatherbrief.api.validation import WAYPOINT_RE
+from weatherbrief.api.validation import WAYPOINT_RE, is_valid_waypoint
 
 
 class CreateFlightRequest(BaseModel):
@@ -50,6 +50,11 @@ class CreateFlightRequest(BaseModel):
 
     route_name: str = Field("", max_length=256)  # optional preset name
     waypoints: list[str] = Field(default_factory=list, max_length=20)  # ICAO codes, navaids, or fixes
+    # Original Field-15 input the pilot typed, when the client captured one
+    # (web Save flow). The server stores it verbatim alongside ``waypoints``
+    # so future parser improvements can re-derive the route. Optional —
+    # iOS/MCP clients pass only ``waypoints``.
+    raw_route: str | None = Field(default=None, max_length=4000)
     departure_time: str  # ISO 8601 datetime with timezone (e.g. "2026-02-21T09:00:00Z")
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
@@ -72,9 +77,10 @@ class CreateFlightRequest(BaseModel):
     @classmethod
     def validate_waypoints(cls, v: list[str]) -> list[str]:
         for wp in v:
-            if not WAYPOINT_RE.match(wp.upper()):
+            if not is_valid_waypoint(wp):
                 raise ValueError(
-                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters"
+                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric "
+                    f"characters or an ICAO inline coordinate (e.g. 4830N00210E)"
                 )
         return v
 
@@ -130,6 +136,12 @@ class FlightResponse(BaseModel):
     is_subscribed: bool = False  # True when the viewer has subscribed to this flight
     debrief: DebriefResponse | None = None  # owned past flights only
     section: Literal["future", "recent", "past"] = "past"
+    # Original Field-15 input the pilot typed, when captured (web Save flow).
+    # Surfaced so the flight detail UI can show "Original: <raw string>" —
+    # useful when the raw input differs from the resolved waypoint chip strip
+    # (DCT/airway/coord shorthand collapsed).
+    raw_route: str | None = None
+    parser_version: str | None = None
 
 
 # Number of flights surfaced in the "recent" section as a debrief nudge,
@@ -303,6 +315,8 @@ def _flight_to_response(
         owner_display_name=owner_display_name,
         is_subscribed=subscribed,
         debrief=debrief_resp,
+        raw_route=flight.raw_route,
+        parser_version=flight.parser_version,
         section=section,
     )
 
@@ -537,6 +551,12 @@ def create_flight(
     except KeyError:
         pass
 
+    # Stamp the parser version only when we actually have a raw_route.
+    # No raw_route → no derivation happened on the server → no version
+    # to record (iOS/MCP path).
+    raw_route = req.raw_route.strip() if req.raw_route else None
+    parser_version = _euro_aip_parser_version() if raw_route else None
+
     flight = Flight(
         id=flight_id,
         user_id=user_id,
@@ -548,11 +568,26 @@ def create_flight(
         cruise_altitude_ft=cruise_altitude_ft,
         flight_ceiling_ft=flight_ceiling_ft,
         flight_duration_hours=flight_duration_hours,
+        raw_route=raw_route,
+        parser_version=parser_version,
         created_at=datetime.now(tz=timezone.utc),
     )
 
     save_flight(db, flight, user_id)
     return _flight_to_response(flight, db, viewer_id=user_id)
+
+
+def _euro_aip_parser_version() -> str:
+    """Stamp tying a stored ``raw_route`` to the parser that derived it.
+
+    Read at request time (not import time) so a hot-reloaded euro_aip
+    during dev shows the new version on the next save without restarting
+    the server. ``unknown`` is the safe fallback if euro_aip ever ships
+    without ``__version__``.
+    """
+    import euro_aip
+    version = getattr(euro_aip, "__version__", None) or "unknown"
+    return f"euro_aip/{version}"
 
 
 class RouteDistanceRequest(BaseModel):
@@ -567,9 +602,10 @@ class RouteDistanceRequest(BaseModel):
             raise ValueError("At least 2 waypoints are required")
         normalized = [wp.strip().upper() for wp in v]
         for wp in normalized:
-            if not WAYPOINT_RE.match(wp):
+            if not is_valid_waypoint(wp):
                 raise ValueError(
-                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters"
+                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric "
+                    f"characters or an ICAO inline coordinate (e.g. 4830N00210E)"
                 )
         return normalized
 
@@ -805,9 +841,11 @@ def parse_flight_plan(
     waypoints: list[str] = []
     if fpl.route.departure:
         waypoints.append(fpl.route.departure)
-    # Filter route waypoints to those matching our waypoint pattern (skip GPS coords)
+    # Filter route waypoints to those matching our waypoint pattern.
+    # is_valid_waypoint accepts named codes AND inline ICAO coords, so a
+    # parsed FPL with a GPS waypoint flows through cleanly.
     for wp in fpl.route.waypoints:
-        if WAYPOINT_RE.match(wp):
+        if is_valid_waypoint(wp):
             waypoints.append(wp)
     if fpl.route.destination and fpl.route.destination not in waypoints:
         waypoints.append(fpl.route.destination)
@@ -899,9 +937,10 @@ class MoveFlightRequest(BaseModel):
         if len(v) < 2:
             raise ValueError("At least 2 waypoints are required")
         for wp in v:
-            if not WAYPOINT_RE.match(wp.upper()):
+            if not is_valid_waypoint(wp):
                 raise ValueError(
-                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters"
+                    f"Invalid waypoint '{wp}': must be 2-5 alphanumeric "
+                    f"characters or an ICAO inline coordinate (e.g. 4830N00210E)"
                 )
         return v
 
@@ -1147,6 +1186,12 @@ class UpdateFlightRequest(BaseModel):
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
     waypoints: list[str] | None = None  # updated route (origin+destination must match)
+    # Optional original Field-15 input. When supplied alongside ``waypoints``
+    # (web Save flow), both are stored and ``parser_version`` is re-stamped.
+    # When ``waypoints`` change but ``raw_route`` is omitted, the stored
+    # raw_route is cleared — the previous string no longer matches the
+    # resolved list, and a stale value would lie about what produced it.
+    raw_route: str | None = Field(default=None, max_length=4000)
 
     @field_validator("departure_time")
     @classmethod
@@ -1213,10 +1258,13 @@ def update_flight(
             )
         # Validate waypoint format
         for wp in new_waypoints:
-            if not WAYPOINT_RE.match(wp):
+            if not is_valid_waypoint(wp):
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Invalid waypoint '{wp}': must be 2-5 alphanumeric characters",
+                    detail=(
+                        f"Invalid waypoint '{wp}': must be 2-5 alphanumeric "
+                        f"characters or an ICAO inline coordinate (e.g. 4830N00210E)"
+                    ),
                 )
         # Validate waypoints exist in the database
         db_path = getattr(request.app.state, "db_path", "")
@@ -1252,6 +1300,18 @@ def update_flight(
             # Update route_name to reflect new waypoints
             row.route_name = "_".join(w.lower() for w in new_waypoints)
             route_changed = True
+            # Sync raw_route with the new waypoint list:
+            #   client sent raw_route → store it + re-stamp parser version
+            #   client sent only waypoints → clear raw_route (the previous
+            #     stored string no longer matches; better NULL than stale)
+            if req.raw_route is not None:
+                row.raw_route = req.raw_route.strip() or None
+                row.parser_version = (
+                    _euro_aip_parser_version() if row.raw_route else None
+                )
+            else:
+                row.raw_route = None
+                row.parser_version = None
 
     # Profile change — apply the new profile's altitude/ceiling to the flight
     if req.profile_id is not None and req.profile_id != original_flight.profile_id:

@@ -46,6 +46,16 @@ class Flight(BaseModel):
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
     last_auto_refresh_at: datetime | None = None
+    # Original Field-15 input the pilot typed, when captured. NULL for
+    # iOS/MCP-created flights and for flights that pre-date the column —
+    # no input string was ever recorded for those, distinct from "input
+    # was empty." Stays in sync with ``waypoints``: cleared when waypoints
+    # are edited directly, overwritten when a new raw string is parsed.
+    raw_route: str | None = None
+    # euro_aip version that derived ``waypoints`` from ``raw_route``
+    # (e.g. ``0.9.0``). Lets a future re-derive job spot flights that
+    # would benefit from a newer parser. NULL whenever raw_route is NULL.
+    parser_version: str | None = None
     created_at: datetime
 
     @computed_field  # type: ignore[prop-decorator]

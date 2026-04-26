@@ -107,6 +107,9 @@ class FlightRow(Base):
     verification_status: Mapped[str | None] = mapped_column(
         String(16), nullable=True, default=None
     )
+    # Original Field-15 input the pilot typed (see weatherbrief.models.Flight).
+    raw_route: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

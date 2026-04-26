@@ -162,6 +162,51 @@ class TestFlightsAPI:
         assert data["target_date"] == _FUTURE_DEPARTURE_DATE
         assert data["departure_time"].startswith(f"{_FUTURE_DEPARTURE_DATE}T09:00:00")
 
+    def test_create_flight_with_raw_route(self, client):
+        """raw_route flows through and gets stamped with parser_version."""
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "raw_route": "EGTK DCT LFPB DCT LSGS",
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
+        assert data["parser_version"] is not None
+        assert data["parser_version"].startswith("euro_aip/")
+
+    def test_create_flight_without_raw_route_stays_null(self, client):
+        """iOS/MCP-style create (waypoints only) — both columns NULL."""
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["raw_route"] is None
+        assert data["parser_version"] is None
+
+    def test_create_flight_with_inline_coord_waypoint(self, client):
+        """Validator accepts ICAO inline coords alongside named codes."""
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "5000N00200W", "LSGS"],
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        # Real DB lookup is mocked away in TestFlightsAPI (no app.state.db_path)
+        # so the resolver guard is skipped — we're only asserting the validator
+        # accepts the coord shape, which is the change under test.
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["waypoints"] == ["EGTK", "5000N00200W", "LSGS"]
+
+    def test_create_flight_rejects_unparseable_token(self, client):
+        """Tokens that are neither named nor a valid coord shape get rejected."""
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "ZZZZZZZ", "LSGS"],
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 422
+
     def test_create_flight_defaults(self, client):
         _alt_future = (_NOW + timedelta(days=5)).replace(
             hour=9, minute=0, second=0, microsecond=0,
@@ -748,6 +793,64 @@ class TestRefreshEndpoint:
             assert "already in progress" in resp.json()["detail"]
         finally:
             refresh_registry.unregister(sample_flight.id)
+
+
+# --- Raw route persistence on update ---
+
+
+class TestUpdateFlightRawRoute:
+    """raw_route sync semantics on PATCH /api/flights/{id}.
+
+    Three cases:
+      1. waypoints + raw_route → both stored, parser_version stamped
+      2. waypoints only        → raw_route cleared (stale string better off NULL)
+      3. waypoints unchanged   → raw_route untouched
+    """
+
+    def _create_with_raw(self, client, raw="EGTK DCT LFPB DCT LSGS"):
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "raw_route": raw,
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        return resp.json()
+
+    def test_update_with_new_raw_route_overwrites(self, client):
+        flight = self._create_with_raw(client)
+        resp = client.patch(f"/api/flights/{flight['id']}", json={
+            "waypoints": ["EGTK", "LSGS"],  # origin/dest unchanged, middle removed
+            "raw_route": "EGTK DCT LSGS",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["waypoints"] == ["EGTK", "LSGS"]
+        assert data["raw_route"] == "EGTK DCT LSGS"
+        assert data["parser_version"] is not None
+
+    def test_update_waypoints_only_clears_raw_route(self, client):
+        """Direct waypoint edit (no raw_route in body) — stored string would
+        no longer match, so we clear it rather than lie about its provenance."""
+        flight = self._create_with_raw(client)
+        resp = client.patch(f"/api/flights/{flight['id']}", json={
+            "waypoints": ["EGTK", "LSGS"],
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["waypoints"] == ["EGTK", "LSGS"]
+        assert data["raw_route"] is None
+        assert data["parser_version"] is None
+
+    def test_update_unrelated_field_preserves_raw_route(self, client):
+        """Touching only altitude/duration must not disturb raw_route."""
+        flight = self._create_with_raw(client)
+        resp = client.patch(f"/api/flights/{flight['id']}", json={
+            "cruise_altitude_ft": 9000,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
+        assert data["parser_version"] is not None
 
 
 # --- Interpret Route ---
