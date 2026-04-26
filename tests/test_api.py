@@ -186,6 +186,20 @@ class TestFlightsAPI:
         assert data["raw_route"] is None
         assert data["parser_version"] is None
 
+    def test_create_flight_whitespace_only_raw_route_stored_as_null(self, client):
+        """A whitespace-only raw_route must collapse to NULL — anything else
+        leaves the row in a contradictory ``(raw_route="", parser_version=None)``
+        state. Mirrors the ``strip() or None`` idiom used by update/move."""
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "raw_route": "   ",
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["raw_route"] is None
+        assert data["parser_version"] is None
+
     def test_create_flight_with_inline_coord_waypoint(self, client):
         """Validator accepts ICAO inline coords alongside named codes."""
         resp = client.post("/api/flights", json={
@@ -795,7 +809,23 @@ class TestRefreshEndpoint:
             refresh_registry.unregister(sample_flight.id)
 
 
-# --- Raw route persistence on update ---
+# --- Raw route persistence on update + move ---
+
+
+@pytest.fixture
+def make_flight_with_raw(client):
+    """Factory fixture for the raw_route test classes — single source of
+    truth for the create payload so adding a required field later only
+    touches this helper, not every test that needs a baseline flight."""
+    def _make(raw: str = "EGTK DCT LFPB DCT LSGS") -> dict:
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "raw_route": raw,
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        return resp.json()
+    return _make
 
 
 class TestUpdateFlightRawRoute:
@@ -807,17 +837,8 @@ class TestUpdateFlightRawRoute:
       3. waypoints unchanged   → raw_route untouched
     """
 
-    def _create_with_raw(self, client, raw="EGTK DCT LFPB DCT LSGS"):
-        resp = client.post("/api/flights", json={
-            "waypoints": ["EGTK", "LFPB", "LSGS"],
-            "raw_route": raw,
-            "departure_time": _FUTURE_DEPARTURE_ISO,
-        })
-        assert resp.status_code == 201
-        return resp.json()
-
-    def test_update_with_new_raw_route_overwrites(self, client):
-        flight = self._create_with_raw(client)
+    def test_update_with_new_raw_route_overwrites(self, client, make_flight_with_raw):
+        flight = make_flight_with_raw()
         resp = client.patch(f"/api/flights/{flight['id']}", json={
             "waypoints": ["EGTK", "LSGS"],  # origin/dest unchanged, middle removed
             "raw_route": "EGTK DCT LSGS",
@@ -828,10 +849,10 @@ class TestUpdateFlightRawRoute:
         assert data["raw_route"] == "EGTK DCT LSGS"
         assert data["parser_version"] is not None
 
-    def test_update_waypoints_only_clears_raw_route(self, client):
+    def test_update_waypoints_only_clears_raw_route(self, client, make_flight_with_raw):
         """Direct waypoint edit (no raw_route in body) — stored string would
         no longer match, so we clear it rather than lie about its provenance."""
-        flight = self._create_with_raw(client)
+        flight = make_flight_with_raw()
         resp = client.patch(f"/api/flights/{flight['id']}", json={
             "waypoints": ["EGTK", "LSGS"],
         })
@@ -841,9 +862,9 @@ class TestUpdateFlightRawRoute:
         assert data["raw_route"] is None
         assert data["parser_version"] is None
 
-    def test_update_unrelated_field_preserves_raw_route(self, client):
+    def test_update_unrelated_field_preserves_raw_route(self, client, make_flight_with_raw):
         """Touching only altitude/duration must not disturb raw_route."""
-        flight = self._create_with_raw(client)
+        flight = make_flight_with_raw()
         resp = client.patch(f"/api/flights/{flight['id']}", json={
             "cruise_altitude_ft": 9000,
         })
@@ -877,12 +898,12 @@ class TestUpdateFlightRawRoute:
         assert data["raw_route"] == "EGTK DCT LFPB DCT LSGS"
         assert data["parser_version"] is not None
 
-    def test_update_same_waypoints_without_raw_route_preserves(self, client):
+    def test_update_same_waypoints_without_raw_route_preserves(self, client, make_flight_with_raw):
         """Round-trip PATCH: a client re-asserts the current waypoints (e.g.
         an idempotent save) without supplying raw_route. The stored raw_route
         is still valid for the same list, so it must be left alone — clearing
         it would be wrong (loses annotation) and would lie about provenance."""
-        flight = self._create_with_raw(client)
+        flight = make_flight_with_raw()
         resp = client.patch(f"/api/flights/{flight['id']}", json={
             "waypoints": ["EGTK", "LFPB", "LSGS"],  # same as stored
             "cruise_altitude_ft": 9500,
@@ -902,16 +923,7 @@ class TestMoveFlightRawRoute:
     a fresh raw_route lands, clear when the route changed without one.
     """
 
-    def _create_with_raw(self, client, raw="EGTK DCT LFPB DCT LSGS"):
-        resp = client.post("/api/flights", json={
-            "waypoints": ["EGTK", "LFPB", "LSGS"],
-            "raw_route": raw,
-            "departure_time": _FUTURE_DEPARTURE_ISO,
-        })
-        assert resp.status_code == 201
-        return resp.json()
-
-    def test_move_date_only_preserves_raw_route(self, client):
+    def test_move_date_only_preserves_raw_route(self, client, make_flight_with_raw):
         """Date-only move with the source's waypoints in the body (the web
         moveBtn always sends them) must preserve the source's raw_route
         AND parser_version verbatim — no re-stamp. Regression test for two
@@ -921,7 +933,7 @@ class TestMoveFlightRawRoute:
         server into the "new raw" branch and silently re-stamped
         parser_version to the current euro_aip release — defeating the
         re-derive marker."""
-        flight = self._create_with_raw(client)
+        flight = make_flight_with_raw()
         original_parser_version = flight["parser_version"]
         new_dt = (_FUTURE_DEPARTURE_DT + timedelta(days=2)).isoformat()
         resp = client.post(f"/api/flights/{flight['id']}/move", json={
@@ -934,10 +946,10 @@ class TestMoveFlightRawRoute:
         # Same parser_version as the source — not re-stamped on the move.
         assert data["parser_version"] == original_parser_version
 
-    def test_move_route_change_without_raw_route_clears(self, client):
+    def test_move_route_change_without_raw_route_clears(self, client, make_flight_with_raw):
         """Route actually changed and no fresh raw was supplied — the stored
         string would lie about the new list, so clear it."""
-        flight = self._create_with_raw(client)
+        flight = make_flight_with_raw()
         resp = client.post(f"/api/flights/{flight['id']}/move", json={
             "waypoints": ["EGTF", "EGLF"],
         })
@@ -947,9 +959,9 @@ class TestMoveFlightRawRoute:
         assert data["raw_route"] is None
         assert data["parser_version"] is None
 
-    def test_move_route_change_with_raw_route_stores_new(self, client):
+    def test_move_route_change_with_raw_route_stores_new(self, client, make_flight_with_raw):
         """Fresh raw_route in the body wins regardless of route change."""
-        flight = self._create_with_raw(client)
+        flight = make_flight_with_raw()
         resp = client.post(f"/api/flights/{flight['id']}/move", json={
             "waypoints": ["EGTF", "EGLF"],
             "raw_route": "EGTF DCT EGLF",
