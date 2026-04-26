@@ -32,6 +32,11 @@ export interface FlightResponse {
   is_subscribed: boolean;
   debrief?: DebriefResponse | null;
   section?: 'future' | 'recent' | 'past';
+  // Original Field-15 input the pilot typed, when captured. Null for
+  // iOS/MCP-created flights and for flights created before raw_route
+  // existed. The detail view shows it under "Original" when present.
+  raw_route?: string | null;
+  parser_version?: string | null;
 }
 
 export type DebriefDecision = 'cancelled' | 'flown' | 'monitoring';
@@ -75,6 +80,11 @@ export interface CreateFlightRequest {
   flight_duration_hours?: number;
   profile_id?: number;
   aircraft_id?: number;
+  // Original Field-15 input. Present from web Save flows where the
+  // pilot typed something like "EGTK DCT LFPB DCT LSGS" and the
+  // interpret popup confirmed the resolved waypoints. Omitted from
+  // iOS/MCP clients (which only know the resolved list).
+  raw_route?: string;
 }
 
 export interface DataStatus {

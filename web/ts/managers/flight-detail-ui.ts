@@ -242,6 +242,22 @@ export function renderFlightInfo(
 
     const routeDisplay = flight.waypoints.join(' \u2192 ');
 
+    // "Original" row: show only when the pilot's raw input added something
+    // beyond the resolved chain (DCT, airways, IFR/VFR, coords, etc).
+    // If the raw input was just the waypoints with single spaces, the row
+    // would duplicate "Route" \u2014 skip it.
+    const rawRoute = (flight.raw_route ?? '').trim();
+    const normalizedRaw = rawRoute.toUpperCase().split(/\s+/).join(' ');
+    const normalizedWps = flight.waypoints.join(' ').toUpperCase();
+    const showOriginal = rawRoute && normalizedRaw !== normalizedWps;
+    const originalHtml = showOriginal
+      ? `
+        <div class="info-row">
+          <span class="info-label">Original</span>
+          <span class="info-value" style="font-family:monospace;">${escapeHtml(rawRoute)}</span>
+        </div>`
+      : '';
+
     // Aircraft display (privacy-gated by server: tail_number only if owner)
     const ac = flight.aircraft;
     const aircraftDisplay = ac
@@ -255,6 +271,7 @@ export function renderFlightInfo(
           <span class="info-label">Route</span>
           <span class="info-value" style="font-family:monospace;">${escapeHtml(routeDisplay)}</span>
         </div>
+        ${originalHtml}
         <div class="info-row">
           <span class="info-label">Aircraft</span>
           <span class="info-value">${escapeHtml(aircraftDisplay)}</span>

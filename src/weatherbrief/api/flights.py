@@ -915,6 +915,10 @@ class MoveFlightRequest(BaseModel):
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
+    # raw_route follows the same sync rules as PATCH: when waypoints
+    # change without a raw_route in the body, the new flight clears
+    # the (now-stale) stored value rather than carrying it forward.
+    raw_route: str | None = Field(default=None, max_length=4000)
 
     @field_validator("departure_time")
     @classmethod
@@ -1036,6 +1040,21 @@ def move_flight(
     except KeyError:
         pass
 
+    # raw_route on the moved flight: preserve when route is unchanged,
+    # overwrite when client sent a fresh raw_route, clear when waypoints
+    # changed but no new raw_route was supplied (stored string would lie).
+    if req.waypoints is None:
+        new_raw_route = source.raw_route
+        new_parser_version = source.parser_version
+    elif req.raw_route is not None:
+        new_raw_route = req.raw_route.strip() or None
+        new_parser_version = (
+            _euro_aip_parser_version() if new_raw_route else None
+        )
+    else:
+        new_raw_route = None
+        new_parser_version = None
+
     new_flight = Flight(
         id=new_id,
         user_id=user_id,
@@ -1050,6 +1069,8 @@ def move_flight(
         private=source.private,
         auto_refresh=source.auto_refresh,
         auto_refresh_hour=source.auto_refresh_hour,
+        raw_route=new_raw_route,
+        parser_version=new_parser_version,
         created_at=datetime.now(tz=timezone.utc),
     )
 

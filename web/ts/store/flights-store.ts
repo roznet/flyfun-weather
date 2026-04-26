@@ -32,6 +32,7 @@ export interface FlightsState {
     flightDurationHours?: number;
     profileId?: number;
     aircraftId?: number;
+    rawRoute?: string;  // original Field-15 input from the popup flow
   }) => Promise<FlightResponse>;
   deleteFlight: (id: string) => Promise<void>;
   unsubscribeFlight: (id: string) => Promise<void>;
@@ -123,6 +124,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
         flight_duration_hours: opts?.flightDurationHours,
         profile_id: opts?.profileId,
         aircraft_id: opts?.aircraftId,
+        raw_route: opts?.rawRoute,
       });
       // Refresh the list
       await get().loadFlights();
