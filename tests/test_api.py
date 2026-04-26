@@ -888,15 +888,51 @@ class TestInterpretRoute:
 
     @patch("weatherbrief.airports._load_airport_model")
     def test_unknown_grammar_token_skipped(self, mock_load, client):
-        """Tokens that don't match any Field-15 grammar (typos, inline GPS
-        coords, mixed alnum) surface in `skipped` so the pilot sees them.
-        The 5-letter typo path is covered by `test_unknown_token_skipped`
-        — this one exercises the parser's UNKNOWN bucket directly."""
+        """Tokens that don't match any Field-15 grammar (typos, mixed alnum)
+        surface in `skipped` so the pilot sees them. The 5-letter typo path
+        is covered by `test_unknown_token_skipped` — this one exercises the
+        parser's UNKNOWN bucket directly."""
         mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
-        # 4629N01541E is an ICAO inline coord — currently UNKNOWN to the
-        # parser (we don't yet resolve it to lat/lon).
+        # 6+ char strings that are neither valid waypoint shape nor a coord.
+        resp = self._post(client, "EGBJ ZZZTOPP LFOV")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGBJ", "LFOV"]
+        assert data["skipped"] == ["ZZZTOPP"]
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_inline_coordinate_resolved(self, mock_load, client):
+        """ICAO inline coords (DDMM[NS]DDDMM[EW]) resolve geometrically and
+        flow through interpret-route as a real route point — name = the
+        original token so it round-trips back into the route string."""
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        # 5000N00200W (~50°N, 2°W) sits between EGBJ (~52°N -2°W) and
+        # LFOV (~48°N -0.7°W) — comfortably on-route, well within the
+        # detour gate.
+        resp = self._post(client, "EGBJ DCT 5000N00200W DCT LFOV")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interpreted"] == ["EGBJ", "5000N00200W", "LFOV"]
+        assert data["skipped"] == []
+        # Coord waypoint comes back with its parsed lat/lon
+        coord_wp = next(w for w in data["waypoints"] if w["icao"] == "5000N00200W")
+        assert abs(coord_wp["lat"] - 50.0) < 0.01
+        assert abs(coord_wp["lon"] - (-2.0)) < 0.01
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_off_route_coordinate_rejected_by_detour_gate(self, mock_load, client):
+        """A coord too far off the direct route gets rejected by the same
+        detour gate that catches misresolved navaids. Surfaces in `skipped`
+        like any other late-stage rejection."""
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        # 4629N01541E (Slovenia) on a EGBJ→LFOV (UK→NW France) route is
+        # ~700+ nm off — detour gate rejects.
         resp = self._post(client, "EGBJ 4629N01541E LFOV")
         assert resp.status_code == 200
         data = resp.json()
