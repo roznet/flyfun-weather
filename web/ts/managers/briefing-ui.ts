@@ -35,8 +35,9 @@ import {
 } from '../helpers/metrics-helper';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
-import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl, flightTitle, flightRoute } from '../utils';
+import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl, flightTitle, flightRouteCompact } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
+import { showRoutePopup } from '../components/route-interpret';
 
 // --- Header ---
 
@@ -58,13 +59,15 @@ export function renderHeader(
   }
 
   const title = flightTitle(wps);
-  const route = wps.length > 2 ? flightRoute(wps) : '';
+  const compactRoute = wps.length > 2 ? flightRouteCompact(wps) : null;
   const dateStr = formatDate(flight.target_date);
   const timeStr = formatDepartureTime(flight.departure_time);
   const alt = formatAlt(flight.cruise_altitude_ft);
 
-  const routeHtml = route
-    ? `<span class="briefing-route">${escapeHtml(route)}</span>`
+  const routeHtml = compactRoute
+    ? `<span class="briefing-route">
+         <span class="route-clickable" role="button" tabindex="0" data-briefing-route="1" title="${escapeHtml(compactRoute.fullText)}" aria-label="Show full route on map">${compactRoute.html}<span class="route-info-icon" aria-hidden="true">ⓘ</span></span>
+       </span>`
     : '';
 
   el.innerHTML = `
@@ -79,6 +82,28 @@ export function renderHeader(
       </div>
     </div>
   `;
+
+  if (compactRoute) {
+    const open = () => {
+      void showRoutePopup(
+        { waypoints: wps, rawRoute: flight.raw_route },
+        (msg) => alert(msg),
+      );
+    };
+    el.querySelectorAll('[data-briefing-route]').forEach((node) => {
+      node.addEventListener('click', (e) => {
+        e.stopPropagation();
+        open();
+      });
+      node.addEventListener('keydown', (e) => {
+        const ke = e as KeyboardEvent;
+        if (ke.key === 'Enter' || ke.key === ' ') {
+          ke.preventDefault();
+          open();
+        }
+      });
+    });
+  }
 }
 
 // --- History dropdown ---

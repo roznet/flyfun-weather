@@ -4,11 +4,37 @@ import type { ConditionTagId, DebriefResponse, FlightResponse, PackMeta } from '
 import type { WaypointInfo } from '../adapters/api-adapter';
 import type { AircraftResponse } from '../adapters/aircraft-adapter';
 import type { ProfileResponse } from '../adapters/profiles-adapter';
-import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRoute, isFlightPast } from '../utils';
+import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRouteCompact, isFlightPast } from '../utils';
 import { getDateLocale, t } from '../i18n/i18n';
 import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
 import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefSummary } from '../components/debrief-summary';
+import { showRoutePopup } from '../components/route-interpret';
+
+/** Wire any `[data-route-popup]` triggers inside `root` to open the route
+ *  popup for the given flight. Idempotent: safe to call after every
+ *  render. */
+function wireRoutePopupTriggers(root: HTMLElement, flight: FlightResponse): void {
+  const open = () => {
+    void showRoutePopup(
+      { waypoints: flight.waypoints, rawRoute: flight.raw_route },
+      (msg) => alert(msg),
+    );
+  };
+  root.querySelectorAll('[data-route-popup]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      open();
+    });
+    el.addEventListener('keydown', (e) => {
+      const ke = e as KeyboardEvent;
+      if (ke.key === 'Enter' || ke.key === ' ') {
+        ke.preventDefault();
+        open();
+      }
+    });
+  });
+}
 
 // --- Assessment badge ---
 
@@ -122,7 +148,7 @@ export function renderFlightInfo(
           <span class="info-label">Route</span>
           <span class="info-value">
             <div style="display:flex;gap:0.5rem;align-items:stretch;">
-              <input type="text" id="edit-waypoints" class="edit-input" value="${escapeHtml(flight.waypoints.join(' '))}" placeholder="e.g. EGTK LFPB LSGS" style="flex:1;font-family:monospace;">
+              <input type="text" id="edit-waypoints" class="edit-input" value="${escapeHtml(flight.raw_route?.trim() || flight.waypoints.join(' '))}" placeholder="e.g. EGTK LFPB LSGS or EGTK DCT MID DCT LSGS" style="flex:1;font-family:monospace;">
               <button type="button" id="edit-preview-route" class="btn btn-outline btn-sm" title="Preview interpreted route on a map">Interpret</button>
             </div>
             <div id="edit-route-note" class="edit-structural-note" style="display:none;"></div>
@@ -243,7 +269,8 @@ export function renderFlightInfo(
         </div>`;
     }
 
-    const routeDisplay = flight.waypoints.join(' \u2192 ');
+    const compactRoute = flightRouteCompact(flight.waypoints);
+    const routeDisplay = `<span class="route-clickable" role="button" tabindex="0" data-route-popup="1" title="${escapeHtml(compactRoute.fullText)}" aria-label="Show full route on map">${compactRoute.html}<span class="route-info-icon" aria-hidden="true">\u24d8</span></span>`;
 
     // "Original" row: show only when the pilot's raw input added something
     // beyond the resolved chain (DCT, airways, IFR/VFR, coords, etc).
@@ -253,11 +280,18 @@ export function renderFlightInfo(
     const normalizedRaw = rawRoute.toUpperCase().split(/\s+/).join(' ');
     const normalizedWps = flight.waypoints.join(' ').toUpperCase();
     const showOriginal = rawRoute && normalizedRaw !== normalizedWps;
+    // Long Field-15 strings can be just as bulky as a long waypoint
+    // chain \u2014 apply the same clickable affordance to the Original row
+    // so the pilot can pop the same map view from either label. We
+    // don't truncate the raw text itself (no clean ellipsis rule) but
+    // we let it wrap naturally.
     const originalHtml = showOriginal
       ? `
         <div class="info-row">
           <span class="info-label">Original</span>
-          <span class="info-value" style="font-family:monospace;">${escapeHtml(rawRoute)}</span>
+          <span class="info-value">
+            <span class="route-clickable" role="button" tabindex="0" data-route-popup="1" title="Show route on map" aria-label="Show route on map" style="font-family:monospace;">${escapeHtml(rawRoute)}<span class="route-info-icon" aria-hidden="true">\u24d8</span></span>
+          </span>
         </div>`
       : '';
 
@@ -272,7 +306,7 @@ export function renderFlightInfo(
       <div class="flight-info-grid">
         <div class="info-row">
           <span class="info-label">Route</span>
-          <span class="info-value" style="font-family:monospace;">${escapeHtml(routeDisplay)}</span>
+          <span class="info-value" style="font-family:monospace;">${routeDisplay}</span>
         </div>
         ${originalHtml}
         <div class="info-row">
@@ -310,6 +344,7 @@ export function renderFlightInfo(
         </div>
       </div>
     `;
+    wireRoutePopupTriggers(container, flight);
   }
 }
 
@@ -331,15 +366,17 @@ export function renderHeader(
     ? flight.waypoints
     : flight.route_name.split('_').map(w => w.toUpperCase());
   const title = flightTitle(wps);
-  const route = wps.length > 2 ? flightRoute(wps) : '';
+  const compactRoute = wps.length > 2 ? flightRouteCompact(wps) : null;
 
   const isOwner = flight.role === 'owner';
   const editBtn = (editing || !isOwner)
     ? ''
     : '<button class="btn btn-sm" id="btn-edit-flight">Edit</button>';
 
-  const routeLine = route
-    ? `<div class="flight-detail-route">${escapeHtml(route)}</div>`
+  const routeLine = compactRoute
+    ? `<div class="flight-detail-route">
+         <span class="route-clickable" role="button" tabindex="0" data-route-popup="1" title="${escapeHtml(compactRoute.fullText)}" aria-label="Show full route on map">${compactRoute.html}<span class="route-info-icon" aria-hidden="true">ⓘ</span></span>
+       </div>`
     : '';
 
   el.innerHTML = `
@@ -348,6 +385,7 @@ export function renderHeader(
       ${routeLine}
     </div>
   `;
+  wireRoutePopupTriggers(el, flight);
 }
 
 // --- Sharing banner ---

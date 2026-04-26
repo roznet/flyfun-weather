@@ -1,14 +1,18 @@
 /**
  * Route interpretation component — smart waypoint parsing with confirmation popup.
  *
- * Two entry points:
+ * Three entry points:
  *   - interpretAndConfirmRoute: save-flow gate. Auto-accepts when nothing
  *     was skipped; otherwise shows a popup with Accept/Cancel.
- *   - previewRoute: preview-only path. Always shows the popup with a single
- *     Close button so the pilot can inspect the resolved chain + map without
- *     committing to a save.
+ *   - previewRoute: preview-only path from a raw route string. Always shows
+ *     the popup with a single Close button so the pilot can inspect the
+ *     resolved chain + map without committing to a save.
+ *   - showRoutePopup: read-only display for an existing flight. Accepts
+ *     `{waypoints, rawRoute?}` and resolves lat/lon via the interpret API
+ *     so the same popup (raw input, interpreted chain, map) can be opened
+ *     anywhere a route is displayed.
  *
- * Both flows render the resolved route on a small Leaflet inset.
+ * All flows render the resolved route on a small Leaflet inset.
  */
 
 import { interpretRoute, type InterpretRouteResponse } from '../adapters/api-adapter';
@@ -86,6 +90,36 @@ export async function previewRoute(
 }
 
 /**
+ * Read-only popup for an already-saved flight. Accepts the resolved
+ * waypoint list and (optionally) the original Field-15 raw_route — the
+ * raw_route is used as the lookup string when present so the popup
+ * displays exactly what the pilot typed; otherwise the joined waypoint
+ * list stands in. The interpret API call resolves lat/lon for the map.
+ */
+export async function showRoutePopup(
+  args: { waypoints: string[]; rawRoute?: string | null },
+  onError: (msg: string) => void,
+): Promise<void> {
+  const lookup = (args.rawRoute ?? '').trim() || args.waypoints.join(' ');
+  if (!lookup) {
+    onError(t('flights.form.errorWaypoints'));
+    return;
+  }
+  let resp: InterpretRouteResponse;
+  try {
+    resp = await interpretRoute(lookup);
+  } catch (err) {
+    onError(err instanceof Error ? err.message.replace(/^API \d+:\s*/, '') : String(err));
+    return;
+  }
+  if (resp.interpreted.length === 0) {
+    onError(t('flights.form.errorWaypoints'));
+    return;
+  }
+  await showRouteConfirmPopup(lookup, resp, 'preview');
+}
+
+/**
  * Validate that new waypoints preserve the origin and destination of an existing flight.
  * Returns an error message if validation fails, or null if OK.
  */
@@ -131,6 +165,20 @@ function showRouteConfirmPopup(
           <span>${resp.skipped.map(s => `<code>${escapeHtml(s)}</code>`).join(', ')}</span>
         </div>`
       : '';
+    // Hide the "Route entered" row when the raw input is just the
+    // resolved waypoints (no DCT/airways/etc) — saves a redundant line
+    // when showRoutePopup is opened on a flight without a stored
+    // raw_route. Same normalization as the "Original" row in
+    // flight-detail-ui (case-insensitive, single-space separated).
+    const normalize = (s: string) => s.toUpperCase().split(/\s+/).filter(Boolean).join(' ');
+    const showRaw = normalize(rawRoute) !== normalize(resp.interpreted.join(' '));
+    const rawRow = showRaw
+      ? `
+        <div style="margin-bottom:0.5rem;">
+          <span class="info-label">Route entered:</span>
+          <span style="font-family:monospace;">${escapeHtml(rawRoute)}</span>
+        </div>`
+      : '';
     // Map only renders with >=2 points (need a polyline). Suppress the
     // 240px container entirely below that — otherwise the popup would
     // show a blank box (e.g. preview path with one waypoint).
@@ -151,16 +199,19 @@ function showRouteConfirmPopup(
       : `
         <button type="button" id="route-confirm-cancel" class="btn btn-primary btn-sm">Close</button>`;
 
+    // "Route Interpreted" makes sense in the save flow (we just parsed
+    // the pilot's input). For preview mode the popup is just showing
+    // the route on a map, so the simpler "Route" reads better.
+    const heading = mode === 'save' ? 'Route Interpreted' : 'Route';
+    const interpretedLabel = showRaw ? 'Route interpreted:' : 'Route:';
+
     modal.innerHTML = `
       <button class="metric-popup-close" aria-label="${t('popup.close')}">×</button>
-      <h3>Route Interpreted</h3>
+      <h3>${heading}</h3>
       <div style="margin:0.75rem 0;">
+        ${rawRow}
         <div style="margin-bottom:0.5rem;">
-          <span class="info-label">Route entered:</span>
-          <span style="font-family:monospace;">${escapeHtml(rawRoute)}</span>
-        </div>
-        <div style="margin-bottom:0.5rem;">
-          <span class="info-label">Route interpreted:</span>
+          <span class="info-label">${interpretedLabel}</span>
           <span>${interpretedHtml}</span>
         </div>
         ${skippedRow}

@@ -2,12 +2,13 @@
 
 import type { DebriefStats, FlightResponse, PackMeta } from '../store/types';
 import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter';
-import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRoute } from '../utils';
+import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
 import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefPill, renderDebriefSummary } from '../components/debrief-summary';
 import { renderDebriefStats } from '../components/debrief-stats';
 import { flaggedTagsFromAdvisories } from '../components/debrief-taxonomy';
+import { showRoutePopup } from '../components/route-interpret';
 
 /** Assessment badge color class. */
 function assessmentClass(assessment: string | null): string {
@@ -37,7 +38,7 @@ function renderFlightCard(
     ? f.waypoints
     : f.route_name.split('_').map(w => w.toUpperCase());
   const title = flightTitle(wps);
-  const route = wps.length > 2 ? flightRoute(wps) : '';
+  const compactRoute = wps.length > 2 ? flightRouteCompact(wps) : null;
   const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
   const pastBadge = past ? `<span class="badge badge-past">${t('flights.pastBadge')}</span> ` : '';
 
@@ -67,8 +68,10 @@ function renderFlightCard(
        <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
     : `<span class="pack-info">${t('flights.noBriefings')}</span>`;
 
-  const routeLine = route
-    ? `<div class="flight-route-detail">${escapeHtml(route)}</div>`
+  const routeLine = compactRoute
+    ? `<div class="flight-route-detail">
+         <span class="route-clickable" role="button" tabindex="0" data-flight-route="${escapeHtml(f.id)}" title="${escapeHtml(compactRoute.fullText)}" aria-label="Show full route on map">${compactRoute.html}<span class="route-info-icon" aria-hidden="true">ⓘ</span></span>
+       </div>`
     : '';
 
   const checkedAttr = selected ? ' checked' : '';
@@ -255,6 +258,30 @@ export function renderFlightList(
       const id = (btn as HTMLElement).dataset.id!;
       if (onUnsubscribe && confirm(t('flights.unsubscribeConfirm'))) {
         onUnsubscribe(id);
+      }
+    });
+  });
+
+  // Wire route popup (click or Enter/Space on the compact route span)
+  const openRoutePopup = (id: string) => {
+    const flight = flights.find(f => f.id === id);
+    if (!flight) return;
+    void showRoutePopup(
+      { waypoints: flight.waypoints, rawRoute: flight.raw_route },
+      (msg) => renderError(msg),
+    );
+  };
+  container.querySelectorAll('[data-flight-route]').forEach((el) => {
+    const id = (el as HTMLElement).dataset.flightRoute!;
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRoutePopup(id);
+    });
+    el.addEventListener('keydown', (e) => {
+      const ke = e as KeyboardEvent;
+      if (ke.key === 'Enter' || ke.key === ' ') {
+        ke.preventDefault();
+        openRoutePopup(id);
       }
     });
   });

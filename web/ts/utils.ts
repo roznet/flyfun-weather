@@ -209,9 +209,34 @@ export function flightTitle(waypoints: string[]): string {
   return `${waypoints[0]} \u2192 ${waypoints[waypoints.length - 1]}`;
 }
 
-/** Full route string from waypoints (all joined with →). */
-export function flightRoute(waypoints: string[]): string {
-  return waypoints.join(' \u2192 ');
+export interface CompactRoute {
+  /** Rendered HTML-safe route, possibly truncated with an ellipsis. */
+  html: string;
+  /** Full untruncated plain-text route, suitable for `title=""`. */
+  fullText: string;
+  /** Whether the route was abbreviated. */
+  isTruncated: boolean;
+}
+
+/** Compact route renderer: shows first 2 + ellipsis + last 2 when the route
+ *  has more than `maxVisible` (default 4) waypoints; otherwise the full
+ *  chain. Returns HTML-escaped output ready for innerHTML. */
+export function flightRouteCompact(waypoints: string[], maxVisible: number = 4): CompactRoute {
+  if (waypoints.length === 0) {
+    return { html: '', fullText: '', isTruncated: false };
+  }
+  const fullText = waypoints.join(' \u2192 ');
+  const escaped = waypoints.map(escapeHtml);
+  if (waypoints.length <= maxVisible) {
+    return { html: escaped.join(' \u2192 '), fullText, isTruncated: false };
+  }
+  const head = escaped.slice(0, 2).join(' \u2192 ');
+  const tail = escaped.slice(-2).join(' \u2192 ');
+  return {
+    html: `${head} \u2192 \u2026 \u2192 ${tail}`,
+    fullText,
+    isTruncated: true,
+  };
 }
 
 /** Normalize an unknown caught value into a user-facing error string.

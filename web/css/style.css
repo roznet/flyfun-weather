@@ -388,6 +388,29 @@ label {
   margin-bottom: 0.3rem;
 }
 
+/* Clickable route display: opens the interpret popup with map + raw route. */
+.route-clickable {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: -1px -4px;
+}
+.route-clickable:hover,
+.route-clickable:focus-visible {
+  background: var(--surface-hover, rgba(127, 127, 127, 0.12));
+  outline: none;
+}
+.route-clickable .route-info-icon {
+  font-size: 0.85em;
+  opacity: 0.55;
+}
+.route-clickable:hover .route-info-icon {
+  opacity: 0.9;
+}
+
 /* Past flights collapsible */
 .past-flights-section {
   margin-top: 1rem;

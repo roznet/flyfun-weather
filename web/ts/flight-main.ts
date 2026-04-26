@@ -120,6 +120,22 @@ async function init(): Promise<void> {
     }
   }
 
+  /** Normalize a route input for change-detection comparisons (case-insensitive,
+   *  whitespace-collapsed). Used to tell whether the pilot actually edited
+   *  the input vs. the form just being pre-populated with the saved
+   *  raw_route or waypoint list. */
+  function normalizeRouteInput(s: string): string {
+    return s.trim().toUpperCase().split(/\s+/).filter(Boolean).join(' ');
+  }
+
+  /** Baseline route string the edit form is pre-populated with: raw_route
+   *  if the flight has one (so Field-15 stays editable verbatim), else the
+   *  joined waypoint list. */
+  function baselineRouteInput(): string {
+    const flight = store.getState().flight;
+    return flight?.raw_route?.trim() || flight?.waypoints.join(' ') || '';
+  }
+
   /** Read the current edit-form state and detect whether the user changed any
    *  structural field (date, origin, destination). Mid-route waypoint changes
    *  are NOT structural — they're handled by PATCH/Save. */
@@ -133,11 +149,16 @@ async function init(): Promise<void> {
       ? wpRaw.split(/[\s,]+/).filter(Boolean).map(w => w.toUpperCase())
       : (flight?.waypoints || []);
     const dateChanged = !!flight && newDate !== flight.target_date;
+    // If the input still matches the pre-populated baseline (which may
+    // be a Field-15 string with /timing or DCT tokens), the route hasn't
+    // changed at all — skip the naive token-split origin/dest check
+    // that would otherwise trip on suffixes like "EGTK/0900".
+    const inputUnchanged = normalizeRouteInput(wpRaw) === normalizeRouteInput(baselineRouteInput());
     const oldOrigin = flight?.waypoints[0] || '';
     const oldDest = flight?.waypoints[flight.waypoints.length - 1] || '';
     const newOrigin = newWaypoints[0] || '';
     const newDest = newWaypoints[newWaypoints.length - 1] || '';
-    const routeChanged = !!flight && (newOrigin !== oldOrigin || newDest !== oldDest);
+    const routeChanged = !!flight && !inputUnchanged && (newOrigin !== oldOrigin || newDest !== oldDest);
     return { dateChanged, routeChanged, newWaypoints, newDate };
   }
 
@@ -244,7 +265,8 @@ async function init(): Promise<void> {
       const wpRaw = (wpEl?.value || '').trim();
       let waypoints: string[] = flight.waypoints;
       let rawRoute: string | undefined;
-      if (wpRaw && wpRaw.toUpperCase() !== flight.waypoints.join(' ').toUpperCase()) {
+      const baseline = baselineRouteInput();
+      if (wpRaw && normalizeRouteInput(wpRaw) !== normalizeRouteInput(baseline)) {
         const result = await interpretAndConfirmRoute(wpRaw, (msg) => ui.renderError(msg));
         if (!result || !result.confirmed) return null;
         waypoints = result.waypoints;
@@ -289,7 +311,8 @@ async function init(): Promise<void> {
       let newWaypoints: string[] | undefined;
       let newRawRoute: string | undefined;
       const wpRaw = wpEl?.value?.trim();
-      if (wpRaw && wpRaw.toUpperCase() !== flight.waypoints.join(' ').toUpperCase()) {
+      const saveBaseline = baselineRouteInput();
+      if (wpRaw && normalizeRouteInput(wpRaw) !== normalizeRouteInput(saveBaseline)) {
         const result = await interpretAndConfirmRoute(wpRaw, (msg) => ui.renderError(msg));
         if (!result || !result.confirmed) return;
         newWaypoints = result.waypoints;
