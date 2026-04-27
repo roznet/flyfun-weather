@@ -227,7 +227,6 @@ class HourlyForecast(BaseModel):
     rain_mm: Optional[float] = None
     showers_mm: Optional[float] = None
     snowfall_cm: Optional[float] = None
-    weather_code: Optional[int] = None
     precipitation_probability_pct: Optional[float] = None
     cloud_cover_pct: Optional[float] = None
     cloud_cover_low_pct: Optional[float] = None

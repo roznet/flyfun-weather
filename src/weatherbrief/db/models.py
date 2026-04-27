@@ -618,7 +618,6 @@ class AirportForecastSnapshotRow(Base):
     precipitation_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
     snowfall_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
     cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
-    weather_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cloud_cover_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_cover_low_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 

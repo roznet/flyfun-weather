@@ -226,7 +226,6 @@ def _fetch_forecasts_for_model(
                     "precipitation_mm": hourly.precipitation_mm,
                     "snowfall_cm": hourly.snowfall_cm,
                     "cape_jkg": hourly.cape_jkg,
-                    "weather_code": hourly.weather_code,
                     "cloud_cover_pct": hourly.cloud_cover_pct,
                     "cloud_cover_low_pct": hourly.cloud_cover_low_pct,
                     "lcl_ft": lcl_ft,
@@ -306,7 +305,8 @@ def _enrich_with_grib(
     )
 
     if model == "ecmwf":
-        # ECMWF uses SFTP GRIB delivery — not yet implemented
+        # ECMWF GRIB ceiling is populated inline by fetch_ecmwf_grib_snapshots —
+        # the Open-Meteo fallback path doesn't have a usable cloud-diag GRIB feed.
         return
 
     init_date, init_hour = datetime_to_init_parts(init_time)
@@ -355,6 +355,233 @@ def _enrich_with_grib(
                 cd = ceiling_data[airport_idx]
                 snap["nwp_ceiling_ft"] = cd.nwp_ceiling_ft
                 snap["cloud_base_ft"] = cd.cloud_base_ft
+
+
+# ---------------------------------------------------------------------------
+# Phase A (ECMWF GRIB-first): decode local a1+a2 files into snapshot dicts
+# ---------------------------------------------------------------------------
+
+def _select_ecmwf_grib_run(om_init_time: datetime, days: int):
+    """Pick the freshest ready ECMWF GRIB run that is not older than Open-Meteo's.
+
+    Returns the file list for the chosen run, or None if no GRIB run is
+    available locally with init >= ``om_init_time``. The caller falls back
+    to Open-Meteo when None is returned.
+    """
+    from weatherbrief.fetch.grib.ecmwf_fetch import (
+        filter_ready_runs,
+        scan_ecmwf_files,
+        ecmwf_grib_dir,
+    )
+
+    grib_dir = ecmwf_grib_dir()
+    all_files = scan_ecmwf_files(grib_dir)
+    if not all_files:
+        return None
+
+    ready_files = filter_ready_runs(all_files, grib_dir)
+    if not ready_files:
+        return None
+
+    runs: dict[datetime, list] = {}
+    for f in ready_files:
+        runs.setdefault(f.base_time, []).append(f)
+
+    # Newest ready run wins, provided it isn't older than Open-Meteo's view.
+    best_bt = max(runs)
+    if best_bt < om_init_time:
+        return None
+
+    return runs[best_bt]
+
+
+def fetch_ecmwf_grib_snapshots(
+    run_files: list,
+    airports: list[WatchlistAirport],
+    sample_hours: list[int],
+    days: int,
+) -> list[dict]:
+    """Decode an ECMWF run on disk into standalone-snapshot dicts.
+
+    For each (day_offset × sample_hour) inside the run's horizon, opens the
+    matching a1 (surface) and a2 (pressure-level) files once and extracts
+    values for all ``airports``. Sounding-derived columns come from
+    ``analyze_sounding_lite`` on the GRIB-native pressure-level profile.
+
+    ``tp`` and ``sf`` arrive accumulated from init in the a1 GRIB, so this
+    fetcher decodes the previous-hour step too and stores per-hour deltas
+    to match Open-Meteo's hourly precipitation semantics.
+
+    Args:
+        run_files: ECMWFFileInfo list scoped to one run (single base_time).
+        airports: Watchlist airports to decode for.
+        sample_hours: UTC hours to sample (e.g. [6, 9, 12, 15, 18]).
+        days: Forecast horizon in days from init.
+
+    Returns:
+        Snapshot dicts with the same shape as ``_fetch_forecasts_for_model``
+        produces. Empty list when run_files has no usable steps.
+    """
+    from datetime import time as dt_time
+
+    from weatherbrief.fetch.grib.decode import (
+        build_ecmwf_surface_snapshot,
+        build_pressure_levels_from_grib,
+        decode_ecmwf_pressure_per_point,
+        decode_ecmwf_surface_per_point,
+    )
+    from weatherbrief.models.analysis import HourlyForecast
+
+    if not run_files:
+        return []
+
+    # Group files by step_hours, separate a1 (surface) and a2 (pressure)
+    files_by_step: dict[int, dict[str, object]] = {}
+    for f in run_files:
+        part = "a2" if f.is_pressure_level else "a1" if f.is_surface else None
+        if part is not None:
+            files_by_step.setdefault(f.step_hours, {})[part] = f.path
+
+    if not files_by_step:
+        return []
+
+    init_time = run_files[0].base_time
+    if init_time.tzinfo is None:
+        init_time = init_time.replace(tzinfo=timezone.utc)
+
+    lats = [a.lat for a in airports]
+    lons = [a.lon for a in airports]
+    n = len(airports)
+    empty: list[dict] = [{} for _ in range(n)]
+
+    # Cache decoded a1 dicts per step — step-diff for tp/sf reads the
+    # previous-hour step, which is reused by the next iteration.
+    a1_cache: dict[int, list[dict[str, float]]] = {}
+
+    def _decode_a1(step_h: int) -> list[dict[str, float]]:
+        if step_h in a1_cache:
+            return a1_cache[step_h]
+        a1_path = files_by_step.get(step_h, {}).get("a1")
+        if a1_path is None:
+            a1_cache[step_h] = empty
+            return empty
+        try:
+            data, _ = decode_ecmwf_surface_per_point(a1_path, lats, lons)
+        except Exception:
+            logger.warning("ECMWF a1 decode failed for step %dh", step_h, exc_info=True)
+            data = empty
+        a1_cache[step_h] = data
+        return data
+
+    snapshots: list[dict] = []
+    max_step = max(files_by_step.keys())
+
+    for day_offset in range(days + 1):
+        target_date = (init_time + timedelta(days=day_offset)).date()
+        for hour in sample_hours:
+            target_dt = datetime.combine(
+                target_date, dt_time(hour, 0, 0), tzinfo=timezone.utc,
+            )
+            step_h = int((target_dt - init_time).total_seconds() / 3600)
+            if step_h <= 0 or step_h > max_step:
+                continue
+            if step_h not in files_by_step:
+                continue
+
+            cur_a1 = _decode_a1(step_h)
+            prev_a1 = _decode_a1(step_h - 1) if (step_h - 1) > 0 else None
+
+            a2_path = files_by_step[step_h].get("a2")
+            pl_data: list[dict[int, dict[str, float]]] | None = None
+            if a2_path is not None:
+                try:
+                    pl_data, _ = decode_ecmwf_pressure_per_point(a2_path, lats, lons)
+                except Exception:
+                    logger.warning(
+                        "ECMWF a2 decode failed for step %dh", step_h, exc_info=True,
+                    )
+                    pl_data = None
+
+            for i, airport in enumerate(airports):
+                cur_raw = cur_a1[i] if i < len(cur_a1) else {}
+                snap_fields = build_ecmwf_surface_snapshot(cur_raw)
+
+                # Step-diff for accumulated fields (precipitation, snowfall)
+                if prev_a1 is not None and i < len(prev_a1):
+                    prev_fields = build_ecmwf_surface_snapshot(prev_a1[i])
+                    cur_pp = snap_fields.get("precipitation_mm")
+                    prev_pp = prev_fields.get("precipitation_mm")
+                    if cur_pp is not None and prev_pp is not None:
+                        snap_fields["precipitation_mm"] = max(0.0, cur_pp - prev_pp)
+                    cur_sf = snap_fields.get("snowfall_cm")
+                    prev_sf = prev_fields.get("snowfall_cm")
+                    if cur_sf is not None and prev_sf is not None:
+                        snap_fields["snowfall_cm"] = max(0.0, cur_sf - prev_sf)
+
+                # LCL from T-Td spread
+                t = snap_fields.get("temperature_2m_c")
+                d = snap_fields.get("dewpoint_2m_c")
+                lcl_ft = None
+                if t is not None and d is not None:
+                    spread = t - d
+                    if spread >= 0:
+                        lcl_ft = _LCL_CONSTANT_FT * spread
+
+                snap = {
+                    "icao": airport.icao,
+                    "model": "ecmwf",
+                    "model_init_time": init_time,
+                    "forecast_hour": target_dt,
+                    "temperature_2m_c": snap_fields.get("temperature_2m_c"),
+                    "dewpoint_2m_c": snap_fields.get("dewpoint_2m_c"),
+                    "visibility_m": snap_fields.get("visibility_m"),
+                    "wind_speed_10m_kt": snap_fields.get("wind_speed_10m_kt"),
+                    "wind_direction_10m_deg": snap_fields.get("wind_direction_10m_deg"),
+                    "wind_gusts_10m_kt": snap_fields.get("wind_gusts_10m_kt"),
+                    "precipitation_mm": snap_fields.get("precipitation_mm"),
+                    "snowfall_cm": snap_fields.get("snowfall_cm"),
+                    "cape_jkg": snap_fields.get("cape_jkg"),
+                    "cloud_cover_pct": snap_fields.get("cloud_cover_pct"),
+                    "cloud_cover_low_pct": snap_fields.get("cloud_cover_low_pct"),
+                    "nwp_ceiling_ft": snap_fields.get("nwp_ceiling_ft"),
+                    "cloud_base_ft": snap_fields.get("cloud_base_ft"),
+                    "lcl_ft": lcl_ft,
+                }
+
+                # Sounding analysis on a2 pressure levels for sounding-derived columns
+                if pl_data is not None and i < len(pl_data) and pl_data[i]:
+                    try:
+                        levels = build_pressure_levels_from_grib(pl_data[i])
+                    except Exception:
+                        logger.warning(
+                            "ECMWF pressure-level build failed for %s step %dh",
+                            airport.icao, step_h, exc_info=True,
+                        )
+                        levels = []
+                    if levels:
+                        hourly = HourlyForecast(
+                            time=target_dt,
+                            temperature_2m_c=snap_fields.get("temperature_2m_c"),
+                            dewpoint_2m_c=snap_fields.get("dewpoint_2m_c"),
+                            surface_pressure_hpa=snap_fields.get("surface_pressure_hpa"),
+                            wind_speed_10m_kt=snap_fields.get("wind_speed_10m_kt"),
+                            wind_direction_10m_deg=snap_fields.get("wind_direction_10m_deg"),
+                            cape_jkg=snap_fields.get("cape_jkg"),
+                            cloud_cover_pct=snap_fields.get("cloud_cover_pct"),
+                            cloud_cover_low_pct=snap_fields.get("cloud_cover_low_pct"),
+                            pressure_levels=levels,
+                        )
+                        _enrich_with_sounding(snap, hourly, "ecmwf")
+
+                snapshots.append(snap)
+
+            # Drop the previous-step cache once we've moved past it; the
+            # next iteration only re-reads (step_h, step_h-1).
+            stale_keys = [k for k in a1_cache if k < step_h - 1]
+            for k in stale_keys:
+                a1_cache.pop(k, None)
+
+    return snapshots
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +658,6 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
             precipitation_mm=snap.get("precipitation_mm"),
             snowfall_cm=snap.get("snowfall_cm"),
             cape_jkg=snap.get("cape_jkg"),
-            weather_code=snap.get("weather_code"),
             cloud_cover_pct=snap.get("cloud_cover_pct"),
             cloud_cover_low_pct=snap.get("cloud_cover_low_pct"),
             nwp_ceiling_ft=snap.get("nwp_ceiling_ft"),
@@ -496,7 +722,6 @@ def _snapshot_to_hourly(snap: AirportForecastSnapshotRow):
         precipitation_mm=snap.precipitation_mm,
         snowfall_cm=snap.snowfall_cm,
         cape_jkg=snap.cape_jkg,
-        weather_code=snap.weather_code,
         cloud_cover_pct=snap.cloud_cover_pct,
         cloud_cover_low_pct=snap.cloud_cover_low_pct,
         nwp_cloud_diagnostics=nwp_diag,
@@ -751,7 +976,24 @@ def run_standalone_cycle(
                     logger.warning("No metadata for model %s, skipping", model)
                     continue
 
-                init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
+                om_init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
+
+                # ECMWF: prefer direct GRIB delivery when its init is at least as
+                # fresh as Open-Meteo's. Open-Meteo republishes ECMWF IFS-HRES
+                # with a 7–9h lag, so the 07/19Z fetch consistently saw the
+                # prior 18Z bc-run; direct GRIB lands ~6h after init.
+                grib_run_files = None
+                if model == "ecmwf":
+                    grib_run_files = _select_ecmwf_grib_run(
+                        om_init_time, MODEL_FORECAST_DAYS.get(model, 4),
+                    )
+
+                if grib_run_files is not None:
+                    init_time = grib_run_files[0].base_time
+                    if init_time.tzinfo is None:
+                        init_time = init_time.replace(tzinfo=timezone.utc)
+                else:
+                    init_time = om_init_time
 
                 existing = db.execute(
                     select(AirportForecastSnapshotRow.id)
@@ -764,15 +1006,32 @@ def run_standalone_cycle(
                     logger.info("Model %s init %s already stored, skipping fetch", model, init_time)
                     continue
 
-                logger.info("Fetching %s forecasts (init %s) for %d airports",
-                            model, init_time, len(airports))
+                if grib_run_files is not None:
+                    logger.info(
+                        "Fetching ECMWF forecasts via GRIB (init %s) for %d airports",
+                        init_time, len(airports),
+                    )
+                    snapshots = fetch_ecmwf_grib_snapshots(
+                        grib_run_files, airports,
+                        SAMPLE_HOURS_UTC,
+                        MODEL_FORECAST_DAYS.get(model, 4),
+                    )
+                    api_calls = 0
+                    logger.info(
+                        "Model ecmwf: %d snapshot values from GRIB (%d files)",
+                        len(snapshots), len(grib_run_files),
+                    )
+                else:
+                    logger.info("Fetching %s forecasts (init %s) for %d airports",
+                                model, init_time, len(airports))
+                    snapshots, api_calls = _fetch_forecasts_for_model(
+                        model, init_time, airports, session,
+                    )
+                    total_api_calls += api_calls
+                    logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
+                                model, len(snapshots), api_calls)
 
-                snapshots, api_calls = _fetch_forecasts_for_model(model, init_time, airports, session)
-                total_api_calls += api_calls
-                logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
-                            model, len(snapshots), api_calls)
-
-                _enrich_with_grib(snapshots, model, init_time, airports, session)
+                    _enrich_with_grib(snapshots, model, init_time, airports, session)
 
                 stored = _store_snapshots(snapshots, db)
                 db.commit()

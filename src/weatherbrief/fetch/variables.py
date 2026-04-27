@@ -76,7 +76,6 @@ SURFACE_VARIABLES = [
     "rain",
     "showers",
     "snowfall",
-    "weather_code",
 ]
 
 # What type of CAPE each model's surface "cape" variable represents.

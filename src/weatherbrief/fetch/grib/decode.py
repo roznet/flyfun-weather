@@ -125,10 +125,14 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "clct": "total_cover_pct",
 }
 
-# ECMWF single-level cloud diagnostic field mapping.
-# ECMWF reports heights in meters, cloud covers as 0–1 fractions.
-# cfgrib shortName → internal field name
+# ECMWF single-level (a1) field mapping.
+# Combines cloud diagnostics (consumed by build_ecmwf_cloud_diagnostics) and
+# the surface variables consumed by build_ecmwf_surface_snapshot for the
+# standalone verification pipeline.  Each builder picks only the keys it
+# cares about, so adding entries here is non-invasive.
+# cfgrib shortName → internal raw field name.
 _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
+    # Cloud diagnostics (used by build_ecmwf_cloud_diagnostics)
     "ceil": "ceiling_m",                   # meters, 9999 = no cloud sentinel
     "cbh": "cloud_base_height_m",          # meters, 9999 = no cloud sentinel
     "hcct": "convective_cloud_top_m",      # meters, 9999 = no cloud sentinel
@@ -137,6 +141,17 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "mcc": "mid_cover_frac",               # 0–1 fraction, ×100 during build
     "tcc": "total_cover_frac",             # 0–1 fraction, ×100 during build
     "hcc": "high_cover_frac",              # 0–1 fraction, ×100 during build
+    # Surface variables (used by build_ecmwf_surface_snapshot)
+    "t2m": "temperature_2m_k",             # K
+    "d2m": "dewpoint_2m_k",                # K
+    "u10": "u_wind_10m_ms",                # m/s
+    "v10": "v_wind_10m_ms",                # m/s
+    "fg10": "wind_gust_10m_ms",            # m/s (10-minute max gust)
+    "vis": "visibility_m",                 # m
+    "tp": "total_precip_m",                # m water equivalent, accumulated since init
+    "sf": "snowfall_m_we",                 # m water equivalent, accumulated since init
+    "mucape": "mucape_jkg",                # J/kg (most-unstable parcel CAPE)
+    "sp": "surface_pressure_pa",           # Pa (used as anchor for sounding analysis)
 }
 
 # Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
@@ -1507,3 +1522,106 @@ def build_ecmwf_cloud_diagnostics(
         convective_top_ft=convective_top_ft,
         freezing_level_ft=freezing_level_ft,
     )
+
+
+def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | None]:
+    """Map ECMWF a1 raw fields into the standalone-snapshot schema.
+
+    Input ``raw`` is the per-point dict returned by
+    :func:`decode_ecmwf_surface_per_point` (cfgrib short-name → raw value
+    in native ECMWF units). Output keys match the snapshot dict columns
+    consumed by ``_store_snapshots`` in ``standalone_verification``.
+
+    Unit conversions:
+    - K → °C (temperature, dewpoint)
+    - m/s u/v → kt speed + meteorological "from" direction
+    - m/s gust → kt
+    - m water-equivalent → mm water (precip) and cm snow (snowfall, ×1000
+      assumes a 10:1 snow:water ratio, matching ECMWF's reference conversion)
+    - 0–1 cloud fraction → 0–100 %
+
+    ``total_precip_m`` and ``snowfall_m_we`` arrive accumulated since model
+    init in ECMWF a1 — callers that need step-of-hour values must compute
+    a step-difference upstream.
+    """
+    import math
+
+    out: dict[str, float | None] = {
+        "temperature_2m_c": None,
+        "dewpoint_2m_c": None,
+        "visibility_m": None,
+        "wind_speed_10m_kt": None,
+        "wind_direction_10m_deg": None,
+        "wind_gusts_10m_kt": None,
+        "precipitation_mm": None,
+        "snowfall_cm": None,
+        "cape_jkg": None,
+        "cloud_cover_pct": None,
+        "cloud_cover_low_pct": None,
+        "surface_pressure_hpa": None,
+        "nwp_ceiling_ft": None,
+        "cloud_base_ft": None,
+    }
+
+    if not raw:
+        return out
+
+    t_k = raw.get("temperature_2m_k")
+    if t_k is not None:
+        out["temperature_2m_c"] = t_k - 273.15
+
+    d_k = raw.get("dewpoint_2m_k")
+    if d_k is not None:
+        out["dewpoint_2m_c"] = d_k - 273.15
+
+    vis = raw.get("visibility_m")
+    if vis is not None:
+        out["visibility_m"] = vis
+
+    u = raw.get("u_wind_10m_ms")
+    v = raw.get("v_wind_10m_ms")
+    if u is not None and v is not None:
+        speed_ms = math.sqrt(u * u + v * v)
+        out["wind_speed_10m_kt"] = speed_ms * _KT_PER_MS
+        if speed_ms > 0.01:
+            out["wind_direction_10m_deg"] = (math.atan2(-u, -v) * 180.0 / math.pi) % 360.0
+        else:
+            out["wind_direction_10m_deg"] = 0.0
+
+    fg = raw.get("wind_gust_10m_ms")
+    if fg is not None:
+        out["wind_gusts_10m_kt"] = fg * _KT_PER_MS
+
+    tp = raw.get("total_precip_m")
+    if tp is not None:
+        out["precipitation_mm"] = tp * 1000.0
+
+    sf = raw.get("snowfall_m_we")
+    if sf is not None:
+        out["snowfall_cm"] = sf * 1000.0
+
+    cape = raw.get("mucape_jkg")
+    if cape is not None:
+        out["cape_jkg"] = cape
+
+    tcc = raw.get("total_cover_frac")
+    if tcc is not None:
+        out["cloud_cover_pct"] = tcc * 100.0
+
+    lcc = raw.get("low_cover_frac")
+    if lcc is not None:
+        out["cloud_cover_low_pct"] = lcc * 100.0
+
+    sp = raw.get("surface_pressure_pa")
+    if sp is not None:
+        out["surface_pressure_hpa"] = sp / 100.0
+
+    ceil_m = raw.get("ceiling_m")
+    if ceil_m is not None and 0 <= ceil_m < _ECMWF_NO_CLOUD_SENTINEL_M:
+        out["nwp_ceiling_ft"] = ceil_m * _M_TO_FT
+
+    cbh_m = raw.get("cloud_base_height_m")
+    if cbh_m is not None and 0 <= cbh_m < _ECMWF_NO_CLOUD_SENTINEL_M:
+        out["cloud_base_ft"] = cbh_m * _M_TO_FT
+
+    return out

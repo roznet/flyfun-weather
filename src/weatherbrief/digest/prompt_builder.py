@@ -117,8 +117,6 @@ def build_digest_context(
                     wx_parts.append(f"Showers={hourly.showers_mm:.1f}mm")
                 if hourly.snowfall_cm is not None and hourly.snowfall_cm > 0:
                     wx_parts.append(f"Snow={hourly.snowfall_cm:.1f}cm")
-                if hourly.weather_code is not None:
-                    wx_parts.append(f"WMO={hourly.weather_code}")
             if hourly.freezing_level_m is not None:
                 fzl_ft = hourly.freezing_level_m * 3.28084
                 wx_parts.append(f"FzLvl={fzl_ft:.0f}ft")

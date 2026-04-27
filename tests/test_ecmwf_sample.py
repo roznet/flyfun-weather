@@ -939,6 +939,206 @@ class TestECMWFDecode:
         assert pressures == sorted(pressures, reverse=True)
 
 
+class TestEcmwfSurfaceSnapshot:
+    """Unit + integration tests for build_ecmwf_surface_snapshot()."""
+
+    def test_unit_conversions_basic(self):
+        """Confirm the explicit conversions: K→°C, m/s→kt, fraction→%."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
+
+        raw = {
+            "temperature_2m_k": 283.15,        # 10°C
+            "dewpoint_2m_k": 278.15,           # 5°C
+            "u_wind_10m_ms": 0.0,
+            "v_wind_10m_ms": -10.0,            # wind from north (180-flip)
+            "wind_gust_10m_ms": 15.0,
+            "visibility_m": 9999.0,
+            "total_precip_m": 0.005,           # 5 mm equivalent (cumulative)
+            "snowfall_m_we": 0.001,            # 1 mm water-equivalent
+            "mucape_jkg": 250.0,
+            "total_cover_frac": 0.75,
+            "low_cover_frac": 0.30,
+            "surface_pressure_pa": 101325.0,
+            "ceiling_m": 600.0,
+            "cloud_base_height_m": 500.0,
+        }
+        out = build_ecmwf_surface_snapshot(raw)
+
+        assert out["temperature_2m_c"] == pytest.approx(10.0)
+        assert out["dewpoint_2m_c"] == pytest.approx(5.0)
+        assert out["visibility_m"] == 9999.0
+        # u=0, v=-10 → wind from north → speed≈10 m/s ≈ 19.44 kt
+        assert out["wind_speed_10m_kt"] == pytest.approx(19.4384, rel=1e-3)
+        # atan2(-u, -v) with u=0, v=-10 → atan2(0, 10) → 0 → 0°
+        assert out["wind_direction_10m_deg"] == pytest.approx(0.0, abs=0.01)
+        assert out["wind_gusts_10m_kt"] == pytest.approx(29.16, rel=1e-3)
+        assert out["precipitation_mm"] == pytest.approx(5.0)
+        assert out["snowfall_cm"] == pytest.approx(1.0)
+        assert out["cape_jkg"] == 250.0
+        assert out["cloud_cover_pct"] == pytest.approx(75.0)
+        assert out["cloud_cover_low_pct"] == pytest.approx(30.0)
+        assert out["surface_pressure_hpa"] == pytest.approx(1013.25)
+        assert out["nwp_ceiling_ft"] == pytest.approx(1968.5, rel=1e-3)
+        assert out["cloud_base_ft"] == pytest.approx(1640.4, rel=1e-3)
+
+    def test_wind_direction_from_easterly(self):
+        """Easterly wind: u=-10 (toward west), v=0 → from-direction = 90°."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
+
+        out = build_ecmwf_surface_snapshot({
+            "u_wind_10m_ms": -10.0, "v_wind_10m_ms": 0.0,
+        })
+        assert out["wind_direction_10m_deg"] == pytest.approx(90.0, abs=0.01)
+
+    def test_no_cloud_sentinel_dropped(self):
+        """ECMWF 9999 m sentinel for ceiling/cloud_base maps to None."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
+
+        out = build_ecmwf_surface_snapshot({
+            "ceiling_m": 9999.0, "cloud_base_height_m": 9999.0,
+        })
+        assert out["nwp_ceiling_ft"] is None
+        assert out["cloud_base_ft"] is None
+
+    def test_empty_input(self):
+        from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
+
+        out = build_ecmwf_surface_snapshot({})
+        # Schema is fully populated with Nones for missing fields
+        for key in (
+            "temperature_2m_c", "dewpoint_2m_c", "visibility_m",
+            "wind_speed_10m_kt", "wind_direction_10m_deg",
+            "wind_gusts_10m_kt", "precipitation_mm", "snowfall_cm",
+            "cape_jkg", "cloud_cover_pct", "cloud_cover_low_pct",
+        ):
+            assert out[key] is None, f"{key} should be None for empty input"
+
+
+@skip_no_samples
+class TestEcmwfSurfaceFromSample:
+    """End-to-end test of decode + build pipeline on a real a1 file."""
+
+    def test_extract_extended_surface_fields(self):
+        """Verify the extended _ECMWF_CLOUD_DIAG_FIELD_MAP picks up surface vars."""
+        from weatherbrief.fetch.grib.decode import (
+            build_ecmwf_surface_snapshot,
+            decode_ecmwf_surface_per_point,
+        )
+
+        a1 = next(
+            (p for p in _grib_files() if (info := parse_ecmwf_filename(p)) and info.is_surface),
+            None,
+        )
+        if a1 is None:
+            pytest.skip("No a1 sample file found")
+
+        # Munich
+        data, covered = decode_ecmwf_surface_per_point(a1, [48.0], [11.5])
+        assert covered[0]
+        snap = build_ecmwf_surface_snapshot(data[0])
+
+        # Surface fields populated; a few sanity bounds for plausibility
+        assert snap["temperature_2m_c"] is not None
+        assert -50.0 < snap["temperature_2m_c"] < 50.0
+        assert snap["dewpoint_2m_c"] is not None
+        assert snap["dewpoint_2m_c"] <= snap["temperature_2m_c"] + 0.1
+        assert snap["wind_speed_10m_kt"] is not None
+        assert 0.0 <= snap["wind_speed_10m_kt"] < 200.0
+        assert snap["wind_direction_10m_deg"] is not None
+        assert 0.0 <= snap["wind_direction_10m_deg"] < 360.0
+        assert snap["cape_jkg"] is not None
+        assert snap["cape_jkg"] >= 0.0
+        assert snap["visibility_m"] is not None
+        assert snap["cloud_cover_pct"] is not None
+        assert 0.0 <= snap["cloud_cover_pct"] <= 100.0
+        assert snap["surface_pressure_hpa"] is not None
+        assert 700.0 < snap["surface_pressure_hpa"] < 1100.0
+
+
+class TestSelectEcmwfGribRun:
+    """Unit tests for _select_ecmwf_grib_run (source-selection helper)."""
+
+    def test_returns_none_when_no_files(self, tmp_path, monkeypatch):
+        from datetime import datetime, timezone
+
+        monkeypatch.setenv("ECMWF_GRIB_DIR", str(tmp_path))
+        from weatherbrief.tasks.standalone_verification import _select_ecmwf_grib_run
+
+        om_init = datetime(2026, 4, 25, 0, 0, tzinfo=timezone.utc)
+        assert _select_ecmwf_grib_run(om_init, days=4) is None
+
+    def test_returns_none_when_grib_older_than_om(self, tmp_path, monkeypatch):
+        """If the freshest ready GRIB run is older than OM init, fall back."""
+        from datetime import datetime, timezone
+
+        monkeypatch.setenv("ECMWF_GRIB_DIR", str(tmp_path))
+
+        # Create a sentinel-ready run dated 2026-04-24 12Z (older than OM = 25 00Z)
+        bt_str = "20260424T120000Z"
+        run_dir = tmp_path
+        for step in (0, 6, 12):
+            for part in ("a1", "a2"):
+                vt_hour = (12 + step) % 24
+                vt_day = 24 if (12 + step) < 24 else 25
+                vt_str = f"202604{vt_day}T{vt_hour:02d}0000Z"
+                f = run_dir / f"brg_{part}_ifs-ens-cf_od_oper_fc_{bt_str}_{vt_str}_{step}h"
+                f.write_bytes(b"")
+        # Sentinel
+        (run_dir / ".ready_20260424_12z").write_text("")
+
+        from weatherbrief.tasks.standalone_verification import _select_ecmwf_grib_run
+
+        om_init = datetime(2026, 4, 25, 0, 0, tzinfo=timezone.utc)
+        assert _select_ecmwf_grib_run(om_init, days=4) is None
+
+
+@skip_no_samples
+class TestFetchEcmwfGribSnapshots:
+    """End-to-end fetcher test against a real local ECMWF run."""
+
+    def test_one_run_two_airports(self):
+        from weatherbrief.fetch.grib.ecmwf_fetch import scan_ecmwf_files
+        from weatherbrief.tasks.airport_watchlist import WatchlistAirport
+        from weatherbrief.tasks.standalone_verification import (
+            fetch_ecmwf_grib_snapshots, SAMPLE_HOURS_UTC,
+        )
+
+        files = scan_ecmwf_files()
+        if not files:
+            pytest.skip("No ECMWF files in sample dir")
+
+        latest_bt = max(f.base_time for f in files)
+        run_files = [f for f in files if f.base_time == latest_bt]
+
+        airports = [
+            WatchlistAirport(icao="LFPG", lat=49.0097, lon=2.5479),
+            WatchlistAirport(icao="EDDF", lat=50.0379, lon=8.5622),
+        ]
+        snaps = fetch_ecmwf_grib_snapshots(
+            run_files, airports, SAMPLE_HOURS_UTC, days=1,
+        )
+        assert len(snaps) > 0
+        # Must contain both airports
+        icaos = {s["icao"] for s in snaps}
+        assert "LFPG" in icaos
+        assert "EDDF" in icaos
+        # Init time matches the run we picked
+        for s in snaps:
+            assert s["model"] == "ecmwf"
+            assert s["model_init_time"] == latest_bt
+            assert s["forecast_hour"].hour in SAMPLE_HOURS_UTC
+        # At least one snapshot has surface data populated
+        sample = next(s for s in snaps if s["temperature_2m_c"] is not None)
+        assert sample["wind_speed_10m_kt"] is not None
+        assert sample["cape_jkg"] is not None
+        # Cumulative precip step-diff: never negative
+        for s in snaps:
+            if s["precipitation_mm"] is not None:
+                assert s["precipitation_mm"] >= 0.0
+            if s["snowfall_cm"] is not None:
+                assert s["snowfall_cm"] >= 0.0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
