@@ -1304,6 +1304,35 @@ def _scan_shortnames(path: Path) -> tuple[set[str], set[int]]:
     return names, tvs
 
 
+def _find_common_file_pair(feed: str) -> tuple[Path, Path] | None:
+    """Find a file present in both PROD and TEST mirrors with same (base_time, step).
+
+    Returns (prod_path, test_path) for the most recent shared key, or None
+    if no overlap. Skips .idx sidecars.
+    """
+    if ECMWF_PROD_DIR is None or ECMWF_TEST_DIR is None:
+        return None
+
+    def index(d: Path) -> dict[tuple[datetime, int], Path]:
+        out: dict[tuple[datetime, int], Path] = {}
+        for p in d.rglob("*"):
+            if not p.is_file() or p.name.endswith(".idx") or p.name.startswith("."):
+                continue
+            info = parse_ecmwf_filename(p)
+            if info is None or info.feed != feed:
+                continue
+            out[(info.base_time, info.step_hours)] = p
+        return out
+
+    prod_idx = index(ECMWF_PROD_DIR)
+    test_idx = index(ECMWF_TEST_DIR)
+    common = sorted(set(prod_idx.keys()) & set(test_idx.keys()), reverse=True)
+    if not common:
+        return None
+    key = common[0]
+    return prod_idx[key], test_idx[key]
+
+
 def _first_file_by_feed(data_dir: Path, feed: str) -> Path | None:
     """Most-recent file matching feed (a1/a2), skipping .idx sidecars.
 
@@ -1372,12 +1401,13 @@ class TestFieldPresenceRegression:
         missing = EXPECTED_A1_SHORTNAMES - names
         assert not missing, f"TPREd a1 missing expected fields: {missing}"
 
-    def test_tpred_a2_pre_amendment_shape(self):
-        """TPREd a2 reflects the *pre-amendment* order: has `d`, no `gh`.
+    def test_tpred_a2_post_amendment_shape(self):
+        """TPREd a2 matches the amended PREd subscription: has `gh`, no `d`.
 
-        When/if ECMWF updates TPREd to match the amended PREd subscription,
-        this test will flip — change the asserts. That flip is a signal
-        the subscription sync completed and we can mark ready-to-migrate.
+        Re-shipped 2026-04-25 after ECMWF synced TPREd to the amended order.
+        If this regresses (gh disappears or d returns), TPREd has been
+        re-staged with a different config — investigate before assuming the
+        comparison against prod is still meaningful.
         """
         if ECMWF_TEST_DIR is None:
             pytest.skip("ECMWF_TEST_GRIB_DIR not set")
@@ -1387,11 +1417,8 @@ class TestFieldPresenceRegression:
         names, _ = _scan_shortnames(a2)
         missing_core = EXPECTED_A2_CORE_SHORTNAMES - names
         assert not missing_core, f"TPREd a2 missing core sounding vars: {missing_core}"
-        assert "d" in names, "TPREd a2 still reflects pre-amendment order (has d)"
-        assert "gh" not in names, (
-            "TPREd a2 is pre-amendment (no gh). If this fails, TPREd has "
-            "been updated to the amended subscription — flip the asserts."
-        )
+        assert "gh" in names, "TPREd a2 should contain gh post-amendment"
+        assert "d" not in names, "TPREd a2 should NOT contain d post-amendment"
 
     def test_tables_version_known(self):
         """tablesVersion on every sampled file must be one we've verified
@@ -1414,6 +1441,129 @@ class TestFieldPresenceRegression:
                 )
         if not results:
             pytest.skip("Neither ECMWF_PROD_GRIB_DIR nor ECMWF_TEST_GRIB_DIR set")
+
+    def test_reader_pressure_equivalence_across_packs(self, tmp_path, monkeypatch):
+        """Reader produces matching shape and sane values from prod and TPREd a2.
+
+        Byte-level value equality is *not* expected: prod runs IFS Cycle 49r1
+        while TPREd is the 50r1 release-candidate (X0080 expver), so the same
+        (base_time, step) gives physically different forecasts by design.
+        What must match is the reader's output *shape* — same pressure levels,
+        same field keys per level — and values must be physically reasonable
+        in both packs. A failure here points at a decode/scaling regression,
+        not at ECMWF data drift.
+        """
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
+
+        pair = _find_common_file_pair("a2")
+        if pair is None:
+            pytest.skip("No common a2 (base_time, step) pair across PROD/TEST mirrors")
+        prod_path, test_path = pair
+
+        monkeypatch.setenv("CFGRIB_INDEXPATH", str(tmp_path / "{short_hash}.idx"))
+
+        # Munich (Europe grid), Oslo (Nordic grid extension)
+        lats = [48.0, 59.9]
+        lons = [11.5, 10.7]
+        prod_data, prod_cov = decode_ecmwf_pressure_per_point(prod_path, lats, lons)
+        test_data, test_cov = decode_ecmwf_pressure_per_point(test_path, lats, lons)
+
+        assert prod_cov == test_cov, (
+            f"coverage masks differ: prod={prod_cov} test={test_cov}"
+        )
+
+        # Sanity bounds — wide enough to accept any plausible atmosphere
+        # but tight enough to catch wrong-unit / wrong-sign decode bugs.
+        bounds = {
+            "raw_temperature_k": (180.0, 330.0),
+            "raw_relative_humidity_pct": (0.0, 110.0),
+            "raw_specific_humidity_kg_kg": (0.0, 0.05),
+            "raw_u_wind_m_s": (-150.0, 150.0),
+            "raw_v_wind_m_s": (-150.0, 150.0),
+            "vertical_velocity_pa_s": (-50.0, 50.0),
+            "cloud_area_fraction_pct": (0.0, 100.0),
+            "cloud_liquid_water_kg_kg": (0.0, 0.01),
+            "ice_mixing_ratio_kg_kg": (0.0, 0.01),
+            "geopotential_height_m": (-500.0, 60000.0),
+        }
+
+        for label, data in (("prod", prod_data), ("test", test_data)):
+            for i, pd in enumerate(data):
+                if not pd:
+                    continue
+                for p, fields in pd.items():
+                    for k, v in fields.items():
+                        if v is None or k not in bounds:
+                            continue
+                        lo, hi = bounds[k]
+                        assert lo <= v <= hi, (
+                            f"{label} point {i} {p}hPa {k}={v} outside "
+                            f"plausible range [{lo}, {hi}]"
+                        )
+
+        for i, (pd, td) in enumerate(zip(prod_data, test_data)):
+            assert set(pd.keys()) == set(td.keys()), (
+                f"point {i}: pressure-level set differs "
+                f"(prod-only={set(pd) - set(td)}, test-only={set(td) - set(pd)})"
+            )
+            for p in pd:
+                pf, tf = pd[p], td[p]
+                assert set(pf.keys()) == set(tf.keys()), (
+                    f"point {i} {p}hPa: field set differs "
+                    f"(prod-only={set(pf) - set(tf)}, test-only={set(tf) - set(pf)})"
+                )
+
+    def test_reader_surface_equivalence_across_packs(self, tmp_path, monkeypatch):
+        """Reader produces matching field set and sane values from prod and TPREd a1.
+
+        See test_reader_pressure_equivalence_across_packs — same rationale.
+        """
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_surface_per_point
+
+        pair = _find_common_file_pair("a1")
+        if pair is None:
+            pytest.skip("No common a1 (base_time, step) pair across PROD/TEST mirrors")
+        prod_path, test_path = pair
+
+        monkeypatch.setenv("CFGRIB_INDEXPATH", str(tmp_path / "{short_hash}.idx"))
+
+        lats = [48.0, 59.9]
+        lons = [11.5, 10.7]
+        prod_data, prod_cov = decode_ecmwf_surface_per_point(prod_path, lats, lons)
+        test_data, test_cov = decode_ecmwf_surface_per_point(test_path, lats, lons)
+
+        assert prod_cov == test_cov, (
+            f"coverage masks differ: prod={prod_cov} test={test_cov}"
+        )
+
+        bounds = {
+            # Cover fractions delivered as 0–1 by the surface decoder
+            "low_cloud_frac": (0.0, 1.0),
+            "mid_cloud_frac": (0.0, 1.0),
+            "high_cloud_frac": (0.0, 1.0),
+            "total_cloud_frac": (0.0, 1.0),
+            # Heights / levels in metres
+            "ceiling_m": (0.0, 25000.0),
+            "cloud_base_m": (0.0, 25000.0),
+            "convective_cloud_top_m": (0.0, 25000.0),
+            "freezing_level_m": (-500.0, 6000.0),
+        }
+
+        for label, data in (("prod", prod_data), ("test", test_data)):
+            for i, pf in enumerate(data):
+                for k, v in pf.items():
+                    if v is None or k not in bounds:
+                        continue
+                    lo, hi = bounds[k]
+                    assert lo <= v <= hi, (
+                        f"{label} point {i} {k}={v} outside plausible range [{lo}, {hi}]"
+                    )
+
+        for i, (pf, tf) in enumerate(zip(prod_data, test_data)):
+            assert set(pf.keys()) == set(tf.keys()), (
+                f"point {i}: field set differs "
+                f"(prod-only={set(pf) - set(tf)}, test-only={set(tf) - set(pf)})"
+            )
 
     def test_cfgrib_decodes_tpred(self, tmp_path):
         """cfgrib.open_datasets must succeed on a tablesVersion=35 TPREd file.
