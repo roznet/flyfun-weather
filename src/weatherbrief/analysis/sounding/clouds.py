@@ -221,6 +221,7 @@ def _build_cc_layer(cc_levels: list[PressureLevelData]) -> EnhancedCloudLayer | 
         mean_temperature_c=mean_t,
         coverage=coverage,
         mean_dewpoint_depression_c=None,
+        mean_cloud_cover_pct=round(peak_caf, 1) if caf_vals else None,
         source="nwp_3d",
     )
 
@@ -305,6 +306,7 @@ def _build_grib_layers(
             coverage=coverage,
             mean_temperature_c=diag.top_temp_c,
             mean_dewpoint_depression_c=None,
+            mean_cloud_cover_pct=round(cover_pct, 1) if cover_pct is not None else None,
             source="grib",
         ))
 
@@ -322,6 +324,7 @@ def _build_grib_layers(
                     top_ft=round(diag_root.convective_top_ft),
                     coverage=conv_cov,
                     mean_dewpoint_depression_c=None,
+                    mean_cloud_cover_pct=round(conv_pct, 1),
                     source="grib",
                 ))
 

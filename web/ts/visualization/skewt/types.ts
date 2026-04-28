@@ -20,6 +20,7 @@ export interface SoundingProfileLevel {
   sfip_100: number | null;
   cloud_liquid_water_g_m3: number | null;
   ice_mixing_ratio_g_kg: number | null;
+  cloud_area_fraction_pct: number | null;
   richardson_number: number | null;
   omega_pa_s: number | null;
   w_fpm: number | null;

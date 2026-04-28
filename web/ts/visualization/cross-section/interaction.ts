@@ -113,8 +113,8 @@ export function attachInteraction(
       }
     }
 
-    // --- Cloud bands ---
-    if (en('cloud-bands') && point.cloudLayers.length > 0) {
+    // --- Cloud bands (DD-derived, both hard and soft renderings) ---
+    if ((en('cloud-bands') || en('soft-cloud-bands')) && point.cloudLayers.length > 0) {
       const lines: string[] = [];
       for (const cl of point.cloudLayers) {
         if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
@@ -128,19 +128,22 @@ export function attachInteraction(
       if (lines.length > 0) sections.push(lines.join('<br>'));
     }
 
-    // --- NWP Cloud bands ---
-    if (en('nwp-cloud-bands')) {
+    // --- NWP Cloud bands (both hard and soft renderings) ---
+    if (en('nwp-cloud-bands') || en('soft-nwp-cloud-bands')) {
       const nwpLines: string[] = [];
       for (const cl of point.nwpCloudLayers ?? []) {
         if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
-          // After the synth removal, source is "grib" or "nwp_3d"; no tag needed.
-          nwpLines.push(`NWP: ${cl.coverage} ${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)}`);
+          let line = `NWP: ${cl.coverage} ${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)}`;
+          if (cl.meanCloudCoverPct !== undefined) {
+            line += ` (CC ${cl.meanCloudCoverPct.toFixed(0)}%)`;
+          }
+          nwpLines.push(line);
         }
       }
       if (nwpLines.length > 0) sections.push(nwpLines.join('<br>'));
     }
 
-    // --- Icing bands ---
+    // --- Icing bands (Ogimet-DD) ---
     if (en('icing-bands')) {
       const lines: string[] = [];
       for (const z of point.icingZones) {
@@ -148,7 +151,18 @@ export function attachInteraction(
           lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.type}`);
         }
       }
-      if (lines.length > 0) sections.push(`Icing<br>${lines.join('<br>')}`);
+      if (lines.length > 0) sections.push(`Icing (Ogimet-DD)<br>${lines.join('<br>')}`);
+    }
+
+    // --- Icing bands (Ogimet-NWP) ---
+    if (en('icing-ogimet-nwp-bands')) {
+      const lines: string[] = [];
+      for (const z of point.icingOgimetNwpZones) {
+        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
+          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.type}`);
+        }
+      }
+      if (lines.length > 0) sections.push(`Icing (Ogimet-NWP)<br>${lines.join('<br>')}`);
     }
 
     // --- SFIP bands ---
@@ -164,12 +178,45 @@ export function attachInteraction(
       if (lines.length > 0) sections.push(lines.join('<br>'));
     }
 
-    // --- CAT bands ---
+    // --- IENG icing bands ---
+    if (en('ieng-icing-bands')) {
+      const lines: string[] = [];
+      for (const z of point.iengIcingZones) {
+        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
+          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.type}`);
+        }
+      }
+      if (lines.length > 0) sections.push(`IENG<br>${lines.join('<br>')}`);
+    }
+
+    // --- SLD bands ---
+    if (en('sld-bands')) {
+      const lines: string[] = [];
+      for (const z of point.sldZones) {
+        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
+          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.mechanism}`);
+        }
+      }
+      if (lines.length > 0) sections.push(`SLD<br>${lines.join('<br>')}`);
+    }
+
+    // --- CAT bands (Richardson) ---
     if (en('cat-bands')) {
       const lines: string[] = [];
       for (const z of point.catLayers) {
         if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
           lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} CAT ${z.risk}`);
+        }
+      }
+      if (lines.length > 0) sections.push(lines.join('<br>'));
+    }
+
+    // --- E-Shear bands ---
+    if (en('e-shear-bands')) {
+      const lines: string[] = [];
+      for (const z of point.eShearLayers) {
+        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
+          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} E-Shear ${z.risk}`);
         }
       }
       if (lines.length > 0) sections.push(lines.join('<br>'));

@@ -176,7 +176,9 @@ export interface VizCloudLayer {
   coverage: string;
   /** Mean dewpoint depression in °C (0–3). Lower = denser cloud. */
   meanDewpointDepressionC?: number;
-  /** How this layer was derived: "dd", "grib", "synthesized". */
+  /** Peak/band cloud cover fraction (%) — populated for nwp_3d and grib sources. */
+  meanCloudCoverPct?: number;
+  /** How this layer was derived: "dd", "grib", "synthesized", "nwp_3d". */
   source?: string;
 }
 

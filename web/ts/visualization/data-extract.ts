@@ -74,6 +74,7 @@ function extractPoint(
     topFt: cl.top_ft,
     coverage: cl.coverage,
     meanDewpointDepressionC: cl.mean_dewpoint_depression_c ?? undefined,
+    meanCloudCoverPct: cl.mean_cloud_cover_pct ?? undefined,
   }));
 
   // nwp_cloud_layers is intentionally nullable from the backend:
@@ -87,6 +88,7 @@ function extractPoint(
         baseFt: cl.base_ft,
         topFt: cl.top_ft,
         coverage: cl.coverage,
+        meanCloudCoverPct: cl.mean_cloud_cover_pct ?? undefined,
         source: cl.source ?? 'dd',
       }));
 

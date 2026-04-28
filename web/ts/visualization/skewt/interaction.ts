@@ -164,6 +164,7 @@ export function attachSkewTInteraction(
     html += row('Td', level.dewpoint_c, '°C');
     html += row('DD', level.dewpoint_depression_c, '°C');
     html += row('RH', level.relative_humidity_pct, '%');
+    html += row('CC', level.cloud_area_fraction_pct, '%');
     if (level.wind_speed_kt != null && level.wind_direction_deg != null) {
       html += `<div>${Math.round(level.wind_direction_deg)}°/${Math.round(level.wind_speed_kt)}kt</div>`;
       if (data.track_deg != null) {

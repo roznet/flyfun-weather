@@ -450,6 +450,7 @@ class EnhancedCloudLayer(BaseModel):
     mean_temperature_c: Optional[float] = None
     coverage: CloudCoverage = CloudCoverage.SCT
     mean_dewpoint_depression_c: Optional[float] = None
+    mean_cloud_cover_pct: Optional[float] = None  # Peak cloud fraction for nwp_3d, band cover_pct for grib
     theoretical_max_top_ft: Optional[float] = None  # EL (convective) or −20°C (stratiform)
     # How this layer was derived:
     #   "dd"          — dewpoint depression sounding analysis (default)

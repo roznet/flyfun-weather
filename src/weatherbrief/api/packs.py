@@ -1865,6 +1865,7 @@ class SoundingProfileLevel(BaseModel):
     sfip_100: float | None = None
     cloud_liquid_water_g_m3: float | None = None
     ice_mixing_ratio_g_kg: float | None = None
+    cloud_area_fraction_pct: float | None = None
     richardson_number: float | None = None
     omega_pa_s: float | None = None
     w_fpm: float | None = None
@@ -2044,6 +2045,7 @@ def _build_sounding_profile(
             sfip_100=dl.get("sfip_100"),
             cloud_liquid_water_g_m3=clw,
             ice_mixing_ratio_g_kg=ice,
+            cloud_area_fraction_pct=pl.cloud_area_fraction_pct,
             richardson_number=dl.get("richardson_number"),
             omega_pa_s=omega,
             w_fpm=w_fpm,

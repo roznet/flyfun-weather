@@ -4,7 +4,8 @@
  */
 
 import { SKEWT_OVERLAYS } from './overlay-bands';
-import { VARIABLE_REGISTRY } from './variable-panel';
+import { VARIABLE_REGISTRY, VARIABLE_GROUPS } from './variable-panel';
+import type { VariableDef } from './variable-panel';
 import { renderInfoButton } from '../../helpers/metrics-helper';
 import { modelLabel } from '../../utils';
 import type { SkewTRenderer } from './renderer';
@@ -33,6 +34,22 @@ interface SidePanelVarHost {
   setSecondaryVar(id: string | null): void;
 }
 
+/** Render <option> entries grouped by VariableDef.group as <optgroup> blocks. */
+function renderGroupedOptions(selectedId: string | null): string {
+  let html = '';
+  for (const group of VARIABLE_GROUPS) {
+    const inGroup: VariableDef[] = VARIABLE_REGISTRY.filter(v => v.group === group);
+    if (inGroup.length === 0) continue;
+    html += `<optgroup label="${group}">`;
+    for (const v of inGroup) {
+      const sel = v.id === selectedId ? 'selected' : '';
+      html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
+    }
+    html += '</optgroup>';
+  }
+  return html;
+}
+
 /** Generate HTML for primary + secondary side panel dropdowns with info buttons. */
 function renderSidePanelSelectorHtml(primaryId: string, secondaryId: string | null): string {
   let html = '<div class="skewt-panel-selector">';
@@ -40,10 +57,7 @@ function renderSidePanelSelectorHtml(primaryId: string, secondaryId: string | nu
 
   // Primary dropdown + info button
   html += '<select class="skewt-panel-dropdown" data-axis="primary" title="Primary variable (bottom axis)">';
-  for (const v of VARIABLE_REGISTRY) {
-    const sel = v.id === primaryId ? 'selected' : '';
-    html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
-  }
+  html += renderGroupedOptions(primaryId);
   html += '</select>';
   const primaryMetric = getVarMetricId(primaryId);
   if (primaryMetric) {
@@ -53,10 +67,7 @@ function renderSidePanelSelectorHtml(primaryId: string, secondaryId: string | nu
   // Secondary dropdown + info button
   html += '<select class="skewt-panel-dropdown" data-axis="secondary" title="Secondary variable (top axis)">';
   html += `<option value=""${!secondaryId ? ' selected' : ''}>None</option>`;
-  for (const v of VARIABLE_REGISTRY) {
-    const sel = v.id === secondaryId ? 'selected' : '';
-    html += `<option value="${v.id}" ${sel}>${v.shortLabel} \u2014 ${v.label}</option>`;
-  }
+  html += renderGroupedOptions(secondaryId);
   html += '</select>';
   const secondaryMetric = secondaryId ? getVarMetricId(secondaryId) : '';
   html += `<button class="metric-info-btn skewt-panel-info" data-axis="secondary" data-metric="${secondaryMetric}" title="More info" aria-label="More info"${!secondaryMetric ? ' style="display:none"' : ''}>\u24d8</button>`;

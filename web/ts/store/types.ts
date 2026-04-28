@@ -162,6 +162,7 @@ export interface EnhancedCloudLayer {
   mean_temperature_c: number | null;
   coverage: CloudCoverage;
   mean_dewpoint_depression_c: number | null;
+  mean_cloud_cover_pct: number | null;
   source: string;
 }
 

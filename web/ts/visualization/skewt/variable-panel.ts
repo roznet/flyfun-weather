@@ -39,6 +39,8 @@ export interface VariableDef {
   secondaryPosLabel?: string;
   /** Metric catalog ID for info popup. */
   metricId?: string;
+  /** Group label shown in the dropdown's optgroup heading. */
+  group: 'Wind' | 'Moisture & Cloud' | 'Icing' | 'Stability & Vertical';
 }
 
 /** All available side panel variables. */
@@ -67,6 +69,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     secondaryNegLabel: '\u2190',  // ← from left
     secondaryPosLabel: '\u2192',  // → from right
     metricId: 'skewt_headwind_crosswind',
+    group: 'Wind',
   },
   {
     id: 'dewpoint_depression',
@@ -77,6 +80,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     getValue: lv => lv.dewpoint_depression_c,
     fixedRange: [0, 15],
     metricId: 'dewpoint_depression_c',
+    group: 'Moisture & Cloud',
   },
   {
     id: 'relative_humidity',
@@ -87,6 +91,18 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     getValue: lv => lv.relative_humidity_pct,
     fixedRange: [0, 100],
     metricId: 'skewt_relative_humidity',
+    group: 'Moisture & Cloud',
+  },
+  {
+    id: 'cloud_area_fraction',
+    label: 'Cloud Cover',
+    shortLabel: 'CC',
+    unit: '%',
+    color: '#20c0e0',
+    getValue: lv => lv.cloud_area_fraction_pct,
+    fixedRange: [0, 100],
+    metricId: 'skewt_cloud_area_fraction',
+    group: 'Moisture & Cloud',
   },
   {
     id: 'wind_speed',
@@ -96,6 +112,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#6060c0',
     getValue: lv => lv.wind_speed_kt,
     metricId: 'wind_speed_kt',
+    group: 'Wind',
   },
   {
     id: 'icing_index',
@@ -106,6 +123,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     getValue: lv => lv.icing_index,
     fixedRange: [0, 100],
     metricId: 'icing_risk',
+    group: 'Icing',
   },
   {
     id: 'icing_index_nwp',
@@ -116,6 +134,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     getValue: lv => lv.icing_index_nwp,
     fixedRange: [0, 100],
     metricId: 'icing_ogimet_nwp_risk',
+    group: 'Icing',
   },
   {
     id: 'sfip',
@@ -126,6 +145,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     getValue: lv => lv.sfip_100,
     fixedRange: [0, 100],
     metricId: 'sfip_risk',
+    group: 'Icing',
   },
   {
     id: 'cloud_liquid_water',
@@ -135,6 +155,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#20a0a0',
     getValue: lv => lv.cloud_liquid_water_g_m3,
     metricId: 'skewt_cloud_liquid_water',
+    group: 'Moisture & Cloud',
   },
   {
     id: 'ice_mixing_ratio',
@@ -144,6 +165,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#8080d0',
     getValue: lv => lv.ice_mixing_ratio_g_kg,
     metricId: 'skewt_ice_mixing_ratio',
+    group: 'Moisture & Cloud',
   },
   {
     id: 'lapse_rate',
@@ -154,6 +176,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     getValue: lv => lv.lapse_rate_c_per_km,
     zeroLine: true,
     metricId: 'lapse_rate_c_km',
+    group: 'Stability & Vertical',
   },
   {
     id: 'richardson',
@@ -163,6 +186,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#d0a020',
     getValue: lv => lv.richardson_number != null && lv.richardson_number < 100 ? lv.richardson_number : null,
     metricId: 'richardson_number',
+    group: 'Stability & Vertical',
   },
   {
     id: 'vertical_velocity',
@@ -173,6 +197,7 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     getValue: lv => lv.w_fpm,
     zeroLine: true,
     metricId: 'skewt_vertical_velocity',
+    group: 'Stability & Vertical',
   },
   {
     id: 'theta_e',
@@ -182,7 +207,16 @@ export const VARIABLE_REGISTRY: VariableDef[] = [
     color: '#a04080',
     getValue: lv => lv.theta_e_k,
     metricId: 'equivalent_potential_temperature_k',
+    group: 'Stability & Vertical',
   },
+];
+
+/** Display order for the dropdown's optgroup headings. */
+export const VARIABLE_GROUPS: VariableDef['group'][] = [
+  'Wind',
+  'Moisture & Cloud',
+  'Icing',
+  'Stability & Vertical',
 ];
 
 export function getVariableById(id: string): VariableDef | undefined {
