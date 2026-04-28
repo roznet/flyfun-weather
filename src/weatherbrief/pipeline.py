@@ -283,6 +283,9 @@ def execute_briefing(
         pack_dir=pack_dir,
         progress_callback=progress_callback,
     )
+    rss = _current_rss_mb()
+    if rss is not None:
+        rss_curve.append(("analyze", rss))
 
     # === 3. Advisories ===
     # Build advisory preference args from options (shared by primary + alt)
@@ -319,6 +322,10 @@ def execute_briefing(
             locale=options.locale,
         )
         route_advisories_manifest = advisory_result.manifest
+
+    rss = _current_rss_mb()
+    if rss is not None:
+        rss_curve.append(("advisories", rss))
 
     # cross_sections is no longer needed in memory after regular advisories:
     # save_fetch_artifacts persisted cross_section.json at end of fetch, alt
