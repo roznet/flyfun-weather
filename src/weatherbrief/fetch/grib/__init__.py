@@ -6,6 +6,7 @@ existing cross-section forecasts from GFS and ICON-EU GRIB2 data.
 
 from __future__ import annotations
 
+import gc
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -490,6 +491,8 @@ def _enrich_clwmr_icmr(
             gfs_sections, all_forecasts, route_points, decoded_points, "gfs",
             valid_utc=valid_utc,
         )
+        del decoded_points
+        gc.collect()
 
     if total_enriched:
         logger.info(
@@ -687,6 +690,9 @@ def _enrich_cloud_diagnostics(
             gfs_sections, all_forecasts, route_points,
             diagnostics_per_point, "gfs", valid_utc=valid_utc,
         )
+        del decoded_points
+        del diagnostics_per_point
+        gc.collect()
 
     if total_enriched:
         logger.info("GRIB2 enrichment: %d hourly entries enriched with cloud diagnostics", total_enriched)
@@ -843,8 +849,6 @@ def _decode_and_merge_icon_eu(
 
     Called after prefetch has cached all data to disk.
     """
-    import gc
-
     from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point, decode_icon_eu_per_point_chunked
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
 
@@ -1030,6 +1034,11 @@ def _enrich_icon_eu_cloud_diagnostics(
                     continue
                 if hourly.nwp_cloud_diagnostics is None:
                     _apply_cloud_diagnostics(hourly, diag)
+
+        del decoded_points
+        del diagnostics_per_point
+        del wp_diag_lookup
+        gc.collect()
 
     if total_enriched:
         logger.info(
