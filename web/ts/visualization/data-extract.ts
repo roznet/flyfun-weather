@@ -75,6 +75,7 @@ function extractPoint(
     coverage: cl.coverage,
     meanDewpointDepressionC: cl.mean_dewpoint_depression_c ?? undefined,
     meanCloudCoverPct: cl.mean_cloud_cover_pct ?? undefined,
+    meanTemperatureC: cl.mean_temperature_c ?? undefined,
   }));
 
   // nwp_cloud_layers is intentionally nullable from the backend:
@@ -89,22 +90,23 @@ function extractPoint(
         topFt: cl.top_ft,
         coverage: cl.coverage,
         meanCloudCoverPct: cl.mean_cloud_cover_pct ?? undefined,
+        meanTemperatureC: cl.mean_temperature_c ?? undefined,
         source: cl.source ?? 'dd',
       }));
 
-  const icingZones: VizIcingZone[] = (sounding?.icing_zones ?? []).map((iz) => ({
+  const mapIcingZone = (iz: any): VizIcingZone => ({
     baseFt: iz.base_ft,
     topFt: iz.top_ft,
     risk: iz.risk,
     type: iz.icing_type,
-  }));
+    meanIcingIndex: iz.mean_icing_index ?? undefined,
+    meanTemperatureC: iz.mean_temperature_c ?? undefined,
+    sldRisk: iz.sld_risk ?? undefined,
+  });
 
-  const icingOgimetNwpZones: VizIcingZone[] = (sounding?.icing_ogimet_nwp_zones ?? []).map((iz) => ({
-    baseFt: iz.base_ft,
-    topFt: iz.top_ft,
-    risk: iz.risk,
-    type: iz.icing_type,
-  }));
+  const icingZones: VizIcingZone[] = (sounding?.icing_zones ?? []).map(mapIcingZone);
+  const icingOgimetNwpZones: VizIcingZone[] = (sounding?.icing_ogimet_nwp_zones ?? []).map(mapIcingZone);
+  const iengIcingZones: VizIcingZone[] = (sounding?.ieng_icing_zones ?? []).map(mapIcingZone);
 
   const sfipZones: VizSfipZone[] = (sounding?.sfip_zones ?? []).map((sz) => ({
     baseFt: sz.base_ft,
@@ -113,13 +115,7 @@ function extractPoint(
     type: sz.icing_type,
     meanSfip100: sz.mean_sfip_100,
     variant: sz.variant,
-  }));
-
-  const iengIcingZones: VizIcingZone[] = (sounding?.ieng_icing_zones ?? []).map((iz: any) => ({
-    baseFt: iz.base_ft,
-    topFt: iz.top_ft,
-    risk: iz.risk,
-    type: iz.icing_type,
+    meanTemperatureC: sz.mean_temperature_c ?? undefined,
   }));
 
   const sldZones: VizSldZone[] = (sounding?.sld_zones ?? []).map((sz: any) => ({
@@ -133,18 +129,21 @@ function extractPoint(
     baseFt: cl.base_ft,
     topFt: cl.top_ft,
     risk: cl.risk,
+    richardsonNumber: cl.richardson_number ?? undefined,
   }));
 
   const eShearLayers: VizCATLayer[] = (sounding?.vertical_motion?.e_shear_layers ?? []).map((cl: any) => ({
     baseFt: cl.base_ft,
     topFt: cl.top_ft,
     risk: cl.risk,
+    richardsonNumber: cl.richardson_number ?? undefined,
   }));
 
   const inversions: VizInversionLayer[] = (sounding?.inversion_layers ?? []).map((inv) => ({
     baseFt: inv.base_ft,
     topFt: inv.top_ft,
     strengthC: inv.strength_c,
+    surfaceBased: (inv as any).surface_based ?? undefined,
   }));
 
   // Cloud cover total: sum low+mid+high, cap at 100
@@ -192,10 +191,12 @@ function extractPoint(
     convectiveRisk: sounding?.convective?.risk_level ?? 'none',
     convectiveBaseFt: sounding?.convective?.base_ft ?? null,
     convectiveTopFt: sounding?.convective?.top_ft ?? null,
+    cinSurfaceJkg: indices?.cin_surface_jkg ?? sounding?.convective?.cin_jkg ?? 0,
     nwpConvectiveRisk: sounding?.convective_nwp?.risk_level ?? 'none',
     nwpConvectiveBaseFt: sounding?.convective_nwp?.base_ft ?? null,
     nwpConvectiveTopFt: sounding?.convective_nwp?.top_ft ?? null,
     nwpConvectiveCoverPct: sounding?.convective_nwp?.cover_pct ?? null,
+    nwpConvectiveMethod: sounding?.convective_nwp?.method ?? null,
     hasNwpConvective: sounding?.convective_nwp != null,
     cloudCoverTotalPct,
     cloudCoverLowPct: sounding?.cloud_cover_low_pct ?? 0,

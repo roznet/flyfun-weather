@@ -7,6 +7,7 @@ import {
   positionTooltip, hideTooltip as hideTooltipEl, findNearbyWaypoint,
   fmtFL, altInBand, altNearLine,
 } from '../interaction-utils';
+import { LAYER_TOOLTIPS } from './tooltip-formatters';
 
 export interface InteractionCallbacks {
   onSelectPoint: (index: number) => void;
@@ -113,149 +114,19 @@ export function attachInteraction(
       }
     }
 
-    // --- Cloud bands (DD-derived, both hard and soft renderings) ---
-    if ((en('cloud-bands') || en('soft-cloud-bands')) && point.cloudLayers.length > 0) {
+    // --- Band/zone-style layers (driven by tooltip-formatters registry) ---
+    for (const def of LAYER_TOOLTIPS) {
+      const enabled = en(def.id) || (def.enabledBy?.some(en) ?? false);
+      if (!enabled) continue;
       const lines: string[] = [];
-      for (const cl of point.cloudLayers) {
-        if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
-          let line = `${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)} ${cl.coverage}`;
-          if (cl.meanDewpointDepressionC !== undefined) {
-            line += ` (DD ${cl.meanDewpointDepressionC.toFixed(1)}°C)`;
-          }
-          lines.push(line);
-        }
+      for (const z of def.getZones(point)) {
+        if (!altInBand(hoverAltFt, z.baseFt, z.topFt)) continue;
+        const line = def.formatLine(z, hoverAltFt);
+        if (line !== null) lines.push(line);
       }
-      if (lines.length > 0) sections.push(lines.join('<br>'));
-    }
-
-    // --- NWP Cloud bands (both hard and soft renderings) ---
-    if (en('nwp-cloud-bands') || en('soft-nwp-cloud-bands')) {
-      const nwpLines: string[] = [];
-      for (const cl of point.nwpCloudLayers ?? []) {
-        if (altInBand(hoverAltFt, cl.baseFt, cl.topFt)) {
-          let line = `NWP: ${cl.coverage} ${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)}`;
-          if (cl.meanCloudCoverPct !== undefined) {
-            line += ` (CC ${cl.meanCloudCoverPct.toFixed(0)}%)`;
-          }
-          nwpLines.push(line);
-        }
-      }
-      if (nwpLines.length > 0) sections.push(nwpLines.join('<br>'));
-    }
-
-    // --- Icing bands (Ogimet-DD) ---
-    if (en('icing-bands')) {
-      const lines: string[] = [];
-      for (const z of point.icingZones) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.type}`);
-        }
-      }
-      if (lines.length > 0) sections.push(`Icing (Ogimet-DD)<br>${lines.join('<br>')}`);
-    }
-
-    // --- Icing bands (Ogimet-NWP) ---
-    if (en('icing-ogimet-nwp-bands')) {
-      const lines: string[] = [];
-      for (const z of point.icingOgimetNwpZones) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.type}`);
-        }
-      }
-      if (lines.length > 0) sections.push(`Icing (Ogimet-NWP)<br>${lines.join('<br>')}`);
-    }
-
-    // --- SFIP bands ---
-    if (en('sfip-bands')) {
-      const lines: string[] = [];
-      for (const z of point.sfipZones) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          const sfipVal = z.meanSfip100 !== null ? ` ${Math.round(z.meanSfip100)}/100` : '';
-          const tag = z.variant.startsWith('proxy') ? ' (PROXY)' : z.variant.startsWith('interp') ? ' (INTERP)' : z.variant.endsWith('_no_vv') ? ' (NO VV)' : '';
-          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} SFIP${sfipVal}${tag}`);
-        }
-      }
-      if (lines.length > 0) sections.push(lines.join('<br>'));
-    }
-
-    // --- IENG icing bands ---
-    if (en('ieng-icing-bands')) {
-      const lines: string[] = [];
-      for (const z of point.iengIcingZones) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.type}`);
-        }
-      }
-      if (lines.length > 0) sections.push(`IENG<br>${lines.join('<br>')}`);
-    }
-
-    // --- SLD bands ---
-    if (en('sld-bands')) {
-      const lines: string[] = [];
-      for (const z of point.sldZones) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.mechanism}`);
-        }
-      }
-      if (lines.length > 0) sections.push(`SLD<br>${lines.join('<br>')}`);
-    }
-
-    // --- CAT bands (Richardson) ---
-    if (en('cat-bands')) {
-      const lines: string[] = [];
-      for (const z of point.catLayers) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} CAT ${z.risk}`);
-        }
-      }
-      if (lines.length > 0) sections.push(lines.join('<br>'));
-    }
-
-    // --- E-Shear bands ---
-    if (en('e-shear-bands')) {
-      const lines: string[] = [];
-      for (const z of point.eShearLayers) {
-        if (z.risk !== 'none' && altInBand(hoverAltFt, z.baseFt, z.topFt)) {
-          lines.push(`${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} E-Shear ${z.risk}`);
-        }
-      }
-      if (lines.length > 0) sections.push(lines.join('<br>'));
-    }
-
-    // --- Inversions ---
-    if (en('inversion-bands')) {
-      const lines: string[] = [];
-      for (const inv of point.inversions) {
-        if (altInBand(hoverAltFt, inv.baseFt, inv.topFt)) {
-          lines.push(`${fmt(inv.baseFt)}–${fmt(inv.topFt)} ft +${inv.strengthC.toFixed(1)}°C`);
-        }
-      }
-      if (lines.length > 0) sections.push(`Inversion<br>${lines.join('<br>')}`);
-    }
-
-    // --- Thermo Convective ---
-    if (en('thermo-convective-bg') && point.convectiveRisk !== 'none') {
-      const baseFt = point.convectiveBaseFt;
-      const topFt = point.convectiveTopFt;
-      if (baseFt !== null && topFt !== null && altInBand(hoverAltFt, baseFt, topFt)) {
-        let line = `Thermo Convective: ${point.convectiveRisk}`;
-        if (point.capeSurfaceJkg > 0) line += ` (CAPE ${Math.round(point.capeSurfaceJkg)})`;
-        line += `<br>Tower: ${fmtFL(baseFt)}–${fmtFL(topFt)}`;
-        sections.push(line);
-      }
-    }
-
-    // --- NWP Convective ---
-    if (en('nwp-convective-bg') && point.nwpConvectiveRisk !== 'none') {
-      const baseFt = point.nwpConvectiveBaseFt;
-      const topFt = point.nwpConvectiveTopFt;
-      const coverPct = point.nwpConvectiveCoverPct;
-      if (baseFt !== null && topFt !== null && altInBand(hoverAltFt, baseFt, topFt)) {
-        let line = `NWP Convective: ${point.nwpConvectiveRisk}`;
-        if (coverPct !== null) line += ` (${Math.round(coverPct)}% cover)`;
-        line += `<br>Tower: ${fmtFL(baseFt)}–${fmtFL(topFt)}`;
-        sections.push(line);
-      }
+      if (lines.length === 0) continue;
+      const body = lines.join('<br>');
+      sections.push(def.header ? `${def.header}<br>${body}` : body);
     }
 
     // --- Temperature lines (proximity-based) ---

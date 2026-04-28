@@ -123,11 +123,15 @@ export interface VizPoint {
   convectiveRisk: string;
   convectiveBaseFt: number | null;
   convectiveTopFt: number | null;
+  /** Surface-based CIN (J/kg) — companion to capeSurfaceJkg. */
+  cinSurfaceJkg: number;
   // NWP convective fields (null when GRIB2 unavailable)
   nwpConvectiveRisk: string;
   nwpConvectiveBaseFt: number | null;
   nwpConvectiveTopFt: number | null;
   nwpConvectiveCoverPct: number | null;
+  /** Method tag: "nwp", "nwp_lcl_top", "nwp_hybrid", etc. */
+  nwpConvectiveMethod: string | null;
   /**
    * True when the model produced a convective_nwp assessment (regardless
    * of risk level). Distinguishes "computed, no convection" (true) from
@@ -178,6 +182,8 @@ export interface VizCloudLayer {
   meanDewpointDepressionC?: number;
   /** Peak/band cloud cover fraction (%) — populated for nwp_3d and grib sources. */
   meanCloudCoverPct?: number;
+  /** Layer-mean temperature (°C). */
+  meanTemperatureC?: number;
   /** How this layer was derived: "dd", "grib", "synthesized", "nwp_3d". */
   source?: string;
 }
@@ -187,6 +193,12 @@ export interface VizIcingZone {
   topFt: number;
   risk: string;
   type: string;
+  /** Numeric icing index (0–100) — populated for Ogimet-DD/NWP and IENG. */
+  meanIcingIndex?: number;
+  /** Layer-mean temperature (°C). */
+  meanTemperatureC?: number;
+  /** Super-cooled large drop risk flag. */
+  sldRisk?: boolean;
 }
 
 export interface VizSfipZone {
@@ -195,7 +207,9 @@ export interface VizSfipZone {
   risk: string;
   type: string;
   meanSfip100: number | null;
-  variant: string;  // "full" or "proxy"
+  variant: string;  // "full", "proxy", "interp_no_vv", etc.
+  /** Layer-mean temperature (°C). */
+  meanTemperatureC?: number;
 }
 
 export interface VizSldZone {
@@ -209,10 +223,13 @@ export interface VizCATLayer {
   baseFt: number;
   topFt: number;
   risk: string;
+  /** Richardson number (Ri < 0.25 → turbulent). */
+  richardsonNumber?: number;
 }
 
 export interface VizInversionLayer {
   baseFt: number;
   topFt: number;
   strengthC: number;
+  surfaceBased?: boolean;
 }
