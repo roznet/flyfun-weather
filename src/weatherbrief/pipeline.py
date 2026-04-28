@@ -60,6 +60,19 @@ def _current_rss_mb() -> float | None:
             return None
     return None
 
+
+def _peak_rss_mb() -> float | None:
+    """Process-lifetime peak RSS in MB (resource.ru_maxrss, unit-normalized).
+
+    ru_maxrss is in KB on Linux, bytes on macOS.
+    """
+    try:
+        import resource
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except (ImportError, OSError):
+        return None
+    return rss / (1024 * 1024) if sys.platform == "darwin" else rss / 1024
+
 DEFAULT_MODELS = [ModelSource(k) for k, v in MODEL_ENDPOINTS.items() if v.default]
 
 
@@ -234,6 +247,13 @@ def execute_briefing(
     logger.info("Target: %s (%d days out)", target_date, days_out)
     logger.info("Models: %s", ", ".join(m.value for m in options.models))
 
+    # Memory curve checkpoints — appended through the pipeline, dumped at end.
+    rss_curve: list[tuple[str, float]] = []
+    peak_at_start = _peak_rss_mb()
+    rss_pipeline_start = _current_rss_mb()
+    if rss_pipeline_start is not None:
+        rss_curve.append(("start", rss_pipeline_start))
+
     # === 1. Fetch ===
     as_of_time = options.as_of_time or (departure_time if options.historical_mode else None)
     fetch_result = run_fetch(
@@ -248,6 +268,9 @@ def execute_briefing(
         historical_mode=options.historical_mode,
         as_of_time=as_of_time,
     )
+    rss = _current_rss_mb()
+    if rss is not None:
+        rss_curve.append(("fetch", rss))
 
     # === 2. Analyze ===
     analysis_result = run_analysis(
@@ -303,18 +326,12 @@ def execute_briefing(
     # Clearing here frees ~150-300 MB on long routes (12+ wp × 4 models).
     if pack_dir and fetch_result.cross_sections:
         cs_count = sum(len(cs.point_forecasts) for cs in fetch_result.cross_sections)
-        rss_before = _current_rss_mb()
         fetch_result.cross_sections.clear()
         gc.collect()
-        rss_after = _current_rss_mb()
-        if rss_before is not None and rss_after is not None:
-            logger.info(
-                "Cleared %d cross-section forecasts after advisories: "
-                "RSS %.0f → %.0f MB (Δ %+.0f MB)",
-                cs_count, rss_before, rss_after, rss_after - rss_before,
-            )
-        else:
-            logger.info("Cleared %d cross-section forecasts after advisories", cs_count)
+        logger.info("Cleared %d cross-section forecasts after advisories", cs_count)
+        rss = _current_rss_mb()
+        if rss is not None:
+            rss_curve.append(("post_clear", rss))
 
     # === 3.1 Alt departure advisories (lite re-run) ===
     alt_advisory_result: AdvisoryResult | None = None
@@ -506,5 +523,21 @@ def execute_briefing(
         output_paths.append(str(result.digest_path))
 
     result.text_digest = format_digest(snapshot, target_dt, output_paths=output_paths)
+
+    rss_end = _current_rss_mb()
+    if rss_end is not None:
+        rss_curve.append(("end", rss_end))
+    if rss_curve:
+        curve_str = " ".join(f"{label}={int(v)}" for label, v in rss_curve)
+        peak_end = _peak_rss_mb()
+        peak_delta_str = ""
+        if peak_end is not None and peak_at_start is not None:
+            peak_delta = peak_end - peak_at_start
+            peak_delta_str = f" peak={int(peak_end)} (+{int(peak_delta)} this request)"
+        request_growth = rss_end - rss_curve[0][1] if rss_end is not None else 0
+        logger.info(
+            "Memory curve: %s MB; request_growth=%+d MB%s",
+            curve_str, int(request_growth), peak_delta_str,
+        )
 
     return result
