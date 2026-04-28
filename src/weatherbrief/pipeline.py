@@ -6,7 +6,11 @@ Returns structured results without printing or exiting.
 
 from __future__ import annotations
 
+import gc
 import logging
+import os
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -32,6 +36,29 @@ from weatherbrief.tasks.advise import AdvisoryResult, run_advisories
 from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
 
 logger = logging.getLogger(__name__)
+
+
+def _current_rss_mb() -> float | None:
+    """Return current RSS in MB, or None if unavailable.
+
+    Linux: reads /proc/self/status (cheap, accurate). macOS: shells out to ps.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["ps", "-o", "rss=", "-p", str(os.getpid())], timeout=1
+            )
+            return int(out.strip()) / 1024
+        except Exception:
+            return None
+    return None
 
 DEFAULT_MODELS = [ModelSource(k) for k, v in MODEL_ENDPOINTS.items() if v.default]
 
@@ -269,6 +296,25 @@ def execute_briefing(
             locale=options.locale,
         )
         route_advisories_manifest = advisory_result.manifest
+
+    # cross_sections is no longer needed in memory after regular advisories:
+    # save_fetch_artifacts persisted cross_section.json at end of fetch, alt
+    # advisories load from disk, and the snapshot save excludes cross_sections.
+    # Clearing here frees ~150-300 MB on long routes (12+ wp × 4 models).
+    if pack_dir and fetch_result.cross_sections:
+        cs_count = sum(len(cs.point_forecasts) for cs in fetch_result.cross_sections)
+        rss_before = _current_rss_mb()
+        fetch_result.cross_sections.clear()
+        gc.collect()
+        rss_after = _current_rss_mb()
+        if rss_before is not None and rss_after is not None:
+            logger.info(
+                "Cleared %d cross-section forecasts after advisories: "
+                "RSS %.0f → %.0f MB (Δ %+.0f MB)",
+                cs_count, rss_before, rss_after, rss_after - rss_before,
+            )
+        else:
+            logger.info("Cleared %d cross-section forecasts after advisories", cs_count)
 
     # === 3.1 Alt departure advisories (lite re-run) ===
     alt_advisory_result: AdvisoryResult | None = None
