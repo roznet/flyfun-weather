@@ -85,27 +85,30 @@ Single fixed-width panel (110px) with dual-axis support:
 
 Two dropdowns in the controls. Selection persisted to `localStorage('wb_skewtSidePanels')`.
 
-**Variable registry** (12 variables):
+**Variable registry** (14 variables, displayed in `<optgroup>` blocks via `VARIABLE_GROUPS`):
 
-| Variable | Source | Computed |
-|----------|--------|----------|
-| HW/XW (headwind/crosswind) | wind + track_deg | Client-side trig |
-| DD (dewpoint depression) | T - Td | Inline in endpoint |
-| RH (relative humidity) | Magnus formula | Inline in endpoint |
-| Wind speed | `wind_speed_kt` | Raw data |
-| Icing (Ogimet-DD) | `icing_index` | On-the-fly analyze_sounding |
-| Icing (Ogimet-NWP) | `icing_index_nwp` | On-the-fly analyze_sounding |
-| SFIP | `sfip_100` | On-the-fly analyze_sounding |
-| CLW (cloud liquid water) | GRIB CLWMR | Inline conversion |
-| ICE (ice mixing ratio) | GRIB ICMR | Inline conversion |
-| Γ (lapse rate) | Adjacent levels | Inline in endpoint |
-| Ri (Richardson number) | `richardson_number` | On-the-fly analyze_sounding |
-| w (vertical velocity) | omega Pa/s | Inline conversion |
-| θe (equiv. pot. temp) | Bolton approximation | Inline in endpoint |
+| Variable | Group | Source | Computed |
+|----------|-------|--------|----------|
+| HW/XW (headwind/crosswind) | Wind | wind + track_deg | Client-side trig |
+| Wind speed | Wind | `wind_speed_kt` | Raw data |
+| DD (dewpoint depression) | Moisture & Cloud | T - Td | Inline in endpoint |
+| CC (cloud cover) | Moisture & Cloud | `cloud_area_fraction_pct` (ECMWF `cc` / ICON `clc`; null for GFS) | GRIB per-level |
+| RH (relative humidity) | Moisture & Cloud | Magnus formula | Inline in endpoint |
+| CLW (cloud liquid water) | Moisture & Cloud | GRIB CLWMR | Inline conversion |
+| ICE (ice mixing ratio) | Moisture & Cloud | GRIB ICMR | Inline conversion |
+| Icing (Ogimet-DD) | Icing | `icing_index` | On-the-fly analyze_sounding |
+| Icing (Ogimet-NWP) | Icing | `icing_index_nwp` | On-the-fly analyze_sounding |
+| SFIP | Icing | `sfip_100` | On-the-fly analyze_sounding |
+| Γ (lapse rate) | Stability & Vertical | Adjacent levels | Inline in endpoint |
+| θe (equiv. pot. temp) | Stability & Vertical | Bolton approximation | Inline in endpoint |
+| Ri (Richardson number) | Stability & Vertical | `richardson_number` | On-the-fly analyze_sounding |
+| w (vertical velocity) | Stability & Vertical | omega Pa/s | Inline conversion |
+
+`VARIABLE_GROUPS` defines display order; `renderGroupedOptions()` in `overlay-controls.ts` emits one `<optgroup label="…">` block per group, filtering registry by `VariableDef.group`. CC plots only for ECMWF/ICON (per-level cc not delivered by GFS — line gap, no fallback).
 
 ## Interaction
 
-- **Hover tooltip**: horizontal crosshair + tooltip with all values at nearest pressure level (T, Td, DD, RH, wind, HW/XW, θe, lapse rate, icing, SFIP, w, altitude/FL)
+- **Hover tooltip**: horizontal crosshair + tooltip with all values at nearest pressure level (T, Td, DD, RH, **CC**, wind, HW/XW, θe, lapse rate, icing, SFIP, w, altitude/FL)
 - **Linked cursor (Skew-T → cross-section)**: `onHoverAltitude` callback fires → cross-section draws horizontal line at that altitude
 - **Linked cursor (cross-section → Skew-T)**: cross-section `onHoverAltitude` callback → `skewtInteraction.setExternalHoverAlt()` draws blue dashed line
 

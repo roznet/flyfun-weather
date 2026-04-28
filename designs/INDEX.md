@@ -41,8 +41,8 @@ Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRender
 → Full doc: visualization.md
 
 ### skewt-canvas
-Dynamic client-rendered Skew-T log-P diagram replacing static MetPy PNGs. Canvas-based with background grid (isotherms, adiabats, mixing ratios), T/Td/parcel path curves, CAPE/CIN shading, overlay bands (clouds, icing, inversions, convective), dual-axis side panel (12 variables incl. HW/XW), hover tooltip, and linked cursor with cross-section. On-the-fly sounding analysis for derived variables.
-Key exports: `SkewTRenderer`, `SkewTTransform`, `attachSkewTInteraction`, `VARIABLE_REGISTRY`, `SKEWT_OVERLAYS`
+Dynamic client-rendered Skew-T log-P diagram replacing static MetPy PNGs. Canvas-based with background grid (isotherms, adiabats, mixing ratios), T/Td/parcel path curves, CAPE/CIN shading, overlay bands (clouds, icing, inversions, convective), dual-axis side panel (14 variables incl. HW/XW and CC, grouped by theme via `<optgroup>`), hover tooltip, and linked cursor with cross-section. On-the-fly sounding analysis for derived variables.
+Key exports: `SkewTRenderer`, `SkewTTransform`, `attachSkewTInteraction`, `VARIABLE_REGISTRY`, `VARIABLE_GROUPS`, `SKEWT_OVERLAYS`
 → Full doc: skewt-canvas.md
 
 ### route-graph

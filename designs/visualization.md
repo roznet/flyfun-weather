@@ -214,7 +214,35 @@ Both cross-section and route-graph interaction modules import from this shared u
 
 - **Hover**: vertical crosshair line follows mouse, shows distance/time at cursor
 - **Click**: selects closest route point, highlights with indicator on overlay canvas
-- **Tooltip**: shows waypoint name (if named) + distance + altitude at hover position
+- **Tooltip**: shows waypoint name (if named) + distance + altitude at hover position, plus per-layer rows for every enabled band/zone the cursor altitude intersects.
+
+### Per-layer tooltip registry (`tooltip-formatters.ts`)
+
+Per-layer tooltip content lives in a declarative registry consumed by `interaction.ts`. Each entry:
+
+```typescript
+{ id, enabledBy?, header?, getZones(p), formatLine(z) }
+```
+
+- `id` — primary layer toggle that owns the data.
+- `enabledBy` — alias toggles that should also activate this row (e.g. `soft-cloud-bands` for the DD-derived row, `soft-nwp-cloud-bands` for the NWP row). Without this the soft-renderings produce visuals but no tooltip text.
+- `header` — optional section title above the lines (e.g. `Icing (Ogimet-DD)`).
+- `getZones` — returns the relevant zone array from `VizPoint` (or synthesizes a single pseudo-zone from per-point fields, used by Thermo/NWP convective).
+- `formatLine` — produces one tooltip line per zone, including any per-layer extras (DD, CC, T, icing index, Ri, SLD tag, source tag, etc.).
+
+The registry includes 12 entries: cloud DD, cloud NWP, Ogimet-DD, Ogimet-NWP, SFIP, IENG, SLD, CAT (Ri), E-Shear, Thermo Convective, NWP Convective, Inversions. Adding a new layer = one new entry; changing what a layer shows = edit one `formatLine`.
+
+**Per-layer extras shown:**
+- Cloud DD: `(DD x.x°C, T n°C)`
+- Cloud NWP: `(CC nn%, T n°C)`; trailing `[band]` only when `source==='grib'` (i.e. GFS GRIB-bulk path) — no tag for `nwp_3d` (ECMWF/ICON per-level).
+- Ogimet-DD / Ogimet-NWP / IENG: `(idx N, T n°C)` plus `+SLD` suffix when `sld_risk`.
+- SFIP: `SFIP nn/100 type (T n°C)` plus trailing `[proxy]` for any non-`full` variant.
+- CAT / E-Shear: `(Ri n.nn)` when populated.
+- Thermo Conv: `(CAPE x, CIN -y)` plus `LCL→EL: FLxxx–FLyyy` (or `Tower:` fallback).
+- NWP Conv: `(nn% cover)` plus `Tower: FLxxx–FLyyy [method-tag]` where method-tag is `nwp` / `nwp_lcl_top` / `nwp_hybrid`.
+- Inversions: ` (sfc)` suffix for surface-based.
+
+Header/terrain/temperature/stability rows stay inline in `interaction.ts` (different shape — proximity-based not band-based).
 
 ## NWP Cloud Bands
 

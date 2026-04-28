@@ -123,6 +123,7 @@ Four-tier approach, tried in this preference order:
 - **Output:** Stored in `SoundingAnalysis.nwp_cloud_layers`
 - **Source tracking:** `EnhancedCloudLayer.source` ∈ {"dd", "nwp_3d", "grib", "synthesized"}
 - **Method tracking:** `cloud_method_effective` records "dd", "nwp" (grib or nwp_3d), or "nwp_synthesized"
+- **Quantitative metadata:** `EnhancedCloudLayer.mean_cloud_cover_pct` carries the underlying numeric — peak `cloud_area_fraction_pct` for `nwp_3d`, the band's `cover_pct` for `grib` (incl. convective). Surfaced in the cross-section tooltip as `(CC nn%)`. Null for `dd` and `synthesized` (those use `mean_dewpoint_depression_c` instead).
 
 | Model | NWP Cloud Layers Result | Source Tag | Notes |
 |-------|------------------------|------------|-------|
