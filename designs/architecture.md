@@ -416,6 +416,7 @@ Static files served from `web/` at root.
 | 12.8 | Done | Email: Resend API provider with SMTP fallback |
 | 12.9 | Done | Convective advisory altitude-awareness, ceiling route graph metrics, route map width variation |
 | 12.10 | Done | GRIB2 memory optimization: two-phase sequential decode, chunked ICON-EU processing |
+| 12.11 | Done | Memory hardening for long routes: per-fhour cleanup in all GRIB enrichment loops, post-advisory release of `cross_sections` in `pipeline.py` (already on disk, not needed downstream), container limit raised to 3 GB. Per-request memory curve logged at end of `execute_briefing()` (`Memory curve: start=… fetch=… analyze=… advisories=… post_clear=… end=… MB; peak=… (+N this request)`) for ongoing observability |
 
 ## Docker
 

@@ -94,6 +94,8 @@ for fhour in forecast_hours:
 
 **ICON-EU Cloud Diagnostics** (`_enrich_icon_eu_cloud_diagnostics`): Same per-hour loop for single-level ceiling/convective fields.
 
+All four loops above (GFS cloud water, GFS cloud diag, ICON-EU QC/QI, ICON-EU cloud diag) follow the same `del decoded_points; gc.collect()` pattern at the end of each fhour iteration. Without it, decoded_points dicts accumulate across the loop on long-route briefings and contribute to OOM pressure. Diagnostics arrays (`diagnostics_per_point`) are deleted alongside in the diag loops.
+
 ### Hour Matching
 
 `_merge_cloud_water_into_sections()` and `_apply_cloud_diagnostics_to_sections()` accept `valid_utc: datetime | None`:
