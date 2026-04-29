@@ -37,7 +37,6 @@
     "@playwright/test": "^1.58.2",
     "@types/leaflet": "^1.9.21",
     "esbuild": "^0.27.3",
-    "jsdom": "^29.1.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.5"
   }

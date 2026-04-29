@@ -105,13 +105,12 @@ export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'crosswind_kt
 
 import { isConsensusMode, computeConsensus, type ConsensusMode } from './weather-map-consensus';
 
-function getConsensus(airport: ForecastAirport, model: string): ConsensusForecast {
-  return computeConsensus(airport, model as ConsensusMode);
+function getConsensus(airport: ForecastAirport, mode: ConsensusMode): ConsensusForecast {
+  return computeConsensus(airport, mode);
 }
 
 function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, model: string): string {
-  const consensus = isConsensusMode(model);
-  const data = consensus ? getConsensus(airport, model) : airport.models[model];
+  const data = isConsensusMode(model) ? getConsensus(airport, model) : airport.models[model];
   if (!data) return '#888';
 
   switch (metric) {
@@ -431,11 +430,11 @@ export class WeatherMap {
     this.markersGroup.clearLayers();
 
     const r = this.markerRadius();
+    const consensusMode: ConsensusMode | null = isConsensusMode(model) ? model : null;
     for (const apt of data.airports) {
       const color = getForecastColor(apt, metric, model);
-      const isConsensus = isConsensusMode(model);
-      const border = isConsensus
-        ? (AGREEMENT_COLORS[getAgreementForMetric(getConsensus(apt, model), metric) ?? ''] || '#888')
+      const border = consensusMode
+        ? (AGREEMENT_COLORS[getAgreementForMetric(getConsensus(apt, consensusMode), metric) ?? ''] || '#888')
         : color;
 
       const marker = L.circleMarker([apt.lat, apt.lon], {
@@ -443,7 +442,7 @@ export class WeatherMap {
         fillColor: color,
         fillOpacity: 0.85,
         color: border,
-        weight: isConsensus ? 2 : 1,
+        weight: consensusMode ? 2 : 1,
         opacity: 1,
       });
 
