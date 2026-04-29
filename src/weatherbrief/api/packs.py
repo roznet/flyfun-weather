@@ -573,9 +573,20 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
     else:
         days_out = (flight.departure_time.date() - datetime.now(timezone.utc).date()).days
 
+    # Only carry init times for models actually fetched. Open-Meteo metadata
+    # is queried for every known model up-front (used by the freshness check
+    # for staleness comparison), but the basis line should only show models
+    # that contributed data — otherwise a model skipped at fetch (e.g.
+    # range-skipped Météo-France) appears twice: once with its init time
+    # and once tagged "skipped".
     init_times = {}
     if model_metadata:
-        init_times = {m: meta.last_init_time for m, meta in model_metadata.items()}
+        fetched = set(result.models_fetched)
+        init_times = {
+            m: meta.last_init_time
+            for m, meta in model_metadata.items()
+            if m in fetched
+        }
 
     # Derive alt assessment from alt advisory result if available
     alt_assessment = None
