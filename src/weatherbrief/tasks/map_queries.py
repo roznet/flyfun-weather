@@ -277,7 +277,9 @@ def get_forecast_map_data(
 
     return {
         "forecast_time": forecast_hour.isoformat(),
-        "model_init_times": {m: t.isoformat() for m, t in init_times.items()},
+        "model_init_times": {
+            m: t.replace(tzinfo=timezone.utc).isoformat() for m, t in init_times.items()
+        },
         "airports": airports,
     }
 
