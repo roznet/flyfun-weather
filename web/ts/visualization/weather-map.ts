@@ -103,90 +103,10 @@ function maeColor(value: number, thresholdBad: number): string {
 
 export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'crosswind_kt' | 'headwind_kt' | 'ceiling_ft' | 'cape_jkg' | 'convective_risk' | 'cloud_cover_pct' | 'visibility_m';
 
-function isConsensusMode(model: string): boolean {
-  return model === 'worst' || model === 'majority';
-}
-
-const CAT_ORDER: Record<string, number> = { VFR: 0, MVFR: 1, IFR: 2, LIFR: 3 };
-const RISK_ORDER = ['none', 'marginal', 'low', 'moderate', 'high', 'extreme'];
-
-// --- Aggregation helpers (numeric) ---
-
-function max(vals: number[]): number { return Math.max(...vals); }
-function min(vals: number[]): number { return Math.min(...vals); }
-function median(vals: number[]): number {
-  const sorted = [...vals].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-function circularMean(degs: number[]): number {
-  const sinSum = degs.reduce((s, d) => s + Math.sin(d * Math.PI / 180), 0);
-  const cosSum = degs.reduce((s, d) => s + Math.cos(d * Math.PI / 180), 0);
-  return ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
-}
-
-// For each numeric metric, how to combine per-model values for Worst (most adverse)
-// and Majority (typical/central). Median is robust to outliers — for 3 models it's the
-// middle one after sorting.
-const NUMERIC_CONSENSUS: Record<
-  'wind_speed_kt' | 'crosswind_kt' | 'headwind_kt' | 'ceiling_ft' | 'cape_jkg' | 'visibility_m' | 'cloud_cover_pct',
-  { worst: (v: number[]) => number; majority: (v: number[]) => number }
-> = {
-  wind_speed_kt:   { worst: max, majority: median },
-  crosswind_kt:    { worst: max, majority: median },
-  headwind_kt:     { worst: max, majority: median },
-  ceiling_ft:      { worst: min, majority: median },
-  cape_jkg:        { worst: max, majority: median },
-  visibility_m:    { worst: min, majority: median },
-  cloud_cover_pct: { worst: max, majority: median },
-};
-
-// Ordinal aggregation for category + risk.
-// Worst: take the worst-ranked value.
-// Majority: modal (most common); if tied or all unique, pick worst among tied candidates.
-function ordinalConsensus(values: string[], order: Record<string, number> | string[], mode: string): string {
-  const rank = Array.isArray(order)
-    ? (v: string) => order.indexOf(v)
-    : (v: string) => order[v] ?? 0;
-  if (mode === 'worst') {
-    return values.reduce((a, b) => rank(a) >= rank(b) ? a : b);
-  }
-  // majority: modal with worse tiebreak
-  const counts = new Map<string, number>();
-  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
-  const maxCount = Math.max(...counts.values());
-  const tied = [...counts.entries()].filter(([, n]) => n === maxCount).map(([v]) => v);
-  return tied.reduce((a, b) => rank(a) >= rank(b) ? a : b);
-}
-
-function computeConsensus(airport: ForecastAirport, mode: string): ConsensusForecast {
-  const models = Object.values(airport.models);
-  if (models.length === 0) return { flight_category: 'VFR', agreement: {} };
-
-  const cats = models.map(m => m.flight_category);
-  const risks = models.map(m => m.convective_risk || 'none');
-
-  const result: ConsensusForecast = {
-    flight_category: ordinalConsensus(cats, CAT_ORDER, mode),
-    convective_risk: ordinalConsensus(risks, RISK_ORDER, mode),
-    agreement: airport.consensus.agreement,
-  };
-
-  for (const [field, fns] of Object.entries(NUMERIC_CONSENSUS) as Array<[keyof typeof NUMERIC_CONSENSUS, typeof NUMERIC_CONSENSUS[keyof typeof NUMERIC_CONSENSUS]]>) {
-    const vals = models.map(m => m[field]).filter((v): v is number => v != null);
-    if (!vals.length) continue;
-    const fn = mode === 'worst' ? fns.worst : fns.majority;
-    (result as any)[field] = Math.round(fn(vals) * 10) / 10;
-  }
-
-  const dirs = models.map(m => m.wind_dir_deg).filter((v): v is number => v != null);
-  if (dirs.length) result.wind_dir_deg = circularMean(dirs);
-
-  return result;
-}
+import { isConsensusMode, computeConsensus, type ConsensusMode } from './weather-map-consensus';
 
 function getConsensus(airport: ForecastAirport, model: string): ConsensusForecast {
-  return computeConsensus(airport, model);
+  return computeConsensus(airport, model as ConsensusMode);
 }
 
 function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, model: string): string {
