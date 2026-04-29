@@ -46,11 +46,20 @@ all of them crawl.
 
 If any test fails, **stop the deploy** and report the failures.
 
-**Run Playwright tests if frontend or API changed.** Check what changed since the last deploy — this means **server → origin/main**, not local working tree:
+**Check what changed since the last deploy** (server → origin/main, not local working tree):
 ```bash
 git diff ${SERVER_SHA}..${LOCAL_SHA} --name-only
 ```
-Run Playwright if ANY of these paths have changes:
+
+**Run Vitest unit tests if `web/` changed.** Pure TypeScript unit tests on frontend code (~300ms). Hard gate — these are deterministic, a failure is a real bug:
+```bash
+cd web && npm test
+```
+If any vitest test fails, **stop the deploy** and report the failures.
+
+> Vitest does not need to run on backend-only changes — fixtures are pure TS and tests don't hit the API. Any backend change that affects the frontend lands as a `web/ts/` edit, which the `web/` trigger already catches.
+
+**Run Playwright tests if frontend or API changed.** Run Playwright if ANY of these paths have changes:
 - `web/` (frontend code, templates, static files)
 - `src/weatherbrief/api/` (API endpoints)
 - `src/weatherbrief/models/` (data models served to frontend)
