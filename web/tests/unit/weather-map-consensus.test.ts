@@ -66,6 +66,10 @@ describe('median', () => {
     median(xs);
     expect(xs).toEqual([3, 1, 2]);
   });
+
+  it('throws on empty input rather than returning NaN', () => {
+    expect(() => median([])).toThrow(/empty/);
+  });
 });
 
 describe('circularMean', () => {
@@ -122,6 +126,11 @@ describe('ordinalConsensus', () => {
 
   it('worst returns the only value when all equal', () => {
     expect(ordinalConsensus(['VFR', 'VFR'], CAT_ORDER, 'worst')).toBe('VFR');
+  });
+
+  it('throws on empty input rather than reduce-of-empty TypeError', () => {
+    expect(() => ordinalConsensus([], CAT_ORDER, 'worst')).toThrow(/empty/);
+    expect(() => ordinalConsensus([], CAT_ORDER, 'majority')).toThrow(/empty/);
   });
 });
 
@@ -204,15 +213,17 @@ describe('computeConsensus', () => {
     expect(c.convective_risk).toBe('low');
   });
 
-  it('aggregates wind direction with circular mean', () => {
+  it('aggregates wind direction with circular mean, rounded to whole degrees', () => {
     const a = makeAirport({
       gfs:  { wind_dir_deg: 350 },
       icon: { wind_dir_deg: 10 },
     });
     const c = computeConsensus(a, 'worst');
     expect(c.wind_dir_deg).toBeDefined();
-    // mean of 350+10 should be near 0 / 360
-    expect(Math.min(c.wind_dir_deg!, 360 - c.wind_dir_deg!)).toBeLessThan(1);
+    // Whole-degree result, no float artifacts like 359.9999999996
+    expect(Number.isInteger(c.wind_dir_deg!)).toBe(true);
+    // Mean of 350+10 should be 0 (or 360 — circular wrap)
+    expect(c.wind_dir_deg === 0 || c.wind_dir_deg === 360).toBe(true);
   });
 
   it('preserves the airport.consensus.agreement map', () => {

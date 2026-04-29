@@ -24,6 +24,7 @@ export function isConsensusMode(model: string): model is ConsensusMode {
 // --- Numeric helpers ---
 
 export function median(vals: number[]): number {
+  if (vals.length === 0) throw new Error('median: empty input');
   const sorted = [...vals].sort((a, b) => a - b);
   const mid = sorted.length >> 1;
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
@@ -63,6 +64,7 @@ export function ordinalConsensus(
   order: Record<string, number> | readonly string[],
   mode: ConsensusMode,
 ): string {
+  if (values.length === 0) throw new Error('ordinalConsensus: empty values');
   const rank = Array.isArray(order)
     ? (v: string) => order.indexOf(v)
     : (v: string) => (order as Record<string, number>)[v] ?? 0;
@@ -101,7 +103,10 @@ export function computeConsensus(airport: ForecastAirport, mode: ConsensusMode):
   }
 
   const dirs = models.map((m) => m.wind_dir_deg).filter((v): v is number => v != null);
-  if (dirs.length) result.wind_dir_deg = circularMean(dirs);
+  // Wind direction is reported in whole degrees by METAR/TAF — sub-degree
+  // precision is false, and serializing the raw float yields strings like
+  // "359.9999999999996". Round to the same convention as the source data.
+  if (dirs.length) result.wind_dir_deg = Math.round(circularMean(dirs));
 
   return result;
 }
