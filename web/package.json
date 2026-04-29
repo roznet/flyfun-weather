@@ -24,7 +24,10 @@
     "dev:user-costs": "npx esbuild ts/user-costs-main.ts --bundle --outfile=dist/user-costs.js --sourcemap --target=es2020 --watch=forever",
     "dev:pireps": "npx esbuild ts/pireps-main.ts --bundle --outfile=dist/pireps.js --sourcemap --target=es2020 --watch=forever",
     "dev:verification": "npx esbuild ts/verification-main.ts --bundle --outfile=dist/verification.js --sourcemap --target=es2020 --watch=forever",
-    "dev:maps": "npx esbuild ts/maps-main.ts --bundle --outfile=dist/maps.js --sourcemap --target=es2020 --watch=forever"
+    "dev:maps": "npx esbuild ts/maps-main.ts --bundle --outfile=dist/maps.js --sourcemap --target=es2020 --watch=forever",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui"
   },
   "dependencies": {
     "leaflet": "^1.9.4",
@@ -34,6 +37,8 @@
     "@playwright/test": "^1.58.2",
     "@types/leaflet": "^1.9.21",
     "esbuild": "^0.27.3",
-    "typescript": "^5.9.3"
+    "jsdom": "^29.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.5"
   }
 }
