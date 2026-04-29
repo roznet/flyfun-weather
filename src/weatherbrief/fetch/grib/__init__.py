@@ -230,6 +230,7 @@ def _enrich_ecmwf(
     """
     from weatherbrief.fetch.grib.decode import (
         build_ecmwf_cloud_diagnostics,
+        build_ecmwf_surface_snapshot,
         decode_ecmwf_pressure_per_point,
         decode_ecmwf_surface_per_point,
     )
@@ -283,6 +284,13 @@ def _enrich_ecmwf(
     point_lats = [rp.lat for rp in route_points]
     point_lons = [rp.lon for rp in route_points]
 
+    # State for step-difference of accumulated surface fields (tp, sf) across
+    # consecutive a1 files. None = no prior step seen yet for that point.
+    n_points = len(route_points)
+    prev_tp_per_point: list[float | None] = [None] * n_points
+    prev_sf_per_point: list[float | None] = [None] * n_points
+    prev_a1_valid_utc: datetime | None = None
+
     enriched_steps = 0
     for step_hours, parts in sorted(files_by_step.items()):
         valid_time = latest_bt + timedelta(hours=step_hours)
@@ -321,6 +329,30 @@ def _enrich_ecmwf(
                 ecmwf_sections, all_forecasts, route_points,
                 diagnostics, "ecmwf", valid_utc=valid_time,
             )
+            # Surface scalars (T/dewpoint, wind/gust, vis, CAPE, MSLP, precip,
+            # snow) onto HourlyForecast. Coupled with cloud-diag application —
+            # both run together at the same valid_utc so that the forward-fill
+            # in fill.py can use ``nwp_cloud_diagnostics is not None`` as the
+            # GRIB-anchor detector.
+            _apply_ecmwf_surface_to_hourly(
+                ecmwf_sections, all_forecasts, route_points,
+                sfc_data, sfc_covered,
+                valid_utc=valid_time,
+                prev_valid_utc=prev_a1_valid_utc,
+                prev_tp_per_point=prev_tp_per_point,
+                prev_sf_per_point=prev_sf_per_point,
+            )
+            # Update step-difference state from this step's cumulative values.
+            for i, (raw, cov) in enumerate(zip(sfc_data, sfc_covered)):
+                if not cov or not raw:
+                    continue
+                tp = raw.get("total_precip_m")
+                if tp is not None:
+                    prev_tp_per_point[i] = tp
+                sf = raw.get("snowfall_m_we")
+                if sf is not None:
+                    prev_sf_per_point[i] = sf
+            prev_a1_valid_utc = valid_time
 
     if enriched_steps > 0:
         logger.info(
@@ -592,6 +624,149 @@ def _apply_cloud_diagnostics_to_sections(
             _apply_cloud_diagnostics(hourly, diag)
 
     return enriched_count
+
+
+# Instantaneous surface fields written from GRIB at the matching valid_utc.
+# Forward-fill in ``fill.py`` propagates these into intermediate hours.
+_ECMWF_HOURLY_INSTANT_FIELDS: tuple[str, ...] = (
+    "temperature_2m_c",
+    "dewpoint_2m_c",
+    "wind_speed_10m_kt",
+    "wind_direction_10m_deg",
+    "wind_gusts_10m_kt",
+    "visibility_m",
+    "cape_jkg",
+    "surface_pressure_hpa",
+)
+
+# Window-average surface fields. ECMWF a1 delivers these as cumulative-since-init,
+# so we step-difference against the prior a1 file and distribute the per-hour
+# rate across every hour in the window — no forward-fill needed.
+_ECMWF_HOURLY_RATE_FIELDS: tuple[str, ...] = (
+    "precipitation_mm",
+    "snowfall_cm",
+)
+
+
+def _copy_fields(hourly: HourlyForecast, snap: dict, fields: tuple[str, ...]) -> None:
+    for f in fields:
+        v = snap.get(f)
+        if v is not None:
+            setattr(hourly, f, v)
+
+
+def _apply_ecmwf_surface_to_hourly(
+    ecmwf_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    sfc_data: list[dict[str, float]],
+    sfc_covered: list[bool],
+    *,
+    valid_utc: datetime,
+    prev_valid_utc: datetime | None,
+    prev_tp_per_point: list[float | None],
+    prev_sf_per_point: list[float | None],
+) -> None:
+    """Write decoded ECMWF a1 surface fields onto matching ``HourlyForecast``s.
+
+    Reuses :func:`build_ecmwf_surface_snapshot` for the unit-conversion logic so
+    the standalone-verification path and the briefing path stay in sync.
+
+    Instantaneous fields (T/dewpoint, wind/gust, vis, CAPE, MSLP) are written
+    only at the hour matching ``valid_utc``. Forward-fill closes the gap to
+    intermediate hours later in :mod:`fetch.grib.fill`.
+
+    Accumulated fields (``tp``, ``sf``) are step-differenced against the prior
+    a1 step's cumulative values and distributed evenly as a per-hour rate
+    across every hour in ``(prev_valid_utc, valid_utc]``. When no prior step
+    is available (first a1 in the processed window), precip/snow are left
+    untouched — Open-Meteo's value remains.
+
+    Mutates ``HourlyForecast`` instances in place. Uncovered points (route
+    extends outside the ECMWF grid) are skipped, leaving Open-Meteo data.
+    """
+    from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
+
+    n = len(sfc_data)
+    if n == 0:
+        return
+
+    window_hours: float | None = None
+    if prev_valid_utc is not None:
+        delta_h = (valid_utc - prev_valid_utc).total_seconds() / 3600.0
+        if delta_h > 0:
+            window_hours = delta_h
+
+    # Build per-point snapshots (instantaneous + per-hour rate). Empty dicts
+    # for uncovered/missing points so the indexing stays aligned with route_points.
+    inst_snaps: list[dict] = []
+    rate_snaps: list[dict] = []
+    for i in range(n):
+        raw = sfc_data[i]
+        if i >= len(sfc_covered) or not sfc_covered[i] or not raw:
+            inst_snaps.append({})
+            rate_snaps.append({})
+            continue
+
+        # Instantaneous: zero out the cumulative fields so the snapshot
+        # builder doesn't emit precip/snow values for the per-hour write.
+        inst_raw = dict(raw)
+        inst_raw["total_precip_m"] = None
+        inst_raw["snowfall_m_we"] = None
+        inst_snaps.append(build_ecmwf_surface_snapshot(inst_raw))
+
+        rate_raw: dict[str, float] = {}
+        if window_hours is not None:
+            tp = raw.get("total_precip_m")
+            ptp = prev_tp_per_point[i] if i < len(prev_tp_per_point) else None
+            if tp is not None and ptp is not None:
+                rate_raw["total_precip_m"] = max(0.0, (tp - ptp) / window_hours)
+            sf = raw.get("snowfall_m_we")
+            psf = prev_sf_per_point[i] if i < len(prev_sf_per_point) else None
+            if sf is not None and psf is not None:
+                rate_raw["snowfall_m_we"] = max(0.0, (sf - psf) / window_hours)
+        rate_snaps.append(build_ecmwf_surface_snapshot(rate_raw) if rate_raw else {})
+
+    def _aware(dt: datetime) -> datetime:
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    def _write(hourly_list: list[HourlyForecast], inst: dict, rate: dict) -> None:
+        for h in hourly_list:
+            if inst and _matches_valid_time(h.time, valid_utc):
+                _copy_fields(h, inst, _ECMWF_HOURLY_INSTANT_FIELDS)
+            if rate and prev_valid_utc is not None:
+                ht = _aware(h.time)
+                if prev_valid_utc < ht <= valid_utc:
+                    _copy_fields(h, rate, _ECMWF_HOURLY_RATE_FIELDS)
+
+    # Cross-section route points
+    for cs in ecmwf_sections:
+        for point_idx, wf in enumerate(cs.point_forecasts):
+            if point_idx >= n:
+                break
+            inst = inst_snaps[point_idx]
+            rate = rate_snaps[point_idx]
+            if not inst and not rate:
+                continue
+            _write(wf.hourly, inst, rate)
+
+    # Waypoint-only forecasts (used by per-airport sounding analysis)
+    wp_idx_lookup: dict[str, int] = {}
+    for rp_idx, rp in enumerate(route_points):
+        if rp.waypoint_icao and rp_idx < n:
+            wp_idx_lookup[rp.waypoint_icao] = rp_idx
+
+    for wf in all_forecasts:
+        if wf.model.value != "ecmwf":
+            continue
+        idx = wp_idx_lookup.get(wf.waypoint.icao)
+        if idx is None:
+            continue
+        inst = inst_snaps[idx]
+        rate = rate_snaps[idx]
+        if not inst and not rate:
+            continue
+        _write(wf.hourly, inst, rate)
 
 
 def _replace_pressure_levels_from_grib(
