@@ -235,6 +235,17 @@ def _linear_interp_ecmwf_surface(
     so the two are coupled. Only ECMWF cross-sections / waypoint forecasts are
     touched.
 
+    INVARIANT: every hour written by ``_apply_ecmwf_surface_to_hourly`` must
+    also have ``nwp_cloud_diagnostics`` set. This holds because both writes
+    run together inside the same ECMWF a1 loop iteration, and ECMWF a1
+    always carries cloud-cover fields (cc / lcc / mcc / hcc / ceiling).
+    If a future a1 schema ever drops cloud fields,
+    ``build_ecmwf_cloud_diagnostics`` returns None and this anchor signal
+    will silently miss those steps — surface scalars at those hours would
+    then get overwritten by interpolation from neighbouring anchors. Keep
+    the two writes coupled, or replace this detector with an explicit
+    anchor list passed from the caller.
+
     Wind direction uses circular linear interpolation (shortest arc); when the
     interpolated speed is below ``_CALM_WIND_KT``, direction is copied from
     the nearest anchor since the interpolated direction would be meaningless.
@@ -402,7 +413,12 @@ def _interp_levels_at(
     for prev in prev_levels:
         nxt = next_by_p.get(prev.pressure_hpa)
         if nxt is None:
-            continue  # level not in both anchors, skip
+            # Level present in prev anchor but not next — drop it on the gap
+            # hour to keep the rebuilt level set self-consistent. Both
+            # GRIB-replaced anchors normally carry the same level set; if
+            # this branch fires repeatedly, anchor delivery has diverged
+            # and is worth investigating.
+            continue
 
         t_c = _lerp(prev.temperature_c, nxt.temperature_c, frac)
         rh = _lerp(prev.relative_humidity_pct, nxt.relative_humidity_pct, frac)
@@ -431,5 +447,9 @@ def _interp_levels_at(
             cloud_liquid_water_kg_kg=_lerp(prev.cloud_liquid_water_kg_kg, nxt.cloud_liquid_water_kg_kg, frac),
             ice_mixing_ratio_kg_kg=_lerp(prev.ice_mixing_ratio_kg_kg, nxt.ice_mixing_ratio_kg_kg, frac),
             cloud_area_fraction_pct=_lerp(prev.cloud_area_fraction_pct, nxt.cloud_area_fraction_pct, frac),
+            # ``clw_interpolated`` flags spatial fill, not temporal. Preserve
+            # from prev so spatially-filled levels stay flagged across the
+            # time-axis interp.
+            clw_interpolated=prev.clw_interpolated or nxt.clw_interpolated,
         ))
     return out

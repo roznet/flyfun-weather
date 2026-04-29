@@ -673,8 +673,10 @@ def _apply_ecmwf_surface_to_hourly(
     the standalone-verification path and the briefing path stay in sync.
 
     Instantaneous fields (T/dewpoint, wind/gust, vis, CAPE, MSLP) are written
-    only at the hour matching ``valid_utc``. Forward-fill closes the gap to
-    intermediate hours later in :mod:`fetch.grib.fill`.
+    only at the hour matching ``valid_utc``. Linear interpolation closes the
+    gap to intermediate hours later in :mod:`fetch.grib.fill`, anchored by
+    the hours where ``nwp_cloud_diagnostics`` was set in the same loop
+    iteration as the surface write — so the two writes must stay coupled.
 
     Accumulated fields (``tp``, ``sf``) are step-differenced against the prior
     a1 step's cumulative values and distributed evenly as a per-hour rate
