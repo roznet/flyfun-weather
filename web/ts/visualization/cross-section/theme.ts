@@ -168,16 +168,16 @@ const STANDARD_THEME: CrossSectionTheme = {
 
   icing: {
     none: 'transparent',
-    light: 'rgba(100, 149, 237, 0.35)',
-    moderate: 'rgba(255, 165, 0, 0.45)',
-    severe: 'rgba(220, 53, 69, 0.55)',
+    light: 'rgba(185, 170, 230, 0.70)',
+    moderate: 'rgba(120, 100, 215, 0.85)',
+    severe: 'rgba(65, 35, 155, 0.93)',
   },
 
   sfipIcing: {
     none: 'transparent',
-    light: 'rgba(100, 149, 237, 0.50)',
-    moderate: 'rgba(255, 165, 0, 0.55)',
-    severe: 'rgba(220, 53, 69, 0.65)',
+    light: 'rgba(185, 170, 230, 0.78)',
+    moderate: 'rgba(120, 100, 215, 0.92)',
+    severe: 'rgba(65, 35, 155, 1.00)',
   },
 
   cat: {
@@ -320,16 +320,16 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
 
   icing: {
     none: 'transparent',
-    light: 'rgba(91, 184, 232, 0.55)',
-    moderate: 'rgba(24, 120, 184, 0.65)',
-    severe: 'rgba(26, 24, 80, 0.75)',
+    light: 'rgba(200, 220, 240, 0.70)',
+    moderate: 'rgba(154, 176, 224, 0.80)',
+    severe: 'rgba(132, 112, 216, 0.90)',
   },
 
   sfipIcing: {
     none: 'transparent',
-    light: 'rgba(91, 184, 232, 0.65)',
-    moderate: 'rgba(24, 120, 184, 0.75)',
-    severe: 'rgba(26, 24, 80, 0.85)',
+    light: 'rgba(200, 220, 240, 0.80)',
+    moderate: 'rgba(154, 176, 224, 0.90)',
+    severe: 'rgba(132, 112, 216, 1.00)',
   },
 
   cat: {
@@ -428,19 +428,19 @@ const GRAMET_THEME: CrossSectionTheme = {
     ceilingColor: '#ce93d8',
   },
 
-  // Icing: blue tint like CloudPath
+  // Icing: mint→teal green to match autorouter GRAMET
   icing: {
     none: 'transparent',
-    light: 'rgba(91, 184, 232, 0.40)',
-    moderate: 'rgba(24, 120, 184, 0.55)',
-    severe: 'rgba(10, 40, 120, 0.70)',
+    light: 'rgba(170, 230, 205, 0.45)',
+    moderate: 'rgba(110, 200, 165, 0.60)',
+    severe: 'rgba(45, 130, 100, 0.75)',
   },
 
   sfipIcing: {
     none: 'transparent',
-    light: 'rgba(91, 184, 232, 0.50)',
-    moderate: 'rgba(24, 120, 184, 0.65)',
-    severe: 'rgba(10, 40, 120, 0.80)',
+    light: 'rgba(170, 230, 205, 0.55)',
+    moderate: 'rgba(110, 200, 165, 0.70)',
+    severe: 'rgba(45, 130, 100, 0.85)',
   },
 
   // SLD: red overlay
