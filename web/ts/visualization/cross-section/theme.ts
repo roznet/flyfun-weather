@@ -106,7 +106,7 @@ export interface CrossSectionTheme {
 
 // --- Theme IDs ---
 
-export type ThemeId = 'standard' | 'high-contrast' | 'gramet';
+export type ThemeId = 'standard' | 'high-contrast' | 'gramet' | 'light';
 
 // --- Standard theme (current production values) ---
 
@@ -468,12 +468,163 @@ const GRAMET_THEME: CrossSectionTheme = {
   },
 } as CrossSectionTheme & { sld: Record<string, string>; softClouds: any };
 
+// --- Light theme (Windy-inspired: white sky, gray clouds) ---
+
+const LIGHT_THEME: CrossSectionTheme = {
+  ...STANDARD_THEME,
+  id: 'light' as ThemeId,
+  label: 'Light',
+
+  sky: {
+    background: '#F8F9FB',
+  },
+
+  axes: {
+    gridColor: 'rgba(20, 30, 50, 0.18)',
+    waypointLineColor: 'rgba(20, 30, 50, 0.32)',
+  },
+
+  terrain: {
+    fillColor: '#A48256',
+    outlineColor: '#7A5E3D',
+  },
+
+  temperature: {
+    freezingLevel: { color: '#0277BD', width: 2 },
+    minus10c: { color: '#1565C0', width: 1.5 },
+    minus20c: { color: '#0D47A1', width: 1, dash: [6, 4] },
+  },
+
+  stability: {
+    lcl: { color: '#2E7D32', width: 2, dash: [6, 4] },
+    lfc: { color: '#E65100', width: 1.5, dash: [6, 4] },
+    el: { color: '#C62828', width: 1.5, dash: [6, 4] },
+  },
+
+  reference: {
+    cruiseColor: '#212121',
+    ceilingColor: '#6A1B9A',
+  },
+
+  // Clouds: dark gray on white (Windy-style). Both denseRgb and thinRgb darker
+  // than the white sky so even thin clouds remain visible.
+  clouds: {
+    denseRgb: [70, 80, 95],
+    thinRgb: [195, 200, 210],
+    coverageAlpha: {
+      few: [0.15, 0.30],
+      sct: [0.40, 0.55],
+      bkn: [0.55, 0.80],
+      ovc: [0.70, 0.90],
+    },
+    fallbackGray: [150, 155, 165],
+    hatchGridPx: 8,
+    hatchLineWidth: { few: 1, sct: 2, bkn: 5, ovc: 8 },
+    hatchColor: 'rgba(50, 60, 75, 0.45)',
+  },
+
+  nwpClouds: {
+    brightRgb: [225, 228, 232],
+    deltaRgb: [155, 160, 165],
+    opacityRange: [0.35, 0.70],
+  },
+
+  // Icing: lavender→indigo, same family as standard but slightly more saturated
+  icing: {
+    none: 'transparent',
+    light: 'rgba(170, 140, 220, 0.55)',
+    moderate: 'rgba(110, 80, 200, 0.72)',
+    severe: 'rgba(60, 30, 145, 0.88)',
+  },
+
+  sfipIcing: {
+    none: 'transparent',
+    light: 'rgba(170, 140, 220, 0.65)',
+    moderate: 'rgba(110, 80, 200, 0.82)',
+    severe: 'rgba(60, 30, 145, 0.95)',
+  },
+
+  // CAT: oranges→red (yellows would vanish on white)
+  cat: {
+    none: 'transparent',
+    light: 'rgba(255, 152, 0, 0.30)',
+    moderate: 'rgba(245, 124, 0, 0.50)',
+    severe: 'rgba(198, 40, 40, 0.65)',
+  },
+
+  convective: {
+    riskColors: {
+      none: 'transparent',
+      marginal: 'rgba(120, 120, 120, 0.10)',
+      low: 'rgba(255, 193, 7, 0.18)',
+      moderate: 'rgba(245, 124, 0, 0.28)',
+      high: 'rgba(220, 53, 69, 0.35)',
+      extreme: 'rgba(136, 14, 79, 0.40)',
+    },
+    bgWash: {
+      marginal: 'rgba(120, 120, 120, 0.05)',
+      low: 'rgba(255, 193, 7, 0.10)',
+      moderate: 'rgba(245, 124, 0, 0.14)',
+      high: 'rgba(220, 53, 69, 0.18)',
+      extreme: 'rgba(136, 14, 79, 0.22)',
+    },
+    towerFill: {
+      marginal: 'rgba(120, 120, 120, 0.20)',
+      low: 'rgba(255, 193, 7, 0.28)',
+      moderate: 'rgba(245, 124, 0, 0.40)',
+      high: 'rgba(220, 53, 69, 0.50)',
+      extreme: 'rgba(136, 14, 79, 0.55)',
+    },
+    hatchColor: {
+      marginal: 'rgba(100, 100, 100, 0.25)',
+      low: 'rgba(180, 130, 0, 0.35)',
+      moderate: 'rgba(200, 80, 0, 0.50)',
+      high: 'rgba(180, 30, 30, 0.60)',
+      extreme: 'rgba(100, 10, 50, 0.70)',
+    },
+    stripColor: {
+      marginal: 'rgba(120, 120, 120, 0.50)',
+      low: 'rgba(255, 193, 7, 0.65)',
+      moderate: 'rgba(245, 124, 0, 0.80)',
+      high: 'rgba(220, 53, 69, 0.88)',
+      extreme: 'rgba(136, 14, 79, 0.92)',
+    },
+    edgeColor: {
+      marginal: 'rgba(100, 100, 100, 0.35)',
+      low: 'rgba(180, 130, 0, 0.45)',
+      moderate: 'rgba(200, 80, 0, 0.60)',
+      high: 'rgba(180, 30, 30, 0.70)',
+      extreme: 'rgba(100, 10, 50, 0.80)',
+    },
+    cbLabelColor: {
+      moderate: 'rgba(200, 80, 0, 0.92)',
+      high: 'rgba(180, 30, 30, 0.95)',
+      extreme: 'rgba(100, 10, 50, 1.00)',
+    },
+  },
+
+  inversion: {
+    baseRgb: [194, 24, 91],
+    opacityParams: { floor: 0.20, scale: 0.55, maxStrengthC: 3, cap: 0.75 },
+  },
+
+  // Soft cloud fill: dark gray on white (inverts the GRAMET white-on-blue)
+  ...({
+    softClouds: {
+      fillRgb: [70, 80, 95],
+      coverageAlpha: { OVC: 0.55, BKN: 0.40, SCT: 0.25, FEW: 0.10 },
+      featherFraction: 0.15,
+    },
+  } as any),
+} as CrossSectionTheme & { softClouds: any };
+
 // --- Theme registry ---
 
 export const THEMES: Record<ThemeId, CrossSectionTheme> = {
   'standard': STANDARD_THEME,
   'high-contrast': HIGH_CONTRAST_THEME,
   'gramet': GRAMET_THEME,
+  'light': LIGHT_THEME,
 };
 
 // --- Module-level getter/setter ---
