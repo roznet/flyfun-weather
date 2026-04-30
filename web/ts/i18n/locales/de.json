@@ -47,6 +47,7 @@
   "flightDetail.copyShareLinkCopied": "Link kopiert",
   "flightDetail.copyShareLinkAlert": "Ein Link zu diesem Briefing wurde in die Zwischenablage kopiert. Füge ihn in deiner bevorzugten Sharing-App (E-Mail, Nachricht usw.) ein.",
   "flightDetail.copyShareLinkFallback": "Kopiere diesen Link zum Teilen:",
+  "flightDetail.copyShareLinkTitle": "Flugbriefing",
   "flightDetail.sharingPrivateNote": "Private Flüge sind für Abonnenten nicht sichtbar. In den Einstellungen umschalten, um zu teilen.",
   "flights.form.errorDate": "Bitte geben Sie ein Datum ein.",
   "flights.form.errorWaypoints": "Die Route muss aus mindestens 2 Wegpunkten bestehen, getrennt durch Leerzeichen (z. B. EGTK POGOL LFQA LSGS).",

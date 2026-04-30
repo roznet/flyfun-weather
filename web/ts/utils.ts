@@ -247,29 +247,82 @@ export function errorToMessage(err: unknown): string {
   return raw.replace(/^API \d+:\s*/, '');
 }
 
-/** Build the shareable URL that recipients open to see a flight. When
- *  `packTimestamp` is given, the link points at that specific briefing pack
- *  on the briefing page so the recipient sees the exact briefing the sender
- *  was looking at. Otherwise it lands on the flight detail page, which has
- *  the Subscribe banner for non-owners. */
-export function flightShareUrl(flightId: string, packTimestamp?: string | null): string {
+/** Build the shareable URL that recipients open to see a flight.
+ *
+ *  Prefers the short ``/s/{code}`` form when a ``shareCode`` is available
+ *  (every flight created after migration 049 has one). For long routes
+ *  this trims the URL from ~80+ chars of slug back down to ~10 chars.
+ *
+ *  When `packTimestamp` is given, the link points at that specific
+ *  briefing pack on the briefing page so the recipient sees the exact
+ *  briefing the sender was looking at — using the short form keeps the
+ *  URL compact even with the pack query string.
+ *
+ *  Falls back to the legacy ``?id=`` URL when no shareCode is provided
+ *  (very old rows, or callers that don't have it on hand). */
+export function flightShareUrl(
+  flightId: string,
+  packTimestamp?: string | null,
+  shareCode?: string | null,
+): string {
+  if (shareCode) {
+    const base = `${window.location.origin}/s/${encodeURIComponent(shareCode)}`;
+    if (packTimestamp) {
+      return `${base}?pack=${encodeURIComponent(packTimestamp)}`;
+    }
+    return base;
+  }
   if (packTimestamp) {
     return `${window.location.origin}/briefing.html?flight=${encodeURIComponent(flightId)}&pack=${encodeURIComponent(packTimestamp)}`;
   }
   return `${window.location.origin}/flight.html?id=${encodeURIComponent(flightId)}`;
 }
 
-/** Copy the flight (or specific briefing pack) share URL to the clipboard and
- *  show a confirmation popup explaining the link was copied. Falls back to a
- *  `prompt()` with the URL pre-filled on browsers where the clipboard API is
- *  unavailable (e.g. plain http origins). Returns true on clipboard success,
- *  false on fallback — callers can use this to decide whether to flash a
- *  "copied" indicator. */
+/** Share the flight (or specific briefing pack) URL.
+ *
+ *  Tier 1: ``navigator.share()`` — opens the OS share sheet on iOS,
+ *  macOS Safari, Android Chrome, and recent Edge/Chrome on Windows.
+ *  Lets the user pick iMessage, Mail, AirDrop, etc. directly. The
+ *  Promise resolves on send and rejects with ``AbortError`` if the
+ *  user dismisses the sheet — we treat that as a no-op (no toast).
+ *
+ *  Tier 2: ``navigator.clipboard.writeText()`` — desktop browsers
+ *  without share-sheet support. Returns true so the caller can flash
+ *  the "copied" indicator on the trigger button.
+ *
+ *  Tier 3: ``prompt()`` — last-resort fallback for non-HTTPS origins
+ *  where the clipboard API is unavailable. Returns false so callers
+ *  skip the flash (the user already saw the URL inline).
+ *
+ *  Returns ``true`` when something happened that doesn't need a
+ *  toolbar flash (share sheet shown / share sheet aborted), or when
+ *  the clipboard copy succeeded; ``false`` only when we fell all the
+ *  way back to ``prompt()``. */
 export async function copyFlightShareLink(
   flightId: string,
   packTimestamp?: string | null,
+  shareCode?: string | null,
 ): Promise<boolean> {
-  const url = flightShareUrl(flightId, packTimestamp);
+  const url = flightShareUrl(flightId, packTimestamp, shareCode);
+
+  if (typeof navigator.share === 'function') {
+    try {
+      await navigator.share({
+        title: t('flightDetail.copyShareLinkTitle'),
+        url,
+      });
+      return true;
+    } catch (err) {
+      // User cancelled the sheet — don't fall back to clipboard, they
+      // explicitly bailed. Other errors (NotAllowedError on http://,
+      // share unsupported for this payload) drop through to clipboard.
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return true;
+      }
+      // fall through
+    }
+  }
+
   try {
     await navigator.clipboard.writeText(url);
     alert(t('flightDetail.copyShareLinkAlert'));

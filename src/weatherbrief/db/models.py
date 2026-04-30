@@ -110,6 +110,11 @@ class FlightRow(Base):
     # Original Field-15 input the pilot typed (see weatherbrief.models.Flight).
     raw_route: Mapped[str | None] = mapped_column(String(4000), nullable=True)
     parser_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Random 8-char base62 token for short share links (/s/{code}).
+    # Nullable for legacy/test rows; create_flight always sets one.
+    share_code: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, unique=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import RedirectResponse
 
 from flyfun_common.auth import (
     SlidingSessionMiddleware,
@@ -345,6 +347,42 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    # Short share-link redirect: /s/{code} → /briefing.html?flight=<id>.
+    # Always lands on the briefing page (that's the artifact pilots
+    # actually want to see); the briefing page auto-loads the latest
+    # pack when no ``pack`` query is supplied. Registered before the
+    # static-file mount below so it takes precedence over the catch-all.
+    # Unauthenticated — auth is enforced on the destination page (the
+    # redirect itself only resolves the code to an ID, which is no more
+    # sensitive than the long ID URL).
+    from urllib.parse import urlencode
+
+    from weatherbrief.storage.flights import lookup_flight_id_by_share_code
+    from flyfun_common.db import get_db as _get_db_for_share
+
+    _SHARE_CODE_RE = re.compile(r"^[0-9A-Za-z]{4,16}$")
+
+    @app.get("/s/{code}")
+    def share_redirect(code: str, request: Request, db=Depends(_get_db_for_share)):
+        # Reject obviously-bogus codes before hitting the DB so log spam
+        # from random scanners doesn't blow up the index.
+        if not _SHARE_CODE_RE.match(code):
+            raise _HTTPException(status_code=404, detail="Unknown share link")
+        flight_id = lookup_flight_id_by_share_code(db, code)
+        if flight_id is None:
+            raise _HTTPException(status_code=404, detail="Unknown share link")
+        # Forward the ``pack`` query param (and only that one) so a
+        # share link to a specific briefing pack still lands on the
+        # right pack after the redirect. Other params are dropped to
+        # keep the redirect surface tight.
+        params: dict[str, str] = {"flight": flight_id}
+        pack = request.query_params.get("pack")
+        if pack:
+            params["pack"] = pack
+        return RedirectResponse(
+            f"/briefing.html?{urlencode(params)}", status_code=302,
+        )
 
     # Mount static files for web UI (if directory exists)
     web_dir = Path(__file__).resolve().parent.parent.parent.parent / "web"

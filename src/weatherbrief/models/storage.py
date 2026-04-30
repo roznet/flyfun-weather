@@ -58,6 +58,10 @@ class Flight(BaseModel):
     # re-derive job spot flights that would benefit from a newer parser.
     # NULL whenever raw_route is NULL.
     parser_version: str | None = None
+    # Short share token for /s/{code} redirect. Generated at save_flight
+    # time when missing — only ever NULL for direct FlightRow construction
+    # in tests.
+    share_code: str | None = None
     created_at: datetime
 
     @computed_field  # type: ignore[prop-decorator]

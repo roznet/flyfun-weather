@@ -836,9 +836,18 @@ async function init(): Promise<void> {
     onSubscribe: () => void store.getState().subscribe(),
     onUnsubscribe: () => void store.getState().unsubscribe(),
     onCopyShareLink: async () => {
-      const { flight, currentPack } = store.getState();
+      const { flight, currentPack, packs } = store.getState();
       if (!flight) return;
-      const copied = await copyFlightShareLink(flight.id, currentPack?.fetch_timestamp);
+      // Pin the share link to ``currentPack`` only when the user is
+      // looking at a non-latest (historical) pack — otherwise the
+      // recipient should just see the freshest briefing on open. packs
+      // is sorted newest-first by the store, so packs[0] is the latest.
+      const latestTs = packs[0]?.fetch_timestamp ?? null;
+      const pinTs =
+        currentPack && currentPack.fetch_timestamp !== latestTs
+          ? currentPack.fetch_timestamp
+          : null;
+      const copied = await copyFlightShareLink(flight.id, pinTs, flight.share_code);
       if (!copied) return;  // fell back to prompt(); skip the toolbar flash
       const btn = document.getElementById('share-btn') as HTMLButtonElement | null;
       if (btn) {

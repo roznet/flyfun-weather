@@ -405,10 +405,13 @@ async function init(): Promise<void> {
       }
     });
     banner.querySelector('.btn-copy-share-link')?.addEventListener('click', async () => {
-      const { flight, packs } = store.getState();
+      const { flight } = store.getState();
       if (!flight) return;
-      const latestPack = packs.length > 0 ? packs[0] : null;
-      const copied = await copyFlightShareLink(flight.id, latestPack?.fetch_timestamp);
+      // Don't pin the share link to a specific pack — /s/{code} lands on
+      // the flight page, which loads the latest pack on its own. Pinning
+      // would just bloat the URL and freeze the recipient on a snapshot
+      // that may already be stale.
+      const copied = await copyFlightShareLink(flight.id, null, flight.share_code);
       if (!copied) return;  // fell back to prompt(); user has already seen the URL
       const btn = banner.querySelector('.btn-copy-share-link') as HTMLButtonElement | null;
       if (btn) {

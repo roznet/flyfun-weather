@@ -1,10 +1,10 @@
 /** Tests for shared utility functions: formatting, route titles, Windy URLs. */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   escapeHtml, formatTime, formatDepartureTime, formatAlt,
   isFlightPast, flightTitle, flightRouteCompact,
-  buildWindyUrl, errorToMessage,
+  buildWindyUrl, errorToMessage, flightShareUrl,
 } from '../../ts/utils';
 
 describe('escapeHtml', () => {
@@ -178,5 +178,54 @@ describe('errorToMessage', () => {
   it('coerces non-Error values to string', () => {
     expect(errorToMessage('string err')).toBe('string err');
     expect(errorToMessage(null)).toBe('null');
+  });
+});
+
+describe('flightShareUrl', () => {
+  // vitest runs in `node` env, so `window` doesn't exist by default.
+  // Stub just enough for ``${window.location.origin}`` to evaluate —
+  // all assertions key off the path/query rather than the origin.
+  const ORIGIN = 'http://localhost:8000';
+  let originalWindow: unknown;
+  beforeAll(() => {
+    originalWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window: unknown }).window = { location: { origin: ORIGIN } };
+  });
+  afterAll(() => {
+    (globalThis as { window?: unknown }).window = originalWindow;
+  });
+
+  const longId = 'lfpn-lfcs-lfrs-lfrh-lfrc-lfrg-2026-04-30-a3f2';
+
+  it('uses /s/{code} when shareCode is provided', () => {
+    const url = flightShareUrl(longId, null, 'aB3xy7Q9');
+    expect(url).toMatch(/\/s\/aB3xy7Q9$/);
+    // Short form should not include the verbose flight_id.
+    expect(url).not.toContain(longId);
+  });
+
+  it('appends pack as query when shareCode is provided', () => {
+    const url = flightShareUrl(longId, '2026-04-30T08:00:00Z', 'aB3xy7Q9');
+    expect(url).toMatch(/\/s\/aB3xy7Q9\?pack=2026-04-30T08%3A00%3A00Z$/);
+  });
+
+  it('falls back to ?id= when no shareCode is given', () => {
+    const url = flightShareUrl(longId);
+    expect(url).toContain(`/flight.html?id=${encodeURIComponent(longId)}`);
+  });
+
+  it('falls back to /briefing.html?flight=...&pack=... when no shareCode', () => {
+    const url = flightShareUrl(longId, '2026-04-30T08:00:00Z');
+    expect(url).toContain('/briefing.html?');
+    expect(url).toContain(`flight=${encodeURIComponent(longId)}`);
+    expect(url).toContain('pack=2026-04-30T08');
+  });
+
+  it('treats empty shareCode as missing (falls back to long URL)', () => {
+    // Defends against accidental `share_code=""` from an old cached
+    // FlightResponse leaking through.
+    const url = flightShareUrl(longId, null, '');
+    expect(url).toContain('/flight.html?id=');
+    expect(url).not.toContain('/s/');
   });
 });

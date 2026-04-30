@@ -49,6 +49,7 @@
   "flightDetail.copyShareLinkCopied": "Link copied",
   "flightDetail.copyShareLinkAlert": "A link to this briefing has been copied to your clipboard. Paste it in your favorite sharing app (email, message, etc.).",
   "flightDetail.copyShareLinkFallback": "Copy this link to share:",
+  "flightDetail.copyShareLinkTitle": "Flight briefing",
   "flightDetail.sharingPrivateNote": "Private flights aren't visible to subscribers. Toggle in settings to share.",
 
   "flights.form.errorDate": "Please enter a date.",

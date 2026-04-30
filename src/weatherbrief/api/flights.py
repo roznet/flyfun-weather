@@ -142,6 +142,11 @@ class FlightResponse(BaseModel):
     # (DCT/airway/coord shorthand collapsed).
     raw_route: str | None = None
     parser_version: str | None = None
+    # 8-char base62 token for the short share link (/s/{code}). Always
+    # set for flights created after migration 049; may be None for very
+    # old rows that didn't get backfilled (extremely unlikely in
+    # practice, but the client falls back to the long ?id= URL).
+    share_code: str | None = None
 
 
 # Number of flights surfaced in the "recent" section as a debrief nudge,
@@ -317,6 +322,7 @@ def _flight_to_response(
         debrief=debrief_resp,
         raw_route=flight.raw_route,
         parser_version=flight.parser_version,
+        share_code=flight.share_code,
         section=section,
     )
 
@@ -1077,6 +1083,10 @@ def move_flight(
         auto_refresh_hour=source.auto_refresh_hour,
         raw_route=new_raw_route,
         parser_version=new_parser_version,
+        # Carry the source's share_code over so links recipients already
+        # have keep resolving after a move (date/route edit). The unique
+        # index is honored because we delete the source row first.
+        share_code=source.share_code,
         created_at=datetime.now(tz=timezone.utc),
     )
 

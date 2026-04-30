@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,34 @@ def _data_dir() -> Path:
 # --- Conversion helpers ---
 
 
+_SHARE_CODE_ALPHABET = (
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+)
+_SHARE_CODE_LEN = 8
+
+
+def _generate_share_code() -> str:
+    """8-char base62 token. ~2.18e14 combos — collisions are vanishingly rare."""
+    return "".join(secrets.choice(_SHARE_CODE_ALPHABET) for _ in range(_SHARE_CODE_LEN))
+
+
+def _allocate_share_code(session: Session) -> str:
+    """Generate a share_code that doesn't collide with an existing row.
+
+    Retries on collision — at 8 base62 chars the loop body almost never
+    runs more than once, but the SELECT is still cheap insurance against
+    a flaky RNG or a future shorter alphabet.
+    """
+    for _ in range(8):
+        code = _generate_share_code()
+        existing = session.execute(
+            select(FlightRow.id).where(FlightRow.share_code == code)
+        ).first()
+        if existing is None:
+            return code
+    raise RuntimeError("Could not allocate a unique share_code after 8 attempts")
+
+
 def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
     return FlightRow(
         id=flight.id,
@@ -60,6 +89,7 @@ def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
         last_auto_refresh_at=flight.last_auto_refresh_at,
         raw_route=flight.raw_route,
         parser_version=flight.parser_version,
+        share_code=flight.share_code,
         created_at=flight.created_at,
     )
 
@@ -83,6 +113,7 @@ def _row_to_flight(row: FlightRow) -> Flight:
         last_auto_refresh_at=row.last_auto_refresh_at,
         raw_route=row.raw_route,
         parser_version=row.parser_version,
+        share_code=row.share_code,
         created_at=row.created_at,
     )
 
@@ -240,7 +271,14 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
 
 
 def save_flight(session: Session, flight: Flight, user_id: str) -> None:
-    """Insert or update a flight in the database."""
+    """Insert or update a flight in the database.
+
+    On insert: a ``share_code`` is allocated when the Flight didn't carry
+    one, so every newly persisted flight is reachable via the short
+    ``/s/{code}`` URL. On update: ``share_code`` is preserved (callers
+    don't pass it through and we don't want to rotate the share link
+    out from under existing recipients).
+    """
     existing = session.get(FlightRow, flight.id)
     if existing:
         existing.route_name = flight.route_name
@@ -256,7 +294,12 @@ def save_flight(session: Session, flight: Flight, user_id: str) -> None:
         existing.auto_refresh = flight.auto_refresh
         existing.auto_refresh_hour = flight.auto_refresh_hour
         existing.last_auto_refresh_at = flight.last_auto_refresh_at
+        # Lazy-mint a code for legacy rows that never had one.
+        if existing.share_code is None:
+            existing.share_code = _allocate_share_code(session)
     else:
+        if flight.share_code is None:
+            flight.share_code = _allocate_share_code(session)
         session.add(_flight_to_row(flight, user_id))
     session.flush()
 
@@ -267,6 +310,18 @@ def load_flight(session: Session, flight_id: str) -> Flight:
     if row is None:
         raise KeyError(f"Flight not found: {flight_id}")
     return _row_to_flight(row)
+
+
+def lookup_flight_id_by_share_code(session: Session, code: str) -> str | None:
+    """Resolve a short share_code to its flight_id, or None if unknown.
+
+    Returns just the flight_id (not the full Flight) — the short-link
+    handler only needs to redirect, so loading the full row would be
+    wasted work.
+    """
+    return session.execute(
+        select(FlightRow.id).where(FlightRow.share_code == code)
+    ).scalar_one_or_none()
 
 
 def list_flights(session: Session, user_id: str) -> list[Flight]:

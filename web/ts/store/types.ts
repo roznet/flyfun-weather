@@ -37,6 +37,10 @@ export interface FlightResponse {
   // existed. The detail view shows it under "Original" when present.
   raw_route?: string | null;
   parser_version?: string | null;
+  // Short share token for /s/{code}. May be omitted on legacy rows that
+  // didn't get backfilled — the share helpers then fall back to the
+  // long ?id= URL.
+  share_code?: string | null;
 }
 
 export type DebriefDecision = 'cancelled' | 'flown' | 'monitoring';
