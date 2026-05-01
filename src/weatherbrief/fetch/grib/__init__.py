@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import gc
 import logging
+import threading
+import time as _time_mod
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -46,6 +49,142 @@ logger = logging.getLogger(__name__)
 _POOL_MAXSIZE = 12
 
 _M_TO_FT = 3.28084
+
+
+# ---------------------------------------------------------------------------
+# Sub-stage timing instrumentation (one-shot, for refresh-pipeline profiling).
+# Single-refresh-at-a-time assumed; multi-refresh would interleave but the
+# numbers still aggregate truthfully, the labels just reflect both runs.
+# ---------------------------------------------------------------------------
+
+_grib_timing_lock = threading.Lock()
+_grib_timing_data: dict[str, float] = {}
+_grib_timing_counts: dict[str, int] = {}
+_grib_gc_seconds: float = 0.0
+_grib_gc_count: int = 0
+
+
+def _grib_time_reset() -> None:
+    global _grib_gc_seconds, _grib_gc_count
+    with _grib_timing_lock:
+        _grib_timing_data.clear()
+        _grib_timing_counts.clear()
+        _grib_gc_seconds = 0.0
+        _grib_gc_count = 0
+
+
+def _grib_time_record(label: str, secs: float) -> None:
+    with _grib_timing_lock:
+        _grib_timing_data[label] = _grib_timing_data.get(label, 0.0) + secs
+        _grib_timing_counts[label] = _grib_timing_counts.get(label, 0) + 1
+
+
+@contextmanager
+def _grib_time(label: str):
+    t0 = _time_mod.perf_counter()
+    try:
+        yield
+    finally:
+        _grib_time_record(label, _time_mod.perf_counter() - t0)
+
+
+def _grib_gc() -> None:
+    """gc.collect() with cumulative timing accounting."""
+    global _grib_gc_seconds, _grib_gc_count
+    t0 = _time_mod.perf_counter()
+    gc.collect()
+    elapsed = _time_mod.perf_counter() - t0
+    with _grib_timing_lock:
+        _grib_gc_seconds += elapsed
+        _grib_gc_count += 1
+
+
+def _grib_time_summary() -> None:
+    if not _grib_timing_data:
+        return
+    items = sorted(_grib_timing_data.items(), key=lambda kv: -kv[1])
+    parts = []
+    for label, secs in items:
+        n = _grib_timing_counts.get(label, 0)
+        parts.append(f"{label}={secs:.2f}s/{n}")
+    parts.append(f"gc={_grib_gc_seconds:.2f}s/{_grib_gc_count}")
+    logger.info("GRIB timing: %s", " ".join(parts))
+
+
+# ---------------------------------------------------------------------------
+# Memory checkpoints — bounded number of INFO logs per refresh, used to
+# locate the peak inside ICON-EU enrichment without raising verbosity.
+# Tracks RSS samples per label (max + count) and a baseline at reset.
+# ---------------------------------------------------------------------------
+
+_grib_rss_lock = threading.Lock()
+_grib_rss_baseline: float | None = None
+_grib_rss_max: dict[str, float] = {}
+_grib_rss_count: dict[str, int] = {}
+
+
+def _read_rss_mb() -> float | None:
+    """Return current process RSS in MB, or None if unavailable.
+
+    Linux: reads /proc/self/status (cheap). macOS: shells out to ps.
+    Mirrors weatherbrief.pipeline._current_rss_mb (kept local to avoid a
+    circular import — pipeline already imports from this module's tree).
+    """
+    import os
+    import subprocess
+    import sys
+
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["ps", "-o", "rss=", "-p", str(os.getpid())], timeout=1,
+            )
+            return int(out.strip()) / 1024
+        except Exception:
+            return None
+    return None
+
+
+def _grib_rss_reset() -> None:
+    global _grib_rss_baseline
+    with _grib_rss_lock:
+        _grib_rss_baseline = _read_rss_mb()
+        _grib_rss_max.clear()
+        _grib_rss_count.clear()
+
+
+def _grib_rss_mark(label: str) -> None:
+    """Record current RSS under *label*. Keeps max-per-label across calls."""
+    rss = _read_rss_mb()
+    if rss is None:
+        return
+    with _grib_rss_lock:
+        prior = _grib_rss_max.get(label)
+        _grib_rss_max[label] = rss if prior is None else max(prior, rss)
+        _grib_rss_count[label] = _grib_rss_count.get(label, 0) + 1
+
+
+def _grib_rss_summary() -> None:
+    if not _grib_rss_max:
+        return
+    baseline = _grib_rss_baseline
+    items = sorted(_grib_rss_max.items(), key=lambda kv: -kv[1])
+    parts = []
+    for label, rss in items:
+        n = _grib_rss_count.get(label, 0)
+        if baseline is not None:
+            parts.append(f"{label}={int(rss)}MB(+{int(rss - baseline)}/{n})")
+        else:
+            parts.append(f"{label}={int(rss)}MB/{n}")
+    base_str = f" baseline={int(baseline)}MB" if baseline is not None else ""
+    logger.info("GRIB RSS:%s %s", base_str, " ".join(parts))
 
 
 def _grib_session() -> requests.Session:
@@ -130,6 +269,10 @@ def enrich_forecasts(
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
 
+    _grib_time_reset()
+    _grib_rss_reset()
+    _grib_rss_mark("enrich_start")
+
     # Download GFS and ICON-EU in parallel (network-bound), but decode
     # sequentially (memory-bound). ICON-EU decode peaks at ~270MB per
     # variable; overlapping with GFS decode caused OOM.
@@ -142,52 +285,57 @@ def enrich_forecasts(
     icon_skip: str | None = None
 
     # Prepare ICON-EU context (run discovery, domain check, etc.)
-    icon_ctx = _prepare_icon_eu(
-        cross_sections, route_points, departure_time,
-        data_dir=data_dir,
-        flight_duration_hours=flight_duration_hours,
-        as_of_time=as_of_time,
-    )
+    with _grib_time("icon_prepare"):
+        icon_ctx = _prepare_icon_eu(
+            cross_sections, route_points, departure_time,
+            data_dir=data_dir,
+            flight_duration_hours=flight_duration_hours,
+            as_of_time=as_of_time,
+        )
 
     # Phase 1: Download/decode in parallel — GFS (download+decode),
     # ICON-EU (download-only), ECMWF GRIB (local disk decode).
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        gfs_future = pool.submit(
-            _enrich_gfs,
-            cross_sections, all_forecasts, route_points,
-            departure_time, data_dir=data_dir,
-            flight_duration_hours=flight_duration_hours,
-            as_of_time=as_of_time,
-        )
-        ecmwf_future = pool.submit(
-            _enrich_ecmwf,
-            cross_sections, all_forecasts, route_points,
-            departure_time,
-            flight_duration_hours=flight_duration_hours,
-            as_of_time=as_of_time,
-        )
-        if icon_ctx is not None:
-            icon_dl_future = pool.submit(
-                _prefetch_icon_eu_data, icon_ctx,
+    with _grib_time("phase1_parallel"):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            gfs_future = pool.submit(
+                _enrich_gfs,
+                cross_sections, all_forecasts, route_points,
+                departure_time, data_dir=data_dir,
+                flight_duration_hours=flight_duration_hours,
+                as_of_time=as_of_time,
             )
-        else:
-            icon_dl_future = None
+            ecmwf_future = pool.submit(
+                _enrich_ecmwf,
+                cross_sections, all_forecasts, route_points,
+                departure_time,
+                flight_duration_hours=flight_duration_hours,
+                as_of_time=as_of_time,
+            )
+            if icon_ctx is not None:
+                icon_dl_future = pool.submit(
+                    _prefetch_icon_eu_data, icon_ctx,
+                )
+            else:
+                icon_dl_future = None
 
-        gfs_ts = gfs_future.result()
-        ecmwf_grib_ts = ecmwf_future.result()
-        if icon_dl_future is not None:
-            icon_dl_future.result()  # ensure downloads are cached
+            gfs_ts = gfs_future.result()
+            ecmwf_grib_ts = ecmwf_future.result()
+            if icon_dl_future is not None:
+                icon_dl_future.result()  # ensure downloads are cached
+    _grib_rss_mark("after_phase1")
 
     if ecmwf_grib_ts is not None:
         grib_init_times["ecmwf"] = ecmwf_grib_ts
 
     # Phase 2: Decode ICON-EU sequentially (memory-heavy, GFS is done).
-    if icon_ctx is not None:
-        icon_ts, icon_skip = _decode_and_merge_icon_eu(
-            icon_ctx, cross_sections, all_forecasts, route_points,
-        )
-    else:
-        icon_skip = icon_ctx  # None
+    with _grib_time("phase2_icon_decode"):
+        if icon_ctx is not None:
+            icon_ts, icon_skip = _decode_and_merge_icon_eu(
+                icon_ctx, cross_sections, all_forecasts, route_points,
+            )
+        else:
+            icon_skip = icon_ctx  # None
+    _grib_rss_mark("after_phase2")
 
     if gfs_ts is not None:
         grib_init_times["gfs"] = gfs_ts
@@ -197,8 +345,13 @@ def enrich_forecasts(
         grib_skip_reasons["icon"] = icon_skip
 
     # Forward-fill all GRIB-enriched fields to interpolated hours
-    from weatherbrief.fetch.grib.fill import propagate_all
-    propagate_all(cross_sections, all_forecasts)
+    with _grib_time("propagate_all"):
+        from weatherbrief.fetch.grib.fill import propagate_all
+        propagate_all(cross_sections, all_forecasts)
+
+    _grib_rss_mark("enrich_end")
+    _grib_time_summary()
+    _grib_rss_summary()
 
     return grib_init_times, grib_skip_reasons
 
@@ -228,6 +381,26 @@ def _enrich_ecmwf(
     Returns:
         GRIB init Unix timestamp, or None if no ECMWF data found.
     """
+    with _grib_time("ecmwf_total"):
+        return _enrich_ecmwf_inner(
+            cross_sections, all_forecasts, route_points,
+            departure_time,
+            flight_duration_hours=flight_duration_hours,
+            as_of_time=as_of_time,
+            ecmwf_data_dir=ecmwf_data_dir,
+        )
+
+
+def _enrich_ecmwf_inner(
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    *,
+    flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
+    ecmwf_data_dir: Path | None = None,
+) -> int | None:
     from weatherbrief.fetch.grib.decode import (
         build_ecmwf_cloud_diagnostics,
         build_ecmwf_surface_snapshot,
@@ -246,7 +419,8 @@ def _enrich_ecmwf(
         return None
 
     grib_dir = ecmwf_data_dir or ecmwf_grib_dir()
-    all_files = scan_ecmwf_files(grib_dir)
+    with _grib_time("ecmwf_scan"):
+        all_files = scan_ecmwf_files(grib_dir)
     if not all_files:
         logger.info("No ECMWF GRIB data available in %s", grib_dir)
         return None
@@ -301,9 +475,10 @@ def _enrich_ecmwf(
 
         # Decode pressure levels (a2)
         if "a2" in parts:
-            pl_data, pl_covered = decode_ecmwf_pressure_per_point(
-                parts["a2"], point_lats, point_lons,
-            )
+            with _grib_time("ecmwf_a2_decode"):
+                pl_data, pl_covered = decode_ecmwf_pressure_per_point(
+                    parts["a2"], point_lats, point_lons,
+                )
             # Only merge covered points — set uncovered to empty
             for i, cov in enumerate(pl_covered):
                 if not cov:
@@ -318,9 +493,10 @@ def _enrich_ecmwf(
 
         # Decode surface diagnostics (a1)
         if "a1" in parts:
-            sfc_data, sfc_covered = decode_ecmwf_surface_per_point(
-                parts["a1"], point_lats, point_lons,
-            )
+            with _grib_time("ecmwf_a1_decode"):
+                sfc_data, sfc_covered = decode_ecmwf_surface_per_point(
+                    parts["a1"], point_lats, point_lons,
+                )
             diagnostics = [
                 build_ecmwf_cloud_diagnostics(raw) if cov else None
                 for raw, cov in zip(sfc_data, sfc_covered)
@@ -384,6 +560,25 @@ def _enrich_gfs(
 
     Returns the GRIB init Unix timestamp, or None if enrichment was skipped.
     """
+    with _grib_time("gfs_total"):
+        return _enrich_gfs_inner(
+            cross_sections, all_forecasts, route_points,
+            departure_time, data_dir=data_dir,
+            flight_duration_hours=flight_duration_hours,
+            as_of_time=as_of_time,
+        )
+
+
+def _enrich_gfs_inner(
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    *,
+    data_dir: Path,
+    flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
+) -> int | None:
     from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
 
     gfs_sections = [cs for cs in cross_sections if cs.model == ModelSource.GFS]
@@ -393,7 +588,8 @@ def _enrich_gfs(
 
     session = _grib_session()
 
-    run_info = find_latest_run(departure_time, session=session, as_of_time=as_of_time)
+    with _grib_time("gfs_find_run"):
+        run_info = find_latest_run(departure_time, session=session, as_of_time=as_of_time)
     if run_info is None:
         logger.warning("No GFS model run found for enrichment")
         return None
@@ -410,12 +606,13 @@ def _enrich_gfs(
     point_lons = [rp.lon for rp in route_points]
 
     # Fetch .idx text (shared by both enrichment paths)
-    idx_by_fhour: dict[int, str] = {}
-    for fhour in forecast_hours:
-        try:
-            idx_by_fhour[fhour] = fetch_idx(init_date, init_hour, fhour, session=session)
-        except Exception:
-            logger.warning("Failed to fetch .idx for f%03d", fhour, exc_info=True)
+    with _grib_time("gfs_idx_fetch"):
+        idx_by_fhour: dict[int, str] = {}
+        for fhour in forecast_hours:
+            try:
+                idx_by_fhour[fhour] = fetch_idx(init_date, init_hour, fhour, session=session)
+            except Exception:
+                logger.warning("Failed to fetch .idx for f%03d", fhour, exc_info=True)
 
     if not idx_by_fhour:
         logger.warning("No .idx files retrieved for enrichment")
@@ -423,20 +620,21 @@ def _enrich_gfs(
 
     # Run both enrichment paths in parallel — they write to different fields
     # (CLWMR/ICMR on PressureLevelData vs nwp_cloud_diagnostics on HourlyForecast)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        pool.submit(
-            _enrich_clwmr_icmr,
-            gfs_sections, all_forecasts, route_points,
-            init_date, init_hour, forecast_hours,
-            run_dir, idx_by_fhour, point_lats, point_lons, session,
-        )
-        pool.submit(
-            _enrich_cloud_diagnostics,
-            gfs_sections, all_forecasts, route_points,
-            init_date, init_hour, forecast_hours,
-            run_dir, idx_by_fhour, point_lats, point_lons, session,
-        )
-        # ThreadPoolExecutor.__exit__ waits for all futures to complete
+    with _grib_time("gfs_workers"):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pool.submit(
+                _enrich_clwmr_icmr,
+                gfs_sections, all_forecasts, route_points,
+                init_date, init_hour, forecast_hours,
+                run_dir, idx_by_fhour, point_lats, point_lons, session,
+            )
+            pool.submit(
+                _enrich_cloud_diagnostics,
+                gfs_sections, all_forecasts, route_points,
+                init_date, init_hour, forecast_hours,
+                run_dir, idx_by_fhour, point_lats, point_lons, session,
+            )
+            # ThreadPoolExecutor.__exit__ waits for all futures to complete
 
     return _run_info_to_timestamp(init_date, init_hour)
 
@@ -466,9 +664,10 @@ def _fetch_clwmr_icmr_for_fhour(
             if not ranges:
                 logger.warning("No CLWMR/ICMR found in .idx for f%03d", fhour)
                 return None
-            grib_bytes = fetch_byte_ranges(
-                init_date, init_hour, fhour, ranges, session=session,
-            )
+            with _grib_time("gfs_clwmr_download"):
+                grib_bytes = fetch_byte_ranges(
+                    init_date, init_hour, fhour, ranges, session=session,
+                )
             if not grib_bytes:
                 return None
             put_cached(run_dir, ck, grib_bytes)
@@ -480,7 +679,8 @@ def _fetch_clwmr_icmr_for_fhour(
             logger.warning("Failed to fetch GRIB2 f%03d", fhour, exc_info=True)
             return None
 
-    return decode_grib_per_point(grib_bytes, point_lats, point_lons)
+    with _grib_time("gfs_clwmr_decode"):
+        return decode_grib_per_point(grib_bytes, point_lats, point_lons)
 
 
 def _enrich_clwmr_icmr(
@@ -524,7 +724,7 @@ def _enrich_clwmr_icmr(
             valid_utc=valid_utc,
         )
         del decoded_points
-        gc.collect()
+        _grib_gc()
 
     if total_enriched:
         logger.info(
@@ -559,9 +759,10 @@ def _fetch_cloud_diag_for_fhour(
             if not ranges:
                 logger.warning("No cloud diag found in .idx for f%03d", fhour)
                 return None
-            grib_bytes = fetch_cloud_diag_ranges(
-                init_date, init_hour, fhour, ranges, session=session,
-            )
+            with _grib_time("gfs_cloud_diag_download"):
+                grib_bytes = fetch_cloud_diag_ranges(
+                    init_date, init_hour, fhour, ranges, session=session,
+                )
             if not grib_bytes:
                 return None
             put_cached(run_dir, ck, grib_bytes)
@@ -573,7 +774,8 @@ def _fetch_cloud_diag_for_fhour(
             logger.warning("Failed to fetch cloud diag f%03d", fhour, exc_info=True)
             return None
 
-    return decode_cloud_diag_per_point(grib_bytes, point_lats, point_lons)
+    with _grib_time("gfs_cloud_diag_decode"):
+        return decode_cloud_diag_per_point(grib_bytes, point_lats, point_lons)
 
 
 def _apply_cloud_diagnostics_to_sections(
@@ -869,7 +1071,7 @@ def _enrich_cloud_diagnostics(
         )
         del decoded_points
         del diagnostics_per_point
-        gc.collect()
+        _grib_gc()
 
     if total_enriched:
         logger.info("GRIB2 enrichment: %d hourly entries enriched with cloud diagnostics", total_enriched)
@@ -973,6 +1175,11 @@ def _prefetch_icon_eu_data(ctx: _IconEuContext) -> None:
 
     Runs in a background thread while GFS enrichment proceeds.
     """
+    with _grib_time("icon_prefetch"):
+        _prefetch_icon_eu_data_inner(ctx)
+
+
+def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_VARIABLES,
         fetch_icon_eu_per_variable,
@@ -990,12 +1197,13 @@ def _prefetch_icon_eu_data(ctx: _IconEuContext) -> None:
             if get_cached(ctx.run_dir, ck) is not None:
                 continue
             try:
-                per_var = fetch_icon_eu_per_variable(
-                    ctx.init_date, ctx.init_hour, fhour,
-                    levels=ctx.levels,
-                    variables=[var],
-                    session=ctx.session,
-                )
+                with _grib_time("icon_prefetch_var"):
+                    per_var = fetch_icon_eu_per_variable(
+                        ctx.init_date, ctx.init_hour, fhour,
+                        levels=ctx.levels,
+                        variables=[var],
+                        session=ctx.session,
+                    )
                 data = per_var.get(var)
                 if data:
                     put_cached(ctx.run_dir, ck, data)
@@ -1006,9 +1214,10 @@ def _prefetch_icon_eu_data(ctx: _IconEuContext) -> None:
         diag_ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
         if get_cached(ctx.run_dir, diag_ck) is None:
             try:
-                fetched = fetch_icon_eu_single_level(
-                    ctx.init_date, ctx.init_hour, [fhour], session=ctx.session,
-                )
+                with _grib_time("icon_prefetch_cloud_diag"):
+                    fetched = fetch_icon_eu_single_level(
+                        ctx.init_date, ctx.init_hour, [fhour], session=ctx.session,
+                    )
                 grib_bytes = fetched.get(fhour)
                 if grib_bytes:
                     put_cached(ctx.run_dir, diag_ck, grib_bytes)
@@ -1045,9 +1254,10 @@ def _decode_and_merge_icon_eu(
         legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
         legacy_bytes = get_cached(ctx.run_dir, legacy_ck)
         if legacy_bytes is not None:
-            decoded = decode_icon_eu_per_point(legacy_bytes, ctx.point_lats, ctx.point_lons)
+            with _grib_time("icon_legacy_decode"):
+                decoded = decode_icon_eu_per_point(legacy_bytes, ctx.point_lats, ctx.point_lons)
             del legacy_bytes
-            gc.collect()
+            _grib_gc()
             return decoded, empty_clc
 
         # Load per-variable data from cache (already downloaded by prefetch)
@@ -1061,16 +1271,19 @@ def _decode_and_merge_icon_eu(
         if not var_bytes:
             return None, empty_clc
 
-        decoded, clc_layers = decode_icon_eu_per_point_chunked(
-            var_bytes, ctx.point_lats, ctx.point_lons,
-        )
+        with _grib_time("icon_chunked_decode"):
+            decoded, clc_layers = decode_icon_eu_per_point_chunked(
+                var_bytes, ctx.point_lats, ctx.point_lons,
+            )
         del var_bytes
-        gc.collect()
+        _grib_gc()
         return decoded, clc_layers
 
     total_enriched = 0
     for fhour in ctx.forecast_hours:
+        _grib_rss_mark("icon_fhour_pre")
         decoded_points, clc_layers = _decode_fhour(fhour)
+        _grib_rss_mark("icon_fhour_decoded")
         if not decoded_points:
             continue
 
@@ -1086,7 +1299,8 @@ def _decode_and_merge_icon_eu(
         )
         total_enriched += replaced
         del decoded_points
-        gc.collect()
+        _grib_gc()
+        _grib_rss_mark("icon_fhour_post_gc")
 
     if not total_enriched:
         logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
@@ -1153,9 +1367,10 @@ def _enrich_icon_eu_cloud_diagnostics(
         if not grib_bytes:
             continue
 
-        decoded_points = decode_icon_eu_cloud_diag_per_point(
-            grib_bytes, point_lats, point_lons,
-        )
+        with _grib_time("icon_cloud_diag_decode"):
+            decoded_points = decode_icon_eu_cloud_diag_per_point(
+                grib_bytes, point_lats, point_lons,
+            )
         del grib_bytes
         if not decoded_points:
             continue
@@ -1215,7 +1430,7 @@ def _enrich_icon_eu_cloud_diagnostics(
         del decoded_points
         del diagnostics_per_point
         del wp_diag_lookup
-        gc.collect()
+        _grib_gc()
 
     if total_enriched:
         logger.info(

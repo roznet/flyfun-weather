@@ -27,6 +27,11 @@ DWD_BASE_URL = "https://opendata.dwd.de/weather/nwp/icon-eu/grib"
 # ICON-EU model-level horizon depends on the run cycle:
 # - Main runs (00z, 12z): model-level data published up to 120h
 # - Intermediate runs (03/06/09/15/18/21z): only up to 78h
+#
+# NOTE: empirical probing shows this is wrong — DWD actually publishes 4 main
+# runs per day (00/06/12/18) and 4 short runs (03/09/15/21z) with horizon ~48h.
+# The fix is held back until ICON memory streaming lands; see
+# designs/plans/refresh-pipeline-performance.md (Phase B/C).
 ICON_EU_MAIN_CYCLES = {0, 12}
 ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN = 120
 ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = 78
@@ -169,7 +174,7 @@ def fetch_icon_eu_single_level(
 
         buf = bytearray()
         downloaded = 0
-        failed = 0
+        failures: dict[int | str, int] = {}
 
         with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
             futures = {
@@ -177,22 +182,25 @@ def fetch_icon_eu_single_level(
                 for url in urls
             }
             for future in as_completed(futures):
-                data = future.result()
+                data, status = future.result()
                 if data is not None:
                     buf.extend(data)
                     downloaded += 1
                 else:
-                    failed += 1
+                    failures[status] = failures.get(status, 0) + 1
 
+        total_failed = sum(failures.values())
         if buf:
             result[fhour] = bytes(buf)
             logger.info(
-                "ICON-EU single-level f%03d: downloaded %d/%d files (%.1f KB)",
-                fhour, downloaded, downloaded + failed, len(buf) / 1024,
+                "ICON-EU single-level f%03d: downloaded %d/%d files (%.1f KB)%s",
+                fhour, downloaded, downloaded + total_failed, len(buf) / 1024,
+                _format_failure_summary(failures),
             )
-        else:
-            logger.debug(
-                "ICON-EU single-level f%03d: all %d files failed", fhour, failed,
+        elif total_failed:
+            logger.warning(
+                "ICON-EU single-level f%03d: all %d files failed%s",
+                fhour, total_failed, _format_failure_summary(failures),
             )
 
     return result
@@ -361,20 +369,35 @@ def compute_icon_eu_flight_window_hours(
     return sorted(fhours)
 
 
+def _format_failure_summary(failures: dict[int | str, int]) -> str:
+    """Format a per-status failure summary for log lines, e.g. '404=40'."""
+    if not failures:
+        return ""
+    parts = [f"{k}={v}" for k, v in sorted(failures.items(), key=lambda kv: str(kv[0]))]
+    return " (" + ",".join(parts) + ")"
+
+
 def _download_one_file(
     url: str,
     session: requests.Session,
-) -> bytes | None:
-    """Download and decompress a single bz2-compressed GRIB2 file."""
+) -> tuple[bytes | None, int | str]:
+    """Download and decompress a single bz2-compressed GRIB2 file.
+
+    Returns ``(bytes_or_None, status_or_error_label)`` so callers can
+    aggregate failure modes (HTTP 404 vs network errors).
+    """
     try:
         resp = session.get(url, timeout=REQUEST_TIMEOUT)
         if resp.status_code != 200:
             logger.debug("HTTP %d for %s", resp.status_code, url.split("/")[-1])
-            return None
-        return bz2.decompress(resp.content)
-    except (requests.RequestException, OSError) as e:
+            return None, resp.status_code
+        return bz2.decompress(resp.content), 200
+    except requests.RequestException as e:
         logger.debug("Download failed %s: %s", url.split("/")[-1], e)
-        return None
+        return None, "network"
+    except OSError as e:
+        logger.debug("Decompress failed %s: %s", url.split("/")[-1], e)
+        return None, "decompress"
 
 
 def fetch_icon_eu_fields(
@@ -410,7 +433,7 @@ def fetch_icon_eu_fields(
 
     result = bytearray()
     downloaded = 0
-    failed = 0
+    failures: dict[int | str, int] = {}
 
     with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
         futures = {
@@ -418,16 +441,18 @@ def fetch_icon_eu_fields(
             for url in urls
         }
         for future in as_completed(futures):
-            data = future.result()
+            data, status = future.result()
             if data is not None:
                 result.extend(data)
                 downloaded += 1
             else:
-                failed += 1
+                failures[status] = failures.get(status, 0) + 1
 
+    total_failed = sum(failures.values())
     logger.info(
-        "ICON-EU f%03d: downloaded %d/%d files (%.1f KB)",
-        forecast_hour, downloaded, downloaded + failed, len(result) / 1024,
+        "ICON-EU f%03d: downloaded %d/%d files (%.1f KB)%s",
+        forecast_hour, downloaded, downloaded + total_failed, len(result) / 1024,
+        _format_failure_summary(failures),
     )
     return bytes(result)
 
@@ -459,7 +484,7 @@ def fetch_icon_eu_per_variable(
 
         buf = bytearray()
         downloaded = 0
-        failed = 0
+        failures: dict[int | str, int] = {}
 
         with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
             futures = {
@@ -467,22 +492,25 @@ def fetch_icon_eu_per_variable(
                 for url in urls
             }
             for future in as_completed(futures):
-                data = future.result()
+                data, status = future.result()
                 if data is not None:
                     buf.extend(data)
                     downloaded += 1
                 else:
-                    failed += 1
+                    failures[status] = failures.get(status, 0) + 1
 
+        total_failed = sum(failures.values())
         if buf:
             result[var] = bytes(buf)
             logger.info(
-                "ICON-EU f%03d %s: downloaded %d/%d levels (%.1f KB)",
-                forecast_hour, var, downloaded, downloaded + failed, len(buf) / 1024,
+                "ICON-EU f%03d %s: downloaded %d/%d levels (%.1f KB)%s",
+                forecast_hour, var, downloaded, downloaded + total_failed,
+                len(buf) / 1024, _format_failure_summary(failures),
             )
         else:
             logger.warning(
-                "ICON-EU f%03d %s: all %d files failed", forecast_hour, var, failed,
+                "ICON-EU f%03d %s: all %d files failed%s",
+                forecast_hour, var, total_failed, _format_failure_summary(failures),
             )
 
     return result
