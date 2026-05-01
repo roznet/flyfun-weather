@@ -11,7 +11,6 @@ from typing import NamedTuple
 
 import metpy.calc as mpcalc
 import numpy as np
-from metpy.units import units
 
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
 from weatherbrief.models import DerivedLevel, ParcelPathPoint, ThermodynamicIndices
@@ -325,56 +324,69 @@ def compute_derived_levels_extended(
     Called by the full briefing pipeline after ``compute_derived_levels_core``.
     These fields are used by icing, inversions, vertical motion, and Skew-T.
     """
-    pressures = profile.pressure.to("hPa").magnitude
-    temps = profile.temperature.to("degC").magnitude
-    dewpoints = profile.dewpoint.to("degC").magnitude
+    n = len(profile.pressure.magnitude)
 
-    # Omega
+    # Omega magnitudes (Pa/s, NaN where missing per prepare.py contract)
     omega_vals = None
     if profile.omega is not None:
         omega_vals = profile.omega.to("Pa/s").magnitude
 
-    # RH (vectorized)
+    # All MetPy calls below operate on the full profile array at once —
+    # MetPy propagates NaN per-level naturally, so we no longer pay the
+    # ~3 calls × n levels of @parse_grid_arguments wrapper overhead.
+
+    rh_vals = None
     try:
         rh_vals = mpcalc.relative_humidity_from_dewpoint(
-            profile.temperature, profile.dewpoint
+            profile.temperature, profile.dewpoint,
         ).magnitude * 100
     except Exception:
-        rh_vals = [None] * len(pressures)
+        logger.debug("RH computation failed", exc_info=True)
+
+    wb_vals = None
+    try:
+        wb_vals = mpcalc.wet_bulb_temperature(
+            profile.pressure, profile.temperature, profile.dewpoint,
+        ).to("degC").magnitude
+    except Exception:
+        logger.debug("Wet bulb computation failed", exc_info=True)
+
+    te_vals = None
+    try:
+        te_vals = mpcalc.equivalent_potential_temperature(
+            profile.pressure, profile.temperature, profile.dewpoint,
+        ).to("kelvin").magnitude
+    except Exception:
+        logger.debug("Theta-E computation failed", exc_info=True)
+
+    w_vals = None
+    if profile.omega is not None:
+        try:
+            w_vals = mpcalc.vertical_velocity(
+                profile.omega, profile.pressure, profile.temperature,
+            ).to("m/s").magnitude
+        except Exception:
+            logger.debug("Omega→w conversion failed", exc_info=True)
 
     for i, lv in enumerate(levels):
-        # Wet-bulb temperature
-        try:
-            wb = mpcalc.wet_bulb_temperature(
-                pressures[i] * units.hPa, temps[i] * units.degC, dewpoints[i] * units.degC
-            )
-            lv.wet_bulb_c = round(float(wb.to("degC").magnitude), 1)
-        except Exception:
-            pass
+        if i >= n:
+            break
 
-        # Theta-E
-        try:
-            te = mpcalc.equivalent_potential_temperature(
-                pressures[i] * units.hPa, temps[i] * units.degC, dewpoints[i] * units.degC
-            )
-            lv.theta_e_k = round(float(te.to("kelvin").magnitude), 1)
-        except Exception:
-            pass
+        if wb_vals is not None:
+            lv.wet_bulb_c = round(float(wb_vals[i]), 1)
 
-        # Omega → w conversion
+        if te_vals is not None:
+            lv.theta_e_k = round(float(te_vals[i]), 1)
+
         if omega_vals is not None and not np.isnan(omega_vals[i]):
             lv.omega_pa_s = round(float(omega_vals[i]), 4)
-            try:
-                w = mpcalc.vertical_velocity(
-                    omega_vals[i] * units("Pa/s"),
-                    pressures[i] * units.hPa,
-                    temps[i] * units.degC,
-                )
-                lv.w_fpm = round(float(w.to("m/s").magnitude) * 196.85, 1)
-            except Exception:
-                logger.debug("Omega→w conversion failed at %s hPa", pressures[i], exc_info=True)
+            if w_vals is not None and not np.isnan(w_vals[i]):
+                lv.w_fpm = round(float(w_vals[i]) * 196.85, 1)
 
-        lv.relative_humidity_pct = round(float(rh_vals[i]), 1) if rh_vals[i] is not None else None
+        if rh_vals is not None:
+            lv.relative_humidity_pct = round(float(rh_vals[i]), 1)
+        else:
+            lv.relative_humidity_pct = None
 
 
 def compute_derived_levels(profile: PreparedProfile) -> list[DerivedLevel]:
