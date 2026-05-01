@@ -184,9 +184,16 @@ def _grib_rss_mark(label: str) -> None:
 def _submit_with_context(pool: ThreadPoolExecutor, fn, /, *args, **kwargs):
     """Submit *fn* to *pool* with the caller's ContextVars copied in.
 
-    ThreadPoolExecutor.submit doesn't propagate contextvars by default;
-    without this, worker threads see _GRIB_TIMER as the default None and
-    timing/RSS calls become silent no-ops.
+    ``ThreadPoolExecutor.submit`` does **not** propagate contextvars in any
+    current Python (verified on 3.13.11: a plain ``pool.submit`` worker sees
+    ContextVar defaults, not the caller's bound values; nested submits lose
+    them at every level). Without this wrapper, worker threads see
+    ``_GRIB_TIMER`` as the default ``None`` and ``_grib_time``/``_grib_gc``
+    /``_grib_rss_mark`` calls become silent no-ops — losing the per-fhour
+    sub-stage timings the instrumentation exists to capture.
+
+    Apply at *every* ``submit`` site that needs the timer, including nested
+    pools (e.g. the inner GFS pool inside an outer Phase-1 worker).
     """
     ctx = contextvars.copy_context()
     return pool.submit(ctx.run, fn, *args, **kwargs)
@@ -653,17 +660,19 @@ def _enrich_gfs_inner(
         return None
 
     # Run both enrichment paths in parallel — they write to different fields
-    # (CLWMR/ICMR on PressureLevelData vs nwp_cloud_diagnostics on HourlyForecast)
+    # (CLWMR/ICMR on PressureLevelData vs nwp_cloud_diagnostics on HourlyForecast).
+    # Use _submit_with_context so per-fhour _grib_time(...) calls in the inner
+    # workers see the same _GRIB_TIMER as the outer enrich_forecasts call.
     with _grib_time("gfs_workers"):
         with ThreadPoolExecutor(max_workers=2) as pool:
-            pool.submit(
-                _enrich_clwmr_icmr,
+            _submit_with_context(
+                pool, _enrich_clwmr_icmr,
                 gfs_sections, all_forecasts, route_points,
                 init_date, init_hour, forecast_hours,
                 run_dir, idx_by_fhour, point_lats, point_lons, session,
             )
-            pool.submit(
-                _enrich_cloud_diagnostics,
+            _submit_with_context(
+                pool, _enrich_cloud_diagnostics,
                 gfs_sections, all_forecasts, route_points,
                 init_date, init_hour, forecast_hours,
                 run_dir, idx_by_fhour, point_lats, point_lons, session,
