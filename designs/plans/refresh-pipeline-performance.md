@@ -1,5 +1,31 @@
 # Refresh pipeline performance investigation
 
+## Status (2026-05-01)
+
+- ✅ **Phase A** — instrumentation, ICON cycle/horizon fix, hardware
+  upgrade. All shipped. See [Plan](#plan).
+- 🚧 **Phase B-1** — ECMWF a2/a1 step parallelism. Ready to implement.
+- 🚧 **Phase B-2** — MetPy vectorisation. Ready to implement.
+- ⏸️ **Phase C** — ICON memory streaming. Deferred (memory not a
+  constraint post-upgrade).
+
+**Phase B-1 and B-2 touch disjoint files**
+(`fetch/grib/__init__.py` vs `analysis/sounding/thermodynamics.py`),
+so they're designed for parallel implementation by separate agents
+without merge conflicts. See the [Plan](#plan) section for
+self-contained implementation briefs for each.
+
+## How to brief a fresh agent for Phase B-1 or B-2
+
+> "Read `designs/plans/refresh-pipeline-performance.md`, find
+> Phase B-1 (or B-2), implement and verify against the acceptance
+> criteria there. The Status section at the top tells you where
+> we are. The Plan section has the brief. Don't worry about Phase
+> A — that's done."
+
+Each brief is self-contained: goal, files, approach, expected impact,
+acceptance criteria, risk notes.
+
 ## Why
 
 Briefing refreshes take ~2 minutes (sometimes longer). User wants to be sure
@@ -293,6 +319,66 @@ also scales 4–5×, prod ICON decode would be ~120–150s for 4 fhours
 — meaningful added cost that should inform whether we
 do streaming refactor before or after the cycle/horizon fix.
 
+## Post-upgrade prod observations (2026-05-01 ~20:15 UTC)
+
+Two changes shipped on 2026-05-01 after Phase A's instrumentation
+landed:
+
+1. **ICON cycle/horizon fix** (commit `d53b97cc` direct on main) —
+   `ICON_EU_MAIN_CYCLES = {0, 6, 12, 18}`, `ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = 48`.
+   Verified via prod logs that the picker now selects 12z (real main)
+   instead of 15z (real short) for our test flight, and `(404=N)`
+   warnings disappear.
+
+2. **Droplet upgrade**: DO-Regular Basic 2 vCPU shared / 3.8 GB RAM
+   → **DO-Premium-AMD 4 vCPU dedicated / 7.8 GB RAM**, NVMe SSD,
+   ~$56/mo. Swap pressure went from 1.9 GB used to **0**.
+
+### Post-upgrade refresh numbers (same test flight)
+
+| Metric | Pre-upgrade (Basic 2 vCPU, broken ICON) | Pre-upgrade (Basic 2 vCPU, full ICON) | **Post-upgrade (Premium 4 vCPU, full ICON)** |
+|---|---|---|---|
+| `phase1_parallel` | 150s | 320s | **92s** |
+| `ecmwf_a2_decode` (per step) | 11.2s | 11.2s (contended) | **6.9s** |
+| `gfs_clwmr_decode` | 31.6s | 82s | **16s** |
+| `gfs_total` | 42s | 87s | **20s** |
+| `phase2_icon_decode` | 0 | 118s | **95s** |
+| Total enrichment | 150s | 438s | **187s** |
+| `route_analysis` | not measured | not measured | **~106s** ⟵ surprise! |
+| Total pipeline | "~2 min" (user report) | est. ~7 min | **5:51 (351s)** |
+| Peak RSS (in enrichment) | not measured | 1028 MB | **1027 MB** (unchanged) |
+| Pipeline peak RSS | 1.8–2.2 GB | 1.6 GB | **1.6 GB** |
+
+### Headline takeaways
+
+1. **Hardware upgrade alone gave ~3.5× Phase 1 speedup** (320s → 92s).
+   Two compounding effects: GFS/ECMWF/ICON workers now have dedicated
+   cores instead of competing for 2 shared vCPUs (~2× from contention
+   removal), AND Premium AMD is ~30–40% faster per core than DO-Regular
+   shared (~1.6× clock).
+
+2. **`route_analysis` is 106s on prod** — that's much more than I'd
+   estimated from local (19s × 4–5× scaling = ~95s, close). It's
+   single-threaded and benefits only from clock improvements, so the
+   4-core upgrade barely helped. **MetPy is now the biggest per-stage
+   prod cost outside ECMWF.** Vectorising it (was O-3, now Phase B-2)
+   could roughly halve it.
+
+3. **Memory is not the constraint anywhere** — peak 1027 MB during
+   enrichment, 1.6 GB pipeline-wide, well under the 3 GB Docker cap.
+   ICON memory streaming (was Phase C key concern) is now a
+   nice-to-have, not a correctness/safety requirement.
+
+4. **ECMWF a2 step parallelism** is now safe and high-value with 4
+   dedicated cores (was counter-productive on 2 vCPU contended). On
+   prod this drops `ecmwf_a2_decode` from 76s sequential → ~40s with
+   workers=2.
+
+5. **We accepted a wall-time regression** (~2 min → ~5:51) for ICON
+   correctness. Of those 4 extra minutes, ~3 are inherent (full ICON
+   fhours download + decode), ~1 is recoverable via the Phase B
+   optimisations below.
+
 ## Memory analysis
 
 Prod baseline today (`docker logs weatherbrief --since 24h | grep peak=`):
@@ -318,86 +404,229 @@ Plausible peak attribution:
 
 ## Plan
 
-### Phase A — instrument and observe (zero behaviour change)
+### Phase A — instrument and observe ✅ DONE
 
-Goal: measure prod memory and timing in detail before making any change
-that affects what data flows through the pipeline.
+Shipped via PR #102 (merged 2026-05-01, commits `bd5a841f`, `d73a607d`,
+`cb801732`):
 
-Ship as one PR/deploy:
+- ✅ Sub-stage GRIB timing (`_GribTimer` class, ContextVar-isolated
+  per-call, propagated to ThreadPool workers via `_submit_with_context`)
+- ✅ Memory RSS checkpoints (`enrich_start`, `after_phase1`,
+  `icon_fhour_pre/decoded/post_gc`, `after_phase2`, `enrich_end`)
+- ✅ `_grib_gc()` wrapper around the 5 existing `gc.collect()` calls
+- ✅ Improved 404 logging in `icon_eu_fetch.py` (`_format_failure_summary`,
+  HTTP status codes in aggregate log lines)
+- ✅ `scripts/profile_refresh.py` driver
+- ✅ `weatherbrief/process_rss.py` shared RSS helper
 
-1. ✅ Sub-stage timing (`_grib_time` + `_grib_time_summary`) — already in
-   local tree.
-2. ✅ Improved 404 logging (`_format_failure_summary`) — already in local
-   tree.
-3. ⏳ Add memory checkpoints in `fetch/grib/__init__.py`:
-   - start/end of `enrich_forecasts`
-   - start/end of `_prefetch_icon_eu_data` (per fhour aggregate)
-   - inside `_decode_and_merge_icon_eu` (per fhour, before/after decode)
-   - inside `decode_icon_eu_per_point_chunked` (per variable)
-4. ⏳ **Revert the cycle/horizon constants** in `icon_eu_fetch.py` for
-   this phase. Prod continues to silently 404 on long-range short cycles,
-   but we get visibility before behaviour changes.
+Plus shipped separately on 2026-05-01:
+- ✅ Cycle/horizon fix (`d53b97cc`, direct commit on main)
+- ✅ Hardware upgrade DO-Regular 2 vCPU → DO-Premium-AMD 4 vCPU 8 GB
 
-Deploy. Watch ~24h of prod refreshes. Capture:
-- per-stage timings under prod network conditions (DWD will be faster)
-- exact per-fhour memory delta during ICON decode
-- 404 mix (`404=` vs `network=`) to see what actually fails today
+Two pending nits from the bot review on PR #102 (low priority, pick up
+alongside the next code change):
+- `_stage_label` is dead code in `scripts/profile_refresh.py:43-`. All
+  call sites pass `detail=None`, so the `if detail:` branch is unreachable.
+  Remove the function and inline.
+- `fetch_icon_eu_fields` in `icon_eu_fetch.py` logs at INFO even when
+  all files fail. Other two fetch helpers (`fetch_icon_eu_per_variable`,
+  `fetch_icon_eu_single_level`) were upgraded to WARNING on full failure —
+  apply the same pattern here for consistency.
 
-### Phase B — ECMWF a2 decode parallelism (highest-value prod win)
+---
 
-**Reordered after Phase A prod data**: ECMWF a2 decode is 123s on prod
-(80% of Phase 1) and parallelisable with negligible memory risk. Lands
-ahead of ICON streaming because:
-- Bigger prod win (~–56s on phase 1 wall vs ICON streaming's ~–500 MB peak)
-- Independent of the ICON cycle bug — can ship without touching ICON
-- Memory cost is bounded (workers=2 → ~540 MB peak, well under 3 GB cap
-  even on macOS where Linux glibc reclaim doesn't help us)
-- Existing instrumentation already measures the relevant metrics — we
-  ship this and immediately see the wall-time delta in prod logs
+### Phase B — two parallel optimisation tracks
 
-Concrete changes in `_enrich_ecmwf_inner`:
-1. Replace the `for step_hours, parts in sorted(files_by_step.items())`
-   loop body with `ThreadPoolExecutor(max_workers=2)` submissions of
-   per-step work.
-2. **Decode** in parallel; **merge** (`_replace_pressure_levels_from_grib`,
-   `_apply_ecmwf_surface_to_hourly`, surface step-difference state)
-   stays single-threaded — those mutate shared cross-section state.
-3. Use `_submit_with_context` so per-step `_grib_time(...)` calls land
-   on the parent's timer.
-4. Verify prod numbers: target `phase1_parallel ≤ 80s` (was 150s).
+**Designed for parallel implementation.** B-1 lives entirely in
+`fetch/grib/__init__.py` and `fetch/grib/decode.py`. B-2 lives entirely
+in `analysis/sounding/thermodynamics.py` (and possibly its callers in
+`analysis/sounding/__init__.py`). **Zero file overlap.** Two fresh agents
+can work on these in parallel branches without merge conflicts.
 
-### Phase C — ICON memory streaming + cycle/horizon fix
+Each track is independently shippable. Together they push prod pipeline
+from 5:51 → ~4:20 (about a third of what we lost when ICON started
+working correctly).
 
-After Phase B's prod data confirms the new baseline, attack ICON.
+#### Phase B-1 — ECMWF a2/a1 step parallelism
 
+**Goal**: parallelise `_enrich_ecmwf_inner`'s per-step decode loop so
+multiple ECMWF GRIB files decode concurrently. Currently 11 a2 steps
+× 6.9s + 11 a1 steps × 1.4s = **76 + 15 = 91s sequential**, dominating
+Phase 1 (which is otherwise just GFS at 20s). With workers=2, drops to
+~50s. Phase 1 wall ~92s → ~55s.
+
+**Why now (and not on Basic 2 vCPU)**: Was originally parked because
+adding more decode threads to a 2-core box just increased contention.
+Premium AMD 4 vCPU has dedicated cores: 2 ECMWF + 1 GFS + 1 ICON
+download = 4 threads on 4 cores, no oversubscription.
+
+**Files**:
+- `src/weatherbrief/fetch/grib/__init__.py` — `_enrich_ecmwf_inner`
+  function (around line 410, the `for step_hours, parts in sorted(files_by_step.items())` loop)
+
+**Implementation approach**:
+1. Read the current loop carefully — it does **two distinct things per
+   iteration**:
+   - **Decode**: `decode_ecmwf_pressure_per_point` (a2),
+     `decode_ecmwf_surface_per_point` (a1). Pure-CPU, no shared state.
+   - **Merge**: `_replace_pressure_levels_from_grib`,
+     `_apply_ecmwf_surface_to_hourly`, plus surface step-difference
+     state (`prev_tp_per_point`, `prev_sf_per_point`, `prev_a1_valid_utc`).
+     **Mutates shared cross-section state and depends on previous step's
+     state for tp/sf step-differences.**
+
+2. Parallelise **decode** with `ThreadPoolExecutor(max_workers=2)`,
+   keep **merge** sequential. Pattern: submit decode futures, collect
+   results in step order, then merge in original sorted order so the
+   step-difference state is correctly threaded.
+
+3. Use `_submit_with_context` (already in this file) when submitting
+   to the ThreadPoolExecutor so per-step `_grib_time("ecmwf_a2_decode")`
+   / `_grib_time("ecmwf_a1_decode")` calls land on the parent's timer.
+
+4. Sketch (not literal — adapt to actual code shape):
+   ```python
+   def _decode_step(step_hours, parts):
+       a2 = decode_ecmwf_pressure_per_point(parts["a2"], ...) if "a2" in parts else None
+       a1 = decode_ecmwf_surface_per_point(parts["a1"], ...) if "a1" in parts else None
+       return step_hours, a2, a1
+   
+   with ThreadPoolExecutor(max_workers=2) as pool:
+       futures = [_submit_with_context(pool, _decode_step, sh, p) for sh, p in sorted_steps]
+       decoded = [f.result() for f in futures]
+   
+   for step_hours, a2_data, a1_data in sorted(decoded):
+       # merge sequentially, exactly as current code does
+       ...
+   ```
+
+5. Keep the existing `_grib_time` blocks; they need to be inside
+   `_decode_step` (per-step timing) not outside.
+
+**Acceptance criteria**:
+- All 197 existing GRIB tests pass (`pytest tests/test_grib.py
+  tests/test_grib_fill.py tests/test_ecmwf_sample.py tests/test_ecmwf_sounding.py`)
+- A local `python scripts/profile_refresh.py <flight-id>` run shows:
+  - `ecmwf_a2_decode=…s/11` count unchanged (still 11 steps)
+  - `ecmwf_a2_decode` total roughly halved
+  - `phase1_parallel` measurably reduced
+  - `GRIB RSS:` baseline + peak unchanged (no new memory regression)
+  - No errors / no `Found ECMWF GRIB: no suitable run` regression
+- Step-difference state for tp/sf is still correctly threaded between
+  consecutive a1 steps (verify by spot-checking precipitation values
+  in the briefing for the test flight).
+
+**Memory cost**: ~+270 MB peak (one extra cfgrib decode in flight).
+Total Phase 1 peak still well under 1.5 GB on prod.
+
+**Expected prod impact**: Phase 1 92s → ~55s (–37s).
+
+#### Phase B-2 — vectorise MetPy in thermodynamics
+
+**Goal**: hoist the `metpy.xarray.py:1285` per-call wrapper overhead out
+of the per-(route_point, model) loop in `analyze_sounding`. Currently
+analyses run MetPy functions one waypoint at a time, each call paying
+~8.4s of pure decorator/conversion overhead across the whole pipeline.
+Vectorise inputs into a leading "point" dimension so MetPy operates on
+batched arrays — the documented efficient pattern.
+
+**Why this is "just reorganising calls"**: Same MetPy, same physics
+(CAPE, lifted index, total totals, K index, etc.), same numerical
+results. The change is `for point in points: metpy_func(point.data)`
+→ `metpy_func(stacked_data)`. MetPy is built on numpy + xarray and
+supports batch inputs natively. The per-call wrapper exists to handle
+scalar inputs gracefully — it's pure overhead when we have 50 route
+points × 3 models worth of data we could pass at once.
+
+**Files**:
+- `src/weatherbrief/analysis/sounding/thermodynamics.py` — the
+  `compute_derived_levels_extended` function (around line 319) and
+  `compute_indices_extended` (around line 162). Maybe
+  `compute_indices_core` (around line 69) for symmetry.
+- Possibly `src/weatherbrief/analysis/sounding/__init__.py` — caller
+  shape changes if we lift batching one level up. Aim to keep it local
+  to thermodynamics.py first.
+
+**Where time is spent (from Phase A pyinstrument data, local warm)**:
+```
+17.28  _analyze_sounding_heavy
+├─ 10.99  compute_derived_levels_extended
+│   └─  8.43  metpy/xarray.py:1285  (the @parse_grid_arguments wrapper!)
+├─  4.67  compute_indices_extended
+│   └─  4.33  metpy/xarray.py:1285
+└─  1.56  compute_stability_indicators
+   └─  1.00  metpy/xarray.py:1285
+```
+
+The wrapper overhead is ~70% of the call time. Nearly all of that is
+saveable.
+
+**Implementation approach**:
+1. Read `compute_derived_levels_extended` and `compute_indices_extended`
+   carefully. They're called from `_analyze_sounding_heavy` in
+   `analysis/sounding/__init__.py`.
+2. Identify the inputs (pressure, temperature, dewpoint, wind, etc.)
+   and outputs.
+3. The MetPy functions inside (`mpcalc.k_index`, `mpcalc.total_totals_index`,
+   `mpcalc.surface_based_cape_cin`, etc.) accept arrays — verify by
+   reading MetPy docs / source.
+4. Build the inputs once per (model, time) batch as pint Quantity arrays
+   with shape `(point, level)` and call MetPy once. Return arrays of
+   the same leading shape; index back per-point in the caller.
+5. Where existing per-point inputs differ in length (some points may
+   have fewer pressure levels), stack with NaN padding and let MetPy's
+   own NaN handling apply, or batch only same-shape soundings together.
+
+**Acceptance criteria**:
+- All existing sounding tests pass: `pytest tests/test_clouds.py
+  tests/test_convective.py tests/test_comparison.py
+  tests/test_ecmwf_sounding.py tests/test_grib.py tests/test_grib_fill.py
+  -q`
+- **Numerical equivalence**: write a small ad-hoc comparison test that
+  runs both old + new on the test flight's data and asserts each
+  per-point output matches to within `np.allclose(rtol=1e-6, atol=1e-9)`
+  for every sounding metric. Add this as a temporary tests/ file
+  during development; can be removed before merge once you trust the
+  result.
+- Local profile via `scripts/profile_refresh.py`: `route_analysis`
+  stage drops by ~50% (was 18.85s local; should be ~10s after).
+- No new warnings/errors in the briefing pipeline.
+
+**Risk**: medium. Edge cases to verify:
+- Single-point routes (only one waypoint analysed)
+- Models with fewer pressure levels (some Open-Meteo models give 11
+  levels, others 25 or 28 — see fetch.md table)
+- NaN handling for missing data
+- ECMWF post-fix gets full GRIB sounding replacement (different shape
+  than DD path)
+
+**Expected prod impact**: `route_analysis` 106s → ~55s (–51s).
+
+---
+
+### Phase C — deferred ICON memory streaming
+
+After Phase B-1 + B-2 land. Memory peak is comfortably 1.6 GB on prod
+post-upgrade, so this is no longer a correctness/safety issue — pure
+speed/headroom optimisation. Deferring until we see if a future
+hardware regression or workload change makes it necessary again.
+
+If/when needed:
 1. Refactor `_decode_and_merge_icon_eu` so it loads `var_bytes[var]`
-   from disk **one variable at a time** into the chunked decoder, frees
-   it, moves on. The compressed bytes are already cached on disk — we're
-   just changing the in-memory shape from "load-all-9-variables-then-decode"
-   to "load-one-decode-free-loop".
-2. May need `decode_icon_eu_per_point_chunked` to accept a callable or
-   generator instead of a dict.
-3. Local profile run with cycle fix + streaming. Confirm peak RSS drops
-   from 3.3 GB to ≤1.5 GB on macOS. (Linux will be lower.)
-4. If still too high, also stream per-fhour to ensure decoded points
-   from fhour N are released before fhour N+1 starts loading.
+   from disk one variable at a time into the chunked decoder, frees
+   it, moves on.
+2. Possibly stream per-fhour to ensure decoded points from fhour N
+   are released before fhour N+1 starts loading.
 
-Ship together with:
-- Cycle/horizon fix (`{0, 6, 12, 18}`, `48`)
-- Phase A + B instrumentation still in place to verify prod memory
-  stays under 2 GB peak with full ICON working
+### Combined success criteria after Phase B-1 + B-2
 
-Watch first few refreshes carefully. Rollback path: revert cycle fix
-(line-level revert restores pre-fix behaviour).
-
-### Phase C success criteria
-
-- ICON enrichment fully complete on long-range flights (no `_failed`
-  warnings for fhours within the real horizon).
-- Prod peak RSS stays ≤2 GB on a D+3 European refresh.
-- Pipeline total ≤ ~120s on a D+3 refresh (Phase B should already
-  put us at ~150s; Phase C trades that for full ICON enrichment
-  without further regression).
+- All existing tests pass on each branch independently.
+- Local profile shows `phase1_parallel` lower (B-1) and
+  `route_analysis` lower (B-2), additively.
+- Prod refresh of a long-range European flight under 4:30 total
+  (was 5:51).
+- Memory peak unchanged (no regression).
+- Both branches mergeable to main in either order without conflict.
 
 ## Other optimisation candidates (parking lot)
 
@@ -422,7 +651,14 @@ pole (true on local macOS, false on prod). Prod data showed ECMWF a2
 takes 123s on prod, dominating Phase 1. Promoted out of parking lot,
 see Phase B above.
 
-### O-3. Vectorise MetPy in `compute_derived_levels_extended` (–8 to –12s)
+### O-3. ~~Vectorise MetPy~~ → promoted to Phase B-2
+
+Local data understated the prod impact. After Phase A measured
+`route_analysis = 106s` on prod (vs 19s local), MetPy vectorisation
+became the second-biggest single optimisation available. Promoted to
+parallel implementation track in Phase B above.
+
+### O-3 (original, kept for reference)
 
 `analysis/sounding/thermodynamics.py:319` (and `:162`). 8.43s of self-time
 in `metpy.xarray.py:1285` — that's the `@parse_grid_arguments` decorator
