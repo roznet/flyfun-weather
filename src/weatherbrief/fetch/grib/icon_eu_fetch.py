@@ -24,17 +24,13 @@ logger = logging.getLogger(__name__)
 # DWD Open Data base URL
 DWD_BASE_URL = "https://opendata.dwd.de/weather/nwp/icon-eu/grib"
 
-# ICON-EU model-level horizon depends on the run cycle:
-# - Main runs (00z, 12z): model-level data published up to 120h
-# - Intermediate runs (03/06/09/15/18/21z): only up to 78h
-#
-# NOTE: empirical probing shows this is wrong — DWD actually publishes 4 main
-# runs per day (00/06/12/18) and 4 short runs (03/09/15/21z) with horizon ~48h.
-# The fix is held back until ICON memory streaming lands; see
-# designs/plans/refresh-pipeline-performance.md (Phase B/C).
-ICON_EU_MAIN_CYCLES = {0, 12}
+# ICON-EU model-level horizon depends on the run cycle (verified empirically
+# against opendata.dwd.de):
+# - Main runs (00z, 06z, 12z, 18z): model-level data published up to 120h
+# - Short runs (03z, 09z, 15z, 21z): hourly to ~30h then 6-hourly to 48h
+ICON_EU_MAIN_CYCLES = {0, 6, 12, 18}
 ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN = 120
-ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = 78
+ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = 48
 
 
 def icon_eu_model_level_max_hour(init_hour: int) -> int:
