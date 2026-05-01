@@ -4,15 +4,20 @@
 
 - ✅ **Phase A** — instrumentation, ICON cycle/horizon fix, hardware
   upgrade. All shipped. See [Plan](#plan).
-- 🚧 **Phase B-1** — ECMWF a2/a1 step parallelism. Ready to implement.
-- 🚧 **Phase B-2** — MetPy vectorisation. Ready to implement.
+- ❌ **Phase B-1 (ThreadPool variant)** — abandoned after local profile
+  showed no wall-clock improvement. Root cause turned out to be
+  different than the brief assumed; details in
+  [Phase B-1 — investigation outcome](#phase-b-1--investigation-outcome).
+- 🚧 **Phase B-1' — vectorise ECMWF interp loop** — new direction based
+  on findings. See [brief](#phase-b-1--vectorise-ecmwf-interp-loop-replaces-threadpool-variant).
+- 🚧 **Phase B-2** — MetPy vectorisation. Ready to implement (unchanged).
 - ⏸️ **Phase C** — ICON memory streaming. Deferred (memory not a
   constraint post-upgrade).
 
-**Phase B-1 and B-2 touch disjoint files**
-(`fetch/grib/__init__.py` vs `analysis/sounding/thermodynamics.py`),
-so they're designed for parallel implementation by separate agents
-without merge conflicts. See the [Plan](#plan) section for
+**Phase B-1' and B-2 touch disjoint files**
+(`fetch/grib/decode.py` vs `analysis/sounding/thermodynamics.py`),
+so they remain designed for parallel implementation by separate
+agents without merge conflicts. See the [Plan](#plan) section for
 self-contained implementation briefs for each.
 
 ## How to brief a fresh agent for Phase B-1 or B-2
@@ -447,79 +452,132 @@ Each track is independently shippable. Together they push prod pipeline
 from 5:51 → ~4:20 (about a third of what we lost when ICON started
 working correctly).
 
-#### Phase B-1 — ECMWF a2/a1 step parallelism
+#### Phase B-1 — investigation outcome
 
-**Goal**: parallelise `_enrich_ecmwf_inner`'s per-step decode loop so
-multiple ECMWF GRIB files decode concurrently. Currently 11 a2 steps
-× 6.9s + 11 a1 steps × 1.4s = **76 + 15 = 91s sequential**, dominating
-Phase 1 (which is otherwise just GFS at 20s). With workers=2, drops to
-~50s. Phase 1 wall ~92s → ~55s.
+**TL;DR**: The ThreadPool variant doesn't work. Local profile showed
+no wall-clock improvement; an isolated experiment localised the cause
+to xarray/Python interp, not cfgrib. Branch
+`perf-ecmwf-parallel` was discarded. New direction: vectorise the
+per-point interp loop (Phase B-1' below).
 
-**Why now (and not on Basic 2 vCPU)**: Was originally parked because
-adding more decode threads to a 2-core box just increased contention.
-Premium AMD 4 vCPU has dedicated cores: 2 ECMWF + 1 GFS + 1 ICON
-download = 4 threads on 4 cores, no oversubscription.
+**What we tried**: Implemented the brief literally — wrapped the per-
+step `decode_ecmwf_pressure_per_point` / `decode_ecmwf_surface_per_point`
+calls in `ThreadPoolExecutor(max_workers=2)` via `_submit_with_context`,
+kept merge sequential. All 197 GRIB tests passed. RSS unchanged.
+
+**What we observed** (local, same test flight, warm cache):
+
+| Metric | Sequential baseline | workers=2 |
+|---|---|---|
+| `phase1_parallel` | 32.58s | 32.98s |
+| `ecmwf_total` | 32.57s | 32.98s |
+| `ecmwf_a2_decode` (sum/10) | 27.60s | **56.17s** |
+| `ecmwf_a1_decode` (sum/10) | 4.87s | 9.46s |
+| Peak RSS | 1603 MB | 1600 MB |
+
+Per-step decode time *doubled* under workers=2 — classic GIL/mutex
+contention signature — and wall-clock barely changed.
+
+**Where the lock actually lives** (isolated experiment, 5 a2 files):
+
+| Phase | workers=1 | workers=2 | speedup |
+|---|---|---|---|
+| `cfgrib.open_datasets` only | 2.50s | 0.53s | **4.73×** ✅ |
+| xarray `.sel` + per-point interp (datasets pre-opened) | 7.28s | 7.15s | **1.02×** ❌ |
+| Combined (production path) | 7.45s | 7.49s | 0.99× |
+
+cfgrib metadata-parsing parallelises fine — superlinear, in fact,
+from page-cache warming. The bottleneck is
+`_decode_pressure_vars_from_datasets` in `decode.py:295`: nested
+Python loops doing `xr_var.sel(pressure_coord=p_val)` per level
+followed by `_interpolate_per_point` per route-point, ~50 points × 25
+levels × 7 variables × 10 steps. xarray's `.sel()` returns a Python
+DataArray and the per-point loop holds the GIL through dict
+construction, attribute access, and result accumulation. Two threads
+running this loop concurrently spin the GIL against each other.
+
+**Why the brief's prod estimate was off**: It assumed the cfgrib decode
+was CPU-bound work that would parallelise on dedicated cores. The
+actual hot path is the interp loop, which is GIL-bound regardless of
+how many cores are available. The Phase 1 outer pool (GFS + ECMWF +
+ICON) overlaps successfully because each branch holds different Python
+objects; two ECMWF interp loops don't have that property.
+
+**What would actually work**:
+
+1. **Vectorise the interp loop** (preferred — see Phase B-1' below).
+   Replace per-(point, level) `.sel + interpolate` with a single
+   batched scipy `map_coordinates` call across all 50 points × all
+   levels at once. Releases the GIL once during the C call, and the
+   underlying numpy/scipy work itself is faster. Closer in spirit to
+   Phase B-2's approach to MetPy.
+
+2. **ProcessPoolExecutor** would parallelise the interp loop, but the
+   pickling cost of shipping xarray datasets across processes is
+   high relative to ~2.7s/step of work. Not the right trade-off.
+
+3. **Cython/numba on the interp loop** — overkill for the ~5–10s
+   prod savings available here.
+
+#### Phase B-1' — vectorise ECMWF interp loop (replaces ThreadPool variant)
+
+**Goal**: replace the per-(level, point) Python loop in
+`_decode_pressure_vars_from_datasets` with a single vectorised
+interpolation across all route points and all pressure levels at
+once. Same outputs, less GIL-held Python work.
 
 **Files**:
-- `src/weatherbrief/fetch/grib/__init__.py` — `_enrich_ecmwf_inner`
-  function (around line 410, the `for step_hours, parts in sorted(files_by_step.items())` loop)
+- `src/weatherbrief/fetch/grib/decode.py` — `_decode_pressure_vars_from_datasets`
+  (line 295) and its helper `_interpolate_per_point`. May also touch
+  `decode_ecmwf_pressure_per_point` (line 1161) and
+  `decode_ecmwf_surface_per_point` (line 1403) if their data shape
+  needs adjusting.
 
-**Implementation approach**:
-1. Read the current loop carefully — it does **two distinct things per
-   iteration**:
-   - **Decode**: `decode_ecmwf_pressure_per_point` (a2),
-     `decode_ecmwf_surface_per_point` (a1). Pure-CPU, no shared state.
-   - **Merge**: `_replace_pressure_levels_from_grib`,
-     `_apply_ecmwf_surface_to_hourly`, plus surface step-difference
-     state (`prev_tp_per_point`, `prev_sf_per_point`, `prev_a1_valid_utc`).
-     **Mutates shared cross-section state and depends on previous step's
-     state for tp/sf step-differences.**
-
-2. Parallelise **decode** with `ThreadPoolExecutor(max_workers=2)`,
-   keep **merge** sequential. Pattern: submit decode futures, collect
-   results in step order, then merge in original sorted order so the
-   step-difference state is correctly threaded.
-
-3. Use `_submit_with_context` (already in this file) when submitting
-   to the ThreadPoolExecutor so per-step `_grib_time("ecmwf_a2_decode")`
-   / `_grib_time("ecmwf_a1_decode")` calls land on the parent's timer.
-
-4. Sketch (not literal — adapt to actual code shape):
-   ```python
-   def _decode_step(step_hours, parts):
-       a2 = decode_ecmwf_pressure_per_point(parts["a2"], ...) if "a2" in parts else None
-       a1 = decode_ecmwf_surface_per_point(parts["a1"], ...) if "a1" in parts else None
-       return step_hours, a2, a1
-   
-   with ThreadPoolExecutor(max_workers=2) as pool:
-       futures = [_submit_with_context(pool, _decode_step, sh, p) for sh, p in sorted_steps]
-       decoded = [f.result() for f in futures]
-   
-   for step_hours, a2_data, a1_data in sorted(decoded):
-       # merge sequentially, exactly as current code does
-       ...
-   ```
-
-5. Keep the existing `_grib_time` blocks; they need to be inside
-   `_decode_step` (per-step timing) not outside.
+**Implementation approach** (sketch — adapt to actual code):
+1. For each variable in each dataset, materialise the full
+   `(level, lat, lon)` numpy array once with `xr_var.values`.
+2. Build route-point fractional grid coordinates once
+   (`(lat_idx, lon_idx)` arrays of shape `(n_points,)`).
+3. Call `scipy.ndimage.map_coordinates(values, [lat_idxs, lon_idxs],
+   order=1)` per level, OR stack levels into a `(n_levels, n_points)`
+   call. scipy's C implementation releases the GIL.
+4. Reshape results back into the existing `[{p_hpa: {field: val}}]`
+   per-point structure for backward compatibility, OR refactor
+   downstream consumers to take batched arrays (bigger change, more
+   wins).
 
 **Acceptance criteria**:
-- All 197 existing GRIB tests pass (`pytest tests/test_grib.py
-  tests/test_grib_fill.py tests/test_ecmwf_sample.py tests/test_ecmwf_sounding.py`)
-- A local `python scripts/profile_refresh.py <flight-id>` run shows:
-  - `ecmwf_a2_decode=…s/11` count unchanged (still 11 steps)
-  - `ecmwf_a2_decode` total roughly halved
-  - `phase1_parallel` measurably reduced
-  - `GRIB RSS:` baseline + peak unchanged (no new memory regression)
-  - No errors / no `Found ECMWF GRIB: no suitable run` regression
-- Step-difference state for tp/sf is still correctly threaded between
-  consecutive a1 steps (verify by spot-checking precipitation values
-  in the briefing for the test flight).
+- All 197 GRIB tests pass (`pytest tests/test_grib.py
+  tests/test_grib_fill.py tests/test_ecmwf_sample.py tests/test_ecmwf_sounding.py`).
+- Numerical equivalence: local diff of decoded values vs main on the
+  test flight matches to within `np.allclose(rtol=1e-6)` for all
+  pressure-level fields. (Add a temporary comparison test during dev.)
+- Local profile via `scripts/profile_refresh.py`:
+  - `ecmwf_a2_decode` total **drops measurably** (target: ~halve from
+    ~27s → ~14s on local; on prod ~76s → ~40s).
+  - `phase1_parallel` drops correspondingly.
+  - RSS unchanged.
+- Same approach should be applied to ECMWF a1 (surface) and may also
+  help GFS `_decode_pressure_vars_from_datasets` callers — but ship
+  ECMWF first, then assess whether GFS is worth touching.
 
-**Memory cost**: ~+270 MB peak (one extra cfgrib decode in flight).
-Total Phase 1 peak still well under 1.5 GB on prod.
+**Risk**: medium. Edge cases:
+- Multi-grid ECMWF files (Europe + Nordic sub-grids in the same .grib).
+  Current code handles this via `first_wins=True`; vectorised version
+  must preserve that semantics.
+- Out-of-domain points (NaN handling) — scipy's `map_coordinates` with
+  `mode='constant', cval=np.nan` and a coverage check matches the
+  current per-point None-on-out-of-bounds.
+- Different grid conventions (-180/+180 vs 0–360) — already handled
+  before the interp call; vectorisation shouldn't change that.
 
-**Expected prod impact**: Phase 1 92s → ~55s (–37s).
+**Expected prod impact**: ECMWF decode ~76s → ~40s, Phase 1 ~92s →
+~55s. Same order of magnitude the brief originally targeted, achieved
+via vectorisation rather than threads.
+
+**Out of scope**: ICON and GFS interp loops use the same helper. They
+*could* be vectorised in the same PR, but defer to keep the change
+focused; revisit after measuring impact on ECMWF.
 
 #### Phase B-2 — vectorise MetPy in thermodynamics
 
