@@ -42,8 +42,6 @@ from weatherbrief.pipeline import BriefingOptions, execute_briefing
 
 def _stage_recorder():
     """Return (callback, finalize) — finalize() returns list of (stage, seconds)."""
-    starts: dict[str, float] = {}
-    order: list[str] = []
     last_stage: list[str | None] = [None]
     last_t: list[float] = [time.perf_counter()]
     durations: list[tuple[str, float]] = []
@@ -53,18 +51,14 @@ def _stage_recorder():
         # Record duration of the previous stage
         if last_stage[0] is not None:
             durations.append((_stage_label(last_stage[0], None), now - last_t[0]))
-        # Compose stage label including the model name when present
-        last_stage[0] = stage
         last_t[0] = now
         # For per-model fetch_forecasts notifications, fold detail into label
         if stage == "fetch_forecasts" and detail:
             last_stage[0] = f"fetch_forecasts:{detail}"
         elif stage == "grib_enrichment" and detail:
             last_stage[0] = f"grib_enrichment:{detail}"
-        if stage in starts:
-            return
-        starts[stage] = now
-        order.append(stage)
+        else:
+            last_stage[0] = stage
 
     def finalize(end_t: float) -> list[tuple[str, float]]:
         if last_stage[0] is not None:

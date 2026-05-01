@@ -6,6 +6,7 @@ existing cross-section forecasts from GFS and ICON-EU GRIB2 data.
 
 from __future__ import annotations
 
+import contextvars
 import gc
 import logging
 import threading
@@ -19,10 +20,13 @@ from typing import Callable
 import requests
 from requests.adapters import HTTPAdapter
 
+from weatherbrief.process_rss import current_rss_mb as _read_rss_mb
+
 from weatherbrief.fetch.grib.cache import (
     cache_dir_for_run,
     cache_key,  # route-independent: keyed by (fhour, variable) only
     get_cached,
+    is_cached,
     purge_old_runs,
     put_cached,
 )
@@ -52,139 +56,140 @@ _M_TO_FT = 3.28084
 
 
 # ---------------------------------------------------------------------------
-# Sub-stage timing instrumentation (one-shot, for refresh-pipeline profiling).
-# Single-refresh-at-a-time assumed; multi-refresh would interleave but the
-# numbers still aggregate truthfully, the labels just reflect both runs.
+# Sub-stage timing + memory instrumentation for refresh-pipeline profiling.
+#
+# State lives on a per-call _GribTimer instance, propagated to inner functions
+# (and into Phase-1 ThreadPoolExecutor workers) via a ContextVar. This makes
+# the instrumentation correct under concurrent refreshes — the API runs
+# refresh pipelines in a ``ThreadPoolExecutor(max_workers=2)``, so two
+# enrich_forecasts() can be in flight at once without their counters mixing.
+#
+# Worker threads spawned by Phase-1 ThreadPoolExecutor must run inside the
+# parent's contextvars copy — see _submit_with_context() below.
 # ---------------------------------------------------------------------------
 
-_grib_timing_lock = threading.Lock()
-_grib_timing_data: dict[str, float] = {}
-_grib_timing_counts: dict[str, int] = {}
-_grib_gc_seconds: float = 0.0
-_grib_gc_count: int = 0
+
+class _GribTimer:
+    """Per-enrich_forecasts call: timing, gc, and RSS accumulators."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.timings: dict[str, float] = {}
+        self.timing_counts: dict[str, int] = {}
+        self.gc_seconds: float = 0.0
+        self.gc_count: int = 0
+        self.rss_baseline: float | None = _read_rss_mb()
+        self.rss_max: dict[str, float] = {}
+        self.rss_count: dict[str, int] = {}
+
+    def _record_time(self, label: str, secs: float) -> None:
+        with self._lock:
+            self.timings[label] = self.timings.get(label, 0.0) + secs
+            self.timing_counts[label] = self.timing_counts.get(label, 0) + 1
+
+    @contextmanager
+    def time(self, label: str):
+        t0 = _time_mod.perf_counter()
+        try:
+            yield
+        finally:
+            self._record_time(label, _time_mod.perf_counter() - t0)
+
+    def gc(self) -> None:
+        """gc.collect() with cumulative timing accounting."""
+        t0 = _time_mod.perf_counter()
+        gc.collect()
+        elapsed = _time_mod.perf_counter() - t0
+        with self._lock:
+            self.gc_seconds += elapsed
+            self.gc_count += 1
+
+    def rss_mark(self, label: str) -> None:
+        """Record current RSS under *label*. Keeps max-per-label across calls."""
+        rss = _read_rss_mb()
+        if rss is None:
+            return
+        with self._lock:
+            prior = self.rss_max.get(label)
+            self.rss_max[label] = rss if prior is None else max(prior, rss)
+            self.rss_count[label] = self.rss_count.get(label, 0) + 1
+
+    def log_summary(self) -> None:
+        # Snapshot under lock, format outside — avoids holding the lock through
+        # logger formatting and matches the locking discipline used for writes.
+        with self._lock:
+            timings = dict(self.timings)
+            counts = dict(self.timing_counts)
+            gc_secs = self.gc_seconds
+            gc_n = self.gc_count
+            rss_max = dict(self.rss_max)
+            rss_count = dict(self.rss_count)
+            baseline = self.rss_baseline
+
+        if timings:
+            items = sorted(timings.items(), key=lambda kv: -kv[1])
+            parts = [f"{label}={secs:.2f}s/{counts.get(label, 0)}" for label, secs in items]
+            parts.append(f"gc={gc_secs:.2f}s/{gc_n}")
+            logger.info("GRIB timing: %s", " ".join(parts))
+
+        if rss_max:
+            items = sorted(rss_max.items(), key=lambda kv: -kv[1])
+            parts = []
+            if baseline is not None:
+                parts.append(f"baseline={int(baseline)}MB")
+            for label, rss in items:
+                n = rss_count.get(label, 0)
+                if baseline is not None:
+                    parts.append(f"{label}={int(rss)}MB(+{int(rss - baseline)}/{n})")
+                else:
+                    parts.append(f"{label}={int(rss)}MB/{n}")
+            logger.info("GRIB RSS: %s", " ".join(parts))
 
 
-def _grib_time_reset() -> None:
-    global _grib_gc_seconds, _grib_gc_count
-    with _grib_timing_lock:
-        _grib_timing_data.clear()
-        _grib_timing_counts.clear()
-        _grib_gc_seconds = 0.0
-        _grib_gc_count = 0
+_GRIB_TIMER: contextvars.ContextVar[_GribTimer | None] = contextvars.ContextVar(
+    "_grib_timer", default=None,
+)
 
 
-def _grib_time_record(label: str, secs: float) -> None:
-    with _grib_timing_lock:
-        _grib_timing_data[label] = _grib_timing_data.get(label, 0.0) + secs
-        _grib_timing_counts[label] = _grib_timing_counts.get(label, 0) + 1
+def _timer() -> _GribTimer | None:
+    return _GRIB_TIMER.get()
 
 
 @contextmanager
 def _grib_time(label: str):
-    t0 = _time_mod.perf_counter()
-    try:
+    """Time a block under the active per-call timer; no-op if none is active."""
+    t = _timer()
+    if t is None:
         yield
-    finally:
-        _grib_time_record(label, _time_mod.perf_counter() - t0)
+        return
+    with t.time(label):
+        yield
 
 
 def _grib_gc() -> None:
-    """gc.collect() with cumulative timing accounting."""
-    global _grib_gc_seconds, _grib_gc_count
-    t0 = _time_mod.perf_counter()
-    gc.collect()
-    elapsed = _time_mod.perf_counter() - t0
-    with _grib_timing_lock:
-        _grib_gc_seconds += elapsed
-        _grib_gc_count += 1
-
-
-def _grib_time_summary() -> None:
-    if not _grib_timing_data:
+    """gc.collect() with cumulative timing accounting (or plain gc.collect if no timer)."""
+    t = _timer()
+    if t is None:
+        gc.collect()
         return
-    items = sorted(_grib_timing_data.items(), key=lambda kv: -kv[1])
-    parts = []
-    for label, secs in items:
-        n = _grib_timing_counts.get(label, 0)
-        parts.append(f"{label}={secs:.2f}s/{n}")
-    parts.append(f"gc={_grib_gc_seconds:.2f}s/{_grib_gc_count}")
-    logger.info("GRIB timing: %s", " ".join(parts))
-
-
-# ---------------------------------------------------------------------------
-# Memory checkpoints — bounded number of INFO logs per refresh, used to
-# locate the peak inside ICON-EU enrichment without raising verbosity.
-# Tracks RSS samples per label (max + count) and a baseline at reset.
-# ---------------------------------------------------------------------------
-
-_grib_rss_lock = threading.Lock()
-_grib_rss_baseline: float | None = None
-_grib_rss_max: dict[str, float] = {}
-_grib_rss_count: dict[str, int] = {}
-
-
-def _read_rss_mb() -> float | None:
-    """Return current process RSS in MB, or None if unavailable.
-
-    Linux: reads /proc/self/status (cheap). macOS: shells out to ps.
-    Mirrors weatherbrief.pipeline._current_rss_mb (kept local to avoid a
-    circular import — pipeline already imports from this module's tree).
-    """
-    import os
-    import subprocess
-    import sys
-
-    try:
-        with open("/proc/self/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) / 1024
-    except OSError:
-        pass
-    if sys.platform == "darwin":
-        try:
-            out = subprocess.check_output(
-                ["ps", "-o", "rss=", "-p", str(os.getpid())], timeout=1,
-            )
-            return int(out.strip()) / 1024
-        except Exception:
-            return None
-    return None
-
-
-def _grib_rss_reset() -> None:
-    global _grib_rss_baseline
-    with _grib_rss_lock:
-        _grib_rss_baseline = _read_rss_mb()
-        _grib_rss_max.clear()
-        _grib_rss_count.clear()
+    t.gc()
 
 
 def _grib_rss_mark(label: str) -> None:
-    """Record current RSS under *label*. Keeps max-per-label across calls."""
-    rss = _read_rss_mb()
-    if rss is None:
-        return
-    with _grib_rss_lock:
-        prior = _grib_rss_max.get(label)
-        _grib_rss_max[label] = rss if prior is None else max(prior, rss)
-        _grib_rss_count[label] = _grib_rss_count.get(label, 0) + 1
+    t = _timer()
+    if t is not None:
+        t.rss_mark(label)
 
 
-def _grib_rss_summary() -> None:
-    if not _grib_rss_max:
-        return
-    baseline = _grib_rss_baseline
-    items = sorted(_grib_rss_max.items(), key=lambda kv: -kv[1])
-    parts = []
-    for label, rss in items:
-        n = _grib_rss_count.get(label, 0)
-        if baseline is not None:
-            parts.append(f"{label}={int(rss)}MB(+{int(rss - baseline)}/{n})")
-        else:
-            parts.append(f"{label}={int(rss)}MB/{n}")
-    base_str = f" baseline={int(baseline)}MB" if baseline is not None else ""
-    logger.info("GRIB RSS:%s %s", base_str, " ".join(parts))
+def _submit_with_context(pool: ThreadPoolExecutor, fn, /, *args, **kwargs):
+    """Submit *fn* to *pool* with the caller's ContextVars copied in.
+
+    ThreadPoolExecutor.submit doesn't propagate contextvars by default;
+    without this, worker threads see _GRIB_TIMER as the default None and
+    timing/RSS calls become silent no-ops.
+    """
+    ctx = contextvars.copy_context()
+    return pool.submit(ctx.run, fn, *args, **kwargs)
 
 
 def _grib_session() -> requests.Session:
@@ -269,9 +274,38 @@ def enrich_forecasts(
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
 
-    _grib_time_reset()
-    _grib_rss_reset()
-    _grib_rss_mark("enrich_start")
+    timer = _GribTimer()
+    token = _GRIB_TIMER.set(timer)
+    try:
+        return _enrich_forecasts_inner(
+            timer, cross_sections, all_forecasts, route_points,
+            departure_time, data_dir=data_dir,
+            flight_duration_hours=flight_duration_hours,
+            progress_callback=progress_callback,
+            as_of_time=as_of_time,
+        )
+    finally:
+        timer.log_summary()
+        _GRIB_TIMER.reset(token)
+
+
+def _enrich_forecasts_inner(
+    timer: _GribTimer,
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    *,
+    data_dir: Path,
+    flight_duration_hours: float = 0.0,
+    progress_callback: Callable[[str, str | None], None] | None = None,
+    as_of_time: datetime | None = None,
+) -> tuple[dict[str, int], dict[str, str]]:
+    """Inner body of enrich_forecasts; assumes _GRIB_TIMER is set to *timer*."""
+    grib_init_times: dict[str, int] = {}
+    grib_skip_reasons: dict[str, str] = {}
+
+    timer.rss_mark("enrich_start")
 
     # Download GFS and ICON-EU in parallel (network-bound), but decode
     # sequentially (memory-bound). ICON-EU decode peaks at ~270MB per
@@ -295,25 +329,28 @@ def enrich_forecasts(
 
     # Phase 1: Download/decode in parallel — GFS (download+decode),
     # ICON-EU (download-only), ECMWF GRIB (local disk decode).
+    # Workers must run inside the parent's contextvars copy so timing/RSS
+    # marks land on this call's timer, not on whichever refresh happens to
+    # be running in the sibling pipeline thread.
     with _grib_time("phase1_parallel"):
         with ThreadPoolExecutor(max_workers=3) as pool:
-            gfs_future = pool.submit(
-                _enrich_gfs,
+            gfs_future = _submit_with_context(
+                pool, _enrich_gfs,
                 cross_sections, all_forecasts, route_points,
                 departure_time, data_dir=data_dir,
                 flight_duration_hours=flight_duration_hours,
                 as_of_time=as_of_time,
             )
-            ecmwf_future = pool.submit(
-                _enrich_ecmwf,
+            ecmwf_future = _submit_with_context(
+                pool, _enrich_ecmwf,
                 cross_sections, all_forecasts, route_points,
                 departure_time,
                 flight_duration_hours=flight_duration_hours,
                 as_of_time=as_of_time,
             )
             if icon_ctx is not None:
-                icon_dl_future = pool.submit(
-                    _prefetch_icon_eu_data, icon_ctx,
+                icon_dl_future = _submit_with_context(
+                    pool, _prefetch_icon_eu_data, icon_ctx,
                 )
             else:
                 icon_dl_future = None
@@ -322,7 +359,7 @@ def enrich_forecasts(
             ecmwf_grib_ts = ecmwf_future.result()
             if icon_dl_future is not None:
                 icon_dl_future.result()  # ensure downloads are cached
-    _grib_rss_mark("after_phase1")
+    timer.rss_mark("after_phase1")
 
     if ecmwf_grib_ts is not None:
         grib_init_times["ecmwf"] = ecmwf_grib_ts
@@ -335,7 +372,7 @@ def enrich_forecasts(
             )
         else:
             icon_skip = icon_ctx  # None
-    _grib_rss_mark("after_phase2")
+    timer.rss_mark("after_phase2")
 
     if gfs_ts is not None:
         grib_init_times["gfs"] = gfs_ts
@@ -349,10 +386,7 @@ def enrich_forecasts(
         from weatherbrief.fetch.grib.fill import propagate_all
         propagate_all(cross_sections, all_forecasts)
 
-    _grib_rss_mark("enrich_end")
-    _grib_time_summary()
-    _grib_rss_summary()
-
+    timer.rss_mark("enrich_end")
     return grib_init_times, grib_skip_reasons
 
 
@@ -1189,12 +1223,12 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     for fhour in ctx.forecast_hours:
         # Model-level data (P, QC, QI) — per variable
         legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
-        if get_cached(ctx.run_dir, legacy_ck) is not None:
+        if is_cached(ctx.run_dir, legacy_ck):
             continue  # legacy cache hit, skip per-var download
 
         for var in ICON_EU_VARIABLES:
             ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
-            if get_cached(ctx.run_dir, ck) is not None:
+            if is_cached(ctx.run_dir, ck):
                 continue
             try:
                 with _grib_time("icon_prefetch_var"):
@@ -1212,7 +1246,7 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
 
         # Single-level cloud diagnostics
         diag_ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
-        if get_cached(ctx.run_dir, diag_ck) is None:
+        if not is_cached(ctx.run_dir, diag_ck):
             try:
                 with _grib_time("icon_prefetch_cloud_diag"):
                     fetched = fetch_icon_eu_single_level(

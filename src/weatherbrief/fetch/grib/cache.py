@@ -58,6 +58,29 @@ def cache_key(
     return f"f{forecast_hour:03d}_{variable}.grib2"
 
 
+def is_cached(
+    run_dir: Path,
+    filename: str,
+) -> bool:
+    """Check whether a cache entry exists and is not expired, without reading it.
+
+    Use this for cache-hit short-circuits where the caller will skip work
+    rather than consume the bytes — e.g. ``_prefetch_icon_eu_data`` skipping
+    already-downloaded variables. Calling :func:`get_cached` for the same
+    purpose pulls the entire file into memory just to check ``is not None``,
+    which inflates RSS on warm-cache refreshes.
+    """
+    path = run_dir / filename
+    if not path.exists():
+        return False
+    age = time.time() - path.stat().st_mtime
+    if age > CACHE_TTL_SECONDS:
+        logger.debug("Cache expired: %s (%.0fh old)", path, age / 3600)
+        path.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def get_cached(
     run_dir: Path,
     filename: str,

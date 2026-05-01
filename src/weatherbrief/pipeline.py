@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import gc
 import logging
-import os
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -38,27 +36,7 @@ from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
 logger = logging.getLogger(__name__)
 
 
-def _current_rss_mb() -> float | None:
-    """Return current RSS in MB, or None if unavailable.
-
-    Linux: reads /proc/self/status (cheap, accurate). macOS: shells out to ps.
-    """
-    try:
-        with open("/proc/self/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) / 1024
-    except OSError:
-        pass
-    if sys.platform == "darwin":
-        try:
-            out = subprocess.check_output(
-                ["ps", "-o", "rss=", "-p", str(os.getpid())], timeout=1
-            )
-            return int(out.strip()) / 1024
-        except Exception:
-            return None
-    return None
+from weatherbrief.process_rss import current_rss_mb as _current_rss_mb
 
 
 def _peak_rss_mb() -> float | None:
