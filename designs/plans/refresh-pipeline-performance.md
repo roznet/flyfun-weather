@@ -201,6 +201,98 @@ gc.collect between variables (matching the decode loop pattern), or
 (c) avoid the bytearray buffer growth by writing each level's
 decompressed bytes to disk as it arrives rather than accumulating.
 
+## Prod observations (post Phase A deploy, 2026-05-01)
+
+Phase A landed on prod and we triggered one user refresh to capture the new
+log lines. The data substantially shifts our model of where prod time is
+spent.
+
+**Test refresh**: D+3 European flight (LSGS→…→EGTF, FL160). Phase 1
+picked ICON-EU `20260501 15z` — a short cycle the buggy code thinks goes
+to 78h but really only goes to 48h. fhours 64+ all 404'd (the
+`(404=40)` annotation made this immediately visible in prod logs).
+
+### Prod vs local timing (warm cache, paid Open-Meteo, full enrichment)
+
+| Stage | Local (Mac) | Prod (DO 2 vCPU) | Ratio |
+|---|---|---|---|
+| `phase1_parallel` | 32s | **150.5s** | 4.7× |
+| `ecmwf_total` | 32s | **150.5s** | 4.7× |
+| `ecmwf_a2_decode` | 27.30s / 10 | 123.15s / 11 (≈11.2s/step) | 4.1× |
+| `ecmwf_a1_decode` | 4.78s / 10 | 25.17s / 11 | 4.7× |
+| `gfs_total` | 8s | 42.22s | 5.3× |
+| `gfs_clwmr_decode` | 5.42s / 4 | 31.64s / 5 | 5.0× |
+| `gfs_cloud_diag_decode` | 3.66s / 4 | 24.58s / 5 | 5.5× |
+| `icon_prefetch_var` (failed-fast) | 4.65s / 36 | 8.68s / 45 | 1.9× |
+| `ecmwf_scan` | 0.02s | 1.88s | 90× |
+
+ECMWF a2 + GFS decode are CPU-bound (cfgrib + xarray + numpy interp).
+Prod's 2 vCPUs vs the local 8+ cores explains the ~4–5× slowdown
+cleanly. Network-bound stages (icon_prefetch_var even on failure) scale
+much less. The `ecmwf_scan` outlier is because prod has many delivery
+files in `/data/ecmwf` from days of ECPDS pushes; small absolute cost.
+
+### Prod vs local memory (same refresh)
+
+| Checkpoint | Local (Mac) | Prod (Linux) |
+|---|---|---|
+| baseline | 510 MB | 630 MB |
+| `after_phase1` | +1100 MB | **+336 MB** |
+| `icon_fhour_decoded` peak | +1145 MB | +336 MB (unchanged — see below) |
+| Total enrichment peak | 1656 MB | **966 MB** |
+
+Prod's much smaller `after_phase1` delta reflects two things:
+1. Linux glibc malloc returns arena pages more aggressively than
+   macOS — confirmed empirically.
+2. ICON downloads failed on prod (15z short-cycle), so `_decode_fhour`
+   returned None for every fhour and the `icon_fhour_decoded` mark
+   never measured an actual decode peak.
+
+The macOS-vs-Linux delta on identical workload (fully successful
+ICON) we don't have yet. Best estimate: prod with full ICON working
+would peak at **~1.5–2.2 GB**, well under the 3 GB Docker cap.
+But this is an **estimate**, not a measurement — see "Should we
+trigger a deliberate ICON-decode test?" below.
+
+### Implications for Phase B priorities
+
+Phase A's design doc assumed **ICON download was the long pole** (because
+that's what dominated my local profile when 12z published mid-test).
+On prod, with ICON failing 404, **ECMWF a2 decode is the long pole at
+123s — 80% of Phase 1**. Even fixing ICON's cycle bug won't change
+that until ECMWF a2 is parallelised:
+
+- Today on prod: 11 ECMWF a2 steps × ~11.2s, sequential = 123s wall
+- With workers=2 inside `_enrich_ecmwf_inner`: ~67s wall (–56s)
+- Phase 1 wall would drop from 150s → ~70s
+- Memory cost: each cfgrib decode peaks ~270 MB, so workers=2 → ~540 MB
+  peak. Even on local-Mac scale that's safe; on prod with allocator
+  reclaim it's even safer.
+
+**ECMWF a2 parallelism is now the highest-value Phase B target.** Bigger
+prod win than ICON streaming, no memory risk under 2 GB, and unrelated
+to the ICON cycle bug — can ship independently.
+
+### Should we trigger a deliberate ICON-decode test on prod?
+
+Currently the prod `icon_fhour_decoded` checkpoint is uninformative
+because ICON downloads fail (cycle bug + 15z short cycle) and the
+decode loop becomes a no-op. We don't have prod numbers for ICON
+decode time or memory peak.
+
+We could collect them without any code change by **triggering a
+refresh on a flight ≤48h out** while a short cycle is the most
+recent. The current 15z covers f000–f048 — a flight 24h out
+gets f024 successfully, ICON downloads + decodes on prod hardware,
+we measure. No deploy required, no behavioural change.
+
+This is a cheap experiment we should do before designing
+Phase B/C: it gives us the ICON decode time scaling factor on prod,
+which we currently only have for ECMWF/GFS (~4–5×). If ICON decode
+also scales 4–5×, prod ICON decode would be ~120–150s for 4 fhours
+— meaningful added cost that should inform whether we
+do streaming refactor before or after the cycle/horizon fix.
+
 ## Memory analysis
 
 Prod baseline today (`docker logs weatherbrief --since 24h | grep peak=`):
@@ -251,9 +343,32 @@ Deploy. Watch ~24h of prod refreshes. Capture:
 - exact per-fhour memory delta during ICON decode
 - 404 mix (`404=` vs `network=`) to see what actually fails today
 
-### Phase B — design + verify Step 2(b) locally
+### Phase B — ECMWF a2 decode parallelism (highest-value prod win)
 
-Once Phase A data is in:
+**Reordered after Phase A prod data**: ECMWF a2 decode is 123s on prod
+(80% of Phase 1) and parallelisable with negligible memory risk. Lands
+ahead of ICON streaming because:
+- Bigger prod win (~–56s on phase 1 wall vs ICON streaming's ~–500 MB peak)
+- Independent of the ICON cycle bug — can ship without touching ICON
+- Memory cost is bounded (workers=2 → ~540 MB peak, well under 3 GB cap
+  even on macOS where Linux glibc reclaim doesn't help us)
+- Existing instrumentation already measures the relevant metrics — we
+  ship this and immediately see the wall-time delta in prod logs
+
+Concrete changes in `_enrich_ecmwf_inner`:
+1. Replace the `for step_hours, parts in sorted(files_by_step.items())`
+   loop body with `ThreadPoolExecutor(max_workers=2)` submissions of
+   per-step work.
+2. **Decode** in parallel; **merge** (`_replace_pressure_levels_from_grib`,
+   `_apply_ecmwf_surface_to_hourly`, surface step-difference state)
+   stays single-threaded — those mutate shared cross-section state.
+3. Use `_submit_with_context` so per-step `_grib_time(...)` calls land
+   on the parent's timer.
+4. Verify prod numbers: target `phase1_parallel ≤ 80s` (was 150s).
+
+### Phase C — ICON memory streaming + cycle/horizon fix
+
+After Phase B's prod data confirms the new baseline, attack ICON.
 
 1. Refactor `_decode_and_merge_icon_eu` so it loads `var_bytes[var]`
    from disk **one variable at a time** into the chunked decoder, frees
@@ -267,24 +382,22 @@ Once Phase A data is in:
 4. If still too high, also stream per-fhour to ensure decoded points
    from fhour N are released before fhour N+1 starts loading.
 
-### Phase C — combined deploy
-
-Ship together:
+Ship together with:
 - Cycle/horizon fix (`{0, 6, 12, 18}`, `48`)
-- Step 2(b) memory streaming refactor
-- Phase A instrumentation still in place to verify prod memory stays
-  under 2 GB peak with full ICON working
+- Phase A + B instrumentation still in place to verify prod memory
+  stays under 2 GB peak with full ICON working
 
 Watch first few refreshes carefully. Rollback path: revert cycle fix
-(line-level revert restores Phase A behaviour).
+(line-level revert restores pre-fix behaviour).
 
-### Step 2(b) success criteria
+### Phase C success criteria
 
 - ICON enrichment fully complete on long-range flights (no `_failed`
   warnings for fhours within the real horizon).
 - Prod peak RSS stays ≤2 GB on a D+3 European refresh.
-- Pipeline total ≤ ~150s on a D+3 refresh (we accept the ICON cost
-  is real and unavoidable; targeting under that with later phases).
+- Pipeline total ≤ ~120s on a D+3 refresh (Phase B should already
+  put us at ~150s; Phase C trades that for full ICON enrichment
+  without further regression).
 
 ## Other optimisation candidates (parking lot)
 
@@ -302,15 +415,12 @@ once 2(b) lands.
 
 Risk: DWD rate limiting. Test with 16 workers first.
 
-### O-2. Parallelise ECMWF a2 decode steps (–15s, after ICON optimised)
+### O-2. ~~Parallelise ECMWF a2 decode steps~~ → promoted to Phase B
 
-`_enrich_ecmwf_inner` decodes 10 steps sequentially (~3s each).
-ThreadPoolExecutor with workers=2 would halve that. Worth nothing right
-now because ICON download (~110s) is the long pole; ECMWF (~35s) hides
-inside that overlap. Becomes worthwhile once ICON drops below ~30s.
-
-Memory: each cfgrib decode peaks ~270 MB → workers=2 means ~540 MB peak.
-OK with current 3 GB cap. workers=4 would breach.
+Was parked here under the assumption that ICON download was the long
+pole (true on local macOS, false on prod). Prod data showed ECMWF a2
+takes 123s on prod, dominating Phase 1. Promoted out of parking lot,
+see Phase B above.
 
 ### O-3. Vectorise MetPy in `compute_derived_levels_extended` (–8 to –12s)
 
