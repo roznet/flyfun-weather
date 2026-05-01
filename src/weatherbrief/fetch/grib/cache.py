@@ -69,6 +69,9 @@ def is_cached(
     already-downloaded variables. Calling :func:`get_cached` for the same
     purpose pulls the entire file into memory just to check ``is not None``,
     which inflates RSS on warm-cache refreshes.
+
+    Side effect: if the file is past TTL, it is unlinked here, matching
+    :func:`get_cached` semantics. Returns ``False`` in that case.
     """
     path = run_dir / filename
     if not path.exists():

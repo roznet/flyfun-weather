@@ -169,6 +169,7 @@ def main() -> int:
     profiler = Profiler(interval=0.01, async_mode="disabled")
     profiler.start()
     t0 = time.perf_counter()
+    result = None
     try:
         result = execute_briefing(
             route=route,
@@ -179,40 +180,42 @@ def main() -> int:
     finally:
         t_end = time.perf_counter()
         profiler.stop()
+        # Always emit the profile artifacts and timing table — they're most
+        # useful exactly when execute_briefing raises.
+        durations = finalize(t_end)
+        total = t_end - t0
 
-    durations = finalize(t_end)
-    total = t_end - t0
+        print()
+        print("=" * 70)
+        print(f"TOTAL elapsed: {total:.2f}s")
+        print("=" * 70)
+        print(f"{'stage':<40} {'seconds':>10} {'pct':>6}")
+        print("-" * 70)
+        # Sum durations by full label; per-model entries (fetch_forecasts:gfs,
+        # fetch_forecasts:ecmwf, ...) appear as separate rows by design.
+        agg: dict[str, float] = {}
+        order: list[str] = []
+        for stage, secs in durations:
+            if stage not in agg:
+                order.append(stage)
+                agg[stage] = 0.0
+            agg[stage] += secs
+        for stage in order:
+            secs = agg[stage]
+            pct = 100.0 * secs / total if total > 0 else 0.0
+            print(f"{stage:<40} {secs:>10.2f} {pct:>5.1f}%")
+        print("-" * 70)
 
-    print()
-    print("=" * 70)
-    print(f"TOTAL elapsed: {total:.2f}s")
-    print("=" * 70)
-    print(f"{'stage':<40} {'seconds':>10} {'pct':>6}")
-    print("-" * 70)
-    # Aggregate by base stage label so multiple fetch_forecasts:* lines stack
-    agg: dict[str, float] = {}
-    order: list[str] = []
-    for stage, secs in durations:
-        if stage not in agg:
-            order.append(stage)
-            agg[stage] = 0.0
-        agg[stage] += secs
-    for stage in order:
-        secs = agg[stage]
-        pct = 100.0 * secs / total
-        print(f"{stage:<40} {secs:>10.2f} {pct:>5.1f}%")
-    print("-" * 70)
-
-    # pyinstrument output
-    profiles_dir = ROOT / "profiles"
-    profiles_dir.mkdir(exist_ok=True)
-    html_path = profiles_dir / f"{args.flight_id}_{safe_ts}.html"
-    html_path.write_text(profiler.output_html())
-    txt_path = profiles_dir / f"{args.flight_id}_{safe_ts}.txt"
-    txt_path.write_text(profiler.output_text(unicode=True, color=False, show_all=False))
-    print(f"\npyinstrument html: {html_path}")
-    print(f"pyinstrument txt:  {txt_path}")
-    print(f"open: file://{html_path}")
+        # pyinstrument output
+        profiles_dir = ROOT / "profiles"
+        profiles_dir.mkdir(exist_ok=True)
+        html_path = profiles_dir / f"{args.flight_id}_{safe_ts}.html"
+        html_path.write_text(profiler.output_html())
+        txt_path = profiles_dir / f"{args.flight_id}_{safe_ts}.txt"
+        txt_path.write_text(profiler.output_text(unicode=True, color=False, show_all=False))
+        print(f"\npyinstrument html: {html_path}")
+        print(f"pyinstrument txt:  {txt_path}")
+        print(f"open: file://{html_path}")
 
     print(f"\nbriefing errors: {result.errors}")
     print(f"models_fetched: {result.models_fetched}")
