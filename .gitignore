@@ -11,6 +11,9 @@ venv/
 # Runtime data (snapshots)
 /data
 
+# Local profiling artifacts (scripts/profile_refresh.py output)
+/profiles
+
 .DS_Store
 .env
 .env.triage
