@@ -1,6 +1,6 @@
 # Refresh pipeline performance investigation
 
-## Status (2026-05-01)
+## Status (2026-05-02)
 
 - ✅ **Phase A** — instrumentation, ICON cycle/horizon fix, hardware
   upgrade. All shipped. See [Plan](#plan).
@@ -10,23 +10,34 @@
   [Phase B-1 — investigation outcome](#phase-b-1--investigation-outcome).
 - 🚧 **Phase B-1' — vectorise ECMWF interp loop** — new direction based
   on findings. See [brief](#phase-b-1--vectorise-ecmwf-interp-loop-replaces-threadpool-variant).
-- 🚧 **Phase B-2** — MetPy vectorisation. Ready to implement (unchanged).
+- ✅ **Phase B-2** — MetPy vectorisation. Deployed 2026-05-02 (PR #103,
+  commits a1eacab4 + 3afde9b9). First post-deploy refresh of the
+  canonical test flight: `analyze` 51.81s → 35.37s (–31.7%) under
+  concurrent-refresh contention. See [GIL evidence](#gil-bound-decode--prod-evidence-2026-05-02).
+- 🚧 **Phase B-3 — out-of-process GRIB decode pool** — new initiative.
+  Today's prod data showed concurrent decodes still inflate per-step
+  ECMWF a2 by 3–6× even after Phase B-2, with the droplet 67% idle —
+  GIL contention. Vectorisation (B-1') reduces but doesn't eliminate
+  this; B-3 attacks the structural cause. See
+  [brief](#phase-b-3--out-of-process-grib-decode-pool).
 - ⏸️ **Phase C** — ICON memory streaming. Deferred (memory not a
   constraint post-upgrade).
 
-**Phase B-1' and B-2 touch disjoint files**
-(`fetch/grib/decode.py` vs `analysis/sounding/thermodynamics.py`),
-so they remain designed for parallel implementation by separate
-agents without merge conflicts. See the [Plan](#plan) section for
-self-contained implementation briefs for each.
+**Phase B-1' and B-3 share a file** (`fetch/grib/decode.py`) but at
+different layers: B-1' rewrites the inner `_decode_pressure_vars_from_datasets`
+loop, B-3 wraps the outer `decode_ecmwf_*_per_point` entry points
+with a process-pool dispatcher. They're designed to compose, but
+schedule **B-1' to land first** — a faster per-step decode means
+the pickle/IPC cost ratio of B-3 stays favourable. Merge order:
+B-1' → B-3.
 
-## How to brief a fresh agent for Phase B-1 or B-2
+## How to brief a fresh agent for Phase B-1', B-2, or B-3
 
 > "Read `designs/plans/refresh-pipeline-performance.md`, find
-> Phase B-1 (or B-2), implement and verify against the acceptance
+> the Phase you're implementing, and verify against the acceptance
 > criteria there. The Status section at the top tells you where
 > we are. The Plan section has the brief. Don't worry about Phase
-> A — that's done."
+> A or B-2 — those are done."
 
 Each brief is self-contained: goal, files, approach, expected impact,
 acceptance criteria, risk notes.
@@ -659,6 +670,236 @@ saveable.
   than DD path)
 
 **Expected prod impact**: `route_analysis` 106s → ~55s (–51s).
+
+---
+
+#### Phase B-3 — out-of-process GRIB decode pool
+
+**Goal**: move GRIB decode (cfgrib + xarray + numpy interp) out of the
+main uvicorn process so that the **standalone forecast cycle and a user
+auto-refresh can decode concurrently without sharing a GIL**. Each decode
+runs in a worker process; the uvicorn process orchestrates and consumes
+results.
+
+##### Why now (evidence as of 2026-05-02)
+
+Today's 7Z auto-refresh window had three flights queued behind the
+forecast cycle's ECMWF GRIB phase. Per-step `ecmwf_a2_decode` blew up to
+21–43s vs the clean baseline of 6.9s/step (3–6× slowdown). The
+`droplet-metrics` skill (`~/.claude/skills/droplet-metrics/`) pulled
+the corresponding window:
+
+```
+CPU %:    peak= 45.6%  avg= 32.2%      ← ~2.7 of 4 cores idle
+Load 1m:  peak=2.56  avg=1.37          ← well below saturation (4)
+Memory:   peak_used= 4367MB (53%)      ← not pressured
+Net in:   peak= 31.86 Mbps  avg= 8.57  ← nowhere near link rate
+```
+
+Nothing in the system metrics shows saturation. The slowdown can only be
+intra-process serialisation — the **Python GIL**. Phase B-1's local
+investigation already isolated the per-(point, level) Python loop in
+`_decode_pressure_vars_from_datasets` as GIL-bound; today's prod data
+confirms it at the system level.
+
+Phase B-1' vectorises the inner loop (releases the GIL during the C
+call), which removes most of the contention but **not all** — cfgrib's
+metadata parse and xarray's per-message dataset construction also hold
+the GIL. Two simultaneous decodes still share one interpreter. The
+durable fix is to give each decode its own interpreter.
+
+Disk I/O is **unmeasured** today (DO API doesn't expose `disk_read`/`disk_write`).
+Run an `iostat -xm 5 360` capture during a future contention window
+before claiming GIL is the only co-factor; if `await` or `%util` is
+high, the design below needs to also address disk concurrency
+(e.g. process affinity per device, or a single shared reader).
+
+##### Files
+
+- `src/weatherbrief/fetch/grib/__init__.py` — orchestration. Replaces
+  the in-process call to `decode_ecmwf_pressure_per_point` /
+  `decode_icon_chunked` / `_decode_pressure_vars_from_datasets` with a
+  pool dispatcher.
+- `src/weatherbrief/fetch/grib/decode.py` — entry points
+  `decode_ecmwf_pressure_per_point` (line ~1161),
+  `decode_ecmwf_surface_per_point` (line ~1403), and the ICON/GFS
+  counterparts. These need to be **callable in a fresh interpreter**
+  (no module-level state, no shared singletons).
+- New module: `src/weatherbrief/fetch/grib/decode_worker.py` — the
+  worker entry point + pool factory.
+- `src/weatherbrief/fetch/grib/_grib_timer.py` (or wherever
+  `_GribTimer` lives) — timing snapshots must survive the process
+  boundary; serialise to dict, return alongside the decode result,
+  merge in the parent.
+
+##### Design choices
+
+| Question | Options | Recommended | Rationale |
+|---|---|---|---|
+| Pool model | `ProcessPoolExecutor` inside uvicorn / `multiprocessing.Pool` / separate microservice | **`ProcessPoolExecutor`** with `initializer=` to import cfgrib once per worker | Simplest, persistent workers (no per-decode spawn cost), trivially testable |
+| Workers (`max_workers`) | 1 / 2 / `os.cpu_count() - 1` | **2** to start | Matches today's typical concurrent job count (forecast cycle + 1 user); doesn't double RSS |
+| What crosses the boundary | Raw GRIB bytes / decoded dict / numpy arrays | Path strings + decode params **in**, decoded result dict **out** | Workers read GRIB from disk themselves (page cache hits), avoid ferrying ~70MB bytes through pickle |
+| Worker state | Stateless / cached cfgrib indexes / shared memory | **Stateless**, revisit only if profiling shows index rebuild is hot | `ProcessPoolExecutor` lifecycle does the right thing for free |
+| Error propagation | Re-raise / sentinel return / log+None | **Re-raise via futures** | `concurrent.futures.Future.result()` already propagates; existing error handling unchanged |
+| Timing/memory observability | Re-implement / pipe back / lose | **Pipe back as part of result dict** | `_GribTimer.snapshot() → dict` then `_GribTimer.merge(snapshot)` in parent. Keeps existing INFO log lines intact |
+| GC inside workers | Manual / let process exit reclaim | **Manual `gc.collect()` matching today's pattern** | Workers are long-lived; same memory hygiene as in-process today |
+
+##### Implementation approach
+
+1. **Audit `decode.py` for module-level state.** Anything that breaks
+   in a fresh interpreter (e.g. cfgrib lazy index registration, env
+   var reads, logging config) needs to either be re-initialised in the
+   worker `initializer` or made deterministic.
+2. **Refactor `decode_ecmwf_pressure_per_point` and friends** to accept
+   serialisable args only (no `xarray.Dataset` instances passed in;
+   build them inside). Most should already be close to this shape.
+3. **Create `decode_worker.py`** exposing:
+   ```python
+   def decode_ecmwf_pressure(grib_path: str, params: dict) -> dict: ...
+   def decode_ecmwf_surface(grib_path: str, params: dict) -> dict: ...
+   def decode_icon_chunked(...): ...
+   ```
+   Each function imports its real implementation lazily, calls it,
+   and returns `{"result": <dict>, "timings": <dict>, "rss_peak_mb": <float>}`.
+4. **Build the pool** with `initializer=_worker_init` setting up
+   logging + ContextVar defaults + cfgrib import. Singleton in
+   `fetch/grib/__init__.py`, lazy-created on first use, lifecycle
+   tied to FastAPI app shutdown.
+5. **Replace decode call-sites** in `enrich_forecasts` /
+   `_enrich_ecmwf_inner` / `_decode_and_merge_icon_eu` with
+   `pool.submit(...)` returning a Future. Keep the outer
+   ThreadPool that overlaps GFS+ECMWF+ICON branches — that part
+   stays in-process and just dispatches futures.
+6. **Wire timing/RSS merge**: after each Future resolves, call
+   `_grib_timer.merge(future.result()["timings"])` so the existing
+   `GRIB timing: ...` line still has the right numbers. Same for
+   memory checkpoints.
+7. **Worker pool tests** in a new `tests/test_grib_pool.py`:
+   deliberately submit two concurrent decodes, assert per-step
+   times stay near baseline (no contention).
+
+##### Acceptance criteria
+
+- All existing GRIB tests pass: `pytest tests/test_grib.py
+  tests/test_grib_fill.py tests/test_ecmwf_sample.py
+  tests/test_ecmwf_sounding.py -q` (the slow `-m slow` ECMWF
+  end-to-end class must also pass).
+- New `tests/test_grib_pool.py` covers: cold start, two concurrent
+  submits, error propagation, worker recycling on crash.
+- Numerical equivalence: temporary comparison test asserts each
+  decoded result matches the in-process version to within
+  `np.allclose(rtol=1e-6)` for all field/point combinations on the
+  test flight. Remove before merge.
+- **Concurrency win**: a deliberate test that submits the standalone
+  forecast cycle's ECMWF decode + a user-refresh ECMWF decode in
+  parallel must show per-step `ecmwf_a2_decode` ≤ 1.3× the clean
+  single-decode baseline (vs today's 3–6×).
+- Existing prod log lines (`GRIB timing: ...`, `GRIB RSS: ...`,
+  `Pipeline timing: ...`) continue to emit with reasonable values —
+  no regression in observability.
+- Memory peak (pipeline-wide) stays under 2.5 GB on the test flight.
+  Today's peak with 2 concurrent decodes was 2.6 GB; expectation is
+  that pool-internal decode peak is similar to today's in-process
+  peak (~270 MB per active decode), and the parent process' working
+  set drops because raw GRIB bytes never live in the parent.
+
+##### Expected prod impact
+
+- **No change for single-refresh latency** — a quiet refresh with no
+  concurrent forecast cycle sees identical timings (small IPC cost
+  offset by no longer holding decoded bytes in two places).
+- **Removes the 3–6× per-step inflation under concurrency.** The 7Z
+  window stops being the worst case; queued auto-refreshes complete
+  ~3× faster when the forecast cycle is running. Headline: the
+  worst-case `egjb_lfbp_leal` morning refresh (467s today) drops to
+  ~250–280s.
+- **No change in p50, big drop in p99** — this is a tail-latency fix.
+
+##### Risk
+
+**High.** Multiprocessing is full of foot-guns:
+
+- **Pickling errors**: cfgrib datasets, lazy file handles, custom
+  exceptions — anything that escapes the worker boundary needs to
+  pickle cleanly. Audit during step 1.
+- **Worker lifecycle**: zombie processes on uvicorn reload, leaked
+  file handles on worker crash, deadlocks on shutdown. Use
+  `concurrent.futures.ProcessPoolExecutor` (not raw `multiprocessing`)
+  and explicitly call `pool.shutdown(wait=True)` in the FastAPI
+  lifespan handler.
+- **Logging context**: workers don't inherit ContextVar values
+  (request_id, user_id). Pass relevant context as part of the
+  decode params and re-set in the worker `initializer`.
+- **Memory accounting**: each worker has its own RSS. The
+  `_peak_rss_mb()` line currently reports just the parent — needs
+  to either aggregate worker RSS or be relabelled "parent RSS".
+- **macOS dev environment**: `fork` start method is unsafe with
+  some libraries (libdispatch); use `spawn` everywhere for parity
+  with Linux prod.
+- **Order with B-1'**: B-1' shrinks per-step decode from ~7s to
+  ~3.5s. With B-3's pickle/IPC cost being a fixed ~50-150ms, the
+  overhead ratio rises from 2% (today) to 3-4% (post-B-1') — still
+  fine but worth measuring. **Land B-1' first**, then this.
+
+##### Out of scope
+
+- ICON download parallelisation across variables (`O-1` in parking
+  lot) — separate concern, not a GIL issue, can ship independently.
+- Forecast-cycle scheduling fixes (move to 7:30Z, sentinel-wait,
+  process mutex) — those are short-term mitigations for the same
+  pathology this brief structurally fixes; they remain valuable as
+  defence-in-depth and ship on their own track.
+- Disk I/O optimisation — gated on the iostat measurement above.
+
+---
+
+#### GIL-bound decode — prod evidence (2026-05-02)
+
+This section captures the empirical case that motivates Phase B-3,
+preserved here so future agents can verify the model.
+
+**Setup**: 7Z auto-refresh window. Standalone forecast cycle started
+at 07:00:11 UTC fetching forecasts for 619 airports across 3 models
+(GFS + ICON + ECMWF). Auto-refresh scheduler picked up 3 due flights
+at 07:07:43 UTC. The forecast cycle's ECMWF GRIB phase
+(~07:16 → 07:35 UTC) overlapped fully with all three user refresh
+ECMWF a2 decodes.
+
+**Per-step ECMWF a2 decode times during overlap**:
+
+| Refresh | `ecmwf_a2_decode` per step | vs clean baseline (6.9s) |
+|---|---|---|
+| Flight #1 (during heaviest overlap) | 42.7s | 6.2× |
+| Flight #2 | 20.5s | 3.0× |
+| Flight #3 | 21.2s | 3.1× |
+
+**Droplet metrics during the same window** (via `~/.claude/skills/droplet-metrics/`):
+
+```
+CPU %:    peak= 45.6%  avg= 32.2%   (4 vCPUs → ~2.7 cores idle)
+Load 1m:  peak=2.56  avg=1.37        (sat threshold = 4)
+Memory:   peak_used= 4367MB (53%)
+FS /mnt/flyfun_data    used_peak= 64.4%  size= 148.6GB
+Net in:   peak= 31.86 Mbps  avg= 8.57 Mbps
+```
+
+**Inference**: with 2.7 cores idle, load 1m at 1.37, no memory
+pressure, and modest network — there is no system-level resource
+the decode could be waiting on. The slowdown must come from
+intra-process serialisation. Python's GIL is the only mechanism
+that produces this signature on a CPython interpreter running
+multiple cfgrib + numpy decode loops concurrently.
+
+This finding has been saved to memory at
+`feedback_grib_decode_gil_bound.md` so future debugging starts
+from this insight rather than rediscovering it.
+
+**Disk I/O note**: `disk_read`/`disk_write` aren't exposed via DO's
+v2 monitoring API (404). To rule out disk as a co-factor, run
+`iostat -xm 5 360` on the droplet during the next 7Z window
+(start at ~06:25 UTC, runs 30 min) and inspect `await`, `r/s`,
+`%util` per device. If they look idle, GIL is the only story; if
+high, B-3's design needs to consider per-device dispatch as well.
 
 ---
 
