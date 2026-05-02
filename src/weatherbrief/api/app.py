@@ -219,6 +219,12 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await task
 
+    # Tear down the GRIB decode worker pool (if it was started). Worker
+    # processes hold ECCODES file handles and ~270 MB RSS each — leaking
+    # them on uvicorn reload would accumulate fast.
+    from weatherbrief.fetch.grib import shutdown_decode_pool
+    shutdown_decode_pool()
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
