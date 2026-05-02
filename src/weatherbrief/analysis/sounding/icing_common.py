@@ -228,15 +228,39 @@ MIN_ZONE_HALF_THICKNESS_FT = 500
 def group_icing_levels(
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
     build_zone_fn: Callable,
+    *,
+    all_levels: list[DerivedLevel] | None = None,
 ) -> list:
     """Group adjacent icing levels into zones using shared adjacency logic.
 
-    Adjacent levels (pressure gap <= 100 hPa) are grouped together.
-    Each group is passed to *build_zone_fn* to construct the zone object.
+    When *all_levels* is provided (the full pre-gated input list, in
+    the iteration order the caller used), two icing entries merge into
+    the same zone iff **both**: they were directly consecutive in
+    *all_levels* (so nothing was filtered out between them by the
+    caller's gate), **and** their pressure gap is ≤
+    ``ZONE_MAX_PRESSURE_GAP_HPA`` (so a sparse input doesn't merge
+    levels that are physically far apart).
+
+    The index check fixes the cloud-gap bridging bug — see the
+    fix/icing-zones-respect-cloud-gaps regression in test_icing.py.
+    The pressure check preserves the legacy split for sparse inputs
+    where two surviving levels happen to be the only entries either
+    side of a wide gap.
+
+    Without *all_levels* we fall back to the legacy pressure-gap
+    heuristic alone. That heuristic is fragile: at typical 25 hPa
+    spacing the threshold of 100 hPa exactly matches the spacing
+    across a 3-level NWP cloud-band gap, so two cloud-gated icing
+    zones get merged across a "no cloud" stretch.
 
     Args:
-        icing_levels: Tuples of (level, icing_type, risk, index_value).
-        build_zone_fn: Callable that takes a list of tuples and returns a zone.
+        icing_levels: Tuples of (level, icing_type, risk, index_value),
+            in the same order as the caller iterated *all_levels*.
+        build_zone_fn: Callable that takes a list of tuples and returns
+            a zone.
+        all_levels: Optional pre-gated input. When provided, enables
+            index-based adjacency (the principled behaviour). When
+            None, uses the legacy pressure-gap heuristic.
 
     Returns:
         List of zone objects, ordered by ascending altitude.
@@ -244,13 +268,34 @@ def group_icing_levels(
     if not icing_levels:
         return []
 
+    def _pressure_close(prev_lv: DerivedLevel, this_lv: DerivedLevel) -> bool:
+        return abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= ZONE_MAX_PRESSURE_GAP_HPA
+
+    if all_levels is not None:
+        # Map level identity → its position in the pre-gated input.
+        # Identity comparison is correct here: derived levels are not
+        # re-instantiated between pipeline stages.
+        pos: dict[int, int] = {id(lv): i for i, lv in enumerate(all_levels)}
+
+        def _adjacent(prev_lv: DerivedLevel, this_lv: DerivedLevel) -> bool:
+            # Merge requires BOTH: directly consecutive in the pre-gated
+            # input (so we don't bridge a filtered-out gap), AND close in
+            # pressure (so we don't merge across a sparse-input jump).
+            ip = pos.get(id(prev_lv), -2)
+            it = pos.get(id(this_lv), -1)
+            if ip < 0 or it < 0 or (it - ip) != 1:
+                return False
+            return _pressure_close(prev_lv, this_lv)
+    else:
+        _adjacent = _pressure_close
+
     zones: list = []
     current: list[tuple[DerivedLevel, IcingType, IcingRisk, float]] = [icing_levels[0]]
 
     for item in icing_levels[1:]:
         prev_lv = current[-1][0]
         this_lv = item[0]
-        if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= ZONE_MAX_PRESSURE_GAP_HPA:
+        if _adjacent(prev_lv, this_lv):
             current.append(item)
         else:
             zones.append(build_zone_fn(current))

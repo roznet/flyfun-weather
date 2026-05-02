@@ -353,9 +353,15 @@ def _build_zone_simple(
 
 def _group_into_zones(
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
+    all_levels: list[DerivedLevel] | None = None,
 ) -> list[IcingZone]:
-    """Group adjacent icing levels into zones (no severity enhancement)."""
-    return group_icing_levels(icing_levels, _build_zone_simple)
+    """Group adjacent icing levels into zones (no severity enhancement).
+
+    Pass *all_levels* (the pre-gated full input the caller iterated over)
+    so the grouper splits zones at gating-induced gaps — see
+    :func:`group_icing_levels` for details.
+    """
+    return group_icing_levels(icing_levels, _build_zone_simple, all_levels=all_levels)
 
 
 def assess_icing_zones_ogimet_dd(
@@ -408,7 +414,7 @@ def assess_icing_zones_ogimet_dd(
         lv.icing_index = round(effective, 1)
         icing_levels.append((lv, icing_type, risk, effective))
 
-    return _group_into_zones(icing_levels)
+    return _group_into_zones(icing_levels, all_levels=levels)
 
 
 def assess_icing_zones_ogimet_nwp(
@@ -490,7 +496,7 @@ def assess_icing_zones_ogimet_nwp(
         lv.icing_index_nwp = round(effective, 1)
         icing_levels.append((lv, icing_type, risk, effective))
 
-    return _group_into_zones(icing_levels)
+    return _group_into_zones(icing_levels, all_levels=levels)
 
 
 def assess_icing_zones_ieng(
@@ -560,4 +566,4 @@ def assess_icing_zones_ieng(
         risk = _index_to_risk(effective)
         icing_levels.append((lv, icing_type, risk, effective))
 
-    return _group_into_zones(icing_levels)
+    return _group_into_zones(icing_levels, all_levels=levels)
