@@ -8,8 +8,11 @@
   showed no wall-clock improvement. Root cause turned out to be
   different than the brief assumed; details in
   [Phase B-1 — investigation outcome](#phase-b-1--investigation-outcome).
-- 🚧 **Phase B-1' — vectorise ECMWF interp loop** — new direction based
-  on findings. See [brief](#phase-b-1--vectorise-ecmwf-interp-loop-replaces-threadpool-variant).
+- ✅ **Phase B-1' — vectorise ECMWF interp loop** — merged 2026-05-02
+  (PR #105, on main at `d45801bb`). Deploy pending. See
+  [brief](#phase-b-1--vectorise-ecmwf-interp-loop-replaces-threadpool-variant)
+  for the original goals against which to evaluate prod numbers
+  post-deploy.
 - ✅ **Phase B-2** — MetPy vectorisation. Deployed 2026-05-02 (PR #103,
   commits a1eacab4 + 3afde9b9). First post-deploy refresh of the
   canonical test flight: `analyze` 51.81s → 35.37s (–31.7%) under
@@ -18,26 +21,29 @@
   Today's prod data showed concurrent decodes still inflate per-step
   ECMWF a2 by 3–6× even after Phase B-2, with the droplet 67% idle —
   GIL contention. Vectorisation (B-1') reduces but doesn't eliminate
-  this; B-3 attacks the structural cause. See
-  [brief](#phase-b-3--out-of-process-grib-decode-pool).
+  this; B-3 attacks the structural cause. In flight on worktree
+  `perf-grib-process-pool/` (branch `perf/grib-process-pool`). The
+  agent there started before B-1' landed — **rebase onto current
+  main before opening a PR**, since both touch `fetch/grib/decode.py`.
+  See [brief](#phase-b-3--out-of-process-grib-decode-pool).
 - ⏸️ **Phase C** — ICON memory streaming. Deferred (memory not a
   constraint post-upgrade).
 
-**Phase B-1' and B-3 share a file** (`fetch/grib/decode.py`) but at
-different layers: B-1' rewrites the inner `_decode_pressure_vars_from_datasets`
-loop, B-3 wraps the outer `decode_ecmwf_*_per_point` entry points
-with a process-pool dispatcher. They're designed to compose, but
-schedule **B-1' to land first** — a faster per-step decode means
-the pickle/IPC cost ratio of B-3 stays favourable. Merge order:
-B-1' → B-3.
+**B-1' and B-3 share `fetch/grib/decode.py`** but at different layers:
+B-1' rewrote the inner `_decode_pressure_vars_from_datasets` loop
+(now in main); B-3 wraps the outer `decode_ecmwf_*_per_point` entry
+points with a process-pool dispatcher. They were designed to
+compose, with B-1' scheduled to land first so the pickle/IPC cost
+ratio of B-3 stays favourable. **B-3's agent should rebase onto
+post-B-1' main and re-baseline its measurements** (per-step decode
+is now ~halved, so the IPC overhead ratio shifts).
 
-## How to brief a fresh agent for Phase B-1', B-2, or B-3
+## How to brief a fresh agent for Phase B-3
 
 > "Read `designs/plans/refresh-pipeline-performance.md`, find
-> the Phase you're implementing, and verify against the acceptance
-> criteria there. The Status section at the top tells you where
-> we are. The Plan section has the brief. Don't worry about Phase
-> A or B-2 — those are done."
+> Phase B-3, and verify against the acceptance criteria there.
+> The Status section at the top tells you where we are. Don't
+> worry about Phases A, B-1', or B-2 — those are done."
 
 Each brief is self-contained: goal, files, approach, expected impact,
 acceptance criteria, risk notes.
