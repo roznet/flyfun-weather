@@ -383,6 +383,7 @@ def _decode_pressure_vars_from_datasets(
             lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
             lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
         except Exception:
+            logger.debug("skip dataset: lat/lon coord extract failed", exc_info=True)
             continue
 
         H, W = lat_arr.size, lon_arr.size
@@ -480,6 +481,10 @@ def _decode_pressure_vars_from_datasets(
             try:
                 pressures = np.asarray(ds.coords[pressure_coord].values)
             except Exception:
+                logger.debug(
+                    "skip %s: pressure coord %r extract failed",
+                    var_name, pressure_coord, exc_info=True,
+                )
                 continue
             if pressures.shape[0] != values.shape[0]:
                 logger.debug(
