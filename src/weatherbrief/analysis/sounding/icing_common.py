@@ -233,25 +233,12 @@ def group_icing_levels(
 ) -> list:
     """Group adjacent icing levels into zones using shared adjacency logic.
 
-    When *all_levels* is provided (the full pre-gated input list, in
-    the iteration order the caller used), two icing entries merge into
-    the same zone iff **both**: they were directly consecutive in
-    *all_levels* (so nothing was filtered out between them by the
-    caller's gate), **and** their pressure gap is ≤
-    ``ZONE_MAX_PRESSURE_GAP_HPA`` (so a sparse input doesn't merge
-    levels that are physically far apart).
-
-    The index check fixes the cloud-gap bridging bug — see the
-    fix/icing-zones-respect-cloud-gaps regression in test_icing.py.
-    The pressure check preserves the legacy split for sparse inputs
-    where two surviving levels happen to be the only entries either
-    side of a wide gap.
-
-    Without *all_levels* we fall back to the legacy pressure-gap
-    heuristic alone. That heuristic is fragile: at typical 25 hPa
-    spacing the threshold of 100 hPa exactly matches the spacing
-    across a 3-level NWP cloud-band gap, so two cloud-gated icing
-    zones get merged across a "no cloud" stretch.
+    With *all_levels* (the pre-gated input the caller iterated), two
+    icing entries merge iff (a) directly consecutive in *all_levels*
+    so no level was filtered between them, AND (b) pressure gap ≤
+    ``ZONE_MAX_PRESSURE_GAP_HPA``. Without *all_levels*, falls back to
+    pressure-only (legacy, vulnerable to cloud-gap bridging — see
+    bug #7 in designs/icing-models-analysis.md).
 
     Args:
         icing_levels: Tuples of (level, icing_type, risk, index_value),
