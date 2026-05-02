@@ -9,9 +9,11 @@ from __future__ import annotations
 import contextvars
 import gc
 import logging
+import multiprocessing
+import os
 import threading
 import time as _time_mod
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,7 +27,6 @@ from weatherbrief.process_rss import current_rss_mb as _read_rss_mb
 from weatherbrief.fetch.grib.cache import (
     cache_dir_for_run,
     cache_key,  # route-independent: keyed by (fhour, variable) only
-    get_cached,
     is_cached,
     purge_old_runs,
     put_cached,
@@ -197,6 +198,88 @@ def _submit_with_context(pool: ThreadPoolExecutor, fn, /, *args, **kwargs):
     """
     ctx = contextvars.copy_context()
     return pool.submit(ctx.run, fn, *args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Process-pool dispatcher for GRIB decode (Phase B-3).
+#
+# GRIB decode (cfgrib + xarray + numpy interp) is GIL-bound — when two
+# enrich_forecasts() calls run concurrently in uvicorn, the decode loops in
+# their respective threads serialise on the GIL and per-step times balloon
+# 3–6× even with multiple cores idle. Dispatching decode to a dedicated
+# ProcessPoolExecutor gives each decode its own interpreter, removing the
+# contention.
+#
+# Workers default to 2 (matches today's typical concurrent job count: the
+# standalone forecast cycle plus one user refresh). Override via
+# ``GRIB_DECODE_WORKERS`` env var. Set to ``0`` to disable the pool entirely
+# and decode in-process — useful for tests, profiling, or as a kill switch.
+# ---------------------------------------------------------------------------
+
+_DECODE_POOL: ProcessPoolExecutor | None = None
+_DECODE_POOL_LOCK = threading.Lock()
+
+
+def _decode_pool_workers() -> int:
+    raw = os.environ.get("GRIB_DECODE_WORKERS", "2").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning("Invalid GRIB_DECODE_WORKERS=%r, defaulting to 2", raw)
+        return 2
+
+
+def _get_decode_pool() -> ProcessPoolExecutor | None:
+    """Lazy singleton process pool. Returns None when pool is disabled."""
+    global _DECODE_POOL
+    if _DECODE_POOL is not None:
+        return _DECODE_POOL
+    workers = _decode_pool_workers()
+    if workers == 0:
+        return None
+    with _DECODE_POOL_LOCK:
+        if _DECODE_POOL is not None:
+            return _DECODE_POOL
+        # Spawn (not fork) for macOS/Linux parity and to avoid inheriting
+        # the parent's threads, locks, and open file handles. cfgrib does
+        # its own ECCODES setup that isn't fork-safe under load.
+        ctx = multiprocessing.get_context("spawn")
+        from weatherbrief.fetch.grib.decode_worker import _worker_init
+        _DECODE_POOL = ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=ctx,
+            initializer=_worker_init,
+        )
+        logger.info("GRIB decode pool started (workers=%d, mp=spawn)", workers)
+    return _DECODE_POOL
+
+
+def shutdown_decode_pool() -> None:
+    """Shut down the decode pool. Safe to call repeatedly; idempotent."""
+    global _DECODE_POOL
+    with _DECODE_POOL_LOCK:
+        pool = _DECODE_POOL
+        _DECODE_POOL = None
+    if pool is not None:
+        pool.shutdown(wait=True, cancel_futures=False)
+        logger.info("GRIB decode pool shut down")
+
+
+def _dispatch_decode(worker_fn_name: str, *args):
+    """Submit a decode job to the pool (or run in-process if disabled).
+
+    Pool is the default; the in-process fallback exists for tests and as
+    a kill switch via ``GRIB_DECODE_WORKERS=0``. Both paths return the
+    raw decode result; timing/RSS observability stays on the parent-side
+    ``_grib_time`` wraps that surround each call site.
+    """
+    from weatherbrief.fetch.grib import decode_worker
+    fn = getattr(decode_worker, worker_fn_name)
+    pool = _get_decode_pool()
+    if pool is None:
+        return fn(*args)
+    future = pool.submit(fn, *args)
+    return future.result()
 
 
 def _grib_session() -> requests.Session:
@@ -445,8 +528,6 @@ def _enrich_ecmwf_inner(
     from weatherbrief.fetch.grib.decode import (
         build_ecmwf_cloud_diagnostics,
         build_ecmwf_surface_snapshot,
-        decode_ecmwf_pressure_per_point,
-        decode_ecmwf_surface_per_point,
     )
     from weatherbrief.fetch.grib.ecmwf_fetch import (
         ecmwf_grib_dir,
@@ -514,11 +595,12 @@ def _enrich_ecmwf_inner(
         if valid_time < flight_start - margin or valid_time > flight_end + margin:
             continue
 
-        # Decode pressure levels (a2)
+        # Decode pressure levels (a2) — out-of-process (Phase B-3)
         if "a2" in parts:
             with _grib_time("ecmwf_a2_decode"):
-                pl_data, pl_covered = decode_ecmwf_pressure_per_point(
-                    parts["a2"], point_lats, point_lons,
+                pl_data, pl_covered = _dispatch_decode(
+                    "decode_ecmwf_pressure",
+                    str(parts["a2"]), point_lats, point_lons,
                 )
             # Only merge covered points — set uncovered to empty
             for i, cov in enumerate(pl_covered):
@@ -532,11 +614,12 @@ def _enrich_ecmwf_inner(
             if replaced > 0:
                 enriched_steps += 1
 
-        # Decode surface diagnostics (a1)
+        # Decode surface diagnostics (a1) — out-of-process (Phase B-3)
         if "a1" in parts:
             with _grib_time("ecmwf_a1_decode"):
-                sfc_data, sfc_covered = decode_ecmwf_surface_per_point(
-                    parts["a1"], point_lats, point_lons,
+                sfc_data, sfc_covered = _dispatch_decode(
+                    "decode_ecmwf_surface",
+                    str(parts["a1"]), point_lats, point_lons,
                 )
             diagnostics = [
                 build_ecmwf_cloud_diagnostics(raw) if cov else None
@@ -693,12 +776,14 @@ def _fetch_clwmr_icmr_for_fhour(
     point_lons: list[float],
     session: requests.Session,
 ) -> list[dict[int, dict[str, float]]] | None:
-    """Fetch, cache, decode CLWMR/ICMR for a single GFS forecast hour."""
-    from weatherbrief.fetch.grib.decode import decode_grib_per_point
+    """Fetch, cache, decode CLWMR/ICMR for a single GFS forecast hour.
 
+    Decode runs in the worker pool (Phase B-3). The parent only ensures the
+    file is on disk, then hands the path to the worker — bytes never live in
+    the parent process for the decode call.
+    """
     ck = cache_key(fhour, "CLWMR_ICMR")
-    grib_bytes = get_cached(run_dir, ck)
-    if grib_bytes is None:
+    if not is_cached(run_dir, ck):
         idx_text = idx_by_fhour.get(fhour)
         if idx_text is None:
             return None
@@ -722,8 +807,11 @@ def _fetch_clwmr_icmr_for_fhour(
             logger.warning("Failed to fetch GRIB2 f%03d", fhour, exc_info=True)
             return None
 
+    cache_path = run_dir / ck
     with _grib_time("gfs_clwmr_decode"):
-        return decode_grib_per_point(grib_bytes, point_lats, point_lons)
+        return _dispatch_decode(
+            "decode_gfs_pressure", str(cache_path), point_lats, point_lons,
+        )
 
 
 def _enrich_clwmr_icmr(
@@ -789,11 +877,8 @@ def _fetch_cloud_diag_for_fhour(
     session: requests.Session,
 ) -> list[dict[str, float]] | None:
     """Fetch, cache, decode cloud diagnostics for a single GFS forecast hour."""
-    from weatherbrief.fetch.grib.decode import decode_cloud_diag_per_point
-
     ck = cache_key(fhour, "CLOUD_DIAG")
-    grib_bytes = get_cached(run_dir, ck)
-    if grib_bytes is None:
+    if not is_cached(run_dir, ck):
         idx_text = idx_by_fhour.get(fhour)
         if idx_text is None:
             return None
@@ -817,8 +902,11 @@ def _fetch_cloud_diag_for_fhour(
             logger.warning("Failed to fetch cloud diag f%03d", fhour, exc_info=True)
             return None
 
+    cache_path = run_dir / ck
     with _grib_time("gfs_cloud_diag_decode"):
-        return decode_cloud_diag_per_point(grib_bytes, point_lats, point_lons)
+        return _dispatch_decode(
+            "decode_gfs_cloud_diag", str(cache_path), point_lats, point_lons,
+        )
 
 
 def _apply_cloud_diagnostics_to_sections(
@@ -1278,7 +1366,6 @@ def _decode_and_merge_icon_eu(
 
     Called after prefetch has cached all data to disk.
     """
-    from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point, decode_icon_eu_per_point_chunked
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
 
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
@@ -1295,31 +1382,31 @@ def _decode_and_merge_icon_eu(
         empty_clc = [{} for _ in range(n_points)]
         # Check for legacy combined cache first
         legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
-        legacy_bytes = get_cached(ctx.run_dir, legacy_ck)
-        if legacy_bytes is not None:
+        if is_cached(ctx.run_dir, legacy_ck):
+            legacy_path = ctx.run_dir / legacy_ck
             with _grib_time("icon_legacy_decode"):
-                decoded = decode_icon_eu_per_point(legacy_bytes, ctx.point_lats, ctx.point_lons)
-            del legacy_bytes
-            _grib_gc()
+                decoded = _dispatch_decode(
+                    "decode_icon_legacy",
+                    str(legacy_path), ctx.point_lats, ctx.point_lons,
+                )
             return decoded, empty_clc
 
-        # Load per-variable data from cache (already downloaded by prefetch)
-        var_bytes: dict[str, bytes] = {}
+        # Build path dict for chunked decode — bytes are read inside the
+        # worker, so the parent never holds the per-variable blobs in RAM.
+        var_paths: dict[str, str] = {}
         for var in ICON_EU_VARIABLES:
             ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
-            cached = get_cached(ctx.run_dir, ck)
-            if cached is not None:
-                var_bytes[var] = cached
+            if is_cached(ctx.run_dir, ck):
+                var_paths[var] = str(ctx.run_dir / ck)
 
-        if not var_bytes:
+        if not var_paths:
             return None, empty_clc
 
         with _grib_time("icon_chunked_decode"):
-            decoded, clc_layers = decode_icon_eu_per_point_chunked(
-                var_bytes, ctx.point_lats, ctx.point_lons,
+            decoded, clc_layers = _dispatch_decode(
+                "decode_icon_chunked",
+                var_paths, ctx.point_lats, ctx.point_lons,
             )
-        del var_bytes
-        _grib_gc()
         return decoded, clc_layers
 
     total_enriched = 0
@@ -1386,17 +1473,13 @@ def _enrich_icon_eu_cloud_diagnostics(
     from model-level data), missing ``base_ft``/``top_ft`` on low/mid/high
     NWPCloudLayerDiag are filled from it.
     """
-    from weatherbrief.fetch.grib.decode import (
-        build_icon_cloud_diagnostics,
-        decode_icon_eu_cloud_diag_per_point,
-    )
+    from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
 
     total_enriched = 0
     for fhour in forecast_hours:
         ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
-        grib_bytes = get_cached(run_dir, ck)
-        if grib_bytes is None:
+        if not is_cached(run_dir, ck):
             try:
                 fetched = fetch_icon_eu_single_level(
                     init_date, init_hour, [fhour], session=session,
@@ -1407,14 +1490,15 @@ def _enrich_icon_eu_cloud_diagnostics(
             except Exception:
                 logger.warning("Failed to fetch ICON-EU cloud diagnostics f%03d", fhour, exc_info=True)
                 continue
-        if not grib_bytes:
+        if not is_cached(run_dir, ck):
             continue
 
+        cache_path = run_dir / ck
         with _grib_time("icon_cloud_diag_decode"):
-            decoded_points = decode_icon_eu_cloud_diag_per_point(
-                grib_bytes, point_lats, point_lons,
+            decoded_points = _dispatch_decode(
+                "decode_icon_cloud_diag",
+                str(cache_path), point_lats, point_lons,
             )
-        del grib_bytes
         if not decoded_points:
             continue
 

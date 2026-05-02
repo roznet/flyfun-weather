@@ -17,14 +17,22 @@
   commits a1eacab4 + 3afde9b9). First post-deploy refresh of the
   canonical test flight: `analyze` 51.81s → 35.37s (–31.7%) under
   concurrent-refresh contention. See [GIL evidence](#gil-bound-decode--prod-evidence-2026-05-02).
-- 🚧 **Phase B-3 — out-of-process GRIB decode pool** — new initiative.
-  Today's prod data showed concurrent decodes still inflate per-step
-  ECMWF a2 by 3–6× even after Phase B-2, with the droplet 67% idle —
-  GIL contention. Vectorisation (B-1') reduces but doesn't eliminate
-  this; B-3 attacks the structural cause. In flight on worktree
-  `perf-grib-process-pool/` (branch `perf/grib-process-pool`). The
-  agent there started before B-1' landed — **rebase onto current
-  main before opening a PR**, since both touch `fetch/grib/decode.py`.
+- 🟢 **Phase B-3 — out-of-process GRIB decode pool** — PR #104, ready
+  to merge after rebase onto post-B-1' main. `ProcessPoolExecutor`
+  (spawn, default workers=2, override via `GRIB_DECODE_WORKERS`,
+  per-call timeout via `GRIB_DECODE_TIMEOUT_S` default 300 s) wraps the
+  six decode entry points called from `enrich_forecasts`. Worker
+  module reads bytes from disk inside the worker so the parent never
+  pickles ~70 MB blobs. `_dispatch_decode` auto-resets the pool on
+  `BrokenProcessPool` (worker SIGKILL/OOM) or `TimeoutError` (worker
+  hang), so one bad worker doesn't poison subsequent requests. New
+  `tests/test_grib_pool.py` covers cold start, parallel dispatch,
+  error propagation, crash + hang recovery. Pool shutdown wired into
+  FastAPI lifespan via `asyncio.to_thread`. Local A/B on the canonical
+  test flight: pipeline 219.47 s → 180.79 s (–17.6%), parent peak RSS
+  1553 MB → 528 MB (–66%), no numerical drift. Awaiting prod rollout
+  to validate the predicted concurrency win under forecast-cycle
+  contention.
   See [brief](#phase-b-3--out-of-process-grib-decode-pool).
 - ⏸️ **Phase C** — ICON memory streaming. Deferred (memory not a
   constraint post-upgrade).
