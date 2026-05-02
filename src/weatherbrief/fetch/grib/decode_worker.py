@@ -159,3 +159,14 @@ def _test_crash() -> None:
     import os
     import signal
     os.kill(os.getpid(), signal.SIGKILL)
+
+
+def _test_hang(seconds: float = 60.0) -> None:
+    """Sleep for *seconds* — used to verify the dispatcher's timeout path.
+
+    A real cfgrib/ECCODES deadlock would be uninterruptible from outside;
+    sleep is a close-enough analogue for testing that ``future.result(timeout=)``
+    fires and the recovery path runs.
+    """
+    import time as _t
+    _t.sleep(seconds)

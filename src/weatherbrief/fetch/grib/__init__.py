@@ -216,10 +216,16 @@ def _submit_with_context(pool: ThreadPoolExecutor, fn, /, *args, **kwargs):
 # standalone forecast cycle plus one user refresh). Override via
 # ``GRIB_DECODE_WORKERS`` env var. Set to ``0`` to disable the pool entirely
 # and decode in-process — useful for tests, profiling, or as a kill switch.
+#
+# Per-dispatch timeout: ``GRIB_DECODE_TIMEOUT_S`` (default 300 s). A hung
+# worker (cfgrib/ECCODES deadlock on a corrupt GRIB) would otherwise block
+# its uvicorn thread indefinitely; the timeout converts this to a
+# TimeoutError and resets the pool.
 # ---------------------------------------------------------------------------
 
 _DECODE_POOL: ProcessPoolExecutor | None = None
 _DECODE_POOL_LOCK = threading.Lock()
+_DECODE_TIMEOUT_DEFAULT_S = 300.0
 
 
 def _decode_pool_workers() -> int:
@@ -229,6 +235,21 @@ def _decode_pool_workers() -> int:
     except ValueError:
         logger.warning("Invalid GRIB_DECODE_WORKERS=%r, defaulting to 2", raw)
         return 2
+
+
+def _decode_timeout_s() -> float:
+    raw = os.environ.get("GRIB_DECODE_TIMEOUT_S", "").strip()
+    if not raw:
+        return _DECODE_TIMEOUT_DEFAULT_S
+    try:
+        v = float(raw)
+        return v if v > 0 else _DECODE_TIMEOUT_DEFAULT_S
+    except ValueError:
+        logger.warning(
+            "Invalid GRIB_DECODE_TIMEOUT_S=%r, defaulting to %.0fs",
+            raw, _DECODE_TIMEOUT_DEFAULT_S,
+        )
+        return _DECODE_TIMEOUT_DEFAULT_S
 
 
 def _get_decode_pool() -> ProcessPoolExecutor | None:
@@ -256,15 +277,22 @@ def _get_decode_pool() -> ProcessPoolExecutor | None:
     return _DECODE_POOL
 
 
-def shutdown_decode_pool() -> None:
-    """Shut down the decode pool. Safe to call repeatedly; idempotent."""
+def shutdown_decode_pool(*, wait: bool = True) -> None:
+    """Shut down the decode pool. Safe to call repeatedly; idempotent.
+
+    ``wait=False`` is for the hung-worker recovery path: a worker stuck
+    in cfgrib/ECCODES will never return, so ``shutdown(wait=True)``
+    would block forever. Trade-off: the orphaned worker process is left
+    behind and reaped when the parent eventually exits — bounded leak
+    (at most ``max_workers`` orphans per pool reset).
+    """
     global _DECODE_POOL
     with _DECODE_POOL_LOCK:
         pool = _DECODE_POOL
         _DECODE_POOL = None
     if pool is not None:
-        pool.shutdown(wait=True, cancel_futures=False)
-        logger.info("GRIB decode pool shut down")
+        pool.shutdown(wait=wait, cancel_futures=not wait)
+        logger.info("GRIB decode pool shut down (wait=%s)", wait)
 
 
 def _dispatch_decode(worker_fn_name: str, *args) -> Any:
@@ -275,11 +303,16 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
     raw decode result; timing/RSS observability stays on the parent-side
     ``_grib_time`` wraps that surround each call site.
 
-    On ``BrokenProcessPool`` (worker SIGKILL, OOM, cfgrib segfault), the
-    current request still fails — we don't know if a partial result is
-    valid — but the broken pool is torn down so the next dispatch
-    lazily creates a fresh one. Without this, one dead worker would
-    poison every subsequent decode until the app restarts.
+    Two new failure modes vs in-process decode, both reset the pool so
+    the next dispatch starts fresh — without this, one bad worker would
+    poison every subsequent request until app restart:
+
+    - ``BrokenProcessPool``: worker SIGKILL/OOM/cfgrib segfault. Workers
+      are dead, so ``shutdown(wait=True)`` returns fast.
+    - ``TimeoutError``: ``GRIB_DECODE_TIMEOUT_S`` (default 300 s)
+      exceeded — likely a cfgrib/ECCODES deadlock on a corrupt GRIB.
+      Workers are still alive but stuck, so we tear down with
+      ``wait=False`` to avoid hanging the recovery path itself.
     """
     from weatherbrief.fetch.grib import decode_worker
     fn = getattr(decode_worker, worker_fn_name)
@@ -288,12 +321,19 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
         return fn(*args)
     try:
         future = pool.submit(fn, *args)
-        return future.result()
+        return future.result(timeout=_decode_timeout_s())
     except BrokenProcessPool:
         logger.error(
             "GRIB decode pool broken (worker died); resetting for next call",
         )
         shutdown_decode_pool()
+        raise
+    except TimeoutError:
+        logger.error(
+            "GRIB decode pool stuck (worker hung %.0fs on %s); resetting",
+            _decode_timeout_s(), worker_fn_name,
+        )
+        shutdown_decode_pool(wait=False)
         raise
 
 
