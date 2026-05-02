@@ -36,9 +36,13 @@ def _worker_init() -> None:
     cold disk). Spawn mode means each worker is a fresh interpreter, so
     these imports happen on every pool boot.
     """
+    # Worker logs are interleaved with the parent's stdout under uvicorn,
+    # so prefix with the worker PID. Same field set as the parent format
+    # otherwise; the prefix is what lets you tell which worker emitted a
+    # cfgrib warning during concurrent decodes.
     logging.basicConfig(
         level=logging.INFO,
-        format="%(levelname)s:%(name)s:%(message)s",
+        format="[grib-worker %(process)d] %(levelname)s:%(name)s:%(message)s",
     )
     import cfgrib  # noqa: F401
     import numpy  # noqa: F401

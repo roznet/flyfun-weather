@@ -319,9 +319,10 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
     pool = _get_decode_pool()
     if pool is None:
         return fn(*args)
+    timeout = _decode_timeout_s()
     try:
         future = pool.submit(fn, *args)
-        return future.result(timeout=_decode_timeout_s())
+        return future.result(timeout=timeout)
     except BrokenProcessPool:
         logger.error(
             "GRIB decode pool broken (worker died); resetting for next call",
@@ -331,7 +332,7 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
     except TimeoutError:
         logger.error(
             "GRIB decode pool stuck (worker hung %.0fs on %s); resetting",
-            _decode_timeout_s(), worker_fn_name,
+            timeout, worker_fn_name,
         )
         shutdown_decode_pool(wait=False)
         raise
