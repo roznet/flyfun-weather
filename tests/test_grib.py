@@ -1462,3 +1462,61 @@ class TestMergeValidHourFilter:
         assert count == 3
         for h in hourlies:
             assert h.pressure_levels[0].cloud_liquid_water_kg_kg == 0.0003
+
+
+class TestFracGridIndices:
+    """Unit tests for the bilinear-interp helper that maps target lat/lon
+    onto fractional grid indices. The descending-coord, exact-boundary, and
+    out-of-range paths are otherwise only exercised via real GRIB samples."""
+
+    def test_ascending_uniform(self):
+        import numpy as np
+        from weatherbrief.fetch.grib.decode import _frac_grid_indices
+
+        coord = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+        frac, ok = _frac_grid_indices(coord, [0.0, 0.5, 1.0, 0.625])
+        assert ok.tolist() == [True, True, True, True]
+        np.testing.assert_allclose(frac, [0.0, 2.0, 4.0, 2.5])
+
+    def test_descending_uniform(self):
+        # ECMWF lat is descending (e.g. 71.5 → 60.0 in 0.25° steps).
+        import numpy as np
+        from weatherbrief.fetch.grib.decode import _frac_grid_indices
+
+        coord = np.array([71.5, 71.25, 71.0, 70.75, 70.5])
+        frac, ok = _frac_grid_indices(coord, [71.5, 70.5, 71.0])
+        assert ok.tolist() == [True, True, True]
+        # 71.5 sits at index 0 of the original (descending) array; 70.5 at 4.
+        np.testing.assert_allclose(frac, [0.0, 4.0, 2.0])
+
+    def test_out_of_range_marks_nan(self):
+        import numpy as np
+        from weatherbrief.fetch.grib.decode import _frac_grid_indices
+
+        coord = np.array([0.0, 1.0, 2.0])
+        frac, ok = _frac_grid_indices(coord, [-0.1, 0.0, 2.0, 2.1])
+        # endpoints are in-bounds; everything strictly outside is NaN.
+        assert ok.tolist() == [False, True, True, False]
+        assert np.isnan(frac[0]) and np.isnan(frac[3])
+        np.testing.assert_allclose(frac[1:3], [0.0, 2.0])
+
+    def test_non_uniform_spacing(self):
+        # np.interp handles uneven coords — verify we don't assume a step.
+        import numpy as np
+        from weatherbrief.fetch.grib.decode import _frac_grid_indices
+
+        coord = np.array([0.0, 1.0, 4.0, 9.0])  # non-uniform spacing
+        frac, ok = _frac_grid_indices(coord, [0.0, 2.5, 9.0])
+        assert ok.tolist() == [True, True, True]
+        # 2.5 sits halfway between coord[1]=1.0 and coord[2]=4.0 in coord-space,
+        # so its fractional index is 1 + 0.5 = 1.5.
+        np.testing.assert_allclose(frac, [0.0, 1.5, 3.0])
+
+    def test_degenerate_coord_returns_all_nan(self):
+        import numpy as np
+        from weatherbrief.fetch.grib.decode import _frac_grid_indices
+
+        coord = np.array([42.0])  # n < 2 — can't interpolate
+        frac, ok = _frac_grid_indices(coord, [42.0, 43.0])
+        assert ok.tolist() == [False, False]
+        assert np.all(np.isnan(frac))
