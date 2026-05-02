@@ -12,6 +12,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Callable
 
 from weatherbrief.fetch.variables import MODEL_ENDPOINTS
@@ -233,8 +234,12 @@ def execute_briefing(
     if rss_pipeline_start is not None:
         rss_curve.append(("start", rss_pipeline_start))
 
+    # Per-stage wall-clock timings — emitted as a single INFO line at end.
+    stage_timings: dict[str, float] = {}
+
     # === 1. Fetch ===
     as_of_time = options.as_of_time or (departure_time if options.historical_mode else None)
+    _t0 = perf_counter()
     fetch_result = run_fetch(
         route=route,
         departure_time=departure_time,
@@ -247,11 +252,13 @@ def execute_briefing(
         historical_mode=options.historical_mode,
         as_of_time=as_of_time,
     )
+    stage_timings["fetch"] = perf_counter() - _t0
     rss = _current_rss_mb()
     if rss is not None:
         rss_curve.append(("fetch", rss))
 
     # === 2. Analyze ===
+    _t0 = perf_counter()
     analysis_result = run_analysis(
         route=route,
         departure_time=departure_time,
@@ -262,6 +269,7 @@ def execute_briefing(
         pack_dir=pack_dir,
         progress_callback=progress_callback,
     )
+    stage_timings["analyze"] = perf_counter() - _t0
     rss = _current_rss_mb()
     if rss is not None:
         rss_curve.append(("analyze", rss))
@@ -281,6 +289,7 @@ def execute_briefing(
     if analysis_result.route_analyses_manifest and analysis_result.route_analyses:
         total_distance = fetch_result.route_points[-1].distance_from_origin_nm
 
+        _t0 = perf_counter()
         advisory_result = run_advisories(
             rp_analyses=analysis_result.route_analyses,
             cross_sections=fetch_result.cross_sections,
@@ -301,6 +310,7 @@ def execute_briefing(
             locale=options.locale,
         )
         route_advisories_manifest = advisory_result.manifest
+        stage_timings["advisories"] = perf_counter() - _t0
 
     rss = _current_rss_mb()
     if rss is not None:
@@ -327,6 +337,7 @@ def execute_briefing(
         and pack_dir
     ):
         _notify("alt_advisories")
+        _t0 = perf_counter()
         try:
             from weatherbrief.tasks.advise import run_alt_from_pack
 
@@ -346,11 +357,13 @@ def execute_briefing(
             )
         except Exception:
             logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)
+        stage_timings["alt_advisories"] = perf_counter() - _t0
 
     # === 3.5 Route weather observations (D-0 only) ===
     route_observations = None
     if days_out == 0 and options.airports_db_path and not options.historical_mode:
         _notify("route_weather")
+        _t0 = perf_counter()
         try:
             from weatherbrief.tasks.route_weather import (
                 run_observation_comparison,
@@ -386,11 +399,13 @@ def execute_briefing(
             logger.warning("Route weather fetch failed", exc_info=True)
             result_usage_metar = False
             result_usage_metar_airports = 0
+        stage_timings["route_weather"] = perf_counter() - _t0
     else:
         result_usage_metar = False
         result_usage_metar_airports = 0
 
     # === 4. Build & save snapshot ===
+    _t0 = perf_counter()
     snapshot = ForecastSnapshot(
         route=route,
         target_date=target_date,
@@ -413,6 +428,7 @@ def execute_briefing(
         if fetch_result.cross_sections:
             save_cross_section(snapshot, data_dir)
     _notify("save_snapshot")
+    stage_timings["save_snapshot"] = perf_counter() - _t0
     logger.info("Snapshot saved: %s", snapshot_path)
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
@@ -435,6 +451,7 @@ def execute_briefing(
     # === 5. Optional: GRAMET ===
     if options.fetch_gramet:
         _notify("fetch_gramet")
+        _t0 = perf_counter()
         gramet_result = run_gramet(
             route=route,
             departure_time=departure_time,
@@ -452,10 +469,12 @@ def execute_briefing(
             result.usage.gramet_failed = True
         if gramet_result.error:
             result.errors.append(gramet_result.error)
+        stage_timings["fetch_gramet"] = perf_counter() - _t0
 
     # === 6. Optional: Skew-T ===
     if options.generate_skewt:
         _notify("generate_skewt")
+        _t0 = perf_counter()
         skewt_result = run_skewt(
             snapshot=snapshot,
             target_time=target_dt,
@@ -466,10 +485,12 @@ def execute_briefing(
             result.skewt_paths = skewt_result.paths
         if skewt_result.error:
             result.errors.append(skewt_result.error)
+        stage_timings["generate_skewt"] = perf_counter() - _t0
 
     # === 7. Optional: LLM digest ===
     if options.generate_llm_digest:
         _notify("llm_digest")
+        _t0 = perf_counter()
         previous_digest = _load_previous_digest(pack_dir, days_out)
         digest_result = run_llm_digest(
             snapshot=snapshot,
@@ -498,6 +519,7 @@ def execute_briefing(
             result.usage.llm_output_tokens = digest_result.llm_output_tokens
         if digest_result.error:
             result.errors.append(digest_result.error)
+        stage_timings["llm_digest"] = perf_counter() - _t0
 
     # === 8. Always: text digest ===
     from weatherbrief.digest.text import format_digest
@@ -526,5 +548,11 @@ def execute_briefing(
             "Memory curve: %s MB; request_growth=%+d MB%s",
             curve_str, int(request_growth), peak_delta_str,
         )
+
+    if stage_timings:
+        items = sorted(stage_timings.items(), key=lambda kv: -kv[1])
+        parts = " ".join(f"{label}={secs:.2f}s" for label, secs in items)
+        total = sum(stage_timings.values())
+        logger.info("Pipeline timing: %s total=%.2fs", parts, total)
 
     return result
