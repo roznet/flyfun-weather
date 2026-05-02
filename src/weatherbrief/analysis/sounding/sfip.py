@@ -388,10 +388,6 @@ def assess_sfip_zones(
     if not sfip_levels:
         return []
 
-    # Group adjacent levels into zones (shared adjacency logic).
-    # Pass *levels* so the grouper splits zones at gating-induced gaps —
-    # SFIP gates per-level on either NWP or DD cloud layers, and either
-    # method can produce gaps that the grouper must respect.
     return group_icing_levels(sfip_levels, _build_sfip_zone, all_levels=levels)
 
 

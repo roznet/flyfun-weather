@@ -355,12 +355,7 @@ def _group_into_zones(
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
     all_levels: list[DerivedLevel] | None = None,
 ) -> list[IcingZone]:
-    """Group adjacent icing levels into zones (no severity enhancement).
-
-    Pass *all_levels* (the pre-gated full input the caller iterated over)
-    so the grouper splits zones at gating-induced gaps — see
-    :func:`group_icing_levels` for details.
-    """
+    """Group adjacent icing levels into zones — see :func:`group_icing_levels` for ``all_levels`` semantics."""
     return group_icing_levels(icing_levels, _build_zone_simple, all_levels=all_levels)
 
 

@@ -118,9 +118,15 @@ Wet-bulb temperature with dry-bulb fallback. Thresholds shifted ~1°C colder tha
 
 Used by all three methods (previously SFIP used dry-bulb only with different thresholds).
 
-### `group_icing_levels(icing_levels, build_zone_fn)`
+### `group_icing_levels(icing_levels, build_zone_fn, *, all_levels=None)`
 
-Shared adjacency grouping: pressure gap ≤ 100 hPa → same zone. Used by Ogimet-DD, Ogimet-NWP, and SFIP.
+Shared adjacency grouping. Two icing entries merge into the same zone iff **both**:
+1. They are directly consecutive in *all_levels* (the pre-gated input the caller iterated over) — guarantees the grouper never bridges a level filtered out by the caller's gate (e.g. an NWP cloud-band gap).
+2. Their pressure gap is ≤ `ZONE_MAX_PRESSURE_GAP_HPA` (100 hPa) — guarantees sparse inputs (e.g. only two levels far apart) still split.
+
+When *all_levels* is omitted the function falls back to the legacy pressure-only check; this path is preserved for backward compatibility but should not be used by new callers (it's vulnerable to bug #7 below).
+
+Used by all four zone builders: Ogimet-DD, Ogimet-NWP, IENG, and SFIP.
 
 ---
 
@@ -161,6 +167,12 @@ Shared adjacency grouping: pressure gap ≤ 100 hPa → same zone. Used by Ogime
 **Problem:** `_is_near_cloud`, `_classify_icing_type`, `_nwp_cloud_for_altitude`/`_cloud_cover_for_level`, and zone grouping logic were duplicated between `icing.py` and `sfip.py` with subtle differences.
 
 **Fix:** Extracted to `icing_common.py`. Both modules delegate to shared implementations. Original private functions preserved as thin wrappers for backward compatibility.
+
+### 7. Icing zones bridging cloud-band gaps (PR #106)
+
+**Problem:** `group_icing_levels` merged adjacent surviving icing levels using a pressure-gap heuristic alone (`abs(p1 - p2) ≤ 100 hPa`). At typical 25 hPa input spacing, a 3-level NWP cloud-band gap (e.g. GFS lcc top FL114 → mcc base FL157) collapses to exactly 100 hPa between the surviving icing levels on either side — the heuristic let two cloud-gated zones bridge the "no cloud" stretch. Visible on prod flight `kpao_kgcn-2026-05-05-dc1b` GFS pt13: NWP cloud bands `[4088-11477]` and `[15679-20851]` ft, but `icing_ogimet_nwp_zones` produced a single `7257-18442` ft zone bridging the FL114-FL157 gap — rendering as icing over apparent blue sky on the cross-section.
+
+**Fix:** `group_icing_levels` now optionally takes the pre-gated input list (`all_levels=`). When provided, two icing entries merge iff **both** they were directly consecutive in `all_levels` (no level filtered between them) and the pressure gap stays under the legacy threshold. All four zone builders updated. The dual-check guarantees zones never bridge a gating-induced gap regardless of how the underlying pressure spacing aligns with the gap width.
 
 ---
 

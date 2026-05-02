@@ -398,18 +398,7 @@ def test_ieng_none_clouds_returns_empty():
     assert assess_icing_zones_ieng(levels, [], nwp_cloud_mid_pct=80.0) == []
 
 
-# --- Cloud-gap respect: zones must split at cloud-band gaps ---
-#
-# Regression: GFS produces three discrete NWP cloud bands (low/mid/high)
-# with real altitude gaps between them. When icing-prone levels exist on
-# both sides of a gap, the legacy pressure-gap heuristic in
-# ``group_icing_levels`` (≤ 100 hPa) bridges across the gap because at
-# typical 25 hPa spacing a 3-level cloud-band gap collapses to exactly
-# 100 hPa between surviving icing levels. The result was one big icing
-# zone displayed across "blue sky" in the cross-section — see
-# investigation 2026-05-02 on flight kpao_kgcn-2026-05-05-dc1b pt13.
-# The fix is index-based grouping: surviving icing levels only merge
-# when they are *directly consecutive* in the pre-gated input.
+# --- Zones must split at gating-induced cloud-band gaps (PR #106) ---
 
 
 def test_ogimet_nwp_does_not_bridge_cloud_band_gap():
@@ -477,12 +466,32 @@ def test_ogimet_nwp_single_band_still_one_zone():
     assert len(zones) == 1
 
 
-def test_ogimet_dd_does_not_bridge_dd_cloud_gap():
-    """Same fix applies to Ogimet-DD when DD clouds happen to have gaps.
+def test_ieng_does_not_bridge_cloud_band_gap():
+    """IENG uses the same NWP gating as Ogimet-NWP — must also split at gaps."""
+    from weatherbrief.analysis.sounding.icing import assess_icing_zones_ieng
 
-    DD clouds are usually continuous (RH-derived) so this case is rare,
-    but the fix in the shared grouper must cover it consistently.
-    """
+    icing_T = -7.0
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=9900, temperature_c=icing_T,
+                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
+        DerivedLevel(pressure_hpa=675, altitude_ft=10840, temperature_c=icing_T,
+                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
+        DerivedLevel(pressure_hpa=625, altitude_ft=12810, temperature_c=icing_T,
+                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
+        DerivedLevel(pressure_hpa=600, altitude_ft=13840, temperature_c=icing_T,
+                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
+        DerivedLevel(pressure_hpa=550, altitude_ft=16020, temperature_c=icing_T,
+                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
+        DerivedLevel(pressure_hpa=525, altitude_ft=17170, temperature_c=icing_T,
+                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
+    ]
+    bands = [_cloud(4088, 11477), _cloud(15679, 20851)]
+    zones = assess_icing_zones_ieng(levels, bands, nwp_cloud_mid_pct=80.0)
+    assert len(zones) == 2, f"IENG: expected 2 zones split at cloud gap, got {len(zones)}"
+
+
+def test_ogimet_dd_does_not_bridge_dd_cloud_gap():
+    """Same fix applies to Ogimet-DD when DD clouds happen to have gaps."""
     icing_T = -7.0
     icing_TD = -7.5
     levels = [
