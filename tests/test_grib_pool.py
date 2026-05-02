@@ -14,13 +14,14 @@ from concurrent.futures.process import BrokenProcessPool
 
 import pytest
 
+import weatherbrief.fetch.grib as grib_pkg
 from weatherbrief.fetch.grib import (
     _decode_pool_workers,
     _dispatch_decode,
     _get_decode_pool,
+    decode_worker,
     shutdown_decode_pool,
 )
-from weatherbrief.fetch.grib import decode_worker
 
 
 @pytest.fixture(autouse=True)
@@ -31,11 +32,14 @@ def _shutdown_after():
 
 
 def test_pool_lazy_startup(monkeypatch):
-    """Pool isn't created until the first dispatch."""
+    """Pool stays None until something actually dispatches a decode."""
     monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
     shutdown_decode_pool()  # ensure clean
-    pool = _get_decode_pool()
-    assert pool is not None
+    assert grib_pkg._DECODE_POOL is None, "pool should not exist before dispatch"
+
+    # Dispatching a job is what should bring the pool up.
+    _dispatch_decode("_test_echo", "ping")
+    assert grib_pkg._DECODE_POOL is not None, "dispatch should have created the pool"
 
 
 def test_pool_disabled_when_workers_zero(monkeypatch):
@@ -100,20 +104,32 @@ def test_error_propagation(monkeypatch):
         _dispatch_decode("_test_echo", None, 0.0, "bang")
 
 
-def test_pool_recovers_after_worker_crash(monkeypatch):
-    """A SIGKILL'd worker breaks the pool; shutdown + redispatch recovers."""
+def test_pool_auto_resets_after_worker_crash(monkeypatch):
+    """A SIGKILL'd worker raises BrokenProcessPool; the next dispatch
+    automatically gets a fresh pool — no manual shutdown required.
+
+    This guards the recovery path added in response to PR #104 review:
+    without it, one bad worker would poison every subsequent decode
+    until the app restarts.
+    """
     monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
     shutdown_decode_pool()
     # First call warms the pool.
     assert _dispatch_decode("_test_echo", "ok") == "ok"
+    broken_pool = grib_pkg._DECODE_POOL
+    assert broken_pool is not None
 
-    # Crash a worker mid-call — the pool will surface BrokenProcessPool.
+    # Crash a worker mid-call — BrokenProcessPool propagates to caller.
     with pytest.raises((BrokenProcessPool, OSError)):
         _dispatch_decode("_test_crash")
 
-    # After teardown + a fresh dispatch, the new pool services jobs again.
-    shutdown_decode_pool()
+    # The except-clause inside _dispatch_decode should have torn the pool down.
+    assert grib_pkg._DECODE_POOL is None, "broken pool should have been cleared"
+
+    # Next dispatch lazily creates a fresh pool, no app restart required.
     assert _dispatch_decode("_test_echo", "recovered") == "recovered"
+    assert grib_pkg._DECODE_POOL is not None
+    assert grib_pkg._DECODE_POOL is not broken_pool
 
 
 def test_concurrent_thread_dispatch(monkeypatch):
