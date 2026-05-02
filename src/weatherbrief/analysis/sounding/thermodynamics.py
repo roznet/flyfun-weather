@@ -324,16 +324,14 @@ def compute_derived_levels_extended(
     Called by the full briefing pipeline after ``compute_derived_levels_core``.
     These fields are used by icing, inversions, vertical motion, and Skew-T.
     """
-    n = len(profile.pressure.magnitude)
-
     # Omega magnitudes (Pa/s, NaN where missing per prepare.py contract)
     omega_vals = None
     if profile.omega is not None:
         omega_vals = profile.omega.to("Pa/s").magnitude
 
-    # All MetPy calls below operate on the full profile array at once —
-    # MetPy propagates NaN per-level naturally, so we no longer pay the
-    # ~3 calls × n levels of @parse_grid_arguments wrapper overhead.
+    # All MetPy calls below operate on the full profile array at once;
+    # MetPy propagates NaN per-level so the per-element guards below are
+    # the same shape as the omega/w path.
 
     rh_vals = None
     try:
@@ -369,13 +367,10 @@ def compute_derived_levels_extended(
             logger.debug("Omega→w conversion failed", exc_info=True)
 
     for i, lv in enumerate(levels):
-        if i >= n:
-            break
-
-        if wb_vals is not None:
+        if wb_vals is not None and not np.isnan(wb_vals[i]):
             lv.wet_bulb_c = round(float(wb_vals[i]), 1)
 
-        if te_vals is not None:
+        if te_vals is not None and not np.isnan(te_vals[i]):
             lv.theta_e_k = round(float(te_vals[i]), 1)
 
         if omega_vals is not None and not np.isnan(omega_vals[i]):
