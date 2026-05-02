@@ -14,6 +14,8 @@ import os
 import threading
 import time as _time_mod
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+from typing import Any
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -265,21 +267,34 @@ def shutdown_decode_pool() -> None:
         logger.info("GRIB decode pool shut down")
 
 
-def _dispatch_decode(worker_fn_name: str, *args):
+def _dispatch_decode(worker_fn_name: str, *args) -> Any:
     """Submit a decode job to the pool (or run in-process if disabled).
 
     Pool is the default; the in-process fallback exists for tests and as
     a kill switch via ``GRIB_DECODE_WORKERS=0``. Both paths return the
     raw decode result; timing/RSS observability stays on the parent-side
     ``_grib_time`` wraps that surround each call site.
+
+    On ``BrokenProcessPool`` (worker SIGKILL, OOM, cfgrib segfault), the
+    current request still fails — we don't know if a partial result is
+    valid — but the broken pool is torn down so the next dispatch
+    lazily creates a fresh one. Without this, one dead worker would
+    poison every subsequent decode until the app restarts.
     """
     from weatherbrief.fetch.grib import decode_worker
     fn = getattr(decode_worker, worker_fn_name)
     pool = _get_decode_pool()
     if pool is None:
         return fn(*args)
-    future = pool.submit(fn, *args)
-    return future.result()
+    try:
+        future = pool.submit(fn, *args)
+        return future.result()
+    except BrokenProcessPool:
+        logger.error(
+            "GRIB decode pool broken (worker died); resetting for next call",
+        )
+        shutdown_decode_pool()
+        raise
 
 
 def _grib_session() -> requests.Session:
