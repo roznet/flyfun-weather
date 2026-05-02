@@ -8,6 +8,7 @@ test suite via the same dispatch path.
 
 from __future__ import annotations
 
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -61,6 +62,10 @@ def test_dispatch_returns_result(monkeypatch):
     assert result == {"a": 1, "b": [2, 3]}
 
 
+@pytest.mark.skipif(
+    (os.cpu_count() or 1) < 2,
+    reason="requires at least 2 logical CPUs to actually parallelise",
+)
 def test_two_concurrent_submits_run_in_parallel(monkeypatch):
     """Two concurrent decode jobs should run in parallel, not serialise.
 
@@ -130,6 +135,39 @@ def test_pool_auto_resets_after_worker_crash(monkeypatch):
     assert _dispatch_decode("_test_echo", "recovered") == "recovered"
     assert grib_pkg._DECODE_POOL is not None
     assert grib_pkg._DECODE_POOL is not broken_pool
+
+
+def test_pool_auto_resets_on_worker_hang(monkeypatch):
+    """A hung worker triggers TimeoutError; the pool is torn down (wait=False
+    so we don't block on the still-running worker), and the next dispatch
+    lazily creates a fresh pool.
+
+    Without the timeout, ``future.result()`` would block the calling thread
+    indefinitely — eventually starving uvicorn's worker thread pool.
+    """
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
+    # Warm with a generous timeout so the spawn cost doesn't trip the test.
+    monkeypatch.setenv("GRIB_DECODE_TIMEOUT_S", "30")
+    shutdown_decode_pool()
+    assert _dispatch_decode("_test_echo", "warm") == "warm"
+    hung_pool = grib_pkg._DECODE_POOL
+    assert hung_pool is not None
+
+    # Now drop the timeout for the hang call.
+    monkeypatch.setenv("GRIB_DECODE_TIMEOUT_S", "0.5")
+    t0 = time.perf_counter()
+    with pytest.raises(TimeoutError):
+        _dispatch_decode("_test_hang", 30.0)  # would hang far longer than timeout
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 2.5, f"timeout fired in {elapsed:.2f}s, should be ~0.5s"
+    assert grib_pkg._DECODE_POOL is None, "stuck pool should have been cleared"
+
+    # Recovery: next dispatch lazily creates a fresh pool. Bump the timeout
+    # back up so the new worker's spawn cost has room.
+    monkeypatch.setenv("GRIB_DECODE_TIMEOUT_S", "30")
+    assert _dispatch_decode("_test_echo", "post-hang") == "post-hang"
+    assert grib_pkg._DECODE_POOL is not None
+    assert grib_pkg._DECODE_POOL is not hung_pool
 
 
 def test_concurrent_thread_dispatch(monkeypatch):
