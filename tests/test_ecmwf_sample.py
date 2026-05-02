@@ -1092,9 +1092,16 @@ class TestSelectEcmwfGribRun:
         assert _select_ecmwf_grib_run(om_init, days=4) is None
 
 
+@slow_grib
 @skip_no_samples
 class TestFetchEcmwfGribSnapshots:
-    """End-to-end fetcher test against a real local ECMWF run."""
+    """End-to-end fetcher test against a real local ECMWF run.
+
+    ~60s on a populated ECMWF_GRIB_DIR (cfgrib decode + multi-grid scan +
+    sounding extraction for 2 airports across all sample hours).
+    Marked slow → skipped by default; run with `pytest -m slow` when
+    touching ECMWF fetch/decode code.
+    """
 
     def test_one_run_two_airports(self):
         from weatherbrief.fetch.grib.ecmwf_fetch import scan_ecmwf_files
