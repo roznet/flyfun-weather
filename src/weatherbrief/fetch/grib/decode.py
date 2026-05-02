@@ -292,7 +292,10 @@ def _interpolate_to_points(
         return None
 
 
-def _frac_grid_indices(coord_arr, targets):
+def _frac_grid_indices(
+    coord_arr: "np.ndarray",
+    targets: "np.ndarray | list[float]",
+) -> "tuple[np.ndarray, np.ndarray]":
     """Map target coordinates to fractional indices in a 1-D coord array.
 
     Handles ascending or descending coords, uniform or non-uniform spacing.
@@ -334,14 +337,10 @@ def _decode_pressure_vars_from_datasets(
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
     """Shared decode loop for pressure-level GRIB datasets.
 
-    Vectorised: for each dataset we compute fractional grid indices and
-    bilinear weights once for all route points, then for each variable
-    materialise its full ``(level, lat, lon)`` numpy array and gather all
-    four bilinear corners with advanced indexing — a single batched
-    ``(n_levels, n_points)`` interp per variable instead of an
-    ``L × N`` xarray ``.sel`` + ``.interp`` loop. The arithmetic runs in
-    numpy C code which releases the GIL, so concurrent ECMWF/GFS/ICON
-    decode threads stop spinning the interpreter against each other.
+    Vectorised: bilinear corner indices/weights are computed once per
+    dataset and the full ``(level, lat, lon)`` array is gathered with
+    numpy advanced indexing. The xarray ``.sel`` + ``.interp`` loop it
+    replaced was GIL-bound, blocking concurrent decode threads.
 
     Args:
         datasets: cfgrib-opened xarray Datasets.
@@ -420,12 +419,29 @@ def _decode_pressure_vars_from_datasets(
 
             is_frac = var_lower in frac_vars
 
-            # Determine pressure coordinate
+            # Determine pressure coordinate + the dim count we expect for this
+            # variable. Doing this *before* materialising .values avoids a full
+            # numpy allocation for ensemble/time-dim variables we'd just drop.
             pressure_coord = None
             for coord_name in ("isobaricInhPa", "level", "pressure"):
                 if coord_name in xr_var.dims:
                     pressure_coord = coord_name
                     break
+
+            if pressure_coord is None:
+                level = xr_var.attrs.get("level")
+                if level is None:
+                    continue
+                expected_ndim = 2
+            else:
+                expected_ndim = 3
+
+            if xr_var.ndim != expected_ndim:
+                logger.debug(
+                    "skip %s: expected %d-D, got %d-D %s",
+                    var_name, expected_ndim, xr_var.ndim, xr_var.dims,
+                )
+                continue
 
             try:
                 var_dims = list(xr_var.dims)
@@ -441,9 +457,6 @@ def _decode_pressure_vars_from_datasets(
             values = np.transpose(values, other_axes + [lat_axis, lon_axis])
 
             if pressure_coord is None:
-                level = xr_var.attrs.get("level")
-                if level is None or values.ndim != 2:
-                    continue
                 p_hpa = int(level)
                 interp = (
                     w00 * values[i0, j0]
@@ -464,13 +477,15 @@ def _decode_pressure_vars_from_datasets(
                     covered[pt_idx] = True
                 continue
 
-            if values.ndim != 3:
-                continue
             try:
                 pressures = np.asarray(ds.coords[pressure_coord].values)
             except Exception:
                 continue
             if pressures.shape[0] != values.shape[0]:
+                logger.debug(
+                    "skip %s: pressure coord len %d != values axis 0 len %d",
+                    var_name, pressures.shape[0], values.shape[0],
+                )
                 continue
 
             # Batched bilinear across all levels — shape (L, n_inb).
