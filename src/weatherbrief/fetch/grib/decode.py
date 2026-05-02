@@ -292,6 +292,37 @@ def _interpolate_to_points(
         return None
 
 
+def _frac_grid_indices(coord_arr, targets):
+    """Map target coordinates to fractional indices in a 1-D coord array.
+
+    Handles ascending or descending coords, uniform or non-uniform spacing.
+    Out-of-range targets receive NaN — matching xarray's
+    ``.interp(method='linear')`` default which fills outside the grid with NaN.
+
+    Returns:
+        (frac, in_bounds) — both shape (n,). ``frac`` is the fractional index
+        in the original (non-reversed) coord array; ``in_bounds`` masks
+        targets strictly outside the grid extent.
+    """
+    import numpy as np
+
+    n = coord_arr.size
+    targets = np.asarray(targets, dtype=np.float64)
+    if n < 2:
+        return np.full(targets.shape, np.nan), np.zeros(targets.shape, dtype=bool)
+
+    if coord_arr[0] > coord_arr[-1]:
+        # Descending: reverse so xp ascends; remap fp to original positions.
+        xp = coord_arr[::-1]
+        fp = np.arange(n - 1, -1, -1, dtype=np.float64)
+    else:
+        xp = coord_arr
+        fp = np.arange(n, dtype=np.float64)
+
+    frac = np.interp(targets, xp, fp, left=np.nan, right=np.nan)
+    return frac, ~np.isnan(frac)
+
+
 def _decode_pressure_vars_from_datasets(
     datasets: list,
     latitudes: list[float],
@@ -303,8 +334,14 @@ def _decode_pressure_vars_from_datasets(
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
     """Shared decode loop for pressure-level GRIB datasets.
 
-    Iterates datasets, maps variable names via var_map, finds the pressure
-    coordinate, interpolates per point, and stores results.
+    Vectorised: for each dataset we compute fractional grid indices and
+    bilinear weights once for all route points, then for each variable
+    materialise its full ``(level, lat, lon)`` numpy array and gather all
+    four bilinear corners with advanced indexing — a single batched
+    ``(n_levels, n_points)`` interp per variable instead of an
+    ``L × N`` xarray ``.sel`` + ``.interp`` loop. The arithmetic runs in
+    numpy C code which releases the GIL, so concurrent ECMWF/GFS/ICON
+    decode threads stop spinning the interpreter against each other.
 
     Args:
         datasets: cfgrib-opened xarray Datasets.
@@ -317,13 +354,64 @@ def _decode_pressure_vars_from_datasets(
     Returns:
         Tuple of (per-point results, coverage mask).
     """
+    import numpy as np
+
     active_map = var_map if var_map is not None else _VAR_MAP
     frac_vars = frac_vars or set()
     n_points = len(latitudes)
     results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
     covered: list[bool] = [False] * n_points
 
+    if n_points == 0:
+        return results, covered
+
+    targets_lat = np.asarray(latitudes, dtype=np.float64)
+    targets_lon = np.asarray(longitudes, dtype=np.float64)
+
     for ds in datasets:
+        # Detect lat/lon dim names once per dataset
+        lat_dim = lon_dim = None
+        for dim in ds.dims:
+            dim_lower = str(dim).lower()
+            if "lat" in dim_lower:
+                lat_dim = dim
+            elif "lon" in dim_lower:
+                lon_dim = dim
+        if lat_dim is None or lon_dim is None:
+            continue
+
+        try:
+            lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
+            lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
+        except Exception:
+            continue
+
+        H, W = lat_arr.size, lon_arr.size
+        if H < 2 or W < 2:
+            continue
+
+        frac_lat, lat_ok = _frac_grid_indices(lat_arr, targets_lat)
+        frac_lon, lon_ok = _frac_grid_indices(lon_arr, targets_lon)
+        in_bounds = lat_ok & lon_ok
+        if not np.any(in_bounds):
+            continue
+
+        # Bilinear corner indices + weights — computed once per dataset and
+        # reused for every variable in that dataset.
+        fl = frac_lat[in_bounds]
+        fln = frac_lon[in_bounds]
+        i0 = np.clip(np.floor(fl).astype(np.intp), 0, H - 2)
+        j0 = np.clip(np.floor(fln).astype(np.intp), 0, W - 2)
+        i1 = i0 + 1
+        j1 = j0 + 1
+        ai = fl - i0
+        aj = fln - j0
+        w00 = (1.0 - ai) * (1.0 - aj)
+        w01 = (1.0 - ai) * aj
+        w10 = ai * (1.0 - aj)
+        w11 = ai * aj
+        inb_idx = np.flatnonzero(in_bounds)
+
         for var_name, xr_var in ds.data_vars.items():
             var_lower = str(var_name).lower()
             field_name = active_map.get(var_lower)
@@ -339,34 +427,71 @@ def _decode_pressure_vars_from_datasets(
                     pressure_coord = coord_name
                     break
 
-            if pressure_coord is None:
-                level = xr_var.attrs.get("level")
-                if level is not None:
-                    p_hpa = int(level)
-                    values = _interpolate_per_point(xr_var, latitudes, longitudes)
-                    for i, val in enumerate(values):
-                        if val is not None:
-                            if first_wins and field_name in results[i].get(p_hpa, {}):
-                                continue
-                            if is_frac:
-                                val *= 100.0
-                            results[i].setdefault(p_hpa, {})[field_name] = val
-                            covered[i] = True
+            try:
+                var_dims = list(xr_var.dims)
+                lat_axis = var_dims.index(lat_dim)
+                lon_axis = var_dims.index(lon_dim)
+                values = np.asarray(xr_var.values, dtype=np.float64)
+            except (ValueError, KeyError):
                 continue
 
-            pressures = ds.coords[pressure_coord].values
-            for p_val in pressures:
-                p_hpa = int(float(p_val))
-                level_data = xr_var.sel({pressure_coord: p_val})
-                values = _interpolate_per_point(level_data, latitudes, longitudes)
-                for i, val in enumerate(values):
-                    if val is not None:
-                        if first_wins and field_name in results[i].get(p_hpa, {}):
-                            continue
-                        if is_frac:
-                            val *= 100.0
-                        results[i].setdefault(p_hpa, {})[field_name] = val
-                        covered[i] = True
+            # Move lat/lon axes to the trailing positions so we can index
+            # with values[..., i, j].
+            other_axes = [a for a in range(values.ndim) if a not in (lat_axis, lon_axis)]
+            values = np.transpose(values, other_axes + [lat_axis, lon_axis])
+
+            if pressure_coord is None:
+                level = xr_var.attrs.get("level")
+                if level is None or values.ndim != 2:
+                    continue
+                p_hpa = int(level)
+                interp = (
+                    w00 * values[i0, j0]
+                    + w01 * values[i0, j1]
+                    + w10 * values[i1, j0]
+                    + w11 * values[i1, j1]
+                )
+                # interp shape: (n_inb,)
+                for k, pt_idx in enumerate(inb_idx):
+                    v = interp[k]
+                    if np.isnan(v):
+                        continue
+                    if first_wins and field_name in results[pt_idx].get(p_hpa, {}):
+                        continue
+                    if is_frac:
+                        v = v * 100.0
+                    results[pt_idx].setdefault(p_hpa, {})[field_name] = float(v)
+                    covered[pt_idx] = True
+                continue
+
+            if values.ndim != 3:
+                continue
+            try:
+                pressures = np.asarray(ds.coords[pressure_coord].values)
+            except Exception:
+                continue
+            if pressures.shape[0] != values.shape[0]:
+                continue
+
+            # Batched bilinear across all levels — shape (L, n_inb).
+            interp = (
+                w00[None, :] * values[:, i0, j0]
+                + w01[None, :] * values[:, i0, j1]
+                + w10[None, :] * values[:, i1, j0]
+                + w11[None, :] * values[:, i1, j1]
+            )
+            scale = 100.0 if is_frac else 1.0
+            for li in range(pressures.shape[0]):
+                p_hpa = int(float(pressures[li]))
+                row = interp[li]
+                for k, pt_idx in enumerate(inb_idx):
+                    v = row[k]
+                    if np.isnan(v):
+                        continue
+                    if first_wins and field_name in results[pt_idx].get(p_hpa, {}):
+                        continue
+                    results[pt_idx].setdefault(p_hpa, {})[field_name] = float(v) * scale
+                    covered[pt_idx] = True
 
     return results, covered
 
