@@ -91,7 +91,12 @@ def briefer_node(state: DigestState) -> dict:
         return {"digest": result, **token_info}
     except Exception as e:
         diagnostic = classify_llm_exception(e)
-        logger.error(
+        # Gate the log level by the diagnostic severity so transient
+        # conditions like ANTHROPIC_RATE_LIMITED / ANTHROPIC_OVERLOADED
+        # (warn-level — retryable, expected under load) don't trip
+        # error-level alerting rules.
+        log_fn = logger.error if diagnostic.level == "error" else logger.warning
+        log_fn(
             "LLM digest generation failed (code=%s, error_id=%s, request_id=%s)",
             diagnostic.code, diagnostic.error_id, diagnostic.request_id,
             exc_info=True,
