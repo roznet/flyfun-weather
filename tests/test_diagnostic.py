@@ -215,16 +215,31 @@ class TestPublicProjection:
         assert dumped["error_id"] is not None
 
     def test_to_public_round_trip_via_json(self):
+        # Verifies the JSON shape is wire-safe AND survives a model
+        # round-trip without re-introducing stripped fields. Earlier
+        # version asserted hasattr() on the reconstructed model, which
+        # is vacuously true (DiagnosticPublic doesn't declare those
+        # fields, so hasattr returns False regardless of input).
         d = Diagnostic.create(
             level="error", stage="digest",
             code=DigestCode.DIGEST_UNKNOWN, message="m",
             detail="secret", request_id="req_x",
         )
         pub_json = d.to_public().model_dump(mode="json")
-        # Reconstructing from the JSON should not surface the stripped fields
-        reconstructed = DiagnosticPublic.model_validate(pub_json)
-        assert not hasattr(reconstructed, "detail")
-        assert not hasattr(reconstructed, "request_id")
+
+        # Sanity: payload itself does not carry the stripped fields.
+        assert "detail" not in pub_json
+        assert "request_id" not in pub_json
+
+        # Round-trip: re-dump after validate must also be clean.
+        reconstructed_json = (
+            DiagnosticPublic.model_validate(pub_json).model_dump(mode="json")
+        )
+        assert "detail" not in reconstructed_json
+        assert "request_id" not in reconstructed_json
+        # And the payload that DID survive matches.
+        assert reconstructed_json["code"] == "digest_unknown"
+        assert reconstructed_json["message"] == "m"
 
     def test_legacy_diagnostic_to_public_safe(self):
         # Legacy {level, message} entry survives to_public without errors

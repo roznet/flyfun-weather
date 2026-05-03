@@ -100,13 +100,21 @@ export interface DataStatus {
 }
 
 /**
- * One structured event from the briefing pipeline.
+ * One structured event from the briefing pipeline — wire-safe shape
+ * that mirrors the backend's `DiagnosticPublic`, NOT the full Python
+ * `Diagnostic`.
  *
- * `level` and `message` are user-facing (rendered in the freshness banner).
- * Other fields are additional structured context. Pydantic serialises
+ * `level` and `message` are user-facing (rendered in the freshness
+ * banner). The other fields are structured context. Pydantic serialises
  * absent optional fields as `null`, so consumers should treat
  * `value == null` as "not set" rather than checking `=== undefined`.
  * Legacy DB rows (pre-typed model) only carry `{level, message}`.
+ *
+ * `detail` (stack traces, file paths) and `request_id` (Anthropic
+ * correlation id) are deliberately absent — `PackMetaResponse` strips
+ * them at the API boundary via `Diagnostic.to_public()`. If you ever
+ * need them client-side, that's a separate authenticated admin
+ * endpoint, not this one.
  */
 export type DiagnosticLevel = 'info' | 'warn' | 'error';
 
@@ -115,8 +123,6 @@ export interface Diagnostic {
   message: string;
   stage?: string | null;
   code?: string | null;
-  detail?: string | null;
-  request_id?: string | null;
   error_id?: string | null;
   occurred_at?: string | null;
 }
