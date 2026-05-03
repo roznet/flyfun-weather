@@ -75,6 +75,26 @@ def _truncate(text: str) -> str:
 
 
 DiagnosticLevel = Literal["info", "warn", "error"]
+"""Severity convention used across the pipeline.
+
+The frontend banner (``web/ts/managers/briefing-ui.ts``) shows ``warn`` and
+``error`` entries; ``info`` is persisted but never surfaced to the user.
+Pick the level based on **what the user can do about it**:
+
+- **info** — Persisted for debugging only, not shown to the user.
+  Use for: normal pipeline events ("ICON skipped, out of range"),
+  internal misconfiguration the user can't fix ("server missing
+  euro_aip dependency"), expected-state non-events.
+- **warn** — Shown in the banner. Use for transient or retryable
+  issues the user can act on by refreshing or waiting:
+  "Anthropic API overloaded — try again in a few minutes",
+  "GFS forecast fetch failed", "GRIB enrichment failed".
+- **error** — Shown in the banner. Use for irrecoverable failures
+  the user should know about even though they can't fix them:
+  malformed input, server-side bugs that surfaced to a user request.
+  Reach for ``warn`` first; ``error`` is for the rare case where
+  retrying genuinely won't help.
+"""
 
 
 class Diagnostic(BaseModel):

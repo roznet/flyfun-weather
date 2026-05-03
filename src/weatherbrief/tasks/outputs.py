@@ -70,13 +70,11 @@ def run_gramet(
 ) -> GrametResult:
     """Fetch GRAMET cross-section PDF from the Autorouter API."""
     if not autorouter_token:
+        # No credentials is an expected user state, not a pipeline event —
+        # don't emit a diagnostic. The frontend GRAMET tab is the right
+        # place to prompt the user to connect Autorouter.
         logger.debug("Skipping GRAMET: no autorouter token available")
-        return GrametResult(diagnostic=Diagnostic.create(
-            level="info",
-            stage="gramet",
-            code=GrametCode.GRAMET_NO_CREDENTIALS,
-            message="GRAMET cross-section unavailable — no Autorouter credentials configured.",
-        ))
+        return GrametResult()
 
     try:
         from euro_aip.briefing.sources.autorouter_gramet import AutorouterGrametSource
@@ -109,11 +107,14 @@ def run_gramet(
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / "gramet.pdf"
         else:
+            # Internal bug — no actionable user message; persist as info
+            # so it lands in fetch_meta.json for debugging without
+            # triggering a banner.
             return GrametResult(diagnostic=Diagnostic.create(
-                level="error",
+                level="info",
                 stage="gramet",
                 code=GrametCode.GRAMET_NO_OUTPUT_DIR,
-                message="GRAMET cross-section unavailable — internal misconfiguration.",
+                message="GRAMET skipped — internal misconfiguration.",
                 detail="run_gramet called without pack_dir or data_dir",
             ))
 
@@ -122,12 +123,15 @@ def run_gramet(
         return GrametResult(path=out_path, fetched=True)
 
     except ImportError as exc:
+        # Server-side dependency missing; user can't act on this. Keep
+        # info-level so it doesn't generate banner noise on every refresh
+        # if euro_aip ever drops out of the deploy.
         logger.warning("GRAMET fetch requires euro_aip package")
         return GrametResult(diagnostic=Diagnostic.create(
-            level="error",
+            level="info",
             stage="gramet",
             code=GrametCode.GRAMET_NOT_AVAILABLE,
-            message="GRAMET cross-section unavailable — server is missing the euro_aip dependency.",
+            message="GRAMET skipped — server is missing the euro_aip dependency.",
             detail=f"{type(exc).__name__}: {exc}",
         ))
     except Exception as exc:
@@ -163,11 +167,12 @@ def run_skewt(
                 / f"d-{snapshot.days_out}_{snapshot.fetch_date}"
             )
         else:
+            # Internal bug — no actionable user message.
             return SkewtResult(diagnostic=Diagnostic.create(
-                level="error",
+                level="info",
                 stage="skewt",
                 code=SkewtCode.SKEWT_NO_OUTPUT_DIR,
-                message="Skew-T diagrams unavailable — internal misconfiguration.",
+                message="Skew-T skipped — internal misconfiguration.",
                 detail="run_skewt called without pack_dir or data_dir",
             ))
 
@@ -178,12 +183,13 @@ def run_skewt(
         return SkewtResult(paths=result_paths)
 
     except ImportError as exc:
+        # Server-side dependency missing; user can't act on this.
         logger.warning("Skew-T generation requires metpy, numpy, matplotlib")
         return SkewtResult(diagnostic=Diagnostic.create(
-            level="error",
+            level="info",
             stage="skewt",
             code=SkewtCode.SKEWT_METPY_NOT_AVAILABLE,
-            message="Skew-T diagrams unavailable — server is missing the metpy dependency.",
+            message="Skew-T skipped — server is missing the metpy dependency.",
             detail=f"{type(exc).__name__}: {exc}",
         ))
     except Exception as exc:

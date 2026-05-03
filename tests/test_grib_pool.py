@@ -42,18 +42,22 @@ def _drain_background_dispatches(timeout_s: float = 3.0) -> None:
 
     The API ``_refresh_executor`` is the main offender: tests that POST
     ``/refresh`` queue pipeline jobs that keep running after the test
-    function returns. Submitting ``max_workers`` no-ops and waiting for
-    them ensures every earlier-queued job has at least started; combined
-    with the poll-and-shutdown loop below, this gives the pool time to
-    settle.
+    function returns. Submitting one no-op per worker slot and waiting
+    for them ensures every earlier-queued job has at least started;
+    combined with the poll-and-shutdown loop below, this gives the pool
+    time to settle.
+
+    Reads ``_refresh_executor._max_workers`` rather than hardcoding so
+    we don't silently regress if the executor's worker count changes.
     """
     try:
         from weatherbrief.api.packs import _refresh_executor
     except Exception:
         return
-    # max_workers=2 — submit that many no-ops so both worker slots flush
-    # whatever they were running.
-    fillers = [_refresh_executor.submit(lambda: None) for _ in range(2)]
+    # Private attribute, but stable across all CPython 3.x stdlib versions.
+    # Fallback to 2 (the documented current setting) if it ever moves.
+    n_workers = getattr(_refresh_executor, "_max_workers", 2)
+    fillers = [_refresh_executor.submit(lambda: None) for _ in range(n_workers)]
     wait(fillers, timeout=timeout_s)
 
 

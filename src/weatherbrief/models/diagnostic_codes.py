@@ -29,7 +29,6 @@ class DigestCode(StrEnum):
 
 
 class GrametCode(StrEnum):
-    GRAMET_NO_CREDENTIALS = "gramet_no_credentials"
     GRAMET_NOT_AVAILABLE = "gramet_not_available"
     GRAMET_FETCH_FAILED = "gramet_fetch_failed"
     GRAMET_NO_OUTPUT_DIR = "gramet_no_output_dir"

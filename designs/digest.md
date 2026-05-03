@@ -100,7 +100,9 @@ START → fetch_text → assemble → briefer → END
 result = run_digest(snapshot, target_time, config)
 result["digest"]       # → WeatherDigest (Pydantic model)
 result["digest_text"]  # → formatted markdown string
-result["error"]        # → error message if LLM failed, else None
+result["diagnostic"]   # → typed Diagnostic if the LLM call failed, else None
+                       #   (see weatherbrief.models.Diagnostic +
+                       #    weatherbrief.digest.exceptions.classify_llm_exception)
 ```
 
 ### WeatherDigest Model

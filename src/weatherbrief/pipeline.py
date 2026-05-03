@@ -9,6 +9,7 @@ from __future__ import annotations
 import gc
 import logging
 import sys
+import traceback
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -16,8 +17,6 @@ from time import perf_counter
 from typing import Callable
 
 from weatherbrief.fetch.variables import MODEL_ENDPOINTS
-import traceback
-
 from weatherbrief.models import (
     AdvisoryCode,
     Diagnostic,
@@ -33,6 +32,7 @@ from weatherbrief.tasks.analyze import (  # noqa: F401  — backward compat re-e
     compute_interpolated_time,
     compute_route_tracks,
 )
+from weatherbrief.tasks.artifacts import load_fetch_meta, write_pack_meta
 from weatherbrief.tasks.fetch import run_fetch
 from weatherbrief.tasks.analyze import run_analysis
 from weatherbrief.tasks.advise import AdvisoryResult, run_advisories
@@ -548,7 +548,6 @@ def execute_briefing(
     # stage already wrote its own subset earlier; this final write supersedes
     # it so on-disk and in-DB diagnostics agree.
     if pack_dir is not None and pack_dir.exists():
-        from weatherbrief.tasks.artifacts import load_fetch_meta, write_pack_meta
         try:
             # Preserve the original fetch timestamp written by save_fetch_artifacts.
             # `fetched_at` records when the weather data was *fetched*, not when the

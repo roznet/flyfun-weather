@@ -38,7 +38,11 @@ def classify_llm_exception(exc: Exception) -> Diagnostic:
     except ImportError:
         anthropic = None  # type: ignore[assignment]
 
-    detail = traceback.format_exc()
+    # Use the explicit (type, value, traceback) form so we capture the trace
+    # of the *given* exception regardless of whether we're in an active
+    # except block. ``format_exc()`` would silently return "NoneType: None\n"
+    # if called outside an except — fragile.
+    detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
     if anthropic is not None:
         # Best-effort request id (present on APIStatusError subclasses)
