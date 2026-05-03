@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 
 
 def _p90_index(count: int) -> int:
@@ -27,3 +28,21 @@ class TestP90Index:
 
     def test_count_eleven(self):
         assert _p90_index(11) == 9  # ceil(9.9) - 1 = 9
+
+
+class TestMedian:
+    """Pin the property the previous ``ds[count // 2]`` formula violated:
+    median of an even-count list should be the average of the two middles,
+    not biased toward the upper middle.
+    """
+
+    def test_count_two_averages_the_pair(self):
+        # Old buggy formula returned the max for count=2.
+        assert int(statistics.median([10, 20])) == 15
+
+    def test_count_four_averages_inner_pair(self):
+        # Old: ds[2] = 30 (third-smallest, biased high).  New: (20+30)/2 = 25.
+        assert int(statistics.median([10, 20, 30, 40])) == 25
+
+    def test_count_odd_returns_middle(self):
+        assert int(statistics.median([10, 20, 30])) == 20

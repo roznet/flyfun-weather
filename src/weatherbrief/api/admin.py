@@ -107,6 +107,7 @@ def freshness_markers(
     immediately after restart).
     """
     import math
+    import statistics
 
     from weatherbrief.fetch.freshness import LOOP_INTERVAL
     from weatherbrief.fetch.freshness.markers import get_store
@@ -132,7 +133,10 @@ def freshness_markers(
             for hour in sorted(delays_by_hour):
                 ds = sorted(delays_by_hour[hour])
                 count = len(ds)
-                median = ds[count // 2]
+                # ``statistics.median`` averages the two middle values for
+                # even counts; ``ds[count // 2]`` would return the upper
+                # middle (biased high for small samples).
+                median = int(statistics.median(ds))
                 # Nearest-rank p90: ceil(count * 0.9) - 1.  ``int()`` would
                 # truncate and underestimate (e.g. count=2 → idx 0 = min, not p90).
                 p90_idx = max(0, math.ceil(count * 0.9) - 1)

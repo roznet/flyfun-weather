@@ -121,9 +121,17 @@ class MarkerStore:
     def get_sync(self, source: str, model: str) -> Marker | None:
         """Lock-free read.  Returns a snapshot copy or None if not bootstrapped.
 
-        Safe because Marker dataclasses are replaced wholesale on update —
-        readers get either the old or the new immutable value.  Used from
-        sync contexts (HTTP handler) where awaiting the lock isn't ideal.
+        Used from sync contexts (FastAPI threadpool routes) where awaiting
+        the asyncio lock isn't ideal — and where the lock wouldn't help
+        anyway, since it only serialises coroutines.
+
+        Coherence comes from how :meth:`update` publishes state: it builds a
+        new ``Marker`` (with a copied observations deque) and assigns it to
+        the dict in a single ``dict.__setitem__`` call.  The reader's
+        ``self._markers.get(...)`` returns either the old or the new
+        ``Marker`` reference whole — never a half-updated one — and the
+        subsequent ``replace(m, observations=deque(...))`` operates on
+        whichever wholly-consistent snapshot it captured.
         """
         m = self._markers.get((source, model))
         if m is None:
@@ -165,6 +173,14 @@ class MarkerStore:
           After ``max_slip_retries``, jump forward to the next cycle's
           expected delivery and reset slip.
         - Else: just update ``last_check`` (early/null check).
+
+        State transitions go through a single atomic ``dict.__setitem__`` of
+        a new ``Marker`` instance (with a copied observations deque).  The
+        ``asyncio.Lock`` only serialises coroutines — :meth:`get_sync` is
+        called from FastAPI's threadpool, and the GIL alone isn't enough to
+        guarantee a coherent multi-field read off a marker mid-mutation.
+        Atomic dict assignment + immutable snapshot is what makes the
+        "wholesale replace" claim in :meth:`get_sync` actually true.
         """
         now = now or datetime.now(timezone.utc)
         async with self._lock:
@@ -172,24 +188,32 @@ class MarkerStore:
             if marker is None:
                 # Source observed before bootstrap — accept and pin from registry.
                 next_exp = registry.next_run_after(source, observed_init)
-                marker = Marker(
+                new_observations: deque[tuple[datetime, datetime]] = deque(
+                    maxlen=OBSERVATIONS_MAXLEN,
+                )
+                new_observations.append((observed_init, now))
+                self._markers[(source, model)] = Marker(
                     source=source, model=model,
                     init=observed_init, next_expected=next_exp,
                     last_check=now,
+                    observations=new_observations,
                 )
-                marker.observations.append((observed_init, now))
-                self._markers[(source, model)] = marker
                 return
 
             if observed_init > marker.init:
                 expected_delivery = registry.expected_delivery_for_init(source, observed_init)
                 actual_delay = now - observed_init
                 vs_expected = now - expected_delivery
-                marker.init = observed_init
-                marker.next_expected = registry.next_run_after(source, observed_init)
-                marker.slip_count = 0
-                marker.observations.append((observed_init, now))
-                marker.last_check = now
+                new_observations = deque(marker.observations, maxlen=OBSERVATIONS_MAXLEN)
+                new_observations.append((observed_init, now))
+                self._markers[(source, model)] = replace(
+                    marker,
+                    init=observed_init,
+                    next_expected=registry.next_run_after(source, observed_init),
+                    slip_count=0,
+                    last_check=now,
+                    observations=new_observations,
+                )
                 logger.info(
                     "Marker advanced: %s/%s init=%s arrived_at=%s "
                     "delivery=+%s (registry expected +%s, drift=%+ds)",
@@ -201,11 +225,15 @@ class MarkerStore:
                 )
                 return
 
-            # No advance — only treat as slip if the expected-delivery time has passed.
+            # No advance — compute the new state, then publish atomically.
+            new_slip_count = marker.slip_count
+            new_next_expected = marker.next_expected
+            log_warning: tuple | None = None
+            log_info: tuple | None = None
             if now >= marker.next_expected:
                 cfg = registry.SOURCE_REGISTRY[source]
-                marker.slip_count += 1
-                if marker.slip_count > cfg.max_slip_retries:
+                new_slip_count = marker.slip_count + 1
+                if new_slip_count > cfg.max_slip_retries:
                     # Give up on the cycle we were waiting for and target the
                     # one *after* it.  The slipping cycle is always the one
                     # right after ``marker.init`` (the last successfully
@@ -218,26 +246,35 @@ class MarkerStore:
                     target_cycle = registry.next_cycle_init_after(
                         source, skipped_cycle,
                     )
-                    marker.next_expected = registry.expected_delivery_for_init(
+                    new_next_expected = registry.expected_delivery_for_init(
                         source, target_cycle,
                     )
-                    marker.slip_count = 0
-                    logger.warning(
+                    new_slip_count = 0
+                    log_warning = (
                         "Marker slip cap hit: %s/%s — skipping cycle %s, "
                         "target cycle %s, next_expected=%s",
                         source, model,
                         skipped_cycle.isoformat(), target_cycle.isoformat(),
-                        marker.next_expected.isoformat(),
+                        new_next_expected.isoformat(),
                     )
                 else:
-                    bump = cfg.slip_bump(marker.slip_count)
-                    marker.next_expected = marker.next_expected + bump
-                    logger.info(
+                    bump = cfg.slip_bump(new_slip_count)
+                    new_next_expected = marker.next_expected + bump
+                    log_info = (
                         "Marker slip: %s/%s slip_count=%d bump=+%s next_expected=%s",
-                        source, model, marker.slip_count,
-                        _fmt_td(bump), marker.next_expected.isoformat(),
+                        source, model, new_slip_count,
+                        _fmt_td(bump), new_next_expected.isoformat(),
                     )
-            marker.last_check = now
+            self._markers[(source, model)] = replace(
+                marker,
+                next_expected=new_next_expected,
+                slip_count=new_slip_count,
+                last_check=now,
+            )
+            if log_warning is not None:
+                logger.warning(*log_warning)
+            elif log_info is not None:
+                logger.info(*log_info)
 
     async def mark_check(self, source: str, model: str, now: datetime | None = None) -> None:
         """Refresh ``last_check`` without changing init/next_expected.
