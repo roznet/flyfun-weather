@@ -91,12 +91,22 @@ export interface CreateFlightRequest {
   raw_route?: string;
 }
 
+export interface ModelStatus {
+  source: string;
+  pack_init: number | null;
+  latest_available: number;
+  next_expected: string;
+  state: "current" | "stale" | "awaiting" | "delayed";
+}
+
 export interface DataStatus {
   fresh: boolean;
   stale_models: string[];
   model_init_times: Record<string, number>;
   next_expected_update: string | null;
   next_expected_model: string | null;
+  marker_health?: "ok" | "suspect";
+  models?: Record<string, ModelStatus>;
 }
 
 /**

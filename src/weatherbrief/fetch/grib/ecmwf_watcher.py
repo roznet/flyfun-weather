@@ -146,6 +146,45 @@ def is_run_partial(data_dir: Path | None = None, *, base_time: datetime) -> bool
     return _sentinel_path(d, base_time).with_suffix(".partial").exists()
 
 
+def _parse_sentinel_base_time(name: str) -> datetime | None:
+    """Parse the base_time from a ``.ready_YYYYMMDD_HHz[.partial]`` filename."""
+    if not name.startswith(".ready_"):
+        return None
+    # ".ready_YYYYMMDD_HHz" or ".ready_YYYYMMDD_HHz.partial"
+    body = name[len(".ready_"):]
+    if body.endswith(".partial"):
+        body = body[: -len(".partial")]
+    # Now body is "YYYYMMDD_HHz"
+    if not body.endswith("z") or len(body) != len("YYYYMMDD_HHz"):
+        return None
+    try:
+        return datetime.strptime(body, "%Y%m%d_%Hz").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def get_latest_ready(data_dir: Path | None = None) -> datetime | None:
+    """Return the most recent ECMWF run with a readiness sentinel, or None.
+
+    Used by the freshness loop's dynamic check for ``ecmwf:direct``.  Reads
+    only filenames in the delivery directory — no network, no GRIB parsing.
+    Counts both ``.ready_*z`` (complete) and ``.ready_*z.partial`` (timed-out)
+    sentinels: a partial run is still useful data the briefing pipeline can
+    consume, so its arrival should also bump freshness.
+    """
+    d = data_dir or ecmwf_grib_dir()
+    if not d.exists():
+        return None
+    latest: datetime | None = None
+    for path in d.iterdir():
+        bt = _parse_sentinel_base_time(path.name)
+        if bt is None:
+            continue
+        if latest is None or bt > latest:
+            latest = bt
+    return latest
+
+
 def _expected_publish_time(
     base_time: datetime, config: DeliveryConfig,
 ) -> datetime:

@@ -209,11 +209,18 @@ async def lifespan(app: FastAPI):
             run_hewson_precompute_loop(app.state)
         )
 
+    freshness_task = None
+    if os.environ.get("DISABLE_FRESHNESS_LOOP", "").strip() not in ("1", "true"):
+        from weatherbrief.scheduler import run_freshness_loop
+
+        freshness_task = asyncio.create_task(run_freshness_loop(app.state))
+
     yield
 
     for task in (scheduler_task, retention_task, verification_task,
                  digest_task, forecast_fetch_task, standalone_task,
-                 ecmwf_watcher_task, hewson_precompute_task):
+                 ecmwf_watcher_task, hewson_precompute_task,
+                 freshness_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):

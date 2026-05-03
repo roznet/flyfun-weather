@@ -93,6 +93,12 @@ class BriefingPackMeta(BaseModel):
     artifact_path: str = ""  # path to pack directory
     model_init_times: dict[str, int] = Field(default_factory=dict)
     grib_init_times: dict[str, int] = Field(default_factory=dict)
+    # Maps logical model name → freshness source key (e.g. "ecmwf" → "ecmwf:direct"
+    # or "ecmwf:openmeteo").  Set at enrichment time so the freshness marker
+    # store knows which source to compare each pack's init against.  Empty for
+    # legacy packs created before issue #108 — the freshness check infers from
+    # ``grib_init_times`` presence in that case.
+    model_sources: dict[str, str] = Field(default_factory=dict)
     models_skipped_region: list[str] = Field(default_factory=list)
     diagnostics: list[Diagnostic] = Field(default_factory=list)
     alt_assessment: Optional[str] = None  # GREEN/AMBER/RED for alt departure
