@@ -24,6 +24,7 @@ class DigestCode(StrEnum):
     ANTHROPIC_RATE_LIMITED = "anthropic_rate_limited"
     ANTHROPIC_TIMEOUT = "anthropic_timeout"
     ANTHROPIC_CONNECTION = "anthropic_connection"
+    ANTHROPIC_AUTH_ERROR = "anthropic_auth_error"
     DIGEST_BAD_REQUEST = "digest_bad_request"
     DIGEST_UNKNOWN = "digest_unknown"
 

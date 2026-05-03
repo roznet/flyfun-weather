@@ -50,7 +50,7 @@ from weatherbrief.fetch.model_status import (
     compute_next_update,
     fetch_model_metadata,
 )
-from weatherbrief.models import BriefingPackMeta, Diagnostic
+from weatherbrief.models import BriefingPackMeta, DiagnosticPublic
 from weatherbrief.storage.flights import (
     list_packs,
     load_pack_meta,
@@ -229,7 +229,11 @@ class PackMetaResponse(BaseModel):
     model_init_times: dict[str, int] = Field(default_factory=dict)
     grib_init_times: dict[str, int] = Field(default_factory=dict)
     models_skipped_region: list[str] = Field(default_factory=list)
-    diagnostics: list[Diagnostic] = Field(default_factory=list)
+    # NOTE: DiagnosticPublic (not Diagnostic) — strips `detail` and
+    # `request_id` so we don't ship stack traces or upstream API
+    # correlation ids to authenticated clients. The full Diagnostic
+    # stays in the DB and on disk for debugging.
+    diagnostics: list[DiagnosticPublic] = Field(default_factory=list)
     data_status: DataStatus | None = None
 
 
@@ -260,7 +264,7 @@ def _meta_to_response(
         model_init_times=meta.model_init_times,
         grib_init_times=meta.grib_init_times,
         models_skipped_region=meta.models_skipped_region,
-        diagnostics=meta.diagnostics,
+        diagnostics=[d.to_public() for d in meta.diagnostics],
         data_status=data_status,
     )
 

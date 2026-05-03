@@ -83,6 +83,21 @@ def classify_llm_exception(exc: Exception) -> Diagnostic:
                 detail=detail,
                 request_id=request_id,
             )
+        if isinstance(
+            exc,
+            (anthropic.AuthenticationError, anthropic.PermissionDeniedError),
+        ):
+            # 401/403 — the server's API key was rejected (rotated, expired,
+            # revoked, or misconfigured). Retrying won't help; the team
+            # needs to act. Don't echo "API key rejected" in the user
+            # message — that leaks server-side state.
+            return Diagnostic.create(
+                level="error", stage="digest",
+                code=DigestCode.ANTHROPIC_AUTH_ERROR,
+                message="AI weather digest unavailable — internal authentication issue. The team has been notified.",
+                detail=detail,
+                request_id=request_id,
+            )
         if isinstance(exc, anthropic.BadRequestError):
             # 400 from Anthropic — usually a server-side prompt/config bug;
             # retrying won't help.
