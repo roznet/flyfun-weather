@@ -49,9 +49,11 @@ _REDACTION_PATTERNS = [
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+"), r"\1<REDACTED>"),
     (re.compile(r"(?i)(authorization['\"]?\s*[:=]\s*['\"]?)[^\s'\"&]+"),
      r"\1<REDACTED>"),
-    # Anthropic / OpenAI / generic API key prefixes
-    (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "<REDACTED_API_KEY>"),
+    # Anthropic / OpenAI / generic API key prefixes — most-specific first
+    # so the broader sk- rule doesn't shadow sk-ant-. Same replacement
+    # either way, but the order keeps the rule list honest.
     (re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}"), "<REDACTED_API_KEY>"),
+    (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "<REDACTED_API_KEY>"),
     # Common query-string secret params
     (re.compile(r"(?i)([?&](?:api[_-]?key|token|access[_-]?token)=)[^&\s]+"),
      r"\1<REDACTED>"),

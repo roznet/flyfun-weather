@@ -4,13 +4,25 @@ Exercises the pool plumbing — startup, dispatch, concurrency, error
 propagation, recycling — using the synthetic helpers in
 ``decode_worker._test_*``. Real GRIB decode is exercised by the existing
 test suite via the same dispatch path.
+
+Test isolation note
+-------------------
+Other tests (notably the API-refresh integration tests) submit pipeline
+runs to ``api.packs._refresh_executor`` — a module-level
+``ThreadPoolExecutor`` whose worker threads outlive the test that
+queued them. Those background threads call ``_dispatch_decode``, which
+in turn re-creates ``_DECODE_POOL`` via the lazy-singleton path. The
+fixture below drains both executors before yielding so each test starts
+from a known-clean state. (Underlying fix would be to drain
+``_refresh_executor`` in the API test fixtures themselves; tracked
+separately.)
 """
 
 from __future__ import annotations
 
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
 
 import pytest
@@ -25,20 +37,72 @@ from weatherbrief.fetch.grib import (
 )
 
 
+def _drain_background_dispatches(timeout_s: float = 3.0) -> None:
+    """Wait for any background pipeline runs to finish their decode work.
+
+    The API ``_refresh_executor`` is the main offender: tests that POST
+    ``/refresh`` queue pipeline jobs that keep running after the test
+    function returns. Submitting ``max_workers`` no-ops and waiting for
+    them ensures every earlier-queued job has at least started; combined
+    with the poll-and-shutdown loop below, this gives the pool time to
+    settle.
+    """
+    try:
+        from weatherbrief.api.packs import _refresh_executor
+    except Exception:
+        return
+    # max_workers=2 — submit that many no-ops so both worker slots flush
+    # whatever they were running.
+    fillers = [_refresh_executor.submit(lambda: None) for _ in range(2)]
+    wait(fillers, timeout=timeout_s)
+
+
+def _settle_pool_to_none(timeout_s: float = 2.0) -> bool:
+    """Repeatedly shut down the pool until ``_DECODE_POOL`` stays None.
+
+    Caller is responsible for preventing concurrent re-creation — set
+    ``GRIB_DECODE_WORKERS=0`` (or otherwise gate ``_get_decode_pool``)
+    before calling. Without that gate, a background thread that calls
+    ``_dispatch_decode`` between our shutdown and the next check will
+    re-create the pool and the loop will spin until the deadline.
+    """
+    deadline = time.perf_counter() + timeout_s
+    while time.perf_counter() < deadline:
+        shutdown_decode_pool()
+        if grib_pkg._DECODE_POOL is None:
+            return True
+        time.sleep(0.05)
+    return grib_pkg._DECODE_POOL is None
+
+
 @pytest.fixture(autouse=True)
-def _shutdown_after():
-    """Always tear the pool down between tests so each test starts fresh."""
+def _settle_pool(monkeypatch):
+    """Settle the decode pool to a known-clean state before AND after each test.
+
+    Strategy: temporarily set ``GRIB_DECODE_WORKERS=0`` so any concurrent
+    ``_get_decode_pool`` call from a leaked background thread takes the
+    in-process fallback (returns None) instead of spawning a fresh pool.
+    Each test then sets its own ``GRIB_DECODE_WORKERS`` value via its own
+    ``monkeypatch.setenv``, which overrides this default.
+    """
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "0")
+    _drain_background_dispatches()
+    _settle_pool_to_none()
     yield
     shutdown_decode_pool()
 
 
 def test_pool_lazy_startup(monkeypatch):
     """Pool stays None until something actually dispatches a decode."""
-    monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
-    shutdown_decode_pool()  # ensure clean
-    assert grib_pkg._DECODE_POOL is None, "pool should not exist before dispatch"
+    # Settle phase: keep workers=0 (from fixture) so any racing background
+    # dispatch hits the in-process fallback. Verify pool is None.
+    assert grib_pkg._DECODE_POOL is None, (
+        "fixture should have settled pool to None; "
+        "see _drain_background_dispatches docstring for leak source"
+    )
 
-    # Dispatching a job is what should bring the pool up.
+    # Now flip on the pool and verify lazy creation.
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
     _dispatch_decode("_test_echo", "ping")
     assert grib_pkg._DECODE_POOL is not None, "dispatch should have created the pool"
 
