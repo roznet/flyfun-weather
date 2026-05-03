@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
@@ -245,13 +246,25 @@ def _parse_diagnostics(raw: str | None) -> list[Diagnostic]:
     - ``"{}"`` (very old rows) -> ``[]``
     - ``[{"level": ..., "message": ...}, ...]`` (pre-typed rows) -> validates
       through Diagnostic; missing optional fields stay None.
+
+    Per-item ``ValidationError`` is contained: a single malformed entry
+    (e.g. an unknown ``level`` value) is logged and skipped rather than
+    breaking every API request that touches the flight. Other exceptions
+    (JSON shape errors, etc.) propagate — they indicate a real bug, not a
+    legacy/corrupt diagnostic.
     """
     if not raw:
         return []
     parsed = json.loads(raw)
     if isinstance(parsed, dict):
         return []
-    return [Diagnostic.model_validate(item) for item in parsed]
+    out: list[Diagnostic] = []
+    for item in parsed:
+        try:
+            out.append(Diagnostic.model_validate(item))
+        except PydanticValidationError:
+            logger.debug("Skipping malformed diagnostic entry: %r", item)
+    return out
 
 
 def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:

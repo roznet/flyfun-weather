@@ -647,6 +647,11 @@ label {
   color: var(--amber);
 }
 
+.diag-error {
+  color: var(--red);
+  font-weight: 500;
+}
+
 .diag-info {
   color: var(--text-muted);
 }

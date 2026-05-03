@@ -548,16 +548,29 @@ def execute_briefing(
     # stage already wrote its own subset earlier; this final write supersedes
     # it so on-disk and in-DB diagnostics agree.
     if pack_dir is not None and pack_dir.exists():
+        # Preserve the original fetch timestamp written by save_fetch_artifacts.
+        # `fetched_at` records when the weather data was *fetched*, not when
+        # the JSON file was last rewritten — so we read it back rather than
+        # letting write_pack_meta default to datetime.now().
+        #
+        # Timestamp recovery is best-effort: a corrupt/missing value falls
+        # back to None (write_pack_meta then uses now()) but must NOT skip
+        # the rewrite itself, which would silently lose every post-fetch
+        # diagnostic from the persisted artifact.
+        fetched_at: datetime | None = None
         try:
-            # Preserve the original fetch timestamp written by save_fetch_artifacts.
-            # `fetched_at` records when the weather data was *fetched*, not when the
-            # JSON file was last rewritten — so we read it back rather than letting
-            # write_pack_meta default to datetime.now().
             existing = load_fetch_meta(pack_dir) or {}
             fetched_at_raw = existing.get("fetched_at")
-            fetched_at = (
-                datetime.fromisoformat(fetched_at_raw) if fetched_at_raw else None
+            if fetched_at_raw:
+                fetched_at = datetime.fromisoformat(fetched_at_raw)
+        except (ValueError, TypeError, OSError):
+            logger.debug(
+                "Could not recover fetched_at from existing pack meta; "
+                "falling back to now()",
+                exc_info=True,
             )
+
+        try:
             write_pack_meta(
                 pack_dir,
                 models_fetched=result.models_fetched,
