@@ -286,3 +286,10 @@ class TestParseDiagnosticsContainment:
         assert _parse_diagnostics(None) == []
         assert _parse_diagnostics("") == []
         assert _parse_diagnostics("{}") == []  # very-old-row shape
+
+    def test_unparseable_json_does_not_crash(self):
+        # Single corrupt row must not 500 the whole flight-list endpoint.
+        from weatherbrief.storage.flights import _parse_diagnostics
+
+        assert _parse_diagnostics("{not valid json") == []
+        assert _parse_diagnostics("garbage") == []
