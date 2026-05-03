@@ -467,27 +467,33 @@ def test_ogimet_nwp_single_band_still_one_zone():
 
 
 def test_ieng_does_not_bridge_cloud_band_gap():
-    """IENG uses the same NWP gating as Ogimet-NWP — must also split at gaps."""
+    """IENG uses the same NWP gating as Ogimet-NWP — must also split at gaps.
+
+    Surviving icing levels at 675 hPa (band 1) and 600 hPa (band 2) are
+    75 hPa apart — within the 100 hPa legacy threshold — so the old
+    pressure-only path would merge them. The new dual-check splits
+    because index 1 and index 4 in `levels` are not consecutive.
+    """
     from weatherbrief.analysis.sounding.icing import assess_icing_zones_ieng
 
     icing_T = -7.0
     levels = [
         DerivedLevel(pressure_hpa=700, altitude_ft=9900, temperature_c=icing_T,
                      dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
-        DerivedLevel(pressure_hpa=675, altitude_ft=10840, temperature_c=icing_T,
+        DerivedLevel(pressure_hpa=675, altitude_ft=10800, temperature_c=icing_T,
                      dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
-        DerivedLevel(pressure_hpa=625, altitude_ft=12810, temperature_c=icing_T,
-                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
-        DerivedLevel(pressure_hpa=600, altitude_ft=13840, temperature_c=icing_T,
-                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
-        DerivedLevel(pressure_hpa=550, altitude_ft=16020, temperature_c=icing_T,
-                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
-        DerivedLevel(pressure_hpa=525, altitude_ft=17170, temperature_c=icing_T,
+        DerivedLevel(pressure_hpa=650, altitude_ft=11800, temperature_c=icing_T,
+                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),  # outside bands → gated
+        DerivedLevel(pressure_hpa=625, altitude_ft=12800, temperature_c=icing_T,
+                     dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),  # outside bands → gated
+        DerivedLevel(pressure_hpa=600, altitude_ft=13800, temperature_c=icing_T,
                      dewpoint_c=icing_T - 0.5, dewpoint_depression_c=0.5),
     ]
-    bands = [_cloud(4088, 11477), _cloud(15679, 20851)]
+    # ±500 ft margin ⇒ band 1 covers 7500-11500, band 2 covers 13000-15500.
+    # 11800 and 12800 land in the gap.
+    bands = [_cloud(8000, 11000), _cloud(13500, 15000)]
     zones = assess_icing_zones_ieng(levels, bands, nwp_cloud_mid_pct=80.0)
-    assert len(zones) == 2, f"IENG: expected 2 zones split at cloud gap, got {len(zones)}"
+    assert len(zones) == 2, f"IENG: expected 2 zones split at cloud gap, got {len(zones)}: {[(int(z.base_ft), int(z.top_ft)) for z in zones]}"
 
 
 def test_ogimet_dd_does_not_bridge_dd_cloud_gap():
@@ -536,12 +542,15 @@ def test_sfip_does_not_bridge_cloud_band_gap():
             dewpoint_depression_c=0.5, cloud_liquid_water_g_kg=0.15,
         )
 
+    # ±500 ft margin ⇒ band 1 covers 3500-11000, band 2 covers 12500-16500.
+    # 650 hPa at 11800 ft lands in the gap and is the only filtered level;
+    # 675 hPa at 10800 ft is still inside band 1 via the margin.
     levels = [
         _l(750, 8100, -6.0),    # band 1
         _l(725, 9000, -7.0),    # band 1
         _l(700, 9900, -8.0),    # band 1
-        _l(675, 10800, -9.0),   # gap — gated out (10800 > 10500 + 500)
-        _l(650, 11800, -10.0),  # gap — gated out
+        _l(675, 10800, -9.0),   # band 1 (10800 < 11000 with margin)
+        _l(650, 11800, -10.0),  # gap — gated out (11800 > 11000 and < 12500)
         _l(600, 13800, -12.0),  # band 2
         _l(575, 14900, -13.0),  # band 2
     ]
