@@ -170,21 +170,24 @@ profile = get_elevation_profile(route)
 - Saved as `elevation_profile.json` in the pack directory
 - Runs early in the pipeline (before fetch) since it doesn't depend on NWP data
 
-## Model Freshness (`fetch/model_status.py`)
+## Model Freshness (`fetch/freshness/`)
 
-Checks whether NWP models have published new initialization runs since the last fetch.
+Marker-based per-(model, source) staleness decision used by `/packs/freshness` and the auto-refresh scheduler. Replaces the old per-call `meta.json` fan-out — most freshness HTTP calls are now pure compute (no I/O).
+
+A 5-min background loop populates an in-memory `MarkerStore`. The HTTP-side check is `api/packs._build_data_status(pack, flight)`, which compares each `(model, source)` recorded on the pack against the matching marker — horizon-aware, so a new run only flags stale if its forecast horizon actually covers the flight's end time.
 
 ```python
-from weatherbrief.fetch.model_status import check_freshness
-result = check_freshness(last_pack_init_times)
-# → {"fresh": False, "stale_models": ["gfs"], "model_init_times": {...}}
+# Used by /packs/freshness handler + scheduler auto-refresh:
+status = _build_data_status(pack, flight)
+if not status.fresh:
+    schedule_refresh()
 ```
 
-- Queries Open-Meteo metadata API for current model init times (GFS, ECMWF, ICON, UKMO, MeteoFrance)
-- Compares against `model_init_times` stored on the previous pack
-- DWD text forecasts checked on assumed update schedule (06:00/18:00 UTC short-range, 10:30 UTC medium-range)
-- `compute_next_update()` estimates when the next model run will be available
-- Smart refresh in the API: skips pipeline if all models are still fresh
+Eight tracked source/model pairs: ECMWF/GFS/ICON-EU direct (GRIB) + 5 Open-Meteo republishes (`gfs/ecmwf/icon/meteofrance/ukmo:openmeteo`).
+
+The legacy `fetch/model_status.py` module (`fetch_model_metadata`, `compute_next_update`) is still imported by `_finalize_refresh` to record per-model Open-Meteo init times on each pack. `check_freshness` and `compute_next_update` are no longer consumed by the freshness endpoint.
+
+→ Full doc: [freshness-markers.md](./freshness-markers.md)
 
 ## GRIB2 Enrichment (`fetch/grib/`)
 
