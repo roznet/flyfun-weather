@@ -28,6 +28,7 @@ from weatherbrief.tasks.artifacts import (  # noqa: F401
     save_advisory_artifacts,
     save_analysis_artifacts,
     save_fetch_artifacts,
+    write_pack_meta,
 )
 from weatherbrief.tasks.fetch import (  # noqa: F401
     FetchResult,

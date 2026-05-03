@@ -12,7 +12,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from weatherbrief.models import ForecastSnapshot
+from weatherbrief.models import (
+    Diagnostic,
+    DigestCode,
+    ForecastSnapshot,
+    GrametCode,
+    SkewtCode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +32,13 @@ class GrametResult:
     path: Path | None = None
     fetched: bool = False
     failed: bool = False
-    error: str | None = None
+    diagnostic: Diagnostic | None = None
 
 
 @dataclass
 class SkewtResult:
     paths: list[Path] = field(default_factory=list)
-    error: str | None = None
+    diagnostic: Diagnostic | None = None
 
 
 @dataclass
@@ -43,7 +49,7 @@ class DigestResult:
     llm_model: str | None = None
     llm_input_tokens: int | None = None
     llm_output_tokens: int | None = None
-    error: str | None = None
+    diagnostic: Diagnostic | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +69,12 @@ def run_gramet(
     """Fetch GRAMET cross-section PDF from the Autorouter API."""
     if not autorouter_token:
         logger.debug("Skipping GRAMET: no autorouter token available")
-        return GrametResult(error="GRAMET requires autorouter credentials")
+        return GrametResult(diagnostic=Diagnostic.create(
+            level="info",
+            stage="gramet",
+            code=GrametCode.GRAMET_NO_CREDENTIALS,
+            message="GRAMET cross-section unavailable — no Autorouter credentials configured.",
+        ))
 
     try:
         from euro_aip.briefing.sources.autorouter_gramet import AutorouterGrametSource
@@ -96,18 +107,37 @@ def run_gramet(
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / "gramet.pdf"
         else:
-            return GrametResult(error="No output directory specified")
+            return GrametResult(diagnostic=Diagnostic.create(
+                level="error",
+                stage="gramet",
+                code=GrametCode.GRAMET_NO_OUTPUT_DIR,
+                message="GRAMET cross-section unavailable — internal misconfiguration.",
+                detail="run_gramet called without pack_dir or data_dir",
+            ))
 
         out_path.write_bytes(data)
         logger.info("GRAMET saved: %s", out_path)
         return GrametResult(path=out_path, fetched=True)
 
-    except ImportError:
+    except ImportError as exc:
         logger.warning("GRAMET fetch requires euro_aip package")
-        return GrametResult(error="GRAMET: euro_aip not available")
+        return GrametResult(diagnostic=Diagnostic.create(
+            level="error",
+            stage="gramet",
+            code=GrametCode.GRAMET_NOT_AVAILABLE,
+            message="GRAMET cross-section unavailable — server is missing the euro_aip dependency.",
+            detail=f"{type(exc).__name__}: {exc}",
+        ))
     except Exception as exc:
+        import traceback
         logger.warning("GRAMET fetch failed: %s", exc, exc_info=True)
-        return GrametResult(failed=True, error=f"GRAMET: {exc}")
+        return GrametResult(failed=True, diagnostic=Diagnostic.create(
+            level="warn",
+            stage="gramet",
+            code=GrametCode.GRAMET_FETCH_FAILED,
+            message="GRAMET cross-section unavailable — fetch from Autorouter failed. Try refreshing again.",
+            detail=traceback.format_exc(),
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +162,13 @@ def run_skewt(
                 / f"d-{snapshot.days_out}_{snapshot.fetch_date}"
             )
         else:
-            return SkewtResult(error="No output directory specified")
+            return SkewtResult(diagnostic=Diagnostic.create(
+                level="error",
+                stage="skewt",
+                code=SkewtCode.SKEWT_NO_OUTPUT_DIR,
+                message="Skew-T diagrams unavailable — internal misconfiguration.",
+                detail="run_skewt called without pack_dir or data_dir",
+            ))
 
         paths = generate_all_skewts(snapshot, target_time, out_dir)
         result_paths = [Path(p) for p in paths]
@@ -140,12 +176,25 @@ def run_skewt(
             logger.info("Skew-T saved: %s", p)
         return SkewtResult(paths=result_paths)
 
-    except ImportError:
+    except ImportError as exc:
         logger.warning("Skew-T generation requires metpy, numpy, matplotlib")
-        return SkewtResult(error="Skew-T: metpy not available")
+        return SkewtResult(diagnostic=Diagnostic.create(
+            level="error",
+            stage="skewt",
+            code=SkewtCode.SKEWT_METPY_NOT_AVAILABLE,
+            message="Skew-T diagrams unavailable — server is missing the metpy dependency.",
+            detail=f"{type(exc).__name__}: {exc}",
+        ))
     except Exception as exc:
+        import traceback
         logger.warning("Skew-T generation failed: %s", exc, exc_info=True)
-        return SkewtResult(error=f"Skew-T: {exc}")
+        return SkewtResult(diagnostic=Diagnostic.create(
+            level="warn",
+            stage="skewt",
+            code=SkewtCode.SKEWT_GENERATION_FAILED,
+            message="Skew-T diagrams unavailable — generation failed. Try refreshing again.",
+            detail=traceback.format_exc(),
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +232,8 @@ def run_llm_digest(
             guidance_key=guidance_key,
         )
 
-        if digest_result.get("error"):
-            return DigestResult(error=f"LLM digest: {digest_result['error']}")
+        if digest_result.get("diagnostic") is not None:
+            return DigestResult(diagnostic=digest_result["diagnostic"])
 
         digest_obj = digest_result.get("digest")
         llm_model = f"{config.llm.provider}:{config.llm.model}"
@@ -243,8 +292,17 @@ def run_llm_digest(
         )
 
     except Exception as exc:
-        logger.warning("LLM digest generation failed: %s", exc, exc_info=True)
-        return DigestResult(error=f"LLM digest: {exc}")
+        # The briefer_node already classifies LLM-call failures; this outer
+        # except catches everything *outside* the LLM call (config load,
+        # context build, file-write errors, etc.). Use the same classifier
+        # which falls through to DIGEST_UNKNOWN.
+        from weatherbrief.digest.llm_digest import _classify_llm_exception
+        diagnostic = _classify_llm_exception(exc)
+        logger.warning(
+            "LLM digest generation failed (code=%s, error_id=%s)",
+            diagnostic.code, diagnostic.error_id, exc_info=True,
+        )
+        return DigestResult(diagnostic=diagnostic)
 
 
 def _save_dwd_overview(pack_dir: Path, translated: list) -> None:

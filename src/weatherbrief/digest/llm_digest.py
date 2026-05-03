@@ -22,7 +22,7 @@ from typing_extensions import TypedDict
 from weatherbrief.digest.llm_config import DigestConfig, create_llm
 from weatherbrief.digest.prompt_builder import build_digest_context
 from weatherbrief.fetch.text_forecasts import fetch_text_forecasts
-from weatherbrief.models import ForecastSnapshot
+from weatherbrief.models import Diagnostic, DigestCode, ForecastSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,99 @@ class DigestState(TypedDict, total=False):
     digest_text: str
     llm_input_tokens: int | None
     llm_output_tokens: int | None
-    error: str | None
+    diagnostic: Diagnostic | None
 
 
 # --- Graph node ---
+
+
+def _classify_llm_exception(exc: Exception) -> Diagnostic:
+    """Map a raised LLM-call exception to a typed Diagnostic.
+
+    Anthropic's exception hierarchy is checked from most specific (status
+    codes) to most general (connection/timeout, then base APIError, then
+    Exception fallback). Each kind gets a stable code and a friendly
+    user-facing message; the raw exception goes into ``detail`` (capped and
+    redacted at the model boundary).
+    """
+    import traceback
+
+    request_id: str | None = None
+    try:
+        import anthropic  # local — module is heavy and only needed when classifying
+    except ImportError:
+        anthropic = None  # type: ignore[assignment]
+
+    detail = traceback.format_exc()
+
+    if anthropic is not None:
+        # Best-effort request id (present on APIStatusError subclasses)
+        request_id = getattr(exc, "request_id", None)
+
+        if (
+            isinstance(exc, anthropic.APIStatusError)
+            and getattr(exc, "status_code", None) == 529
+        ):
+            return Diagnostic.create(
+                level="warn", stage="digest",
+                code=DigestCode.ANTHROPIC_OVERLOADED,
+                message="AI weather digest unavailable — Anthropic API overloaded. Try refreshing again shortly.",
+                detail=detail,
+                request_id=request_id,
+            )
+        if isinstance(exc, anthropic.RateLimitError):
+            return Diagnostic.create(
+                level="warn", stage="digest",
+                code=DigestCode.ANTHROPIC_RATE_LIMITED,
+                message="AI weather digest unavailable — rate-limited by Anthropic. Try refreshing again in a moment.",
+                detail=detail,
+                request_id=request_id,
+            )
+        if isinstance(exc, anthropic.APITimeoutError):
+            return Diagnostic.create(
+                level="warn", stage="digest",
+                code=DigestCode.ANTHROPIC_TIMEOUT,
+                message="AI weather digest unavailable — Anthropic API timed out. Try refreshing again.",
+                detail=detail,
+                request_id=request_id,
+            )
+        if isinstance(exc, anthropic.APIConnectionError):
+            return Diagnostic.create(
+                level="warn", stage="digest",
+                code=DigestCode.ANTHROPIC_CONNECTION,
+                message="AI weather digest unavailable — could not reach Anthropic API. Try refreshing again.",
+                detail=detail,
+                request_id=request_id,
+            )
+        if isinstance(exc, anthropic.BadRequestError):
+            # 400 from Anthropic — usually a server-side prompt/config bug;
+            # retrying won't help.
+            return Diagnostic.create(
+                level="error", stage="digest",
+                code=DigestCode.DIGEST_BAD_REQUEST,
+                message="AI weather digest unavailable — internal request error.",
+                detail=detail,
+                request_id=request_id,
+            )
+        if isinstance(exc, anthropic.InternalServerError) or (
+            isinstance(exc, anthropic.APIStatusError)
+            and 500 <= (getattr(exc, "status_code", 0) or 0) < 600
+        ):
+            return Diagnostic.create(
+                level="warn", stage="digest",
+                code=DigestCode.ANTHROPIC_INTERNAL_ERROR,
+                message="AI weather digest unavailable — Anthropic API error. Try refreshing again in a few minutes.",
+                detail=detail,
+                request_id=request_id,
+            )
+
+    return Diagnostic.create(
+        level="error", stage="digest",
+        code=DigestCode.DIGEST_UNKNOWN,
+        message="AI weather digest unavailable — unexpected error. Try refreshing again later.",
+        detail=detail,
+        request_id=request_id,
+    )
 
 
 def briefer_node(state: DigestState) -> dict:
@@ -89,8 +178,13 @@ def briefer_node(state: DigestState) -> dict:
 
         return {"digest": result, **token_info}
     except Exception as e:
-        logger.error("LLM digest generation failed", exc_info=True)
-        return {"error": str(e)}
+        diagnostic = _classify_llm_exception(e)
+        logger.error(
+            "LLM digest generation failed (code=%s, error_id=%s, request_id=%s)",
+            diagnostic.code, diagnostic.error_id, diagnostic.request_id,
+            exc_info=True,
+        )
+        return {"diagnostic": diagnostic}
 
 
 # --- Graph builder ---

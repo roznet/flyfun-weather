@@ -170,7 +170,7 @@ class TestBriefingResult:
         assert result.skewt_paths == []
         assert result.digest_path is None
         assert result.digest is None
-        assert result.errors == []
+        assert result.diagnostics == []
 
     def test_digest_field_carries_object(self, tmp_path):
         from weatherbrief.models import ForecastSnapshot, RouteConfig, Waypoint

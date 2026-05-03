@@ -99,6 +99,26 @@ export interface DataStatus {
   next_expected_model: string | null;
 }
 
+/**
+ * One structured event from the briefing pipeline.
+ *
+ * `level` and `message` are user-facing (rendered in the freshness banner).
+ * Other fields (stage, code, detail, request_id, error_id, occurred_at) are
+ * additional structured context — only `level` and `message` are required for
+ * legacy DB rows written before the typed model existed. All others are
+ * optional.
+ */
+export interface Diagnostic {
+  level: string;
+  message: string;
+  stage?: string;
+  code?: string;
+  detail?: string | null;
+  request_id?: string | null;
+  error_id?: string | null;
+  occurred_at?: string | null;
+}
+
 export interface PackMeta {
   flight_id: string;
   fetch_timestamp: string;
@@ -115,7 +135,7 @@ export interface PackMeta {
   model_init_times?: Record<string, number>;
   grib_init_times?: Record<string, number>;
   models_skipped_region?: string[];
-  diagnostics?: {level: string; message: string}[];
+  diagnostics?: Diagnostic[];
   data_status?: DataStatus | null;
 }
 

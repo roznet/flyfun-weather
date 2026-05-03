@@ -17,6 +17,7 @@ from typing import Callable
 
 from weatherbrief.fetch.variables import MODEL_ENDPOINTS
 from weatherbrief.models import (
+    Diagnostic,
     ForecastSnapshot,
     ModelSource,
     RouteConfig,
@@ -127,9 +128,8 @@ class BriefingResult:
     grib_init_times: dict[str, int] = field(default_factory=dict)
     models_fetched: list[str] = field(default_factory=list)
     models_skipped_region: list[str] = field(default_factory=list)
-    diagnostics: list[dict] = field(default_factory=list)
+    diagnostics: list[Diagnostic] = field(default_factory=list)
     alt_advisory_result: AdvisoryResult | None = None
-    errors: list[str] = field(default_factory=list)
     usage: BriefingUsage = field(default_factory=BriefingUsage)
 
 
@@ -355,8 +355,17 @@ def execute_briefing(
                 convective_method=options.convective_method,
                 locale=options.locale,
             )
-        except Exception:
+        except Exception as exc:
+            import traceback
+            from weatherbrief.models import AdvisoryCode
             logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)
+            result.diagnostics.append(Diagnostic.create(
+                level="warn",
+                stage="advisories",
+                code=AdvisoryCode.ALT_ADVISORY_FAILED,
+                message="Alternate-departure advisories unavailable for this briefing.",
+                detail=traceback.format_exc(),
+            ))
         stage_timings["alt_advisories"] = perf_counter() - _t0
 
     # === 3.5 Route weather observations (D-0 only) ===
@@ -467,8 +476,8 @@ def execute_briefing(
             result.usage.gramet_fetched = gramet_result.fetched
         if gramet_result.failed:
             result.usage.gramet_failed = True
-        if gramet_result.error:
-            result.errors.append(gramet_result.error)
+        if gramet_result.diagnostic:
+            result.diagnostics.append(gramet_result.diagnostic)
         stage_timings["fetch_gramet"] = perf_counter() - _t0
 
     # === 6. Optional: Skew-T ===
@@ -483,8 +492,8 @@ def execute_briefing(
         )
         if skewt_result.paths:
             result.skewt_paths = skewt_result.paths
-        if skewt_result.error:
-            result.errors.append(skewt_result.error)
+        if skewt_result.diagnostic:
+            result.diagnostics.append(skewt_result.diagnostic)
         stage_timings["generate_skewt"] = perf_counter() - _t0
 
     # === 7. Optional: LLM digest ===
@@ -517,8 +526,8 @@ def execute_briefing(
             result.usage.llm_model = digest_result.llm_model
             result.usage.llm_input_tokens = digest_result.llm_input_tokens
             result.usage.llm_output_tokens = digest_result.llm_output_tokens
-        if digest_result.error:
-            result.errors.append(digest_result.error)
+        if digest_result.diagnostic:
+            result.diagnostics.append(digest_result.diagnostic)
         stage_timings["llm_digest"] = perf_counter() - _t0
 
     # === 8. Always: text digest ===
@@ -532,6 +541,21 @@ def execute_briefing(
         output_paths.append(str(result.digest_path))
 
     result.text_digest = format_digest(snapshot, target_dt, output_paths=output_paths)
+
+    # Rewrite fetch_meta.json with the merged diagnostics from all stages
+    # (fetch + analyze + advisories + gramet + skewt + digest). The fetch
+    # stage already wrote its own subset earlier; this final write supersedes
+    # it so on-disk and in-DB diagnostics agree.
+    if pack_dir is not None and pack_dir.exists():
+        from weatherbrief.tasks.artifacts import write_pack_meta
+        try:
+            write_pack_meta(
+                pack_dir,
+                models_fetched=result.models_fetched,
+                diagnostics=result.diagnostics,
+            )
+        except Exception:
+            logger.warning("Failed to rewrite pack meta with full diagnostics", exc_info=True)
 
     rss_end = _current_rss_mb()
     if rss_end is not None:
