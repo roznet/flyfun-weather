@@ -10,6 +10,7 @@ import pytest
 from weatherbrief.models import (
     DETAIL_MAX_BYTES,
     Diagnostic,
+    DiagnosticPublic,
     DigestCode,
     FetchCode,
 )
@@ -183,6 +184,56 @@ class TestInvalidLevel:
     def test_unknown_level_rejected(self):
         with pytest.raises(Exception):
             Diagnostic.model_validate({"level": "fatal", "message": "m"})
+
+
+class TestPublicProjection:
+    """DiagnosticPublic must not leak debug fields to API clients."""
+
+    def test_to_public_strips_detail_and_request_id(self):
+        d = Diagnostic.create(
+            level="warn", stage="digest",
+            code=DigestCode.ANTHROPIC_INTERNAL_ERROR,
+            message="visible",
+            detail="Traceback (most recent call last):\n  File '/app/...'",
+            request_id="req_abc123",
+        )
+        pub = d.to_public()
+
+        # Debug fields gone
+        dumped = pub.model_dump(mode="json")
+        assert "detail" not in dumped
+        assert "request_id" not in dumped
+
+        # User-facing fields preserved
+        assert dumped["level"] == "warn"
+        assert dumped["message"] == "visible"
+        assert dumped["stage"] == "digest"
+        assert dumped["code"] == "anthropic_internal_error"
+
+        # error_id IS exposed (user-quotable support id)
+        assert "error_id" in dumped
+        assert dumped["error_id"] is not None
+
+    def test_to_public_round_trip_via_json(self):
+        d = Diagnostic.create(
+            level="error", stage="digest",
+            code=DigestCode.DIGEST_UNKNOWN, message="m",
+            detail="secret", request_id="req_x",
+        )
+        pub_json = d.to_public().model_dump(mode="json")
+        # Reconstructing from the JSON should not surface the stripped fields
+        reconstructed = DiagnosticPublic.model_validate(pub_json)
+        assert not hasattr(reconstructed, "detail")
+        assert not hasattr(reconstructed, "request_id")
+
+    def test_legacy_diagnostic_to_public_safe(self):
+        # Legacy {level, message} entry survives to_public without errors
+        legacy = Diagnostic.model_validate({"level": "warn", "message": "old"})
+        pub = legacy.to_public()
+        assert pub.level == "warn"
+        assert pub.message == "old"
+        assert pub.error_id is None
+        assert pub.code is None
 
 
 class TestParseDiagnosticsContainment:

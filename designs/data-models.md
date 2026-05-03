@@ -229,6 +229,64 @@ BriefingPackMeta(
 
 Stored in `pack.json` alongside artifacts. `fetch_timestamp` is a timezone-aware UTC datetime (stored as `DATETIME(6)` in MySQL, text in SQLite). `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)".
 
+`BriefingPackMeta.diagnostics: list[Diagnostic]` carries structured pipeline events from every stage (fetch, analyze, advisories, gramet, skewt, digest). See the **Diagnostic** section below.
+
+## Diagnostic (`models/diagnostic.py`)
+
+One structured event from the briefing pipeline — warning, info, or error. Collected per-pipeline-run, persisted both into the pack on disk (`fetch_meta.json`) and into the DB (`diagnostics_json` column on `BriefingPackRow`).
+
+```python
+Diagnostic(
+    level="warn",
+    stage="digest",
+    code="anthropic_internal_error",  # StrEnum value, see DigestCode/FetchCode/...
+    message="AI weather digest unavailable — Anthropic API error. Try refreshing again in a few minutes.",
+    detail="Traceback (most recent call last):\n  ...",   # capped + redacted, debug-only
+    request_id="req_011Caf...",                            # upstream Anthropic id
+    error_id=UUID("a4f9..."),                              # user-quotable support id
+    occurred_at=datetime(2026, 5, 3, 5, 18, 37, tzinfo=timezone.utc),
+)
+```
+
+### Level convention
+
+`level` doubles as severity AND audience. Pick based on what the user can do about it:
+
+| Level | Banner? | Use for |
+|-------|---------|---------|
+| `info` | no | persisted for debugging only — internal config the user can't fix, normal pipeline events ("ICON skipped, out of range") |
+| `warn` | yes | retryable issues — "GFS fetch failed", "Anthropic API overloaded — try again" |
+| `error` | yes | irrecoverable failures the user should know about even though they can't fix them — bad request, auth failure |
+
+Reach for `warn` first; `error` is for the rare case where retrying genuinely won't help.
+
+### Construction split (preserves backward compat)
+
+- `Diagnostic.create(...)` — for **new** entries. Mints `error_id` (UUID) and `occurred_at`.
+- `Diagnostic(...)` / `Diagnostic.model_validate(...)` — for **round-tripping** persisted records. Leaves `error_id` and `occurred_at` as `None`.
+
+Why: legacy DB rows (pre-typed model) only have `{level, message}`. If `error_id` used `Field(default_factory=uuid4)`, every read of the same legacy row would mint a fresh UUID, making the same diagnostic look "new" on every parse. The split-constructor pattern avoids that.
+
+`model_config = {"extra": "ignore"}` lets future field additions land without breaking older readers.
+
+### Wire-safe projection: `DiagnosticPublic`
+
+`DiagnosticPublic` strips `detail` and `request_id` before crossing the API boundary. The frontend doesn't render `detail` today, but it's trivially visible via devtools — and `detail` contains stack traces, file paths, library versions. `PackMetaResponse.diagnostics: list[DiagnosticPublic]`; `Diagnostic.to_public()` does the projection.
+
+`error_id` IS exposed on the public schema — it's a per-entry UUID a user can quote back to support, with no information value beyond that.
+
+### Stable codes
+
+Codes live in `models/diagnostic_codes.py`, one `StrEnum` per stage: `FetchCode`, `DigestCode`, `GrametCode`, `SkewtCode`, `AdvisoryCode`. **Never rename existing values** — add new ones. Telemetry, log filters, and any future i18n key off these strings.
+
+### Persistence
+
+- **DB**: `BriefingPackRow.diagnostics_json` (`Text` column). `_meta_to_row` serializes via `model_dump(mode="json")`; `_parse_diagnostics` validates per-item and skips malformed entries (logs at debug) so one bad row doesn't break a whole flight listing.
+- **Disk**: `fetch_meta.json` in the pack directory. Written once by `save_fetch_artifacts` (fetch-stage subset), then rewritten at end of `execute_briefing` with the full merged set across all stages — preserving the original `fetched_at`.
+- **Detail cap**: 4 KB per entry, with light redaction for Bearer tokens and `sk-`/`sk-ant-` API key prefixes. Applied in a `field_validator(mode="before")` so it fires on both fresh construction and round-trip.
+
+See [digest.md](./digest.md) for the digest-stage classifier (`classify_llm_exception`) that maps Anthropic exceptions to typed `DigestCode` values.
+
 ## Route Advisory Models (`models/advisories.py`)
 
 | Model | Purpose | Key fields |

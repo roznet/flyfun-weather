@@ -58,6 +58,7 @@ from weatherbrief.models.diagnostic import (  # noqa: F401
     DETAIL_MAX_BYTES,
     Diagnostic,
     DiagnosticLevel,
+    DiagnosticPublic,
 )
 from weatherbrief.models.diagnostic_codes import (  # noqa: F401
     AdvisoryCode,

@@ -152,3 +152,40 @@ class Diagnostic(BaseModel):
             error_id=uuid4(),
             occurred_at=datetime.now(timezone.utc),
         )
+
+    def to_public(self) -> "DiagnosticPublic":
+        """Project to the public schema (omits debug-only fields).
+
+        Use this whenever a diagnostic crosses the API boundary so we
+        don't leak ``detail`` (stack traces, file paths) or
+        ``request_id`` (Anthropic-internal correlation id) to clients.
+        """
+        return DiagnosticPublic(
+            level=self.level,
+            message=self.message,
+            stage=self.stage,
+            code=self.code,
+            error_id=self.error_id,
+            occurred_at=self.occurred_at,
+        )
+
+
+class DiagnosticPublic(BaseModel):
+    """Wire-safe projection of :class:`Diagnostic` for API responses.
+
+    Excludes ``detail`` (capped/redacted but still contains stack traces,
+    file paths, library versions — debug-only by design) and
+    ``request_id`` (Anthropic-internal correlation id, not user-actionable).
+
+    ``error_id`` IS exposed: it's a per-entry UUID a user can quote back
+    to support, with no information value beyond that.
+    """
+
+    level: DiagnosticLevel
+    message: str
+    stage: Optional[str] = None
+    code: Optional[str] = None
+    error_id: Optional[UUID] = None
+    occurred_at: Optional[datetime] = None
+
+    model_config = {"extra": "ignore"}
