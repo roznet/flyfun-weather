@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from weatherbrief.digest.exceptions import classify_llm_exception
 from weatherbrief.models import (
     Diagnostic,
     DigestCode,
@@ -129,7 +131,6 @@ def run_gramet(
             detail=f"{type(exc).__name__}: {exc}",
         ))
     except Exception as exc:
-        import traceback
         logger.warning("GRAMET fetch failed: %s", exc, exc_info=True)
         return GrametResult(failed=True, diagnostic=Diagnostic.create(
             level="warn",
@@ -186,7 +187,6 @@ def run_skewt(
             detail=f"{type(exc).__name__}: {exc}",
         ))
     except Exception as exc:
-        import traceback
         logger.warning("Skew-T generation failed: %s", exc, exc_info=True)
         return SkewtResult(diagnostic=Diagnostic.create(
             level="warn",
@@ -292,12 +292,12 @@ def run_llm_digest(
         )
 
     except Exception as exc:
-        # The briefer_node already classifies LLM-call failures; this outer
-        # except catches everything *outside* the LLM call (config load,
-        # context build, file-write errors, etc.). Use the same classifier
-        # which falls through to DIGEST_UNKNOWN.
-        from weatherbrief.digest.llm_digest import _classify_llm_exception
-        diagnostic = _classify_llm_exception(exc)
+        # briefer_node classifies LLM-call failures; this outer except
+        # catches everything *outside* the LLM call (config load, context
+        # build, file-write errors, etc.). The classifier handles both
+        # cases — anthropic.* exceptions get specific codes, anything else
+        # falls through to DIGEST_UNKNOWN.
+        diagnostic = classify_llm_exception(exc)
         logger.warning(
             "LLM digest generation failed (code=%s, error_id=%s)",
             diagnostic.code, diagnostic.error_id, exc_info=True,

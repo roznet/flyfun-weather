@@ -16,7 +16,10 @@ from time import perf_counter
 from typing import Callable
 
 from weatherbrief.fetch.variables import MODEL_ENDPOINTS
+import traceback
+
 from weatherbrief.models import (
+    AdvisoryCode,
     Diagnostic,
     ForecastSnapshot,
     ModelSource,
@@ -355,9 +358,7 @@ def execute_briefing(
                 convective_method=options.convective_method,
                 locale=options.locale,
             )
-        except Exception as exc:
-            import traceback
-            from weatherbrief.models import AdvisoryCode
+        except Exception:
             logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)
             result.diagnostics.append(Diagnostic.create(
                 level="warn",
@@ -547,12 +548,22 @@ def execute_briefing(
     # stage already wrote its own subset earlier; this final write supersedes
     # it so on-disk and in-DB diagnostics agree.
     if pack_dir is not None and pack_dir.exists():
-        from weatherbrief.tasks.artifacts import write_pack_meta
+        from weatherbrief.tasks.artifacts import load_fetch_meta, write_pack_meta
         try:
+            # Preserve the original fetch timestamp written by save_fetch_artifacts.
+            # `fetched_at` records when the weather data was *fetched*, not when the
+            # JSON file was last rewritten — so we read it back rather than letting
+            # write_pack_meta default to datetime.now().
+            existing = load_fetch_meta(pack_dir) or {}
+            fetched_at_raw = existing.get("fetched_at")
+            fetched_at = (
+                datetime.fromisoformat(fetched_at_raw) if fetched_at_raw else None
+            )
             write_pack_meta(
                 pack_dir,
                 models_fetched=result.models_fetched,
                 diagnostics=result.diagnostics,
+                fetched_at=fetched_at,
             )
         except Exception:
             logger.warning("Failed to rewrite pack meta with full diagnostics", exc_info=True)

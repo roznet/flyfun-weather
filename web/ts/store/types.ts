@@ -103,16 +103,18 @@ export interface DataStatus {
  * One structured event from the briefing pipeline.
  *
  * `level` and `message` are user-facing (rendered in the freshness banner).
- * Other fields (stage, code, detail, request_id, error_id, occurred_at) are
- * additional structured context — only `level` and `message` are required for
- * legacy DB rows written before the typed model existed. All others are
- * optional.
+ * Other fields are additional structured context. Pydantic serialises
+ * absent optional fields as `null`, so consumers should treat
+ * `value == null` as "not set" rather than checking `=== undefined`.
+ * Legacy DB rows (pre-typed model) only carry `{level, message}`.
  */
+export type DiagnosticLevel = 'info' | 'warn' | 'error';
+
 export interface Diagnostic {
-  level: string;
+  level: DiagnosticLevel;
   message: string;
-  stage?: string;
-  code?: string;
+  stage?: string | null;
+  code?: string | null;
   detail?: string | null;
   request_id?: string | null;
   error_id?: string | null;
