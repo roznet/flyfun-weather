@@ -18,8 +18,13 @@ Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection
 
 ### fetch
 Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD for US, DWD for Europe), Autorouter GRAMET, SRTM elevation, model freshness, GRIB2 enrichment (GFS + ICON-EU + ECMWF IFS via ECPDS) with two-phase sequential decode for memory safety.
-Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `check_freshness`, `enrich_forecasts`
+Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `enrich_forecasts`
 → Full doc: fetch.md
+
+### freshness-markers
+Marker-based per-(model, source) staleness decision used by `/packs/freshness` + auto-refresh. In-memory `MarkerStore` populated by a 5-min loop; pure-compute lookup in the HTTP path. Horizon-aware comparison against pack `model_sources`. Admin endpoint surfaces observed delivery delays vs. registry expectation for ongoing calibration.
+Key exports: `SOURCE_REGISTRY`, `MarkerStore`, `get_store`, `check_source`, `run_freshness_loop`, `_build_data_status`
+→ Full doc: freshness-markers.md
 
 ### analysis
 Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, DD/NWP cloud methods, four icing methods — Ogimet-DD/Ogimet-NWP/SFIP-NWP/IENG-NWP, inversions, convective, vertical motion/CAT), altitude advisories, model divergence scoring. Icing gated by `is_in_cloud_layer()` consistent with cloud display layers. Icing and cloud methods selectable via user preferences.
