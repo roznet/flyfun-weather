@@ -262,7 +262,10 @@ def _parse_diagnostics(raw: str | None) -> list[Diagnostic]:
     except json.JSONDecodeError:
         logger.debug("Skipping unparseable diagnostics_json: %r", raw[:200])
         return []
-    if isinstance(parsed, dict):
+    # Reject any non-list shape: legacy {} dict, JSON null, or scalar.
+    # Without this, `for item in None` (or in a number/string) would
+    # raise TypeError and 500 the flight-list endpoint.
+    if not isinstance(parsed, list):
         return []
     out: list[Diagnostic] = []
     for item in parsed:

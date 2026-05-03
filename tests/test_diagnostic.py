@@ -293,3 +293,13 @@ class TestParseDiagnosticsContainment:
 
         assert _parse_diagnostics("{not valid json") == []
         assert _parse_diagnostics("garbage") == []
+
+    def test_non_list_json_shapes_safe(self):
+        # Valid JSON but not a list — null/scalar/string would TypeError
+        # on `for item in parsed` without the isinstance guard.
+        from weatherbrief.storage.flights import _parse_diagnostics
+
+        assert _parse_diagnostics("null") == []
+        assert _parse_diagnostics("42") == []
+        assert _parse_diagnostics("true") == []
+        assert _parse_diagnostics('"a string"') == []
