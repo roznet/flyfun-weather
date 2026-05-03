@@ -360,6 +360,10 @@ def execute_briefing(
             )
         except Exception:
             logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)
+            # format_exc() is fine here because we're inside the active
+            # except block. classify_llm_exception (the other diagnostic
+            # construction site) uses the explicit format_exception(...)
+            # form because it can be called from outside an except.
             result.diagnostics.append(Diagnostic.create(
                 level="warn",
                 stage="advisories",

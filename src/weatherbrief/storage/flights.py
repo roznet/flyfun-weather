@@ -247,15 +247,21 @@ def _parse_diagnostics(raw: str | None) -> list[Diagnostic]:
     - ``[{"level": ..., "message": ...}, ...]`` (pre-typed rows) -> validates
       through Diagnostic; missing optional fields stay None.
 
-    Per-item ``ValidationError`` is contained: a single malformed entry
-    (e.g. an unknown ``level`` value) is logged and skipped rather than
-    breaking every API request that touches the flight. Other exceptions
-    (JSON shape errors, etc.) propagate — they indicate a real bug, not a
+    Defensive at two layers so one corrupt row can't take down the whole
+    flight-list endpoint:
+    - Outer ``json.JSONDecodeError`` (column unparseable) -> empty list.
+    - Per-item ``ValidationError`` (one bad entry) -> log and skip,
+      keep the rest.
+    Other exceptions still propagate — they signal a real bug, not a
     legacy/corrupt diagnostic.
     """
     if not raw:
         return []
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.debug("Skipping unparseable diagnostics_json: %r", raw[:200])
+        return []
     if isinstance(parsed, dict):
         return []
     out: list[Diagnostic] = []
