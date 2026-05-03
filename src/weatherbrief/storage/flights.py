@@ -202,6 +202,9 @@ def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
         artifact_path=meta.artifact_path,
         model_init_times_json=json.dumps(meta.model_init_times),
         grib_init_times_json=json.dumps(meta.grib_init_times),
+        model_sources_json=(
+            json.dumps(meta.model_sources) if meta.model_sources else None
+        ),
         models_skipped_region_json=json.dumps(meta.models_skipped_region),
         diagnostics_json=json.dumps(
             [d.model_dump(mode="json") for d in meta.diagnostics],
@@ -290,6 +293,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         artifact_path=_resolve_artifact_path(row.artifact_path),
         model_init_times=json.loads(row.model_init_times_json) if row.model_init_times_json else {},
         grib_init_times=json.loads(row.grib_init_times_json) if row.grib_init_times_json else {},
+        model_sources=json.loads(row.model_sources_json) if row.model_sources_json else {},
         models_skipped_region=json.loads(row.models_skipped_region_json) if row.models_skipped_region_json else [],
         diagnostics=_parse_diagnostics(row.diagnostics_json),
         alt_assessment=row.alt_assessment,

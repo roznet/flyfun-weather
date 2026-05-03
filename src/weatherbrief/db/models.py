@@ -211,6 +211,7 @@ class BriefingPackRow(Base):
     artifact_path: Mapped[str] = mapped_column(Text, default="")
     model_init_times_json: Mapped[str] = mapped_column(Text, default="{}")
     grib_init_times_json: Mapped[str] = mapped_column(Text, default="{}")
+    model_sources_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     models_skipped_region_json: Mapped[str] = mapped_column(Text, default="[]")
     diagnostics_json: Mapped[str] = mapped_column(Text, default="[]")
     alt_assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)

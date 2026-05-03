@@ -90,6 +90,76 @@ def _user_disk_bytes(data_dir: Path, user_id: str) -> int:
     return total
 
 
+@router.get("/freshness/markers")
+def freshness_markers(
+    _admin_id: str = Depends(require_admin),
+):
+    """Dump the freshness marker store for debugging + calibration (issue #108).
+
+    For each (source, model) returns:
+    - ``init`` / ``next_expected`` / ``last_check`` / ``slip_count`` — live state.
+    - ``observations`` — recent ``(cycle_init, observed_at, delay_s)`` advances.
+    - ``calibration`` — per-cycle-hour aggregate ``count`` / ``median_delay_s``
+      / ``p90_delay_s`` plus the registry's currently-configured offset, so
+      drift between observed and configured is visible at a glance.
+
+    Empty marker list if the freshness loop hasn't bootstrapped yet (e.g.
+    immediately after restart).
+    """
+    from datetime import timedelta
+
+    from weatherbrief.fetch.freshness.markers import get_store
+    from weatherbrief.fetch.freshness.registry import SOURCE_REGISTRY
+
+    store = get_store()
+    loop_interval = timedelta(seconds=300)
+    out = []
+    for (source, model), m in store.all_sync().items():
+        observations = []
+        delays_by_hour: dict[int, list[int]] = {}
+        for cycle_init, observed_at in m.observations:
+            delay_s = int((observed_at - cycle_init).total_seconds())
+            observations.append({
+                "init": cycle_init.isoformat(),
+                "observed_at": observed_at.isoformat(),
+                "delay_s": delay_s,
+            })
+            delays_by_hour.setdefault(cycle_init.hour, []).append(delay_s)
+
+        cfg = SOURCE_REGISTRY.get(source)
+        calibration = []
+        if cfg is not None:
+            for hour in sorted(delays_by_hour):
+                ds = sorted(delays_by_hour[hour])
+                count = len(ds)
+                median = ds[count // 2]
+                p90_idx = max(0, int(count * 0.9) - 1) if count > 1 else 0
+                p90 = ds[p90_idx]
+                configured = int(cfg.offset_for(hour).total_seconds())
+                calibration.append({
+                    "cycle_hour": hour,
+                    "count": count,
+                    "median_delay_s": median,
+                    "p90_delay_s": p90,
+                    "configured_offset_s": configured,
+                    "drift_p90_vs_config_s": p90 - configured,
+                })
+
+        out.append({
+            "source": source,
+            "model": model,
+            "init": m.init.isoformat(),
+            "next_expected": m.next_expected.isoformat(),
+            "last_check": m.last_check.isoformat() if m.last_check else None,
+            "slip_count": m.slip_count,
+            "is_stale": m.is_stale(loop_interval),
+            "observations": observations,
+            "calibration": calibration,
+        })
+    out.sort(key=lambda r: r["source"])
+    return {"loop_interval_seconds": int(loop_interval.total_seconds()), "markers": out}
+
+
 @router.get("/users")
 def list_users(
     period: str = Query(default="30d", pattern="^(30d|all)$"),

@@ -41,6 +41,8 @@ _DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
 _STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
 _ECMWF_WATCHER_POLL_SECONDS = 300  # 5 minutes
 _ECMWF_WATCHER_STARTUP_DELAY_SECONDS = 15  # run early — other loops may need ready data
+_FRESHNESS_LOOP_POLL_SECONDS = 300  # 5 minutes
+_FRESHNESS_LOOP_STARTUP_DELAY_SECONDS = 20  # let ECMWF watcher run once first
 # Hewson precompute fires once per init cycle. 06Z and 18Z pick up the 00Z /
 # 12Z inits after ~6 h — Open-Meteo has all 3 models published by then, and
 # we keep ~1 h buffer before the 07Z / 19Z standalone forecast-fetch cycles.
@@ -206,11 +208,11 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
     try:
         flight = _row_to_flight(flight_row)
 
-        # Check freshness — skip if data hasn't changed
+        # Check freshness — skip if no source has fresher data covering the flight.
         packs = list_packs(db, flight_row.id)
         if packs:
             latest = packs[0]
-            status = _build_data_status(latest.model_init_times)
+            status = _build_data_status(latest, flight)
             if status.fresh:
                 logger.info("Auto-refresh: data is fresh for %s, skipping", flight_row.id)
                 return
@@ -644,6 +646,56 @@ def _run_ecmwf_watcher_once() -> list[datetime]:
     from weatherbrief.fetch.grib.ecmwf_watcher import check_ecmwf_completeness
 
     return check_ecmwf_completeness()
+
+
+# ---------------------------------------------------------------------------
+# Freshness marker loop (issue #108)
+# ---------------------------------------------------------------------------
+
+
+async def run_freshness_loop(app_state) -> None:
+    """Marker-based freshness loop — started as an asyncio task.
+
+    Bootstraps the in-memory ``MarkerStore`` from the registry, then runs a
+    dynamic readiness check on each (source, model) only when its marker's
+    ``next_expected`` has passed.  Most ticks are no-ops and produce no I/O.
+    """
+    from weatherbrief.fetch.freshness.markers import get_store
+    from weatherbrief.fetch.freshness.sources import all_tracked_sources
+
+    logger.info(
+        "Freshness loop started (poll every %ds)", _FRESHNESS_LOOP_POLL_SECONDS,
+    )
+    store = get_store()
+    await store.bootstrap(all_tracked_sources())
+    await asyncio.sleep(_FRESHNESS_LOOP_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            await _run_freshness_check_once()
+        except Exception:
+            logger.error("Freshness loop cycle failed", exc_info=True)
+        await asyncio.sleep(_FRESHNESS_LOOP_POLL_SECONDS)
+
+
+async def _run_freshness_check_once() -> None:
+    """Check every marker whose next_expected has elapsed."""
+    from weatherbrief.fetch.freshness.markers import get_store
+    from weatherbrief.fetch.freshness.sources import all_tracked_sources, check_source
+
+    store = get_store()
+    now = datetime.now(timezone.utc)
+    for source, model in all_tracked_sources():
+        marker = store.get_sync(source, model)
+        if marker is None:
+            continue
+        if now < marker.next_expected:
+            continue
+        observed = await asyncio.to_thread(check_source, source, model)
+        if observed is None:
+            await store.mark_check(source, model, now=now)
+            continue
+        await store.update(source, model, observed, now=now)
 
 
 # ---------------------------------------------------------------------------

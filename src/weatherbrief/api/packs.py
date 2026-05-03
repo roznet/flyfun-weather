@@ -45,12 +45,8 @@ def _validate_model(model: str) -> str:
     return model
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
-from weatherbrief.fetch.model_status import (
-    check_freshness,
-    compute_next_update,
-    fetch_model_metadata,
-)
-from weatherbrief.models import BriefingPackMeta, DiagnosticPublic
+from weatherbrief.fetch.model_status import fetch_model_metadata
+from weatherbrief.models import BriefingPackMeta, DiagnosticPublic, Flight
 from weatherbrief.storage.flights import (
     list_packs,
     load_pack_meta,
@@ -200,14 +196,32 @@ refresh_registry = _RefreshRegistry()
 router = APIRouter(prefix="/flights/{flight_id}/packs", tags=["packs"])
 
 
-class DataStatus(BaseModel):
-    """Model freshness status."""
+class ModelStatus(BaseModel):
+    """Per-(model, source) freshness detail (issue #108)."""
 
-    fresh: bool  # True = all models up to date
+    source: str  # registry key, e.g. "ecmwf:direct"
+    pack_init: int | None = None  # Unix ts of the init the pack was built from
+    latest_available: int  # Unix ts of latest known init for this source
+    next_expected: str  # ISO datetime — wallclock when next run is expected
+    state: str  # "current" | "stale" | "awaiting" | "delayed"
+
+
+class DataStatus(BaseModel):
+    """Model freshness status.
+
+    Back-compat fields (``fresh``, ``stale_models``, ``model_init_times``,
+    ``next_expected_update``, ``next_expected_model``) are preserved so
+    existing clients keep working.  ``models`` and ``marker_health`` are
+    additive (issue #108).
+    """
+
+    fresh: bool  # True = all models up to date for the flight horizon
     stale_models: list[str] = Field(default_factory=list)
-    model_init_times: dict[str, int] = Field(default_factory=dict)  # current live init times
-    next_expected_update: str | None = None  # ISO datetime
+    model_init_times: dict[str, int] = Field(default_factory=dict)  # latest known init per model
+    next_expected_update: str | None = None  # earliest ISO datetime across sources
     next_expected_model: str | None = None  # which model updates next
+    marker_health: str = "ok"  # "ok" | "suspect"
+    models: dict[str, ModelStatus] = Field(default_factory=dict)
 
 
 class PackMetaResponse(BaseModel):
@@ -302,29 +316,154 @@ def get_freshness(
     db: Session = Depends(get_db),
 ):
     """Check whether the latest pack's data is still fresh."""
-    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = list_packs(db, flight_id)
     if not packs:
         return DataStatus(fresh=False)
 
-    latest = packs[0]
-    return _build_data_status(latest.model_init_times)
+    return _build_data_status(packs[0], flight)
 
 
-def _build_data_status(stored_init_times: dict[str, int]) -> DataStatus:
-    """Fetch live metadata and compare against stored init times."""
-    models_to_check = list(stored_init_times.keys()) if stored_init_times else None
-    live = fetch_model_metadata(models_to_check)
-    is_fresh, stale = check_freshness(stored_init_times, live)
-    next_time, next_model = compute_next_update(live)
+# Source-key prefix → which pack init-time field carries the pack's init.
+# Direct sources record into ``grib_init_times``; Open-Meteo records into
+# ``model_init_times``.
+def _pack_init_for_source(pack: BriefingPackMeta, model: str, source: str) -> int | None:
+    if source.endswith(":openmeteo"):
+        return pack.model_init_times.get(model)
+    return pack.grib_init_times.get(model) or pack.model_init_times.get(model)
+
+
+def _backfill_sources(pack: BriefingPackMeta) -> dict[str, str]:
+    """Infer ``model_sources`` for legacy packs created before issue #108.
+
+    A model with a ``grib_init_times`` entry was direct-GRIB enriched; the
+    rest came from Open-Meteo.  ICON's direct path is ECMWF-style
+    ``icon_eu:dwd``; GFS's is ``gfs:noaa``.
+    """
+    if pack.model_sources:
+        return dict(pack.model_sources)
+    direct = {"ecmwf": "ecmwf:direct", "gfs": "gfs:noaa", "icon": "icon_eu:dwd"}
+    out: dict[str, str] = {}
+    all_models = set(pack.model_init_times) | set(pack.grib_init_times)
+    for model in all_models:
+        if model in pack.grib_init_times and model in direct:
+            out[model] = direct[model]
+        else:
+            out[model] = f"{model}:openmeteo"
+    return out
+
+
+def _inline_check(source: str, model: str) -> tuple[datetime, datetime] | None:
+    """Best-effort one-shot dynamic check used when the marker is suspect.
+
+    Falls back to the registry's expected delivery time if the dynamic
+    check fails — better than reporting nothing.  Returns (init, next_expected)
+    aware UTC datetimes.
+    """
+    from weatherbrief.fetch.freshness import registry
+    from weatherbrief.fetch.freshness.sources import check_source as _sync_check
+
+    observed = _sync_check(source, model)
+    if observed is None:
+        # Last-resort: synthesize from registry
+        init, nxt = registry.initial_marker_for(source)
+        return init, nxt
+    return observed, registry.next_run_after(source, observed)
+
+
+def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
+    """Marker-based freshness for one pack (issue #108).
+
+    Pure compute when markers are healthy: zero HTTP fan-out.  For each
+    (model, source) recorded on the pack:
+
+    1. Read the marker (or backfill via inline check if suspect/missing).
+    2. Pack is stale for this source iff:
+       - ``marker.init > pack.init`` AND
+       - the new run's horizon reaches the flight's end time.
+    """
+    from datetime import timedelta as _td
+
+    from weatherbrief.fetch.freshness import registry
+    from weatherbrief.fetch.freshness.markers import get_store
+
+    sources = _backfill_sources(pack)
+    if not sources:
+        return DataStatus(fresh=False)
+
+    flight_end = flight.departure_time + _td(hours=flight.flight_duration_hours or 0)
+    store = get_store()
+    loop_interval = _td(seconds=300)
+
+    models_out: dict[str, ModelStatus] = {}
+    next_expected_candidates: list[tuple[datetime, str]] = []
+    health = "ok"
+    any_stale = False
+    stale_models: list[str] = []
+
+    for model, source in sources.items():
+        marker = store.get_sync(source, model_for_source(source))
+        if marker is None or marker.is_stale(loop_interval):
+            health = "suspect"
+            inline = _inline_check(source, model_for_source(source))
+            if inline is None:
+                continue
+            init, nxt = inline
+        else:
+            init, nxt = marker.init, marker.next_expected
+
+        pack_init_ts = _pack_init_for_source(pack, model, source)
+        horizon = registry.run_horizon(source, init)
+        run_covers_flight = (init + horizon) >= flight_end
+
+        if pack_init_ts is None:
+            state = "current"
+        elif int(init.timestamp()) > pack_init_ts and run_covers_flight:
+            state = "stale"
+            any_stale = True
+            stale_models.append(model)
+        elif int(init.timestamp()) > pack_init_ts:
+            # Newer run exists but doesn't cover the flight → not actionable.
+            state = "current"
+        else:
+            now = datetime.now(timezone.utc)
+            state = "delayed" if now > nxt else "awaiting"
+
+        models_out[model] = ModelStatus(
+            source=source,
+            pack_init=pack_init_ts,
+            latest_available=int(init.timestamp()),
+            next_expected=nxt.isoformat(),
+            state=state,
+        )
+        next_expected_candidates.append((nxt, model))
+
+    next_time = None
+    next_model = None
+    if next_expected_candidates:
+        next_expected_candidates.sort(key=lambda c: c[0])
+        next_time, next_model = next_expected_candidates[0]
 
     return DataStatus(
-        fresh=is_fresh,
-        stale_models=stale,
-        model_init_times={m: meta.last_init_time for m, meta in live.items()},
+        fresh=not any_stale,
+        stale_models=stale_models,
+        model_init_times={m: s.latest_available for m, s in models_out.items()},
         next_expected_update=next_time.isoformat() if next_time else None,
         next_expected_model=next_model,
+        marker_health=health,
+        models=models_out,
     )
+
+
+def model_for_source(source: str) -> str:
+    """Return the model name keyed in the marker store for ``source``.
+
+    The store keys by ``(source, model_from_source_prefix)`` — e.g.
+    ``("icon_eu:dwd", "icon_eu")``.  Pack-side ``model_sources`` may map
+    pack-model ``"icon"`` to source ``"icon_eu:dwd"``; we strip the suffix
+    here to find the matching marker.
+    """
+    return source.split(":", 1)[0]
 
 
 def _can_force_refresh(request: Request, db: Session) -> bool:
@@ -592,6 +731,21 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
             if m in fetched
         }
 
+    # model_sources records which freshness source produced each model's data.
+    # Default = Open-Meteo for every fetched model; overridden to the matching
+    # direct-GRIB source where GRIB enrichment succeeded.  Used by the
+    # marker-based freshness check (issue #108).
+    model_sources: dict[str, str] = {m: f"{m}:openmeteo" for m in init_times}
+    _DIRECT_SOURCE_KEYS = {
+        "ecmwf": "ecmwf:direct",
+        "gfs": "gfs:noaa",
+        "icon": "icon_eu:dwd",
+    }
+    for m in result.grib_init_times:
+        key = _DIRECT_SOURCE_KEYS.get(m)
+        if key:
+            model_sources[m] = key
+
     # Derive alt assessment from alt advisory result if available
     alt_assessment = None
     alt_assessment_reason = None
@@ -615,6 +769,7 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
         artifact_path=str(pack_path),
         model_init_times=init_times,
         grib_init_times=result.grib_init_times,
+        model_sources=model_sources,
         models_skipped_region=result.models_skipped_region,
         diagnostics=result.diagnostics,
         alt_assessment=alt_assessment,
@@ -713,7 +868,7 @@ async def refresh_briefing(
         packs = list_packs(db, flight_id)
         if packs:
             latest = packs[0]
-            status = _build_data_status(latest.model_init_times)
+            status = _build_data_status(latest, flight)
             if status.fresh:
                 logger.info("Data is fresh for %s, skipping pipeline", flight_id)
                 return Response(
@@ -848,7 +1003,7 @@ async def refresh_briefing_stream(
             packs = list_packs(db, flight_id)
             if packs:
                 latest = packs[0]
-                status = _build_data_status(latest.model_init_times)
+                status = _build_data_status(latest, flight)
                 if status.fresh:
                     logger.info("Data is fresh for %s, skipping pipeline (stream)", flight_id)
                     pack_resp = _meta_to_response(latest, data_status=status).model_dump()
