@@ -364,8 +364,12 @@ export function renderFreshnessBar(
   const basisParts = [...fetchedParts, ...skippedParts].join(', ');
   const basisLine = basisParts ? `<span class="freshness-basis">${t('freshness.basedOn')}${basisParts}</span>` : '';
 
-  // Build diagnostics HTML (warn entries only — info is too noisy for the bar)
-  const diagEntries = (pack?.diagnostics || []).filter(d => d.level === 'warn');
+  // Build diagnostics HTML — show warn (retryable issues) and error
+  // (irrecoverable failures); info entries are persisted for debug only.
+  // See models/diagnostic.py for the level convention.
+  const diagEntries = (pack?.diagnostics || []).filter(
+    d => d.level === 'warn' || d.level === 'error',
+  );
   const diagHtml = diagEntries.length > 0
     ? `<span class="freshness-diagnostics">${diagEntries.map(d =>
         `<span class="diag-${d.level}">${escapeHtml(d.message)}</span>`
