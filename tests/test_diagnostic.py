@@ -183,3 +183,29 @@ class TestInvalidLevel:
     def test_unknown_level_rejected(self):
         with pytest.raises(Exception):
             Diagnostic.model_validate({"level": "fatal", "message": "m"})
+
+
+class TestParseDiagnosticsContainment:
+    """The DB-row parser must not crash a whole flight listing on one bad entry."""
+
+    def test_skips_malformed_entry_keeps_valid(self):
+        import json
+
+        from weatherbrief.storage.flights import _parse_diagnostics
+
+        raw = json.dumps([
+            {"level": "warn", "message": "good entry"},
+            {"level": "fatal", "message": "unknown level"},  # malformed
+            {"level": "info", "message": "another good entry"},
+        ])
+        result = _parse_diagnostics(raw)
+        assert len(result) == 2
+        assert result[0].message == "good entry"
+        assert result[1].message == "another good entry"
+
+    def test_empty_and_dict_inputs_safe(self):
+        from weatherbrief.storage.flights import _parse_diagnostics
+
+        assert _parse_diagnostics(None) == []
+        assert _parse_diagnostics("") == []
+        assert _parse_diagnostics("{}") == []  # very-old-row shape
