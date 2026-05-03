@@ -41,7 +41,6 @@ _DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
 _STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
 _ECMWF_WATCHER_POLL_SECONDS = 300  # 5 minutes
 _ECMWF_WATCHER_STARTUP_DELAY_SECONDS = 15  # run early — other loops may need ready data
-_FRESHNESS_LOOP_POLL_SECONDS = 300  # 5 minutes
 _FRESHNESS_LOOP_STARTUP_DELAY_SECONDS = 20  # let ECMWF watcher run once first
 # Hewson precompute fires once per init cycle. 06Z and 18Z pick up the 00Z /
 # 12Z inits after ~6 h — Open-Meteo has all 3 models published by then, and
@@ -660,12 +659,12 @@ async def run_freshness_loop(app_state) -> None:
     dynamic readiness check on each (source, model) only when its marker's
     ``next_expected`` has passed.  Most ticks are no-ops and produce no I/O.
     """
+    from weatherbrief.fetch.freshness import LOOP_INTERVAL
     from weatherbrief.fetch.freshness.markers import get_store
     from weatherbrief.fetch.freshness.sources import all_tracked_sources
 
-    logger.info(
-        "Freshness loop started (poll every %ds)", _FRESHNESS_LOOP_POLL_SECONDS,
-    )
+    poll_seconds = int(LOOP_INTERVAL.total_seconds())
+    logger.info("Freshness loop started (poll every %ds)", poll_seconds)
     store = get_store()
     await store.bootstrap(all_tracked_sources())
     await asyncio.sleep(_FRESHNESS_LOOP_STARTUP_DELAY_SECONDS)
@@ -675,11 +674,21 @@ async def run_freshness_loop(app_state) -> None:
             await _run_freshness_check_once()
         except Exception:
             logger.error("Freshness loop cycle failed", exc_info=True)
-        await asyncio.sleep(_FRESHNESS_LOOP_POLL_SECONDS)
+        await asyncio.sleep(poll_seconds)
 
 
 async def _run_freshness_check_once() -> None:
-    """Check every marker whose next_expected has elapsed."""
+    """Run a single freshness-loop tick.
+
+    For every (source, model) marker:
+    - If ``next_expected`` hasn't elapsed yet, just bump ``last_check``
+      so the heartbeat stays fresh — no I/O.  Without this, sources whose
+      next-expected is hours away would have stale heartbeats and force
+      every freshness HTTP call into the inline-fallback (sync I/O on the
+      event loop) until the loop got around to checking them.
+    - Otherwise, run the dynamic ``check_source`` (offloaded to a thread)
+      and either advance the marker or record a slip.
+    """
     from weatherbrief.fetch.freshness.markers import get_store
     from weatherbrief.fetch.freshness.sources import all_tracked_sources, check_source
 
@@ -690,6 +699,7 @@ async def _run_freshness_check_once() -> None:
         if marker is None:
             continue
         if now < marker.next_expected:
+            await store.mark_check(source, model, now=now)
             continue
         observed = await asyncio.to_thread(check_source, source, model)
         if observed is None:

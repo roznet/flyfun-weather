@@ -95,14 +95,19 @@ class MarkerStore:
         ``sources`` is a list of ``(source_key, model_name)`` pairs.  Each
         gets a marker whose ``init`` is the most recent expected-delivered
         cycle and ``next_expected`` is the next cycle's expected delivery.
-        ``last_check`` stays None so the loop will run a real check on the
-        first tick.
+
+        ``last_check`` is set to ``now`` so :meth:`Marker.is_stale` doesn't
+        immediately flag every marker as suspect — the registry-derived
+        ``init`` is a good-faith estimate, and the loop will run a real
+        dynamic check the first time a marker's ``next_expected`` passes.
         """
+        bootstrap_now = now or datetime.now(timezone.utc)
         async with self._lock:
             for source, model in sources:
                 init, nxt = registry.initial_marker_for(source, now=now)
                 self._markers[(source, model)] = Marker(
                     source=source, model=model, init=init, next_expected=nxt,
+                    last_check=bootstrap_now,
                 )
             logger.info(
                 "MarkerStore: bootstrapped %d (source, model) markers",
@@ -201,14 +206,28 @@ class MarkerStore:
                 cfg = registry.SOURCE_REGISTRY[source]
                 marker.slip_count += 1
                 if marker.slip_count > cfg.max_slip_retries:
-                    # Give up on the missed cycle — jump to the cycle after it.
-                    skipped_init = registry.cycle_init_for(source, marker.next_expected)
-                    marker.next_expected = registry.next_cycle_after(source, skipped_init)
+                    # Give up on the cycle we were waiting for and target the
+                    # one *after* it.  The slipping cycle is always the one
+                    # right after ``marker.init`` (the last successfully
+                    # observed cycle) — derive it directly so accumulated
+                    # backoff bumps to ``next_expected`` don't push the jump
+                    # several cycles into the future.
+                    skipped_cycle = registry.next_cycle_init_after(
+                        source, marker.init,
+                    )
+                    target_cycle = registry.next_cycle_init_after(
+                        source, skipped_cycle,
+                    )
+                    marker.next_expected = registry.expected_delivery_for_init(
+                        source, target_cycle,
+                    )
                     marker.slip_count = 0
                     logger.warning(
-                        "Marker slip cap hit: %s/%s — jumping to next cycle, "
-                        "next_expected=%s",
-                        source, model, marker.next_expected.isoformat(),
+                        "Marker slip cap hit: %s/%s — skipping cycle %s, "
+                        "target cycle %s, next_expected=%s",
+                        source, model,
+                        skipped_cycle.isoformat(), target_cycle.isoformat(),
+                        marker.next_expected.isoformat(),
                     )
                 else:
                     bump = cfg.slip_bump(marker.slip_count)

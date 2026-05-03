@@ -216,14 +216,15 @@ def next_run_after(source: str, current_init: datetime) -> datetime:
     return next_init + cfg.offset_for(next_init.hour)
 
 
-def next_cycle_after(source: str, skipped_init: datetime) -> datetime:
-    """Like :func:`next_run_after` but used after slip-cap to skip a cycle.
+def next_cycle_init_after(source: str, init: datetime) -> datetime:
+    """Return the next cycle init (without offset) strictly after ``init``.
 
-    Returns the expected delivery wallclock for the cycle *after* the one
-    that started at ``skipped_init`` — i.e. we give up on ``skipped_init``
-    and pin our hopes on the following cycle.
+    Companion to :func:`next_run_after`, exposed so callers can reason
+    about cycles separately from delivery wallclocks.  Used by the
+    marker store's slip-cap path to identify the cycle being skipped.
     """
-    return next_run_after(source, skipped_init)
+    cfg = SOURCE_REGISTRY[source]
+    return _next_cycle_init(init, cfg.cycles)
 
 
 def run_horizon(source: str, init: datetime) -> timedelta:

@@ -11,7 +11,7 @@ from weatherbrief.fetch.freshness.registry import (
     cycle_init_for,
     expected_delivery_for_init,
     initial_marker_for,
-    next_cycle_after,
+    next_cycle_init_after,
     next_run_after,
     run_horizon,
 )
@@ -55,11 +55,16 @@ class TestNextRunAfter:
         assert nxt == _utc(2026, 5, 4, 0) + timedelta(hours=8)
 
 
-class TestNextCycleAfter:
-    def test_skip_one_cycle(self):
-        # If 06Z is slipping past cap, jump to expected delivery of 12Z
-        nxt = next_cycle_after("ecmwf:direct", _utc(2026, 5, 3, 6))
-        assert nxt == _utc(2026, 5, 3, 12) + timedelta(hours=6, minutes=40)
+class TestNextCycleInitAfter:
+    def test_returns_next_cycle_init_without_offset(self):
+        # 00Z + 1 = 06Z (no offset added — caller composes with
+        # expected_delivery_for_init when delivery wallclock is needed).
+        nxt = next_cycle_init_after("ecmwf:direct", _utc(2026, 5, 3, 0))
+        assert nxt == _utc(2026, 5, 3, 6)
+
+    def test_rolls_to_next_day(self):
+        nxt = next_cycle_init_after("ecmwf:direct", _utc(2026, 5, 3, 18))
+        assert nxt == _utc(2026, 5, 4, 0)
 
 
 # ---------------------------------------------------------------------------

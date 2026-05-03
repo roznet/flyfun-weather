@@ -106,13 +106,13 @@ def freshness_markers(
     Empty marker list if the freshness loop hasn't bootstrapped yet (e.g.
     immediately after restart).
     """
-    from datetime import timedelta
+    import math
 
+    from weatherbrief.fetch.freshness import LOOP_INTERVAL
     from weatherbrief.fetch.freshness.markers import get_store
     from weatherbrief.fetch.freshness.registry import SOURCE_REGISTRY
 
     store = get_store()
-    loop_interval = timedelta(seconds=300)
     out = []
     for (source, model), m in store.all_sync().items():
         observations = []
@@ -133,7 +133,9 @@ def freshness_markers(
                 ds = sorted(delays_by_hour[hour])
                 count = len(ds)
                 median = ds[count // 2]
-                p90_idx = max(0, int(count * 0.9) - 1) if count > 1 else 0
+                # Nearest-rank p90: ceil(count * 0.9) - 1.  ``int()`` would
+                # truncate and underestimate (e.g. count=2 → idx 0 = min, not p90).
+                p90_idx = max(0, math.ceil(count * 0.9) - 1)
                 p90 = ds[p90_idx]
                 configured = int(cfg.offset_for(hour).total_seconds())
                 calibration.append({
@@ -152,12 +154,12 @@ def freshness_markers(
             "next_expected": m.next_expected.isoformat(),
             "last_check": m.last_check.isoformat() if m.last_check else None,
             "slip_count": m.slip_count,
-            "is_stale": m.is_stale(loop_interval),
+            "is_stale": m.is_stale(LOOP_INTERVAL),
             "observations": observations,
             "calibration": calibration,
         })
     out.sort(key=lambda r: r["source"])
-    return {"loop_interval_seconds": int(loop_interval.total_seconds()), "markers": out}
+    return {"loop_interval_seconds": int(LOOP_INTERVAL.total_seconds()), "markers": out}
 
 
 @router.get("/users")
