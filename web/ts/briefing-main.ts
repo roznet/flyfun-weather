@@ -894,7 +894,7 @@ async function init(): Promise<void> {
       state.elevationProfile !== prev.elevationProfile ||
       state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride
     ) {
-      ui.renderAssessment(state.currentPack, state.flight);
+      ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
@@ -1260,7 +1260,7 @@ async function init(): Promise<void> {
     // renderBriefingSharing already ran via the store subscriber above when
     // flight was set; don't re-invoke (it would waste a clone+replace cycle).
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
-    ui.renderAssessment(s.currentPack, s.flight);
+    ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode);

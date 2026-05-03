@@ -22,6 +22,7 @@ import type {
   VerticalRegime,
   WeatherDigest,
 } from '../store/types';
+import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus } from '../types/advisories';
 import type { DisplayMode, Tier } from '../types/metrics';
 import {
   getDisplayConfig,
@@ -136,44 +137,132 @@ export function renderHistoryDropdown(
 
 // --- Assessment banner ---
 
-export function renderAssessment(pack: PackMeta | null, flight?: FlightResponse | null): void {
-  const el = $('assessment-banner');
-  if (!el) return;
+const ASSESSMENT_BADGE_CLASS: Record<AdvisoryStatus, string> = {
+  red: 'badge-red',
+  amber: 'badge-amber',
+  green: 'badge-green',
+  unavailable: 'badge-muted',
+};
 
-  if (!pack || !pack.assessment) {
-    el.className = 'assessment-banner assessment-none';
-    el.textContent = t('briefing.noAssessment');
+const ASSESSMENT_BADGE_LETTER: Record<AdvisoryStatus, string> = {
+  red: 'R',
+  amber: 'A',
+  green: 'G',
+  unavailable: '?',
+};
+
+interface AdvisoryCounts {
+  red: number;
+  amber: number;
+  green: number;
+}
+
+function countAdvisoryStatuses(manifest: RouteAdvisoriesManifest | null): AdvisoryCounts {
+  const counts: AdvisoryCounts = { red: 0, amber: 0, green: 0 };
+  if (!manifest) return counts;
+  for (const a of manifest.advisories) {
+    if (a.aggregate_status === 'red') counts.red++;
+    else if (a.aggregate_status === 'amber') counts.amber++;
+    else if (a.aggregate_status === 'green') counts.green++;
+  }
+  return counts;
+}
+
+/**
+ * Compare two advisory tallies using the same rule as the altitude table:
+ * fewer reds wins, ties broken by fewer ambers.
+ */
+function compareAdvisoryCounts(
+  alt: AdvisoryCounts,
+  primary: AdvisoryCounts,
+): 'better' | 'same' | 'worse' {
+  if (alt.red < primary.red) return 'better';
+  if (alt.red > primary.red) return 'worse';
+  if (alt.amber < primary.amber) return 'better';
+  if (alt.amber > primary.amber) return 'worse';
+  return 'same';
+}
+
+function renderAdvisoryChips(manifest: RouteAdvisoriesManifest): string {
+  const catalog = new Map(manifest.catalog.map(e => [e.id, e.name]));
+  const concerns = manifest.advisories
+    .filter(a => a.aggregate_status === 'red' || a.aggregate_status === 'amber')
+    .sort((a, b) => {
+      if (a.aggregate_status === b.aggregate_status) return 0;
+      return a.aggregate_status === 'red' ? -1 : 1;
+    });
+
+  if (concerns.length === 0) {
+    const greenCount = manifest.advisories.filter(a => a.aggregate_status === 'green').length;
+    if (greenCount === 0) return '';
+    return `<span class="assessment-chip"><span class="badge badge-green">G</span> ${greenCount} clear</span>`;
+  }
+
+  return concerns.map((adv: RouteAdvisoryResult) => {
+    const name = catalog.get(adv.advisory_id) ?? adv.advisory_id;
+    const cls = ASSESSMENT_BADGE_CLASS[adv.aggregate_status];
+    const letter = ASSESSMENT_BADGE_LETTER[adv.aggregate_status];
+    return `<span class="assessment-chip"><span class="badge ${cls}">${letter}</span> ${escapeHtml(name)}</span>`;
+  }).join(' ');
+}
+
+export function renderAssessment(
+  pack: PackMeta | null,
+  flight?: FlightResponse | null,
+  routeAdvisories?: RouteAdvisoriesManifest | null,
+  altAdvisories?: RouteAdvisoriesManifest | null,
+): void {
+  const el = $('assessment-banner');
+  if (el) {
+    if (!pack || !pack.assessment) {
+      el.className = 'assessment-banner assessment-none';
+      el.textContent = t('briefing.noAssessment');
+    } else {
+      const level = pack.assessment.toUpperCase();
+      el.className = `assessment-banner assessment-${level.toLowerCase()}`;
+      el.innerHTML = `
+        <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : ''}
+      `;
+    }
+  }
+
+  // Alternate departure time \u2014 separate banner outside the AI digest box
+  const altEl = $('alt-assessment-banner');
+  if (!altEl) return;
+
+  if (!pack || !pack.alt_assessment || !flight?.alt_departure_time) {
+    altEl.style.display = 'none';
+    altEl.innerHTML = '';
     return;
   }
 
-  const level = pack.assessment.toUpperCase();
+  const altLevel = pack.alt_assessment.toUpperCase();
+  const altTime = formatDepartureTime(flight.alt_departure_time);
+  const chipsHtml = altAdvisories
+    ? renderAdvisoryChips(altAdvisories)
+    : (pack.alt_assessment_reason ? escapeHtml(pack.alt_assessment_reason) : '');
 
-  // Show alt assessment alongside primary if available
-  if (pack.alt_assessment && flight?.alt_departure_time) {
-    const altLevel = pack.alt_assessment.toUpperCase();
-    const primaryTime = formatDepartureTime(flight.departure_time);
-    const altTime = formatDepartureTime(flight.alt_departure_time);
-    const altReason = pack.alt_assessment_reason ? ` \u2014 ${escapeHtml(pack.alt_assessment_reason)}` : '';
-    const primaryReason = pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : '';
-
-    el.className = `assessment-banner assessment-${level.toLowerCase()}`;
-    el.innerHTML = `
-      <span class="assessment-dual">
-        <span class="assessment-primary">
-          <strong>${primaryTime}: ${level}</strong>${primaryReason}
-        </span>
-        <span class="assessment-separator">\u2502</span>
-        <span class="assessment-alt assessment-${altLevel.toLowerCase()}-text">
-          <strong>${t('briefing.alt', { time: altTime })}: ${altLevel}</strong>${altReason}
-        </span>
-      </span>
-    `;
-  } else {
-    el.className = `assessment-banner assessment-${level.toLowerCase()}`;
-    el.innerHTML = `
-      <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : ''}
-    `;
+  // Only show comparison when both manifests are available
+  let cmpHtml = '';
+  if (routeAdvisories && altAdvisories) {
+    const cmp = compareAdvisoryCounts(
+      countAdvisoryStatuses(altAdvisories),
+      countAdvisoryStatuses(routeAdvisories),
+    );
+    const label = cmp === 'better' ? 'Better' : cmp === 'worse' ? 'Worse' : 'Same';
+    cmpHtml = `<span class="alt-cmp alt-cmp-${cmp}">${label}</span>`;
   }
+
+  altEl.style.display = '';
+  altEl.className = 'alt-assessment-banner';
+  altEl.innerHTML = `
+    <div class="alt-assessment-header">
+      <strong>Alternate Departure Time ${escapeHtml(altTime)}:</strong>
+      <span class="alt-assessment-level assessment-${altLevel.toLowerCase()}-text">${altLevel}</span>
+      ${cmpHtml}
+    </div>
+    <div class="alt-assessment-chips">${chipsHtml}</div>
+  `;
 }
 
 // --- Freshness bar ---

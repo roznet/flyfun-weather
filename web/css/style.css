@@ -717,6 +717,59 @@ label {
 .assessment-amber-text { color: var(--amber); }
 .assessment-red-text { color: var(--red); }
 
+.assessment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-right: 0.4rem;
+  white-space: nowrap;
+}
+
+/* --- Alternate departure time banner (separate from main assessment) --- */
+
+.alt-assessment-banner {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.alt-assessment-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.35rem;
+}
+
+.alt-assessment-level {
+  font-weight: 600;
+}
+
+.alt-assessment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.4rem;
+}
+
+.alt-cmp {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border: 1px solid currentColor;
+}
+
+.alt-cmp-better { color: var(--green); background: var(--green-bg); }
+.alt-cmp-same   { color: var(--text-muted); background: var(--bg); }
+.alt-cmp-worse  { color: var(--red); background: var(--red-bg); }
+
 /* --- Advisory time toggle --- */
 
 .advisory-time-toggle {
