@@ -334,6 +334,11 @@ def execute_briefing(
 
     # === 3.1 Alt departure advisories (lite re-run) ===
     alt_advisory_result: AdvisoryResult | None = None
+    # Buffer the failure diagnostic — `result` doesn't exist yet (created
+    # below at section 5) and even after creation `result.diagnostics`
+    # gets reassigned from fetch_result.diagnostics, which would clobber
+    # any earlier append. We merge this in after that reassignment.
+    _alt_advisory_diagnostic: Diagnostic | None = None
     if (
         options.alt_departure_time is not None
         and analysis_result.route_analyses_manifest
@@ -360,17 +365,33 @@ def execute_briefing(
             )
         except Exception:
             logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)
+            # Belt-and-suspenders: alt-advisory is an *optional* stage
+            # that re-runs evaluators on a different time slice. Its
+            # failure (and even our failure to *record* its failure)
+            # must never bring the main briefing pipeline down. If
+            # Diagnostic.create raises here for any reason — future
+            # validator change, weird edge case — we log and continue;
+            # the user just won't see the alt-advisory section.
+            #
             # format_exc() is fine here because we're inside the active
             # except block. classify_llm_exception (the other diagnostic
             # construction site) uses the explicit format_exception(...)
             # form because it can be called from outside an except.
-            result.diagnostics.append(Diagnostic.create(
-                level="warn",
-                stage="advisories",
-                code=AdvisoryCode.ALT_ADVISORY_FAILED,
-                message="Alternate-departure advisories unavailable for this briefing.",
-                detail=traceback.format_exc(),
-            ))
+            try:
+                _alt_advisory_diagnostic = Diagnostic.create(
+                    level="warn",
+                    stage="advisories",
+                    code=AdvisoryCode.ALT_ADVISORY_FAILED,
+                    message="Alternate-departure advisories unavailable for this briefing.",
+                    detail=traceback.format_exc(),
+                )
+            except Exception:
+                logger.warning(
+                    "Could not construct alt-advisory failure diagnostic — "
+                    "user won't see why alt-advisory is missing",
+                    exc_info=True,
+                )
+                _alt_advisory_diagnostic = None
         stage_timings["alt_advisories"] = perf_counter() - _t0
 
     # === 3.5 Route weather observations (D-0 only) ===
@@ -450,6 +471,10 @@ def execute_briefing(
     result.models_fetched = fetch_result.models_fetched
     result.models_skipped_region = fetch_result.models_skipped_region
     result.diagnostics = fetch_result.diagnostics
+    # Merge any earlier-buffered diagnostics from stages that ran before
+    # `result` existed (alt-advisories runs before snapshot construction).
+    if _alt_advisory_diagnostic is not None:
+        result.diagnostics.append(_alt_advisory_diagnostic)
     result.usage.open_meteo_calls = fetch_result.open_meteo_api_calls
     result.usage.grib_enrichment = fetch_result.grib_enriched
     result.usage.grib_enrichment_failed = fetch_result.grib_enrichment_failed
