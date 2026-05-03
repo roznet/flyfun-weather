@@ -120,8 +120,13 @@ def classify_llm_exception(exc: Exception) -> Diagnostic:
                 request_id=request_id,
             )
 
+    # Unknown failures might be transient (a flaky upstream we haven't
+    # classified yet) or fatal. The message tells the user to try again,
+    # so the level should agree — warn, not error. If a specific
+    # unrecoverable failure mode shows up in the unknown bucket often
+    # enough to matter, give it its own DigestCode + level=error.
     return Diagnostic.create(
-        level="error", stage="digest",
+        level="warn", stage="digest",
         code=DigestCode.DIGEST_UNKNOWN,
         message="AI weather digest unavailable — unexpected error. Try refreshing again later.",
         detail=detail,

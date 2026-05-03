@@ -66,12 +66,25 @@ def _redact(text: str) -> str:
     return text
 
 
+_TRUNCATION_MARKER_TEMPLATE = "\n... [truncated, {} bytes total]"
+
+
 def _truncate(text: str) -> str:
+    """Cap a string at ``DETAIL_MAX_BYTES`` total, marker included.
+
+    The validator that calls this fires on every ``model_validate``
+    (including DB round-trips). Without reserving marker space, each
+    read would re-trigger truncation and shave off another marker's
+    worth of body bytes — silently eroding the tail of detail (which
+    for tracebacks is the most useful part).
+    """
     encoded = text.encode("utf-8", errors="replace")
     if len(encoded) <= DETAIL_MAX_BYTES:
         return text
-    truncated = encoded[:DETAIL_MAX_BYTES].decode("utf-8", errors="ignore")
-    return truncated + f"\n... [truncated, {len(encoded)} bytes total]"
+    marker = _TRUNCATION_MARKER_TEMPLATE.format(len(encoded))
+    body_limit = DETAIL_MAX_BYTES - len(marker.encode("utf-8"))
+    truncated = encoded[:body_limit].decode("utf-8", errors="ignore")
+    return truncated + marker
 
 
 DiagnosticLevel = Literal["info", "warn", "error"]

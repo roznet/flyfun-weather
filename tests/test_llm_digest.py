@@ -162,10 +162,12 @@ def test_run_digest_llm_failure(mock_fetch_text, mock_create_llm, minimal_snapsh
 
     diagnostic = result.get("diagnostic")
     assert diagnostic is not None
-    # Falls through to the catch-all (not an anthropic.* exception)
+    # Falls through to the catch-all (not an anthropic.* exception).
+    # DIGEST_UNKNOWN is `warn` per the level convention — the message
+    # tells users to retry, so the level agrees.
     assert diagnostic.code == DigestCode.DIGEST_UNKNOWN
     assert diagnostic.stage == "digest"
-    assert diagnostic.level == "error"
+    assert diagnostic.level == "warn"
     # Original exception text appears in the redacted/capped detail
     assert "API key invalid" in (diagnostic.detail or "")
 
