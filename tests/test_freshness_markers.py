@@ -28,7 +28,11 @@ async def test_bootstrap_populates_all_requested_sources():
     assert m is not None
     assert m.init <= _utc(2026, 5, 3, 12)
     assert m.next_expected > _utc(2026, 5, 3, 12)
-    assert m.last_check is None
+    # Bootstrap sets last_check so freshly-bootstrapped markers don't
+    # immediately read as suspect (which would force every freshness HTTP
+    # call into the inline-fallback sync-I/O path).  The actual is_stale
+    # check is wall-clock-relative and tested separately.
+    assert m.last_check == _utc(2026, 5, 3, 12)
 
 
 @pytest.mark.asyncio
@@ -111,29 +115,48 @@ async def test_slip_backoff_grows_then_caps():
 
 @pytest.mark.asyncio
 async def test_slip_cap_jumps_to_next_cycle():
-    store = MarkerStore()
-    await store.bootstrap([("ecmwf:direct", "ecmwf")], now=_utc(2026, 5, 3, 12))
-    cfg = registry.SOURCE_REGISTRY["ecmwf:direct"]
+    """After slip-cap, marker should target the cycle right after the
+    one that was slipping — not several cycles later.
 
-    # Drive slip up to and past the cap.  Each call: same observed_init,
-    # now == current next_expected → bumps.
+    Regression for PR #109 review: previous code derived the skipped cycle
+    from the bumped ``next_expected`` instead of from ``marker.init``, so
+    accumulated backoff pushed the jump past intermediate cycles.
+    """
+    store = MarkerStore()
+    # Bootstrap at a time when the latest delivered ECMWF cycle is 00Z.
+    await store.bootstrap([("ecmwf:direct", "ecmwf")], now=_utc(2026, 5, 3, 8))
+    cfg = registry.SOURCE_REGISTRY["ecmwf:direct"]
+    pre_init = store.get_sync("ecmwf:direct", "ecmwf").init
+
     for _ in range(cfg.max_slip_retries + 1):
         m = store.get_sync("ecmwf:direct", "ecmwf")
         await store.update("ecmwf:direct", "ecmwf", m.init, now=m.next_expected)
 
     m_final = store.get_sync("ecmwf:direct", "ecmwf")
-    assert m_final.slip_count == 0  # reset after jump
-    # next_expected should be aligned to a registered cycle's delivery — same
-    # minute-of-hour as the registry's offset (modulo 60).
-    expected_minute = int(cfg.offset_for(0).total_seconds() / 60) % 60
-    assert m_final.next_expected.minute == expected_minute
+    assert m_final.slip_count == 0
+    # The cycle we were waiting for is the one right after pre_init.
+    # Slip-cap should target the cycle two ahead of pre_init.
+    skipped_cycle = registry.next_cycle_init_after("ecmwf:direct", pre_init)
+    target_cycle = registry.next_cycle_init_after("ecmwf:direct", skipped_cycle)
+    assert m_final.next_expected == registry.expected_delivery_for_init(
+        "ecmwf:direct", target_cycle,
+    )
 
 
 @pytest.mark.asyncio
-async def test_is_stale_when_never_checked():
-    store = MarkerStore()
-    await store.bootstrap([("gfs:noaa", "gfs")], now=_utc(2026, 5, 3, 12))
-    m = store.get_sync("gfs:noaa", "gfs")
+async def test_is_stale_when_last_check_is_none():
+    """Manually-constructed marker with last_check=None should be stale.
+
+    Bootstrap sets last_check (so this can't happen via the public API),
+    but Marker(...) is also used internally — the heartbeat logic must
+    still treat last_check=None as suspect.
+    """
+    from weatherbrief.fetch.freshness.markers import Marker
+    m = Marker(
+        source="gfs:noaa", model="gfs",
+        init=_utc(2026, 5, 3, 6), next_expected=_utc(2026, 5, 3, 12),
+        last_check=None,
+    )
     assert m.is_stale(loop_interval=timedelta(minutes=5)) is True
 
 
@@ -181,3 +204,48 @@ async def test_mark_check_refreshes_heartbeat_only():
     assert after.last_check == _utc(2026, 5, 3, 13)
     assert after.init == before.init
     assert after.next_expected == before.next_expected
+
+
+@pytest.mark.asyncio
+async def test_loop_tick_refreshes_heartbeat_for_not_yet_due_marker(monkeypatch):
+    """The freshness loop must bump last_check even for sources that aren't
+    yet due — otherwise their heartbeat goes stale during the gap between
+    next_expected boundaries, forcing freshness HTTP calls into the
+    inline-fallback (sync I/O on the event loop).
+
+    Regression for PR #109 review: previously the loop's not-due branch
+    used ``continue`` without touching last_check.
+    """
+    from weatherbrief.fetch.freshness import markers as markers_mod
+    from weatherbrief.scheduler import _run_freshness_check_once
+
+    # Inject our own store as the singleton.
+    test_store = MarkerStore()
+    await test_store.bootstrap(
+        [("gfs:noaa", "gfs")], now=_utc(2026, 5, 3, 12),
+    )
+    monkeypatch.setattr(markers_mod, "_STORE", test_store)
+
+    before = test_store.get_sync("gfs:noaa", "gfs")
+    # Simulate a tick well before next_expected (so we hit the not-due path).
+    next_exp = before.next_expected
+    assert next_exp > _utc(2026, 5, 3, 13)  # sanity
+
+    # Patch wallclock used by the loop to a moment before next_expected, but
+    # after bootstrap_now (so last_check would change visibly).
+    fake_now = _utc(2026, 5, 3, 13)
+
+    class _FakeDatetime:
+        @staticmethod
+        def now(tz):
+            return fake_now
+
+    import weatherbrief.scheduler as scheduler_mod
+    monkeypatch.setattr(scheduler_mod, "datetime", _FakeDatetime)
+
+    await _run_freshness_check_once()
+
+    after = test_store.get_sync("gfs:noaa", "gfs")
+    assert after.last_check == fake_now
+    assert after.next_expected == before.next_expected  # untouched
+    assert after.init == before.init                    # untouched

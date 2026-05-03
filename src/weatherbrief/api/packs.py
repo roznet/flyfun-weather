@@ -324,7 +324,29 @@ def get_freshness(
     return _build_data_status(packs[0], flight)
 
 
-# Source-key prefix → which pack init-time field carries the pack's init.
+# Pack-model name -> freshness source key when GRIB enrichment succeeds for
+# that model.  Single source of truth: used by both ``_finalize_refresh``
+# (records ``model_sources`` on new packs) and ``_backfill_sources`` (infers
+# source for legacy packs missing the column).
+_DIRECT_SOURCE_KEYS: dict[str, str] = {
+    "ecmwf": "ecmwf:direct",
+    "gfs": "gfs:noaa",
+    "icon": "icon_eu:dwd",
+}
+
+
+def model_for_source(source: str) -> str:
+    """Return the model name keyed in the marker store for ``source``.
+
+    The store keys by ``(source, model_from_source_prefix)`` -- e.g.
+    ``("icon_eu:dwd", "icon_eu")``.  Pack-side ``model_sources`` may map
+    pack-model ``"icon"`` to source ``"icon_eu:dwd"``; we strip the suffix
+    here to find the matching marker.
+    """
+    return source.split(":", 1)[0]
+
+
+# Source-key suffix decides which pack init-time field carries the pack's init.
 # Direct sources record into ``grib_init_times``; Open-Meteo records into
 # ``model_init_times``.
 def _pack_init_for_source(pack: BriefingPackMeta, model: str, source: str) -> int | None:
@@ -337,17 +359,17 @@ def _backfill_sources(pack: BriefingPackMeta) -> dict[str, str]:
     """Infer ``model_sources`` for legacy packs created before issue #108.
 
     A model with a ``grib_init_times`` entry was direct-GRIB enriched; the
-    rest came from Open-Meteo.  ICON's direct path is ECMWF-style
-    ``icon_eu:dwd``; GFS's is ``gfs:noaa``.
+    rest came from Open-Meteo.  Direct-source mapping comes from the
+    module-level :data:`_DIRECT_SOURCE_KEYS` so it stays in sync with
+    pack-recording in :func:`_finalize_refresh`.
     """
     if pack.model_sources:
         return dict(pack.model_sources)
-    direct = {"ecmwf": "ecmwf:direct", "gfs": "gfs:noaa", "icon": "icon_eu:dwd"}
     out: dict[str, str] = {}
     all_models = set(pack.model_init_times) | set(pack.grib_init_times)
     for model in all_models:
-        if model in pack.grib_init_times and model in direct:
-            out[model] = direct[model]
+        if model in pack.grib_init_times and model in _DIRECT_SOURCE_KEYS:
+            out[model] = _DIRECT_SOURCE_KEYS[model]
         else:
             out[model] = f"{model}:openmeteo"
     return out
@@ -384,7 +406,7 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
     """
     from datetime import timedelta as _td
 
-    from weatherbrief.fetch.freshness import registry
+    from weatherbrief.fetch.freshness import LOOP_INTERVAL, registry
     from weatherbrief.fetch.freshness.markers import get_store
 
     sources = _backfill_sources(pack)
@@ -393,7 +415,6 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
 
     flight_end = flight.departure_time + _td(hours=flight.flight_duration_hours or 0)
     store = get_store()
-    loop_interval = _td(seconds=300)
 
     models_out: dict[str, ModelStatus] = {}
     next_expected_candidates: list[tuple[datetime, str]] = []
@@ -403,7 +424,7 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
 
     for model, source in sources.items():
         marker = store.get_sync(source, model_for_source(source))
-        if marker is None or marker.is_stale(loop_interval):
+        if marker is None or marker.is_stale(LOOP_INTERVAL):
             health = "suspect"
             inline = _inline_check(source, model_for_source(source))
             if inline is None:
@@ -455,15 +476,6 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
     )
 
 
-def model_for_source(source: str) -> str:
-    """Return the model name keyed in the marker store for ``source``.
-
-    The store keys by ``(source, model_from_source_prefix)`` — e.g.
-    ``("icon_eu:dwd", "icon_eu")``.  Pack-side ``model_sources`` may map
-    pack-model ``"icon"`` to source ``"icon_eu:dwd"``; we strip the suffix
-    here to find the matching marker.
-    """
-    return source.split(":", 1)[0]
 
 
 def _can_force_refresh(request: Request, db: Session) -> bool:
@@ -736,11 +748,6 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
     # direct-GRIB source where GRIB enrichment succeeded.  Used by the
     # marker-based freshness check (issue #108).
     model_sources: dict[str, str] = {m: f"{m}:openmeteo" for m in init_times}
-    _DIRECT_SOURCE_KEYS = {
-        "ecmwf": "ecmwf:direct",
-        "gfs": "gfs:noaa",
-        "icon": "icon_eu:dwd",
-    }
     for m in result.grib_init_times:
         key = _DIRECT_SOURCE_KEYS.get(m)
         if key:
