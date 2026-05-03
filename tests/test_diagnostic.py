@@ -101,16 +101,27 @@ class TestDetailCap:
             level="error", stage="digest", code="x", message="m", detail=big,
         )
         assert d.detail is not None
-        encoded = d.detail.encode("utf-8")
-        # Truncated body + suffix marker; the body itself is at most
-        # DETAIL_MAX_BYTES.
-        body, _, marker = d.detail.partition("\n... [truncated,")
-        assert len(body.encode("utf-8")) <= DETAIL_MAX_BYTES
-        assert marker.startswith(" ")
-        # And the suffix mentions the original size
+        # Total payload stays within the cap — marker space is reserved
+        # so the whole `detail` (body + marker) never exceeds DETAIL_MAX_BYTES.
+        assert len(d.detail.encode("utf-8")) <= DETAIL_MAX_BYTES
+        # And the suffix mentions the original size.
         assert "bytes total]" in d.detail
-        # Total stays bounded (truncation marker is small, fixed-ish)
-        assert len(encoded) < DETAIL_MAX_BYTES + 200
+
+    def test_truncate_round_trip_stable(self):
+        # Validator fires on every model_validate (incl. DB round-trips).
+        # Without reserving marker space, each round-trip would shave
+        # the body's tail by another marker's worth — silently eroding
+        # the most useful part of a traceback.
+        big = "x" * (DETAIL_MAX_BYTES + 5000)
+        d1 = Diagnostic.create(
+            level="error", stage="digest", code="x", message="m", detail=big,
+        )
+        # Round-trip 5 times — detail must stay byte-stable.
+        current = d1
+        first_detail = d1.detail
+        for _ in range(5):
+            current = Diagnostic.model_validate(current.model_dump(mode="json"))
+            assert current.detail == first_detail
 
     def test_none_detail_stays_none(self):
         d = Diagnostic.create(

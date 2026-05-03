@@ -21,6 +21,14 @@ def _make(exc_cls: type[Exception], **attrs):
     ``isinstance`` checks in the classifier we just need the class
     identity. ``__new__`` gets us a typed instance without the SDK's
     construction ceremony.
+
+    Caveat: ``__traceback__`` is ``None`` because the exception was
+    never raised. ``classify_llm_exception`` calls
+    ``traceback.format_exception(type(exc), exc, exc.__traceback__)``,
+    which then emits a one-liner. Tests that assert on ``code``,
+    ``level``, ``stage``, or ``request_id`` are unaffected. Any future
+    test that wants to assert on ``detail`` content should construct
+    the exception via a real ``raise`` so a traceback is attached.
     """
     exc = exc_cls.__new__(exc_cls)
     for k, v in attrs.items():
@@ -74,7 +82,9 @@ class TestFallback:
     def test_unknown_exception_falls_through(self):
         d = classify_llm_exception(ValueError("not anthropic at all"))
         assert d.code == DigestCode.DIGEST_UNKNOWN
-        assert d.level == "error"
+        # Unknown failures may be transient — message says "try again"
+        # so the level matches: warn (banner, retryable), not error.
+        assert d.level == "warn"
         assert d.stage == "digest"
         # Detail should contain the original exception text
         assert "not anthropic at all" in (d.detail or "")
