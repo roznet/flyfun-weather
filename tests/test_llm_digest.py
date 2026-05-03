@@ -140,7 +140,7 @@ def test_run_digest_full_graph(mock_fetch_text, mock_create_llm, minimal_snapsho
     assert result["digest"].assessment == "GREEN"
     assert result["digest_text"] is not None
     assert "GREEN" in result["digest_text"]
-    assert result.get("error") is None
+    assert result.get("diagnostic") is None
     assert result.get("llm_input_tokens") == 1000
     assert result.get("llm_output_tokens") == 200
 
@@ -148,7 +148,9 @@ def test_run_digest_full_graph(mock_fetch_text, mock_create_llm, minimal_snapsho
 @patch("weatherbrief.digest.llm_digest.create_llm")
 @patch("weatherbrief.digest.llm_digest.fetch_text_forecasts")
 def test_run_digest_llm_failure(mock_fetch_text, mock_create_llm, minimal_snapshot):
-    """Graph handles LLM failure gracefully."""
+    """Graph handles LLM failure gracefully and surfaces a typed Diagnostic."""
+    from weatherbrief.models import DigestCode
+
     mock_fetch_text.return_value = None
 
     mock_create_llm.side_effect = Exception("API key invalid")
@@ -158,8 +160,14 @@ def test_run_digest_llm_failure(mock_fetch_text, mock_create_llm, minimal_snapsh
 
     result = run_digest(minimal_snapshot, target_time, config)
 
-    assert result.get("error") is not None
-    assert "API key invalid" in result["error"]
+    diagnostic = result.get("diagnostic")
+    assert diagnostic is not None
+    # Falls through to the catch-all (not an anthropic.* exception)
+    assert diagnostic.code == DigestCode.DIGEST_UNKNOWN
+    assert diagnostic.stage == "digest"
+    assert diagnostic.level == "error"
+    # Original exception text appears in the redacted/capped detail
+    assert "API key invalid" in (diagnostic.detail or "")
 
 
 def test_weather_digest_model():

@@ -54,6 +54,18 @@ from weatherbrief.models.analysis import (  # noqa: F401
     pressure_hpa_to_altitude_m,
     pressure_pa_to_altitude_ft,
 )
+from weatherbrief.models.diagnostic import (  # noqa: F401
+    DETAIL_MAX_BYTES,
+    Diagnostic,
+    DiagnosticLevel,
+)
+from weatherbrief.models.diagnostic_codes import (  # noqa: F401
+    AdvisoryCode,
+    DigestCode,
+    FetchCode,
+    GrametCode,
+    SkewtCode,
+)
 from weatherbrief.models.advisories import (  # noqa: F401
     AdvisoryAggregation,
     AdvisoryCatalogEntry,

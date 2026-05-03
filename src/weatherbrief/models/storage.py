@@ -13,6 +13,7 @@ from weatherbrief.debriefs.taxonomy import (
     Decision,
     OutcomeValue,
 )
+from weatherbrief.models.diagnostic import Diagnostic
 
 
 class FlightProfile(BaseModel):
@@ -93,7 +94,7 @@ class BriefingPackMeta(BaseModel):
     model_init_times: dict[str, int] = Field(default_factory=dict)
     grib_init_times: dict[str, int] = Field(default_factory=dict)
     models_skipped_region: list[str] = Field(default_factory=list)
-    diagnostics: list[dict] = Field(default_factory=list)
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
     alt_assessment: Optional[str] = None  # GREEN/AMBER/RED for alt departure
     alt_assessment_reason: Optional[str] = None
     has_alt_advisories: bool = False

@@ -50,7 +50,7 @@ from weatherbrief.fetch.model_status import (
     compute_next_update,
     fetch_model_metadata,
 )
-from weatherbrief.models import BriefingPackMeta
+from weatherbrief.models import BriefingPackMeta, Diagnostic
 from weatherbrief.storage.flights import (
     list_packs,
     load_pack_meta,
@@ -229,7 +229,7 @@ class PackMetaResponse(BaseModel):
     model_init_times: dict[str, int] = Field(default_factory=dict)
     grib_init_times: dict[str, int] = Field(default_factory=dict)
     models_skipped_region: list[str] = Field(default_factory=list)
-    diagnostics: list[dict] = Field(default_factory=list)
+    diagnostics: list[Diagnostic] = Field(default_factory=list)
     data_status: DataStatus | None = None
 
 

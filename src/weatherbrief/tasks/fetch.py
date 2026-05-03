@@ -26,7 +26,9 @@ from weatherbrief.fetch.variables import (
 _INTER_MODEL_DELAY_PAID = 0.0
 _INTER_MODEL_DELAY_FREE = 1.0
 from weatherbrief.models import (
+    Diagnostic,
     ElevationProfile,
+    FetchCode,
     ModelSource,
     RouteConfig,
     RouteCrossSection,
@@ -66,7 +68,7 @@ class FetchResult:
     grib_enriched: bool = False
     grib_enrichment_failed: bool = False
     grib_init_times: dict[str, int] = field(default_factory=dict)
-    diagnostics: list[dict] = field(default_factory=list)
+    diagnostics: list[Diagnostic] = field(default_factory=list)
     open_meteo_api_calls: int = 0
 
 
@@ -81,9 +83,9 @@ def _build_fetch_diagnostics(
     grib_enrichment_failed: bool,
     grib_init_times: dict[str, int],
     grib_skip_reasons: dict[str, str] | None = None,
-) -> list[dict]:
+) -> list[Diagnostic]:
     """Build user-facing diagnostic messages from the completed fetch state."""
-    diags: list[dict] = []
+    diags: list[Diagnostic] = []
 
     range_skipped_names = {m for m, _, _ in (models_skipped_range or [])}
 
@@ -91,29 +93,36 @@ def _build_fetch_diagnostics(
     fetched_or_skipped = set(models_fetched) | set(models_skipped_region) | range_skipped_names
     for m in requested_models:
         if m not in fetched_or_skipped:
-            diags.append({"level": "warn", "message": f"{m.upper()} forecast fetch failed"})
+            diags.append(Diagnostic.create(
+                level="warn", stage="fetch",
+                code=FetchCode.MODEL_FETCH_FAILED,
+                message=f"{m.upper()} forecast fetch failed",
+            ))
 
     # Models skipped for range (too many days out)
     for m, days_out, max_days in (models_skipped_range or []):
-        diags.append({
-            "level": "info",
-            "message": f"{m.upper()} skipped ({days_out} days out exceeds {max_days}-day range)",
-        })
+        diags.append(Diagnostic.create(
+            level="info", stage="fetch",
+            code=FetchCode.MODEL_SKIPPED_RANGE,
+            message=f"{m.upper()} skipped ({days_out} days out exceeds {max_days}-day range)",
+        ))
 
     # Models skipped for region
     for m in models_skipped_region:
-        diags.append({
-            "level": "info",
-            "message": f"{m.upper()} skipped (not available for this route region)",
-        })
+        diags.append(Diagnostic.create(
+            level="info", stage="fetch",
+            code=FetchCode.MODEL_SKIPPED_REGION,
+            message=f"{m.upper()} skipped (not available for this route region)",
+        ))
 
     # GRIB enrichment diagnostics
     if enrich_grib:
         if grib_enrichment_failed:
-            diags.append({
-                "level": "warn",
-                "message": "GRIB enrichment failed — cloud microphysics (CLW/ICMR) and cloud diagnostics not available",
-            })
+            diags.append(Diagnostic.create(
+                level="warn", stage="fetch",
+                code=FetchCode.GRIB_ENRICHMENT_FAILED,
+                message="GRIB enrichment failed — cloud microphysics (CLW/ICMR) and cloud diagnostics not available",
+            ))
         elif grib_enriched:
             # Per-model GRIB status
             enriched_models = set(grib_init_times.keys())
@@ -123,20 +132,23 @@ def _build_fetch_diagnostics(
                 if m in grib_capable and m not in enriched_models:
                     skip_reason = skip_reasons.get(m)
                     if skip_reason == "out_of_range":
-                        diags.append({
-                            "level": "info",
-                            "message": f"{m.upper()} GRIB skipped — flight exceeds forecast range",
-                        })
+                        diags.append(Diagnostic.create(
+                            level="info", stage="fetch",
+                            code=FetchCode.GRIB_SKIPPED_OUT_OF_RANGE,
+                            message=f"{m.upper()} GRIB skipped — flight exceeds forecast range",
+                        ))
                     else:
-                        diags.append({
-                            "level": "warn",
-                            "message": f"{m.upper()} GRIB enrichment unavailable — cloud microphysics and diagnostics not available for this model",
-                        })
+                        diags.append(Diagnostic.create(
+                            level="warn", stage="fetch",
+                            code=FetchCode.GRIB_UNAVAILABLE_FOR_MODEL,
+                            message=f"{m.upper()} GRIB enrichment unavailable — cloud microphysics and diagnostics not available for this model",
+                        ))
             for m in sorted(enriched_models):
-                diags.append({
-                    "level": "info",
-                    "message": f"{m.upper()} GRIB enrichment applied (cloud water + cloud diagnostics)",
-                })
+                diags.append(Diagnostic.create(
+                    level="info", stage="fetch",
+                    code=FetchCode.GRIB_ENRICHMENT_APPLIED,
+                    message=f"{m.upper()} GRIB enrichment applied (cloud water + cloud diagnostics)",
+                ))
 
     return diags
 

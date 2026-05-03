@@ -23,7 +23,7 @@ from weatherbrief.db.models import (
     FlightRow,
     FlightSubscriptionRow,
 )
-from weatherbrief.models import BriefingPackMeta, Flight, FlightProfile
+from weatherbrief.models import BriefingPackMeta, Diagnostic, Flight, FlightProfile
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,9 @@ def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
         model_init_times_json=json.dumps(meta.model_init_times),
         grib_init_times_json=json.dumps(meta.grib_init_times),
         models_skipped_region_json=json.dumps(meta.models_skipped_region),
-        diagnostics_json=json.dumps(meta.diagnostics),
+        diagnostics_json=json.dumps(
+            [d.model_dump(mode="json") for d in meta.diagnostics],
+        ),
         alt_assessment=meta.alt_assessment,
         alt_assessment_reason=meta.alt_assessment_reason,
         has_alt_advisories=meta.has_alt_advisories,
@@ -235,14 +237,21 @@ def _resolve_artifact_path(raw: str) -> str:
     return raw
 
 
-def _parse_diagnostics(raw: str | None) -> list[dict]:
-    """Parse diagnostics_json, tolerating old rows that stored {} instead of []."""
+def _parse_diagnostics(raw: str | None) -> list[Diagnostic]:
+    """Parse diagnostics_json into typed Diagnostic entries.
+
+    Tolerates legacy storage formats:
+    - ``None`` / empty string -> ``[]``
+    - ``"{}"`` (very old rows) -> ``[]``
+    - ``[{"level": ..., "message": ...}, ...]`` (pre-typed rows) -> validates
+      through Diagnostic; missing optional fields stay None.
+    """
     if not raw:
         return []
     parsed = json.loads(raw)
     if isinstance(parsed, dict):
         return []
-    return parsed
+    return [Diagnostic.model_validate(item) for item in parsed]
 
 
 def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:

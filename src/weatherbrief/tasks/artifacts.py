@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from weatherbrief.models import (
+    Diagnostic,
     ElevationProfile,
     RouteAdvisoriesManifest,
     RouteAnalysesManifest,
@@ -33,9 +34,14 @@ def save_fetch_artifacts(
     route_points: list[RoutePoint],
     *,
     models_fetched: list[str] | None = None,
-    diagnostics: list[dict] | None = None,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> None:
-    """Persist fetch-stage artifacts to *pack_dir*."""
+    """Persist fetch-stage artifacts to *pack_dir*.
+
+    Writes ``fetch_meta.json`` with the fetch-stage diagnostics. The pipeline
+    rewrites this file at the end of execute_briefing with the full merged
+    set (digest/gramet/skewt diagnostics included) via :func:`write_pack_meta`.
+    """
     pack_dir.mkdir(parents=True, exist_ok=True)
 
     if cross_sections:
@@ -53,11 +59,31 @@ def save_fetch_artifacts(
         rp_data = [rp.model_dump(mode="json") for rp in route_points]
         rp_path.write_text(json.dumps(rp_data, indent=2))
 
-    # Metadata about the fetch run
+    write_pack_meta(
+        pack_dir,
+        models_fetched=models_fetched or [],
+        diagnostics=diagnostics or [],
+    )
+
+
+def write_pack_meta(
+    pack_dir: Path,
+    *,
+    models_fetched: list[str],
+    diagnostics: list[Diagnostic],
+    fetched_at: datetime | None = None,
+) -> None:
+    """Write or rewrite ``fetch_meta.json`` with the given diagnostics.
+
+    Called once by ``save_fetch_artifacts`` after fetch completes, then again
+    by the pipeline at end-of-run with diagnostics merged across all stages.
+    Keeping the file name stable avoids consumer churn — its contents are
+    additive, not breaking.
+    """
     meta = {
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
-        "models_fetched": models_fetched or [],
-        "diagnostics": diagnostics or [],
+        "fetched_at": (fetched_at or datetime.now(timezone.utc)).isoformat(),
+        "models_fetched": models_fetched,
+        "diagnostics": [d.model_dump(mode="json") for d in diagnostics],
     }
     meta_path = pack_dir / "fetch_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2))
