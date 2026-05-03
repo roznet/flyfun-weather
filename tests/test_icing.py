@@ -491,23 +491,69 @@ def test_ieng_does_not_bridge_cloud_band_gap():
 
 
 def test_ogimet_dd_does_not_bridge_dd_cloud_gap():
-    """Same fix applies to Ogimet-DD when DD clouds happen to have gaps."""
+    """DD-gated Ogimet must split at cloud-band gaps even when surviving levels
+    are within ≤100 hPa pressure (the case the legacy heuristic would merge).
+
+    Setup: surviving icing levels at 675 hPa (in band 1) and 600 hPa (in band 2)
+    are 75 hPa apart — old code merges, new code splits because indices 1 and 4
+    in `levels` are not consecutive (650 and 625 were filtered out).
+    """
     icing_T = -7.0
     icing_TD = -7.5
     levels = [
         DerivedLevel(pressure_hpa=700, altitude_ft=9900, temperature_c=icing_T,
                      dewpoint_c=icing_TD, dewpoint_depression_c=0.5),
-        DerivedLevel(pressure_hpa=650, altitude_ft=11810, temperature_c=icing_T,
-                     dewpoint_c=icing_TD, dewpoint_depression_c=5.0),  # DD too high → gated out
-        DerivedLevel(pressure_hpa=600, altitude_ft=13840, temperature_c=icing_T,
-                     dewpoint_c=icing_TD, dewpoint_depression_c=5.0),  # gated out
-        DerivedLevel(pressure_hpa=550, altitude_ft=16020, temperature_c=icing_T,
+        DerivedLevel(pressure_hpa=675, altitude_ft=10800, temperature_c=icing_T,
+                     dewpoint_c=icing_TD, dewpoint_depression_c=0.5),
+        DerivedLevel(pressure_hpa=650, altitude_ft=11800, temperature_c=icing_T,
+                     dewpoint_c=icing_TD, dewpoint_depression_c=0.5),  # outside band → gated
+        DerivedLevel(pressure_hpa=625, altitude_ft=12800, temperature_c=icing_T,
+                     dewpoint_c=icing_TD, dewpoint_depression_c=0.5),  # outside band → gated
+        DerivedLevel(pressure_hpa=600, altitude_ft=13800, temperature_c=icing_T,
                      dewpoint_c=icing_TD, dewpoint_depression_c=0.5),
     ]
-    # Two DD cloud bands with a gap, mirroring NWP shape
-    bands = [_cloud(8000, 12000), _cloud(15500, 17000)]
+    # Two DD cloud bands with a 13000-ft gap. ±500 ft margin ⇒ band 1 covers
+    # 7500-11500, band 2 covers 13000-15500. 11800 and 12800 land in the gap.
+    bands = [_cloud(8000, 11000), _cloud(13500, 15000)]
     zones = assess_icing_zones_ogimet_dd(levels, bands)
-    assert len(zones) == 2, f"expected 2 DD zones split at cloud gap, got {len(zones)}"
+    assert len(zones) == 2, f"expected 2 DD zones split at cloud gap, got {len(zones)}: {[(int(z.base_ft), int(z.top_ft)) for z in zones]}"
+
+
+def test_sfip_does_not_bridge_cloud_band_gap():
+    """SFIP (full variant, NWP-gated) must split at cloud-band gaps.
+
+    Mirrors the Ogimet-NWP regression for the SFIP code path. With CLW
+    set on every level, SFIP uses NWP cloud gating; the levels in the
+    band gap are filtered out and the surviving levels on either side
+    must form separate zones.
+    """
+    from weatherbrief.analysis.sounding.sfip import assess_sfip_zones
+
+    def _l(p, alt, t):
+        return DerivedLevel(
+            pressure_hpa=p, altitude_ft=alt, temperature_c=t,
+            dewpoint_c=t - 0.5, relative_humidity_pct=96.0,
+            dewpoint_depression_c=0.5, cloud_liquid_water_g_kg=0.15,
+        )
+
+    levels = [
+        _l(750, 8100, -6.0),    # band 1
+        _l(725, 9000, -7.0),    # band 1
+        _l(700, 9900, -8.0),    # band 1
+        _l(675, 10800, -9.0),   # gap — gated out (10800 > 10500 + 500)
+        _l(650, 11800, -10.0),  # gap — gated out
+        _l(600, 13800, -12.0),  # band 2
+        _l(575, 14900, -13.0),  # band 2
+    ]
+    bands = [
+        EnhancedCloudLayer(base_ft=4000, top_ft=10500, source="grib", coverage=CloudCoverage.BKN),
+        EnhancedCloudLayer(base_ft=13000, top_ft=16000, source="grib", coverage=CloudCoverage.OVC),
+    ]
+    zones = assess_sfip_zones(
+        levels, nwp_cloud_layers=bands,
+        nwp_cloud_low_pct=80.0, nwp_cloud_mid_pct=99.0,
+    )
+    assert len(zones) == 2, f"SFIP: expected 2 zones split at cloud gap, got {len(zones)}: {[(int(z.base_ft), int(z.top_ft)) for z in zones]}"
 
 
 def test_ogimet_nwp_zero_cloud_pct_no_icing():
