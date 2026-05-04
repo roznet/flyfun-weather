@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -71,13 +72,33 @@ class OpenMeteoClient:
         self._historical = historical
         self.timeout = 60 if historical else timeout  # historical API is slower
         self.session = requests.Session()
+        # `call_count` is read by single-threaded callers (CLI, single-point
+        # fetch_forecast); for concurrent paths the per-thread counter below
+        # is the source of truth and the caller aggregates after join.
         self.call_count = 0
+        self._tls = threading.local()
         self._api_key = os.environ.get("OPENMETEO_API_KEY")
         self.has_api_key = bool(self._api_key)
         if self._api_key:
             logger.info("Using Open-Meteo customer API (paid plan)")
         if historical:
             logger.info("Using Open-Meteo historical forecast API (free tier)")
+
+    def _record_call(self) -> None:
+        """Bump both the global aggregate and the thread-local counter."""
+        # Global is racy under threading but fine for non-concurrent paths.
+        self.call_count += 1
+        self._tls.count = getattr(self._tls, "count", 0) + 1
+
+    def reset_thread_call_count(self) -> None:
+        """Zero this thread's call counter — call before a unit of work whose
+        cost the caller wants to attribute back to itself."""
+        self._tls.count = 0
+
+    def thread_call_count(self) -> int:
+        """Return the number of HTTP calls this thread has issued since its
+        last `reset_thread_call_count()`."""
+        return getattr(self._tls, "count", 0)
 
     def _prepare_request(self, url: str, params: dict) -> tuple[str, dict]:
         """Swap to historical or customer API host as needed.
@@ -107,7 +128,7 @@ class OpenMeteoClient:
         """GET with retry on 429 rate-limit and 5xx server error responses."""
         url, params = self._prepare_request(url, params)
         for attempt in range(_MAX_RETRIES):
-            self.call_count += 1
+            self._record_call()
             resp = self.session.get(url, params=params, timeout=self.timeout)
             if resp.status_code not in self._RETRYABLE_STATUS_CODES:
                 resp.raise_for_status()
@@ -122,7 +143,7 @@ class OpenMeteoClient:
             )
             time.sleep(wait)
         # Final attempt — let it raise on any error
-        self.call_count += 1
+        self._record_call()
         resp = self.session.get(url, params=params, timeout=self.timeout)
         resp.raise_for_status()
         return resp

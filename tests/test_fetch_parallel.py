@@ -1,8 +1,9 @@
-"""Tests for parallel per-model fetch in run_fetch (issue #112)."""
+"""Tests for parallel/sequential per-model fetch in run_fetch (issue #112)."""
 
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -17,6 +18,18 @@ from weatherbrief.models import (
     WaypointForecast,
 )
 from weatherbrief.tasks import fetch as fetch_module
+
+
+@pytest.fixture
+def paid_api_key(monkeypatch):
+    """Force the paid (parallel) path by setting OPENMETEO_API_KEY."""
+    monkeypatch.setenv("OPENMETEO_API_KEY", "test-key")
+
+
+@pytest.fixture
+def free_tier(monkeypatch):
+    """Force the free-tier (sequential + delay) path."""
+    monkeypatch.delenv("OPENMETEO_API_KEY", raising=False)
 
 
 def _route() -> RouteConfig:
@@ -63,18 +76,19 @@ def _disable_elevation():
     )
 
 
-def test_models_fetched_concurrently():
+def test_paid_path_runs_models_concurrently(paid_api_key):
     """All non-skipped models run in parallel — verified via threading.Barrier.
 
-    A barrier of N parties only releases when N threads arrive. If the loop were
-    sequential, only one worker would ever be in `fetch_multi_point` at a time
-    and the barrier would time out.
+    A barrier of N parties only releases when N threads arrive. If the loop
+    were sequential only one worker would ever be inside `fetch_multi_point`
+    at a time and the barrier would time out.
     """
     models = [ModelSource.GFS, ModelSource.ECMWF, ModelSource.ICON]
-    barrier = threading.Barrier(len(models), timeout=5.0)
+    barrier = threading.Barrier(len(models), timeout=15.0)
 
     def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
         barrier.wait()  # raises BrokenBarrierError on timeout
+        self._record_call()  # simulate one HTTP call per model
         return [_make_forecast(p, model) for p in points]
 
     with _disable_elevation(), patch(
@@ -90,15 +104,18 @@ def test_models_fetched_concurrently():
 
     assert sorted(result.models_fetched) == ["ecmwf", "gfs", "icon"]
     assert len(result.cross_sections) == 3
+    # Each worker recorded one call; aggregate via thread-local sum.
+    assert result.open_meteo_api_calls == 3
 
 
-def test_partial_failure_does_not_abort_other_models():
+def test_paid_path_partial_failure(paid_api_key):
     """One model raising must not stop others from completing."""
     models = [ModelSource.GFS, ModelSource.ECMWF, ModelSource.ICON]
 
     def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
         if model == ModelSource.ECMWF:
             raise RuntimeError("simulated failure")
+        self._record_call()
         return [_make_forecast(p, model) for p in points]
 
     with _disable_elevation(), patch(
@@ -116,9 +133,11 @@ def test_partial_failure_does_not_abort_other_models():
     assert "ecmwf" not in result.models_fetched
     fetched_models = {cs.model for cs in result.cross_sections}
     assert fetched_models == {ModelSource.GFS, ModelSource.ICON}
+    # Two successful workers, each recorded one call; failed worker recorded none.
+    assert result.open_meteo_api_calls == 2
 
 
-def test_concurrency_capped_to_number_of_models(monkeypatch):
+def test_paid_path_concurrency_capped_to_model_count(paid_api_key, monkeypatch):
     """Worker count never exceeds the number of models actually being fetched."""
     seen_max_workers: list[int] = []
 
@@ -151,3 +170,68 @@ def test_concurrency_capped_to_number_of_models(monkeypatch):
     assert seen_max_workers == [2], (
         f"Expected max_workers capped to 2 (model count), got {seen_max_workers}"
     )
+
+
+def test_free_tier_runs_sequentially_with_delay(free_tier, monkeypatch):
+    """Free tier uses the sequential path with an inter-model delay so we
+    don't blow through the 600/min rate limit."""
+    monkeypatch.setattr(fetch_module, "_INTER_MODEL_DELAY_FREE", 0.05)
+    sleep_calls: list[float] = []
+    real_sleep = time.sleep
+
+    def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        real_sleep(0)  # don't actually delay the test
+
+    monkeypatch.setattr(fetch_module.time, "sleep", fake_sleep)
+
+    # Track the order workers are dispatched in — sequential should match
+    # input order strictly.
+    dispatched: list[str] = []
+
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+        dispatched.append(model.value)
+        return [_make_forecast(p, model) for p in points]
+
+    models = [ModelSource.GFS, ModelSource.ECMWF, ModelSource.ICON]
+    with _disable_elevation(), patch(
+        "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+        new=fake_fetch_multi_point,
+    ):
+        result = fetch_module.run_fetch(
+            route=_route(),
+            departure_time=datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc),
+            models=models,
+            enrich_grib=False,
+        )
+
+    # Sequential: dispatch order matches input order.
+    assert dispatched == ["gfs", "ecmwf", "icon"]
+    # And so does the resulting models_fetched list (parallel path would be
+    # completion order, which is non-deterministic).
+    assert result.models_fetched == ["gfs", "ecmwf", "icon"]
+    # 3 models → 2 inter-model delays.
+    assert sleep_calls == [0.05, 0.05]
+
+
+def test_free_tier_partial_failure(free_tier, monkeypatch):
+    """One model failing in the free-tier path must not abort others."""
+    monkeypatch.setattr(fetch_module, "_INTER_MODEL_DELAY_FREE", 0.0)
+
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+        if model == ModelSource.ECMWF:
+            raise RuntimeError("simulated failure")
+        return [_make_forecast(p, model) for p in points]
+
+    with _disable_elevation(), patch(
+        "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+        new=fake_fetch_multi_point,
+    ):
+        result = fetch_module.run_fetch(
+            route=_route(),
+            departure_time=datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc),
+            models=[ModelSource.GFS, ModelSource.ECMWF, ModelSource.ICON],
+            enrich_grib=False,
+        )
+
+    assert result.models_fetched == ["gfs", "icon"]
