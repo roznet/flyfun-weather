@@ -1116,7 +1116,7 @@ async def refresh_briefing_stream(
                 thread_db.close()
             complete_event = {
                 "type": "complete",
-                "pack": _meta_to_response(meta).model_dump(),
+                "pack": _meta_to_response(meta).model_dump(mode="json"),
                 "elapsed_seconds": total_elapsed,
             }
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
@@ -1151,7 +1151,7 @@ async def refresh_briefing_stream(
         while True:
             event = await queue.get()
             event_type = event.get("type", "progress")
-            data = json_mod.dumps(event)
+            data = json_mod.dumps(event, default=str)
             yield f"event: {event_type}\ndata: {data}\n\n"
             if event_type in ("complete", "error"):
                 break
