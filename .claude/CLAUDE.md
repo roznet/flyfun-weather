@@ -37,26 +37,26 @@ Dev uses SQLite, production uses MySQL. Migrations must work on both:
 
 ## Setup
 
-- Frontend uses esbuild. `npm run dev` runs watch mode and rebuilds `web/dist/*.js` on change — it is typically already running in tmux (see "Running the Web App" below), so don't run `npm run build` manually.
-- Activate venv before running Python. If there's no venv in the current directory, check `../main/venv` and use that (we're in a git worktree and the main venv is shared).
-- Local environment variables live in `.env`.
+- Frontend uses esbuild. `npm run dev` runs watch mode and rebuilds `web/dist/*.js` on change — usually already running in a tmux session managed by `/devserver`, so don't run `npm run build` manually.
+- **Each worktree (including `main/`) has its own venv at `./venv`.** Do NOT fall back to `../main/venv` — that pattern caused editable-install bugs (the `weatherbrief` package would silently resolve to whichever directory last ran `pip install -e .`). If a worktree is missing its venv, run `/worktree-init` (for new worktrees) or `python3 -m venv venv && source venv/bin/activate && pip install -e ".[dev]"` (for `main`).
+- Local environment variables live in `.env`. In worktrees, `.env` is copied verbatim from `main/.env` by `/worktree-init`; absolute paths in it (e.g. `DATA_DIR`, `DATABASE_URL`) keep heavy data and the DB shared with main. There is intentionally NO `data/` directory in a worktree — code that bypasses `DATA_DIR` and writes to `./data` should fail loudly.
+
+## Worktree workflow
+
+- `/worktree-init <branch-name>` — create a new worktree as a sibling of `main/` with its own venv, `npm install`, and `.env` copied from main. Does not run alembic, does not start the server.
+- `/devserver` — start the dev server in a tmux session named `wb-<worktree-basename>`. Port: 8000 for `main`, auto-picked 8001+ for other worktrees, so multiple HTTP dev servers can run in parallel.
+- `/devserver --https` (or `--simulator`) — start the singleton TLS instance at `https://localhost.ro-z.me:8443` (session `wb-https`) for iOS simulator testing. Only one HTTPS instance at a time across all worktrees; invoking from a different worktree kills+restarts it there.
 
 ## Running the Web App
 
-Start both servers in a tmux session:
+Use `/devserver`. After it starts, open the URL it prints (e.g. `http://localhost:8000` for main, `http://localhost:8001` for a worktree) and attach to tmux with `tmux attach -t wb-<basename>`. Pane 0 is uvicorn (`--reload`), pane 1 is esbuild watch.
+
+If you genuinely need to bypass the skill, the manual equivalent for `main` is:
 
 ```bash
-tmux new-session -s weatherbrief
-# Pane 0 — backend (FastAPI on :8000)
 source venv/bin/activate
 uvicorn weatherbrief.api.app:app --reload --port 8000
-
-# Pane 1 (Ctrl-b %) — frontend (esbuild watch)
-cd web && npm run dev
+# in another pane: cd web && npm run dev
 ```
-
-Open http://localhost:8000 in the browser. The backend serves static files from `web/`.
-esbuild watches TypeScript sources and rebuilds `web/dist/*.js` on change.
-Attach to the session with `tmux attach -t weatherbrief`.
 
 

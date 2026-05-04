@@ -1,111 +1,168 @@
 ---
 name: devserver
-description: Start or restart the local dev server (backend + frontend) in a tmux session
+description: Start or restart the local dev server (backend + frontend) in a per-worktree tmux session. Use --https (or --simulator) to run the singleton TLS instance for iOS simulator testing.
 disable-model-invocation: true
 ---
 
 # Local dev server management
 
-Manage the `weatherbrief` tmux session that runs the FastAPI backend and esbuild frontend watcher.
+Manages tmux sessions running the FastAPI backend (`uvicorn --reload`) and esbuild frontend watcher.
 
-## Step 1 — Determine the project root
+Two modes:
 
-Figure out the correct project root (`PROJECT_ROOT`):
-- Use the current working directory
-- If we are in a git worktree (no `src/` dir, or `.git` is a file not a directory), the working directory IS the project root for that worktree
+| Mode | Flag | Session name | Port | Concurrency |
+|------|------|--------------|------|-------------|
+| HTTP (default) | (none) | `wb-<worktree-basename>` | 8000 for `main`, auto-pick 8001+ for others | One per worktree |
+| HTTPS | `--https` or `--simulator` | `wb-https` (singleton) | 8443 | One only — kill+restart on invocation from any worktree |
 
-## Step 2 — Resolve the venv
+## Step 1 — Parse args
 
-- If `$PROJECT_ROOT/venv/` exists, use it
-- Otherwise check `$PROJECT_ROOT/../main/venv/` (worktree case sharing main's venv)
-- If neither exists, tell the user and stop
+- No flag → HTTP mode.
+- `--https` or `--simulator` → HTTPS mode.
 
-Store the resolved path as `VENV_PATH`.
+## Step 2 — Determine project root and basename
 
-### Ensure editable install points to current directory
+- `PROJECT_ROOT` = current working directory (assume the user invoked the skill from a worktree root).
+- `BASENAME` = `basename "$PROJECT_ROOT"` (e.g. `main`, `issue-65`).
 
-When using a shared venv (especially `../main/venv/`), the `weatherbrief` package is installed in editable mode (`pip install -e .`) and the `.egg-link` / `__editable__` path points to whichever directory last ran that command. This means:
-- If the venv was set up in `../main/`, the server will use `../main/` source code, **not** the current worktree's code — changes here won't be picked up.
-- Conversely, if a worktree ran `pip install -e .` last, going back to `../main/` will have the same problem.
+Sanity check it looks like a flyfun-weather worktree: `pyproject.toml` should exist with `name = "weatherbrief"`. If not, refuse and tell the user where they are.
 
-**Always verify and fix this:**
-
-1. Activate the venv and check where the package currently points:
-   ```bash
-   source $VENV_PATH/bin/activate
-   pip show weatherbrief | grep Location
-   ```
-2. If the `Location` (or editable path) does **not** match `$PROJECT_ROOT`, re-install:
-   ```bash
-   pip install -e "$PROJECT_ROOT"
-   ```
-3. Tell the user that the editable install was re-pointed to the current directory.
-
-## Step 3 — Check for .env file
-
-- If `$PROJECT_ROOT/.env` exists, good — nothing to do
-- If it does NOT exist, check if `$PROJECT_ROOT/../main/.env` exists (worktree case)
-  - If found, copy it: `cp ../main/.env $PROJECT_ROOT/.env`
-  - Tell the user it was copied
-- If neither exists, warn the user that the `.env` file is missing and the server will likely fail to start
-
-## Step 4 — Check for existing tmux session
-
-Run: `tmux has-session -t weatherbrief 2>/dev/null`
-
-If a session exists:
-1. Check what directory it's running in: `tmux display-message -t weatherbrief -p '#{pane_current_path}'`
-2. Compare that path to `$PROJECT_ROOT`
-3. **If the directory matches** and the session looks healthy, tell the user:
-   > Dev server already running at http://localhost:8000 — attach with `tmux attach -t weatherbrief`
-
-   Then stop (no restart needed).
-4. **If the directory does NOT match** (e.g., switched worktrees), kill the session:
-   ```
-   tmux kill-session -t weatherbrief
-   ```
-   Then continue to Step 5 to create a fresh one.
-
-## Step 5 — Check for pending Alembic migrations
-
-With the venv activated, run:
-```
-alembic current  # shows what the DB is at
-alembic heads    # shows the latest migration in code
-```
-
-If they differ (i.e., there are unapplied migrations), **warn the user prominently** before starting the server:
-> Pending Alembic migrations detected. Run `alembic upgrade head` before starting the server, or the app may fail.
-
-Ask the user whether to run `alembic upgrade head` now or skip.
-
-## Step 6 — Start the tmux session
-
-
-Create a new tmux session with two panes:
+## Step 3 — Resolve the venv
 
 ```bash
-# Create detached session — pane 0 runs the backend
-tmux new-session -d -s weatherbrief -c "$PROJECT_ROOT"
-
-# Pane 0: backend (FastAPI with reload)
-tmux send-keys -t weatherbrief "source $VENV_PATH/bin/activate && uvicorn weatherbrief.api.app:app --reload --port 8000" Enter
-
-# Create pane 1 (vertical split) for the frontend watcher
-tmux split-window -h -t weatherbrief -c "$PROJECT_ROOT/web"
-tmux send-keys -t weatherbrief "npm run dev" Enter
+VENV_PATH="$PROJECT_ROOT/venv"
 ```
 
-## Step 7 — Report to user
+If `$VENV_PATH` does NOT exist, stop and tell the user:
+- For `main`: `python3 -m venv venv && source venv/bin/activate && pip install -e ".[dev]"`
+- For a worktree: `/worktree-init` should have created it. Re-run that, or set up manually.
 
-Tell the user:
-- Backend running at **http://localhost:8000**
-- Attach to tmux with: `tmux attach -t weatherbrief`
-- Pane 0 = backend (uvicorn with --reload), Pane 1 = frontend (esbuild watch)
+**Do NOT fall back to `../main/venv`.** Per-worktree venvs are required (avoids the editable-install whack-a-mole).
+
+### Verify editable install points at this worktree
+
+```bash
+source "$VENV_PATH/bin/activate"
+python -c "import weatherbrief, sys; p = weatherbrief.__file__; sys.exit(0 if p.startswith('$PROJECT_ROOT') else 1)"
+```
+
+If this fails, the venv is wired to a different source tree. Stop and tell the user to re-run `pip install -e ".[dev]"` from `$PROJECT_ROOT`. Do not auto-fix — a wrong-pointed venv usually means something structural is off and a silent reinstall masks it.
+
+## Step 4 — Check `.env`
+
+If `$PROJECT_ROOT/.env` does not exist:
+- If we're in a worktree (`PROJECT_ROOT` != `<parent>/main`), tell the user to run `/worktree-init` (which sets up `.env` with path rewrites + `data/` symlink). Don't auto-copy here — that path belongs to the init skill.
+- If we're in `main`, warn that `.env` is missing and the server will likely fail.
+
+## Step 5 — Pick session name and port
+
+**HTTP mode:**
+- `SESSION = "wb-$BASENAME"`
+- If `$BASENAME` == `main`: `PORT = 8000`
+- Else: scan ports 8001..8010, pick the first not in use:
+  ```bash
+  for p in 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010; do
+    if ! lsof -nP -iTCP:$p -sTCP:LISTEN >/dev/null 2>&1; then PORT=$p; break; fi
+  done
+  ```
+  If all are in use, stop and tell the user.
+- Sticky-port behavior: if a tmux session named `wb-$BASENAME` already exists from a previous run, prefer to reuse its port (read it from the running uvicorn — see Step 6).
+
+**HTTPS mode:**
+- `SESSION = "wb-https"`
+- `PORT = 8443`
+- Verify the cert files are readable:
+  ```bash
+  test -r /usr/local/etc/letsencrypt/live/ro-z.me/privkey.pem && \
+  test -r /usr/local/etc/letsencrypt/live/ro-z.me/fullchain.pem
+  ```
+  If not, stop and tell the user. Print the chmod they need to run (don't sudo). Typical fix:
+  ```
+  sudo chmod -R a+rX /usr/local/etc/letsencrypt/{live,archive}/ro-z.me
+  ```
+
+## Step 6 — Handle existing session
+
+```bash
+tmux has-session -t "$SESSION" 2>/dev/null
+```
+
+If it exists:
+1. Read its CWD: `tmux display-message -t "$SESSION" -p '#{pane_current_path}'`
+2. **Same CWD as `$PROJECT_ROOT`** → already running for this worktree. Tell the user the URL (`http://localhost:$PORT` or `https://localhost.ro-z.me:8443`) and stop. No restart.
+3. **Different CWD** → only legitimate for `wb-https` (HTTP sessions are namespaced by basename so they can't collide). Kill and restart:
+   ```bash
+   tmux kill-session -t "$SESSION"
+   ```
+   Tell the user the HTTPS session moved from `<old-path>` to `$PROJECT_ROOT`.
+
+## Step 7 — Pending alembic migrations check
+
+With venv activated:
+```bash
+alembic current 2>/dev/null
+alembic heads 2>/dev/null
+```
+
+If they differ, warn the user prominently:
+> Pending Alembic migrations detected. Run `alembic upgrade head` before starting, or the app may fail.
+
+Ask whether to run `alembic upgrade head` now or skip.
+
+**Note:** the worktree's `.env` (copied from main by `/worktree-init`) points `DATABASE_URL` and friends at main's DB by default, so this migration runs against the shared DB. If that's not what you want, stop and fork the DB first (see `worktree-init` Step 5).
+
+## Step 8 — Start the tmux session
+
+**HTTP mode:**
+```bash
+tmux new-session -d -s "$SESSION" -c "$PROJECT_ROOT"
+tmux send-keys -t "$SESSION" \
+  "source $VENV_PATH/bin/activate && uvicorn weatherbrief.api.app:app --reload --port $PORT" Enter
+tmux split-window -h -t "$SESSION" -c "$PROJECT_ROOT/web"
+tmux send-keys -t "$SESSION" "npm run dev" Enter
+```
+
+**HTTPS mode:**
+```bash
+tmux new-session -d -s "$SESSION" -c "$PROJECT_ROOT"
+tmux send-keys -t "$SESSION" \
+  "source $VENV_PATH/bin/activate && uvicorn weatherbrief.api.app:app --reload \
+   --host 0.0.0.0 --port 8443 \
+   --ssl-keyfile /usr/local/etc/letsencrypt/live/ro-z.me/privkey.pem \
+   --ssl-certfile /usr/local/etc/letsencrypt/live/ro-z.me/fullchain.pem" Enter
+tmux split-window -h -t "$SESSION" -c "$PROJECT_ROOT/web"
+tmux send-keys -t "$SESSION" "npm run dev" Enter
+```
+
+## Step 9 — Cross-mode banner
+
+After starting in HTTP mode, also check whether a `wb-https` session is running:
+```bash
+tmux has-session -t wb-https 2>/dev/null
+```
+If yes, get its CWD. If that CWD is **different** from `$PROJECT_ROOT`, print a banner:
+> Note: `wb-https` (simulator mode) is currently anchored to `<other-path>`. The iOS simulator at `https://localhost.ro-z.me:8443` is serving that branch's code, not this one. Run `/devserver --https` here to repoint it.
+
+(In HTTPS mode, no banner needed — we just told the user we (re)started it for this worktree.)
+
+## Step 10 — Report to user
+
+**HTTP:**
+> Backend: http://localhost:$PORT
+> Attach:  tmux attach -t $SESSION
+> Pane 0 = uvicorn (--reload), Pane 1 = esbuild watch
+
+**HTTPS:**
+> Backend: https://localhost.ro-z.me:8443  (singleton; iOS simulator URL)
+> Attach:  tmux attach -t wb-https
+> Pane 0 = uvicorn (TLS, --reload), Pane 1 = esbuild watch
+
+Include the cross-mode banner from Step 9 if applicable.
 
 ## Notes
 
-- The `.env` file is loaded automatically by the app (python-dotenv), no need to source it manually
-- `uvicorn --reload` watches for Python file changes automatically
-- `npm run dev` in `web/` runs esbuild in watch mode for all TypeScript bundles
-- Production uses port 8020 (docker), dev uses port 8000
+- The `.env` is loaded automatically by the app (python-dotenv); no need to source it.
+- `uvicorn --reload` watches Python file changes; `npm run dev` rebuilds `web/dist/*.js` on TypeScript change.
+- Production: 8020 (docker, HTTP behind Caddy). Dev HTTP: 8000 (main) / 8001+ (worktrees). Dev HTTPS: 8443.
+- The `localhost.ro-z.me` host resolves to 127.0.0.1 (already configured) so the wildcard cert validates without DNS shenanigans.
+- OAuth callbacks are configured for `:8000` only; that's expected — local dev runs in single-user/admin mode and doesn't exercise OAuth.
