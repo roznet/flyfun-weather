@@ -94,7 +94,7 @@ def classify_llm_exception(exc: Exception) -> Diagnostic:
             return Diagnostic.create(
                 level="error", stage="digest",
                 code=DigestCode.ANTHROPIC_AUTH_ERROR,
-                message="AI weather digest unavailable — internal authentication issue. The team has been notified.",
+                message="AI weather digest unavailable — internal authentication issue.",
                 detail=detail,
                 request_id=request_id,
             )
