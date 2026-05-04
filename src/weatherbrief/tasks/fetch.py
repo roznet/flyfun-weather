@@ -262,16 +262,19 @@ def run_fetch(
         if client.has_api_key:
             # Paid tier: parallel dispatch. Workers share one OpenMeteoClient
             # (and one requests.Session). This is safe under the current
-            # invariants — unauthenticated GETs only, no cookies set, no
-            # session-level state mutated post-init, redirects not followed
-            # — because urllib3's PoolManager (the actual transport layer)
-            # is itself thread-safe. If any of those invariants change
-            # (cookies, auth headers, redirect following), revisit.
+            # invariants — unauthenticated GETs only, no cookies persisted
+            # on the session (Open-Meteo doesn't Set-Cookie), no session-
+            # level state mutated post-init — because urllib3's PoolManager
+            # (the actual transport layer) is itself thread-safe. Redirect
+            # following is on by default but Open-Meteo doesn't issue
+            # redirects, so no per-redirect session state is touched. If
+            # any of those invariants change (cookies, auth headers, an
+            # endpoint that 30x's), revisit.
             #
             # Each worker resets its thread-local call counter, runs its
             # fetch, captures the count, and returns it — even on failure —
             # so retries that 429'd before raising still get counted.
-            def _fetch_one_model(model: ModelSource) -> tuple[ModelSource, list[WaypointForecast] | None, int, BaseException | None]:
+            def _fetch_one_model(model: ModelSource) -> tuple[ModelSource, list[WaypointForecast] | None, int, Exception | None]:
                 client._reset_thread_call_count()
                 try:
                     point_forecasts = client.fetch_multi_point(
@@ -279,7 +282,7 @@ def run_fetch(
                         start_date=target_date, end_date=end_date,
                     )
                     return model, point_forecasts, client._thread_call_count(), None
-                except BaseException as exc:
+                except Exception as exc:
                     return model, None, client._thread_call_count(), exc
 
             max_workers = max(1, min(_BRIEFING_FETCH_CONCURRENCY, len(models_to_fetch)))
