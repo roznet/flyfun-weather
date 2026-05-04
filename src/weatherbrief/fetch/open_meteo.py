@@ -86,18 +86,26 @@ class OpenMeteoClient:
 
     def _record_call(self) -> None:
         """Bump both the global aggregate and the thread-local counter."""
-        # Global is racy under threading but fine for non-concurrent paths.
+        # `self.call_count` is a plain int and the increment is racy under
+        # threading. That's fine because concurrent callers (tasks/fetch.py)
+        # ignore the value during the run and overwrite it with the summed
+        # per-thread total after the pool joins. Single-threaded callers
+        # see no race and read it directly.
         self.call_count += 1
         self._tls.count = getattr(self._tls, "count", 0) + 1
 
-    def reset_thread_call_count(self) -> None:
+    def _reset_thread_call_count(self) -> None:
         """Zero this thread's call counter — call before a unit of work whose
-        cost the caller wants to attribute back to itself."""
+        cost the caller wants to attribute back to itself.
+
+        Internal hook for the concurrent orchestrator in tasks/fetch.py;
+        not part of the public client API.
+        """
         self._tls.count = 0
 
-    def thread_call_count(self) -> int:
+    def _thread_call_count(self) -> int:
         """Return the number of HTTP calls this thread has issued since its
-        last `reset_thread_call_count()`."""
+        last `_reset_thread_call_count()`. Internal — see above."""
         return getattr(self._tls, "count", 0)
 
     def _prepare_request(self, url: str, params: dict) -> tuple[str, dict]:

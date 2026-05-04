@@ -260,20 +260,27 @@ def run_fetch(
         _notify("fetch_forecasts")
 
         if client.has_api_key:
-            # Paid tier: parallel dispatch. Workers share the OpenMeteoClient
-            # (and its requests.Session) — safe here because we only issue
-            # unauthenticated GETs with no redirects, where urllib3's
-            # connection pool handles concurrency. Each worker resets its
-            # thread-local call counter, then returns it so we can aggregate
-            # an accurate `open_meteo_api_calls` count without racing on the
-            # shared `client.call_count` integer.
-            def _fetch_one_model(model: ModelSource) -> tuple[ModelSource, list[WaypointForecast], int]:
-                client.reset_thread_call_count()
-                point_forecasts = client.fetch_multi_point(
-                    route_points, model,
-                    start_date=target_date, end_date=end_date,
-                )
-                return model, point_forecasts, client.thread_call_count()
+            # Paid tier: parallel dispatch. Workers share one OpenMeteoClient
+            # (and one requests.Session). This is safe under the current
+            # invariants — unauthenticated GETs only, no cookies set, no
+            # session-level state mutated post-init, redirects not followed
+            # — because urllib3's PoolManager (the actual transport layer)
+            # is itself thread-safe. If any of those invariants change
+            # (cookies, auth headers, redirect following), revisit.
+            #
+            # Each worker resets its thread-local call counter, runs its
+            # fetch, captures the count, and returns it — even on failure —
+            # so retries that 429'd before raising still get counted.
+            def _fetch_one_model(model: ModelSource) -> tuple[ModelSource, list[WaypointForecast] | None, int, BaseException | None]:
+                client._reset_thread_call_count()
+                try:
+                    point_forecasts = client.fetch_multi_point(
+                        route_points, model,
+                        start_date=target_date, end_date=end_date,
+                    )
+                    return model, point_forecasts, client._thread_call_count(), None
+                except BaseException as exc:
+                    return model, None, client._thread_call_count(), exc
 
             max_workers = max(1, min(_BRIEFING_FETCH_CONCURRENCY, len(models_to_fetch)))
             total_calls = 0
@@ -284,12 +291,14 @@ def run_fetch(
                 }
                 for future in concurrent.futures.as_completed(future_to_model):
                     model = future_to_model[future]
-                    try:
-                        _, point_forecasts, calls = future.result()
-                    except Exception:
-                        logger.warning("Failed to fetch %s", model.value, exc_info=True)
-                        continue
+                    _, point_forecasts, calls, exc = future.result()
                     total_calls += calls
+                    if exc is not None:
+                        logger.warning(
+                            "Failed to fetch %s", model.value,
+                            exc_info=(type(exc), exc, exc.__traceback__),
+                        )
+                        continue
                     _record_success(model, point_forecasts)
             # Replace the racy aggregate with the summed per-thread totals.
             client.call_count = total_calls

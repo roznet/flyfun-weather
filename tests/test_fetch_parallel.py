@@ -137,6 +137,41 @@ def test_paid_path_partial_failure(paid_api_key):
     assert result.open_meteo_api_calls == 2
 
 
+def test_paid_path_failed_worker_calls_still_counted(paid_api_key):
+    """A worker that records HTTP calls (e.g. 429 retries) and then raises
+    must still contribute those calls to the aggregate. Otherwise we
+    under-count traffic against the paid quota."""
+    models = [ModelSource.GFS, ModelSource.ECMWF]
+
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+        if model == ModelSource.ECMWF:
+            # Simulate 4 retry attempts that all 429'd before the worker
+            # gives up — exactly the scenario that would silently drop
+            # calls from the count if we didn't capture pre-raise.
+            self._record_call()
+            self._record_call()
+            self._record_call()
+            self._record_call()
+            raise RuntimeError("rate limited")
+        self._record_call()
+        return [_make_forecast(p, model) for p in points]
+
+    with _disable_elevation(), patch(
+        "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+        new=fake_fetch_multi_point,
+    ):
+        result = fetch_module.run_fetch(
+            route=_route(),
+            departure_time=datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc),
+            models=models,
+            enrich_grib=False,
+        )
+
+    assert result.models_fetched == ["gfs"]
+    # 1 (gfs success) + 4 (ecmwf failed retries) = 5
+    assert result.open_meteo_api_calls == 5
+
+
 def test_paid_path_concurrency_capped_to_model_count(paid_api_key, monkeypatch):
     """Worker count never exceeds the number of models actually being fetched."""
     seen_max_workers: list[int] = []
