@@ -52,7 +52,7 @@ Score table growth is the storage concern. Activate the existing `verification_m
 
 ## Implementation order
 
-1. **Pre-req**: EU parallelisation PR (issue #110) merged and validated in prod
+1. **Pre-req**: standalone-verification parallelisation (issue #110 — chunk-level parallelism inside `_fetch_forecasts_for_model`) merged and validated in prod. Distinct from issue #112, which parallelises the per-model loop in the *briefing* pipeline; that's already shipped and unrelated to standalone capacity headroom.
 2. Add `region` column to watchlist JSON and `AirportForecastSnapshotRow` (alembic migration)
 3. Extend `STANDALONE_MODELS` to be region-aware: `{"eu": ["gfs", "icon", "ecmwf"], "us": ["gfs", "ecmwf"]}`
 4. Add 13Z and 01Z to `FORECAST_FETCH_HOURS_UTC` for the US region (or split the loop)
