@@ -458,7 +458,7 @@ def _enrich_forecasts_inner(
     # variable; overlapping with GFS decode caused OOM.
     # ECMWF GRIB is local disk I/O — runs in parallel with network fetches.
     if progress_callback is not None:
-        progress_callback("grib_enrichment", "GFS + ICON-EU + ECMWF GRIB")
+        progress_callback("grib_enrichment", None)
 
     gfs_ts: int | None = None
     icon_ts: int | None = None

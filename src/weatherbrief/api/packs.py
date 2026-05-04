@@ -496,7 +496,7 @@ _STAGE_LABELS: dict[str, str] = {
     "route_interpolation": "Interpolating route",
     "elevation_profile": "Fetching terrain data",
     "fetch_forecasts": "Fetching forecasts",
-    "grib_enrichment": "Enriching with GRIB2 data",
+    "grib_enrichment": "Adding cloud & icing detail",
     "waypoint_analysis": "Analyzing waypoints",
     "route_analysis": "Analyzing route points",
     "route_advisories": "Evaluating route advisories",

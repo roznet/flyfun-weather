@@ -6,8 +6,9 @@ and persist its artifacts to a pack directory.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
-import time
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -23,8 +24,11 @@ from weatherbrief.fetch.variables import (
 
 # Delay between Open-Meteo API calls to avoid rate limiting.
 # Paid API key has generous limits; free tier allows 600/min but be polite.
+# Retained for the legacy sequential path; parallel fetch ignores them.
 _INTER_MODEL_DELAY_PAID = 0.0
 _INTER_MODEL_DELAY_FREE = 1.0
+
+_BRIEFING_FETCH_CONCURRENCY = int(os.environ.get("BRIEFING_FETCH_CONCURRENCY", "4"))
 from weatherbrief.models import (
     Diagnostic,
     ElevationProfile,
@@ -208,10 +212,15 @@ def run_fetch(
     models_fetched_names: list[str] = []
     models_skipped_region: list[str] = []
     models_skipped_range: list[tuple[str, int, int]] = []
-    models_fetched_count = 0
 
     route_region = detect_model_region(route)
+    end_date = (
+        departure_time
+        + timedelta(hours=math.ceil(route.flight_duration_hours or 0))
+    ).strftime("%Y-%m-%d")
 
+    # Filter models up-front so we don't waste worker threads on skipped models.
+    models_to_fetch: list[ModelSource] = []
     for model in models:
         endpoint = MODEL_ENDPOINTS[model.value]
         if days_out_for_range is not None and days_out_for_range >= endpoint.max_days:
@@ -230,37 +239,45 @@ def run_fetch(
             )
             models_skipped_region.append(model.value)
             continue
-        # Delay between model fetches to avoid Open-Meteo rate limiting
-        if models_fetched_count > 0:
-            delay = _INTER_MODEL_DELAY_PAID if client.has_api_key else _INTER_MODEL_DELAY_FREE
-            if delay > 0:
-                time.sleep(delay)
-        _notify("fetch_forecasts", model.value)
-        try:
-            end_date = (
-                departure_time
-                + timedelta(hours=math.ceil(route.flight_duration_hours or 0))
-            ).strftime("%Y-%m-%d")
-            point_forecasts = client.fetch_multi_point(
-                route_points, model,
-                start_date=target_date, end_date=end_date,
-            )
-            # Extract waypoint-only forecasts for analysis
-            for rp, fc in zip(route_points, point_forecasts):
-                if rp.waypoint_icao:
-                    all_forecasts.append(fc)
-            # Store the full cross-section
-            cross_sections.append(RouteCrossSection(
-                model=model,
-                route_points=route_points,
-                fetched_at=point_forecasts[0].fetched_at,
-                point_forecasts=point_forecasts,
-            ))
-            logger.info("Fetched %s: %d points", model.value, len(point_forecasts))
-            models_fetched_count += 1
-            models_fetched_names.append(model.value)
-        except Exception:
-            logger.warning("Failed to fetch %s", model.value, exc_info=True)
+        models_to_fetch.append(model)
+
+    def _fetch_one_model(model: ModelSource) -> tuple[ModelSource, list[WaypointForecast]]:
+        point_forecasts = client.fetch_multi_point(
+            route_points, model,
+            start_date=target_date, end_date=end_date,
+        )
+        return model, point_forecasts
+
+    if models_to_fetch:
+        # Single notify before parallel dispatch — per-model detail would
+        # flicker across concurrent workers and isn't useful to the user.
+        _notify("fetch_forecasts")
+        max_workers = max(1, min(_BRIEFING_FETCH_CONCURRENCY, len(models_to_fetch)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_model = {
+                executor.submit(_fetch_one_model, model): model
+                for model in models_to_fetch
+            }
+            for future in concurrent.futures.as_completed(future_to_model):
+                model = future_to_model[future]
+                try:
+                    _, point_forecasts = future.result()
+                except Exception:
+                    logger.warning("Failed to fetch %s", model.value, exc_info=True)
+                    continue
+                # Extract waypoint-only forecasts for analysis
+                for rp, fc in zip(route_points, point_forecasts):
+                    if rp.waypoint_icao:
+                        all_forecasts.append(fc)
+                # Store the full cross-section
+                cross_sections.append(RouteCrossSection(
+                    model=model,
+                    route_points=route_points,
+                    fetched_at=point_forecasts[0].fetched_at,
+                    point_forecasts=point_forecasts,
+                ))
+                logger.info("Fetched %s: %d points", model.value, len(point_forecasts))
+                models_fetched_names.append(model.value)
 
     # --- GRIB2 enrichment (optional) ---
     grib_enriched = False
