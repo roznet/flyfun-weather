@@ -809,6 +809,160 @@ class TestRefreshEndpoint:
             refresh_registry.unregister(sample_flight.id)
 
 
+class TestRefreshStreamEncoder:
+    """Guard the JSON-encoder path used by ``/refresh/stream`` SSE events.
+
+    The stream endpoint builds events as raw dicts and serialises with
+    ``json.dumps`` — *not* via FastAPI's response-model path.  Any
+    Pydantic field whose Python representation isn't JSON-trivial (UUID,
+    datetime, Path, Decimal, Enum, IPvNAddress, set, frozenset, …) will
+    silently kill the stream after the headers are sent.  The user sees
+    "stream ended without completion" while the pipeline actually
+    succeeded server-side.
+
+    PR #107 introduced ``Diagnostic.error_id: UUID``.  Every pipeline run
+    emits diagnostics, so this bug fired on every refresh — yet shipped
+    because no test exercised the encoder line with a real diagnostic.
+    These tests reproduce the exact two-step encode the route does:
+
+        pack_dict = _meta_to_response(meta).model_dump(mode="json")
+        json.dumps({"type": "complete", "pack": pack_dict}, default=str)
+
+    so adding a new Diagnostic field with a non-trivial type, or
+    introducing another non-JSON-trivial field anywhere on the pack
+    response, will fail this test class — without needing to spin up the
+    full SSE harness.
+    """
+
+    def _make_pack_with_uuid_diagnostic(self) -> BriefingPackMeta:
+        from weatherbrief.models.diagnostic import Diagnostic
+        from weatherbrief.models.diagnostic_codes import FetchCode
+
+        diag = Diagnostic.create(
+            level="info", stage="fetch",
+            code=FetchCode.GRIB_ENRICHMENT_APPLIED,
+            message="ECMWF GRIB enrichment applied",
+        )
+        assert diag.error_id is not None  # sanity: UUID is set
+        return BriefingPackMeta(
+            flight_id="test-flight",
+            fetch_timestamp=_NOW - timedelta(hours=1),
+            days_out=3,
+            has_gramet=False, has_skewt=False, has_digest=False,
+            assessment="GREEN",
+            diagnostics=[diag],
+        )
+
+    def test_complete_event_round_trips_through_sse_encoder(self):
+        """The exact two-step encode the SSE complete-event uses must
+        not raise on a pack carrying a UUID-bearing Diagnostic.
+
+        Pre-fix (PR-107 ship):
+          - ``model_dump()`` returned a dict with a ``UUID`` Python obj
+          - plain ``json.dumps(event)`` → ``TypeError: Object of type
+            UUID is not JSON serializable``
+          - SSE stream died after the response headers were sent →
+            client saw "stream ended without completion".
+
+        Post-fix:
+          - ``model_dump(mode="json")`` stringifies UUID + datetime
+          - ``json.dumps(event, default=str)`` is a defensive backstop
+        """
+        from weatherbrief.api.packs import _meta_to_response
+
+        meta = self._make_pack_with_uuid_diagnostic()
+
+        # Step 1: same model_dump call the route makes.
+        pack_dict = _meta_to_response(meta).model_dump(mode="json")
+        # Step 2: same json.dumps call the route makes.
+        encoded = json.dumps({"type": "complete", "pack": pack_dict}, default=str)
+
+        # Decode and assert the diagnostic survived as a JSON-friendly
+        # dict with a stringified error_id.
+        parsed = json.loads(encoded)
+        assert parsed["type"] == "complete"
+        diags = parsed["pack"]["diagnostics"]
+        assert len(diags) == 1
+        assert isinstance(diags[0]["error_id"], str)
+        assert len(diags[0]["error_id"]) == 36  # standard UUID hex form
+
+    def test_naked_model_dump_with_uuid_field_is_unsafe(self):
+        """Lock in *why* we need ``mode="json"``: a plain ``model_dump()``
+        of a UUID-bearing pack is NOT directly JSON-encodable.
+
+        If a future Pydantic version makes ``model_dump()`` JSON-safe by
+        default, this test will fail loudly — at which point the
+        ``mode="json"`` calls in ``refresh_briefing_stream`` are
+        redundant defenses and can be revisited.
+        """
+        from weatherbrief.api.packs import _meta_to_response
+
+        meta = self._make_pack_with_uuid_diagnostic()
+        pack_dict = _meta_to_response(meta).model_dump()  # default mode="python"
+
+        # The bug we shipped: this raises TypeError.
+        with pytest.raises(TypeError, match="UUID"):
+            json.dumps({"type": "complete", "pack": pack_dict})
+
+    def test_packs_module_sse_encoders_are_json_safe(self):
+        """Structural lint: every ``json_mod.dumps(...)`` call inside
+        ``api/packs.py`` must use ``default=str`` (defensive backstop),
+        and every ``model_dump()`` call whose result feeds a
+        ``json.dumps`` must use ``mode="json"``.
+
+        This is the only test in this class that actually catches a
+        *route-level* regression — the two tests above lock in encoder
+        behavior, but a future patch removing ``mode="json"`` from the
+        route would silently revert the production bug.  This test
+        re-introduces the structural guard the bug exposed.
+
+        Brittle by design (string-matching on source).  If this test
+        fails after a legitimate refactor, the right answer is usually
+        to extract the SSE encoding into a typed helper and update this
+        check (see post-mortem brainstorm — option C1, typed event
+        union).
+        """
+        from pathlib import Path
+
+        src = (
+            Path(__file__).parent.parent
+            / "src" / "weatherbrief" / "api" / "packs.py"
+        ).read_text()
+
+        # 1. Every ``json_mod.dumps(`` call in this file must include
+        #    ``default=str`` on the same line.  Cheap and exact.
+        bad_dumps = [
+            (i, line.strip())
+            for i, line in enumerate(src.splitlines(), 1)
+            if "json_mod.dumps(" in line and "default=str" not in line
+        ]
+        assert not bad_dumps, (
+            "Found json_mod.dumps() without default=str in packs.py — "
+            "the SSE stream will silently die on any non-JSON-trivial "
+            "field (UUID, datetime, Path, Decimal, …).  Add default=str.\n"
+            + "\n".join(f"  L{i}: {line}" for i, line in bad_dumps)
+        )
+
+        # 2. Every ``_meta_to_response(...).model_dump(`` call in this
+        #    file must use ``mode="json"`` so UUID/datetime are
+        #    stringified before they hit any JSON encoder.
+        import re
+        # Match `_meta_to_response(...).model_dump(...)` — capture the
+        # arg list of model_dump.
+        pattern = re.compile(
+            r"_meta_to_response\([^)]*\)\.model_dump\(([^)]*)\)"
+        )
+        for match in pattern.finditer(src):
+            args = match.group(1)
+            line_no = src[: match.start()].count("\n") + 1
+            assert 'mode="json"' in args or "mode='json'" in args, (
+                f"packs.py:{line_no} — _meta_to_response(...).model_dump() "
+                f"must use mode='json' (got args: {args!r}).  Without it, "
+                f"UUID/datetime fields stay as Python objects and die in "
+                f"any json.dumps() downstream."
+            )
+
+
 # --- Raw route persistence on update + move ---
 
 

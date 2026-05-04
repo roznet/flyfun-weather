@@ -1013,11 +1013,11 @@ async def refresh_briefing_stream(
                 status = _build_data_status(latest, flight)
                 if status.fresh:
                     logger.info("Data is fresh for %s, skipping pipeline (stream)", flight_id)
-                    pack_resp = _meta_to_response(latest, data_status=status).model_dump()
+                    pack_resp = _meta_to_response(latest, data_status=status).model_dump(mode="json")
 
                     async def fresh_generator() -> AsyncGenerator[str, None]:
                         event = {"type": "complete", "pack": pack_resp}
-                        yield f"event: complete\ndata: {json_mod.dumps(event)}\n\n"
+                        yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
                     return StreamingResponse(
                         fresh_generator(),
@@ -1032,7 +1032,7 @@ async def refresh_briefing_stream(
         except QueueFullError:
             async def busy_generator() -> AsyncGenerator[str, None]:
                 event = {"type": "error", "message": "Server busy, too many queued refreshes"}
-                yield f"event: error\ndata: {json_mod.dumps(event)}\n\n"
+                yield f"event: error\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
             return StreamingResponse(
                 busy_generator(),
@@ -1048,7 +1048,7 @@ async def refresh_briefing_stream(
         if entry is None:
             async def duplicate_generator() -> AsyncGenerator[str, None]:
                 event = {"type": "error", "message": "Refresh already in progress"}
-                yield f"event: error\ndata: {json_mod.dumps(event)}\n\n"
+                yield f"event: error\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
             return StreamingResponse(
                 duplicate_generator(),
@@ -1358,10 +1358,10 @@ def refresh_observations(
         briefing_data["route_observations"] = new_obs.model_dump(mode="json")
         briefing_path = pack_dir / "briefing.json"
         if briefing_path.exists():
-            briefing_path.write_text(json_mod.dumps(briefing_data, indent=2))
+            briefing_path.write_text(json_mod.dumps(briefing_data, indent=2, default=str))
         else:
             snapshot_path = pack_dir / "snapshot.json"
-            snapshot_path.write_text(json_mod.dumps(briefing_data, indent=2))
+            snapshot_path.write_text(json_mod.dumps(briefing_data, indent=2, default=str))
 
         return new_obs.model_dump(mode="json")
 
