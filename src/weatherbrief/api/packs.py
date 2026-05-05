@@ -874,10 +874,14 @@ def _assessment_from_advisories(
     try:
         loaded = _RouteAdvisoriesManifest.model_validate_json(adv_path.read_text())
         return derive_assessment_from_advisories(loaded)
-    except (OSError, ValueError) as exc:
+    except Exception:
+        # Same broad catch as the in-memory path above: I/O can raise OSError,
+        # validation can raise ValueError, and derive_assessment_from_advisories
+        # can raise AttributeError/KeyError on malformed entries. Persisting
+        # the pack must never abort because of an assessment-derivation hiccup.
         logger.warning(
-            "Could not derive assessment from %s (%s) — falling back to NULL",
-            adv_path, exc,
+            "Could not derive assessment from %s — falling back to NULL",
+            adv_path, exc_info=True,
         )
         return (None, None)
 

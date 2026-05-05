@@ -186,10 +186,12 @@ function makeRefreshEventHandler(
     } else if (event.type === 'briefing_ready' && event.pack) {
       const ts = event.pack.fetch_timestamp;
       set({ digestPending: true });
-      // Render the visible briefing while the digest stage continues. The
-      // post-stream code path (after `complete`) will reload+reselect so any
-      // assessment update from the digest is reflected.
-      get().loadPacks().then(() => get().selectPack(ts)).catch(() => {
+      // Render the visible briefing while the digest stage continues.
+      // selectPack fetches the pack + snapshot + advisories directly via its
+      // timestamp, so we don't need a fresh /packs list here — the
+      // post-stream code path runs `loadPacks()` once `complete` arrives,
+      // which is when the dropdown actually needs the new entry.
+      get().selectPack(ts).catch(() => {
         /* non-critical — final reload after `complete` will recover */
       });
     } else if (event.type === 'complete' && event.elapsed_seconds) {
