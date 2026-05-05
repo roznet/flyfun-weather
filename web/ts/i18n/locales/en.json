@@ -94,7 +94,7 @@
   "freshness.sourcesTitle": "Forecast data sources",
   "freshness.sourcesIntro": "Each model can be sourced directly from the forecast centre or via Open-Meteo. When both contribute, the run actually used for upper-air enrichment is shown first; the Open-Meteo entry is the surface base layer.",
   "freshness.colModel": "Model",
-  "freshness.colSource": "Source",
+  "freshness.colProvider": "Provider",
   "freshness.colRun": "Run",
   "freshness.colPublished": "Published",
   "freshness.colNextUpdate": "Next update",

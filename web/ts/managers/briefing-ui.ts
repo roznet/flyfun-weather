@@ -391,7 +391,7 @@ function renderSourcesPopupContent(sources: ModelSourceDetail[]): string {
         <thead>
           <tr>
             <th>${t('freshness.colModel')}</th>
-            <th>${t('freshness.colSource')}</th>
+            <th>${t('freshness.colProvider')}</th>
             <th>${t('freshness.colRun')}</th>
             <th>${t('freshness.colPublished')}</th>
             <th>${t('freshness.colNextUpdate')}</th>

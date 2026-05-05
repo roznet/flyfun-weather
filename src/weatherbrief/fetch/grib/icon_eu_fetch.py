@@ -210,10 +210,30 @@ def find_latest_icon_eu_run(
 ) -> tuple[str, int] | None:
     """Find the latest available ICON-EU model run whose horizon covers the flight.
 
+    Thin wrapper around :func:`find_latest_icon_eu_run_with_response` for
+    callers that don't need the HEAD response.
+    """
+    found = find_latest_icon_eu_run_with_response(
+        target_time, session, as_of_time, cover_until,
+    )
+    return (found[0], found[1]) if found is not None else None
+
+
+def find_latest_icon_eu_run_with_response(
+    target_time: datetime,
+    session: requests.Session | None = None,
+    as_of_time: datetime | None = None,
+    cover_until: datetime | None = None,
+) -> tuple[str, int, requests.Response] | None:
+    """Find the latest ICON-EU run + return the matching probe HEAD response.
+
     Tries cycles in reverse chronological order, checking that enough time
     has passed for publication and that the run's model-level horizon
     reaches ``cover_until``.  If ``cover_until`` is None, any run that
     covers ``target_time`` is accepted.
+
+    The response is returned so the freshness dispatch can read its
+    ``Last-Modified`` header without re-issuing the same HEAD upstream.
 
     Args:
         target_time: Flight departure time.
@@ -225,7 +245,7 @@ def find_latest_icon_eu_run(
             are skipped in favour of an older main run with longer range.
 
     Returns:
-        (init_date_YYYYMMDD, init_hour) or None if no run available.
+        ``(init_date_YYYYMMDD, init_hour, head_response)`` or ``None``.
     """
     sess = session or requests.Session()
     reference_time = as_of_time or datetime.now(timezone.utc)
@@ -260,7 +280,7 @@ def find_latest_icon_eu_run(
                 resp = sess.head(probe_url, timeout=10)
                 if resp.status_code == 200:
                     logger.info("Found ICON-EU run: %s %02dz (horizon %dh)", date_str, cycle, max_hour)
-                    return date_str, cycle
+                    return date_str, cycle, resp
             except requests.RequestException:
                 continue
 

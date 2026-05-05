@@ -203,7 +203,10 @@ class ModelStatus(BaseModel):
     pack_init: int | None = None  # Unix ts of the init the pack was built from
     latest_available: int  # Unix ts of latest known init for this source
     next_expected: str  # ISO datetime — wallclock when next run is expected
-    published_at: str | None = None  # provider-reported publish time (OM only)
+    # Provider-reported publish wallclock when known.  OM: from meta.json's
+    # last_run_availability_time.  Direct GRIB: NOAA's S3 Last-Modified,
+    # DWD's HTTP Last-Modified, ECMWF's local sentinel mtime.
+    published_at: str | None = None
     state: str  # "current" | "stale" | "awaiting" | "delayed"
 
 
@@ -221,7 +224,9 @@ class ModelSourceDetail(BaseModel):
     provider: str  # human display name: "NOAA", "DWD", "ECMWF", "Open-Meteo"
     role: str  # "primary" (in pack.model_sources) | "base" (OM under direct)
     init: int  # Unix ts of the run as it landed in the pack
-    published_at: str | None = None  # ISO datetime, OM only
+    # Provider-reported publish wallclock — populated for all sources now
+    # (OM meta.json; direct GRIB Last-Modified or sentinel mtime).
+    published_at: str | None = None
     next_expected: str  # ISO datetime
     state: str  # "current" | "stale" | "awaiting" | "delayed"
 
@@ -423,8 +428,9 @@ def _inline_check(
 
     Falls back to the registry's expected delivery time if the dynamic
     check fails — better than reporting nothing.  Returns
-    ``(init, next_expected, published_at)`` aware UTC datetimes (with
-    ``published_at`` set only for Open-Meteo).
+    ``(init, next_expected, published_at)`` aware UTC datetimes;
+    ``published_at`` may still be ``None`` if the dispatch couldn't
+    determine one (e.g. ECMWF sentinel race, missing HTTP header).
     """
     from weatherbrief.fetch.freshness import registry
     from weatherbrief.fetch.freshness.sources import check_source as _sync_check
@@ -540,6 +546,21 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
                 if om_resolved is not None:
                     om_init, om_nxt, om_pub = om_resolved
                     om_pub_iso = om_pub.isoformat() if om_pub else None
+                    # Compute the OM base's actual marker state instead of
+                    # hardcoding "current" — the popover should honestly
+                    # reflect a delayed OM publish, even when the pack's
+                    # primary direct source is fine.
+                    om_now = datetime.now(timezone.utc)
+                    if int(om_init.timestamp()) > om_pack_init:
+                        om_horizon = registry.run_horizon(om_source, om_init)
+                        om_state = (
+                            "stale" if (om_init + om_horizon) >= flight_end
+                            else "current"
+                        )
+                    elif om_now > om_nxt:
+                        om_state = "delayed"
+                    else:
+                        om_state = "current" if int(om_init.timestamp()) == om_pack_init else "awaiting"
                     sources_out.append(ModelSourceDetail(
                         model=model,
                         source=om_source,
@@ -548,7 +569,7 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
                         init=om_pack_init,
                         published_at=om_pub_iso,
                         next_expected=om_nxt.isoformat(),
-                        state="current",
+                        state=om_state,
                     ))
 
     next_time = None
