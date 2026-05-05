@@ -52,6 +52,7 @@ from weatherbrief.storage.flights import (
     load_pack_meta,
     pack_dir_for,
     save_pack_meta,
+    update_pack_meta,
 )
 
 logger = logging.getLogger(__name__)
@@ -505,6 +506,7 @@ _STAGE_LABELS: dict[str, str] = {
     "save_snapshot": "Saving snapshot",
     "fetch_gramet": "Fetching GRAMET",
     "generate_skewt": "Generating Skew-T",
+    "briefing_ready": "Briefing ready",
     "llm_digest": "Generating AI digest",
 }
 
@@ -521,6 +523,7 @@ _STAGE_PROGRESS: dict[str, float] = {
     "save_snapshot": 0.65,
     "fetch_gramet": 0.75,
     "generate_skewt": 0.85,
+    "briefing_ready": 0.88,
     "llm_digest": 0.95,
 }
 
@@ -720,9 +723,31 @@ def _charge_briefing_cost(
         logger.warning("Failed to charge briefing cost for %s", user_id, exc_info=True)
 
 
-def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
-                      user_id=None, model_metadata=None, as_of_time=None):
-    """Shared finalization: build and save pack metadata, log usage, return response."""
+def _build_pack_meta(
+    flight_id,
+    flight,
+    fetch_ts,
+    pack_path,
+    result,
+    *,
+    model_metadata=None,
+    as_of_time=None,
+    provisional: bool = False,
+) -> BriefingPackMeta:
+    """Build a ``BriefingPackMeta`` from a (possibly partial) ``BriefingResult``.
+
+    Pure: builds the model object only — does not touch the DB.
+
+    When ``provisional=True`` (called between phase 6 and phase 7), the LLM
+    digest hasn't run yet, so ``has_digest`` is forced to False and the
+    assessment is derived from the route advisories on disk rather than the
+    digest.
+
+    When ``provisional=False`` (called after phase 7), ``has_digest`` reflects
+    whether the digest succeeded and the assessment prefers the digest's
+    output (falling back to the advisories-derived value when the digest
+    failed).
+    """
     if as_of_time:
         days_out = (flight.departure_time.date() - as_of_time.date()).days
     else:
@@ -764,27 +789,117 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
             result.alt_advisory_result.manifest,
         )
 
-    meta = BriefingPackMeta(
+    # Assessment: prefer the digest's, fall back to advisories on disk.
+    assessment: str | None = None
+    assessment_reason: str | None = None
+    if not provisional and result.digest:
+        assessment = result.digest.assessment
+        assessment_reason = result.digest.assessment_reason
+    if assessment is None:
+        assessment, assessment_reason = _assessment_from_disk(pack_path)
+
+    has_digest = False if provisional else (result.digest_path is not None)
+
+    return BriefingPackMeta(
         flight_id=flight_id,
         fetch_timestamp=fetch_ts,
         days_out=days_out,
         has_gramet=result.gramet_path is not None,
         has_skewt=len(result.skewt_paths) > 0,
-        has_digest=result.digest_path is not None,
-        assessment=result.digest.assessment if result.digest else None,
-        assessment_reason=result.digest.assessment_reason if result.digest else None,
+        has_digest=has_digest,
+        assessment=assessment,
+        assessment_reason=assessment_reason,
         artifact_path=str(pack_path),
         model_init_times=init_times,
         grib_init_times=result.grib_init_times,
         model_sources=model_sources,
         models_skipped_region=result.models_skipped_region,
-        diagnostics=result.diagnostics,
+        diagnostics=list(result.diagnostics),
         alt_assessment=alt_assessment,
         alt_assessment_reason=alt_assessment_reason,
         has_alt_advisories=has_alt_advisories,
     )
 
+
+def _assessment_from_disk(pack_path: Path) -> tuple[str | None, str | None]:
+    """Read ``route_advisories.json`` and derive (assessment, reason).
+
+    Returns ``(None, None)`` if the file is missing or unparseable so the
+    pack row falls back to NULL — the briefing UI handles missing
+    assessments gracefully.
+    """
+    adv_path = Path(pack_path) / "route_advisories.json"
+    if not adv_path.exists():
+        return (None, None)
+    try:
+        from weatherbrief.models import RouteAdvisoriesManifest
+        from weatherbrief.tasks.advise import derive_assessment_from_advisories
+
+        manifest = RouteAdvisoriesManifest.model_validate_json(adv_path.read_text())
+        return derive_assessment_from_advisories(manifest)
+    except Exception:
+        logger.warning(
+            "Could not derive assessment from %s — falling back to NULL",
+            adv_path, exc_info=True,
+        )
+        return (None, None)
+
+
+def _persist_pack_provisional(
+    flight_id,
+    flight,
+    fetch_ts,
+    pack_path,
+    result,
+    db,
+    *,
+    model_metadata=None,
+    as_of_time=None,
+) -> BriefingPackMeta:
+    """Insert a provisional pack row at the briefing_ready milestone.
+
+    The LLM digest hasn't run yet — ``has_digest=False`` and the assessment
+    comes from advisories. ``_persist_pack_finalize`` will update this row
+    once the digest completes (or update with ``has_digest=False`` if it
+    fails). The row is inserted unconditionally; if a row with the same
+    ``(flight_id, fetch_timestamp)`` already exists (which shouldn't happen
+    in practice — each refresh allocates a fresh timestamp), the SQL layer
+    will surface the conflict.
+    """
+    meta = _build_pack_meta(
+        flight_id, flight, fetch_ts, pack_path, result,
+        model_metadata=model_metadata,
+        as_of_time=as_of_time,
+        provisional=True,
+    )
     save_pack_meta(db, meta)
+    logger.info("Provisional pack persisted for %s: %s", flight_id, fetch_ts)
+    return meta
+
+
+def _persist_pack_finalize(
+    flight_id,
+    flight,
+    fetch_ts,
+    pack_path,
+    result,
+    db,
+    *,
+    user_id=None,
+    model_metadata=None,
+    as_of_time=None,
+) -> BriefingPackMeta:
+    """Finalize the pack row after phase 7 — update if a provisional row
+    exists, otherwise insert. Logs usage and charges credits.
+    """
+    meta = _build_pack_meta(
+        flight_id, flight, fetch_ts, pack_path, result,
+        model_metadata=model_metadata,
+        as_of_time=as_of_time,
+        provisional=False,
+    )
+    if not update_pack_meta(db, meta):
+        save_pack_meta(db, meta)
 
     # Log usage and charge credits
     from weatherbrief.api.usage import log_api_usage, log_briefing_usage
@@ -806,6 +921,22 @@ def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
 
     logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)
     return meta
+
+
+def _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, db,
+                      user_id=None, model_metadata=None, as_of_time=None):
+    """Backwards-compatible single-shot persist (no provisional row).
+
+    Used by the synchronous ``/refresh`` endpoint that doesn't speak SSE and
+    therefore can't render a partial briefing — there's no benefit to a
+    provisional row in that path.
+    """
+    return _persist_pack_finalize(
+        flight_id, flight, fetch_ts, pack_path, result, db,
+        user_id=user_id,
+        model_metadata=model_metadata,
+        as_of_time=as_of_time,
+    )
 
 
 class RefreshAccepted(BaseModel):
@@ -1076,6 +1207,13 @@ async def refresh_briefing_stream(
     loop = asyncio.get_event_loop()
 
     def progress_callback(stage: str, detail: str | None = None) -> None:
+        refresh_registry.update_progress(flight_id, stage, detail)
+        # briefing_ready emits a dedicated SSE event with the provisional pack
+        # metadata (handled by briefing_ready_callback below). Skip the generic
+        # progress event so clients don't see two notifications for the same
+        # milestone.
+        if stage == "briefing_ready":
+            return
         label = _STAGE_LABELS.get(stage, stage)
         progress = _STAGE_PROGRESS.get(stage, 0.0)
         event = {
@@ -1085,7 +1223,37 @@ async def refresh_briefing_stream(
             "label": label,
             "progress": progress,
         }
-        refresh_registry.update_progress(flight_id, stage, detail)
+        asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+
+    def briefing_ready_callback(result) -> None:
+        """Persist the provisional pack row and emit the briefing_ready SSE event.
+
+        Runs in the pipeline worker thread, between phase 6 and phase 7.
+        Failures here are logged but never bubble back into the pipeline —
+        the digest still runs and ``_persist_pack_finalize`` will insert
+        the row at the end if the provisional persist failed.
+        """
+        try:
+            thread_db = SessionLocal()
+            try:
+                meta = _persist_pack_provisional(
+                    flight_id, flight, fetch_ts, pack_path, result, thread_db,
+                    model_metadata=model_metadata,
+                    as_of_time=as_of_time,
+                )
+                thread_db.commit()
+            finally:
+                thread_db.close()
+        except Exception:
+            logger.warning(
+                "Provisional pack persist failed for %s — digest will still run",
+                flight_id, exc_info=True,
+            )
+            return
+        event = {
+            "type": "briefing_ready",
+            "pack": _meta_to_response(meta).model_dump(mode="json"),
+        }
         asyncio.run_coroutine_threadsafe(queue.put(event), loop)
 
     def run_pipeline() -> None:
@@ -1098,6 +1266,7 @@ async def refresh_briefing_stream(
                 departure_time=flight.departure_time,
                 options=options,
                 progress_callback=progress_callback,
+                briefing_ready_callback=briefing_ready_callback,
             )
             # Capture timing before unregister
             queue_wait, total_elapsed = refresh_registry.get_timing(flight_id)
@@ -1108,9 +1277,11 @@ async def refresh_briefing_stream(
             # Use a dedicated DB session — the request-scoped one isn't thread-safe
             thread_db = SessionLocal()
             try:
-                meta = _finalize_refresh(flight_id, flight, fetch_ts, pack_path, result, thread_db,
-                                         user_id=user_id, model_metadata=model_metadata,
-                                         as_of_time=as_of_time)
+                meta = _persist_pack_finalize(
+                    flight_id, flight, fetch_ts, pack_path, result, thread_db,
+                    user_id=user_id, model_metadata=model_metadata,
+                    as_of_time=as_of_time,
+                )
                 thread_db.commit()
             finally:
                 thread_db.close()

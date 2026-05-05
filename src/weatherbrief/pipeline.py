@@ -192,6 +192,7 @@ def execute_briefing(
     departure_time: datetime,
     options: BriefingOptions | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
+    briefing_ready_callback: Callable[["BriefingResult"], None] | None = None,
 ) -> BriefingResult:
     """Run the full briefing pipeline.
 
@@ -200,6 +201,12 @@ def execute_briefing(
 
     Args:
         departure_time: Aware UTC datetime for the flight departure.
+        briefing_ready_callback: Optional callback invoked after the visible
+            briefing artifacts (snapshot, advisories, GRAMET, Skew-T) have
+            been produced and before the LLM digest phase. Receives the
+            partially-populated ``BriefingResult`` so callers can persist a
+            provisional pack row and notify clients while the digest still
+            runs in the background.
 
     Raises:
         ValueError: If target_date is in the past.
@@ -525,6 +532,20 @@ def execute_briefing(
         if skewt_result.diagnostic:
             result.diagnostics.append(skewt_result.diagnostic)
         stage_timings["generate_skewt"] = perf_counter() - _t0
+
+    # === 6.5 Briefing ready milestone ===
+    # Visible briefing artifacts (snapshot + advisories + GRAMET + Skew-T) are
+    # all on disk by this point. Notify callers so they can render the briefing
+    # and persist a provisional pack row while the LLM digest still runs.
+    _notify("briefing_ready", str(snapshot_path))
+    if briefing_ready_callback is not None:
+        try:
+            briefing_ready_callback(result)
+        except Exception:
+            logger.warning(
+                "briefing_ready_callback raised — continuing with digest",
+                exc_info=True,
+            )
 
     # === 7. Optional: LLM digest ===
     if options.generate_llm_digest:

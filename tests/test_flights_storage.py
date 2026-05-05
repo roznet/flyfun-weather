@@ -17,6 +17,7 @@ from weatherbrief.storage.flights import (
     pack_dir_for,
     save_flight,
     save_pack_meta,
+    update_pack_meta,
 )
 
 
@@ -162,6 +163,43 @@ class TestBriefingPacks:
         pack_dir = pack_dir_for("user-123", "flight-abc", "2026-02-19T18:00:00Z")
         assert "user-123" in str(pack_dir)
         assert "flight-abc" in str(pack_dir)
+
+    def test_update_pack_meta_updates_existing(
+        self, db_session, dev_user, sample_flight, sample_pack_meta,
+    ):
+        """update_pack_meta updates an existing row in place (no new row)."""
+        save_flight(db_session, sample_flight, dev_user)
+        # Insert provisional row with has_digest=False
+        provisional = sample_pack_meta.model_copy(update={
+            "has_digest": False,
+            "assessment": "AMBER",
+            "assessment_reason": "advisories: icing=AMBER",
+        })
+        save_pack_meta(db_session, provisional)
+
+        # Finalize: same timestamp, has_digest=True, assessment overridden
+        finalized = sample_pack_meta.model_copy(update={
+            "has_digest": True,
+            "assessment": "GREEN",
+            "assessment_reason": "Digest concluded all clear",
+        })
+        updated = update_pack_meta(db_session, finalized)
+
+        assert updated is True
+        packs = list_packs(db_session, sample_flight.id)
+        assert len(packs) == 1  # row count must not increase
+        assert packs[0].has_digest is True
+        assert packs[0].assessment == "GREEN"
+        assert packs[0].assessment_reason == "Digest concluded all clear"
+
+    def test_update_pack_meta_returns_false_when_missing(
+        self, db_session, dev_user, sample_flight, sample_pack_meta,
+    ):
+        """update_pack_meta returns False if no matching row exists."""
+        save_flight(db_session, sample_flight, dev_user)
+        # No provisional row inserted — update should report not-found.
+        assert update_pack_meta(db_session, sample_pack_meta) is False
+        assert list_packs(db_session, sample_flight.id) == []
 
 
 # --- Model tests ---

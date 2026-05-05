@@ -557,6 +557,45 @@ def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
     session.flush()
 
 
+def update_pack_meta(session: Session, meta: BriefingPackMeta) -> bool:
+    """Update an existing pack row (matched by flight_id + fetch_timestamp).
+
+    Returns True when an existing row was updated, False when no row existed
+    (caller should fall back to ``save_pack_meta``).
+    """
+    naive_ts = meta.fetch_timestamp.replace(tzinfo=None)
+    stmt = select(BriefingPackRow).where(
+        BriefingPackRow.flight_id == meta.flight_id,
+        BriefingPackRow.fetch_timestamp == naive_ts,
+    )
+    row = session.execute(stmt).scalar_one_or_none()
+    if row is None:
+        return False
+
+    row.days_out = meta.days_out
+    row.has_gramet = meta.has_gramet
+    row.has_skewt = meta.has_skewt
+    row.has_digest = meta.has_digest
+    row.assessment = meta.assessment
+    row.assessment_reason = meta.assessment_reason
+    row.artifact_path = meta.artifact_path
+    row.model_init_times_json = json.dumps(meta.model_init_times)
+    row.grib_init_times_json = json.dumps(meta.grib_init_times)
+    row.model_sources_json = (
+        json.dumps(meta.model_sources) if meta.model_sources else None
+    )
+    row.models_skipped_region_json = json.dumps(meta.models_skipped_region)
+    row.diagnostics_json = json.dumps(
+        [d.model_dump(mode="json") for d in meta.diagnostics],
+    )
+    row.alt_assessment = meta.alt_assessment
+    row.alt_assessment_reason = meta.alt_assessment_reason
+    row.has_alt_advisories = meta.has_alt_advisories
+    row.integrity_hmac = _compute_pack_hmac(row)
+    session.flush()
+    return True
+
+
 def load_pack_meta(
     session: Session, flight_id: str, fetch_timestamp: str | datetime
 ) -> BriefingPackMeta:
