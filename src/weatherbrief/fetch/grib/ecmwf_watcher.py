@@ -172,17 +172,47 @@ def get_latest_ready(data_dir: Path | None = None) -> datetime | None:
     sentinels: a partial run is still useful data the briefing pipeline can
     consume, so its arrival should also bump freshness.
     """
+    result = get_latest_ready_with_mtime(data_dir)
+    return result[0] if result is not None else None
+
+
+def get_latest_ready_with_mtime(
+    data_dir: Path | None = None,
+) -> tuple[datetime, datetime | None] | None:
+    """Like :func:`get_latest_ready` but also returns the sentinel's mtime.
+
+    The mtime approximates "when the run finished landing locally" — the
+    closest analogue we have to a publish wallclock for direct ECMWF, since
+    ECMWF themselves don't expose a server-side availability time the way
+    Open-Meteo's ``meta.json`` does.  Used by the freshness ``Observation``
+    so the popover can show *something* under "Published" rather than "—".
+
+    Returns ``(init, sentinel_mtime)`` aware UTC, with ``sentinel_mtime``
+    possibly ``None`` if a race deleted the sentinel between ``iterdir``
+    and ``stat`` — caller surfaces that as "—" rather than substituting
+    the cycle init time, which would mislead pilots about freshness.
+    Returns ``None`` if no sentinel exists at all.
+    """
     d = data_dir or ecmwf_grib_dir()
     if not d.exists():
         return None
     latest: datetime | None = None
+    latest_mtime: datetime | None = None
     for path in d.iterdir():
         bt = _parse_sentinel_base_time(path.name)
         if bt is None:
             continue
         if latest is None or bt > latest:
             latest = bt
-    return latest
+            try:
+                latest_mtime = datetime.fromtimestamp(
+                    path.stat().st_mtime, tz=timezone.utc,
+                )
+            except OSError:
+                latest_mtime = None
+    if latest is None:
+        return None
+    return latest, latest_mtime
 
 
 def _expected_publish_time(

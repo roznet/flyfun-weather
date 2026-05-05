@@ -8,17 +8,34 @@ so the cost of these I/O calls is paid at most twice per cycle per
 source (once on-time, once on slip).
 
 All wrappers must be safe to call from a thread (the loop offloads them
-via ``asyncio.to_thread``) and must return either an aware-UTC
-``datetime`` for the latest observed init or ``None`` if the check
-couldn't determine one (transient network failure, missing data).
+via ``asyncio.to_thread``) and must return either an :class:`Observation`
+for the latest observed init (with an optional provider-reported
+``published_at`` wallclock) or ``None`` if the check couldn't determine
+one (transient network failure, missing data).
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
+
+
+class Observation(NamedTuple):
+    """Result of a dynamic readiness check.
+
+    ``published_at`` is the provider-reported wallclock when the run
+    became available — only Open-Meteo exposes this (via ``meta.json``'s
+    ``last_run_availability_time``).  Direct GRIB sources return ``None``
+    because the providers don't publish a server-side availability time;
+    the closest local proxy is the marker's ``last_check`` wallclock when
+    the run was first observed.
+    """
+
+    init: datetime
+    published_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -26,53 +43,117 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _check_ecmwf_direct(model: str) -> datetime | None:
-    """Return latest ECMWF run with a readiness sentinel."""
-    from weatherbrief.fetch.grib.ecmwf_watcher import get_latest_ready
-    return get_latest_ready()
+def _check_ecmwf_direct(model: str) -> Observation | None:
+    """Return latest ECMWF run with a readiness sentinel.
 
-
-def _check_gfs_noaa(model: str) -> datetime | None:
-    """Return latest GFS run that has its .idx file published on S3."""
-    from weatherbrief.fetch.grib.grib_fetch import find_latest_run
-    now = datetime.now(timezone.utc)
-    # find_latest_run uses target_time only for as-of/bracketing; passing now
-    # gets the most recently published cycle.
-    result = find_latest_run(target_time=now)
+    ``published_at`` is the sentinel mtime — i.e. when the watcher finished
+    writing it after rsync delivery.  That's our local arrival time, not
+    ECMWF's central publish time, but it's the closest analogue we have
+    and is what a pilot really wants to know ("when did this data become
+    usable on the briefing server?").
+    """
+    from weatherbrief.fetch.grib.ecmwf_watcher import get_latest_ready_with_mtime
+    result = get_latest_ready_with_mtime()
     if result is None:
         return None
-    init_date, init_hour = result
-    return datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+    init, mtime = result
+    return Observation(init=init, published_at=mtime)
+
+
+def _check_gfs_noaa(model: str) -> Observation | None:
+    """Return latest GFS run that has its .idx file published on S3.
+
+    Reuses the HEAD that ``find_latest_run_with_response`` already issues
+    to confirm the run, extracting ``published_at`` from its
+    ``Last-Modified`` header — NOAA's server-side timestamp, equivalent
+    in quality to Open-Meteo's ``last_run_availability_time``.
+    """
+    from weatherbrief.fetch.grib.grib_fetch import find_latest_run_with_response
+    now = datetime.now(timezone.utc)
+    # target_time is only used for as-of/bracketing; passing ``now`` gets
+    # the most recently published cycle.
+    result = find_latest_run_with_response(target_time=now)
+    if result is None:
+        return None
+    init_date, init_hour, resp = result
+    init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
+    )
+    return Observation(
+        init=init,
+        published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
     )
 
 
-def _check_icon_eu_dwd(model: str) -> datetime | None:
+def _check_icon_eu_dwd(model: str) -> Observation | None:
     """Return latest ICON-EU run whose level-74 P file responds 200 on HEAD.
 
     For the marker we don't filter by horizon — the freshness check applies
     horizon-awareness later.  We still rely on the existing helper, which
     requires ``cover_until`` to verify horizon; pass ``target_time=now`` and
     ``cover_until=now`` so any published run qualifies.
+
+    Reuses the HEAD that ``find_latest_icon_eu_run_with_response`` issues,
+    extracting ``published_at`` from its ``Last-Modified`` header — DWD's
+    server-side publish wallclock.
     """
-    from weatherbrief.fetch.grib.icon_eu_fetch import find_latest_icon_eu_run
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        find_latest_icon_eu_run_with_response,
+    )
     now = datetime.now(timezone.utc)
-    result = find_latest_icon_eu_run(target_time=now, cover_until=now)
+    result = find_latest_icon_eu_run_with_response(target_time=now, cover_until=now)
     if result is None:
         return None
-    init_date, init_hour = result
-    return datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+    init_date, init_hour, resp = result
+    init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
+    )
+    return Observation(
+        init=init,
+        published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
     )
 
 
-def _check_om_meta(model: str) -> datetime | None:
-    """Return latest Open-Meteo init for ``model`` from its meta.json."""
+def _parse_last_modified(header: str | None) -> datetime | None:
+    """Parse a ``Last-Modified`` HTTP header into an aware UTC datetime.
+
+    Returns ``None`` if the header is missing or unparseable — failures
+    here must never break the freshness loop, so no exception is allowed
+    to escape.
+    """
+    if not header:
+        return None
+    try:
+        import email.utils
+
+        # parsedate_to_datetime returns aware UTC for RFC-1123 HTTP dates.
+        return email.utils.parsedate_to_datetime(header).astimezone(timezone.utc)
+    except Exception:
+        logger.debug("Failed to parse Last-Modified header %r", header, exc_info=True)
+        return None
+
+
+def _check_om_meta(model: str) -> Observation | None:
+    """Return latest Open-Meteo init + publish time for ``model``.
+
+    Guards ``last_availability_time == 0`` (set by OM when a model hasn't
+    yet published) so we don't surface ``1970-01-01 00:00 UTC`` as the
+    publish time in the popover.
+    """
     from weatherbrief.fetch.model_status import fetch_model_metadata
     meta = fetch_model_metadata([model])
     if model not in meta:
         return None
-    return datetime.fromtimestamp(meta[model].last_init_time, tz=timezone.utc)
+    m = meta[model]
+    published_at = (
+        datetime.fromtimestamp(m.last_availability_time, tz=timezone.utc)
+        if m.last_availability_time
+        else None
+    )
+    return Observation(
+        init=datetime.fromtimestamp(m.last_init_time, tz=timezone.utc),
+        published_at=published_at,
+    )
 
 
 _DISPATCH = {
@@ -83,13 +164,13 @@ _DISPATCH = {
 }
 
 
-def check_source(source: str, model: str) -> datetime | None:
+def check_source(source: str, model: str) -> Observation | None:
     """Run the dynamic readiness check for one (source, model) pair.
 
     Looks up the registry to find which check to dispatch, then invokes it.
-    Returns the latest observed init time (aware UTC) or None on failure.
-    Exceptions are caught and logged — the loop should never crash on a
-    transient I/O error.
+    Returns the latest :class:`Observation` (aware UTC ``init``, optional
+    ``published_at``) or None on failure.  Exceptions are caught and
+    logged — the loop should never crash on a transient I/O error.
     """
     from .registry import SOURCE_REGISTRY
 

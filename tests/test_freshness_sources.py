@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,8 +13,8 @@ from weatherbrief.fetch.freshness.registry import SOURCE_REGISTRY
 from weatherbrief.fetch.grib import ecmwf_watcher
 
 
-def _utc(year: int, month: int, day: int, hour: int = 0) -> datetime:
-    return datetime(year, month, day, hour, tzinfo=timezone.utc)
+def _utc(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime:
+    return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,41 @@ class TestGetLatestReady:
         latest = ecmwf_watcher.get_latest_ready(tmp_path)
         assert latest == _utc(2026, 5, 3, 6)
 
+    def test_with_mtime_returns_sentinel_mtime(self, tmp_path: Path):
+        sentinel = tmp_path / ".ready_20260503_12z"
+        sentinel.write_text("complete")
+        mtime_ts = _utc(2026, 5, 3, 18, 47).timestamp()
+        os.utime(sentinel, (mtime_ts, mtime_ts))
+        result = ecmwf_watcher.get_latest_ready_with_mtime(tmp_path)
+        assert result is not None
+        init, mtime = result
+        assert init == _utc(2026, 5, 3, 12)
+        assert mtime is not None
+        assert int(mtime.timestamp()) == int(mtime_ts)
+
+    def test_with_mtime_returns_none_for_empty_dir(self, tmp_path: Path):
+        assert ecmwf_watcher.get_latest_ready_with_mtime(tmp_path) is None
+
+    def test_with_mtime_propagates_none_when_stat_races(self, tmp_path: Path, monkeypatch):
+        """If stat() raises (sentinel deleted between iterdir and stat),
+        the helper must return mtime=None — NOT substitute the cycle init,
+        which would mislead the popover with a wildly wrong publish time.
+        """
+        (tmp_path / ".ready_20260503_12z").write_text("complete")
+        original_stat = Path.stat
+
+        def _racing_stat(self, *args, **kwargs):
+            if self.name.startswith(".ready_"):
+                raise OSError("simulated race: sentinel removed")
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", _racing_stat)
+        result = ecmwf_watcher.get_latest_ready_with_mtime(tmp_path)
+        assert result is not None
+        init, mtime = result
+        assert init == _utc(2026, 5, 3, 12)
+        assert mtime is None  # crucial: NOT init
+
 
 # ---------------------------------------------------------------------------
 # sources.check_source dispatch
@@ -70,7 +106,11 @@ class TestCheckSourceDispatch:
 
     def test_ecmwf_direct_uses_watcher(self, monkeypatch, tmp_path: Path):
         # Drop a sentinel and point the watcher at the temp dir.
-        (tmp_path / ".ready_20260503_12z").write_text("complete")
+        sentinel = tmp_path / ".ready_20260503_12z"
+        sentinel.write_text("complete")
+        # Pin the sentinel mtime so we can assert on the publish_at value.
+        mtime_ts = _utc(2026, 5, 3, 18, 32).timestamp()
+        os.utime(sentinel, (mtime_ts, mtime_ts))
 
         def _fake_dir():
             return tmp_path
@@ -79,51 +119,95 @@ class TestCheckSourceDispatch:
             _fake_dir,
         )
         result = sources.check_source("ecmwf:direct", "ecmwf")
-        assert result == _utc(2026, 5, 3, 12)
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 12)
+        # Sentinel mtime is the closest analogue to publish time for direct.
+        assert result.published_at is not None
+        assert int(result.published_at.timestamp()) == int(mtime_ts)
 
     def test_gfs_noaa_returns_aware_utc(self, monkeypatch):
         from weatherbrief.fetch.grib import grib_fetch
 
+        class _Resp:
+            headers = {"Last-Modified": "Sun, 03 May 2026 11:15:42 GMT"}
+
         def _fake(target_time, **kw):
-            return ("20260503", 6)
-        monkeypatch.setattr(grib_fetch, "find_latest_run", _fake)
+            return ("20260503", 6, _Resp())
+        monkeypatch.setattr(grib_fetch, "find_latest_run_with_response", _fake)
         result = sources.check_source("gfs:noaa", "gfs")
-        assert result == _utc(2026, 5, 3, 6)
-        assert result.tzinfo == timezone.utc
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 6)
+        assert result.init.tzinfo == timezone.utc
+        # Publish time comes from the HEAD response we already had —
+        # no second round-trip.
+        assert result.published_at == _utc(2026, 5, 3, 11, 15).replace(second=42)
 
     def test_icon_eu_dwd_returns_aware_utc(self, monkeypatch):
         from weatherbrief.fetch.grib import icon_eu_fetch
 
-        def _fake(target_time, **kw):
-            return ("20260503", 9)
-        monkeypatch.setattr(icon_eu_fetch, "find_latest_icon_eu_run", _fake)
-        result = sources.check_source("icon_eu:dwd", "icon_eu")
-        assert result == _utc(2026, 5, 3, 9)
+        class _Resp:
+            headers = {"Last-Modified": "Sun, 03 May 2026 12:08:11 GMT"}
 
-    def test_om_meta_returns_aware_utc(self, monkeypatch):
+        def _fake(target_time, **kw):
+            return ("20260503", 9, _Resp())
+        monkeypatch.setattr(
+            icon_eu_fetch, "find_latest_icon_eu_run_with_response", _fake,
+        )
+        result = sources.check_source("icon_eu:dwd", "icon_eu")
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 9)
+        assert result.published_at == _utc(2026, 5, 3, 12, 8).replace(second=11)
+
+    def test_om_meta_skips_zero_availability(self, monkeypatch):
+        """Guard against OM's `last_availability_time=0` (unpublished model)
+        rendering as Jan 1 1970 in the popover."""
         from weatherbrief.fetch import model_status
 
-        ts = int(_utc(2026, 5, 3, 12).timestamp())
+        init_ts = int(_utc(2026, 5, 3, 12).timestamp())
 
         def _fake_meta(models, **kw):
             return {
                 models[0]: model_status.ModelMetadata(
                     model=models[0],
-                    last_init_time=ts,
-                    last_availability_time=ts + 60,
+                    last_init_time=init_ts,
+                    last_availability_time=0,  # OM sentinel for "not yet"
                     update_interval_seconds=21600,
                 )
             }
         monkeypatch.setattr(model_status, "fetch_model_metadata", _fake_meta)
         result = sources.check_source("gfs:openmeteo", "gfs")
-        assert result == _utc(2026, 5, 3, 12)
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 12)
+        assert result.published_at is None
+
+    def test_om_meta_returns_init_and_publish_time(self, monkeypatch):
+        from weatherbrief.fetch import model_status
+
+        init_ts = int(_utc(2026, 5, 3, 12).timestamp())
+        avail_ts = init_ts + 60 * 45  # OM published 45 min after run init
+
+        def _fake_meta(models, **kw):
+            return {
+                models[0]: model_status.ModelMetadata(
+                    model=models[0],
+                    last_init_time=init_ts,
+                    last_availability_time=avail_ts,
+                    update_interval_seconds=21600,
+                )
+            }
+        monkeypatch.setattr(model_status, "fetch_model_metadata", _fake_meta)
+        result = sources.check_source("gfs:openmeteo", "gfs")
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 12)
+        assert result.published_at is not None
+        assert int(result.published_at.timestamp()) == avail_ts
 
     def test_dispatch_swallows_exceptions(self, monkeypatch):
         from weatherbrief.fetch.grib import grib_fetch
 
         def _boom(*a, **k):
             raise RuntimeError("simulated S3 outage")
-        monkeypatch.setattr(grib_fetch, "find_latest_run", _boom)
+        monkeypatch.setattr(grib_fetch, "find_latest_run_with_response", _boom)
         result = sources.check_source("gfs:noaa", "gfs")
         assert result is None
 
@@ -131,6 +215,30 @@ class TestCheckSourceDispatch:
 # ---------------------------------------------------------------------------
 # all_tracked_sources
 # ---------------------------------------------------------------------------
+
+
+class TestParseLastModified:
+    """Cover the small header-parse helper used by the GFS / ICON dispatches."""
+
+    def test_returns_aware_utc_for_valid_header(self):
+        from weatherbrief.fetch.freshness import sources as srcs
+
+        result = srcs._parse_last_modified("Sun, 03 May 2026 11:15:42 GMT")
+        assert result is not None
+        assert result.tzinfo is not None
+        assert result == _utc(2026, 5, 3, 11, 15).replace(second=42)
+
+    def test_returns_none_for_none_header(self):
+        from weatherbrief.fetch.freshness import sources as srcs
+        assert srcs._parse_last_modified(None) is None
+
+    def test_returns_none_for_empty_header(self):
+        from weatherbrief.fetch.freshness import sources as srcs
+        assert srcs._parse_last_modified("") is None
+
+    def test_returns_none_for_garbage_header(self):
+        from weatherbrief.fetch.freshness import sources as srcs
+        assert srcs._parse_last_modified("not-a-real-date") is None
 
 
 def test_all_tracked_sources_matches_registry():

@@ -11,6 +11,7 @@ import type {
   DataStatus,
   FlightResponse,
   ForecastSnapshot,
+  ModelSourceDetail,
   ObservationComparison,
   PackMeta,
   RouteAnalysesManifest,
@@ -273,6 +274,137 @@ function formatModelRunTime(initTime: number): string {
   return `${h}Z`;
 }
 
+/** Build the per-model basis segments from the freshness `sources` list.
+ *
+ * For each model:
+ * - if only one source contributed, render `MODEL RUNZ PROVIDER`
+ * - if both contributed AND on the same run, collapse to the primary alone
+ *   (no need to mention Open-Meteo redundantly)
+ * - if both contributed AND runs differ, render `MODEL DIRECTRUNZ PROVIDER, OMRUNZ Open-Meteo`
+ *
+ * Falls back to the legacy pack-times path when the API hasn't sent the
+ * `sources` field yet (older clients/responses).
+ */
+function buildBasisFromSources(
+  sources: ModelSourceDetail[] | undefined,
+  pack: PackMeta | null,
+): string[] {
+  if (!sources || sources.length === 0) {
+    // Legacy fallback: use pack init times (no provider attribution).
+    const packTimes = pack?.model_init_times || {};
+    const gribTimes = pack?.grib_init_times || {};
+    return Object.entries(packTimes).map(([m, t]) => {
+      const gribTs = gribTimes[m];
+      if (gribTs && gribTs !== t) {
+        return `${modelLabel(m)} ${formatModelRunTime(gribTs)}, ${formatModelRunTime(t)} Open-Meteo`;
+      }
+      return `${modelLabel(m)} ${formatModelRunTime(t)}`;
+    });
+  }
+
+  // Group sources by model, preserving insertion order.
+  const byModel = new Map<string, ModelSourceDetail[]>();
+  for (const s of sources) {
+    const list = byModel.get(s.model) || [];
+    list.push(s);
+    byModel.set(s.model, list);
+  }
+
+  const out: string[] = [];
+  for (const [model, rows] of byModel) {
+    const primary = rows.find(r => r.role === 'primary') || rows[0];
+    const base = rows.find(r => r !== primary);
+    const label = modelLabel(model);
+    // Drop the provider tag when it's already a token in the model label
+    // (e.g. "DWD ICON 12Z DWD" → "DWD ICON 12Z", "ECMWF IFS 12Z ECMWF" →
+    // "ECMWF IFS 12Z").  Avoids visible duplication for ICON/ECMWF where
+    // the provider is part of how pilots refer to the model.
+    const tag = (provider: string) =>
+      labelHasProvider(label, provider) ? '' : ` ${provider}`;
+    if (!base || base.init === primary.init) {
+      out.push(`${label} ${formatModelRunTime(primary.init)}${tag(primary.provider)}`);
+    } else {
+      out.push(
+        `${label} ${formatModelRunTime(primary.init)}${tag(primary.provider)}, ` +
+        `${formatModelRunTime(base.init)}${tag(base.provider)}`,
+      );
+    }
+  }
+  return out;
+}
+
+/** Return true when the provider name appears as a whole-word token in the label. */
+function labelHasProvider(label: string, provider: string): boolean {
+  const tokens = label.toUpperCase().split(/\s+/);
+  return tokens.includes(provider.toUpperCase());
+}
+
+/** Format an ISO datetime for the popup as `DD MMM HH:MM UTC`. */
+function formatPopupTime(iso: string): string {
+  const d = new Date(iso);
+  const day = d.getUTCDate().toString().padStart(2, '0');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mon = months[d.getUTCMonth()];
+  const h = d.getUTCHours().toString().padStart(2, '0');
+  const m = d.getUTCMinutes().toString().padStart(2, '0');
+  return `${day} ${mon} ${h}:${m} UTC`;
+}
+
+/** Build the per-source detail table shown in the (i) popover. */
+function renderSourcesPopupContent(sources: ModelSourceDetail[]): string {
+  // Group by model so the "primary + base" pairing is visually adjacent.
+  const byModel = new Map<string, ModelSourceDetail[]>();
+  for (const s of sources) {
+    const list = byModel.get(s.model) || [];
+    list.push(s);
+    byModel.set(s.model, list);
+  }
+
+  const rows: string[] = [];
+  for (const [model, modelRows] of byModel) {
+    const primary = modelRows.find(r => r.role === 'primary') || modelRows[0];
+    const ordered = [primary, ...modelRows.filter(r => r !== primary)];
+    ordered.forEach((r, idx) => {
+      const modelCell = idx === 0
+        ? `<td class="freshness-popup-model">${escapeHtml(modelLabel(model))}</td>`
+        : `<td></td>`;
+      const published = r.published_at
+        ? formatPopupTime(r.published_at)
+        : t('freshness.publishedUnknown');
+      rows.push(`
+        <tr class="freshness-popup-row freshness-popup-${r.role}">
+          ${modelCell}
+          <td>${escapeHtml(r.provider)}</td>
+          <td>${formatModelRunTime(r.init)}</td>
+          <td>${escapeHtml(published)}</td>
+          <td>${formatPopupTime(r.next_expected)}</td>
+        </tr>
+      `);
+    });
+  }
+
+  return `
+    <div class="freshness-popup">
+      <h3>${t('freshness.sourcesTitle')}</h3>
+      <p class="freshness-popup-intro">${t('freshness.sourcesIntro')}</p>
+      <table class="freshness-popup-table">
+        <thead>
+          <tr>
+            <th>${t('freshness.colModel')}</th>
+            <th>${t('freshness.colProvider')}</th>
+            <th>${t('freshness.colRun')}</th>
+            <th>${t('freshness.colPublished')}</th>
+            <th>${t('freshness.colNextUpdate')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function formatTimeUntil(isoStr: string): string {
   const target = new Date(isoStr).getTime();
   const now = Date.now();
@@ -348,21 +480,24 @@ export function renderFreshnessBar(
     return;
   }
 
-  // Model basis line from the pack's init times, with GRIB annotation when different
-  const packTimes = pack?.model_init_times || {};
-  const gribTimes = pack?.grib_init_times || {};
-  const fetchedParts = Object.entries(packTimes)
-    .map(([m, t]) => {
-      const gribTs = gribTimes[m];
-      if (gribTs && gribTs !== t) {
-        return `${modelLabel(m)} ${formatModelRunTime(t)} (GRIB ${formatModelRunTime(gribTs)})`;
-      }
-      return `${modelLabel(m)} ${formatModelRunTime(t)}`;
-    });
+  // Model basis line — one segment per model, listing each contributing
+  // provider with its run time.  When the primary (direct) and base (OM)
+  // sources are on the same run, collapse to the primary alone — no
+  // need to mention Open-Meteo redundantly.  Models are separated by `·`
+  // so the within-model comma stays unambiguous.
+  const fetchedParts = buildBasisFromSources(freshness.sources, pack);
   const skippedParts = (pack?.models_skipped_region || [])
     .map(m => `${modelLabel(m)} <span class="model-skipped">${t('freshness.skipped')}</span>`);
-  const basisParts = [...fetchedParts, ...skippedParts].join(', ');
-  const basisLine = basisParts ? `<span class="freshness-basis">${t('freshness.basedOn')}${basisParts}</span>` : '';
+  const basisParts = [...fetchedParts, ...skippedParts].join(' · ');
+  // Note: don't add `metric-info-btn` here — there's a global click
+  // delegate (briefing-main.ts) that routes that class to showMetricInfo
+  // and would override our handler with "no info for this metric".
+  const infoBtn = (freshness.sources && freshness.sources.length > 0)
+    ? ` <button type="button" class="freshness-info-btn" id="freshness-sources-info" aria-label="${t('freshness.infoLabel')}">i</button>`
+    : '';
+  const basisLine = basisParts
+    ? `<span class="freshness-basis">${t('freshness.basedOn')}${basisParts}${infoBtn}</span>`
+    : '';
 
   // Build diagnostics HTML — show warn (retryable issues) and error
   // (irrecoverable failures); info entries are persisted for debug only.
@@ -420,6 +555,13 @@ export function renderFreshnessBar(
   const emailEl = document.getElementById(emailCheckId) as HTMLInputElement | null;
   if (emailEl && onNotifyEmailChange) {
     emailEl.addEventListener('change', () => onNotifyEmailChange(emailEl.checked));
+  }
+  const sourcesInfoBtn = document.getElementById('freshness-sources-info');
+  if (sourcesInfoBtn && freshness.sources) {
+    sourcesInfoBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      showPopupContent(renderSourcesPopupContent(freshness.sources!));
+    });
   }
 }
 

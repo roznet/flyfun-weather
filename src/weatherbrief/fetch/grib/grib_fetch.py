@@ -56,8 +56,25 @@ def find_latest_run(
 ) -> tuple[str, int] | None:
     """Find the latest available GFS model run for a target time.
 
+    Thin wrapper around :func:`find_latest_run_with_response` for callers
+    that don't need the HEAD response.
+    """
+    found = find_latest_run_with_response(target_time, session, as_of_time)
+    return (found[0], found[1]) if found is not None else None
+
+
+def find_latest_run_with_response(
+    target_time: datetime,
+    session: requests.Session | None = None,
+    as_of_time: datetime | None = None,
+) -> tuple[str, int, requests.Response] | None:
+    """Find the latest available GFS model run + return the matching HEAD response.
+
     Tries model cycles (00z, 06z, 12z, 18z) in reverse chronological order,
     checking that enough time has passed for publication.
+
+    The response is returned so the freshness dispatch can read its
+    ``Last-Modified`` header without re-issuing the same HEAD upstream.
 
     Args:
         target_time: The forecast target time.
@@ -66,7 +83,7 @@ def find_latest_run(
             (for historical "as-of" briefings). Uses ``now`` if None.
 
     Returns:
-        (init_date_YYYYMMDD, init_hour) or None if no run available.
+        ``(init_date_YYYYMMDD, init_hour, head_response)`` or ``None``.
     """
     sess = session or requests.Session()
     reference_time = as_of_time or datetime.now(timezone.utc)
@@ -92,7 +109,7 @@ def find_latest_run(
                 resp = sess.head(idx_url, timeout=10)
                 if resp.status_code == 200:
                     logger.info("Found GFS run: %s %02dz", date_str, cycle)
-                    return date_str, cycle
+                    return date_str, cycle, resp
             except requests.RequestException:
                 continue
 

@@ -42,6 +42,10 @@ class Marker:
         next_expected: Wallclock time at which the next run is expected.
         last_check: When the dynamic check last ran (None until first check).
         slip_count: Number of consecutive slip retries since last advance.
+        published_at: Provider-reported wallclock when the run became
+            available (only Open-Meteo exposes this via ``meta.json``'s
+            ``last_run_availability_time``).  ``None`` for direct GRIB
+            sources where we can only observe local arrival.
         observations: Recent ``(cycle_init, arrival_wallclock)`` pairs — used
             for drift detection / calibration.  Each pair lets you compute
             actual delivery delay vs. registry expectation.
@@ -53,6 +57,7 @@ class Marker:
     next_expected: datetime
     last_check: datetime | None = None
     slip_count: int = 0
+    published_at: datetime | None = None
     observations: deque[tuple[datetime, datetime]] = field(
         default_factory=lambda: deque(maxlen=OBSERVATIONS_MAXLEN),
     )
@@ -162,12 +167,15 @@ class MarkerStore:
         model: str,
         observed_init: datetime,
         now: datetime | None = None,
+        published_at: datetime | None = None,
     ) -> None:
         """Record a fresh check.  Advances ``init`` if newer; bumps slip otherwise.
 
         - If ``observed_init > marker.init``: advance, reset slip, append a
-          ``(cycle_init, arrival_wallclock)`` observation, and log the actual
-          delivery delay vs. the registry expectation (used for calibration).
+          ``(cycle_init, arrival_wallclock)`` observation, refresh
+          ``published_at`` from the dispatch (Open-Meteo only — direct sources
+          pass ``None``), and log the actual delivery delay vs. the registry
+          expectation (used for calibration).
         - If equal and ``now >= next_expected``: slip — bump ``next_expected``
           by ``cfg.slip_bump(slip_count)`` (exponential backoff, capped).
           After ``max_slip_retries``, jump forward to the next cycle's
@@ -196,6 +204,7 @@ class MarkerStore:
                     source=source, model=model,
                     init=observed_init, next_expected=next_exp,
                     last_check=now,
+                    published_at=published_at,
                     observations=new_observations,
                 )
                 return
@@ -212,6 +221,7 @@ class MarkerStore:
                     next_expected=registry.next_run_after(source, observed_init),
                     slip_count=0,
                     last_check=now,
+                    published_at=published_at,
                     observations=new_observations,
                 )
                 logger.info(
@@ -265,11 +275,20 @@ class MarkerStore:
                         source, model, new_slip_count,
                         _fmt_td(bump), new_next_expected.isoformat(),
                     )
+            # Capture published_at on every successful OM observation, even
+            # when init hasn't advanced — otherwise we'd discard a freshly
+            # observed publish wallclock just because the run didn't change,
+            # leaving popover restarts blank for hours until the next cycle.
+            # Direct sources always pass None here; only update when set.
+            new_published_at = (
+                published_at if published_at is not None else marker.published_at
+            )
             self._markers[(source, model)] = replace(
                 marker,
                 next_expected=new_next_expected,
                 slip_count=new_slip_count,
                 last_check=now,
+                published_at=new_published_at,
             )
             if log_warning is not None:
                 logger.warning(*log_warning)
