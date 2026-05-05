@@ -56,6 +56,19 @@
 
     .map-wrapper { position: relative; }
 
+    /* Share-view button (page header). Shows the icon + label and
+     * flashes "Link copied" briefly on success. */
+    .btn-share-link {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.3rem 0.7rem; margin-right: 0.5rem;
+      border: 1px solid var(--border); border-radius: 4px;
+      background: var(--surface); color: var(--text);
+      cursor: pointer; font-size: 0.8rem; font-weight: 500;
+    }
+    .btn-share-link:hover:not(:disabled) { background: var(--bg); }
+    .btn-share-link:disabled { opacity: 0.7; cursor: default; }
+    .btn-share-link svg { flex-shrink: 0; }
+
     /* Experimental banner */
     .experimental-banner {
       display: inline-flex; align-items: center; gap: 0.4rem;
@@ -152,6 +165,10 @@
     <div class="page-header">
       <h2>Forecast</h2>
       <div class="header-right">
+        <button id="share-link-btn" class="btn-share-link" type="button" title="Share view">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          <span class="share-link-label">Share view</span>
+        </button>
         <div id="user-info" class="user-info"></div>
       </div>
     </div>

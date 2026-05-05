@@ -65,6 +65,11 @@
 
   "briefing.shareTitle": "Copy share link",
   "briefing.sharePrivateTitle": "Private — flip to public in settings to share",
+
+  "maps.shareLink": "Share view",
+  "maps.shareLinkTitle": "Copy a link to this view",
+  "maps.shareLinkCopied": "Link copied",
+  "maps.shareLinkFallback": "Copy this link to share:",
   "briefing.noFlightSpecified": "No flight specified. Go back to flights list.",
   "briefing.noBriefings": "No briefings yet",
   "briefing.noAssessment": "No assessment available",
