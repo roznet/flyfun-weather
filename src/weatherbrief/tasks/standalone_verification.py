@@ -7,6 +7,7 @@ at multiple lead times (D-0 through D-7).
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -55,6 +56,7 @@ MODEL_FORECAST_DAYS = {
 }
 
 _OPEN_METEO_BATCH_SIZE = 100  # airports per Open-Meteo API call (also retry boundary)
+_OPEN_METEO_CONCURRENCY = int(os.environ.get("STANDALONE_FETCH_CONCURRENCY", "4"))
 _LCL_CONSTANT_FT = 400  # 400 * (T - Td) approximation for LCL in feet
 
 
@@ -153,14 +155,20 @@ def _fetch_forecasts_for_model(
     end_date = end_dt.strftime("%Y-%m-%d")
 
     client = OpenMeteoClient(timeout=60)
-    all_results: list[dict] = []
 
-    # Process airports in chunks
-    chunk_num = 0
-    total_chunks = (len(airports) + _OPEN_METEO_BATCH_SIZE - 1) // _OPEN_METEO_BATCH_SIZE
-    for chunk_airports in batched(airports, _OPEN_METEO_BATCH_SIZE):
-        chunk_num += 1
-        chunk_list = list(chunk_airports)
+    chunks: list[list[WatchlistAirport]] = [
+        list(c) for c in batched(airports, _OPEN_METEO_BATCH_SIZE)
+    ]
+    total_chunks = len(chunks)
+
+    def _fetch_one_chunk(
+        chunk_idx: int, chunk_list: list[WatchlistAirport],
+    ) -> tuple[list[dict], int]:
+        # Reset thread-local call count so the caller can attribute HTTP
+        # calls — including failed retries — back to this chunk after the
+        # pool joins. The shared `client.call_count` is racy under threads.
+        client._reset_thread_call_count()
+        chunk_num = chunk_idx + 1
         points = [
             RoutePoint(
                 lat=a.lat, lon=a.lon,
@@ -170,6 +178,11 @@ def _fetch_forecasts_for_model(
             for a in chunk_list
         ]
 
+        # Time the whole retry ladder, not just the successful attempt: a
+        # chunk that needed retries took that long to deliver useful data,
+        # and that's the signal we want surfaced when scanning logs for
+        # slow chunks.
+        chunk_started = time.monotonic()
         forecasts = None
         for attempt in range(3):
             try:
@@ -194,10 +207,14 @@ def _fetch_forecasts_for_model(
                         model, len(chunk_list), exc_info=True,
                     )
         if forecasts is None:
-            continue
+            return [], client._thread_call_count()
 
-        logger.info("Model %s chunk %d/%d: processing %d airports",
-                    model, chunk_num, total_chunks, len(chunk_list))
+        logger.info(
+            "Model %s chunk %d/%d: processing %d airports (fetch %.1fs)",
+            model, chunk_num, total_chunks, len(chunk_list),
+            time.monotonic() - chunk_started,
+        )
+        chunk_results: list[dict] = []
         for airport, wpf in zip(chunk_list, forecasts):
             # Filter to sample hours only
             for hourly in wpf.hourly:
@@ -234,8 +251,46 @@ def _fetch_forecasts_for_model(
                 # Run sounding analysis on pressure levels (already fetched)
                 _enrich_with_sounding(snap, hourly, model)
 
-                all_results.append(snap)
+                chunk_results.append(snap)
+        return chunk_results, client._thread_call_count()
 
+    all_results: list[dict] = []
+    if not chunks:
+        return all_results, client.call_count
+
+    # Unlike the briefing-side parallel fetch (tasks/fetch.py), this path
+    # doesn't gate on `client.has_api_key`. The briefing gate exists
+    # because briefings fire per-user-action on any deployment — including
+    # local dev without a key — so the gate keeps free-tier dev runs from
+    # tripping rate limits. Standalone is different: it's a scheduled
+    # server-side cycle (twice daily), and a deployment that runs it at
+    # all is expected to have the paid key set. Without the key the cycle
+    # would still complete (peak ~4 in-flight requests, well under
+    # 600/min), but the daily call budget for verification at full
+    # watchlist scale belongs in a paid plan regardless of parallelism.
+    max_workers = max(1, min(_OPEN_METEO_CONCURRENCY, total_chunks))
+    total_calls = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(_fetch_one_chunk, idx, chunk)
+            for idx, chunk in enumerate(chunks)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                chunk_results, chunk_calls = future.result()
+                all_results.extend(chunk_results)
+                total_calls += chunk_calls
+            except Exception:
+                # Per-chunk retries already logged inside the worker. A leak
+                # here is unexpected — note it but don't abort other chunks.
+                logger.warning(
+                    "Open-Meteo %s chunk worker raised unexpectedly",
+                    model, exc_info=True,
+                )
+
+    # Replace the racy aggregate with the summed per-thread totals so the
+    # caller sees the correct count of HTTP calls made under concurrency.
+    client.call_count = total_calls
     return all_results, client.call_count
 
 
