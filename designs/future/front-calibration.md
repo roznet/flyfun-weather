@@ -264,6 +264,109 @@ done
 
 4. **METAR FROPA validation** — use frontal passage reports from European METAR stations as aviation-native ground truth. Need to verify FROPA availability in EASA-region METARs.
 
+## Route-Scale Hewson Calibration (Real-Flight Pairs)
+
+The sections above cover **zone-scale** detection against drawn fronts on DWD/MF charts. This section covers a separate, complementary calibration track: **route-scale Hewson metrics** validated against pilot-reported flight outcomes. The two are distinct:
+
+| Aspect | Zone calibration (above) | Route Hewson calibration (this section) |
+|---|---|---|
+| Target | "Is there a front in zone X?" | "What does the metric look like along leg Y, and did the pilot feel it?" |
+| Ground truth | DWD chart annotation | Pilot debrief — front felt vs not felt |
+| Output unit | POD / FAR / CSI per zone | Metric values per waypoint × per hour |
+| Best for | Synoptic narrative, LLM digest | Per-leg advisory thresholds (§3 of Hewson design doc) |
+
+Both are expected to coexist — zone scoring tunes the zone aggregator, route scoring tunes per-leg evaluators (Phase C).
+
+### How to run a route-scale calibration pair
+
+1. **Backdate the precompute** for the flight day(s):
+   ```bash
+   python -m weatherbrief.hewson precompute --date YYYY-MM-DD --stride-hours 1
+   ```
+   Writes one NPZ per model at `data/hewson/<model>/YYYY-MM-DDT00:00:00Z.npz`. Open-Meteo's customer-api serves all 3 models historically with the project key, so backdate is cheap (~3 minutes for 3 models, ~80 MB total).
+
+2. **Sample the route(s)** through the snapshot. Reference implementation in `scripts/compare_hewson_may1_may4.py`:
+   - Loads the NPZ via `numpy.load`
+   - Resolves ICAO/waypoint codes via `weatherbrief.airports.resolve_waypoints`
+   - Inserts mid-leg interpolated points on legs of interest (catches sub-leg TFP zero-crossings)
+   - Bilinear-samples each metric at 925 / 850 hPa for the flight's hour window
+   - Prints colored thresholds per §3 of `designs/future/hewson-fields-aviation-advisories.md`
+
+3. **Compare to pilot recollection.** A pair of flights — one with a felt front, one smooth — gives the strongest discrimination signal.
+
+### Findings — May 1 / May 4 2026 calibration pair
+
+First real-flight pair, run 2026-05-06.
+
+- **May 4** LSGS → LSGL → LFQB → LFQA → BILGO → LFAT → EGTF (07-12 Z). Pilot reported front Dijon → north of Reims; UK side smooth.
+- **May 1** EGTF → LFQA → LFSD → LSGL → LSGS (07-11 Z). Pilot reported smooth, no front.
+
+**1. TFP sign progression along the route is the discriminator, not |∇θe| magnitude.**
+
+May 4 ECMWF @ 925 hPa, in route order south → north:
+
+| Waypoint | Lat / Lon | TFP (K/100km²) |
+|---|---|---|
+| LSGS (Sion) | 46.22 N, 7.33 E | +0.79 |
+| LSGL (Lausanne) | 46.55 N, 6.62 E | **+1.96** |
+| .LSGL-LFQB.1/3 | 47.14 N, 5.75 E | **−1.52** ← Dijon — sign change |
+| .LSGL-LFQB.2/3 | 47.73 N, 4.88 E | −1.59 |
+| LFQB (Troyes) | 48.32 N, 4.02 E | +0.17 |
+| LFQA (Reims) | 49.21 N, 4.16 E | +0.83 |
+| BILGO | 49.90 N, 3.45 E | +0.78 |
+| LFAT (Le Touquet) | 50.52 N, 1.62 E | < 0.1 |
+| EGTF (Fairoaks) | 51.35 N, −0.56 E | −0.17 |
+
+Clean **+ → − → +** crossing right at Dijon, then quiet to UK. Pilot's report exactly.
+
+May 1 ECMWF @ 925 hPa for comparison: TFP at LFQA was −0.63, but the gradient magnitude |∇θe| there was +9.21 — comparable to anywhere on May 4. The TFP sign zigzagged + → − → + → + → − incoherently across the route (no single coherent crossing). Magnitude alone would have fired a false advisory.
+
+**2. 925 hPa is sharper than 850 hPa for GA-altitude fronts.**
+
+| Model | May 4 LSGL→LFQB leg, |∇θe| 925 hPa | … 850 hPa |
+|---|---|---|
+| ECMWF | +4.42 → +7.01 (mid) | +3.35 → +7.85 (mid) |
+| GFS | +2.89 (warm) → −1.25 (cold) — caught the front | max +3.5 — **missed it** |
+| ICON | +6.08 → +4.69 (mid) | +4.63 → +4.07 (mid) |
+
+GFS is the headline: at 850 hPa it shows almost no signal across the LFQB-LFQA segment despite the front being there; at 925 hPa the TFP crosses cleanly. Boundary-layer moisture is concentrated at 925 (~2,500 ft), which aligns with what a GA pilot at FL060-FL080 actually feels.
+
+**3. Mid-leg interpolation is necessary to localise the front.**
+
+Without intermediate sample points, the LSGL → LFQB leg is ~200 km — the TFP sign change would be detected but the zero-crossing position would be ambiguous within that range. Inserting two evenly-spaced intermediate points (1/3 and 2/3 along the leg) put the crossing at 47.14 N, 5.75 E — within ~10 nm of Dijon. Recommend ≥2 intermediate samples per leg of interest in any production advisory evaluator.
+
+**4. §10a.1 (Hewson ≠ cloud) is the real gap.**
+
+May 1 LFQA showed |∇θe| ≥ 11 K/100km on all 3 models (ICON peaked at 28 K/100km — likely regridding artifact at coastal cells, separately worth flagging). Yet the flight was smooth. The boundary was real but **dry** — no operational impact. This validates the Phase E moisture cross-check (RH₉₂₅ + LCC + TP) as the missing ingredient before §3 advisory thresholds can be wired into evaluators.
+
+**5. ICON Open-Meteo regridding artifact.**
+
+ICON shows |∇θe| of 25-29 K/100km at LFQA on May 1 — that is non-physical at synoptic scale. Likely an interpolation edge effect at the coastal/channel grid cell. Consistent with `project_open_meteo_ecmwf_discrepancy` in private memory. Worth checking whether ICON-EU regridded by Open-Meteo has known issues at coastal cells before consuming this metric in advisories.
+
+**6. Model ranking against ground truth (this pair).**
+
+For European GA fronts: **ECMWF ≈ ICON > GFS** at 925 hPa. ECMWF and ICON both saw the May 4 front cleanly; GFS only saw it at 925 hPa (missed at 850). Consistent with pilot's separate recollection that GFS was further from observed reality than ECMWF/ICON on the day.
+
+### Implications for Phase C advisory evaluators
+
+When wiring §3 thresholds from `designs/future/hewson-fields-aviation-advisories.md` into per-leg evaluators:
+
+- **Sample at 925 hPa primary** for low-level GA flights, fall back to 850 hPa for higher cruise. The 3-level precompute supports this directly.
+- **Use TFP sign progression along the leg** (count zero-crossings within the leg) as the structural detector, not raw |∇θe| max. Magnitude becomes a secondary intensity score after the sign-progression check.
+- **Aggregate with mid-leg sampling** (P95 or sign-change-count rather than max-of-2-endpoints) so a leg longer than ~150 km doesn't miss a front that crosses through its middle.
+- **Suppress on dry signature** once Phase E lands. Until then, advisories will fire on May-1-style dry boundaries.
+
+### Calibration data inventory
+
+| Date | Route | Outcome | Snapshots on disk |
+|---|---|---|---|
+| 2026-05-01 | EGTF → LFQA → LFSD → LSGL → LSGS | smooth | data/hewson/{ecmwf,gfs,icon}/2026-05-01T00:00:00Z.npz |
+| 2026-05-04 | LSGS → LSGL → LFQB → LFQA → BILGO → LFAT → EGTF | felt front Dijon → N. Reims | data/hewson/{ecmwf,gfs,icon}/2026-05-04T00:00:00Z.npz |
+
+Reproducer: `scripts/compare_hewson_may1_may4.py`.
+
+Future pairs should follow the same shape: capture route + hour window + pilot debrief tag (smooth / front-felt / IMC / turbulence-only / convective). When we have 5-10 pairs across different synoptic regimes, run the same evaluator-threshold sweep this section already does for the zone calibration.
+
 ## Data Backup
 
 The calibration dataset (`data/calibration/`) is gitignored (raw JSON files are ~10MB each). Back up to a persistent location:
