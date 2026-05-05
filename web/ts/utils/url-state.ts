@@ -66,6 +66,9 @@ export interface UrlState<S extends UrlSchema> {
 
 function pickCodec<T>(field: UrlField<T>): Codec<T> {
   if (field.codec) return field.codec;
+  // Numeric defaults are always treated as integers — float fields (e.g.
+  // a 0.5 zoom level) would silently truncate. Pass an explicit `codec`
+  // on the schema field for non-integer numeric values.
   if (typeof field.default === 'number') return intCodec as unknown as Codec<T>;
   return stringCodec as unknown as Codec<T>;
 }

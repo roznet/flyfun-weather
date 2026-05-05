@@ -706,6 +706,12 @@ async function main(): Promise<void> {
   const urlParams = new URLSearchParams(window.location.search);
   const init = mapsUrlState.read();
   currentTab  = init.tab;
+  // Clamp: the admin gate above removed the synoptic panel for non-admins,
+  // so a shared `?tab=synoptic` link from an admin would land them on a
+  // page where switchTab() strips `active` from every other panel and
+  // none gets it back — blank content area. Drop them on the forecast
+  // tab instead.
+  if (currentTab === 'synoptic' && !user.is_admin) currentTab = 'forecast';
   fcDay       = init['fc.day'];
   fcHour      = init['fc.hour'];
   fcModel     = init['fc.model'];
