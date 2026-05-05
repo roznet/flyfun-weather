@@ -911,7 +911,6 @@ async function init(): Promise<void> {
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
-      ui.renderDWDOverview(state.flight, state.currentPack);
       ui.renderGramet(state.flight, state.currentPack);
       renderPointSections(state);
       renderVisualization(state);
@@ -1280,7 +1279,6 @@ async function init(): Promise<void> {
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode, s.digestPending);
-    ui.renderDWDOverview(s.flight, s.currentPack);
     ui.renderGramet(s.flight, s.currentPack);
     renderPointSections(s);
     renderVisualization(s);

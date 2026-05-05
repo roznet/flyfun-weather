@@ -224,6 +224,11 @@ def run_digest(
     if result.get("digest") is not None:
         result["digest_text"] = format_digest_markdown(result["digest"], snapshot)
 
+    # Carry dwd_translated through to the caller for persistence. It's
+    # intentionally kept out of the LangGraph state (commit 2589691d, to keep
+    # LangSmith trace payloads small), so we attach it post-graph instead.
+    result["dwd_translated"] = dwd_translated
+
     return result
 
 
