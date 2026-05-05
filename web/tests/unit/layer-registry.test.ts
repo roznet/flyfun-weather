@@ -75,17 +75,35 @@ describe('getCompactLayerOverrides', () => {
     expect(overrides['thermo-convective-bg']).toBe(false);
   });
 
-  it('falsy preferred method disables all in that group', () => {
+  it('unknown preferred method falls back to group default-enabled layer', () => {
     const overrides = getCompactLayerOverrides({
       clouds: 'unknown-method',
       icing: 'ogimet_nwp',
       turbulence: 'ri',
       convection: 'nwp',
     });
-    expect(overrides['soft-nwp-cloud-bands']).toBe(false);
+    // soft-nwp-cloud-bands is the defaultEnabled cloud layer
+    expect(overrides['soft-nwp-cloud-bands']).toBe(true);
     expect(overrides['soft-cloud-bands']).toBe(false);
     expect(overrides['nwp-cloud-bands']).toBe(false);
     expect(overrides['cloud-bands']).toBe(false);
+  });
+
+  it('empty preferredMethods enables each group default (race-condition path)', () => {
+    // Reproduces the path where compact mode is entered before fetchPreferences
+    // resolves — must still enable a sensible single layer per group, not
+    // silently leave stale extras enabled.
+    const overrides = getCompactLayerOverrides({});
+    expect(overrides['soft-nwp-cloud-bands']).toBe(true);
+    expect(overrides['icing-ogimet-nwp-bands']).toBe(true);
+    expect(overrides['nwp-convective-bg']).toBe(true);
+    // turbulence has no defaultEnabled layer; falls back to layers[0] = cat-bands
+    expect(overrides['cat-bands']).toBe(true);
+    expect(overrides['e-shear-bands']).toBe(false);
+    // Non-preferred siblings stay off
+    expect(overrides['cloud-bands']).toBe(false);
+    expect(overrides['icing-bands']).toBe(false);
+    expect(overrides['thermo-convective-bg']).toBe(false);
   });
 });
 

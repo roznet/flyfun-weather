@@ -89,16 +89,23 @@ export function getPreferredLayerForGroup(
 
 /**
  * Return layer overrides for entering compact mode: enable only the preferred
- * layer in each compact group, disable the rest.
+ * layer in each compact group, disable the rest. When a group has no known
+ * preferred method (empty/missing/unknown), falls back to the group's
+ * defaultEnabled layer so compact mode always shows something.
  */
 export function getCompactLayerOverrides(
   preferredMethods: Record<string, string>,
 ): Record<string, boolean> {
   const overrides: Record<string, boolean> = {};
   for (const [group, methodMap] of Object.entries(PREFERRED_METHOD_LAYER)) {
-    const preferredId = methodMap[preferredMethods[group]];
+    const groupLayers = ALL_LAYERS.filter((l) => l.group === group);
+    const preferred = getPreferredLayerForGroup(
+      group as LayerGroup,
+      groupLayers,
+      preferredMethods[group],
+    );
     for (const layerId of Object.values(methodMap)) {
-      overrides[layerId] = layerId === preferredId;
+      overrides[layerId] = layerId === preferred.id;
     }
   }
   return overrides;

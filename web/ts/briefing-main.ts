@@ -70,11 +70,23 @@ async function init(): Promise<void> {
   let preferredMethods: Record<string, string> = {};
   import('./adapters/preferences-adapter').then(({ fetchModelCatalog, fetchPreferences }) => {
     fetchModelCatalog().then(initModelCatalog).catch(() => {});
-    fetchPreferences().then((prefs) => {
-      preferredMethods = { clouds: prefs.cloud_method, icing: prefs.icing_method, convection: prefs.convective_method };
-      // Re-render controls so compact mode picks up the preferred methods
-      renderVisualization(store.getState());
-    }).catch(() => {});
+    fetchPreferences()
+      .then((prefs) => {
+        preferredMethods = { clouds: prefs.cloud_method, icing: prefs.icing_method, convection: prefs.convective_method };
+      })
+      .catch(() => {})
+      .finally(() => {
+        // Reconcile compact-mode layers once prefs have settled. Covers two paths:
+        // (a) user toggled compact before the prefs fetch resolved, leaving
+        //     non-preferred layers from full mode silently rendering;
+        // (b) page booted directly into compact (default / persisted) with stale
+        //     extras in localStorage that the panel can't expose to toggle off.
+        if (store.getState().displayMode === 'compact') {
+          store.getState().setLayersBatch(getCompactLayerOverrides(preferredMethods));
+        } else {
+          renderVisualization(store.getState());
+        }
+      });
   });
 
   // Initialize metric info popup
@@ -945,8 +957,11 @@ async function init(): Promise<void> {
         renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
         // Entering compact: enforce preferred-only layers for clouds/icing
-        // (triggers vizSettings change → renderVisualization runs via that subscriber)
-        if (state.displayMode === 'compact' && Object.keys(preferredMethods).length > 0) {
+        // (triggers vizSettings change → renderVisualization runs via that subscriber).
+        // Runs even with empty preferredMethods — getCompactLayerOverrides falls
+        // back to each group's defaultEnabled layer so we never strand non-preferred
+        // layers enabled while their checkbox is hidden.
+        if (state.displayMode === 'compact') {
           store.getState().setLayersBatch(getCompactLayerOverrides(preferredMethods));
         } else {
           renderVisualization(state);
