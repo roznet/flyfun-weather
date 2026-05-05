@@ -50,11 +50,58 @@ async def test_update_advances_init_when_newer():
     assert m.init == new_init
     assert m.slip_count == 0
     assert m.last_check == _utc(2026, 5, 3, 19)
+    # Direct sources advance without a published_at — Open-Meteo is the
+    # only dispatch that supplies one.
+    assert m.published_at is None
     # Observations are (cycle_init, arrival_wallclock) pairs.
     obs_inits = [pair[0] for pair in m.observations]
     obs_arrivals = [pair[1] for pair in m.observations]
     assert new_init in obs_inits
     assert _utc(2026, 5, 3, 19) in obs_arrivals
+
+
+@pytest.mark.asyncio
+async def test_update_records_published_at_for_open_meteo():
+    """OM advances should persist the provider-reported publish wallclock."""
+    store = MarkerStore()
+    await store.bootstrap([("gfs:openmeteo", "gfs")], now=_utc(2026, 5, 3, 12))
+    new_init = _utc(2026, 5, 3, 18)
+    publish_time = _utc(2026, 5, 3, 18, 45)
+
+    await store.update(
+        "gfs:openmeteo", "gfs", new_init,
+        now=_utc(2026, 5, 3, 19),
+        published_at=publish_time,
+    )
+    m = store.get_sync("gfs:openmeteo", "gfs")
+    assert m.init == new_init
+    assert m.published_at == publish_time
+
+
+@pytest.mark.asyncio
+async def test_update_captures_published_at_on_no_advance():
+    """Bootstrap → first loop tick observes the same init → published_at
+    must still be captured, otherwise the popover stays blank for hours.
+    """
+    store = MarkerStore()
+    await store.bootstrap([("gfs:openmeteo", "gfs")], now=_utc(2026, 5, 3, 12))
+    same_init = store.get_sync("gfs:openmeteo", "gfs").init
+    publish_time = same_init + timedelta(hours=7)  # OM publishes ~7h after init
+
+    # Same init, before next_expected (no slip) — should still record publish.
+    early = store.get_sync("gfs:openmeteo", "gfs").next_expected - timedelta(minutes=30)
+    await store.update(
+        "gfs:openmeteo", "gfs", same_init,
+        now=early, published_at=publish_time,
+    )
+    m = store.get_sync("gfs:openmeteo", "gfs")
+    assert m.published_at == publish_time
+
+    # Subsequent no-advance check WITHOUT a publish_time must not overwrite.
+    later = early + timedelta(minutes=5)
+    await store.update("gfs:openmeteo", "gfs", same_init, now=later, published_at=None)
+    m2 = store.get_sync("gfs:openmeteo", "gfs")
+    assert m2.published_at == publish_time
 
 
 @pytest.mark.asyncio

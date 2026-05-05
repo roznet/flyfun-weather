@@ -705,7 +705,10 @@ async def _run_freshness_check_once() -> None:
         if observed is None:
             await store.mark_check(source, model, now=now)
             continue
-        await store.update(source, model, observed, now=now)
+        await store.update(
+            source, model, observed.init, now=now,
+            published_at=observed.published_at,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -79,7 +79,10 @@ class TestCheckSourceDispatch:
             _fake_dir,
         )
         result = sources.check_source("ecmwf:direct", "ecmwf")
-        assert result == _utc(2026, 5, 3, 12)
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 12)
+        # Direct sources don't have a provider-reported publish time.
+        assert result.published_at is None
 
     def test_gfs_noaa_returns_aware_utc(self, monkeypatch):
         from weatherbrief.fetch.grib import grib_fetch
@@ -88,8 +91,10 @@ class TestCheckSourceDispatch:
             return ("20260503", 6)
         monkeypatch.setattr(grib_fetch, "find_latest_run", _fake)
         result = sources.check_source("gfs:noaa", "gfs")
-        assert result == _utc(2026, 5, 3, 6)
-        assert result.tzinfo == timezone.utc
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 6)
+        assert result.init.tzinfo == timezone.utc
+        assert result.published_at is None
 
     def test_icon_eu_dwd_returns_aware_utc(self, monkeypatch):
         from weatherbrief.fetch.grib import icon_eu_fetch
@@ -98,25 +103,31 @@ class TestCheckSourceDispatch:
             return ("20260503", 9)
         monkeypatch.setattr(icon_eu_fetch, "find_latest_icon_eu_run", _fake)
         result = sources.check_source("icon_eu:dwd", "icon_eu")
-        assert result == _utc(2026, 5, 3, 9)
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 9)
+        assert result.published_at is None
 
-    def test_om_meta_returns_aware_utc(self, monkeypatch):
+    def test_om_meta_returns_init_and_publish_time(self, monkeypatch):
         from weatherbrief.fetch import model_status
 
-        ts = int(_utc(2026, 5, 3, 12).timestamp())
+        init_ts = int(_utc(2026, 5, 3, 12).timestamp())
+        avail_ts = init_ts + 60 * 45  # OM published 45 min after run init
 
         def _fake_meta(models, **kw):
             return {
                 models[0]: model_status.ModelMetadata(
                     model=models[0],
-                    last_init_time=ts,
-                    last_availability_time=ts + 60,
+                    last_init_time=init_ts,
+                    last_availability_time=avail_ts,
                     update_interval_seconds=21600,
                 )
             }
         monkeypatch.setattr(model_status, "fetch_model_metadata", _fake_meta)
         result = sources.check_source("gfs:openmeteo", "gfs")
-        assert result == _utc(2026, 5, 3, 12)
+        assert result is not None
+        assert result.init == _utc(2026, 5, 3, 12)
+        assert result.published_at is not None
+        assert int(result.published_at.timestamp()) == avail_ts
 
     def test_dispatch_swallows_exceptions(self, monkeypatch):
         from weatherbrief.fetch.grib import grib_fetch

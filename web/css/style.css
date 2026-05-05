@@ -596,6 +596,73 @@ label {
   font-size: 0.8rem;
 }
 
+.freshness-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+  opacity: 0.6;
+  transition: color 0.15s, border-color 0.15s, opacity 0.15s;
+}
+
+.freshness-info-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  opacity: 1;
+}
+
+.freshness-popup h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.freshness-popup-intro {
+  margin: 0 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.freshness-popup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.freshness-popup-table th,
+.freshness-popup-table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.freshness-popup-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.freshness-popup-model {
+  font-weight: 600;
+}
+
+.freshness-popup-base td {
+  color: var(--text-muted);
+}
+
 .freshness-elapsed {
   color: var(--text-muted);
   font-size: 0.8rem;

@@ -203,6 +203,26 @@ class ModelStatus(BaseModel):
     pack_init: int | None = None  # Unix ts of the init the pack was built from
     latest_available: int  # Unix ts of latest known init for this source
     next_expected: str  # ISO datetime — wallclock when next run is expected
+    published_at: str | None = None  # provider-reported publish time (OM only)
+    state: str  # "current" | "stale" | "awaiting" | "delayed"
+
+
+class ModelSourceDetail(BaseModel):
+    """One (model, source) row for the freshness info popover.
+
+    Distinct from :class:`ModelStatus` because a single pack-model can have
+    *multiple* contributing sources (Open-Meteo as base + direct GRIB
+    enrichment); ``models`` only carries the primary, while ``sources``
+    enumerates every contributing path.
+    """
+
+    model: str  # pack-model name, e.g. "gfs"
+    source: str  # registry key, e.g. "gfs:noaa"
+    provider: str  # human display name: "NOAA", "DWD", "ECMWF", "Open-Meteo"
+    role: str  # "primary" (in pack.model_sources) | "base" (OM under direct)
+    init: int  # Unix ts of the run as it landed in the pack
+    published_at: str | None = None  # ISO datetime, OM only
+    next_expected: str  # ISO datetime
     state: str  # "current" | "stale" | "awaiting" | "delayed"
 
 
@@ -212,7 +232,8 @@ class DataStatus(BaseModel):
     Back-compat fields (``fresh``, ``stale_models``, ``model_init_times``,
     ``next_expected_update``, ``next_expected_model``) are preserved so
     existing clients keep working.  ``models`` and ``marker_health`` are
-    additive (issue #108).
+    additive (issue #108).  ``sources`` enumerates every contributing
+    (model, source) pair for the freshness info popover.
     """
 
     fresh: bool  # True = all models up to date for the flight horizon
@@ -222,6 +243,26 @@ class DataStatus(BaseModel):
     next_expected_model: str | None = None  # which model updates next
     marker_health: str = "ok"  # "ok" | "suspect"
     models: dict[str, ModelStatus] = Field(default_factory=dict)
+    sources: list[ModelSourceDetail] = Field(default_factory=list)
+
+
+# Display names used in API payload + UI (single source of truth so the
+# frontend doesn't have to duplicate the source-key → provider mapping).
+_PROVIDER_LABELS: dict[str, str] = {
+    "ecmwf:direct": "ECMWF",
+    "gfs:noaa": "NOAA",
+    "icon_eu:dwd": "DWD",
+    "ecmwf:openmeteo": "Open-Meteo",
+    "gfs:openmeteo": "Open-Meteo",
+    "icon:openmeteo": "Open-Meteo",
+    "ukmo:openmeteo": "Open-Meteo",
+    "meteofrance:openmeteo": "Open-Meteo",
+}
+
+
+def _provider_label(source: str) -> str:
+    """Human display name for a source key (fallbacks to the suffix)."""
+    return _PROVIDER_LABELS.get(source, source.split(":", 1)[-1].title())
 
 
 class PackMetaResponse(BaseModel):
@@ -375,12 +416,15 @@ def _backfill_sources(pack: BriefingPackMeta) -> dict[str, str]:
     return out
 
 
-def _inline_check(source: str, model: str) -> tuple[datetime, datetime] | None:
+def _inline_check(
+    source: str, model: str,
+) -> tuple[datetime, datetime, datetime | None] | None:
     """Best-effort one-shot dynamic check used when the marker is suspect.
 
     Falls back to the registry's expected delivery time if the dynamic
-    check fails — better than reporting nothing.  Returns (init, next_expected)
-    aware UTC datetimes.
+    check fails — better than reporting nothing.  Returns
+    ``(init, next_expected, published_at)`` aware UTC datetimes (with
+    ``published_at`` set only for Open-Meteo).
     """
     from weatherbrief.fetch.freshness import registry
     from weatherbrief.fetch.freshness.sources import check_source as _sync_check
@@ -389,8 +433,12 @@ def _inline_check(source: str, model: str) -> tuple[datetime, datetime] | None:
     if observed is None:
         # Last-resort: synthesize from registry
         init, nxt = registry.initial_marker_for(source)
-        return init, nxt
-    return observed, registry.next_run_after(source, observed)
+        return init, nxt, None
+    return (
+        observed.init,
+        registry.next_run_after(source, observed.init),
+        observed.published_at,
+    )
 
 
 def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
@@ -417,21 +465,26 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
     store = get_store()
 
     models_out: dict[str, ModelStatus] = {}
+    sources_out: list[ModelSourceDetail] = []
     next_expected_candidates: list[tuple[datetime, str]] = []
     health = "ok"
     any_stale = False
     stale_models: list[str] = []
 
-    for model, source in sources.items():
+    def _resolve_marker(source: str, model: str) -> tuple[datetime, datetime, datetime | None] | None:
+        """Return (init, next_expected, published_at) or None on suspect+failure."""
+        nonlocal health
         marker = store.get_sync(source, model_for_source(source))
         if marker is None or marker.is_stale(LOOP_INTERVAL):
             health = "suspect"
-            inline = _inline_check(source, model_for_source(source))
-            if inline is None:
-                continue
-            init, nxt = inline
-        else:
-            init, nxt = marker.init, marker.next_expected
+            return _inline_check(source, model_for_source(source))
+        return marker.init, marker.next_expected, marker.published_at
+
+    for model, source in sources.items():
+        resolved = _resolve_marker(source, model)
+        if resolved is None:
+            continue
+        init, nxt, published_at = resolved
 
         pack_init_ts = _pack_init_for_source(pack, model, source)
         horizon = registry.run_horizon(source, init)
@@ -450,14 +503,53 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
             now = datetime.now(timezone.utc)
             state = "delayed" if now > nxt else "awaiting"
 
+        published_at_iso = published_at.isoformat() if published_at else None
         models_out[model] = ModelStatus(
             source=source,
             pack_init=pack_init_ts,
             latest_available=int(init.timestamp()),
             next_expected=nxt.isoformat(),
+            published_at=published_at_iso,
             state=state,
         )
         next_expected_candidates.append((nxt, model))
+
+        # Primary row in the popover-friendly list — uses the run that
+        # actually landed in the pack (pack_init_ts) so the popover shows
+        # what the pilot is looking at, not just what's now-available.
+        sources_out.append(ModelSourceDetail(
+            model=model,
+            source=source,
+            provider=_provider_label(source),
+            role="primary",
+            init=pack_init_ts if pack_init_ts is not None else int(init.timestamp()),
+            published_at=published_at_iso,
+            next_expected=nxt.isoformat(),
+            state=state,
+        ))
+
+        # When the primary is direct GRIB, OM also contributed (it's always
+        # fetched first — see fetch.py:244-247) and supplied the surface base
+        # layer.  Surface that as a "base" row so the popover honestly shows
+        # both contributing sources.
+        if not source.endswith(":openmeteo"):
+            om_source = f"{model}:openmeteo"
+            om_pack_init = pack.model_init_times.get(model)
+            if om_pack_init is not None:
+                om_resolved = _resolve_marker(om_source, model)
+                if om_resolved is not None:
+                    om_init, om_nxt, om_pub = om_resolved
+                    om_pub_iso = om_pub.isoformat() if om_pub else None
+                    sources_out.append(ModelSourceDetail(
+                        model=model,
+                        source=om_source,
+                        provider=_provider_label(om_source),
+                        role="base",
+                        init=om_pack_init,
+                        published_at=om_pub_iso,
+                        next_expected=om_nxt.isoformat(),
+                        state="current",
+                    ))
 
     next_time = None
     next_model = None
@@ -473,6 +565,7 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
         next_expected_model=next_model,
         marker_health=health,
         models=models_out,
+        sources=sources_out,
     )
 
 

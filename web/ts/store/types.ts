@@ -96,6 +96,18 @@ export interface ModelStatus {
   pack_init: number | null;
   latest_available: number;
   next_expected: string;
+  published_at?: string | null;
+  state: "current" | "stale" | "awaiting" | "delayed";
+}
+
+export interface ModelSourceDetail {
+  model: string;
+  source: string;
+  provider: string;
+  role: "primary" | "base";
+  init: number;
+  published_at?: string | null;
+  next_expected: string;
   state: "current" | "stale" | "awaiting" | "delayed";
 }
 
@@ -107,6 +119,7 @@ export interface DataStatus {
   next_expected_model: string | null;
   marker_health?: "ok" | "suspect";
   models?: Record<string, ModelStatus>;
+  sources?: ModelSourceDetail[];
 }
 
 /**

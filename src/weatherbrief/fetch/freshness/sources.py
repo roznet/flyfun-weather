@@ -8,17 +8,34 @@ so the cost of these I/O calls is paid at most twice per cycle per
 source (once on-time, once on slip).
 
 All wrappers must be safe to call from a thread (the loop offloads them
-via ``asyncio.to_thread``) and must return either an aware-UTC
-``datetime`` for the latest observed init or ``None`` if the check
-couldn't determine one (transient network failure, missing data).
+via ``asyncio.to_thread``) and must return either an :class:`Observation`
+for the latest observed init (with an optional provider-reported
+``published_at`` wallclock) or ``None`` if the check couldn't determine
+one (transient network failure, missing data).
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
+
+
+class Observation(NamedTuple):
+    """Result of a dynamic readiness check.
+
+    ``published_at`` is the provider-reported wallclock when the run
+    became available — only Open-Meteo exposes this (via ``meta.json``'s
+    ``last_run_availability_time``).  Direct GRIB sources return ``None``
+    because the providers don't publish a server-side availability time;
+    the closest local proxy is the marker's ``last_check`` wallclock when
+    the run was first observed.
+    """
+
+    init: datetime
+    published_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -26,13 +43,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _check_ecmwf_direct(model: str) -> datetime | None:
+def _check_ecmwf_direct(model: str) -> Observation | None:
     """Return latest ECMWF run with a readiness sentinel."""
     from weatherbrief.fetch.grib.ecmwf_watcher import get_latest_ready
-    return get_latest_ready()
+    init = get_latest_ready()
+    if init is None:
+        return None
+    return Observation(init=init)
 
 
-def _check_gfs_noaa(model: str) -> datetime | None:
+def _check_gfs_noaa(model: str) -> Observation | None:
     """Return latest GFS run that has its .idx file published on S3."""
     from weatherbrief.fetch.grib.grib_fetch import find_latest_run
     now = datetime.now(timezone.utc)
@@ -42,12 +62,13 @@ def _check_gfs_noaa(model: str) -> datetime | None:
     if result is None:
         return None
     init_date, init_hour = result
-    return datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+    init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
+    return Observation(init=init)
 
 
-def _check_icon_eu_dwd(model: str) -> datetime | None:
+def _check_icon_eu_dwd(model: str) -> Observation | None:
     """Return latest ICON-EU run whose level-74 P file responds 200 on HEAD.
 
     For the marker we don't filter by horizon — the freshness check applies
@@ -61,18 +82,25 @@ def _check_icon_eu_dwd(model: str) -> datetime | None:
     if result is None:
         return None
     init_date, init_hour = result
-    return datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+    init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
+    return Observation(init=init)
 
 
-def _check_om_meta(model: str) -> datetime | None:
-    """Return latest Open-Meteo init for ``model`` from its meta.json."""
+def _check_om_meta(model: str) -> Observation | None:
+    """Return latest Open-Meteo init + publish time for ``model``."""
     from weatherbrief.fetch.model_status import fetch_model_metadata
     meta = fetch_model_metadata([model])
     if model not in meta:
         return None
-    return datetime.fromtimestamp(meta[model].last_init_time, tz=timezone.utc)
+    m = meta[model]
+    return Observation(
+        init=datetime.fromtimestamp(m.last_init_time, tz=timezone.utc),
+        published_at=datetime.fromtimestamp(
+            m.last_availability_time, tz=timezone.utc,
+        ),
+    )
 
 
 _DISPATCH = {
@@ -83,13 +111,13 @@ _DISPATCH = {
 }
 
 
-def check_source(source: str, model: str) -> datetime | None:
+def check_source(source: str, model: str) -> Observation | None:
     """Run the dynamic readiness check for one (source, model) pair.
 
     Looks up the registry to find which check to dispatch, then invokes it.
-    Returns the latest observed init time (aware UTC) or None on failure.
-    Exceptions are caught and logged — the loop should never crash on a
-    transient I/O error.
+    Returns the latest :class:`Observation` (aware UTC ``init``, optional
+    ``published_at``) or None on failure.  Exceptions are caught and
+    logged — the loop should never crash on a transient I/O error.
     """
     from .registry import SOURCE_REGISTRY
 

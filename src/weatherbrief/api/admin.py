@@ -158,6 +158,7 @@ def freshness_markers(
             "next_expected": m.next_expected.isoformat(),
             "last_check": m.last_check.isoformat() if m.last_check else None,
             "slip_count": m.slip_count,
+            "published_at": m.published_at.isoformat() if m.published_at else None,
             "is_stale": m.is_stale(LOOP_INTERVAL),
             "observations": observations,
             "calibration": calibration,
