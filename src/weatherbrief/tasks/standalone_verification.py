@@ -161,7 +161,13 @@ def _fetch_forecasts_for_model(
     ]
     total_chunks = len(chunks)
 
-    def _fetch_one_chunk(chunk_idx: int, chunk_list: list[WatchlistAirport]) -> list[dict]:
+    def _fetch_one_chunk(
+        chunk_idx: int, chunk_list: list[WatchlistAirport],
+    ) -> tuple[list[dict], int]:
+        # Reset thread-local call count so the caller can attribute HTTP
+        # calls — including failed retries — back to this chunk after the
+        # pool joins. The shared `client.call_count` is racy under threads.
+        client._reset_thread_call_count()
         chunk_num = chunk_idx + 1
         points = [
             RoutePoint(
@@ -172,14 +178,16 @@ def _fetch_forecasts_for_model(
             for a in chunk_list
         ]
 
-        chunk_started = time.monotonic()
         forecasts = None
+        fetch_seconds = 0.0
         for attempt in range(3):
+            attempt_started = time.monotonic()
             try:
                 forecasts = client.fetch_multi_point(
                     points, model_source,
                     start_date=start_date, end_date=end_date,
                 )
+                fetch_seconds = time.monotonic() - attempt_started
                 break
             except Exception:
                 if attempt < 2:
@@ -197,12 +205,11 @@ def _fetch_forecasts_for_model(
                         model, len(chunk_list), exc_info=True,
                     )
         if forecasts is None:
-            return []
+            return [], client._thread_call_count()
 
         logger.info(
             "Model %s chunk %d/%d: processing %d airports (fetch %.1fs)",
-            model, chunk_num, total_chunks, len(chunk_list),
-            time.monotonic() - chunk_started,
+            model, chunk_num, total_chunks, len(chunk_list), fetch_seconds,
         )
         chunk_results: list[dict] = []
         for airport, wpf in zip(chunk_list, forecasts):
@@ -242,13 +249,14 @@ def _fetch_forecasts_for_model(
                 _enrich_with_sounding(snap, hourly, model)
 
                 chunk_results.append(snap)
-        return chunk_results
+        return chunk_results, client._thread_call_count()
 
     all_results: list[dict] = []
     if not chunks:
         return all_results, client.call_count
 
     max_workers = max(1, min(_OPEN_METEO_CONCURRENCY, total_chunks))
+    total_calls = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(_fetch_one_chunk, idx, chunk)
@@ -256,7 +264,9 @@ def _fetch_forecasts_for_model(
         ]
         for future in concurrent.futures.as_completed(futures):
             try:
-                all_results.extend(future.result())
+                chunk_results, chunk_calls = future.result()
+                all_results.extend(chunk_results)
+                total_calls += chunk_calls
             except Exception:
                 # Per-chunk retries already logged inside the worker. A leak
                 # here is unexpected — note it but don't abort other chunks.
@@ -265,6 +275,9 @@ def _fetch_forecasts_for_model(
                     model, exc_info=True,
                 )
 
+    # Replace the racy aggregate with the summed per-thread totals so the
+    # caller sees the correct count of HTTP calls made under concurrency.
+    client.call_count = total_calls
     return all_results, client.call_count
 
 
