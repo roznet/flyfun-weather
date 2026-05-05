@@ -189,30 +189,42 @@ def _verify_pack_hmac(row: BriefingPackRow) -> bool:
     return hmac.compare_digest(row.integrity_hmac, _compute_pack_hmac_legacy(row))
 
 
-def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
-    return BriefingPackRow(
-        flight_id=meta.flight_id,
-        fetch_timestamp=meta.fetch_timestamp,
-        days_out=meta.days_out,
-        has_gramet=meta.has_gramet,
-        has_skewt=meta.has_skewt,
-        has_digest=meta.has_digest,
-        assessment=meta.assessment,
-        assessment_reason=meta.assessment_reason,
-        artifact_path=meta.artifact_path,
-        model_init_times_json=json.dumps(meta.model_init_times),
-        grib_init_times_json=json.dumps(meta.grib_init_times),
-        model_sources_json=(
-            json.dumps(meta.model_sources) if meta.model_sources else None
-        ),
-        models_skipped_region_json=json.dumps(meta.models_skipped_region),
-        diagnostics_json=json.dumps(
-            [d.model_dump(mode="json") for d in meta.diagnostics],
-        ),
-        alt_assessment=meta.alt_assessment,
-        alt_assessment_reason=meta.alt_assessment_reason,
-        has_alt_advisories=meta.has_alt_advisories,
+def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
+    """Copy every BriefingPackMeta field onto a BriefingPackRow.
+
+    Single source of truth for the meta→row mapping, used by both
+    ``_meta_to_row`` (insert path) and ``update_pack_meta`` (update path)
+    so they can't drift when a new field is added to ``BriefingPackMeta``.
+    Does NOT touch ``id`` or ``integrity_hmac`` — those are managed by
+    SQLAlchemy and ``_compute_pack_hmac`` respectively.
+    """
+    row.flight_id = meta.flight_id
+    row.fetch_timestamp = meta.fetch_timestamp
+    row.days_out = meta.days_out
+    row.has_gramet = meta.has_gramet
+    row.has_skewt = meta.has_skewt
+    row.has_digest = meta.has_digest
+    row.assessment = meta.assessment
+    row.assessment_reason = meta.assessment_reason
+    row.artifact_path = meta.artifact_path
+    row.model_init_times_json = json.dumps(meta.model_init_times)
+    row.grib_init_times_json = json.dumps(meta.grib_init_times)
+    row.model_sources_json = (
+        json.dumps(meta.model_sources) if meta.model_sources else None
     )
+    row.models_skipped_region_json = json.dumps(meta.models_skipped_region)
+    row.diagnostics_json = json.dumps(
+        [d.model_dump(mode="json") for d in meta.diagnostics],
+    )
+    row.alt_assessment = meta.alt_assessment
+    row.alt_assessment_reason = meta.alt_assessment_reason
+    row.has_alt_advisories = meta.has_alt_advisories
+
+
+def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
+    row = BriefingPackRow()
+    _apply_meta_to_row(row, meta)
+    return row
 
 
 def _resolve_artifact_path(raw: str) -> str:
@@ -555,6 +567,26 @@ def save_pack_meta(session: Session, meta: BriefingPackMeta) -> None:
     row.integrity_hmac = _compute_pack_hmac(row)
     session.add(row)
     session.flush()
+
+
+def update_pack_meta(session: Session, meta: BriefingPackMeta) -> bool:
+    """Update an existing pack row (matched by flight_id + fetch_timestamp).
+
+    Returns True when an existing row was updated, False when no row existed
+    (caller should fall back to ``save_pack_meta``).
+    """
+    naive_ts = meta.fetch_timestamp.replace(tzinfo=None)
+    stmt = select(BriefingPackRow).where(
+        BriefingPackRow.flight_id == meta.flight_id,
+        BriefingPackRow.fetch_timestamp == naive_ts,
+    )
+    row = session.execute(stmt).scalar_one_or_none()
+    if row is None:
+        return False
+    _apply_meta_to_row(row, meta)
+    row.integrity_hmac = _compute_pack_hmac(row)
+    session.flush()
+    return True
 
 
 def load_pack_meta(

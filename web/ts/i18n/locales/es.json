@@ -125,6 +125,7 @@
   "digest.watchItems": "Elementos a vigilar",
   "digest.noBriefing": "No se ha cargado ningún briefing.",
   "digest.loading": "Cargando resumen...",
+  "digest.generating": "Generando resumen…",
   "digest.notAvailable": "Sinopsis no disponible. Ejecute una actualización para generarla.",
   "digest.failed": "Error al cargar el resumen.",
   "digest.profileMismatch": "Este resumen fue generado con el perfil \"{name}\". El perfil actual es diferente — recalcule para actualizar.",

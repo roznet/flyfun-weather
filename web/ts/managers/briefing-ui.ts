@@ -1017,6 +1017,7 @@ export function renderSynopsis(
   pack: PackMeta | null,
   digest: WeatherDigest | null,
   displayMode: DisplayMode = 'full',
+  digestPending: boolean = false,
 ): void {
   const el = $('synopsis-section');
   if (!el) return;
@@ -1036,6 +1037,14 @@ export function renderSynopsis(
   if (pack.has_digest) {
     el.innerHTML = `<p class="muted">${t('digest.loading')}</p>`;
     fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el, displayMode, flight.profile_id);
+    return;
+  }
+
+  // `digestPending` is set while the SSE refresh stream is between its
+  // briefing_ready and complete events — the visible briefing is rendered
+  // but the digest is still being generated in the background.
+  if (digestPending) {
+    el.innerHTML = `<p class="muted">${t('digest.generating')}</p>`;
     return;
   }
 

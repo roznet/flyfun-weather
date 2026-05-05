@@ -125,6 +125,7 @@
   "digest.watchItems": "Points de vigilance",
   "digest.noBriefing": "Aucun briefing chargé.",
   "digest.loading": "Chargement du résumé...",
+  "digest.generating": "Génération du résumé…",
   "digest.notAvailable": "Résumé synoptique non disponible. Lancez une actualisation pour le générer.",
   "digest.failed": "Échec du chargement du résumé.",
   "digest.profileMismatch": "Ce résumé a été généré avec le profil \"{name}\". Le profil actuel est différent — recalculez pour mettre à jour.",

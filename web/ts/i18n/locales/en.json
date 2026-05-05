@@ -145,6 +145,7 @@
   "digest.watchItems": "Watch Items",
   "digest.noBriefing": "No briefing loaded.",
   "digest.loading": "Loading digest...",
+  "digest.generating": "Generating summary…",
   "digest.notAvailable": "Synopsis not available. Trigger a refresh to generate.",
   "digest.failed": "Failed to load digest.",
   "digest.profileMismatch": "This summary was generated with profile \"{name}\". The current profile is different \u2014 recalculate to update.",

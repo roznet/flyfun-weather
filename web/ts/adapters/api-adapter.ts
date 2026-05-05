@@ -264,9 +264,20 @@ export async function fetchFreshness(flightId: string): Promise<DataStatus> {
   );
 }
 
-/** SSE event from the streaming refresh endpoint. */
+/** SSE event from the streaming refresh endpoint.
+ *
+ * Event types in stream order (best case):
+ *   progress* → briefing_ready → progress(llm_digest) → complete
+ *
+ * `briefing_ready` carries a provisional `pack` with `has_digest=false`;
+ * the visible briefing artifacts (snapshot, advisories, GRAMET) are on
+ * disk and ready to render. `complete` carries the final `pack` with
+ * `has_digest=true` (or false if the digest stage failed). Older servers
+ * that don't emit `briefing_ready` still work — clients just see the
+ * existing `progress* → complete` flow.
+ */
 export interface RefreshStreamEvent {
-  type: 'progress' | 'complete' | 'error';
+  type: 'progress' | 'briefing_ready' | 'complete' | 'error';
   stage?: string;
   detail?: string | null;
   label?: string;

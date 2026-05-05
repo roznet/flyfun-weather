@@ -899,6 +899,7 @@ async function init(): Promise<void> {
       state.currentPack !== prev.currentPack ||
       state.snapshot !== prev.snapshot ||
       state.digest !== prev.digest ||
+      state.digestPending !== prev.digestPending ||
       state.routeAnalyses !== prev.routeAnalyses ||
       state.routeAdvisories !== prev.routeAdvisories ||
       state.altAdvisories !== prev.altAdvisories ||
@@ -909,7 +910,7 @@ async function init(): Promise<void> {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
-      ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
+      ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
       ui.renderDWDOverview(state.flight, state.currentPack);
       ui.renderGramet(state.flight, state.currentPack);
       renderPointSections(state);
@@ -955,7 +956,7 @@ async function init(): Promise<void> {
       renderPointSections(state);
       if (state.displayMode !== prev.displayMode) {
         renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
-        ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode);
+        ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
         // Entering compact: enforce preferred-only layers for clouds/icing
         // (triggers vizSettings change → renderVisualization runs via that subscriber).
         // Runs even with empty preferredMethods — getCompactLayerOverrides falls
@@ -1278,7 +1279,7 @@ async function init(): Promise<void> {
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
-    ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode);
+    ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode, s.digestPending);
     ui.renderDWDOverview(s.flight, s.currentPack);
     ui.renderGramet(s.flight, s.currentPack);
     renderPointSections(s);
