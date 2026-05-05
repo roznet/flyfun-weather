@@ -44,17 +44,31 @@ class Observation(NamedTuple):
 
 
 def _check_ecmwf_direct(model: str) -> Observation | None:
-    """Return latest ECMWF run with a readiness sentinel."""
-    from weatherbrief.fetch.grib.ecmwf_watcher import get_latest_ready
-    init = get_latest_ready()
-    if init is None:
+    """Return latest ECMWF run with a readiness sentinel.
+
+    ``published_at`` is the sentinel mtime — i.e. when the watcher finished
+    writing it after rsync delivery.  That's our local arrival time, not
+    ECMWF's central publish time, but it's the closest analogue we have
+    and is what a pilot really wants to know ("when did this data become
+    usable on the briefing server?").
+    """
+    from weatherbrief.fetch.grib.ecmwf_watcher import get_latest_ready_with_mtime
+    result = get_latest_ready_with_mtime()
+    if result is None:
         return None
-    return Observation(init=init)
+    init, mtime = result
+    return Observation(init=init, published_at=mtime)
 
 
 def _check_gfs_noaa(model: str) -> Observation | None:
-    """Return latest GFS run that has its .idx file published on S3."""
-    from weatherbrief.fetch.grib.grib_fetch import find_latest_run
+    """Return latest GFS run that has its .idx file published on S3.
+
+    Captures the ``Last-Modified`` header from the .idx HEAD response as
+    ``published_at`` — that's NOAA's server-side timestamp, equivalent in
+    quality to Open-Meteo's ``last_run_availability_time``.  One extra
+    HEAD per loop tick (every 5 min when due) is negligible.
+    """
+    from weatherbrief.fetch.grib.grib_fetch import find_latest_run, gfs_idx_url
     now = datetime.now(timezone.utc)
     # find_latest_run uses target_time only for as-of/bracketing; passing now
     # gets the most recently published cycle.
@@ -65,7 +79,8 @@ def _check_gfs_noaa(model: str) -> Observation | None:
     init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
-    return Observation(init=init)
+    published_at = _http_last_modified(gfs_idx_url(init_date, init_hour, 0))
+    return Observation(init=init, published_at=published_at)
 
 
 def _check_icon_eu_dwd(model: str) -> Observation | None:
@@ -75,8 +90,14 @@ def _check_icon_eu_dwd(model: str) -> Observation | None:
     horizon-awareness later.  We still rely on the existing helper, which
     requires ``cover_until`` to verify horizon; pass ``target_time=now`` and
     ``cover_until=now`` so any published run qualifies.
+
+    Captures the ``Last-Modified`` header from the level-74 P file HEAD as
+    ``published_at`` — DWD's server-side publish wallclock.
     """
-    from weatherbrief.fetch.grib.icon_eu_fetch import find_latest_icon_eu_run
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        find_latest_icon_eu_run,
+        icon_eu_file_url,
+    )
     now = datetime.now(timezone.utc)
     result = find_latest_icon_eu_run(target_time=now, cover_until=now)
     if result is None:
@@ -85,7 +106,35 @@ def _check_icon_eu_dwd(model: str) -> Observation | None:
     init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
-    return Observation(init=init)
+    published_at = _http_last_modified(
+        icon_eu_file_url(init_date, init_hour, 0, 74, "p"),
+    )
+    return Observation(init=init, published_at=published_at)
+
+
+def _http_last_modified(url: str) -> datetime | None:
+    """HEAD ``url`` and parse its ``Last-Modified`` header (aware UTC).
+
+    Returns ``None`` on any error — the caller falls back to the absent
+    publish time.  Failures here must never break the freshness loop, so
+    no exception is allowed to escape.
+    """
+    import email.utils
+
+    import requests
+
+    try:
+        resp = requests.head(url, timeout=10)
+        if resp.status_code != 200:
+            return None
+        header = resp.headers.get("Last-Modified")
+        if not header:
+            return None
+        # parsedate_to_datetime returns aware UTC for RFC-1123 HTTP dates.
+        return email.utils.parsedate_to_datetime(header).astimezone(timezone.utc)
+    except Exception:
+        logger.debug("Last-Modified probe failed for %s", url, exc_info=True)
+        return None
 
 
 def _check_om_meta(model: str) -> Observation | None:
