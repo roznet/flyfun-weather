@@ -40,20 +40,6 @@ const intCodec: Codec<number> = {
   format: (v) => String(v),
 };
 
-const floatCodec: Codec<number> = {
-  parse: (s) => {
-    const n = parseFloat(s);
-    return Number.isFinite(n) ? n : undefined;
-  },
-  format: (v) => String(v),
-};
-
-export const urlCodecs = {
-  string: stringCodec,
-  int: intCodec,
-  float: floatCodec,
-};
-
 export interface UrlField<T> {
   default: T;
   /** Optional codec; inferred from `default`'s type when omitted. */

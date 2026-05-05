@@ -736,6 +736,10 @@ async function main(): Promise<void> {
     shareBtn.title = t('maps.shareLinkTitle');
     shareBtn.querySelector('.share-link-label')!.textContent = t('maps.shareLink');
     shareBtn.addEventListener('click', async () => {
+      // Flush current state to the URL before sharing — covers the
+      // first-load case where the smart-default fcHour was assigned
+      // but no control has been touched yet, so the URL is still bare.
+      syncUrl();
       const ok = await shareCurrentUrl(document.title);
       if (!ok) return;
       const label = shareBtn.querySelector('.share-link-label') as HTMLElement;
