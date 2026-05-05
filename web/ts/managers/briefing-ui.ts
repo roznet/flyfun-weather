@@ -1087,12 +1087,13 @@ async function fetchAndRenderDigestJson(
 export function renderDWDOverview(
   flight: FlightResponse | null,
   pack: PackMeta | null,
+  isAdmin: boolean,
 ): void {
   const wrapper = $('dwd-overview-wrapper');
   const el = $('dwd-overview-section');
   if (!el || !wrapper) return;
 
-  if (!flight || !pack) {
+  if (!isAdmin || !flight || !pack) {
     wrapper.style.display = 'none';
     return;
   }
