@@ -91,8 +91,10 @@ def _write_advisories(
     *,
     aggregate_status: AdvisoryStatus = AdvisoryStatus.AMBER,
     advisory_id: str = "icing.fiki",
-) -> None:
-    """Write a minimal ``route_advisories.json`` so assessment derivation works."""
+) -> RouteAdvisoriesManifest:
+    """Write a minimal ``route_advisories.json`` so assessment derivation works.
+    Returns the manifest so tests can also exercise the in-memory branch.
+    """
     pack_path.mkdir(parents=True, exist_ok=True)
     manifest = RouteAdvisoriesManifest(
         advisories=[
@@ -106,6 +108,7 @@ def _write_advisories(
     (pack_path / "route_advisories.json").write_text(
         manifest.model_dump_json(indent=2),
     )
+    return manifest
 
 
 # --- Persistence layer ---
@@ -143,6 +146,44 @@ class TestPersistProvisional:
         assert packs[0].assessment == "AMBER"
         assert packs[0].has_gramet is True
         assert packs[0].has_skewt is True
+
+    def test_uses_in_memory_manifest_without_disk_read(
+        self, db_session, dev_user, tmp_path, monkeypatch,
+    ):
+        """Hot production path: the manifest set on BriefingResult is used
+        directly; route_advisories.json on disk is NOT re-read.
+        """
+        from weatherbrief.api import packs as packs_mod
+        from weatherbrief.api.packs import _persist_pack_provisional
+
+        flight = _make_flight()
+        save_flight(db_session, flight, dev_user)
+
+        pack_path = tmp_path / "pack"
+        manifest = _write_advisories(pack_path, aggregate_status=AdvisoryStatus.RED)
+
+        # Trip-wire: if the code falls back to disk, model_validate_json
+        # gets called and the test fails.
+        def _fail_if_called(*_a, **_kw):
+            raise AssertionError(
+                "_assessment_from_advisories re-read disk despite an in-memory manifest",
+            )
+        monkeypatch.setattr(
+            packs_mod._RouteAdvisoriesManifest,
+            "model_validate_json",
+            _fail_if_called,
+        )
+
+        result = _make_partial_result(pack_path)
+        result.route_advisories_manifest = manifest
+        fetch_ts = datetime.now(timezone.utc).replace(microsecond=0)
+
+        meta = _persist_pack_provisional(
+            flight.id, flight, fetch_ts, pack_path, result, db_session,
+        )
+
+        assert meta.assessment == "RED"
+        assert meta.has_digest is False
 
     def test_no_advisories_leaves_assessment_null(
         self, db_session, dev_user, tmp_path,

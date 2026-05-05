@@ -400,14 +400,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       const MAX_POLL_ATTEMPTS = 100; // ~5 minutes at 3s intervals
       const poll = async (attempt = 0): Promise<void> => {
         if (attempt >= MAX_POLL_ATTEMPTS) {
-          set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, error: 'Refresh timed out' });
+          set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, digestPending: false, error: 'Refresh timed out' });
           return;
         }
         await new Promise(r => setTimeout(r, 3000));
         const s = await api.fetchRefreshStatus(flight.id);
         if (!s.active) {
           // Done — reload packs and select latest
-          set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0 });
+          set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, digestPending: false });
           await get().loadPacks();
           await get().selectLatest();
           get().checkFreshness();

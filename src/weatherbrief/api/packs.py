@@ -46,7 +46,14 @@ def _validate_model(model: str) -> str:
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
 from weatherbrief.fetch.model_status import fetch_model_metadata
-from weatherbrief.models import BriefingPackMeta, DiagnosticPublic, Flight
+from weatherbrief.models import (
+    BriefingPackMeta,
+    DiagnosticPublic,
+    Flight,
+    # Imported eagerly so an ImportError surfaces at module load rather than
+    # being silently swallowed by the broad except in _assessment_from_advisories.
+    RouteAdvisoriesManifest as _RouteAdvisoriesManifest,
+)
 from weatherbrief.storage.flights import (
     list_packs,
     load_pack_meta,
@@ -829,11 +836,6 @@ def _build_pack_meta(
     )
 
 
-# Module-level imports so an ImportError surfaces at module load instead of
-# being silently swallowed by the broad ``except`` in ``_assessment_from_advisories``.
-from weatherbrief.models import RouteAdvisoriesManifest as _RouteAdvisoriesManifest
-
-
 def _assessment_from_advisories(
     manifest: "RouteAdvisoriesManifest | None",
     pack_path: Path,
@@ -853,6 +855,13 @@ def _assessment_from_advisories(
         try:
             return derive_assessment_from_advisories(manifest)
         except Exception:
+            # Broad catch is intentional: derive_assessment_from_advisories
+            # iterates over advisory entries and could raise anything an
+            # individual evaluator surfaces (AttributeError on a malformed
+            # status enum, KeyError on a missing field, etc.). Provisional
+            # persist must never abort the pipeline — fall back to NULL.
+            # Don't narrow this to (ValueError, AttributeError); a future
+            # change to the manifest format would silently bubble through.
             logger.warning(
                 "Could not derive assessment from in-memory manifest — falling back to NULL",
                 exc_info=True,
@@ -927,6 +936,13 @@ def _persist_pack_finalize(
         provisional=False,
     )
     if not update_pack_meta(db, meta):
+        # Sync /refresh, scheduler, or a provisional persist that failed
+        # silently — log so we can correlate with any earlier "Provisional
+        # pack persist failed" warning.
+        logger.info(
+            "No provisional row for %s @ %s — inserting directly",
+            flight_id, fetch_ts,
+        )
         save_pack_meta(db, meta)
 
     # Log usage and charge credits
