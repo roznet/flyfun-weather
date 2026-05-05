@@ -598,7 +598,12 @@ async function initSynopticTab(): Promise<void> {
 
 function switchTab(tab: Tab): void {
   currentTab = tab;
-  syncUrl();
+  // Note: syncUrl() is intentionally NOT called here. The init path in
+  // main() calls switchTab() to hydrate from a non-default URL, and we
+  // don't want that to rewrite the URL with smart-default fcHour before
+  // the user has touched anything. The tab-click handler in main()
+  // calls syncUrl() explicitly after switchTab() so user-driven tab
+  // switches still keep the URL in sync.
 
   // Tab buttons
   for (const btn of document.querySelectorAll('#tabs .tab-btn')) {
@@ -690,7 +695,9 @@ async function main(): Promise<void> {
     const btn = (e.target as HTMLElement).closest('.tab-btn') as HTMLElement | null;
     if (!btn) return;
     const tab = btn.getAttribute('data-tab') as Tab;
-    if (tab) switchTab(tab);
+    if (!tab) return;
+    switchTab(tab);
+    syncUrl();
   });
 
   // Hydrate from the URL. Anything not in the URL falls back to the
@@ -740,8 +747,11 @@ async function main(): Promise<void> {
       // first-load case where the smart-default fcHour was assigned
       // but no control has been touched yet, so the URL is still bare.
       syncUrl();
-      const ok = await shareCurrentUrl(document.title);
-      if (!ok) return;
+      const result = await shareCurrentUrl(document.title);
+      // 'shared' = OS share sheet handled it (no flash, nothing was copied).
+      // 'copied' = clipboard write succeeded — flash the button.
+      // false    = fell back to prompt() — user already saw the URL inline.
+      if (result !== 'copied') return;
       const label = shareBtn.querySelector('.share-link-label') as HTMLElement;
       const original = label.textContent;
       label.textContent = t('maps.shareLinkCopied');
