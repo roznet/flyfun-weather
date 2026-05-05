@@ -121,6 +121,7 @@
   "digest.watchItems": "Beobachtungspunkte",
   "digest.noBriefing": "Kein Briefing geladen.",
   "digest.loading": "Zusammenfassung wird geladen...",
+  "digest.generating": "Zusammenfassung wird erstellt…",
   "digest.notAvailable": "Synoptische Übersicht nicht verfügbar. Führen Sie eine Aktualisierung durch, um sie zu generieren.",
   "digest.failed": "Zusammenfassung konnte nicht geladen werden.",
   "digest.profileMismatch": "Diese Zusammenfassung wurde mit Profil \"{name}\" erstellt. Das aktuelle Profil ist anders — neu berechnen, um zu aktualisieren.",

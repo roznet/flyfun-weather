@@ -22,6 +22,7 @@ from weatherbrief.models import (
     Diagnostic,
     ForecastSnapshot,
     ModelSource,
+    RouteAdvisoriesManifest,
     RouteConfig,
     WaypointAnalysis,
 )
@@ -122,6 +123,10 @@ class BriefingResult:
     snapshot_path: Path
     elevation_profile_path: Path | None = None
     route_advisories_path: Path | None = None
+    # In-memory manifest produced by phase 3 advisories. Allows the
+    # briefing_ready callback to derive the provisional assessment without
+    # re-reading route_advisories.json from disk (the file was just written).
+    route_advisories_manifest: RouteAdvisoriesManifest | None = None
     gramet_path: Path | None = None
     skewt_paths: list[Path] = field(default_factory=list)
     digest_path: Path | None = None
@@ -491,6 +496,8 @@ def execute_briefing(
         result.elevation_profile_path = pack_dir / "elevation_profile.json"
     if route_advisories_manifest and pack_dir:
         result.route_advisories_path = pack_dir / "route_advisories.json"
+    if route_advisories_manifest is not None:
+        result.route_advisories_manifest = route_advisories_manifest
     if alt_advisory_result is not None:
         result.alt_advisory_result = alt_advisory_result
 
@@ -534,18 +541,24 @@ def execute_briefing(
         stage_timings["generate_skewt"] = perf_counter() - _t0
 
     # === 6.5 Briefing ready milestone ===
-    # Visible briefing artifacts (snapshot + advisories + GRAMET + Skew-T) are
-    # all on disk by this point. Notify callers so they can render the briefing
+    # Visible briefing artifacts (snapshot + advisories + optional GRAMET) are
+    # on disk by this point. Notify callers so they can render the briefing
     # and persist a provisional pack row while the LLM digest still runs.
-    _notify("briefing_ready", str(snapshot_path))
-    if briefing_ready_callback is not None:
-        try:
-            briefing_ready_callback(result)
-        except Exception:
-            logger.warning(
-                "briefing_ready_callback raised — continuing with digest",
-                exc_info=True,
-            )
+    #
+    # When the digest phase is disabled there's nothing to wait for: the
+    # provisional row would be inserted and immediately overwritten by
+    # finalize, with no user-visible benefit. Skip both the progress event
+    # and the callback in that case.
+    if options.generate_llm_digest:
+        _notify("briefing_ready", str(snapshot_path))
+        if briefing_ready_callback is not None:
+            try:
+                briefing_ready_callback(result)
+            except Exception:
+                logger.warning(
+                    "briefing_ready_callback raised — continuing with digest",
+                    exc_info=True,
+                )
 
     # === 7. Optional: LLM digest ===
     if options.generate_llm_digest:

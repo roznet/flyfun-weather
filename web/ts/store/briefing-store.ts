@@ -101,6 +101,11 @@ export interface BriefingState {
   refreshProgress: number;
   refreshElapsed: number | null;
   avgRefreshSeconds: number | null;
+  /** True between the SSE `briefing_ready` and `complete` events: the visible
+   * briefing is rendered but the LLM digest is still being generated. The UI
+   * uses this to show a "Generating summary…" placeholder in the digest panel
+   * instead of the default "Summary not available" copy. */
+  digestPending: boolean;
   notifyEmail: boolean;
   advisoryAltitudeOverride: number | null;
   altitudeTable: AltitudeTableResult | null;
@@ -151,6 +156,48 @@ export interface BriefingState {
   setVizPreset: (presetId: string | null) => void;
 }
 
+/** Build the SSE event handler shared by `refresh` and `forceRefresh`.
+ *
+ * Three event types:
+ * - `progress`: update stage label / detail / fraction.
+ * - `briefing_ready`: provisional pack with `has_digest=false` is in the DB and
+ *   the visible artifacts are on disk. Reload the pack list and select the new
+ *   pack so the UI renders the briefing immediately, while the digest stage
+ *   continues in the background. `digestPending=true` tells the synopsis
+ *   renderer to show "Generating summary…" instead of "not available".
+ * - `complete`: capture elapsed time. The post-stream code paths reload+reselect
+ *   to pick up the final assessment + digest. Backward-compatible: if the
+ *   server doesn't emit `briefing_ready` (older deploy), the store sees only
+ *   `progress` + `complete` and behaves exactly as before.
+ */
+function makeRefreshEventHandler(
+  set: (partial: Partial<BriefingState>) => void,
+  get: () => BriefingState,
+  tracker: { elapsed: number | null },
+): (event: import('../adapters/api-adapter').RefreshStreamEvent) => void {
+  return (event) => {
+    if (event.type === 'progress') {
+      set({
+        refreshStatus: 'refreshing',
+        refreshStage: event.label || event.stage || null,
+        refreshDetail: event.detail || null,
+        refreshProgress: event.progress || 0,
+      });
+    } else if (event.type === 'briefing_ready' && event.pack) {
+      const ts = event.pack.fetch_timestamp;
+      set({ digestPending: true });
+      // Render the visible briefing while the digest stage continues. The
+      // post-stream code path (after `complete`) will reload+reselect so any
+      // assessment update from the digest is reflected.
+      get().loadPacks().then(() => get().selectPack(ts)).catch(() => {
+        /* non-critical — final reload after `complete` will recover */
+      });
+    } else if (event.type === 'complete' && event.elapsed_seconds) {
+      tracker.elapsed = event.elapsed_seconds;
+    }
+  };
+}
+
 export const briefingStore = createStore<BriefingState>((set, get) => ({
   flight: null,
   packs: [],
@@ -177,6 +224,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refreshProgress: 0,
   refreshElapsed: null,
   avgRefreshSeconds: null,
+  digestPending: false,
   notifyEmail: false,
   advisoryAltitudeOverride: null,
   altitudeTable: null,
@@ -273,39 +321,31 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refresh: async (asOfDate?: string) => {
     const flight = get().flight;
     if (!flight) return;
-    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: null });
+    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false, error: null });
     // Fetch average refresh time for the progress hint (best-effort, non-blocking)
     api.fetchRefreshStats().then(stats => {
       if (stats.avg_elapsed_seconds) set({ avgRefreshSeconds: stats.avg_elapsed_seconds });
     }).catch(() => { /* ignore */ });
     try {
-      let elapsed: number | null = null;
+      const tracker: { elapsed: number | null } = { elapsed: null };
+      const handleEvent = makeRefreshEventHandler(set, get, tracker);
       const notifyEmail = get().notifyEmail;
-      const newPack = await api.refreshBriefingStream(flight.id, (event) => {
-        if (event.type === 'progress') {
-          set({
-            refreshStatus: 'refreshing',
-            refreshStage: event.label || event.stage || null,
-            refreshDetail: event.detail || null,
-            refreshProgress: event.progress || 0,
-          });
-        } else if (event.type === 'complete' && event.elapsed_seconds) {
-          elapsed = event.elapsed_seconds;
-        }
-      }, false, asOfDate, notifyEmail);
+      const newPack = await api.refreshBriefingStream(
+        flight.id, handleEvent, false, asOfDate, notifyEmail,
+      );
       // If the server returned a data_status (fresh skip), update freshness
       if (newPack.data_status) {
         set({ freshness: newPack.data_status });
       }
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: elapsed });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: tracker.elapsed, digestPending: false });
       // Re-check freshness after a real refresh
       if (!newPack.data_status) {
         get().checkFreshness();
       }
       // Clear elapsed message after 15 seconds
-      if (elapsed) setTimeout(() => set({ refreshElapsed: null }), 15_000);
+      if (tracker.elapsed) setTimeout(() => set({ refreshElapsed: null }), 15_000);
     } catch (err) {
       // If another refresh is already in progress, poll for its completion
       if (err instanceof RefreshStreamError && /already in progress/i.test(err.message)) {
@@ -313,40 +353,30 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: msg });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false, error: msg });
     }
   },
 
   forceRefresh: async () => {
     const flight = get().flight;
     if (!flight) return;
-    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: null });
+    set({ refreshing: true, refreshStatus: 'refreshing', refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false, error: null });
     try {
-      let elapsed: number | null = null;
-      const newPack = await api.refreshBriefingStream(flight.id, (event) => {
-        if (event.type === 'progress') {
-          set({
-            refreshStatus: 'refreshing',
-            refreshStage: event.label || event.stage || null,
-            refreshDetail: event.detail || null,
-            refreshProgress: event.progress || 0,
-          });
-        } else if (event.type === 'complete' && event.elapsed_seconds) {
-          elapsed = event.elapsed_seconds;
-        }
-      }, true);
+      const tracker: { elapsed: number | null } = { elapsed: null };
+      const handleEvent = makeRefreshEventHandler(set, get, tracker);
+      const newPack = await api.refreshBriefingStream(flight.id, handleEvent, true);
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: elapsed });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: tracker.elapsed, digestPending: false });
       get().checkFreshness();
-      if (elapsed) setTimeout(() => set({ refreshElapsed: null }), 15_000);
+      if (tracker.elapsed) setTimeout(() => set({ refreshElapsed: null }), 15_000);
     } catch (err) {
       if (err instanceof RefreshStreamError && /already in progress/i.test(err.message)) {
         get().checkActiveRefresh();
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
-      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, error: msg });
+      set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false, error: msg });
     }
   },
 

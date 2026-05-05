@@ -385,6 +385,43 @@ class TestPipelineEmitsBriefingReady:
         assert ready_called[0].digest is None
         assert ready_called[0].digest_path is None
 
+    def test_briefing_ready_skipped_when_no_digest(self, monkeypatch, tmp_path):
+        """When generate_llm_digest=False, the provisional persist would be
+        immediately overwritten by finalize — skip both the progress event
+        and the callback to avoid the redundant DB roundtrip.
+        """
+        from weatherbrief.pipeline import BriefingOptions, execute_briefing
+
+        self._patch_pipeline_phases(monkeypatch)
+
+        progress_stages: list[str] = []
+        ready_called: list[BriefingResult] = []
+
+        def progress_cb(stage: str, _detail: str | None = None) -> None:
+            progress_stages.append(stage)
+
+        def ready_cb(result: BriefingResult) -> None:
+            ready_called.append(result)
+
+        options = BriefingOptions(
+            output_dir=tmp_path / "pack",
+            fetch_gramet=False,
+            generate_skewt=False,
+            generate_llm_digest=False,
+        )
+
+        execute_briefing(
+            route=_make_route(),
+            departure_time=datetime.now(timezone.utc) + timedelta(days=2),
+            options=options,
+            progress_callback=progress_cb,
+            briefing_ready_callback=ready_cb,
+        )
+
+        assert "briefing_ready" not in progress_stages
+        assert "llm_digest" not in progress_stages
+        assert ready_called == []
+
     def test_briefing_ready_callback_failure_does_not_abort_pipeline(
         self, monkeypatch, tmp_path,
     ):
