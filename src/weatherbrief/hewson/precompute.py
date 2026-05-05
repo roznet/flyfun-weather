@@ -212,6 +212,8 @@ def _build_one_snapshot(
     levels: list[int],
     forecast_days: int,
     stride_hours: int = DEFAULT_STRIDE_HOURS,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> tuple[int, np.ndarray, dict[int, dict[str, np.ndarray]]] | None:
     """Fetch + compute diagnostics for one model.
 
@@ -223,14 +225,27 @@ def _build_one_snapshot(
     Returns ``(init_time_unix, valid_times, per_level_stacks)`` where
     ``per_level_stacks[L]`` is a dict of metric-name → (n_time, n_lat, n_lon)
     float32 stacks. Returns ``None`` if Open-Meteo returns no usable data.
+
+    When ``start_date`` and ``end_date`` are set the fetch covers that
+    historical (or forward) window instead of the live forecast. The
+    returned ``init_time_unix`` is overridden to ``start_date`` 00 Z so
+    the snapshot is filed under a stable, calibration-friendly key
+    rather than the live model's current init timestamp.
     """
     raw, timestamps, init_time = fetch_grid_fields(
         client, model, lat, lon,
         levels=levels, forecast_days=forecast_days,
+        start_date=start_date, end_date=end_date,
     )
     if not timestamps:
         logger.warning("Hewson precompute: %s returned no timestamps", model)
         return None
+
+    if start_date:
+        # Override init_time so the snapshot is keyed by the requested date,
+        # not whatever live cycle Open-Meteo happened to serve.
+        init_dt = datetime.fromisoformat(f"{start_date}T00:00:00+00:00")
+        init_time = int(init_dt.timestamp())
 
     if stride_hours < 1:
         raise ValueError(f"stride_hours must be >= 1, got {stride_hours}")
@@ -406,6 +421,8 @@ def run_once(
     retention_hours: int = DEFAULT_RETENTION_HOURS,
     dry_run: bool = False,
     skip_existing: bool = True,
+    start_date: str | None = None,
+    end_date: str | None = None,
     client=None,
 ) -> SnapshotResult:
     """Fetch + compute + write one snapshot per model.
@@ -428,6 +445,12 @@ def run_once(
     dry_run : compute but do not write NPZ or purge.
     skip_existing : if an NPZ for a model's current init already exists,
         skip the fetch + compute. Disable for forced recomputation.
+        Automatically forced to False when ``start_date`` is set, since
+        the live model-status init is meaningless for a backdated run.
+    start_date, end_date : ``YYYY-MM-DD`` strings. When set, the fetch
+        targets that historical (or forward) window instead of the live
+        forecast. The snapshot is keyed by ``start_date`` 00 Z. Purge is
+        skipped so calibration runs aren't garbage-collected by retention.
     client : optional OpenMeteoClient (for testing / dependency injection).
     """
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
@@ -436,6 +459,11 @@ def run_once(
 
     models = list(models) if models else list(DEFAULT_MODELS)
     levels = sorted(int(L) for L in (levels if levels else DEFAULT_LEVELS))
+    backdated = bool(start_date)
+    if backdated and not end_date:
+        end_date = start_date
+    if backdated:
+        skip_existing = False
 
     started = time.monotonic()
     result = SnapshotResult()
@@ -467,6 +495,7 @@ def run_once(
             built = _build_one_snapshot(
                 client, model, lat, lon, terrain_mask,
                 levels, forecast_days, stride_hours,
+                start_date=start_date, end_date=end_date,
             )
             if built is None:
                 result.skipped[model] = "no-data"
@@ -505,7 +534,7 @@ def run_once(
             logger.exception("Hewson precompute: %s failed", model)
             result.skipped[model] = "error"
 
-    if not dry_run:
+    if not dry_run and not backdated:
         result.purged = purge_old_snapshots(
             output_dir=output_dir, retention_hours=retention_hours,
         )

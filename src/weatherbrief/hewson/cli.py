@@ -55,6 +55,8 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
         retention_hours=args.retention_hours,
         dry_run=args.dry_run,
         skip_existing=not args.force,
+        start_date=args.date,
+        end_date=args.date,
     )
     for model, path in result.snapshots.items():
         if path is None:
@@ -184,6 +186,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_pc.add_argument(
         "--force", action="store_true",
         help="Recompute even if a snapshot for the current init exists.",
+    )
+    p_pc.add_argument(
+        "--date", default=None,
+        help="Backdate the fetch to a single ``YYYY-MM-DD`` (UTC) — fetches "
+             "Open-Meteo's archived forecast for that day across all 24 hours. "
+             "Snapshot is keyed by the requested date 00 Z and is exempt from "
+             "the retention purge. Use --stride-hours 1 for hourly granularity.",
     )
     p_pc.set_defaults(func=_cmd_precompute)
 

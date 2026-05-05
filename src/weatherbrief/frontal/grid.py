@@ -251,6 +251,8 @@ def fetch_grid_fields(
     lon: np.ndarray,
     levels: list[int] | None = None,
     forecast_days: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> tuple[dict[str, list], list[str], int]:
     """Fetch pressure-level fields for the full frontal grid from Open-Meteo.
 
@@ -269,6 +271,13 @@ def fetch_grid_fields(
     to ``min(endpoint.max_days, 4)`` which gives the frontal CLI its
     usual ~72 h horizon. Hewson precompute passes ``5`` to reach the 120 h
     §4.3 horizon.
+
+    ``start_date`` / ``end_date`` (``YYYY-MM-DD``) override ``forecast_days``
+    and request a specific historical or forward window. Open-Meteo serves
+    the best available run that covered the requested range — for past
+    dates this is the archived forecast (e.g. yesterday's 00Z run). When
+    set, ``init_time`` from the live model-status query is unreliable, so
+    the caller is expected to supply its own init timestamp.
     """
     from weatherbrief.fetch.model_status import fetch_model_metadata
     from weatherbrief.fetch.variables import MODEL_ENDPOINTS
@@ -286,6 +295,7 @@ def fetch_grid_fields(
     all_responses: list[dict] = []
     timestamps: list[str] | None = None
 
+    use_date_range = bool(start_date and end_date)
     days = forecast_days if forecast_days is not None else min(endpoint.max_days, 4)
     days = max(1, min(days, endpoint.max_days))
 
@@ -300,8 +310,12 @@ def fetch_grid_fields(
             "hourly": hourly_vars,
             "wind_speed_unit": "kn",
             "timezone": "UTC",
-            "forecast_days": days,
         }
+        if use_date_range:
+            params["start_date"] = start_date
+            params["end_date"] = end_date
+        else:
+            params["forecast_days"] = days
         if endpoint.model_param:
             params["models"] = endpoint.model_param
 
