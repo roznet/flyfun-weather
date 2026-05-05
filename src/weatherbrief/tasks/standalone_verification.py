@@ -259,11 +259,15 @@ def _fetch_forecasts_for_model(
         return all_results, client.call_count
 
     # Unlike the briefing-side parallel fetch (tasks/fetch.py), this path
-    # doesn't gate on `client.has_api_key`. Standalone runs the per-model
-    # loop sequentially, so at most _OPEN_METEO_CONCURRENCY (default 4)
-    # chunks are in flight at once — and each chunk takes ~100s, putting
-    # peak load at well under 1 RPS. Free-tier (600/min) is in no danger,
-    # and `_get_with_retry` would absorb a stray 429 anyway.
+    # doesn't gate on `client.has_api_key`. The briefing gate exists
+    # because briefings fire per-user-action on any deployment — including
+    # local dev without a key — so the gate keeps free-tier dev runs from
+    # tripping rate limits. Standalone is different: it's a scheduled
+    # server-side cycle (twice daily), and a deployment that runs it at
+    # all is expected to have the paid key set. Without the key the cycle
+    # would still complete (peak ~4 in-flight requests, well under
+    # 600/min), but the daily call budget for verification at full
+    # watchlist scale belongs in a paid plan regardless of parallelism.
     max_workers = max(1, min(_OPEN_METEO_CONCURRENCY, total_chunks))
     total_calls = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
