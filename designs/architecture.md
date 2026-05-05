@@ -54,6 +54,8 @@ Optional outputs:
 
 **Task modules** (`tasks/`): Pipeline stages extracted into independent modules for testability and incremental re-runs. `pipeline.py` is now a thin orchestrator calling `run_fetch()` → `run_analysis()` → `run_advisories()` → `run_route_weather()` (D-0) → optional outputs. Each task module can also run standalone from saved artifacts (e.g. `run_advisories_from_pack()`).
 
+**Progressive render via SSE** (`/refresh/stream`, PR #118): the pipeline emits a `briefing_ready` event after the snapshot is saved (post-advisories, post-GRAMET) but **before** the LLM digest runs. The SSE handler persists a *provisional* `BriefingPackRow` at this milestone and pushes the event with the pack timestamp. The frontend shows the briefing immediately while `digestPending` is true, then patches in the digest when the `complete` event lands ~20-30s later. Total perceived latency drops from ~80s to ~55s. The provisional pack is rewritten with `digest_path` on completion — same row, no second insert.
+
 ## Package Layout
 
 ```
@@ -276,7 +278,7 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/flights/{id}/packs` | GET | List pack history |
 | `/api/flights/{id}/packs/latest` | GET | Most recent pack |
 | `/api/flights/{id}/packs/refresh` | POST | Trigger new briefing fetch (owner only) |
-| `/api/flights/{id}/packs/refresh/stream` | POST | SSE streaming refresh with progress |
+| `/api/flights/{id}/packs/refresh/stream` | POST | SSE streaming refresh with progress (emits `progress`, `briefing_ready`, `complete`, `error`) |
 | `/api/flights/{id}/packs/{ts}` | GET | Pack metadata |
 | `/api/flights/{id}/packs/{ts}/snapshot` | GET | Raw forecast JSON |
 | `/api/flights/{id}/packs/{ts}/gramet` | GET | GRAMET PDF (or PNG fallback) |

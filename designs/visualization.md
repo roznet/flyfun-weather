@@ -99,6 +99,8 @@ PREFERRED_METHOD_LAYER = {
 
 **Compact mode** collapses each group to the user's preferred method. Defaults (for new users and migrated existing users): Soft NWP clouds, Ogimet-NWP icing, CAT (Ri) turbulence, NWP Convective. User preferences from the backend override these defaults. Legacy values (`dd`, `ogimet_dd`, `thermo`) are auto-upgraded to GRAMET-aligned defaults in `_parse_service_toggles()`.
 
+The compact-mode invariant — *only* the preferred layer in each group is enabled — is enforced by `getCompactLayerOverrides(preferredMethods)` (`layer-registry.ts`) and applied in two places: on the mode transition (`displayMode → compact`) and once the async `fetchPreferences()` settles. Both paths are needed: clicking compact before prefs load, or booting straight into compact (the persisted default) with stale extras in localStorage, would otherwise leave non-preferred layers rendering invisibly with no UI to toggle them off (the panel only renders the preferred layer's checkbox in compact mode). When `preferredMethods` is empty, the override falls back to each group's `defaultEnabled` layer rather than disabling all.
+
 ## Preset System
 
 Layer presets provide one-click configurations. Currently one preset:
@@ -338,7 +340,8 @@ Toggled via a button pair in the briefing page header. The mode is `'compact' | 
 The freshness bar (`renderFreshnessBar()` in `briefing-ui.ts`) shows data age and model basis:
 
 - **Basis line:** `"Based on GFS 12Z, ECMWF 00Z, ..."` from `pack.model_init_times`
-- **GRIB annotation:** When `pack.grib_init_times[model]` differs from `pack.model_init_times[model]`, displays `"GFS 12Z (GRIB 18Z)"` — indicates Open-Meteo data from one cycle, GRIB enrichment from another
+- **Provider-aware annotation:** each model badge shows the *primary* provider (Open-Meteo or direct GRIB) so users can tell at a glance whether a given model was sourced via OM or fetched directly. When `pack.grib_init_times[model]` differs from `pack.model_init_times[model]`, the run hour also surfaces (e.g. `"GFS 12Z (GRIB 18Z)"`).
+- **Per-source (i) popover:** clicking the info icon opens a table grouped by model (`renderSourcesPopupContent`), one row per source detailing provider, run hour, observed publish time, and next-expected update. Comes from `pack.model_sources` joined with the live marker store data on `/freshness`.
 - **States:** current (muted), stale (amber), refreshing (animated dots spinner)
 - **Force refresh link:** shown for admins when data is stale
 

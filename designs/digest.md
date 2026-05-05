@@ -127,6 +127,14 @@ Structured output with 11 fields:
 
 `format_digest_markdown()` produces spec-compliant output with assessment icon, labeled sections, and separator lines. Saved to `data/digests/{target_date}/d-{N}_{fetch_date}/digest.md`.
 
+### DWD Synoptic Overview Side-Output
+
+For Europe routes, the digest pipeline also fetches DWD German weather text, translates/extracts it via a cheap LLM (`digest/dwd_translate.py`, content-hash cached), and uses the result as briefer context. The translated entries are also persisted as `pack_dir/dwd_overview.json` (`tasks/outputs.py:_save_dwd_overview`) and exposed via `GET /packs/{ts}/dwd-overview`.
+
+**Plumbing:** `dwd_translated` is intentionally kept out of the LangGraph state (commit 2589691d, to keep LangSmith traces small). `run_digest()` attaches it to the returned dict post-graph so `outputs.py` can save it — this contract was silently broken from 2589691d (Mar 2026) until commit 6d722099 (May 2026) restored it. If 404s reappear, that's the wire to check first.
+
+**UI gating:** `renderDWDOverview` in `briefing-ui.ts` is admin-only (`is_admin` flag from `/auth/me`). Non-admins never see the section to keep the briefing UI focused; admins see it for debugging/inspection.
+
 ### System Prompt
 
 `configs/weather_digest/prompts/briefer_v1.md`: aviation weather briefer persona, instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty.

@@ -23,7 +23,7 @@ Three modules under `src/weatherbrief/fetch/freshness/`:
 |---|---|
 | `registry.py` | `SourceConfig` dataclass, `SOURCE_REGISTRY` dict (8 source/model pairs), pure functions: `next_run_after`, `next_cycle_after`, `run_horizon`, `cycle_init_for`, `expected_delivery_for_init`, `initial_marker_for`. |
 | `markers.py` | `Marker` dataclass + `MarkerStore` (asyncio-locked, singleton via `get_store()`). Records `(cycle_init, arrival_wallclock)` observations in a maxlen=100 deque. |
-| `sources.py` | Unified `check_source(source, model)` dispatch wrapping existing helpers (`grib_fetch.find_latest_run` for GFS/NOAA, `icon_eu_fetch.find_latest_icon_eu_run` for ICON-EU/DWD, `ecmwf_watcher.get_latest_ready` for ECMWF/direct, `model_status.fetch_model_metadata` for `*:openmeteo`). |
+| `sources.py` | Unified `check_source(source, model)` dispatch wrapping existing helpers (`grib_fetch.find_latest_run` for GFS/NOAA, `icon_eu_fetch.find_latest_icon_eu_run` for ICON-EU/DWD, `ecmwf_watcher.get_latest_ready` for ECMWF/direct, `model_status.fetch_model_metadata` for `*:openmeteo`). Each dispatch returns an `Observation(init, published_at)` — `published_at` is the provider's `Last-Modified` header for HTTP sources (NOAA, DWD), the OM `last_run_availability_time` for `*:openmeteo`, and the sentinel-file mtime for ECMWF direct (no central publish wallclock). |
 
 The 5-min loop lives in `scheduler.run_freshness_loop` — bootstraps the store, then on each tick: for every `(source, model)` whose `next_expected` has passed, run `check_source` (offloaded to a thread), call `store.update`. Most ticks no-op.
 
@@ -73,6 +73,7 @@ if not status.fresh:
 - **Horizon-aware.** Without this, a 78h intermediate ICON-EU run would wrongly invalidate a 120h main-run pack for long-haul flights.
 - **Exponential slip backoff.** `slip_bump(n) = min(retry_interval × 2^(n-1), max_retry_interval)`. Default base 10min, cap 1h, 8 slips → ~6h before cycle-jump. Replaces uniform `retry_interval × 12 = 2h` cap that hammered slow-publishing OM endpoints.
 - **`(cycle_init, arrival_wallclock)` observations.** Stored as tuples in a 100-entry deque per marker. Lets the admin endpoint compute per-cycle-hour median/p90 delay vs. registry expectation, surfacing drift without needing log retention or a DB table.
+- **`Marker.published_at` distinct from `arrival_wallclock`.** `published_at` is the provider-reported time the run became downloadable (HTTP `Last-Modified` or OM availability field); `arrival_wallclock` is when *we* observed it. The frontend per-source freshness popover surfaces `published_at`, and the admin endpoint exposes both — the gap measures our polling lag, separately from provider drift.
 - **Pack `model_sources` recorded at enrichment time, backfilled at read time.** Legacy packs missing the column infer source from `grib_init_times` presence (a model in `grib_init_times` → direct; otherwise OM).
 
 ## Patterns

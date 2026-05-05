@@ -52,6 +52,17 @@ Data source:
 ### Accuracy Stats
 - Embedded iframe to `/verification.html?embed`
 
+## URL State & Share Links
+
+The forecast and accuracy tabs both deep-link via the URL query string so any view can be shared as a stable link (PR #117).
+
+- **Encoder/decoder**: `web/ts/utils/url-state.ts` — parses + serialises the current view (active tab, day, hour, model, metric, consensus mode, accuracy filters) to/from `URLSearchParams`. State changes write back via `history.replaceState` (no history pollution).
+- **Share button**: `web/ts/utils/share-link.ts` — copies the canonical URL for the current view to the clipboard with a transient toast.
+- **Two URL shapes**: forecast tab uses `?tab=forecast&day=&hour=&model=&metric=&consensus=`; accuracy tab uses `?tab=accuracy&model=&days_out=&metric=&period=`. The `tab=` param is the dispatch key.
+- **Backwards-compatible**: bookmarks without `tab=` default to forecast tab with the page-level defaults — unchanged behavior.
+
+Pattern: any new control on these tabs that affects the rendered view should be added to the encoder/decoder so the share-link round-trip stays lossless.
+
 ## Consensus Algorithm
 
 Server-side in `map_queries.py::_consensus()`:
