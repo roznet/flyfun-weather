@@ -178,16 +178,18 @@ def _fetch_forecasts_for_model(
             for a in chunk_list
         ]
 
+        # Time the whole retry ladder, not just the successful attempt: a
+        # chunk that needed retries took that long to deliver useful data,
+        # and that's the signal we want surfaced when scanning logs for
+        # slow chunks.
+        chunk_started = time.monotonic()
         forecasts = None
-        fetch_seconds = 0.0
         for attempt in range(3):
-            attempt_started = time.monotonic()
             try:
                 forecasts = client.fetch_multi_point(
                     points, model_source,
                     start_date=start_date, end_date=end_date,
                 )
-                fetch_seconds = time.monotonic() - attempt_started
                 break
             except Exception:
                 if attempt < 2:
@@ -209,7 +211,8 @@ def _fetch_forecasts_for_model(
 
         logger.info(
             "Model %s chunk %d/%d: processing %d airports (fetch %.1fs)",
-            model, chunk_num, total_chunks, len(chunk_list), fetch_seconds,
+            model, chunk_num, total_chunks, len(chunk_list),
+            time.monotonic() - chunk_started,
         )
         chunk_results: list[dict] = []
         for airport, wpf in zip(chunk_list, forecasts):
@@ -255,6 +258,12 @@ def _fetch_forecasts_for_model(
     if not chunks:
         return all_results, client.call_count
 
+    # Unlike the briefing-side parallel fetch (tasks/fetch.py), this path
+    # doesn't gate on `client.has_api_key`. Standalone runs the per-model
+    # loop sequentially, so at most _OPEN_METEO_CONCURRENCY (default 4)
+    # chunks are in flight at once — and each chunk takes ~100s, putting
+    # peak load at well under 1 RPS. Free-tier (600/min) is in no danger,
+    # and `_get_with_retry` would absorb a stray 429 anyway.
     max_workers = max(1, min(_OPEN_METEO_CONCURRENCY, total_chunks))
     total_calls = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
