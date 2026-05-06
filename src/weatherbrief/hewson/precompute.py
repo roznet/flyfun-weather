@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -196,6 +197,13 @@ class SnapshotResult:
     elapsed_seconds: float = 0.0
     purged: int = 0
     api_calls_total: int = 0
+    # Per-model timing breakdown in seconds. Helpful when correlating slow
+    # cycles with droplet load — fetch is network-bound (Open-Meteo round
+    # trips), compute is GIL-bound (numpy gradients + MetPy θe), write is
+    # disk-bound (np.savez_compressed).
+    fetch_seconds: dict[str, float] = field(default_factory=dict)
+    compute_seconds: dict[str, float] = field(default_factory=dict)
+    write_seconds: dict[str, float] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +222,7 @@ def _build_one_snapshot(
     stride_hours: int = DEFAULT_STRIDE_HOURS,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> tuple[int, np.ndarray, dict[int, dict[str, np.ndarray]]] | None:
+) -> tuple[int, np.ndarray, dict[int, dict[str, np.ndarray]], float, float] | None:
     """Fetch + compute diagnostics for one model.
 
     Fetches hourly data from Open-Meteo (its native cadence), then decimates
@@ -222,9 +230,12 @@ def _build_one_snapshot(
     — this both shrinks the output NPZ and skips ``stride_hours - 1`` compute
     passes per step. See ``DEFAULT_STRIDE_HOURS`` for the rationale.
 
-    Returns ``(init_time_unix, valid_times, per_level_stacks)`` where
-    ``per_level_stacks[L]`` is a dict of metric-name → (n_time, n_lat, n_lon)
-    float32 stacks. Returns ``None`` if Open-Meteo returns no usable data.
+    Returns ``(init_time_unix, valid_times, per_level_stacks, fetch_secs,
+    compute_secs)`` where ``per_level_stacks[L]`` is a dict of metric-name
+    → (n_time, n_lat, n_lon) float32 stacks. ``fetch_secs`` and
+    ``compute_secs`` are wall-time measurements for instrumentation; the
+    write step happens in :func:`run_once` so it's timed there. Returns
+    ``None`` if Open-Meteo returns no usable data.
 
     When ``start_date`` and ``end_date`` are set the fetch covers that
     historical (or forward) window instead of the live forecast. The
@@ -232,11 +243,13 @@ def _build_one_snapshot(
     the snapshot is filed under a stable, calibration-friendly key
     rather than the live model's current init timestamp.
     """
+    fetch_t0 = time.monotonic()
     raw, timestamps, init_time = fetch_grid_fields(
         client, model, lat, lon,
         levels=levels, forecast_days=forecast_days,
         start_date=start_date, end_date=end_date,
     )
+    fetch_secs = time.monotonic() - fetch_t0
     if not timestamps:
         logger.warning("Hewson precompute: %s returned no timestamps", model)
         return None
@@ -273,6 +286,7 @@ def _build_one_snapshot(
         for L in levels
     }
 
+    compute_t0 = time.monotonic()
     for i, h in enumerate(keep_indices):
         for L in levels:
             fields = reshape_to_fields(raw, lat, lon, h, terrain_mask, level_hPa=L)
@@ -299,8 +313,9 @@ def _build_one_snapshot(
         per_level[L]["tendency"] = tendency_k_per_hour(
             per_level[L]["theta_e"], step_hours=stride_hours,
         )
+    compute_secs = time.monotonic() - compute_t0
 
-    return init_time, valid_times, per_level
+    return init_time, valid_times, per_level, fetch_secs, compute_secs
 
 
 # ---------------------------------------------------------------------------
@@ -455,8 +470,6 @@ def run_once(
     """
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
 
-    import time
-
     models = list(models) if models else list(DEFAULT_MODELS)
     levels = sorted(int(L) for L in (levels if levels else DEFAULT_LEVELS))
     backdated = bool(start_date)
@@ -500,8 +513,10 @@ def run_once(
             if built is None:
                 result.skipped[model] = "no-data"
                 continue
-            init_time, valid_times, per_level = built
+            init_time, valid_times, per_level, fetch_secs, compute_secs = built
             result.init_times[model] = init_time
+            result.fetch_seconds[model] = fetch_secs
+            result.compute_seconds[model] = compute_secs
 
             if init_time == 0:
                 logger.warning(
@@ -514,20 +529,27 @@ def run_once(
             path = snapshot_path(model, init_time, output_dir)
             if dry_run:
                 logger.info(
-                    "Hewson precompute (dry-run): would write %s", path,
+                    "Hewson precompute (dry-run): would write %s "
+                    "(fetch=%.1fs compute=%.1fs)",
+                    path, fetch_secs, compute_secs,
                 )
                 result.snapshots[model] = None
             else:
+                write_t0 = time.monotonic()
                 write_snapshot(
                     path, init_time, valid_times, lat, lon,
                     levels, stride_hours, per_level,
                 )
+                write_secs = time.monotonic() - write_t0
+                result.write_seconds[model] = write_secs
                 size_kb = path.stat().st_size / 1024
                 logger.info(
                     "Hewson precompute: wrote %s "
-                    "(%d timesteps × %d levels, stride=%dh, %.1f KB)",
+                    "(%d timesteps × %d levels, stride=%dh, %.1f KB) "
+                    "fetch=%.1fs compute=%.1fs write=%.1fs",
                     path, len(valid_times), len(levels),
                     stride_hours, size_kb,
+                    fetch_secs, compute_secs, write_secs,
                 )
                 result.snapshots[model] = path
         except Exception:
@@ -541,13 +563,18 @@ def run_once(
 
     result.api_calls_total = getattr(client, "call_count", 0)
     result.elapsed_seconds = time.monotonic() - started
+    fetch_total = sum(result.fetch_seconds.values())
+    compute_total = sum(result.compute_seconds.values())
+    write_total = sum(result.write_seconds.values())
     logger.info(
         "Hewson precompute: done (%.1fs) — %d written, %d skipped, "
-        "%d purged, %d Open-Meteo API calls",
+        "%d purged, %d Open-Meteo API calls "
+        "[fetch=%.1fs compute=%.1fs write=%.1fs]",
         result.elapsed_seconds,
         len([p for p in result.snapshots.values() if p is not None]),
         len(result.skipped),
         result.purged,
         result.api_calls_total,
+        fetch_total, compute_total, write_total,
     )
     return result
