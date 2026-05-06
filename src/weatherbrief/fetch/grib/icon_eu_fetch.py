@@ -25,12 +25,17 @@ logger = logging.getLogger(__name__)
 DWD_BASE_URL = "https://opendata.dwd.de/weather/nwp/icon-eu/grib"
 
 # ICON-EU model-level horizon depends on the run cycle (verified empirically
-# against opendata.dwd.de):
-# - Main runs (00z, 06z, 12z, 18z): model-level data published up to 120h
-# - Short runs (03z, 09z, 15z, 21z): hourly to ~30h then 6-hourly to 48h
+# against opendata.dwd.de directory listings):
+# - Main runs (00z, 06z, 12z, 18z): hourly to 78h, 3-hourly to 120h
+# - Short runs (03z, 09z, 15z, 21z): hourly to 30h, then 6-hourly to 48h
+#
+# We cap short-run usage at 30h so the run-picker falls back to the prior main
+# run for any flight extending past +30h. This keeps every briefing on a
+# uniform hourly grid (short run hourly 0-30h, OR main run hourly 0-78h) and
+# avoids 404s on f031–f035/f037–f041/f043–f047 which are not published.
 ICON_EU_MAIN_CYCLES = {0, 6, 12, 18}
 ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN = 120
-ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = 48
+ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = 30
 
 
 def icon_eu_model_level_max_hour(init_hour: int) -> int:

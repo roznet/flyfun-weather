@@ -51,9 +51,11 @@ from weatherbrief.models import (
 
 logger = logging.getLogger(__name__)
 
-# GRIB downloads use 8 workers; pool_maxsize must be at least that large
-# to avoid urllib3 "Connection pool is full, discarding connection" warnings.
-_POOL_MAXSIZE = 12
+# GFS enrichment fans out into two parallel branches (_enrich_clwmr_icmr +
+# _enrich_cloud_diagnostics) that share one session, each running 8 download
+# workers — peak 16 concurrent connections. Sized to 20 to leave headroom for
+# concurrent .idx fetches and avoid urllib3 "Connection pool is full" warnings.
+_POOL_MAXSIZE = 20
 
 _M_TO_FT = 3.28084
 
