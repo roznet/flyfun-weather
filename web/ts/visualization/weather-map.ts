@@ -366,7 +366,12 @@ const FORECAST_LEGENDS: Record<ForecastMetric, { title: string; items: Array<{ c
 
 // --- Map class ---
 
-export type AirportContextHandler = (icao: string, lat: number, lon: number) => void;
+/** Right-click handler — receives only the ICAO. The map already has the
+ *  coords via the marker, but the host re-resolves them server-side
+ *  (via `_resolve_airport_coords`) so passing them here would be dead
+ *  payload. If a future host wants to skip that lookup, extend the
+ *  signature then. */
+export type AirportContextHandler = (icao: string) => void;
 
 export class WeatherMap {
   private container: HTMLElement;
@@ -488,7 +493,7 @@ export class WeatherMap {
       marker.on('contextmenu', (e: L.LeafletMouseEvent) => {
         L.DomEvent.preventDefault(e.originalEvent);
         L.DomEvent.stopPropagation(e.originalEvent);
-        this.contextHandler?.(apt.icao, apt.lat, apt.lon);
+        this.contextHandler?.(apt.icao);
       });
       marker.addTo(this.markersGroup);
       this.icaoToMarker.set(apt.icao, { marker, weight: baseWeight, color: border });

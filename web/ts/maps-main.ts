@@ -58,6 +58,12 @@ let fcHour = 12;
 let fcModel = 'worst';
 let fcMetric: ForecastMetric = 'flight_category';
 
+// Number of forward hours the airport-profile panel requests beyond the
+// selected start hour. Mirror of `_DEFAULT_WINDOW_H` in the Python
+// endpoint — both must agree, otherwise the cross-section X-axis would
+// show fewer/more time ticks than the streamed payload contains.
+const AIRPORT_PROFILE_WINDOW_H = 3;
+
 // Airport profile panel state (right-click on a forecast marker)
 let airportPanel: AirportProfilePanel | null = null;
 let airportPanelIcao: string | null = null;
@@ -186,7 +192,7 @@ function openAirportPanel(icao: string, opts: { initialModel?: string } = {}): v
   airportPanelIcao = icao;
   forecastMap?.setHighlightedIcao(icao);
   airportPanel.load({
-    icao, startHour: forecastStartHour(), windowH: 3,
+    icao, startHour: forecastStartHour(), windowH: AIRPORT_PROFILE_WINDOW_H,
   });
   syncUrl();
   // The map width changed — let Leaflet re-layout.
@@ -208,7 +214,7 @@ function refreshAirportPanelOnHourChange(): void {
   // Map's day/hour changed: reload the open panel; metric changes are ignored.
   if (!airportPanel || !airportPanelIcao) return;
   airportPanel.load({
-    icao: airportPanelIcao, startHour: forecastStartHour(), windowH: 3,
+    icao: airportPanelIcao, startHour: forecastStartHour(), windowH: AIRPORT_PROFILE_WINDOW_H,
   });
 }
 

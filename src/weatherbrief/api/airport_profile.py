@@ -38,6 +38,8 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
 
+from weatherbrief.api.deps import airports_db as _airports_db, data_dir as _data_dir
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/maps", tags=["maps"])
@@ -119,28 +121,38 @@ _limiter = _StreamLimiter()
 
 
 class _GribRunDedup:
-    """Process-wide async-lock pool keyed by (model, init_time_unix).
+    """Process-wide async-lock pool keyed by (model, forecast_start_unix).
 
-    Two simultaneous airport-profile streams on the same model+run
-    currently both invoke `enrich_forecasts`, which redownloads the same
-    GFS / ICON GRIB file (see #123 for the cache-layer race). This pool
-    serialises the enrichment phase so the second request sees a warm
-    cache and skips the download.
+    Two simultaneous airport-profile streams that share both the model
+    AND the user-selected forecast start hour serialise their enrichment
+    phase so the second request sees a warm cache. The most common
+    bursty pattern (multiple users right-clicking different airports
+    while the map's hour selector hasn't moved) hits this exactly.
 
-    Locks are created lazily and never freed — there are at most ~6 active
-    GRIB runs at any moment (3 models × 2 cycles a day) so unbounded
-    growth is not a concern.
+    What this does NOT cover: two streams whose forecast start hours
+    differ but whose underlying GRIB run is the same (e.g. user A on
+    12Z forecast, user B on 15Z forecast, both served by the same GFS
+    06Z run). Resolving the actual run init would require running
+    ``find_best_*_run`` before acquiring the lock, which adds a slow
+    pre-step to every request. Issue #123 will eliminate the race at
+    the cache layer (``put_cached`` becoming atomic via tempfile +
+    rename), at which point this lock can be removed entirely.
+
+    Locks are created lazily and never freed. Pool size is bounded by
+    ``unique (model, forecast_start)`` pairs ever clicked — in practice
+    a few hundred entries before a server restart, well under any
+    memory pressure threshold.
     """
 
     def __init__(self) -> None:
         self._sync_lock = threading.Lock()
         self._locks: dict[tuple[str, int], asyncio.Lock] = {}
 
-    def lock_for(self, model: str, run_init_unix: int | None) -> asyncio.Lock:
-        # Use a sentinel for "no init time available yet" so per-model
-        # bursts before the first GRIB resolves still serialise rather
-        # than all charging at the cold cache.
-        key = (model, run_init_unix if run_init_unix is not None else -1)
+    def lock_for(self, model: str, forecast_start_unix: int | None) -> asyncio.Lock:
+        # Sentinel `-1` buckets all "no start hour known" calls under a
+        # single key — kept for API symmetry; the airport-profile call
+        # site always passes a real timestamp.
+        key = (model, forecast_start_unix if forecast_start_unix is not None else -1)
         with self._sync_lock:
             lock = self._locks.get(key)
             if lock is None:
@@ -164,9 +176,6 @@ def _iso_utc(dt: datetime) -> str:
     else:
         dt = dt.astimezone(timezone.utc)
     return dt.isoformat()
-
-
-from weatherbrief.api.deps import airports_db as _airports_db, data_dir as _data_dir
 
 
 def _resolve_airport_coords(icao: str, airports_db_path: str) -> tuple[float, float, float | None] | None:
@@ -240,18 +249,22 @@ def _surface_from_cache(
     ).scalars().all()
 
     # Pick the freshest snapshot per forecast_hour (latest model_init_time).
+    # Normalise every key to `timezone.utc` regardless of how the driver
+    # presents the value: SQLite returns naive (treat as UTC), MySQL
+    # returns aware but the offset object may be `timezone(timedelta(0))`
+    # rather than `timezone.utc` — both compare equal as datetimes but
+    # Python uses identity-then-equality on dict lookup, so converting
+    # explicitly with astimezone() avoids any subtle miss.
     by_hour: dict[datetime, AirportForecastSnapshotRow] = {}
     for r in rows:
         fh = r.forecast_hour
-        if fh.tzinfo is None:
-            fh = fh.replace(tzinfo=timezone.utc)
+        fh = fh.replace(tzinfo=timezone.utc) if fh.tzinfo is None else fh.astimezone(timezone.utc)
         if fh not in by_hour:
             by_hour[fh] = r
 
     result: list[dict[str, Any]] = []
     for h in hours:
-        # Match either tz-aware or naive (DBs vary).
-        row = by_hour.get(h) or by_hour.get(h.replace(tzinfo=None))
+        row = by_hour.get(h)
         if row is None:
             continue
         result.append({
@@ -279,10 +292,13 @@ def _fetch_pressure_levels(
     lon: float,
     model: str,
     hours: list[datetime],
-):
+) -> Any:
     """Fetch hourly pressure-level data from Open-Meteo for one airport.
 
-    Returns a WaypointForecast (or None on failure).
+    Returns a ``WaypointForecast`` (or ``None`` on failure). The annotation
+    is ``Any`` rather than the real type to keep ``weatherbrief.models``
+    out of this module's import graph — matches the lazy-import pattern
+    used elsewhere in this file.
     """
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
     from weatherbrief.models import RoutePoint
@@ -376,18 +392,23 @@ def _grib_enrich_levels(
     if waypoint_forecast is None or not hours:
         return {"sources": {}, "skipped": {"all": "no_levels"}}
 
-    # Fast preflight: if nothing is configured locally, skip the heavy
-    # call entirely so dev environments don't pay a futile S3 round-trip
-    # on every right-click. The check is intentionally cheap and
-    # conservative — production deployments set ECMWF_GRIB_DIR to a real
-    # populated directory; dev typically doesn't.
+    # Fast preflight: skip the heavy call when no local GRIB is
+    # configured so dev environments don't pay a futile S3 round-trip
+    # on every right-click.
+    #
+    # Assumption: production deployments that have ICON-EU and/or GFS
+    # enrichment configured ALSO have ECMWF_GRIB_DIR populated — the
+    # three sources are wired together in the same deploy and we
+    # haven't seen a partial setup in the wild. ECMWF presence is a
+    # cheap proxy for "is this prod?" without scanning each source's
+    # cache directory. If a deployment ever ships ICON/GFS without
+    # ECMWF, this check would silently skip enrichment for it; revisit
+    # then.
     from weatherbrief.fetch.grib.ecmwf_fetch import ecmwf_grib_dir
     ecmwf_dir = ecmwf_grib_dir()
     # is_dir() returns False for nonexistent paths — no exception risk.
     if not (ecmwf_dir.is_dir() and any(ecmwf_dir.iterdir())):
         return {"sources": {}, "skipped": {"all": "no_local_grib_configured"}}
-
-    from datetime import timezone as _tz
 
     from weatherbrief.fetch.grib import enrich_forecasts
     from weatherbrief.models import RouteCrossSection, RoutePoint
@@ -397,7 +418,7 @@ def _grib_enrich_levels(
     cs = RouteCrossSection(
         model=src,
         route_points=[point],
-        fetched_at=datetime.now(_tz.utc),
+        fetched_at=datetime.now(timezone.utc),
         point_forecasts=[waypoint_forecast],
     )
 
@@ -577,11 +598,13 @@ async def get_airport_profile(
             # (e.g. PermissionError on iterdir()) don't kill the stream — the
             # client still gets the derived phase on the unenriched profile.
             #
-            # Wrapped in `_grib_dedup.lock_for(model, hours[0])` so two
-            # concurrent panels for the same model+hour don't both download
-            # the same GRIB file. The second panel waits for the first's
-            # enrichment to finish, then enters with a warm cache. See #123
-            # for the deeper cache-layer atomicity issue.
+            # Serialise concurrent enrichment calls that share both
+            # model and forecast start hour. Catches the common bursty
+            # pattern (multiple users right-clicking different airports
+            # while the map's hour selector hasn't moved); does NOT
+            # catch two requests whose forecast hours differ but whose
+            # underlying GRIB run is the same. See #123 for the deeper
+            # cache-layer atomicity fix that supersedes this lock.
             if enrich and wf is not None:
                 run_lock = _grib_dedup.lock_for(model, int(hours[0].timestamp()))
                 async with run_lock:
