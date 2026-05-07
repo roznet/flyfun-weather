@@ -377,7 +377,12 @@ export class WeatherMap {
   private zoomHandler: (() => void) | null = null;
   private contextHandler: AirportContextHandler | null = null;
   private highlightedIcao: string | null = null;
-  private icaoToMarker: Map<string, L.CircleMarker> = new Map();
+  /** Marker registry. Stores the original style alongside the marker so
+   *  `setHighlightedIcao(null)` can restore the exact pre-highlight
+   *  appearance — consensus mode uses weight=2 + agreement-color border,
+   *  individual-model mode uses weight=1, and a single restored value
+   *  would silently change the visual encoding. */
+  private icaoToMarker: Map<string, { marker: L.CircleMarker; weight: number; color: string }> = new Map();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -395,13 +400,15 @@ export class WeatherMap {
     if (this.highlightedIcao === icao) return;
     if (this.highlightedIcao) {
       const prev = this.icaoToMarker.get(this.highlightedIcao);
-      prev?.setStyle({ weight: 1 });
+      if (prev) prev.marker.setStyle({ weight: prev.weight, color: prev.color });
     }
     this.highlightedIcao = icao;
     if (icao) {
-      const marker = this.icaoToMarker.get(icao);
-      marker?.setStyle({ weight: 4, color: '#fbbf24' });
-      marker?.bringToFront();
+      const entry = this.icaoToMarker.get(icao);
+      if (entry) {
+        entry.marker.setStyle({ weight: 4, color: '#fbbf24' });
+        entry.marker.bringToFront();
+      }
     }
   }
 
@@ -464,13 +471,14 @@ export class WeatherMap {
       const border = consensusMode
         ? (AGREEMENT_COLORS[getAgreementForMetric(getConsensus(apt, consensusMode), metric) ?? ''] || '#888')
         : color;
+      const baseWeight = consensusMode ? 2 : 1;
 
       const marker = L.circleMarker([apt.lat, apt.lon], {
         radius: r,
         fillColor: color,
         fillOpacity: 0.85,
         color: border,
-        weight: consensusMode ? 2 : 1,
+        weight: baseWeight,
         opacity: 1,
       });
 
@@ -483,7 +491,7 @@ export class WeatherMap {
         this.contextHandler?.(apt.icao, apt.lat, apt.lon);
       });
       marker.addTo(this.markersGroup);
-      this.icaoToMarker.set(apt.icao, marker);
+      this.icaoToMarker.set(apt.icao, { marker, weight: baseWeight, color: border });
     }
 
     this.attachZoomHandler();
@@ -491,8 +499,11 @@ export class WeatherMap {
 
     // Re-apply highlight if the currently-highlighted airport is still on the map.
     if (this.highlightedIcao) {
-      const m = this.icaoToMarker.get(this.highlightedIcao);
-      if (m) { m.setStyle({ weight: 4, color: '#fbbf24' }); m.bringToFront(); }
+      const entry = this.icaoToMarker.get(this.highlightedIcao);
+      if (entry) {
+        entry.marker.setStyle({ weight: 4, color: '#fbbf24' });
+        entry.marker.bringToFront();
+      }
     }
   }
 

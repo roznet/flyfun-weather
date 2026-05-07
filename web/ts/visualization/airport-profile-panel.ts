@@ -54,6 +54,10 @@ export interface AirportProfilePanelOptions {
   container: HTMLElement;
   initialModel?: string;
   onClose?: () => void;
+  /** Fired when the user picks a different model from the panel's
+   *  dropdown — lets the host round-trip the selection through URL
+   *  state without polling. */
+  onModelChange?: (model: string) => void;
 }
 
 export interface AirportProfileRequest {
@@ -69,6 +73,7 @@ export class AirportProfilePanel {
   private model: string;
   private viewMode: ViewMode;
   private onClose?: () => void;
+  private onModelChange?: (model: string) => void;
 
   private crossEl: HTMLDivElement;
   private skewtEl: HTMLDivElement;
@@ -91,6 +96,7 @@ export class AirportProfilePanel {
     this.model = opts.initialModel ?? 'ecmwf';
     this.viewMode = loadViewMode();
     this.onClose = opts.onClose;
+    this.onModelChange = opts.onModelChange;
 
     this.container.classList.add('ap-panel');
     this.container.innerHTML = `
@@ -138,6 +144,7 @@ export class AirportProfilePanel {
     this.container.querySelector('.ap-panel-close')?.addEventListener('click', () => this.close());
     this.modelSel.addEventListener('change', () => {
       this.model = this.modelSel.value;
+      this.onModelChange?.(this.model);
       if (this.currentRequest) this.load(this.currentRequest);
     });
     viewGroup.addEventListener('click', (e) => {
@@ -156,6 +163,12 @@ export class AirportProfilePanel {
     if (!MODELS.includes(model as any)) return;
     this.model = model;
     this.modelSel.value = model;
+  }
+
+  /** Read the panel's current model — used by the host to round-trip
+   *  the panel's selection through the URL state. */
+  getModel(): string {
+    return this.model;
   }
 
   /** Start (or restart) loading the profile for a new airport / hour. */

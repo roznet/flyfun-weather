@@ -26,6 +26,7 @@ import json as json_mod
 import logging
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -43,11 +44,25 @@ _VALID_MODELS = ("gfs", "icon", "ecmwf")
 _DEFAULT_WINDOW_H = 3  # selected hour + 3 forward = 4 forecast hours
 
 
+def _iso_utc(dt: datetime) -> str:
+    """Serialize a datetime as a UTC-aware ISO 8601 string.
+
+    All time keys emitted by this endpoint go through here so that strict
+    equality (`===`) on the client matches between phases. Open-Meteo
+    sometimes returns naive datetimes; we treat those as UTC.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat()
+
+
 def _airports_db(request: Request) -> str:
     return request.app.state.db_path
 
 
-def _data_dir(request: Request):
+def _data_dir(request: Request) -> Path:
     """Shared data directory (DATA_DIR env var). GRIB cache lives under here."""
     return request.app.state.data_dir
 
@@ -138,7 +153,7 @@ def _surface_from_cache(
         if row is None:
             continue
         result.append({
-            "time": h.isoformat(),
+            "time": _iso_utc(h),
             "temperature_2m_c": row.temperature_2m_c,
             "dewpoint_2m_c": row.dewpoint_2m_c,
             "visibility_m": row.visibility_m,
@@ -157,6 +172,7 @@ def _surface_from_cache(
 
 
 def _fetch_pressure_levels(
+    icao: str,
     lat: float,
     lon: float,
     model: str,
@@ -186,17 +202,22 @@ def _fetch_pressure_levels(
         )
     except Exception:
         logger.warning(
-            "Airport profile: pressure-level fetch failed for %s/%s",
-            model, lat, exc_info=True,
+            "Airport profile: pressure-level fetch failed for %s %s (%.4f, %.4f)",
+            icao, model, lat, lon, exc_info=True,
         )
         return None
     return forecasts[0] if forecasts else None
 
 
 def _hourly_to_dict(h) -> dict[str, Any]:
-    """Project a HourlyForecast to a serializable dict (levels included)."""
+    """Project a HourlyForecast to a serializable dict (levels included).
+
+    The `time` key uses `_iso_utc()` so it round-trips exactly with the
+    `meta.hours[i]` strings on the client (Open-Meteo returns naive
+    datetimes which would otherwise miss the `+00:00` suffix).
+    """
     return {
-        "time": h.time.isoformat() if hasattr(h.time, "isoformat") else str(h.time),
+        "time": _iso_utc(h.time),
         "temperature_2m_c": h.temperature_2m_c,
         "dewpoint_2m_c": h.dewpoint_2m_c,
         "wind_speed_10m_kt": h.wind_speed_10m_kt,
@@ -251,14 +272,23 @@ def _grib_enrich_levels(
     stay intact and `analyze_sounding` still runs in the derived phase.
     """
     if waypoint_forecast is None or not hours:
-        return {"sources": {}, "skipped": "no_levels"}
+        return {"sources": {}, "skipped": {"all": "no_levels"}}
+
+    # Fast preflight: if nothing is configured locally, skip the heavy
+    # call entirely so dev environments don't pay a futile S3 round-trip
+    # on every right-click. The check is intentionally cheap and
+    # conservative — production deployments set ECMWF_GRIB_DIR to a real
+    # populated directory; dev typically doesn't.
+    from weatherbrief.fetch.grib.ecmwf_fetch import ecmwf_grib_dir
+    ecmwf_dir = ecmwf_grib_dir()
+    has_ecmwf_dir = ecmwf_dir.exists() and any(ecmwf_dir.iterdir()) if ecmwf_dir.exists() else False
+    if not has_ecmwf_dir:
+        return {"sources": {}, "skipped": {"all": "no_local_grib_configured"}}
 
     from datetime import timezone as _tz
 
     from weatherbrief.fetch.grib import enrich_forecasts
-    from weatherbrief.models import (
-        ModelSource, RouteCrossSection, RoutePoint, WaypointForecast as _WF,
-    )
+    from weatherbrief.models import RouteCrossSection, RoutePoint
 
     src = _model_to_source(model)
     point = RoutePoint(lat=lat, lon=lon, distance_from_origin_nm=0.0)
@@ -305,7 +335,7 @@ def _build_derived_payload(
     # Index hourly entries by their UTC time (naive form for matching).
     by_time: dict[Any, Any] = {}
     for h in waypoint_forecast.hourly:
-        ht = h.time.replace(tzinfo=None) if hasattr(h.time, "tzinfo") and h.time.tzinfo else h.time
+        ht = h.time.replace(tzinfo=None) if h.time.tzinfo else h.time
         by_time[ht] = h
 
     results: list[dict[str, Any]] = []
@@ -325,7 +355,7 @@ def _build_derived_payload(
             continue
         results.append({
             "point_index": idx,
-            "time": target_hour.isoformat(),
+            "time": _iso_utc(target_hour),
             "sounding": sa.model_dump(mode="json"),
         })
     return results
@@ -338,11 +368,10 @@ async def get_airport_profile(
     start_hour: str = Query(..., description="ISO 8601 UTC start hour, e.g. 2026-05-07T12:00:00Z"),
     window_h: int = Query(default=_DEFAULT_WINDOW_H, ge=0, le=12),
     enrich: bool = Query(default=True, description="Run local-GRIB enrichment phase"),
-    request: Request = None,  # type: ignore[assignment]
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
     airports_db: str = Depends(_airports_db),
-    data_dir = Depends(_data_dir),
+    data_dir: Path = Depends(_data_dir),
 ):
     """Stream airport profile data via Server-Sent Events.
 
@@ -392,9 +421,9 @@ async def get_airport_profile(
             "lon": lon,
             "elevation_ft": elevation_ft,
             "model": model,
-            "start_hour": start_dt.isoformat(),
+            "start_hour": _iso_utc(start_dt),
             "window_h": window_h,
-            "hours": [h.isoformat() for h in hours],
+            "hours": [_iso_utc(h) for h in hours],
         }
         yield _event("meta", meta)
 
@@ -402,10 +431,10 @@ async def get_airport_profile(
         yield _event("surface", {"type": "surface", "hours": surface})
 
         # Phase 2 (levels) — runs in a thread since it does network I/O.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             wf = await loop.run_in_executor(
-                None, _fetch_pressure_levels, lat, lon, model, hours,
+                None, _fetch_pressure_levels, icao, lat, lon, model, hours,
             )
         except Exception as exc:
             logger.warning("Airport profile: levels fetch raised: %s", exc, exc_info=True)
@@ -417,7 +446,7 @@ async def get_airport_profile(
             target_set = {h.replace(tzinfo=None) for h in hours}
             kept = []
             for h in wf.hourly:
-                ht = h.time.replace(tzinfo=None) if hasattr(h.time, "tzinfo") and h.time.tzinfo else h.time
+                ht = h.time.replace(tzinfo=None) if h.time.tzinfo else h.time
                 if ht in target_set:
                     kept.append(_hourly_to_dict(h))
             yield _event("levels", {"type": "levels", "hours": kept})

@@ -62,11 +62,37 @@ export interface AirportProfileLevelsHour {
   }>;
 }
 
+/** Shallow shape of the server-side `SoundingAnalysis.model_dump()`
+ *  payload. Only the fields the adapter actually projects are listed —
+ *  the full Python model is much larger. Field types use `any` for
+ *  nested zone/layer arrays where the structural assumptions are too
+ *  varied to express here without duplicating server contracts; the
+ *  point of this interface is to surface the top-level keys so
+ *  refactors can't silently drop one without breaking compilation. */
+export interface SoundingPayload {
+  indices: Record<string, number | null> | null;
+  parcel_path?: Array<{ pressure_hpa: number; temperature_c: number }>;
+  cloud_layers?: any[];
+  nwp_cloud_layers?: any[] | null;
+  icing_zones?: any[];
+  icing_ogimet_nwp_zones?: any[];
+  ieng_icing_zones?: any[];
+  sfip_zones?: any[];
+  sld_zones?: any[];
+  inversion_layers?: any[];
+  vertical_motion?: { cat_risk_layers?: any[]; e_shear_layers?: any[] } | null;
+  convective?: { risk_level?: string; base_ft?: number | null; top_ft?: number | null; cin_jkg?: number } | null;
+  convective_nwp?: { risk_level?: string; base_ft?: number | null; top_ft?: number | null; cover_pct?: number | null; method?: string | null } | null;
+  cloud_cover_low_pct?: number | null;
+  cloud_cover_mid_pct?: number | null;
+  cloud_cover_high_pct?: number | null;
+}
+
 export interface AirportProfileDerivedPoint {
   point_index: number;
   time: string;
   /** Server-side `SoundingAnalysis.model_dump()` payload (snake_case keys). */
-  sounding: any;
+  sounding: SoundingPayload | null;
 }
 
 /** Result of the local-GRIB enrichment phase. `sources[m]` is present
@@ -226,7 +252,7 @@ function synthesizeVizPoint(
   lat: number,
   lon: number,
   elevationFt: number,
-  sounding: any | null,
+  sounding: SoundingPayload | null,
   surface: AirportProfileSurfaceHour | null,
 ): VizPoint {
   const indices = sounding?.indices ?? null;

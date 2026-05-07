@@ -87,6 +87,12 @@ const mapsUrlState = createUrlState({
     default: 'flight_category' as ForecastMetric,
     values: ['flight_category', 'wind_speed_kt', 'crosswind_kt', 'headwind_kt', 'ceiling_ft', 'visibility_m', 'cape_jkg', 'convective_risk', 'cloud_cover_pct'] as readonly ForecastMetric[],
   },
+  // Open airport-profile panel (ICAO) and the panel's selected model.
+  // Empty ICAO = no panel open. Panel model defaults differ from the
+  // map's per-airport model (panel always needs a real model, not a
+  // consensus mode), so they're separate keys.
+  'fc.apt':    { default: '' },
+  'fc.apModel':{ default: 'ecmwf', values: ['gfs', 'icon', 'ecmwf'] as readonly string[] },
   'vf.period': { default: '7d', values: ['7d', '30d'] as readonly string[] },
   'vf.days':   { default: 0, values: [0, 1, 2, 3] as readonly number[] },
   'vf.model':  { default: 'all', values: ['all', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
@@ -103,6 +109,8 @@ function syncUrl(): void {
     'fc.hour':   fcHour,
     'fc.model':  fcModel,
     'fc.metric': fcMetric,
+    'fc.apt':    airportPanelIcao ?? '',
+    'fc.apModel': airportPanel?.getModel() ?? 'ecmwf',
     'vf.period': verifPeriod,
     'vf.days':   verifDays,
     'vf.model':  verifModel,
@@ -161,22 +169,26 @@ function panelDefaultModel(): string {
   return ['gfs', 'icon', 'ecmwf'].includes(fcModel) ? fcModel : 'ecmwf';
 }
 
-function openAirportPanel(icao: string): void {
+function openAirportPanel(icao: string, opts: { initialModel?: string } = {}): void {
   const host = $('ap-panel-host') as HTMLElement | null;
   if (!host) return;
   host.style.display = 'flex';
   if (!airportPanel) {
     airportPanel = new AirportProfilePanel({
       container: host,
-      initialModel: panelDefaultModel(),
+      initialModel: opts.initialModel ?? panelDefaultModel(),
       onClose: () => closeAirportPanel(),
+      onModelChange: () => syncUrl(),
     });
+  } else if (opts.initialModel) {
+    airportPanel.setModel(opts.initialModel);
   }
   airportPanelIcao = icao;
   forecastMap?.setHighlightedIcao(icao);
   airportPanel.load({
     icao, startHour: forecastStartHour(), windowH: 3,
   });
+  syncUrl();
   // The map width changed — let Leaflet re-layout.
   setTimeout(() => forecastMap?.invalidateSize(), 50);
 }
@@ -188,6 +200,7 @@ function closeAirportPanel(): void {
   airportPanel = null;
   airportPanelIcao = null;
   forecastMap?.setHighlightedIcao(null);
+  syncUrl();
   setTimeout(() => forecastMap?.invalidateSize(), 50);
 }
 
@@ -836,6 +849,14 @@ async function main(): Promise<void> {
     loadForecast();
   } else {
     switchTab(currentTab);
+  }
+
+  // Re-open the airport-profile panel if the URL carried one. Defer until
+  // after the forecast load triggers a marker render so setHighlightedIcao
+  // has a marker to highlight.
+  const urlIcao = init['fc.apt'];
+  if (urlIcao && currentTab === 'forecast') {
+    openAirportPanel(urlIcao, { initialModel: init['fc.apModel'] });
   }
 }
 
