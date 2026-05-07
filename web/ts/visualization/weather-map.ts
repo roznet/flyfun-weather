@@ -366,6 +366,8 @@ const FORECAST_LEGENDS: Record<ForecastMetric, { title: string; items: Array<{ c
 
 // --- Map class ---
 
+export type AirportContextHandler = (icao: string, lat: number, lon: number) => void;
+
 export class WeatherMap {
   private container: HTMLElement;
   private map: L.Map | null = null;
@@ -373,9 +375,34 @@ export class WeatherMap {
   private legendEl: HTMLElement | null = null;
   private tileLayer: L.TileLayer | null = null;
   private zoomHandler: (() => void) | null = null;
+  private contextHandler: AirportContextHandler | null = null;
+  private highlightedIcao: string | null = null;
+  private icaoToMarker: Map<string, L.CircleMarker> = new Map();
 
   constructor(container: HTMLElement) {
     this.container = container;
+  }
+
+  /** Register a callback fired when the user right-clicks an airport marker.
+   *  The forecast tab uses this to open the airport-profile detail panel. */
+  setAirportContextHandler(handler: AirportContextHandler | null): void {
+    this.contextHandler = handler;
+  }
+
+  /** Visually highlight one airport (typically the one currently shown
+   *  in the detail panel). Pass null to clear the highlight. */
+  setHighlightedIcao(icao: string | null): void {
+    if (this.highlightedIcao === icao) return;
+    if (this.highlightedIcao) {
+      const prev = this.icaoToMarker.get(this.highlightedIcao);
+      prev?.setStyle({ weight: 1 });
+    }
+    this.highlightedIcao = icao;
+    if (icao) {
+      const marker = this.icaoToMarker.get(icao);
+      marker?.setStyle({ weight: 4, color: '#fbbf24' });
+      marker?.bringToFront();
+    }
   }
 
   init(): void {
@@ -428,6 +455,7 @@ export class WeatherMap {
   setForecastData(data: ForecastMapResponse, metric: ForecastMetric, model: string): void {
     if (!this.markersGroup || !this.map) return;
     this.markersGroup.clearLayers();
+    this.icaoToMarker.clear();
 
     const r = this.markerRadius();
     const consensusMode: ConsensusMode | null = isConsensusMode(model) ? model : null;
@@ -447,11 +475,25 @@ export class WeatherMap {
       });
 
       marker.bindTooltip(getForecastTooltip(apt, model, metric), { className: 'map-tooltip' });
+      // Right-click → open airport profile panel. Native contextmenu is
+      // suppressed so the browser menu doesn't fight Leaflet's event.
+      marker.on('contextmenu', (e: L.LeafletMouseEvent) => {
+        L.DomEvent.preventDefault(e.originalEvent);
+        L.DomEvent.stopPropagation(e.originalEvent);
+        this.contextHandler?.(apt.icao, apt.lat, apt.lon);
+      });
       marker.addTo(this.markersGroup);
+      this.icaoToMarker.set(apt.icao, marker);
     }
 
     this.attachZoomHandler();
     this.renderLegend(FORECAST_LEGENDS[metric]);
+
+    // Re-apply highlight if the currently-highlighted airport is still on the map.
+    if (this.highlightedIcao) {
+      const m = this.icaoToMarker.get(this.highlightedIcao);
+      if (m) { m.setStyle({ weight: 4, color: '#fbbf24' }); m.bringToFront(); }
+    }
   }
 
   setVerificationData(data: VerificationMapResponse, metric: VerifMetric): void {

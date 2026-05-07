@@ -56,6 +56,80 @@
 
     .map-wrapper { position: relative; }
 
+    /* --- Airport profile panel (right-click on a forecast marker) --- */
+    /* Forecast tab switches to a 2-column grid when the panel is open;
+     * the map keeps its existing height and the panel claims the right
+     * column. On narrow screens (<900px) the panel becomes a full-screen
+     * takeover so the map and detail don't fight for width. */
+    .ap-split-host { display: flex; gap: 0.5rem; position: relative; }
+    .ap-split-host > .map-wrapper { flex: 1 1 auto; min-width: 0; }
+    .ap-split-host > .ap-panel-host {
+      flex: 0 0 480px;
+      max-width: 50%;
+      min-width: 360px;
+      display: flex; flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .ap-panel { display: flex; flex-direction: column; height: calc(100vh - 280px); min-height: 400px; }
+    .ap-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border);
+    }
+    .ap-panel-title { font-weight: 600; font-size: 0.9rem; color: var(--text); }
+    .ap-panel-close {
+      border: none; background: transparent; color: var(--text-muted);
+      font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 0 0.4rem;
+    }
+    .ap-panel-close:hover { color: var(--text); }
+    .ap-panel-controls {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+      padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+    .ap-panel-controls label { color: var(--text-muted); font-weight: 600; font-size: 0.75rem; }
+    .ap-panel-controls select {
+      padding: 0.2rem 0.4rem; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); border-radius: 4px;
+      font-size: 0.75rem;
+    }
+    .ap-panel-controls .btn-toggle {
+      padding: 0.2rem 0.5rem; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); cursor: pointer;
+      font-size: 0.75rem;
+    }
+    .ap-panel-controls .btn-group .btn-toggle:first-child { border-radius: 4px 0 0 4px; }
+    .ap-panel-controls .btn-group .btn-toggle:last-child { border-radius: 0 4px 4px 0; }
+    .ap-panel-controls .btn-group .btn-toggle:not(:first-child) { border-left: none; }
+    .ap-panel-controls .btn-toggle.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+    .ap-panel-status {
+      padding: 0.2rem 0.6rem;
+      font-size: 0.75rem; color: var(--text-muted);
+      min-height: 1.1rem; border-bottom: 1px solid var(--border);
+    }
+    .ap-panel-status:empty { display: none; }
+
+    .ap-panel-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+    .ap-panel.view-both .ap-cross,
+    .ap-panel.view-both .ap-skewt { flex: 1 1 50%; min-height: 0; position: relative; }
+    .ap-panel.view-cross .ap-cross { flex: 1 1 100%; min-height: 0; position: relative; }
+    .ap-panel.view-skewt .ap-skewt { flex: 1 1 100%; min-height: 0; position: relative; }
+    .ap-cross, .ap-skewt { background: var(--bg); position: relative; min-height: 0; }
+    .ap-cross + .ap-skewt { border-top: 1px solid var(--border); }
+
+    @media (max-width: 900px) {
+      .ap-split-host { display: block; }
+      .ap-split-host > .ap-panel-host {
+        position: fixed; inset: 0; max-width: none; min-width: 0;
+        z-index: 2000; border-radius: 0;
+      }
+      .ap-panel { height: 100vh; }
+    }
+
     /* Share-view button (page header). Shows the icon + label and
      * flashes "Link copied" briefly on success. */
     .btn-share-link {
@@ -234,8 +308,11 @@
         </select>
       </div>
 
-      <div class="map-wrapper">
-        <div id="map-container"></div>
+      <div class="ap-split-host" id="forecast-split-host">
+        <div class="map-wrapper">
+          <div id="map-container"></div>
+        </div>
+        <div class="ap-panel-host" id="ap-panel-host" style="display:none"></div>
       </div>
       <div class="map-info" id="map-info"></div>
     </div>

@@ -11,6 +11,7 @@ import {
   type HewsonAllMetricsSlice,
 } from './adapters/hewson-map-adapter';
 import { WeatherMap, type ForecastMetric, type VerifMetric } from './visualization/weather-map';
+import { AirportProfilePanel } from './visualization/airport-profile-panel';
 import { SynopticMap } from './visualization/synoptic-map';
 import { type HewsonMetric, type ColorScale, vRangeFor } from './visualization/hewson-colormaps';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
@@ -56,6 +57,10 @@ let fcDay = 0;
 let fcHour = 12;
 let fcModel = 'worst';
 let fcMetric: ForecastMetric = 'flight_category';
+
+// Airport profile panel state (right-click on a forecast marker)
+let airportPanel: AirportProfilePanel | null = null;
+let airportPanelIcao: string | null = null;
 
 // Verification state
 let verifData: VerificationMapResponse | null = null;
@@ -140,6 +145,60 @@ function updateForecastDatetime(): void {
 
 // --- Data loading ---
 
+function forecastStartHour(): string {
+  // Build an ISO 8601 UTC string for the currently-selected (day, hour).
+  const now = new Date();
+  const dt = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + fcDay,
+    fcHour, 0, 0,
+  ));
+  return dt.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function panelDefaultModel(): string {
+  // Map: forecast tab might be in consensus mode, panel needs a real
+  // model. Pick the same model when one is selected, otherwise ECMWF.
+  return ['gfs', 'icon', 'ecmwf'].includes(fcModel) ? fcModel : 'ecmwf';
+}
+
+function openAirportPanel(icao: string): void {
+  const host = $('ap-panel-host') as HTMLElement | null;
+  if (!host) return;
+  host.style.display = 'flex';
+  if (!airportPanel) {
+    airportPanel = new AirportProfilePanel({
+      container: host,
+      initialModel: panelDefaultModel(),
+      onClose: () => closeAirportPanel(),
+    });
+  }
+  airportPanelIcao = icao;
+  forecastMap?.setHighlightedIcao(icao);
+  airportPanel.load({
+    icao, startHour: forecastStartHour(), windowH: 3,
+  });
+  // The map width changed — let Leaflet re-layout.
+  setTimeout(() => forecastMap?.invalidateSize(), 50);
+}
+
+function closeAirportPanel(): void {
+  const host = $('ap-panel-host') as HTMLElement | null;
+  if (host) host.style.display = 'none';
+  airportPanel?.destroy();
+  airportPanel = null;
+  airportPanelIcao = null;
+  forecastMap?.setHighlightedIcao(null);
+  setTimeout(() => forecastMap?.invalidateSize(), 50);
+}
+
+function refreshAirportPanelOnHourChange(): void {
+  // Map's day/hour changed: reload the open panel; metric changes are ignored.
+  if (!airportPanel || !airportPanelIcao) return;
+  airportPanel.load({
+    icao: airportPanelIcao, startHour: forecastStartHour(), windowH: 3,
+  });
+}
+
 async function loadForecast(): Promise<void> {
   updateForecastDatetime();
   showInfo('Loading forecast...', 'map-info');
@@ -216,12 +275,14 @@ function wireForecastControls(): void {
     } catch { /* ignore */ }
     syncUrl();
     loadForecast();
+    refreshAirportPanelOnHourChange();
   });
 
   wireButtonGroup('hour-picker', 'hour', (v) => {
     fcHour = parseInt(v);
     syncUrl();
     loadForecast();
+    refreshAirportPanelOnHourChange();
   });
 
   wireButtonGroup('model-picker', 'model', (v) => {
@@ -681,6 +742,7 @@ async function main(): Promise<void> {
   if (!container) return;
   forecastMap = new WeatherMap(container);
   forecastMap.init();
+  forecastMap.setAirportContextHandler((icao) => openAirportPanel(icao));
 
   // Set up the briefing-style info modal (used by the synoptic tab's (i)).
   initInfoPopup();
