@@ -1,14 +1,21 @@
 import AuthenticationServices
+import FlyFunCommon
 import SwiftUI
 
 /// Sign-in screen with Apple and Google OAuth.
 struct LoginView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var isSigningIn = false
     @State private var errorMessage: String?
 
-    private let authService = AuthService()
+    private var authService: FlyFunAuthService {
+        FlyFunAuthService(config: .init(
+            baseURL: AppState.defaultBaseURL,
+            callbackScheme: "flyfunweather"
+        ))
+    }
 
     var body: some View {
         VStack(spacing: 32) {
@@ -35,49 +42,47 @@ struct LoginView: View {
                     .padding(.horizontal)
             }
 
-            SignInWithAppleButton(.signIn) { request in
-                request.requestedScopes = [.fullName, .email]
-            } onCompletion: { result in
-                Task { await handleAppleSignIn(result) }
-            }
-            .signInWithAppleButtonStyle(.black)
-            .frame(maxWidth: 280, minHeight: 50, maxHeight: 50)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .disabled(isSigningIn)
-
-            Button {
-                Task { await signIn(provider: "google") }
-            } label: {
-                HStack {
-                    if isSigningIn {
-                        ProgressView()
-                            .tint(.white)
-                    }
-                    Text("Sign in with Google")
-                        .fontWeight(.semibold)
+            VStack(spacing: 12) {
+                SignInWithAppleButton(.signIn) { request in
+                    request.requestedScopes = [.fullName, .email]
+                } onCompletion: { result in
+                    Task { await handleAppleSignIn(result) }
                 }
-                .frame(maxWidth: 280)
-                .padding()
-                .background(.blue)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-            .disabled(isSigningIn)
+                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+                .frame(width: 175, height: 40)
+                .disabled(isSigningIn)
 
-            #if DEBUG
-            Button {
-                Task { await devLogin() }
-            } label: {
-                Text("Dev Login")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: 280)
-                    .padding()
-                    .background(.gray)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                Button {
+                    Task { await signIn(provider: "google") }
+                } label: {
+                    Image("SignInWithGoogle")
+                        .resizable()
+                        .frame(width: 175, height: 40)
+                        .overlay {
+                            if isSigningIn {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(isSigningIn)
+
+                #if DEBUG
+                Button {
+                    Task { await devLogin() }
+                } label: {
+                    Text("Dev Login")
+                        .font(.footnote.weight(.semibold))
+                        .frame(width: 175, height: 32)
+                        .background(.gray)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .disabled(isSigningIn)
+                .padding(.top, 4)
+                #endif
             }
-            .disabled(isSigningIn)
-            #endif
 
             Spacer()
                 .frame(height: 60)
@@ -95,14 +100,24 @@ struct LoginView: View {
                 errorMessage = String(localized: "Unexpected credential type.")
                 return
             }
-            let token = try await authService.exchangeAppleCredential(credential, baseURL: AppState.defaultBaseURL)
-            guard let callbackURL = URL(string: "flyfunweather://auth/callback?token=\(token)") else {
-                errorMessage = String(localized: "Failed to create authentication URL.")
-                return
-            }
-            appState.handleAuthCallback(url: callbackURL)
+            let token = try await authService.exchangeAppleCredential(credential)
+            appState.signIn(token: token)
         } catch {
             if (error as? ASAuthorizationError)?.code != .canceled {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func signIn(provider: String) async {
+        isSigningIn = true
+        errorMessage = nil
+        defer { isSigningIn = false }
+        do {
+            let token = try await authService.signIn(provider: provider)
+            appState.signIn(token: token)
+        } catch {
+            if (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin {
                 errorMessage = error.localizedDescription
             }
         }
@@ -121,26 +136,10 @@ struct LoginView: View {
                 errorMessage = "No token in dev-token response"
                 return
             }
-            let callbackURL = URL(string: "flyfunweather://auth/callback?token=\(token)")!
-            appState.handleAuthCallback(url: callbackURL)
+            appState.signIn(token: token)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
     #endif
-
-    private func signIn(provider: String) async {
-        isSigningIn = true
-        errorMessage = nil
-        defer { isSigningIn = false }
-        do {
-            let token = try await authService.signIn(baseURL: AppState.defaultBaseURL, provider: provider)
-            let callbackURL = URL(string: "flyfunweather://auth/callback?token=\(token)")!
-            appState.handleAuthCallback(url: callbackURL)
-        } catch {
-            if (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
 }

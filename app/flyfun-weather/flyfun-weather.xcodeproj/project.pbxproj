@@ -13,6 +13,7 @@
 		42B896432F54720900C5AF7B /* RZUtilsSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896422F54720900C5AF7B /* RZUtilsSwift */; };
 		42B896452F54720900C5AF7B /* RZUtilsSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896442F54720900C5AF7B /* RZUtilsSwiftUI */; };
 		42B896472F54720900C5AF7B /* RZUtilsUniversal in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896462F54720900C5AF7B /* RZUtilsUniversal */; };
+		42BF6E612FAD203A00D5615F /* FlyFunCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 42BF6E602FAD203A00D5615F /* FlyFunCommon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -76,6 +77,7 @@
 			files = (
 				42B896412F54720900C5AF7B /* RZUtils in Frameworks */,
 				42B896472F54720900C5AF7B /* RZUtilsUniversal in Frameworks */,
+				42BF6E612FAD203A00D5615F /* FlyFunCommon in Frameworks */,
 				42B8963E2F5471ED00C5AF7B /* RZFlight in Frameworks */,
 				424BB64B2F6B3E2C00023F98 /* RZSkewT in Frameworks */,
 				42B896452F54720900C5AF7B /* RZUtilsSwiftUI in Frameworks */,
@@ -154,6 +156,7 @@
 				42B896442F54720900C5AF7B /* RZUtilsSwiftUI */,
 				42B896462F54720900C5AF7B /* RZUtilsUniversal */,
 				424BB64A2F6B3E2C00023F98 /* RZSkewT */,
+				42BF6E602FAD203A00D5615F /* FlyFunCommon */,
 			);
 			productName = "flyfun-weather";
 			productReference = 42269E4C2F546D2000EFA5E4 /* flyfun-weather.app */;
@@ -241,6 +244,7 @@
 				42B8963C2F5471ED00C5AF7B /* XCRemoteSwiftPackageReference "rzflight" */,
 				42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */,
 				424BB6492F6B3E1600023F98 /* XCRemoteSwiftPackageReference "rzskewt" */,
+				42BF6E5F2FAD202E00D5615F /* XCRemoteSwiftPackageReference "flyfun-common" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 42269E4D2F546D2000EFA5E4 /* Products */;
@@ -716,6 +720,14 @@
 				minimumVersion = 1.0.29;
 			};
 		};
+		42BF6E5F2FAD202E00D5615F /* XCRemoteSwiftPackageReference "flyfun-common" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/roznet/flyfun-common";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -748,6 +760,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 42B8963F2F54720900C5AF7B /* XCRemoteSwiftPackageReference "rzutils" */;
 			productName = RZUtilsUniversal;
+		};
+		42BF6E602FAD203A00D5615F /* FlyFunCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 42BF6E5F2FAD202E00D5615F /* XCRemoteSwiftPackageReference "flyfun-common" */;
+			productName = FlyFunCommon;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

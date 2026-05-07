@@ -1,6 +1,15 @@
 {
-  "originHash" : "d8d3578ebda9dd48c17320e841492b4b8b85537aca70824a94f2d5e81e3c0ddf",
+  "originHash" : "f569aad69edf19916e3cd481f4681ce4385af3d4e3bd41408676cb44c896c04b",
   "pins" : [
+    {
+      "identity" : "flyfun-common",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/roznet/flyfun-common",
+      "state" : {
+        "branch" : "main",
+        "revision" : "c823ae8af397dd1d053675a82f353de89329dd16"
+      }
+    },
     {
       "identity" : "fmdb",
       "kind" : "remoteSourceControl",
@@ -34,7 +43,7 @@
       "location" : "https://github.com/roznet/rzflight",
       "state" : {
         "branch" : "main",
-        "revision" : "db9b0deb298f5b86d507ad31ad5d5edbfe4c1400"
+        "revision" : "4cd8e30567fa74ceb6387955433a2e75283843e4"
       }
     },
     {
@@ -51,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/roznet/rzutils",
       "state" : {
-        "revision" : "4ddf6c0ae146b801b5fd62d1baed77caa7193c96",
-        "version" : "1.0.29"
+        "revision" : "26465b73e220f1cfe77a6ac586d89ec73225d71a",
+        "version" : "1.0.30"
       }
     }
   ],

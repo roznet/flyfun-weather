@@ -1,3 +1,4 @@
+import FlyFunCommon
 import Foundation
 import OSLog
 
@@ -31,23 +32,30 @@ enum APIError: LocalizedError {
 }
 
 /// HTTP client for the WeatherBrief REST API.
+///
+/// All authenticated requests flow through the shared `RollingBearerSession`
+/// from `flyfun-common`, so the JWT is read from the keychain on every call,
+/// rolled forward when the server emits `X-Renewed-Token`, and cleared on 401
+/// (which fires `AppState.handleUnauthorized` to bounce the user to login).
 actor APIClient {
     let baseURL: URL
     private let session: URLSession
-    private var jwt: String
+    private let tokenStore: any BearerTokenStore
+    private let rollingSession: RollingBearerSession
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "APIClient")
 
-    init(baseURL: URL, jwt: String) {
+    init(
+        baseURL: URL,
+        tokenStore: any BearerTokenStore,
+        rollingSession: RollingBearerSession
+    ) {
         self.baseURL = baseURL
-        self.jwt = jwt
+        self.tokenStore = tokenStore
+        self.rollingSession = rollingSession
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         self.session = URLSession(configuration: config)
-    }
-
-    func updateJWT(_ newJWT: String) {
-        self.jwt = newJWT
     }
 
     // MARK: - Generic request methods
@@ -64,21 +72,27 @@ actor APIClient {
     }
 
     /// Stream SSE events from the server.
+    ///
+    /// SSE uses `URLSession.bytes(for:)` which `RollingBearerSession` doesn't
+    /// wrap, so we attach the Bearer token directly from the store. 401 here
+    /// surfaces as `serverError(401, ...)` rather than going through the
+    /// rolling session's `onUnauthorized` callback — acceptable because the
+    /// stream is short-lived and its caller already handles errors per event.
     func streamSSE(_ path: String, method: String = "POST") -> AsyncThrowingStream<RefreshEvent, Error> {
-        // Capture actor state before creating the stream
         let url = baseURL.appendingPathComponent(path)
-        let currentJwt = jwt
+        let store = tokenStore
         let currentSession = session
 
         return AsyncThrowingStream { continuation in
             Task {
                 var request = URLRequest(url: url)
                 request.httpMethod = method
-                request.setValue("Bearer \(currentJwt)", forHTTPHeaderField: "Authorization")
+                if let token = store.token {
+                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                }
                 request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                 request.timeoutInterval = 300
 
-                // Local decoder to avoid MainActor-isolated JSONDecoder.weatherBrief
                 let decoder = JSONDecoder()
                 decoder.keyDecodingStrategy = .convertFromSnakeCase
 
@@ -148,7 +162,6 @@ actor APIClient {
     private func _fetch(url: URL, method: String, body: Data?, label: String) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
         if let body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -157,22 +170,20 @@ actor APIClient {
         Self.logger.debug("\(method) \(label)")
 
         let data: Data
-        let response: URLResponse
+        let http: HTTPURLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, http) = try await rollingSession.data(for: request)
+        } catch FlyFunAPIError.unauthorized {
+            throw APIError.unauthorized
+        } catch let FlyFunAPIError.networkError(inner) {
+            throw APIError.networkError(inner)
         } catch {
             throw APIError.networkError(error)
-        }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError.networkError(URLError(.badServerResponse))
         }
 
         switch http.statusCode {
         case 200...299:
             return data
-        case 401:
-            throw APIError.unauthorized
         case 403:
             let msg = (try? JSONDecoder().decode([String: String].self, from: data))?["detail"]
             throw APIError.forbidden(msg ?? "Forbidden")

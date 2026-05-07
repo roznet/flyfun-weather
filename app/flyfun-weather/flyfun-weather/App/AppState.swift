@@ -1,12 +1,6 @@
+import FlyFunCommon
 import Foundation
 import OSLog
-import RZUtilsSwift
-
-/// Keys for secure and user storage.
-enum StorageKey: String {
-    case jwt
-    case selectedModel
-}
 
 #if DEBUG
 /// Server environment toggle, available only in simulator builds.
@@ -36,10 +30,19 @@ enum ServerEnvironment: String, CaseIterable {
 @Observable
 @MainActor
 final class AppState {
-    // MARK: - Storage
+    // MARK: - Auth (FlyFunCommon)
 
-    @ObservationIgnored
-    private var secureStorage = CodableSecureStorage<StorageKey, String>(key: .jwt, service: "aero.flyfun.weather")
+    @ObservationIgnored let tokenStore: KeychainBearerTokenStore
+    @ObservationIgnored private(set) var rollingSession: RollingBearerSession!
+    @ObservationIgnored private let callbackParser = AuthCallbackParser(
+        customScheme: "flyfunweather",
+        universalLinkHost: "weather.flyfun.aero"
+    )
+
+    /// Mirror of the keychain JWT — observable so SwiftUI re-renders on
+    /// login/logout. Don't pass this around for API auth; use `apiClient`,
+    /// which always reads through the live `RollingBearerSession`.
+    private(set) var jwt: String?
 
     // MARK: - State
 
@@ -68,39 +71,60 @@ final class AppState {
     static var defaultBaseURL: URL { productionBaseURL }
     #endif
 
-    var isAuthenticated: Bool {
-        apiClient != nil
-    }
+    var isAuthenticated: Bool { jwt != nil }
 
     // MARK: - Lifecycle
 
     init() {
-        // Restore JWT from keychain
-        if let jwt = secureStorage.wrappedValue, !jwt.isEmpty {
-            setupClient(jwt: jwt)
+        let store = KeychainBearerTokenStore(service: "aero.flyfun.weather")
+        self.tokenStore = store
+        self.jwt = store.token
+
+        self.rollingSession = RollingBearerSession(
+            store: store,
+            onUnauthorized: { [weak self] in
+                await self?.handleUnauthorized()
+            }
+        )
+
+        if store.token?.isEmpty == false {
+            setupClient()
         }
     }
 
     // MARK: - Auth
 
+    /// Apply a JWT obtained from Apple-credential exchange or Google OAuth.
+    func signIn(token: String) {
+        Self.logger.info("Storing JWT after sign-in")
+        applyToken(token)
+        setupClient()
+    }
+
+    /// Handle a deep-link auth callback (`flyfunweather://auth?token=…` or
+    /// `https://weather.flyfun.aero/auth/callback?token=…`).
     func handleAuthCallback(url: URL) {
-        let isCustomScheme = url.scheme == "flyfunweather" && url.host == "auth"
-        let isUniversalLink = url.scheme == "https" && url.host == "weather.flyfun.aero"
-        guard (isCustomScheme || isUniversalLink),
-              url.path == "/callback" || url.path == "/auth/callback",
-              let token = url.queryParam("token"), !token.isEmpty
-        else {
+        guard let token = callbackParser.token(from: url) else {
             Self.logger.warning("Invalid auth callback URL: \(url)")
             return
         }
-        Self.logger.info("Auth callback received, storing JWT")
-        secureStorage.wrappedValue = token
-        setupClient(jwt: token)
+        signIn(token: token)
     }
 
     func logout() {
         Self.logger.info("Logging out")
-        secureStorage.wrappedValue = nil
+        applyToken(nil)
+        apiClient = nil
+        repository = nil
+        userPreferences.clear()
+    }
+
+    /// Sync the observable mirror after the rolling session cleared the
+    /// store on 401. Triggers SwiftUI to swap views back to `LoginView`.
+    func handleUnauthorized() {
+        guard jwt != nil else { return }
+        Self.logger.info("401 from server — clearing local auth state")
+        jwt = nil
         apiClient = nil
         repository = nil
         userPreferences.clear()
@@ -121,16 +145,14 @@ final class AppState {
     func setServerEnvironment(_ env: ServerEnvironment) {
         Self.serverEnvironment = env
         Self.logger.info("Switched to \(env.label) (\(env.baseURL))")
-        // Re-setup client with new base URL if we have a JWT
-        if let jwt = secureStorage.wrappedValue, !jwt.isEmpty {
-            setupClient(jwt: jwt)
+        if tokenStore.token?.isEmpty == false {
+            setupClient()
         }
     }
     #endif
 
     // MARK: - Offline sync
 
-    /// Sync any queued PIREPs when connectivity returns.
     func syncPendingPireps() async {
         guard let repository else { return }
         await pirepOfflineStore.load()
@@ -140,8 +162,6 @@ final class AppState {
         }
     }
 
-    /// Refresh user preferences from the server. Safe to call while offline
-    /// (silently keeps the cached value).
     func refreshUserPreferences() async {
         guard let apiClient else { return }
         await userPreferences.refresh(using: apiClient)
@@ -154,8 +174,17 @@ final class AppState {
         repository as? CachingBriefingRepository
     }
 
-    private func setupClient(jwt: String) {
-        let client = APIClient(baseURL: Self.defaultBaseURL, jwt: jwt)
+    private func applyToken(_ token: String?) {
+        tokenStore.token = token
+        jwt = token
+    }
+
+    private func setupClient() {
+        let client = APIClient(
+            baseURL: Self.defaultBaseURL,
+            tokenStore: tokenStore,
+            rollingSession: rollingSession
+        )
         apiClient = client
         let online = OnlineBriefingRepository(client: client)
         let cache = BriefingCacheStore()
