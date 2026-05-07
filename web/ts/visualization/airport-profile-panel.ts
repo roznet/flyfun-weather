@@ -38,6 +38,20 @@ function formatEnrichmentBadge(e: AirportProfileEnriched | null): string {
   return `GRIB: ${parts.join(', ')}`;
 }
 
+/** HTML-escape user-visible strings before injecting into the status
+ *  bar (we use innerHTML there so the dots-spinner span renders). */
+function esc(s: string): string {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+/** Status row template that matches briefing-ui's "Refreshing · <stage>…"
+ *  pattern: phase label followed by an animated dots-spinner. */
+function statusLoading(label: string): string {
+  return `${esc(label)}<span class="dots-spinner"></span>`;
+}
+
 type ViewMode = 'both' | 'cross' | 'skewt';
 const VIEW_MODE_KEY = 'wb_apProfileView';
 
@@ -90,6 +104,12 @@ export class AirportProfilePanel {
   };
   private stream: AirportProfileStreamHandle | null = null;
   private currentRequest: AirportProfileRequest | null = null;
+
+  /** Per-(icao,startHour,model) cache of completed snapshots so model
+   *  switching reuses prior fetches. Cleared whenever the request shape
+   *  changes (different icao or startHour) since the previous entries
+   *  no longer apply. */
+  private snapshotCache = new Map<string, AirportProfileSnapshot>();
 
   constructor(opts: AirportProfilePanelOptions) {
     this.container = opts.container;
@@ -173,13 +193,35 @@ export class AirportProfilePanel {
 
   /** Start (or restart) loading the profile for a new airport / hour. */
   load(req: AirportProfileRequest): void {
+    // Drop the cache on icao or startHour change — the cached snapshots
+    // are scoped to the previous request shape and no longer apply.
+    if (
+      this.currentRequest
+      && (this.currentRequest.icao !== req.icao
+          || this.currentRequest.startHour !== req.startHour)
+    ) {
+      this.snapshotCache.clear();
+    }
     this.currentRequest = req;
+    if (this.stream) { this.stream.abort(); this.stream = null; }
+
+    // Cache hit: skip the SSE round-trip entirely.
+    const cached = this.snapshotCache.get(this.cacheKey(req, this.model));
+    if (cached) {
+      this.snapshot = cached;
+      this.applyTitle(cached);
+      this.statusEl.innerHTML = esc(formatEnrichmentBadge(cached.enriched));
+      this.clearRenderers();
+      this.renderCross();
+      this.renderSkewT();
+      return;
+    }
+
     this.snapshot = {
       meta: null, surface: [], levels: [], enriched: null, derived: [],
     };
-    if (this.stream) { this.stream.abort(); this.stream = null; }
     this.titleEl.textContent = `${req.icao} — loading…`;
-    this.statusEl.textContent = 'Connecting…';
+    this.statusEl.innerHTML = statusLoading('Connecting');
     this.clearRenderers();
 
     this.stream = streamAirportProfile(
@@ -188,36 +230,72 @@ export class AirportProfilePanel {
     );
   }
 
+  private cacheKey(req: AirportProfileRequest, model: string): string {
+    return `${req.icao}|${req.startHour}|${model}`;
+  }
+
+  /** Render the panel header from the snapshot's meta. */
+  private applyTitle(snapshot: AirportProfileSnapshot): void {
+    if (!snapshot.meta) return;
+    const m = snapshot.meta;
+    const startStr = new Date(m.start_hour).toISOString().slice(11, 16) + 'Z';
+    this.titleEl.textContent = `${m.icao} · ${m.model.toUpperCase()} · ${startStr} +${m.window_h}h`;
+  }
+
   private onPhase(phase: string, snapshot: AirportProfileSnapshot, raw: any): void {
     this.snapshot = snapshot;
+    // Backend emits a `label` field on phases that map to a stage in the
+    // briefing pipeline (see api/airport_profile.py:_PHASE_TO_STAGE). For
+    // phases without a label (`meta`, `surface`) we use a local string
+    // since the briefing pipeline has no analogue.
+    const labelFromBackend = (raw && typeof raw === 'object' && typeof raw.label === 'string')
+      ? raw.label as string
+      : null;
+
     if (phase === 'meta') {
-      const m = snapshot.meta!;
-      const start = new Date(m.start_hour);
-      const startStr = start.toISOString().slice(11, 16) + 'Z';
-      this.titleEl.textContent = `${m.icao} · ${m.model.toUpperCase()} · ${startStr} +${m.window_h}h`;
-      this.statusEl.textContent = 'Surface…';
+      this.applyTitle(snapshot);
+      this.statusEl.innerHTML = statusLoading('Loading');
       this.renderCross();
     } else if (phase === 'surface') {
-      this.statusEl.textContent = 'Pressure levels…';
+      this.statusEl.innerHTML = statusLoading(labelFromBackend ?? 'Loading');
       this.renderCross();
     } else if (phase === 'levels') {
-      this.statusEl.textContent = (raw && raw.error) ? `Levels failed (${raw.error})` : 'GRIB enrichment…';
+      const text = (raw && raw.error)
+        ? `Levels failed (${raw.error})`
+        : (labelFromBackend ?? 'Fetching forecasts');
+      this.statusEl.innerHTML = (raw && raw.error) ? esc(text) : statusLoading(text);
       this.renderSkewT();
     } else if (phase === 'enriched') {
-      this.statusEl.textContent = `Analyzing… ${formatEnrichmentBadge(snapshot.enriched)}`;
+      this.statusEl.innerHTML = statusLoading(labelFromBackend ?? 'Adding cloud & icing detail');
     } else if (phase === 'derived') {
-      this.statusEl.textContent = formatEnrichmentBadge(snapshot.enriched);
+      this.statusEl.innerHTML = esc(formatEnrichmentBadge(snapshot.enriched));
       this.renderCross();
       this.renderSkewT();
     } else if (phase === 'complete') {
-      this.statusEl.textContent = formatEnrichmentBadge(snapshot.enriched);
+      this.statusEl.innerHTML = esc(formatEnrichmentBadge(snapshot.enriched));
+      // Successful completion: cache the snapshot for fast model-switch.
+      if (this.currentRequest) {
+        this.snapshotCache.set(
+          this.cacheKey(this.currentRequest, this.model),
+          // Store a shallow clone so subsequent mutations of `snapshot`
+          // (in onPhase callbacks for a follow-on request) don't bleed
+          // back into the cached entry.
+          {
+            meta: snapshot.meta,
+            surface: snapshot.surface,
+            levels: snapshot.levels,
+            enriched: snapshot.enriched,
+            derived: snapshot.derived,
+          },
+        );
+      }
     } else if (phase === 'error') {
       // Backend-emitted structured error: {type, phase, message}. Falls
       // through to a generic message when the connection just dropped.
       const detail = raw && typeof raw === 'object' && raw.phase
         ? `${raw.phase}: ${raw.message ?? 'unknown error'}`
         : 'connection lost';
-      this.statusEl.textContent = `Error — ${detail}`;
+      this.statusEl.innerHTML = esc(`Error — ${detail}`);
     }
   }
 
@@ -299,6 +377,7 @@ export class AirportProfilePanel {
    *  empty the container. Idempotent. */
   destroy(): void {
     if (this.stream) { this.stream.abort(); this.stream = null; }
+    this.snapshotCache.clear();
     this.clearRenderers();
     this.container.innerHTML = '';
     this.container.classList.remove('ap-panel', 'view-both', 'view-cross', 'view-skewt');

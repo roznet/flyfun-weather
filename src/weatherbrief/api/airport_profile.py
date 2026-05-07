@@ -45,6 +45,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/maps", tags=["maps"])
 
 _VALID_MODELS = ("gfs", "icon", "ecmwf")
+
+# Reuse the briefing pipeline's progress labels so the panel's status row
+# reads the same as /refresh/stream. Mapping is phase → stage_name in
+# packs._STAGE_LABELS. The `surface` phase has no analogue (the briefing
+# pipeline doesn't read a surface cache); we emit a generic label for it.
+# Keys are looked up lazily inside the SSE generator so a circular import
+# from packs (which itself imports from many places) can't break startup.
+_PHASE_TO_STAGE: dict[str, str] = {
+    "levels": "fetch_forecasts",
+    "enriched": "grib_enrichment",
+    "derived": "waypoint_analysis",
+}
 _DEFAULT_WINDOW_H = 3  # selected hour + 3 forward = 4 forecast hours
 
 
@@ -539,7 +551,18 @@ async def get_airport_profile(
     _limiter.acquire(_user_id)
 
     async def event_generator() -> AsyncGenerator[str, None]:
+        # Lazy import to avoid an import cycle at module load (packs.py
+        # is heavy and pulls in much of the API surface).
+        from weatherbrief.api.packs import _STAGE_LABELS
+
+        def _label_for(phase: str) -> str | None:
+            stage = _PHASE_TO_STAGE.get(phase)
+            return _STAGE_LABELS.get(stage) if stage else None
+
         def _event(event_type: str, payload: dict) -> str:
+            label = _label_for(event_type)
+            if label and "label" not in payload:
+                payload = {**payload, "label": label}
             return f"event: {event_type}\ndata: {json_mod.dumps(payload, default=str)}\n\n"
 
         def _error_event(phase: str, message: str) -> str:
