@@ -14,6 +14,7 @@ not easy to exercise in unit tests; what we can pin down here is:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -240,3 +241,133 @@ class TestGribEnrichSkippedShape:
         )
         assert isinstance(result["skipped"], dict)
         assert result["skipped"] == {"all": "no_local_grib_configured"}
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: per-user / global stream limiter (PR #122 design discussion).
+#
+# Bursty right-clicks on the forecast map could otherwise saturate the thread
+# pool. The limiter is light (just two int counters) — no queue, no progress
+# polling, no flight_id dedup like packs._RefreshRegistry. Tests below pin
+# the cap behavior + acquire/release symmetry.
+# ---------------------------------------------------------------------------
+
+
+class TestStreamLimiter:
+    def test_acquire_release_cycle(self):
+        from weatherbrief.api.airport_profile import _StreamLimiter
+
+        limiter = _StreamLimiter(max_per_user=3, max_global=10)
+        assert limiter.snapshot()["global"] == 0
+
+        limiter.acquire("alice")
+        limiter.acquire("alice")
+        assert limiter.snapshot() == {"global": 2, "users": 1}
+
+        limiter.release("alice")
+        limiter.release("alice")
+        assert limiter.snapshot() == {"global": 0, "users": 0}
+
+    def test_per_user_cap_returns_429(self):
+        from fastapi import HTTPException
+
+        from weatherbrief.api.airport_profile import _StreamLimiter
+
+        limiter = _StreamLimiter(max_per_user=2, max_global=10)
+        limiter.acquire("alice")
+        limiter.acquire("alice")
+
+        with pytest.raises(HTTPException) as exc_info:
+            limiter.acquire("alice")
+        assert exc_info.value.status_code == 429
+        assert "limit 2" in str(exc_info.value.detail)
+
+        # Other users are unaffected by alice's cap.
+        limiter.acquire("bob")
+        assert limiter.snapshot()["global"] == 3
+
+    def test_global_cap_returns_429(self):
+        from fastapi import HTTPException
+
+        from weatherbrief.api.airport_profile import _StreamLimiter
+
+        limiter = _StreamLimiter(max_per_user=10, max_global=2)
+        limiter.acquire("alice")
+        limiter.acquire("bob")
+
+        with pytest.raises(HTTPException) as exc_info:
+            limiter.acquire("carol")
+        assert exc_info.value.status_code == 429
+        assert "Server busy" in exc_info.value.detail
+
+    def test_release_below_zero_is_safe(self):
+        """Defensive: a doubled release shouldn't underflow into negative
+        counts. Could happen if the synchronous release-on-construction-
+        error path collides with the generator's finally — both should
+        be tolerated."""
+        from weatherbrief.api.airport_profile import _StreamLimiter
+
+        limiter = _StreamLimiter(max_per_user=2, max_global=5)
+        limiter.acquire("alice")
+        limiter.release("alice")
+        limiter.release("alice")  # extra release
+        assert limiter.snapshot() == {"global": 0, "users": 0}
+
+
+class TestGribRunDedup:
+    """Two simultaneous panels for the same (model, run) should serialise
+    their enrichment phase. Locks for different keys must NOT serialise."""
+
+    def test_same_key_returns_same_lock(self):
+        from weatherbrief.api.airport_profile import _GribRunDedup
+
+        dedup = _GribRunDedup()
+        a = dedup.lock_for("ecmwf", 1717000000)
+        b = dedup.lock_for("ecmwf", 1717000000)
+        assert a is b
+
+    def test_different_keys_return_different_locks(self):
+        from weatherbrief.api.airport_profile import _GribRunDedup
+
+        dedup = _GribRunDedup()
+        a = dedup.lock_for("ecmwf", 1717000000)
+        b = dedup.lock_for("ecmwf", 1717003600)  # different run
+        c = dedup.lock_for("gfs", 1717000000)    # different model
+        assert a is not b
+        assert a is not c
+        assert b is not c
+
+    def test_none_init_uses_sentinel_key(self):
+        """Before the GRIB run resolves we don't know its init time. The
+        dedup pool buckets all None-init requests under one sentinel so a
+        burst still serialises rather than racing the cold cache."""
+        from weatherbrief.api.airport_profile import _GribRunDedup
+
+        dedup = _GribRunDedup()
+        a = dedup.lock_for("ecmwf", None)
+        b = dedup.lock_for("ecmwf", None)
+        assert a is b
+
+    @pytest.mark.asyncio
+    async def test_lock_serialises_concurrent_acquirers(self):
+        """Mechanical: two coroutines acquiring the same lock interleave
+        their critical sections in order, not in parallel."""
+        from weatherbrief.api.airport_profile import _GribRunDedup
+
+        dedup = _GribRunDedup()
+        lock = dedup.lock_for("ecmwf", 1717000000)
+        order: list[str] = []
+
+        async def worker(name: str, hold_s: float) -> None:
+            async with lock:
+                order.append(f"{name}:enter")
+                await asyncio.sleep(hold_s)
+                order.append(f"{name}:exit")
+
+        await asyncio.gather(worker("a", 0.01), worker("b", 0.01))
+
+        # Either a→a→b→b or b→b→a→a (no interleave like a→b→a→b).
+        assert order in (
+            ["a:enter", "a:exit", "b:enter", "b:exit"],
+            ["b:enter", "b:exit", "a:enter", "a:exit"],
+        )

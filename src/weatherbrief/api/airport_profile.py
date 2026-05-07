@@ -24,6 +24,8 @@ from __future__ import annotations
 import asyncio
 import json as json_mod
 import logging
+import threading
+from collections import defaultdict
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,6 +44,112 @@ router = APIRouter(prefix="/maps", tags=["maps"])
 
 _VALID_MODELS = ("gfs", "icon", "ecmwf")
 _DEFAULT_WINDOW_H = 3  # selected hour + 3 forward = 4 forecast hours
+
+
+# ---------------------------------------------------------------------------
+# Concurrency control
+#
+# Two layers of concurrency protection (see issue #121 PR #122 review):
+#
+# A) Per-user / global stream limiter — bounds the "user clicks 20 airports
+#    rapidly" DoS surface and the global thread-pool exhaustion surface.
+#    Lighter than packs._RefreshRegistry: no queue, no progress polling,
+#    no flight_id dedup — just an int counter.
+#
+# B) Same-run GRIB enrichment lock — two simultaneous panels for different
+#    airports on the same (model, run_init) currently both call
+#    enrich_forecasts(), which both download the same GFS / ICON GRIB
+#    file. Without this lock they race at the file-write level (see #123
+#    for the underlying cache-layer fix). With it, the second request
+#    waits for the first's enrichment to finish; by the time it acquires
+#    the lock, the disk cache is warm and the second request is fast.
+# ---------------------------------------------------------------------------
+
+_MAX_PER_USER = 3
+_MAX_GLOBAL = 20
+
+
+class _StreamLimiter:
+    """Bounded-counter request limiter for the airport-profile SSE.
+
+    Caps in-flight streams per-user (so one user can't monopolise the
+    thread pool with rapid right-clicks) and globally (so total in-flight
+    work is bounded). Counters are incremented synchronously at acquire
+    and decremented in the endpoint's `finally` block — `acquire()`
+    raises `HTTPException(429)` rather than blocking, so the client sees
+    the rejection immediately and can retry instead of hanging.
+    """
+
+    def __init__(self, max_per_user: int = _MAX_PER_USER, max_global: int = _MAX_GLOBAL) -> None:
+        self._lock = threading.Lock()
+        self._per_user: dict[str, int] = defaultdict(int)
+        self._global = 0
+        self._max_per_user = max_per_user
+        self._max_global = max_global
+
+    def acquire(self, user_id: str) -> None:
+        with self._lock:
+            if self._global >= self._max_global:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Server busy ({self._global} airport profiles in flight). Try again shortly.",
+                )
+            if self._per_user[user_id] >= self._max_per_user:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"You already have {self._per_user[user_id]} airport profiles in flight (limit {self._max_per_user}).",
+                )
+            self._per_user[user_id] += 1
+            self._global += 1
+
+    def release(self, user_id: str) -> None:
+        with self._lock:
+            self._per_user[user_id] = max(0, self._per_user[user_id] - 1)
+            if self._per_user[user_id] == 0:
+                self._per_user.pop(user_id, None)
+            self._global = max(0, self._global - 1)
+
+    def snapshot(self) -> dict[str, int]:
+        """Return active counts for diagnostics / tests."""
+        with self._lock:
+            return {"global": self._global, "users": len(self._per_user)}
+
+
+_limiter = _StreamLimiter()
+
+
+class _GribRunDedup:
+    """Process-wide async-lock pool keyed by (model, init_time_unix).
+
+    Two simultaneous airport-profile streams on the same model+run
+    currently both invoke `enrich_forecasts`, which redownloads the same
+    GFS / ICON GRIB file (see #123 for the cache-layer race). This pool
+    serialises the enrichment phase so the second request sees a warm
+    cache and skips the download.
+
+    Locks are created lazily and never freed — there are at most ~6 active
+    GRIB runs at any moment (3 models × 2 cycles a day) so unbounded
+    growth is not a concern.
+    """
+
+    def __init__(self) -> None:
+        self._sync_lock = threading.Lock()
+        self._locks: dict[tuple[str, int], asyncio.Lock] = {}
+
+    def lock_for(self, model: str, run_init_unix: int | None) -> asyncio.Lock:
+        # Use a sentinel for "no init time available yet" so per-model
+        # bursts before the first GRIB resolves still serialise rather
+        # than all charging at the cold cache.
+        key = (model, run_init_unix if run_init_unix is not None else -1)
+        with self._sync_lock:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[key] = lock
+            return lock
+
+
+_grib_dedup = _GribRunDedup()
 
 
 def _iso_utc(dt: datetime) -> str:
@@ -403,6 +511,12 @@ async def get_airport_profile(
     # SSE error mid-stream).
     surface = _surface_from_cache(db, icao, model, hours)
 
+    # Acquire the per-user / global concurrency slot before opening the
+    # stream. Released in the generator's finally block. Done synchronously
+    # (raises 429) so the client doesn't waste a round-trip on an SSE
+    # connection that would never produce a complete event.
+    _limiter.acquire(_user_id)
+
     async def event_generator() -> AsyncGenerator[str, None]:
         def _event(event_type: str, payload: dict) -> str:
             return f"event: {event_type}\ndata: {json_mod.dumps(payload, default=str)}\n\n"
@@ -415,88 +529,109 @@ async def get_airport_profile(
             so the SSE stream closes normally."""
             return _event("error", {"type": "error", "phase": phase, "message": message})
 
-        # Phase 0 (meta): instant — lets the client size the canvas.
-        meta = {
-            "type": "meta",
-            "icao": icao,
-            "lat": lat,
-            "lon": lon,
-            "elevation_ft": elevation_ft,
-            "model": model,
-            "start_hour": _iso_utc(start_dt),
-            "window_h": window_h,
-            "hours": [_iso_utc(h) for h in hours],
-        }
-        yield _event("meta", meta)
-
-        # Phase 1 (surface): cached scalars. Already snapshotted above so
-        # nothing to do in the executor.
-        yield _event("surface", {"type": "surface", "hours": surface})
-
-        # Phase 2 (levels) — runs in a thread since it does network I/O.
-        loop = asyncio.get_running_loop()
         try:
-            wf = await loop.run_in_executor(
-                None, _fetch_pressure_levels, icao, lat, lon, model, hours,
-            )
-        except Exception as exc:
-            logger.warning("Airport profile: levels fetch raised: %s", exc, exc_info=True)
-            wf = None
+            # Phase 0 (meta): instant — lets the client size the canvas.
+            meta = {
+                "type": "meta",
+                "icao": icao,
+                "lat": lat,
+                "lon": lon,
+                "elevation_ft": elevation_ft,
+                "model": model,
+                "start_hour": _iso_utc(start_dt),
+                "window_h": window_h,
+                "hours": [_iso_utc(h) for h in hours],
+            }
+            yield _event("meta", meta)
 
-        if wf is not None:
-            # Filter to the requested hours. Open-Meteo can return naive
-            # datetimes; normalize before matching.
-            target_set = {h.replace(tzinfo=None) for h in hours}
-            kept = []
-            for h in wf.hourly:
-                ht = h.time.replace(tzinfo=None) if h.time.tzinfo else h.time
-                if ht in target_set:
-                    kept.append(_hourly_to_dict(h))
-            yield _event("levels", {"type": "levels", "hours": kept})
-        else:
-            yield _event("levels", {"type": "levels", "hours": [], "error": "fetch_failed"})
+            # Phase 1 (surface): cached scalars. Already snapshotted above so
+            # nothing to do in the executor.
+            yield _event("surface", {"type": "surface", "hours": surface})
 
-        # Phase 2.5 (enriched) — local-GRIB augmentation. Modifies wf in-place.
-        # Skipped when the levels phase failed (nothing to augment) or when
-        # the caller passed enrich=false. The whole phase is guarded so a
-        # PermissionError on iterdir() (preflight) or any other unexpected
-        # raise doesn't kill the stream — the client still gets the derived
-        # phase on the unenriched profile.
-        if enrich and wf is not None:
+            # Phase 2 (levels) — runs in a thread since it does network I/O.
+            loop = asyncio.get_running_loop()
             try:
-                enrichment = await loop.run_in_executor(
-                    None, _grib_enrich_levels, wf, lat, lon, model, hours, data_dir,
+                wf = await loop.run_in_executor(
+                    None, _fetch_pressure_levels, icao, lat, lon, model, hours,
+                )
+            except Exception as exc:
+                logger.warning("Airport profile: levels fetch raised: %s", exc, exc_info=True)
+                wf = None
+
+            if wf is not None:
+                # Filter to the requested hours. Open-Meteo can return naive
+                # datetimes; normalize before matching.
+                target_set = {h.replace(tzinfo=None) for h in hours}
+                kept = []
+                for h in wf.hourly:
+                    ht = h.time.replace(tzinfo=None) if h.time.tzinfo else h.time
+                    if ht in target_set:
+                        kept.append(_hourly_to_dict(h))
+                yield _event("levels", {"type": "levels", "hours": kept})
+            else:
+                yield _event("levels", {"type": "levels", "hours": [], "error": "fetch_failed"})
+
+            # Phase 2.5 (enriched) — local-GRIB augmentation. Modifies wf in-place.
+            # Skipped when the levels phase failed (nothing to augment) or when
+            # the caller passed enrich=false. Guarded so unexpected raises
+            # (e.g. PermissionError on iterdir()) don't kill the stream — the
+            # client still gets the derived phase on the unenriched profile.
+            #
+            # Wrapped in `_grib_dedup.lock_for(model, hours[0])` so two
+            # concurrent panels for the same model+hour don't both download
+            # the same GRIB file. The second panel waits for the first's
+            # enrichment to finish, then enters with a warm cache. See #123
+            # for the deeper cache-layer atomicity issue.
+            if enrich and wf is not None:
+                run_lock = _grib_dedup.lock_for(model, int(hours[0].timestamp()))
+                async with run_lock:
+                    try:
+                        enrichment = await loop.run_in_executor(
+                            None, _grib_enrich_levels, wf, lat, lon, model, hours, data_dir,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Airport profile: enrichment executor raised: %s", exc, exc_info=True,
+                        )
+                        enrichment = {"sources": {}, "skipped": {"all": "exception"}}
+                yield _event("enriched", {"type": "enriched", **enrichment})
+
+            # Phase 3 (derived) — analyze_sounding on the (possibly-enriched) levels.
+            # If this fails the client gets nothing useful past the levels phase;
+            # emit a structured error and stop instead of letting the executor
+            # exception bubble up and kill the stream silently.
+            try:
+                derived = await loop.run_in_executor(
+                    None, _build_derived_payload, wf, hours,
                 )
             except Exception as exc:
                 logger.warning(
-                    "Airport profile: enrichment executor raised: %s", exc, exc_info=True,
+                    "Airport profile: derived executor raised: %s", exc, exc_info=True,
                 )
-                enrichment = {"sources": {}, "skipped": {"all": "exception"}}
-            yield _event("enriched", {"type": "enriched", **enrichment})
+                yield _error_event("derived", str(exc))
+                return
+            yield _event("derived", {"type": "derived", "points": derived})
 
-        # Phase 3 (derived) — analyze_sounding on the (possibly-enriched) levels.
-        # If this fails the client gets nothing useful past the levels phase;
-        # emit a structured error and stop instead of letting the executor
-        # exception bubble up and kill the stream silently.
-        try:
-            derived = await loop.run_in_executor(
-                None, _build_derived_payload, wf, hours,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Airport profile: derived executor raised: %s", exc, exc_info=True,
-            )
-            yield _error_event("derived", str(exc))
-            return
-        yield _event("derived", {"type": "derived", "points": derived})
+            yield _event("complete", {"type": "complete"})
+        finally:
+            # Always release the slot — covers normal completion, error
+            # returns, and client disconnect (Starlette closes the
+            # generator, which runs this block).
+            _limiter.release(_user_id)
 
-        yield _event("complete", {"type": "complete"})
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    try:
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception:
+        # StreamingResponse construction itself shouldn't raise, but if it
+        # does, the generator's finally will never run and the slot leaks.
+        # Release defensively. (Same pattern /refresh/stream uses around
+        # refresh_registry.unregister.)
+        _limiter.release(_user_id)
+        raise
