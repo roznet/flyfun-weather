@@ -21,7 +21,22 @@ import { getAllLayers, getDefaultEnabled } from './cross-section/layer-registry'
 import {
   streamAirportProfile, snapshotToVizData, snapshotToSkewtData,
   type AirportProfileSnapshot, type AirportProfileStreamHandle,
+  type AirportProfileEnriched,
 } from '../adapters/airport-profile-adapter';
+
+/** Render a one-line summary of which GRIB sources contributed
+ *  (or empty when none did, so the status row collapses). */
+function formatEnrichmentBadge(e: AirportProfileEnriched | null): string {
+  if (!e) return '';
+  const parts: string[] = [];
+  for (const [m, info] of Object.entries(e.sources)) {
+    const dt = new Date(info.init_time_unix * 1000);
+    const hh = String(dt.getUTCHours()).padStart(2, '0');
+    parts.push(`${m.toUpperCase()} ${hh}Z`);
+  }
+  if (parts.length === 0) return '';
+  return `GRIB: ${parts.join(', ')}`;
+}
 
 type ViewMode = 'both' | 'cross' | 'skewt';
 const VIEW_MODE_KEY = 'wb_apProfileView';
@@ -65,7 +80,9 @@ export class AirportProfilePanel {
   private crossRenderer: CrossSectionRenderer | null = null;
   private skewtRenderer: SkewTRenderer | null = null;
 
-  private snapshot: AirportProfileSnapshot = { meta: null, surface: [], levels: [], derived: [] };
+  private snapshot: AirportProfileSnapshot = {
+    meta: null, surface: [], levels: [], enriched: null, derived: [],
+  };
   private stream: AirportProfileStreamHandle | null = null;
   private currentRequest: AirportProfileRequest | null = null;
 
@@ -144,7 +161,9 @@ export class AirportProfilePanel {
   /** Start (or restart) loading the profile for a new airport / hour. */
   load(req: AirportProfileRequest): void {
     this.currentRequest = req;
-    this.snapshot = { meta: null, surface: [], levels: [], derived: [] };
+    this.snapshot = {
+      meta: null, surface: [], levels: [], enriched: null, derived: [],
+    };
     if (this.stream) { this.stream.abort(); this.stream = null; }
     this.titleEl.textContent = `${req.icao} — loading…`;
     this.statusEl.textContent = 'Connecting…';
@@ -169,14 +188,16 @@ export class AirportProfilePanel {
       this.statusEl.textContent = 'Pressure levels…';
       this.renderCross();
     } else if (phase === 'levels') {
-      this.statusEl.textContent = (raw && raw.error) ? `Levels failed (${raw.error})` : 'Analyzing…';
+      this.statusEl.textContent = (raw && raw.error) ? `Levels failed (${raw.error})` : 'GRIB enrichment…';
       this.renderSkewT();
+    } else if (phase === 'enriched') {
+      this.statusEl.textContent = `Analyzing… ${formatEnrichmentBadge(snapshot.enriched)}`;
     } else if (phase === 'derived') {
-      this.statusEl.textContent = '';
+      this.statusEl.textContent = formatEnrichmentBadge(snapshot.enriched);
       this.renderCross();
       this.renderSkewT();
     } else if (phase === 'complete') {
-      this.statusEl.textContent = '';
+      this.statusEl.textContent = formatEnrichmentBadge(snapshot.enriched);
     } else if (phase === 'error') {
       this.statusEl.textContent = 'Stream error';
     }

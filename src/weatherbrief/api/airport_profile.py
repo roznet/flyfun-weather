@@ -47,6 +47,11 @@ def _airports_db(request: Request) -> str:
     return request.app.state.db_path
 
 
+def _data_dir(request: Request):
+    """Shared data directory (DATA_DIR env var). GRIB cache lives under here."""
+    return request.app.state.data_dir
+
+
 def _resolve_airport_coords(icao: str, airports_db_path: str) -> tuple[float, float, float | None] | None:
     """Look up an ICAO's lat/lon/elevation from the euro_aip database.
 
@@ -218,6 +223,75 @@ def _hourly_to_dict(h) -> dict[str, Any]:
     }
 
 
+def _grib_enrich_levels(
+    waypoint_forecast,
+    lat: float,
+    lon: float,
+    model: str,
+    hours: list[datetime],
+    data_dir,
+) -> dict[str, Any]:
+    """Run the local-GRIB enrichment pipeline against a synthetic single-point
+    "route" so the existing per-flight machinery can run unchanged.
+
+    The pipeline (`fetch.grib.enrich_forecasts`) is route-shaped: it expects
+    a list of `RouteCrossSection`, a list of `RoutePoint`, and a flight
+    departure time / duration. Wrap our (icao, model, hours[]) into that
+    shape and let the function modify the WaypointForecast in-place.
+
+    The returned dict is suitable for the SSE payload — it summarises which
+    sources contributed (so the client can show "GRIB enriched: ECMWF run
+    12Z" or "no local GRIB available").
+
+    NOTE: This path requires:
+      - ECMWF: a populated ECMWF_GRIB_DIR with a recent run covering hours[-1]
+      - ICON-EU: airport inside the ICON-EU domain (~Europe + adjoining seas)
+      - GFS: NOAA S3 access (GFS GRIB is downloaded on-demand into data_dir)
+    Any of those failing is non-fatal: the pre-enrichment Open-Meteo levels
+    stay intact and `analyze_sounding` still runs in the derived phase.
+    """
+    if waypoint_forecast is None or not hours:
+        return {"sources": {}, "skipped": "no_levels"}
+
+    from datetime import timezone as _tz
+
+    from weatherbrief.fetch.grib import enrich_forecasts
+    from weatherbrief.models import (
+        ModelSource, RouteCrossSection, RoutePoint, WaypointForecast as _WF,
+    )
+
+    src = _model_to_source(model)
+    point = RoutePoint(lat=lat, lon=lon, distance_from_origin_nm=0.0)
+    cs = RouteCrossSection(
+        model=src,
+        route_points=[point],
+        fetched_at=datetime.now(_tz.utc),
+        point_forecasts=[waypoint_forecast],
+    )
+
+    departure = hours[0]
+    duration_h = (hours[-1] - hours[0]).total_seconds() / 3600.0
+
+    try:
+        grib_init_times, grib_skip_reasons = enrich_forecasts(
+            cross_sections=[cs],
+            all_forecasts=[waypoint_forecast],
+            route_points=[point],
+            departure_time=departure,
+            data_dir=data_dir,
+            flight_duration_hours=duration_h,
+        )
+    except Exception:
+        logger.warning("Airport profile: GRIB enrichment failed", exc_info=True)
+        return {"sources": {}, "skipped": "exception"}
+
+    sources: dict[str, dict[str, Any]] = {}
+    for m, ts in grib_init_times.items():
+        sources[m] = {"init_time_unix": ts}
+    skipped = {m: reason for m, reason in grib_skip_reasons.items()}
+    return {"sources": sources, "skipped": skipped}
+
+
 def _build_derived_payload(
     waypoint_forecast,
     hours: list[datetime],
@@ -263,10 +337,12 @@ async def get_airport_profile(
     model: str = Query(default="ecmwf", description="Weather model: gfs / icon / ecmwf"),
     start_hour: str = Query(..., description="ISO 8601 UTC start hour, e.g. 2026-05-07T12:00:00Z"),
     window_h: int = Query(default=_DEFAULT_WINDOW_H, ge=0, le=12),
+    enrich: bool = Query(default=True, description="Run local-GRIB enrichment phase"),
     request: Request = None,  # type: ignore[assignment]
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
     airports_db: str = Depends(_airports_db),
+    data_dir = Depends(_data_dir),
 ):
     """Stream airport profile data via Server-Sent Events.
 
@@ -348,7 +424,16 @@ async def get_airport_profile(
         else:
             yield _event("levels", {"type": "levels", "hours": [], "error": "fetch_failed"})
 
-        # Phase 3 (derived) — analyze_sounding on the levels.
+        # Phase 2.5 (enriched) — local-GRIB augmentation. Modifies wf in-place.
+        # Skipped when the levels phase failed (nothing to augment) or when
+        # the caller passed enrich=false.
+        if enrich and wf is not None:
+            enrichment = await loop.run_in_executor(
+                None, _grib_enrich_levels, wf, lat, lon, model, hours, data_dir,
+            )
+            yield _event("enriched", {"type": "enriched", **enrichment})
+
+        # Phase 3 (derived) — analyze_sounding on the (possibly-enriched) levels.
         derived = await loop.run_in_executor(
             None, _build_derived_payload, wf, hours,
         )

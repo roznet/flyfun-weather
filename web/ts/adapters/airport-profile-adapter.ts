@@ -69,14 +69,24 @@ export interface AirportProfileDerivedPoint {
   sounding: any;
 }
 
+/** Result of the local-GRIB enrichment phase. `sources[m]` is present
+ *  when the model `m` actually contributed (init_time_unix is the run
+ *  timestamp). `skipped[m]` is set when a model couldn't enrich
+ *  (out_of_domain / out_of_range / no_data). */
+export interface AirportProfileEnriched {
+  sources: Record<string, { init_time_unix: number }>;
+  skipped: Record<string, string>;
+}
+
 export interface AirportProfileSnapshot {
   meta: AirportProfileMeta | null;
   surface: AirportProfileSurfaceHour[];
   levels: AirportProfileLevelsHour[];
+  enriched: AirportProfileEnriched | null;
   derived: AirportProfileDerivedPoint[];
 }
 
-export type AirportProfilePhase = 'meta' | 'surface' | 'levels' | 'derived' | 'complete' | 'error';
+export type AirportProfilePhase = 'meta' | 'surface' | 'levels' | 'enriched' | 'derived' | 'complete' | 'error';
 
 export interface AirportProfileStreamHandle {
   abort(): void;
@@ -96,7 +106,9 @@ export function streamAirportProfile(
 
   const url = `${API_BASE}/maps/airport-profile?${qs.toString()}`;
   const es = new EventSource(url, { withCredentials: true });
-  const snapshot: AirportProfileSnapshot = { meta: null, surface: [], levels: [], derived: [] };
+  const snapshot: AirportProfileSnapshot = {
+    meta: null, surface: [], levels: [], enriched: null, derived: [],
+  };
 
   const dispatch = (phase: AirportProfilePhase, raw: any) => onPhase(phase, snapshot, raw);
 
@@ -120,6 +132,13 @@ export function streamAirportProfile(
       snapshot.levels = data.hours ?? [];
       dispatch('levels', data);
     } catch (err) { console.warn('airport-profile: bad levels event', err); }
+  });
+  es.addEventListener('enriched', (e: MessageEvent) => {
+    try {
+      const data = JSON.parse(e.data);
+      snapshot.enriched = { sources: data.sources ?? {}, skipped: data.skipped ?? {} };
+      dispatch('enriched', data);
+    } catch (err) { console.warn('airport-profile: bad enriched event', err); }
   });
   es.addEventListener('derived', (e: MessageEvent) => {
     try {
