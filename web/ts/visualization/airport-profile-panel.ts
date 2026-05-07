@@ -212,7 +212,12 @@ export class AirportProfilePanel {
     } else if (phase === 'complete') {
       this.statusEl.textContent = formatEnrichmentBadge(snapshot.enriched);
     } else if (phase === 'error') {
-      this.statusEl.textContent = 'Stream error';
+      // Backend-emitted structured error: {type, phase, message}. Falls
+      // through to a generic message when the connection just dropped.
+      const detail = raw && typeof raw === 'object' && raw.phase
+        ? `${raw.phase}: ${raw.message ?? 'unknown error'}`
+        : 'connection lost';
+      this.statusEl.textContent = `Error — ${detail}`;
     }
   }
 

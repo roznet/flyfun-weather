@@ -180,8 +180,16 @@ export function streamAirportProfile(
     dispatch('complete', null);
     es.close();
   });
-  es.addEventListener('error', (e) => {
-    dispatch('error', e);
+  // Server-emitted structured error event (matches /refresh/stream pattern).
+  // We piggyback on the same 'error' phase the EventSource onerror uses;
+  // the raw payload tells the host whether it was a clean server error
+  // (has phase + message) or a connection drop (no payload).
+  es.addEventListener('error', (e: Event) => {
+    let payload: any = null;
+    if (e instanceof MessageEvent && typeof e.data === 'string') {
+      try { payload = JSON.parse(e.data); } catch { /* not JSON, treat as connection error */ }
+    }
+    dispatch('error', payload ?? e);
     es.close();
   });
 

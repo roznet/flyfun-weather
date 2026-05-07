@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -58,13 +58,7 @@ def _iso_utc(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def _airports_db(request: Request) -> str:
-    return request.app.state.db_path
-
-
-def _data_dir(request: Request) -> Path:
-    """Shared data directory (DATA_DIR env var). GRIB cache lives under here."""
-    return request.app.state.data_dir
+from weatherbrief.api.deps import airports_db as _airports_db, data_dir as _data_dir
 
 
 def _resolve_airport_coords(icao: str, airports_db_path: str) -> tuple[float, float, float | None] | None:
@@ -413,6 +407,14 @@ async def get_airport_profile(
         def _event(event_type: str, payload: dict) -> str:
             return f"event: {event_type}\ndata: {json_mod.dumps(payload, default=str)}\n\n"
 
+        def _error_event(phase: str, message: str) -> str:
+            """Match /refresh/stream's pattern: emit a structured error
+            event so the client sees a clean handoff instead of the
+            EventSource onerror connection-level signal. After yielding
+            this, the generator should `break` out of `event_generator`
+            so the SSE stream closes normally."""
+            return _event("error", {"type": "error", "phase": phase, "message": message})
+
         # Phase 0 (meta): instant — lets the client size the canvas.
         meta = {
             "type": "meta",
@@ -427,7 +429,8 @@ async def get_airport_profile(
         }
         yield _event("meta", meta)
 
-        # Phase 1 (surface): cached scalars.
+        # Phase 1 (surface): cached scalars. Already snapshotted above so
+        # nothing to do in the executor.
         yield _event("surface", {"type": "surface", "hours": surface})
 
         # Phase 2 (levels) — runs in a thread since it does network I/O.
@@ -455,17 +458,36 @@ async def get_airport_profile(
 
         # Phase 2.5 (enriched) — local-GRIB augmentation. Modifies wf in-place.
         # Skipped when the levels phase failed (nothing to augment) or when
-        # the caller passed enrich=false.
+        # the caller passed enrich=false. The whole phase is guarded so a
+        # PermissionError on iterdir() (preflight) or any other unexpected
+        # raise doesn't kill the stream — the client still gets the derived
+        # phase on the unenriched profile.
         if enrich and wf is not None:
-            enrichment = await loop.run_in_executor(
-                None, _grib_enrich_levels, wf, lat, lon, model, hours, data_dir,
-            )
+            try:
+                enrichment = await loop.run_in_executor(
+                    None, _grib_enrich_levels, wf, lat, lon, model, hours, data_dir,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Airport profile: enrichment executor raised: %s", exc, exc_info=True,
+                )
+                enrichment = {"sources": {}, "skipped": {"all": "exception"}}
             yield _event("enriched", {"type": "enriched", **enrichment})
 
         # Phase 3 (derived) — analyze_sounding on the (possibly-enriched) levels.
-        derived = await loop.run_in_executor(
-            None, _build_derived_payload, wf, hours,
-        )
+        # If this fails the client gets nothing useful past the levels phase;
+        # emit a structured error and stop instead of letting the executor
+        # exception bubble up and kill the stream silently.
+        try:
+            derived = await loop.run_in_executor(
+                None, _build_derived_payload, wf, hours,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Airport profile: derived executor raised: %s", exc, exc_info=True,
+            )
+            yield _error_event("derived", str(exc))
+            return
         yield _event("derived", {"type": "derived", "points": derived})
 
         yield _event("complete", {"type": "complete"})

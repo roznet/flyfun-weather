@@ -1,12 +1,24 @@
 """Smoke tests for the airport profile SSE helpers.
 
 The SSE endpoint itself depends on Open-Meteo and the airports DB so it's
-not easy to exercise in unit tests; what we can pin down here is the
-purely-functional helpers (hour-window construction, time-key matching).
+not easy to exercise in unit tests; what we can pin down here is:
+
+  1. Purely-functional helpers (hour-window construction, time-key matching).
+  2. The JSON-encoder discipline that protects the SSE stream from
+     silently dying on a non-JSON-trivial field — a class of bug the
+     briefing pipeline shipped once (PR #107: ``Diagnostic.error_id: UUID``
+     killed every refresh stream). See ``test_api.py::TestRefreshStreamEncoder``
+     for the canonical version of this guard.
+  3. The ``_grib_enrich_levels`` return-shape contract (string-vs-dict
+     regression guard from the PR review of #122).
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
 
 from weatherbrief.api.airport_profile import _build_hours, _DEFAULT_WINDOW_H
 
@@ -33,3 +45,198 @@ def test_build_hours_crosses_midnight():
     assert [h.hour for h in hours] == [22, 23, 0, 1]
     assert hours[0].day == 7
     assert hours[-1].day == 8
+
+
+# ---------------------------------------------------------------------------
+# JSON-encoder discipline (mirrors test_api.py::TestRefreshStreamEncoder).
+#
+# The /api/maps/airport-profile SSE generator builds events as raw dicts
+# and serialises with ``json_mod.dumps(payload, default=str)``. The
+# ``derived`` event embeds a ``SoundingAnalysis.model_dump(mode="json")``
+# payload, which is a much larger Pydantic structure than the briefing's
+# pack response — every datetime, UUID, Enum, or other non-JSON-trivial
+# field added to ``SoundingAnalysis`` (or any of its nested models) flows
+# through this encoder.
+#
+# Two layers of defense, each tested below:
+#   1. The route uses ``model_dump(mode="json")`` so Pydantic stringifies
+#      UUID/datetime/Enum on its way out.
+#   2. The route uses ``json.dumps(..., default=str)`` as a backstop in
+#      case mode="json" misses something (or someone adds a fresh
+#      json_mod.dumps call without it — see the structural lint test).
+# ---------------------------------------------------------------------------
+
+
+class TestAirportProfileEncoder:
+    """The same class of regression that killed /refresh/stream once."""
+
+    def test_derived_event_round_trips_through_sse_encoder(self):
+        """Build a real SoundingAnalysis (the heaviest payload the
+        airport-profile stream emits), run it through the exact
+        two-step encode the route does, and decode back. Catches any
+        future field on SoundingAnalysis (or its nested models) that
+        plain ``json.dumps`` can't handle.
+        """
+        from weatherbrief.models.analysis import (
+            ConvectiveAssessment, IcingRisk, SoundingAnalysis, ThermodynamicIndices,
+        )
+
+        # Construct a SoundingAnalysis with the kind of fields most likely
+        # to surface a non-trivial encoder issue: enums (IcingRisk),
+        # nested Pydantic models, datetimes if/when added.
+        sa = SoundingAnalysis(
+            indices=ThermodynamicIndices(
+                lcl_pressure_hpa=950.0,
+                lcl_altitude_ft=2000.0,
+                cape_surface_jkg=350.0,
+                cin_surface_jkg=-25.0,
+                lifted_index=2.5,
+                freezing_level_ft=10000.0,
+            ),
+            convective=ConvectiveAssessment(risk_level=IcingRisk.NONE),
+        )
+
+        # Step 1: same model_dump call the route makes.
+        payload = {
+            "type": "derived",
+            "points": [{
+                "point_index": 0,
+                "time": "2026-05-07T12:00:00+00:00",
+                "sounding": sa.model_dump(mode="json"),
+            }],
+        }
+        # Step 2: same json.dumps call the route makes (default=str backstop).
+        encoded = json.dumps(payload, default=str)
+        parsed = json.loads(encoded)
+
+        assert parsed["type"] == "derived"
+        assert len(parsed["points"]) == 1
+        # Key indices fields survived through to the JSON payload.
+        survived = parsed["points"][0]["sounding"]
+        assert survived["indices"]["cape_surface_jkg"] == 350.0
+        # Enum was stringified, not left as a Python repr.
+        assert survived["convective"]["risk_level"] == IcingRisk.NONE.value
+
+    def test_meta_event_is_json_safe(self):
+        """The meta event contains the only datetime-derived strings the
+        endpoint emits (start_hour, hours[i]). They go through
+        ``_iso_utc()`` so they're already strings — but lock that in so
+        a future change that emits a raw datetime breaks here, not at
+        runtime."""
+        from weatherbrief.api.airport_profile import _build_hours, _iso_utc
+
+        start = datetime(2026, 5, 7, 12, 0, tzinfo=timezone.utc)
+        hours = _build_hours(start, _DEFAULT_WINDOW_H)
+        meta = {
+            "type": "meta",
+            "icao": "EGLL",
+            "lat": 51.4775,
+            "lon": -0.4614,
+            "elevation_ft": 83.0,
+            "model": "ecmwf",
+            "start_hour": _iso_utc(start),
+            "window_h": _DEFAULT_WINDOW_H,
+            "hours": [_iso_utc(h) for h in hours],
+        }
+        encoded = json.dumps(meta, default=str)
+        parsed = json.loads(encoded)
+        # All time strings carry the +00:00 suffix — same as derived/surface
+        # so the client's strict === match works across phases.
+        assert parsed["start_hour"].endswith("+00:00")
+        assert all(h.endswith("+00:00") for h in parsed["hours"])
+
+    def test_airport_profile_module_sse_encoders_are_json_safe(self):
+        """Structural lint, mirrored from test_api.py::TestRefreshStreamEncoder.
+
+        Every ``json_mod.dumps(...)`` call in ``airport_profile.py`` must
+        include ``default=str`` on the same line. This is the only test in
+        this class that catches a *route-level* regression — the encoder
+        round-trip tests above only lock in encoder behavior, but a future
+        patch removing ``default=str`` from a new SSE event would silently
+        revert the production guard.
+        """
+        src = (
+            Path(__file__).parent.parent
+            / "src" / "weatherbrief" / "api" / "airport_profile.py"
+        ).read_text()
+
+        bad_dumps = [
+            (i, line.strip())
+            for i, line in enumerate(src.splitlines(), 1)
+            if "json_mod.dumps(" in line and "default=str" not in line
+        ]
+        assert not bad_dumps, (
+            "Found json_mod.dumps() without default=str in airport_profile.py — "
+            "the SSE stream will silently die on any non-JSON-trivial "
+            "field (UUID, datetime, Path, Decimal, …). Add default=str.\n"
+            + "\n".join(f"  L{i}: {line}" for i, line in bad_dumps)
+        )
+
+    def test_airport_profile_model_dump_uses_json_mode(self):
+        """The ``derived`` payload embeds ``sa.model_dump(mode="json")``.
+        Without ``mode="json"``, UUID/datetime/Enum stay as Python objects
+        and die in the json.dumps downstream — the exact bug PR #107
+        shipped on /refresh/stream.
+        """
+        import re
+
+        src = (
+            Path(__file__).parent.parent
+            / "src" / "weatherbrief" / "api" / "airport_profile.py"
+        ).read_text()
+
+        # Look for any .model_dump(...) call inside this file. The lint
+        # is intentionally broad — every payload that goes into a SSE
+        # event should be json-mode-dumped.
+        pattern = re.compile(r"\.model_dump\(([^)]*)\)")
+        for match in pattern.finditer(src):
+            args = match.group(1)
+            line_no = src[: match.start()].count("\n") + 1
+            assert 'mode="json"' in args or "mode='json'" in args, (
+                f"airport_profile.py:{line_no} — .model_dump() must use "
+                f"mode='json' (got args: {args!r}). Without it, UUID/"
+                f"datetime/Enum fields stay as Python objects and die in "
+                f"the json_mod.dumps() call downstream."
+            )
+
+
+# ---------------------------------------------------------------------------
+# Contract: _grib_enrich_levels.skipped is always Dict[str, str].
+#
+# The TS adapter declares ``skipped: Record<string, string>``. The Python
+# function had four return paths — three returned dicts, one returned the
+# bare string ``"exception"`` (caught in PR review). Lock it in.
+# ---------------------------------------------------------------------------
+
+
+class TestGribEnrichSkippedShape:
+    def test_no_levels_returns_dict_skipped(self):
+        from weatherbrief.api.airport_profile import _grib_enrich_levels
+
+        result = _grib_enrich_levels(
+            None, 51.4775, -0.4614, "ecmwf", [], Path("/tmp"),
+        )
+        assert isinstance(result["skipped"], dict)
+        assert result["skipped"] == {"all": "no_levels"}
+        assert result["sources"] == {}
+
+    def test_no_grib_dir_returns_dict_skipped(self, tmp_path, monkeypatch):
+        """Force the preflight to skip by pointing ECMWF_GRIB_DIR at an
+        empty (or nonexistent) directory."""
+        from weatherbrief.api.airport_profile import _grib_enrich_levels
+        from weatherbrief.fetch.grib import ecmwf_fetch as ecmwf_mod
+
+        empty = tmp_path / "ecmwf_empty_dir"  # never created
+        monkeypatch.setattr(ecmwf_mod, "ecmwf_grib_dir", lambda: empty)
+
+        # Construct a minimal fake WaypointForecast — only used as a
+        # truthy-ness check before the preflight.
+        class _FakeWf:
+            hourly = []
+
+        hours = [datetime(2026, 5, 7, 12, 0, tzinfo=timezone.utc)]
+        result = _grib_enrich_levels(
+            _FakeWf(), 51.4775, -0.4614, "ecmwf", hours, tmp_path,
+        )
+        assert isinstance(result["skipped"], dict)
+        assert result["skipped"] == {"all": "no_local_grib_configured"}
