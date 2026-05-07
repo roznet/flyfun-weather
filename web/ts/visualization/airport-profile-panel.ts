@@ -281,14 +281,17 @@ export class AirportProfilePanel {
     this.skewtEl.innerHTML = '';
   }
 
-  /** Close the panel and notify the host. */
+  /** User clicked the ✕ button. Notifies the host so it can decide
+   *  what to do with the panel container — the host is then expected
+   *  to call `destroy()`. We don't tear anything down here; that keeps
+   *  the lifecycle linear (one teardown path) instead of having
+   *  `close()` and `destroy()` partially overlap. */
   close(): void {
-    if (this.stream) { this.stream.abort(); this.stream = null; }
-    this.clearRenderers();
     this.onClose?.();
   }
 
-  /** Tear down everything (used when the host removes the panel). */
+  /** Single teardown path: abort the SSE stream, dispose renderers,
+   *  empty the container. Idempotent. */
   destroy(): void {
     if (this.stream) { this.stream.abort(); this.stream = null; }
     this.clearRenderers();

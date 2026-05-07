@@ -2,21 +2,21 @@
 
 Provides a phased SSE stream so the frontend can paint axes immediately,
 fill in surface scalars from cache, then layer in pressure-level data
-(Open-Meteo) and the analyzed sounding once they're ready.
+(Open-Meteo), augment with local-GRIB sources where available, and run
+the sounding analysis on the assembled profile.
 
 Phases:
+  meta     — icao + lat/lon/elevation + hour list (~0ms)
   surface  — airport_forecast_snapshots cache (~0ms)
   levels   — Open-Meteo per-airport pressure-level fetch (1–2s)
-  derived  — analyze_sounding on combined data (~50ms)
+  enriched — local-GRIB augmentation via fetch.grib.enrich_forecasts (up to ~10s)
+  derived  — analyze_sounding on the (possibly-enriched) profile (~50ms)
   complete — done
 
 Each phase event carries the partial data the client needs to render
 that layer; the client doesn't need to wait for `complete` to start
-showing anything.
-
-Note: GRIB enrichment (the `enriched` phase in the design doc) is not
-yet implemented. The frontend tolerates its absence — derived runs on
-the levels-only profile when no enriched payload arrives.
+showing anything. The `enriched` phase is skipped fast-path when no
+local GRIB is configured (see `_grib_enrich_levels`).
 """
 
 from __future__ import annotations
@@ -281,8 +281,8 @@ def _grib_enrich_levels(
     # populated directory; dev typically doesn't.
     from weatherbrief.fetch.grib.ecmwf_fetch import ecmwf_grib_dir
     ecmwf_dir = ecmwf_grib_dir()
-    has_ecmwf_dir = ecmwf_dir.exists() and any(ecmwf_dir.iterdir()) if ecmwf_dir.exists() else False
-    if not has_ecmwf_dir:
+    # is_dir() returns False for nonexistent paths — no exception risk.
+    if not (ecmwf_dir.is_dir() and any(ecmwf_dir.iterdir())):
         return {"sources": {}, "skipped": {"all": "no_local_grib_configured"}}
 
     from datetime import timezone as _tz
@@ -313,7 +313,7 @@ def _grib_enrich_levels(
         )
     except Exception:
         logger.warning("Airport profile: GRIB enrichment failed", exc_info=True)
-        return {"sources": {}, "skipped": "exception"}
+        return {"sources": {}, "skipped": {"all": "exception"}}
 
     sources: dict[str, dict[str, Any]] = {}
     for m, ts in grib_init_times.items():

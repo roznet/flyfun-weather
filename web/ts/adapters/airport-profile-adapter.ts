@@ -32,8 +32,11 @@ export interface AirportProfileSurfaceHour {
   wind_speed_kt: number | null;
   wind_direction_deg: number | null;
   wind_gusts_kt: number | null;
+  precipitation_mm: number | null;
+  snowfall_cm: number | null;
   cape_jkg: number | null;
   cloud_cover_pct: number | null;
+  cloud_cover_low_pct: number | null;
   ceiling_ft: number | null;
   freezing_level_ft: number | null;
 }
@@ -315,7 +318,11 @@ function synthesizeVizPoint(
     surfaceBased: inv.surface_based ?? undefined,
   }));
 
-  const low = sounding?.cloud_cover_low_pct ?? 0;
+  // Cloud cover: prefer the sounding (derived phase) values, but fall back
+  // to the surface cache so the cross-section's cloud-cover-derived
+  // metrics aren't pinned at zero during the ~2s window between levels
+  // arriving and derived completing.
+  const low = sounding?.cloud_cover_low_pct ?? surface?.cloud_cover_low_pct ?? 0;
   const mid = sounding?.cloud_cover_mid_pct ?? 0;
   const high = sounding?.cloud_cover_high_pct ?? 0;
 
@@ -349,7 +356,7 @@ function synthesizeVizPoint(
     soundingCeilingFt: indices?.sounding_ceiling_ft ?? surface?.ceiling_ft ?? null,
     terrainElevationFt: elevationFt,
     temperatureC: surface?.temperature_2m_c ?? null,
-    precipitationMm: null,
+    precipitationMm: surface?.precipitation_mm ?? null,
   };
 }
 
