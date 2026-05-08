@@ -125,6 +125,23 @@ describe('computeSurfaceObscuration — secondary low-cloud + DD trigger', () =>
     expect(out!.severity).toBe('red');
     expect(out!.reason).toBe('visibility');
   });
+
+  it('does NOT fire when vis is good (>=5km) even with saturated low cloud', () => {
+    // Models that report visibility (GFS / ICON / UKMO): if vis is good,
+    // the secondary trigger must NOT fire — a 100% low-cloud forecast
+    // with near-zero DD at 8 km vis is "low stratus, not fog".
+    const out = computeSurfaceObscuration(
+      {
+        visibilityM: 8000,
+        temperature2mC: 6,
+        dewpoint2mC: 5.9,
+        cloudCoverLowPct: 100,
+      },
+      [],
+      0,
+    );
+    expect(out).toBeNull();
+  });
 });
 
 describe('computeSurfaceObscuration — band geometry', () => {

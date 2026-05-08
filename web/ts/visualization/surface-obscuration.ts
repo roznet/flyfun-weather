@@ -65,7 +65,13 @@ export function computeSurfaceObscuration(
     else severity = 'yellow';
     reason = 'visibility';
   } else if (
-    cloudCoverLowPct !== null
+    // Secondary fires only when the model has no visibility forecast
+    // (ECMWF / Météo-France / GEM). For models that report visibility
+    // (GFS / ICON / UKMO), trust the primary path: a 100% low-cloud +
+    // near-zero DD forecast paired with vis=8 km is "low stratus, not
+    // fog" and shouldn't paint a band.
+    visibilityM === null
+    && cloudCoverLowPct !== null
     && cloudCoverLowPct >= SECONDARY_LOW_CC_THRESHOLD_PCT
     && temperature2mC !== null
     && dewpoint2mC !== null

@@ -11,28 +11,7 @@ import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint, VizSurf
 import { getActiveTheme } from '../theme';
 import { drawSmoothBand, type BandPointData } from './base';
 
-interface ObscurationTheme {
-  red: string;
-  amber: string;
-  yellow: string;
-  hatchColor: string;
-  hatchSpacingPx: number;
-  hatchLineWidth: number;
-}
-
-const FALLBACK_THEME: ObscurationTheme = {
-  red: 'rgba(168, 85, 247, 0.65)',     // LIFR purple
-  amber: 'rgba(239, 68, 68, 0.55)',    // IFR red
-  yellow: 'rgba(245, 158, 11, 0.50)',  // MVFR amber
-  hatchColor: 'rgba(255, 255, 255, 0.65)',
-  hatchSpacingPx: 8,
-  hatchLineWidth: 1.5,
-};
-
-function getObscurationTheme(): ObscurationTheme {
-  const themeAny = getActiveTheme() as unknown as { obscuration?: Partial<ObscurationTheme> };
-  return { ...FALLBACK_THEME, ...(themeAny.obscuration ?? {}) };
-}
+type ObscurationTheme = ReturnType<typeof getActiveTheme>['obscuration'];
 
 function severityColor(theme: ObscurationTheme, severity: VizSurfaceObscuration['severity']): string {
   switch (severity) {
@@ -53,7 +32,7 @@ export const surfaceObscurationBandsLayer: CrossSectionLayer = {
     const obsPoints = data.points.filter((p) => p.surfaceObscuration !== null);
     if (obsPoints.length === 0) return;
 
-    const theme = getObscurationTheme();
+    const theme = getActiveTheme().obscuration;
 
     // Group adjacent points with the same severity into runs so the
     // smooth-band primitive can render a continuous band per run. A
