@@ -54,11 +54,26 @@ export function getAllLayers(): CrossSectionLayer[] {
   return ALL_LAYERS;
 }
 
-export function getDefaultEnabled(): Record<string, boolean> {
+/** Where the cross-section is being rendered. Used for context-specific
+ *  layer defaults: surface obscuration is high-signal in the airport-
+ *  profile drawer (where users right-click for low-altitude detail) but
+ *  off by default on the briefing page (avoids stacking with low-cloud /
+ *  DD bands users already have visible). */
+export type CrossSectionContext = 'briefing' | 'airport-profile';
+
+const CONTEXT_OVERRIDES: Record<CrossSectionContext, Record<string, boolean>> = {
+  briefing: {},
+  'airport-profile': {
+    'surface-obscuration-bands': true,
+  },
+};
+
+export function getDefaultEnabled(context: CrossSectionContext = 'briefing'): Record<string, boolean> {
   const enabled: Record<string, boolean> = {};
   for (const layer of ALL_LAYERS) {
     enabled[layer.id] = layer.defaultEnabled;
   }
+  Object.assign(enabled, CONTEXT_OVERRIDES[context]);
   return enabled;
 }
 

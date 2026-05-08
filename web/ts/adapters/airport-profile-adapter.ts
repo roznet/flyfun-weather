@@ -11,6 +11,7 @@
 
 import type { VizRouteData, VizPoint, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizCATLayer, VizInversionLayer } from '../visualization/types';
 import type { SoundingProfileData, SoundingProfileLevel, ParcelPathPoint, CloudLayer, IcingZone, InversionLayer } from '../visualization/skewt/types';
+import { computeSurfaceObscuration, type ObscurationLevel } from '../visualization/surface-obscuration';
 import { API_BASE } from '../utils';
 
 export interface AirportProfileMeta {
@@ -226,12 +227,15 @@ export function snapshotToVizData(
   for (const d of snapshot.derived) derivedByTime.set(d.time, d);
   const surfaceByTime = new Map<string, AirportProfileSurfaceHour>();
   for (const s of snapshot.surface) surfaceByTime.set(s.time, s);
+  const levelsByTime = new Map<string, AirportProfileLevelsHour>();
+  for (const l of snapshot.levels) levelsByTime.set(l.time, l);
 
   const points: VizPoint[] = meta.hours.map((time, idx) => {
     const derived = derivedByTime.get(time);
     const sounding = derived?.sounding ?? null;
     const surface = surfaceByTime.get(time);
-    return synthesizeVizPoint(time, idx, meta.lat, meta.lon, elevationFt, sounding, surface ?? null);
+    const levelsHour = levelsByTime.get(time);
+    return synthesizeVizPoint(time, idx, meta.lat, meta.lon, elevationFt, sounding, surface ?? null, levelsHour ?? null);
   });
 
   // Cap the Y axis using the highest cruise-altitude target we'd reasonably
@@ -265,6 +269,7 @@ function synthesizeVizPoint(
   elevationFt: number,
   sounding: SoundingPayload | null,
   surface: AirportProfileSurfaceHour | null,
+  levelsHour: AirportProfileLevelsHour | null,
 ): VizPoint {
   const indices = sounding?.indices ?? null;
 
@@ -334,6 +339,30 @@ function synthesizeVizPoint(
   const mid = sounding?.cloud_cover_mid_pct ?? 0;
   const high = sounding?.cloud_cover_high_pct ?? 0;
 
+  // Surface obscuration uses the levels phase when available (real per-
+  // level DD for an accurate band top), and falls back to surface-only
+  // when levels haven't arrived — the floor/cap still produce a useful
+  // visual band.
+  const obscurationLevels: ObscurationLevel[] = (levelsHour?.pressure_levels ?? [])
+    .filter((pl) => pl.altitude_ft !== null && pl.altitude_ft > elevationFt)
+    .map((pl) => {
+      const dd = pl.temperature_c !== null && pl.dewpoint_c !== null
+        ? pl.temperature_c - pl.dewpoint_c
+        : null;
+      return { altitudeFt: pl.altitude_ft as number, ddC: dd };
+    })
+    .sort((a, b) => a.altitudeFt - b.altitudeFt);
+  const surfaceObscuration = computeSurfaceObscuration(
+    {
+      visibilityM: surface?.visibility_m ?? levelsHour?.visibility_m ?? null,
+      temperature2mC: surface?.temperature_2m_c ?? levelsHour?.temperature_2m_c ?? null,
+      dewpoint2mC: surface?.dewpoint_2m_c ?? levelsHour?.dewpoint_2m_c ?? null,
+      cloudCoverLowPct: surface?.cloud_cover_low_pct ?? levelsHour?.cloud_cover_low_pct ?? null,
+    },
+    obscurationLevels,
+    elevationFt,
+  );
+
   return {
     distanceNm: idx * HOURS_TO_NM_SCALE,
     lat, lon, time,
@@ -365,6 +394,7 @@ function synthesizeVizPoint(
     terrainElevationFt: elevationFt,
     temperatureC: surface?.temperature_2m_c ?? null,
     precipitationMm: surface?.precipitation_mm ?? null,
+    surfaceObscuration,
   };
 }
 
