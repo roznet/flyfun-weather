@@ -174,9 +174,13 @@ function extractPoint(
   const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
 
   // Prefer NWP cloud layers when available so the obscuration band top
-  // matches the cloud method drawn directly above it. Falls back to
-  // DD-derived layers (the only signal for some models) when NWP is
-  // absent. Impact is bounded by the 1500 ft cap regardless.
+  // matches the cloud method drawn directly above it. `??` falls back
+  // to DD only when NWP is unavailable (`null` — model has no native
+  // NWP cloud envelope, e.g. ECMWF without GRIB enrichment); an empty
+  // NWP array (model says clear sky) is treated as "available, no
+  // clouds" and the band top falls through to the 1500 ft cap rather
+  // than reading from DD layers — that's intentional, since the user
+  // has selected the NWP cloud method.
   const layersForObscuration = nwpCloudLayers ?? cloudLayers;
   const surfaceObscuration = computeSurfaceObscurationFromCloudLayers(
     {

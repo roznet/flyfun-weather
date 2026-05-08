@@ -506,6 +506,13 @@
   "legend.inversion.strong": "Strong (>3\u00b0C)",
   "legend.inversion.strongDesc": "Dense haze/fog trapped",
 
+  "legend.obscuration.lifr": "LIFR / FG",
+  "legend.obscuration.lifrDesc": "Visibility < 1 km \u2014 dense fog",
+  "legend.obscuration.ifr": "IFR / BR/MIFG",
+  "legend.obscuration.ifrDesc": "Visibility 1\u20133 km \u2014 mist or shallow fog",
+  "legend.obscuration.mvfr": "MVFR / BR",
+  "legend.obscuration.mvfrDesc": "Visibility 3\u20135 km \u2014 mist",
+
   "legend.line.freezingLevel": "Freezing Level (0\u00b0C)",
   "legend.line.minus10": "\u221210\u00b0C Level",
   "legend.line.minus20": "\u221220\u00b0C Level",

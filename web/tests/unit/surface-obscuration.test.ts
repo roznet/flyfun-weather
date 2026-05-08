@@ -21,7 +21,7 @@ const CLEAR: ObscurationSurface = {
 };
 
 describe('computeSurfaceObscuration — visibility trigger', () => {
-  it('severe fog (<1 km) → red', () => {
+  it('severe fog (<1 km) → LIFR', () => {
     const out = computeSurfaceObscuration(
       { ...CLEAR, visibilityM: 60, temperature2mC: 6, dewpoint2mC: 6, cloudCoverLowPct: 100 },
       [],
@@ -316,7 +316,7 @@ describe('computeSurfaceObscurationFromCloudLayers — cloudLayer adapter', () =
 });
 
 describe('LFAQ canonical repro from issue #125', () => {
-  it('vis=560m, low_cc=100%, DD=0.1°C, terrain=364 → red band, base=364', () => {
+  it('vis=560m, low_cc=100%, DD=0.1°C, terrain=364 → LIFR band, base=364', () => {
     const out = computeSurfaceObscuration(
       {
         visibilityM: 560,
