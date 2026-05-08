@@ -71,7 +71,11 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
-      overflow: hidden;
+      /* Was overflow:hidden for rounded-corner clipping; relaxed so the
+       * settings drawer (positioned at right:100%) can extend left over
+       * the map. The inner sections do their own clipping. */
+      overflow: visible;
+      position: relative;
     }
 
     .ap-panel { display: flex; flex-direction: column; height: calc(100vh - 280px); min-height: 400px; }
@@ -121,6 +125,91 @@
     .ap-cross, .ap-skewt { background: var(--bg); position: relative; min-height: 0; }
     .ap-cross + .ap-skewt { border-top: 1px solid var(--border); }
 
+    /* Loading state — kills the "blue sky = forecast is clear" trap by
+     * desaturating the empty canvas and overlaying a "Loading…" badge
+     * until the `derived` SSE phase lands real data. The status row
+     * (with dots-spinner) keeps showing the actual stage label. */
+    .ap-cross.is-loading > canvas,
+    .ap-skewt.is-loading > canvas {
+      filter: grayscale(0.95) opacity(0.45);
+      transition: filter 0.15s ease-out;
+    }
+    .ap-cross.is-loading::after,
+    .ap-skewt.is-loading::after {
+      content: 'Loading\2026';
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem; font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      pointer-events: none;
+    }
+
+    /* Gear / settings button in the controls row. Uses the same toggle
+     * vocabulary as the briefing-page sidebar gear so users find it
+     * familiar. */
+    .ap-settings-btn {
+      margin-left: auto;
+      padding: 0.2rem 0.45rem; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); cursor: pointer;
+      border-radius: 4px; font-size: 0.9rem; line-height: 1;
+    }
+    .ap-settings-btn:hover { background: var(--bg); }
+    .ap-settings-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+    /* Settings drawer slides out to the LEFT of the panel and overlaps
+     * the map. Width is fixed; on narrow viewports the drawer drops
+     * inline below the controls instead (see media query below). */
+    .ap-settings-drawer {
+      position: absolute;
+      top: 0; right: 100%;
+      height: 100%;
+      width: 320px;
+      margin-right: 4px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: -6px 0 14px rgba(0, 0, 0, 0.15);
+      z-index: 1500;
+      overflow-y: auto;
+      padding: 0.6rem 0.7rem;
+      font-size: 0.78rem;
+    }
+    .ap-settings-drawer[hidden] { display: none; }
+    .ap-drawer-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding-bottom: 0.4rem; margin-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .ap-drawer-title { font-weight: 600; font-size: 0.85rem; }
+    .ap-drawer-close {
+      border: none; background: transparent; color: var(--text-muted);
+      font-size: 1.2rem; line-height: 1; cursor: pointer; padding: 0 0.3rem;
+    }
+    .ap-drawer-close:hover { color: var(--text); }
+    .ap-drawer-section { margin-bottom: 0.7rem; }
+    .ap-drawer-section + .ap-drawer-section {
+      border-top: 1px solid var(--border);
+      padding-top: 0.6rem;
+    }
+    .ap-drawer-section-title {
+      margin: 0 0 0.4rem 0; font-size: 0.75rem; font-weight: 600;
+      color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .ap-drawer-empty { color: var(--text-muted); font-style: italic; padding: 0.3rem 0; }
+    /* Reused viz layer-toggle styling: tighter line height + wrap inside
+     * the narrow drawer column. */
+    .ap-settings-drawer .viz-layer-toggles {
+      display: flex; flex-direction: column; gap: 0.3rem;
+    }
+    .ap-settings-drawer .viz-layer-group {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem;
+    }
+    .ap-settings-drawer .viz-layer-checkbox {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      font-size: 0.78rem;
+    }
+
     @media (max-width: 900px) {
       .ap-split-host { display: block; }
       .ap-split-host > .ap-panel-host {
@@ -128,6 +217,14 @@
         z-index: 2000; border-radius: 0;
       }
       .ap-panel { height: 100vh; }
+      /* No room for a left-overlap drawer on phones; render it as a
+       * full-width sheet at the bottom of the panel instead. */
+      .ap-settings-drawer {
+        position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+        width: auto; height: 60vh; border-radius: 8px 8px 0 0;
+        margin-right: 0;
+        box-shadow: 0 -6px 14px rgba(0, 0, 0, 0.2);
+      }
     }
 
     /* Share-view button (page header). Shows the icon + label and

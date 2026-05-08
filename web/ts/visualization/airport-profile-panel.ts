@@ -18,6 +18,8 @@
 import { CrossSectionRenderer } from './cross-section/renderer';
 import { SkewTRenderer } from './skewt/renderer';
 import { getAllLayers, getDefaultEnabled } from './cross-section/layer-registry';
+import { renderLayerToggles } from './controls/panel';
+import { renderSkewtOverlayControls } from './skewt/overlay-controls';
 import {
   streamAirportProfile, snapshotToVizData, snapshotToSkewtData,
   type AirportProfileSnapshot, type AirportProfileStreamHandle,
@@ -54,6 +56,10 @@ function statusLoading(label: string): string {
 
 type ViewMode = 'both' | 'cross' | 'skewt';
 const VIEW_MODE_KEY = 'wb_apProfileView';
+/** Per-panel layer-enable map. Key is independent from the main
+ *  briefing's `wb_visibleLayers` so toggles in this panel don't bleed
+ *  into the main /briefing.html view. */
+const LAYERS_KEY = 'wb_apProfileLayers';
 
 function loadViewMode(): ViewMode {
   const v = localStorage.getItem(VIEW_MODE_KEY);
@@ -62,6 +68,28 @@ function loadViewMode(): ViewMode {
 }
 function saveViewMode(m: ViewMode): void {
   localStorage.setItem(VIEW_MODE_KEY, m);
+}
+
+function loadEnabledLayers(): Record<string, boolean> {
+  const defaults = getDefaultEnabled();
+  try {
+    const raw = localStorage.getItem(LAYERS_KEY);
+    if (!raw) return defaults;
+    const saved = JSON.parse(raw) as Record<string, unknown>;
+    // Merge: keep any layer the saved blob didn't know about at its
+    // default. Coerce values to boolean so a malformed entry can't
+    // poison the renderer's enable check.
+    const merged: Record<string, boolean> = { ...defaults };
+    for (const [k, v] of Object.entries(saved)) {
+      if (typeof v === 'boolean') merged[k] = v;
+    }
+    return merged;
+  } catch {
+    return defaults;
+  }
+}
+function saveEnabledLayers(m: Record<string, boolean>): void {
+  try { localStorage.setItem(LAYERS_KEY, JSON.stringify(m)); } catch { /* quota */ }
 }
 
 export interface AirportProfilePanelOptions {
@@ -95,9 +123,16 @@ export class AirportProfilePanel {
   private titleEl: HTMLDivElement;
   private modelSel: HTMLSelectElement;
   private viewBtns: Record<ViewMode, HTMLButtonElement>;
+  private settingsBtn: HTMLButtonElement;
+  private drawerEl: HTMLDivElement;
+  private drawerOpen = false;
 
   private crossRenderer: CrossSectionRenderer | null = null;
   private skewtRenderer: SkewTRenderer | null = null;
+  /** Layer enable state for the cross-section. Persisted to localStorage
+   *  so the user's toggles survive panel close + reopen. Applied to the
+   *  renderer via `setLayers()` whenever it (re)mounts. */
+  private enabledLayers: Record<string, boolean> = loadEnabledLayers();
 
   private snapshot: AirportProfileSnapshot = {
     meta: null, surface: [], levels: [], enriched: null, derived: [],
@@ -137,12 +172,14 @@ export class AirportProfilePanel {
           <button class="btn-toggle" data-view="cross">Cross-section</button>
           <button class="btn-toggle" data-view="skewt">Skew-T</button>
         </div>
+        <button class="ap-settings-btn" type="button" title="Layers & overlays" aria-label="Settings" aria-expanded="false">⚙</button>
       </div>
       <div class="ap-panel-status" id="ap-status"></div>
       <div class="ap-panel-body">
         <div class="ap-cross" id="ap-cross"></div>
         <div class="ap-skewt" id="ap-skewt"></div>
       </div>
+      <div class="ap-settings-drawer" hidden></div>
     `;
 
     this.titleEl = this.container.querySelector('.ap-panel-title') as HTMLDivElement;
@@ -151,6 +188,8 @@ export class AirportProfilePanel {
     this.skewtEl = this.container.querySelector('.ap-skewt') as HTMLDivElement;
     this.modelSel = this.container.querySelector('.ap-model-sel') as HTMLSelectElement;
     this.modelSel.value = this.model;
+    this.settingsBtn = this.container.querySelector('.ap-settings-btn') as HTMLButtonElement;
+    this.drawerEl = this.container.querySelector('.ap-settings-drawer') as HTMLDivElement;
 
     const viewGroup = this.container.querySelector('.ap-view-group') as HTMLElement;
     this.viewBtns = {
@@ -175,7 +214,11 @@ export class AirportProfilePanel {
       this.viewMode = v;
       saveViewMode(v);
       this.applyViewMode();
+      // Drawer contents depend on viewMode; re-render if open so a
+      // section that just became visible shows its controls.
+      if (this.drawerOpen) this.renderDrawer();
     });
+    this.settingsBtn.addEventListener('click', () => this.toggleDrawer());
   }
 
   /** Update the model from outside (e.g. for URL deep-linking). */
@@ -212,6 +255,7 @@ export class AirportProfilePanel {
       this.applyTitle(cached);
       this.statusEl.innerHTML = esc(formatEnrichmentBadge(cached.enriched));
       this.clearRenderers();
+      this.setLoading(false);
       this.renderCross();
       this.renderSkewT();
       return;
@@ -223,11 +267,23 @@ export class AirportProfilePanel {
     this.titleEl.textContent = `${req.icao} — loading…`;
     this.statusEl.innerHTML = statusLoading('Connecting');
     this.clearRenderers();
+    // Mark canvases as loading so the empty cross-section doesn't read
+    // as "real-clear-skies forecast" while we wait for derived data.
+    // Lifted in onPhase('derived') / 'complete' / 'error'.
+    this.setLoading(true);
 
     this.stream = streamAirportProfile(
       { icao: req.icao, model: this.model, startHour: req.startHour, windowH: req.windowH },
       (phase, snapshot, raw) => this.onPhase(phase, snapshot, raw),
     );
+  }
+
+  /** Toggle the dimmed/grayscale "loading" state on the canvas areas.
+   *  Driven by `is-loading` CSS class on `.ap-cross` and `.ap-skewt`
+   *  (see maps.html). */
+  private setLoading(loading: boolean): void {
+    this.crossEl.classList.toggle('is-loading', loading);
+    this.skewtEl.classList.toggle('is-loading', loading);
   }
 
   private cacheKey(req: AirportProfileRequest, model: string): string {
@@ -265,10 +321,14 @@ export class AirportProfilePanel {
         : (labelFromBackend ?? 'Fetching forecasts');
       this.statusEl.innerHTML = (raw && raw.error) ? esc(text) : statusLoading(text);
       this.renderSkewT();
+      // Skew-T renderer just mounted — refresh drawer if open so
+      // the previously-empty Skew-T section now has controls.
+      if (this.drawerOpen) this.renderDrawer();
     } else if (phase === 'enriched') {
       this.statusEl.innerHTML = statusLoading(labelFromBackend ?? 'Adding cloud & icing detail');
     } else if (phase === 'derived') {
       this.statusEl.innerHTML = esc(formatEnrichmentBadge(snapshot.enriched));
+      this.setLoading(false);
       this.renderCross();
       this.renderSkewT();
     } else if (phase === 'complete') {
@@ -296,6 +356,10 @@ export class AirportProfilePanel {
         ? `${raw.phase}: ${raw.message ?? 'unknown error'}`
         : 'connection lost';
       this.statusEl.innerHTML = esc(`Error — ${detail}`);
+      // Lift the loading dim on error too — the canvases now show
+      // whatever last-known state they have (typically empty axes),
+      // which is the correct signal alongside the error message.
+      this.setLoading(false);
     }
   }
 
@@ -321,9 +385,7 @@ export class AirportProfilePanel {
   private ensureCrossRenderer(): CrossSectionRenderer {
     if (!this.crossRenderer) {
       this.crossRenderer = new CrossSectionRenderer(this.crossEl);
-      const layers = getAllLayers();
-      const enabled = getDefaultEnabled();
-      this.crossRenderer.setLayers(layers, enabled);
+      this.crossRenderer.setLayers(getAllLayers(), this.enabledLayers);
     }
     return this.crossRenderer;
   }
@@ -364,6 +426,85 @@ export class AirportProfilePanel {
     this.skewtEl.innerHTML = '';
   }
 
+  // -------------------------------------------------------------------
+  // Settings drawer (gear icon → slide-out panel that overlaps the map)
+  //
+  // The drawer is anchored to the panel's left edge via CSS (see
+  // maps.html: `.ap-settings-drawer { right: 100%; }`) so it grows
+  // toward the map without resizing the panel itself. Contents are
+  // rebuilt on every open + on viewMode change so toggling the View
+  // segmented control swaps which section's controls are visible.
+  // -------------------------------------------------------------------
+  private toggleDrawer(): void {
+    this.drawerOpen = !this.drawerOpen;
+    this.drawerEl.hidden = !this.drawerOpen;
+    this.container.classList.toggle('drawer-open', this.drawerOpen);
+    this.settingsBtn.setAttribute('aria-expanded', String(this.drawerOpen));
+    this.settingsBtn.classList.toggle('active', this.drawerOpen);
+    if (this.drawerOpen) this.renderDrawer();
+    else this.drawerEl.innerHTML = '';
+  }
+
+  private renderDrawer(): void {
+    const showCross = this.viewMode !== 'skewt';
+    const showSkewT = this.viewMode !== 'cross';
+
+    // Build section shells; populate each with the appropriate
+    // sub-control via the dedicated render helpers.
+    let html = '<div class="ap-drawer-header">';
+    html += '<span class="ap-drawer-title">Layers & overlays</span>';
+    html += '<button class="ap-drawer-close" type="button" title="Close" aria-label="Close">×</button>';
+    html += '</div>';
+    if (showCross) {
+      html += '<section class="ap-drawer-section" data-section="cross">';
+      html += '<h4 class="ap-drawer-section-title">Cross-section</h4>';
+      html += '<div class="ap-drawer-cross-host"></div>';
+      html += '</section>';
+    }
+    if (showSkewT) {
+      html += '<section class="ap-drawer-section" data-section="skewt">';
+      html += '<h4 class="ap-drawer-section-title">Skew-T</h4>';
+      html += '<div class="ap-drawer-skewt-host"></div>';
+      html += '</section>';
+    }
+    this.drawerEl.innerHTML = html;
+    this.drawerEl.querySelector('.ap-drawer-close')?.addEventListener(
+      'click', () => this.toggleDrawer(),
+    );
+
+    if (showCross) {
+      const host = this.drawerEl.querySelector('.ap-drawer-cross-host') as HTMLElement;
+      // Toggles work even before the cross-section renderer mounts —
+      // state is owned by the panel and applied via setLayers() once
+      // the renderer exists (see ensureCrossRenderer).
+      renderLayerToggles(host, this.enabledLayers, (layerId) => this.onLayerToggle(layerId));
+    }
+    if (showSkewT) {
+      const host = this.drawerEl.querySelector('.ap-drawer-skewt-host') as HTMLElement;
+      // Skew-T overlay controls read state from the renderer, so they
+      // need it to exist. When the levels phase hasn't completed yet,
+      // show a placeholder; renderDrawer is re-called on phase events
+      // (see onPhase) so the controls light up once data lands.
+      if (this.skewtRenderer) {
+        renderSkewtOverlayControls(host, this.skewtRenderer);
+      } else {
+        host.innerHTML = '<div class="ap-drawer-empty">Available once data loads</div>';
+      }
+    }
+  }
+
+  private onLayerToggle(layerId: string): void {
+    // Default-enabled layers are stored as `true`; flipping a missing
+    // key to `false` is the explicit "off" signal the renderer checks.
+    const current = this.enabledLayers[layerId] !== false;
+    this.enabledLayers = { ...this.enabledLayers, [layerId]: !current };
+    saveEnabledLayers(this.enabledLayers);
+    if (this.crossRenderer) {
+      this.crossRenderer.setLayers(getAllLayers(), this.enabledLayers);
+      this.crossRenderer.render();
+    }
+  }
+
   /** User clicked the ✕ button. Notifies the host so it can decide
    *  what to do with the panel container — the host is then expected
    *  to call `destroy()`. We don't tear anything down here; that keeps
@@ -378,8 +519,9 @@ export class AirportProfilePanel {
   destroy(): void {
     if (this.stream) { this.stream.abort(); this.stream = null; }
     this.snapshotCache.clear();
+    this.drawerOpen = false;
     this.clearRenderers();
     this.container.innerHTML = '';
-    this.container.classList.remove('ap-panel', 'view-both', 'view-cross', 'view-skewt');
+    this.container.classList.remove('ap-panel', 'view-both', 'view-cross', 'view-skewt', 'drawer-open');
   }
 }
