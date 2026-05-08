@@ -32,6 +32,7 @@ from weatherbrief.fetch.grib import (
     _decode_pool_max_tasks_per_child,
     _decode_pool_workers,
     _dispatch_decode,
+    _dispatch_decode_parallel,
     _get_decode_pool,
     decode_worker,
     shutdown_decode_pool,
@@ -299,3 +300,72 @@ def test_pool_recycles_workers_after_max_tasks(monkeypatch):
         f"max_tasks_per_child=3 with 6 dispatches should recycle the worker; "
         f"saw only {len(pids)} distinct PIDs ({pids})"
     )
+
+
+def test_parallel_dispatch_preserves_order_and_in_process_fallback(monkeypatch):
+    """``_dispatch_decode_parallel`` returns results in input order — both
+    via the pool and via the in-process fallback (workers=0)."""
+    # Pool path
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
+    shutdown_decode_pool()
+    jobs = [("_test_echo", (i,)) for i in range(5)]
+    assert _dispatch_decode_parallel(jobs) == [0, 1, 2, 3, 4]
+
+    # In-process fallback path
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "0")
+    shutdown_decode_pool()
+    assert _dispatch_decode_parallel(jobs) == [0, 1, 2, 3, 4]
+    # Empty batch is a no-op
+    assert _dispatch_decode_parallel([]) == []
+
+
+@pytest.mark.skipif(
+    (os.cpu_count() or 1) < 4,
+    reason="requires at least 4 logical CPUs to actually parallelise 4-way",
+)
+def test_parallel_dispatch_runs_four_jobs_in_parallel(monkeypatch):
+    """Regression for issue #133: a 4-way parallel dispatch should finish
+    in ~D wall-clock, not 4D — the bug was that sequential ``_dispatch_decode``
+    calls in a ``for`` loop only ever exercised one worker even with workers>=2.
+
+    With workers=4 and four CPU-bound jobs of duration ``D``, total wall time
+    should be close to ``D``. We allow generous slack for spawn-time and
+    scheduling jitter, but flag if it sneaks into "obviously serialised"
+    territory (>= 2D).
+    """
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "4")
+    shutdown_decode_pool()
+    pool = _get_decode_pool()
+    assert pool is not None
+
+    # Pre-warm all four workers — ProcessPoolExecutor spawns lazily.
+    warm = [pool.submit(decode_worker._test_echo, None, 0.05) for _ in range(4)]
+    for f in warm:
+        f.result()
+
+    duration = 0.5
+    jobs = [("_test_busy_loop", (duration,)) for _ in range(4)]
+
+    t0 = time.perf_counter()
+    results = _dispatch_decode_parallel(jobs)
+    elapsed = time.perf_counter() - t0
+
+    assert len(results) == 4
+    # Serial would take ~2.0s; parallel should be ~0.5s. Generous bound to
+    # allow for jitter, but well below serial-ish territory.
+    assert elapsed < 1.5, (
+        f"Four parallel busy-loops of {duration}s took {elapsed:.2f}s — "
+        "looks serialised, not parallel (issue #133 regression)"
+    )
+
+
+def test_parallel_dispatch_error_propagation(monkeypatch):
+    """Worker exceptions surface to the caller and reset the pool when fatal."""
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
+    shutdown_decode_pool()
+    jobs = [
+        ("_test_echo", ("ok",)),
+        ("_test_echo", (None, 0.0, "boom")),
+    ]
+    with pytest.raises(RuntimeError, match="boom"):
+        _dispatch_decode_parallel(jobs)

@@ -230,13 +230,30 @@ _DECODE_POOL_LOCK = threading.Lock()
 _DECODE_TIMEOUT_DEFAULT_S = 300.0
 
 
+def _decode_pool_workers_default() -> int:
+    """Default worker count when ``GRIB_DECODE_WORKERS`` is unset.
+
+    Sized to the host CPU count, capped at 4: the parallel fhour fan-out
+    in the ICON / ECMWF decode loops can keep up to 4 cores busy on a
+    single airport-profile request, and going higher mostly burns RAM
+    (~125 MB RSS per worker during ICON decode) without further wall-time
+    wins.
+    """
+    return min(4, os.cpu_count() or 2)
+
+
 def _decode_pool_workers() -> int:
-    raw = os.environ.get("GRIB_DECODE_WORKERS", "2").strip()
+    raw = os.environ.get("GRIB_DECODE_WORKERS", "").strip()
+    if not raw:
+        return _decode_pool_workers_default()
     try:
         return max(0, int(raw))
     except ValueError:
-        logger.warning("Invalid GRIB_DECODE_WORKERS=%r, defaulting to 2", raw)
-        return 2
+        default = _decode_pool_workers_default()
+        logger.warning(
+            "Invalid GRIB_DECODE_WORKERS=%r, defaulting to %d", raw, default,
+        )
+        return default
 
 
 def _decode_pool_max_tasks_per_child() -> int | None:
@@ -363,6 +380,68 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
         )
         shutdown_decode_pool(wait=False)
         raise
+
+
+def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
+    """Submit a batch of decode jobs to the pool concurrently.
+
+    Each job is ``(worker_fn_name, args_tuple)``; results are returned in the
+    same order. Falls back to sequential in-process execution when the pool
+    is disabled (``GRIB_DECODE_WORKERS=0``) so the call sites stay
+    correctness-equivalent in tests / kill-switch scenarios.
+
+    Why this exists: ``_dispatch_decode`` submits one job and waits for its
+    result, so a sequential ``for`` loop of ``_dispatch_decode`` calls keeps
+    only one pool worker busy at a time even when the pool has more. Fanning
+    out the whole batch and harvesting results lets the worker count actually
+    matter (issue #133).
+
+    Failure modes mirror :func:`_dispatch_decode` — ``BrokenProcessPool`` and
+    ``TimeoutError`` reset the pool. A single deadline applies across the
+    batch: if the slowest job exceeds ``GRIB_DECODE_TIMEOUT_S``, we tear
+    down. Cancels not-yet-started jobs on failure to free the workers.
+    """
+    if not jobs:
+        return []
+
+    from weatherbrief.fetch.grib import decode_worker
+
+    pool = _get_decode_pool()
+    if pool is None:
+        return [getattr(decode_worker, name)(*args) for name, args in jobs]
+
+    timeout = _decode_timeout_s()
+    deadline = _time_mod.perf_counter() + timeout
+
+    futures = [
+        pool.submit(getattr(decode_worker, name), *args)
+        for name, args in jobs
+    ]
+    results: list[Any] = [None] * len(jobs)
+    try:
+        for i, fut in enumerate(futures):
+            remaining = max(0.0, deadline - _time_mod.perf_counter())
+            results[i] = fut.result(timeout=remaining)
+    except BrokenProcessPool:
+        for fut in futures:
+            fut.cancel()
+        logger.error(
+            "GRIB decode pool broken during parallel dispatch (%d jobs); resetting",
+            len(jobs),
+        )
+        shutdown_decode_pool()
+        raise
+    except TimeoutError:
+        for fut in futures:
+            fut.cancel()
+        names = ",".join({name for name, _ in jobs})
+        logger.error(
+            "GRIB decode pool stuck (%d jobs %s exceeded %.0fs); resetting",
+            len(jobs), names, timeout,
+        )
+        shutdown_decode_pool(wait=False)
+        raise
+    return results
 
 
 def _grib_session() -> requests.Session:
@@ -670,72 +749,105 @@ def _enrich_ecmwf_inner(
     prev_sf_per_point: list[float | None] = [None] * n_points
     prev_a1_valid_utc: datetime | None = None
 
-    enriched_steps = 0
+    # Filter steps to the flight window (with margin) up-front so we can
+    # fan out all decodes in parallel before merging.
+    margin = timedelta(hours=3)
+    window_steps: list[tuple[int, dict[str, Path], datetime]] = []
     for step_hours, parts in sorted(files_by_step.items()):
         valid_time = latest_bt + timedelta(hours=step_hours)
-        # Only process steps within the flight window (with some margin)
-        margin = timedelta(hours=3)
         if valid_time < flight_start - margin or valid_time > flight_end + margin:
             continue
+        window_steps.append((step_hours, parts, valid_time))
 
-        # Decode pressure levels (a2) — out-of-process (Phase B-3)
+    # Build the parallel job batch: one a2 (pressure) and/or one a1 (surface)
+    # decode per step. Each step's two decodes are independent of each other,
+    # and steps are independent of each other — fan the whole batch out so the
+    # decode pool's workers actually parallelise (issue #133).
+    job_keys: list[tuple[str, int]] = []  # ("a1"|"a2", step_hours)
+    job_list: list[tuple[str, tuple]] = []
+    for step_hours, parts, _ in window_steps:
         if "a2" in parts:
-            with _grib_time("ecmwf_a2_decode"):
-                pl_data, pl_covered = _dispatch_decode(
-                    "decode_ecmwf_pressure",
-                    str(parts["a2"]), point_lats, point_lons,
-                )
-            # Only merge covered points — set uncovered to empty
-            for i, cov in enumerate(pl_covered):
-                if not cov:
-                    pl_data[i] = {}
-
-            replaced = _replace_pressure_levels_from_grib(
-                ecmwf_sections, all_forecasts, route_points,
-                pl_data, valid_utc=valid_time,
-            )
-            if replaced > 0:
-                enriched_steps += 1
-
-        # Decode surface diagnostics (a1) — out-of-process (Phase B-3)
+            job_keys.append(("a2", step_hours))
+            job_list.append((
+                "decode_ecmwf_pressure",
+                (str(parts["a2"]), point_lats, point_lons),
+            ))
         if "a1" in parts:
-            with _grib_time("ecmwf_a1_decode"):
-                sfc_data, sfc_covered = _dispatch_decode(
-                    "decode_ecmwf_surface",
-                    str(parts["a1"]), point_lats, point_lons,
+            job_keys.append(("a1", step_hours))
+            job_list.append((
+                "decode_ecmwf_surface",
+                (str(parts["a1"]), point_lats, point_lons),
+            ))
+
+    if job_list:
+        with _grib_time("ecmwf_decode_parallel"):
+            raw_results = _dispatch_decode_parallel(job_list)
+    else:
+        raw_results = []
+
+    a2_results: dict[int, tuple[list[dict[int, dict[str, float]]], list[bool]]] = {}
+    a1_results: dict[int, tuple[list[dict[str, float]], list[bool]]] = {}
+    for (kind, step_hours), result in zip(job_keys, raw_results):
+        if kind == "a2":
+            a2_results[step_hours] = result
+        else:
+            a1_results[step_hours] = result
+
+    enriched_steps = 0
+    for step_hours, parts, valid_time in window_steps:
+        # Pressure levels (a2) — merge in step order
+        if step_hours in a2_results:
+            with _grib_time("ecmwf_a2_merge"):
+                pl_data, pl_covered = a2_results[step_hours]
+                # Only merge covered points — set uncovered to empty
+                for i, cov in enumerate(pl_covered):
+                    if not cov:
+                        pl_data[i] = {}
+
+                replaced = _replace_pressure_levels_from_grib(
+                    ecmwf_sections, all_forecasts, route_points,
+                    pl_data, valid_utc=valid_time,
                 )
-            diagnostics = [
-                build_ecmwf_cloud_diagnostics(raw) if cov else None
-                for raw, cov in zip(sfc_data, sfc_covered)
-            ]
-            _apply_cloud_diagnostics_to_sections(
-                ecmwf_sections, all_forecasts, route_points,
-                diagnostics, "ecmwf", valid_utc=valid_time,
-            )
-            # Surface scalars (T/dewpoint, wind/gust, vis, CAPE, MSLP, precip,
-            # snow) onto HourlyForecast. Coupled with cloud-diag application —
-            # both run together at the same valid_utc so that the forward-fill
-            # in fill.py can use ``nwp_cloud_diagnostics is not None`` as the
-            # GRIB-anchor detector.
-            _apply_ecmwf_surface_to_hourly(
-                ecmwf_sections, all_forecasts, route_points,
-                sfc_data, sfc_covered,
-                valid_utc=valid_time,
-                prev_valid_utc=prev_a1_valid_utc,
-                prev_tp_per_point=prev_tp_per_point,
-                prev_sf_per_point=prev_sf_per_point,
-            )
-            # Update step-difference state from this step's cumulative values.
-            for i, (raw, cov) in enumerate(zip(sfc_data, sfc_covered)):
-                if not cov or not raw:
-                    continue
-                tp = raw.get("total_precip_m")
-                if tp is not None:
-                    prev_tp_per_point[i] = tp
-                sf = raw.get("snowfall_m_we")
-                if sf is not None:
-                    prev_sf_per_point[i] = sf
-            prev_a1_valid_utc = valid_time
+                if replaced > 0:
+                    enriched_steps += 1
+
+        # Surface diagnostics (a1) — must run in step order so the
+        # accumulated-precip step-difference state propagates correctly.
+        if step_hours in a1_results:
+            with _grib_time("ecmwf_a1_merge"):
+                sfc_data, sfc_covered = a1_results[step_hours]
+                diagnostics = [
+                    build_ecmwf_cloud_diagnostics(raw) if cov else None
+                    for raw, cov in zip(sfc_data, sfc_covered)
+                ]
+                _apply_cloud_diagnostics_to_sections(
+                    ecmwf_sections, all_forecasts, route_points,
+                    diagnostics, "ecmwf", valid_utc=valid_time,
+                )
+                # Surface scalars (T/dewpoint, wind/gust, vis, CAPE, MSLP, precip,
+                # snow) onto HourlyForecast. Coupled with cloud-diag application —
+                # both run together at the same valid_utc so that the forward-fill
+                # in fill.py can use ``nwp_cloud_diagnostics is not None`` as the
+                # GRIB-anchor detector.
+                _apply_ecmwf_surface_to_hourly(
+                    ecmwf_sections, all_forecasts, route_points,
+                    sfc_data, sfc_covered,
+                    valid_utc=valid_time,
+                    prev_valid_utc=prev_a1_valid_utc,
+                    prev_tp_per_point=prev_tp_per_point,
+                    prev_sf_per_point=prev_sf_per_point,
+                )
+                # Update step-difference state from this step's cumulative values.
+                for i, (raw, cov) in enumerate(zip(sfc_data, sfc_covered)):
+                    if not cov or not raw:
+                        continue
+                    tp = raw.get("total_precip_m")
+                    if tp is not None:
+                        prev_tp_per_point[i] = tp
+                    sf = raw.get("snowfall_m_we")
+                    if sf is not None:
+                        prev_sf_per_point[i] = sf
+                prev_a1_valid_utc = valid_time
 
     if enriched_steps > 0:
         logger.info(
@@ -1458,45 +1570,66 @@ def _decode_and_merge_icon_eu(
     # a given ICON run, so any forecast hour's CLC works).
     n_points = len(ctx.point_lats)
     clc_layers_per_point: list[dict[str, float]] = [{} for _ in range(n_points)]
+    empty_clc = [{} for _ in range(n_points)]
 
-    def _decode_fhour(
-        fhour: int,
-    ) -> tuple[list[dict[int, dict[str, float]]] | None, list[dict[str, float]]]:
-        empty_clc = [{} for _ in range(n_points)]
-        # Check for legacy combined cache first
+    # Build per-fhour decode jobs up-front. A given fhour either has the
+    # legacy combined cache (one ``decode_icon_legacy`` job) or per-variable
+    # caches (one ``decode_icon_chunked`` job); fhours with neither are
+    # skipped. The decode bytes are read inside the worker.
+    fhour_jobs: dict[int, tuple[str, tuple]] = {}
+    for fhour in ctx.forecast_hours:
         legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
         if is_cached(ctx.run_dir, legacy_ck):
-            legacy_path = ctx.run_dir / legacy_ck
-            with _grib_time("icon_legacy_decode"):
-                decoded = _dispatch_decode(
-                    "decode_icon_legacy",
-                    str(legacy_path), ctx.point_lats, ctx.point_lons,
-                )
-            return decoded, empty_clc
+            fhour_jobs[fhour] = (
+                "decode_icon_legacy",
+                (str(ctx.run_dir / legacy_ck), ctx.point_lats, ctx.point_lons),
+            )
+            continue
 
-        # Build path dict for chunked decode — bytes are read inside the
-        # worker, so the parent never holds the per-variable blobs in RAM.
         var_paths: dict[str, str] = {}
         for var in ICON_EU_VARIABLES:
             ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
             if is_cached(ctx.run_dir, ck):
                 var_paths[var] = str(ctx.run_dir / ck)
-
-        if not var_paths:
-            return None, empty_clc
-
-        with _grib_time("icon_chunked_decode"):
-            decoded, clc_layers = _dispatch_decode(
+        if var_paths:
+            fhour_jobs[fhour] = (
                 "decode_icon_chunked",
-                var_paths, ctx.point_lats, ctx.point_lons,
+                (var_paths, ctx.point_lats, ctx.point_lons),
             )
-        return decoded, clc_layers
 
+    # Fan out all fhour decodes in parallel — the dominant cost on this path.
+    # Sequential dispatch was using only one pool worker even with workers>=2;
+    # see issue #133 for the production timing analysis.
+    fhours_with_jobs = list(fhour_jobs.keys())
+    job_list = [fhour_jobs[fh] for fh in fhours_with_jobs]
+    _grib_rss_mark("icon_fhour_pre")
+    if job_list:
+        with _grib_time("icon_chunked_decode"):
+            raw_results = _dispatch_decode_parallel(job_list)
+    else:
+        raw_results = []
+    _grib_rss_mark("icon_fhour_decoded")
+
+    # Normalise: legacy returns just decoded points; chunked returns
+    # (decoded, clc_layers). Build a fhour -> (decoded, clc) lookup.
+    decoded_by_fhour: dict[int, tuple[
+        list[dict[int, dict[str, float]]] | None,
+        list[dict[str, float]],
+    ]] = {}
+    for fhour, (worker_name, _), raw in zip(fhours_with_jobs, job_list, raw_results):
+        if worker_name == "decode_icon_legacy":
+            decoded_by_fhour[fhour] = (raw, empty_clc)
+        else:
+            decoded, clc_layers = raw
+            decoded_by_fhour[fhour] = (decoded, clc_layers)
+
+    # Merge in forecast_hours order so the existing valid-time invariants hold.
     total_enriched = 0
     for fhour in ctx.forecast_hours:
-        _grib_rss_mark("icon_fhour_pre")
-        decoded_points, clc_layers = _decode_fhour(fhour)
-        _grib_rss_mark("icon_fhour_decoded")
+        res = decoded_by_fhour.get(fhour)
+        if res is None:
+            continue
+        decoded_points, clc_layers = res
         if not decoded_points:
             continue
 
@@ -1512,8 +1645,9 @@ def _decode_and_merge_icon_eu(
         )
         total_enriched += replaced
         del decoded_points
-        _grib_gc()
-        _grib_rss_mark("icon_fhour_post_gc")
+        decoded_by_fhour[fhour] = (None, clc_layers)
+    _grib_gc()
+    _grib_rss_mark("icon_fhour_post_gc")
 
     if not total_enriched:
         logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
