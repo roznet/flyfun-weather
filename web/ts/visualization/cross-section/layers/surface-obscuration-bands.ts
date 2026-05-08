@@ -25,8 +25,7 @@ export const surfaceObscurationBandsLayer: CrossSectionLayer = {
   metricId: 'visibility_m',
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
-    const obsPoints = data.points.filter((p) => p.surfaceObscuration !== null);
-    if (obsPoints.length === 0) return;
+    if (data.points.every((p) => p.surfaceObscuration === null)) return;
 
     const theme = getActiveTheme().obscuration;
 

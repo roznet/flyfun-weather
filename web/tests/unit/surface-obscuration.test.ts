@@ -32,7 +32,7 @@ describe('computeSurfaceObscuration — visibility trigger', () => {
     expect(out!.reason).toBe('visibility');
   });
 
-  it('moderate mist (1–3 km) → amber', () => {
+  it('moderate mist (1–3 km) → IFR', () => {
     const out = computeSurfaceObscuration(
       { ...CLEAR, visibilityM: 2400 },
       [],
@@ -42,7 +42,7 @@ describe('computeSurfaceObscuration — visibility trigger', () => {
     expect(out!.reason).toBe('visibility');
   });
 
-  it('haze (3–5 km) → yellow', () => {
+  it('low vis (3–5 km) → MVFR', () => {
     const out = computeSurfaceObscuration(
       { ...CLEAR, visibilityM: 4000 },
       [],
@@ -67,7 +67,7 @@ describe('computeSurfaceObscuration — visibility trigger', () => {
 });
 
 describe('computeSurfaceObscuration — secondary low-cloud + DD trigger', () => {
-  it('low_cc=100% and DD=0.5 → amber, reason=low_cloud_dd', () => {
+  it('low_cc=100% and DD=0.5 → IFR, reason=low_cloud_dd', () => {
     const out = computeSurfaceObscuration(
       {
         visibilityM: null,
@@ -80,6 +80,25 @@ describe('computeSurfaceObscuration — secondary low-cloud + DD trigger', () =>
     );
     expect(out).not.toBeNull();
     expect(out!.severity).toBe('ifr');
+    expect(out!.reason).toBe('low_cloud_dd');
+  });
+
+  it('low_cc=100% and DD=0.1 → LIFR (saturated → fog, not just stratus)', () => {
+    // Regression: ECMWF / Météo-France / GEM (no surface visibility
+    // forecast) — when surface DD says the air is essentially saturated
+    // and low cloud is overcast, the model is forecasting fog and
+    // deserves the LIFR purple, not IFR red.
+    const out = computeSurfaceObscuration(
+      {
+        visibilityM: null,
+        temperature2mC: 6,
+        dewpoint2mC: 5.9,
+        cloudCoverLowPct: 100,
+      },
+      [],
+      0,
+    );
+    expect(out!.severity).toBe('lifr');
     expect(out!.reason).toBe('low_cloud_dd');
   });
 
@@ -200,11 +219,28 @@ describe('computeSurfaceObscuration — band geometry', () => {
     expect(out!.topFt).toBe(1864);
   });
 
-  it('lowest-level constraint clamps top below cap when level is above floor', () => {
-    // Level at 1200ft (well above floor=864) and no DD>4 → top clamps to
-    // lowest level's altitude.
+  it('saturated lowest level does NOT clamp top — fog extends past it', () => {
+    // Level at 1200ft (above floor=864) with DD=1 (saturated) is INSIDE
+    // the fog, not above it. Cap should win, not the level altitude —
+    // otherwise sea-level airports get artificially shallow bands when
+    // the 1000 hPa level is in the boundary layer.
     const levels: ObscurationLevel[] = [
       { altitudeFt: 1200, ddC: 1 },
+    ];
+    const out = computeSurfaceObscuration(
+      { ...CLEAR, visibilityM: 60 },
+      levels,
+      364,
+    );
+    expect(out!.topFt).toBe(1864); // cap = terrain + 1500
+  });
+
+  it('falls back to lowest level when DD info is unavailable', () => {
+    // No DD info at any level → conservative fallback clamps top to
+    // the lowest level above terrain so we don't extrapolate fog into
+    // territory we have no data for.
+    const levels: ObscurationLevel[] = [
+      { altitudeFt: 1200, ddC: null },
     ];
     const out = computeSurfaceObscuration(
       { ...CLEAR, visibilityM: 60 },
@@ -214,18 +250,21 @@ describe('computeSurfaceObscuration — band geometry', () => {
     expect(out!.topFt).toBe(1200);
   });
 
-  it('floor wins when lowest level sits below terrain+500 (fog under grid)', () => {
-    // Level at 800ft (just above 364ft terrain) is below floor=864 →
-    // floor enforces minimum visible thickness.
+  it('sea-level airport with saturated 1000 hPa level gets full-height band', () => {
+    // Regression: 0 ft elevation airport, 1000 hPa at 330 ft AGL with
+    // saturated air. Old behaviour clamped to 330 ft → 500 ft floor;
+    // new behaviour lets the cap (1500 ft) win since the level is
+    // INSIDE the fog, not above it.
     const levels: ObscurationLevel[] = [
-      { altitudeFt: 800, ddC: 1 },
+      { altitudeFt: 330, ddC: 0.2 },
+      { altitudeFt: 2400, ddC: 0.5 },
     ];
     const out = computeSurfaceObscuration(
-      { ...CLEAR, visibilityM: 60 },
+      { visibilityM: 200, temperature2mC: 4, dewpoint2mC: 4, cloudCoverLowPct: 100 },
       levels,
-      364,
+      0,
     );
-    expect(out!.topFt).toBe(864);
+    expect(out!.topFt).toBe(1500); // cap, not 330
   });
 });
 

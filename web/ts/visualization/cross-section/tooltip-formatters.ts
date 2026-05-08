@@ -231,7 +231,11 @@ const surfaceObscuration: LayerTooltipDef = {
   header: 'Surface obscuration',
   getZones: (p) => (p.surfaceObscuration ? [p.surfaceObscuration] : []),
   formatLine: (z: VizSurfaceObscuration) => {
-    const metar = z.severity === 'lifr' ? 'FG' : z.severity === 'ifr' ? 'BR/MIFG' : 'HZ';
+    // BR (mist) for both IFR and MVFR — humidity-driven low vis is mist,
+    // not haze (HZ is reserved for dry suspended particles per ICAO
+    // Annex 3). MIFG (shallow fog) on the IFR row matches the typical
+    // 1–3 km radiation-fog signature.
+    const metar = z.severity === 'lifr' ? 'FG' : z.severity === 'ifr' ? 'BR/MIFG' : 'BR';
     const cat = z.severity.toUpperCase();
     const vis = z.visM !== null ? `vis ${Math.round(z.visM)} m` : 'vis n/a';
     const t = z.surfaceTC !== null ? `${z.surfaceTC.toFixed(0)}°C` : '—';

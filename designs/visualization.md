@@ -71,7 +71,7 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 | CAT bands | CAT (Ri) | turbulence | `cat-bands.ts` | on | Richardson number turbulence |
 | E-Shear bands | CAT (E-Shear) | turbulence | `e-shear-bands.ts` | off | Vertical + horizontal wind shear E parameter (CloudPath method) |
 | Inversion bands | Inversions | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
-| Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | airport-profile only | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives flight-category color (LIFR purple, IFR red, MVFR amber). Default ON in airport-profile drawer, OFF on briefing. |
+| Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | off† | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives flight-category color (LIFR purple, IFR red, MVFR amber). †Default ON in airport-profile drawer, OFF on briefing — context-aware via `getDefaultEnabled('airport-profile')`. |
 | Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
 | Freezing level | 0°C | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
 | −10°C level | −10°C | temperature | `temperature-lines.ts` | off | Cyan dashed line |

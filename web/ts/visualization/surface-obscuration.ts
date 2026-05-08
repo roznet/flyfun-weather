@@ -33,6 +33,11 @@ const PRIMARY_AMBER_VIS_M = 3000;
 const PRIMARY_RED_VIS_M = 1000;
 const SECONDARY_LOW_CC_THRESHOLD_PCT = 80;
 const SECONDARY_DD_THRESHOLD_C = 2;
+/** Surface DD below which the secondary trigger emits LIFR rather than
+ *  IFR. Below 0.5 °C the air is essentially saturated; pair that with
+ *  ≥ 80 % low cloud cover and the model is forecasting fog, not just
+ *  near-saturated stratus. */
+const SECONDARY_LIFR_DD_THRESHOLD_C = 0.5;
 const TOP_DD_DRIES_OUT_C = 4;
 const FLOOR_THICKNESS_FT = 500;
 const CAP_THICKNESS_FT = 1500;
@@ -77,7 +82,12 @@ export function computeSurfaceObscuration(
     && dewpoint2mC !== null
     && temperature2mC - dewpoint2mC < SECONDARY_DD_THRESHOLD_C
   ) {
-    severity = 'ifr';
+    // Graduate severity by surface DD so dense fog on visibility-less
+    // models (e.g. ECMWF TCC=100% / DD=0.1°C) gets the LIFR purple it
+    // deserves rather than IFR red.
+    severity = (temperature2mC - dewpoint2mC) < SECONDARY_LIFR_DD_THRESHOLD_C
+      ? 'lifr'
+      : 'ifr';
     reason = 'low_cloud_dd';
   }
 
@@ -127,16 +137,26 @@ function computeTop(levels: ObscurationLevel[], terrainFt: number): number {
 
   let top = cap;
 
-  // First level above terrain where DD exceeds the dry-out threshold.
-  const dryLevel = levels.find(
-    (l) => l.altitudeFt > terrainFt && l.ddC !== null && l.ddC > TOP_DD_DRIES_OUT_C,
-  );
-  if (dryLevel) top = Math.min(top, dryLevel.altitudeFt);
+  const aboveTerrain = levels.filter((l) => l.altitudeFt > terrainFt);
 
-  // Lowest pressure-level altitude — without exposed level altitudes the
-  // caller passes `[]` and this branch is a no-op (cap remains).
-  const lowest = levels.find((l) => l.altitudeFt > terrainFt);
-  if (lowest) top = Math.min(top, lowest.altitudeFt);
+  // First level above terrain where DD exceeds the dry-out threshold —
+  // this is the natural fog top when DD info is available.
+  const dryLevel = aboveTerrain.find(
+    (l) => l.ddC !== null && l.ddC > TOP_DD_DRIES_OUT_C,
+  );
+  if (dryLevel) {
+    top = Math.min(top, dryLevel.altitudeFt);
+  } else if (aboveTerrain.length > 0 && aboveTerrain.every((l) => l.ddC === null)) {
+    // Conservative fallback when no level reports DD: clamp to the
+    // lowest level above terrain so we don't extrapolate fog into
+    // territory we have no data for. Skipped when DD info IS available
+    // (i.e. dryLevel just didn't fire) — in that case the levels are
+    // saturated and ARE inside the fog, not above it; the cap should
+    // win. This matters most for sea-level airports where 1000 hPa
+    // sits ~330 ft AGL: clamping there on saturated levels would
+    // produce a 500-ft-thick band even when fog extends much higher.
+    top = Math.min(top, aboveTerrain[0].altitudeFt);
+  }
 
   return Math.max(top, floor);
 }
