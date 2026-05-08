@@ -24,13 +24,12 @@ from weatherbrief.fetch.grib.cache import (
     purge_old_runs,
     put_cached,
 )
+from weatherbrief.fetch.grib.icon_eu_fetch import (
+    ICON_EU_VARIABLES as ICON_EU_PRECACHE_VARS,
+)
 
 logger = logging.getLogger(__name__)
 
-
-# 9 pressure-level variables on ICON-EU model levels — same set the briefing
-# path uses (kept in sync with icon_eu_fetch.ICON_EU_VARIABLES).
-ICON_EU_PRECACHE_VARS = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
 
 # /maps.html Forecast controls offer hour-options 06/09/12/15/18 Z, each
 # spawning a 4-hour window. The union deduplicates to hours 06–21 Z per day.

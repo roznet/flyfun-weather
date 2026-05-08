@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 # Cache entries older than this are purged. 7 h ≈ one main-cycle gap (6 h)
 # plus headroom — the precache loop refreshes the cache for each new main run.
+# Tighter than the previous 24 h: if the precache loop stalls (server restart
+# during a delayed publish, or briefings landing on a never-precached short
+# cycle 03/09/15/21Z), entries fall out of cache faster. Acceptable margin
+# under expected operation; widen back if telemetry shows stalls dominating.
 CACHE_TTL_SECONDS = 7 * 3600
 
 
