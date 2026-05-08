@@ -774,5 +774,10 @@ class VerificationCycleRow(Base):
     finalized: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     scored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Peak parent uvicorn RSS during the cycle. Nullable: legacy rows
+    # predate sampling. See migration 051 / issue #137.
+    peak_rss_mb: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Peak total cgroup memory (parent + GRIB decode workers). Same caveat.
+    peak_cgroup_mb: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
