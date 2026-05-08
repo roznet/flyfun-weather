@@ -727,6 +727,36 @@
       { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque fill. Full cloud layer." }
     ]
   },
+  "square_cloud_dd": {
+    "name": "Square Clouds (DD)",
+    "unit": "",
+    "vibe": "Discrete cloud cells from sounding moisture",
+    "primary_goal": "Visualise cloud layers as solid filled rectangles, one per zone, with no hatching or gradient feathering. Uses the same dewpoint depression detection as the DD Layers method.",
+    "best_used_for": "A ForeFlight-like cell view. Same cloud detection as DD Layers and Soft DD — the difference is purely rendering. Each detected cloud band fills a sharp-edged rectangle spanning its base/top altitudes; opacity scales with dewpoint depression and coverage class. Easy to compare zone extents at a glance.",
+    "limitations": "Same as DD Layers: derived from 8 pressure levels, can miss thin layers. Coverage estimated from humidity, not observed. The cells reflect the zone-collapsed bands, not the raw per-pressure-level moisture distribution.",
+    "theory": "Cloud layers detected identically to DD Layers — dewpoint depression below 3°C indicates saturation and cloud presence. Rendering fills each detected zone as a solid rectangle from base to top altitude. Fill colour blends from gray (DD ≈ 0, dense cloud) to white (DD ≈ 3, thin cloud); alpha scales with the coverage class (FEW/SCT/BKN/OVC). No hatch overlay.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Lower opacity rectangle." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "Mid opacity rectangle." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque rectangle." }
+    ]
+  },
+  "square_cloud_nwp": {
+    "name": "Square Clouds (NWP)",
+    "unit": "",
+    "vibe": "Discrete cloud cells from model output",
+    "primary_goal": "Visualise NWP model cloud layers as solid filled rectangles. Uses the same NWP cloud detection as the NWP Layers method.",
+    "best_used_for": "A ForeFlight-like cell view of model cloud layers. Same data as Soft NWP and NWP Layers; the difference is purely rendering. Cells make zone boundaries crisp and side-by-side comparison of multiple bands easy.",
+    "limitations": "Same as NWP Layers: coverage is model-predicted, not observed. When GRIB diagnostics aren't available, falls back to synthesised layers from Open-Meteo cloud percentages narrowed by the dewpoint depression envelope.",
+    "theory": "Cloud layers from the NWP model's cloud scheme (GRIB diagnostics or Open-Meteo synthesis), rendered as sharp-edged rectangles. Fill colour blends bright→dark with cloud cover percentage; alpha rises 0.30→0.85 with coverage. No hatch overlay, no gradient feathering — just the cells.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Lower opacity, lighter shade." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "Mid opacity." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque rectangle, darker shade." }
+    ]
+  },
   "inversion_layer": {
     "name": "Inversions",
     "unit": "°C",

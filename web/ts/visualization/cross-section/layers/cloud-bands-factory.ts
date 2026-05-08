@@ -40,7 +40,6 @@ interface SourceSpec {
   getZones: (p: VizPoint) => VizCloudLayer[];
   /** Continuous fill color for a (possibly matched) zone. Used by hatched and square styles. */
   matchedColor: (cl: VizCloudLayer, matched: VizCloudLayer | null) => string;
-  metricId: string;
 }
 
 function avgDD(a: VizCloudLayer, b: VizCloudLayer | null): number | undefined {
@@ -67,17 +66,15 @@ const DD_SOURCE: SourceSpec = {
     const dd = avgDD(cl, matched);
     return cloudFillFromDD(dd, cl.coverage);
   },
-  metricId: 'cloud_coverage',
 };
 
 const NWP_SOURCE: SourceSpec = {
   getZones: (p) => p.nwpCloudLayers ?? [],
   matchedColor: (cl, matched) => {
-    const a = cl.meanCloudCoverPct ?? coverageToPct(cl.coverage);
-    const b = matched ? (matched.meanCloudCoverPct ?? coverageToPct(matched.coverage)) : a;
-    return nwpCloudFill((a + b) / 2);
+    const covA = cl.meanCloudCoverPct ?? coverageToPct(cl.coverage);
+    const covB = matched ? (matched.meanCloudCoverPct ?? coverageToPct(matched.coverage)) : covA;
+    return nwpCloudFill((covA + covB) / 2);
   },
-  metricId: 'nwp_cloud_cover',
 };
 
 /** Blue-tinted fill from coverage % — used by hatched-NWP for matched-zone color. */
@@ -213,6 +210,10 @@ export interface CloudLayerSpec {
   name: string;
   source: CloudSource;
   style: CloudStyle;
+  /** metrics-catalog key for the layer-info popup. Style-specific so the
+   *  popup explains soft gradients vs hatch vs square cells, not just the
+   *  underlying data source. */
+  metricId: string;
   defaultEnabled?: boolean;
 }
 
@@ -225,7 +226,7 @@ export function cloudLayer(spec: CloudLayerSpec): CrossSectionLayer {
     name: spec.name,
     group: 'clouds',
     defaultEnabled: spec.defaultEnabled ?? false,
-    metricId: source.metricId,
+    metricId: spec.metricId,
 
     render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
       const hasData = data.points.some((p) => source.getZones(p).length > 0);
@@ -268,6 +269,7 @@ export const cloudBandsLayer = cloudLayer({
   name: 'DD Layers',
   source: 'dd',
   style: 'layer',
+  metricId: 'cloud_coverage',
 });
 
 export const nwpCloudBandsLayer = cloudLayer({
@@ -275,6 +277,7 @@ export const nwpCloudBandsLayer = cloudLayer({
   name: 'NWP Layers',
   source: 'nwp',
   style: 'layer',
+  metricId: 'nwp_cloud_cover',
 });
 
 export const softCloudBandsLayer = cloudLayer({
@@ -282,6 +285,7 @@ export const softCloudBandsLayer = cloudLayer({
   name: 'Soft DD',
   source: 'dd',
   style: 'soft',
+  metricId: 'soft_cloud_dd',
 });
 
 export const softNwpCloudBandsLayer = cloudLayer({
@@ -289,6 +293,7 @@ export const softNwpCloudBandsLayer = cloudLayer({
   name: 'Soft NWP',
   source: 'nwp',
   style: 'soft',
+  metricId: 'soft_cloud_nwp',
   defaultEnabled: true,
 });
 
@@ -297,6 +302,7 @@ export const squareCloudBandsLayer = cloudLayer({
   name: 'Square DD',
   source: 'dd',
   style: 'square',
+  metricId: 'square_cloud_dd',
 });
 
 export const squareNwpCloudBandsLayer = cloudLayer({
@@ -304,6 +310,7 @@ export const squareNwpCloudBandsLayer = cloudLayer({
   name: 'Square NWP',
   source: 'nwp',
   style: 'square',
+  metricId: 'square_cloud_nwp',
 });
 
 /** Lookup table: which layer id corresponds to a given (source, style) combo. */
