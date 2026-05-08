@@ -234,9 +234,15 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const hasSld = data.points.some((p) => p.sldZones.length > 0);
   const hasEShear = data.points.some((p) => p.eShearLayers.length > 0);
 
-  if (!hasNwpCloudData) unavailable.add('nwp-cloud-bands');
-  if (!hasNwpCloudData) unavailable.add('icing-ogimet-nwp-bands');
-  if (!hasNwpCloudData) unavailable.add('ieng-icing-bands');
+  if (!hasNwpCloudData) {
+    // All three NWP cloud-style variants share the same data source —
+    // tag them together so the panel can disable the NWP toggle.
+    unavailable.add('nwp-cloud-bands');
+    unavailable.add('soft-nwp-cloud-bands');
+    unavailable.add('square-nwp-cloud-bands');
+    unavailable.add('icing-ogimet-nwp-bands');
+    unavailable.add('ieng-icing-bands');
+  }
   if (!hasSfip) unavailable.add('sfip-bands');
   if (!hasSld) unavailable.add('sld-bands');
   if (!hasEShear) unavailable.add('e-shear-bands');

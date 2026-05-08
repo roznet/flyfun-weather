@@ -65,6 +65,29 @@ let aircraftList: AircraftResponse[] = [];
 let editingAircraftId: number | null = null;
 let autorouterMode: 'oauth' | 'password' = 'oauth';
 
+/** Parse the persisted cloud_method ('soft_nwp', 'square_dd', 'dd', 'nwp', etc.) into source+style. */
+function parseCloudMethod(value: string): { source: 'dd' | 'nwp'; style: 'soft' | 'layer' | 'square' } {
+  const lower = (value ?? '').toLowerCase();
+  // Style-prefixed forms: soft_nwp, soft_dd, square_nwp, square_dd
+  if (lower.startsWith('soft_')) {
+    return { style: 'soft', source: lower === 'soft_nwp' ? 'nwp' : 'dd' };
+  }
+  if (lower.startsWith('square_')) {
+    return { style: 'square', source: lower === 'square_nwp' ? 'nwp' : 'dd' };
+  }
+  // Legacy bare-source forms: 'dd', 'nwp' (== hatched layer style)
+  if (lower === 'nwp') return { style: 'layer', source: 'nwp' };
+  if (lower === 'dd') return { style: 'layer', source: 'dd' };
+  // Unknown → fall back to recommended.
+  return { style: 'soft', source: 'nwp' };
+}
+
+/** Compose source+style back into a cloud_method string for persistence. */
+function composeCloudMethod(source: string, style: string): string {
+  if (style === 'layer') return source;          // 'nwp' or 'dd' (legacy bare form)
+  return `${style}_${source}`;                   // 'soft_nwp', 'square_dd', etc.
+}
+
 /** Default advisory models: all default briefing models except best_match. */
 function defaultAdvisoryModelKeys(): string[] {
   return defaultModelKeys().filter(k => k !== 'best_match');
@@ -185,9 +208,12 @@ function populateProfileForm(profile: ProfileResponse): void {
   const icingMethodSelect = document.getElementById('input-icing-method') as HTMLSelectElement;
   if (icingMethodSelect) icingMethodSelect.value = s.icing_method ?? 'ogimet_nwp';
 
-  // Cloud method selector
-  const cloudMethodSelect = document.getElementById('input-cloud-method') as HTMLSelectElement;
-  if (cloudMethodSelect) cloudMethodSelect.value = s.cloud_method ?? 'soft_nwp';
+  // Cloud source + style selectors (composed into s.cloud_method like 'soft_nwp', 'square_dd', etc.).
+  const cloudSourceSelect = document.getElementById('input-cloud-source') as HTMLSelectElement;
+  const cloudStyleSelect = document.getElementById('input-cloud-style') as HTMLSelectElement;
+  const { source: cloudSource, style: cloudStyle } = parseCloudMethod(s.cloud_method ?? 'soft_nwp');
+  if (cloudSourceSelect) cloudSourceSelect.value = cloudSource;
+  if (cloudStyleSelect) cloudStyleSelect.value = cloudStyle;
 
   // Convective method selector
   const convectiveMethodSelect = document.getElementById('input-convective-method') as HTMLSelectElement;
@@ -375,7 +401,8 @@ function translateStaticElements(): void {
   }
   set('label[for="advisory-aggregation"]', 'page.settings.summaryRating');
   set('label[for="input-icing-method"]', 'page.settings.icingMethod');
-  set('label[for="input-cloud-method"]', 'page.settings.cloudMethod');
+  set('label[for="input-cloud-source"]', 'page.settings.cloudSource');
+  set('label[for="input-cloud-style"]', 'page.settings.cloudStyle');
   set('label[for="input-convective-method"]', 'page.settings.convectiveMethod');
   // Translate select options for flight rules
   const frSelect = document.getElementById('input-flight-rules') as HTMLSelectElement;
@@ -791,7 +818,9 @@ async function handleSave(): Promise<void> {
   const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? false;
   const icingMethod = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd';
-  const cloudMethod = (document.getElementById('input-cloud-method') as HTMLSelectElement)?.value || 'dd';
+  const cloudSourceValue = (document.getElementById('input-cloud-source') as HTMLSelectElement)?.value || 'nwp';
+  const cloudStyleValue = (document.getElementById('input-cloud-style') as HTMLSelectElement)?.value || 'soft';
+  const cloudMethod = composeCloudMethod(cloudSourceValue, cloudStyleValue);
   const convectiveMethod = (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || 'thermo';
   const digestGuidance = (document.getElementById('input-digest-guidance') as HTMLSelectElement)?.value || 'balanced';
   const advisories = collectAdvisoryPrefs();
