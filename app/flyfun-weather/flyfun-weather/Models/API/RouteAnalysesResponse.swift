@@ -30,11 +30,15 @@ struct RoutePointAnalysis: Codable, Sendable {
 struct SoundingAnalysis: Codable, Sendable {
     let indices: ThermodynamicIndices?
     let cloudLayers: [EnhancedCloudLayer]?
+    /// Native NWP cloud envelope. nil = no NWP source for this model;
+    /// empty array = model says clear sky. Non-empty = render layers.
+    let nwpCloudLayers: [EnhancedCloudLayer]?
     let icingZones: [IcingZone]?
     let icingOgimetNwpZones: [IcingZone]?
     let sfipZones: [SfipZone]?
     let inversionLayers: [InversionLayer]?
     let convective: ConvectiveAssessment?
+    let convectiveNwp: ConvectiveAssessment?
     let verticalMotion: VerticalMotionAssessment?
     let cloudCoverLowPct: Double?
     let cloudCoverMidPct: Double?
@@ -85,6 +89,12 @@ struct InversionLayer: Codable, Sendable {
 
 struct ConvectiveAssessment: Codable, Sendable {
     let riskLevel: String
+    let baseFt: Double?
+    let topFt: Double?
+    let capeJkg: Double?
+    let cinJkg: Double?
+    let coverPct: Double?
+    let method: String?
 }
 
 struct VerticalMotionAssessment: Codable, Sendable {
