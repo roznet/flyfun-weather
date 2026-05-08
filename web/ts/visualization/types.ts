@@ -184,7 +184,9 @@ export interface VizPoint {
 export interface VizSurfaceObscuration {
   baseFt: number;
   topFt: number;
-  severity: 'red' | 'amber' | 'yellow';
+  /** Aviation flight category — drives both the tooltip label and the
+   *  rendered color (LIFR=purple, IFR=red, MVFR=amber). */
+  severity: 'lifr' | 'ifr' | 'mvfr';
   visM: number | null;
   surfaceTC: number | null;
   surfaceTdC: number | null;

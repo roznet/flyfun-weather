@@ -9,16 +9,12 @@
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData, VizPoint, VizSurfaceObscuration } from '../../types';
 import { getActiveTheme } from '../theme';
-import { drawSmoothBand, type BandPointData } from './base';
+import { drawSmoothBand, buildBandPath, type BandPointData } from './base';
 
 type ObscurationTheme = ReturnType<typeof getActiveTheme>['obscuration'];
 
 function severityColor(theme: ObscurationTheme, severity: VizSurfaceObscuration['severity']): string {
-  switch (severity) {
-    case 'red': return theme.red;
-    case 'amber': return theme.amber;
-    case 'yellow': return theme.yellow;
-  }
+  return theme[severity];
 }
 
 export const surfaceObscurationBandsLayer: CrossSectionLayer = {
@@ -72,7 +68,9 @@ export const surfaceObscurationBandsLayer: CrossSectionLayer = {
 };
 
 /** Draw 45° hatching inside the smooth-band path, snapped to a global
- *  grid so adjacent runs align. */
+ *  grid so adjacent runs align. Uses the same Fritsch-Carlson spline
+ *  geometry as `drawSmoothBand` for the clip path so hatch lines never
+ *  bleed past the smooth fill at curve peaks/troughs. */
 function drawDiagonalHatch(
   ctx: CanvasRenderingContext2D,
   bandPoints: BandPointData[],
@@ -83,7 +81,7 @@ function drawDiagonalHatch(
   if (valid.length < 2) return;
 
   ctx.save();
-  buildBandClipPath(ctx, valid, transform);
+  buildBandPath(ctx, valid, transform);
   ctx.clip();
 
   ctx.strokeStyle = theme.hatchColor;
@@ -118,23 +116,4 @@ function drawDiagonalHatch(
   }
 
   ctx.restore();
-}
-
-/** Build a closed path (top L→R, base R→L) used as a clip region. */
-function buildBandClipPath(
-  ctx: CanvasRenderingContext2D,
-  valid: BandPointData[],
-  transform: CoordTransform,
-): void {
-  ctx.beginPath();
-  // Top
-  ctx.moveTo(transform.distanceToX(valid[0].distance), transform.altitudeToY(valid[0].top!));
-  for (let i = 1; i < valid.length; i++) {
-    ctx.lineTo(transform.distanceToX(valid[i].distance), transform.altitudeToY(valid[i].top!));
-  }
-  // Base R→L
-  for (let i = valid.length - 1; i >= 0; i--) {
-    ctx.lineTo(transform.distanceToX(valid[i].distance), transform.altitudeToY(valid[i].base!));
-  }
-  ctx.closePath();
 }

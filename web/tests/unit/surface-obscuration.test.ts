@@ -28,7 +28,7 @@ describe('computeSurfaceObscuration — visibility trigger', () => {
       364,
     );
     expect(out).not.toBeNull();
-    expect(out!.severity).toBe('red');
+    expect(out!.severity).toBe('lifr');
     expect(out!.reason).toBe('visibility');
   });
 
@@ -38,7 +38,7 @@ describe('computeSurfaceObscuration — visibility trigger', () => {
       [],
       0,
     );
-    expect(out!.severity).toBe('amber');
+    expect(out!.severity).toBe('ifr');
     expect(out!.reason).toBe('visibility');
   });
 
@@ -48,7 +48,7 @@ describe('computeSurfaceObscuration — visibility trigger', () => {
       [],
       0,
     );
-    expect(out!.severity).toBe('yellow');
+    expect(out!.severity).toBe('mvfr');
   });
 
   it('no trigger when visibility good and low_cc small', () => {
@@ -79,7 +79,7 @@ describe('computeSurfaceObscuration — secondary low-cloud + DD trigger', () =>
       500,
     );
     expect(out).not.toBeNull();
-    expect(out!.severity).toBe('amber');
+    expect(out!.severity).toBe('ifr');
     expect(out!.reason).toBe('low_cloud_dd');
   });
 
@@ -122,7 +122,7 @@ describe('computeSurfaceObscuration — secondary low-cloud + DD trigger', () =>
       [],
       0,
     );
-    expect(out!.severity).toBe('red');
+    expect(out!.severity).toBe('lifr');
     expect(out!.reason).toBe('visibility');
   });
 
@@ -289,7 +289,7 @@ describe('LFAQ canonical repro from issue #125', () => {
       364,
     );
     expect(out).not.toBeNull();
-    expect(out!.severity).toBe('red');
+    expect(out!.severity).toBe('lifr');
     expect(out!.reason).toBe('visibility');
     expect(out!.baseFt).toBe(364);
     expect(out!.topFt).toBeGreaterThanOrEqual(364 + 500);

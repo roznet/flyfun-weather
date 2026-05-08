@@ -173,6 +173,11 @@ function extractPoint(
   const temperatureC = divergenceValue(rpa, 'temperature_c', model);
   const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
 
+  // Prefer NWP cloud layers when available so the obscuration band top
+  // matches the cloud method drawn directly above it. Falls back to
+  // DD-derived layers (the only signal for some models) when NWP is
+  // absent. Impact is bounded by the 1500 ft cap regardless.
+  const layersForObscuration = nwpCloudLayers ?? cloudLayers;
   const surfaceObscuration = computeSurfaceObscurationFromCloudLayers(
     {
       visibilityM: sounding?.visibility_m ?? null,
@@ -180,7 +185,7 @@ function extractPoint(
       dewpoint2mC: sounding?.dewpoint_2m_c ?? null,
       cloudCoverLowPct: sounding?.cloud_cover_low_pct ?? null,
     },
-    cloudLayers,
+    layersForObscuration,
     terrainElevationFt,
   );
 

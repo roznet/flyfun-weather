@@ -99,12 +99,14 @@ export interface CrossSectionTheme {
   };
 
   /** Surface obscuration (fog / LIFR) band colors and hatch settings.
-   *  Themes that prefer a solid fill or alternative texture can override
-   *  `hatchLineWidth` and `hatchSpacingPx`. */
+   *  Keyed by aviation flight category so `theme.obscuration[severity]`
+   *  reads naturally at the call site. Themes that prefer a solid fill
+   *  or alternative texture can override `hatchLineWidth` /
+   *  `hatchSpacingPx`. */
   obscuration: {
-    red: string;
-    amber: string;
-    yellow: string;
+    lifr: string;
+    ifr: string;
+    mvfr: string;
     hatchColor: string;
     hatchSpacingPx: number;
     hatchLineWidth: number;
@@ -256,9 +258,9 @@ const STANDARD_THEME: CrossSectionTheme = {
   },
 
   obscuration: {
-    red: 'rgba(168, 85, 247, 0.65)',     // LIFR purple
-    amber: 'rgba(239, 68, 68, 0.55)',    // IFR red
-    yellow: 'rgba(245, 158, 11, 0.50)',  // MVFR amber
+    lifr: 'rgba(168, 85, 247, 0.65)',  // purple
+    ifr: 'rgba(239, 68, 68, 0.55)',    // red
+    mvfr: 'rgba(245, 158, 11, 0.50)',  // amber
     hatchColor: 'rgba(255, 255, 255, 0.65)',
     hatchSpacingPx: 8,
     hatchLineWidth: 1.5,
@@ -631,9 +633,9 @@ const LIGHT_THEME: CrossSectionTheme = {
 
   // Darker hatch on light theme — white-on-pale-fog vanishes.
   obscuration: {
-    red: 'rgba(126, 34, 206, 0.55)',
-    amber: 'rgba(220, 38, 38, 0.50)',
-    yellow: 'rgba(202, 138, 4, 0.50)',
+    lifr: 'rgba(126, 34, 206, 0.55)',
+    ifr: 'rgba(220, 38, 38, 0.50)',
+    mvfr: 'rgba(202, 138, 4, 0.50)',
     hatchColor: 'rgba(30, 30, 45, 0.55)',
     hatchSpacingPx: 8,
     hatchLineWidth: 1.5,

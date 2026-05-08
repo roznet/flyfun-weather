@@ -56,13 +56,13 @@ export function computeSurfaceObscuration(
 ): VizSurfaceObscuration | null {
   const { visibilityM, temperature2mC, dewpoint2mC, cloudCoverLowPct } = surface;
 
-  let severity: 'red' | 'amber' | 'yellow' | null = null;
+  let severity: 'lifr' | 'ifr' | 'mvfr' | null = null;
   let reason: 'visibility' | 'low_cloud_dd' | null = null;
 
   if (visibilityM !== null && visibilityM < PRIMARY_VIS_THRESHOLD_M) {
-    if (visibilityM < PRIMARY_RED_VIS_M) severity = 'red';
-    else if (visibilityM < PRIMARY_AMBER_VIS_M) severity = 'amber';
-    else severity = 'yellow';
+    if (visibilityM < PRIMARY_RED_VIS_M) severity = 'lifr';
+    else if (visibilityM < PRIMARY_AMBER_VIS_M) severity = 'ifr';
+    else severity = 'mvfr';
     reason = 'visibility';
   } else if (
     // Secondary fires only when the model has no visibility forecast
@@ -77,7 +77,7 @@ export function computeSurfaceObscuration(
     && dewpoint2mC !== null
     && temperature2mC - dewpoint2mC < SECONDARY_DD_THRESHOLD_C
   ) {
-    severity = 'amber';
+    severity = 'ifr';
     reason = 'low_cloud_dd';
   }
 

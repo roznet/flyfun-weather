@@ -71,6 +71,7 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 | CAT bands | CAT (Ri) | turbulence | `cat-bands.ts` | on | Richardson number turbulence |
 | E-Shear bands | CAT (E-Shear) | turbulence | `e-shear-bands.ts` | off | Vertical + horizontal wind shear E parameter (CloudPath method) |
 | Inversion bands | Inversions | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
+| Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | airport-profile only | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives flight-category color (LIFR purple, IFR red, MVFR amber). Default ON in airport-profile drawer, OFF on briefing. |
 | Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
 | Freezing level | 0°C | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
 | −10°C level | −10°C | temperature | `temperature-lines.ts` | off | Cyan dashed line |
@@ -232,7 +233,7 @@ Per-layer tooltip content lives in a declarative registry consumed by `interacti
 - `getZones` — returns the relevant zone array from `VizPoint` (or synthesizes a single pseudo-zone from per-point fields, used by Thermo/NWP convective).
 - `formatLine` — produces one tooltip line per zone, including any per-layer extras (DD, CC, T, icing index, Ri, SLD tag, source tag, etc.).
 
-The registry includes 12 entries: cloud DD, cloud NWP, Ogimet-DD, Ogimet-NWP, SFIP, IENG, SLD, CAT (Ri), E-Shear, Thermo Convective, NWP Convective, Inversions. Adding a new layer = one new entry; changing what a layer shows = edit one `formatLine`.
+The registry includes 13 entries: cloud DD, cloud NWP, Ogimet-DD, Ogimet-NWP, SFIP, IENG, SLD, CAT (Ri), E-Shear, Thermo Convective, NWP Convective, Inversions, Surface obscuration. Adding a new layer = one new entry; changing what a layer shows = edit one `formatLine`.
 
 **Per-layer extras shown:**
 - Cloud DD: `(DD x.x°C, T n°C)`

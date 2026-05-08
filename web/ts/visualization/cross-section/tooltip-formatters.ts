@@ -231,15 +231,15 @@ const surfaceObscuration: LayerTooltipDef = {
   header: 'Surface obscuration',
   getZones: (p) => (p.surfaceObscuration ? [p.surfaceObscuration] : []),
   formatLine: (z: VizSurfaceObscuration) => {
-    const label = z.severity === 'red' ? 'FG' : z.severity === 'amber' ? 'BR/MIFG' : 'HZ';
+    const metar = z.severity === 'lifr' ? 'FG' : z.severity === 'ifr' ? 'BR/MIFG' : 'HZ';
+    const cat = z.severity.toUpperCase();
     const vis = z.visM !== null ? `vis ${Math.round(z.visM)} m` : 'vis n/a';
     const t = z.surfaceTC !== null ? `${z.surfaceTC.toFixed(0)}°C` : '—';
     const td = z.surfaceTdC !== null ? `${z.surfaceTdC.toFixed(0)}°C` : '—';
     const rh = z.surfaceRhPct !== null ? `${Math.round(z.surfaceRhPct)}%` : '—';
-    const cause = z.reason === 'visibility' ? 'visibility' : 'low_cloud_dd';
-    return `${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.severity} ${label}`
+    return `${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${cat} ${metar}`
       + extras([vis, `T/Td ${t}/${td}`, `RH ${rh}`])
-      + ` [${cause}]`;
+      + ` [${z.reason}]`;
   },
 };
 
