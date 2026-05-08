@@ -29,6 +29,7 @@ import pytest
 
 import weatherbrief.fetch.grib as grib_pkg
 from weatherbrief.fetch.grib import (
+    _decode_pool_max_tasks_per_child,
     _decode_pool_workers,
     _dispatch_decode,
     _get_decode_pool,
@@ -252,3 +253,49 @@ def test_concurrent_thread_dispatch(monkeypatch):
         ]
         results = sorted(f.result() for f in futures)
     assert results == list(range(n))
+
+
+def test_max_tasks_per_child_default(monkeypatch):
+    """Default of 50 keeps cfgrib/ECCODES native memory bounded across long
+    runs (issue #134) — ECMWF standalone fetch dispatches ~50 decodes per run,
+    so workers turn over roughly once per cycle."""
+    monkeypatch.delenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", raising=False)
+    assert _decode_pool_max_tasks_per_child() == 50
+
+
+def test_max_tasks_per_child_override(monkeypatch):
+    monkeypatch.setenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", "10")
+    assert _decode_pool_max_tasks_per_child() == 10
+
+
+def test_max_tasks_per_child_disabled_via_zero(monkeypatch):
+    """Zero (or negative) disables recycling — escape hatch for debugging
+    or for environments where worker spawn overhead matters more than
+    bounding native memory."""
+    monkeypatch.setenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", "0")
+    assert _decode_pool_max_tasks_per_child() is None
+    monkeypatch.setenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", "-1")
+    assert _decode_pool_max_tasks_per_child() is None
+
+
+def test_max_tasks_per_child_invalid_falls_back(monkeypatch):
+    monkeypatch.setenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", "not_a_number")
+    assert _decode_pool_max_tasks_per_child() == 50
+
+
+def test_pool_recycles_workers_after_max_tasks(monkeypatch):
+    """Once a worker hits ``max_tasks_per_child`` it exits and is replaced.
+
+    Verified by counting distinct worker PIDs across N+2 dispatches with
+    ``max_tasks_per_child=N`` and ``max_workers=1``: at least 2 distinct
+    PIDs must appear, proving the worker was recycled.
+    """
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "1")
+    monkeypatch.setenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", "3")
+    shutdown_decode_pool()
+
+    pids = {_dispatch_decode("_test_pid") for _ in range(6)}
+    assert len(pids) >= 2, (
+        f"max_tasks_per_child=3 with 6 dispatches should recycle the worker; "
+        f"saw only {len(pids)} distinct PIDs ({pids})"
+    )

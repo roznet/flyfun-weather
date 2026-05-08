@@ -165,6 +165,12 @@ def _test_crash() -> None:
     os.kill(os.getpid(), signal.SIGKILL)
 
 
+def _test_pid() -> int:
+    """Return the worker process PID — used to verify worker recycling."""
+    import os
+    return os.getpid()
+
+
 def _test_hang(seconds: float = 60.0) -> None:
     """Sleep for *seconds* — used to verify the dispatcher's timeout path.
 
