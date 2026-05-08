@@ -301,14 +301,21 @@
               <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which icing method feeds the advisory evaluators. All three are always visible on the cross-section.</span>
             </div>
             <div class="form-group">
-              <label for="input-cloud-method">Cloud Method</label>
-              <select id="input-cloud-method" class="input-select">
-                <option value="soft_nwp">Soft NWP (recommended)</option>
-                <option value="soft_dd">Soft DD</option>
-                <option value="nwp">NWP (hatched)</option>
-                <option value="dd">DD (hatched)</option>
+              <label for="input-cloud-source">Cloud Source</label>
+              <select id="input-cloud-source" class="input-select">
+                <option value="nwp">NWP (model cloud cover)</option>
+                <option value="dd">DD (dewpoint depression)</option>
               </select>
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Cloud rendering style for the cross-section. Soft uses gradient fills; DD/NWP hatched is the classic look. Advisory cloud detection is independent of this setting.</span>
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Where cloud zones come from. NWP uses the model's cloud cover; DD derives them from sounding moisture. Advisory cloud detection is independent of this setting.</span>
+            </div>
+            <div class="form-group">
+              <label for="input-cloud-style">Cloud Style</label>
+              <select id="input-cloud-style" class="input-select">
+                <option value="soft">Soft (gradient fill)</option>
+                <option value="layer">Layer (hatched)</option>
+                <option value="square">Square (cells)</option>
+              </select>
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">How clouds are rendered. Soft is GRAMET-like; Layer is the classic hatched look; Square fills each zone as a cell with opacity from the value.</span>
             </div>
             <div class="form-group">
               <label for="input-convective-method">Convective Method</label>
