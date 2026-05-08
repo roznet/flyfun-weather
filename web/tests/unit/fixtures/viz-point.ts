@@ -60,6 +60,7 @@ export function makeVizPoint(overrides: Partial<VizPoint> = {}): VizPoint {
     terrainElevationFt: 0,
     temperatureC: null,
     precipitationMm: null,
+    surfaceObscuration: null,
     ...overrides,
   };
 }

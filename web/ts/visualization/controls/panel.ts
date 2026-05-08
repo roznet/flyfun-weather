@@ -20,6 +20,7 @@ const GROUP_INFO: Record<string, () => string> = {
   clouds: () => t('viz.cloudMethods'),
   convection: () => t('viz.convectionMethods'),
   icing: () => t('viz.icingMethods'),
+  obscuration: () => t('viz.obscurationMethod'),
 };
 
 export interface VizControlCallbacks {

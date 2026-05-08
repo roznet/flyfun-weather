@@ -275,6 +275,9 @@ def analyze_sounding_lite(
         cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         cloud_cover_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         cloud_cover_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+        visibility_m=hourly.visibility_m if hourly else None,
+        temperature_2m_c=hourly.temperature_2m_c if hourly else None,
+        dewpoint_2m_c=hourly.dewpoint_2m_c if hourly else None,
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 

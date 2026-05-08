@@ -7,7 +7,7 @@
  * registry instead of carrying one if-block per layer.
  */
 
-import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer } from '../types';
+import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
 import { fmtFL } from '../interaction-utils';
 
 export interface LayerTooltipDef {
@@ -226,6 +226,23 @@ const inversion: LayerTooltipDef = {
   },
 };
 
+const surfaceObscuration: LayerTooltipDef = {
+  id: 'surface-obscuration-bands',
+  header: 'Surface obscuration',
+  getZones: (p) => (p.surfaceObscuration ? [p.surfaceObscuration] : []),
+  formatLine: (z: VizSurfaceObscuration) => {
+    const label = z.severity === 'red' ? 'FG' : z.severity === 'amber' ? 'BR/MIFG' : 'HZ';
+    const vis = z.visM !== null ? `vis ${Math.round(z.visM)} m` : 'vis n/a';
+    const t = z.surfaceTC !== null ? `${z.surfaceTC.toFixed(0)}°C` : '—';
+    const td = z.surfaceTdC !== null ? `${z.surfaceTdC.toFixed(0)}°C` : '—';
+    const rh = z.surfaceRhPct !== null ? `${Math.round(z.surfaceRhPct)}%` : '—';
+    const cause = z.reason === 'visibility' ? 'visibility' : 'low_cloud_dd';
+    return `${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.severity} ${label}`
+      + extras([vis, `T/Td ${t}/${td}`, `RH ${rh}`])
+      + ` [${cause}]`;
+  },
+};
+
 /** All band/zone-style tooltip definitions, in display order. */
 export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   cloudDD,
@@ -240,4 +257,5 @@ export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   thermoConv,
   nwpConv,
   inversion,
+  surfaceObscuration,
 ];

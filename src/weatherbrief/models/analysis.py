@@ -617,6 +617,12 @@ class SoundingAnalysis(BaseModel):
     cloud_cover_low_pct: Optional[float] = None
     cloud_cover_mid_pct: Optional[float] = None
     cloud_cover_high_pct: Optional[float] = None
+    # Surface-level fields used for surface obscuration (fog/LIFR) viz.
+    # All optional — older snapshots omit them and the cross-section
+    # falls back to "no obscuration band".
+    visibility_m: Optional[float] = None
+    temperature_2m_c: Optional[float] = None
+    dewpoint_2m_c: Optional[float] = None
     # GFS cloud layer diagnostics from GRIB2 enrichment
     nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
 

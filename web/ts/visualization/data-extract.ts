@@ -2,6 +2,7 @@
 
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
 import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag } from './types';
+import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 
 export function extractVizData(
   manifest: RouteAnalysesManifest,
@@ -172,6 +173,17 @@ function extractPoint(
   const temperatureC = divergenceValue(rpa, 'temperature_c', model);
   const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
 
+  const surfaceObscuration = computeSurfaceObscurationFromCloudLayers(
+    {
+      visibilityM: sounding?.visibility_m ?? null,
+      temperature2mC: sounding?.temperature_2m_c ?? null,
+      dewpoint2mC: sounding?.dewpoint_2m_c ?? null,
+      cloudCoverLowPct: sounding?.cloud_cover_low_pct ?? null,
+    },
+    cloudLayers,
+    terrainElevationFt,
+  );
+
   return {
     distanceNm: rpa.distance_from_origin_nm,
     lat: rpa.lat,
@@ -210,6 +222,7 @@ function extractPoint(
     terrainElevationFt,
     temperatureC,
     precipitationMm,
+    surfaceObscuration,
   };
 }
 

@@ -98,6 +98,18 @@ export interface CrossSectionTheme {
     opacityParams: { floor: number; scale: number; maxStrengthC: number; cap: number };
   };
 
+  /** Surface obscuration (fog / LIFR) band colors and hatch settings.
+   *  Themes that prefer a solid fill or alternative texture can override
+   *  `hatchLineWidth` and `hatchSpacingPx`. */
+  obscuration: {
+    red: string;
+    amber: string;
+    yellow: string;
+    hatchColor: string;
+    hatchSpacingPx: number;
+    hatchLineWidth: number;
+  };
+
   coverageOpacity: Record<string, number>;
 
   /** Distinct colors assigned to models in consensus-outline mode. */
@@ -241,6 +253,15 @@ const STANDARD_THEME: CrossSectionTheme = {
   inversion: {
     baseRgb: [233, 30, 99],
     opacityParams: { floor: 0.15, scale: 0.5, maxStrengthC: 3, cap: 0.65 },
+  },
+
+  obscuration: {
+    red: 'rgba(168, 85, 247, 0.65)',     // LIFR purple
+    amber: 'rgba(239, 68, 68, 0.55)',    // IFR red
+    yellow: 'rgba(245, 158, 11, 0.50)',  // MVFR amber
+    hatchColor: 'rgba(255, 255, 255, 0.65)',
+    hatchSpacingPx: 8,
+    hatchLineWidth: 1.5,
   },
 
   coverageOpacity: {
@@ -606,6 +627,16 @@ const LIGHT_THEME: CrossSectionTheme = {
   inversion: {
     baseRgb: [194, 24, 91],
     opacityParams: { floor: 0.20, scale: 0.55, maxStrengthC: 3, cap: 0.75 },
+  },
+
+  // Darker hatch on light theme — white-on-pale-fog vanishes.
+  obscuration: {
+    red: 'rgba(126, 34, 206, 0.55)',
+    amber: 'rgba(220, 38, 38, 0.50)',
+    yellow: 'rgba(202, 138, 4, 0.50)',
+    hatchColor: 'rgba(30, 30, 45, 0.55)',
+    hatchSpacingPx: 8,
+    hatchLineWidth: 1.5,
   },
 
   // Soft cloud fill: dark gray on white (inverts the GRAMET white-on-blue)
