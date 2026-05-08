@@ -425,6 +425,18 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
     baseRgb: [255, 82, 82],
     opacityParams: { floor: 0.25, scale: 0.55, maxStrengthC: 3, cap: 0.80 },
   },
+
+  // Brighter, more opaque fills than standard to keep the band readable
+  // against the deep navy sky. Hatch picked up from STANDARD via
+  // inheritance is fine (white-on-dark reads well).
+  obscuration: {
+    lifr: 'rgba(192, 132, 252, 0.75)',
+    ifr: 'rgba(248, 113, 113, 0.65)',
+    mvfr: 'rgba(251, 191, 36, 0.60)',
+    hatchColor: 'rgba(255, 255, 255, 0.70)',
+    hatchSpacingPx: 8,
+    hatchLineWidth: 1.5,
+  },
 };
 
 // --- GRAMET theme (CloudPath-inspired, optimized for soft cloud overlays) ---
@@ -489,6 +501,17 @@ const GRAMET_THEME: CrossSectionTheme = {
       high: 'rgba(255, 80, 60, 1.0)',
       extreme: 'rgba(255, 50, 30, 1.0)',
     },
+  },
+
+  // Slightly cooler obscuration palette so the band sits naturally next
+  // to the GRAMET green icing without competing for attention.
+  obscuration: {
+    lifr: 'rgba(155, 90, 220, 0.65)',
+    ifr: 'rgba(220, 70, 70, 0.55)',
+    mvfr: 'rgba(230, 160, 50, 0.50)',
+    hatchColor: 'rgba(255, 255, 255, 0.60)',
+    hatchSpacingPx: 8,
+    hatchLineWidth: 1.5,
   },
 
   // Soft cloud config

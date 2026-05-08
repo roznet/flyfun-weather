@@ -47,12 +47,21 @@ const CAP_THICKNESS_FT = 1500;
  * Returns `null` when no trigger fires.
  *
  * - Primary trigger: `visibility_m < 5000` → severity by 1/3/5 km tiers.
- * - Secondary trigger: low cloud ≥ 80% AND surface DD < 2°C → amber.
+ * - Secondary trigger: low cloud ≥ 80% AND surface DD < 2°C, only when
+ *   visibility is unavailable (ECMWF / Météo-France / GEM). Severity
+ *   grades by surface DD: < 0.5°C → LIFR, else IFR.
  *
  * Band geometry:
  *   bottom = terrainFt
- *   top    = min(first level with DD > 4°C, lowest level altitude,
- *               terrainFt + 1500), floored at terrainFt + 500.
+ *   top    = min(first level with DD > 4°C, terrainFt + 1500),
+ *            floored at terrainFt + 500.
+ *   Lowest-level altitude is used as a conservative top fallback only
+ *   when no level reports DD (otherwise saturated levels would clamp
+ *   the band into the fog itself).
+ *
+ * @param pressureLevels Must be **sorted ascending by `altitudeFt`** —
+ *   `computeTop` finds the first matching level via `Array.find`, so an
+ *   unsorted input would silently pick the wrong level.
  */
 export function computeSurfaceObscuration(
   surface: ObscurationSurface,
