@@ -57,10 +57,12 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 
 | Layer | Name | Group | File | Default | Description |
 |-------|------|-------|------|---------|-------------|
-| Soft NWP clouds | Soft NWP | clouds | `soft-cloud-bands.ts` | **on** | Gradient-edge fills with coverage-proportional opacity (GRAMET style) |
-| Soft DD clouds | Soft DD | clouds | `soft-cloud-bands.ts` | off | Same soft rendering using DD-derived cloud layers |
-| NWP cloud bands | NWP Layers | clouds | `nwp-cloud-bands.ts` | off | Hatched NWP cloud layers (classic style) |
-| Cloud bands | DD Layers | clouds | `cloud-bands.ts` | off | Hatched DD cloud layers (classic style) |
+| Soft NWP clouds | Soft NWP | clouds | `cloud-bands-factory.ts` | **on** | Gradient-edge fills with coverage-proportional opacity (GRAMET style) |
+| Soft DD clouds | Soft DD | clouds | `cloud-bands-factory.ts` | off | Same soft rendering using DD-derived cloud layers |
+| NWP cloud bands | NWP Layers | clouds | `cloud-bands-factory.ts` | off | Hatched NWP cloud layers (classic style) |
+| Cloud bands | DD Layers | clouds | `cloud-bands-factory.ts` | off | Hatched DD cloud layers (classic style) |
+| Square NWP clouds | Square NWP | clouds | `cloud-bands-factory.ts` | off | Solid filled cells per zone, opacity from cover% (ForeFlight-like) |
+| Square DD clouds | Square DD | clouds | `cloud-bands-factory.ts` | off | Same square cells using DD-derived cloud layers |
 | NWP Convective | NWP Convective | convection | `nwp-convective-bg.ts` | **on** | Model convective scheme output (base/top/coverage) |
 | Thermo Convective | Thermo Convective | convection | `thermo-convective-bg.ts` | off | CAPE/CIN tower columns LCL→EL, hatching, CB labels |
 | Icing bands | Ogimet-DD | icing | `icing-bands.ts` | off | DD-attenuated Ogimet index |
@@ -227,7 +229,7 @@ Per-layer tooltip content lives in a declarative registry consumed by `interacti
 ```
 
 - `id` — primary layer toggle that owns the data.
-- `enabledBy` — alias toggles that should also activate this row (e.g. `soft-cloud-bands` for the DD-derived row, `soft-nwp-cloud-bands` for the NWP row). Without this the soft-renderings produce visuals but no tooltip text.
+- `enabledBy` — alias toggles that should also activate this row (e.g. `soft-cloud-bands` and `square-cloud-bands` for the DD-derived row, `soft-nwp-cloud-bands` and `square-nwp-cloud-bands` for the NWP row). Without this the soft/square-renderings produce visuals but no tooltip text.
 - `header` — optional section title above the lines (e.g. `Icing (Ogimet-DD)`).
 - `getZones` — returns the relevant zone array from `VizPoint` (or synthesizes a single pseudo-zone from per-point fields, used by Thermo/NWP convective).
 - `formatLine` — produces one tooltip line per zone, including any per-layer extras (DD, CC, T, icing index, Ri, SLD tag, source tag, etc.).
@@ -246,17 +248,21 @@ The registry includes 12 entries: cloud DD, cloud NWP, Ogimet-DD, Ogimet-NWP, SF
 
 Header/terrain/temperature/stability rows stay inline in `interaction.ts` (different shape — proximity-based not band-based).
 
-## NWP Cloud Bands
+## Cloud Bands Factory
 
-The NWP cloud bands layer (`nwp-cloud-bands.ts`) renders pre-computed NWP cloud layers from the backend:
+All six cloud layers (DD/NWP × Soft/Layer/Square) come from a single `cloudLayer({source, style, ...})` factory in `cloud-bands-factory.ts`. The two axes are orthogonal:
 
-- **Server-computed layers**: All heuristic narrowing (DD envelope, inversion capping, LCL) now happens in Python (`clouds.py:_synthesize_nwp_layers()`). The frontend receives ready-to-render `EnhancedCloudLayer` objects with base/top boundaries for all models.
-- **Layer matching**: Adjacent points' NWP cloud layers are matched by altitude overlap (same approach as DD cloud bands). Matched pairs are rendered as smooth bands; unmatched layers taper to midpoint.
-- **Coverage-proportional fill**: Blue-tinted fill with opacity proportional to coverage (OVC→90%, BKN→65%, SCT→35%) via `coverageToPct()`.
-- **Hatching**: Horizontal hatch lines with width proportional to coverage percentage, matching DD cloud band style.
-- **Source tagging**: Tooltip shows source context — "(synth)" for synthesized layers, no tag for GRIB layers.
-- **Single-point fallback**: When only one route point exists, draws column bands instead of smooth bands.
-- Renders on sky-blue background (set in `axes.ts`)
+- **Source** picks the data feed and the continuous color function:
+  - `dd` → `p.cloudLayers`, color from `cloudFillFromDD(dd, coverage)` (gray ↔ white by DD, alpha by coverage class).
+  - `nwp` → `p.nwpCloudLayers`, color from `nwpCloudFill(coverPct)` (theme bright ↔ dark by cover %, alpha 0.30→0.85).
+- **Style** picks the painter applied per matched-zone band:
+  - `soft` → `paintSoft`, vertical-gradient feathered fills (top/bottom 15% fade).
+  - `layer` → `hatchCloudBand`, classic horizontal hatch, line spacing/width by coverage class.
+  - `square` → `drawColumnBand`, solid filled rectangles per zone (no hatch, no feathering).
+
+Server-computed layers come from Python (`clouds.py:_synthesize_nwp_layers()`); the frontend receives ready-to-render `EnhancedCloudLayer` objects with base/top boundaries. Adjacent route points are matched by altitude overlap via `renderMatchedZones`; unmatched zones taper to midpoint. Single-point routes fall back to column bands.
+
+The factory exposes `CLOUD_LAYER_BY_AXES`, `ALL_CLOUD_LAYER_IDS`, and `parseCloudLayerId(id)` helpers for the panel's compound source-checkbox + style-dropdown control (`controls/panel.ts:cloudCompoundHtml`).
 
 ## Layer Legends
 
