@@ -87,9 +87,9 @@ function cloudCompoundHtml(
   html += sourceCheckbox('nwp', 'NWP', nwpEnabled, nwpUnavail);
   html += sourceCheckbox('dd', 'DD', ddEnabled, ddUnavail);
   html += `<select class="viz-model-select" data-cloud-style>`;
-  html += `<option value="soft"${style === 'soft' ? ' selected' : ''}>Soft</option>`;
-  html += `<option value="layer"${style === 'layer' ? ' selected' : ''}>Layer</option>`;
-  html += `<option value="square"${style === 'square' ? ' selected' : ''}>Square</option>`;
+  html += `<option value="soft"${style === 'soft' ? ' selected' : ''}>${t('viz.cloudStyle.soft')}</option>`;
+  html += `<option value="layer"${style === 'layer' ? ' selected' : ''}>${t('viz.cloudStyle.layer')}</option>`;
+  html += `<option value="square"${style === 'square' ? ' selected' : ''}>${t('viz.cloudStyle.square')}</option>`;
   html += `</select>`;
   return html;
 }
