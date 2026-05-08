@@ -143,8 +143,14 @@ export class AirportProfilePanel {
   /** Per-(icao,startHour,model) cache of completed snapshots so model
    *  switching reuses prior fetches. Cleared whenever the request shape
    *  changes (different icao or startHour) since the previous entries
-   *  no longer apply. */
+   *  no longer apply.
+   *
+   *  Bounded LRU: each entry holds full pressure-level arrays + sounding
+   *  analysis (~hundreds of KB up to a few MB). Without a cap, a session
+   *  hopping airports would accumulate unbounded snapshots. JS `Map`
+   *  preserves insertion order, so we evict the oldest key on overflow. */
   private snapshotCache = new Map<string, AirportProfileSnapshot>();
+  private static readonly SNAPSHOT_CACHE_MAX = 10;
 
   constructor(opts: AirportProfilePanelOptions) {
     this.container = opts.container;
@@ -248,9 +254,15 @@ export class AirportProfilePanel {
     this.currentRequest = req;
     if (this.stream) { this.stream.abort(); this.stream = null; }
 
-    // Cache hit: skip the SSE round-trip entirely.
-    const cached = this.snapshotCache.get(this.cacheKey(req, this.model));
+    // Cache hit: skip the SSE round-trip entirely. Bump the entry to
+    // the most-recently-used slot (Map preserves insertion order, so
+    // delete-then-set moves it to the end) — that way a still-actively-used
+    // entry isn't evicted just because it was loaded first.
+    const cacheKey = this.cacheKey(req, this.model);
+    const cached = this.snapshotCache.get(cacheKey);
     if (cached) {
+      this.snapshotCache.delete(cacheKey);
+      this.snapshotCache.set(cacheKey, cached);
       this.snapshot = cached;
       this.applyTitle(cached);
       this.statusEl.innerHTML = esc(formatEnrichmentBadge(cached.enriched));
@@ -335,19 +347,27 @@ export class AirportProfilePanel {
       this.statusEl.innerHTML = esc(formatEnrichmentBadge(snapshot.enriched));
       // Successful completion: cache the snapshot for fast model-switch.
       if (this.currentRequest) {
-        this.snapshotCache.set(
-          this.cacheKey(this.currentRequest, this.model),
-          // Store a shallow clone so subsequent mutations of `snapshot`
-          // (in onPhase callbacks for a follow-on request) don't bleed
-          // back into the cached entry.
-          {
-            meta: snapshot.meta,
-            surface: snapshot.surface,
-            levels: snapshot.levels,
-            enriched: snapshot.enriched,
-            derived: snapshot.derived,
-          },
-        );
+        const key = this.cacheKey(this.currentRequest, this.model);
+        // Re-insert overwrites + moves to most-recently-used slot.
+        this.snapshotCache.delete(key);
+        // Store a shallow clone so subsequent mutations of `snapshot`
+        // (in onPhase callbacks for a follow-on request) don't bleed
+        // back into the cached entry.
+        this.snapshotCache.set(key, {
+          meta: snapshot.meta,
+          surface: snapshot.surface,
+          levels: snapshot.levels,
+          enriched: snapshot.enriched,
+          derived: snapshot.derived,
+        });
+        // Evict oldest entries until we're back under the cap. JS Map
+        // iteration order is insertion order, so the first key is the
+        // least-recently-used.
+        while (this.snapshotCache.size > AirportProfilePanel.SNAPSHOT_CACHE_MAX) {
+          const oldest = this.snapshotCache.keys().next().value;
+          if (oldest === undefined) break;
+          this.snapshotCache.delete(oldest);
+        }
       }
     } else if (phase === 'error') {
       // Backend-emitted structured error: {type, phase, message}. Falls
@@ -408,6 +428,10 @@ export class AirportProfilePanel {
 
   private renderSkewT(): void {
     if (this.viewMode === 'cross') return;
+    // TODO(#121-followup): Skew-T is locked to hour 0 of the window;
+    // the cross-section above shows all 4 hours but there's no
+    // affordance (click on a time tick, hour selector, etc.) to
+    // inspect hours 1–3 here. Tracked separately from the v1 issue.
     const data = snapshotToSkewtData(this.snapshot, 0);
     if (!data || data.levels.length === 0) {
       this.skewtRenderer?.clear();

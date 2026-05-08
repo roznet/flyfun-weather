@@ -71,11 +71,36 @@ function layerTogglesHtml(
   return html;
 }
 
+/** Wire `data-layer-info` and `data-group-info` buttons inside `container`
+ *  to their respective info popups. Used by both the main toolbar and the
+ *  standalone {@link renderLayerToggles} so an info ⓘ is interactive
+ *  wherever the toggles render. */
+function wireLayerInfoButtons(container: HTMLElement): void {
+  container.querySelectorAll('[data-layer-info]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const el = btn as HTMLElement;
+      const layerId = el.dataset.layerInfo!;
+      const metricId = el.dataset.metricId!;
+      showLayerInfo(layerId, metricId);
+    });
+  });
+  container.querySelectorAll('[data-group-info]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const groupKey = (btn as HTMLElement).dataset.groupInfo!;
+      const infoFn = GROUP_INFO[groupKey];
+      if (infoFn) showPopupContent(infoFn());
+    });
+  });
+}
+
 /** Render layer toggle checkboxes into a standalone container and wire
- *  change events. For callers that only need the layer-selection part of
- *  the main toolbar (e.g. the airport-profile panel's settings drawer).
- *  Group/layer info buttons are emitted but NOT wired here — wire them in
- *  the caller if needed. */
+ *  change events + ⓘ info popups. For callers that only need the
+ *  layer-selection part of the main toolbar (e.g. the airport-profile
+ *  panel's settings drawer). */
 export function renderLayerToggles(
   container: HTMLElement,
   enabledLayers: Record<string, boolean>,
@@ -86,6 +111,7 @@ export function renderLayerToggles(
   container.querySelectorAll<HTMLInputElement>('input[data-layer-id]').forEach((cb) => {
     cb.addEventListener('change', () => onToggle(cb.dataset.layerId!));
   });
+  wireLayerInfoButtons(container);
 }
 
 export interface VizControlCallbacks {
@@ -242,28 +268,8 @@ export function renderVizControls(
     });
   }
 
-  // Wire info buttons
-  container.querySelectorAll('[data-layer-info]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const el = btn as HTMLElement;
-      const layerId = el.dataset.layerInfo!;
-      const metricId = el.dataset.metricId!;
-      showLayerInfo(layerId, metricId);
-    });
-  });
-
-  // Wire group info buttons
-  container.querySelectorAll('[data-group-info]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const groupKey = (btn as HTMLElement).dataset.groupInfo!;
-      const infoFn = GROUP_INFO[groupKey];
-      if (infoFn) showPopupContent(infoFn());
-    });
-  });
+  // Wire layer + group info ⓘ buttons (shared with renderLayerToggles).
+  wireLayerInfoButtons(container);
 }
 
 /** Render route graph controls (toggle + metric dropdowns) into a separate container below the graph. */
