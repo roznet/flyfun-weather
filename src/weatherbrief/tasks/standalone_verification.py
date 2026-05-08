@@ -18,6 +18,7 @@ from pathlib import Path
 
 import requests
 from sqlalchemy import select, tuple_
+from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
@@ -26,10 +27,20 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
 from weatherbrief.process_rss import current_rss_mb
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
 
 logger = logging.getLogger(__name__)
+
+# Anomaly thresholds (issue #137). The relative trigger catches gradual
+# memory creep (e.g. the 5/7 → 5/8 drift from 2.57 → 2.97 GiB that ended
+# in OOM); the absolute trigger catches hitting a tight ceiling regardless
+# of trend. Per-source baselining so e.g. ``standalone_forecast`` is
+# compared only against itself, not against the lighter ``standalone_light``.
+_RSS_ANOMALY_RELATIVE_FACTOR = 1.4
+_RSS_ANOMALY_ABSOLUTE_PCT_OF_CGROUP = 0.80
+_RSS_ANOMALY_MIN_BASELINE_SAMPLES = 3
 
 
 def _rss_log(label: str) -> None:
@@ -42,6 +53,122 @@ def _rss_log(label: str) -> None:
     rss = current_rss_mb()
     if rss is not None:
         logger.info("Standalone cycle RSS @ %s: %dMB", label, int(rss))
+
+
+def _read_cgroup_limit_mb() -> int | None:
+    """Read the container's cgroup memory limit in MB.
+
+    Tries cgroup v2 first (``memory.max``), falls back to v1
+    (``memory.limit_in_bytes``). Returns ``None`` outside a container or
+    when the limit is unset (cgroup v2 prints "max" in that case).
+    """
+    for path in (
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    ):
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+            if raw == "max":
+                return None
+            return int(raw) // (1024 * 1024)
+        except OSError:
+            continue
+    return None
+
+
+def _check_memory_anomaly(
+    db: Session,
+    source: str,
+    peaks: MemoryPeaks,
+    cycle_started_at: datetime,
+) -> None:
+    """Emit a WARN log if this cycle's peak memory is anomalously high.
+
+    Two complementary triggers, each comparing against the metric that
+    actually matters for the failure mode it's guarding:
+
+    - **Relative** (``peak_rss_mb`` vs RSS baseline): catches gradual creep
+      in the parent process. ``peak_rss_mb`` × ``_RSS_ANOMALY_RELATIVE_FACTOR``
+      vs the median of the last N same-source cycles' ``peak_rss_mb``.
+    - **Absolute** (``peak_cgroup_mb`` vs % of cgroup limit): catches
+      approaching the OOM ceiling. The OOM-killer compares the *cgroup
+      total* (parent + decode workers + healthcheck) against the limit, so
+      this is the metric that decides whether we're about to die. Falls
+      back to ``peak_rss_mb`` only when cgroup readings are unavailable
+      (e.g. dev outside a container).
+
+    The current cycle's row is excluded from the baseline (``started_at <
+    cycle_started_at``) so a single elevated peak doesn't immediately
+    pollute its own comparison — important for catching gradual creep
+    rather than absorbing it into the rolling median.
+
+    The relative check is skipped until at least
+    ``_RSS_ANOMALY_MIN_BASELINE_SAMPLES`` *prior* populated rows exist for
+    the same source (otherwise a single high outlier becomes its own
+    baseline and suppresses warnings on subsequent runs).
+    """
+    if peaks.peak_rss_mb is None and peaks.peak_cgroup_mb is None:
+        return
+
+    cgroup_limit_mb = _read_cgroup_limit_mb()
+    absolute_threshold_mb: int | None = None
+    if cgroup_limit_mb is not None:
+        absolute_threshold_mb = int(cgroup_limit_mb * _RSS_ANOMALY_ABSOLUTE_PCT_OF_CGROUP)
+
+    # Cgroup total is the metric the OOM-killer compares against the limit;
+    # parent RSS is only one of several processes inside the cgroup. Use
+    # cgroup when we have it, fall back to RSS when running outside a
+    # container.
+    peak_for_absolute = peaks.peak_cgroup_mb if peaks.peak_cgroup_mb is not None else peaks.peak_rss_mb
+
+    prev = db.execute(
+        select(VerificationCycleRow.peak_rss_mb)
+        .where(VerificationCycleRow.source == source)
+        .where(VerificationCycleRow.peak_rss_mb.is_not(None))
+        .where(VerificationCycleRow.started_at < cycle_started_at)
+        .order_by(VerificationCycleRow.started_at.desc())
+        .limit(10)
+    ).scalars().all()
+
+    relative_threshold_mb: int | None = None
+    baseline_mb: int | None = None
+    if len(prev) >= _RSS_ANOMALY_MIN_BASELINE_SAMPLES:
+        sorted_prev = sorted(prev)
+        mid = len(sorted_prev) // 2
+        if len(sorted_prev) % 2 == 1:
+            baseline_mb = sorted_prev[mid]
+        else:
+            baseline_mb = (sorted_prev[mid - 1] + sorted_prev[mid]) // 2
+        relative_threshold_mb = int(baseline_mb * _RSS_ANOMALY_RELATIVE_FACTOR)
+
+    triggered = False
+    if (
+        relative_threshold_mb is not None
+        and peaks.peak_rss_mb is not None
+        and peaks.peak_rss_mb > relative_threshold_mb
+    ):
+        triggered = True
+    if (
+        absolute_threshold_mb is not None
+        and peak_for_absolute is not None
+        and peak_for_absolute > absolute_threshold_mb
+    ):
+        triggered = True
+
+    if triggered:
+        logger.warning(
+            "Standalone cycle memory anomaly (source=%s): "
+            "peak_rss=%dMB peak_cgroup=%s baseline=%s cgroup_limit=%s "
+            "(relative_threshold=%s, absolute_threshold=%s)",
+            source,
+            peaks.peak_rss_mb,
+            peaks.peak_cgroup_mb if peaks.peak_cgroup_mb is not None else "n/a",
+            baseline_mb if baseline_mb is not None else "n/a",
+            cgroup_limit_mb if cgroup_limit_mb is not None else "n/a",
+            relative_threshold_mb if relative_threshold_mb is not None else "n/a",
+            absolute_threshold_mb if absolute_threshold_mb is not None else "n/a",
+        )
 
 # ---------------------------------------------------------------------------
 # Configuration defaults (hardcoded until config table in Step 10)
@@ -1028,6 +1155,13 @@ def run_standalone_cycle(
     db = SessionLocal()
     session = requests.Session()
 
+    # Sample parent RSS + cgroup memory every 5s for the entire cycle so
+    # transient peaks during fetch (e.g. concurrent in-flight Open-Meteo
+    # chunks at ~2.5 GiB) are visible, not just the post-`del snapshots`
+    # plateau the boundary log lines capture. Persisted in the cycle row.
+    memory_sampler = MemorySampler(interval_seconds=5.0)
+    memory_sampler.start()
+
     try:
         models_fetched = 0
         snapshots_stored = 0
@@ -1152,10 +1286,15 @@ def run_standalone_cycle(
         t_end = time.monotonic()
         duration_ms = int((t_end - t_start) * 1000)
 
+        # Stop the sampler before building the cycle row so peaks land in the
+        # same DB transaction as the rest of the metrics.
+        peaks = memory_sampler.stop()
+        cycle_source = f"standalone_{cycle_type}"
+
         cycle_row = VerificationCycleRow(
             started_at=now,
             duration_ms=duration_ms,
-            source=f"standalone_{cycle_type}",
+            source=cycle_source,
             # fetch+store is interleaved per model, so combined into phase_fetch
             phase_fetch_ms=int((t_fetch_done - t_start) * 1000),
             phase_gather_ms=int((t_obs_done - t_fetch_done) * 1000),
@@ -1163,11 +1302,29 @@ def run_standalone_cycle(
             airports=len(airports),
             observations_stored=obs_stored,
             scored=scores_created,
+            peak_rss_mb=peaks.peak_rss_mb,
+            peak_cgroup_mb=peaks.peak_cgroup_mb,
         )
         db.add(cycle_row)
         db.commit()
 
         _rss_log(f"end ({cycle_type})")
+        if peaks.peak_rss_mb is not None or peaks.peak_cgroup_mb is not None:
+            logger.info(
+                "Standalone cycle peaks: rss=%sMB cgroup=%sMB samples=%d",
+                peaks.peak_rss_mb if peaks.peak_rss_mb is not None else "n/a",
+                peaks.peak_cgroup_mb if peaks.peak_cgroup_mb is not None else "n/a",
+                peaks.samples,
+            )
+
+        # Anomaly check runs after commit so the current cycle's row exists
+        # in the table — keeps the baseline query consistent across cycles.
+        # Failures here must not propagate (they'd mark a successful cycle as
+        # failed in `_record_failed_cycle`).
+        try:
+            _check_memory_anomaly(db, cycle_source, peaks, cycle_started_at=now)
+        except Exception:
+            logger.warning("Memory anomaly check failed", exc_info=True)
 
         return {
             "cycle_type": cycle_type,
@@ -1181,6 +1338,14 @@ def run_standalone_cycle(
 
     except Exception:
         db.rollback()
+        # Best-effort sampler stop on the error path so the daemon thread
+        # doesn't outlive the cycle. Peaks aren't persisted in the failed
+        # cycle row (kept simple — the DB-side _record_failed_cycle uses a
+        # fresh session for isolation).
+        try:
+            memory_sampler.stop()
+        except Exception:
+            pass
         # Record the failure in a separate session so the error row survives
         _record_failed_cycle(now, t_start, cycle_type, len(airports))
         raise
