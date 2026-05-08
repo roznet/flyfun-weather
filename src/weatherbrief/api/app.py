@@ -225,12 +225,26 @@ async def lifespan(app: FastAPI):
 
         freshness_task = asyncio.create_task(run_freshness_loop(app.state))
 
+    grib_precache_task = None
+    # Default off in dev so local devs don't pull ~38 GB on startup; on in prod.
+    _precache_default = "false" if is_dev_mode() else "true"
+    _precache_enabled = os.environ.get(
+        "WB_GRIB_PRECACHE_ENABLED", _precache_default,
+    ).strip().lower() in ("1", "true", "yes")
+    if _precache_enabled:
+        from weatherbrief.scheduler import run_grib_precache_loop
+
+        grib_precache_task = asyncio.create_task(
+            run_grib_precache_loop(app.state)
+        )
+
     yield
 
     for task in (scheduler_task, retention_task, verification_task,
                  digest_task, metar_ingest_task, forecast_fetch_task,
                  standalone_task, ecmwf_watcher_task,
-                 hewson_precompute_task, freshness_task):
+                 hewson_precompute_task, freshness_task,
+                 grib_precache_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):

@@ -4,7 +4,10 @@ Cache layout:
     {data_dir}/.cache/grib/{model}/{YYYYMMDD}_{HH}z/
         f{FFF}_{var}_{bbox_hash}.grib2
 
-TTL: 24 hours — each model run is self-contained, no cross-run comparison needed.
+TTL: 7 hours — slightly more than one main-cycle gap (6 h) so the cache holds
+essentially one main run at a time with a small overlap during rollover.
+Shortened from 24 h once the precache loop (issue #126) started actively
+warming the cache for each new main run.
 """
 
 from __future__ import annotations
@@ -17,8 +20,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Cache entries older than this are purged
-CACHE_TTL_SECONDS = 24 * 3600  # 24 hours
+# Cache entries older than this are purged. 7 h ≈ one main-cycle gap (6 h)
+# plus headroom — the precache loop refreshes the cache for each new main run.
+CACHE_TTL_SECONDS = 7 * 3600
 
 
 def cache_dir_for_run(

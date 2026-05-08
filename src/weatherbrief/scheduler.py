@@ -70,6 +70,11 @@ _FORECAST_FETCH_FRESHNESS_SOURCES: list[tuple[str, str]] = [
 # we keep ~1 h buffer before the 07Z / 19Z standalone forecast-fetch cycles.
 _HEWSON_SAMPLE_HOURS_UTC = [6, 18]
 _HEWSON_STARTUP_DELAY_SECONDS = 300  # let other loops settle; Hewson is cold-cache anyway
+# GRIB pre-cache loop polls the freshness MarkerStore every 5 min and pre-fetches
+# the airport-profile (forecast-map) byte ranges as soon as a new ICON-EU / GFS
+# main run lands. See issue #126.
+_GRIB_PRECACHE_POLL_SECONDS = 300
+_GRIB_PRECACHE_STARTUP_DELAY_SECONDS = 60  # let freshness loop bootstrap first
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -1006,6 +1011,68 @@ async def run_hewson_precompute_loop(app_state) -> None:
             logger.error("Hewson precompute cycle failed", exc_info=True)
             # Back off 15 min on failure (same as standalone verification)
             await asyncio.sleep(900)
+
+
+# ---------------------------------------------------------------------------
+# GRIB pre-cache loop (issue #126)
+# ---------------------------------------------------------------------------
+
+
+async def run_grib_precache_loop(app_state) -> None:
+    """Watch MarkerStore; pre-cache each new main-cycle ICON-EU/GFS run.
+
+    Event-driven: piggybacks on the freshness loop's marker advancement.
+    When a marker advances to a main-cycle init (00/06/12/18 Z) we pre-fetch
+    the 9 ICON-EU pressure-level variables × the 64 forecast hours covering
+    the ``/maps.html`` D-0..D-3 controls (and the GFS equivalent). Bytes
+    land in the shared GRIB byte-range cache so flight briefings overlapping
+    the same window also benefit.
+
+    Disable via ``WB_GRIB_PRECACHE_ENABLED=false`` (default in dev).
+    """
+    from weatherbrief.fetch.grib.precache import (
+        MAIN_CYCLE_HOURS,
+        precache_gfs_run,
+        precache_icon_eu_run,
+    )
+    from weatherbrief.fetch.freshness.markers import get_store
+
+    logger.info(
+        "GRIB pre-cache loop started (poll every %ds)",
+        _GRIB_PRECACHE_POLL_SECONDS,
+    )
+    await asyncio.sleep(_GRIB_PRECACHE_STARTUP_DELAY_SECONDS)
+
+    last_done: dict[str, str] = {}  # source_key -> "YYYYMMDD_HHz"
+    targets = [
+        ("icon_eu:dwd", "icon_eu", precache_icon_eu_run),
+        ("gfs:noaa", "gfs", precache_gfs_run),
+    ]
+    main_cycles = set(MAIN_CYCLE_HOURS)
+
+    while True:
+        try:
+            store = get_store()
+            for source_key, model, fn in targets:
+                marker = store.get_sync(source_key, model)
+                if marker is None or marker.init.hour not in main_cycles:
+                    continue
+                key = marker.init.strftime("%Y%m%d_%Hz")
+                if last_done.get(source_key) == key:
+                    continue
+                logger.info(
+                    "Pre-caching %s %s for airport-profile",
+                    source_key, key,
+                )
+                stats = await asyncio.to_thread(fn, marker.init)
+                logger.info(
+                    "Pre-cache %s %s done: %s",
+                    source_key, key, stats,
+                )
+                last_done[source_key] = key
+        except Exception:
+            logger.error("GRIB pre-cache loop cycle failed", exc_info=True)
+        await asyncio.sleep(_GRIB_PRECACHE_POLL_SECONDS)
 
 
 def _run_hewson_precompute_once() -> None:
