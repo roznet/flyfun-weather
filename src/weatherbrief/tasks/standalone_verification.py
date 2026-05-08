@@ -18,6 +18,7 @@ from pathlib import Path
 
 import requests
 from sqlalchemy import select, tuple_
+from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
@@ -77,24 +78,37 @@ def _read_cgroup_limit_mb() -> int | None:
 
 
 def _check_memory_anomaly(
-    db,
+    db: Session,
     source: str,
     peaks: MemoryPeaks,
+    cycle_started_at: datetime,
 ) -> None:
-    """Emit a WARN log if this cycle's peak RSS is anomalously high.
+    """Emit a WARN log if this cycle's peak memory is anomalously high.
 
-    Two complementary triggers:
-    - **Relative**: peak > ``_RSS_ANOMALY_RELATIVE_FACTOR`` × median of the
-      last 10 same-source cycles. Catches gradual creep.
-    - **Absolute**: peak > ``_RSS_ANOMALY_ABSOLUTE_PCT_OF_CGROUP`` of the
-      cgroup limit. Catches "we're getting too close regardless of trend."
+    Two complementary triggers, each comparing against the metric that
+    actually matters for the failure mode it's guarding:
+
+    - **Relative** (``peak_rss_mb`` vs RSS baseline): catches gradual creep
+      in the parent process. ``peak_rss_mb`` × ``_RSS_ANOMALY_RELATIVE_FACTOR``
+      vs the median of the last N same-source cycles' ``peak_rss_mb``.
+    - **Absolute** (``peak_cgroup_mb`` vs % of cgroup limit): catches
+      approaching the OOM ceiling. The OOM-killer compares the *cgroup
+      total* (parent + decode workers + healthcheck) against the limit, so
+      this is the metric that decides whether we're about to die. Falls
+      back to ``peak_rss_mb`` only when cgroup readings are unavailable
+      (e.g. dev outside a container).
+
+    The current cycle's row is excluded from the baseline (``started_at <
+    cycle_started_at``) so a single elevated peak doesn't immediately
+    pollute its own comparison — important for catching gradual creep
+    rather than absorbing it into the rolling median.
 
     The relative check is skipped until at least
-    ``_RSS_ANOMALY_MIN_BASELINE_SAMPLES`` populated rows exist for the same
-    source (otherwise a single high outlier becomes its own baseline and
-    suppresses warnings on subsequent runs).
+    ``_RSS_ANOMALY_MIN_BASELINE_SAMPLES`` *prior* populated rows exist for
+    the same source (otherwise a single high outlier becomes its own
+    baseline and suppresses warnings on subsequent runs).
     """
-    if peaks.peak_rss_mb is None:
+    if peaks.peak_rss_mb is None and peaks.peak_cgroup_mb is None:
         return
 
     cgroup_limit_mb = _read_cgroup_limit_mb()
@@ -102,10 +116,17 @@ def _check_memory_anomaly(
     if cgroup_limit_mb is not None:
         absolute_threshold_mb = int(cgroup_limit_mb * _RSS_ANOMALY_ABSOLUTE_PCT_OF_CGROUP)
 
+    # Cgroup total is the metric the OOM-killer compares against the limit;
+    # parent RSS is only one of several processes inside the cgroup. Use
+    # cgroup when we have it, fall back to RSS when running outside a
+    # container.
+    peak_for_absolute = peaks.peak_cgroup_mb if peaks.peak_cgroup_mb is not None else peaks.peak_rss_mb
+
     prev = db.execute(
         select(VerificationCycleRow.peak_rss_mb)
         .where(VerificationCycleRow.source == source)
         .where(VerificationCycleRow.peak_rss_mb.is_not(None))
+        .where(VerificationCycleRow.started_at < cycle_started_at)
         .order_by(VerificationCycleRow.started_at.desc())
         .limit(10)
     ).scalars().all()
@@ -122,9 +143,17 @@ def _check_memory_anomaly(
         relative_threshold_mb = int(baseline_mb * _RSS_ANOMALY_RELATIVE_FACTOR)
 
     triggered = False
-    if relative_threshold_mb is not None and peaks.peak_rss_mb > relative_threshold_mb:
+    if (
+        relative_threshold_mb is not None
+        and peaks.peak_rss_mb is not None
+        and peaks.peak_rss_mb > relative_threshold_mb
+    ):
         triggered = True
-    if absolute_threshold_mb is not None and peaks.peak_rss_mb > absolute_threshold_mb:
+    if (
+        absolute_threshold_mb is not None
+        and peak_for_absolute is not None
+        and peak_for_absolute > absolute_threshold_mb
+    ):
         triggered = True
 
     if triggered:
@@ -1293,7 +1322,7 @@ def run_standalone_cycle(
         # Failures here must not propagate (they'd mark a successful cycle as
         # failed in `_record_failed_cycle`).
         try:
-            _check_memory_anomaly(db, cycle_source, peaks)
+            _check_memory_anomaly(db, cycle_source, peaks, cycle_started_at=now)
         except Exception:
             logger.warning("Memory anomaly check failed", exc_info=True)
 
