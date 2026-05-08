@@ -10,6 +10,8 @@ TTL: 24 hours — each model run is self-contained, no cross-run comparison need
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -108,10 +110,26 @@ def put_cached(
     filename: str,
     data: bytes,
 ) -> Path:
-    """Store GRIB2 data in the cache."""
+    """Store GRIB2 data in the cache atomically.
+
+    Writes to a tempfile in the same directory and then ``os.replace``s it
+    into place. The rename is atomic on POSIX and on NTFS, so concurrent
+    callers racing on the same ``(run_dir, filename)`` either see the file
+    not-yet-present or fully-written — never a half-written interleave.
+    """
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / filename
-    path.write_bytes(data)
+    fd, tmp = tempfile.mkstemp(prefix=f".{filename}.", suffix=".tmp", dir=run_dir)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
     logger.debug("Cached: %s (%d bytes)", path, len(data))
     return path
 
