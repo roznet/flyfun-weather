@@ -102,16 +102,24 @@ class _StreamLimiter:
         self._max_global = max_global
 
     def acquire(self, user_id: str) -> None:
+        # RFC 6585 §4 — 429 responses SHOULD carry a Retry-After header so
+        # well-behaved clients have a retry signal. A small fixed value
+        # (5s) is conservative; most slots free up within ~30s when the
+        # GRIB enrichment finishes, so 5s nudges retries to land just as
+        # the cache warms.
+        retry_headers = {"Retry-After": "5"}
         with self._lock:
             if self._global >= self._max_global:
                 raise HTTPException(
                     status_code=429,
                     detail=f"Server busy ({self._global} airport profiles in flight). Try again shortly.",
+                    headers=retry_headers,
                 )
             if self._per_user[user_id] >= self._max_per_user:
                 raise HTTPException(
                     status_code=429,
                     detail=f"You already have {self._per_user[user_id]} airport profiles in flight (limit {self._max_per_user}).",
+                    headers=retry_headers,
                 )
             self._per_user[user_id] += 1
             self._global += 1
@@ -146,9 +154,29 @@ class _GribRunDedup:
     12Z forecast, user B on 15Z forecast, both served by the same GFS
     06Z run). Resolving the actual run init would require running
     ``find_best_*_run`` before acquiring the lock, which adds a slow
-    pre-step to every request. Issue #123 will eliminate the race at
-    the cache layer (``put_cached`` becoming atomic via tempfile +
-    rename), at which point this lock can be removed entirely.
+    pre-step to every request.
+
+    Adjacent work (do NOT delete this lock when these merge):
+
+    - **PR #127 / Issue #123** made ``put_cached`` atomic via tempfile +
+      ``os.replace``. That fixes a separate concern — file *corruption*
+      when two writers race the same path — and is orthogonal to this
+      lock. With #127 the race is safe but each writer still pays the
+      full network fetch. The lock here prevents the redundant fetch,
+      not the corruption, so #127 alone does NOT make it removable.
+    - **Issue #126** (airport-profile GRIB pre-cache loop) is the thing
+      that eventually obsoletes this lock: once typical airport-profile
+      selectables are pre-cached after each main ICON-EU/GFS run
+      publishes, the bursty-click pattern hits a warm cache and there's
+      nothing to dedup. Revisit removal after #126 lands and we have
+      telemetry on cold-fetch frequency.
+
+    Note on the inner ``threading.Lock``: ``lock_for()`` is currently
+    only called from the async ``event_generator`` (single-threaded
+    event loop), so the sync lock is defensive — it guards against a
+    future caller from an executor thread, and also makes the
+    ``asyncio.Lock()`` allocation thread-safe in case that ever happens.
+    Cheap, and worth keeping while the class exists.
 
     Locks are created lazily and never freed. Pool size is bounded by
     ``unique (model, forecast_start)`` pairs ever clicked — in practice
@@ -292,7 +320,13 @@ def _surface_from_cache(
             "cape_jkg": row.cape_jkg,
             "cloud_cover_pct": row.cloud_cover_pct,
             "cloud_cover_low_pct": row.cloud_cover_low_pct,
-            "ceiling_ft": row.nwp_ceiling_ft or row.sounding_ceiling_ft,
+            # Explicit None-check rather than `or` — a NWP ceiling of 0
+            # (literal ground-level fog: rare but valid for severe LIFR)
+            # would silently fall through to the sounding ceiling otherwise.
+            "ceiling_ft": (
+                row.nwp_ceiling_ft if row.nwp_ceiling_ft is not None
+                else row.sounding_ceiling_ft
+            ),
             "freezing_level_ft": row.freezing_level_ft,
         })
     return result
@@ -419,7 +453,10 @@ def _grib_enrich_levels(
     from weatherbrief.fetch.grib.ecmwf_fetch import ecmwf_grib_dir
     ecmwf_dir = ecmwf_grib_dir()
     # is_dir() returns False for nonexistent paths — no exception risk.
-    if not (ecmwf_dir.is_dir() and any(ecmwf_dir.iterdir())):
+    # `next(iter, None)` rather than `any(iter)` so the iterator (and the
+    # underlying os.scandir() handle) is fully consumed and closed
+    # immediately, instead of being left for GC.
+    if not (ecmwf_dir.is_dir() and next(ecmwf_dir.iterdir(), None) is not None):
         return {"sources": {}, "skipped": {"all": "no_local_grib_configured"}}
 
     from weatherbrief.fetch.grib import enrich_forecasts

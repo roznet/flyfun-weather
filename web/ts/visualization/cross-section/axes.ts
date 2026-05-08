@@ -211,22 +211,20 @@ function drawTimeAxis(
   data: VizRouteData,
 ): void {
   const { plotArea } = transform;
+  // Hoist loop-invariant canvas state out of the per-point loop.
   ctx.fillStyle = labelColor();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
+  ctx.strokeStyle = getActiveTheme().axes.gridColor;
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([]);
 
   for (const p of data.points) {
     const x = transform.distanceToX(p.distanceNm);
-
-    ctx.strokeStyle = getActiveTheme().axes.gridColor;
-    ctx.lineWidth = 0.5;
-    ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(x, plotArea.top);
     ctx.lineTo(x, plotArea.top + plotArea.height);
     ctx.stroke();
-
-    ctx.fillStyle = labelColor();
     ctx.fillText(formatTimeUTC(p.time), x, plotArea.top + plotArea.height + 6);
   }
 }
