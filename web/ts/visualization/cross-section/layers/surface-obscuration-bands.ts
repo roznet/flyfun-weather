@@ -60,6 +60,31 @@ export const surfaceObscurationBandsLayer: CrossSectionLayer = {
         top: p.surfaceObscuration!.topFt,
       }));
 
+      // Forecast hour N is valid for the cell [N, N+1], so extend the band
+      // to the next point's x-coordinate at the trailing point's geometry.
+      // This makes a single-active-hour render as a full-width rectangle
+      // rather than collapsing to drawSmoothBand's fixed-width single-point
+      // fallback (~20 px), and gives multi-hour runs a flat trailing edge
+      // through the last cell.
+      const lastInRun = run[run.length - 1];
+      const lastIdx = data.points.indexOf(lastInRun);
+      let trailingDistance: number | null = null;
+      if (lastIdx >= 0 && lastIdx < data.points.length - 1) {
+        trailingDistance = data.points[lastIdx + 1].distanceNm;
+      } else if (lastIdx > 0) {
+        // Last point in the dataset: project forward by the previous step
+        // so the final cell still gets full width.
+        const prevDist = data.points[lastIdx - 1].distanceNm;
+        trailingDistance = lastInRun.distanceNm + (lastInRun.distanceNm - prevDist);
+      }
+      if (trailingDistance !== null) {
+        bandPoints.push({
+          distance: trailingDistance,
+          base: lastInRun.surfaceObscuration!.baseFt,
+          top: lastInRun.surfaceObscuration!.topFt,
+        });
+      }
+
       drawSmoothBand(ctx, bandPoints, transform, severityColor(theme, severity));
       drawDiagonalHatch(ctx, bandPoints, transform, theme);
     }
