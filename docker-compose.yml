@@ -29,7 +29,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3G
+          # Bumped 3G → 4G in #137: 19Z cycle observed transient 2.55 GiB peaks
+          # during GFS Open-Meteo fetch (parent process), leaving only ~450 MiB
+          # headroom for concurrent briefing refreshes — too tight, fits the
+          # 07Z OOM signature. Droplet host has ~3.9 GB available, ~1.5 GB
+          # margin remains after this bump.
+          memory: 4G
     networks:
       - shared-services
 
