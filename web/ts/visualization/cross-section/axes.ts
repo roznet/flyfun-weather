@@ -18,11 +18,13 @@ export function drawAxes(
 ): void {
   ctx.font = FONT;
 
-  const visibleWaypoints = pickVisibleWaypointLabels(ctx, transform, data);
+  const visibleWaypoints = data.timeAxisMode
+    ? new Array(data.waypointMarkers.length).fill(false)
+    : pickVisibleWaypointLabels(ctx, transform, data);
 
   drawAltitudeAxis(ctx, transform, data);
   drawDistanceAxis(ctx, transform, data, visibleWaypoints);
-  drawWaypointLines(ctx, transform, data, visibleWaypoints);
+  if (!data.timeAxisMode) drawWaypointLines(ctx, transform, data, visibleWaypoints);
   drawPlotBorder(ctx, transform);
 }
 
@@ -146,6 +148,10 @@ function drawDistanceAxis(
   data: VizRouteData,
   visibleWaypoints: boolean[],
 ): void {
+  if (data.timeAxisMode) {
+    drawTimeAxis(ctx, transform, data);
+    return;
+  }
   const { plotArea } = transform;
   const maxDist = data.totalDistanceNm;
 
@@ -193,6 +199,33 @@ function drawDistanceAxis(
       ctx.fillStyle = labelColor();
       ctx.fillText(timeStr, x, plotArea.top + plotArea.height + 20);
     }
+  }
+}
+
+/** Time-axis variant: each point's `distanceNm` is treated as an hour offset
+ *  and the X label shows HH:MMZ from `point.time`. Used by the airport
+ *  profile panel. */
+function drawTimeAxis(
+  ctx: CanvasRenderingContext2D,
+  transform: CoordTransform,
+  data: VizRouteData,
+): void {
+  const { plotArea } = transform;
+  // Hoist loop-invariant canvas state out of the per-point loop.
+  ctx.fillStyle = labelColor();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.strokeStyle = getActiveTheme().axes.gridColor;
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([]);
+
+  for (const p of data.points) {
+    const x = transform.distanceToX(p.distanceNm);
+    ctx.beginPath();
+    ctx.moveTo(x, plotArea.top);
+    ctx.lineTo(x, plotArea.top + plotArea.height);
+    ctx.stroke();
+    ctx.fillText(formatTimeUTC(p.time), x, plotArea.top + plotArea.height + 6);
   }
 }
 

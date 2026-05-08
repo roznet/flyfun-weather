@@ -84,6 +84,14 @@ export interface VizRouteData {
   departureTime: string;
   flightDurationHours: number;
   terrainProfile: TerrainPoint[] | null;
+  /**
+   * When true, the cross-section's X-axis renders time labels (HH:MMZ)
+   * instead of distance ticks. Used by the airport-profile panel where
+   * the spatial extent collapses to one point and time becomes the X-axis.
+   * Distance values in `points[i].distanceNm` are repurposed as hour
+   * offsets from the start time, and `totalDistanceNm` is the total span.
+   */
+  timeAxisMode?: boolean;
 }
 
 export interface WaypointMarker {

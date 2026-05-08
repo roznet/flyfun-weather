@@ -48,6 +48,7 @@ from weatherbrief.api.credits import (
 from weatherbrief.api.feedback import router as feedback_router
 from weatherbrief.api.messages import admin_router as messages_admin_router, router as messages_router
 from weatherbrief.api.maps import router as maps_router
+from weatherbrief.api.airport_profile import router as airport_profile_router
 from weatherbrief.api.hewson_map import router as hewson_map_router
 from weatherbrief.api.models import router as models_router
 from weatherbrief.api.tokens import router as tokens_router
@@ -342,6 +343,7 @@ def create_app() -> FastAPI:
     app.include_router(messages_router, prefix="/api")
     app.include_router(messages_admin_router, prefix="/api")
     app.include_router(maps_router, prefix="/api")
+    app.include_router(airport_profile_router, prefix="/api")
     app.include_router(hewson_map_router, prefix="/api")
     app.include_router(tokens_router, prefix="/api")
     app.include_router(models_router, prefix="/api")
