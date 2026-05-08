@@ -24,9 +24,13 @@ import {
 import { iengIcingBandsLayer } from './layers/ieng-icing-bands';
 import { sldBandsLayer } from './layers/sld-bands';
 import { eShearBandsLayer } from './layers/e-shear-bands';
+import { surfaceObscurationBandsLayer } from './layers/surface-obscuration-bands';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
-  // Rendering order: clouds → convection → icing → other bands → terrain → lines → reference
+  // Rendering order: obscuration → clouds → convection → icing → other bands → terrain → lines → reference.
+  // Obscuration sits at the bottom of the stack so any DD/NWP cloud
+  // bands that extend above the boundary layer overlay it cleanly.
+  surfaceObscurationBandsLayer,
   softNwpCloudBandsLayer,
   softCloudBandsLayer,
   squareNwpCloudBandsLayer,
@@ -57,11 +61,26 @@ export function getAllLayers(): CrossSectionLayer[] {
   return ALL_LAYERS;
 }
 
-export function getDefaultEnabled(): Record<string, boolean> {
+/** Where the cross-section is being rendered. Used for context-specific
+ *  layer defaults: surface obscuration is high-signal in the airport-
+ *  profile drawer (where users right-click for low-altitude detail) but
+ *  off by default on the briefing page (avoids stacking with low-cloud /
+ *  DD bands users already have visible). */
+export type CrossSectionContext = 'briefing' | 'airport-profile';
+
+const CONTEXT_OVERRIDES: Record<CrossSectionContext, Record<string, boolean>> = {
+  briefing: {},
+  'airport-profile': {
+    'surface-obscuration-bands': true,
+  },
+};
+
+export function getDefaultEnabled(context: CrossSectionContext = 'briefing'): Record<string, boolean> {
   const enabled: Record<string, boolean> = {};
   for (const layer of ALL_LAYERS) {
     enabled[layer.id] = layer.defaultEnabled;
   }
+  Object.assign(enabled, CONTEXT_OVERRIDES[context]);
   return enabled;
 }
 
@@ -194,10 +213,11 @@ export function getLayerGroups(): LayerGroupInfo[] {
     stability: t('viz.group.stability'),
     turbulence: t('viz.group.turbulence'),
     convection: t('viz.group.convection'),
+    obscuration: t('viz.group.obscuration'),
     reference: t('viz.group.reference'),
   };
 
-  const order: LayerGroup[] = ['terrain', 'reference', 'temperature', 'clouds', 'icing', 'stability', 'turbulence', 'convection'];
+  const order: LayerGroup[] = ['terrain', 'reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection'];
 
   return order
     .filter((g) => groupMap.has(g))

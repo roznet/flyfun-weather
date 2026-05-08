@@ -2,6 +2,7 @@
 
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
 import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag } from './types';
+import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 
 export function extractVizData(
   manifest: RouteAnalysesManifest,
@@ -172,6 +173,26 @@ function extractPoint(
   const temperatureC = divergenceValue(rpa, 'temperature_c', model);
   const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
 
+  // Prefer NWP cloud layers when available so the obscuration band top
+  // matches the cloud method drawn directly above it. `??` falls back
+  // to DD only when NWP is unavailable (`null` — model has no native
+  // NWP cloud envelope, e.g. ECMWF without GRIB enrichment); an empty
+  // NWP array (model says clear sky) is treated as "available, no
+  // clouds" and the band top falls through to the 1500 ft cap rather
+  // than reading from DD layers — that's intentional, since the user
+  // has selected the NWP cloud method.
+  const layersForObscuration = nwpCloudLayers ?? cloudLayers;
+  const surfaceObscuration = computeSurfaceObscurationFromCloudLayers(
+    {
+      visibilityM: sounding?.visibility_m ?? null,
+      temperature2mC: sounding?.temperature_2m_c ?? null,
+      dewpoint2mC: sounding?.dewpoint_2m_c ?? null,
+      cloudCoverLowPct: sounding?.cloud_cover_low_pct ?? null,
+    },
+    layersForObscuration,
+    terrainElevationFt,
+  );
+
   return {
     distanceNm: rpa.distance_from_origin_nm,
     lat: rpa.lat,
@@ -210,6 +231,7 @@ function extractPoint(
     terrainElevationFt,
     temperatureC,
     precipitationMm,
+    surfaceObscuration,
   };
 }
 

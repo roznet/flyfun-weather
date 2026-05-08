@@ -25,6 +25,7 @@ const GROUP_INFO: Record<string, () => string> = {
   clouds: () => t('viz.cloudMethods'),
   convection: () => t('viz.convectionMethods'),
   icing: () => t('viz.icingMethods'),
+  obscuration: () => t('viz.obscurationMethod'),
 };
 
 /** Options shared between the main toolbar's layer-toggle block and the

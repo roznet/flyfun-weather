@@ -60,6 +60,7 @@ export type LayerGroup =
   | 'stability'
   | 'turbulence'
   | 'convection'
+  | 'obscuration'
   | 'reference';
 
 // --- Terrain ---
@@ -171,6 +172,27 @@ export interface VizPoint {
   // Route graph scalars (extracted from model_divergence)
   temperatureC: number | null;
   precipitationMm: number | null;
+  /**
+   * Surface obscuration band (fog / low stratus). Populated when the
+   * surface forecast indicates reduced visibility or near-saturated low
+   * cloud — `null` otherwise. Pure visualization data; no advisory or
+   * analysis logic depends on it.
+   */
+  surfaceObscuration: VizSurfaceObscuration | null;
+}
+
+export interface VizSurfaceObscuration {
+  baseFt: number;
+  topFt: number;
+  /** Aviation flight category — drives both the tooltip label and the
+   *  rendered color (LIFR=purple, IFR=red, MVFR=amber). */
+  severity: 'lifr' | 'ifr' | 'mvfr';
+  visM: number | null;
+  surfaceTC: number | null;
+  surfaceTdC: number | null;
+  surfaceRhPct: number | null;
+  /** Which trigger fired — primary (visibility) or secondary (low cloud + small DD). */
+  reason: 'visibility' | 'low_cloud_dd';
 }
 
 export interface AltitudeLines {

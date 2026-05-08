@@ -71,7 +71,7 @@ function saveViewMode(m: ViewMode): void {
 }
 
 function loadEnabledLayers(): Record<string, boolean> {
-  const defaults = getDefaultEnabled();
+  const defaults = getDefaultEnabled('airport-profile');
   try {
     const raw = localStorage.getItem(LAYERS_KEY);
     if (!raw) return defaults;

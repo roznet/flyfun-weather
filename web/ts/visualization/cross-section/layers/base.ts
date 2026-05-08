@@ -135,7 +135,7 @@ export function drawBandHatch(
 }
 
 /** Build the closed spline band path (top curve L→R, base curve R→L). Does not fill or stroke. */
-function buildBandPath(
+export function buildBandPath(
   ctx: CanvasRenderingContext2D,
   valid: BandPointData[],
   transform: CoordTransform,

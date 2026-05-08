@@ -335,6 +335,12 @@ export interface SoundingAnalysis {
   cloud_cover_low_pct: number | null;
   cloud_cover_mid_pct: number | null;
   cloud_cover_high_pct: number | null;
+  // Surface fields used for surface-obscuration cross-section layer.
+  // Optional for backward-compat with snapshots taken before these
+  // fields were added to SoundingAnalysis.
+  visibility_m?: number | null;
+  temperature_2m_c?: number | null;
+  dewpoint_2m_c?: number | null;
   nwp_cloud_diagnostics: NWPCloudDiagnostics | null;
 }
 

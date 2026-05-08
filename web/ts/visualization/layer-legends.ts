@@ -100,6 +100,17 @@ function inversionLegend(): LegendEntry[] {
   ];
 }
 
+function obscurationLegend(): LegendEntry[] {
+  const theme = getActiveTheme().obscuration;
+  // Diagonal hatch overlay matches the canvas rendering's 45° hatching.
+  const hatch = `repeating-linear-gradient(45deg, ${theme.hatchColor} 0px, ${theme.hatchColor} ${theme.hatchLineWidth}px, transparent ${theme.hatchLineWidth}px, transparent ${theme.hatchSpacingPx}px)`;
+  return [
+    { label: t('legend.obscuration.lifr'), color: theme.lifr, meaning: t('legend.obscuration.lifrDesc'), hatchStyle: hatch },
+    { label: t('legend.obscuration.ifr'), color: theme.ifr, meaning: t('legend.obscuration.ifrDesc'), hatchStyle: hatch },
+    { label: t('legend.obscuration.mvfr'), color: theme.mvfr, meaning: t('legend.obscuration.mvfrDesc'), hatchStyle: hatch },
+  ];
+}
+
 function lineLegends(): Record<string, LegendEntry[]> {
   const theme = getActiveTheme();
   return {
@@ -130,6 +141,7 @@ export function getLayerLegend(layerId: string): LegendEntry[] | null {
     'square-cloud-bands': cloudBandsLegend,
     'square-nwp-cloud-bands': nwpCloudLegend,
     'inversion-bands': inversionLegend,
+    'surface-obscuration-bands': obscurationLegend,
   };
 
   const bandBuilder = bandLegends[layerId];

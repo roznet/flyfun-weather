@@ -7,7 +7,7 @@
  * registry instead of carrying one if-block per layer.
  */
 
-import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer } from '../types';
+import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
 import { fmtFL } from '../interaction-utils';
 
 export interface LayerTooltipDef {
@@ -226,6 +226,27 @@ const inversion: LayerTooltipDef = {
   },
 };
 
+const surfaceObscuration: LayerTooltipDef = {
+  id: 'surface-obscuration-bands',
+  header: 'Surface obscuration',
+  getZones: (p) => (p.surfaceObscuration ? [p.surfaceObscuration] : []),
+  formatLine: (z: VizSurfaceObscuration) => {
+    // BR (mist) for both IFR and MVFR — humidity-driven low vis is mist,
+    // not haze (HZ is reserved for dry suspended particles per ICAO
+    // Annex 3). MIFG (shallow fog) on the IFR row matches the typical
+    // 1–3 km radiation-fog signature.
+    const metar = z.severity === 'lifr' ? 'FG' : z.severity === 'ifr' ? 'BR/MIFG' : 'BR';
+    const cat = z.severity.toUpperCase();
+    const vis = z.visM !== null ? `vis ${Math.round(z.visM)} m` : 'vis n/a';
+    const t = z.surfaceTC !== null ? `${z.surfaceTC.toFixed(0)}°C` : '—';
+    const td = z.surfaceTdC !== null ? `${z.surfaceTdC.toFixed(0)}°C` : '—';
+    const rh = z.surfaceRhPct !== null ? `${Math.round(z.surfaceRhPct)}%` : '—';
+    return `${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${cat} ${metar}`
+      + extras([vis, `T/Td ${t}/${td}`, `RH ${rh}`])
+      + ` [${z.reason}]`;
+  },
+};
+
 /** All band/zone-style tooltip definitions, in display order. */
 export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   cloudDD,
@@ -240,4 +261,5 @@ export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   thermoConv,
   nwpConv,
   inversion,
+  surfaceObscuration,
 ];

@@ -98,6 +98,20 @@ export interface CrossSectionTheme {
     opacityParams: { floor: number; scale: number; maxStrengthC: number; cap: number };
   };
 
+  /** Surface obscuration (fog / LIFR) band colors and hatch settings.
+   *  Keyed by aviation flight category so `theme.obscuration[severity]`
+   *  reads naturally at the call site. Themes that prefer a solid fill
+   *  or alternative texture can override `hatchLineWidth` /
+   *  `hatchSpacingPx`. */
+  obscuration: {
+    lifr: string;
+    ifr: string;
+    mvfr: string;
+    hatchColor: string;
+    hatchSpacingPx: number;
+    hatchLineWidth: number;
+  };
+
   /** Optional soft-cloud rendering config. When omitted the soft style
    *  falls back to defaults defined in the cloud-bands factory. */
   softClouds?: {
@@ -251,6 +265,15 @@ const STANDARD_THEME: CrossSectionTheme = {
     opacityParams: { floor: 0.15, scale: 0.5, maxStrengthC: 3, cap: 0.65 },
   },
 
+  obscuration: {
+    lifr: 'rgba(168, 85, 247, 0.65)',  // purple
+    ifr: 'rgba(239, 68, 68, 0.55)',    // red
+    mvfr: 'rgba(245, 158, 11, 0.50)',  // amber
+    hatchColor: 'rgba(255, 255, 255, 0.65)',
+    hatchSpacingPx: 8,
+    hatchLineWidth: 1.5,
+  },
+
   coverageOpacity: {
     sct: 0.25,
     bkn: 0.50,
@@ -402,6 +425,18 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
     baseRgb: [255, 82, 82],
     opacityParams: { floor: 0.25, scale: 0.55, maxStrengthC: 3, cap: 0.80 },
   },
+
+  // Brighter, more opaque fills than standard to keep the band readable
+  // against the deep navy sky. Hatch picked up from STANDARD via
+  // inheritance is fine (white-on-dark reads well).
+  obscuration: {
+    lifr: 'rgba(192, 132, 252, 0.75)',
+    ifr: 'rgba(248, 113, 113, 0.65)',
+    mvfr: 'rgba(251, 191, 36, 0.60)',
+    hatchColor: 'rgba(255, 255, 255, 0.70)',
+    hatchSpacingPx: 8,
+    hatchLineWidth: 1.5,
+  },
 };
 
 // --- GRAMET theme (CloudPath-inspired, optimized for soft cloud overlays) ---
@@ -466,6 +501,17 @@ const GRAMET_THEME: CrossSectionTheme = {
       high: 'rgba(255, 80, 60, 1.0)',
       extreme: 'rgba(255, 50, 30, 1.0)',
     },
+  },
+
+  // Slightly cooler obscuration palette so the band sits naturally next
+  // to the GRAMET green icing without competing for attention.
+  obscuration: {
+    lifr: 'rgba(155, 90, 220, 0.65)',
+    ifr: 'rgba(220, 70, 70, 0.55)',
+    mvfr: 'rgba(230, 160, 50, 0.50)',
+    hatchColor: 'rgba(255, 255, 255, 0.60)',
+    hatchSpacingPx: 8,
+    hatchLineWidth: 1.5,
   },
 
   // Soft cloud config
@@ -614,6 +660,16 @@ const LIGHT_THEME: CrossSectionTheme = {
   inversion: {
     baseRgb: [194, 24, 91],
     opacityParams: { floor: 0.20, scale: 0.55, maxStrengthC: 3, cap: 0.75 },
+  },
+
+  // Darker hatch on light theme — white-on-pale-fog vanishes.
+  obscuration: {
+    lifr: 'rgba(126, 34, 206, 0.55)',
+    ifr: 'rgba(220, 38, 38, 0.50)',
+    mvfr: 'rgba(202, 138, 4, 0.50)',
+    hatchColor: 'rgba(30, 30, 45, 0.55)',
+    hatchSpacingPx: 8,
+    hatchLineWidth: 1.5,
   },
 
   // Soft cloud fill: dark gray on white (inverts the GRAMET white-on-blue)
