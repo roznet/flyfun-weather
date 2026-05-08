@@ -3,7 +3,7 @@
  * All colors are derived dynamically from the active cross-section theme.
  */
 
-import { icingRiskColor, catRiskColor, cloudFillFromDD, inversionOpacity } from './scales';
+import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity } from './scales';
 import { getActiveTheme } from './cross-section/theme';
 import { t } from '../i18n/i18n';
 
@@ -75,30 +75,18 @@ function cloudBandsLegend(): LegendEntry[] {
 
 function nwpCloudLegend(): LegendEntry[] {
   const theme = getActiveTheme();
-  const nwp = theme.nwpClouds;
   const grid = theme.clouds.hatchGridPx;
   const hColor = theme.clouds.hatchColor;
-  const [br, bg, bb] = nwp.brightRgb;
-  const [dr, dg, db] = nwp.deltaRgb;
-  const [opFloor, opScale] = nwp.opacityRange;
-  function fill(pct: number): string {
-    const t = Math.min(1, pct / 100);
-    const r = Math.round(br - dr * t);
-    const g = Math.round(bg - dg * t);
-    const b = Math.round(bb - db * t);
-    const a = Math.min(opFloor + opScale + 0.001, opFloor + opScale * t);
-    return `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
-  }
   function nwpHatch(pct: number): string {
     const lw = grid * (pct / 100);
     return hatchGradient(grid, lw, hColor);
   }
   return [
-    { label: t('legend.nwpCloud.25'), color: fill(25), meaning: t('legend.nwpCloud.25Desc'),
+    { label: t('legend.nwpCloud.25'), color: nwpCloudFill(25), meaning: t('legend.nwpCloud.25Desc'),
       hatchStyle: nwpHatch(25) },
-    { label: t('legend.nwpCloud.50'), color: fill(50), meaning: t('legend.nwpCloud.50Desc'),
+    { label: t('legend.nwpCloud.50'), color: nwpCloudFill(50), meaning: t('legend.nwpCloud.50Desc'),
       hatchStyle: nwpHatch(50) },
-    { label: t('legend.nwpCloud.75'), color: fill(75), meaning: t('legend.nwpCloud.75Desc'),
+    { label: t('legend.nwpCloud.75'), color: nwpCloudFill(75), meaning: t('legend.nwpCloud.75Desc'),
       hatchStyle: nwpHatch(75) },
   ];
 }

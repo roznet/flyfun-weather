@@ -22,7 +22,7 @@ import type {
   VizCloudLayer,
   VizPoint,
 } from '../../types';
-import { cloudFillFromDD } from '../../scales';
+import { cloudFillFromDD, nwpCloudFill } from '../../scales';
 import {
   drawColumnBand,
   drawSmoothBand,
@@ -77,20 +77,6 @@ const NWP_SOURCE: SourceSpec = {
   },
 };
 
-/** Blue-tinted fill from coverage % — used by hatched-NWP for matched-zone color. */
-function nwpCloudFill(pct: number): string {
-  const theme = getActiveTheme().nwpClouds;
-  const t = Math.min(1, Math.max(0, pct / 100));
-  const [br, bg, bb] = theme.brightRgb;
-  const [dr, dg, db] = theme.deltaRgb;
-  const r = Math.round(br - dr * t);
-  const g = Math.round(bg - dg * t);
-  const b = Math.round(bb - db * t);
-  const [opFloor, opScale] = theme.opacityRange;
-  const opacity = Math.min(opFloor + opScale + 0.001, opFloor + opScale * t);
-  return `rgba(${r}, ${g}, ${b}, ${opacity.toFixed(2)})`;
-}
-
 const SOURCES: Record<CloudSource, SourceSpec> = { dd: DD_SOURCE, nwp: NWP_SOURCE };
 
 // --- Style axis ---
@@ -134,8 +120,7 @@ function paintSoft(
 ): void {
   if (bandPoints.length === 0) return;
 
-  const theme = getActiveTheme();
-  const softConfig = (theme as any).softClouds;
+  const softConfig = getActiveTheme().softClouds;
   const [r, g, b] = softConfig?.fillRgb ?? [255, 255, 255];
   const configAlpha = softConfig?.coverageAlpha ?? COVERAGE_ALPHA;
   const feather = softConfig?.featherFraction ?? FEATHER_FRACTION;

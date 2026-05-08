@@ -98,6 +98,14 @@ export interface CrossSectionTheme {
     opacityParams: { floor: number; scale: number; maxStrengthC: number; cap: number };
   };
 
+  /** Optional soft-cloud rendering config. When omitted the soft style
+   *  falls back to defaults defined in the cloud-bands factory. */
+  softClouds?: {
+    fillRgb: [number, number, number];
+    coverageAlpha: Record<string, number>;
+    featherFraction: number;
+  };
+
   coverageOpacity: Record<string, number>;
 
   /** Distinct colors assigned to models in consensus-outline mode. */
@@ -466,7 +474,7 @@ const GRAMET_THEME: CrossSectionTheme = {
     coverageAlpha: { OVC: 0.85, BKN: 0.65, SCT: 0.45, FEW: 0.15 },
     featherFraction: 0.15,
   },
-} as CrossSectionTheme & { sld: Record<string, string>; softClouds: any };
+} as CrossSectionTheme & { sld: Record<string, string> };
 
 // --- Light theme (Windy-inspired: white sky, gray clouds) ---
 
@@ -609,14 +617,12 @@ const LIGHT_THEME: CrossSectionTheme = {
   },
 
   // Soft cloud fill: dark gray on white (inverts the GRAMET white-on-blue)
-  ...({
-    softClouds: {
-      fillRgb: [70, 80, 95],
-      coverageAlpha: { OVC: 0.55, BKN: 0.40, SCT: 0.25, FEW: 0.10 },
-      featherFraction: 0.15,
-    },
-  } as any),
-} as CrossSectionTheme & { softClouds: any };
+  softClouds: {
+    fillRgb: [70, 80, 95],
+    coverageAlpha: { OVC: 0.55, BKN: 0.40, SCT: 0.25, FEW: 0.10 },
+    featherFraction: 0.15,
+  },
+};
 
 // --- Theme registry ---
 

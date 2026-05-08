@@ -53,6 +53,27 @@ export function cloudFillFromDD(dd: number | undefined, coverage: string): strin
   return `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
 }
 
+/**
+ * Blue-tinted fill from NWP cloud cover percentage.
+ * Mixes theme.nwpClouds.brightRgb → (brightRgb - deltaRgb) as pct rises 0→100,
+ * with alpha rising from opacityRange[0] to opacityRange[0]+opacityRange[1].
+ *
+ * Used by the hatched-NWP and square-NWP cloud styles, the NWP cloud legend,
+ * and any other consumer that needs the canonical NWP cloud fill.
+ */
+export function nwpCloudFill(pct: number): string {
+  const theme = getActiveTheme().nwpClouds;
+  const t = Math.min(1, Math.max(0, pct / 100));
+  const [br, bg, bb] = theme.brightRgb;
+  const [dr, dg, db] = theme.deltaRgb;
+  const r = Math.round(br - dr * t);
+  const g = Math.round(bg - dg * t);
+  const b = Math.round(bb - db * t);
+  const [opFloor, opScale] = theme.opacityRange;
+  const opacity = opFloor + opScale * t;
+  return `rgba(${r}, ${g}, ${b}, ${opacity.toFixed(2)})`;
+}
+
 export function inversionOpacity(strengthC: number): number {
   const { floor, scale, maxStrengthC, cap } = getActiveTheme().inversion.opacityParams;
   return Math.min(cap, floor + scale * Math.min(strengthC / maxStrengthC, 1));
