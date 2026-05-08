@@ -235,11 +235,10 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const hasEShear = data.points.some((p) => p.eShearLayers.length > 0);
 
   if (!hasNwpCloudData) {
-    // All three NWP cloud-style variants share the same data source —
-    // tag them together so the panel can disable the NWP toggle.
+    // Use the hatched-style id as the canonical "NWP source unavailable"
+    // signal — the compound clouds control reads this one id and grays
+    // out the entire NWP source toggle (covering soft/square variants too).
     unavailable.add('nwp-cloud-bands');
-    unavailable.add('soft-nwp-cloud-bands');
-    unavailable.add('square-nwp-cloud-bands');
     unavailable.add('icing-ogimet-nwp-bands');
     unavailable.add('ieng-icing-bands');
   }

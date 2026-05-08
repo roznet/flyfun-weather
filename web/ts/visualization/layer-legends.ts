@@ -139,6 +139,8 @@ export function getLayerLegend(layerId: string): LegendEntry[] | null {
     'nwp-cloud-bands': nwpCloudLegend,
     'soft-cloud-bands': cloudBandsLegend,
     'soft-nwp-cloud-bands': nwpCloudLegend,
+    'square-cloud-bands': cloudBandsLegend,
+    'square-nwp-cloud-bands': nwpCloudLegend,
     'inversion-bands': inversionLegend,
   };
 

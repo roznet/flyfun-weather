@@ -143,7 +143,9 @@ function paintSoft(
   const cov = cl.coverage?.toUpperCase() ?? 'BKN';
   const alpha = configAlpha[cov] ?? COVERAGE_ALPHA[cov] ?? 0.5;
 
-  // Modulate by DD if available (use merged value if matched).
+  // Modulate by DD if available (use merged value if matched). NWP layers
+  // don't carry meanDewpointDepressionC, so dd stays undefined for them
+  // and ddFactor stays 1.0 — matching the pre-refactor softNwpCloudBandsLayer.
   const dd = matched ? avgDD(cl, matched) : cl.meanDewpointDepressionC;
   let ddFactor = 1.0;
   if (dd !== undefined) {
@@ -327,10 +329,10 @@ export const CLOUD_LAYER_BY_AXES: Record<CloudSource, Record<CloudStyle, string>
   },
 };
 
-export const ALL_CLOUD_LAYER_IDS: string[] = [
-  'cloud-bands', 'soft-cloud-bands', 'square-cloud-bands',
-  'nwp-cloud-bands', 'soft-nwp-cloud-bands', 'square-nwp-cloud-bands',
-];
+/** Flat list of all cloud layer ids — derived so adding a new (source, style)
+ *  combo to CLOUD_LAYER_BY_AXES updates this in one place. */
+export const ALL_CLOUD_LAYER_IDS: string[] = Object.values(CLOUD_LAYER_BY_AXES)
+  .flatMap((styles) => Object.values(styles));
 
 /** Parse a cloud layer id back into its (source, style) axes. Returns null if not a cloud layer. */
 export function parseCloudLayerId(id: string): { source: CloudSource; style: CloudStyle } | null {
