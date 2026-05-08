@@ -98,26 +98,85 @@ struct CrossSectionView: View {
 
                 Divider().frame(height: 20)
 
-                ForEach(CrossSectionLayer.allLayers, id: \.id) { layer in
-                    let enabled = csVM.enabledLayers[layer.id] ?? false
-                    Button {
-                        csVM.toggleLayer(layer.id)
-                    } label: {
-                        Text(layer.name)
-                            .font(.caption2)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(enabled ? Color.accentColor.opacity(0.15) : Color.clear)
-                            .foregroundStyle(enabled ? .primary : .secondary)
-                            .clipShape(Capsule())
-                            .overlay(Capsule().stroke(enabled ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: 0.5))
-                    }
-                    .buttonStyle(.plain)
+                // Method-picker dropdowns: clouds / icing / turbulence / convection.
+                // Each is a single mutually-exclusive choice with a "None" option.
+                ForEach(LayerGroup.allCases.filter(\.isMethodGroup), id: \.self) { group in
+                    methodMenu(for: group)
+                }
+
+                Divider().frame(height: 20)
+
+                // Toggle chips: terrain / reference / temperature / stability layers
+                // remain independently toggleable.
+                ForEach(CrossSectionLayer.allLayers.filter { !$0.group.isMethodGroup }, id: \.id) { layer in
+                    toggleChip(for: layer)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
+    }
+
+    /// Dropdown menu for a method group (clouds / icing / turbulence / convection).
+    /// Items: "None" + each method in the group, with a checkmark on the active one.
+    @ViewBuilder
+    private func methodMenu(for group: LayerGroup) -> some View {
+        let active = csVM.activeMethod(for: group)
+        let activeLabel = active.flatMap { CrossSectionLayer.methodLabels[$0] } ?? "None"
+
+        Menu {
+            Button {
+                csVM.setMethod(nil, for: group)
+            } label: {
+                if active == nil {
+                    Label("None", systemImage: "checkmark")
+                } else {
+                    Text("None")
+                }
+            }
+            ForEach(CrossSectionLayer.methodGroupOrder[group] ?? [], id: \.self) { layerId in
+                Button {
+                    csVM.setMethod(layerId, for: group)
+                } label: {
+                    if active == layerId {
+                        Label(CrossSectionLayer.methodLabels[layerId] ?? layerId, systemImage: "checkmark")
+                    } else {
+                        Text(CrossSectionLayer.methodLabels[layerId] ?? layerId)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text("\(group.label): \(activeLabel)")
+                    .font(.caption2)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(active != nil ? Color.accentColor.opacity(0.15) : Color.clear)
+            .foregroundStyle(active != nil ? .primary : .secondary)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(active != nil ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: 0.5))
+        }
+    }
+
+    @ViewBuilder
+    private func toggleChip(for layer: any CrossSectionLayerProtocol) -> some View {
+        let enabled = csVM.enabledLayers[layer.id] ?? false
+        Button {
+            csVM.toggleLayer(layer.id)
+        } label: {
+            Text(layer.name)
+                .font(.caption2)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(enabled ? Color.accentColor.opacity(0.15) : Color.clear)
+                .foregroundStyle(enabled ? .primary : .secondary)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(enabled ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
     }
 
     /// Aircraft position for cross-section overlay, from flight tracking service.

@@ -35,12 +35,23 @@ struct VizPoint {
     let time: String
     let altitudeLines: AltitudeLines
     let cloudLayers: [VizCloudLayer]
+    /// Native NWP cloud envelope (GRIB or model-percentage-derived).
+    /// nil = no NWP source for this point; [] = clear sky.
+    let nwpCloudLayers: [VizCloudLayer]?
     let icingZones: [VizIcingZone]
     let icingOgimetNwpZones: [VizIcingZone]
     let sfipZones: [VizSfipZone]
     let catLayers: [VizCATLayer]
     let inversions: [VizInversionLayer]
     let convectiveRisk: String
+    let convectiveBaseFt: Double?
+    let convectiveTopFt: Double?
+    let nwpConvectiveRisk: String
+    let nwpConvectiveBaseFt: Double?
+    let nwpConvectiveTopFt: Double?
+    let nwpConvectiveCoverPct: Double?
+    let nwpConvectiveMethod: String?
+    let hasNwpConvective: Bool
     let cloudCoverTotalPct: Double
     let cloudCoverLowPct: Double
     let cloudCoverMidPct: Double

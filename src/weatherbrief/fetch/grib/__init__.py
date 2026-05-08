@@ -239,6 +239,24 @@ def _decode_pool_workers() -> int:
         return 2
 
 
+def _decode_pool_max_tasks_per_child() -> int | None:
+    """Worker recycle threshold; ``None`` disables recycling.
+
+    cfgrib/ECCODES allocate native memory that Python GC cannot reclaim;
+    recycling caps cumulative growth across many decodes (e.g. the standalone
+    ECMWF fetch dispatches ~50 decodes per run). 0 or negative means disabled.
+    """
+    raw = os.environ.get("GRIB_DECODE_MAX_TASKS_PER_CHILD", "50").strip()
+    try:
+        v = int(raw)
+        return v if v > 0 else None
+    except ValueError:
+        logger.warning(
+            "Invalid GRIB_DECODE_MAX_TASKS_PER_CHILD=%r, defaulting to 50", raw,
+        )
+        return 50
+
+
 def _decode_timeout_s() -> float:
     raw = os.environ.get("GRIB_DECODE_TIMEOUT_S", "").strip()
     if not raw:
@@ -270,12 +288,19 @@ def _get_decode_pool() -> ProcessPoolExecutor | None:
         # its own ECCODES setup that isn't fork-safe under load.
         ctx = multiprocessing.get_context("spawn")
         from weatherbrief.fetch.grib.decode_worker import _worker_init
-        _DECODE_POOL = ProcessPoolExecutor(
-            max_workers=workers,
-            mp_context=ctx,
-            initializer=_worker_init,
+        max_tasks = _decode_pool_max_tasks_per_child()
+        kwargs: dict[str, Any] = {
+            "max_workers": workers,
+            "mp_context": ctx,
+            "initializer": _worker_init,
+        }
+        if max_tasks is not None:
+            kwargs["max_tasks_per_child"] = max_tasks
+        _DECODE_POOL = ProcessPoolExecutor(**kwargs)
+        logger.info(
+            "GRIB decode pool started (workers=%d, mp=spawn, max_tasks_per_child=%s)",
+            workers, max_tasks if max_tasks is not None else "off",
         )
-        logger.info("GRIB decode pool started (workers=%d, mp=spawn)", workers)
     return _DECODE_POOL
 
 

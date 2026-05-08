@@ -4,7 +4,6 @@ import type { CrossSectionLayer, LayerGroup } from '../types';
 import { t } from '../../i18n/i18n';
 import { freezingLevelLayer, minus10cLayer, minus20cLayer } from './layers/temperature-lines';
 import { cruiseAltitudeLayer } from './layers/reference-lines';
-import { cloudBandsLayer } from './layers/cloud-bands';
 import { icingBandsLayer } from './layers/icing-bands';
 import { icingOgimetNwpBandsLayer } from './layers/icing-ogimet-nwp-bands';
 import { sfipBandsLayer } from './layers/sfip-bands';
@@ -14,8 +13,14 @@ import { inversionBandsLayer } from './layers/inversion-bands';
 import { thermoConvectiveBgLayer } from './layers/thermo-convective-bg';
 import { nwpConvectiveBgLayer } from './layers/nwp-convective-bg';
 import { terrainFillLayer } from './layers/terrain-fill';
-import { nwpCloudBandsLayer } from './layers/nwp-cloud-bands';
-import { softCloudBandsLayer, softNwpCloudBandsLayer } from './layers/soft-cloud-bands';
+import {
+  cloudBandsLayer,
+  nwpCloudBandsLayer,
+  softCloudBandsLayer,
+  softNwpCloudBandsLayer,
+  squareCloudBandsLayer,
+  squareNwpCloudBandsLayer,
+} from './layers/cloud-bands-factory';
 import { iengIcingBandsLayer } from './layers/ieng-icing-bands';
 import { sldBandsLayer } from './layers/sld-bands';
 import { eShearBandsLayer } from './layers/e-shear-bands';
@@ -28,6 +33,8 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   surfaceObscurationBandsLayer,
   softNwpCloudBandsLayer,
   softCloudBandsLayer,
+  squareNwpCloudBandsLayer,
+  squareCloudBandsLayer,
   nwpCloudBandsLayer,
   cloudBandsLayer,
   thermoConvectiveBgLayer,
@@ -85,7 +92,14 @@ export interface LayerGroupInfo {
 
 /** Maps preference values to layer IDs for groups that collapse in compact mode. */
 const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
-  clouds: { dd: 'cloud-bands', nwp: 'nwp-cloud-bands', soft_dd: 'soft-cloud-bands', soft_nwp: 'soft-nwp-cloud-bands' },
+  clouds: {
+    dd: 'cloud-bands',
+    nwp: 'nwp-cloud-bands',
+    soft_dd: 'soft-cloud-bands',
+    soft_nwp: 'soft-nwp-cloud-bands',
+    square_dd: 'square-cloud-bands',
+    square_nwp: 'square-nwp-cloud-bands',
+  },
   icing: { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands', ieng: 'ieng-icing-bands' },
   turbulence: { ri: 'cat-bands', e_shear: 'e-shear-bands' },
   convection: { thermo: 'thermo-convective-bg', nwp: 'nwp-convective-bg' },
@@ -142,6 +156,8 @@ export interface LayerPreset {
 const GRAMET_ENABLED: Record<string, boolean> = {
   'soft-nwp-cloud-bands': true,
   'soft-cloud-bands': false,
+  'square-nwp-cloud-bands': false,
+  'square-cloud-bands': false,
   'nwp-cloud-bands': false,
   'cloud-bands': false,
   'thermo-convective-bg': false,

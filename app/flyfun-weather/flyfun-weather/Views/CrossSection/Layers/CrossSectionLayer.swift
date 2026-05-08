@@ -19,11 +19,46 @@ enum LayerGroup: String, CaseIterable {
     case reference
 }
 
+extension LayerGroup {
+    /// True for groups where multiple methods are mutually exclusive — the UI
+    /// surfaces these as a single dropdown ("None / method A / method B / ...")
+    /// rather than a row of independent toggles. Toggle groups (terrain,
+    /// reference, temperature, stability) keep individual on/off chips.
+    var isMethodGroup: Bool {
+        switch self {
+        case .clouds, .icing, .turbulence, .convection: return true
+        default: return false
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .terrain: "Terrain"
+        case .temperature: "Temperature"
+        case .clouds: "Clouds"
+        case .icing: "Icing"
+        case .stability: "Stability"
+        case .turbulence: "Turbulence"
+        case .convection: "Convection"
+        case .reference: "Reference"
+        }
+    }
+}
+
 /// Registry of all cross-section layers with default enabled states.
 enum CrossSectionLayer {
+    /// Rendering order: clouds → convection → icing → other bands → terrain → lines → reference.
+    /// Matches the web layer-registry.ts ordering so identical data renders the same on both platforms.
     static let allLayers: [any CrossSectionLayerProtocol] = [
+        SoftCloudBandsLayer(source: .nwp),
+        SoftCloudBandsLayer(source: .dd),
+        NwpCloudBandsLayer(),
         CloudBandsLayer(),
+        ThermoConvectiveBgLayer(),
+        NwpConvectiveBgLayer(),
         IcingBandsLayer(),
+        IcingOgimetNwpBandsLayer(),
+        SfipBandsLayer(),
         CATBandsLayer(),
         InversionBandsLayer(),
         TerrainLayer(),
@@ -33,15 +68,49 @@ enum CrossSectionLayer {
         ReferenceLinesLayer(),
     ]
 
+    /// GRAMET-aligned defaults (matches web's GRAMET preset, the production default):
+    /// Soft NWP clouds + Ogimet-NWP icing + CAT (Ri) + NWP convective + freezing
+    /// level + terrain + cruise altitude.
     static let defaultEnabled: [String: Bool] = [
-        "cloud-bands": true,
-        "icing-bands": true,
-        "cat-bands": false,
-        "inversion-bands": true,
+        "soft-nwp-cloud-bands": true,
+        "soft-cloud-bands": false,
+        "nwp-cloud-bands": false,
+        "cloud-bands": false,
+        "thermo-convective-bg": false,
+        "nwp-convective-bg": true,
+        "icing-bands": false,
+        "icing-ogimet-nwp-bands": true,
+        "sfip-bands": false,
+        "cat-bands": true,
+        "inversion-bands": false,
         "terrain": true,
         "freezing-level": true,
-        "minus-10c": true,
+        "minus-10c": false,
         "minus-20c": false,
         "reference-lines": true,
+    ]
+
+    /// For each method group, ordered list of layer IDs (from preferred to alternates).
+    /// Used by the dropdown picker UI: "None" + each method, in this display order.
+    /// Mirrors web's PREFERRED_METHOD_LAYER mapping in layer-registry.ts.
+    static let methodGroupOrder: [LayerGroup: [String]] = [
+        .clouds: ["soft-nwp-cloud-bands", "soft-cloud-bands", "nwp-cloud-bands", "cloud-bands"],
+        .icing: ["icing-ogimet-nwp-bands", "icing-bands", "sfip-bands"],
+        .turbulence: ["cat-bands"],
+        .convection: ["nwp-convective-bg", "thermo-convective-bg"],
+    ]
+
+    /// Friendlier short labels for the dropdown menu items.
+    static let methodLabels: [String: String] = [
+        "soft-nwp-cloud-bands": "Soft NWP",
+        "soft-cloud-bands": "Soft DD",
+        "nwp-cloud-bands": "NWP",
+        "cloud-bands": "DD",
+        "icing-ogimet-nwp-bands": "Ogimet-NWP",
+        "icing-bands": "Ogimet-DD",
+        "sfip-bands": "SFIP",
+        "cat-bands": "CAT (Ri)",
+        "nwp-convective-bg": "NWP",
+        "thermo-convective-bg": "Thermo",
     ]
 }

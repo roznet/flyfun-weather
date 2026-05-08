@@ -26,9 +26,22 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.process_rss import current_rss_mb
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
 
 logger = logging.getLogger(__name__)
+
+
+def _rss_log(label: str) -> None:
+    """Log parent-process RSS at a cycle phase boundary.
+
+    Memory regressions in this cycle have killed the container at the 3 GiB
+    cgroup limit (issue #134). Periodic RSS logs make creep visible before
+    the next OOM rather than after.
+    """
+    rss = current_rss_mb()
+    if rss is not None:
+        logger.info("Standalone cycle RSS @ %s: %dMB", label, int(rss))
 
 # ---------------------------------------------------------------------------
 # Configuration defaults (hardcoded until config table in Step 10)
@@ -479,11 +492,10 @@ def fetch_ecmwf_grib_snapshots(
     """
     from datetime import time as dt_time
 
+    from weatherbrief.fetch.grib import _dispatch_decode
     from weatherbrief.fetch.grib.decode import (
         build_ecmwf_surface_snapshot,
         build_pressure_levels_from_grib,
-        decode_ecmwf_pressure_per_point,
-        decode_ecmwf_surface_per_point,
     )
     from weatherbrief.models.analysis import HourlyForecast
 
@@ -521,7 +533,9 @@ def fetch_ecmwf_grib_snapshots(
             a1_cache[step_h] = empty
             return empty
         try:
-            data, _ = decode_ecmwf_surface_per_point(a1_path, lats, lons)
+            data, _ = _dispatch_decode(
+                "decode_ecmwf_surface", str(a1_path), lats, lons,
+            )
         except Exception:
             logger.warning("ECMWF a1 decode failed for step %dh", step_h, exc_info=True)
             data = empty
@@ -550,7 +564,9 @@ def fetch_ecmwf_grib_snapshots(
             pl_data: list[dict[int, dict[str, float]]] | None = None
             if a2_path is not None:
                 try:
-                    pl_data, _ = decode_ecmwf_pressure_per_point(a2_path, lats, lons)
+                    pl_data, _ = _dispatch_decode(
+                        "decode_ecmwf_pressure", str(a2_path), lats, lons,
+                    )
                 except Exception:
                     logger.warning(
                         "ECMWF a2 decode failed for step %dh", step_h, exc_info=True,
@@ -1020,6 +1036,8 @@ def run_standalone_cycle(
         scores_created = 0
         pruned = 0
 
+        _rss_log(f"start ({cycle_type})")
+
         if fetch_forecasts:
             # Phase A+B: Fetch and store forecasts per model. One model at a
             # time to bound memory — each model's snapshots are stored and
@@ -1094,6 +1112,7 @@ def run_standalone_cycle(
                 logger.info("Model %s: stored %d snapshots", model, stored)
                 del snapshots
                 models_fetched += 1
+                _rss_log(f"after {model}")
         else:
             logger.info("Skipping forecast fetch (score-only cycle)")
 
@@ -1147,6 +1166,8 @@ def run_standalone_cycle(
         )
         db.add(cycle_row)
         db.commit()
+
+        _rss_log(f"end ({cycle_type})")
 
         return {
             "cycle_type": cycle_type,

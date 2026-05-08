@@ -52,7 +52,7 @@ function extras(parts: string[]): string {
 
 const cloudDD: LayerTooltipDef = {
   id: 'cloud-bands',
-  enabledBy: ['soft-cloud-bands'],
+  enabledBy: ['soft-cloud-bands', 'square-cloud-bands'],
   getZones: (p) => p.cloudLayers,
   formatLine: (cl: VizCloudLayer) => {
     return `${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)} ${cl.coverage}`
@@ -62,7 +62,7 @@ const cloudDD: LayerTooltipDef = {
 
 const cloudNWP: LayerTooltipDef = {
   id: 'nwp-cloud-bands',
-  enabledBy: ['soft-nwp-cloud-bands'],
+  enabledBy: ['soft-nwp-cloud-bands', 'square-nwp-cloud-bands'],
   getZones: (p) => p.nwpCloudLayers ?? [],
   formatLine: (cl: VizCloudLayer) => {
     const tag = cl.source === 'grib' ? ' [band]' : '';

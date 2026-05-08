@@ -16,6 +16,22 @@ final class CrossSectionViewModel {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
     }
 
+    /// Currently-active method layer ID for a method group (clouds/icing/etc),
+    /// or nil if all methods in the group are off.
+    func activeMethod(for group: LayerGroup) -> String? {
+        guard let order = CrossSectionLayer.methodGroupOrder[group] else { return nil }
+        return order.first(where: { enabledLayers[$0] == true })
+    }
+
+    /// Set the active method for a group. Passing nil disables all methods in the group.
+    /// Other methods in the same group are turned off — only one is rendered at a time.
+    func setMethod(_ layerId: String?, for group: LayerGroup) {
+        guard let order = CrossSectionLayer.methodGroupOrder[group] else { return }
+        for id in order {
+            enabledLayers[id] = (id == layerId)
+        }
+    }
+
     // MARK: - Data extraction (port of data-extract.ts)
 
     static func extractVizData(
@@ -80,6 +96,15 @@ final class CrossSectionViewModel {
             VizCloudLayer(baseFt: $0.baseFt, topFt: $0.topFt, coverage: $0.coverage, meanDewpointDepressionC: $0.meanDewpointDepressionC)
         }
 
+        // nwp_cloud_layers: nil = no NWP source for this model; [] = clear sky.
+        // Mirrors web's data-extract semantics so layer toggles can distinguish
+        // "no data" (disable) from "clear sky" (render nothing).
+        let nwpCloudLayers: [VizCloudLayer]? = sounding?.nwpCloudLayers.map { layers in
+            layers.map {
+                VizCloudLayer(baseFt: $0.baseFt, topFt: $0.topFt, coverage: $0.coverage, meanDewpointDepressionC: $0.meanDewpointDepressionC)
+            }
+        }
+
         let icingZones = (sounding?.icingZones ?? []).map {
             VizIcingZone(baseFt: $0.baseFt, topFt: $0.topFt, risk: $0.risk, type: $0.icingType)
         }
@@ -124,6 +149,8 @@ final class CrossSectionViewModel {
         let temperatureC = divergenceValue(rpa.modelDivergence, variable: "temperature_c", model: model)
         let precipitationMm = divergenceValue(rpa.modelDivergence, variable: "precipitation_mm", model: model)
 
+        let convNwp = sounding?.convectiveNwp
+
         return VizPoint(
             distanceNm: rpa.distanceFromOriginNm,
             lat: rpa.lat,
@@ -131,12 +158,21 @@ final class CrossSectionViewModel {
             time: rpa.interpolatedTime,
             altitudeLines: altitudeLines,
             cloudLayers: cloudLayers,
+            nwpCloudLayers: nwpCloudLayers,
             icingZones: icingZones,
             icingOgimetNwpZones: icingOgimetNwpZones,
             sfipZones: sfipZones,
             catLayers: catLayers,
             inversions: inversions,
             convectiveRisk: sounding?.convective?.riskLevel ?? "none",
+            convectiveBaseFt: sounding?.convective?.baseFt,
+            convectiveTopFt: sounding?.convective?.topFt,
+            nwpConvectiveRisk: convNwp?.riskLevel ?? "none",
+            nwpConvectiveBaseFt: convNwp?.baseFt,
+            nwpConvectiveTopFt: convNwp?.topFt,
+            nwpConvectiveCoverPct: convNwp?.coverPct,
+            nwpConvectiveMethod: convNwp?.method,
+            hasNwpConvective: convNwp != nil,
             cloudCoverTotalPct: cloudCoverTotalPct,
             cloudCoverLowPct: sounding?.cloudCoverLowPct ?? 0,
             cloudCoverMidPct: sounding?.cloudCoverMidPct ?? 0,

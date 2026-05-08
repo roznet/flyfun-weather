@@ -3,6 +3,11 @@
 import type { VizLayout, VizSettings, CompareBandMode } from '../types';
 import type { DisplayMode } from '../../types/metrics';
 import { getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset } from '../cross-section/layer-registry';
+import {
+  CLOUD_LAYER_BY_AXES,
+  ALL_CLOUD_LAYER_IDS,
+  parseCloudLayerId,
+} from '../cross-section/layers/cloud-bands-factory';
 import { getComparableLayerGroups, getComparableLayer } from '../cross-section/compare-layers';
 import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
@@ -31,6 +36,65 @@ export interface LayerTogglesOptions {
   unavailableLayers?: Set<string>;
 }
 
+/** Source state derived from which cloud layer ids are currently enabled. */
+function cloudState(enabledLayers: Record<string, boolean>): {
+  ddEnabled: boolean;
+  nwpEnabled: boolean;
+  style: 'layer' | 'soft' | 'square';
+} {
+  let ddEnabled = false;
+  let nwpEnabled = false;
+  let style: 'layer' | 'soft' | 'square' = 'soft';
+  for (const id of ALL_CLOUD_LAYER_IDS) {
+    if (!enabledLayers[id]) continue;
+    const axes = parseCloudLayerId(id);
+    if (!axes) continue;
+    if (axes.source === 'dd') ddEnabled = true;
+    if (axes.source === 'nwp') nwpEnabled = true;
+    style = axes.style;  // last-wins; all enabled cloud layers share the same style by construction
+  }
+  return { ddEnabled, nwpEnabled, style };
+}
+
+/** Render the compound clouds control: per-source checkboxes + shared style dropdown. */
+function cloudCompoundHtml(
+  enabledLayers: Record<string, boolean>,
+  unavailable?: Set<string>,
+): string {
+  const { ddEnabled, nwpEnabled, style } = cloudState(enabledLayers);
+  // A source is "unavailable" iff its hatched-style id (the canonical
+  // data signal) is in the unavailable set. DD is sounding-derived so
+  // generally always available; NWP requires native cloud-cover data.
+  const ddUnavail = unavailable?.has('cloud-bands') ?? false;
+  const nwpUnavail = unavailable?.has('nwp-cloud-bands') ?? false;
+
+  const sourceCheckbox = (
+    source: 'dd' | 'nwp',
+    label: string,
+    checked: boolean,
+    unavail: boolean,
+  ): string => {
+    const dimClass = unavail ? ' viz-layer-unavailable' : '';
+    const tooltip = unavail ? ` title="${t('viz.notAvailableModel')}"` : '';
+    const disabled = unavail ? 'disabled' : '';
+    const checkedAttr = checked && !unavail ? 'checked' : '';
+    return `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`
+      + `<input type="checkbox" data-cloud-source="${source}" ${checkedAttr} ${disabled}>`
+      + `<span>${label}</span>`
+      + `</label>`;
+  };
+
+  let html = '';
+  html += sourceCheckbox('nwp', 'NWP', nwpEnabled, nwpUnavail);
+  html += sourceCheckbox('dd', 'DD', ddEnabled, ddUnavail);
+  html += `<select class="viz-model-select" data-cloud-style>`;
+  html += `<option value="soft"${style === 'soft' ? ' selected' : ''}>${t('viz.cloudStyle.soft')}</option>`;
+  html += `<option value="layer"${style === 'layer' ? ' selected' : ''}>${t('viz.cloudStyle.layer')}</option>`;
+  html += `<option value="square"${style === 'square' ? ' selected' : ''}>${t('viz.cloudStyle.square')}</option>`;
+  html += `</select>`;
+  return html;
+}
+
 /** Build the `<div class="viz-layer-toggles">...</div>` block for a set of
  *  enabled-layer states. Used inline by the main toolbar and by
  *  {@link renderLayerToggles} for callers that only want this section. */
@@ -52,6 +116,12 @@ function layerTogglesHtml(
     if (GROUP_INFO[group.group]) {
       html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${group.group}" title="About ${group.label}" aria-label="About ${group.label}">ⓘ</button>`;
     }
+    // Clouds group in non-compact mode: compound source-toggles + style dropdown.
+    if (group.group === 'clouds' && !isCompactCollapse) {
+      html += cloudCompoundHtml(enabledLayers, unavailableLayers);
+      html += '</div>';
+      continue;
+    }
     for (const layer of layersToRender) {
       const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
       const checked = !isUnavailable && enabledLayers[layer.id] !== false ? 'checked' : '';
@@ -70,6 +140,59 @@ function layerTogglesHtml(
   }
   html += '</div>';
   return html;
+}
+
+/** Wire the compound clouds control. Per-source checkboxes (DD, NWP) toggle
+ *  each source independently; the shared style dropdown swaps the active
+ *  layer-id for any source that's currently on. */
+function wireCloudCompound(
+  container: HTMLElement,
+  enabledLayers: Record<string, boolean>,
+  onToggle: (layerId: string) => void,
+): void {
+  const sourceCbs = container.querySelectorAll<HTMLInputElement>('[data-cloud-source]');
+  const styleSel = container.querySelector<HTMLSelectElement>('[data-cloud-style]');
+  if (sourceCbs.length === 0 || !styleSel) return;
+
+  // Layer id (if any) currently enabled for a given source.
+  const enabledIdFor = (source: 'dd' | 'nwp'): string | null => {
+    for (const id of ALL_CLOUD_LAYER_IDS) {
+      if (!enabledLayers[id]) continue;
+      const axes = parseCloudLayerId(id);
+      if (axes?.source === source) return id;
+    }
+    return null;
+  };
+
+  for (const cb of Array.from(sourceCbs)) {
+    cb.addEventListener('change', () => {
+      const source = cb.dataset.cloudSource as 'dd' | 'nwp';
+      const style = styleSel.value as 'layer' | 'soft' | 'square';
+      const currentId = enabledIdFor(source);
+      if (cb.checked) {
+        const targetId = CLOUD_LAYER_BY_AXES[source][style];
+        if (currentId && currentId !== targetId) onToggle(currentId);
+        if (currentId !== targetId) onToggle(targetId);
+      } else if (currentId) {
+        onToggle(currentId);
+      }
+    });
+  }
+
+  styleSel.addEventListener('change', () => {
+    const newStyle = styleSel.value as 'layer' | 'soft' | 'square';
+    // For each source that's currently enabled, swap from its current
+    // style-layer to the new style-layer. Sources that are off stay off.
+    for (const source of ['dd', 'nwp'] as const) {
+      const currentId = enabledIdFor(source);
+      if (!currentId) continue;
+      const targetId = CLOUD_LAYER_BY_AXES[source][newStyle];
+      if (currentId !== targetId) {
+        onToggle(currentId);
+        onToggle(targetId);
+      }
+    }
+  });
 }
 
 /** Wire `data-layer-info` and `data-group-info` buttons inside `container`
@@ -112,6 +235,7 @@ export function renderLayerToggles(
   container.querySelectorAll<HTMLInputElement>('input[data-layer-id]').forEach((cb) => {
     cb.addEventListener('change', () => onToggle(cb.dataset.layerId!));
   });
+  wireCloudCompound(container, enabledLayers, onToggle);
   wireLayerInfoButtons(container);
 }
 
@@ -233,6 +357,9 @@ export function renderVizControls(
       callbacks.onLayerToggle((checkbox as HTMLInputElement).dataset.layerId!);
     });
   });
+
+  // Wire compound clouds control (master + source + style).
+  wireCloudCompound(container, settings.enabledLayers, callbacks.onLayerToggle);
 
   // Wire model selector
   const vizModelSelect = container.querySelector('#viz-model-select') as HTMLSelectElement | null;
