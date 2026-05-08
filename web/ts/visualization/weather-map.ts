@@ -366,6 +366,13 @@ const FORECAST_LEGENDS: Record<ForecastMetric, { title: string; items: Array<{ c
 
 // --- Map class ---
 
+/** Right-click handler — receives only the ICAO. The map already has the
+ *  coords via the marker, but the host re-resolves them server-side
+ *  (via `_resolve_airport_coords`) so passing them here would be dead
+ *  payload. If a future host wants to skip that lookup, extend the
+ *  signature then. */
+export type AirportContextHandler = (icao: string) => void;
+
 export class WeatherMap {
   private container: HTMLElement;
   private map: L.Map | null = null;
@@ -373,9 +380,41 @@ export class WeatherMap {
   private legendEl: HTMLElement | null = null;
   private tileLayer: L.TileLayer | null = null;
   private zoomHandler: (() => void) | null = null;
+  private contextHandler: AirportContextHandler | null = null;
+  private highlightedIcao: string | null = null;
+  /** Marker registry. Stores the original style alongside the marker so
+   *  `setHighlightedIcao(null)` can restore the exact pre-highlight
+   *  appearance — consensus mode uses weight=2 + agreement-color border,
+   *  individual-model mode uses weight=1, and a single restored value
+   *  would silently change the visual encoding. */
+  private icaoToMarker: Map<string, { marker: L.CircleMarker; weight: number; color: string }> = new Map();
 
   constructor(container: HTMLElement) {
     this.container = container;
+  }
+
+  /** Register a callback fired when the user right-clicks an airport marker.
+   *  The forecast tab uses this to open the airport-profile detail panel. */
+  setAirportContextHandler(handler: AirportContextHandler | null): void {
+    this.contextHandler = handler;
+  }
+
+  /** Visually highlight one airport (typically the one currently shown
+   *  in the detail panel). Pass null to clear the highlight. */
+  setHighlightedIcao(icao: string | null): void {
+    if (this.highlightedIcao === icao) return;
+    if (this.highlightedIcao) {
+      const prev = this.icaoToMarker.get(this.highlightedIcao);
+      if (prev) prev.marker.setStyle({ weight: prev.weight, color: prev.color });
+    }
+    this.highlightedIcao = icao;
+    if (icao) {
+      const entry = this.icaoToMarker.get(icao);
+      if (entry) {
+        entry.marker.setStyle({ weight: 4, color: '#fbbf24' });
+        entry.marker.bringToFront();
+      }
+    }
   }
 
   init(): void {
@@ -428,6 +467,7 @@ export class WeatherMap {
   setForecastData(data: ForecastMapResponse, metric: ForecastMetric, model: string): void {
     if (!this.markersGroup || !this.map) return;
     this.markersGroup.clearLayers();
+    this.icaoToMarker.clear();
 
     const r = this.markerRadius();
     const consensusMode: ConsensusMode | null = isConsensusMode(model) ? model : null;
@@ -436,22 +476,40 @@ export class WeatherMap {
       const border = consensusMode
         ? (AGREEMENT_COLORS[getAgreementForMetric(getConsensus(apt, consensusMode), metric) ?? ''] || '#888')
         : color;
+      const baseWeight = consensusMode ? 2 : 1;
 
       const marker = L.circleMarker([apt.lat, apt.lon], {
         radius: r,
         fillColor: color,
         fillOpacity: 0.85,
         color: border,
-        weight: consensusMode ? 2 : 1,
+        weight: baseWeight,
         opacity: 1,
       });
 
       marker.bindTooltip(getForecastTooltip(apt, model, metric), { className: 'map-tooltip' });
+      // Right-click → open airport profile panel. Native contextmenu is
+      // suppressed so the browser menu doesn't fight Leaflet's event.
+      marker.on('contextmenu', (e: L.LeafletMouseEvent) => {
+        L.DomEvent.preventDefault(e.originalEvent);
+        L.DomEvent.stopPropagation(e.originalEvent);
+        this.contextHandler?.(apt.icao);
+      });
       marker.addTo(this.markersGroup);
+      this.icaoToMarker.set(apt.icao, { marker, weight: baseWeight, color: border });
     }
 
     this.attachZoomHandler();
     this.renderLegend(FORECAST_LEGENDS[metric]);
+
+    // Re-apply highlight if the currently-highlighted airport is still on the map.
+    if (this.highlightedIcao) {
+      const entry = this.icaoToMarker.get(this.highlightedIcao);
+      if (entry) {
+        entry.marker.setStyle({ weight: 4, color: '#fbbf24' });
+        entry.marker.bringToFront();
+      }
+    }
   }
 
   setVerificationData(data: VerificationMapResponse, metric: VerifMetric): void {

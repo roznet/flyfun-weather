@@ -22,6 +22,98 @@ const GROUP_INFO: Record<string, () => string> = {
   icing: () => t('viz.icingMethods'),
 };
 
+/** Options shared between the main toolbar's layer-toggle block and the
+ *  standalone {@link renderLayerToggles} helper. */
+export interface LayerTogglesOptions {
+  displayMode?: DisplayMode;
+  preferredMethods?: Record<string, string>;
+  unavailableLayers?: Set<string>;
+}
+
+/** Build the `<div class="viz-layer-toggles">...</div>` block for a set of
+ *  enabled-layer states. Used inline by the main toolbar and by
+ *  {@link renderLayerToggles} for callers that only want this section. */
+function layerTogglesHtml(
+  enabledLayers: Record<string, boolean>,
+  opts: LayerTogglesOptions = {},
+): string {
+  const { displayMode, preferredMethods, unavailableLayers } = opts;
+  const groups = getLayerGroups();
+  let html = '<div class="viz-layer-toggles">';
+  for (const group of groups) {
+    const isCompactCollapse = displayMode === 'compact' && COMPACT_GROUPS.has(group.group);
+    const layersToRender = isCompactCollapse
+      ? [getPreferredLayerForGroup(group.group, group.layers, preferredMethods?.[group.group])]
+      : group.layers;
+
+    html += `<div class="viz-layer-group">`;
+    html += `<span class="viz-group-label">${group.label}:</span>`;
+    if (GROUP_INFO[group.group]) {
+      html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${group.group}" title="About ${group.label}" aria-label="About ${group.label}">ⓘ</button>`;
+    }
+    for (const layer of layersToRender) {
+      const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
+      const checked = !isUnavailable && enabledLayers[layer.id] !== false ? 'checked' : '';
+      const disabled = isUnavailable ? 'disabled' : '';
+      const dimClass = isUnavailable ? ' viz-layer-unavailable' : '';
+      const tooltip = isUnavailable ? ` title="${t('viz.notAvailableModel')}"` : '';
+      html += `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
+      html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
+      html += `<span>${isCompactCollapse ? group.label : t('viz.layer.' + layer.id)}</span>`;
+      html += `</label>`;
+      if (layer.metricId) {
+        html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
+      }
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+/** Wire `data-layer-info` and `data-group-info` buttons inside `container`
+ *  to their respective info popups. Used by both the main toolbar and the
+ *  standalone {@link renderLayerToggles} so an info ⓘ is interactive
+ *  wherever the toggles render. */
+function wireLayerInfoButtons(container: HTMLElement): void {
+  container.querySelectorAll('[data-layer-info]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const el = btn as HTMLElement;
+      const layerId = el.dataset.layerInfo!;
+      const metricId = el.dataset.metricId!;
+      showLayerInfo(layerId, metricId);
+    });
+  });
+  container.querySelectorAll('[data-group-info]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const groupKey = (btn as HTMLElement).dataset.groupInfo!;
+      const infoFn = GROUP_INFO[groupKey];
+      if (infoFn) showPopupContent(infoFn());
+    });
+  });
+}
+
+/** Render layer toggle checkboxes into a standalone container and wire
+ *  change events + ⓘ info popups. For callers that only need the
+ *  layer-selection part of the main toolbar (e.g. the airport-profile
+ *  panel's settings drawer). */
+export function renderLayerToggles(
+  container: HTMLElement,
+  enabledLayers: Record<string, boolean>,
+  onToggle: (layerId: string) => void,
+  opts: LayerTogglesOptions = {},
+): void {
+  container.innerHTML = layerTogglesHtml(enabledLayers, opts);
+  container.querySelectorAll<HTMLInputElement>('input[data-layer-id]').forEach((cb) => {
+    cb.addEventListener('change', () => onToggle(cb.dataset.layerId!));
+  });
+  wireLayerInfoButtons(container);
+}
+
 export interface VizControlCallbacks {
   onLayerToggle: (layerId: string) => void;
   onLayoutChange: (layout: VizLayout) => void;
@@ -50,8 +142,6 @@ export function renderVizControls(
   preferredMethods?: Record<string, string>,
   unavailableLayers?: Set<string>,
 ): void {
-  const groups = getLayerGroups();
-
   let html = '<div class="viz-toolbar">';
 
   // Top row: Layout toggle + Model indicator + Render mode toggle
@@ -117,39 +207,14 @@ export function renderVizControls(
 
   html += '</div>'; // .viz-toolbar-top
 
-  // Layer toggles — only when cross-section visible
+  // Layer toggles — only when cross-section visible. The HTML is built
+  // by `layerTogglesHtml()` (also reused by `renderLayerToggles()` for
+  // the airport-profile drawer); change listeners are wired below.
   if (settings.layout !== 'map') {
-    html += '<div class="viz-layer-toggles">';
-    for (const group of groups) {
-      const isCompactCollapse = displayMode === 'compact' && COMPACT_GROUPS.has(group.group);
-      const layersToRender = isCompactCollapse
-        ? [getPreferredLayerForGroup(group.group, group.layers, preferredMethods?.[group.group])]
-        : group.layers;
-
-      html += `<div class="viz-layer-group">`;
-      html += `<span class="viz-group-label">${group.label}:</span>`;
-      if (GROUP_INFO[group.group]) {
-        html += `<button class="viz-layer-info-btn viz-group-info-btn" data-group-info="${group.group}" title="About ${group.label}" aria-label="About ${group.label}">\u24d8</button>`;
-      }
-      for (const layer of layersToRender) {
-        const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
-        const checked = !isUnavailable && settings.enabledLayers[layer.id] !== false ? 'checked' : '';
-        const disabled = isUnavailable ? 'disabled' : '';
-        const dimClass = isUnavailable ? ' viz-layer-unavailable' : '';
-        const tooltip = isUnavailable ? ` title="${t('viz.notAvailableModel')}"` : '';
-        html += `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
-        html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
-        html += `<span>${isCompactCollapse ? group.label : t('viz.layer.' + layer.id)}</span>`;
-        html += `</label>`;
-        if (layer.metricId) {
-          html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">\u24d8</button>`;
-        }
-      }
-      html += '</div>';
-    }
-    html += '</div>';
+    html += layerTogglesHtml(settings.enabledLayers, {
+      displayMode, preferredMethods, unavailableLayers,
+    });
   }
-
   html += '</div>'; // .viz-toolbar
 
   container.innerHTML = html;
@@ -203,28 +268,8 @@ export function renderVizControls(
     });
   }
 
-  // Wire info buttons
-  container.querySelectorAll('[data-layer-info]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const el = btn as HTMLElement;
-      const layerId = el.dataset.layerInfo!;
-      const metricId = el.dataset.metricId!;
-      showLayerInfo(layerId, metricId);
-    });
-  });
-
-  // Wire group info buttons
-  container.querySelectorAll('[data-group-info]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const groupKey = (btn as HTMLElement).dataset.groupInfo!;
-      const infoFn = GROUP_INFO[groupKey];
-      if (infoFn) showPopupContent(infoFn());
-    });
-  });
+  // Wire layer + group info ⓘ buttons (shared with renderLayerToggles).
+  wireLayerInfoButtons(container);
 }
 
 /** Render route graph controls (toggle + metric dropdowns) into a separate container below the graph. */

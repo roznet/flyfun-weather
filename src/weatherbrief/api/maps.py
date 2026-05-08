@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
@@ -26,8 +26,7 @@ router = APIRouter(prefix="/maps", tags=["maps"])
 from weatherbrief.tasks.standalone_verification import SAMPLE_HOURS_UTC as _SAMPLE_HOURS
 
 
-def _airports_db(request: Request) -> str:
-    return request.app.state.db_path
+from weatherbrief.api.deps import airports_db as _airports_db
 
 
 @router.get("/forecast")
