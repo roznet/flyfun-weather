@@ -1120,6 +1120,97 @@ function formatUtcCaption(d: Date): string {
   return `${yyyy}-${mm}-${dd} ${hh}Z`;
 }
 
+interface DwdChartWaypoint {
+  icao: string;
+  lat: number;
+  lon: number;
+  x: number;
+  y: number;
+}
+
+interface DwdChartOverlay {
+  analysis: { native_size: [number, number]; waypoints: DwdChartWaypoint[] };
+  icon: { native_size: [number, number]; waypoints: DwdChartWaypoint[] };
+}
+
+function chartTypeFor(chartId: string): 'analysis' | 'icon' {
+  return chartId === 'ana' ? 'analysis' : 'icon';
+}
+
+function renderRouteSvg(
+  overlay: DwdChartOverlay,
+  chartType: 'analysis' | 'icon',
+): string {
+  const data = overlay[chartType];
+  if (!data || !data.waypoints.length) return '';
+  const [w, h] = data.native_size;
+  const wps = data.waypoints;
+  const polyline = wps.map((p) => `${p.x},${p.y}`).join(' ');
+  // Sizes scale with native chart resolution so they look the same on
+  // the analysis (4389px wide) and icon (800px wide) charts.
+  const dotR = w / 250;
+  const labelFont = w / 35;
+  const labelDistance = w / 60; // dot-center → label-anchor (≥ 5 × dotR)
+  const haloW = w / 800;
+
+  const dots = wps
+    .map(
+      (p) =>
+        `<circle cx="${p.x}" cy="${p.y}" r="${dotR}" fill="#ff00ff" stroke="white" stroke-width="${haloW}" />`,
+    )
+    .join('');
+
+  // Smart label placement: push each endpoint label OUTSIDE the route's
+  // bounding box, in the direction from bbox-center → endpoint. This puts
+  // the label past the endpoint in genuinely empty space — no overlap
+  // with any segment of the route, regardless of how the route curves.
+  const minX = Math.min(...wps.map((p) => p.x));
+  const maxX = Math.max(...wps.map((p) => p.x));
+  const minY = Math.min(...wps.map((p) => p.y));
+  const maxY = Math.max(...wps.map((p) => p.y));
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+
+  const endpoints =
+    wps.length >= 2 ? [wps[0], wps[wps.length - 1]] : wps.length === 1 ? [wps[0]] : [];
+
+  const labels = endpoints
+    .map((wp) => {
+      // Fallback: if endpoint is exactly at the bbox center (degenerate
+      // single-point or all-coincident routes), just put the label to
+      // the right of the dot.
+      let dx = wp.x - cx;
+      let dy = wp.y - cy;
+      const mag = Math.hypot(dx, dy);
+      if (mag === 0) {
+        dx = 1;
+        dy = 0;
+      }
+      const ux = mag > 0 ? dx / mag : 1;
+      const uy = mag > 0 ? dy / mag : 0;
+      const lx = wp.x + ux * labelDistance;
+      const ly = wp.y + uy * labelDistance;
+      // Sign-based anchor/baseline — text always extends AWAY from the
+      // dot, so it can't drift back over the endpoint.
+      const anchor = ux > 0 ? 'start' : ux < 0 ? 'end' : 'middle';
+      const baseline = uy > 0 ? 'hanging' : uy < 0 ? 'alphabetic' : 'middle';
+      return `<text x="${lx}" y="${ly}" font-size="${labelFont}" font-family="sans-serif" font-weight="bold" text-anchor="${anchor}" dominant-baseline="${baseline}" fill="white" stroke="black" stroke-width="${haloW * 2}" paint-order="stroke" style="white-space:pre;">${escapeHtml(wp.icao)}</text>`;
+    })
+    .join('');
+
+  // vector-effect keeps the polyline 2px wide regardless of viewBox
+  // scaling, so it stays crisp at any zoom level.
+  return `
+    <svg class="dwd-route-overlay" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"
+         style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;">
+      <polyline points="${polyline}" stroke="#ff00ff" stroke-width="2.5" fill="none"
+                vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round" />
+      ${dots}
+      ${labels}
+    </svg>
+  `;
+}
+
 export function renderDwdCharts(
   flight: FlightResponse | null,
   pack: PackMeta | null,
@@ -1157,16 +1248,49 @@ export function renderDwdCharts(
   }).join('');
 
   el.innerHTML = `
-    <div class="dwd-charts-tabs" role="tablist" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+    <div class="dwd-charts-tabs" role="tablist" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; align-items:center;">
       ${tabsHtml}
+      <label style="margin-left:auto; display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;" title="Toggle route overlay">
+        <input type="checkbox" id="dwd-charts-route-toggle" checked style="cursor:pointer;">
+        <span>Show route</span>
+      </label>
     </div>
     <div id="dwd-charts-image-wrap" style="text-align:center;">
-      <img id="dwd-charts-image" alt="DWD chart" style="max-width:100%; height:auto;">
+      <div id="dwd-charts-image-container" style="position:relative; display:inline-block; max-width:100%;">
+        <img id="dwd-charts-image" alt="DWD chart" style="display:block; max-width:100%; height:auto;">
+        <div id="dwd-charts-overlay-slot" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></div>
+      </div>
       <p id="dwd-charts-caption" class="header-meta" style="margin-top:6px;"></p>
     </div>
   `;
 
+  let currentChartId = defaultId;
+  let routeVisible = true;
+  let overlay: DwdChartOverlay | null = null;
+
+  const updateOverlay = (): void => {
+    const slot = document.getElementById('dwd-charts-overlay-slot');
+    if (!slot) return;
+    if (!overlay || !routeVisible) {
+      slot.innerHTML = '';
+      return;
+    }
+    slot.innerHTML = renderRouteSvg(overlay, chartTypeFor(currentChartId));
+  };
+
+  // Fetch overlay once per render. Failures degrade silently — chart still works.
+  fetch(api.dwdChartOverlayUrl(flight.id, pack.fetch_timestamp))
+    .then((r) => (r.ok ? (r.json() as Promise<DwdChartOverlay>) : null))
+    .then((data) => {
+      overlay = data;
+      updateOverlay();
+    })
+    .catch(() => {
+      overlay = null;
+    });
+
   const showChart = (chartId: string): void => {
+    currentChartId = chartId;
     const img = document.getElementById('dwd-charts-image') as HTMLImageElement | null;
     const caption = document.getElementById('dwd-charts-caption');
     if (!img || !caption) return;
@@ -1176,9 +1300,12 @@ export function renderDwdCharts(
     img.onerror = () => {
       img.style.display = 'none';
       caption.innerHTML = `<span class="muted">Chart no longer available — the cached file has been evicted.</span>`;
+      const slot = document.getElementById('dwd-charts-overlay-slot');
+      if (slot) slot.innerHTML = '';
     };
     img.onload = () => {
       img.style.display = '';
+      updateOverlay();
     };
 
     let issuedCaption = '';
@@ -1188,17 +1315,23 @@ export function renderDwdCharts(
     }
     caption.innerHTML = `${issuedCaption}Source: <a href="${DWD_PAGE_URL}" target="_blank" rel="noopener">Deutscher Wetterdienst (DWD)</a>, CC BY 4.0`;
 
-    el.querySelectorAll('.dwd-charts-tabs .btn-toggle').forEach((btn) => {
+    el.querySelectorAll('.dwd-charts-tabs .btn-toggle[data-chart-id]').forEach((btn) => {
       const b = btn as HTMLButtonElement;
       b.classList.toggle('active', b.dataset.chartId === chartId);
     });
   };
 
-  el.querySelectorAll('.dwd-charts-tabs .btn-toggle').forEach((btn) => {
+  el.querySelectorAll('.dwd-charts-tabs .btn-toggle[data-chart-id]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = (btn as HTMLButtonElement).dataset.chartId;
       if (id) showChart(id);
     });
+  });
+
+  const routeCheckbox = document.getElementById('dwd-charts-route-toggle') as HTMLInputElement | null;
+  routeCheckbox?.addEventListener('change', () => {
+    routeVisible = routeCheckbox.checked;
+    updateOverlay();
   });
 
   showChart(defaultId);

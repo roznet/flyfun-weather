@@ -69,6 +69,39 @@ _TIMEOUT_SECONDS = 30
 _DEFAULT_KEEP_CYCLES = 8  # ~2 days at 6h cadence
 _USER_AGENT = "flyfun-weather/1.0 (+https://weather.flyfun.aero)"
 
+# Native pixel sizes of each chart, used for client-side SVG overlay scaling.
+CHART_NATIVE_SIZE: dict[str, tuple[int, int]] = {
+    "analysis": (4389, 3114),
+    "icon": (800, 653),
+}
+
+# Calibrations for converting WGS84 lon/lat to chart-pixel coordinates.
+# Each entry holds the polar-stereographic projection parameters (consumed
+# by pyproj) and an 8-coefficient 2D homography fit from gridline
+# intersections identified manually on the chart. Originally calibrated
+# in src/weatherbrief/frontal/cli.py — moved here so the same math can
+# drive both the frontal zone overlay and the briefing route overlay.
+_CHART_CALIBRATIONS: dict[str, dict[str, object]] = {
+    # Max calibration error: 1.2px
+    "icon": {
+        "proj": {"proj": "stere", "lat_0": 90, "lat_ts": 60, "lon_0": 5},
+        "homography": (
+            0.00010064544583772085, 8.021406574208543e-06, 505.2081110061641,
+            8.455010167934436e-06, -0.00010106842893807126, -114.44765418753545,
+            -3.747121446686481e-10, -3.0137722186545355e-10,
+        ),
+    },
+    # Max calibration error: 3.0px
+    "analysis": {
+        "proj": {"proj": "stere", "lat_0": 90, "lat_ts": 90, "lon_0": 10},
+        "homography": (
+            0.0005145316041850823, 5.082539130306949e-06, 2793.4808547432303,
+            1.1777669359815649e-06, -0.0005125590704322343, -606.7192569143913,
+            8.930427981271965e-10, 1.7297125807436028e-09,
+        ),
+    },
+}
+
 
 @dataclass
 class ChartFetchResult:
@@ -220,6 +253,73 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def lonlat_to_chart_pixel(
+    lon: float,
+    lat: float,
+    chart_type: str,
+) -> tuple[int, int]:
+    """Project WGS84 lon/lat to native pixel coordinates on a DWD chart.
+
+    ``chart_type`` is "analysis" (4389×3114) or "icon" (800×653 — used by
+    every forecast offset 036/048/060/084/108).
+
+    Composes pyproj's polar stereographic forward projection with a 2D
+    homography fit from gridline intersections. Uses pyproj at runtime;
+    not imported here at module scope so the cache module stays usable
+    in environments where pyproj isn't installed (it's already a
+    dependency for the frontal pipeline).
+    """
+    if chart_type not in _CHART_CALIBRATIONS:
+        raise ValueError(f"Unknown DWD chart type: {chart_type!r}")
+
+    import pyproj
+
+    cal = _CHART_CALIBRATIONS[chart_type]
+    proj = pyproj.Proj(**cal["proj"])  # type: ignore[arg-type]
+    a, b, c, d, e, f, g, h = cal["homography"]  # type: ignore[misc]
+
+    x, y = proj(lon, lat)
+    denom = g * x + h * y + 1
+    px = (a * x + b * y + c) / denom
+    py = (d * x + e * y + f) / denom
+    return int(px), int(py)
+
+
+def build_route_overlay(
+    waypoints: list[tuple[str, float, float]],
+) -> dict:
+    """Build the route-overlay JSON consumed by the frontend SVG renderer.
+
+    Args:
+        waypoints: ``[(icao, lat, lon), ...]`` in flight order.
+
+    Returns a structure with both chart-types pre-computed so the
+    frontend can switch between analysis and forecast tabs without
+    extra round-trips:
+
+        {
+          "analysis": {
+            "native_size": [4389, 3114],
+            "waypoints": [{"icao": "EGTF", "lat": ..., "lon": ..., "x": 1234, "y": 567}, ...]
+          },
+          "icon": { "native_size": [800, 653], "waypoints": [...] }
+        }
+    """
+    out: dict[str, dict] = {}
+    for chart_type, native_size in CHART_NATIVE_SIZE.items():
+        projected = []
+        for icao, lat, lon in waypoints:
+            x, y = lonlat_to_chart_pixel(lon, lat, chart_type)
+            projected.append(
+                {"icao": icao, "lat": lat, "lon": lon, "x": x, "y": y}
+            )
+        out[chart_type] = {
+            "native_size": list(native_size),
+            "waypoints": projected,
+        }
+    return out
 
 
 def _parse_lm_header(value: str | None) -> datetime | None:

@@ -539,6 +539,7 @@ def execute_briefing(
         route=route,
         departure_time=departure_time,
         data_dir=data_dir,
+        pack_dir=pack_dir,
     )
     result.dwd_charts_run_cycle = dwd_charts_result.run_cycle
     result.dwd_charts_default_id = dwd_charts_result.default_chart_id

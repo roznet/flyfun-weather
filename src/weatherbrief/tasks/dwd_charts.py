@@ -47,6 +47,7 @@ def run_dwd_charts(
     route: RouteConfig,
     departure_time: datetime,
     data_dir: Path,
+    pack_dir: Path | None = None,
 ) -> DwdChartsResult:
     """Refresh the DWD chart cache and compute briefing references.
 

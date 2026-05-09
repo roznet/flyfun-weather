@@ -10,13 +10,16 @@ import responses
 
 from weatherbrief.fetch.dwd_charts import (
     CHART_IDS,
+    CHART_NATIVE_SIZE,
     DWD_BASE_URL,
     FORECAST_OFFSETS_H,
+    build_route_overlay,
     chart_meta,
     cycle_dir,
     evict_cycles_older_than,
     evict_old_cycles,
     list_cycles,
+    lonlat_to_chart_pixel,
     parse_run_cycle_from_last_modified,
     refresh_charts,
     resolve_chart_path,
@@ -290,3 +293,58 @@ def test_resolve_chart_path_hit_and_miss(tmp_path: Path):
 
 def test_chart_meta_returns_none_on_miss(tmp_path: Path):
     assert chart_meta(tmp_path, "2026-05-08T06Z", "ana") is None
+
+
+# ---------------------------------------------------------------------------
+# lonlat_to_chart_pixel + build_route_overlay
+# ---------------------------------------------------------------------------
+
+
+def test_lonlat_to_chart_pixel_inside_chart_bounds():
+    """A central-Europe point projects inside the chart frame on both calibrations."""
+    # Frankfurt-ish (~50N 8E) — well inside both NA charts.
+    for chart_type, (w, h) in CHART_NATIVE_SIZE.items():
+        x, y = lonlat_to_chart_pixel(8.0, 50.0, chart_type)
+        assert 0 < x < w, f"{chart_type} x out of range: {x}"
+        assert 0 < y < h, f"{chart_type} y out of range: {y}"
+
+
+def test_lonlat_to_chart_pixel_unknown_chart_raises():
+    with pytest.raises(ValueError):
+        lonlat_to_chart_pixel(0.0, 50.0, "bogus")
+
+
+def test_lonlat_to_chart_pixel_distinct_points_distinct_pixels():
+    """Two well-separated points must not collapse to the same pixel."""
+    p_paris = lonlat_to_chart_pixel(2.35, 48.86, "icon")  # Paris
+    p_oslo = lonlat_to_chart_pixel(10.75, 59.91, "icon")  # Oslo
+    assert p_paris != p_oslo
+    # Oslo is north and east of Paris on this chart — y should be smaller (north = up = lower y)
+    assert p_oslo[1] < p_paris[1]
+
+
+def test_build_route_overlay_shape():
+    waypoints = [
+        ("EGTF", 51.34, -0.55),
+        ("LFPB", 48.97, 2.44),
+        ("LSGS", 46.22, 7.33),
+    ]
+    overlay = build_route_overlay(waypoints)
+
+    assert set(overlay.keys()) == {"analysis", "icon"}
+    for chart_type in ("analysis", "icon"):
+        section = overlay[chart_type]
+        assert section["native_size"] == list(CHART_NATIVE_SIZE[chart_type])
+        assert len(section["waypoints"]) == 3
+        for orig, projected in zip(waypoints, section["waypoints"]):
+            assert projected["icao"] == orig[0]
+            assert projected["lat"] == orig[1]
+            assert projected["lon"] == orig[2]
+            assert isinstance(projected["x"], int)
+            assert isinstance(projected["y"], int)
+
+
+def test_build_route_overlay_handles_empty_waypoints():
+    overlay = build_route_overlay([])
+    assert overlay["analysis"]["waypoints"] == []
+    assert overlay["icon"]["waypoints"] == []

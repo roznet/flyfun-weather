@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
@@ -2802,6 +2802,54 @@ def get_dwd_chart(
     return FileResponse(
         path,
         media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get("/{timestamp}/dwd-chart-overlay")
+def get_dwd_chart_overlay(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Compute the route-overlay JSON for the DWD chart section.
+
+    Pre-projects each waypoint into native pixel coordinates for both
+    chart types (analysis 4389×3114 and icon 800×653). Frontend renders
+    these as an SVG polyline with markers, scaling via SVG ``viewBox``.
+
+    Computed on-demand from the briefing snapshot — projection is cheap
+    (sub-ms per waypoint) and this avoids a per-pack file artifact, so
+    the overlay works for packs created before this feature shipped.
+    Falls back to live waypoint resolution when ``briefing.json`` is
+    missing (very old / partial packs).
+    """
+    from weatherbrief.fetch.dwd_charts import build_route_overlay
+
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    waypoints: list[tuple[str, float, float]] = []
+    briefing_path = pack_dir / "briefing.json"
+    if briefing_path.exists():
+        try:
+            data = json_mod.loads(briefing_path.read_text())
+            for wp in (data.get("route") or {}).get("waypoints") or []:
+                if "icao" in wp and "lat" in wp and "lon" in wp:
+                    waypoints.append((wp["icao"], float(wp["lat"]), float(wp["lon"])))
+        except (json_mod.JSONDecodeError, OSError, TypeError, ValueError):
+            logger.warning("Failed to parse briefing.json for overlay", exc_info=True)
+
+    if not waypoints:
+        # No briefing.json or no waypoints in it — pack predates the
+        # split-storage era. Section will just render without the overlay.
+        raise HTTPException(
+            status_code=404, detail="No waypoints available for overlay",
+        )
+
+    overlay = build_route_overlay(waypoints)
+    return JSONResponse(
+        content=overlay,
         headers={"Cache-Control": "public, max-age=3600"},
     )
 

@@ -188,3 +188,59 @@ def test_pack_meta_response_includes_dwd_chart_fields(client, app_db, tmp_path):
     assert pack["dwd_charts_default_id"] == "048"
     assert pack["dwd_charts_in_coverage"] is True
     assert pack["dwd_charts_within_horizon"] is True
+
+
+# --- Route overlay endpoint -------------------------------------------------
+
+
+def _seed_pack_dir_with_briefing(
+    pack_dir: Path,
+    waypoints: list[tuple[str, float, float]],
+) -> Path:
+    """Write a minimal briefing.json with route.waypoints (icao/lat/lon)."""
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    data = {
+        "route": {
+            "name": "test",
+            "waypoints": [
+                {"icao": icao, "name": icao, "lat": lat, "lon": lon}
+                for icao, lat, lon in waypoints
+            ],
+        },
+    }
+    path = pack_dir / "briefing.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_dwd_chart_overlay_returns_json(client, app_db, tmp_path: Path):
+    flight, meta = _seed_flight_and_pack(app_db)
+    # _get_pack_dir reconstructs from user/flight/timestamp; create that dir.
+    from weatherbrief.storage.flights import pack_dir_for
+    pack_dir = pack_dir_for(DEV_USER_ID, flight.id, meta.fetch_timestamp.isoformat())
+    _seed_pack_dir_with_briefing(
+        pack_dir,
+        [("EGTF", 51.34, -0.55), ("LSGS", 46.22, 7.33)],
+    )
+
+    ts = meta.fetch_timestamp.isoformat()
+    resp = client.get(f"/api/flights/{flight.id}/packs/{ts}/dwd-chart-overlay")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "analysis" in body
+    assert "icon" in body
+    assert body["analysis"]["waypoints"][0]["icao"] == "EGTF"
+    assert body["analysis"]["native_size"] == [4389, 3114]
+    assert body["icon"]["native_size"] == [800, 653]
+
+
+def test_dwd_chart_overlay_404_when_briefing_missing(client, app_db, tmp_path: Path):
+    flight, meta = _seed_flight_and_pack(app_db)
+    # Create the pack dir so _get_pack_dir succeeds, but no briefing.json inside.
+    from weatherbrief.storage.flights import pack_dir_for
+    pack_dir = pack_dir_for(DEV_USER_ID, flight.id, meta.fetch_timestamp.isoformat())
+    pack_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = meta.fetch_timestamp.isoformat()
+    resp = client.get(f"/api/flights/{flight.id}/packs/{ts}/dwd-chart-overlay")
+    assert resp.status_code == 404

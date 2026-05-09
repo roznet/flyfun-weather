@@ -1728,45 +1728,14 @@ def _download_dwd_chart(name: str, filename: str, output_dir: Path) -> Path | No
 def _dwd_lonlat_to_pixel(
     lon: float, lat: float, chart_type: str = "analysis",
 ) -> tuple[int, int]:
-    """Convert lon/lat to pixel coordinates on a DWD chart.
+    """Thin wrapper kept for callers within this module.
 
-    Uses polar stereographic projections with homography transforms
-    calibrated from user-provided gridline intersection points.
-
-    chart_type: "analysis" (4389×3114) or "icon" (800×653).
+    The actual calibration + projection lives in
+    :mod:`weatherbrief.fetch.dwd_charts` so the briefing's route overlay
+    can reuse the same math.
     """
-    import pyproj
-
-    # Each chart type has its own projection and homography, calibrated
-    # from 7 lat/lon gridline intersections identified by the user.
-    if chart_type == "icon":
-        # ICON forecast chart (800×653)
-        # Projection: stere lat_0=90 lat_ts=60 lon_0=5
-        # Max calibration error: 1.2px
-        proj = pyproj.Proj(proj="stere", lat_0=90, lat_ts=60, lon_0=5)
-        H = [
-            0.00010064544583772085, 8.021406574208543e-06, 505.2081110061641,
-            8.455010167934436e-06, -0.00010106842893807126, -114.44765418753545,
-            -3.747121446686481e-10, -3.0137722186545355e-10,
-        ]
-    else:
-        # Analysis chart (4389×3114)
-        # Projection: stere lat_0=90 lat_ts=90 lon_0=10
-        # Max calibration error: 3.0px
-        proj = pyproj.Proj(proj="stere", lat_0=90, lat_ts=90, lon_0=10)
-        H = [
-            0.0005145316041850823, 5.082539130306949e-06, 2793.4808547432303,
-            1.1777669359815649e-06, -0.0005125590704322343, -606.7192569143913,
-            8.930427981271965e-10, 1.7297125807436028e-09,
-        ]
-
-    a, b, c, d, e, f, g, h = H
-    x, y = proj(lon, lat)
-    denom = g * x + h * y + 1
-    px = (a * x + b * y + c) / denom
-    py = (d * x + e * y + f) / denom
-
-    return int(px), int(py)
+    from weatherbrief.fetch.dwd_charts import lonlat_to_chart_pixel
+    return lonlat_to_chart_pixel(lon, lat, chart_type)
 
 
 _FRONT_FILL_RGBA = {
