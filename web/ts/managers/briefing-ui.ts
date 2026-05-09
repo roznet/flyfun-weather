@@ -1082,6 +1082,128 @@ async function fetchAndRenderDigestJson(
   }
 }
 
+// --- DWD Surface Analysis & Forecast ---
+
+const DWD_CHART_TABS: ReadonlyArray<{ id: string; label: string; offsetH: number }> = [
+  { id: 'ana', label: 'Analysis', offsetH: 0 },
+  { id: '036', label: '+36h', offsetH: 36 },
+  { id: '048', label: '+48h', offsetH: 48 },
+  { id: '060', label: '+60h', offsetH: 60 },
+  { id: '084', label: '+84h', offsetH: 84 },
+  { id: '108', label: '+108h', offsetH: 108 },
+];
+
+const DWD_PAGE_URL = 'https://www.dwd.de/DE/leistungen/hobbymet_wk_europa/hobbyeuropakarten.html';
+
+/** Parse "2026-05-08T06Z" into a Date. Returns null on failure. */
+function parseRunCycle(runCycle: string): Date | null {
+  // "2026-05-08T06Z" → "2026-05-08T06:00:00Z"
+  const m = runCycle.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})Z$/);
+  if (!m) return null;
+  const d = new Date(`${m[1]}T${m[2]}:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatHoursAgo(ms: number): string {
+  const hours = Math.max(0, Math.round(ms / 3_600_000));
+  if (hours < 1) return 'just now';
+  if (hours === 1) return '1 hour ago';
+  if (hours < 48) return `${hours} hours ago`;
+  return `${Math.floor(hours / 24)} days ago`;
+}
+
+function formatUtcCaption(d: Date): string {
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}Z`;
+}
+
+export function renderDwdCharts(
+  flight: FlightResponse | null,
+  pack: PackMeta | null,
+): void {
+  const wrapper = $('dwd-charts-wrapper');
+  const el = $('dwd-charts-section');
+  if (!wrapper || !el) return;
+
+  if (!flight || !pack) {
+    wrapper.style.display = 'none';
+    return;
+  }
+
+  if (!pack.dwd_charts_in_coverage) {
+    // Section silently hidden for non-Europe routes (matches DWD-overview behaviour).
+    wrapper.style.display = 'none';
+    return;
+  }
+
+  if (!pack.dwd_charts_within_horizon || !pack.dwd_charts_run_cycle) {
+    wrapper.style.display = '';
+    el.innerHTML = `<p class="muted">DWD charts unavailable for this briefing — flight is beyond the +108h forecast horizon, or the chart refresh failed.</p>`;
+    return;
+  }
+
+  const runCycle = pack.dwd_charts_run_cycle;
+  const issuedDate = parseRunCycle(runCycle);
+  const defaultId = pack.dwd_charts_default_id || 'ana';
+
+  wrapper.style.display = '';
+
+  const tabsHtml = DWD_CHART_TABS.map((tab) => {
+    const cls = tab.id === defaultId ? 'btn-toggle active' : 'btn-toggle';
+    return `<button type="button" class="${cls}" data-chart-id="${tab.id}">${escapeHtml(tab.label)}</button>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="dwd-charts-tabs" role="tablist" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+      ${tabsHtml}
+    </div>
+    <div id="dwd-charts-image-wrap" style="text-align:center;">
+      <img id="dwd-charts-image" alt="DWD chart" style="max-width:100%; height:auto;">
+      <p id="dwd-charts-caption" class="header-meta" style="margin-top:6px;"></p>
+    </div>
+  `;
+
+  const showChart = (chartId: string): void => {
+    const img = document.getElementById('dwd-charts-image') as HTMLImageElement | null;
+    const caption = document.getElementById('dwd-charts-caption');
+    if (!img || !caption) return;
+
+    img.src = api.dwdChartUrl(flight.id, pack.fetch_timestamp, chartId);
+    img.alt = `DWD chart ${chartId}`;
+    img.onerror = () => {
+      img.style.display = 'none';
+      caption.innerHTML = `<span class="muted">Chart no longer available — the cached file has been evicted.</span>`;
+    };
+    img.onload = () => {
+      img.style.display = '';
+    };
+
+    let issuedCaption = '';
+    if (issuedDate) {
+      const ago = formatHoursAgo(Date.now() - issuedDate.getTime());
+      issuedCaption = `Issued ${ago} (${escapeHtml(formatUtcCaption(issuedDate))}) · `;
+    }
+    caption.innerHTML = `${issuedCaption}Source: <a href="${DWD_PAGE_URL}" target="_blank" rel="noopener">Deutscher Wetterdienst (DWD)</a>, CC BY 4.0`;
+
+    el.querySelectorAll('.dwd-charts-tabs .btn-toggle').forEach((btn) => {
+      const b = btn as HTMLButtonElement;
+      b.classList.toggle('active', b.dataset.chartId === chartId);
+    });
+  };
+
+  el.querySelectorAll('.dwd-charts-tabs .btn-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = (btn as HTMLButtonElement).dataset.chartId;
+      if (id) showChart(id);
+    });
+  });
+
+  showChart(defaultId);
+}
+
 // --- DWD Synoptic Overview ---
 
 export function renderDWDOverview(

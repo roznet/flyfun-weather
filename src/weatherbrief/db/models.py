@@ -217,6 +217,18 @@ class BriefingPackRow(Base):
     alt_assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     alt_assessment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     has_alt_advisories: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # DWD Surface Analysis & Forecast section.
+    # Bytes live in the shared DATA_DIR/dwd_charts/<run_cycle>/ cache; this
+    # row only stores references. NULL run_cycle = section unavailable for
+    # this pack (out of coverage, beyond horizon, or refresh failed).
+    dwd_charts_run_cycle: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    dwd_charts_default_id: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    dwd_charts_in_coverage: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0",
+    )
+    dwd_charts_within_horizon: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0",
+    )
     integrity_hmac: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     flight: Mapped[FlightRow] = relationship(back_populates="packs")

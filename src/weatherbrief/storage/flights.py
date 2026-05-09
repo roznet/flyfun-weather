@@ -219,6 +219,10 @@ def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
     row.alt_assessment = meta.alt_assessment
     row.alt_assessment_reason = meta.alt_assessment_reason
     row.has_alt_advisories = meta.has_alt_advisories
+    row.dwd_charts_run_cycle = meta.dwd_charts_run_cycle
+    row.dwd_charts_default_id = meta.dwd_charts_default_id
+    row.dwd_charts_in_coverage = meta.dwd_charts_in_coverage
+    row.dwd_charts_within_horizon = meta.dwd_charts_within_horizon
 
 
 def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
@@ -311,6 +315,10 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         alt_assessment=row.alt_assessment,
         alt_assessment_reason=row.alt_assessment_reason,
         has_alt_advisories=row.has_alt_advisories,
+        dwd_charts_run_cycle=row.dwd_charts_run_cycle,
+        dwd_charts_default_id=row.dwd_charts_default_id,
+        dwd_charts_in_coverage=row.dwd_charts_in_coverage,
+        dwd_charts_within_horizon=row.dwd_charts_within_horizon,
     )
 
 

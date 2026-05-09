@@ -104,6 +104,13 @@ class BriefingPackMeta(BaseModel):
     alt_assessment: Optional[str] = None  # GREEN/AMBER/RED for alt departure
     alt_assessment_reason: Optional[str] = None
     has_alt_advisories: bool = False
+    # DWD Surface Analysis & Forecast — references the shared chart cache.
+    # NULL run_cycle = section is unavailable (out of coverage, beyond
+    # horizon, or chart refresh failed at briefing time).
+    dwd_charts_run_cycle: Optional[str] = None  # e.g. "2026-05-08T06Z"
+    dwd_charts_default_id: Optional[str] = None  # "ana" | "036" | "048" | "060" | "084" | "108"
+    dwd_charts_in_coverage: bool = False
+    dwd_charts_within_horizon: bool = False
 
     @computed_field  # type: ignore[prop-decorator]
     @property

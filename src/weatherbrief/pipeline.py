@@ -37,6 +37,7 @@ from weatherbrief.tasks.artifacts import load_fetch_meta, write_pack_meta
 from weatherbrief.tasks.fetch import run_fetch
 from weatherbrief.tasks.analyze import run_analysis
 from weatherbrief.tasks.advise import AdvisoryResult, run_advisories
+from weatherbrief.tasks.dwd_charts import run_dwd_charts
 from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,12 @@ class BriefingResult:
     models_skipped_region: list[str] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     alt_advisory_result: AdvisoryResult | None = None
+    # DWD Surface Analysis & Forecast — references into the shared chart
+    # cache (DATA_DIR/dwd_charts/<run_cycle>/). Bytes are not stored here.
+    dwd_charts_run_cycle: str | None = None
+    dwd_charts_default_id: str | None = None
+    dwd_charts_in_coverage: bool = False
+    dwd_charts_within_horizon: bool = False
     usage: BriefingUsage = field(default_factory=BriefingUsage)
 
 
@@ -523,6 +530,21 @@ def execute_briefing(
         if gramet_result.diagnostic:
             result.diagnostics.append(gramet_result.diagnostic)
         stage_timings["fetch_gramet"] = perf_counter() - _t0
+
+    # === 5b. DWD Surface Analysis & Forecast ===
+    # Cheap (six parallel conditional GETs, ~300ms when nothing changed)
+    # so it always runs — eligibility is checked inside run_dwd_charts.
+    _t0 = perf_counter()
+    dwd_charts_result = run_dwd_charts(
+        route=route,
+        departure_time=departure_time,
+        data_dir=data_dir,
+    )
+    result.dwd_charts_run_cycle = dwd_charts_result.run_cycle
+    result.dwd_charts_default_id = dwd_charts_result.default_chart_id
+    result.dwd_charts_in_coverage = dwd_charts_result.in_coverage
+    result.dwd_charts_within_horizon = dwd_charts_result.within_horizon
+    stage_timings["dwd_charts"] = perf_counter() - _t0
 
     # === 6. Optional: Skew-T ===
     if options.generate_skewt:

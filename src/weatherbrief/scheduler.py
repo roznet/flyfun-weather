@@ -440,6 +440,20 @@ def _run_retention_once() -> None:
     except Exception:
         logger.error("GRIB cache purge failed", exc_info=True)
 
+    # Age-based safety wipe for DWD chart cycles. The primary eviction is
+    # count-based and lives inside refresh_charts (keep N=8 most recent).
+    # This is a backstop for cycles older than 14 days that survived a
+    # long quiet period.
+    try:
+        from weatherbrief.fetch.dwd_charts import evict_cycles_older_than
+
+        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        evicted = evict_cycles_older_than(data_dir, max_age_hours=14 * 24)
+        if evicted:
+            logger.info("Age-evicted %d DWD chart cycles", len(evicted))
+    except Exception:
+        logger.error("DWD chart cache age-eviction failed", exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Forecast fetch + standalone verification loops

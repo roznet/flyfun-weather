@@ -542,6 +542,10 @@ export function dwdOverviewUrl(flightId: string, timestamp: string): string {
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/dwd-overview`;
 }
 
+export function dwdChartUrl(flightId: string, timestamp: string, chartId: string): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/dwd-chart/${encodeURIComponent(chartId)}`;
+}
+
 // --- Report ---
 
 export function reportPdfUrl(flightId: string, timestamp: string): string {

@@ -168,6 +168,10 @@ export interface PackMeta {
   models_skipped_region?: string[];
   diagnostics?: Diagnostic[];
   data_status?: DataStatus | null;
+  dwd_charts_run_cycle?: string | null;
+  dwd_charts_default_id?: string | null;
+  dwd_charts_in_coverage?: boolean;
+  dwd_charts_within_horizon?: boolean;
 }
 
 export interface ModelDivergence {

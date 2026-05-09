@@ -303,6 +303,13 @@ class PackMetaResponse(BaseModel):
     # stays in the DB and on disk for debugging.
     diagnostics: list[DiagnosticPublic] = Field(default_factory=list)
     data_status: DataStatus | None = None
+    # DWD Surface Analysis & Forecast — frontend uses these to decide
+    # whether to render the section, which chart to default-select, and
+    # to compute the "Issued Xh ago" caption client-side.
+    dwd_charts_run_cycle: str | None = None
+    dwd_charts_default_id: str | None = None
+    dwd_charts_in_coverage: bool = False
+    dwd_charts_within_horizon: bool = False
 
 
 def _meta_to_response(
@@ -334,6 +341,10 @@ def _meta_to_response(
         models_skipped_region=meta.models_skipped_region,
         diagnostics=[d.to_public() for d in meta.diagnostics],
         data_status=data_status,
+        dwd_charts_run_cycle=meta.dwd_charts_run_cycle,
+        dwd_charts_default_id=meta.dwd_charts_default_id,
+        dwd_charts_in_coverage=meta.dwd_charts_in_coverage,
+        dwd_charts_within_horizon=meta.dwd_charts_within_horizon,
     )
 
 
@@ -947,6 +958,10 @@ def _build_pack_meta(
         alt_assessment=alt_assessment,
         alt_assessment_reason=alt_assessment_reason,
         has_alt_advisories=has_alt_advisories,
+        dwd_charts_run_cycle=result.dwd_charts_run_cycle,
+        dwd_charts_default_id=result.dwd_charts_default_id,
+        dwd_charts_in_coverage=result.dwd_charts_in_coverage,
+        dwd_charts_within_horizon=result.dwd_charts_within_horizon,
     )
 
 
@@ -2744,6 +2759,51 @@ def get_digest_json(
     if not json_path.exists():
         raise HTTPException(status_code=404, detail="Structured digest not available")
     return FileResponse(json_path, media_type="application/json")
+
+
+@router.get("/{timestamp}/dwd-chart/{chart_id}")
+def get_dwd_chart(
+    flight_id: str,
+    timestamp: str,
+    chart_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Serve a DWD surface chart PNG for this pack.
+
+    Looks up the bytes in the shared ``DATA_DIR/dwd_charts/<run_cycle>/``
+    cache. Returns 410 (Gone) when the cache has been evicted — the
+    frontend renders an "unavailable" placeholder for that chart.
+
+    Auth: any authenticated user can view (matches dwd-overview).
+    """
+    from weatherbrief.fetch.dwd_charts import CHART_IDS, resolve_chart_path
+
+    if chart_id not in CHART_IDS:
+        raise HTTPException(status_code=400, detail="Invalid chart id")
+
+    # Auth + flight/pack existence check. We don't need the pack_dir
+    # itself — chart bytes live in the shared cache, not the pack — so
+    # avoid _get_pack_dir's requirement that the artifact directory exist.
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    meta = _load_pack_meta_or_404(db, flight_id, timestamp)
+
+    if not meta.dwd_charts_run_cycle:
+        raise HTTPException(
+            status_code=404, detail="DWD charts not available for this pack",
+        )
+
+    import os as _os
+    data_dir = Path(_os.environ.get("DATA_DIR", "data"))
+    path = resolve_chart_path(data_dir, meta.dwd_charts_run_cycle, chart_id)
+    if path is None:
+        raise HTTPException(status_code=410, detail="Chart no longer cached")
+
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.get("/{timestamp}/dwd-overview")
