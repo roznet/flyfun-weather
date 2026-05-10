@@ -17,6 +17,32 @@ def _clean_env_leaks(monkeypatch):
     monkeypatch.delenv("OPENMETEO_API_KEY", raising=False)
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _drain_module_executors_at_session_end():
+    """Drain module-level executors at session end so background threads
+    don't dump tracebacks after pytest's summary line.
+
+    Why: ``api.packs._refresh_executor`` (a ThreadPoolExecutor) and the
+    GRIB ``_DECODE_POOL`` (a ProcessPoolExecutor) are module-level and
+    outlive any individual test that submitted work. When pytest's
+    per-test SQLite engine is torn down before those threads finish,
+    they hit ``UnboundExecutionError`` and spam stderr — burying the
+    pytest summary under stack traces and making it look like the run
+    failed or hung. Draining at session end keeps stdout clean.
+    """
+    yield
+    try:
+        from weatherbrief.api.packs import _refresh_executor
+        _refresh_executor.shutdown(wait=True, cancel_futures=True)
+    except Exception:
+        pass
+    try:
+        from weatherbrief.fetch.grib import shutdown_decode_pool
+        shutdown_decode_pool()
+    except Exception:
+        pass
+
 from flyfun_common.db import DEV_USER_ID
 from flyfun_common.db.models import Base, UserPreferencesRow, UserRow
 from weatherbrief.models import (

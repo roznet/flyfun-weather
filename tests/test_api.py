@@ -767,13 +767,23 @@ class TestRefreshEndpoint:
         assert resp.status_code != 503 or "not configured" not in resp.json().get("detail", "")
         client.app.state.db_path = ""
 
+    @patch("weatherbrief.pipeline.execute_briefing")
     @patch("weatherbrief.airports._load_airport_model")
-    def test_refresh_queued(self, mock_load, client, sample_flight):
-        """Refresh returns 202 with queued status (pipeline runs in background)."""
+    def test_refresh_queued(self, mock_load, mock_execute, client, sample_flight):
+        """Refresh returns 202 with queued status (pipeline runs in background).
+
+        ``execute_briefing`` is stubbed to raise immediately so the
+        background worker exits via the registered except-branch
+        (logs + unregisters) without touching the DB. Without this stub
+        the real pipeline runs against the test SQLite engine, which
+        gets torn down mid-run and dumps ``UnboundExecutionError`` into
+        stderr after pytest's summary line.
+        """
         from airport_mocks import TEST_AIRPORTS, mock_model
         from weatherbrief.api.packs import refresh_registry
 
         mock_load.return_value = mock_model(TEST_AIRPORTS)
+        mock_execute.side_effect = RuntimeError("test stub — pipeline skipped")
         client.app.state.db_path = "/fake/db"
 
         resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
@@ -783,14 +793,15 @@ class TestRefreshEndpoint:
         assert data["status"] == "queued"
         assert data["flight_id"] == sample_flight.id
 
-        # Clean up: wait briefly for executor to pick up and unregister
+        # Wait briefly for the worker to pick up the job and unregister.
+        # The stub raises immediately, so the except-branch in run_pipeline
+        # runs and clears the registry within a tick.
         import time
         for _ in range(20):
             if not refresh_registry._entries.get(sample_flight.id):
                 break
             time.sleep(0.1)
         else:
-            # Force cleanup if pipeline failed (expected — /fake/db doesn't exist)
             refresh_registry.unregister(sample_flight.id)
 
     def test_refresh_duplicate_409(self, client, sample_flight):

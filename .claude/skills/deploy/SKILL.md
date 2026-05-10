@@ -35,14 +35,26 @@ The project directory on the server is `flyfun-weather`.
 
 ## Run tests
 
-**Always run Python tests** — they take ~15s and cover the backend:
+**Always run Python tests** — full suite is ~85s and covers the backend:
 ```bash
 source venv/bin/activate && python -m pytest tests/ --ignore=tests/test_llm_digest.py -q
 ```
 Slow GRIB decode tests are skipped by default (via `addopts` in pyproject.toml).
-Run pytest exactly **once** — if output seems slow, check `ps aux | grep pytest` before
-launching another instance. Multiple concurrent pytest processes thrash the CPU and make
-all of them crawl.
+
+**Discipline:**
+- Run pytest exactly **once** with `timeout: 600000`. If output seems slow,
+  check `ps aux | grep pytest` before launching another instance —
+  concurrent pytest processes thrash the CPU and turn 85s into many minutes.
+- **Do not pipe pytest through `tail`/`head`.** The summary line
+  (`N passed, M failed`) is what we need; piping hides it behind any
+  late stderr output (e.g. background-thread tracebacks that print
+  *after* pytest's summary). Capture full output instead and grep for
+  `passed|failed|error` to fish the summary out:
+  ```bash
+  source venv/bin/activate && python -m pytest tests/ --ignore=tests/test_llm_digest.py -q 2>&1 \
+    | tee /tmp/pytest.out | grep -E "passed|failed|error" | tail -5
+  ```
+  If a failure shows up, the full log is in `/tmp/pytest.out` — no need to re-run.
 
 If any test fails, **stop the deploy** and report the failures.
 
@@ -162,7 +174,14 @@ ssh <user>@<server> 'docker logs --since 10m weatherbrief 2>&1 | grep -iE "stand
 - If you see `Light cycle` or `Full cycle` log lines but no subsequent `sleeping` or `Recorded` line — a cycle is likely **in progress**. Warn the user: *"A standalone verification cycle appears to be running. Deploying now will interrupt it. Wait a few minutes or proceed?"*
 - If no standalone lines appear in the last 10 minutes — the loop is between cycles, safe to deploy.
 
-Full cycles (hours 6, 18) take ~2 minutes; light cycles take ~1 minute. If a cycle just started, suggest waiting 2-3 minutes.
+Cycle duration depends on what it samples:
+- **Fetch-only cycle** (3 models × 619 airports × 7 chunks each): ~20-25 minutes. The completion log line comes from `weatherbrief.scheduler` and looks like `Standalone forecast cycle: N models, M snapshots, ... (NNNNNNms)`.
+- **Lighter cycles** (single model or fewer airports): a few minutes.
+
+If a cycle just started, plan on **20+ min wait** unless you can confirm it's a lighter variant. To poll for completion, wait for either:
+- `weatherbrief.scheduler:Standalone forecast cycle:` (fetch-only completion), OR
+- `weatherbrief.scheduler:Verification cycle:` (full scoring completion).
+Do NOT poll only for `standalone.*sleeping` — that pattern doesn't fire from this loop.
 
 **If a cycle was interrupted** (user chose to deploy anyway, or the deploy already happened), offer to re-trigger it after the container is healthy:
 ```bash
