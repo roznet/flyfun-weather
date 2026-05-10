@@ -302,6 +302,7 @@ def prune_raw_observations(
     """
     from weatherbrief.db.models import (
         AirportMonthlySummaryRow,
+        FlightVerificationMapRow,
         TafVerificationScoreRow,
         VerificationObservationRow,
         VerificationScoreRow,
@@ -318,7 +319,7 @@ def prune_raw_observations(
     if retain_days >= _DEFAULT_RAW_RETENTION_DAYS:
         # Effectively disabled. Don't even scan.
         logger.debug("Raw observation retention disabled (retain_days=%d)", retain_days)
-        return {"observations": 0, "scores": 0, "taf_scores": 0}
+        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=retain_days)
 
@@ -335,7 +336,7 @@ def prune_raw_observations(
         logger.warning(
             "Raw retention: no months summarised yet — refusing to delete"
         )
-        return {"observations": 0, "scores": 0, "taf_scores": 0}
+        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
 
     # Build list of (month_start, month_end) ranges fully inside the cutoff
     # AND in summarised_months.
@@ -351,18 +352,31 @@ def prune_raw_observations(
             safe_ranges.append((month_start, month_end))
 
     if not safe_ranges:
-        return {"observations": 0, "scores": 0, "taf_scores": 0}
+        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
 
+    # All three child FKs to verification_observations.id use ON DELETE
+    # CASCADE, so a parent-first delete would also work — but the child
+    # rows would already be gone by the time we ran the child deletes,
+    # making our score/taf counters useless for monitoring. Deleting
+    # children first gives us accurate per-table metrics.
     obs_deleted = 0
     score_deleted = 0
     taf_deleted = 0
+    map_deleted = 0
     for start, end in safe_ranges:
-        r = db.execute(
-            VerificationObservationRow.__table__.delete()
+        # FlightVerificationMapRow has no observation_time of its own —
+        # find linked map rows by joining through observation_id.
+        obs_id_subquery = (
+            select(VerificationObservationRow.id)
             .where(VerificationObservationRow.observation_time >= start)
             .where(VerificationObservationRow.observation_time < end)
+            .scalar_subquery()
         )
-        obs_deleted += r.rowcount or 0
+        r = db.execute(
+            FlightVerificationMapRow.__table__.delete()
+            .where(FlightVerificationMapRow.observation_id.in_(obs_id_subquery))
+        )
+        map_deleted += r.rowcount or 0
         r = db.execute(
             VerificationScoreRow.__table__.delete()
             .where(VerificationScoreRow.observation_time >= start)
@@ -375,17 +389,28 @@ def prune_raw_observations(
             .where(TafVerificationScoreRow.observation_time < end)
         )
         taf_deleted += r.rowcount or 0
+        r = db.execute(
+            VerificationObservationRow.__table__.delete()
+            .where(VerificationObservationRow.observation_time >= start)
+            .where(VerificationObservationRow.observation_time < end)
+        )
+        obs_deleted += r.rowcount or 0
 
-    db.commit()
+    # Caller commits — matches the rollup convention. expire_all so any
+    # cached ORM objects representing the deleted rows reflect their absence.
+    db.flush()
+    db.expire_all()
     logger.info(
-        "Raw retention: pruned %d observations, %d scores, %d TAF scores "
-        "(retain_days=%d, cutoff=%s)",
-        obs_deleted, score_deleted, taf_deleted, retain_days, cutoff.isoformat(),
+        "Raw retention: pruned %d observations, %d scores, %d TAF scores, "
+        "%d map rows (retain_days=%d, cutoff=%s)",
+        obs_deleted, score_deleted, taf_deleted, map_deleted,
+        retain_days, cutoff.isoformat(),
     )
     return {
         "observations": obs_deleted,
         "scores": score_deleted,
         "taf_scores": taf_deleted,
+        "map_rows": map_deleted,
     }
 
 
@@ -427,7 +452,7 @@ def ensure_future_partitions(db: Session, months_ahead: int = 3) -> int:
     now = datetime.now(timezone.utc)
     targets: list[tuple[int, int]] = []
     y, m = now.year, now.month
-    for _ in range(months_ahead + 1):
+    for _ in range(months_ahead):
         m += 1
         if m > 12:
             m = 1
@@ -452,6 +477,4 @@ def ensure_future_partitions(db: Session, months_ahead: int = 3) -> int:
         added += 1
         logger.info("Added partition %s (upper=%s)", name, upper)
 
-    if added:
-        db.commit()
     return added

@@ -373,6 +373,7 @@ def cmd_rollup_summary(args):
         if args.all or (not args.month and not args.day):
             n_months = rollup_all_complete_months(db)
             n_days = rollup_all_complete_days(db)
+            db.commit()
             print(f"Rolled up {n_months} airport-months and {n_days} airport-days.")
             return
 

@@ -7,7 +7,7 @@ ForeignKey references work correctly.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date as date_t, datetime, timezone
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
@@ -816,7 +816,7 @@ class AirportDailySummaryRow(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    date: Mapped[datetime] = mapped_column(Date, nullable=False)  # UTC date
+    date: Mapped[date_t] = mapped_column(Date, nullable=False)  # UTC date
     icao: Mapped[str] = mapped_column(String(4), nullable=False)
 
     n_obs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

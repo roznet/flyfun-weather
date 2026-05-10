@@ -492,11 +492,15 @@ def _run_retention_once() -> None:
         try:
             n_months = rollup_all_complete_months(db)
             n_days = rollup_all_complete_days(db)
+            db.commit()
             if n_months or n_days:
                 logger.info(
                     "Airport summary rollup: %d months, %d days",
                     n_months, n_days,
                 )
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
     except Exception:
@@ -508,8 +512,12 @@ def _run_retention_once() -> None:
         db = SessionLocal()
         try:
             added = ensure_future_partitions(db, months_ahead=3)
+            db.commit()
             if added:
                 logger.info("Created %d future verification_observations partition(s)", added)
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
     except Exception:
@@ -521,11 +529,16 @@ def _run_retention_once() -> None:
         db = SessionLocal()
         try:
             result = prune_raw_observations(db)
+            db.commit()
             if any(v for v in result.values()):
                 logger.info(
-                    "Raw retention: pruned obs=%d scores=%d taf=%d",
-                    result["observations"], result["scores"], result["taf_scores"],
+                    "Raw retention: pruned obs=%d scores=%d taf=%d map=%d",
+                    result["observations"], result["scores"],
+                    result["taf_scores"], result["map_rows"],
                 )
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
     except Exception:
