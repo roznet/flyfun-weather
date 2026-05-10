@@ -7,6 +7,8 @@ in analysis/clouds.py.
 
 from __future__ import annotations
 
+import logging
+
 from weatherbrief.models import (
     CloudCoverage,
     DerivedLevel,
@@ -15,6 +17,8 @@ from weatherbrief.models import (
     PressureLevelData,
     ThermodynamicIndices,
 )
+
+logger = logging.getLogger(__name__)
 
 _M_TO_FT = 3.28084
 
@@ -136,15 +140,13 @@ def _nwp_pct_to_coverage(pct: float) -> CloudCoverage | None:
     return None
 
 
-# Lower CAF % bound for each METAR coverage category. Used to find the
-# boundary CAF when interpolating altitude between two adjacent levels of
-# different categories — the boundary is the lower bound of whichever
-# endpoint sits in the higher category.
+# Lower CAF % bound for each METAR coverage category, derived from
+# _NWP_COVERAGE_THRESHOLDS so the breakpoints stay in one place. Used to
+# find the boundary CAF when interpolating altitude between two adjacent
+# levels of different categories — the boundary is the lower bound of
+# whichever endpoint sits in the higher category.
 _NWP_CATEGORY_LOWER_BOUNDS: dict[CloudCoverage, float] = {
-    CloudCoverage.FEW: 12.5,
-    CloudCoverage.SCT: 25.0,
-    CloudCoverage.BKN: 50.0,
-    CloudCoverage.OVC: 87.5,
+    coverage: threshold for threshold, coverage in _NWP_COVERAGE_THRESHOLDS
 }
 
 
@@ -157,13 +159,15 @@ def _crossing_altitude(
     """Altitude (ft) where ``cloud_area_fraction_pct`` linearly crosses the
     boundary CAF separating a's and b's coverage categories.
 
-    Used to anchor a deck's base/top to the *model's own* cloud field
-    instead of pinning to a level altitude. ``b_cat=None`` means b is sub-
-    FEW (clear).
+    ``a`` is always a level inside a deck (so ``a_cat`` is non-None and
+    ``a_caf >= 12.5 %``); ``b`` is the adjacent neighbor — possibly clear
+    (``b_cat=None`` and ``b_caf < 12.5 %``). Used to anchor a deck's
+    base/top to the model's own cloud field instead of pinning to a level
+    altitude.
 
     Returns ``None`` if either endpoint lacks data, the two levels share
     the same CAF (no crossing possible), or the boundary CAF lies outside
-    [a_caf, b_caf] (interpolation would be an extrapolation).
+    [a_caf, b_caf] (would require extrapolation).
     """
     a_caf = a.cloud_area_fraction_pct
     b_caf = b.cloud_area_fraction_pct
@@ -173,9 +177,13 @@ def _crossing_altitude(
             or a_caf == b_caf):
         return None
 
+    # ``a`` is always in a real category (caller guarantees ``a_cat`` non-None
+    # via the deck-membership check), so when ``a_caf >= b_caf`` the higher
+    # category is ``a_cat``. When ``a_caf < b_caf``, ``b`` is in a denser
+    # category — and since ``a`` is at least FEW (caf ≥ 12.5 %), ``b`` must
+    # also be ≥ 12.5 % and therefore have a non-None category too.
     higher_cat = a_cat if a_caf >= b_caf else b_cat
-    if higher_cat is None:
-        return None  # both endpoints sub-FEW
+    assert higher_cat is not None  # invariant: at least one endpoint is in a deck
     target = _NWP_CATEGORY_LOWER_BOUNDS[higher_cat]
 
     frac = (target - a_caf) / (b_caf - a_caf)
@@ -186,15 +194,15 @@ def _crossing_altitude(
     return a_ft + frac * (b_ft - a_ft)
 
 
-def _half_pressure_altitude(
+def _midpoint_altitude_ft(
     inner: PressureLevelData,
     outer: PressureLevelData | None,
 ) -> float | None:
     """Edge altitude when threshold-crossing isn't usable.
 
-    Falls back to half-way between the deck-edge level and its neighbor;
-    or, at the column floor / TOA where there's no neighbor, the level's
-    own altitude.
+    Falls back to the altitude midway between the deck-edge level and its
+    neighbor; or, at the column floor / TOA where there's no neighbor, the
+    level's own altitude.
     """
     if inner.geopotential_height_m is None:
         return None
@@ -215,7 +223,7 @@ def _layer_edge_below(
         ft = _crossing_altitude(levels[i], levels[i - 1], cat, cats[i - 1])
         if ft is not None:
             return ft
-    return _half_pressure_altitude(levels[i], levels[i - 1] if i > 0 else None)
+    return _midpoint_altitude_ft(levels[i], levels[i - 1] if i > 0 else None)
 
 
 def _layer_edge_above(
@@ -230,7 +238,7 @@ def _layer_edge_above(
         ft = _crossing_altitude(levels[j], levels[j + 1], cat, cats[j + 1])
         if ft is not None:
             return ft
-    return _half_pressure_altitude(levels[j], levels[j + 1] if j + 1 < n else None)
+    return _midpoint_altitude_ft(levels[j], levels[j + 1] if j + 1 < n else None)
 
 
 def build_nwp_cloud_layers_from_fraction(
@@ -289,14 +297,27 @@ def build_nwp_cloud_layers_from_fraction(
         base_ft = _layer_edge_below(levels, cats, i, cat)
         top_ft = _layer_edge_above(levels, cats, j, cat)
         if base_ft is None or top_ft is None or top_ft <= base_ft:
+            # Should not happen with well-formed sounding data: a category run
+            # always has at least one level with valid CAF + geopotential, and
+            # well-ordered geopotential should give top > base. Logged so a
+            # pathological GRIB (e.g. inverted geopotential) doesn't silently
+            # disappear from the cross-section.
+            logger.warning(
+                "Dropping NWP-3D cloud deck at run [%d..%d] (cat=%s): "
+                "base_ft=%s top_ft=%s — degenerate layer geometry",
+                i, j, cat, base_ft, top_ft,
+            )
             i = j + 1
             continue
 
         run = levels[i:j + 1]
+        # Every level in the run is guaranteed to carry CAF + geopotential
+        # (cats[k] is non-None only when both are present), so caf_vals and
+        # base/top altitudes are always populated here.
         caf_vals = [lv.cloud_area_fraction_pct for lv in run
                     if lv.cloud_area_fraction_pct is not None]
         t_vals = [lv.temperature_c for lv in run if lv.temperature_c is not None]
-        mean_caf = sum(caf_vals) / len(caf_vals) if caf_vals else 0.0
+        mean_caf = sum(caf_vals) / len(caf_vals)
         mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
 
         layers.append(EnhancedCloudLayer(
@@ -308,7 +329,7 @@ def build_nwp_cloud_layers_from_fraction(
             mean_temperature_c=mean_t,
             coverage=cat,
             mean_dewpoint_depression_c=None,
-            mean_cloud_cover_pct=round(mean_caf, 1) if caf_vals else None,
+            mean_cloud_cover_pct=round(mean_caf, 1),
             source="nwp_3d",
         ))
         i = j + 1

@@ -111,7 +111,7 @@ Open-Meteo `cloud_cover_*_pct` values are NOT spatially interpolated — each po
 
 Four-tier approach, tried in this preference order:
 
-**Tier 0 — Per-level 3D cloud fraction (ECMWF `cc`, ICON-EU `clc`):** `build_nwp_cloud_layers_from_fraction(pressure_levels)` scans `cloud_area_fraction_pct` vertically, groups contiguous levels above 12.5% into decks, and emits `EnhancedCloudLayer` with real base/top from level geopotential heights. Tagged `source="nwp_3d"`. Preferred when any level carries `cloud_area_fraction_pct` — strictly richer than GRIB-bulk because deck boundaries come from the model's own cloud scheme at sounding-level resolution.
+**Tier 0 — Per-level 3D cloud fraction (ECMWF `cc`, ICON-EU `clc`):** `build_nwp_cloud_layers_from_fraction(pressure_levels)` scans `cloud_area_fraction_pct` vertically and groups consecutive levels by their METAR coverage category (FEW/SCT/BKN/OVC, with sub-FEW = clear). A category change starts a new layer; sub-FEW levels split layers (clear-air gaps). Each layer's base/top altitudes come from linear threshold-crossing on `cloud_area_fraction_pct` against the boundary CAF separating this layer from its (different-category) neighbor — a model-derived edge instead of pinning to a level altitude. Half-pressure attribution falls back at the column ends. Tagged `source="nwp_3d"`. Preferred when any level carries `cloud_area_fraction_pct` — strictly richer than GRIB-bulk because deck boundaries come from the model's own cloud scheme at sounding-level resolution.
 
 **Tier 1 — GRIB bulk bands (GFS):** `_build_grib_layers()` uses GFS's native per-band boundaries (`HGHL/HGHM/HGHH` → base_ft/top_ft) and `LCDC/MCDC/HCDC` coverage. Each layer tagged `source="grib"`.
 
@@ -119,11 +119,11 @@ Four-tier approach, tried in this preference order:
 
 **Tier 3 — No data:** Returns None only when no cloud cover data exists at all.
 
-- **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (Tier 0 uses peak deck CAF; Tiers 1–2 use bulk band %)
+- **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (Tier 0 classifies each level individually then splits on category change; Tiers 1–2 use bulk band %)
 - **Output:** Stored in `SoundingAnalysis.nwp_cloud_layers`
 - **Source tracking:** `EnhancedCloudLayer.source` ∈ {"dd", "nwp_3d", "grib", "synthesized"}
 - **Method tracking:** `cloud_method_effective` records "dd", "nwp" (grib or nwp_3d), or "nwp_synthesized"
-- **Quantitative metadata:** `EnhancedCloudLayer.mean_cloud_cover_pct` carries the underlying numeric — peak `cloud_area_fraction_pct` for `nwp_3d`, the band's `cover_pct` for `grib` (incl. convective). Surfaced in the cross-section tooltip as `(CC nn%)`. Null for `dd` and `synthesized` (those use `mean_dewpoint_depression_c` instead).
+- **Quantitative metadata:** `EnhancedCloudLayer.mean_cloud_cover_pct` carries the underlying numeric — mean `cloud_area_fraction_pct` across the (homogeneous) deck for `nwp_3d`, the band's `cover_pct` for `grib` (incl. convective). Surfaced in the cross-section tooltip as `(CC nn%)`. Null for `dd` and `synthesized` (those use `mean_dewpoint_depression_c` instead).
 
 | Model | NWP Cloud Layers Result | Source Tag | Notes |
 |-------|------------------------|------------|-------|
