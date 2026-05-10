@@ -67,6 +67,25 @@ def test_single_homogeneous_deck():
     assert layers[0].source == "nwp_3d"
 
 
+def test_clear_gap_produces_two_separate_decks():
+    """Two cloud regions separated by a sub-FEW level emit two independent
+    layers with real clear air between them — they don't merge across the
+    gap and don't share an edge altitude."""
+    levels = [
+        _lv(1000, 100, caf=0),
+        _lv(925, 760, caf=70, t=14),    # BKN — deck 1
+        _lv(850, 1500, caf=5),          # sub-FEW gap
+        _lv(700, 3100, caf=60, t=5),    # BKN — deck 2
+        _lv(500, 5500, caf=0),
+    ]
+    layers = build_nwp_cloud_layers_from_fraction(levels)
+    assert layers is not None
+    assert len(layers) == 2
+    assert all(layer.coverage == CloudCoverage.BKN for layer in layers)
+    # Layers do NOT meet — there is real clear air between them.
+    assert layers[1].base_ft > layers[0].top_ft
+
+
 def test_category_change_splits():
     """Transition between coverage categories splits decks."""
     levels = [

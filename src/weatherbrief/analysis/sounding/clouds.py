@@ -94,7 +94,11 @@ def _dd_crossing_altitude(
     # ``b`` is denser — and since ``a`` already has DD < dd_threshold,
     # ``b`` has even smaller DD and therefore also a non-None category.
     denser_cat = a_cat if a_dd <= b_dd else b_cat
-    assert denser_cat is not None  # invariant: at least one endpoint is in a deck
+    if denser_cat is None:
+        # Defensive — invariant above says this is unreachable, but `assert`
+        # would crash the whole sounding analysis on a single bad deck and
+        # is also stripped under `python -O`. Treat as "no usable crossing".
+        return None
     target = _DD_CATEGORY_UPPER_BOUNDS[denser_cat]
 
     frac = (target - a_dd) / (b_dd - a_dd)
@@ -109,9 +113,11 @@ def _dd_midpoint_altitude_ft(
 ) -> float | None:
     """Edge altitude when threshold-crossing isn't usable.
 
-    Falls back to the altitude midway between the deck-edge level and its
-    neighbor; or, at the column floor / TOA where there's no neighbor, the
-    level's own altitude.
+    Two behaviours, both intentional:
+      - ``outer`` present → altitude midway between the deck-edge level
+        and its neighbor.
+      - ``outer is None`` (column floor / TOA) → the deck-edge level's
+        own altitude, since there's no neighbor to interpolate against.
     """
     if inner.altitude_ft is None:
         return None
@@ -303,7 +309,11 @@ def _crossing_altitude(
     # category — and since ``a`` is at least FEW (caf ≥ 12.5 %), ``b`` must
     # also be ≥ 12.5 % and therefore have a non-None category too.
     higher_cat = a_cat if a_caf >= b_caf else b_cat
-    assert higher_cat is not None  # invariant: at least one endpoint is in a deck
+    if higher_cat is None:
+        # Defensive — invariant above says this is unreachable, but `assert`
+        # would crash the whole sounding analysis on a single bad deck and
+        # is also stripped under `python -O`. Treat as "no usable crossing".
+        return None
     target = _NWP_CATEGORY_LOWER_BOUNDS[higher_cat]
 
     frac = (target - a_caf) / (b_caf - a_caf)
@@ -320,9 +330,11 @@ def _midpoint_altitude_ft(
 ) -> float | None:
     """Edge altitude when threshold-crossing isn't usable.
 
-    Falls back to the altitude midway between the deck-edge level and its
-    neighbor; or, at the column floor / TOA where there's no neighbor, the
-    level's own altitude.
+    Two behaviours, both intentional:
+      - ``outer`` present → altitude midway between the deck-edge level
+        and its neighbor.
+      - ``outer is None`` (column floor / TOA) → the deck-edge level's
+        own altitude, since there's no neighbor to interpolate against.
     """
     if inner.geopotential_height_m is None:
         return None
@@ -434,8 +446,7 @@ def build_nwp_cloud_layers_from_fraction(
         # Every level in the run is guaranteed to carry CAF + geopotential
         # (cats[k] is non-None only when both are present), so caf_vals and
         # base/top altitudes are always populated here.
-        caf_vals = [lv.cloud_area_fraction_pct for lv in run
-                    if lv.cloud_area_fraction_pct is not None]
+        caf_vals = [lv.cloud_area_fraction_pct for lv in run]
         t_vals = [lv.temperature_c for lv in run if lv.temperature_c is not None]
         mean_caf = sum(caf_vals) / len(caf_vals)
         mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
