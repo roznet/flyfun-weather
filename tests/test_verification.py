@@ -35,7 +35,7 @@ from weatherbrief.db.models import (
 )
 from weatherbrief.models.verification import VerificationObservation
 from weatherbrief.tasks.verification import (
-    _should_skip_for_hourly_dedup,
+    _should_skip_for_bucket_dedup,
     collect_and_store,
     fetch_observations_batch,
     finalize_completed_flights,
@@ -287,19 +287,33 @@ class TestGatherAirports:
 
 
 # ---------------------------------------------------------------------------
-# Hourly dedup
+# 30-min bucket dedup
 # ---------------------------------------------------------------------------
 
 
-class TestHourlyDedup:
+class TestBucketDedup:
 
     def test_empty_db_no_skip(self, db_session):
-        assert not _should_skip_for_hourly_dedup(
+        assert not _should_skip_for_bucket_dedup(
             db_session, "EGTK", NOW,
         )
 
-    def test_existing_observation_skips(self, db_session):
-        # Observation at 12:20 — same clock hour as 12:30
+    def test_same_bucket_skips(self, db_session):
+        # 12:05 and 12:25 both fall in the [12:00, 12:30) bucket
+        db_session.add(VerificationObservationRow(
+            icao="EGTK",
+            observation_time=_utc(2026, 4, 1, 12, 5),
+            collected_at=NOW,
+        ))
+        db_session.flush()
+
+        assert _should_skip_for_bucket_dedup(
+            db_session, "EGTK", _utc(2026, 4, 1, 12, 25),
+        )
+
+    def test_different_bucket_within_hour_no_skip(self, db_session):
+        # 12:20 is in [12:00, 12:30); 12:35 is in [12:30, 13:00) — different
+        # buckets, both should be storable.
         db_session.add(VerificationObservationRow(
             icao="EGTK",
             observation_time=_utc(2026, 4, 1, 12, 20),
@@ -307,8 +321,8 @@ class TestHourlyDedup:
         ))
         db_session.flush()
 
-        assert _should_skip_for_hourly_dedup(
-            db_session, "EGTK", _utc(2026, 4, 1, 12, 30),
+        assert not _should_skip_for_bucket_dedup(
+            db_session, "EGTK", _utc(2026, 4, 1, 12, 35),
         )
 
     def test_different_hour_no_skip(self, db_session):
@@ -319,7 +333,7 @@ class TestHourlyDedup:
         ))
         db_session.flush()
 
-        assert not _should_skip_for_hourly_dedup(db_session, "EGTK", NOW)
+        assert not _should_skip_for_bucket_dedup(db_session, "EGTK", NOW)
 
     def test_different_airport_no_skip(self, db_session):
         db_session.add(VerificationObservationRow(
@@ -329,7 +343,7 @@ class TestHourlyDedup:
         ))
         db_session.flush()
 
-        assert not _should_skip_for_hourly_dedup(db_session, "EGTK", NOW)
+        assert not _should_skip_for_bucket_dedup(db_session, "EGTK", NOW)
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +387,20 @@ class TestStoreObservations:
         ).scalars().all()
         assert len(rows) == 1
 
-    def test_hourly_dedup_skips_second_obs(self, db_session, dev_user):
+    def test_bucket_dedup_skips_second_obs_same_bucket(self, db_session, dev_user):
+        # Both fall in the [12:00, 12:30) bucket — only one stored.
+        flight = _make_flight(db_session, dev_user, verification_status="collecting")
+        obs1 = _make_observation(observation_time=_utc(2026, 4, 1, 12, 5))
+        obs2 = _make_observation(observation_time=_utc(2026, 4, 1, 12, 25))
+        icao_map = {"EGTK": {flight.id}}
+
+        count = store_observations([obs1, obs2], icao_map, db_session)
+        db_session.flush()
+
+        assert count == 1
+
+    def test_bucket_dedup_keeps_obs_in_different_buckets(self, db_session, dev_user):
+        # 12:05 in [12:00, 12:30); 12:35 in [12:30, 13:00) — both stored.
         flight = _make_flight(db_session, dev_user, verification_status="collecting")
         obs1 = _make_observation(observation_time=_utc(2026, 4, 1, 12, 5))
         obs2 = _make_observation(observation_time=_utc(2026, 4, 1, 12, 35))
@@ -382,7 +409,7 @@ class TestStoreObservations:
         count = store_observations([obs1, obs2], icao_map, db_session)
         db_session.flush()
 
-        assert count == 1
+        assert count == 2
 
     def test_creates_flight_linkage(self, db_session, dev_user):
         flight = _make_flight(db_session, dev_user, verification_status="collecting")

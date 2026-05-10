@@ -591,7 +591,6 @@ class TestRunStandaloneCycle:
 
     @patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0)
     @patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=5)
-    @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=3)
     @patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=100)
     @patch("weatherbrief.tasks.standalone_verification._enrich_with_grib")
     @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=([{"dummy": True}], 1))
@@ -599,7 +598,7 @@ class TestRunStandaloneCycle:
     @patch("flyfun_common.db.SessionLocal")
     def test_full_cycle_orchestration(
         self, mock_session_local, mock_meta, mock_fetch, mock_enrich,
-        mock_store_snap, mock_store_obs, mock_score, mock_prune,
+        mock_store_snap, mock_score, mock_prune,
     ):
         from weatherbrief.tasks.standalone_verification import run_standalone_cycle
 
@@ -618,7 +617,8 @@ class TestRunStandaloneCycle:
 
         assert result["models_fetched"] == 1
         assert result["snapshots_stored"] == 100
-        assert result["observations_stored"] == 3
+        # METAR fetch is no longer the cycle's job — owned by metar_ingest loop
+        assert result["observations_stored"] == 0
         assert result["scores_created"] == 5
         assert result["duration_ms"] >= 0
         assert mock_db.commit.call_count >= 1
@@ -637,8 +637,7 @@ class TestRunStandaloneCycle:
             "gfs": SimpleNamespace(last_init_time=int(GFS_INIT.timestamp())),
         }
 
-        with patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=0), \
-             patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=0), \
+        with patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=0), \
              patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0), \
              patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=0):
             result = run_standalone_cycle(
@@ -650,12 +649,11 @@ class TestRunStandaloneCycle:
 
     @patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0)
     @patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=7)
-    @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=5)
     @patch("flyfun_common.db.SessionLocal")
     def test_light_cycle_skips_fetch(
-        self, mock_session_local, mock_store_obs, mock_score, mock_prune,
+        self, mock_session_local, mock_score, mock_prune,
     ):
-        """Light cycle (fetch_forecasts=False) skips Phase A+B entirely."""
+        """Light cycle (fetch_forecasts=False) skips Phase A+B and reads obs from DB."""
         from weatherbrief.tasks.standalone_verification import run_standalone_cycle
 
         mock_db = MagicMock()
@@ -667,13 +665,13 @@ class TestRunStandaloneCycle:
         assert result["cycle_type"] == "light"
         assert result["models_fetched"] == 0
         assert result["snapshots_stored"] == 0
-        assert result["observations_stored"] == 5
+        # Light cycle no longer fetches METARs — that's the metar_ingest loop's job.
+        assert result["observations_stored"] == 0
         assert result["scores_created"] == 7
         assert result["duration_ms"] >= 0
 
     @patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots", return_value=0)
     @patch("weatherbrief.tasks.standalone_verification._score_cycle", return_value=5)
-    @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=3)
     @patch("weatherbrief.tasks.standalone_verification._store_snapshots", return_value=100)
     @patch("weatherbrief.tasks.standalone_verification._enrich_with_grib")
     @patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model", return_value=([{"dummy": True}], 1))
@@ -681,7 +679,7 @@ class TestRunStandaloneCycle:
     @patch("flyfun_common.db.SessionLocal")
     def test_full_cycle_returns_cycle_type(
         self, mock_session_local, mock_meta, mock_fetch, mock_enrich,
-        mock_store_snap, mock_store_obs, mock_score, mock_prune,
+        mock_store_snap, mock_score, mock_prune,
     ):
         """Full cycle sets cycle_type='full' in result."""
         from weatherbrief.tasks.standalone_verification import run_standalone_cycle
@@ -698,6 +696,38 @@ class TestRunStandaloneCycle:
         result = run_standalone_cycle(airports, "/fake/db")
 
         assert result["cycle_type"] == "full"
+
+
+class TestRunMetarIngestCycle:
+
+    @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=7)
+    @patch("flyfun_common.db.SessionLocal")
+    def test_records_cycle_row_with_metar_ingest_source(
+        self, mock_session_local, mock_fetch_obs,
+    ):
+        """run_metar_ingest_cycle commits a cycle row tagged source='metar_ingest'."""
+        from weatherbrief.tasks.standalone_verification import run_metar_ingest_cycle
+
+        mock_db = MagicMock()
+        mock_session_local.return_value = mock_db
+
+        airports = [
+            WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55),
+            WatchlistAirport(icao="EGLL", lat=51.47, lon=-0.46),
+        ]
+        result = run_metar_ingest_cycle(airports, "/fake/db")
+
+        assert result["cycle_type"] == "metar_ingest"
+        assert result["airports"] == 2
+        assert result["observations_stored"] == 7
+        assert result["duration_ms"] >= 0
+        # _fetch_and_store_observations was called with the watchlist
+        mock_fetch_obs.assert_called_once()
+        # A cycle row was added (along with whatever the fetch helper added)
+        assert mock_db.add.called
+        added_rows = [c.args[0] for c in mock_db.add.call_args_list]
+        cycle_rows = [r for r in added_rows if getattr(r, "source", None) == "metar_ingest"]
+        assert len(cycle_rows) == 1
 
 
 class TestEnrichWithSounding:
