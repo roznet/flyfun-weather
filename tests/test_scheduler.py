@@ -21,6 +21,7 @@ from weatherbrief.scheduler import (
     _find_due_flights,
     _flight_start_dt,
     _next_due_at,
+    _seconds_until_next_30min_boundary,
 )
 
 
@@ -401,3 +402,68 @@ class TestFindDueFlights:
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             due = _find_due_flights(db_session)
         assert len(due) == 0
+
+
+# ---------------------------------------------------------------------------
+# _seconds_until_next_30min_boundary
+# ---------------------------------------------------------------------------
+
+class TestSecondsUntilNext30MinBoundary:
+    """Boundary helper drives the METAR ingest loop's timing.
+
+    Given an offset within a 30-min bucket, returns seconds until the next
+    fire instant. Two candidates exist per hour (``:offset`` and
+    ``:30+offset``); when both are in the past, falls through to the first
+    slot of the next hour.
+    """
+
+    @pytest.mark.parametrize("now_min,expected_secs", [
+        (0, 1800),    # 12:00:00 → next slot 12:30 (12:00 not strictly > now)
+        (1, 1740),    # 12:01 → 12:30 in 29min
+        (15, 900),    # 12:15 → 12:30 in 15min
+        (29, 60),     # 12:29 → 12:30 in 1min
+        (30, 1800),   # 12:30:00 → next slot 13:00
+        (31, 1740),   # 12:31 → 13:00 in 29min
+        (45, 900),    # 12:45 → 13:00 in 15min
+        (59, 60),     # 12:59 → 13:00 in 1min
+    ])
+    def test_offset_zero(self, now_min, expected_secs):
+        """offset_seconds=0 fires at :00 and :30 sharp."""
+        fixed = _utc(2026, 4, 1, 12, now_min, 0)
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            secs = _seconds_until_next_30min_boundary(0)
+        assert secs == expected_secs
+
+    @pytest.mark.parametrize("now_min,expected_secs", [
+        (0, 300),     # 12:00 → 12:05 in 5min
+        (5, 1800),    # 12:05:00 → next slot 12:35
+        (10, 1500),   # 12:10 → 12:35 in 25min
+        (35, 1800),   # 12:35:00 → next slot 13:05
+        (40, 1500),   # 12:40 → 13:05 in 25min
+    ])
+    def test_offset_five_minutes(self, now_min, expected_secs):
+        """offset_seconds=300 fires at :05 and :35."""
+        fixed = _utc(2026, 4, 1, 12, now_min, 0)
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            secs = _seconds_until_next_30min_boundary(300)
+        assert secs == expected_secs
+
+    def test_falls_through_hour_boundary(self):
+        """At 12:35, both offsets in this hour past — returns to 13:00."""
+        fixed = _utc(2026, 4, 1, 12, 35, 30)  # 12:35:30
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            secs = _seconds_until_next_30min_boundary(0)
+        # 13:00:00 - 12:35:30 = 24min 30s
+        assert secs == 24 * 60 + 30
+
+    @pytest.mark.parametrize("bad_offset", [-1, 1800, 1801, 3600])
+    def test_rejects_out_of_range_offset(self, bad_offset):
+        """Offset must be in [0, 1800) — otherwise minute=30+offset overflows."""
+        with pytest.raises(ValueError, match="offset_seconds"):
+            _seconds_until_next_30min_boundary(bad_offset)

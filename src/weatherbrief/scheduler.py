@@ -483,16 +483,18 @@ def _run_retention_once() -> None:
 #
 # Three independent loops driven by the standalone subsystem:
 #
-#   * METAR ingest fires every 30 min (offset 5 min past :00/:30 so airports
-#     have published). Pulls METAR/TAF for the watchlist and upserts into
-#     verification_observations. Source tag: 'metar_ingest'.
+#   * METAR ingest fires every 30 min at :00/:30 sharp. Most EU airports
+#     issue METARs at HH:20/HH:50, so by HH:00/HH:30 aviationweather has
+#     fully absorbed them. Pulls METAR/TAF for the watchlist and upserts
+#     into verification_observations. Source tag: 'metar_ingest'.
 #   * Forecast fetch fires at FORECAST_FETCH_HOURS_UTC + 15 min (07:15/19:15)
 #     so Open-Meteo GFS (~+6h45m) and ECMWF direct (~+6h40m) deliveries have
 #     landed. Additionally waits up to 15 min more if a marker's next_expected
 #     is within the window. Stores fresh snapshots only.
-#   * Verification fires at VERIFICATION_HOURS_UTC (06/09/12/15/18). Reads
-#     observations + snapshots already in DB and scores them — does NOT call
-#     aviationweather.gov (METAR ingest owns that).
+#   * Verification fires at VERIFICATION_HOURS_UTC + 15 min (e.g. 06:15,
+#     09:15, ...) so the HH:00 METAR ingest has fully landed. Reads
+#     observations + snapshots already in DB and scores them — does NOT
+#     call aviationweather.gov (METAR ingest owns that).
 #
 # Decoupled so observations accumulate continuously, scoring runs on a
 # synoptic cadence, and forecast fetch waits for the late ECMWF delivery.
@@ -535,7 +537,13 @@ def _seconds_until_next_30min_boundary(offset_seconds: int) -> float:
     """Seconds until the next ``:offset_minutes`` past either ``:00`` or ``:30``.
 
     For ``offset_seconds=300`` (5 min), fires at ``HH:05`` and ``HH:35``.
+    Must be ``< 1800`` (30 min) — anything larger lands in the next bucket
+    and would silently overflow ``minute=30+offset_minutes`` past 59.
     """
+    if not 0 <= offset_seconds < 1800:
+        raise ValueError(
+            f"offset_seconds must be in [0, 1800), got {offset_seconds}"
+        )
     now = datetime.now(timezone.utc)
     offset_minutes = offset_seconds // 60
     candidates = [
