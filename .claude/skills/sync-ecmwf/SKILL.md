@@ -93,7 +93,68 @@ Report:
 - Total local size
 - Time taken
 
-### 6. Suggest next step
+### 6. Offer to clean stale runs
+
+After a successful sync, look for older runs in the local cache and offer (with explicit user confirmation) to delete them. Skip this step entirely if `--dry-run` was used.
+
+Discovery — find all sentinels older than 24h, excluding the run we just synced. Note: `rsync -a` preserves the prod mtime, so a re-synced old run can still look stale on disk; the explicit `TAG` exclusion guards against deleting it.
+
+```bash
+JUST_SYNCED_TAG="<TAG>"   # e.g. 20260510_00z
+
+# Sentinels older than 24h (mtime > 1 day), excluding the just-synced one and any .partial
+OLD_SENTINELS=$(find "$DEST" -maxdepth 1 -name '.ready_*z' -mtime +1 -type f 2>/dev/null \
+  | grep -v "/.ready_${JUST_SYNCED_TAG}$" || true)
+```
+
+If `OLD_SENTINELS` is empty, print `No stale runs (>24h) to clean.` and continue to step 7.
+
+Otherwise, for each old sentinel, build a per-run summary:
+
+```bash
+for sentinel in $OLD_SENTINELS; do
+  tag=$(basename "$sentinel" | sed 's/^\.ready_//')
+  date_part=${tag%_*}
+  hour_part=${tag#*_}; hour_part=${hour_part%z}
+  RUN_TS="${date_part}T${hour_part}0000Z"
+
+  age_h=$(( ($(date +%s) - $(stat -f %m "$sentinel")) / 3600 ))
+  file_count=$(ls -1 "$DEST"/brg_*_fc_${RUN_TS}_* 2>/dev/null | wc -l | tr -d ' ')
+  size=$(du -ch "$sentinel" "$DEST"/brg_*_fc_${RUN_TS}_* 2>/dev/null | tail -1 | cut -f1)
+
+  echo "  $tag — ${age_h}h old, $file_count files, $size"
+done
+```
+
+Present the list to the user and **pause for explicit confirmation** (do not delete anything yet). For example:
+
+```
+Stale ECMWF runs in /Users/brice/tmp/ecmwf/data:
+  20260509_00z — 30h old, 232 files, 2.0G
+  20260508_12z — 42h old, 232 files, 2.0G
+Delete these (sentinels + matching brg_*_fc_<run>_* files)? [y/N]
+```
+
+Only on an explicit "yes" from the user, run the deletion per stale tag:
+
+```bash
+for sentinel in $OLD_SENTINELS; do
+  tag=$(basename "$sentinel" | sed 's/^\.ready_//')
+  date_part=${tag%_*}
+  hour_part=${tag#*_}; hour_part=${hour_part%z}
+  RUN_TS="${date_part}T${hour_part}0000Z"
+
+  rm -f "$DEST"/brg_*_fc_${RUN_TS}_* "$sentinel"
+  echo "Removed $tag"
+done
+du -sh "$DEST"
+```
+
+Notes:
+- Only `.ready_*z` is in scope here — `.partial` sentinels and orphan grib files (no matching sentinel) are out of scope; surface them to the user but do not auto-delete.
+- Never delete without confirmation, even if disk looks tight. The user can always re-sync from prod.
+
+### 7. Suggest next step
 
 After a successful sync, suggest:
 
@@ -107,6 +168,6 @@ For an existing pack, look in fetch_meta.json for an 'ECMWF GRIB enrichment appl
 
 - **Pattern anchoring**: `brg_*_<RUN_TS>_*` matches both the init time and the valid time positions. Always include `_fc_` before the run timestamp to anchor correctly.
 - **`.partial` sentinels**: written when ECPDS delivery times out. The skill ignores them by default — partial runs should not be promoted to dev unless the user passes `--run` explicitly with a `.partial` tag.
-- **Disk usage**: the skill does NOT clean old runs locally. Periodically `rm` older `_fc_<old_run>_*` and matching `.ready_*` files if `/Users/brice/tmp/ecmwf/data` is filling up.
+- **Disk usage**: step 6 offers to clean runs whose sentinel is >24h old, but only with explicit user confirmation and never the run just synced. Orphan grib files (no matching `.ready_*` sentinel) are reported but not auto-deleted — clean them by hand if needed.
 - **Network**: ~9 MB/s observed in initial test — droplet uplink, not local — so 2 GB takes ~4 min. If it's noticeably slower, check `ssh brice@161.35.35.15 'iftop'` or just wait.
 - **rsync exit 24**: "some files vanished" — happens when the watcher deletes a file mid-transfer. Not fatal for our purposes as long as the run files all came through; verify with the file-count check in step 5.
