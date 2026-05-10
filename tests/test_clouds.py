@@ -6,17 +6,24 @@ from weatherbrief.models.analysis import CloudCoverage, EnhancedCloudLayer, Soun
 
 
 def test_single_cloud_layer():
-    """Detects a single cloud layer where dewpoint depression < 3C."""
+    """Consecutive levels in the same DD category form one layer.
+
+    Both 925 (DD=1.7) and 850 (DD=1.5) classify as BKN (1.0 ≤ DD < 2.0)
+    so they merge into a single BKN layer; threshold-crossing on the
+    neighbors gives non-zero base/top.
+    """
     levels = [
         DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
-        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=2.0),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=1.7),
         DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=1.5),
         DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=10.0),
     ]
     layers = detect_cloud_layers(levels)
     assert len(layers) == 1
-    assert layers[0].base_ft == 2530
-    assert layers[0].top_ft == 4760
+    assert layers[0].coverage == CloudCoverage.BKN
+    # Base/top are interpolated, not pinned to level altitudes.
+    assert layers[0].base_ft < 2530, layers[0].base_ft
+    assert layers[0].top_ft > 4760, layers[0].top_ft
 
 
 def test_no_cloud():
@@ -39,67 +46,139 @@ def test_two_layers():
         DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=6.0),
     ]
     layers = detect_cloud_layers(levels)
+    # 1000 (BKN, DD=1.5) | 925 clear | 850 (SCT, DD=2.0) | 700 clear → 2 layers
     assert len(layers) == 2
 
 
 def test_cloud_extending_to_top():
-    """Cloud extending to top of profile is captured."""
+    """Cloud extending to top of profile is captured.
+
+    Both upper levels share BKN category so they merge; the topmost edge
+    falls back to the level's own altitude (no level above to interpolate
+    against — TOA fallback).
+    """
     levels = [
         DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
         DerivedLevel(pressure_hpa=500, altitude_ft=18040, dewpoint_depression_c=1.5),
-        DerivedLevel(pressure_hpa=300, altitude_ft=29860, dewpoint_depression_c=2.0),
+        DerivedLevel(pressure_hpa=300, altitude_ft=29860, dewpoint_depression_c=1.8),
     ]
     layers = detect_cloud_layers(levels)
     assert len(layers) == 1
-    assert layers[0].base_ft == 18040
+    assert layers[0].coverage == CloudCoverage.BKN
+    # Topmost edge falls back to the level's own altitude.
     assert layers[0].top_ft == 29860
 
 
 def test_coverage_ovc():
-    """Mean DD < 1C classifies as OVC."""
+    """Two adjacent OVC levels (DD < 1.0) form one OVC layer."""
     levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
         DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=0.5),
         DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=0.8),
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=8.0),
     ]
     layers = detect_cloud_layers(levels)
     assert len(layers) == 1
-    assert layers[0].coverage.value == "ovc"
+    assert layers[0].coverage == CloudCoverage.OVC
 
 
 def test_coverage_bkn():
-    """Mean DD 1-2C classifies as BKN."""
+    """Two adjacent BKN levels (1.0 ≤ DD < 2.0) form one BKN layer."""
     levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
         DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=1.2),
         DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=1.8),
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=8.0),
     ]
     layers = detect_cloud_layers(levels)
     assert len(layers) == 1
-    assert layers[0].coverage.value == "bkn"
+    assert layers[0].coverage == CloudCoverage.BKN
 
 
 def test_coverage_sct():
-    """Mean DD 2-3C classifies as SCT."""
+    """Two adjacent SCT levels (2.0 ≤ DD < 3.0) form one SCT layer."""
     levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
         DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=2.5),
         DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=2.8),
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=8.0),
     ]
     layers = detect_cloud_layers(levels)
     assert len(layers) == 1
-    assert layers[0].coverage.value == "sct"
+    assert layers[0].coverage == CloudCoverage.SCT
 
 
-def test_missing_dd_skipped():
-    """Levels with missing dewpoint depression are skipped."""
+def test_dd_category_change_splits():
+    """A column where DD oscillates across category boundaries splits into
+    multiple categorical layers instead of one mean-DD-classified slab."""
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1700, dewpoint_depression_c=2.5),  # SCT
+        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=0.8),  # OVC
+        DerivedLevel(pressure_hpa=900, altitude_ft=3300, dewpoint_depression_c=0.4),  # OVC
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=1.5),  # BKN
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=8.0),  # clear
+    ]
+    layers = detect_cloud_layers(levels)
+    cats = [layer.coverage for layer in layers]
+    assert cats == [CloudCoverage.SCT, CloudCoverage.OVC, CloudCoverage.BKN]
+    # Layers stack contiguously (within rounding).
+    for prev, nxt in zip(layers, layers[1:]):
+        assert abs(prev.top_ft - nxt.base_ft) <= 1, (prev.top_ft, nxt.base_ft)
+    # No degenerate slabs.
+    for layer in layers:
+        assert layer.thickness_ft > 0
+
+
+def test_dd_threshold_crossing_base_below_clear():
+    """SCT base interpolates against DD = 3.0 K (SCT/clear boundary)
+    when below is clear.
+
+    DD goes from 8.0 (clear) at 330 ft to 2.5 (SCT) at 1700 ft.
+    Boundary DD = 3.0. frac = (3.0 − 2.5) / (8.0 − 2.5) = 0.0909.
+    Interpolated alt = 1700 + 0.0909 × (330 − 1700) ≈ 1576 ft.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1700, dewpoint_depression_c=2.5),
+        DerivedLevel(pressure_hpa=900, altitude_ft=3300, dewpoint_depression_c=8.0),
+    ]
+    layers = detect_cloud_layers(levels)
+    assert len(layers) == 1
+    assert layers[0].coverage == CloudCoverage.SCT
+    assert 1500 < layers[0].base_ft < 1650, layers[0].base_ft
+
+
+def test_dd_single_level_deck_with_neighbors():
+    """A single-level deck sandwiched by clear neighbors gets non-zero
+    thickness from threshold-crossing on both sides."""
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=8.0),
+        DerivedLevel(pressure_hpa=925, altitude_ft=2530, dewpoint_depression_c=1.5),  # BKN
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=8.0),
+    ]
+    layers = detect_cloud_layers(levels)
+    assert len(layers) == 1
+    assert layers[0].coverage == CloudCoverage.BKN
+    assert layers[0].thickness_ft > 0
+    assert layers[0].top_ft > layers[0].base_ft
+
+
+def test_missing_dd_uses_midpoint_fallback():
+    """When a deck-edge neighbor has DD=None but a valid altitude, the
+    layer edge falls back to the altitude midpoint — the missing DD blocks
+    threshold-crossing but altitude info is still usable."""
     levels = [
         DerivedLevel(pressure_hpa=1000, altitude_ft=330, dewpoint_depression_c=None),
         DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=1.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=None),
     ]
-    # Single level can't form a layer (no adjacent partner)
     layers = detect_cloud_layers(levels)
     assert len(layers) == 1
-    assert layers[0].base_ft == 4760
-    assert layers[0].top_ft == 4760
+    assert layers[0].coverage == CloudCoverage.BKN
+    # Midpoint between (330, 4760) ≈ 2545; midpoint between (4760, 9880) ≈ 7320.
+    assert 2500 < layers[0].base_ft < 2600
+    assert 7300 < layers[0].top_ft < 7400
 
 
 def test_empty_levels():

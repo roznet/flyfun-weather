@@ -100,8 +100,8 @@ Open-Meteo `cloud_cover_*_pct` values are NOT spatially interpolated — each po
 `clouds.py:detect_cloud_layers()` → `list[EnhancedCloudLayer]`
 
 - **Input:** DerivedLevel dewpoint depression profile
-- **Threshold:** DD < 3°C = "in cloud"
-- **Coverage:** Mean DD < 1°C → OVC, < 2°C → BKN, < 3°C → SCT
+- **Algorithm:** Walk levels surface→TOA, classify each in-cloud level by DD (OVC < 1°C ≤ BKN < 2°C ≤ SCT < 3°C), group consecutive same-category levels into a deck. A category change starts a new deck; DD ≥ 3°C splits decks (clear-air gaps).
+- **Layer edges:** Linear threshold-crossing on `dewpoint_depression_c` against the boundary DD separating the layer from its different-category neighbor — a moisture-defined edge instead of pinning to a level altitude. Half-pressure attribution falls back at the column ends. Mirrors the NWP-3D path with three categories instead of four (no FEW analog).
 - **Model consistency:** Identical treatment for all 6 models (purely thermodynamic)
 - **Output:** Stored in `SoundingAnalysis.dd_cloud_layers` (immutable) and `cloud_layers` (active slot)
 
