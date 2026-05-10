@@ -170,7 +170,6 @@ def analyze_sounding_lite(
     Returns None if profile preparation fails (insufficient data).
     """
     from weatherbrief.analysis.sounding.clouds import (
-        apply_nwp_coverage,
         detect_cloud_layers,
     )
     from weatherbrief.analysis.sounding.convective import (
@@ -227,6 +226,7 @@ def analyze_sounding_lite(
     # NWP bulk band %, which destroys the per-deck edges and produces
     # zero-pressure-span segments that disappear from the Skew-T view.
     if _APPLY_NWP_COVERAGE_OVERLAY:
+        from weatherbrief.analysis.sounding.clouds import apply_nwp_coverage
         cloud_layers = apply_nwp_coverage(
             dd_cloud_layers,
             nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
@@ -313,7 +313,6 @@ def _analyze_sounding_heavy(
     cloud_layers and inversions after extended enrichment.
     """
     from weatherbrief.analysis.sounding.clouds import (
-        apply_nwp_coverage,
         build_nwp_cloud_layers,
         enrich_cloud_top_uncertainty,
     )
@@ -356,6 +355,7 @@ def _analyze_sounding_heavy(
     # Active cloud_layers slot. See _APPLY_NWP_COVERAGE_OVERLAY note above
     # — overlay disabled by default, so we publish dd_cloud_layers verbatim.
     if _APPLY_NWP_COVERAGE_OVERLAY:
+        from weatherbrief.analysis.sounding.clouds import apply_nwp_coverage
         cloud_layers = apply_nwp_coverage(
             dd_cloud_layers,
             nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
