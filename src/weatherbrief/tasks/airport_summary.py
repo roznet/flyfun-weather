@@ -436,19 +436,21 @@ def completed_days(db: Session) -> list[date]:
 def rollup_all_complete_months(db: Session) -> int:
     """Roll up every completed month not yet in airport_monthly_summary.
 
+    Caller commits — matches the convention used by verification_rollup.
     Returns total rows inserted across all months.
     """
     total = 0
     for month_start in completed_months(db):
         total += rollup_month(db, month_start)
-    db.commit()
     return total
 
 
 def rollup_all_complete_days(db: Session) -> int:
-    """Roll up every completed UTC day not yet in airport_daily_summary."""
+    """Roll up every completed UTC day not yet in airport_daily_summary.
+
+    Caller commits.
+    """
     total = 0
     for d in completed_days(db):
         total += rollup_day(db, d)
-    db.commit()
     return total
