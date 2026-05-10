@@ -477,6 +477,60 @@ def _run_retention_once() -> None:
     except Exception:
         logger.error("DWD chart cache age-eviction failed", exc_info=True)
 
+    # Roll up completed months/days into the airport summary tables, then
+    # ensure future MySQL partitions exist, then prune raw obs older than
+    # retention (effectively a no-op until VERIFICATION_RAW_RETENTION_DAYS
+    # is set < 9999). Each step is wrapped independently so a single
+    # failure doesn't skip the others.
+    try:
+        from weatherbrief.tasks.airport_summary import (
+            rollup_all_complete_days,
+            rollup_all_complete_months,
+        )
+
+        db = SessionLocal()
+        try:
+            n_months = rollup_all_complete_months(db)
+            n_days = rollup_all_complete_days(db)
+            if n_months or n_days:
+                logger.info(
+                    "Airport summary rollup: %d months, %d days",
+                    n_months, n_days,
+                )
+        finally:
+            db.close()
+    except Exception:
+        logger.error("Airport summary rollup failed", exc_info=True)
+
+    try:
+        from weatherbrief.tasks.retention import ensure_future_partitions
+
+        db = SessionLocal()
+        try:
+            added = ensure_future_partitions(db, months_ahead=3)
+            if added:
+                logger.info("Created %d future verification_observations partition(s)", added)
+        finally:
+            db.close()
+    except Exception:
+        logger.error("Partition maintenance failed", exc_info=True)
+
+    try:
+        from weatherbrief.tasks.retention import prune_raw_observations
+
+        db = SessionLocal()
+        try:
+            result = prune_raw_observations(db)
+            if any(v for v in result.values()):
+                logger.info(
+                    "Raw retention: pruned obs=%d scores=%d taf=%d",
+                    result["observations"], result["scores"], result["taf_scores"],
+                )
+        finally:
+            db.close()
+    except Exception:
+        logger.error("Raw observation retention failed", exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # METAR ingest, forecast fetch, and standalone verification loops
