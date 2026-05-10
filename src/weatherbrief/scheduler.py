@@ -42,6 +42,17 @@ _STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
 _ECMWF_WATCHER_POLL_SECONDS = 300  # 5 minutes
 _ECMWF_WATCHER_STARTUP_DELAY_SECONDS = 15  # run early — other loops may need ready data
 _FRESHNESS_LOOP_STARTUP_DELAY_SECONDS = 20  # let ECMWF watcher run once first
+# Forecast fetch runs at HH:15 (not on the hour) so Open-Meteo GFS (~+6h45m
+# after 00Z/12Z init) and ECMWF direct (~+6h40m) have a margin to land.
+_FORECAST_FETCH_HOUR_OFFSET_SECONDS = 900  # 15 min
+# If a slow-publisher marker's next_expected falls within this window after the
+# offset, wait for it (capped) — saves a stale-init fetch when delivery is
+# running a few minutes late.
+_FORECAST_FETCH_FRESHNESS_WAIT_MAX_SECONDS = 900  # 15 min
+_FORECAST_FETCH_FRESHNESS_SOURCES: list[tuple[str, str]] = [
+    ("gfs:openmeteo", "gfs"),
+    ("icon:openmeteo", "icon"),
+]
 # Hewson precompute fires once per init cycle. 06Z and 18Z pick up the 00Z /
 # 12Z inits after ~6 h — Open-Meteo has all 3 models published by then, and
 # we keep ~1 h buffer before the 07Z / 19Z standalone forecast-fetch cycles.
@@ -460,8 +471,10 @@ def _run_retention_once() -> None:
 #
 # Two independent loops driven by the standalone subsystem:
 #
-#   * Forecast fetch fires at FORECAST_FETCH_HOURS_UTC (07/19 — ~30 min after
-#     ECMWF 00Z/12Z deliveries land). Stores fresh snapshots only.
+#   * Forecast fetch fires at FORECAST_FETCH_HOURS_UTC + 15 min (07:15/19:15)
+#     so Open-Meteo GFS (~+6h45m) and ECMWF direct (~+6h40m) deliveries have
+#     landed. Additionally waits up to 15 min more if a marker's next_expected
+#     is within the window. Stores fresh snapshots only.
 #   * Verification fires at VERIFICATION_HOURS_UTC (06/09/12/15/18). Pulls
 #     METAR/TAF and scores against whatever snapshots are already in DB.
 #
@@ -494,6 +507,8 @@ async def run_forecast_fetch_loop(app_state) -> None:
                 "Forecast fetch: sleeping %ds until next fetch hour", sleep_secs,
             )
             await asyncio.sleep(sleep_secs)
+            await asyncio.sleep(_FORECAST_FETCH_HOUR_OFFSET_SECONDS)
+            await _wait_for_marker_freshness(_FORECAST_FETCH_FRESHNESS_WAIT_MAX_SECONDS)
             await asyncio.to_thread(
                 _run_standalone_once, app_state,
                 True,   # fetch_forecasts
@@ -503,6 +518,40 @@ async def run_forecast_fetch_loop(app_state) -> None:
         except Exception:
             logger.error("Forecast fetch cycle failed", exc_info=True)
             await asyncio.sleep(900)
+
+
+async def _wait_for_marker_freshness(max_wait_seconds: float) -> None:
+    """Sleep up to ``max_wait_seconds`` if a tracked marker is about to publish.
+
+    For each (source, model) in :data:`_FORECAST_FETCH_FRESHNESS_SOURCES`, if
+    its ``next_expected`` falls between *now* and *now+max_wait_seconds*, hold
+    off until the latest such time so the fetch picks up the fresh init rather
+    than the previous one. Capped at ``max_wait_seconds`` so a long-slipping
+    provider doesn't block the cycle indefinitely.
+    """
+    from weatherbrief.fetch.freshness.markers import get_store
+
+    store = get_store()
+    now = datetime.now(timezone.utc)
+    deadline = now + timedelta(seconds=max_wait_seconds)
+    target = now
+    waited_for: list[str] = []
+    for source, model in _FORECAST_FETCH_FRESHNESS_SOURCES:
+        marker = store.get_sync(source, model)
+        if marker is None:
+            continue
+        if now < marker.next_expected <= deadline:
+            if marker.next_expected > target:
+                target = marker.next_expected
+            waited_for.append(f"{source}/{model}@{marker.next_expected.isoformat()}")
+
+    wait = (target - now).total_seconds()
+    if wait > 0:
+        logger.info(
+            "Forecast fetch: freshness wait %.0fs for %s",
+            wait, ", ".join(waited_for),
+        )
+        await asyncio.sleep(wait)
 
 
 async def run_standalone_verification_loop(app_state) -> None:
