@@ -8,6 +8,7 @@ in analysis/clouds.py.
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from weatherbrief.models import (
     CloudCoverage,
@@ -78,8 +79,9 @@ def _dd_crossing_altitude(
     endpoint is the one with the lower DD.
 
     Returns ``None`` if either endpoint lacks data, the two levels share
-    the same DD (no crossing possible), or the boundary DD lies outside
-    [a_dd, b_dd] (would require extrapolation).
+    the same DD (no crossing possible), the boundary DD lies outside
+    [a_dd, b_dd] (would require extrapolation), or — defensively — the
+    deck-membership invariant is violated (should be unreachable).
     """
     a_dd = a.dewpoint_depression_c
     b_dd = b.dewpoint_depression_c
@@ -225,8 +227,10 @@ def detect_cloud_layers(
             continue
 
         run = sorted_levels[i:j + 1]
-        # Every level in the run has DD + altitude (cats[k] non-None requires both).
-        dd_vals = [lv.dewpoint_depression_c for lv in run]
+        # Every level in the run has DD + altitude (cats[k] non-None requires
+        # both). ``cast`` makes the runtime invariant visible to the type
+        # checker.
+        dd_vals = cast("list[float]", [lv.dewpoint_depression_c for lv in run])
         t_vals = [lv.temperature_c for lv in run if lv.temperature_c is not None]
         mean_dd = sum(dd_vals) / len(dd_vals)
         mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
@@ -292,8 +296,9 @@ def _crossing_altitude(
     altitude.
 
     Returns ``None`` if either endpoint lacks data, the two levels share
-    the same CAF (no crossing possible), or the boundary CAF lies outside
-    [a_caf, b_caf] (would require extrapolation).
+    the same CAF (no crossing possible), the boundary CAF lies outside
+    [a_caf, b_caf] (would require extrapolation), or — defensively — the
+    deck-membership invariant is violated (should be unreachable).
     """
     a_caf = a.cloud_area_fraction_pct
     b_caf = b.cloud_area_fraction_pct
@@ -445,8 +450,9 @@ def build_nwp_cloud_layers_from_fraction(
         run = levels[i:j + 1]
         # Every level in the run is guaranteed to carry CAF + geopotential
         # (cats[k] is non-None only when both are present), so caf_vals and
-        # base/top altitudes are always populated here.
-        caf_vals = [lv.cloud_area_fraction_pct for lv in run]
+        # base/top altitudes are always populated here. ``cast`` makes the
+        # runtime invariant visible to the type checker.
+        caf_vals = cast("list[float]", [lv.cloud_area_fraction_pct for lv in run])
         t_vals = [lv.temperature_c for lv in run if lv.temperature_c is not None]
         mean_caf = sum(caf_vals) / len(caf_vals)
         mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None

@@ -155,7 +155,7 @@ def test_single_level_deck_with_neighbors():
     assert layer.top_ft > layer.base_ft
 
 
-def test_floor_uses_half_pressure_fallback():
+def test_floor_uses_own_altitude_fallback():
     """Lowest level above threshold with no level below — base = its own altitude."""
     levels = [
         _lv(1000, 100, caf=70, t=15),  # BKN at floor
@@ -169,7 +169,7 @@ def test_floor_uses_half_pressure_fallback():
     assert 320 < layers[0].base_ft < 340, layers[0].base_ft
 
 
-def test_top_uses_half_pressure_fallback():
+def test_top_uses_own_altitude_fallback():
     """Highest level above threshold with no level above — top = its own altitude."""
     levels = [
         _lv(900, 1000, caf=10),

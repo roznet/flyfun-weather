@@ -210,7 +210,12 @@ def analyze_sounding_lite(
         lcl_altitude_ft=indices.lcl_altitude_ft,
     )
 
-    # Apply NWP coverage to DD layers so ceiling reflects model cloud amount
+    # Apply NWP coverage to DD layers so ceiling reflects model cloud amount.
+    # TODO: With the category-split DD detector, dd_cloud_layers already
+    # carries moisture-defined edges and per-deck OVC/BKN/SCT classes. The
+    # ICAO band overlay below can override those classes with band averages
+    # — re-evaluate whether the overlay still adds value or should be
+    # toggleable / removed.
     cloud_layers = apply_nwp_coverage(
         dd_cloud_layers,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
@@ -335,7 +340,12 @@ def _analyze_sounding_heavy(
     eff_cape = effective_cape(indices)
     enrich_cloud_top_uncertainty(dd_cloud_layers, indices, eff_cape)
 
-    # Apply NWP coverage percentages to DD layers
+    # Apply NWP coverage percentages to DD layers.
+    # TODO: With the category-split DD detector, dd_cloud_layers already
+    # carries moisture-defined edges and per-deck OVC/BKN/SCT classes. The
+    # ICAO band overlay below can override those classes with band averages
+    # — re-evaluate whether the overlay still adds value or should be
+    # toggleable / removed.
     cloud_layers = apply_nwp_coverage(
         dd_cloud_layers,
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
