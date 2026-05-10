@@ -7,9 +7,9 @@ ForeignKey references work correctly.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date as date_t, datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -711,6 +711,141 @@ class VerificationMonthlyStatsRow(Base):
     n_convection_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     n_convection_miss: Mapped[int | None] = mapped_column(Integer, nullable=True)
     n_convection_false_alarm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class AirportMonthlySummaryRow(Base):
+    """Pre-aggregated monthly observation climatology per airport.
+
+    One row per (month, icao). Powers the public Patterns map and Spotlight
+    leaderboards. Rolled up nightly from ``verification_observations`` once
+    a calendar month is complete; idempotent (DELETE+INSERT per month).
+
+    Generous column set: per-phenomenon counts, multiple percentiles, and
+    hours-below-threshold derivations are stored eagerly so leaderboard
+    queries are single-table reads against ~830 rows per month.
+    """
+
+    __tablename__ = "airport_monthly_summary"
+    __table_args__ = (
+        UniqueConstraint("month", "icao", name="uq_ams_key"),
+        Index("ix_ams_month", "month"),
+        Index("ix_ams_icao", "icao"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    month: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )  # first day of month, UTC
+    icao: Mapped[str] = mapped_column(String(4), nullable=False)
+
+    # Sample size
+    n_obs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Flight category hour counts (drives IR usefulness, VFR rate)
+    n_vfr: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_mvfr: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ifr: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_lifr: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Phenomena hour counts. Each counts METARs whose ``weather`` list
+    # contains the relevant code (e.g. n_ts captures TS, +TSRA, VCTS, ...).
+    n_obscuration: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_fg: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_br: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_haze: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_precip: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ra: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_sn: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_freezing: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Ceiling percentiles (ft). NULL for airports with no METAR ceiling data.
+    ceiling_p10_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_p25_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_p50_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_p75_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_p90_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Visibility percentiles (m).
+    visibility_p10_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visibility_p25_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visibility_p50_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Wind aggregates (kt).
+    wind_mean_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_p50_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_p95_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gust_max_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Hours-below-threshold (handy for "approach minimums" / "low vis"
+    # rankings without re-deriving from percentiles).
+    n_ceiling_below_500: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ceiling_below_1500: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_visibility_below_5km: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_wind_over_25kt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Temperature extremes (deg C).
+    temp_min_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temp_max_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Volatility — count of category transitions between consecutive
+    # observations within the same UTC day, summed across the month.
+    category_changes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Per-hour-of-day breakdown stored as JSON. Keys are zero-padded HH
+    # strings (00..23); values are dicts {n, n_ifr, n_ts, n_fog, n_precip,
+    # ceiling_p50}. Hours with no observations are omitted.
+    diurnal_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AirportDailySummaryRow(Base):
+    """Daily observation climatology per airport.
+
+    One row per (date, icao). Powers Spotlight calendar heatmaps and
+    "worst day of the month" leaderboards. Rolled up nightly from
+    ``verification_observations`` for completed UTC days; idempotent.
+
+    Cannot be backfilled past raw retention — must accumulate from day 1.
+    """
+
+    __tablename__ = "airport_daily_summary"
+    __table_args__ = (
+        UniqueConstraint("date", "icao", name="uq_ads_key"),
+        Index("ix_ads_date", "date"),
+        Index("ix_ads_icao", "icao"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[date_t] = mapped_column(Date, nullable=False)  # UTC date
+    icao: Mapped[str] = mapped_column(String(4), nullable=False)
+
+    n_obs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Worst category seen during the day (VFR/MVFR/IFR/LIFR). Drives the
+    # calendar heatmap cell color.
+    worst_category: Mapped[str | None] = mapped_column(String(4), nullable=True)
+
+    n_vfr: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_mvfr: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ifr: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_lifr: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    n_obscuration: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_fg: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_br: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_precip: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_freezing: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    ceiling_min_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_p10_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ceiling_p50_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visibility_min_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visibility_p50_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    wind_max_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gust_max_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    temp_min_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temp_max_c: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class VerificationCacheRow(Base):

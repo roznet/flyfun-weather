@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow, FlightRow, PirepRow, UserRow
@@ -269,3 +269,212 @@ def _dir_size(path: Path) -> int:
             except OSError:
                 pass
     return total
+
+
+# ---------------------------------------------------------------------------
+# Verification observation retention
+#
+# Independent of the briefing-pack tiered retention above. Once raw obs are
+# rolled up into airport_monthly/daily_summary, we can drop the originals.
+# Default retention is intentionally very high (9999 days = effectively
+# disabled) until the Patterns/Spotlight UI has been live long enough to
+# validate the rollup column set covers everything we query. Once that's
+# confirmed, switch to ~180 days via VERIFICATION_RAW_RETENTION_DAYS.
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_RAW_RETENTION_DAYS = 9999  # disabled by default — see comment above
+
+
+def prune_raw_observations(
+    db: Session,
+    retain_days: int | None = None,
+) -> dict:
+    """Delete verification_observations / scores older than retain_days.
+
+    Only deletes data older than the cutoff *AND* whose containing month
+    has at least one row in airport_monthly_summary — never delete obs that
+    haven't been summarised yet, even if the cutoff has passed (e.g. if
+    rollup has been failing). This is a safety belt; in normal operation
+    rollup runs nightly and is well ahead of the cutoff.
+
+    Returns a dict with deletion counts per table.
+    """
+    from weatherbrief.db.models import (
+        AirportMonthlySummaryRow,
+        FlightVerificationMapRow,
+        TafVerificationScoreRow,
+        VerificationObservationRow,
+        VerificationScoreRow,
+    )
+
+    if retain_days is None:
+        retain_days = int(
+            os.environ.get(
+                "VERIFICATION_RAW_RETENTION_DAYS",
+                str(_DEFAULT_RAW_RETENTION_DAYS),
+            )
+        )
+
+    if retain_days >= _DEFAULT_RAW_RETENTION_DAYS:
+        # Effectively disabled. Don't even scan.
+        logger.debug("Raw observation retention disabled (retain_days=%d)", retain_days)
+        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retain_days)
+
+    # Months that have been summarised (any airport row implies the month
+    # was rolled up — rollup is all-or-nothing per month).
+    summarised_months: set[tuple[int, int]] = set()
+    for dt in db.execute(
+        select(AirportMonthlySummaryRow.month).distinct()
+    ).scalars().all():
+        if dt is not None:
+            summarised_months.add((dt.year, dt.month))
+
+    if not summarised_months:
+        logger.warning(
+            "Raw retention: no months summarised yet — refusing to delete"
+        )
+        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
+
+    # Build list of (month_start, month_end) ranges fully inside the cutoff
+    # AND in summarised_months.
+    safe_ranges: list[tuple[datetime, datetime]] = []
+    for (y, m) in sorted(summarised_months):
+        month_start = datetime(y, m, 1, tzinfo=timezone.utc)
+        month_end = (
+            datetime(y + 1, 1, 1, tzinfo=timezone.utc)
+            if m == 12
+            else datetime(y, m + 1, 1, tzinfo=timezone.utc)
+        )
+        if month_end <= cutoff:
+            safe_ranges.append((month_start, month_end))
+
+    if not safe_ranges:
+        return {"observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0}
+
+    # All three child FKs to verification_observations.id use ON DELETE
+    # CASCADE, so a parent-first delete would also work — but the child
+    # rows would already be gone by the time we ran the child deletes,
+    # making our score/taf counters useless for monitoring. Deleting
+    # children first gives us accurate per-table metrics.
+    obs_deleted = 0
+    score_deleted = 0
+    taf_deleted = 0
+    map_deleted = 0
+    for start, end in safe_ranges:
+        # FlightVerificationMapRow has no observation_time of its own —
+        # find linked map rows by joining through observation_id.
+        obs_id_subquery = (
+            select(VerificationObservationRow.id)
+            .where(VerificationObservationRow.observation_time >= start)
+            .where(VerificationObservationRow.observation_time < end)
+            .scalar_subquery()
+        )
+        r = db.execute(
+            FlightVerificationMapRow.__table__.delete()
+            .where(FlightVerificationMapRow.observation_id.in_(obs_id_subquery))
+        )
+        map_deleted += r.rowcount or 0
+        r = db.execute(
+            VerificationScoreRow.__table__.delete()
+            .where(VerificationScoreRow.observation_time >= start)
+            .where(VerificationScoreRow.observation_time < end)
+        )
+        score_deleted += r.rowcount or 0
+        r = db.execute(
+            TafVerificationScoreRow.__table__.delete()
+            .where(TafVerificationScoreRow.observation_time >= start)
+            .where(TafVerificationScoreRow.observation_time < end)
+        )
+        taf_deleted += r.rowcount or 0
+        r = db.execute(
+            VerificationObservationRow.__table__.delete()
+            .where(VerificationObservationRow.observation_time >= start)
+            .where(VerificationObservationRow.observation_time < end)
+        )
+        obs_deleted += r.rowcount or 0
+
+    # Caller commits — matches the rollup convention. expire_all so any
+    # cached ORM objects representing the deleted rows reflect their absence.
+    db.flush()
+    db.expire_all()
+    logger.info(
+        "Raw retention: pruned %d observations, %d scores, %d TAF scores, "
+        "%d map rows (retain_days=%d, cutoff=%s)",
+        obs_deleted, score_deleted, taf_deleted, map_deleted,
+        retain_days, cutoff.isoformat(),
+    )
+    return {
+        "observations": obs_deleted,
+        "scores": score_deleted,
+        "taf_scores": taf_deleted,
+        "map_rows": map_deleted,
+    }
+
+
+# ---------------------------------------------------------------------------
+# MySQL partition maintenance — Phase 4
+# ---------------------------------------------------------------------------
+
+
+def ensure_future_partitions(db: Session, months_ahead: int = 3) -> int:
+    """Pre-create monthly partitions for verification_observations on MySQL.
+
+    Without this, an INSERT for a date past the highest existing partition
+    would fail. SQLite is a no-op (no partitioning).
+
+    Returns the number of partitions added.
+    """
+    bind = db.get_bind()
+    if bind.dialect.name != "mysql":
+        return 0
+
+    # Discover existing partitions
+    rows = db.execute(text(
+        "SELECT partition_name, partition_description "
+        "FROM information_schema.PARTITIONS "
+        "WHERE table_schema = DATABASE() "
+        "AND table_name = 'verification_observations' "
+        "AND partition_name IS NOT NULL"
+    )).all()
+
+    existing_names = {r[0] for r in rows}
+    if not existing_names:
+        # Table isn't partitioned yet (migration 054 hasn't run). Nothing to do.
+        logger.debug(
+            "ensure_future_partitions: verification_observations not partitioned"
+        )
+        return 0
+
+    # Compute target month names for the next N months.
+    now = datetime.now(timezone.utc)
+    targets: list[tuple[int, int]] = []
+    y, m = now.year, now.month
+    for _ in range(months_ahead):
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+        targets.append((y, m))
+
+    added = 0
+    for (y, m) in targets:
+        name = f"p_{y:04d}{m:02d}"
+        if name in existing_names:
+            continue
+        # TO_DAYS upper bound = first day of the *following* month
+        next_y, next_m = (y + 1, 1) if m == 12 else (y, m + 1)
+        upper = f"{next_y:04d}-{next_m:02d}-01"
+        # REORGANIZE the catch-all p_future partition to add the new range.
+        db.execute(text(
+            f"ALTER TABLE verification_observations "
+            f"REORGANIZE PARTITION p_future INTO ("
+            f"PARTITION {name} VALUES LESS THAN (TO_DAYS('{upper}')), "
+            f"PARTITION p_future VALUES LESS THAN MAXVALUE)"
+        ))
+        added += 1
+        logger.info("Added partition %s (upper=%s)", name, upper)
+
+    return added

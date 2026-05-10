@@ -16,6 +16,7 @@ from weatherbrief.tasks.retention import (
     _inactive_user_ids,
     _purge_full_pack,
     _purge_heavy_artifacts,
+    prune_raw_observations,
     run_retention,
 )
 
@@ -513,3 +514,123 @@ class TestDebriefExemption:
         db_session.expire_all()
         assert db_session.get(BriefingPackRow, p1_id) is not None
         assert db_session.get(BriefingPackRow, p2_id) is not None
+
+
+# ---------------------------------------------------------------------------
+# prune_raw_observations
+# ---------------------------------------------------------------------------
+
+
+class TestPruneRawObservations:
+    """Verify the raw-obs retention pruner — disabled-by-default, safety
+    belts, and accurate per-table counters when actually pruning."""
+
+    def test_disabled_default_does_nothing(self, db_session):
+        from weatherbrief.db.models import VerificationObservationRow
+
+        # Insert one obs from years ago — would absolutely be pruned if
+        # retention were active.
+        old = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2020, 1, 1, 0, 0),
+            collected_at=_utc(2020, 1, 1, 0, 0),
+        )
+        db_session.add(old)
+        db_session.flush()
+
+        result = prune_raw_observations(db_session)
+        assert result == {
+            "observations": 0, "scores": 0, "taf_scores": 0, "map_rows": 0,
+        }
+
+    def test_no_summarised_months_refuses_to_delete(self, db_session):
+        """Safety belt: even if retain_days is short, refuse to delete when
+        no months have been rolled up — could indicate a broken rollup loop."""
+        from weatherbrief.db.models import VerificationObservationRow
+
+        old = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2020, 1, 1, 0, 0),
+            collected_at=_utc(2020, 1, 1, 0, 0),
+        )
+        db_session.add(old)
+        db_session.flush()
+
+        # Force an aggressive retention but no AirportMonthlySummary rows exist
+        result = prune_raw_observations(db_session, retain_days=1)
+        assert result["observations"] == 0
+        assert db_session.get(VerificationObservationRow, old.id) is not None
+
+    def test_deletes_children_before_parent_with_accurate_counters(self, db_session):
+        """Children must be deleted before parent so per-table counters
+        reflect what was actually removed (with CASCADE FKs the parent-first
+        order would silently zero the child counters)."""
+        from weatherbrief.db.models import (
+            AirportMonthlySummaryRow,
+            VerificationObservationRow,
+            VerificationScoreRow,
+        )
+
+        # One obs in Feb 2026 with a score row pointing at it
+        feb_obs = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 15, 12, 0),
+            collected_at=_utc(2026, 2, 15, 12, 0),
+        )
+        db_session.add(feb_obs)
+        db_session.flush()
+        feb_id = feb_obs.id  # capture before prune (which expires the session)
+        score = VerificationScoreRow(
+            icao="LFPG",
+            observation_id=feb_id,
+            observation_time=feb_obs.observation_time,
+            model="gfs",
+            model_init_time=_utc(2026, 2, 15, 0, 0),
+            lead_hours=12,
+            days_out=0,
+            source="standalone",
+        )
+        db_session.add(score)
+        # Mark Feb 2026 as summarised so retention will prune it.
+        db_session.add(AirportMonthlySummaryRow(
+            month=_utc(2026, 2, 1), icao="LFPG", n_obs=1,
+        ))
+        db_session.flush()
+
+        # retain_days=1 with cutoff way in the future from Feb 2026 → prune
+        result = prune_raw_observations(db_session, retain_days=1)
+        assert result["observations"] == 1
+        assert result["scores"] == 1  # would be 0 if parent-first w/ CASCADE
+        assert db_session.get(VerificationObservationRow, feb_id) is None
+
+    def test_unsummarised_month_left_alone(self, db_session):
+        """Obs from a month that's never been rolled up stays put even when
+        the cutoff has passed — protects against a broken rollup loop."""
+        from weatherbrief.db.models import (
+            AirportMonthlySummaryRow,
+            VerificationObservationRow,
+        )
+
+        # Mar 2026 is summarised; Feb 2026 is NOT summarised.
+        feb_obs = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 2, 15, 12, 0),
+            collected_at=_utc(2026, 2, 15, 12, 0),
+        )
+        mar_obs = VerificationObservationRow(
+            icao="LFPG",
+            observation_time=_utc(2026, 3, 15, 12, 0),
+            collected_at=_utc(2026, 3, 15, 12, 0),
+        )
+        db_session.add_all([feb_obs, mar_obs])
+        db_session.add(AirportMonthlySummaryRow(
+            month=_utc(2026, 3, 1), icao="LFPG", n_obs=1,
+        ))
+        db_session.flush()
+        feb_id, mar_id = feb_obs.id, mar_obs.id  # capture before prune
+
+        result = prune_raw_observations(db_session, retain_days=1)
+        # Only March (the summarised month past cutoff) gets pruned
+        assert result["observations"] == 1
+        assert db_session.get(VerificationObservationRow, feb_id) is not None
+        assert db_session.get(VerificationObservationRow, mar_id) is None
