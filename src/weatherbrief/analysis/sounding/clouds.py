@@ -41,83 +41,203 @@ def _classify_coverage(mean_dd: float) -> CloudCoverage:
     return CloudCoverage.SCT
 
 
+# Upper DD bound for each METAR coverage category, derived from
+# _COVERAGE_THRESHOLDS so the breakpoints stay in one place. Used to find
+# the boundary DD when interpolating altitude between two adjacent levels
+# of different categories — the boundary is the upper bound of whichever
+# endpoint sits in the denser (lower-DD) category.
+_DD_CATEGORY_UPPER_BOUNDS: dict[CloudCoverage, float] = {
+    coverage: threshold for threshold, coverage in _COVERAGE_THRESHOLDS
+}
+
+
+def _dd_category(
+    dd: float | None,
+    in_cloud_threshold: float = IN_CLOUD_DD_THRESHOLD,
+) -> CloudCoverage | None:
+    """Map dewpoint depression to METAR coverage category. Returns None for
+    DD ≥ ``in_cloud_threshold`` (clear)."""
+    if dd is None or dd >= in_cloud_threshold:
+        return None
+    return _classify_coverage(dd)
+
+
+def _dd_crossing_altitude(
+    a: DerivedLevel,
+    b: DerivedLevel,
+    a_cat: CloudCoverage,
+    b_cat: CloudCoverage | None,
+) -> float | None:
+    """Altitude (ft) where ``dewpoint_depression_c`` linearly crosses the
+    boundary DD separating a's and b's coverage categories.
+
+    Mirrors ``_crossing_altitude`` for the NWP-3D path but on DD: ``a`` is
+    always a level inside a deck (so ``a_cat`` non-None and
+    ``a_dd < dd_threshold``); ``b`` is the adjacent neighbor — possibly
+    clear (``b_cat=None`` and ``b_dd >= dd_threshold``). The denser
+    endpoint is the one with the lower DD.
+
+    Returns ``None`` if either endpoint lacks data, the two levels share
+    the same DD (no crossing possible), or the boundary DD lies outside
+    [a_dd, b_dd] (would require extrapolation).
+    """
+    a_dd = a.dewpoint_depression_c
+    b_dd = b.dewpoint_depression_c
+    if (a_dd is None or b_dd is None
+            or a.altitude_ft is None
+            or b.altitude_ft is None
+            or a_dd == b_dd):
+        return None
+
+    # Denser endpoint = lower DD. ``a`` is always in a real category, so
+    # when ``a_dd <= b_dd`` the denser cat is ``a_cat``. When ``a_dd > b_dd``,
+    # ``b`` is denser — and since ``a`` already has DD < dd_threshold,
+    # ``b`` has even smaller DD and therefore also a non-None category.
+    denser_cat = a_cat if a_dd <= b_dd else b_cat
+    assert denser_cat is not None  # invariant: at least one endpoint is in a deck
+    target = _DD_CATEGORY_UPPER_BOUNDS[denser_cat]
+
+    frac = (target - a_dd) / (b_dd - a_dd)
+    if not 0.0 <= frac <= 1.0:
+        return None
+    return a.altitude_ft + frac * (b.altitude_ft - a.altitude_ft)
+
+
+def _dd_midpoint_altitude_ft(
+    inner: DerivedLevel,
+    outer: DerivedLevel | None,
+) -> float | None:
+    """Edge altitude when threshold-crossing isn't usable.
+
+    Falls back to the altitude midway between the deck-edge level and its
+    neighbor; or, at the column floor / TOA where there's no neighbor, the
+    level's own altitude.
+    """
+    if inner.altitude_ft is None:
+        return None
+    if outer is None or outer.altitude_ft is None:
+        return inner.altitude_ft
+    return (inner.altitude_ft + outer.altitude_ft) / 2.0
+
+
+def _dd_layer_edge_below(
+    levels: list[DerivedLevel],
+    cats: list[CloudCoverage | None],
+    i: int,
+    cat: CloudCoverage,
+) -> float | None:
+    """Altitude of the lower edge of the run starting at index i."""
+    if i > 0:
+        ft = _dd_crossing_altitude(levels[i], levels[i - 1], cat, cats[i - 1])
+        if ft is not None:
+            return ft
+    return _dd_midpoint_altitude_ft(levels[i], levels[i - 1] if i > 0 else None)
+
+
+def _dd_layer_edge_above(
+    levels: list[DerivedLevel],
+    cats: list[CloudCoverage | None],
+    j: int,
+    cat: CloudCoverage,
+) -> float | None:
+    """Altitude of the upper edge of the run ending at index j."""
+    n = len(levels)
+    if j + 1 < n:
+        ft = _dd_crossing_altitude(levels[j], levels[j + 1], cat, cats[j + 1])
+        if ft is not None:
+            return ft
+    return _dd_midpoint_altitude_ft(levels[j], levels[j + 1] if j + 1 < n else None)
+
+
 def detect_cloud_layers(
     levels: list[DerivedLevel],
     lcl_altitude_ft: float | None = None,
     dd_threshold: float = IN_CLOUD_DD_THRESHOLD,
 ) -> list[EnhancedCloudLayer]:
-    """Detect cloud layers from derived level dewpoint depression.
+    """Detect cloud layers from derived-level dewpoint depression.
+
+    Walks levels surface→TOA and groups consecutive levels by their METAR
+    coverage category derived from DD (SCT/BKN/OVC). A category change
+    starts a new layer; levels with DD ≥ ``dd_threshold`` (≥ 3.0 K by
+    default) split layers (clear-air gaps).
+
+    Each layer's base/top altitudes come from linear threshold-crossing on
+    ``dewpoint_depression_c`` against the boundary DD separating the layer
+    from its (different-category) neighbor — a moisture-defined edge
+    instead of pinning to a level altitude. Half-pressure attribution
+    falls back at the column ends.
+
+    Mirrors ``build_nwp_cloud_layers_from_fraction`` for the NWP-3D path,
+    just on the DD field with three categories instead of four (DD has no
+    FEW analog; lightest in-cloud class is SCT).
 
     Args:
         levels: Derived levels sorted by descending pressure (surface first).
-        lcl_altitude_ft: Optional LCL altitude for convective base annotation.
-        dd_threshold: Dewpoint depression threshold for cloud detection.
+        lcl_altitude_ft: Accepted for API stability with the previous
+            implementation (currently unused).
+        dd_threshold: DD threshold for "in cloud". Defaults to 3.0 K.
 
     Returns:
         List of EnhancedCloudLayer, ordered from lowest to highest.
     """
+    del lcl_altitude_ft  # unused — kept for backward compat
     if not levels:
         return []
 
-    cloud_layers: list[EnhancedCloudLayer] = []
-    in_cloud = False
-    cloud_levels: list[DerivedLevel] = []
-
-    for lv in levels:
+    # Surface → TOA: descending pressure. Defensive sort (input is already
+    # ordered, but mirrors the NWP-3D path).
+    sorted_levels = sorted(levels, key=lambda lv: lv.pressure_hpa, reverse=True)
+    cats: list[CloudCoverage | None] = []
+    for lv in sorted_levels:
         if lv.dewpoint_depression_c is None or lv.altitude_ft is None:
+            cats.append(None)
+        else:
+            cats.append(_dd_category(lv.dewpoint_depression_c, dd_threshold))
+
+    cloud_layers: list[EnhancedCloudLayer] = []
+    n = len(sorted_levels)
+    i = 0
+    while i < n:
+        cat = cats[i]
+        if cat is None:
+            i += 1
+            continue
+        # Run [i..j] of identical category.
+        j = i
+        while j + 1 < n and cats[j + 1] == cat:
+            j += 1
+
+        base_ft = _dd_layer_edge_below(sorted_levels, cats, i, cat)
+        top_ft = _dd_layer_edge_above(sorted_levels, cats, j, cat)
+        if base_ft is None or top_ft is None or top_ft <= base_ft:
+            logger.warning(
+                "Dropping DD cloud deck at run [%d..%d] (cat=%s): "
+                "base_ft=%s top_ft=%s — degenerate layer geometry",
+                i, j, cat, base_ft, top_ft,
+            )
+            i = j + 1
             continue
 
-        if lv.dewpoint_depression_c < dd_threshold:
-            if not in_cloud:
-                in_cloud = True
-                cloud_levels = []
-            cloud_levels.append(lv)
-        elif in_cloud:
-            # End of cloud layer
-            in_cloud = False
-            layer = _build_layer(cloud_levels)
-            if layer is not None:
-                cloud_layers.append(layer)
+        run = sorted_levels[i:j + 1]
+        # Every level in the run has DD + altitude (cats[k] non-None requires both).
+        dd_vals = [lv.dewpoint_depression_c for lv in run]
+        t_vals = [lv.temperature_c for lv in run if lv.temperature_c is not None]
+        mean_dd = sum(dd_vals) / len(dd_vals)
+        mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
 
-    # Handle cloud extending to top of profile
-    if in_cloud and cloud_levels:
-        layer = _build_layer(cloud_levels)
-        if layer is not None:
-            cloud_layers.append(layer)
+        cloud_layers.append(EnhancedCloudLayer(
+            base_ft=round(base_ft),
+            top_ft=round(top_ft),
+            base_pressure_hpa=run[0].pressure_hpa,
+            top_pressure_hpa=run[-1].pressure_hpa,
+            thickness_ft=round(top_ft - base_ft),
+            mean_temperature_c=mean_t,
+            coverage=cat,
+            mean_dewpoint_depression_c=round(mean_dd, 1),
+        ))
+        i = j + 1
 
     return cloud_layers
-
-
-def _build_layer(cloud_levels: list[DerivedLevel]) -> EnhancedCloudLayer | None:
-    """Build an EnhancedCloudLayer from a group of consecutive cloud levels."""
-    if not cloud_levels:
-        return None
-
-    base = cloud_levels[0]
-    top = cloud_levels[-1]
-    base_ft = base.altitude_ft
-    top_ft = top.altitude_ft
-
-    if base_ft is None or top_ft is None:
-        return None
-
-    # Mean dewpoint depression and temperature within the layer
-    dd_vals = [lv.dewpoint_depression_c for lv in cloud_levels if lv.dewpoint_depression_c is not None]
-    t_vals = [lv.temperature_c for lv in cloud_levels if lv.temperature_c is not None]
-
-    mean_dd = sum(dd_vals) / len(dd_vals) if dd_vals else 2.0
-    mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
-
-    return EnhancedCloudLayer(
-        base_ft=round(base_ft),
-        top_ft=round(top_ft),
-        base_pressure_hpa=base.pressure_hpa,
-        top_pressure_hpa=top.pressure_hpa,
-        thickness_ft=round(top_ft - base_ft),
-        mean_temperature_c=mean_t,
-        coverage=_classify_coverage(mean_dd),
-        mean_dewpoint_depression_c=round(mean_dd, 1),
-    )
 
 
 # Coverage mapping from NWP cloud cover percentage (standard METAR oktas)
