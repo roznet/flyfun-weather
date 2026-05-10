@@ -186,6 +186,38 @@ def test_empty_levels():
     assert detect_cloud_layers([]) == []
 
 
+def test_single_level_deck_has_non_collapsed_pressures():
+    """A deck consisting of one pressure level must still span a non-zero
+    pressure range — interpolated between neighbors so the Skew-T view
+    (which plots in pressure coords) renders the deck instead of drawing
+    a zero-height band.
+
+    Regression for the OBIMO/ICON case where a BKN run at a single level
+    (600 hPa) reported base_pressure_hpa == top_pressure_hpa, making the
+    deck invisible on the Skew-T while the cross-section (altitude axis)
+    correctly drew it.
+    """
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=4760, dewpoint_depression_c=0.3),  # OVC
+        DerivedLevel(pressure_hpa=700, altitude_ft=9880, dewpoint_depression_c=0.3),  # OVC
+        DerivedLevel(pressure_hpa=600, altitude_ft=13800, dewpoint_depression_c=1.8),  # BKN
+        DerivedLevel(pressure_hpa=500, altitude_ft=18300, dewpoint_depression_c=2.3),  # SCT
+    ]
+    layers = detect_cloud_layers(levels)
+    # Three runs: OVC[850,700], BKN[600], SCT[500] → 3 layers.
+    assert len(layers) == 3, [(c.base_ft, c.top_ft, c.coverage.value) for c in layers]
+    bkn = next(c for c in layers if c.coverage == CloudCoverage.BKN)
+    assert bkn.base_pressure_hpa is not None and bkn.top_pressure_hpa is not None
+    assert bkn.base_pressure_hpa > bkn.top_pressure_hpa, (
+        f"Single-level BKN deck collapsed: base={bkn.base_pressure_hpa} "
+        f"top={bkn.top_pressure_hpa} hPa"
+    )
+    # Interpolated edges — base sits between 700 (denser) and 600 (in deck),
+    # top sits between 600 (in deck) and 500 (clear/lighter).
+    assert 600 < bkn.base_pressure_hpa < 700
+    assert 500 < bkn.top_pressure_hpa < 600
+
+
 # --- NWP cloud layer tests ---
 
 

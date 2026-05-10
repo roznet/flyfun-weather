@@ -18,6 +18,15 @@ logger = logging.getLogger(__name__)
 # Dry air gas constant (J/(kg·K))
 _RD = 287.05
 
+# Hardcoded off — see designs/cloud-layers-analysis.md "ICAO band overlay (disabled)".
+# When True, the active ``cloud_layers`` slot is built by
+# ``apply_nwp_coverage(dd_cloud_layers, …)``, which splits decks at ICAO
+# band boundaries (6500/20000 ft) and re-codes coverage from NWP bulk
+# band %. Now that the category-split DD detector produces good per-deck
+# OVC/BKN/SCT classes with moisture-defined edges, that overlay degrades
+# rather than improves the result. Kept callable so we can A/B it later.
+_APPLY_NWP_COVERAGE_OVERLAY = False
+
 
 def _enrich_lwc(
     derived_levels: list[DerivedLevel],
@@ -210,19 +219,23 @@ def analyze_sounding_lite(
         lcl_altitude_ft=indices.lcl_altitude_ft,
     )
 
-    # Apply NWP coverage to DD layers so ceiling reflects model cloud amount.
-    # TODO: With the category-split DD detector, dd_cloud_layers already
-    # carries moisture-defined edges and per-deck OVC/BKN/SCT classes. The
-    # ICAO band overlay below can override those classes with band averages
-    # — re-evaluate whether the overlay still adds value or should be
-    # toggleable / removed.
-    cloud_layers = apply_nwp_coverage(
-        dd_cloud_layers,
-        nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
-        nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
-        nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
-        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
-    )
+    # Active cloud_layers slot. With _APPLY_NWP_COVERAGE_OVERLAY off (the
+    # current default) we publish dd_cloud_layers verbatim — they already
+    # carry moisture-defined edges and per-deck OVC/BKN/SCT classes from
+    # the category-split detector. The ICAO band overlay (when enabled)
+    # would split decks at 6500/20000 ft and re-classify each segment by
+    # NWP bulk band %, which destroys the per-deck edges and produces
+    # zero-pressure-span segments that disappear from the Skew-T view.
+    if _APPLY_NWP_COVERAGE_OVERLAY:
+        cloud_layers = apply_nwp_coverage(
+            dd_cloud_layers,
+            nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+            nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+            nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+            nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+        )
+    else:
+        cloud_layers = list(dd_cloud_layers)
 
     # Inversions (cheap — single linear scan, ~2 µs)
     inversion_layers = detect_inversions(derived_levels)
@@ -340,19 +353,18 @@ def _analyze_sounding_heavy(
     eff_cape = effective_cape(indices)
     enrich_cloud_top_uncertainty(dd_cloud_layers, indices, eff_cape)
 
-    # Apply NWP coverage percentages to DD layers.
-    # TODO: With the category-split DD detector, dd_cloud_layers already
-    # carries moisture-defined edges and per-deck OVC/BKN/SCT classes. The
-    # ICAO band overlay below can override those classes with band averages
-    # — re-evaluate whether the overlay still adds value or should be
-    # toggleable / removed.
-    cloud_layers = apply_nwp_coverage(
-        dd_cloud_layers,
-        nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
-        nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
-        nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
-        nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
-    )
+    # Active cloud_layers slot. See _APPLY_NWP_COVERAGE_OVERLAY note above
+    # — overlay disabled by default, so we publish dd_cloud_layers verbatim.
+    if _APPLY_NWP_COVERAGE_OVERLAY:
+        cloud_layers = apply_nwp_coverage(
+            dd_cloud_layers,
+            nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+            nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+            nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+            nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+        )
+    else:
+        cloud_layers = list(dd_cloud_layers)
 
     # Temperature inversion detection
     inversion_layers = detect_inversions(derived_levels)
