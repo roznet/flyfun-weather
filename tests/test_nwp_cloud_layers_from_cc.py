@@ -86,6 +86,36 @@ def test_clear_gap_produces_two_separate_decks():
     assert layers[1].base_ft > layers[0].top_ft
 
 
+def test_single_level_deck_has_non_collapsed_pressures():
+    """A deck consisting of one pressure level must still span a non-zero
+    pressure range — interpolated between neighbors so the Skew-T view
+    (which plots in pressure coords) renders the deck instead of drawing
+    a zero-height band.
+
+    Mirror of the DD-path regression test: ECMWF/ICON 3D-cloud paths
+    have the same single-level-collapse failure mode.
+    """
+    # OVC[850,700], BKN at single level 600, SCT at single level 500.
+    levels = [
+        _lv(850, 1500, caf=92, t=4),   # OVC
+        _lv(700, 3100, caf=88, t=-2),  # OVC
+        _lv(600, 4250, caf=65, t=-12), # BKN — single level
+        _lv(500, 5600, caf=35, t=-22), # SCT — single level
+    ]
+    layers = build_nwp_cloud_layers_from_fraction(levels)
+    assert layers is not None
+    bkn = next(layer for layer in layers if layer.coverage == CloudCoverage.BKN)
+    assert bkn.base_pressure_hpa is not None and bkn.top_pressure_hpa is not None
+    assert bkn.base_pressure_hpa > bkn.top_pressure_hpa, (
+        f"Single-level BKN deck collapsed: base={bkn.base_pressure_hpa} "
+        f"top={bkn.top_pressure_hpa} hPa"
+    )
+    # Interpolated edges — base sits between 700 (denser) and 600 (in deck),
+    # top sits between 600 (in deck) and 500 (lighter SCT).
+    assert 600 < bkn.base_pressure_hpa < 700
+    assert 500 < bkn.top_pressure_hpa < 600
+
+
 def test_category_change_splits():
     """Transition between coverage categories splits decks."""
     levels = [

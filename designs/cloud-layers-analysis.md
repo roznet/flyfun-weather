@@ -140,6 +140,23 @@ Four-tier approach, tried in this preference order:
 - Stratiform → −20°C level (glaciation limit)
 - Only set when exceeding sounding-derived cloud top
 
+### Stage 6: Active `cloud_layers` slot
+
+`SoundingAnalysis` exposes three cloud-layer fields:
+- `dd_cloud_layers` — immutable DD-derived layers (Method 1).
+- `nwp_cloud_layers` — immutable NWP-derived layers (Method 2), or `None` if the model has no native NWP source.
+- `cloud_layers` — the **active slot** consumed by Skew-T, cross-section, ceiling computation, and downstream icing/IFR feasibility. Today it is set to `list(dd_cloud_layers)` verbatim.
+
+#### ICAO band overlay (disabled)
+
+Historically the active slot was `apply_nwp_coverage(dd_cloud_layers, …)` — an overlay that splits DD decks at ICAO band boundaries (6500 / 20000 ft) and re-classifies each segment's coverage from the model's bulk band % (`cloud_cover_low/mid/high_pct`). The function and its tests are kept callable but the call site is gated by `_APPLY_NWP_COVERAGE_OVERLAY` in `analysis/sounding/__init__.py`, hard-coded to `False`.
+
+**Why disabled:** the category-split DD detector (PR #142) already produces good per-deck OVC/BKN/SCT classes with moisture-defined edges. The overlay degrades that signal in two ways:
+1. Splitting at 6500 / 20000 ft turns a single moisture-defined deck (e.g. 4351–10892 ft OVC) into two band-bounded segments with different coverages.
+2. Split segments inherit `base_pressure_hpa=None` or `top_pressure_hpa=None` from the band-cut edges, which causes the Skew-T (a pressure-axis view) to skip them entirely.
+
+**To re-enable** (e.g. if NWP bulk bands later re-prove useful for ceiling adjustment), flip `_APPLY_NWP_COVERAGE_OVERLAY = True` and run `tests/test_clouds.py` — existing tests for the overlay still cover its semantics. Consider exposing as a per-user preference rather than re-enabling globally.
+
 ---
 
 ## Cloud Data in Icing Assessment

@@ -63,20 +63,26 @@ def _dd_category(
     return _classify_coverage(dd)
 
 
-def _dd_crossing_altitude(
+def _dd_crossing_edge(
     a: DerivedLevel,
     b: DerivedLevel,
     a_cat: CloudCoverage,
     b_cat: CloudCoverage | None,
-) -> float | None:
-    """Altitude (ft) where ``dewpoint_depression_c`` linearly crosses the
-    boundary DD separating a's and b's coverage categories.
+) -> tuple[float, float] | None:
+    """``(altitude_ft, pressure_hpa)`` where ``dewpoint_depression_c``
+    linearly crosses the boundary DD separating a's and b's coverage
+    categories.
 
-    Mirrors ``_crossing_altitude`` for the NWP-3D path but on DD: ``a`` is
+    Mirrors ``_crossing_edge`` for the NWP-3D path but on DD: ``a`` is
     always a level inside a deck (so ``a_cat`` non-None and
     ``a_dd < dd_threshold``); ``b`` is the adjacent neighbor — possibly
     clear (``b_cat=None`` and ``b_dd >= dd_threshold``). The denser
     endpoint is the one with the lower DD.
+
+    Both altitude and pressure are interpolated at the same fraction of
+    the [a, b] segment, so the returned edge represents one consistent
+    point in the sounding — needed by Skew-T (pressure axis) and the
+    cross-section (altitude axis) views to render the same deck.
 
     Returns ``None`` if either endpoint lacks data, the two levels share
     the same DD (no crossing possible), the boundary DD lies outside
@@ -106,26 +112,30 @@ def _dd_crossing_altitude(
     frac = (target - a_dd) / (b_dd - a_dd)
     if not 0.0 <= frac <= 1.0:
         return None
-    return a.altitude_ft + frac * (b.altitude_ft - a.altitude_ft)
+    altitude_ft = a.altitude_ft + frac * (b.altitude_ft - a.altitude_ft)
+    pressure_hpa = a.pressure_hpa + frac * (b.pressure_hpa - a.pressure_hpa)
+    return (altitude_ft, pressure_hpa)
 
 
-def _dd_midpoint_altitude_ft(
+def _dd_midpoint_edge(
     inner: DerivedLevel,
     outer: DerivedLevel | None,
-) -> float | None:
-    """Edge altitude when threshold-crossing isn't usable.
+) -> tuple[float, float] | None:
+    """Edge ``(altitude_ft, pressure_hpa)`` when threshold-crossing isn't usable.
 
     Two behaviours, both intentional:
-      - ``outer`` present → altitude midway between the deck-edge level
-        and its neighbor.
+      - ``outer`` present → midpoint between the deck-edge level and its
+        neighbor (altitude AND pressure both averaged at frac=0.5).
       - ``outer is None`` (column floor / TOA) → the deck-edge level's
-        own altitude, since there's no neighbor to interpolate against.
+        own altitude/pressure, since there's no neighbor to interpolate.
     """
     if inner.altitude_ft is None:
         return None
     if outer is None or outer.altitude_ft is None:
-        return inner.altitude_ft
-    return (inner.altitude_ft + outer.altitude_ft) / 2.0
+        return (inner.altitude_ft, float(inner.pressure_hpa))
+    altitude_ft = (inner.altitude_ft + outer.altitude_ft) / 2.0
+    pressure_hpa = (inner.pressure_hpa + outer.pressure_hpa) / 2.0
+    return (altitude_ft, pressure_hpa)
 
 
 def _dd_layer_edge_below(
@@ -133,13 +143,14 @@ def _dd_layer_edge_below(
     cats: list[CloudCoverage | None],
     i: int,
     cat: CloudCoverage,
-) -> float | None:
-    """Altitude of the lower edge of the run starting at index i."""
+) -> tuple[float, float] | None:
+    """``(altitude_ft, pressure_hpa)`` of the lower edge of the run starting
+    at index i."""
     if i > 0:
-        ft = _dd_crossing_altitude(levels[i], levels[i - 1], cat, cats[i - 1])
-        if ft is not None:
-            return ft
-    return _dd_midpoint_altitude_ft(levels[i], levels[i - 1] if i > 0 else None)
+        edge = _dd_crossing_edge(levels[i], levels[i - 1], cat, cats[i - 1])
+        if edge is not None:
+            return edge
+    return _dd_midpoint_edge(levels[i], levels[i - 1] if i > 0 else None)
 
 
 def _dd_layer_edge_above(
@@ -147,14 +158,15 @@ def _dd_layer_edge_above(
     cats: list[CloudCoverage | None],
     j: int,
     cat: CloudCoverage,
-) -> float | None:
-    """Altitude of the upper edge of the run ending at index j."""
+) -> tuple[float, float] | None:
+    """``(altitude_ft, pressure_hpa)`` of the upper edge of the run ending
+    at index j."""
     n = len(levels)
     if j + 1 < n:
-        ft = _dd_crossing_altitude(levels[j], levels[j + 1], cat, cats[j + 1])
-        if ft is not None:
-            return ft
-    return _dd_midpoint_altitude_ft(levels[j], levels[j + 1] if j + 1 < n else None)
+        edge = _dd_crossing_edge(levels[j], levels[j + 1], cat, cats[j + 1])
+        if edge is not None:
+            return edge
+    return _dd_midpoint_edge(levels[j], levels[j + 1] if j + 1 < n else None)
 
 
 def detect_cloud_layers(
@@ -215,16 +227,19 @@ def detect_cloud_layers(
         while j + 1 < n and cats[j + 1] == cat:
             j += 1
 
-        base_ft = _dd_layer_edge_below(sorted_levels, cats, i, cat)
-        top_ft = _dd_layer_edge_above(sorted_levels, cats, j, cat)
-        if base_ft is None or top_ft is None or top_ft <= base_ft:
+        base_edge = _dd_layer_edge_below(sorted_levels, cats, i, cat)
+        top_edge = _dd_layer_edge_above(sorted_levels, cats, j, cat)
+        if base_edge is None or top_edge is None or top_edge[0] <= base_edge[0]:
             logger.warning(
                 "Dropping DD cloud deck at run [%d..%d] (cat=%s): "
-                "base_ft=%s top_ft=%s — degenerate layer geometry",
-                i, j, cat, base_ft, top_ft,
+                "base_edge=%s top_edge=%s — degenerate layer geometry",
+                i, j, cat, base_edge, top_edge,
             )
             i = j + 1
             continue
+
+        base_ft, base_pressure_hpa = base_edge
+        top_ft, top_pressure_hpa = top_edge
 
         run = sorted_levels[i:j + 1]
         # Every level in the run has DD + altitude (cats[k] non-None requires
@@ -238,8 +253,8 @@ def detect_cloud_layers(
         cloud_layers.append(EnhancedCloudLayer(
             base_ft=round(base_ft),
             top_ft=round(top_ft),
-            base_pressure_hpa=run[0].pressure_hpa,
-            top_pressure_hpa=run[-1].pressure_hpa,
+            base_pressure_hpa=round(base_pressure_hpa),
+            top_pressure_hpa=round(top_pressure_hpa),
             thickness_ft=round(top_ft - base_ft),
             mean_temperature_c=mean_t,
             coverage=cat,
@@ -280,20 +295,26 @@ _NWP_CATEGORY_LOWER_BOUNDS: dict[CloudCoverage, float] = {
 }
 
 
-def _crossing_altitude(
+def _crossing_edge(
     a: PressureLevelData,
     b: PressureLevelData,
     a_cat: CloudCoverage,
     b_cat: CloudCoverage | None,
-) -> float | None:
-    """Altitude (ft) where ``cloud_area_fraction_pct`` linearly crosses the
-    boundary CAF separating a's and b's coverage categories.
+) -> tuple[float, float] | None:
+    """``(altitude_ft, pressure_hpa)`` where ``cloud_area_fraction_pct``
+    linearly crosses the boundary CAF separating a's and b's coverage
+    categories.
 
     ``a`` is always a level inside a deck (so ``a_cat`` is non-None and
     ``a_caf >= 12.5 %``); ``b`` is the adjacent neighbor — possibly clear
     (``b_cat=None`` and ``b_caf < 12.5 %``). Used to anchor a deck's
     base/top to the model's own cloud field instead of pinning to a level
     altitude.
+
+    Both altitude and pressure are interpolated at the same fraction of
+    the [a, b] segment, so the returned edge represents one consistent
+    point in the sounding — needed by Skew-T (pressure axis) and the
+    cross-section (altitude axis) views to render the same deck.
 
     Returns ``None`` if either endpoint lacks data, the two levels share
     the same CAF (no crossing possible), the boundary CAF lies outside
@@ -326,27 +347,31 @@ def _crossing_altitude(
         return None
     a_ft = a.geopotential_height_m * _M_TO_FT
     b_ft = b.geopotential_height_m * _M_TO_FT
-    return a_ft + frac * (b_ft - a_ft)
+    altitude_ft = a_ft + frac * (b_ft - a_ft)
+    pressure_hpa = a.pressure_hpa + frac * (b.pressure_hpa - a.pressure_hpa)
+    return (altitude_ft, pressure_hpa)
 
 
-def _midpoint_altitude_ft(
+def _midpoint_edge(
     inner: PressureLevelData,
     outer: PressureLevelData | None,
-) -> float | None:
-    """Edge altitude when threshold-crossing isn't usable.
+) -> tuple[float, float] | None:
+    """Edge ``(altitude_ft, pressure_hpa)`` when threshold-crossing isn't usable.
 
     Two behaviours, both intentional:
-      - ``outer`` present → altitude midway between the deck-edge level
-        and its neighbor.
+      - ``outer`` present → midpoint between the deck-edge level and its
+        neighbor (altitude AND pressure both averaged at frac=0.5).
       - ``outer is None`` (column floor / TOA) → the deck-edge level's
-        own altitude, since there's no neighbor to interpolate against.
+        own altitude/pressure, since there's no neighbor to interpolate.
     """
     if inner.geopotential_height_m is None:
         return None
     inner_ft = inner.geopotential_height_m * _M_TO_FT
     if outer is None or outer.geopotential_height_m is None:
-        return inner_ft
-    return (inner_ft + outer.geopotential_height_m * _M_TO_FT) / 2.0
+        return (inner_ft, float(inner.pressure_hpa))
+    altitude_ft = (inner_ft + outer.geopotential_height_m * _M_TO_FT) / 2.0
+    pressure_hpa = (inner.pressure_hpa + outer.pressure_hpa) / 2.0
+    return (altitude_ft, pressure_hpa)
 
 
 def _layer_edge_below(
@@ -354,13 +379,14 @@ def _layer_edge_below(
     cats: list[CloudCoverage | None],
     i: int,
     cat: CloudCoverage,
-) -> float | None:
-    """Altitude of the lower edge of the run starting at index i."""
+) -> tuple[float, float] | None:
+    """``(altitude_ft, pressure_hpa)`` of the lower edge of the run starting
+    at index i."""
     if i > 0:
-        ft = _crossing_altitude(levels[i], levels[i - 1], cat, cats[i - 1])
-        if ft is not None:
-            return ft
-    return _midpoint_altitude_ft(levels[i], levels[i - 1] if i > 0 else None)
+        edge = _crossing_edge(levels[i], levels[i - 1], cat, cats[i - 1])
+        if edge is not None:
+            return edge
+    return _midpoint_edge(levels[i], levels[i - 1] if i > 0 else None)
 
 
 def _layer_edge_above(
@@ -368,14 +394,15 @@ def _layer_edge_above(
     cats: list[CloudCoverage | None],
     j: int,
     cat: CloudCoverage,
-) -> float | None:
-    """Altitude of the upper edge of the run ending at index j."""
+) -> tuple[float, float] | None:
+    """``(altitude_ft, pressure_hpa)`` of the upper edge of the run ending
+    at index j."""
     n = len(levels)
     if j + 1 < n:
-        ft = _crossing_altitude(levels[j], levels[j + 1], cat, cats[j + 1])
-        if ft is not None:
-            return ft
-    return _midpoint_altitude_ft(levels[j], levels[j + 1] if j + 1 < n else None)
+        edge = _crossing_edge(levels[j], levels[j + 1], cat, cats[j + 1])
+        if edge is not None:
+            return edge
+    return _midpoint_edge(levels[j], levels[j + 1] if j + 1 < n else None)
 
 
 def build_nwp_cloud_layers_from_fraction(
@@ -431,9 +458,9 @@ def build_nwp_cloud_layers_from_fraction(
         while j + 1 < n and cats[j + 1] == cat:
             j += 1
 
-        base_ft = _layer_edge_below(levels, cats, i, cat)
-        top_ft = _layer_edge_above(levels, cats, j, cat)
-        if base_ft is None or top_ft is None or top_ft <= base_ft:
+        base_edge = _layer_edge_below(levels, cats, i, cat)
+        top_edge = _layer_edge_above(levels, cats, j, cat)
+        if base_edge is None or top_edge is None or top_edge[0] <= base_edge[0]:
             # Should not happen with well-formed sounding data: a category run
             # always has at least one level with valid CAF + geopotential, and
             # well-ordered geopotential should give top > base. Logged so a
@@ -441,11 +468,14 @@ def build_nwp_cloud_layers_from_fraction(
             # disappear from the cross-section.
             logger.warning(
                 "Dropping NWP-3D cloud deck at run [%d..%d] (cat=%s): "
-                "base_ft=%s top_ft=%s — degenerate layer geometry",
-                i, j, cat, base_ft, top_ft,
+                "base_edge=%s top_edge=%s — degenerate layer geometry",
+                i, j, cat, base_edge, top_edge,
             )
             i = j + 1
             continue
+
+        base_ft, base_pressure_hpa = base_edge
+        top_ft, top_pressure_hpa = top_edge
 
         run = levels[i:j + 1]
         # Every level in the run is guaranteed to carry CAF + geopotential
@@ -460,8 +490,8 @@ def build_nwp_cloud_layers_from_fraction(
         layers.append(EnhancedCloudLayer(
             base_ft=round(base_ft),
             top_ft=round(top_ft),
-            base_pressure_hpa=levels[i].pressure_hpa,
-            top_pressure_hpa=levels[j].pressure_hpa,
+            base_pressure_hpa=round(base_pressure_hpa),
+            top_pressure_hpa=round(top_pressure_hpa),
             thickness_ft=round(top_ft - base_ft),
             mean_temperature_c=mean_t,
             coverage=cat,
