@@ -221,9 +221,15 @@ export function renderAssessment(
     } else {
       const level = pack.assessment.toUpperCase();
       el.className = `assessment-banner assessment-${level.toLowerCase()}`;
-      el.innerHTML = `
-        <strong>${level}</strong>${pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : ''}
-      `;
+      // Only show ``assessment_reason`` once the AI digest is ready.
+      // Pre-digest, the backend fills it with a machine-readable concern
+      // list ("fiki_icing=RED, flight_category=AMBER, \u2026") that's noise
+      // for users \u2014 the structured advisory chips below already convey
+      // the same information in a friendlier form.
+      const reasonHtml = pack.has_digest && pack.assessment_reason
+        ? ` \u2014 ${escapeHtml(pack.assessment_reason)}`
+        : ` <span class="assessment-pending">${escapeHtml(t('digest.generating'))}</span>`;
+      el.innerHTML = `<strong>${level}</strong>${reasonHtml}`;
     }
   }
 
