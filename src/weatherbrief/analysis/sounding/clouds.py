@@ -136,9 +136,105 @@ def _nwp_pct_to_coverage(pct: float) -> CloudCoverage | None:
     return None
 
 
+# Lower CAF % bound for each METAR coverage category. Used to find the
+# boundary CAF when interpolating altitude between two adjacent levels of
+# different categories — the boundary is the lower bound of whichever
+# endpoint sits in the higher category.
+_NWP_CATEGORY_LOWER_BOUNDS: dict[CloudCoverage, float] = {
+    CloudCoverage.FEW: 12.5,
+    CloudCoverage.SCT: 25.0,
+    CloudCoverage.BKN: 50.0,
+    CloudCoverage.OVC: 87.5,
+}
+
+
+def _crossing_altitude(
+    a: PressureLevelData,
+    b: PressureLevelData,
+    a_cat: CloudCoverage,
+    b_cat: CloudCoverage | None,
+) -> float | None:
+    """Altitude (ft) where ``cloud_area_fraction_pct`` linearly crosses the
+    boundary CAF separating a's and b's coverage categories.
+
+    Used to anchor a deck's base/top to the *model's own* cloud field
+    instead of pinning to a level altitude. ``b_cat=None`` means b is sub-
+    FEW (clear).
+
+    Returns ``None`` if either endpoint lacks data, the two levels share
+    the same CAF (no crossing possible), or the boundary CAF lies outside
+    [a_caf, b_caf] (interpolation would be an extrapolation).
+    """
+    a_caf = a.cloud_area_fraction_pct
+    b_caf = b.cloud_area_fraction_pct
+    if (a_caf is None or b_caf is None
+            or a.geopotential_height_m is None
+            or b.geopotential_height_m is None
+            or a_caf == b_caf):
+        return None
+
+    higher_cat = a_cat if a_caf >= b_caf else b_cat
+    if higher_cat is None:
+        return None  # both endpoints sub-FEW
+    target = _NWP_CATEGORY_LOWER_BOUNDS[higher_cat]
+
+    frac = (target - a_caf) / (b_caf - a_caf)
+    if not 0.0 <= frac <= 1.0:
+        return None
+    a_ft = a.geopotential_height_m * _M_TO_FT
+    b_ft = b.geopotential_height_m * _M_TO_FT
+    return a_ft + frac * (b_ft - a_ft)
+
+
+def _half_pressure_altitude(
+    inner: PressureLevelData,
+    outer: PressureLevelData | None,
+) -> float | None:
+    """Edge altitude when threshold-crossing isn't usable.
+
+    Falls back to half-way between the deck-edge level and its neighbor;
+    or, at the column floor / TOA where there's no neighbor, the level's
+    own altitude.
+    """
+    if inner.geopotential_height_m is None:
+        return None
+    inner_ft = inner.geopotential_height_m * _M_TO_FT
+    if outer is None or outer.geopotential_height_m is None:
+        return inner_ft
+    return (inner_ft + outer.geopotential_height_m * _M_TO_FT) / 2.0
+
+
+def _layer_edge_below(
+    levels: list[PressureLevelData],
+    cats: list[CloudCoverage | None],
+    i: int,
+    cat: CloudCoverage,
+) -> float | None:
+    """Altitude of the lower edge of the run starting at index i."""
+    if i > 0:
+        ft = _crossing_altitude(levels[i], levels[i - 1], cat, cats[i - 1])
+        if ft is not None:
+            return ft
+    return _half_pressure_altitude(levels[i], levels[i - 1] if i > 0 else None)
+
+
+def _layer_edge_above(
+    levels: list[PressureLevelData],
+    cats: list[CloudCoverage | None],
+    j: int,
+    cat: CloudCoverage,
+) -> float | None:
+    """Altitude of the upper edge of the run ending at index j."""
+    n = len(levels)
+    if j + 1 < n:
+        ft = _crossing_altitude(levels[j], levels[j + 1], cat, cats[j + 1])
+        if ft is not None:
+            return ft
+    return _half_pressure_altitude(levels[j], levels[j + 1] if j + 1 < n else None)
+
+
 def build_nwp_cloud_layers_from_fraction(
     pressure_levels: list[PressureLevelData],
-    threshold_pct: float = 12.5,
 ) -> list[EnhancedCloudLayer] | None:
     """Build cloud layers from per-level model cloud fraction.
 
@@ -147,83 +243,77 @@ def build_nwp_cloud_layers_from_fraction(
     bulk band percentages: we can extract actual deck base/top from the
     model's own cloud scheme instead of inferring them from RH.
 
-    Algorithm: walk levels surface→TOA, group consecutive levels with
-    ``cloud_area_fraction_pct >= threshold_pct`` into a deck, compute
-    base/top altitude from ``geopotential_height_m``, and classify coverage
-    from the deck's peak fraction.
+    Algorithm: walk levels surface→TOA and group consecutive levels by
+    their METAR coverage category (FEW/SCT/BKN/OVC). A category change
+    starts a new layer; sub-FEW (<12.5 %) levels and levels missing CAF or
+    geopotential height split layers (clear-air gaps).
 
-    Returns None when no level carries ``cloud_area_fraction_pct`` (so the
-    caller can fall back to bulk-%/synthesized path for GFS, Open-Meteo).
-    Returns an empty list when CAF is present but all levels are below
-    threshold (genuinely clear column per the model).
+    Each layer's base/top altitudes come from linear threshold-crossing on
+    ``cloud_area_fraction_pct`` against the boundary CAF separating the
+    layer from its (different-category) neighbor — a model-derived edge
+    instead of pinning to a level altitude. Half-pressure attribution
+    falls back at the column ends.
+
+    Returns ``None`` when no level carries ``cloud_area_fraction_pct``
+    (caller falls back to bulk-%/synthesized path for GFS, Open-Meteo).
+    Returns an empty list when CAF is present but every level is sub-FEW
+    (genuinely clear column per the model).
     """
     if not pressure_levels:
         return None
-
-    any_caf = any(lv.cloud_area_fraction_pct is not None for lv in pressure_levels)
-    if not any_caf:
+    if not any(lv.cloud_area_fraction_pct is not None for lv in pressure_levels):
         return None
 
-    # Surface → TOA: descending pressure
-    sorted_levels = sorted(
-        pressure_levels, key=lambda lv: lv.pressure_hpa, reverse=True,
-    )
+    # Surface → TOA: descending pressure.
+    levels = sorted(pressure_levels, key=lambda lv: lv.pressure_hpa, reverse=True)
+    cats: list[CloudCoverage | None] = []
+    for lv in levels:
+        if lv.cloud_area_fraction_pct is None or lv.geopotential_height_m is None:
+            cats.append(None)
+        else:
+            cats.append(_nwp_pct_to_coverage(lv.cloud_area_fraction_pct))
 
     layers: list[EnhancedCloudLayer] = []
-    current: list[PressureLevelData] = []
+    n = len(levels)
+    i = 0
+    while i < n:
+        cat = cats[i]
+        if cat is None:
+            i += 1
+            continue
+        # Run [i..j] of identical category.
+        j = i
+        while j + 1 < n and cats[j + 1] == cat:
+            j += 1
 
-    def _flush() -> None:
-        if not current:
-            return
-        layer = _build_cc_layer(current)
-        if layer is not None:
-            layers.append(layer)
-        current.clear()
+        base_ft = _layer_edge_below(levels, cats, i, cat)
+        top_ft = _layer_edge_above(levels, cats, j, cat)
+        if base_ft is None or top_ft is None or top_ft <= base_ft:
+            i = j + 1
+            continue
 
-    for lv in sorted_levels:
-        caf = lv.cloud_area_fraction_pct
-        if (caf is not None and caf >= threshold_pct
-                and lv.geopotential_height_m is not None):
-            current.append(lv)
-        else:
-            _flush()
+        run = levels[i:j + 1]
+        caf_vals = [lv.cloud_area_fraction_pct for lv in run
+                    if lv.cloud_area_fraction_pct is not None]
+        t_vals = [lv.temperature_c for lv in run if lv.temperature_c is not None]
+        mean_caf = sum(caf_vals) / len(caf_vals) if caf_vals else 0.0
+        mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
 
-    _flush()
+        layers.append(EnhancedCloudLayer(
+            base_ft=round(base_ft),
+            top_ft=round(top_ft),
+            base_pressure_hpa=levels[i].pressure_hpa,
+            top_pressure_hpa=levels[j].pressure_hpa,
+            thickness_ft=round(top_ft - base_ft),
+            mean_temperature_c=mean_t,
+            coverage=cat,
+            mean_dewpoint_depression_c=None,
+            mean_cloud_cover_pct=round(mean_caf, 1) if caf_vals else None,
+            source="nwp_3d",
+        ))
+        i = j + 1
+
     return layers
-
-
-def _build_cc_layer(cc_levels: list[PressureLevelData]) -> EnhancedCloudLayer | None:
-    """Build one EnhancedCloudLayer from consecutive cc-above-threshold levels."""
-    if not cc_levels:
-        return None
-
-    base = cc_levels[0]
-    top = cc_levels[-1]
-    if base.geopotential_height_m is None or top.geopotential_height_m is None:
-        return None
-
-    base_ft = base.geopotential_height_m * _M_TO_FT
-    top_ft = top.geopotential_height_m * _M_TO_FT
-
-    caf_vals = [lv.cloud_area_fraction_pct for lv in cc_levels
-                if lv.cloud_area_fraction_pct is not None]
-    t_vals = [lv.temperature_c for lv in cc_levels if lv.temperature_c is not None]
-    peak_caf = max(caf_vals) if caf_vals else 0.0
-    mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
-    coverage = _nwp_pct_to_coverage(peak_caf) or CloudCoverage.FEW
-
-    return EnhancedCloudLayer(
-        base_ft=round(base_ft),
-        top_ft=round(top_ft),
-        base_pressure_hpa=base.pressure_hpa,
-        top_pressure_hpa=top.pressure_hpa,
-        thickness_ft=round(top_ft - base_ft),
-        mean_temperature_c=mean_t,
-        coverage=coverage,
-        mean_dewpoint_depression_c=None,
-        mean_cloud_cover_pct=round(peak_caf, 1) if caf_vals else None,
-        source="nwp_3d",
-    )
 
 
 def build_nwp_cloud_layers(
