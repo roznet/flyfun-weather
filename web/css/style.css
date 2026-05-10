@@ -797,6 +797,12 @@ label {
   white-space: nowrap;
 }
 
+.assessment-pending {
+  font-style: italic;
+  opacity: 0.7;
+  font-weight: normal;
+}
+
 /* --- Alternate departure time banner (separate from main assessment) --- */
 
 .alt-assessment-banner {
