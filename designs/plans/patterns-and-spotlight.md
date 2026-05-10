@@ -8,7 +8,11 @@
 
 ## Status (2026-05-10)
 
-- ⏸ All phases not yet started. Planning complete.
+- ✅ **Phase 1** — METAR ingest decoupling + 30-min cadence. Shipped (PR #140) and deployed to weather.flyfun.aero.
+- 🟡 **Phase 2** — `airport_monthly_summary` rollup. In progress (this branch).
+- 🟡 **Phase 3** — `airport_daily_summary` rollup. In progress (this branch, alongside Phase 2).
+- ⏸ **Phase 4** — MySQL partitioning. **Deferred** — InnoDB rejects partitioning on tables with FKs (parent or child), and `verification_observations` has 3 inbound CASCADE FKs from score / map tables. Decided 2026-05-10 to use plain `DELETE` for retention (Option B): at current scale (~80–160k rows/month) indexed-range deletes complete in seconds; revisit only if perf becomes a real problem. ``ensure_future_partitions()`` left as a no-op stub for future pivot.
+- ⏸ Phases 5–6 not yet started.
 
 ## Why
 
@@ -80,14 +84,14 @@ are user-facing and depend on rollup tables existing (but can render
 against the live `verification_observations` table on day one if we want
 to ship them before the rollup backfill completes).
 
-- **Phase 1** — Decouple METAR ingest, run every 30 min
+- **Phase 1** — Decouple METAR ingest, run every 30 min ✅ shipped
 - **Phase 2** — `airport_monthly_summary` rollup + retention task
 - **Phase 3** — `airport_daily_summary` rollup
-- **Phase 4** — MySQL partitioning of `verification_observations`
+- **Phase 4** — ~~MySQL partitioning of `verification_observations`~~ **deferred** — see Status block. Use plain DELETE for retention.
 - **Phase 5** — Patterns tab (replaces Model Accuracy map)
 - **Phase 6** — Spotlight tab (replaces Accuracy Stats)
 
-Phases 1–4 are independent and can run in parallel. Phases 5–6 depend
+Phases 1–3 are independent and can run in parallel. Phases 5–6 depend
 on phase 2 (monthly summary) at minimum; phase 6's calendar heatmap
 depends on phase 3 (daily summary).
 

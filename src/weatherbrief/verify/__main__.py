@@ -352,6 +352,56 @@ def cmd_rebuild_cache(args):
         db.close()
 
 
+def cmd_rollup_summary(args):
+    """Roll up raw observations into airport_monthly_summary / airport_daily_summary."""
+    from datetime import date as date_cls, datetime as dt, timezone
+
+    from flyfun_common.db import SessionLocal
+
+    from weatherbrief.tasks.airport_summary import (
+        rollup_all_complete_days,
+        rollup_all_complete_months,
+        rollup_day,
+        rollup_month,
+    )
+
+    _init_db()
+    load_dotenv()
+
+    db = SessionLocal()
+    try:
+        if args.all or (not args.month and not args.day):
+            n_months = rollup_all_complete_months(db)
+            n_days = rollup_all_complete_days(db)
+            print(f"Rolled up {n_months} airport-months and {n_days} airport-days.")
+            return
+
+        if args.month:
+            try:
+                year, month = args.month.split("-")
+                month_start = dt(int(year), int(month), 1, tzinfo=timezone.utc)
+            except (ValueError, AttributeError):
+                print(f"ERROR: invalid --month {args.month!r} (expect YYYY-MM)",
+                      file=sys.stderr)
+                sys.exit(1)
+            n = rollup_month(db, month_start)
+            db.commit()
+            print(f"Rolled up {n} airport-months for {args.month}.")
+
+        if args.day:
+            try:
+                d = date_cls.fromisoformat(args.day)
+            except ValueError:
+                print(f"ERROR: invalid --day {args.day!r} (expect YYYY-MM-DD)",
+                      file=sys.stderr)
+                sys.exit(1)
+            n = rollup_day(db, d)
+            db.commit()
+            print(f"Rolled up {n} airport-days for {args.day}.")
+    finally:
+        db.close()
+
+
 def cmd_digest(args):
     """Preview or send the admin digest."""
     from datetime import timedelta
@@ -465,6 +515,24 @@ def main():
         help="Rebuild verification/forecast map cache",
     )
 
+    # rollup-summary
+    p_rollup_summary = subparsers.add_parser(
+        "rollup-summary",
+        help="Roll up obs into airport_monthly/daily_summary tables",
+    )
+    p_rollup_summary.add_argument(
+        "--month",
+        help="Roll up a specific month (YYYY-MM). Default: every completed month.",
+    )
+    p_rollup_summary.add_argument(
+        "--day",
+        help="Roll up a specific UTC date (YYYY-MM-DD). Default: every completed day.",
+    )
+    p_rollup_summary.add_argument(
+        "--all", action="store_true",
+        help="Roll up every completed period for both monthly and daily tables.",
+    )
+
     # digest
     p_digest = subparsers.add_parser(
         "digest",
@@ -501,6 +569,8 @@ def main():
         cmd_standalone(args)
     elif args.command == "rebuild-cache":
         cmd_rebuild_cache(args)
+    elif args.command == "rollup-summary":
+        cmd_rollup_summary(args)
     elif args.command == "digest":
         cmd_digest(args)
 
