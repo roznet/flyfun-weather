@@ -289,7 +289,7 @@ _DEFAULT_RAW_RETENTION_DAYS = 9999  # disabled by default — see comment above
 def prune_raw_observations(
     db: Session,
     retain_days: int | None = None,
-) -> dict:
+) -> dict[str, int]:
     """Delete verification_observations / scores older than retain_days.
 
     Only deletes data older than the cutoff *AND* whose containing month

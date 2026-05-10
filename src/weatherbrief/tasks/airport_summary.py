@@ -9,8 +9,10 @@ observations within the same UTC day, summed across the period. A flap of
 VFR→MVFR→VFR within a day counts as 2 transitions.
 
 Diurnal JSON convention (monthly only): keys are zero-padded HH strings
-(00..23), values are dicts {n, n_ifr, n_ts, n_fog, n_precip, ceiling_p50}.
+(00..23), values are dicts {n, n_ifr, n_ts, n_fg, n_precip, ceiling_p50}.
 Hours with zero observations are omitted to keep the blob compact.
+Field names match the top-level monthly column names exactly so that
+client code can reuse the same accessor logic across both shapes.
 """
 
 from __future__ import annotations
@@ -141,7 +143,7 @@ def _build_diurnal_json(obs_list: list[VerificationObservationRow]) -> str | Non
             "n": len(rows),
             "n_ifr": sum(1 for r in rows if r.flight_category in ("IFR", "LIFR")),
             "n_ts": sum(1 for w in weathers if _has_marker(w, _PHENOMENA["ts"])),
-            "n_fog": sum(1 for w in weathers if _has_marker(w, _PHENOMENA["fg"])),
+            "n_fg": sum(1 for w in weathers if _has_marker(w, _PHENOMENA["fg"])),
             "n_precip": sum(1 for w in weathers if _has_marker(w, _PRECIP_MARKERS)),
             "ceiling_p50": (
                 int(_percentile([float(c) for c in ceilings], 50))
@@ -450,7 +452,15 @@ def rollup_all_complete_days(db: Session) -> int:
 
     Caller commits.
     """
+    pending = completed_days(db)
+    if len(pending) > 7:
+        # First-deploy backfill can span months — surface the scope so the
+        # scheduler log doesn't go silent for minutes.
+        logger.info(
+            "airport_daily_summary: backfilling %d days (%s..%s)",
+            len(pending), pending[0].isoformat(), pending[-1].isoformat(),
+        )
     total = 0
-    for d in completed_days(db):
+    for d in pending:
         total += rollup_day(db, d)
     return total

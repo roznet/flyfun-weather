@@ -204,7 +204,7 @@ class TestBuildDiurnalJson:
         out = json.loads(_build_diurnal_json(obs))
         assert out["06"]["n"] == 2
         assert out["06"]["n_ifr"] == 1
-        assert out["06"]["n_fog"] == 1
+        assert out["06"]["n_fg"] == 1
         assert out["09"]["n"] == 1
         assert out["09"]["n_ts"] == 1
         assert out["09"]["n_precip"] == 1
