@@ -39,6 +39,18 @@ _VERIF_STARTUP_DELAY_SECONDS = 60  # let auto-refresh settle first
 _DIGEST_INTERVAL_SECONDS = 86_400  # 24 hours
 _DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
 _STANDALONE_STARTUP_DELAY_SECONDS = 240  # let other loops settle first
+# METAR ingest fires every 30 min on :00/:30. Most EU airports issue at HH:20
+# and HH:50, so by HH:00/HH:30 aviationweather.gov has fully absorbed the
+# previous batch — no offset needed. Decoupled from forecast fetch and scoring
+# so the observation table is populated continuously instead of only at
+# sample hours.
+_METAR_INGEST_INTERVAL_SECONDS = 1800  # 30 minutes
+_METAR_INGEST_OFFSET_SECONDS = 0  # fire at :00/:30 sharp
+_METAR_INGEST_STARTUP_DELAY_SECONDS = 200  # land before standalone (240s)
+# Verification scoring fires 15 min past each synoptic hour, giving the HH:00
+# ingest plenty of margin (METAR fetch is ~30-60s) and ensuring freshly-stored
+# METARs are scored against snapshots already in DB.
+_VERIFICATION_HOUR_OFFSET_SECONDS = 900  # 15 min
 _ECMWF_WATCHER_POLL_SECONDS = 300  # 5 minutes
 _ECMWF_WATCHER_STARTUP_DELAY_SECONDS = 15  # run early — other loops may need ready data
 _FRESHNESS_LOOP_STARTUP_DELAY_SECONDS = 20  # let ECMWF watcher run once first
@@ -467,19 +479,114 @@ def _run_retention_once() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Forecast fetch + standalone verification loops
+# METAR ingest, forecast fetch, and standalone verification loops
 #
-# Two independent loops driven by the standalone subsystem:
+# Three independent loops driven by the standalone subsystem:
 #
+#   * METAR ingest fires every 30 min (offset 5 min past :00/:30 so airports
+#     have published). Pulls METAR/TAF for the watchlist and upserts into
+#     verification_observations. Source tag: 'metar_ingest'.
 #   * Forecast fetch fires at FORECAST_FETCH_HOURS_UTC + 15 min (07:15/19:15)
 #     so Open-Meteo GFS (~+6h45m) and ECMWF direct (~+6h40m) deliveries have
 #     landed. Additionally waits up to 15 min more if a marker's next_expected
 #     is within the window. Stores fresh snapshots only.
-#   * Verification fires at VERIFICATION_HOURS_UTC (06/09/12/15/18). Pulls
-#     METAR/TAF and scores against whatever snapshots are already in DB.
+#   * Verification fires at VERIFICATION_HOURS_UTC (06/09/12/15/18). Reads
+#     observations + snapshots already in DB and scores them — does NOT call
+#     aviationweather.gov (METAR ingest owns that).
 #
-# They're decoupled so verification picks up the right METARs at synoptic
-# bucket hours, while forecast fetch waits for the late ECMWF delivery.
+# Decoupled so observations accumulate continuously, scoring runs on a
+# synoptic cadence, and forecast fetch waits for the late ECMWF delivery.
+# ---------------------------------------------------------------------------
+
+
+async def run_metar_ingest_loop(app_state) -> None:
+    """Fetch METAR/TAF for the airport watchlist every 30 min.
+
+    Disableable via ``DISABLE_METAR_INGEST=1`` env var.
+    """
+    if os.environ.get("DISABLE_METAR_INGEST", "").strip() in ("1", "true"):
+        logger.info("METAR ingest disabled via env var")
+        return
+
+    logger.info(
+        "METAR ingest loop started (every %ds, offset +%ds)",
+        _METAR_INGEST_INTERVAL_SECONDS, _METAR_INGEST_OFFSET_SECONDS,
+    )
+    await asyncio.sleep(_METAR_INGEST_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            sleep_secs = _seconds_until_next_30min_boundary(
+                _METAR_INGEST_OFFSET_SECONDS,
+            )
+            logger.info(
+                "METAR ingest: sleeping %ds until next ingest tick", sleep_secs,
+            )
+            await asyncio.sleep(sleep_secs)
+            await asyncio.to_thread(_run_metar_ingest_once, app_state)
+            # Advance past the current bucket so we don't re-trigger immediately
+            await asyncio.sleep(60)
+        except Exception:
+            logger.error("METAR ingest cycle failed", exc_info=True)
+            await asyncio.sleep(900)
+
+
+def _seconds_until_next_30min_boundary(offset_seconds: int) -> float:
+    """Seconds until the next ``:offset_minutes`` past either ``:00`` or ``:30``.
+
+    For ``offset_seconds=300`` (5 min), fires at ``HH:05`` and ``HH:35``.
+    """
+    now = datetime.now(timezone.utc)
+    offset_minutes = offset_seconds // 60
+    candidates = [
+        now.replace(minute=offset_minutes, second=0, microsecond=0),
+        now.replace(minute=30 + offset_minutes, second=0, microsecond=0),
+    ]
+    candidates = [c for c in candidates if c > now]
+    if candidates:
+        return (min(candidates) - now).total_seconds()
+    # Both offsets in this hour have passed — first slot of the next hour
+    next_hour = (now + timedelta(hours=1)).replace(
+        minute=offset_minutes, second=0, microsecond=0,
+    )
+    return (next_hour - now).total_seconds()
+
+
+def _run_metar_ingest_once(app_state) -> None:
+    """Execute a single METAR ingest cycle (called in a thread)."""
+    db_path = getattr(app_state, "db_path", "")
+    if not db_path:
+        logger.warning("METAR ingest: no AIRPORTS_DB configured")
+        return
+
+    from weatherbrief.tasks.airport_watchlist import (
+        get_configs_dir,
+        load_watchlist_with_coords,
+    )
+    from weatherbrief.tasks.standalone_verification import run_metar_ingest_cycle
+
+    try:
+        airports = load_watchlist_with_coords(get_configs_dir(), db_path)
+    except FileNotFoundError:
+        logger.warning(
+            "METAR ingest: airport watchlist not found. "
+            "Run: python -m weatherbrief.verify discover"
+        )
+        return
+
+    if not airports:
+        logger.warning("METAR ingest: empty watchlist")
+        return
+
+    result = run_metar_ingest_cycle(airports, db_path)
+    logger.info(
+        "METAR ingest cycle: %d airports, %d new observations (%dms)",
+        result["airports"], result["observations_stored"], result["duration_ms"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Forecast fetch + standalone verification loops
 # ---------------------------------------------------------------------------
 
 
@@ -581,12 +688,15 @@ async def run_standalone_verification_loop(app_state) -> None:
                 sleep_secs,
             )
             await asyncio.sleep(sleep_secs)
+            # Offset by 15 min so the HH:00 METAR ingest (~30-60s fetch) has
+            # fully landed before scoring picks the nearest obs.
+            await asyncio.sleep(_VERIFICATION_HOUR_OFFSET_SECONDS)
             await asyncio.to_thread(
                 _run_standalone_once, app_state,
                 False,  # fetch_forecasts
                 True,   # score_observations
             )
-            await asyncio.sleep(60)  # advance past the current hour
+            await asyncio.sleep(60)  # advance past the current offset
         except Exception:
             logger.error("Standalone verification cycle failed", exc_info=True)
             await asyncio.sleep(900)

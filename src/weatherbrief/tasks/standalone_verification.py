@@ -1129,10 +1129,13 @@ def run_standalone_cycle(
         fetch + store snapshots only. Used by the forecast-fetch loop, which
         fires after ECMWF deliveries land.
       * ``fetch_forecasts=False, score_observations=True`` → ``"light"``:
-        METAR/TAF fetch + scoring only. Used by the verification loop, which
-        scores observations against whatever snapshots are already in DB.
+        Score-only. Reads observations already stored in the DB (populated
+        by :func:`run_metar_ingest_cycle`) — does NOT call aviationweather.gov.
 
     The remaining ``(False, False)`` combination is rejected.
+
+    Note: METAR fetch is owned by :func:`run_metar_ingest_cycle`, which fires
+    every 30 min on its own loop. Scoring cycles only read from DB.
 
     Returns a summary dict with counts and timing.
     """
@@ -1253,12 +1256,10 @@ def run_standalone_cycle(
         t_fetch_done = time.monotonic()
 
         if score_observations:
-            # Phase C: Fetch METAR/TAF
-            obs_stored = _fetch_and_store_observations(airports, airports_db_path, db)
+            # Phase D: Score against snapshots + observations already in DB.
+            # METAR fetch is owned by run_metar_ingest_cycle on its own loop —
+            # this cycle is a pure-DB operation now.
             t_obs_done = time.monotonic()
-            logger.info("Stored %d new observations", obs_stored)
-
-            # Phase D: Score against snapshots already in DB.
             scores_created = _score_cycle(now, airports, airports_db_path, db)
             t_score_done = time.monotonic()
             logger.info("Created %d scores", scores_created)
@@ -1354,6 +1355,69 @@ def run_standalone_cycle(
         db.close()
 
 
+# ---------------------------------------------------------------------------
+# METAR ingest cycle — fires every 30 min, decoupled from scoring
+# ---------------------------------------------------------------------------
+
+
+def run_metar_ingest_cycle(
+    airports: list[WatchlistAirport],
+    airports_db_path: str,
+) -> dict:
+    """Fetch METAR/TAF for the watchlist and upsert into verification_observations.
+
+    Called from the 30-min METAR ingest loop. Does no forecast fetch and no
+    scoring — those are owned by the forecast-fetch and verification loops
+    respectively. The 30-min bucket dedup in :func:`store_observations`
+    means cycles firing at HH:05 and HH:35 each insert at most one row per
+    airper-bucket, so SPECIs land alongside regular reports.
+
+    Returns a summary dict; persists a row in ``verification_cycles`` with
+    ``source='metar_ingest'``.
+    """
+    from flyfun_common.db import SessionLocal
+
+    t_start = time.monotonic()
+    started_at = datetime.now(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        try:
+            obs_stored = _fetch_and_store_observations(
+                airports, airports_db_path, db,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            _record_failed_cycle(
+                started_at, t_start, "metar_ingest", len(airports),
+            )
+            raise
+
+        duration_ms = int((time.monotonic() - t_start) * 1000)
+
+        cycle_row = VerificationCycleRow(
+            started_at=started_at,
+            duration_ms=duration_ms,
+            source="metar_ingest",
+            phase_fetch_ms=duration_ms,
+            airports=len(airports),
+            observations_stored=obs_stored,
+            scored=0,
+        )
+        db.add(cycle_row)
+        db.commit()
+
+        return {
+            "cycle_type": "metar_ingest",
+            "airports": len(airports),
+            "observations_stored": obs_stored,
+            "duration_ms": duration_ms,
+        }
+    finally:
+        db.close()
+
+
 def _record_failed_cycle(
     started_at: datetime,
     t_start: float,
@@ -1368,12 +1432,16 @@ def _record_failed_cycle(
     duration_ms = int((time.monotonic() - t_start) * 1000)
     error_msg = traceback.format_exc()[-500:]  # last 500 chars
 
+    # New metar_ingest cycle keeps its bare source name; the legacy
+    # standalone cycles prefix it for backward-compat with existing queries.
+    source = cycle_type if cycle_type == "metar_ingest" else f"standalone_{cycle_type}"
+
     try:
         err_db = SessionLocal()
         cycle_row = VerificationCycleRow(
             started_at=started_at,
             duration_ms=duration_ms,
-            source=f"standalone_{cycle_type}",
+            source=source,
             phase_fetch_ms=0,
             phase_find_ms=0,
             phase_gather_ms=0,

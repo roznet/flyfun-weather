@@ -269,23 +269,29 @@ def fetch_observations_batch(
 # ---------------------------------------------------------------------------
 
 
-def _should_skip_for_hourly_dedup(
+def _should_skip_for_bucket_dedup(
     db: Session, icao: str, obs_time: datetime,
 ) -> bool:
-    """One-per-hour filter: keep at most one observation per airport per clock hour.
+    """30-min bucket filter: keep at most one observation per airport per
+    30-minute bucket (``[HH:00, HH:30)`` and ``[HH:30, HH+1:00)``).
 
-    Returns True if an observation already exists for this (icao, hour) —
+    Returns True if an observation already exists for this (icao, bucket) —
     the caller should skip this observation. Once an observation is stored
     it is never replaced, since scores or FK references may already point
     to it.
+
+    METARs are normally issued every 30 minutes; SPECIs land at off-cycle
+    times. The 30-min bucket lets the new ingest loop (firing every 30 min)
+    capture both regular reports and SPECIs without inflating the table.
     """
-    hour_start = obs_time.replace(minute=0, second=0, microsecond=0)
-    hour_end = hour_start + timedelta(hours=1)
+    bucket_minute = 0 if obs_time.minute < 30 else 30
+    bucket_start = obs_time.replace(minute=bucket_minute, second=0, microsecond=0)
+    bucket_end = bucket_start + timedelta(minutes=30)
     existing = db.execute(
         select(VerificationObservationRow.id)
         .where(VerificationObservationRow.icao == icao)
-        .where(VerificationObservationRow.observation_time >= hour_start)
-        .where(VerificationObservationRow.observation_time < hour_end)
+        .where(VerificationObservationRow.observation_time >= bucket_start)
+        .where(VerificationObservationRow.observation_time < bucket_end)
         .limit(1)
     ).scalar_one_or_none()
 
@@ -299,8 +305,9 @@ def store_observations(
 ) -> int:
     """Store observations and create flight linkages.
 
-    Deduplicates on (icao, observation_time). Applies one-per-hour filter.
-    Returns count of newly inserted observations.
+    Deduplicates on (icao, observation_time). Applies one-per-30-min-bucket
+    filter so HH:00 and HH:30 METARs both land while SPECIs at HH:15 are
+    absorbed. Returns count of newly inserted observations.
     """
     inserted = 0
 
@@ -315,8 +322,8 @@ def store_observations(
         if existing is not None:
             obs_row_id = existing.id
         else:
-            # One-per-hour filter: keep whichever observation is closer to :00
-            if _should_skip_for_hourly_dedup(db, obs.icao, obs.observation_time):
+            # One-per-30-min-bucket filter: keep first arrival per bucket.
+            if _should_skip_for_bucket_dedup(db, obs.icao, obs.observation_time):
                 continue
 
             row = VerificationObservationRow(
