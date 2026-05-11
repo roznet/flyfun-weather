@@ -93,8 +93,12 @@ export interface LayerGroupInfo {
 /** Maps preference values to layer IDs for groups that collapse in compact mode. */
 const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
   clouds: {
+    // Legacy bare-source forms (pre-natural style). Kept for back-compat
+    // with prefs that never went through user_migration 001.
     dd: 'cloud-bands',
     nwp: 'nwp-cloud-bands',
+    natural_dd: 'cloud-bands',
+    natural_nwp: 'nwp-cloud-bands',
     soft_dd: 'soft-cloud-bands',
     soft_nwp: 'soft-nwp-cloud-bands',
     square_dd: 'square-cloud-bands',

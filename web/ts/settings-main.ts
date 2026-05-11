@@ -65,27 +65,32 @@ let aircraftList: AircraftResponse[] = [];
 let editingAircraftId: number | null = null;
 let autorouterMode: 'oauth' | 'password' = 'oauth';
 
-/** Parse the persisted cloud_method ('soft_nwp', 'square_dd', 'dd', 'nwp', etc.) into source+style. */
-function parseCloudMethod(value: string): { source: 'dd' | 'nwp'; style: 'soft' | 'layer' | 'square' } {
+/** Parse the persisted cloud_method ('soft_nwp', 'square_dd', 'natural_nwp', 'dd', 'nwp', etc.) into source+style. */
+function parseCloudMethod(value: string): { source: 'dd' | 'nwp'; style: 'soft' | 'natural' | 'square' } {
   const lower = (value ?? '').toLowerCase();
-  // Style-prefixed forms: soft_nwp, soft_dd, square_nwp, square_dd
+  // Style-prefixed forms: soft_nwp, soft_dd, square_nwp, square_dd, natural_nwp, natural_dd
   if (lower.startsWith('soft_')) {
     return { style: 'soft', source: lower === 'soft_nwp' ? 'nwp' : 'dd' };
   }
   if (lower.startsWith('square_')) {
     return { style: 'square', source: lower === 'square_nwp' ? 'nwp' : 'dd' };
   }
-  // Legacy bare-source forms: 'dd', 'nwp' (== hatched layer style)
-  if (lower === 'nwp') return { style: 'layer', source: 'nwp' };
-  if (lower === 'dd') return { style: 'layer', source: 'dd' };
+  if (lower.startsWith('natural_')) {
+    return { style: 'natural', source: lower === 'natural_nwp' ? 'nwp' : 'dd' };
+  }
+  // Legacy bare-source forms ('dd' / 'nwp') used to mean the old hatched
+  // layer style. Map them to natural (the replacement rendering for that slot).
+  if (lower === 'nwp') return { style: 'natural', source: 'nwp' };
+  if (lower === 'dd') return { style: 'natural', source: 'dd' };
   // Unknown → fall back to recommended.
   return { style: 'soft', source: 'nwp' };
 }
 
-/** Compose source+style back into a cloud_method string for persistence. */
+/** Compose source+style back into a cloud_method string for persistence.
+ *  Uses `natural_<source>` for the natural style — avoids the bare `dd`/`nwp`
+ *  form that the user_migration in api/user_migrations.py rewrites to soft_nwp. */
 function composeCloudMethod(source: string, style: string): string {
-  if (style === 'layer') return source;          // 'nwp' or 'dd' (legacy bare form)
-  return `${style}_${source}`;                   // 'soft_nwp', 'square_dd', etc.
+  return `${style}_${source}`;                   // 'soft_nwp', 'square_dd', 'natural_nwp', etc.
 }
 
 /** Default advisory models: all default briefing models except best_match. */

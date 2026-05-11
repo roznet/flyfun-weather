@@ -5,14 +5,18 @@
  *   - 'nwp' → p.nwpCloudLayers, color from NWP cover %
  *
  * Style picks the painter:
- *   - 'layer'  → hatched fill (classic look)
- *   - 'soft'   → feathered gradient (GRAMET-like)
- *   - 'square' → solid rectangle, opacity from value (ForeFlight-like cells)
+ *   - 'natural' → flat-bottom puffs with bumpy tops; coverage encoded as
+ *                 horizontal fill fraction (SCT = gaps between puffs, BKN =
+ *                 touching puffs with valleys, OVC = continuous bumpy blanket).
+ *                 Tries to look like clouds out the window.
+ *   - 'soft'    → feathered vertical-gradient fill (GRAMET-like).
+ *   - 'square'  → solid rectangle, opacity from value (ForeFlight-like cells).
  *
  * Layer IDs preserve the existing combined naming so persisted prefs and
  * presets keep working: 'cloud-bands', 'nwp-cloud-bands', 'soft-cloud-bands',
- * 'soft-nwp-cloud-bands'. New square layers add 'square-cloud-bands' and
- * 'square-nwp-cloud-bands'.
+ * 'soft-nwp-cloud-bands'. Square layers add 'square-cloud-bands' and
+ * 'square-nwp-cloud-bands'. The 'natural' style is the replacement for the
+ * old hatched 'layer' style — the IDs are reused, only the rendering changed.
  */
 
 import type {
@@ -26,7 +30,6 @@ import { cloudFillFromDD, nwpCloudFill } from '../../scales';
 import {
   drawColumnBand,
   drawSmoothBand,
-  hatchCloudBand,
   type BandPointData,
 } from './base';
 import { getActiveTheme } from '../theme';
@@ -38,7 +41,7 @@ export type CloudSource = 'dd' | 'nwp';
 
 interface SourceSpec {
   getZones: (p: VizPoint) => VizCloudLayer[];
-  /** Continuous fill color for a (possibly matched) zone. Used by hatched and square styles. */
+  /** Continuous fill color for a (possibly matched) zone. Used by natural and square styles. */
   matchedColor: (cl: VizCloudLayer, matched: VizCloudLayer | null) => string;
 }
 
@@ -81,7 +84,7 @@ const SOURCES: Record<CloudSource, SourceSpec> = { dd: DD_SOURCE, nwp: NWP_SOURC
 
 // --- Style axis ---
 
-export type CloudStyle = 'layer' | 'soft' | 'square';
+export type CloudStyle = 'natural' | 'soft' | 'square';
 
 type OnBand = (
   ctx: CanvasRenderingContext2D,
@@ -101,14 +104,205 @@ const COVERAGE_ALPHA: Record<string, number> = {
 
 const FEATHER_FRACTION = 0.15;
 
-function paintHatched(
+// --- Natural cloud config (tunable) ---
+//
+// These knobs control the puffy-cloud appearance. Tweak in this one place
+// to adjust how SCT/BKN/OVC look. The aim is "what you'd see out the window":
+//   - SCT: discrete puffs with sky gaps between them
+//   - BKN: puffs that mostly touch, occasional gap
+//   - OVC: continuous bumpy blanket
+// Bump count, amplitude, and gap pattern come from a deterministic per-band
+// hash so the same band keeps a stable shape across redraws.
+
+export interface NaturalCloudConfig {
+  /** Target horizontal fill fraction per METAR coverage class (DD source).
+   *  NWP source uses `meanCloudCoverPct / 100` directly. */
+  fillFraction: { FEW: number; SCT: number; BKN: number; OVC: number };
+  /** Target horizontal extent of a single puff slot, in CSS px. */
+  puffWidthPx: number;
+  /** Target horizontal extent of a single bump within a puff, in CSS px. */
+  humpWidthPx: number;
+  /** Below this segment width, skip the gap pattern and draw one continuous
+   *  bumpy fill — gaps would be too small to read at this scale. */
+  minBandWidthPx: number;
+  /** 0..1: max per-bump amplitude reduction (jitter so peaks aren't uniform). */
+  amplitudeJitter: number;
+  /** Extra px above the band top so puffs look fluffy / overflow slightly.
+   *  Set to 0 for strict clipping to the band envelope. */
+  edgeOverflowPx: number;
+  /** Fixed alpha applied to the source color. Coverage lives in the gap
+   *  pattern, not opacity — this avoids double-encoding SCT as "fewer puffs
+   *  AND lower alpha". Set to null to keep the source's coverage-modulated
+   *  alpha. */
+  fillAlpha: number | null;
+  /** Floor on fill fraction (so an NWP cover% of 5% still shows a puff or two). */
+  minFillFraction: number;
+}
+
+const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
+  fillFraction: { FEW: 0.20, SCT: 0.45, BKN: 0.80, OVC: 1.00 },
+  puffWidthPx: 30,
+  humpWidthPx: 14,
+  minBandWidthPx: 50,
+  amplitudeJitter: 0.25,
+  edgeOverflowPx: 2,
+  fillAlpha: 0.85,
+  minFillFraction: 0.15,
+};
+
+/** Cheap, deterministic hash → [0, 1). */
+function hash01(n: number): number {
+  let h = (n + 0x9e3779b9) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h = h ^ (h >>> 16);
+  return (h >>> 0) / 0x100000000;
+}
+
+function coverageBucket(cl: VizCloudLayer): keyof NaturalCloudConfig['fillFraction'] {
+  const cov = cl.coverage?.toUpperCase();
+  if (cov === 'OVC' || cov === 'BKN' || cov === 'SCT' || cov === 'FEW') return cov;
+  return 'BKN';
+}
+
+function naturalFillFraction(
+  cl: VizCloudLayer,
+  matched: VizCloudLayer | null,
+  config: NaturalCloudConfig,
+): number {
+  // Prefer NWP cover% (granular) when available; else map coverage bucket.
+  const covA = cl.meanCloudCoverPct;
+  const covB = matched?.meanCloudCoverPct;
+  if (covA != null) {
+    const pct = covB != null ? (covA + covB) / 2 : covA;
+    return Math.max(config.minFillFraction, Math.min(1.0, pct / 100));
+  }
+  const a = config.fillFraction[coverageBucket(cl)];
+  const b = matched ? config.fillFraction[coverageBucket(matched)] : a;
+  return Math.max(config.minFillFraction, (a + b) / 2);
+}
+
+/** Replace the alpha channel on an `rgba()` / `rgb()` string. Returns the
+ *  original string unchanged if it isn't parseable. */
+function withAlpha(color: string, alpha: number): string {
+  const m = color.match(/rgba?\(([^)]+)\)/);
+  if (!m) return color;
+  const parts = m[1].split(',').map((s) => s.trim());
+  if (parts.length < 3) return color;
+  return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
+}
+
+/** Draw one puff path (flat bottom + bumpy top) inside [xa, xb] using linear
+ *  interpolation of base/top profiles. Caller fills. */
+function buildPuffPath(
+  ctx: CanvasRenderingContext2D,
+  xa: number,
+  xb: number,
+  baseAt: (x: number) => number,
+  topAt: (x: number) => number,
+  seed: number,
+  config: NaturalCloudConfig,
+): void {
+  const width = xb - xa;
+  const nHumps = Math.max(1, Math.round(width / config.humpWidthPx));
+  const humpStride = width / nHumps;
+
+  ctx.beginPath();
+  ctx.moveTo(xa, baseAt(xa));
+
+  // Walk the bumpy top left→right. Each hump is a quadratic Bezier from
+  // (x0, base) up over (xMid, peak) to (x1, base), giving a smooth cumulus
+  // dome. Peak height is jittered per-bump for variety.
+  for (let h = 0; h < nHumps; h++) {
+    const x0 = xa + h * humpStride;
+    const x1 = xa + (h + 1) * humpStride;
+    const xMid = (x0 + x1) / 2;
+    const yBase0 = baseAt(x0);
+    const yBase1 = baseAt(x1);
+    const yTopMid = topAt(xMid);
+
+    const yBaseMid = (yBase0 + yBase1) / 2;
+    const fullAmp = yBaseMid - yTopMid;  // positive in canvas y
+    if (fullAmp <= 0) {
+      ctx.lineTo(x1, yBase1);
+      continue;
+    }
+
+    const j = hash01(seed * 31 + h);
+    const ampScale = 1.0 - config.amplitudeJitter * j;
+    const yPeak = yBaseMid - ampScale * fullAmp - config.edgeOverflowPx;
+    // Quadratic Bezier control point so the curve passes through (xMid, yPeak)
+    // at t = 0.5: ctrlY = 2 * peak - yBaseMid (derived from B(0.5) algebra).
+    const ctrlY = 2 * yPeak - yBaseMid;
+    ctx.quadraticCurveTo(xMid, ctrlY, x1, yBase1);
+  }
+
+  ctx.closePath();
+}
+
+function paintNatural(
   ctx: CanvasRenderingContext2D,
   bandPoints: BandPointData[],
   transform: CoordTransform,
   cl: VizCloudLayer,
+  matched: VizCloudLayer | null,
+  source: SourceSpec,
 ): void {
-  const hatch = getActiveTheme().clouds;
-  hatchCloudBand(ctx, bandPoints, transform, cl.coverage, hatch);
+  if (bandPoints.length < 2) return;
+  const pL = bandPoints[0];
+  const pR = bandPoints[1];
+  if (pL.base == null || pL.top == null || pR.base == null || pR.top == null) return;
+
+  const config = DEFAULT_NATURAL_CONFIG;
+  const xL = transform.distanceToX(pL.distance);
+  const xR = transform.distanceToX(pR.distance);
+  if (xR <= xL) return;
+
+  const yBaseL = transform.altitudeToY(pL.base);
+  const yBaseR = transform.altitudeToY(pR.base);
+  const yTopL = transform.altitudeToY(pL.top);
+  const yTopR = transform.altitudeToY(pR.top);
+
+  const segWidth = xR - xL;
+  const fillFrac = naturalFillFraction(cl, matched, config);
+  const baseFill = source.matchedColor(cl, matched);
+  const fillStyle = config.fillAlpha != null ? withAlpha(baseFill, config.fillAlpha) : baseFill;
+
+  // Linear interpolators across the 2-point band segment.
+  const baseAt = (x: number) => yBaseL + (yBaseR - yBaseL) * (x - xL) / segWidth;
+  const topAt  = (x: number) => yTopL  + (yTopR  - yTopL ) * (x - xL) / segWidth;
+
+  // Round baseFt to nearest 100ft so small zone-boundary drift between
+  // adjacent matched segments doesn't reshuffle the gap pattern.
+  const bandSeed = (Math.round(cl.baseFt / 100) ^ 0x4d36e96) | 0;
+
+  ctx.save();
+  ctx.fillStyle = fillStyle;
+
+  // OVC and short segments → one continuous bumpy blanket (no gaps).
+  if (fillFrac >= 0.99 || segWidth < config.minBandWidthPx) {
+    buildPuffPath(ctx, xL, xR, baseAt, topAt, bandSeed, config);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  // Discrete puffs anchored on a global x grid so adjacent segments tile
+  // coherently — slot S spans [S * puffW, (S + 1) * puffW] in canvas px.
+  const puffW = config.puffWidthPx;
+  const slotStart = Math.floor(xL / puffW);
+  const slotEnd = Math.ceil(xR / puffW);
+
+  for (let s = slotStart; s < slotEnd; s++) {
+    if (hash01(s * 0x1f1f1f + bandSeed) > fillFrac) continue;
+    const xa = Math.max(xL, s * puffW);
+    const xb = Math.min(xR, (s + 1) * puffW);
+    if (xb - xa < 2) continue;
+    buildPuffPath(ctx, xa, xb, baseAt, topAt, bandSeed ^ s, config);
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 function paintSoft(
@@ -177,15 +371,15 @@ function paintSquare(
   matched: VizCloudLayer | null,
   source: SourceSpec,
 ): void {
-  // Reuse the same continuous color scale as the hatched style, but fill
-  // a solid rectangle without the hatch overlay. Gives the same DD/cover%
-  // hue+alpha modulation between layers, just cleaner cells.
+  // Reuse the same continuous color scale as the natural style, but fill
+  // a solid rectangle. Gives the same DD/cover% hue+alpha modulation between
+  // layers, just cleaner cells.
   const fill = source.matchedColor(cl, matched);
   drawColumnBand(ctx, bandPoints, transform, fill);
 }
 
 const STYLES: Record<CloudStyle, OnBand> = {
-  layer: (ctx, bp, t, cl) => paintHatched(ctx, bp, t, cl),
+  natural: (ctx, bp, t, cl, matched, source) => paintNatural(ctx, bp, t, cl, matched, source),
   soft: (ctx, bp, t, cl, matched) => paintSoft(ctx, bp, t, cl, matched),
   square: (ctx, bp, t, cl, matched, source) => paintSquare(ctx, bp, t, cl, matched, source),
 };
@@ -198,8 +392,8 @@ export interface CloudLayerSpec {
   source: CloudSource;
   style: CloudStyle;
   /** metrics-catalog key for the layer-info popup. Style-specific so the
-   *  popup explains soft gradients vs hatch vs square cells, not just the
-   *  underlying data source. */
+   *  popup explains soft gradients vs natural puffs vs square cells, not
+   *  just the underlying data source. */
   metricId: string;
   defaultEnabled?: boolean;
 }
@@ -219,7 +413,8 @@ export function cloudLayer(spec: CloudLayerSpec): CrossSectionLayer {
       const hasData = data.points.some((p) => source.getZones(p).length > 0);
       if (!hasData) return;
 
-      // Single-point fallback: column per zone (square style anyway).
+      // Single-point fallback: column per zone (every style collapses to a
+      // simple cell here — there's no horizontal span to draw puffs in).
       if (data.points.length === 1) {
         const p = data.points[0];
         for (const cl of source.getZones(p)) {
@@ -239,8 +434,11 @@ export function cloudLayer(spec: CloudLayerSpec): CrossSectionLayer {
 
       renderMatchedZones(ctx, transform, data, {
         getZones: source.getZones,
-        getColor: (cl, matched) =>
-          spec.style === 'layer' ? source.matchedColor(cl, matched) : 'transparent',
+        // Soft and natural draw their own visuals on top of `onBand`; pass
+        // `transparent` to suppress the default smooth-band fill. Square
+        // doesn't use `onBand` and relies on the smooth-band fill directly,
+        // but we keep the column draw inside paintSquare for consistency.
+        getColor: () => 'transparent',
         onBand: (ctx, bandPoints, transform, cl, matched) => {
           style(ctx, bandPoints, transform, cl, matched, source);
         },
@@ -253,17 +451,17 @@ export function cloudLayer(spec: CloudLayerSpec): CrossSectionLayer {
 
 export const cloudBandsLayer = cloudLayer({
   id: 'cloud-bands',
-  name: 'DD Layers',
+  name: 'DD Natural',
   source: 'dd',
-  style: 'layer',
+  style: 'natural',
   metricId: 'cloud_coverage',
 });
 
 export const nwpCloudBandsLayer = cloudLayer({
   id: 'nwp-cloud-bands',
-  name: 'NWP Layers',
+  name: 'NWP Natural',
   source: 'nwp',
-  style: 'layer',
+  style: 'natural',
   metricId: 'nwp_cloud_cover',
 });
 
@@ -303,12 +501,12 @@ export const squareNwpCloudBandsLayer = cloudLayer({
 /** Lookup table: which layer id corresponds to a given (source, style) combo. */
 export const CLOUD_LAYER_BY_AXES: Record<CloudSource, Record<CloudStyle, string>> = {
   dd: {
-    layer: 'cloud-bands',
+    natural: 'cloud-bands',
     soft: 'soft-cloud-bands',
     square: 'square-cloud-bands',
   },
   nwp: {
-    layer: 'nwp-cloud-bands',
+    natural: 'nwp-cloud-bands',
     soft: 'soft-nwp-cloud-bands',
     square: 'square-nwp-cloud-bands',
   },
@@ -322,7 +520,7 @@ export const ALL_CLOUD_LAYER_IDS: string[] = Object.values(CLOUD_LAYER_BY_AXES)
 /** Parse a cloud layer id back into its (source, style) axes. Returns null if not a cloud layer. */
 export function parseCloudLayerId(id: string): { source: CloudSource; style: CloudStyle } | null {
   for (const source of ['dd', 'nwp'] as CloudSource[]) {
-    for (const style of ['layer', 'soft', 'square'] as CloudStyle[]) {
+    for (const style of ['natural', 'soft', 'square'] as CloudStyle[]) {
       if (CLOUD_LAYER_BY_AXES[source][style] === id) return { source, style };
     }
   }

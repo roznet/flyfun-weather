@@ -40,11 +40,11 @@ export interface LayerTogglesOptions {
 function cloudState(enabledLayers: Record<string, boolean>): {
   ddEnabled: boolean;
   nwpEnabled: boolean;
-  style: 'layer' | 'soft' | 'square';
+  style: 'natural' | 'soft' | 'square';
 } {
   let ddEnabled = false;
   let nwpEnabled = false;
-  let style: 'layer' | 'soft' | 'square' = 'soft';
+  let style: 'natural' | 'soft' | 'square' = 'soft';
   for (const id of ALL_CLOUD_LAYER_IDS) {
     if (!enabledLayers[id]) continue;
     const axes = parseCloudLayerId(id);
@@ -62,7 +62,7 @@ function cloudCompoundHtml(
   unavailable?: Set<string>,
 ): string {
   const { ddEnabled, nwpEnabled, style } = cloudState(enabledLayers);
-  // A source is "unavailable" iff its hatched-style id (the canonical
+  // A source is "unavailable" iff its natural-style id (the canonical
   // data signal) is in the unavailable set. DD is sounding-derived so
   // generally always available; NWP requires native cloud-cover data.
   const ddUnavail = unavailable?.has('cloud-bands') ?? false;
@@ -89,7 +89,7 @@ function cloudCompoundHtml(
   html += sourceCheckbox('dd', 'DD', ddEnabled, ddUnavail);
   html += `<select class="viz-model-select" data-cloud-style>`;
   html += `<option value="soft"${style === 'soft' ? ' selected' : ''}>${t('viz.cloudStyle.soft')}</option>`;
-  html += `<option value="layer"${style === 'layer' ? ' selected' : ''}>${t('viz.cloudStyle.layer')}</option>`;
+  html += `<option value="natural"${style === 'natural' ? ' selected' : ''}>${t('viz.cloudStyle.natural')}</option>`;
   html += `<option value="square"${style === 'square' ? ' selected' : ''}>${t('viz.cloudStyle.square')}</option>`;
   html += `</select>`;
   return html;
@@ -167,7 +167,7 @@ function wireCloudCompound(
   for (const cb of Array.from(sourceCbs)) {
     cb.addEventListener('change', () => {
       const source = cb.dataset.cloudSource as 'dd' | 'nwp';
-      const style = styleSel.value as 'layer' | 'soft' | 'square';
+      const style = styleSel.value as 'natural' | 'soft' | 'square';
       const currentId = enabledIdFor(source);
       if (cb.checked) {
         const targetId = CLOUD_LAYER_BY_AXES[source][style];
@@ -180,7 +180,7 @@ function wireCloudCompound(
   }
 
   styleSel.addEventListener('change', () => {
-    const newStyle = styleSel.value as 'layer' | 'soft' | 'square';
+    const newStyle = styleSel.value as 'natural' | 'soft' | 'square';
     // For each source that's currently enabled, swap from its current
     // style-layer to the new style-layer. Sources that are off stay off.
     for (const source of ['dd', 'nwp'] as const) {
