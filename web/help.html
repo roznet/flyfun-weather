@@ -19,6 +19,7 @@
     <div class="help-tabs" id="help-tabs">
       <button class="tab-btn active" data-tab="guide">Help &amp; Guide</button>
       <button class="tab-btn" data-tab="whats-new">What's New<span class="help-tab-badge" id="whats-new-badge"></span></button>
+      <button class="tab-btn" data-tab="data-sources">Data Sources</button>
     </div>
 
     <div id="tab-guide" class="tab-panel active">
@@ -240,6 +241,10 @@
         <a href="https://github.com/roznet/flyfun-weather/blob/main/designs/weather-engine-specs.md" target="_blank" rel="noopener">Weather Engine Specs</a>.
       </p>
       <div id="data-sources-table-host"></div>
+      <p class="muted" style="margin-top: 0.5rem;">
+        <a href="?tab=data-sources" data-tab-link="data-sources">Open the full Data Sources tab &rarr;</a>
+        for every column we track (model family, resolution, cycles, latest run, covers until, next update).
+      </p>
 
       <h4 style="margin-top: 1.5rem;">Waypoint &amp; Navigation Data</h4>
       <p>
@@ -406,6 +411,15 @@
     <div id="tab-whats-new" class="tab-panel">
       <div id="messages-container" class="message-list">
         <p class="messages-empty">Loading...</p>
+      </div>
+    </div>
+
+    <div id="tab-data-sources" class="tab-panel">
+      <div class="help-section">
+        <h3 id="data-sources-full-heading">Data Sources &amp; Models &mdash; full table</h3>
+        <div id="data-sources-full-host">
+          <p class="muted">Loading…</p>
+        </div>
       </div>
     </div>
 

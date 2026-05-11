@@ -3475,14 +3475,30 @@ label {
 }
 
 .data-sources-table {
-  min-width: 1000px;
+  width: 100%;
   font-size: 0.8rem;
+}
+
+/* Summary table on the help-guide tab keeps a few extra columns and still
+ * benefits from a minimum width so cells don't compress unreadably. */
+.data-sources-table.summary {
+  min-width: 700px;
 }
 
 .data-sources-table th,
 .data-sources-table td {
-  padding: 0.35rem 0.5rem;
+  padding: 0.35rem 0.4rem;
   vertical-align: top;
+}
+
+/* Levels column carries one or two digits — shrink it so we recover the
+ * width for the wider neighbour columns. */
+.data-sources-table:not(.summary) th:nth-child(3),
+.data-sources-table:not(.summary) td:nth-child(3) {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .data-source-model {
@@ -3501,15 +3517,64 @@ label {
   color: var(--text-muted);
 }
 
-.data-source-description-row td {
-  border-bottom: 2px solid var(--border);
-  padding-top: 0;
+.data-source-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin-left: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: color 0.15s, border-color 0.15s;
 }
 
-.data-source-description {
+.data-source-info-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.data-source-popup h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.data-source-popup h3 .muted {
+  font-weight: normal;
+  font-size: 0.85rem;
   color: var(--text-muted);
-  font-size: 0.78rem;
-  padding-bottom: 0.6rem;
+}
+
+.data-source-popup p {
+  margin: 0 0 0.75rem;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.data-source-popup-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.data-source-popup-meta dt {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.data-source-popup-meta dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .data-source-role {
@@ -3556,6 +3621,23 @@ label {
 .data-sources-footer {
   margin-top: 0.4rem;
   font-size: 0.75rem;
+}
+
+/* Two/three-line stacked cell used by the full data-sources table to
+ * collapse paired columns (e.g. Variant/Provider, Resolution/Coverage,
+ * Cycles/Horizon) into one. Primary line keeps the default style; the
+ * secondary/tertiary lines render smaller and muted so the eye can group
+ * each cell's lines together. */
+.ds-stack { display: flex; flex-direction: column; gap: 0.1rem; line-height: 1.25; }
+.ds-stack-primary { color: var(--text); }
+.ds-stack-secondary,
+.ds-stack-tertiary {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.data-sources-table th .ds-stack-secondary,
+.data-sources-table th .ds-stack-tertiary {
+  font-weight: normal;
 }
 
 /* --- Route Map Visualization --- */

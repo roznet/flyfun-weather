@@ -7,12 +7,14 @@ import { renderUserInfo, checkMessagesBadge, escapeHtml } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { mountDataSourcesTable } from './data-sources-table';
+import { initInfoPopup } from './components/info-popup';
 
 let isSignedIn = false;
 
 async function init(): Promise<void> {
   await initI18n();
   initTheme();
+  initInfoPopup();
 
   const h1 = document.querySelector('h1');
   if (h1) h1.textContent = t('nav.help');
@@ -43,17 +45,27 @@ async function init(): Promise<void> {
     }
   }
 
-  // Render the data-driven Data Sources & Models table.  Failure to load
-  // leaves the help page usable — the renderer shows its own muted error.
+  // Render the data-driven Data Sources & Models table in summary mode for
+  // the guide tab. The full-detail table mounts lazily on tab switch.
   const dataSourcesHost = document.getElementById('data-sources-table-host');
   if (dataSourcesHost) {
-    mountDataSourcesTable(dataSourcesHost as HTMLElement);
+    mountDataSourcesTable(dataSourcesHost as HTMLElement, 'summary');
   }
 
-  // Check if URL has ?tab=whats-new to auto-switch
+  // In-page links from the guide to the full Data Sources tab.
+  document.querySelectorAll<HTMLAnchorElement>('a[data-tab-link]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const tab = a.dataset.tabLink;
+      if (tab) switchTab(tab);
+    });
+  });
+
+  // Check if URL has ?tab=... to auto-switch
   const params = new URLSearchParams(window.location.search);
-  if (params.get('tab') === 'whats-new') {
-    switchTab('whats-new');
+  const initialTab = params.get('tab');
+  if (initialTab === 'whats-new' || initialTab === 'data-sources') {
+    switchTab(initialTab);
   }
 }
 
@@ -72,6 +84,7 @@ function initTabs(): void {
 }
 
 let messagesLoaded = false;
+let fullDataSourcesLoaded = false;
 
 function switchTab(tab: string): void {
   // Update tab buttons
@@ -86,6 +99,11 @@ function switchTab(tab: string): void {
   if (tab === 'whats-new' && !messagesLoaded) {
     messagesLoaded = true;
     loadMessages();
+  }
+  if (tab === 'data-sources' && !fullDataSourcesLoaded) {
+    fullDataSourcesLoaded = true;
+    const host = document.getElementById('data-sources-full-host');
+    if (host) mountDataSourcesTable(host as HTMLElement, 'full');
   }
 }
 
