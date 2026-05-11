@@ -2,7 +2,7 @@
 
 import { THEMES, type ThemeId, type CrossSectionTheme } from './theme';
 import { showPopupContent } from '../../components/info-popup';
-import { buildPuffPath, hash01, DEFAULT_NATURAL_CONFIG } from './layers/cloud-bands-factory';
+import { drawNaturalCloudBand, DEFAULT_NATURAL_CONFIG } from './layers/cloud-bands-factory';
 
 const W = 520;
 const H = 320;
@@ -256,10 +256,10 @@ function drawThemeLine(
   ctx.setLineDash([]);
 }
 
-/** Render the natural-puff cloud rendering inside a rectangular strip so the
- *  preview matches what the cross-section actually draws. `fillFraction`
- *  drives the puff/gap pattern (1.0 = continuous blanket, 0.45 ≈ SCT, etc.).
- *  `seed` makes the puff phases stable for the preview. */
+/** Render the natural cloud style inside a rectangular strip so the preview
+ *  matches what the cross-section actually draws. `fillFraction` drives the
+ *  noise threshold (1.0 = filled blanket, 0.45 ≈ SCT). `seed` keeps the
+ *  noise pattern stable across redraws. */
 function drawPreviewPuffStrip(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number, h: number,
@@ -267,33 +267,9 @@ function drawPreviewPuffStrip(
   cloudColor: string,
   seed: number,
 ): void {
-  const config = DEFAULT_NATURAL_CONFIG;
-  const baseAt = () => y + h;  // flat bottom of strip
-  const topAt  = () => y;       // flat top of strip
-  ctx.save();
-  ctx.fillStyle = cloudColor;
-
-  // Continuous blanket for OVC or narrow strips.
-  if (fillFraction >= 0.99 || w < config.minBandWidthPx) {
-    buildPuffPath(ctx, x, x + w, baseAt, topAt, seed, config);
-    ctx.fill();
-    ctx.restore();
-    return;
-  }
-
-  // Discrete puff slots: same per-slot hash decision as `paintNatural` so
-  // the preview's distribution matches what the cross-section actually draws.
-  const slotW = config.puffWidthPx;
-  const nSlots = Math.ceil(w / slotW);
-  for (let s = 0; s < nSlots; s++) {
-    if (hash01(s * 0x1f1f1f + seed) > fillFraction) continue;
-    const xa = x + s * slotW;
-    const xb = Math.min(x + w, xa + slotW);
-    if (xb - xa < 2) continue;
-    buildPuffPath(ctx, xa, xb, baseAt, topAt, seed ^ s, config);
-    ctx.fill();
-  }
-  ctx.restore();
+  const baseAt = () => y + h;
+  const topAt = () => y;
+  drawNaturalCloudBand(ctx, x, x + w, baseAt, topAt, cloudColor, fillFraction, seed);
 }
 
 function hexLuminance(hex: string): number {

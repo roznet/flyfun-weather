@@ -5,18 +5,17 @@
  *   - 'nwp' → p.nwpCloudLayers, color from NWP cover %
  *
  * Style picks the painter:
- *   - 'natural' → flat-bottom puffs with bumpy tops; coverage encoded as
- *                 horizontal fill fraction (SCT = gaps between puffs, BKN =
- *                 touching puffs with valleys, OVC = continuous bumpy blanket).
- *                 Tries to look like clouds out the window.
- *   - 'soft'    → feathered vertical-gradient fill (GRAMET-like).
+ *   - 'natural' → anisotropic value-noise fill (long horizontal features,
+ *                 tight vertical stratification) emulating the GRAMET look.
+ *                 Coverage drives a noise threshold: OVC fills most of the
+ *                 band, SCT lets sky show through between streaks.
+ *   - 'soft'    → feathered vertical-gradient fill.
  *   - 'square'  → solid rectangle, opacity from value (ForeFlight-like cells).
  *
  * Layer IDs preserve the existing combined naming so persisted prefs and
  * presets keep working: 'cloud-bands', 'nwp-cloud-bands', 'soft-cloud-bands',
  * 'soft-nwp-cloud-bands'. Square layers add 'square-cloud-bands' and
- * 'square-nwp-cloud-bands'. The 'natural' style is the replacement for the
- * old hatched 'layer' style — the IDs are reused, only the rendering changed.
+ * 'square-nwp-cloud-bands'.
  */
 
 import type {
@@ -111,51 +110,52 @@ const FEATHER_FRACTION = 0.15;
 
 // --- Natural cloud config (tunable) ---
 //
-// These knobs control the puffy-cloud appearance. Tweak in this one place
-// to adjust how SCT/BKN/OVC look. The aim is "what you'd see out the window":
-//   - SCT: discrete puffs with sky gaps between them
-//   - BKN: puffs that mostly touch, occasional gap
-//   - OVC: continuous bumpy blanket
-// Bump count, amplitude, and gap pattern come from a deterministic per-band
-// hash so the same band keeps a stable shape across redraws.
+// The natural style paints each band as a row of overlapping soft elliptical
+// blobs. Each blob is a canvas radial gradient (wide horizontally, narrow
+// vertically) with alpha falling off from a defined core to fully
+// transparent at the edge. Coverage drives the probability that each slot
+// gets a blob — OVC fills every slot (heavy overlap, continuous cloud), SCT
+// fills ~45% (visible sky gaps), FEW leaves isolated wisps.
 
 export interface NaturalCloudConfig {
   /** Target horizontal fill fraction per METAR coverage class (DD source).
    *  NWP source uses `meanCloudCoverPct / 100` directly. */
   fillFraction: { FEW: number; SCT: number; BKN: number; OVC: number };
-  /** Target horizontal extent of a single puff slot, in CSS px. */
-  puffWidthPx: number;
-  /** Target horizontal extent of a single bump within a puff, in CSS px. */
-  humpWidthPx: number;
-  /** Below this segment width, skip the gap pattern and draw one continuous
-   *  bumpy fill — gaps would be too small to read at this scale. */
-  minBandWidthPx: number;
-  /** 0..1: max per-bump amplitude reduction (jitter so peaks aren't uniform). */
-  amplitudeJitter: number;
-  /** Extra px above the band top so puffs look fluffy / overflow slightly.
-   *  Set to 0 for strict clipping to the band envelope. NOTE: there is
-   *  intentionally no `ctx.clip` around the puff fills, so the overflow is
-   *  visible. At the default 2 px this is harmless; raising this knob will
-   *  let puffs visibly invade adjacent bands. Bump with care. */
-  edgeOverflowPx: number;
-  /** Fixed alpha applied to the source color. Coverage lives in the gap
-   *  pattern, not opacity — this avoids double-encoding SCT as "fewer puffs
-   *  AND lower alpha". Set to null to keep the source's coverage-modulated
-   *  alpha. */
-  fillAlpha: number | null;
-  /** Floor on fill fraction (so an NWP cover% of 5% still shows a puff or two). */
+  /** Floor on fill fraction (so an NWP cover% of 5% still shows a wisp). */
   minFillFraction: number;
+  /** Fixed alpha applied to the source color. Coverage lives in slot
+   *  density, not opacity — avoids double-encoding SCT as "fewer blobs AND
+   *  lower alpha". Set to null to keep the source's coverage-modulated alpha. */
+  fillAlpha: number | null;
+  /** Horizontal spacing between blob slots along the route, in px. */
+  blobSpacingPx: number;
+  /** Nominal horizontal blob radius, in px. Should exceed blobSpacingPx so
+   *  adjacent filled slots overlap into a continuous cloud at high coverage. */
+  blobRadiusXPx: number;
+  /** Blob vertical radius as fraction of band height. */
+  blobHeightFraction: number;
+  /** Per-blob x position jitter as fraction of slot spacing. */
+  blobJitterX: number;
+  /** Per-blob y center jitter as fraction of band height. */
+  blobJitterY: number;
+  /** Per-blob size variation (multiplier range = 1 ± variation/2). */
+  blobSizeVariation: number;
+  /** Radial-gradient stop where alpha starts fading (0..1). Larger → harder
+   *  cloud cores; smaller → wispier blobs. */
+  coreFraction: number;
 }
 
 export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
   fillFraction: { FEW: 0.20, SCT: 0.45, BKN: 0.80, OVC: 1.00 },
-  puffWidthPx: 30,
-  humpWidthPx: 14,
-  minBandWidthPx: 50,
-  amplitudeJitter: 0.25,
-  edgeOverflowPx: 2,
-  fillAlpha: 0.85,
   minFillFraction: 0.15,
+  fillAlpha: 0.85,
+  blobSpacingPx: 28,
+  blobRadiusXPx: 36,
+  blobHeightFraction: 0.6,
+  blobJitterX: 0.4,
+  blobJitterY: 0.15,
+  blobSizeVariation: 0.5,
+  coreFraction: 0.3,
 };
 
 /** Cheap, deterministic hash → [0, 1). Exported so other UI surfaces can
@@ -201,55 +201,82 @@ function withAlpha(color: string, alpha: number): string {
   return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
 }
 
-/** Draw one puff path (flat bottom + bumpy top) inside [xa, xb] using linear
- *  interpolation of base/top profiles. Caller fills.
+/** Draw one soft elliptical blob via a scaled circular radial gradient.
+ *  Core (centre) is `cloudColor` at full alpha, fading to transparent at the
+ *  outer radius. `coreFraction` is the gradient stop where the fade starts. */
+function drawSoftBlob(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  cloudColor: string,
+  coreFraction: number,
+): void {
+  if (rx <= 0 || ry <= 0) return;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, ry / rx);
+  const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+  grad.addColorStop(0, cloudColor);
+  grad.addColorStop(coreFraction, cloudColor);
+  grad.addColorStop(1, withAlpha(cloudColor, 0));
+  ctx.fillStyle = grad;
+  ctx.fillRect(-rx, -rx, 2 * rx, 2 * rx);
+  ctx.restore();
+}
+
+/** Paint a cloud band as overlapping soft elliptical blobs inside the
+ *  envelope defined by `baseAt(x)` and `topAt(x)`. Coverage drives the
+ *  probability that each slot along the route carries a blob.
+ *
+ *  Slots are anchored on a global x grid (`floor(x / blobSpacingPx)`) so
+ *  adjacent route segments tile coherently and a slot is owned by exactly
+ *  one segment (`cx ∈ [xL, xR)`), preventing double-render at boundaries.
  *
  *  Exported so other UI surfaces (theme preview, legend snippets) can render
- *  the same puff geometry as the actual cross-section. */
-export function buildPuffPath(
+ *  the same look as the actual cross-section. */
+export function drawNaturalCloudBand(
   ctx: CanvasRenderingContext2D,
-  xa: number,
-  xb: number,
+  xL: number,
+  xR: number,
   baseAt: (x: number) => number,
   topAt: (x: number) => number,
+  cloudColor: string,
+  fillFraction: number,
   seed: number,
-  config: NaturalCloudConfig,
+  config: NaturalCloudConfig = DEFAULT_NATURAL_CONFIG,
 ): void {
-  const width = xb - xa;
-  const nHumps = Math.max(1, Math.round(width / config.humpWidthPx));
-  const humpStride = width / nHumps;
+  if (xR <= xL) return;
 
-  ctx.beginPath();
-  ctx.moveTo(xa, baseAt(xa));
+  const slotW = config.blobSpacingPx;
+  // Include neighbouring slots so jitter can pull a blob from outside the
+  // raw range into our [xL, xR) ownership window.
+  const slotStart = Math.floor(xL / slotW) - 1;
+  const slotEnd = Math.ceil(xR / slotW) + 1;
 
-  // Walk the bumpy top left→right. Each hump is a quadratic Bezier from
-  // (x0, base) up over (xMid, peak) to (x1, base), giving a smooth cumulus
-  // dome. Peak height is jittered per-bump for variety.
-  for (let h = 0; h < nHumps; h++) {
-    const x0 = xa + h * humpStride;
-    const x1 = xa + (h + 1) * humpStride;
-    const xMid = (x0 + x1) / 2;
-    const yBase0 = baseAt(x0);
-    const yBase1 = baseAt(x1);
-    const yTopMid = topAt(xMid);
+  for (let s = slotStart; s < slotEnd; s++) {
+    if (hash01(s * 0x1f1f1f + seed) > fillFraction) continue;
 
-    const yBaseMid = (yBase0 + yBase1) / 2;
-    const fullAmp = yBaseMid - yTopMid;  // positive in canvas y
-    if (fullAmp <= 0) {
-      ctx.lineTo(x1, yBase1);
-      continue;
-    }
+    const xJ = (hash01(s * 0x2f3f4f + seed) - 0.5) * slotW * config.blobJitterX;
+    const cx = (s + 0.5) * slotW + xJ;
+    // Ownership rule keeps adjacent segments from drawing the same blob.
+    if (cx < xL || cx >= xR) continue;
 
-    const j = hash01(seed * 31 + h);
-    const ampScale = 1.0 - config.amplitudeJitter * j;
-    const yPeak = yBaseMid - ampScale * fullAmp - config.edgeOverflowPx;
-    // Quadratic Bezier control point so the curve passes through (xMid, yPeak)
-    // at t = 0.5: ctrlY = 2 * peak - yBaseMid (derived from B(0.5) algebra).
-    const ctrlY = 2 * yPeak - yBaseMid;
-    ctx.quadraticCurveTo(xMid, ctrlY, x1, yBase1);
+    const yTop = topAt(cx);
+    const yBase = baseAt(cx);
+    const bandH = yBase - yTop;
+    if (bandH <= 0) continue;
+
+    const yJ = (hash01(s * 0x5b6c79 + seed) - 0.5) * bandH * config.blobJitterY;
+    const cy = (yTop + yBase) / 2 + yJ;
+
+    const sizeJ = 1 + (hash01(s * 0x7e8f91 + seed) - 0.5) * config.blobSizeVariation;
+    const rx = config.blobRadiusXPx * sizeJ;
+    const ry = bandH * config.blobHeightFraction * sizeJ;
+
+    drawSoftBlob(ctx, cx, cy, rx, ry, cloudColor, config.coreFraction);
   }
-
-  ctx.closePath();
 }
 
 function paintNatural(
@@ -280,44 +307,17 @@ function paintNatural(
   const baseFill = source.matchedColor(cl, matched);
   const fillStyle = config.fillAlpha != null ? withAlpha(baseFill, config.fillAlpha) : baseFill;
 
-  // Linear interpolators across the 2-point band segment.
   const baseAt = (x: number) => yBaseL + (yBaseR - yBaseL) * (x - xL) / segWidth;
   const topAt  = (x: number) => yTopL  + (yTopR  - yTopL ) * (x - xL) / segWidth;
 
   // Round baseFt to nearest 100ft so small zone-boundary drift between
-  // adjacent matched segments doesn't reshuffle the gap pattern. Mix in
-  // the source key so DD and NWP bands at the same altitude don't share
-  // an identical gap pattern (would look artificially correlated).
+  // adjacent matched segments doesn't reshuffle the noise pattern. Mix in
+  // the source key so DD and NWP bands at the same altitude don't share an
+  // identical pattern (would look artificially correlated).
   const sourceSalt = source.key === 'nwp' ? 0xdeadbeef : 0x0;
   const bandSeed = ((Math.round(cl.baseFt / 100) ^ 0x4d36e96) ^ sourceSalt) | 0;
 
-  ctx.save();
-  ctx.fillStyle = fillStyle;
-
-  // OVC and short segments → one continuous bumpy blanket (no gaps).
-  if (fillFrac >= 0.99 || segWidth < config.minBandWidthPx) {
-    buildPuffPath(ctx, xL, xR, baseAt, topAt, bandSeed, config);
-    ctx.fill();
-    ctx.restore();
-    return;
-  }
-
-  // Discrete puffs anchored on a global x grid so adjacent segments tile
-  // coherently — slot S spans [S * puffW, (S + 1) * puffW] in canvas px.
-  const puffW = config.puffWidthPx;
-  const slotStart = Math.floor(xL / puffW);
-  const slotEnd = Math.ceil(xR / puffW);
-
-  for (let s = slotStart; s < slotEnd; s++) {
-    if (hash01(s * 0x1f1f1f + bandSeed) > fillFrac) continue;
-    const xa = Math.max(xL, s * puffW);
-    const xb = Math.min(xR, (s + 1) * puffW);
-    if (xb - xa < 2) continue;
-    buildPuffPath(ctx, xa, xb, baseAt, topAt, bandSeed ^ s, config);
-    ctx.fill();
-  }
-
-  ctx.restore();
+  drawNaturalCloudBand(ctx, xL, xR, baseAt, topAt, fillStyle, fillFrac, bandSeed, config);
 }
 
 function paintSoft(
