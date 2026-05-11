@@ -153,6 +153,12 @@ export interface NaturalCloudConfig {
   subBlobSizeFraction: number;
   /** Sub-blob size variation around the nominal fraction (additive jitter). */
   subBlobSizeJitter: number;
+  /** Floor multiplier for coverage-driven blob shrinkage. Effective blob
+   *  radius = nominal * (floor + (1-floor) * fillFraction). At fillFraction=1
+   *  (OVC) blobs stay at full size and overlap into a continuous blanket; at
+   *  low coverage (SCT/FEW) blobs shrink so visible sky shows between
+   *  surviving clusters. Set to 1.0 to disable coverage-driven shrinkage. */
+  radiusCoverageScaleFloor: number;
 }
 
 export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
@@ -170,6 +176,7 @@ export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
   subBlobOffsetFraction: 0.35,
   subBlobSizeFraction: 0.65,
   subBlobSizeJitter: 0.25,
+  radiusCoverageScaleFloor: 0.25,
 };
 
 /** Cheap, deterministic hash → [0, 1). Exported so other UI surfaces can
@@ -269,6 +276,12 @@ export function drawNaturalCloudBand(
   const slotStart = Math.floor(xL / slotW) - 1;
   const slotEnd = Math.ceil(xR / slotW) + 1;
 
+  // Coverage-driven blob shrinkage: at low coverage, blobs are smaller so
+  // even the surviving slots leave visible sky between clusters (SCT look),
+  // while OVC keeps full-size blobs that overlap into a continuous blanket.
+  const floor = config.radiusCoverageScaleFloor;
+  const radiusScale = floor + (1 - floor) * Math.max(0, Math.min(1, fillFraction));
+
   for (let s = slotStart; s < slotEnd; s++) {
     if (hash01(s * 0x1f1f1f + seed) > fillFraction) continue;
 
@@ -286,8 +299,8 @@ export function drawNaturalCloudBand(
     const cy = (yTop + yBase) / 2 + yJ;
 
     const sizeJ = 1 + (hash01(s * 0x7e8f91 + seed) - 0.5) * config.blobSizeVariation;
-    const rx = config.blobRadiusXPx * sizeJ;
-    const ry = bandH * config.blobHeightFraction * sizeJ;
+    const rx = config.blobRadiusXPx * sizeJ * radiusScale;
+    const ry = bandH * config.blobHeightFraction * sizeJ * radiusScale;
 
     // Paint the slot as a small cluster of overlapping sub-blobs. The union
     // of their soft alpha gradients yields a lumpy, non-circular silhouette
