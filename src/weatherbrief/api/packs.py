@@ -45,6 +45,7 @@ def _validate_model(model: str) -> str:
     return model
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
+from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.fetch.model_status import fetch_model_metadata
 from weatherbrief.models import (
     BriefingPackMeta,
@@ -268,9 +269,7 @@ def _provider_label(source: str) -> str:
     use the same label.  Falls back defensively so legacy packs with an
     unknown source key still render.
     """
-    from weatherbrief.fetch.freshness import registry
-
-    cfg = registry.SOURCE_REGISTRY.get(source)
+    cfg = freshness_registry.SOURCE_REGISTRY.get(source)
     if cfg is not None and cfg.provider_label:
         return cfg.provider_label
     return source.split(":", 1)[-1].title()
