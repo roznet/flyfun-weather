@@ -242,9 +242,9 @@ function extractPoint(
 export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const unavailable = new Set<string>();
 
-  // "NWP Layers" toggle: enabled when ANY point has native NWP cloud
-  // info (even if []). Distinguishes "model says clear sky" (toggle on,
-  // empty) from "no NWP enrichment" (toggle disabled).
+  // "NWP Natural / Soft / Square" cloud toggle: enabled when ANY point has
+  // native NWP cloud info (even if []). Distinguishes "model says clear sky"
+  // (toggle on, empty) from "no NWP enrichment" (toggle disabled).
   const hasNwpCloudData = data.points.some((p) => p.nwpCloudLayers !== null);
   // Ogimet-NWP / IENG: their backends now return [] when no native NWP
   // layers exist (no fabricated zones). So gating on "any native NWP
@@ -257,7 +257,7 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const hasEShear = data.points.some((p) => p.eShearLayers.length > 0);
 
   if (!hasNwpCloudData) {
-    // Use the hatched-style id as the canonical "NWP source unavailable"
+    // Use the natural-style id as the canonical "NWP source unavailable"
     // signal — the compound clouds control reads this one id and grays
     // out the entire NWP source toggle (covering soft/square variants too).
     unavailable.add('nwp-cloud-bands');

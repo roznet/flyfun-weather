@@ -59,8 +59,8 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 |-------|------|-------|------|---------|-------------|
 | Soft NWP clouds | Soft NWP | clouds | `cloud-bands-factory.ts` | **on** | Gradient-edge fills with coverage-proportional opacity (GRAMET style) |
 | Soft DD clouds | Soft DD | clouds | `cloud-bands-factory.ts` | off | Same soft rendering using DD-derived cloud layers |
-| NWP cloud bands | NWP Layers | clouds | `cloud-bands-factory.ts` | off | Hatched NWP cloud layers (classic style) |
-| Cloud bands | DD Layers | clouds | `cloud-bands-factory.ts` | off | Hatched DD cloud layers (classic style) |
+| Natural NWP clouds | NWP Natural | clouds | `cloud-bands-factory.ts` | off | Flat-bottom puffs with bumpy tops; coverage encoded as horizontal fill fraction (SCT = gaps, OVC = continuous blanket) |
+| Natural DD clouds | DD Natural | clouds | `cloud-bands-factory.ts` | off | Same puff rendering using DD-derived cloud layers |
 | Square NWP clouds | Square NWP | clouds | `cloud-bands-factory.ts` | off | Solid filled cells per zone, opacity from cover% (ForeFlight-like) |
 | Square DD clouds | Square DD | clouds | `cloud-bands-factory.ts` | off | Same square cells using DD-derived cloud layers |
 | NWP Convective | NWP Convective | convection | `nwp-convective-bg.ts` | **on** | Model convective scheme output (base/top/coverage) |
@@ -171,7 +171,7 @@ Switchable visual themes for the cross-section via `cross-section/theme.ts`. Sep
 - `'gramet'` — Deep blue sky (#2B5DA8), CloudPath-inspired. Blue-tinted icing, prominent red freezing level, warm brown terrain. Optimized for soft cloud rendering. Applied automatically by the GRAMET preset.
 
 **Cloud rendering styles:**
-- **Hatched** (DD Layers, NWP Layers): horizontal hatch lines, fixed 8px grid, coverage-proportional line width. Classic cross-section look.
+- **Natural** (DD Natural, NWP Natural): flat-bottom puffs with bumpy tops, drawn procedurally on canvas (no PNG assets). Coverage is encoded as horizontal fill fraction — SCT shows discrete puffs with sky gaps, BKN shows mostly-touching puffs with valleys between humps, OVC shows a continuous bumpy blanket. Each puff is a closed path: flat base + chain of quadratic-Bezier humps whose peaks reach the band-top profile, with per-hump amplitude jitter from a stable per-band hash. Puff slots are anchored on a global x grid so adjacent matched-zone segments tile coherently; the gap pattern is deterministic so the same band keeps a stable shape across redraws. Tunable knobs live in `DEFAULT_NATURAL_CONFIG` in `cloud-bands-factory.ts` (fill-fraction per coverage class, puff/hump width, min band width before falling back to continuous fill, amplitude jitter, edge overflow, fill alpha).
 - **Soft** (Soft DD, Soft NWP): gradient-edge fills with coverage-proportional opacity. Each band has feathered edges (top/bottom 15% fades to transparent). Opacity: OVC ~0.85, BKN ~0.65, SCT ~0.45, modulated by dewpoint depression for density. GRAMET-like aesthetic. Rendering uses `onBand` callback in `renderMatchedZones` to draw vertical `CanvasGradient` fills — no changes to `base.ts` core primitives needed. Theme config: `softClouds: { fillRgb, coverageAlpha, featherFraction }`.
 
 **Theme preview:** `theme-preview.ts` renders a popup canvas showing all visual elements (NWP clouds, DD clouds, icing, CAT, convective tower, inversion, temperature/stability/reference lines, terrain) for the selected theme.
@@ -230,7 +230,7 @@ Per-layer tooltip content lives in a declarative registry consumed by `interacti
 ```
 
 - `id` — primary layer toggle that owns the data.
-- `enabledBy` — alias toggles that should also activate this row (e.g. `soft-cloud-bands` and `square-cloud-bands` for the DD-derived row, `soft-nwp-cloud-bands` and `square-nwp-cloud-bands` for the NWP row). Without this the soft/square-renderings produce visuals but no tooltip text.
+- `enabledBy` — alias toggles that should also activate this row (e.g. `soft-cloud-bands` and `square-cloud-bands` for the DD-derived row, `soft-nwp-cloud-bands` and `square-nwp-cloud-bands` for the NWP row). Without this the soft/square/natural renderings produce visuals but no tooltip text.
 - `header` — optional section title above the lines (e.g. `Icing (Ogimet-DD)`).
 - `getZones` — returns the relevant zone array from `VizPoint` (or synthesizes a single pseudo-zone from per-point fields, used by Thermo/NWP convective).
 - `formatLine` — produces one tooltip line per zone, including any per-layer extras (DD, CC, T, icing index, Ri, SLD tag, source tag, etc.).
@@ -251,15 +251,15 @@ Header/terrain/temperature/stability rows stay inline in `interaction.ts` (diffe
 
 ## Cloud Bands Factory
 
-All six cloud layers (DD/NWP × Soft/Layer/Square) come from a single `cloudLayer({source, style, ...})` factory in `cloud-bands-factory.ts`. The two axes are orthogonal:
+All six cloud layers (DD/NWP × Soft/Natural/Square) come from a single `cloudLayer({source, style, ...})` factory in `cloud-bands-factory.ts`. The two axes are orthogonal:
 
 - **Source** picks the data feed and the continuous color function:
   - `dd` → `p.cloudLayers`, color from `cloudFillFromDD(dd, coverage)` (gray ↔ white by DD, alpha by coverage class).
   - `nwp` → `p.nwpCloudLayers`, color from `nwpCloudFill(coverPct)` (theme bright ↔ dark by cover %, alpha 0.30→0.85).
 - **Style** picks the painter applied per matched-zone band:
   - `soft` → `paintSoft`, vertical-gradient feathered fills (top/bottom 15% fade).
-  - `layer` → `hatchCloudBand`, classic horizontal hatch, line spacing/width by coverage class.
-  - `square` → `drawColumnBand`, solid filled rectangles per zone (no hatch, no feathering).
+  - `natural` → `paintNatural`, flat-bottom puffs with bumpy quadratic-Bezier tops; coverage encoded as horizontal fill fraction (SCT gaps, BKN touching, OVC continuous blanket).
+  - `square` → `drawColumnBand`, solid filled rectangles per zone (no puffs, no feathering).
 
 Server-computed layers come from Python (`clouds.py:_synthesize_nwp_layers()`); the frontend receives ready-to-render `EnhancedCloudLayer` objects with base/top boundaries. Adjacent route points are matched by altitude overlap via `renderMatchedZones`; unmatched zones taper to midpoint. Single-point routes fall back to column bands.
 

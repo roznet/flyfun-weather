@@ -158,7 +158,7 @@ export interface VizPoint {
   /**
    * Native NWP cloud layers (GRIB diagnostics or per-level cc).
    * `null` when the model has no native NWP cloud envelope at all —
-   * use this to gate the cross-section "NWP Layers" toggle.
+   * use this to gate the cross-section NWP clouds toggle.
    * `[]` when a native source is available but produced no layers
    * (genuine clear-sky forecast).
    */
