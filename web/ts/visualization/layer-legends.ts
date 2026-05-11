@@ -5,6 +5,7 @@
 
 import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity } from './scales';
 import { getActiveTheme } from './cross-section/theme';
+import { parseCloudLayerId, DEFAULT_NATURAL_CONFIG, type CloudStyle } from './cross-section/layers/cloud-bands-factory';
 import { t } from '../i18n/i18n';
 
 export interface LegendEntry {
@@ -20,6 +21,24 @@ function hatchGradient(gridPx: number, lineWidth: number, color: string): string
   if (lineWidth >= gridPx) return ''; // solid — no hatch
   // Build a gradient: line color for lineWidth px, then transparent for the gap
   return `repeating-linear-gradient(0deg, ${color} 0px, ${color} ${lineWidth}px, transparent ${lineWidth}px, transparent ${gridPx}px)`;
+}
+
+/** CSS background that simulates the natural-style puff/gap pattern at a
+ *  given fill fraction. Returns a horizontal repeating gradient of
+ *  `cloudColor` filled puff segments alternating with transparent gaps,
+ *  so the sky behind the swatch shows through where coverage is missing.
+ *  At fillFraction == 1.0 returns the solid color (no gaps). */
+function naturalPuffOverlay(cloudColor: string, fillFraction: number): string {
+  if (fillFraction >= 0.99) return cloudColor;
+  const cycle = 14; // px in the swatch
+  const puffPx = Math.max(2, Math.round(cycle * fillFraction));
+  return `repeating-linear-gradient(90deg, `
+    + `${cloudColor} 0px, ${cloudColor} ${puffPx}px, `
+    + `transparent ${puffPx}px, transparent ${cycle}px)`;
+}
+
+function cloudStyleForLayer(layerId: string): CloudStyle {
+  return parseCloudLayerId(layerId)?.style ?? 'natural';
 }
 
 // --- Dynamic legend builders ---
@@ -59,35 +78,59 @@ function convectiveLegend(): LegendEntry[] {
   ];
 }
 
-function cloudBandsLegend(): LegendEntry[] {
-  const theme = getActiveTheme().clouds;
-  const grid = theme.hatchGridPx;
-  const hColor = theme.hatchColor;
+/** DD cloud legend, branched by the layer's rendering style:
+ *  - natural: puff/gap overlay (coverage encoded as horizontal fill fraction)
+ *  - soft / square: solid swatch (alpha already encodes coverage via `cloudFillFromDD`)
+ */
+function cloudBandsLegend(layerId: string): LegendEntry[] {
+  const style = cloudStyleForLayer(layerId);
+  const ovcColor = cloudFillFromDD(0.5, 'ovc');
+  const bknColor = cloudFillFromDD(1.5, 'bkn');
+  const sctColor = cloudFillFromDD(2.5, 'sct');
+
+  if (style === 'natural') {
+    const f = DEFAULT_NATURAL_CONFIG.fillFraction;
+    return [
+      { label: t('legend.cloud.ovc'), color: 'transparent', meaning: t('legend.cloud.ovcDesc'),
+        hatchStyle: naturalPuffOverlay(ovcColor, f.OVC) },
+      { label: t('legend.cloud.bkn'), color: 'transparent', meaning: t('legend.cloud.bknDesc'),
+        hatchStyle: naturalPuffOverlay(bknColor, f.BKN) },
+      { label: t('legend.cloud.sct'), color: 'transparent', meaning: t('legend.cloud.sctDesc'),
+        hatchStyle: naturalPuffOverlay(sctColor, f.SCT) },
+    ];
+  }
+
+  // soft and square render as solid fills — the rgba alpha already encodes
+  // coverage. No overlay needed; the swatch reads correctly with just the color.
   return [
-    { label: t('legend.cloud.ovc'), color: cloudFillFromDD(0.5, 'ovc'), meaning: t('legend.cloud.ovcDesc'),
-      hatchStyle: hatchGradient(grid, theme.hatchLineWidth['ovc'] ?? grid, hColor) },
-    { label: t('legend.cloud.bkn'), color: cloudFillFromDD(1.5, 'bkn'), meaning: t('legend.cloud.bknDesc'),
-      hatchStyle: hatchGradient(grid, theme.hatchLineWidth['bkn'] ?? grid, hColor) },
-    { label: t('legend.cloud.sct'), color: cloudFillFromDD(2.5, 'sct'), meaning: t('legend.cloud.sctDesc'),
-      hatchStyle: hatchGradient(grid, theme.hatchLineWidth['sct'] ?? grid, hColor) },
+    { label: t('legend.cloud.ovc'), color: ovcColor, meaning: t('legend.cloud.ovcDesc') },
+    { label: t('legend.cloud.bkn'), color: bknColor, meaning: t('legend.cloud.bknDesc') },
+    { label: t('legend.cloud.sct'), color: sctColor, meaning: t('legend.cloud.sctDesc') },
   ];
 }
 
-function nwpCloudLegend(): LegendEntry[] {
-  const theme = getActiveTheme();
-  const grid = theme.clouds.hatchGridPx;
-  const hColor = theme.clouds.hatchColor;
-  function nwpHatch(pct: number): string {
-    const lw = grid * (pct / 100);
-    return hatchGradient(grid, lw, hColor);
+function nwpCloudLegend(layerId: string): LegendEntry[] {
+  const style = cloudStyleForLayer(layerId);
+  const colorAt = (pct: number) => nwpCloudFill(pct);
+
+  if (style === 'natural') {
+    // Natural NWP uses `meanCloudCoverPct / 100` directly as fill fraction,
+    // so legend swatches show the same encoding: 25%/50%/75% gap pattern.
+    return [
+      { label: t('legend.nwpCloud.25'), color: 'transparent', meaning: t('legend.nwpCloud.25Desc'),
+        hatchStyle: naturalPuffOverlay(colorAt(25), 0.25) },
+      { label: t('legend.nwpCloud.50'), color: 'transparent', meaning: t('legend.nwpCloud.50Desc'),
+        hatchStyle: naturalPuffOverlay(colorAt(50), 0.50) },
+      { label: t('legend.nwpCloud.75'), color: 'transparent', meaning: t('legend.nwpCloud.75Desc'),
+        hatchStyle: naturalPuffOverlay(colorAt(75), 0.75) },
+    ];
   }
+
+  // soft and square render as solid fills — alpha encodes coverage.
   return [
-    { label: t('legend.nwpCloud.25'), color: nwpCloudFill(25), meaning: t('legend.nwpCloud.25Desc'),
-      hatchStyle: nwpHatch(25) },
-    { label: t('legend.nwpCloud.50'), color: nwpCloudFill(50), meaning: t('legend.nwpCloud.50Desc'),
-      hatchStyle: nwpHatch(50) },
-    { label: t('legend.nwpCloud.75'), color: nwpCloudFill(75), meaning: t('legend.nwpCloud.75Desc'),
-      hatchStyle: nwpHatch(75) },
+    { label: t('legend.nwpCloud.25'), color: colorAt(25), meaning: t('legend.nwpCloud.25Desc') },
+    { label: t('legend.nwpCloud.50'), color: colorAt(50), meaning: t('legend.nwpCloud.50Desc') },
+    { label: t('legend.nwpCloud.75'), color: colorAt(75), meaning: t('legend.nwpCloud.75Desc') },
   ];
 }
 
@@ -125,6 +168,17 @@ function lineLegends(): Record<string, LegendEntry[]> {
 
 /** Get the visual legend entries for a cross-section layer. */
 export function getLayerLegend(layerId: string): LegendEntry[] | null {
+  // Cloud legends are style-aware: they branch on the layer ID to render
+  // natural-puff / soft / square swatches matching the actual rendering.
+  const cloudIds = new Set([
+    'cloud-bands', 'soft-cloud-bands', 'square-cloud-bands',
+  ]);
+  const nwpCloudIds = new Set([
+    'nwp-cloud-bands', 'soft-nwp-cloud-bands', 'square-nwp-cloud-bands',
+  ]);
+  if (cloudIds.has(layerId)) return cloudBandsLegend(layerId);
+  if (nwpCloudIds.has(layerId)) return nwpCloudLegend(layerId);
+
   const bandLegends: Record<string, () => LegendEntry[]> = {
     'icing-bands': icingLegend,
     'icing-ogimet-nwp-bands': icingLegend,
@@ -134,12 +188,6 @@ export function getLayerLegend(layerId: string): LegendEntry[] | null {
     'cat-bands': catLegend,
     'e-shear-bands': catLegend,
     'convective-bg': convectiveLegend,
-    'cloud-bands': cloudBandsLegend,
-    'nwp-cloud-bands': nwpCloudLegend,
-    'soft-cloud-bands': cloudBandsLegend,
-    'soft-nwp-cloud-bands': nwpCloudLegend,
-    'square-cloud-bands': cloudBandsLegend,
-    'square-nwp-cloud-bands': nwpCloudLegend,
     'inversion-bands': inversionLegend,
     'surface-obscuration-bands': obscurationLegend,
   };
