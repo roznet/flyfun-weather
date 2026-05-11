@@ -3463,6 +3463,101 @@ label {
   color: var(--text-muted);
 }
 
+/* --- Data Sources & Models table (help page) --- */
+
+.data-sources-intro {
+  margin: 0.5rem 0 0.25rem;
+}
+
+.data-sources-table-wrap {
+  overflow-x: auto;
+  margin-top: 0.5rem;
+}
+
+.data-sources-table {
+  min-width: 1000px;
+  font-size: 0.8rem;
+}
+
+.data-sources-table th,
+.data-sources-table td {
+  padding: 0.35rem 0.5rem;
+  vertical-align: top;
+}
+
+.data-source-model {
+  font-weight: 600;
+  white-space: nowrap;
+  border-right: 1px solid var(--border);
+}
+
+.data-source-model-cont {
+  border-right: 1px solid var(--border);
+}
+
+.data-source-live {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.data-source-description-row td {
+  border-bottom: 2px solid var(--border);
+  padding-top: 0;
+}
+
+.data-source-description {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  padding-bottom: 0.6rem;
+}
+
+.data-source-role {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: lowercase;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-source-role-primary-sounding {
+  border-color: #2e7d32;
+  color: #2e7d32;
+}
+
+.data-source-role-cloud-enrichment {
+  border-color: #1565c0;
+  color: #1565c0;
+}
+
+.data-source-role-surface-base {
+  border-color: #6a1b9a;
+  color: #6a1b9a;
+}
+
+.data-source-health {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 0.3rem;
+  vertical-align: middle;
+}
+
+.data-source-health-ok { background: #2e7d32; }
+.data-source-health-suspect { background: #f9a825; }
+.data-source-health-unknown { background: var(--text-muted); opacity: 0.5; }
+
+.data-sources-footer {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+}
+
 /* --- Route Map Visualization --- */
 
 .viz-layout-wrapper {

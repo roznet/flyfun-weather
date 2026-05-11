@@ -17,13 +17,14 @@ What should NOT change:
 
 ## Architecture
 
-Three modules under `src/weatherbrief/fetch/freshness/`:
+Four modules under `src/weatherbrief/fetch/freshness/`:
 
 | Module | Purpose |
 |---|---|
-| `registry.py` | `SourceConfig` dataclass, `SOURCE_REGISTRY` dict (8 source/model pairs), pure functions: `next_run_after`, `next_cycle_after`, `run_horizon`, `cycle_init_for`, `expected_delivery_for_init`, `initial_marker_for`. |
+| `registry.py` | `SourceConfig` dataclass, `SOURCE_REGISTRY` dict (8 source/model pairs), pure functions: `next_run_after`, `next_cycle_after`, `run_horizon`, `cycle_init_for`, `expected_delivery_for_init`, `initial_marker_for`. **Single source of truth** for descriptive fields too (`model_label`, `provider_label`, `provider_url`, `role`, `resolution`, `coverage`, `pressure_levels`, `description`) — consumed by the freshness popover, the public data-sources endpoint, and the help-page table. |
 | `markers.py` | `Marker` dataclass + `MarkerStore` (asyncio-locked, singleton via `get_store()`). Records `(cycle_init, arrival_wallclock)` observations in a maxlen=100 deque. |
 | `sources.py` | Unified `check_source(source, model)` dispatch wrapping existing helpers (`grib_fetch.find_latest_run` for GFS/NOAA, `icon_eu_fetch.find_latest_icon_eu_run` for ICON-EU/DWD, `ecmwf_watcher.get_latest_ready` for ECMWF/direct, `model_status.fetch_model_metadata` for `*:openmeteo`). Each dispatch returns an `Observation(init, published_at)` — `published_at` is the provider's `Last-Modified` header for HTTP sources (NOAA, DWD), the OM `last_run_availability_time` for `*:openmeteo`, and the sentinel-file mtime for ECMWF direct (no central publish wallclock). |
+| `catalog.py` | Pure read-only merge of `SOURCE_REGISTRY` (static description + schedule) and `MarkerStore` (live `latest_init`, `published_at`, `next_expected`, `horizon_end`, `marker_health`). Backs `GET /api/data-sources` — the public catalog endpoint that drives the help-page Data Sources & Models table. |
 
 The 5-min loop lives in `scheduler.run_freshness_loop` — bootstraps the store, then on each tick: for every `(source, model)` whose `next_expected` has passed, run `check_source` (offloaded to a thread), call `store.update`. Most ticks no-op.
 
@@ -79,9 +80,46 @@ if not status.fresh:
 ## Patterns
 
 When adding a new (source, model) pair:
-1. Add a `SourceConfig` to `SOURCE_REGISTRY` with cycles, delivery_offset, horizon, readiness_check symbol.
+1. Add a `SourceConfig` to `SOURCE_REGISTRY` with **both** schedule fields (`cycles`, `delivery_offset`, `horizon`, `readiness_check`) **and** descriptive fields (`model_label`, `provider_label`, `provider_url`, `role`, `resolution`, `coverage`, `pressure_levels`, `description`). The catalog test (`test_data_sources_catalog.py`) enforces that descriptive fields are populated.
 2. Add a wrapper to `sources._DISPATCH` mapping the readiness_check symbol → callable returning `datetime | None`.
 3. If the source produces a new model name not seen by `_finalize_refresh`, extend `_DIRECT_SOURCE_KEYS` in `api/packs.py` so `model_sources` records correctly.
+
+The help-page table and the freshness popover both render from the same registry — no separate copy to keep in sync.
+
+## Public Data-Sources Endpoint
+
+`GET /api/data-sources` returns the full catalog as JSON. Response shape:
+
+```jsonc
+{
+  "sources": [
+    {
+      "key": "ecmwf:direct",
+      "model": "ecmwf",
+      "model_label": "ECMWF IFS",
+      "provider_label": "ECMWF",
+      "provider_url": "https://www.ecmwf.int/",
+      "role": "primary-sounding",
+      "resolution": "0.25° (~25 km)",
+      "coverage": "Europe + US",
+      "pressure_levels": 25,
+      "description": "...",
+      "cycles": [0, 6, 12, 18],
+      "horizon_hours": {"0": 168.0, "6": 90.0, "12": 168.0, "18": 90.0},
+      "delivery_offset_hours": {"0": 6.67, ...},
+      "latest_init": "2026-05-11T06:00:00+00:00",     // null if marker unset
+      "published_at": "2026-05-11T12:38:00+00:00",     // null for direct GRIB
+      "next_expected": "2026-05-11T18:40:00+00:00",
+      "horizon_end": "2026-05-15T00:00:00+00:00",
+      "marker_health": "ok"   // "ok" | "suspect" | "unknown"
+    },
+    ...
+  ],
+  "generated_at": "2026-05-11T14:23:11+00:00"
+}
+```
+
+Public (no auth) and inexpensive (pure dict + marker-store read, no I/O) — safe to reuse in other UI surfaces (admin pages, mobile clients, etc.). Optional `?model=ecmwf` filter narrows to one pack-model.
 
 When tuning registry offsets:
 1. Wait several days, then `curl /api/admin/freshness/markers`.
@@ -101,8 +139,10 @@ When tuning registry offsets:
 
 - Issue #108 (design + acceptance criteria)
 - Existing helpers wrapped: `fetch/model_status.py`, `fetch/grib/{grib_fetch,icon_eu_fetch,ecmwf_watcher}.py`
-- Pack-side: `api/packs.py:_build_data_status`, `_backfill_sources`, `_finalize_refresh` (records `model_sources`)
+- Pack-side: `api/packs.py:_build_data_status`, `_backfill_sources`, `_finalize_refresh` (records `model_sources`), `_provider_label` (reads `registry.SOURCE_REGISTRY.provider_label`)
 - Loop wiring: `scheduler.py:run_freshness_loop`, `api/app.py:lifespan`
 - Admin endpoint: `api/admin.py:freshness_markers`
+- Public catalog: `fetch/freshness/catalog.py`, `api/data_sources.py` (GET `/api/data-sources`)
+- Frontend consumers: `web/help.html` + `web/ts/data-sources-table.ts` (data-driven help table), `web/ts/managers/briefing-ui.ts:renderSourcesPopupContent` (per-flight popover)
 - Storage: `BriefingPackMeta.model_sources`, `BriefingPackRow.model_sources_json` (Text JSON, alembic 050)
-- Tests: `tests/test_freshness_{registry,markers,sources}.py`
+- Tests: `tests/test_freshness_{registry,markers,sources,admin}.py`, `tests/test_data_sources_catalog.py`
