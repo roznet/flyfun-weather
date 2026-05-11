@@ -40,6 +40,9 @@ import { renderMatchedZones } from './zone-matching';
 export type CloudSource = 'dd' | 'nwp';
 
 interface SourceSpec {
+  /** Identifier mixed into per-band hashes so DD and NWP bands at the same
+   *  base altitude don't draw identical puff/gap patterns. */
+  key: CloudSource;
   getZones: (p: VizPoint) => VizCloudLayer[];
   /** Continuous fill color for a (possibly matched) zone. Used by natural and square styles. */
   matchedColor: (cl: VizCloudLayer, matched: VizCloudLayer | null) => string;
@@ -64,6 +67,7 @@ function coverageToPct(coverage: string): number {
 }
 
 const DD_SOURCE: SourceSpec = {
+  key: 'dd',
   getZones: (p) => p.cloudLayers,
   matchedColor: (cl, matched) => {
     const dd = avgDD(cl, matched);
@@ -72,6 +76,7 @@ const DD_SOURCE: SourceSpec = {
 };
 
 const NWP_SOURCE: SourceSpec = {
+  key: 'nwp',
   getZones: (p) => p.nwpCloudLayers ?? [],
   matchedColor: (cl, matched) => {
     const covA = cl.meanCloudCoverPct ?? coverageToPct(cl.coverage);
@@ -139,7 +144,7 @@ export interface NaturalCloudConfig {
   minFillFraction: number;
 }
 
-const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
+export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
   fillFraction: { FEW: 0.20, SCT: 0.45, BKN: 0.80, OVC: 1.00 },
   puffWidthPx: 30,
   humpWidthPx: 14,
@@ -193,8 +198,11 @@ function withAlpha(color: string, alpha: number): string {
 }
 
 /** Draw one puff path (flat bottom + bumpy top) inside [xa, xb] using linear
- *  interpolation of base/top profiles. Caller fills. */
-function buildPuffPath(
+ *  interpolation of base/top profiles. Caller fills.
+ *
+ *  Exported so other UI surfaces (theme preview, legend snippets) can render
+ *  the same puff geometry as the actual cross-section. */
+export function buildPuffPath(
   ctx: CanvasRenderingContext2D,
   xa: number,
   xb: number,
@@ -273,8 +281,11 @@ function paintNatural(
   const topAt  = (x: number) => yTopL  + (yTopR  - yTopL ) * (x - xL) / segWidth;
 
   // Round baseFt to nearest 100ft so small zone-boundary drift between
-  // adjacent matched segments doesn't reshuffle the gap pattern.
-  const bandSeed = (Math.round(cl.baseFt / 100) ^ 0x4d36e96) | 0;
+  // adjacent matched segments doesn't reshuffle the gap pattern. Mix in
+  // the source key so DD and NWP bands at the same altitude don't share
+  // an identical gap pattern (would look artificially correlated).
+  const sourceSalt = source.key === 'nwp' ? 0xdeadbeef : 0x0;
+  const bandSeed = ((Math.round(cl.baseFt / 100) ^ 0x4d36e96) ^ sourceSalt) | 0;
 
   ctx.save();
   ctx.fillStyle = fillStyle;

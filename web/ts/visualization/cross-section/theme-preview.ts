@@ -2,6 +2,7 @@
 
 import { THEMES, type ThemeId, type CrossSectionTheme } from './theme';
 import { showPopupContent } from '../../components/info-popup';
+import { buildPuffPath, DEFAULT_NATURAL_CONFIG } from './layers/cloud-bands-factory';
 
 const W = 520;
 const H = 320;
@@ -79,10 +80,9 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // NWP cloud band (top area)
+  // NWP cloud band (top area) — rendered with the natural puff style so the
+  // preview matches what the cross-section actually draws.
   const nwp = theme.nwpClouds;
-  const grid = theme.clouds.hatchGridPx;
-  const hColor = theme.clouds.hatchColor;
   const nwpPcts = [25, 50, 75];
   const nwpLabels = ['25%', '50%', '75%'];
   for (let i = 0; i < 3; i++) {
@@ -95,18 +95,17 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
     const b = Math.round(nbb - ndb * t);
     const [opFloor, opScale] = nwp.opacityRange;
     const a = Math.min(opFloor + opScale, opFloor + opScale * t);
-    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
+    const cloudColor = `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
     const bandW = plotW / 3;
     const bx = plotL + bandW * i;
-    ctx.fillRect(bx, plotT + 10, bandW, 35);
-    drawRectHatch(ctx, bx, plotT + 10, bandW, 35, grid, grid * t, hColor);
+    drawPreviewPuffStrip(ctx, bx, plotT + 10, bandW, 35, t, cloudColor, i * 17);
     drawLabel(ctx, nwpLabels[i], bx + bandW / 2, plotT + 30, bg);
   }
   drawLabel(ctx, 'NWP Clouds', plotL + plotW / 2, plotT + 5, bg);
 
-  // DD cloud band
+  // DD cloud band — same natural puff rendering.
   const cloudY = plotT + 50;
-  const ddCoverages = ['ovc', 'bkn', 'sct'];
+  const ddCoverages: Array<keyof typeof DEFAULT_NATURAL_CONFIG.fillFraction> = ['OVC', 'BKN', 'SCT'];
   const ddLabels = ['OVC', 'BKN', 'SCT'];
   const ddValues = [0, 1.5, 3]; // dewpoint depression
   for (let i = 0; i < 3; i++) {
@@ -117,12 +116,11 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
     const r = Math.round(ddr + (ttr - ddr) * ct);
     const g = Math.round(ddg + (ttg - ddg) * ct);
     const b = Math.round(ddb + (ttb - ddb) * ct);
-    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.7 - 0.2 * ct})`;
+    const cloudColor = `rgba(${r}, ${g}, ${b}, ${(0.7 - 0.2 * ct).toFixed(2)})`;
     const bandW = plotW / 3;
     const bx = plotL + bandW * i;
-    ctx.fillRect(bx, cloudY, bandW, 25);
-    const lw = theme.clouds.hatchLineWidth[ddCoverages[i]] ?? grid;
-    drawRectHatch(ctx, bx, cloudY, bandW, 25, grid, lw, hColor);
+    const fillFrac = DEFAULT_NATURAL_CONFIG.fillFraction[ddCoverages[i]];
+    drawPreviewPuffStrip(ctx, bx, cloudY, bandW, 25, fillFrac, cloudColor, i * 23 + 11);
     drawLabel(ctx, ddLabels[i], bx + bandW / 2, cloudY + 14, bg);
   }
   drawLabel(ctx, 'DD Clouds', plotL + plotW / 2, cloudY - 4, bg);
@@ -258,26 +256,44 @@ function drawThemeLine(
   ctx.setLineDash([]);
 }
 
-/** Draw horizontal hatch lines inside a rectangle on a fixed grid. */
-function drawRectHatch(
+/** Render the natural-puff cloud rendering inside a rectangular strip so the
+ *  preview matches what the cross-section actually draws. `fillFraction`
+ *  drives the puff/gap pattern (1.0 = continuous blanket, 0.45 ≈ SCT, etc.).
+ *  `seed` makes the puff phases stable for the preview. */
+function drawPreviewPuffStrip(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number, h: number,
-  gridPx: number, lineWidth: number, color: string,
+  fillFraction: number,
+  cloudColor: string,
+  seed: number,
 ): void {
-  if (lineWidth >= gridPx) return; // solid
+  const config = DEFAULT_NATURAL_CONFIG;
+  const baseAt = () => y + h;  // flat bottom of strip
+  const topAt  = () => y;       // flat top of strip
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  ctx.clip();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = lineWidth;
-  ctx.setLineDash([]);
-  const startY = Math.ceil(y / gridPx) * gridPx;
-  for (let ly = startY; ly <= y + h; ly += gridPx) {
-    ctx.beginPath();
-    ctx.moveTo(x, ly);
-    ctx.lineTo(x + w, ly);
-    ctx.stroke();
+  ctx.fillStyle = cloudColor;
+
+  // Continuous blanket for OVC or narrow strips.
+  if (fillFraction >= 0.99 || w < config.minBandWidthPx) {
+    buildPuffPath(ctx, x, x + w, baseAt, topAt, seed, config);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  // Discrete puff slots: regular grid, deterministic by seed.
+  const slotW = config.puffWidthPx;
+  const nSlots = Math.ceil(w / slotW);
+  for (let s = 0; s < nSlots; s++) {
+    // Simple stride threshold: emit a puff if (s/(nSlots-1)) ratio crossed.
+    // Equivalent to picking floor(fillFraction * nSlots) slots — uniform spread.
+    const idx = (s + seed) % nSlots;
+    if (idx >= Math.round(fillFraction * nSlots)) continue;
+    const xa = x + s * slotW;
+    const xb = Math.min(x + w, xa + slotW);
+    if (xb - xa < 2) continue;
+    buildPuffPath(ctx, xa, xb, baseAt, topAt, seed ^ s, config);
+    ctx.fill();
   }
   ctx.restore();
 }
