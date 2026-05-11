@@ -82,8 +82,9 @@ describe('getCompactLayerOverrides', () => {
       turbulence: 'ri',
       convection: 'nwp',
     });
-    // soft-nwp-cloud-bands is the defaultEnabled cloud layer
-    expect(overrides['soft-nwp-cloud-bands']).toBe(true);
+    // square-nwp-cloud-bands is the defaultEnabled cloud layer
+    expect(overrides['square-nwp-cloud-bands']).toBe(true);
+    expect(overrides['soft-nwp-cloud-bands']).toBe(false);
     expect(overrides['soft-cloud-bands']).toBe(false);
     expect(overrides['nwp-cloud-bands']).toBe(false);
     expect(overrides['cloud-bands']).toBe(false);
@@ -94,7 +95,7 @@ describe('getCompactLayerOverrides', () => {
     // resolves — must still enable a sensible single layer per group, not
     // silently leave stale extras enabled.
     const overrides = getCompactLayerOverrides({});
-    expect(overrides['soft-nwp-cloud-bands']).toBe(true);
+    expect(overrides['square-nwp-cloud-bands']).toBe(true);
     expect(overrides['icing-ogimet-nwp-bands']).toBe(true);
     expect(overrides['nwp-convective-bg']).toBe(true);
     // turbulence has no defaultEnabled layer; falls back to layers[0] = cat-bands
@@ -102,6 +103,7 @@ describe('getCompactLayerOverrides', () => {
     expect(overrides['e-shear-bands']).toBe(false);
     // Non-preferred siblings stay off
     expect(overrides['cloud-bands']).toBe(false);
+    expect(overrides['soft-nwp-cloud-bands']).toBe(false);
     expect(overrides['icing-bands']).toBe(false);
     expect(overrides['thermo-convective-bg']).toBe(false);
   });
