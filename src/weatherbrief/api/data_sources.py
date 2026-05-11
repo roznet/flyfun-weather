@@ -15,6 +15,7 @@ the last observed init/publish time per source; nothing user-specific.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter
@@ -24,7 +25,7 @@ from weatherbrief.fetch.freshness import catalog as freshness_catalog
 router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
 
-def _iso(value):
+def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
@@ -69,10 +70,14 @@ def list_data_sources(model: str | None = None) -> dict[str, Any]:
           "generated_at": "ISO UTC timestamp",
         }
     """
+    # Capture the wallclock *before* the snapshot read so ``generated_at``
+    # is at-or-before the moment the marker store was sampled — matters
+    # if the value is ever used for cache validation downstream.
+    generated_at = freshness_catalog.utcnow()
     entries = freshness_catalog.build()
     if model:
         entries = [e for e in entries if e.model == model]
     return {
         "sources": [_serialise_entry(e) for e in entries],
-        "generated_at": freshness_catalog.utcnow().isoformat(),
+        "generated_at": generated_at.isoformat(),
     }
