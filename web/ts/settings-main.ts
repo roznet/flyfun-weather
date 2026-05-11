@@ -83,7 +83,7 @@ function parseCloudMethod(value: string): { source: 'dd' | 'nwp'; style: 'soft' 
   if (lower === 'nwp') return { style: 'natural', source: 'nwp' };
   if (lower === 'dd') return { style: 'natural', source: 'dd' };
   // Unknown → fall back to recommended.
-  return { style: 'soft', source: 'nwp' };
+  return { style: 'square', source: 'nwp' };
 }
 
 /** Compose source+style back into a cloud_method string for persistence.
@@ -216,7 +216,7 @@ function populateProfileForm(profile: ProfileResponse): void {
   // Cloud source + style selectors (composed into s.cloud_method like 'soft_nwp', 'square_dd', etc.).
   const cloudSourceSelect = document.getElementById('input-cloud-source') as HTMLSelectElement;
   const cloudStyleSelect = document.getElementById('input-cloud-style') as HTMLSelectElement;
-  const { source: cloudSource, style: cloudStyle } = parseCloudMethod(s.cloud_method ?? 'soft_nwp');
+  const { source: cloudSource, style: cloudStyle } = parseCloudMethod(s.cloud_method ?? 'square_nwp');
   if (cloudSourceSelect) cloudSourceSelect.value = cloudSource;
   if (cloudStyleSelect) cloudStyleSelect.value = cloudStyle;
 
@@ -824,7 +824,7 @@ async function handleSave(): Promise<void> {
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? false;
   const icingMethod = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd';
   const cloudSourceValue = (document.getElementById('input-cloud-source') as HTMLSelectElement)?.value || 'nwp';
-  const cloudStyleValue = (document.getElementById('input-cloud-style') as HTMLSelectElement)?.value || 'soft';
+  const cloudStyleValue = (document.getElementById('input-cloud-style') as HTMLSelectElement)?.value || 'square';
   const cloudMethod = composeCloudMethod(cloudSourceValue, cloudStyleValue);
   const convectiveMethod = (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || 'thermo';
   const digestGuidance = (document.getElementById('input-digest-guidance') as HTMLSelectElement)?.value || 'balanced';

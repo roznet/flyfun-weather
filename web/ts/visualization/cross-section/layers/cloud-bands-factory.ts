@@ -539,7 +539,6 @@ export const softNwpCloudBandsLayer = cloudLayer({
   source: 'nwp',
   style: 'soft',
   metricId: 'soft_cloud_nwp',
-  defaultEnabled: true,
 });
 
 export const squareCloudBandsLayer = cloudLayer({
@@ -556,6 +555,7 @@ export const squareNwpCloudBandsLayer = cloudLayer({
   source: 'nwp',
   style: 'square',
   metricId: 'square_cloud_nwp',
+  defaultEnabled: true,
 });
 
 /** Lookup table: which layer id corresponds to a given (source, style) combo. */

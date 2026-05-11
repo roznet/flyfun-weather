@@ -46,10 +46,10 @@ export interface LayerTogglesOptions {
 /** Source state derived from which cloud layer ids are currently enabled.
  *  When no cloud layers are enabled the style falls back to `persistedStyle`
  *  (the value remembered in `vizSettings.cloudStyle`) so re-checking a
- *  source restores the user's last choice instead of the 'soft' default. */
+ *  source restores the user's last choice instead of the 'square' default. */
 function cloudState(
   enabledLayers: Record<string, boolean>,
-  persistedStyle: 'natural' | 'soft' | 'square' = 'soft',
+  persistedStyle: 'natural' | 'soft' | 'square' = 'square',
 ): {
   ddEnabled: boolean;
   nwpEnabled: boolean;

@@ -52,7 +52,7 @@ function loadVizSettings(): VizSettings {
     compareLayer: 'icing-bands',
     compareModels: {},
     compareBandMode: 'consensus-outline',
-    cloudStyle: 'soft',
+    cloudStyle: 'square',
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
