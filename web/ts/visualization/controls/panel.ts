@@ -103,7 +103,8 @@ function cloudCompoundHtml(
   html += sourceCheckbox('dd', 'DD', ddEnabled, ddUnavail);
   html += `<select class="viz-model-select" data-cloud-style>`;
   html += `<option value="soft"${style === 'soft' ? ' selected' : ''}>${t('viz.cloudStyle.soft')}</option>`;
-  html += `<option value="natural"${style === 'natural' ? ' selected' : ''}>${t('viz.cloudStyle.natural')}</option>`;
+  // 'natural' temporarily hidden — rendering needs more work; type + layer
+  // registry entries are kept so re-enabling is a one-line restore.
   html += `<option value="square"${style === 'square' ? ' selected' : ''}>${t('viz.cloudStyle.square')}</option>`;
   html += `</select>`;
   return html;
