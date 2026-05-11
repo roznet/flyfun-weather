@@ -34,17 +34,30 @@ export interface LayerTogglesOptions {
   displayMode?: DisplayMode;
   preferredMethods?: Record<string, string>;
   unavailableLayers?: Set<string>;
+  /** Persisted cloud-style preference; the compound control falls back to
+   *  this when no cloud layers are enabled, so the dropdown remembers the
+   *  user's last choice across re-renders and page reloads. */
+  cloudStyle?: 'natural' | 'soft' | 'square';
+  /** Fired when the user picks a different cloud style. Wire to the store
+   *  so the choice persists alongside other viz settings. */
+  onCloudStyleChange?: (style: 'natural' | 'soft' | 'square') => void;
 }
 
-/** Source state derived from which cloud layer ids are currently enabled. */
-function cloudState(enabledLayers: Record<string, boolean>): {
+/** Source state derived from which cloud layer ids are currently enabled.
+ *  When no cloud layers are enabled the style falls back to `persistedStyle`
+ *  (the value remembered in `vizSettings.cloudStyle`) so re-checking a
+ *  source restores the user's last choice instead of the 'soft' default. */
+function cloudState(
+  enabledLayers: Record<string, boolean>,
+  persistedStyle: 'natural' | 'soft' | 'square' = 'soft',
+): {
   ddEnabled: boolean;
   nwpEnabled: boolean;
   style: 'natural' | 'soft' | 'square';
 } {
   let ddEnabled = false;
   let nwpEnabled = false;
-  let style: 'natural' | 'soft' | 'square' = 'soft';
+  let style: 'natural' | 'soft' | 'square' = persistedStyle;
   for (const id of ALL_CLOUD_LAYER_IDS) {
     if (!enabledLayers[id]) continue;
     const axes = parseCloudLayerId(id);
@@ -59,9 +72,10 @@ function cloudState(enabledLayers: Record<string, boolean>): {
 /** Render the compound clouds control: per-source checkboxes + shared style dropdown. */
 function cloudCompoundHtml(
   enabledLayers: Record<string, boolean>,
-  unavailable?: Set<string>,
+  unavailable: Set<string> | undefined,
+  persistedStyle: 'natural' | 'soft' | 'square' | undefined,
 ): string {
-  const { ddEnabled, nwpEnabled, style } = cloudState(enabledLayers);
+  const { ddEnabled, nwpEnabled, style } = cloudState(enabledLayers, persistedStyle);
   // A source is "unavailable" iff its natural-style id (the canonical
   // data signal) is in the unavailable set. DD is sounding-derived so
   // generally always available; NWP requires native cloud-cover data.
@@ -102,7 +116,7 @@ function layerTogglesHtml(
   enabledLayers: Record<string, boolean>,
   opts: LayerTogglesOptions = {},
 ): string {
-  const { displayMode, preferredMethods, unavailableLayers } = opts;
+  const { displayMode, preferredMethods, unavailableLayers, cloudStyle } = opts;
   const groups = getLayerGroups();
   let html = '<div class="viz-layer-toggles">';
   for (const group of groups) {
@@ -118,7 +132,7 @@ function layerTogglesHtml(
     }
     // Clouds group in non-compact mode: compound source-toggles + style dropdown.
     if (group.group === 'clouds' && !isCompactCollapse) {
-      html += cloudCompoundHtml(enabledLayers, unavailableLayers);
+      html += cloudCompoundHtml(enabledLayers, unavailableLayers, cloudStyle);
       html += '</div>';
       continue;
     }
@@ -149,6 +163,7 @@ function wireCloudCompound(
   container: HTMLElement,
   enabledLayers: Record<string, boolean>,
   onToggle: (layerId: string) => void,
+  onStyleChange?: (style: 'natural' | 'soft' | 'square') => void,
 ): void {
   const sourceCbs = container.querySelectorAll<HTMLInputElement>('[data-cloud-source]');
   const styleSel = container.querySelector<HTMLSelectElement>('[data-cloud-style]');
@@ -181,6 +196,10 @@ function wireCloudCompound(
 
   styleSel.addEventListener('change', () => {
     const newStyle = styleSel.value as 'natural' | 'soft' | 'square';
+    // Persist the choice even if no sources are enabled — otherwise picking
+    // a style with everything unchecked produces no toggle event and the
+    // next re-render would discard the selection.
+    onStyleChange?.(newStyle);
     // For each source that's currently enabled, swap from its current
     // style-layer to the new style-layer. Sources that are off stay off.
     for (const source of ['dd', 'nwp'] as const) {
@@ -235,7 +254,7 @@ export function renderLayerToggles(
   container.querySelectorAll<HTMLInputElement>('input[data-layer-id]').forEach((cb) => {
     cb.addEventListener('change', () => onToggle(cb.dataset.layerId!));
   });
-  wireCloudCompound(container, enabledLayers, onToggle);
+  wireCloudCompound(container, enabledLayers, onToggle, opts.onCloudStyleChange);
   wireLayerInfoButtons(container);
 }
 
@@ -245,6 +264,7 @@ export interface VizControlCallbacks {
   onModelChange?: (model: string) => void;
   onThemeChange?: (themeId: string) => void;
   onPresetChange?: (presetId: string | null) => void;
+  onCloudStyleChange?: (style: 'natural' | 'soft' | 'square') => void;
 }
 
 export interface RouteGraphControlCallbacks {
@@ -338,6 +358,7 @@ export function renderVizControls(
   if (settings.layout !== 'map') {
     html += layerTogglesHtml(settings.enabledLayers, {
       displayMode, preferredMethods, unavailableLayers,
+      cloudStyle: settings.cloudStyle,
     });
   }
   html += '</div>'; // .viz-toolbar
@@ -359,7 +380,7 @@ export function renderVizControls(
   });
 
   // Wire compound clouds control (master + source + style).
-  wireCloudCompound(container, settings.enabledLayers, callbacks.onLayerToggle);
+  wireCloudCompound(container, settings.enabledLayers, callbacks.onLayerToggle, callbacks.onCloudStyleChange);
 
   // Wire model selector
   const vizModelSelect = container.querySelector('#viz-model-select') as HTMLSelectElement | null;

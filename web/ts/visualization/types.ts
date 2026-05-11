@@ -18,6 +18,10 @@ export interface VizSettings {
   compareModels: Record<string, boolean>;
   compareBandMode: CompareBandMode;
   vizTheme?: string;
+  /** Last cloud style picked from the compound cloud control. Persisted
+   *  so re-checking a cloud source after unchecking all keeps the user's
+   *  choice instead of snapping back to the default. */
+  cloudStyle?: 'natural' | 'soft' | 'square';
 }
 
 // --- Coordinate Transform ---

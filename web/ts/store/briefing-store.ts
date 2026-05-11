@@ -52,6 +52,7 @@ function loadVizSettings(): VizSettings {
     compareLayer: 'icing-bands',
     compareModels: {},
     compareBandMode: 'consensus-outline',
+    cloudStyle: 'soft',
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
@@ -128,6 +129,7 @@ export interface BriefingState {
   toggleTier: (tier: Tier) => void;
   toggleVizLayer: (layerId: string) => void;
   setLayersBatch: (overrides: Record<string, boolean>) => void;
+  setCloudStyle: (style: 'natural' | 'soft' | 'square') => void;
   setAdvisoryAltitudeOverride: (alt: number | null) => void;
   recalculateAdvisories: () => Promise<void>;
   changeFlightProfile: (profileId: number) => Promise<void>;
@@ -477,6 +479,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const current = get().vizSettings;
     const enabled = { ...current.enabledLayers, ...overrides };
     const updated = { ...current, enabledLayers: enabled };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setCloudStyle: (style: 'natural' | 'soft' | 'square') => {
+    const current = get().vizSettings;
+    if (current.cloudStyle === style) return;
+    const updated = { ...current, cloudStyle: style };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },

@@ -816,6 +816,7 @@ async function init(): Promise<void> {
         onModelChange: (model) => store.getState().setSelectedModel(model),
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
         onPresetChange: (presetId) => store.getState().setVizPreset(presetId),
+        onCloudStyleChange: (style) => store.getState().setCloudStyle(style),
       }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable);
 
       // Render route graph controls (below graph)
