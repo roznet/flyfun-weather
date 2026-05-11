@@ -225,101 +225,21 @@
       <h3>Data Sources &amp; Models</h3>
       <h4>Forecast Models</h4>
       <p>
-        Flyfun Weather fetches data from the following NWP models via
-        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.
-        Each model uses a <em>seamless</em> blend that automatically selects the highest-resolution
-        variant available for the queried location.
-        All metrics, calculations, and data sources are fully documented in the
-        <a href="https://github.com/roznet/flyfun-weather/blob/main/designs/analysis-metrics.md" target="_blank" rel="noopener">Analysis Metrics Reference</a>.
-      </p>
-      <table class="help-table">
-        <thead>
-          <tr>
-            <th>Model</th>
-            <th>Provider</th>
-            <th>Coverage</th>
-            <th>Resolution</th>
-            <th>Range</th>
-            <th>Levels</th>
-            <th>Source</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>GFS</td>
-            <td>NOAA (US)</td>
-            <td>Global</td>
-            <td>0.25&deg; (~25 km)</td>
-            <td>16 days</td>
-            <td>28&Dagger;</td>
-            <td>Direct GRIB (NOAA S3) + <a href="https://open-meteo.com/en/docs/gfs-api" target="_blank" rel="noopener">Open-Meteo</a></td>
-          </tr>
-          <tr>
-            <td>ECMWF IFS</td>
-            <td>ECMWF</td>
-            <td>Global</td>
-            <td>0.25&deg; (~25 km)</td>
-            <td>10 days</td>
-            <td>25&dagger; / 13</td>
-            <td>Direct GRIB (ECPDS) + <a href="https://open-meteo.com/en/docs/ecmwf-api" target="_blank" rel="noopener">Open-Meteo</a></td>
-          </tr>
-          <tr>
-            <td>DWD ICON</td>
-            <td>DWD (Germany)</td>
-            <td>Global</td>
-            <td>11 km; 7 km over Europe</td>
-            <td>7 days</td>
-            <td>19&Dagger;</td>
-            <td>Direct GRIB (DWD ICON-EU) + <a href="https://open-meteo.com/en/docs/dwd-api" target="_blank" rel="noopener">Open-Meteo</a></td>
-          </tr>
-          <tr>
-            <td>UK Met Office</td>
-            <td>Met Office (UK)</td>
-            <td>Global</td>
-            <td>10 km; 2 km over UK</td>
-            <td>7 days</td>
-            <td>20</td>
-            <td><a href="https://open-meteo.com/en/docs/ukmo-api" target="_blank" rel="noopener">Open-Meteo</a></td>
-          </tr>
-          <tr>
-            <td>M&eacute;t&eacute;o-France</td>
-            <td>M&eacute;t&eacute;o-France</td>
-            <td>Global</td>
-            <td>25 km; 11 km (EU); 2.5 km (France)</td>
-            <td>6 days</td>
-            <td>19</td>
-            <td><a href="https://open-meteo.com/en/docs/meteofrance-api" target="_blank" rel="noopener">Open-Meteo</a></td>
-          </tr>
-          <tr>
-            <td>GEM</td>
-            <td>ECCC (Canada)</td>
-            <td>Global</td>
-            <td>15 km; 10 km (N.&nbsp;America)</td>
-            <td>10 days</td>
-            <td>20</td>
-            <td><a href="https://open-meteo.com/en/docs/gem-api" target="_blank" rel="noopener">Open-Meteo</a></td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="muted" style="margin-top: 0.25rem;">
-        <strong>Levels</strong> = number of pressure levels used for upper-air analysis
-        (soundings, cross-sections). More levels give finer vertical detail.
-        <strong>Range</strong> = maximum forecast horizon.
+        Flyfun Weather pulls each NWP model from <em>multiple</em> sources and blends them.
+        Where available, raw GRIB2 from the originating forecast centre (ECMWF, DWD, NOAA)
+        provides the high-resolution upper-air sounding and cloud microphysics; outside
+        those coverage areas (or beyond the direct horizon) <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>
+        fills in. The table below is generated live from the server's source registry,
+        so what you see is exactly what the briefing engine has available right now &mdash;
+        including the most recent run, how far it covers, and when the next update is expected.
       </p>
       <p class="muted" style="margin-top: 0.25rem;">
-        &dagger;<strong>ECMWF IFS</strong> soundings use 25 levels (1000&ndash;1 hPa) fetched
-        directly from ECMWF over Europe and the US within the first ~7 days, replacing the
-        Open-Meteo data for those locations. Outside that area or beyond 7 days, we fall
-        back to the 13-level Open-Meteo feed. Cloud liquid/ice water content and per-level
-        cloud fraction are only available inside the direct-GRIB coverage.
+        Full per-metric attribution lives in the
+        <a href="https://github.com/roznet/flyfun-weather/blob/main/designs/analysis-metrics.md" target="_blank" rel="noopener">Analysis Metrics Reference</a>;
+        the engine-level details are in
+        <a href="https://github.com/roznet/flyfun-weather/blob/main/designs/weather-engine-specs.md" target="_blank" rel="noopener">Weather Engine Specs</a>.
       </p>
-      <p class="muted" style="margin-top: 0.25rem;">
-        &Dagger;<strong>GFS and DWD ICON</strong> are enriched with direct GRIB data for
-        cloud liquid water, ice mixing ratio, and NWP cloud diagnostics (ceiling, convective
-        base/top, per-layer cloud covers). GFS enrichment is global; ICON enrichment covers
-        Europe only (29.5&ndash;70.5&deg;N, 23.5&deg;W&ndash;62.5&deg;E) within ~5 days. Level
-        counts are unchanged &mdash; the upgrade is in the microphysics and cloud structure.
-      </p>
+      <div id="data-sources-table-host"></div>
 
       <h4 style="margin-top: 1.5rem;">Waypoint &amp; Navigation Data</h4>
       <p>

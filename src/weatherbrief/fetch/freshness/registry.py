@@ -21,7 +21,14 @@ from datetime import datetime, timedelta, timezone
 
 @dataclass(frozen=True)
 class SourceConfig:
-    """Schedule + horizon config for one (model, source) pair.
+    """Schedule + horizon + descriptive config for one (model, source) pair.
+
+    Schedule fields (``cycles``, ``delivery_offset``, ``horizon``, retry
+    knobs, ``readiness_check``) drive the freshness loop.  Descriptive
+    fields (``model_label`` through ``description``) feed the public
+    ``/api/data-sources`` endpoint and the help-page data-sources table —
+    they are static metadata about *what this source is*, separate from
+    dynamic per-cycle marker state.
 
     Attributes:
         key: Stable identifier ``"{model}:{source}"``.
@@ -40,6 +47,32 @@ class SourceConfig:
             backoff schedule, 8 slips ≈ 6 h before cycle-jump.
         readiness_check: Symbolic name of the check_source dispatch target.
             Resolved by :mod:`sources`.
+        model_label: Display label for the underlying NWP model
+            (e.g. "ICON-EU", "ICON-Global", "ECMWF IFS").  Distinct from
+            the pack-model name in the key prefix — the same pack-model
+            ``"icon"`` is served by both ``icon_eu:dwd`` and
+            ``icon:openmeteo`` but those represent different variants of
+            the ICON family.
+        provider_label: Human-readable data provider ("DWD", "NOAA",
+            "ECMWF", "Open-Meteo").  Single source of truth for the
+            UI — replaces the duplicate dict in ``api/packs.py``.
+        provider_url: Optional documentation/landing URL for the provider.
+        role: What this source contributes to the briefing.  One of
+            ``"primary-sounding"`` (full upper-air sounding replacement),
+            ``"cloud-enrichment"`` (cloud microphysics + diagnostics
+            patched onto an Open-Meteo base), ``"surface-base"``
+            (Open-Meteo surface fields under a direct-GRIB sounding),
+            or ``"primary"`` (Open-Meteo-only model — surface + sounding
+            from the same feed).
+        resolution: Spatial resolution string for display
+            ("0.25° (~25 km)", "~6.5 km", etc.).
+        coverage: Geographic coverage string for display
+            ("Global", "Europe (29.5–70.5°N, 23.5°W–62.5°E)").
+        pressure_levels: Number of pressure levels delivered by this
+            source.  ``None`` for sources that don't deliver an upper-air
+            sounding (e.g. cloud-enrichment-only).
+        description: One-sentence description of what this source
+            contributes — surfaced in the help-page table.
     """
 
     key: str
@@ -50,6 +83,15 @@ class SourceConfig:
     max_retry_interval: timedelta = timedelta(hours=1)
     max_slip_retries: int = 8
     readiness_check: str = ""
+
+    model_label: str = ""
+    provider_label: str = ""
+    provider_url: str = ""
+    role: str = "primary"
+    resolution: str = ""
+    coverage: str = ""
+    pressure_levels: int | None = None
+    description: str = ""
 
     def slip_bump(self, slip_count: int) -> timedelta:
         """Return the next-expected bump for the ``slip_count``-th slip.
@@ -122,6 +164,20 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_ECMWF_OFFSET,
         horizon=_ECMWF_HORIZON,
         readiness_check="ecmwf_direct",
+        model_label="ECMWF IFS",
+        provider_label="ECMWF",
+        provider_url="https://www.ecmwf.int/",
+        role="primary-sounding",
+        resolution="0.25° (~25 km)",
+        coverage="Europe + US",
+        pressure_levels=25,
+        description=(
+            "Direct GRIB delivery from ECMWF via ECPDS. Provides the full "
+            "25-level upper-air sounding (t, r, u, v, w, gh, cc, clwc, ciwc) "
+            "plus cloud diagnostics over Europe + US. 00/12Z cycles reach "
+            "168h; 06/18Z reach 90h. Beyond this horizon we fall back to "
+            "ecmwf:openmeteo."
+        ),
     ),
     "gfs:noaa": SourceConfig(
         key="gfs:noaa",
@@ -129,6 +185,19 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_GFS_NOAA_OFFSET,
         horizon=_GFS_NOAA_HORIZON,
         readiness_check="gfs_noaa",
+        model_label="GFS",
+        provider_label="NOAA",
+        provider_url="https://www.nco.ncep.noaa.gov/pmb/products/gfs/",
+        role="cloud-enrichment",
+        resolution="0.25° (~25 km)",
+        coverage="Global",
+        pressure_levels=None,
+        description=(
+            "Direct GRIB2 from NOAA S3 (noaa-gfs-bdp-pds). Patches cloud "
+            "liquid water, ice mixing ratio and cloud diagnostics (ceiling, "
+            "low/mid/high covers, convective base/top) onto the 28-level "
+            "Open-Meteo GFS sounding. 16-day horizon."
+        ),
     ),
     "icon_eu:dwd": SourceConfig(
         key="icon_eu:dwd",
@@ -136,6 +205,19 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_ICON_EU_OFFSET,
         horizon=_ICON_EU_HORIZON,
         readiness_check="icon_eu_dwd",
+        model_label="ICON-EU",
+        provider_label="DWD",
+        provider_url="https://opendata.dwd.de/weather/nwp/icon-eu/",
+        role="primary-sounding",
+        resolution="~6.5 km",
+        coverage="Europe (29.5–70.5°N, 23.5°W–62.5°E)",
+        pressure_levels=40,
+        description=(
+            "Direct GRIB from DWD opendata. 40 model levels interpolated to "
+            "pressure levels — full sounding replacement plus cloud "
+            "microphysics and diagnostics. 8 cycles/day (every 3h); main "
+            "cycles 00/06/12/18 reach 120h, intermediate cycles reach 78h."
+        ),
     ),
     "gfs:openmeteo": SourceConfig(
         key="gfs:openmeteo",
@@ -143,6 +225,18 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_OM_GFS_OFFSET,
         horizon=timedelta(days=16),
         readiness_check="om_meta",
+        model_label="GFS",
+        provider_label="Open-Meteo",
+        provider_url="https://open-meteo.com/en/docs/gfs-api",
+        role="primary",
+        resolution="0.25° (~25 km)",
+        coverage="Global",
+        pressure_levels=28,
+        description=(
+            "Open-Meteo's GFS seamless feed (28 pressure levels, surface + "
+            "upper-air). Primary GFS sounding source; gfs:noaa enriches "
+            "cloud microphysics on top."
+        ),
     ),
     # Open-Meteo only effectively publishes ECMWF 00/12 main runs in time;
     # 06/18 are bc-runs that lag heavily — see issue #100.  We track only the
@@ -153,6 +247,19 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_OM_ECMWF_OFFSET,
         horizon=timedelta(days=10),
         readiness_check="om_meta",
+        model_label="ECMWF IFS",
+        provider_label="Open-Meteo",
+        provider_url="https://open-meteo.com/en/docs/ecmwf-api",
+        role="surface-base",
+        resolution="0.25° (~25 km)",
+        coverage="Global",
+        pressure_levels=13,
+        description=(
+            "Open-Meteo's ECMWF IFS feed (13 pressure levels). Provides "
+            "surface fields under the direct-GRIB sounding inside the "
+            "ECMWF coverage area, and is the full fallback outside it or "
+            "beyond ~7 days. Only 00/12Z tracked — 06/18 bc-runs lag heavily."
+        ),
     ),
     # Open-Meteo's meta.json reports update_interval_seconds=21600 (6h) for
     # ICON, even though DWD itself runs ICON on a 3h cycle.  OM only
@@ -164,6 +271,19 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_OM_ICON_OFFSET,
         horizon=timedelta(days=7),
         readiness_check="om_meta",
+        model_label="ICON-Global",
+        provider_label="Open-Meteo",
+        provider_url="https://open-meteo.com/en/docs/dwd-api",
+        role="primary",
+        resolution="~11 km global, ~7 km over Europe (seamless)",
+        coverage="Global",
+        pressure_levels=19,
+        description=(
+            "Open-Meteo's ICON seamless feed (19 pressure levels). Serves "
+            "the global ICON-Global variant; over Europe the regional "
+            "ICON-EU GRIB from DWD takes over as the primary sounding. "
+            "Note: ICON-D2 (2.2 km, central Europe, 27h) is not yet fetched."
+        ),
     ),
     "meteofrance:openmeteo": SourceConfig(
         key="meteofrance:openmeteo",
@@ -171,6 +291,17 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_OM_ARPEGE_OFFSET,
         horizon=timedelta(days=6),
         readiness_check="om_meta",
+        model_label="Météo-France ARPEGE",
+        provider_label="Open-Meteo",
+        provider_url="https://open-meteo.com/en/docs/meteofrance-api",
+        role="primary",
+        resolution="~25 km global, ~11 km EU, ~2.5 km France (seamless)",
+        coverage="Global (best over France/Europe)",
+        pressure_levels=19,
+        description=(
+            "Open-Meteo's Météo-France seamless feed (19 pressure levels). "
+            "Only fetched for routes containing a French (LF…) ICAO."
+        ),
     ),
     "ukmo:openmeteo": SourceConfig(
         key="ukmo:openmeteo",
@@ -178,6 +309,17 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_OM_UKMO_OFFSET,
         horizon=timedelta(days=7),
         readiness_check="om_meta",
+        model_label="UK Met Office",
+        provider_label="Open-Meteo",
+        provider_url="https://open-meteo.com/en/docs/ukmo-api",
+        role="primary",
+        resolution="~10 km global, ~2 km over UK (seamless)",
+        coverage="Global (best over UK/Europe)",
+        pressure_levels=20,
+        description=(
+            "Open-Meteo's UK Met Office seamless feed (20 pressure levels). "
+            "Only fetched for routes containing a UK (EG…) ICAO."
+        ),
     ),
 }
 

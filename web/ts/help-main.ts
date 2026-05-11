@@ -6,6 +6,7 @@ import { submitFeedback } from './adapters/api-adapter';
 import { renderUserInfo, checkMessagesBadge, escapeHtml } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
+import { mountDataSourcesTable } from './data-sources-table';
 
 let isSignedIn = false;
 
@@ -40,6 +41,13 @@ async function init(): Promise<void> {
         <a href="/login.html" class="btn-settings">${t('nav.signIn')}</a>
       `;
     }
+  }
+
+  // Render the data-driven Data Sources & Models table.  Failure to load
+  // leaves the help page usable — the renderer shows its own muted error.
+  const dataSourcesHost = document.getElementById('data-sources-table-host');
+  if (dataSourcesHost) {
+    mountDataSourcesTable(dataSourcesHost as HTMLElement);
   }
 
   // Check if URL has ?tab=whats-new to auto-switch

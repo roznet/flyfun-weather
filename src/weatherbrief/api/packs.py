@@ -259,23 +259,21 @@ class DataStatus(BaseModel):
     sources: list[ModelSourceDetail] = Field(default_factory=list)
 
 
-# Display names used in API payload + UI (single source of truth so the
-# frontend doesn't have to duplicate the source-key → provider mapping).
-_PROVIDER_LABELS: dict[str, str] = {
-    "ecmwf:direct": "ECMWF",
-    "gfs:noaa": "NOAA",
-    "icon_eu:dwd": "DWD",
-    "ecmwf:openmeteo": "Open-Meteo",
-    "gfs:openmeteo": "Open-Meteo",
-    "icon:openmeteo": "Open-Meteo",
-    "ukmo:openmeteo": "Open-Meteo",
-    "meteofrance:openmeteo": "Open-Meteo",
-}
-
-
 def _provider_label(source: str) -> str:
-    """Human display name for a source key (fallbacks to the suffix)."""
-    return _PROVIDER_LABELS.get(source, source.split(":", 1)[-1].title())
+    """Human display name for a source key (fallback to the Title-cased suffix).
+
+    Single source of truth is
+    :data:`weatherbrief.fetch.freshness.registry.SOURCE_REGISTRY[source].provider_label`
+    so the freshness popover, the data-sources API, and the help page all
+    use the same label.  Falls back defensively so legacy packs with an
+    unknown source key still render.
+    """
+    from weatherbrief.fetch.freshness import registry
+
+    cfg = registry.SOURCE_REGISTRY.get(source)
+    if cfg is not None and cfg.provider_label:
+        return cfg.provider_label
+    return source.split(":", 1)[-1].title()
 
 
 class PackMetaResponse(BaseModel):
