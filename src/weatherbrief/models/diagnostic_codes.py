@@ -12,6 +12,14 @@ class FetchCode(StrEnum):
     MODEL_FETCH_FAILED = "model_fetch_failed"
     MODEL_SKIPPED_REGION = "model_skipped_region"
     MODEL_SKIPPED_RANGE = "model_skipped_range"
+    # The flight window lies beyond the provider's actual data_end_time
+    # (live horizon), which can be shorter than the static config horizon
+    # for a given run. Distinct from MODEL_SKIPPED_RANGE (static config).
+    MODEL_SKIPPED_HORIZON = "model_skipped_horizon"
+    # The fetch returned a structurally-valid response containing only
+    # null values across all hourly slots — defensive trap for the same
+    # condition when the horizon precheck couldn't catch it.
+    MODEL_RETURNED_EMPTY = "model_returned_empty"
     GRIB_ENRICHMENT_FAILED = "grib_enrichment_failed"
     GRIB_ENRICHMENT_APPLIED = "grib_enrichment_applied"
     GRIB_SKIPPED_OUT_OF_RANGE = "grib_skipped_out_of_range"

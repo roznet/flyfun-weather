@@ -23,6 +23,10 @@ class ModelMetadata:
     last_init_time: int  # Unix timestamp of the model init (run) time
     last_availability_time: int  # Unix timestamp when data became available
     update_interval_seconds: int
+    # Last hourly timestamp actually served by the API for the current run.
+    # Often shorter than the static config horizon: e.g. ARPEGE advertises
+    # 6 days but a given run may deliver only ~4 days. 0 if not published.
+    data_end_time: int = 0
 
 
 # --- Metadata URLs ---
@@ -54,6 +58,7 @@ def _parse_meta(model: str, data: dict) -> ModelMetadata:
         last_init_time=int(data["last_run_initialisation_time"]),
         last_availability_time=int(data["last_run_availability_time"]),
         update_interval_seconds=int(data["update_interval_seconds"]),
+        data_end_time=int(data.get("data_end_time", 0) or 0),
     )
 
 

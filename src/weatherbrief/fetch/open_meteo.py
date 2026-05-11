@@ -28,6 +28,39 @@ from weatherbrief.models import (
 
 logger = logging.getLogger(__name__)
 
+
+class EmptyForecastError(RuntimeError):
+    """Raised when an Open-Meteo response contains no usable values.
+
+    Open-Meteo answers requests past a run's actual ``data_end_time`` with
+    a structurally-valid response (correct number of timestamps, all
+    pressure-level slots present) where every weather value is null.
+    Storing that produces empty Skew-Ts and empty cross-section layers.
+    Callers should treat this like any other fetch failure for the model.
+    """
+
+
+def _all_hourly_empty(forecasts: list[WaypointForecast]) -> bool:
+    """Return True if every hourly slot across all points is all-null.
+
+    Probes a small representative set of fields rather than scanning every
+    column — if temperature, surface pressure, wind, and the 500 hPa
+    pressure-level temperature are all null across every hour of every
+    point, the response carries no usable signal.
+    """
+    for fc in forecasts:
+        for hr in fc.hourly:
+            if (
+                hr.temperature_2m_c is not None
+                or hr.surface_pressure_hpa is not None
+                or hr.wind_speed_10m_kt is not None
+            ):
+                return False
+            for lvl in hr.pressure_levels:
+                if lvl.temperature_c is not None or lvl.wind_speed_kt is not None:
+                    return False
+    return True
+
 # Magnus formula constants
 MAGNUS_B = 17.67
 MAGNUS_C = 243.5  # °C
@@ -290,6 +323,12 @@ class OpenMeteoClient:
             )
             results.extend(chunk_results)
 
+        if results and _all_hourly_empty(results):
+            raise EmptyForecastError(
+                f"{model.value}: response contained no values across "
+                f"{len(results)} points × "
+                f"{len(results[0].hourly) if results[0].hourly else 0} hourly slots"
+            )
         return results
 
     def _fetch_multi_point_chunk(

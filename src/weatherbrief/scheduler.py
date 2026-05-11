@@ -956,6 +956,7 @@ async def _run_freshness_check_once() -> None:
         await store.update(
             source, model, observed.init, now=now,
             published_at=observed.published_at,
+            data_end=observed.data_end,
         )
 
 

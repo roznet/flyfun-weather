@@ -32,10 +32,18 @@ class Observation(NamedTuple):
     because the providers don't publish a server-side availability time;
     the closest local proxy is the marker's ``last_check`` wallclock when
     the run was first observed.
+
+    ``data_end`` is the latest hourly timestamp the provider is actually
+    serving for the current run.  Only Open-Meteo exposes this (via
+    ``meta.json``'s ``data_end_time``).  Often shorter than the static
+    config horizon (e.g. ARPEGE advertises 6 days but a given run may
+    deliver only ~4 days).  Direct GRIB sources return ``None`` and the
+    catalog falls back to ``init + cfg.horizon``.
     """
 
     init: datetime
     published_at: datetime | None = None
+    data_end: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +158,15 @@ def _check_om_meta(model: str) -> Observation | None:
         if m.last_availability_time
         else None
     )
+    data_end = (
+        datetime.fromtimestamp(m.data_end_time, tz=timezone.utc)
+        if m.data_end_time
+        else None
+    )
     return Observation(
         init=datetime.fromtimestamp(m.last_init_time, tz=timezone.utc),
         published_at=published_at,
+        data_end=data_end,
     )
 
 

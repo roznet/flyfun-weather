@@ -202,6 +202,55 @@ class TestCheckSourceDispatch:
         assert result.published_at is not None
         assert int(result.published_at.timestamp()) == avail_ts
 
+    def test_om_meta_returns_data_end(self, monkeypatch):
+        """OM's meta.json carries data_end_time — must surface so the
+        catalog can override the static config horizon when the live
+        run delivers fewer hours (the meteofrance empty-data case)."""
+        from weatherbrief.fetch import model_status
+
+        init_ts = int(_utc(2026, 5, 3, 12).timestamp())
+        avail_ts = init_ts + 60 * 45
+        # Simulate a ~103h run (shorter than the 144h config horizon).
+        data_end_ts = init_ts + 103 * 3600
+
+        def _fake_meta(models, **kw):
+            return {
+                models[0]: model_status.ModelMetadata(
+                    model=models[0],
+                    last_init_time=init_ts,
+                    last_availability_time=avail_ts,
+                    update_interval_seconds=21600,
+                    data_end_time=data_end_ts,
+                )
+            }
+        monkeypatch.setattr(model_status, "fetch_model_metadata", _fake_meta)
+        result = sources.check_source("meteofrance:openmeteo", "meteofrance")
+        assert result is not None
+        assert result.data_end is not None
+        assert int(result.data_end.timestamp()) == data_end_ts
+
+    def test_om_meta_no_data_end_field(self, monkeypatch):
+        """data_end_time=0 (legacy or missing) yields data_end=None — we
+        fall back to the static config horizon downstream."""
+        from weatherbrief.fetch import model_status
+
+        init_ts = int(_utc(2026, 5, 3, 12).timestamp())
+
+        def _fake_meta(models, **kw):
+            return {
+                models[0]: model_status.ModelMetadata(
+                    model=models[0],
+                    last_init_time=init_ts,
+                    last_availability_time=init_ts + 3600,
+                    update_interval_seconds=21600,
+                    data_end_time=0,
+                )
+            }
+        monkeypatch.setattr(model_status, "fetch_model_metadata", _fake_meta)
+        result = sources.check_source("gfs:openmeteo", "gfs")
+        assert result is not None
+        assert result.data_end is None
+
     def test_dispatch_swallows_exceptions(self, monkeypatch):
         from weatherbrief.fetch.grib import grib_fetch
 

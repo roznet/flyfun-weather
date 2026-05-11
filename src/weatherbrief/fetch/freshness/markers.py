@@ -58,6 +58,11 @@ class Marker:
     last_check: datetime | None = None
     slip_count: int = 0
     published_at: datetime | None = None
+    # Latest hourly timestamp the provider is actually serving for this
+    # run. None for direct GRIB sources (no equivalent metadata) — the
+    # catalog falls back to ``init + cfg.horizon`` in that case. Only
+    # Open-Meteo's meta.json populates this.
+    data_end: datetime | None = None
     observations: deque[tuple[datetime, datetime]] = field(
         default_factory=lambda: deque(maxlen=OBSERVATIONS_MAXLEN),
     )
@@ -168,6 +173,7 @@ class MarkerStore:
         observed_init: datetime,
         now: datetime | None = None,
         published_at: datetime | None = None,
+        data_end: datetime | None = None,
     ) -> None:
         """Record a fresh check.  Advances ``init`` if newer; bumps slip otherwise.
 
@@ -205,6 +211,7 @@ class MarkerStore:
                     init=observed_init, next_expected=next_exp,
                     last_check=now,
                     published_at=published_at,
+                    data_end=data_end,
                     observations=new_observations,
                 )
                 return
@@ -222,6 +229,7 @@ class MarkerStore:
                     slip_count=0,
                     last_check=now,
                     published_at=published_at,
+                    data_end=data_end,
                     observations=new_observations,
                 )
                 logger.info(
@@ -283,12 +291,20 @@ class MarkerStore:
             new_published_at = (
                 published_at if published_at is not None else marker.published_at
             )
+            # data_end is run-scoped: even if init hasn't advanced, the
+            # provider may have extended (or trimmed) the served horizon
+            # between checks. Refresh when we have a fresh observation,
+            # preserve the prior value when this check didn't produce one.
+            new_data_end = (
+                data_end if data_end is not None else marker.data_end
+            )
             self._markers[(source, model)] = replace(
                 marker,
                 next_expected=new_next_expected,
                 slip_count=new_slip_count,
                 last_check=now,
                 published_at=new_published_at,
+                data_end=new_data_end,
             )
             if log_warning is not None:
                 logger.warning(*log_warning)

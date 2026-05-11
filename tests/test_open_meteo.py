@@ -7,7 +7,11 @@ from unittest.mock import patch
 
 import responses
 
-from weatherbrief.fetch.open_meteo import OpenMeteoClient, magnus_dewpoint
+from weatherbrief.fetch.open_meteo import (
+    EmptyForecastError,
+    OpenMeteoClient,
+    magnus_dewpoint,
+)
 from weatherbrief.models import ModelSource, RoutePoint, Waypoint
 
 
@@ -227,6 +231,60 @@ def test_fetch_multi_point_parses_list_response():
     assert len(results) == 3
     assert all(r.model == ModelSource.GFS for r in results)
     assert all(len(r.hourly) == 2 for r in results)
+
+
+@responses.activate
+def test_fetch_multi_point_raises_when_all_values_null():
+    """Open-Meteo answers requests past a run's actual data_end_time with a
+    structurally-valid response (correct timestamps) where every value is
+    null. We must detect that and raise rather than persist a skeleton."""
+    null_hourly = {
+        "time": ["2026-02-21T09:00", "2026-02-21T10:00", "2026-02-21T11:00"],
+        "temperature_2m": [None, None, None],
+        "wind_speed_10m": [None, None, None],
+        "surface_pressure": [None, None, None],
+    }
+    multi_response = [{"hourly": null_hourly}, {"hourly": null_hourly}, {"hourly": null_hourly}]
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/meteofrance",
+        json=multi_response,
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    points = _make_route_points()
+    try:
+        client.fetch_multi_point(points, ModelSource.METEOFRANCE)
+    except EmptyForecastError as exc:
+        assert "meteofrance" in str(exc).lower()
+        return
+    raise AssertionError("EmptyForecastError was not raised on all-null response")
+
+
+@responses.activate
+def test_fetch_multi_point_does_not_raise_when_only_some_null():
+    """Don't false-positive: a response with even one non-null reading
+    across all hours and points must come through normally."""
+    mostly_null = {
+        "time": ["2026-02-21T09:00", "2026-02-21T10:00"],
+        "temperature_2m": [None, None],
+    }
+    one_real = {
+        "time": ["2026-02-21T09:00", "2026-02-21T10:00"],
+        "temperature_2m": [None, 12.5],  # last hour has data
+    }
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=[{"hourly": mostly_null}, {"hourly": one_real}, {"hourly": mostly_null}],
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    points = _make_route_points()
+    results = client.fetch_multi_point(points, ModelSource.GFS)
+    assert len(results) == 3  # no exception
 
 
 @responses.activate

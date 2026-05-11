@@ -152,6 +152,43 @@ class TestDynamicFields:
         # 06Z (next due at 18:40Z) — a 90h cycle.
         assert delta.total_seconds() / 3600 in (90, 168)
 
+    def test_marker_data_end_overrides_config_horizon(self):
+        """When the provider reports an actual data_end_time shorter than
+        the static config horizon (the meteofrance empty-data case), the
+        catalog must surface the live value rather than the config lie."""
+        store = MarkerStore()
+        # Direct update path bypasses bootstrap to drop a marker with
+        # data_end < init + config horizon.
+        init = datetime(2026, 5, 11, 12, tzinfo=timezone.utc)
+        truncated_end = datetime(2026, 5, 15, 19, tzinfo=timezone.utc)
+        asyncio.run(store.update(
+            "meteofrance:openmeteo", "meteofrance",
+            observed_init=init,
+            now=datetime(2026, 5, 11, 12, 45, tzinfo=timezone.utc),
+            data_end=truncated_end,
+        ))
+        entries = {e.key: e for e in catalog.build(store=store, loop_interval_s=86400)}
+        mf = entries["meteofrance:openmeteo"]
+        # data_end (live) wins over init + 6-day config horizon.
+        assert mf.horizon_end == truncated_end
+
+    def test_horizon_end_falls_back_to_config_when_no_data_end(self):
+        """Direct-GRIB sources don't report data_end — must fall back to
+        init + cfg.horizon so the UI still shows something useful."""
+        store = MarkerStore()
+        init = datetime(2026, 5, 11, 12, tzinfo=timezone.utc)
+        asyncio.run(store.update(
+            "ecmwf:direct", "ecmwf",
+            observed_init=init,
+            now=datetime(2026, 5, 11, 18, 40, tzinfo=timezone.utc),
+            data_end=None,  # explicit: direct sources have no live horizon
+        ))
+        entries = {e.key: e for e in catalog.build(store=store, loop_interval_s=86400)}
+        ecmwf = entries["ecmwf:direct"]
+        # 12Z is a 168h cycle for ECMWF; falls back to config.
+        delta = ecmwf.horizon_end - ecmwf.latest_init
+        assert delta.total_seconds() / 3600 == 168
+
 
 # ---------------------------------------------------------------------------
 # Serialisation

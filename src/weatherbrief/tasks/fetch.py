@@ -11,10 +11,11 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from weatherbrief.fetch.open_meteo import OpenMeteoClient
+from weatherbrief.fetch.open_meteo import EmptyForecastError, OpenMeteoClient
 from weatherbrief.fetch.route_points import interpolate_route
 from weatherbrief.fetch.variables import (
     MODEL_ENDPOINTS,
@@ -41,6 +42,40 @@ _INTER_MODEL_DELAY_FREE = 1.0  # seconds between models on free tier
 _BRIEFING_FETCH_CONCURRENCY = int(os.environ.get("BRIEFING_FETCH_CONCURRENCY", "4"))
 
 logger = logging.getLogger(__name__)
+
+
+# Open-Meteo registry keys per model — we only consult Open-Meteo-backed
+# markers; direct-GRIB models (ECMWF direct, GFS NOAA, ICON-EU DWD) have
+# their own horizon handling in the GRIB fetch path.
+_OM_REGISTRY_KEYS: dict[str, str] = {
+    "ecmwf": "ecmwf:openmeteo",
+    "gfs": "gfs:openmeteo",
+    "icon": "icon:openmeteo",
+    "ukmo": "ukmo:openmeteo",
+    "meteofrance": "meteofrance:openmeteo",
+    "gem": "gem:openmeteo",
+}
+
+
+def _open_meteo_live_horizons() -> dict[str, datetime]:
+    """Snapshot the marker store's ``data_end`` per Open-Meteo model.
+
+    Returns ``{model_value: data_end_dt}`` for every known model with a
+    populated ``data_end`` on its marker. Models without a marker (store
+    not yet bootstrapped, or direct-GRIB key only) are omitted, in which
+    case the caller falls through to the static config horizon.
+    """
+    try:
+        from weatherbrief.fetch.freshness.markers import get_store
+    except Exception:
+        return {}
+    store = get_store()
+    out: dict[str, datetime] = {}
+    for model_value, source_key in _OM_REGISTRY_KEYS.items():
+        marker = store.get_sync(source_key, model_value)
+        if marker is not None and marker.data_end is not None:
+            out[model_value] = marker.data_end
+    return out
 
 
 def _should_skip_for_region(endpoint, route_region: ModelRegion, route=None) -> bool:
@@ -82,6 +117,8 @@ def _build_fetch_diagnostics(
     models_fetched: list[str],
     models_skipped_region: list[str],
     models_skipped_range: list[tuple[str, int, int]] | None = None,
+    models_skipped_horizon: list[tuple[str, datetime]] | None = None,
+    models_returned_empty: list[str] | None = None,
     enrich_grib: bool,
     grib_enriched: bool,
     grib_enrichment_failed: bool,
@@ -92,9 +129,17 @@ def _build_fetch_diagnostics(
     diags: list[Diagnostic] = []
 
     range_skipped_names = {m for m, _, _ in (models_skipped_range or [])}
+    horizon_skipped_names = {m for m, _ in (models_skipped_horizon or [])}
+    empty_names = set(models_returned_empty or [])
 
     # Models that failed to fetch (requested but neither fetched nor skipped)
-    fetched_or_skipped = set(models_fetched) | set(models_skipped_region) | range_skipped_names
+    fetched_or_skipped = (
+        set(models_fetched)
+        | set(models_skipped_region)
+        | range_skipped_names
+        | horizon_skipped_names
+        | empty_names
+    )
     for m in requested_models:
         if m not in fetched_or_skipped:
             diags.append(Diagnostic.create(
@@ -109,6 +154,25 @@ def _build_fetch_diagnostics(
             level="info", stage="fetch",
             code=FetchCode.MODEL_SKIPPED_RANGE,
             message=f"{m.upper()} skipped ({days_out} days out exceeds {max_days}-day range)",
+        ))
+
+    # Models skipped because flight window is past the run's actual horizon
+    for m, data_end in (models_skipped_horizon or []):
+        diags.append(Diagnostic.create(
+            level="info", stage="fetch",
+            code=FetchCode.MODEL_SKIPPED_HORIZON,
+            message=(
+                f"{m.upper()} skipped — current run only serves data through "
+                f"{data_end.strftime('%Y-%m-%d %H:%MZ')}"
+            ),
+        ))
+
+    # Models that fetched successfully but came back with no usable values
+    for m in models_returned_empty or []:
+        diags.append(Diagnostic.create(
+            level="warn", stage="fetch",
+            code=FetchCode.MODEL_RETURNED_EMPTY,
+            message=f"{m.upper()} returned no values (likely past provider horizon)",
         ))
 
     # Models skipped for region
@@ -212,6 +276,8 @@ def run_fetch(
     models_fetched_names: list[str] = []
     models_skipped_region: list[str] = []
     models_skipped_range: list[tuple[str, int, int]] = []
+    models_skipped_horizon: list[tuple[str, datetime]] = []
+    models_returned_empty: list[str] = []
 
     route_region = detect_model_region(route)
     end_date = (
@@ -220,6 +286,8 @@ def run_fetch(
     ).strftime("%Y-%m-%d")
 
     # Filter models up-front so we don't waste worker threads on skipped models.
+    end_date_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+    live_horizons = _open_meteo_live_horizons() if not historical_mode else {}
     models_to_fetch: list[ModelSource] = []
     for model in models:
         endpoint = MODEL_ENDPOINTS[model.value]
@@ -238,6 +306,18 @@ def run_fetch(
                 model.value, endpoint.region.value, route_region.value,
             )
             models_skipped_region.append(model.value)
+            continue
+        # Live horizon check: Open-Meteo's data_end_time can fall short of
+        # the static config horizon for a given run. Skip rather than fetch
+        # a structurally-valid response of all-null values.
+        live_end = live_horizons.get(model.value)
+        if live_end is not None and end_date_dt > live_end:
+            logger.info(
+                "Skipping %s: flight window ends %s, but current run only "
+                "serves data through %s",
+                model.value, end_date_dt.isoformat(), live_end.isoformat(),
+            )
+            models_skipped_horizon.append((model.value, live_end))
             continue
         models_to_fetch.append(model)
 
@@ -296,6 +376,10 @@ def run_fetch(
                     model = future_to_model[future]
                     _, point_forecasts, calls, exc = future.result()
                     total_calls += calls
+                    if isinstance(exc, EmptyForecastError):
+                        logger.warning("%s returned no values: %s", model.value, exc)
+                        models_returned_empty.append(model.value)
+                        continue
                     if exc is not None:
                         logger.warning(
                             "Failed to fetch %s", model.value,
@@ -316,6 +400,10 @@ def run_fetch(
                         route_points, model,
                         start_date=target_date, end_date=end_date,
                     )
+                except EmptyForecastError as exc:
+                    logger.warning("%s returned no values: %s", model.value, exc)
+                    models_returned_empty.append(model.value)
+                    continue
                 except Exception:
                     logger.warning("Failed to fetch %s", model.value, exc_info=True)
                     continue
@@ -353,6 +441,8 @@ def run_fetch(
         models_fetched=models_fetched_names,
         models_skipped_region=models_skipped_region,
         models_skipped_range=models_skipped_range,
+        models_skipped_horizon=models_skipped_horizon,
+        models_returned_empty=models_returned_empty,
         enrich_grib=enrich_grib,
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
@@ -370,8 +460,13 @@ def run_fetch(
             diagnostics=diagnostics,
         )
 
-    # Combine region-skipped and range-skipped into one list for the UI badge
-    all_skipped = models_skipped_region + [m for m, _, _ in models_skipped_range]
+    # Combine all skip/empty buckets into one list for the UI badge
+    all_skipped = (
+        models_skipped_region
+        + [m for m, _, _ in models_skipped_range]
+        + [m for m, _ in models_skipped_horizon]
+        + models_returned_empty
+    )
 
     return FetchResult(
         route_points=route_points,

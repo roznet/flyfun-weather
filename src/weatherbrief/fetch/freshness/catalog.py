@@ -103,11 +103,17 @@ def build(
         latest_init = marker.init if marker is not None else None
         published_at = marker.published_at if marker is not None else None
         next_expected = marker.next_expected if marker is not None else None
-        horizon_end = (
-            latest_init + cfg.horizon_for(latest_init.hour)
-            if latest_init is not None
-            else None
-        )
+        # Prefer the provider's actual data_end_time (Open-Meteo) when
+        # available: a given run often serves fewer hours than the static
+        # config horizon advertises (e.g. ARPEGE config=144h, actual~103h).
+        # Direct GRIB sources don't expose this — fall back to the config.
+        data_end = marker.data_end if marker is not None else None
+        if data_end is not None:
+            horizon_end = data_end
+        elif latest_init is not None:
+            horizon_end = latest_init + cfg.horizon_for(latest_init.hour)
+        else:
+            horizon_end = None
         out.append(SourceCatalogEntry(
             key=key,
             model=model,
