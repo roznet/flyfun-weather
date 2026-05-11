@@ -73,13 +73,28 @@ function fmtHorizon(entry: DataSourceEntry): string {
   return min === max ? fmt(max) : `${fmt(min)}–${fmt(max)}`;
 }
 
+/** Return the uniform spacing in hours between sorted cycle inits, or null
+ *  if the spacing isn't uniform. Length-based heuristics (e.g. "4 cycles
+ *  means every 6h") would silently mislabel a 3- or 6-cycle source. */
+function uniformSpacing(cycles: number[]): number | null {
+  if (cycles.length < 2) return null;
+  const sorted = [...cycles].sort((a, b) => a - b);
+  const gap = sorted[1] - sorted[0];
+  for (let i = 2; i < sorted.length; i++) {
+    if (sorted[i] - sorted[i - 1] !== gap) return null;
+  }
+  return gap;
+}
+
 function fmtCycles(cycles: number[]): string {
   if (cycles.length === 0) return '—';
-  // Detect "every 3h" vs "every 6h" by spacing
-  if (cycles.length === 8) return `${cycles.length}× / day (every 3h)`;
-  if (cycles.length === 4) return `${cycles.length}× / day (every 6h)`;
-  if (cycles.length === 2) return `${cycles.length}× / day (${cycles.map(c => `${String(c).padStart(2,'0')}Z`).join(', ')})`;
-  return cycles.map(c => `${String(c).padStart(2,'0')}Z`).join(', ');
+  const gap = uniformSpacing(cycles);
+  if (gap !== null && cycles.length >= 3) {
+    return `${cycles.length}× / day (every ${gap}h)`;
+  }
+  // Non-uniform or ≤2 cycles: list the init hours explicitly.
+  const list = cycles.map(c => `${String(c).padStart(2, '0')}Z`).join(', ');
+  return cycles.length >= 2 ? `${cycles.length}× / day (${list})` : list;
 }
 
 function fmtLevels(n: number | null): string {
@@ -107,7 +122,7 @@ function renderRow(entry: DataSourceEntry, isFirst: boolean, modelLabel: string)
     ? `<a href="${escapeHtml(entry.provider_url)}" target="_blank" rel="noopener">${escapeHtml(entry.provider_label)}</a>`
     : escapeHtml(entry.provider_label);
   const modelCell = isFirst
-    ? `<td class="data-source-model" rowspan-marker>${escapeHtml(modelLabel)}</td>`
+    ? `<td class="data-source-model">${escapeHtml(modelLabel)}</td>`
     : `<td class="data-source-model-cont"></td>`;
   return `
     <tr class="data-source-row">

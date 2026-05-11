@@ -101,7 +101,10 @@ class TestDynamicFields:
             assert e.marker_health == "unknown"
 
     def test_bootstrapped_store_populates_dynamic_fields(self, bootstrapped_store):
-        entries = catalog.build(store=bootstrapped_store)
+        # ``Marker.is_stale`` compares ``last_check`` against the real
+        # ``datetime.now()`` — pass a generous loop interval so this test
+        # is robust to wallclock drift between bootstrap and the assertion.
+        entries = catalog.build(store=bootstrapped_store, loop_interval_s=86400)
         for e in entries:
             assert e.latest_init is not None
             assert e.next_expected is not None
