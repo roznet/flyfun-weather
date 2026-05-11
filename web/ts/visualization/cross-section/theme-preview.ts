@@ -2,7 +2,7 @@
 
 import { THEMES, type ThemeId, type CrossSectionTheme } from './theme';
 import { showPopupContent } from '../../components/info-popup';
-import { buildPuffPath, DEFAULT_NATURAL_CONFIG } from './layers/cloud-bands-factory';
+import { buildPuffPath, hash01, DEFAULT_NATURAL_CONFIG } from './layers/cloud-bands-factory';
 
 const W = 520;
 const H = 320;
@@ -281,14 +281,12 @@ function drawPreviewPuffStrip(
     return;
   }
 
-  // Discrete puff slots: regular grid, deterministic by seed.
+  // Discrete puff slots: same per-slot hash decision as `paintNatural` so
+  // the preview's distribution matches what the cross-section actually draws.
   const slotW = config.puffWidthPx;
   const nSlots = Math.ceil(w / slotW);
   for (let s = 0; s < nSlots; s++) {
-    // Simple stride threshold: emit a puff if (s/(nSlots-1)) ratio crossed.
-    // Equivalent to picking floor(fillFraction * nSlots) slots — uniform spread.
-    const idx = (s + seed) % nSlots;
-    if (idx >= Math.round(fillFraction * nSlots)) continue;
+    if (hash01(s * 0x1f1f1f + seed) > fillFraction) continue;
     const xa = x + s * slotW;
     const xb = Math.min(x + w, xa + slotW);
     if (xb - xa < 2) continue;

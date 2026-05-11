@@ -133,7 +133,10 @@ export interface NaturalCloudConfig {
   /** 0..1: max per-bump amplitude reduction (jitter so peaks aren't uniform). */
   amplitudeJitter: number;
   /** Extra px above the band top so puffs look fluffy / overflow slightly.
-   *  Set to 0 for strict clipping to the band envelope. */
+   *  Set to 0 for strict clipping to the band envelope. NOTE: there is
+   *  intentionally no `ctx.clip` around the puff fills, so the overflow is
+   *  visible. At the default 2 px this is harmless; raising this knob will
+   *  let puffs visibly invade adjacent bands. Bump with care. */
   edgeOverflowPx: number;
   /** Fixed alpha applied to the source color. Coverage lives in the gap
    *  pattern, not opacity — this avoids double-encoding SCT as "fewer puffs
@@ -155,8 +158,9 @@ export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
   minFillFraction: 0.15,
 };
 
-/** Cheap, deterministic hash → [0, 1). */
-function hash01(n: number): number {
+/** Cheap, deterministic hash → [0, 1). Exported so other UI surfaces can
+ *  mimic the same per-slot fill/gap decision as `paintNatural`. */
+export function hash01(n: number): number {
   let h = (n + 0x9e3779b9) | 0;
   h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
@@ -445,10 +449,10 @@ export function cloudLayer(spec: CloudLayerSpec): CrossSectionLayer {
 
       renderMatchedZones(ctx, transform, data, {
         getZones: source.getZones,
-        // Soft and natural draw their own visuals on top of `onBand`; pass
-        // `transparent` to suppress the default smooth-band fill. Square
-        // doesn't use `onBand` and relies on the smooth-band fill directly,
-        // but we keep the column draw inside paintSquare for consistency.
+        // All three styles draw their visuals via `onBand` (soft paints a
+        // gradient fill, natural paints puffs, square paints column rects),
+        // so the default smooth-band fill that `renderMatchedZones` would
+        // otherwise draw is suppressed by returning 'transparent' here.
         getColor: () => 'transparent',
         onBand: (ctx, bandPoints, transform, cl, matched) => {
           style(ctx, bandPoints, transform, cl, matched, source);

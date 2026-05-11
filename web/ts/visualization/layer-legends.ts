@@ -16,13 +16,6 @@ export interface LegendEntry {
   hatchStyle?: string;
 }
 
-/** CSS repeating-linear-gradient for horizontal hatch lines on a fixed grid. */
-function hatchGradient(gridPx: number, lineWidth: number, color: string): string {
-  if (lineWidth >= gridPx) return ''; // solid — no hatch
-  // Build a gradient: line color for lineWidth px, then transparent for the gap
-  return `repeating-linear-gradient(0deg, ${color} 0px, ${color} ${lineWidth}px, transparent ${lineWidth}px, transparent ${gridPx}px)`;
-}
-
 /** CSS background that simulates the natural-style puff/gap pattern at a
  *  given fill fraction. Returns a horizontal repeating gradient of
  *  `cloudColor` filled puff segments alternating with transparent gaps,
