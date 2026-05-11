@@ -155,6 +155,7 @@ def test_all_expected_sources_registered():
         "icon:openmeteo",
         "meteofrance:openmeteo",
         "ukmo:openmeteo",
+        "gem:openmeteo",
     }
     assert set(SOURCE_REGISTRY.keys()) == expected
 

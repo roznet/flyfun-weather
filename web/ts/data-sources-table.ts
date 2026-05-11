@@ -117,9 +117,16 @@ function healthDot(health: string): string {
   return `<span class="${cls}" title="${escapeHtml(label)}"></span>`;
 }
 
+/** Only http/https URLs are allowed as href; defends against a future
+ *  registry typo that would otherwise yield a `javascript:` link. */
+function safeHref(url: string): string | null {
+  return /^https?:\/\//.test(url) ? url : null;
+}
+
 function renderRow(entry: DataSourceEntry, isFirst: boolean, modelLabel: string): string {
-  const providerCell = entry.provider_url
-    ? `<a href="${escapeHtml(entry.provider_url)}" target="_blank" rel="noopener">${escapeHtml(entry.provider_label)}</a>`
+  const safeUrl = safeHref(entry.provider_url);
+  const providerCell = safeUrl
+    ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">${escapeHtml(entry.provider_label)}</a>`
     : escapeHtml(entry.provider_label);
   const modelCell = isFirst
     ? `<td class="data-source-model">${escapeHtml(modelLabel)}</td>`

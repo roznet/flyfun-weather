@@ -93,6 +93,27 @@ class SourceConfig:
     pressure_levels: int | None = None
     description: str = ""
 
+    def __post_init__(self) -> None:
+        """Catch partial-dict horizons/offsets at registry-construction time.
+
+        A dict-shaped ``horizon`` or ``delivery_offset`` must cover *every*
+        configured cycle hour — otherwise consumers like
+        ``catalog._per_cycle_hours`` would ``KeyError`` and surface as an
+        opaque 500 from ``/api/data-sources``.  Fail loudly at import.
+        """
+        for field_name, value in (
+            ("horizon", self.horizon),
+            ("delivery_offset", self.delivery_offset),
+        ):
+            if isinstance(value, dict):
+                missing = [h for h in self.cycles if h not in value]
+                if missing:
+                    raise ValueError(
+                        f"SourceConfig({self.key!r}): {field_name} dict "
+                        f"missing cycle hours {missing} "
+                        f"(cycles={list(self.cycles)})"
+                    )
+
     def slip_bump(self, slip_count: int) -> timedelta:
         """Return the next-expected bump for the ``slip_count``-th slip.
 
@@ -155,6 +176,10 @@ _OM_ECMWF_OFFSET = timedelta(hours=8)                # observed 7h30m
 _OM_ICON_OFFSET = timedelta(hours=4, minutes=30)     # observed 4h17m
 _OM_ARPEGE_OFFSET = timedelta(hours=4, minutes=30)   # observed 4h00m
 _OM_UKMO_OFFSET = timedelta(hours=8, minutes=30)     # observed 8h19m
+# GEM (Canadian ECCC global) is the slowest OM-republished model we track;
+# margin lets us avoid slip storms.  Recalibrate from /admin/freshness/markers
+# once we have a few days of observations.
+_OM_GEM_OFFSET = timedelta(hours=8)
 
 
 SOURCE_REGISTRY: dict[str, SourceConfig] = {
@@ -319,6 +344,25 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         description=(
             "Open-Meteo's UK Met Office seamless feed (20 pressure levels). "
             "Only fetched for routes containing a UK (EG…) ICAO."
+        ),
+    ),
+    "gem:openmeteo": SourceConfig(
+        key="gem:openmeteo",
+        cycles=(0, 6, 12, 18),
+        delivery_offset=_OM_GEM_OFFSET,
+        horizon=timedelta(days=10),
+        readiness_check="om_meta",
+        model_label="GEM",
+        provider_label="Open-Meteo",
+        provider_url="https://open-meteo.com/en/docs/gem-api",
+        role="primary",
+        resolution="~15 km global, ~10 km over North America (seamless)",
+        coverage="Global (best over North America)",
+        pressure_levels=20,
+        description=(
+            "Open-Meteo's GEM seamless feed (20 pressure levels), from "
+            "Environment and Climate Change Canada. Only fetched for routes "
+            "containing a North-American (K/C/P…) ICAO."
         ),
     ),
 }

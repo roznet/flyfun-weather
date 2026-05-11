@@ -3526,18 +3526,18 @@ label {
 }
 
 .data-source-role-primary-sounding {
-  border-color: #2e7d32;
-  color: #2e7d32;
+  border-color: var(--green);
+  color: var(--green);
 }
 
 .data-source-role-cloud-enrichment {
-  border-color: #1565c0;
-  color: #1565c0;
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .data-source-role-surface-base {
-  border-color: #6a1b9a;
-  color: #6a1b9a;
+  border-color: var(--lifr);
+  color: var(--lifr);
 }
 
 .data-source-health {
@@ -3549,8 +3549,8 @@ label {
   vertical-align: middle;
 }
 
-.data-source-health-ok { background: #2e7d32; }
-.data-source-health-suspect { background: #f9a825; }
+.data-source-health-ok { background: var(--green); }
+.data-source-health-suspect { background: var(--amber); }
 .data-source-health-unknown { background: var(--text-muted); opacity: 0.5; }
 
 .data-sources-footer {

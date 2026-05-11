@@ -83,6 +83,34 @@ class TestStaticFields:
         assert entries["ecmwf:direct"].pressure_levels == 25
         assert entries["ecmwf:openmeteo"].pressure_levels == 13
 
+    def test_gem_is_present(self, fresh_store):
+        """GEM (Canadian ECCC) was in the legacy static help table and is
+        fetched by the OM seamless feed for North-American routes.  Make
+        sure it survives in the data-driven catalog so the help page
+        doesn't silently drop a supported model."""
+        entries = {e.key: e for e in catalog.build(store=fresh_store)}
+        assert "gem:openmeteo" in entries
+        assert entries["gem:openmeteo"].model_label == "GEM"
+        assert entries["gem:openmeteo"].pressure_levels == 20
+
+    def test_post_init_rejects_partial_horizon_dict(self):
+        """A dict-shaped horizon must cover every configured cycle hour —
+        the constructor must fail loudly, not surface a 500 from the
+        endpoint when ``catalog._per_cycle_hours`` would ``KeyError``."""
+        from datetime import timedelta
+
+        from weatherbrief.fetch.freshness.registry import SourceConfig
+
+        with pytest.raises(ValueError, match="missing cycle hours"):
+            SourceConfig(
+                key="bad:source",
+                cycles=(0, 6, 12, 18),
+                # 12Z missing — must raise.
+                delivery_offset=timedelta(hours=1),
+                horizon={0: timedelta(hours=120), 6: timedelta(hours=78),
+                         18: timedelta(hours=78)},
+            )
+
 
 # ---------------------------------------------------------------------------
 # Dynamic fields — comes from MarkerStore
