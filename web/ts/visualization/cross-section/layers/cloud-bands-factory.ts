@@ -143,6 +143,16 @@ export interface NaturalCloudConfig {
   /** Radial-gradient stop where alpha starts fading (0..1). Larger → harder
    *  cloud cores; smaller → wispier blobs. */
   coreFraction: number;
+  /** Sub-blobs per slot. Each filled slot draws this many overlapping
+   *  radial-gradient blobs at jittered offsets — the union forms a lumpy,
+   *  non-circular cloud silhouette. 1 → single ellipse (no deformation). */
+  subBlobsPerSlot: number;
+  /** Max sub-blob offset from cluster centre, as fraction of blob radius. */
+  subBlobOffsetFraction: number;
+  /** Sub-blob nominal size as fraction of main blob radius. */
+  subBlobSizeFraction: number;
+  /** Sub-blob size variation around the nominal fraction (additive jitter). */
+  subBlobSizeJitter: number;
 }
 
 export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
@@ -156,6 +166,10 @@ export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
   blobJitterY: 0.15,
   blobSizeVariation: 0.5,
   coreFraction: 0.3,
+  subBlobsPerSlot: 3,
+  subBlobOffsetFraction: 0.35,
+  subBlobSizeFraction: 0.65,
+  subBlobSizeJitter: 0.25,
 };
 
 /** Cheap, deterministic hash → [0, 1). Exported so other UI surfaces can
@@ -275,7 +289,25 @@ export function drawNaturalCloudBand(
     const rx = config.blobRadiusXPx * sizeJ;
     const ry = bandH * config.blobHeightFraction * sizeJ;
 
-    drawSoftBlob(ctx, cx, cy, rx, ry, cloudColor, config.coreFraction);
+    // Paint the slot as a small cluster of overlapping sub-blobs. The union
+    // of their soft alpha gradients yields a lumpy, non-circular silhouette
+    // instead of a perfect ellipse. n=1 reproduces the single-ellipse style.
+    const n = Math.max(1, config.subBlobsPerSlot | 0);
+    const aspect = rx > 0 ? ry / rx : 1;
+    for (let i = 0; i < n; i++) {
+      const subSeed = (Math.imul(s, 0x9e3779b1) ^ Math.imul(i, 0x85ebca6b) ^ seed) | 0;
+      // Polar offset around the cluster centre, scaled to the ellipse aspect
+      // so the cluster footprint inherits the band's horizontal stretching.
+      const angle = hash01(subSeed) * Math.PI * 2;
+      const offsetMag = hash01(subSeed ^ 0x12345) * config.subBlobOffsetFraction * rx;
+      const ox = Math.cos(angle) * offsetMag;
+      const oy = Math.sin(angle) * offsetMag * aspect;
+      const subSize = config.subBlobSizeFraction
+        + (hash01(subSeed ^ 0x67890) - 0.5) * config.subBlobSizeJitter;
+      const subRx = rx * subSize;
+      const subRy = ry * subSize;
+      drawSoftBlob(ctx, cx + ox, cy + oy, subRx, subRy, cloudColor, config.coreFraction);
+    }
   }
 }
 
