@@ -50,30 +50,30 @@ describe('getZonesForLayer', () => {
     ]);
   });
 
-  it('cloud-bands does NOT filter (covers low-coverage layers too) and uses coverage as severity', () => {
+  it('square-cloud-bands does NOT filter (covers low-coverage layers too) and uses coverage as severity', () => {
     const p = makeVizPoint({
       cloudLayers: [
         makeCloudLayer({ baseFt: 1000, topFt: 3000, coverage: 'sct' }),
         makeCloudLayer({ baseFt: 5000, topFt: 9000, coverage: 'ovc' }),
       ],
     });
-    const slices = getZonesForLayer('cloud-bands', p);
+    const slices = getZonesForLayer('square-cloud-bands', p);
     expect(slices).toEqual([
       { baseFt: 1000, topFt: 3000, severity: 'sct' },
       { baseFt: 5000, topFt: 9000, severity: 'ovc' },
     ]);
   });
 
-  it('nwp-cloud-bands handles null nwpCloudLayers', () => {
+  it('square-nwp-cloud-bands handles null nwpCloudLayers', () => {
     const p = makeVizPoint({ nwpCloudLayers: null });
-    expect(getZonesForLayer('nwp-cloud-bands', p)).toEqual([]);
+    expect(getZonesForLayer('square-nwp-cloud-bands', p)).toEqual([]);
   });
 
-  it('nwp-cloud-bands maps coverage to severity', () => {
+  it('square-nwp-cloud-bands maps coverage to severity', () => {
     const p = makeVizPoint({
       nwpCloudLayers: [makeCloudLayer({ baseFt: 5000, topFt: 9000, coverage: 'bkn' })],
     });
-    expect(getZonesForLayer('nwp-cloud-bands', p)).toEqual([
+    expect(getZonesForLayer('square-nwp-cloud-bands', p)).toEqual([
       { baseFt: 5000, topFt: 9000, severity: 'bkn' },
     ]);
   });

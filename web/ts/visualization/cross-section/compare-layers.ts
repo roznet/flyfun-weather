@@ -18,9 +18,11 @@ export interface ComparableLayer {
 const COMPARABLE_LAYERS: ComparableLayer[] = [
   // --- Band layers (reuse existing CrossSectionLayer.render via offscreen compositing) ---
 
-  // Clouds
-  { id: 'cloud-bands', name: 'DD Clouds', group: 'Clouds', type: 'band' },
-  { id: 'nwp-cloud-bands', name: 'NWP Clouds', group: 'Clouds', type: 'band' },
+  // Clouds — compare uses the square layer (solid rectangles) because the
+  // natural style's stochastic puffs don't composite cleanly in overlay mode
+  // and add noise to consensus shapes. Square gives sharp model boundaries.
+  { id: 'square-cloud-bands', name: 'DD Clouds', group: 'Clouds', type: 'band' },
+  { id: 'square-nwp-cloud-bands', name: 'NWP Clouds', group: 'Clouds', type: 'band' },
 
   // Icing
   { id: 'icing-bands', name: 'Ogimet-DD Icing', group: 'Icing', type: 'band' },

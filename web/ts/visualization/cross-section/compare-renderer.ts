@@ -483,8 +483,8 @@ export class CompareSectionRenderer {
         return parseRgbaToRgb(theme.sfipIcing.moderate) ?? [255, 165, 0];
       case 'cat-bands':
         return parseRgbaToRgb(theme.cat.moderate) ?? [255, 152, 0];
-      case 'cloud-bands':
-      case 'nwp-cloud-bands':
+      case 'square-cloud-bands':
+      case 'square-nwp-cloud-bands':
         return theme.nwpClouds.brightRgb;
       case 'inversion-bands':
         return theme.inversion.baseRgb;

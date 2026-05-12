@@ -5,10 +5,13 @@
  *   - 'nwp' → p.nwpCloudLayers, color from NWP cover %
  *
  * Style picks the painter:
- *   - 'natural' → anisotropic value-noise fill (long horizontal features,
- *                 tight vertical stratification) emulating the GRAMET look.
- *                 Coverage drives a noise threshold: OVC fills most of the
- *                 band, SCT lets sky show through between streaks.
+ *   - 'natural' → cluster of overlapping soft elliptical blobs, painted
+ *                 across the full band. Defaults yield a continuous puffy
+ *                 band; coverage is encoded by the source's colour/alpha
+ *                 (DD: gray↔white + per-coverage alpha; NWP: brightness +
+ *                 opacity by cover%). Knobs (fillFraction,
+ *                 radiusCoverageScaleFloor, fillAlpha) can re-introduce
+ *                 horizontal sparseness if desired.
  *   - 'soft'    → feathered vertical-gradient fill.
  *   - 'square'  → solid rectangle, opacity from value (ForeFlight-like cells).
  *
@@ -161,10 +164,15 @@ export interface NaturalCloudConfig {
   radiusCoverageScaleFloor: number;
 }
 
+// Defaults paint a continuous puff band: every slot filled, full-size blobs
+// regardless of coverage. Coverage is encoded via colour/alpha from the source
+// (DD: gray↔white + per-coverage alpha; NWP: brightness + opacity by cover%),
+// not by horizontal sparseness. Lower fillFraction / radiusCoverageScaleFloor
+// to bring back the SCT-gaps look.
 export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
-  fillFraction: { FEW: 0.20, SCT: 0.45, BKN: 0.80, OVC: 1.00 },
-  minFillFraction: 0.15,
-  fillAlpha: 0.85,
+  fillFraction: { FEW: 1.0, SCT: 1.0, BKN: 1.0, OVC: 1.0 },
+  minFillFraction: 1.0,
+  fillAlpha: null,
   blobSpacingPx: 28,
   blobRadiusXPx: 36,
   blobHeightFraction: 0.6,
@@ -176,7 +184,7 @@ export const DEFAULT_NATURAL_CONFIG: NaturalCloudConfig = {
   subBlobOffsetFraction: 0.35,
   subBlobSizeFraction: 0.65,
   subBlobSizeJitter: 0.25,
-  radiusCoverageScaleFloor: 0.25,
+  radiusCoverageScaleFloor: 1.0,
 };
 
 /** Cheap, deterministic hash → [0, 1). Exported so other UI surfaces can
