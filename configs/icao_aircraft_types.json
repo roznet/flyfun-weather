@@ -79,6 +79,7 @@
     {"icao": "E55P", "manufacturer": "Embraer", "model": "Phenom 300", "category": "JET"},
     {"icao": "EA50", "manufacturer": "Eclipse", "model": "Eclipse 500", "category": "JET"},
     {"icao": "EC20", "manufacturer": "Eurocopter", "model": "EC120 Colibri", "category": "SET"},
+    {"icao": "EFOX", "manufacturer": "Aeropro", "model": "EuroFOX", "category": "SEP"},
     {"icao": "EUFI", "manufacturer": "Robin", "model": "DR400 Ecoflyer", "category": "SEP"},
     {"icao": "EVOT", "manufacturer": "Evector", "model": "EV-97 Eurostar", "category": "SEP"},
     {"icao": "F2TH", "manufacturer": "Dassault", "model": "Falcon 2000", "category": "JET"},
