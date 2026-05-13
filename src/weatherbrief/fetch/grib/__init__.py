@@ -240,7 +240,7 @@ def _decode_pool_workers_default() -> int:
     on hosts with spare RAM (the prod droplet has 4 vCPU but only 4 GiB
     cgroup, and concurrent refreshes already compete for it).
     """
-    return min(2, os.cpu_count() or 2)
+    return 2
 
 
 def _decode_pool_workers() -> int:
@@ -400,7 +400,9 @@ def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
     Failure modes mirror :func:`_dispatch_decode` — ``BrokenProcessPool`` and
     ``TimeoutError`` reset the pool. A single deadline applies across the
     batch: if the slowest job exceeds ``GRIB_DECODE_TIMEOUT_S``, we tear
-    down. Cancels not-yet-started jobs on failure to free the workers.
+    down. Any worker exception (including non-fatal ones like cfgrib parse
+    errors) cancels not-yet-started jobs so the pool isn't left burning
+    cycles on results no caller will read.
     """
     if not jobs:
         return []
@@ -441,6 +443,14 @@ def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
             len(jobs), names, timeout,
         )
         shutdown_decode_pool(wait=False)
+        raise
+    except Exception:
+        # Non-fatal worker exception (e.g. cfgrib parse error). Cancel
+        # pending futures so the pool doesn't keep decoding results the
+        # caller will never read, but leave the pool itself intact — the
+        # workers are still healthy.
+        for fut in futures:
+            fut.cancel()
         raise
     return results
 
@@ -1571,7 +1581,6 @@ def _decode_and_merge_icon_eu(
     # a given ICON run, so any forecast hour's CLC works).
     n_points = len(ctx.point_lats)
     clc_layers_per_point: list[dict[str, float]] = [{} for _ in range(n_points)]
-    empty_clc = [{} for _ in range(n_points)]
 
     # Build per-fhour decode jobs up-front. A given fhour either has the
     # legacy combined cache (one ``decode_icon_legacy`` job) or per-variable
@@ -1605,7 +1614,7 @@ def _decode_and_merge_icon_eu(
     job_list = [fhour_jobs[fh] for fh in fhours_with_jobs]
     _grib_rss_mark("icon_fhour_pre")
     if job_list:
-        with _grib_time("icon_chunked_decode"):
+        with _grib_time("icon_parallel_decode"):
             raw_results = _dispatch_decode_parallel(job_list)
     else:
         raw_results = []
@@ -1619,7 +1628,10 @@ def _decode_and_merge_icon_eu(
     ]] = {}
     for fhour, (worker_name, _), raw in zip(fhours_with_jobs, job_list, raw_results):
         if worker_name == "decode_icon_legacy":
-            decoded_by_fhour[fhour] = (raw, empty_clc)
+            # Fresh empty list per fhour — sharing a single sentinel would
+            # alias all legacy fhours' clc_layers, a latent footgun if any
+            # downstream merge ever writes back into the slot.
+            decoded_by_fhour[fhour] = (raw, [{} for _ in range(n_points)])
         else:
             decoded, clc_layers = raw
             decoded_by_fhour[fhour] = (decoded, clc_layers)
