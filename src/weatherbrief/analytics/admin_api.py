@@ -79,6 +79,13 @@ def usage_summary(
         .where(AnalyticsBriefingDimRow.is_refresh.is_(True))
     ) or 0
 
+    # Summing daily rows double-counts briefings the user opened on more
+    # than one day — both numerator and denominator grow with the revisit,
+    # but the denominator (briefings_total) grows faster on average since
+    # not every revisit uses every feature. The bias pulls attachment %
+    # slightly *down*. Acceptable trade-off here: the rollup is per-day
+    # and the cross-day exact denominator would require querying
+    # analytics_briefings_dim, sacrificing the cheap rollup-only read.
     feature_rows = db.execute(
         select(
             AnalyticsBriefingFeatureDailyRow.feature,

@@ -68,14 +68,15 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
         delete(AnalyticsEventDailyRow).where(AnalyticsEventDailyRow.day == day)
     )
 
-    # New anons: those whose first ever session started in this day, kept
-    # as a scalar subquery so we don't pull anon_ids into Python.
+    # New anons: those whose first ever session started in this day. We
+    # pass the Select directly to ``.in_()`` so the set lives entirely in
+    # the DB and never lands in Python (would bust MySQL's
+    # max_allowed_packet at scale).
     new_anons_subq = (
         select(AnalyticsSessionRow.anon_id)
         .where(AnalyticsSessionRow.is_first_session.is_(True))
         .where(AnalyticsSessionRow.started_at >= day_start)
         .where(AnalyticsSessionRow.started_at < day_end)
-        .scalar_subquery()
     )
 
     # Single GROUP BY query — ``unique_new_anons`` is COUNT(DISTINCT) over a
@@ -139,7 +140,7 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
     # Denominator: distinct briefings opened (i.e., briefing.opened event)
     # in this UTC day. We use the event timestamp, not the briefing's own
     # created_at, because "opened today" is the user-engagement signal.
-    # Kept as a scalar subquery for the feature joins.
+    # Reused via ``.in_()`` in the feature joins below.
     briefings_today_subq = (
         select(AnalyticsEventRow.briefing_id)
         .distinct()
@@ -147,7 +148,6 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
         .where(AnalyticsEventRow.ts >= day_start)
         .where(AnalyticsEventRow.ts < day_end)
         .where(AnalyticsEventRow.briefing_id.is_not(None))
-        .scalar_subquery()
     )
     briefings_total = int(db.scalar(
         select(func.count(distinct(AnalyticsEventRow.briefing_id)))
@@ -225,6 +225,11 @@ def _extract_detailed_mode(
     event of the day ended with ``to: detailed``. Briefings whose final
     transition was back to ``compact`` (or who never switched) don't count.
 
+    ``total_uses`` only counts transitions *to* detailed mode, matching
+    the "feature activated" semantic used by all other features. Counting
+    every transition (including detailed → compact) would inflate the
+    number for users who toggled back and forth.
+
     Returns ``(briefings_with_feature, total_uses)``.
     """
     rows = db.execute(
@@ -237,11 +242,10 @@ def _extract_detailed_mode(
     ).all()
 
     latest_mode: dict[int, str] = {}
-    total_changes = 0
+    to_detailed_count = 0
     for bid, props_json in rows:
         if bid is None:
             continue
-        total_changes += 1
         try:
             props = json.loads(props_json or "{}")
         except Exception:
@@ -249,9 +253,11 @@ def _extract_detailed_mode(
         to_mode = str(props.get("to") or "").lower()
         if to_mode in ("compact", "detailed"):
             latest_mode[bid] = to_mode
+            if to_mode == "detailed":
+                to_detailed_count += 1
 
     detailed_briefings = sum(1 for m in latest_mode.values() if m == "detailed")
-    return detailed_briefings, total_changes
+    return detailed_briefings, to_detailed_count
 
 
 # ---------------------------------------------------------------------------

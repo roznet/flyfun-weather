@@ -276,6 +276,11 @@ export function track(
  * ``setBriefingContext`` is called with a different context.
  */
 export function trackOncePerBriefing(event: EventName, props?: Props): void {
+  // Check isDisabled() before mutating ``seenInCurrentBriefing``. Otherwise,
+  // marking the event as seen while tracking is off (analytics-notrack
+  // flag) means flipping the flag back on mid-session silently never
+  // re-fires it for the current briefing context.
+  if (isDisabled()) return;
   if (seenInCurrentBriefing.has(event)) return;
   seenInCurrentBriefing.add(event);
   track(event, props);

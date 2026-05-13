@@ -25,11 +25,27 @@ _audit_logger = logging.getLogger("weatherbrief.security.audit")
 _access_logger = logging.getLogger("weatherbrief.security.access")
 
 
-def _client_ip(request: Request) -> str:
-    """Extract client IP, respecting X-Forwarded-For behind a reverse proxy."""
+def client_ip(request: Request) -> str:
+    """Extract the client IP from a request behind Caddy.
+
+    Source priority is chosen so the value cannot be spoofed by a client
+    sending arbitrary headers:
+
+    1. ``X-Real-IP`` — Caddy sets this from the connection peer; clients
+       cannot make Caddy override it.
+    2. ``X-Forwarded-For`` rightmost — Caddy *appends* the real remote
+       address to whatever the client sent, so the last comma-separated
+       entry is the one Caddy added. The leftmost entries are
+       client-controlled and unsafe to trust.
+    3. ``request.client.host`` — fallback for direct connections (local
+       dev), where no proxy header is present.
+    """
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -46,7 +62,7 @@ def audit_admin_action(
     details: str = "",
 ) -> None:
     """Log a structured admin action for audit trail."""
-    ip = _client_ip(request)
+    ip = client_ip(request)
     parts = [
         f"admin_action={action}",
         f"admin_id={admin_id}",
@@ -66,7 +82,7 @@ def audit_pack_access(
     request: Request,
 ) -> None:
     """Log pack/artifact access for pattern tracking."""
-    ip = _client_ip(request)
+    ip = client_ip(request)
     _access_logger.info(
         "pack_access user=%s flight=%s endpoint=%s ip=%s",
         user_id, flight_id, endpoint, ip,

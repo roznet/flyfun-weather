@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import SessionLocal
+from weatherbrief.api.security import client_ip
 from weatherbrief.api.throttle import (
     analytics_burst_limiter,
     analytics_daily_limiter,
@@ -57,14 +58,6 @@ _MAX_PROPS_JSON_BYTES = 1_024
 # Timestamp clamp window. Anything outside this is replaced with server_now.
 _TS_FUTURE_TOLERANCE = timedelta(minutes=5)
 _TS_PAST_TOLERANCE = timedelta(days=7)
-
-
-def _client_ip(request: Request) -> str:
-    """Extract client IP, respecting X-Forwarded-For behind Caddy."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 class EventIn(BaseModel):
@@ -133,6 +126,12 @@ def ingest_events(
     plus a daily event-count cap. Both keep an abusive client from
     inflating the events table without blocking real users.
     """
+    # Apply the burst cap before the empty-batch short-circuit so a client
+    # can't dodge throttling by flooding ``{"events": []}`` — pydantic
+    # validation alone is cheap but uncapped POSTs still cost CPU.
+    ip = client_ip(request)
+    analytics_burst_limiter.check(ip)
+
     if not body.events:
         return {"accepted": 0}
 
@@ -140,8 +139,6 @@ def ingest_events(
     # batch doesn't lose us all the events.
     events = body.events[:_MAX_EVENTS_PER_BATCH]
 
-    ip = _client_ip(request)
-    analytics_burst_limiter.check(ip)
     analytics_daily_limiter.check(ip, count=len(events))
 
     background.add_task(
