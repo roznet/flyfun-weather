@@ -139,14 +139,17 @@ def _fill_cloud_diagnostics(
 
 
 def _fill_diag_hourly(hourly_list: list[HourlyForecast]) -> int:
-    """Forward-fill: copy each anchor's diag onto subsequent gap hours."""
+    """Forward-fill: each gap hour gets a shallow copy of the preceding
+    anchor's diag, so a downstream in-place mutation (e.g. icing analysis
+    setting a flag) on one hour cannot leak across other hours that share
+    the same anchor."""
     filled = 0
     last_diag: NWPCloudDiagnostics | None = None
     for h in sorted(hourly_list, key=lambda h: h.time):
         if h.nwp_cloud_diagnostics is not None:
             last_diag = h.nwp_cloud_diagnostics
         elif last_diag is not None:
-            h.nwp_cloud_diagnostics = last_diag
+            h.nwp_cloud_diagnostics = last_diag.model_copy()
             filled += 1
     return filled
 
@@ -235,11 +238,13 @@ def _interp_gfs_diag_hourly(
             filled += 1
 
     # After the last anchor: forward-fill (no upper bracket to interp against).
+    # Each trailing gap hour gets its own shallow copy so a downstream
+    # in-place mutation on one hour doesn't leak across the others.
     last_idx = anchor_indices[-1]
     last_diag = sorted_hours[last_idx].nwp_cloud_diagnostics
     for i in range(last_idx + 1, len(sorted_hours)):
         if sorted_hours[i].nwp_cloud_diagnostics is None:
-            sorted_hours[i].nwp_cloud_diagnostics = last_diag
+            sorted_hours[i].nwp_cloud_diagnostics = last_diag.model_copy()
             filled += 1
 
     return filled
@@ -431,6 +436,15 @@ def _interp_gfs_clw_hourly(hourly_list: list[HourlyForecast]) -> int:
     that's the cover-fraction issue), so step-time anchoring is correct here.
     Hours after the last anchor forward-fill; hours before the first anchor
     are left as-is.
+
+    Anchor invariant: anchor indexing is keyed on ``cloud_liquid_water_kg_kg``
+    alone. ICMR rides along — its interp / forward-fill is gated by the
+    corresponding CLW being present. This is safe because the GFS GRIB
+    decoder writes CLW and ICMR together from the same byte-range fetch
+    (`plan_byte_ranges` requests CLMR + ICMR atomically per native step).
+    If a future decoder change ever populates ICMR independently of CLW
+    for some pressure level, those ICMR values would silently miss the
+    interp — update the anchor keying here.
     """
     sorted_hours = sorted(hourly_list, key=lambda h: h.time)
     if not sorted_hours:
@@ -561,7 +575,22 @@ def apply_gfs_rh_condensate_gate(
 
 
 def _gate_gfs_hourly(h: HourlyForecast) -> int:
-    """Apply the gate to one hourly forecast. Returns # layers dropped."""
+    """Apply the gate to one hourly forecast. Returns # layers dropped.
+
+    Only low/mid/high are gated. Convective, boundary, total, ceiling, and
+    freezing level are *instantaneous* products in GFS pgrb2 (TCDC@atmosphere,
+    TCDC@convectiveCloudLayer, TCDC@boundaryLayerCloudLayer, GH@cloudCeiling,
+    HGT@0degC) — they don't suffer the averaged-window back-smear that
+    motivates this gate, so they're forwarded unchanged.
+
+    Caveat: ``ceiling_ft`` is computed by GFS from the column's lowest
+    cloudy layer, which can include the layers we just gated. If the only
+    cloudy layer at a step was the phantom one dropped here, the inherited
+    ``ceiling_ft`` is stale. We don't recompute it because the relationship
+    between GFS GH@cloudCeiling and the per-band geometry isn't a simple
+    function we can invert at this stage. The downstream ceiling consumers
+    cross-check against pressure-level RH anyway.
+    """
     from weatherbrief.models import NWPCloudDiagnostics
 
     diag = h.nwp_cloud_diagnostics

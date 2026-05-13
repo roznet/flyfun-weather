@@ -94,7 +94,8 @@ def _make_cs_with_hourly(
 
 class TestForwardFillDiagnostics:
     def test_fills_gap_after_native_hour(self):
-        """Diagnostics at T0 should forward-fill to T0+1h."""
+        """Diagnostics at T0 should forward-fill (value-equal copies, not
+        shared references) to T0+1h."""
         diag = _make_diag()
         hourly = [
             _make_hourly(T0, diag=diag),
@@ -104,8 +105,14 @@ class TestForwardFillDiagnostics:
         cs = _make_cs_with_hourly([hourly])
         propagate_all([cs], [])
 
-        assert cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics is diag
-        assert cs.point_forecasts[0].hourly[2].nwp_cloud_diagnostics is diag
+        # Each gap hour is value-equal to the anchor but a distinct object so
+        # downstream in-place mutation cannot leak across hours.
+        hf = cs.point_forecasts[0].hourly
+        assert hf[1].nwp_cloud_diagnostics == diag
+        assert hf[2].nwp_cloud_diagnostics == diag
+        assert hf[1].nwp_cloud_diagnostics is not diag
+        assert hf[2].nwp_cloud_diagnostics is not diag
+        assert hf[1].nwp_cloud_diagnostics is not hf[2].nwp_cloud_diagnostics
 
     def test_does_not_overwrite_existing(self):
         """Existing diagnostics should not be overwritten."""
@@ -530,6 +537,54 @@ class TestGfsMidpointInterp:
         for h in cs.point_forecasts[0].hourly[1:]:
             assert h.nwp_cloud_diagnostics.high.cover_pct == 50.0
 
+    def test_post_last_anchor_forward_fill_does_not_share_object(self):
+        """Each forward-filled hour gets its own copy, so an in-place mutation
+        on one hour cannot leak into the others."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        diag = NWPCloudDiagnostics(
+            high=NWPCloudLayerDiag(cover_pct=50.0, base_ft=30000, top_ft=40000),
+        )
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=132), diag=diag),
+            _make_hourly(gfs_init + timedelta(hours=133)),
+            _make_hourly(gfs_init + timedelta(hours=134)),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        hf = cs.point_forecasts[0].hourly
+        assert hf[1].nwp_cloud_diagnostics is not hf[2].nwp_cloud_diagnostics
+        assert hf[1].nwp_cloud_diagnostics is not hf[0].nwp_cloud_diagnostics
+
+    def test_pre_f120_mixed_window_clamp(self):
+        """f001 (1h window, midpoint at f000:30) → f003 (3h window, midpoint
+        at f001:30). The midpoint span is 1 h, but step span is 2 h. A gap
+        hour at f002 sits past the next midpoint (mid_frac > 1.0 → clamped),
+        so it inherits the next anchor's cover state. Catches a regression
+        where short-haul flights in the first few forecast hours mis-handle
+        the cadence transition.
+        """
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        diag_f001 = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=80.0, base_ft=10000, top_ft=18000),
+        )
+        diag_f003 = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=10.0, base_ft=11000, top_ft=19000),
+        )
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=1), diag=diag_f001),
+            _make_hourly(gfs_init + timedelta(hours=2)),  # gap
+            _make_hourly(gfs_init + timedelta(hours=3), diag=diag_f003),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        mid_f002 = cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics.mid
+        # f002 is past f003's midpoint (f001:30) → mid_frac clamps to 1.0 →
+        # cover = next anchor's 10%. Layer kept (above 5% drop threshold)
+        # with geometry held from higher-cover endpoint (f001).
+        assert mid_f002.cover_pct == pytest.approx(10.0)
+        assert mid_f002.base_ft == 10000  # f001 geometry (higher cover)
+        assert mid_f002.top_ft == 18000
+
 
 class TestGfsClwLinearInterp:
     """CLW/ICMR are instantaneous — linear interp between native step times."""
@@ -562,6 +617,24 @@ class TestGfsClwLinearInterp:
         propagate_all([cs], [])  # no gfs_init → forward-fill
         pl1 = cs.point_forecasts[0].hourly[1].pressure_levels[0]
         assert pl1.cloud_liquid_water_kg_kg == pytest.approx(1e-4)
+
+    def test_clw_post_last_anchor_forward_fills(self):
+        """Hours past the last CLW anchor have no upper bracket → carry the
+        last known value forward (mirrors the diag post-last-anchor path)."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=120), clw=2e-4, icmr=5e-5),
+            _make_hourly(gfs_init + timedelta(hours=123), clw=4e-4, icmr=1e-4),
+            _make_hourly(gfs_init + timedelta(hours=124)),  # past last anchor
+            _make_hourly(gfs_init + timedelta(hours=125)),  # past last anchor
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        pl_trailing_1 = cs.point_forecasts[0].hourly[2].pressure_levels[0]
+        pl_trailing_2 = cs.point_forecasts[0].hourly[3].pressure_levels[0]
+        assert pl_trailing_1.cloud_liquid_water_kg_kg == pytest.approx(4e-4)
+        assert pl_trailing_1.ice_mixing_ratio_kg_kg == pytest.approx(1e-4)
+        assert pl_trailing_2.cloud_liquid_water_kg_kg == pytest.approx(4e-4)
 
 
 class TestGfsRhCondensateGate:

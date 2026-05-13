@@ -119,7 +119,7 @@ Open-Meteo provides **hourly** forecast data for the full 24h cross-section, inc
 | `nwp_cloud_diagnostics.low/mid/high.cover_pct` | GRIB averaged-window cover (GFS) or instantaneous cover | **Window-midpoint linear interp**; sub-5 % drops layer; RH/condensate gate may also drop layer post-interp | Forward-filled |
 | `nwp_cloud_diagnostics.low/mid/high.base_ft/top_ft/top_temp_c` | GRIB geometry | Held over from the bracketing higher-cover endpoint | Forward-filled |
 | `nwp_cloud_diagnostics` instantaneous fields (convective, boundary, total, ceiling, freezing level) | GRIB instantaneous | Step-time linear interp | Forward-filled |
-| `cloud_cover_low/mid/high_pct` | Overridden by GRIB | Propagated from GRIB diagnostics | Propagated from GRIB diagnostics |
+| `cloud_cover_low/mid/high_pct` (bulk OM field) | Open-Meteo hourly interp (never written by GRIB enrichment) | same | same |
 | `cloud_liquid_water_kg_kg` / `ice_mixing_ratio_kg_kg` (per level) | GRIB CLMR / ICMR | Step-time linear interp (`_interp_gfs_clw_hourly`) | Forward-filled (`_fill_clw_hourly`) for GFS without `gfs_init`; ECMWF / ICON-EU rebuild full `pressure_levels` via `_linear_interp_pressure_levels` |
 
 **Cloud diagnostics propagation** (`_fill_cloud_diagnostics` in `fetch/grib/fill.py`, called from `propagate_all`):
