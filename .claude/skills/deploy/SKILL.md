@@ -245,7 +245,7 @@ Runs **only after** the health check returns 200 — never close issues if the d
    for pr in $PRS; do
      body=$(gh pr view "$pr" --json body --jq .body)
      issues=$(printf '%s\n' "$body" \
-       | grep -oiE '(addresses|refs?|references|related to|closes?|closed|fix(es|ed)?|resolves?|resolved)[[:space:]]+#[0-9]+' \
+       | grep -oiE '(addresses|refs?|references|related to|closes?|closed|fix(es|ed)?|resolves?|resolved)[[:space:]]+(issue[[:space:]]+)?#[0-9]+' \
        | grep -oE '[0-9]+' | sort -u)
      for issue in $issues; do
        state=$(gh issue view "$issue" --json state --jq .state 2>/dev/null)
@@ -266,6 +266,8 @@ Runs **only after** the health check returns 200 — never close issues if the d
    ```
 
 > **Gotcha**: GitHub's auto-close keywords (`Closes`/`Fixes`/`Resolves`) fire on **either** the PR body or the merged commit message. With "Rebase and merge", original commit messages are preserved — so even if the PR body uses `Addresses #N`, a `Closes #N` in the commit message body will close the issue at merge time. When writing commit messages for close-on-deploy PRs, use `Addresses #N` (or just `#N`) in the commit body too.
+>
+> **Also**: GitHub's auto-close only matches `Fixes #N`, not `Fixes issue #N` (the word "issue" between keyword and `#` breaks it). PR #139 was an example — its body said "Fixes issue #133" so neither GitHub nor an earlier version of this regex caught it. The regex above includes an optional `issue` token to handle that variant on the deploy side; prefer dropping the word "issue" in PR bodies so GitHub's own auto-close fires at merge time.
 
 3. Summarize what was closed at the end (or say "no Addresses-linked issues to close" if the list is empty).
 
