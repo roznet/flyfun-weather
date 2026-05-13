@@ -30,6 +30,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from flyfun_common.db import SessionLocal, get_db
 from sqlalchemy.orm import Session
@@ -131,13 +132,21 @@ def _persist_batch(
     events: list[dict],
     received_at: datetime,
 ) -> None:
-    """Write the batch in a dedicated DB session (background task)."""
+    """Write the batch in a dedicated DB session (background task).
+
+    Each event insert runs inside its own SAVEPOINT so a single bad event
+    (constraint violation, etc.) doesn't poison the surrounding
+    transaction. Without the SAVEPOINT, SQLAlchemy would mark the session
+    as "must rollback" after the first DB-level error and the final
+    ``db.commit()`` would discard the whole batch.
+    """
     db = SessionLocal()
     try:
         _ensure_session_row(db, anon_id, session_id, received_at, app_version)
         for raw in events:
             try:
-                _persist_one(db, anon_id, session_id, app_version, raw, received_at)
+                with db.begin_nested():
+                    _persist_one(db, anon_id, session_id, app_version, raw, received_at)
             except Exception:
                 logger.warning(
                     "analytics: failed to persist event %s", raw.get("event"),
@@ -158,7 +167,15 @@ def _ensure_session_row(
     started_at: datetime,
     app_version: str | None,
 ) -> None:
-    """Insert a session row on first sight; idempotent."""
+    """Insert a session row on first sight; idempotent under concurrency.
+
+    The check-then-insert here is racy: two concurrent flushes from the
+    same session (10 s timer + ``pagehide``) can both pass the
+    ``db.get()`` check and try to insert, hitting the PK constraint. We
+    wrap the insert in a SAVEPOINT so only that statement rolls back on
+    conflict — the rest of the batch survives. Same pattern as
+    ``storage.flights.subscribe_flight``.
+    """
     if db.get(AnalyticsSessionRow, session_id) is not None:
         return
 
@@ -168,15 +185,21 @@ def _ensure_session_row(
         .where(AnalyticsSessionRow.anon_id == anon_id)
         .limit(1)
     )
-    db.add(
-        AnalyticsSessionRow(
-            session_id=session_id,
-            anon_id=anon_id,
-            started_at=started_at,
-            is_first_session=has_prior is None,
-            app_version=app_version,
-        )
-    )
+    try:
+        with db.begin_nested():
+            db.add(
+                AnalyticsSessionRow(
+                    session_id=session_id,
+                    anon_id=anon_id,
+                    started_at=started_at,
+                    is_first_session=has_prior is None,
+                    app_version=app_version,
+                )
+            )
+    except IntegrityError:
+        # Another flush from the same session won the race. That's fine —
+        # the row exists, we're done.
+        pass
 
 
 def _persist_one(

@@ -92,7 +92,7 @@ def build_digest(db: Session, end_day: date | None = None) -> str:
 
     feature_lines: list[str] = []
     for feature, with_feat, total in feature_rows:
-        pct = (int(with_feat) * 100 // int(total)) if total else 0
+        pct = round(int(with_feat) * 100 / int(total), 1) if total else 0.0
         feature_lines.append(f"  {feature}: {pct}% ({with_feat}/{total})")
 
     lines = [

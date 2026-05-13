@@ -27,9 +27,6 @@ export const EVENTS = {
   AUTO_REFRESH_ENABLED: 'auto_refresh.enabled',
   AUTO_REFRESH_DISABLED: 'auto_refresh.disabled',
   DISPLAY_MODE_CHANGED: 'display_mode.changed',
-
-  // Search / navigation
-  AIRPORT_SEARCHED: 'airport.searched',
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];

@@ -48,9 +48,6 @@ class Event(StrEnum):
     AUTO_REFRESH_DISABLED = "auto_refresh.disabled"
     DISPLAY_MODE_CHANGED = "display_mode.changed"  # props: {from, to}
 
-    # Search / navigation ----------------------------------------------------
-    AIRPORT_SEARCHED = "airport.searched"
-
 
 ALLOWED_EVENTS: frozenset[str] = frozenset(e.value for e in Event)
 

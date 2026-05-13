@@ -526,7 +526,9 @@ async function init(): Promise<void> {
           aircraftId: !isNaN(aircraftId!) ? aircraftId : undefined,
           rawRoute: wpRaw,
         });
-        track(EVENTS.FLIGHT_CREATED, { flight_id: flight.id });
+        // Pass flight_id via context (top-level field) so server-side
+        // enrichment (upsert_flight_dim) picks it up.
+        track(EVENTS.FLIGHT_CREATED, undefined, { flight_id: flight.id });
         // Navigate to briefing page for the new flight
         navigateToBriefing(flight.id);
       } catch {

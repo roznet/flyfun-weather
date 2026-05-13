@@ -17,6 +17,7 @@ rolled up, so re-running for the same day produces the same result.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import date, datetime, timedelta, timezone
@@ -189,8 +190,7 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
                 continue
             total_detailed_changes += 1
             try:
-                import json as _json
-                props = _json.loads(props_json or "{}")
+                props = json.loads(props_json or "{}")
                 to_mode = str(props.get("to") or "").lower()
                 if to_mode in ("compact", "detailed"):
                     latest_mode[bid] = to_mode

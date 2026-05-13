@@ -214,14 +214,31 @@ function ensureInitialized(): void {
   track(EVENTS.SESSION_STARTED);
 }
 
-export function track(event: EventName, props?: Props): void {
+/**
+ * Per-call context override. Used for events that fire *outside* the
+ * briefing page where ``setBriefingContext`` is not active — most notably
+ * ``flight.created``, which has a flight_id but no briefing_ts yet.
+ *
+ * Pass ``flight_id`` here rather than stuffing it in ``props`` so the
+ * server-side enrichment (which reads the top-level field) picks it up.
+ */
+export interface TrackContext {
+  flight_id?: string;
+  briefing_ts?: string;
+}
+
+export function track(
+  event: EventName,
+  props?: Props,
+  context?: TrackContext,
+): void {
   if (isDisabled()) return;
   ensureInitialized();
   queue.push({
     event,
     ts: new Date().toISOString(),
-    flight_id: currentFlightId,
-    briefing_ts: currentBriefingTs,
+    flight_id: context?.flight_id ?? currentFlightId,
+    briefing_ts: context?.briefing_ts ?? currentBriefingTs,
     props,
   });
   scheduleFlush();

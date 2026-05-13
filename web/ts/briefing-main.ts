@@ -900,6 +900,19 @@ async function init(): Promise<void> {
         (ts) => store.getState().selectPack(ts),
       );
     }
+    // Re-attach analytics context whenever the selected pack changes —
+    // history-dropdown switches and refresh-completed both land here.
+    if (state.currentPack !== prev.currentPack && state.flight && state.currentPack) {
+      setBriefingContext(state.flight.id, state.currentPack.fetch_timestamp);
+      // A new pack timestamp (i.e. one not previously in state.packs) means
+      // a refresh just completed. Emit briefing.refreshed once for it.
+      const wasNew = !prev.packs.some(
+        (p: { fetch_timestamp: string }) => p.fetch_timestamp === state.currentPack!.fetch_timestamp,
+      );
+      if (wasNew) {
+        track(EVENTS.BRIEFING_REFRESHED);
+      }
+    }
     if (
       state.currentPack !== prev.currentPack ||
       state.snapshot !== prev.snapshot ||

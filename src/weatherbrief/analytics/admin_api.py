@@ -97,7 +97,9 @@ def usage_summary(
             "briefings_with_feature": int(with_feat),
             "briefings_total": int(total),
             "total_uses": int(uses),
-            "attachment_pct": (int(with_feat) * 100 // int(total)) if total else 0,
+            "attachment_pct": (
+                round(int(with_feat) * 100 / int(total), 1) if total else 0.0
+            ),
         }
         for feature, with_feat, total, uses in feature_rows
     ]
