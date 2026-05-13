@@ -78,9 +78,12 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point() ──→ build_ic
 
 ### Stage 2: Temporal Interpolation
 
-`fill.py:_forward_fill_cloud_diagnostics()` — forward-fills `nwp_cloud_diagnostics` from native GRIB hours to Open-Meteo interpolated hours. Cloud layer geometry changes slowly between 3-hour GFS steps.
+`fill.py:_fill_cloud_diagnostics()` (invoked from `propagate_all`) fills `nwp_cloud_diagnostics` on gap hours between native GRIB steps.
 
-Open-Meteo `cloud_cover_*_pct` values are NOT forward-filled — they have their own hourly interpolation from Open-Meteo. This means cloud cover percentages and cloud diagnostic boundaries can come from different time anchors (up to 3 hours apart at longer lead times).
+- **GFS, when `gfs_init` is provided** — `_interp_gfs_diag_hourly` does **window-midpoint linear interpolation** for low/mid/high cover (LCDC/MCDC/HCDC are averaged-window fields in GFS pgrb2, so each anchor sits at `step - window_length/2`). Layer geometry (`base_ft`, `top_ft`, `top_temp_c`) holds over from the higher-cover endpoint; sub-5 % covers drop the layer entirely. Convective, boundary, total, ceiling, and freezing level interpolate linearly with step-time anchoring. A follow-up `apply_gfs_rh_condensate_gate` drops bands whose pressure-level RH and condensate inside `[base_ft, top_ft]` contradict the averaged cover. See [future/meteorology-decisions.md §3](./future/meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate).
+- **ICON-EU, ECMWF, and the GFS fallback path** (no `gfs_init`) — `_fill_diag_hourly` forward-fills. ICON-EU and ECMWF publish instantaneous cover; persistence is the right semantic.
+
+Open-Meteo `cloud_cover_*_pct` values are NOT temporally smoothed by this module — they have their own hourly interpolation from Open-Meteo. This means cloud cover percentages and cloud diagnostic boundaries can come from different time anchors (up to ~1.5 hours apart on the GFS path with window-midpoint interp; up to 3 hours on the forward-fill path).
 
 ### Stage 3: Spatial Interpolation
 
@@ -313,7 +316,10 @@ The ceiling and convective base/top from ICON-EU diagnostics ARE used elsewhere 
 
 ### 4. Temporal desynchronization between cover % and boundaries
 
-Open-Meteo provides hourly-interpolated cloud cover percentages. GRIB2 provides native-step diagnostics (1h or 3h intervals) that are forward-filled. Between native steps, the percentage can be freshly interpolated while the boundaries are stale (up to 3 hours old). This is documented in `fill.py` and accepted as a reasonable approximation.
+Open-Meteo provides hourly-interpolated cloud cover percentages. GRIB2 native-step diagnostics arrive at 1h or 3h intervals.
+
+- **GFS path (with `gfs_init`)** — low/mid/high cover is now window-midpoint linearly interpolated and the RH/condensate gate drops phantom layers (see [future/meteorology-decisions.md §3](./future/meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate) and Stage 2). The remaining desync is between the freshly-interpolated cover and held-over layer geometry — bounded by the bracketing native steps' window length (≤ 1.5 h on either side past f120).
+- **ICON-EU / ECMWF / GFS fallback** — forward-fill leaves boundaries stale up to one full native step behind (3 h at longer lead times). Cover and boundaries can disagree by that much. Accepted as a reasonable approximation; ICON-EU and ECMWF cover is instantaneous, so persistence of both cover and geometry together is consistent.
 
 ---
 
@@ -414,9 +420,11 @@ SFIP proxy uses a wider gate (3°C, includes SCT) because it has no pass-2 NWP f
 
 | Axis | What | Method | Notes |
 |------|------|--------|-------|
-| **Temporal** | Cloud diagnostics | Forward-fill from native GRIB hours | Up to 3h gap at longer lead times |
-| **Temporal** | Cloud water (CLW/ICMR) | Forward-fill from native GRIB hours | Same timing as diagnostics |
-| **Temporal** | Cloud cover % | Open-Meteo hourly interpolation | Independent of GRIB timing |
+| **Temporal** | GFS cloud diagnostics (low/mid/high cover) | Window-midpoint linear interp between native steps (requires `gfs_init`); geometry held from higher-cover endpoint; sub-5 % drops layer; RH/condensate gate drops phantom layers post-interp | See [future/meteorology-decisions.md §3](./future/meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate) |
+| **Temporal** | GFS cloud diagnostics (instantaneous: convective, boundary, total, ceiling, freezing level) | Step-time linear interp (requires `gfs_init`) | Instantaneous fields in GFS pgrb2 — no midpoint offset |
+| **Temporal** | ICON-EU / ECMWF cloud diagnostics + GFS fallback path | Forward-fill from preceding native GRIB hour | Up to 3h gap at longer lead times |
+| **Temporal** | Cloud water (CLW/ICMR) | GFS: step-time linear interp (requires `gfs_init`), otherwise forward-fill; ECMWF / ICON-EU rebuild via `_linear_interp_pressure_levels` | Instantaneous mixing ratios — step-time anchoring |
+| **Temporal** | Cloud cover % (`cloud_cover_low/mid/high_pct`) | Open-Meteo hourly interpolation | Independent of GRIB timing |
 | **Spatial** | Cloud diagnostics | Linear between route points | One-sided fallback; max 100nm gap |
 | **Spatial** | Cloud water (CLW/ICMR) | Linear between route points | Sets `clw_interpolated=True` |
 | **Spatial** | Cloud cover % | Not interpolated | Each point has own API response |

@@ -12,6 +12,7 @@
 import type { VizRouteData, VizPoint, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizCATLayer, VizInversionLayer } from '../visualization/types';
 import type { SoundingProfileData, SoundingProfileLevel, ParcelPathPoint, CloudLayer, IcingZone, InversionLayer } from '../visualization/skewt/types';
 import { computeSurfaceObscuration, type ObscurationLevel } from '../visualization/surface-obscuration';
+import { randomOverlapPct } from '../visualization/scales';
 import { API_BASE } from '../utils';
 
 export interface AirportProfileMeta {
@@ -382,7 +383,7 @@ function synthesizeVizPoint(
     nwpConvectiveCoverPct: sounding?.convective_nwp?.cover_pct ?? null,
     nwpConvectiveMethod: sounding?.convective_nwp?.method ?? null,
     hasNwpConvective: sounding?.convective_nwp != null,
-    cloudCoverTotalPct: Math.min(100, low + mid + high),
+    cloudCoverTotalPct: randomOverlapPct(low, mid, high),
     cloudCoverLowPct: low,
     cloudCoverMidPct: mid,
     headwindKt: 0,

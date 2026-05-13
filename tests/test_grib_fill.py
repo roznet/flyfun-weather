@@ -8,7 +8,11 @@ from weatherbrief.analysis.spatial_interpolation import (
     interpolate_diagnostics_spatially,
     interpolate_all_spatially,
 )
-from weatherbrief.fetch.grib.fill import propagate_all
+from weatherbrief.fetch.grib.fill import (
+    _gfs_window_length_hours,
+    apply_gfs_rh_condensate_gate,
+    propagate_all,
+)
 from weatherbrief.models import (
     HourlyForecast,
     ModelSource,
@@ -90,7 +94,8 @@ def _make_cs_with_hourly(
 
 class TestForwardFillDiagnostics:
     def test_fills_gap_after_native_hour(self):
-        """Diagnostics at T0 should forward-fill to T0+1h."""
+        """Diagnostics at T0 should forward-fill (value-equal copies, not
+        shared references) to T0+1h."""
         diag = _make_diag()
         hourly = [
             _make_hourly(T0, diag=diag),
@@ -100,8 +105,14 @@ class TestForwardFillDiagnostics:
         cs = _make_cs_with_hourly([hourly])
         propagate_all([cs], [])
 
-        assert cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics is diag
-        assert cs.point_forecasts[0].hourly[2].nwp_cloud_diagnostics is diag
+        # Each gap hour is value-equal to the anchor but a distinct object so
+        # downstream in-place mutation cannot leak across hours.
+        hf = cs.point_forecasts[0].hourly
+        assert hf[1].nwp_cloud_diagnostics == diag
+        assert hf[2].nwp_cloud_diagnostics == diag
+        assert hf[1].nwp_cloud_diagnostics is not diag
+        assert hf[2].nwp_cloud_diagnostics is not diag
+        assert hf[1].nwp_cloud_diagnostics is not hf[2].nwp_cloud_diagnostics
 
     def test_does_not_overwrite_existing(self):
         """Existing diagnostics should not be overwritten."""
@@ -361,3 +372,388 @@ class TestForwardFillPressureLevels:
 
         assert len(cs.point_forecasts[0].hourly[0].pressure_levels) == 19
         assert len(cs.point_forecasts[0].hourly[2].pressure_levels) == 19
+
+
+# ---------------------------------------------------------------------------
+# Issue #148 — GFS window-midpoint cloud-diag interp + RH/condensate gate
+# ---------------------------------------------------------------------------
+
+
+class TestGfsWindowLength:
+    """GFS averaging-window cadence: f001/4/7 → 1h, f002/5/8 → 2h, rest → 3h."""
+
+    @pytest.mark.parametrize("fhour,expected", [
+        (1, 1), (4, 1), (7, 1), (118, 1),
+        (2, 2), (5, 2), (8, 2), (119, 2),
+        (3, 3), (6, 3), (9, 3), (120, 3),
+        (123, 3), (126, 3), (132, 3), (168, 3), (384, 3),
+        (0, 0),  # analysis — no window
+    ])
+    def test_window_length(self, fhour, expected):
+        assert _gfs_window_length_hours(fhour) == expected
+
+
+def _make_cs_with_hourly_model(
+    point_hourly: list[list[HourlyForecast]],
+    model: ModelSource,
+) -> RouteCrossSection:
+    now = datetime.now(tz=timezone.utc)
+    wpt = Waypoint(icao="XXXX", name="Test", lat=50.0, lon=0.0)
+    point_forecasts = [
+        WaypointForecast(
+            waypoint=wpt, model=model, fetched_at=now,
+            hourly=hourly_list,
+        )
+        for hourly_list in point_hourly
+    ]
+    return RouteCrossSection(
+        model=model, route_points=[], fetched_at=now,
+        point_forecasts=point_forecasts,
+    )
+
+
+class TestGfsMidpointInterp:
+    """pt11-style regression: midpoint anchoring collapses the phantom layer.
+
+    init = 2026-05-12 00z, target hour = 134 → step f132 anchor at 12z
+    (window 09-12z, midpoint 10:30z) reading 100% mid, step f135 at 15z
+    (window 12-15z, midpoint 13:30z) reading 0%. Forward-fill would smear
+    100% across 13z/14z; midpoint interp collapses to 0% at 14z (past the
+    f135 midpoint).
+    """
+
+    def _build_pt11_section(self) -> tuple[datetime, RouteCrossSection]:
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        # 12z (f132, 100%), 13z gap, 14z gap, 15z (f135, 0%), 16z gap, 17z gap,
+        # 18z (f138, 0%). Step span = 3 h, window midpoints at 10:30 and 13:30.
+        diag_high = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=100.0, base_ft=18000, top_ft=22200),
+        )
+        diag_zero = NWPCloudDiagnostics(mid=NWPCloudLayerDiag(cover_pct=0.0))
+        diag_zero_2 = NWPCloudDiagnostics(mid=NWPCloudLayerDiag(cover_pct=0.0))
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=132), diag=diag_high),
+            _make_hourly(gfs_init + timedelta(hours=133)),
+            _make_hourly(gfs_init + timedelta(hours=134)),
+            _make_hourly(gfs_init + timedelta(hours=135), diag=diag_zero),
+            _make_hourly(gfs_init + timedelta(hours=136)),
+            _make_hourly(gfs_init + timedelta(hours=137)),
+            _make_hourly(gfs_init + timedelta(hours=138), diag=diag_zero_2),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        return gfs_init, cs
+
+    def test_phantom_layer_collapsed_at_14z(self):
+        gfs_init, cs = self._build_pt11_section()
+        propagate_all([cs], [], gfs_init=gfs_init)
+        hourly = cs.point_forecasts[0].hourly
+
+        # 12z (native f132): unchanged 100%.
+        assert hourly[0].nwp_cloud_diagnostics.mid.cover_pct == 100.0
+        # 14z (gap, past f135 midpoint 13:30): below the 5% drop threshold.
+        mid_14z = hourly[2].nwp_cloud_diagnostics.mid
+        assert mid_14z.cover_pct is None  # dropped layer
+        assert mid_14z.base_ft is None
+        # 15z native: unchanged 0%.
+        assert hourly[3].nwp_cloud_diagnostics.mid.cover_pct == 0.0
+
+    def test_intermediate_hour_interpolates_between_midpoints(self):
+        """13z sits between midpoints 10:30 (100%) and 13:30 (0%) →
+        frac = 2.5/3 = 0.833 → 16.7%. Above drop threshold → layer kept."""
+        gfs_init, cs = self._build_pt11_section()
+        propagate_all([cs], [], gfs_init=gfs_init)
+        mid_13z = cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics.mid
+        assert mid_13z.cover_pct == pytest.approx(100 - 100 * 2.5 / 3.0, abs=0.1)
+        # Geometry held over from higher-cover (prev) endpoint.
+        assert mid_13z.base_ft == 18000
+        assert mid_13z.top_ft == 22200
+
+    def test_fallback_path_unchanged_when_gfs_init_none(self):
+        """Without gfs_init, behavior matches forward-fill (back-compat)."""
+        gfs_init, cs = self._build_pt11_section()
+        propagate_all([cs], [])  # no gfs_init
+        # 14z forward-filled with 100% (the bug we're fixing).
+        assert (
+            cs.point_forecasts[0].hourly[2].nwp_cloud_diagnostics.mid.cover_pct
+            == 100.0
+        )
+
+    def test_ercoz_low_layer_survives(self):
+        """Negative control: stable low cover between two equal anchors stays."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        # Both anchors carry the same 86.9% low layer @ 4781-10383 ft.
+        diag_a = NWPCloudDiagnostics(
+            low=NWPCloudLayerDiag(cover_pct=86.9, base_ft=4781, top_ft=10383),
+        )
+        diag_b = NWPCloudDiagnostics(
+            low=NWPCloudLayerDiag(cover_pct=86.9, base_ft=4781, top_ft=10383),
+        )
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=129), diag=diag_a),
+            _make_hourly(gfs_init + timedelta(hours=130)),
+            _make_hourly(gfs_init + timedelta(hours=131)),
+            _make_hourly(gfs_init + timedelta(hours=132), diag=diag_b),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        for h in cs.point_forecasts[0].hourly:
+            assert h.nwp_cloud_diagnostics is not None
+            assert h.nwp_cloud_diagnostics.low.cover_pct == pytest.approx(86.9)
+            assert h.nwp_cloud_diagnostics.low.base_ft == 4781
+
+    def test_ecmwf_section_uses_forward_fill_not_midpoint(self):
+        """ICON / ECMWF cloud cover is instantaneous — midpoint interp must
+        NOT fire for them even when gfs_init is provided."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        diag = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=100.0, base_ft=18000, top_ft=22000),
+        )
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=132), diag=diag),
+            _make_hourly(gfs_init + timedelta(hours=133)),  # gap
+            _make_hourly(gfs_init + timedelta(hours=134)),  # gap
+            _make_hourly(gfs_init + timedelta(hours=135),
+                         diag=NWPCloudDiagnostics(mid=NWPCloudLayerDiag(cover_pct=0.0))),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.ECMWF)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        # Forward-fill semantics: gap hours inherit prev anchor's 100%.
+        assert cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics.mid.cover_pct == 100.0
+        assert cs.point_forecasts[0].hourly[2].nwp_cloud_diagnostics.mid.cover_pct == 100.0
+
+    def test_post_last_anchor_forward_fills(self):
+        """Hours past the last anchor have no upper bracket → forward-fill."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        diag = NWPCloudDiagnostics(
+            high=NWPCloudLayerDiag(cover_pct=50.0, base_ft=30000, top_ft=40000),
+        )
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=132), diag=diag),
+            _make_hourly(gfs_init + timedelta(hours=133)),
+            _make_hourly(gfs_init + timedelta(hours=134)),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        for h in cs.point_forecasts[0].hourly[1:]:
+            assert h.nwp_cloud_diagnostics.high.cover_pct == 50.0
+
+    def test_post_last_anchor_forward_fill_does_not_share_object(self):
+        """Each forward-filled hour gets its own copy, so an in-place mutation
+        on one hour cannot leak into the others."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        diag = NWPCloudDiagnostics(
+            high=NWPCloudLayerDiag(cover_pct=50.0, base_ft=30000, top_ft=40000),
+        )
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=132), diag=diag),
+            _make_hourly(gfs_init + timedelta(hours=133)),
+            _make_hourly(gfs_init + timedelta(hours=134)),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        hf = cs.point_forecasts[0].hourly
+        assert hf[1].nwp_cloud_diagnostics is not hf[2].nwp_cloud_diagnostics
+        assert hf[1].nwp_cloud_diagnostics is not hf[0].nwp_cloud_diagnostics
+
+    def test_pre_f120_mixed_window_clamp(self):
+        """f001 (1h window, midpoint at f000:30) → f003 (3h window, midpoint
+        at f001:30). The midpoint span is 1 h, but step span is 2 h. A gap
+        hour at f002 sits past the next midpoint (mid_frac > 1.0 → clamped),
+        so it inherits the next anchor's cover state. Catches a regression
+        where short-haul flights in the first few forecast hours mis-handle
+        the cadence transition.
+        """
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        diag_f001 = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=80.0, base_ft=10000, top_ft=18000),
+        )
+        diag_f003 = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=10.0, base_ft=11000, top_ft=19000),
+        )
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=1), diag=diag_f001),
+            _make_hourly(gfs_init + timedelta(hours=2)),  # gap
+            _make_hourly(gfs_init + timedelta(hours=3), diag=diag_f003),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        mid_f002 = cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics.mid
+        # f002 is past f003's midpoint (f001:30) → mid_frac clamps to 1.0 →
+        # cover = next anchor's 10%. Layer kept (above 5% drop threshold)
+        # with geometry held from higher-cover endpoint (f001).
+        assert mid_f002.cover_pct == pytest.approx(10.0)
+        assert mid_f002.base_ft == 10000  # f001 geometry (higher cover)
+        assert mid_f002.top_ft == 18000
+
+
+class TestGfsClwLinearInterp:
+    """CLW/ICMR are instantaneous — linear interp between native step times."""
+
+    def test_clw_interpolated_between_anchors(self):
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        # f120 native at 12z with clw=1e-4; f123 native at 15z with clw=4e-4;
+        # 13z and 14z are gap hours → linear interp 2e-4 and 3e-4.
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=120), clw=1e-4, icmr=0.0),
+            _make_hourly(gfs_init + timedelta(hours=121)),
+            _make_hourly(gfs_init + timedelta(hours=122)),
+            _make_hourly(gfs_init + timedelta(hours=123), clw=4e-4, icmr=0.0),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        pl1 = cs.point_forecasts[0].hourly[1].pressure_levels[0]
+        pl2 = cs.point_forecasts[0].hourly[2].pressure_levels[0]
+        assert pl1.cloud_liquid_water_kg_kg == pytest.approx(2e-4)
+        assert pl2.cloud_liquid_water_kg_kg == pytest.approx(3e-4)
+
+    def test_clw_forward_fills_when_gfs_init_none(self):
+        """Without gfs_init, falls back to forward-fill (back-compat)."""
+        hourly = [
+            _make_hourly(T0, clw=1e-4),
+            _make_hourly(T0 + timedelta(hours=1)),
+            _make_hourly(T0 + timedelta(hours=2), clw=4e-4),
+        ]
+        cs = _make_cs_with_hourly([hourly])
+        propagate_all([cs], [])  # no gfs_init → forward-fill
+        pl1 = cs.point_forecasts[0].hourly[1].pressure_levels[0]
+        assert pl1.cloud_liquid_water_kg_kg == pytest.approx(1e-4)
+
+    def test_clw_post_last_anchor_forward_fills(self):
+        """Hours past the last CLW anchor have no upper bracket → carry the
+        last known value forward (mirrors the diag post-last-anchor path)."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        hourly = [
+            _make_hourly(gfs_init + timedelta(hours=120), clw=2e-4, icmr=5e-5),
+            _make_hourly(gfs_init + timedelta(hours=123), clw=4e-4, icmr=1e-4),
+            _make_hourly(gfs_init + timedelta(hours=124)),  # past last anchor
+            _make_hourly(gfs_init + timedelta(hours=125)),  # past last anchor
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        pl_trailing_1 = cs.point_forecasts[0].hourly[2].pressure_levels[0]
+        pl_trailing_2 = cs.point_forecasts[0].hourly[3].pressure_levels[0]
+        assert pl_trailing_1.cloud_liquid_water_kg_kg == pytest.approx(4e-4)
+        assert pl_trailing_1.ice_mixing_ratio_kg_kg == pytest.approx(1e-4)
+        assert pl_trailing_2.cloud_liquid_water_kg_kg == pytest.approx(4e-4)
+
+
+class TestGfsRhCondensateGate:
+    """The dry-band gate drops phantom layers with no RH or condensate
+    support. Only fires for GFS sections."""
+
+    def _build_dry_pt11_hourly(self) -> HourlyForecast:
+        """pt11 at 14z native: mid 100% @ 18-22 kft, but pressure-level RH
+        and condensate inside the band are dry. The gate should drop it."""
+        # Pressure levels covering 18-22 kft (~500 hPa = 18 kft, ~450 hPa = 20 kft).
+        pls = [
+            PressureLevelData(pressure_hpa=500, relative_humidity_pct=11.0,
+                              cloud_liquid_water_kg_kg=0.0, ice_mixing_ratio_kg_kg=0.0,
+                              geopotential_height_m=18000 / 3.28084),
+            PressureLevelData(pressure_hpa=450, relative_humidity_pct=26.0,
+                              cloud_liquid_water_kg_kg=0.0, ice_mixing_ratio_kg_kg=0.0,
+                              geopotential_height_m=20000 / 3.28084),
+        ]
+        diag = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=100.0, base_ft=18000, top_ft=22200),
+        )
+        return HourlyForecast(
+            time=T0, nwp_cloud_diagnostics=diag, pressure_levels=pls,
+        )
+
+    def test_drops_dry_mid_layer(self):
+        h = self._build_dry_pt11_hourly()
+        cs = _make_cs_with_hourly_model([[h]], ModelSource.GFS)
+        apply_gfs_rh_condensate_gate([cs], [])
+        assert h.nwp_cloud_diagnostics.mid.cover_pct is None
+        assert h.nwp_cloud_diagnostics.mid.base_ft is None
+
+    def test_keeps_humid_low_layer(self):
+        """ERCOZ negative control: low @ 4781-10383 ft, RH 80-98%, CLW > 0."""
+        pls = [
+            PressureLevelData(pressure_hpa=850, relative_humidity_pct=80.0,
+                              cloud_liquid_water_kg_kg=1e-4, ice_mixing_ratio_kg_kg=0.0,
+                              geopotential_height_m=4900 / 3.28084),
+            PressureLevelData(pressure_hpa=700, relative_humidity_pct=92.0,
+                              cloud_liquid_water_kg_kg=2e-4, ice_mixing_ratio_kg_kg=0.0,
+                              geopotential_height_m=10000 / 3.28084),
+        ]
+        diag = NWPCloudDiagnostics(
+            low=NWPCloudLayerDiag(cover_pct=86.9, base_ft=4781, top_ft=10383),
+        )
+        h = HourlyForecast(time=T0, nwp_cloud_diagnostics=diag, pressure_levels=pls)
+        cs = _make_cs_with_hourly_model([[h]], ModelSource.GFS)
+        apply_gfs_rh_condensate_gate([cs], [])
+        assert h.nwp_cloud_diagnostics.low.cover_pct == 86.9
+        assert h.nwp_cloud_diagnostics.low.base_ft == 4781
+
+    def test_keeps_dry_layer_when_clw_data_absent(self):
+        """No CLMR/ICMR observations inside the band → cannot prove sum==0,
+        so don't drop. Conservative behavior."""
+        pls = [
+            PressureLevelData(pressure_hpa=500, relative_humidity_pct=20.0,
+                              geopotential_height_m=18000 / 3.28084),
+            PressureLevelData(pressure_hpa=450, relative_humidity_pct=22.0,
+                              geopotential_height_m=20000 / 3.28084),
+        ]
+        diag = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=100.0, base_ft=18000, top_ft=22200),
+        )
+        h = HourlyForecast(time=T0, nwp_cloud_diagnostics=diag, pressure_levels=pls)
+        cs = _make_cs_with_hourly_model([[h]], ModelSource.GFS)
+        apply_gfs_rh_condensate_gate([cs], [])
+        # Layer preserved (gate can't run without condensate observations).
+        assert h.nwp_cloud_diagnostics.mid.cover_pct == 100.0
+
+    def test_keeps_dry_layer_when_condensate_present(self):
+        """RH below threshold but CLW > 0 anywhere in band → keep."""
+        pls = [
+            PressureLevelData(pressure_hpa=500, relative_humidity_pct=20.0,
+                              cloud_liquid_water_kg_kg=1e-5, ice_mixing_ratio_kg_kg=0.0,
+                              geopotential_height_m=18000 / 3.28084),
+            PressureLevelData(pressure_hpa=450, relative_humidity_pct=22.0,
+                              cloud_liquid_water_kg_kg=0.0, ice_mixing_ratio_kg_kg=0.0,
+                              geopotential_height_m=20000 / 3.28084),
+        ]
+        diag = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=100.0, base_ft=18000, top_ft=22200),
+        )
+        h = HourlyForecast(time=T0, nwp_cloud_diagnostics=diag, pressure_levels=pls)
+        cs = _make_cs_with_hourly_model([[h]], ModelSource.GFS)
+        apply_gfs_rh_condensate_gate([cs], [])
+        assert h.nwp_cloud_diagnostics.mid.cover_pct == 100.0
+
+    def test_no_op_for_ecmwf(self):
+        """ECMWF cloud cover is instantaneous → gate must not fire even on a
+        synthetic dry layer matching the GFS pathology pattern."""
+        h = self._build_dry_pt11_hourly()
+        cs = _make_cs_with_hourly_model([[h]], ModelSource.ECMWF)
+        apply_gfs_rh_condensate_gate([cs], [])
+        assert h.nwp_cloud_diagnostics.mid.cover_pct == 100.0
+
+    def test_no_op_for_icon(self):
+        """ICON-EU cloud cover is instantaneous → gate must not fire."""
+        h = self._build_dry_pt11_hourly()
+        cs = _make_cs_with_hourly_model([[h]], ModelSource.ICON)
+        apply_gfs_rh_condensate_gate([cs], [])
+        assert h.nwp_cloud_diagnostics.mid.cover_pct == 100.0
+
+    def test_does_not_touch_convective_band(self):
+        """Convective cover is instantaneous in GFS pgrb2 → not gated."""
+        pls = [
+            PressureLevelData(pressure_hpa=500, relative_humidity_pct=20.0,
+                              cloud_liquid_water_kg_kg=0.0, ice_mixing_ratio_kg_kg=0.0,
+                              geopotential_height_m=18000 / 3.28084),
+        ]
+        diag = NWPCloudDiagnostics(
+            mid=NWPCloudLayerDiag(cover_pct=100.0, base_ft=18000, top_ft=22200),
+            convective_cover_pct=55.0,
+            convective_base_ft=2665.0,
+            convective_top_ft=12022.0,
+        )
+        h = HourlyForecast(time=T0, nwp_cloud_diagnostics=diag, pressure_levels=pls)
+        cs = _make_cs_with_hourly_model([[h]], ModelSource.GFS)
+        apply_gfs_rh_condensate_gate([cs], [])
+        # Mid dropped, convective unchanged.
+        assert h.nwp_cloud_diagnostics.mid.cover_pct is None
+        assert h.nwp_cloud_diagnostics.convective_cover_pct == 55.0
+        assert h.nwp_cloud_diagnostics.convective_base_ft == 2665.0

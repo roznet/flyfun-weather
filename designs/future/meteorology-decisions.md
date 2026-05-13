@@ -249,3 +249,151 @@ absent, option (1) is justified.
 Algorithm code in `src/weatherbrief/analysis/sounding/icing.py` is unchanged.
 This entry exists to document the decision so the next reviewer doesn't
 re-investigate the same width and conclude it's a bug.
+
+---
+
+## 3. GFS cloud diagnostics: window-midpoint interp + RH/condensate gate
+
+**Date:** 2026-05-13
+**Status:** Implemented (issue #148, PR #149)
+**Context:** Investigation of a 14:00 Z snapshot at pt11 of flight
+`lfrq_ercoz_jsy_revtu_tujag_rudmo_egtf-2026-05-17` showed
+`nwp_cloud_diagnostics.mid.cover_pct = 100%` at FL180–222 while every
+instantaneous signal at the same point disagreed: Open-Meteo bulk
+`cloud_cover_mid_pct` = 33 %, GFS pressure-level RH at 500–450 hPa = 11–26 %,
+CLMR + ICMR = 0, and GRAMET showed no mid deck. The pilot saw a phantom
+layer that no other source supported.
+
+### Background
+
+Two compounding effects in the GFS pgrb2 product:
+
+1. **Averaged cloud cover past f0.** NCEP publishes only the time-averaged
+   form of LCDC/MCDC/HCDC (and the matching cloud-band PRES bottoms/tops) for
+   forecast hours > 0. The averaging window has length 1/2/3 h depending on
+   the step's position in the 3-h reset cycle (1 h at f001/f004/…, 2 h at
+   f002/f005/…, 3 h at f003/f006/…/f120); past f120 it's always 3 h. There
+   is no instantaneous variant in pgrb2. Our decoder already accepts the
+   averaged form (`gfs_idx.py: parse_cloud_diag_idx`) and maps it onto the
+   same internal slots as a hypothetical instantaneous (`decode.py:
+   _CLOUD_DIAG_FIELD_MAP`).
+
+2. **3-hourly cadence past f120.** GRIB enrichment snaps to native steps
+   (… f120, f123, f126, f129 …). Gap hours between those steps used to
+   inherit the preceding step's diagnostics via forward-fill.
+
+For the pt11 case the chain was: f132 native step carries the average over
+**09–12 Z** (100 % cover), forward-fill propagated that value across 13:00
+and 14:00 Z, the next native step f135 (window 12–15 Z, 0 % cover) overwrote
+15:00 Z. The 100 % at 14:00 Z was thus an **08–14 Z back-smear** of a window
+that had ended two hours earlier.
+
+ICON-EU and ECMWF publish instantaneous cloud cover and are not affected.
+
+### The decision
+
+Three coupled changes, GFS-only:
+
+**A. Window-midpoint linear interpolation** (in
+`src/weatherbrief/fetch/grib/fill.py`). When `gfs_init` is provided to
+`propagate_all`, GFS cloud diagnostics are interpolated linearly between
+native steps in **window-midpoint space** rather than forward-filled.
+Each averaged native step's anchor sits at `step - window_length/2`. For
+the pt11 case f135's midpoint is 13:30 Z, so 14:00 Z sits past it and
+interpolates toward the next anchor's 0 % rather than holding f132's 100 %.
+
+**B. Geometry hold-over with sub-5% drop.** `base_ft`, `top_ft`, and
+`top_temp_c` are not numerically interpolatable — interpolating altitudes
+between two dissimilar layer geometries would create phantom intermediate
+layers. The gap-hour layer reuses the geometry of whichever bracketing
+endpoint has the higher cover; when interpolated cover falls below
+`_GFS_LAYER_DROP_THRESHOLD_PCT` (5 %) the entire `NWPCloudLayerDiag` is
+emptied. Visually a dissipating deck thins toward zero and then drops out.
+
+**C. RH/condensate gate** (`apply_gfs_rh_condensate_gate` in `fill.py`).
+After interpolation, for each GFS hourly with both pressure_levels and
+diagnostics, each low/mid/high band is rechecked: compute `max(RH)` and
+`sum(CLMR + ICMR)` over the pressure levels falling inside `[base_ft,
+top_ft]`. If the band has positive cover but `max(RH) < threshold` AND
+`sum(CLMR + ICMR) == 0`, the layer is dropped. Per-band thresholds are
+conservative starting values:
+
+| Band | RH threshold |
+|------|------:|
+| low | `_GFS_GATE_RH_LOW_PCT` = 60 % |
+| mid | `_GFS_GATE_RH_MID_PCT` = 70 % |
+| high | `_GFS_GATE_RH_HIGH_PCT` = 70 % |
+
+The gate requires at least one observed condensate value inside the band —
+otherwise it cannot distinguish "no condensate" from "no data" and leaves
+the forecast as-is. Convective and boundary bands are instantaneous in GFS
+pgrb2 and not gated.
+
+### Reasoning
+
+1. **Time-truth of the averaged value.** A 3-h-averaged 09–12 Z cover
+   carries no information about 14:00 Z. The cleanest way to use it is to
+   place it where its time-mean actually applies — the window midpoint —
+   and trust the next anchor to constrain the snapshot. Forward-fill silently
+   asserted "this 09–12 Z mean still applies 2 hours after the window ended";
+   midpoint interp makes the temporal logic explicit.
+
+2. **Geometry interpolation creates noise.** Two adjacent native steps can
+   report cloud at very different altitudes (deck rising, deck dissipating,
+   different deck altogether). Linearly blending their `base_ft` / `top_ft`
+   yields a halfway altitude that neither step supports. The higher-cover
+   hold-over biases toward the better-resolved deck and the 5 % drop
+   threshold prevents thin phantom layers from outliving their forecast
+   support.
+
+3. **The RH/condensate gate is the truth check.** Even with correct timing,
+   the averaged cover can be inflated relative to instantaneous reality
+   (e.g. when half of the 3-h window had cloud and half was clear). The
+   pressure-level RH + CLMR/ICMR at the snapshot hour are instantaneous by
+   construction. Requiring **both** sources to agree before declaring a
+   cloud-free band keeps the gate conservative — a single moist or
+   condensate-bearing level survives.
+
+4. **GFS-only by design.** ICON-EU and ECMWF publish instantaneous cover.
+   Applying the same gate there would compete with model physics rather
+   than catch a pipeline artifact.
+
+### What we decided against
+
+**Dropping the averaged MCDC/LCDC/HCDC entirely** and re-deriving cloud
+cover from instantaneous pressure-level RH + condensate (Sundqvist-style
+diagnostic). This is the cleaner long-term end-state — no averaged-window
+back-smear is possible if we never read the averaged value — but the change
+surface is much larger (new diagnostic, new calibration against
+observations, replaces the current GRIB-bulk path used by ceiling and other
+downstream consumers). Tracked as a follow-up.
+
+**Step-time linear interp without the midpoint adjustment.** This would
+have fixed the forward-fill smear in one direction but still anchored the
+3-h-averaged value at the step time, so 14:00 Z would have interpolated
+between values that mis-represent their own time bracket. Midpoint
+anchoring is the correct fix for averaged data.
+
+### Real-world validation needed
+
+- **Marine stratocumulus calibration of `_GFS_GATE_RH_LOW_PCT`.** Sub-grid
+  inversion-trapped sheets can produce real low cover at pressure-level
+  RH below 60 %. The conservative 60 % threshold may suppress these. A
+  coastal SW UK / Brittany briefing on a stable-PBL day is the canonical
+  test case.
+- **Negative-control surveillance.** Confirm that strongly-supported decks
+  (e.g. ERCOZ low layer 86.9 % @ 4781–10383 ft with RH 80–98 % and non-zero
+  CLMR) survive both the interpolation and the gate unchanged.
+
+### Files changed
+
+- `src/weatherbrief/fetch/grib/fill.py` — `_fill_cloud_diagnostics` now
+  branches on `gfs_init`: GFS sections use `_interp_gfs_diag_hourly`
+  (window-midpoint linear), others fall back to `_fill_diag_hourly`
+  (forward-fill). `_fill_cloud_water` similarly branches between
+  `_interp_gfs_clw_hourly` (step-time linear) and `_fill_clw_hourly`
+  (forward-fill). New `apply_gfs_rh_condensate_gate` runs after
+  `propagate_all` and drops phantom layers per the gate rule.
+- `src/weatherbrief/fetch/grib/__init__.py` — wires `gfs_init` through
+  `propagate_all` and invokes `apply_gfs_rh_condensate_gate` after
+  enrichment completes.

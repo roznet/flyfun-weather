@@ -5,6 +5,7 @@ import {
   riskMapColor, cloudCoverMapColor, headwindMapColor, capeMapColor,
   freezingLevelMapColor, ceilingMapColor, temperatureMapColor,
   crosswindMapColor, agreementMapColor, linearWidth, altitudeToPressureHpa,
+  randomOverlapPct,
 } from '../../ts/visualization/scales';
 
 describe('riskMapColor', () => {
@@ -18,6 +19,43 @@ describe('riskMapColor', () => {
 
   it('falls back to green for unknown risk', () => {
     expect(riskMapColor('totally-unknown')).toBe('#22c55e');
+  });
+});
+
+describe('randomOverlapPct', () => {
+  it('returns 0 when all bands are 0', () => {
+    expect(randomOverlapPct(0, 0, 0)).toBe(0);
+  });
+
+  it('returns 100 when any band is 100', () => {
+    expect(randomOverlapPct(100, 0, 0)).toBe(100);
+    expect(randomOverlapPct(0, 100, 0)).toBe(100);
+    expect(randomOverlapPct(0, 0, 100)).toBe(100);
+    expect(randomOverlapPct(100, 50, 30)).toBe(100);
+  });
+
+  it('passes a single band through unchanged', () => {
+    expect(randomOverlapPct(80, 0, 0)).toBeCloseTo(80, 9);
+    expect(randomOverlapPct(0, 45, 0)).toBeCloseTo(45, 9);
+  });
+
+  it('matches the random-overlap reference values from #124', () => {
+    // 1 - 0.7^3 = 0.657
+    expect(randomOverlapPct(30, 30, 30)).toBeCloseTo(65.7, 1);
+    // 1 - 0.5^3 = 0.875
+    expect(randomOverlapPct(50, 50, 50)).toBeCloseTo(87.5, 9);
+    // 1 - 0.4^3 = 0.936
+    expect(randomOverlapPct(60, 60, 60)).toBeCloseTo(93.6, 1);
+  });
+
+  it('is strictly less than the additive sum in the partial-overlap regime', () => {
+    const additive = 30 + 30 + 30;
+    expect(randomOverlapPct(30, 30, 30)).toBeLessThan(additive);
+  });
+
+  it('clamps inputs outside [0, 100]', () => {
+    expect(randomOverlapPct(-10, 0, 0)).toBe(0);
+    expect(randomOverlapPct(150, 0, 0)).toBe(100);
   });
 });
 

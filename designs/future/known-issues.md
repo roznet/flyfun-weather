@@ -66,4 +66,31 @@ The ECMWF `ceil` (ceiling) field in the a1 surface GRIB is ~50% NaN. ECMWF only 
 
 ## Resolved
 
-_(none yet)_
+### GFS cloud-diagnostic forward-fill produced phantom layers
+
+**Added:** 2026-05-12
+**Resolved:** 2026-05-13 (issue #148, PR #149)
+**Location:** `src/weatherbrief/fetch/grib/fill.py` —
+`_fill_cloud_diagnostics`, `_fill_cloud_water`,
+`apply_gfs_rh_condensate_gate`
+
+GFS LCDC/MCDC/HCDC are averaged-window fields (1/2/3 h windows depending on
+the step's position in the 3-h reset cycle, always 3 h past f120). Past
+f120 the 3-hourly cadence meant gap hours were forward-filled from the
+preceding native step, smearing each window's average forward up to 2 h
+beyond where it applied. At pt11 of flight
+`lfrq_ercoz_jsy_revtu_tujag_rudmo_egtf-2026-05-17` this produced a 100 %
+mid deck at 14:00 Z (FL180–222) that no instantaneous signal supported
+(RH 11–26 %, CLMR + ICMR = 0, GRAMET clear).
+
+Fix replaces the forward-fill with window-midpoint linear interpolation
+for GFS cloud diagnostics (`_interp_gfs_diag_hourly`) and adds an
+RH/condensate gate (`apply_gfs_rh_condensate_gate`) that drops any band
+whose pressure-level RH and condensate inside `[base_ft, top_ft]` don't
+support the averaged cover. ICON-EU / ECMWF publish instantaneous cover
+and are unaffected. See [meteorology-decisions.md §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate)
+for the full rationale.
+
+The longer-term cleanup — drop the averaged MCDC entirely and re-derive
+cloud cover from instantaneous RH + condensate (Sundqvist-style) — is
+deliberately deferred as a separate follow-up.

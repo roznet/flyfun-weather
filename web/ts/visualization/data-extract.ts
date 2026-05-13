@@ -3,6 +3,7 @@
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
 import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag } from './types';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
+import { randomOverlapPct } from './scales';
 
 export function extractVizData(
   manifest: RouteAnalysesManifest,
@@ -147,11 +148,12 @@ function extractPoint(
     surfaceBased: (inv as any).surface_based ?? undefined,
   }));
 
-  // Cloud cover total: sum low+mid+high, cap at 100
+  // Cloud cover total: random-overlap combination of the three bands
+  // (see #124 — additive sum double-counts overlapping layers).
   const low = sounding?.cloud_cover_low_pct ?? 0;
   const mid = sounding?.cloud_cover_mid_pct ?? 0;
   const high = sounding?.cloud_cover_high_pct ?? 0;
-  const cloudCoverTotalPct = Math.min(100, low + mid + high);
+  const cloudCoverTotalPct = randomOverlapPct(low, mid, high);
 
   // Worst model agreement
   let worstModelAgreement = 'good';

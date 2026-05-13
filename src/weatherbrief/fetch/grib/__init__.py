@@ -649,10 +649,21 @@ def _enrich_forecasts_inner(
     elif icon_skip is not None:
         grib_skip_reasons["icon"] = icon_skip
 
-    # Forward-fill all GRIB-enriched fields to interpolated hours
+    # Time-axis fill of all GRIB-enriched fields onto interpolated hours.
+    # When the GFS init is known, the cloud-diag pass uses window-midpoint
+    # interpolation for low/mid/high cover (issue #148 — averaged-window
+    # phantom-layer fix) and the gate drops layers unsupported by RH or
+    # condensate. Both are no-ops in the GFS=None fallback.
+    gfs_init_dt: datetime | None = None
+    if gfs_ts is not None:
+        gfs_init_dt = datetime.fromtimestamp(gfs_ts, tz=timezone.utc)
     with _grib_time("propagate_all"):
-        from weatherbrief.fetch.grib.fill import propagate_all
-        propagate_all(cross_sections, all_forecasts)
+        from weatherbrief.fetch.grib.fill import (
+            apply_gfs_rh_condensate_gate,
+            propagate_all,
+        )
+        propagate_all(cross_sections, all_forecasts, gfs_init=gfs_init_dt)
+        apply_gfs_rh_condensate_gate(cross_sections, all_forecasts)
 
     timer.rss_mark("enrich_end")
     return grib_init_times, grib_skip_reasons
