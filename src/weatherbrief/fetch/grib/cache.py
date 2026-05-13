@@ -4,10 +4,9 @@ Cache layout:
     {data_dir}/.cache/grib/{model}/{YYYYMMDD}_{HH}z/
         f{FFF}_{var}_{bbox_hash}.grib2
 
-TTL: 7 hours — slightly more than one main-cycle gap (6 h) so the cache holds
-essentially one main run at a time with a small overlap during rollover.
-Shortened from 24 h once the precache loop (issue #126) started actively
-warming the cache for each new main run.
+TTL: 12 hours — two main-cycle gaps (6 h × 2), so the cache typically holds
+the current main run plus the previous one. Shortened from 24 h once the
+precache loop started actively warming the cache for each new main run.
 """
 
 from __future__ import annotations
@@ -20,13 +19,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Cache entries older than this are purged. 7 h ≈ one main-cycle gap (6 h)
-# plus headroom — the precache loop refreshes the cache for each new main run.
-# Tighter than the previous 24 h: if the precache loop stalls (server restart
-# during a delayed publish, or briefings landing on a never-precached short
-# cycle 03/09/15/21Z), entries fall out of cache faster. Acceptable margin
-# under expected operation; widen back if telemetry shows stalls dominating.
-CACHE_TTL_SECONDS = 7 * 3600
+# Cache entries older than this are purged. 12 h ≈ two main-cycle gaps so
+# the current and previous main runs stay warm. Covers DWD's typical 3–4 h
+# publication slip on the next cycle: even if the precache loop is delayed,
+# the previous run is still cached when briefings land.
+CACHE_TTL_SECONDS = 12 * 3600
 
 
 def cache_dir_for_run(
