@@ -448,15 +448,17 @@ def _run_retention_once() -> None:
     finally:
         db.close()
 
-    # Purge old ECMWF deliveries (72h default — keeps ~2 days of runs)
+    # Purge old ECMWF deliveries. Readers always pick max(base_time) of
+    # ready runs, so older inits are never consulted; 36 h keeps the latest
+    # run plus ~24 h of prior runs as headroom for in-flight deliveries.
     try:
         from weatherbrief.fetch.grib.ecmwf_watcher import purge_old_ecmwf_deliveries
 
-        purge_old_ecmwf_deliveries()
+        purge_old_ecmwf_deliveries(max_age_hours=36)
     except Exception:
         logger.error("ECMWF delivery purge failed", exc_info=True)
 
-    # Purge old GRIB download cache (GFS + ICON-EU, 24h TTL)
+    # Purge old GRIB download cache (GFS + ICON-EU share CACHE_TTL_SECONDS)
     try:
         from weatherbrief.fetch.grib.cache import purge_old_runs
 
