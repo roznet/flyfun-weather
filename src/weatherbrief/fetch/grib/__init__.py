@@ -13,7 +13,7 @@ import multiprocessing
 import os
 import threading
 import time as _time_mod
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any
 from contextlib import contextmanager
@@ -420,7 +420,7 @@ def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
     # mid-batch (worker died between submits) still tears down the pool
     # global — otherwise every subsequent dispatch keeps hitting the same
     # broken pool until the process restarts.
-    futures: list = []
+    futures: list[Future[Any]] = []
     results: list[Any] = [None] * len(jobs)
     try:
         futures = [
@@ -1637,7 +1637,7 @@ def _decode_and_merge_icon_eu(
     decoded_by_fhour: dict[int, tuple[
         list[dict[int, dict[str, float]]] | None,
         list[dict[str, float]],
-    ]] = {}
+    ] | None] = {}
     for fhour, (worker_name, _), raw in zip(fhours_with_jobs, job_list, raw_results):
         if worker_name == "decode_icon_legacy":
             # Fresh empty list per fhour — sharing a single sentinel would
@@ -1670,7 +1670,12 @@ def _decode_and_merge_icon_eu(
         )
         total_enriched += replaced
         del decoded_points
-        decoded_by_fhour[fhour] = (None, clc_layers)
+        # Replace the tuple to release both the decoded_points reference
+        # (already del'd locally) and the clc_layers reference (already
+        # accumulated into clc_layers_per_point above). The local
+        # ``clc_layers`` stays alive for the rest of this iteration; no
+        # further reader needs the dict entry.
+        decoded_by_fhour[fhour] = None
     _grib_gc()
     _grib_rss_mark("icon_fhour_post_gc")
 

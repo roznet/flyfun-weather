@@ -320,6 +320,42 @@ def test_parallel_dispatch_preserves_order_and_in_process_fallback(monkeypatch):
 
 
 @pytest.mark.skipif(
+    (os.cpu_count() or 1) < 2,
+    reason="requires at least 2 logical CPUs to actually parallelise 2-way",
+)
+def test_parallel_dispatch_runs_two_jobs_in_parallel(monkeypatch):
+    """Companion 2-CPU regression for issue #133.
+
+    The 4-way test below skips on 2-CPU CI runners, leaving the core
+    regression unverified there. With workers=2 and two CPU-bound jobs
+    of duration ``D``, total wall time should be close to ``D`` (not
+    ``2D``) — the same bug surface as the 4-way case.
+    """
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
+    shutdown_decode_pool()
+    pool = _get_decode_pool()
+    assert pool is not None
+
+    warm = [pool.submit(decode_worker._test_echo, None, 0.05) for _ in range(2)]
+    for f in warm:
+        f.result()
+
+    duration = 0.5
+    jobs = [("_test_busy_loop", (duration,)) for _ in range(2)]
+
+    t0 = time.perf_counter()
+    results = _dispatch_decode_parallel(jobs)
+    elapsed = time.perf_counter() - t0
+
+    assert len(results) == 2
+    # Serial would take ~1.0s; parallel should be ~0.5s.
+    assert elapsed < 0.9, (
+        f"Two parallel busy-loops of {duration}s took {elapsed:.2f}s — "
+        "looks serialised, not parallel (issue #133 regression)"
+    )
+
+
+@pytest.mark.skipif(
     (os.cpu_count() or 1) < 4,
     reason="requires at least 4 logical CPUs to actually parallelise 4-way",
 )
