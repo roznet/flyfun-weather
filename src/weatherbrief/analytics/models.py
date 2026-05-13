@@ -36,7 +36,15 @@ class AnalyticsEventRow(Base):
         Index("ix_ae_ts", "ts"),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # BigInteger().with_variant(Integer, "sqlite") so SQLite emits
+    # ``INTEGER PRIMARY KEY`` — the only form SQLite treats as a rowid alias
+    # with automatic ID assignment. Plain BIGINT PRIMARY KEY is a normal
+    # NOT NULL column with no default and inserts fail.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     anon_id: Mapped[str] = mapped_column(String(36), nullable=False)
     session_id: Mapped[str] = mapped_column(String(36), nullable=False)

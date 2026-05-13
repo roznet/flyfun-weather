@@ -124,7 +124,12 @@ interface SessionRecord {
   lastActivity: number;
 }
 
-function getSessionId(): string {
+interface SessionInfo {
+  id: string;
+  isFresh: boolean;
+}
+
+function getOrCreateSession(): SessionInfo {
   const now = Date.now();
   try {
     const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
@@ -133,7 +138,7 @@ function getSessionId(): string {
       if (parsed.id && now - parsed.lastActivity < SESSION_IDLE_MS) {
         parsed.lastActivity = now;
         window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(parsed));
-        return parsed.id;
+        return { id: parsed.id, isFresh: false };
       }
     }
   } catch {
@@ -145,7 +150,11 @@ function getSessionId(): string {
   } catch {
     /* ignore */
   }
-  return fresh.id;
+  return { id: fresh.id, isFresh: true };
+}
+
+function getSessionId(): string {
+  return getOrCreateSession().id;
 }
 
 function appVersion(): string | undefined {
@@ -217,9 +226,14 @@ function ensureInitialized(): void {
     }
   });
   window.addEventListener('pagehide', flushNow);
-  // First event of the session implicitly counts as session_started;
-  // emit it once explicitly so the rollup has a clean denominator.
-  track(EVENTS.SESSION_STARTED);
+  // ``initialized`` is module-scoped — it resets on every full page load,
+  // but the session_id in sessionStorage persists across loads within the
+  // 30-minute idle window. Emitting session_started here unconditionally
+  // would re-fire it on reload under the same session_id and inflate the
+  // rollup. Gate on the session being genuinely fresh.
+  if (getOrCreateSession().isFresh) {
+    track(EVENTS.SESSION_STARTED);
+  }
 }
 
 /**

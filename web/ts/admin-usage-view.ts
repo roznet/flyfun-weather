@@ -1,14 +1,13 @@
 /**
- * Admin usage analytics page entry point.
+ * Admin usage analytics view — renders into the Usage Analytics tab on
+ * the admin page. Imported by admin-main.ts; lazily invoked on first
+ * tab activation by ``initUsageAnalyticsTab()``.
  *
  * Reads from rollup tables only via the admin API — cheap even when the
  * raw events table is large. Read-only; no mutations.
  */
 
-import { fetchCurrentUser } from './adapters/auth-adapter';
-import { redirectToLogin, renderUserInfo, escapeHtml, apiFetch } from './utils';
-import { initTheme } from './theme';
-import { initI18n } from './i18n/i18n';
+import { escapeHtml, apiFetch } from './utils';
 
 interface FeatureRow {
   feature: string;
@@ -61,9 +60,9 @@ interface DigestResponse {
 }
 
 async function loadAll(days: number): Promise<void> {
-  const loading = document.getElementById('loading')!;
-  const page = document.getElementById('page-content')!;
-  const errBox = document.getElementById('error-message') as HTMLElement;
+  const loading = document.getElementById('ua-loading')!;
+  const page = document.getElementById('ua-content')!;
+  const errBox = document.getElementById('ua-error-message') as HTMLElement;
   loading.style.display = '';
   page.style.display = 'none';
   errBox.style.display = 'none';
@@ -264,28 +263,18 @@ function renderDigest(d: DigestResponse): void {
   pre.textContent = d.text;
 }
 
-async function main(): Promise<void> {
-  initTheme();
-  await initI18n();
-
-  const user = await fetchCurrentUser();
-  if (!user) {
-    redirectToLogin();
-    return;
-  }
-  if (!user.is_admin) {
-    const err = document.getElementById('error-message') as HTMLElement;
-    err.textContent = 'Admin access required.';
-    err.style.display = '';
-    document.getElementById('loading')!.style.display = 'none';
-    return;
-  }
-  renderUserInfo(user, 'admin');
-
-  const select = document.getElementById('window-select') as HTMLSelectElement;
+/**
+ * Wire the window-size selector and trigger the first load. Idempotent —
+ * safe to call again (e.g. if the tab is reopened), though the lazy-load
+ * gate in admin-main.ts means this normally fires only once per page.
+ */
+export async function initUsageAnalyticsTab(): Promise<void> {
+  const select = document.getElementById('window-select') as HTMLSelectElement | null;
+  if (!select) return;
   const days = () => parseInt(select.value, 10) || 30;
-  select.addEventListener('change', () => loadAll(days()));
+  if (!select.dataset.bound) {
+    select.dataset.bound = '1';
+    select.addEventListener('change', () => loadAll(days()));
+  }
   await loadAll(days());
 }
-
-void main();

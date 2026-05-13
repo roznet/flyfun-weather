@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import distinct, func, select
+from sqlalchemy import case, distinct, func, select
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import get_db
@@ -187,10 +187,26 @@ def briefing_shape(
             )
         ]
 
+    # Bucket raw route_points server-side rather than in the dim row, so the
+    # boundaries can evolve without re-enriching history. Boundaries are
+    # tuned for GA: nearly every flight is 2 (point-to-point), 3-5 (a couple
+    # of fixes), or 6+ (pasted IFR FPLs). Three buckets is plenty.
+    route_points_bucket = case(
+        (AnalyticsFlightDimRow.route_points.is_(None), None),
+        (AnalyticsFlightDimRow.route_points <= 2, "2"),
+        (AnalyticsFlightDimRow.route_points <= 5, "3-5"),
+        else_="6+",
+    )
+    rp_order = {"2": 0, "3-5": 1, "6+": 2}
+    rp_buckets = sorted(
+        _count_by(route_points_bucket),
+        key=lambda b: rp_order.get(b["key"], 99),
+    )
+
     return {
         "by_region": _count_by(AnalyticsFlightDimRow.region),
         "by_distance": _count_by(AnalyticsFlightDimRow.distance_bucket),
-        "by_route_points": _count_by(AnalyticsFlightDimRow.route_points),
+        "by_route_points": rp_buckets,
         "by_lead_time": _count_by(AnalyticsBriefingDimRow.lead_time_bucket),
         "by_model_count": _count_by(AnalyticsBriefingDimRow.model_count),
         "by_alternate_etd": _count_by(AnalyticsFlightDimRow.has_alternate_etd),

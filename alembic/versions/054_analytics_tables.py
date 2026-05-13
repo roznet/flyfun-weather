@@ -39,7 +39,15 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.create_table(
         "analytics_events",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        # SQLite only autoincrements ``INTEGER PRIMARY KEY``; plain BIGINT
+        # is treated as a regular NOT NULL column. Variant keeps BIGINT on
+        # MySQL while emitting INTEGER on SQLite.
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column("ts", sa.DateTime(timezone=True), nullable=False),
         sa.Column("anon_id", sa.String(36), nullable=False),
         sa.Column("session_id", sa.String(36), nullable=False),
