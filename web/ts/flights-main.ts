@@ -17,6 +17,7 @@ import { initInfoPopup } from './components/info-popup';
 import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';
+import { track, EVENTS } from './analytics/track';
 
 let loadedProfiles: ProfileResponse[] = [];
 let loadedAircraft: AircraftResponse[] = [];
@@ -525,6 +526,9 @@ async function init(): Promise<void> {
           aircraftId: !isNaN(aircraftId!) ? aircraftId : undefined,
           rawRoute: wpRaw,
         });
+        // Pass flight_id via context (top-level field) so server-side
+        // enrichment (upsert_flight_dim) picks it up.
+        track(EVENTS.FLIGHT_CREATED, undefined, { flight_id: flight.id });
         // Navigate to briefing page for the new flight
         navigateToBriefing(flight.id);
       } catch {

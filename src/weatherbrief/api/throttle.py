@@ -92,3 +92,13 @@ feedback_daily_limiter = SlidingWindowRateLimiter(max_requests=20, window_second
 """Feedback submission — max 20 per 24 hours. Hard cap on admin mailbox
 amplification and on DB rows that the triage worker will later have to ignore
 (worker cap is 10 per 7 days — this is a pre-insert belt)."""
+
+analytics_burst_limiter = SlidingWindowRateLimiter(max_requests=30, window_seconds=60)
+"""Analytics ingest — max 30 batches per minute per IP. Real clients flush every
+10s, so a single tab generates ~6/min; the cap leaves headroom for a few open
+tabs but blocks a bot pounding the endpoint."""
+
+analytics_daily_limiter = SlidingWindowRateLimiter(max_requests=20_000, window_seconds=86400)
+"""Analytics ingest — max 20,000 *events* per 24h per IP. Batch size is folded
+into the count, so this caps row inflation regardless of how the client splits
+its batches. Generous enough that no real user will hit it."""
