@@ -233,13 +233,14 @@ _DECODE_TIMEOUT_DEFAULT_S = 300.0
 def _decode_pool_workers_default() -> int:
     """Default worker count when ``GRIB_DECODE_WORKERS`` is unset.
 
-    Sized to the host CPU count, capped at 4: the parallel fhour fan-out
-    in the ICON / ECMWF decode loops can keep up to 4 cores busy on a
-    single airport-profile request, and going higher mostly burns RAM
-    (~125 MB RSS per worker during ICON decode) without further wall-time
-    wins.
+    Default of 2: gives a meaningful speed-up over the sequential-dispatch
+    bug (issue #133) while keeping peak RSS bounded. Each ICON decode
+    worker holds ~125 MB during decode, so 2 workers ≈ +125 MB extra peak
+    vs. the prior single-worker behaviour. Raise via ``GRIB_DECODE_WORKERS``
+    on hosts with spare RAM (the prod droplet has 4 vCPU but only 4 GiB
+    cgroup, and concurrent refreshes already compete for it).
     """
-    return min(4, os.cpu_count() or 2)
+    return min(2, os.cpu_count() or 2)
 
 
 def _decode_pool_workers() -> int:
