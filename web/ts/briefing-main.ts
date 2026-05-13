@@ -28,6 +28,7 @@ import { attachMapInteraction, type MapInteractionHandle } from './visualization
 import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
 import { initTheme } from './theme';
+import { track, setBriefingContext, EVENTS } from './analytics/track';
 import { initI18n, t } from './i18n/i18n';
 import { SkewTRenderer } from './visualization/skewt/renderer';
 import { renderSkewtOverlayControls, renderSkewtCompareControls } from './visualization/skewt/overlay-controls';
@@ -267,6 +268,9 @@ async function init(): Promise<void> {
   function setSkewtViewMode(mode: 'dynamic' | 'compare' | 'static'): void {
     const prevMode = skewtViewMode;
     skewtViewMode = mode;
+    if (prevMode !== mode) {
+      track(EVENTS.SKEWT_OPENED, { view: mode });
+    }
 
     const dynBtn = document.getElementById('skewt-view-dynamic');
     const cmpBtn = document.getElementById('skewt-view-compare');
@@ -979,6 +983,16 @@ async function init(): Promise<void> {
       renderVisualization(state);
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
       renderPointSections(state);
+      // Analytics: emit on transition into map / compare / split (the user
+      // explicitly engaged with that view), not for every viz settings tweak.
+      if (state.vizSettings.layout !== prev.vizSettings.layout) {
+        const layout = state.vizSettings.layout;
+        if (layout === 'map' || layout === 'split') {
+          track(EVENTS.FORECAST_MAP_OPENED, { layout });
+        } else if (layout === 'compare') {
+          track(EVENTS.COMPARE_OPENED);
+        }
+      }
     }
     if (state.loading !== prev.loading) {
       ui.renderLoading(state.loading);
@@ -1001,6 +1015,7 @@ async function init(): Promise<void> {
     refreshBtn.addEventListener('click', () => {
       const { flight } = store.getState();
       if (!flight) return;
+      track(EVENTS.BRIEFING_REFRESH_REQUESTED);
       if (isFlightPast(flight.target_date, flight.target_time_utc, flight.flight_duration_hours)) {
         showHistoricalRefreshModal(flight);
       } else {
@@ -1184,7 +1199,12 @@ async function init(): Promise<void> {
     toggleContainer.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest('.btn-toggle') as HTMLElement | null;
       if (btn && btn.dataset.mode) {
-        store.getState().setDisplayMode(btn.dataset.mode as DisplayMode);
+        const from = store.getState().displayMode;
+        const to = btn.dataset.mode as DisplayMode;
+        if (from !== to) {
+          track(EVENTS.DISPLAY_MODE_CHANGED, { from, to });
+        }
+        store.getState().setDisplayMode(to);
       }
     });
   }
@@ -1278,6 +1298,11 @@ async function init(): Promise<void> {
     // renderBriefingSharing already ran via the store subscriber above when
     // flight was set; don't re-invoke (it would waste a clone+replace cycle).
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
+    // Wire analytics context + emit briefing.opened once the pack is loaded.
+    if (s.flight && s.currentPack) {
+      setBriefingContext(s.flight.id, s.currentPack.fetch_timestamp);
+      track(EVENTS.BRIEFING_OPENED, { days_out: s.currentPack.days_out });
+    }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
@@ -1321,6 +1346,7 @@ async function init(): Promise<void> {
     // Render auto-refresh toggle
     ui.renderAutoRefreshBar(s.flight, user.id, past, async (autoRefresh, hour) => {
       if (!s.flight) return;
+      const wasEnabled = s.flight.auto_refresh;
       try {
         const updated = await api.updateAutoRefresh(s.flight.id, {
           auto_refresh: autoRefresh,
@@ -1328,6 +1354,9 @@ async function init(): Promise<void> {
         });
         // Update the flight in store with new auto-refresh fields
         store.getState().updateFlightAutoRefresh(updated.auto_refresh, updated.auto_refresh_hour);
+        if (autoRefresh !== wasEnabled) {
+          track(autoRefresh ? EVENTS.AUTO_REFRESH_ENABLED : EVENTS.AUTO_REFRESH_DISABLED);
+        }
       } catch (err) {
         ui.renderError(t('autoRefresh.failedUpdate', { error: String(err) }));
       }

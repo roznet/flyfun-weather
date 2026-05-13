@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — Usage Analytics</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .usage-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .usage-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.75rem 1rem;
+      text-align: center;
+    }
+    .usage-card .value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .usage-card .label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-top: 0.1rem;
+    }
+
+    .feature-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    .feature-table th,
+    .feature-table td {
+      padding: 0.5rem 0.6rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .feature-table th {
+      background: var(--bg);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+    .feature-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .attachment-bar {
+      display: inline-block;
+      width: 100px;
+      height: 10px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      vertical-align: middle;
+      margin-right: 0.5rem;
+    }
+    .attachment-bar > span {
+      display: block;
+      height: 100%;
+      background: var(--accent, var(--green, #4caf50));
+    }
+
+    .shape-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .shape-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.75rem 1rem;
+    }
+    .shape-card h4 {
+      margin: 0 0 0.5rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .shape-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      padding: 0.15rem 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .shape-row .key { color: var(--text); }
+    .shape-row .count { color: var(--text-muted); }
+
+    .digest-pre {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      margin: 0;
+    }
+
+    .window-controls {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .window-controls label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    #loading { text-align: center; padding: 3rem; color: var(--text-muted); }
+    #error-message { color: var(--danger); text-align: center; padding: 1rem; display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="page-header">
+      <h1>Usage Analytics</h1>
+      <div class="header-right">
+        <div id="user-info" class="user-info"></div>
+      </div>
+    </div>
+
+    <div id="error-message"></div>
+    <div id="loading"><p class="muted">Loading usage data&hellip;</p></div>
+
+    <div id="page-content" style="display:none;">
+      <div class="window-controls">
+        <label for="window-select">Window:</label>
+        <select id="window-select">
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+        <span id="window-range" class="muted" style="font-size:0.85rem;"></span>
+      </div>
+
+      <div id="totals" class="usage-summary"></div>
+
+      <div class="section">
+        <h3>Feature attachment per briefing</h3>
+        <p class="muted" style="font-size:0.85rem;">
+          Of all briefings opened in the window, the percentage that used each feature
+          at least once. The headline metric — answers "is anyone actually using the map?".
+        </p>
+        <div style="overflow-x:auto;">
+          <table class="feature-table">
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th>Attachment</th>
+                <th class="num">Briefings with feature</th>
+                <th class="num">Total uses</th>
+              </tr>
+            </thead>
+            <tbody id="feature-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Briefing shape</h3>
+        <p class="muted" style="font-size:0.85rem;">
+          Distribution of briefings in the window across the dimensions snapshotted at
+          first open. Counts are number of briefings, not users.
+        </p>
+        <div id="shape-grid" class="shape-grid"></div>
+      </div>
+
+      <div class="section">
+        <h3>Weekly digest</h3>
+        <p class="muted" style="font-size:0.85rem;">
+          Same text the Monday cron writes to the log.
+        </p>
+        <pre id="digest-text" class="digest-pre"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="/dist/admin-usage.js"></script>
+</body>
+</html>

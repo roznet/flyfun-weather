@@ -70,6 +70,12 @@ _FORECAST_FETCH_FRESHNESS_SOURCES: list[tuple[str, str]] = [
 # we keep ~1 h buffer before the 07Z / 19Z standalone forecast-fetch cycles.
 _HEWSON_SAMPLE_HOURS_UTC = [6, 18]
 _HEWSON_STARTUP_DELAY_SECONDS = 300  # let other loops settle; Hewson is cold-cache anyway
+# Usage-analytics rollup runs daily — at the same UTC hour each day so the
+# rollup of "yesterday" lands well after the day has actually rolled over.
+_ANALYTICS_ROLLUP_INTERVAL_SECONDS = 86_400
+_ANALYTICS_ROLLUP_STARTUP_DELAY_SECONDS = 90  # land after retention/scheduler
+# Weekly digest fires once a week on Monday at 08:00 UTC by default.
+_ANALYTICS_DIGEST_STARTUP_DELAY_SECONDS = 120
 
 
 async def run_scheduler_loop(app_state) -> None:
@@ -1052,3 +1058,82 @@ def _run_hewson_precompute_once() -> None:
             )
         finally:
             db.close()
+
+
+# ---------------------------------------------------------------------------
+# Usage analytics: daily rollup + weekly digest
+# ---------------------------------------------------------------------------
+
+
+async def run_analytics_rollup_loop(app_state) -> None:
+    """Daily rollup of yesterday + raw-event retention purge."""
+    logger.info(
+        "Analytics rollup loop started (every %ds)",
+        _ANALYTICS_ROLLUP_INTERVAL_SECONDS,
+    )
+    await asyncio.sleep(_ANALYTICS_ROLLUP_STARTUP_DELAY_SECONDS)
+
+    while True:
+        try:
+            await asyncio.to_thread(_run_analytics_rollup_once)
+        except Exception:
+            logger.error("Analytics rollup cycle failed", exc_info=True)
+        await asyncio.sleep(_ANALYTICS_ROLLUP_INTERVAL_SECONDS)
+
+
+def _run_analytics_rollup_once() -> None:
+    from weatherbrief.analytics.rollup import run_rollup_and_retention
+
+    db = SessionLocal()
+    try:
+        run_rollup_and_retention(db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+async def run_analytics_digest_loop(app_state) -> None:
+    """Weekly digest — fires Monday at the configured UTC hour.
+
+    Log-only for v1 (no email). Pure read against rollup tables, so it
+    survives raw-event retention.
+    """
+    target_hour = int(os.environ.get("ANALYTICS_DIGEST_HOUR_UTC", "8"))
+    logger.info(
+        "Analytics digest loop started (Mondays at %02d:00 UTC)", target_hour,
+    )
+    await asyncio.sleep(_ANALYTICS_DIGEST_STARTUP_DELAY_SECONDS)
+
+    while True:
+        now = datetime.now(timezone.utc)
+        # Days until next Monday at target hour. Monday = weekday 0.
+        days_ahead = (0 - now.weekday()) % 7
+        next_run = now.replace(
+            hour=target_hour, minute=0, second=0, microsecond=0,
+        ) + timedelta(days=days_ahead)
+        if next_run <= now:
+            next_run += timedelta(days=7)
+        wait_seconds = (next_run - now).total_seconds()
+        logger.info(
+            "Analytics digest: next emit at %s (in %.0fs)",
+            next_run.isoformat(), wait_seconds,
+        )
+        await asyncio.sleep(wait_seconds)
+
+        try:
+            await asyncio.to_thread(_run_analytics_digest_once)
+        except Exception:
+            logger.error("Analytics digest cycle failed", exc_info=True)
+
+
+def _run_analytics_digest_once() -> None:
+    from weatherbrief.analytics.digest import build_and_emit_digest
+
+    db = SessionLocal()
+    try:
+        build_and_emit_digest(db)
+    finally:
+        db.close()

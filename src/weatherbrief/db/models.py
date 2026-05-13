@@ -27,6 +27,16 @@ from flyfun_common.oauth import (  # noqa: F401 — register OAuth tables on Bas
     OAuthRefreshTokenRow,
 )
 
+# Register analytics tables on Base so init_shared_db picks them up in dev.
+from weatherbrief.analytics.models import (  # noqa: F401
+    AnalyticsBriefingDimRow,
+    AnalyticsBriefingFeatureDailyRow,
+    AnalyticsEventDailyRow,
+    AnalyticsEventRow,
+    AnalyticsFlightDimRow,
+    AnalyticsSessionRow,
+)
+
 
 class UserAircraftRow(Base):
     __tablename__ = "user_aircraft"

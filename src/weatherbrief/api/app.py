@@ -46,6 +46,8 @@ from weatherbrief.api.credits import (
     transparency_router,
 )
 from weatherbrief.api.feedback import router as feedback_router
+from weatherbrief.analytics.api import router as analytics_router
+from weatherbrief.analytics.admin_api import router as analytics_admin_router
 from weatherbrief.api.messages import admin_router as messages_admin_router, router as messages_router
 from weatherbrief.api.maps import router as maps_router
 from weatherbrief.api.airport_profile import router as airport_profile_router
@@ -225,12 +227,28 @@ async def lifespan(app: FastAPI):
 
         freshness_task = asyncio.create_task(run_freshness_loop(app.state))
 
+    analytics_rollup_task = None
+    analytics_digest_task = None
+    if os.environ.get("DISABLE_ANALYTICS_ROLLUP", "").strip() not in ("1", "true"):
+        from weatherbrief.scheduler import (
+            run_analytics_digest_loop,
+            run_analytics_rollup_loop,
+        )
+
+        analytics_rollup_task = asyncio.create_task(
+            run_analytics_rollup_loop(app.state)
+        )
+        analytics_digest_task = asyncio.create_task(
+            run_analytics_digest_loop(app.state)
+        )
+
     yield
 
     for task in (scheduler_task, retention_task, verification_task,
                  digest_task, metar_ingest_task, forecast_fetch_task,
                  standalone_task, ecmwf_watcher_task,
-                 hewson_precompute_task, freshness_task):
+                 hewson_precompute_task, freshness_task,
+                 analytics_rollup_task, analytics_digest_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):
@@ -349,6 +367,8 @@ def create_app() -> FastAPI:
     app.include_router(admin_router, prefix="/api")
     app.include_router(cost_config_router, prefix="/api")
     app.include_router(feedback_router, prefix="/api")
+    app.include_router(analytics_router, prefix="/api")
+    app.include_router(analytics_admin_router, prefix="/api")
     app.include_router(messages_router, prefix="/api")
     app.include_router(messages_admin_router, prefix="/api")
     app.include_router(maps_router, prefix="/api")
