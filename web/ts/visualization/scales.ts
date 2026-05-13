@@ -97,6 +97,20 @@ export function riskMapColor(risk: string): string {
   return RISK_MAP_COLORS[risk] ?? '#22c55e';
 }
 
+/**
+ * Combine low/mid/high cloud-cover percentages into a total using the
+ * standard random-overlap approximation (assumes layer independence):
+ *   total = 1 − (1 − L)(1 − M)(1 − H)
+ * Avoids the double-counting bias of additive summing in the 30–60% band.
+ */
+export function randomOverlapPct(low: number, mid: number, high: number): number {
+  const clamp = (x: number) => Math.min(100, Math.max(0, x)) / 100;
+  const l = clamp(low);
+  const m = clamp(mid);
+  const h = clamp(high);
+  return (1 - (1 - l) * (1 - m) * (1 - h)) * 100;
+}
+
 /** Continuous cloud cover percentage → gray scale. */
 export function cloudCoverMapColor(pct: number): string {
   const t = Math.min(1, Math.max(0, pct / 100));
