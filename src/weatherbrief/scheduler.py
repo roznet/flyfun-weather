@@ -458,7 +458,7 @@ def _run_retention_once() -> None:
     except Exception:
         logger.error("ECMWF delivery purge failed", exc_info=True)
 
-    # Purge old GRIB download cache (GFS + ICON-EU share CACHE_TTL_SECONDS)
+    # Purge old GRIB download cache; per-model TTL in MODEL_TTL_SECONDS
     try:
         from weatherbrief.fetch.grib.cache import purge_old_runs
 
