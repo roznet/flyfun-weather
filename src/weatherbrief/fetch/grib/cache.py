@@ -4,9 +4,10 @@ Cache layout:
     {data_dir}/.cache/grib/{model}/{YYYYMMDD}_{HH}z/
         f{FFF}_{var}_{bbox_hash}.grib2
 
-TTL: 12 hours — two main-cycle gaps (6 h × 2), so the cache typically holds
-the current main run plus the previous one. Shortened from 24 h once the
-precache loop started actively warming the cache for each new main run.
+TTL is per-model: ICON-EU is precached on each main run so the previous run
+is dead weight after a few hours (12 h); GFS isn't precached and is small
+enough that 24 h costs almost nothing on disk, so it gets the more generous
+window for fall-through to a prior run.
 """
 
 from __future__ import annotations
@@ -19,11 +20,26 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Cache entries older than this are purged. 12 h ≈ two main-cycle gaps so
-# the current and previous main runs stay warm. Covers DWD's typical 3–4 h
-# publication slip on the next cycle: even if the precache loop is delayed,
-# the previous run is still cached when briefings land.
+# Per-model TTL overrides. The model is recovered from the cache layout —
+# ``run_dir.parent.name`` is the model key (see :func:`cache_dir_for_run`).
+# Models not listed here fall back to :data:`CACHE_TTL_SECONDS`.
+MODEL_TTL_SECONDS: dict[str, int] = {
+    "gfs": 24 * 3600,       # no precache, small footprint (~0.5 GB/run)
+    "icon-eu": 12 * 3600,   # precached each main run; previous run is fallback
+}
+
+# Default TTL for models without an explicit entry above.
 CACHE_TTL_SECONDS = 12 * 3600
+
+
+def _ttl_for(run_dir: Path) -> int:
+    """Look up the TTL for the model owning ``run_dir``.
+
+    The cache layout puts the model key one level above the run directory
+    (``.cache/grib/{model}/{init}z``), so the model name is recoverable
+    without threading it through every call site.
+    """
+    return MODEL_TTL_SECONDS.get(run_dir.parent.name, CACHE_TTL_SECONDS)
 
 
 def cache_dir_for_run(
@@ -84,7 +100,7 @@ def is_cached(
     if not path.exists():
         return False
     age = time.time() - path.stat().st_mtime
-    if age > CACHE_TTL_SECONDS:
+    if age > _ttl_for(run_dir):
         logger.debug("Cache expired: %s (%.0fh old)", path, age / 3600)
         path.unlink(missing_ok=True)
         return False
@@ -101,7 +117,7 @@ def get_cached(
         return None
 
     age = time.time() - path.stat().st_mtime
-    if age > CACHE_TTL_SECONDS:
+    if age > _ttl_for(run_dir):
         logger.debug("Cache expired: %s (%.0fh old)", path, age / 3600)
         path.unlink(missing_ok=True)
         return None
@@ -140,7 +156,7 @@ def put_cached(
 
 
 def purge_old_runs(data_dir: Path, model: str = "gfs") -> int:
-    """Remove cache directories older than CACHE_TTL_SECONDS.
+    """Remove cache directories older than the TTL for ``model``.
 
     Returns number of directories removed.
     """
@@ -148,6 +164,7 @@ def purge_old_runs(data_dir: Path, model: str = "gfs") -> int:
     if not cache_root.exists():
         return 0
 
+    ttl = MODEL_TTL_SECONDS.get(model, CACHE_TTL_SECONDS)
     removed = 0
     now = time.time()
     for run_dir in cache_root.iterdir():
@@ -155,7 +172,7 @@ def purge_old_runs(data_dir: Path, model: str = "gfs") -> int:
             continue
         # Use directory mtime as proxy for age
         age = now - run_dir.stat().st_mtime
-        if age > CACHE_TTL_SECONDS:
+        if age > ttl:
             import shutil
             shutil.rmtree(run_dir, ignore_errors=True)
             removed += 1
