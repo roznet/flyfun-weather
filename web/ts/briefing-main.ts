@@ -908,9 +908,14 @@ async function init(): Promise<void> {
       setBriefingContext(state.flight.id, state.currentPack.fetch_timestamp);
       // A new pack timestamp (i.e. one not previously in state.packs) means
       // a refresh just completed. Emit briefing.refreshed once for it.
-      const wasNew = !prev.packs.some(
-        (p: { fetch_timestamp: string }) => p.fetch_timestamp === state.currentPack!.fetch_timestamp,
-      );
+      // Guard on prev.packs being non-empty: on initial page load it is
+      // always empty so ``some()`` returns false and we'd fire refreshed
+      // for every first visit, inflating the count 1:1 with briefing.opened.
+      const wasNew =
+        prev.packs.length > 0 &&
+        !prev.packs.some(
+          (p: { fetch_timestamp: string }) => p.fetch_timestamp === state.currentPack!.fetch_timestamp,
+        );
       if (wasNew) {
         track(EVENTS.BRIEFING_REFRESHED);
       }

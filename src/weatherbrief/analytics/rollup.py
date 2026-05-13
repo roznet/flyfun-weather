@@ -195,9 +195,7 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
     # interpret display_mode.changed by looking at the **last** mode set
     # in each briefing and counting briefings whose final mode is
     # ``detailed``. This needs the event stream + props, so it can't
-    # collapse into the simple FEATURE_OF loop above; if you add another
-    # derived feature, extend ``DERIVED_FEATURE_EXTRACTORS`` below rather
-    # than copy-pasting this block.
+    # collapse into the simple FEATURE_OF loop above.
     detailed_with, detailed_total = _extract_detailed_mode(
         db, briefings_today_subq, day_start, day_end,
     )

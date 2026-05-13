@@ -1,8 +1,8 @@
 """Admin-facing read endpoints for the usage-analytics dashboard.
 
-All endpoints read from the rollup tables only — never from raw
-``analytics_events`` — so the dashboard is cheap even when the events
-table has grown large.
+Endpoints read from the rollup tables and dimension snapshots; the raw
+``analytics_events`` table is never queried here, so the dashboard stays
+cheap even when the events table has grown large.
 """
 
 from __future__ import annotations
@@ -171,8 +171,19 @@ def briefing_shape(
     _start_day, _end_day, start_dt, end_dt = _window(days)
 
     def _count_by(column):
+        # ``str(True)`` → "True" / "False" with capital first letter; the
+        # frontend's formatKey check expects lowercase. Normalise booleans
+        # so the dialect (SQLAlchemy's Boolean processor) doesn't leak into
+        # the wire format.
+        def _key(k):
+            if k is None:
+                return None
+            if isinstance(k, bool):
+                return "true" if k else "false"
+            return str(k)
+
         return [
-            {"key": (str(k) if k is not None else None), "count": int(c)}
+            {"key": _key(k), "count": int(c)}
             for k, c in db.execute(
                 select(column, func.count())
                 .select_from(AnalyticsBriefingDimRow)
