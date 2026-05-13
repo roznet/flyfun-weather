@@ -22,7 +22,7 @@ import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import and_, delete, distinct, func, select
+from sqlalchemy import and_, case, delete, distinct, func, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.analytics.events import FEATURE_OF, KNOWN_FEATURES, Event
@@ -75,36 +75,47 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
         )
     }
 
-    per_event_rows = db.execute(
-        select(
-            AnalyticsEventRow.event,
-            func.count(AnalyticsEventRow.id),
-            func.count(distinct(AnalyticsEventRow.anon_id)),
+    # Single GROUP BY query — ``unique_new_anons`` is COUNT(DISTINCT) over a
+    # CASE that returns the anon_id only when it's in today's new-anons set,
+    # NULL otherwise. NULLs don't count in DISTINCT, so we get the right
+    # numerator without a per-event correlated subquery.
+    base_cols = [
+        AnalyticsEventRow.event,
+        func.count(AnalyticsEventRow.id),
+        func.count(distinct(AnalyticsEventRow.anon_id)),
+    ]
+    if new_anons_this_day:
+        new_anon_expr = case(
+            (AnalyticsEventRow.anon_id.in_(new_anons_this_day), AnalyticsEventRow.anon_id),
+            else_=None,
         )
+        select_cols = base_cols + [func.count(distinct(new_anon_expr))]
+    else:
+        # No new anons today — short-circuit the count to literal 0 so we
+        # don't generate a useless ``in_([])`` clause that some dialects
+        # render as ``1=0``.
+        select_cols = base_cols
+
+    per_event_rows = db.execute(
+        select(*select_cols)
         .where(AnalyticsEventRow.ts >= day_start)
         .where(AnalyticsEventRow.ts < day_end)
         .group_by(AnalyticsEventRow.event)
     ).all()
 
     n_events = 0
-    for event_name, total, unique_anons in per_event_rows:
-        if not new_anons_this_day:
-            unique_new = 0
-        else:
-            unique_new = db.scalar(
-                select(func.count(distinct(AnalyticsEventRow.anon_id)))
-                .where(AnalyticsEventRow.ts >= day_start)
-                .where(AnalyticsEventRow.ts < day_end)
-                .where(AnalyticsEventRow.event == event_name)
-                .where(AnalyticsEventRow.anon_id.in_(new_anons_this_day))
-            ) or 0
+    for row in per_event_rows:
+        event_name = row[0]
+        total = row[1]
+        unique_anons = row[2]
+        unique_new = row[3] if new_anons_this_day else 0
         db.add(
             AnalyticsEventDailyRow(
                 day=day,
                 event=event_name,
                 total_count=int(total),
                 unique_anons=int(unique_anons),
-                unique_new_anons=int(unique_new),
+                unique_new_anons=int(unique_new or 0),
             )
         )
         n_events += 1

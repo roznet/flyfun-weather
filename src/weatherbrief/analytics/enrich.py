@@ -19,6 +19,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from weatherbrief.analytics.models import (
@@ -101,7 +102,9 @@ def _lead_time_bucket(
     """How far ahead of departure the briefing was generated.
 
     Capped at ``7d_plus`` — most NWP models lose useful skill past a week,
-    so finer buckets beyond that don't carry signal.
+    so finer buckets beyond that don't carry signal. Briefings created
+    *after* departure (post-flight analysis, historical re-runs) land in
+    ``post_departure`` rather than being collapsed into ``same_day``.
     """
     if departure_time is None:
         return "no_etd"
@@ -111,6 +114,8 @@ def _lead_time_bucket(
         departure_time = departure_time.replace(tzinfo=timezone.utc)
 
     delta_h = (departure_time - briefing_created_at).total_seconds() / 3600.0
+    if delta_h <= 0:
+        return "post_departure"
     if delta_h < 12:
         return "same_day"
     if delta_h < 36:
@@ -145,7 +150,10 @@ def upsert_flight_dim(db: Session, flight_id: str) -> None:
     user edits the flight later we keep the original snapshot, since
     that's what was true when the briefings were generated.
 
-    Best-effort: silently no-ops if the flight is missing or DB read fails.
+    Wraps the INSERT in its own SAVEPOINT so a concurrent batch that
+    won the check-then-insert race doesn't poison the caller's
+    transaction (the caller is itself inside a SAVEPOINT around the
+    event insert — letting the conflict propagate would lose the event).
     """
     existing = db.get(AnalyticsFlightDimRow, flight_id)
     if existing is not None:
@@ -164,7 +172,12 @@ def upsert_flight_dim(db: Session, flight_id: str) -> None:
         route_points=_route_points(flight),
         has_alternate_etd=flight.alt_departure_time is not None,
     )
-    db.add(row)
+    try:
+        with db.begin_nested():
+            db.add(row)
+    except IntegrityError:
+        # Lost the race to another batch. Row exists; nothing to do.
+        pass
 
 
 def upsert_briefing_dim(db: Session, briefing_id: int) -> None:
@@ -203,4 +216,9 @@ def upsert_briefing_dim(db: Session, briefing_id: int) -> None:
         lead_time_bucket=_lead_time_bucket(pack.fetch_timestamp, departure_time),
         model_count=_model_count(pack),
     )
-    db.add(row)
+    try:
+        with db.begin_nested():
+            db.add(row)
+    except IntegrityError:
+        # Lost the race to another batch. Row exists; nothing to do.
+        pass

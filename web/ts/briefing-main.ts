@@ -28,7 +28,7 @@ import { attachMapInteraction, type MapInteractionHandle } from './visualization
 import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
 import { initTheme } from './theme';
-import { track, setBriefingContext, EVENTS } from './analytics/track';
+import { track, trackOncePerBriefing, setBriefingContext, EVENTS } from './analytics/track';
 import { initI18n, t } from './i18n/i18n';
 import { SkewTRenderer } from './visualization/skewt/renderer';
 import { renderSkewtOverlayControls, renderSkewtCompareControls } from './visualization/skewt/overlay-controls';
@@ -269,7 +269,9 @@ async function init(): Promise<void> {
     const prevMode = skewtViewMode;
     skewtViewMode = mode;
     if (prevMode !== mode) {
-      track(EVENTS.SKEWT_OPENED, { view: mode });
+      // Once per briefing — toggling between view modes shouldn't inflate
+      // the "user engaged with skew-T" signal.
+      trackOncePerBriefing(EVENTS.SKEWT_OPENED, { view: mode });
     }
 
     const dynBtn = document.getElementById('skewt-view-dynamic');
@@ -996,14 +998,15 @@ async function init(): Promise<void> {
       renderVisualization(state);
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
       renderPointSections(state);
-      // Analytics: emit on transition into map / compare / split (the user
-      // explicitly engaged with that view), not for every viz settings tweak.
+      // Analytics: emit at most once per briefing on transition into
+      // map / compare / split. The user can toggle between layouts
+      // freely; counting every toggle would inflate engagement.
       if (state.vizSettings.layout !== prev.vizSettings.layout) {
         const layout = state.vizSettings.layout;
         if (layout === 'map' || layout === 'split') {
-          track(EVENTS.FORECAST_MAP_OPENED, { layout });
+          trackOncePerBriefing(EVENTS.FORECAST_MAP_OPENED, { layout });
         } else if (layout === 'compare') {
-          track(EVENTS.COMPARE_OPENED);
+          trackOncePerBriefing(EVENTS.COMPARE_OPENED);
         }
       }
     }

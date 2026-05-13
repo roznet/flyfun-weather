@@ -56,11 +56,19 @@ let initialized = false;
 // entrypoint sets this on load and clears it on unload.
 let currentBriefingTs: string | undefined;
 let currentFlightId: string | undefined;
+// Events already emitted for the *current* briefing context — used by
+// ``trackOncePerBriefing`` to suppress duplicate feature-open events when
+// the user toggles between e.g. skew-T view modes. Cleared whenever the
+// context changes.
+const seenInCurrentBriefing = new Set<EventName>();
 
 export function setBriefingContext(
   flightId: string | undefined,
   briefingTs: string | undefined,
 ): void {
+  if (flightId !== currentFlightId || briefingTs !== currentBriefingTs) {
+    seenInCurrentBriefing.clear();
+  }
   currentFlightId = flightId;
   currentBriefingTs = briefingTs;
 }
@@ -242,6 +250,21 @@ export function track(
     props,
   });
   scheduleFlush();
+}
+
+/**
+ * Track an event at most once per briefing context.
+ *
+ * Use for "feature opened" signals where the user toggling sub-views
+ * (skew-T dynamic ↔ compare ↔ static, map ↔ cross-section ↔ compare)
+ * would otherwise inflate the count. The first call inside a given
+ * briefing context fires; subsequent calls are silently dropped until
+ * ``setBriefingContext`` is called with a different context.
+ */
+export function trackOncePerBriefing(event: EventName, props?: Props): void {
+  if (seenInCurrentBriefing.has(event)) return;
+  seenInCurrentBriefing.add(event);
+  track(event, props);
 }
 
 // Expose the registry too for ergonomics.

@@ -25,15 +25,14 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-
-from flyfun_common.db import SessionLocal, get_db
 from sqlalchemy.orm import Session
+
+from flyfun_common.db import SessionLocal
 
 from weatherbrief.analytics.enrich import upsert_briefing_dim, upsert_flight_dim
 from weatherbrief.analytics.events import ALLOWED_EVENTS, Event
@@ -97,14 +96,14 @@ class EventBatchIn(BaseModel):
 def ingest_events(
     body: EventBatchIn,
     background: BackgroundTasks,
-    db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     """Accept a batch of analytics events.
 
     Validates the batch synchronously (cheap), then schedules the actual
     write on FastAPI's BackgroundTasks so the response returns immediately.
-    The background task opens its own DB session — request-scoped ``db``
-    won't be valid after the response is sent.
+    The background task opens its own DB session — taking a request-scoped
+    one here would just open and close a connection per POST for nothing,
+    and this is the highest-frequency endpoint in the system.
     """
     if not body.events:
         return {"accepted": 0}
@@ -180,6 +179,14 @@ def _ensure_session_row(
         return
 
     # First time we see this anon_id at all? Mark the session.
+    #
+    # Note: a first-time anon_id opening multiple tabs in quick succession
+    # can race here — both can see ``has_prior is None`` before either
+    # session commits and land with ``is_first_session=True``. We accept
+    # that small inflation rather than serialise all session inserts. The
+    # downstream rollup uses unique anon_ids, so the inflation only
+    # affects ``unique_new_anons`` and only on the very first day the user
+    # appears.
     has_prior = db.scalar(
         select(AnalyticsSessionRow.session_id)
         .where(AnalyticsSessionRow.anon_id == anon_id)
