@@ -360,12 +360,21 @@ def test_parallel_dispatch_runs_four_jobs_in_parallel(monkeypatch):
 
 
 def test_parallel_dispatch_error_propagation(monkeypatch):
-    """Worker exceptions surface to the caller and reset the pool when fatal."""
+    """Worker exceptions surface to the caller and cancel pending futures.
+
+    Three jobs with the failure in the middle exercises the cancel path —
+    a 2-job batch with the failure last leaves no pending futures, so the
+    cancel logic is never proven to run. The pool itself is left intact:
+    a non-fatal worker exception doesn't mean the pool is broken.
+    """
     monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
     shutdown_decode_pool()
     jobs = [
         ("_test_echo", ("ok",)),
         ("_test_echo", (None, 0.0, "boom")),
+        ("_test_echo", ("also-ok",)),
     ]
     with pytest.raises(RuntimeError, match="boom"):
         _dispatch_decode_parallel(jobs)
+    # Pool stays alive — exception was at job level, not pool level.
+    assert grib_pkg._DECODE_POOL is not None
