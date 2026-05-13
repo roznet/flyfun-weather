@@ -211,7 +211,7 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 | `icon_eu_levels.py` | Log-pressure interpolation from ICON-EU model levels to pressure levels |
 | `ecmwf_fetch.py` | Parse ECPDS filenames, scan delivery directory, find latest run. No HTTP — files land on local disk via ECPDS push |
 | `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points. Chunked ICON-EU decoder (`decode_icon_eu_per_point_chunked()`) processes one variable at a time with explicit `gc.collect()` between — peak ~270MB vs ~800MB. ECMWF decoders handle multi-grid files (first-wins per point) |
-| `fill.py` | Forward-fill GRIB-enriched fields across time axis (cloud diagnostics + microphysics) |
+| `fill.py` | Time-axis fill of GRIB-enriched fields. Linear interp for GFS cloud diagnostics (window-midpoint, see meteorology-decisions §3) and CLW/ICMR when `gfs_init` is provided; forward-fill for ICON-EU/ECMWF and the GFS fallback path. Also hosts `apply_gfs_rh_condensate_gate` — drops GFS phantom layers where pressure-level RH and condensate disagree with the averaged cover |
 | `cache.py` | Disk cache per model (`data/.cache/grib/{model}/{date}_{cycle}z/`) with 48h TTL |
 
 ### How It Works
@@ -245,13 +245,20 @@ enrich_forecasts(cross_sections, all_forecasts, route_points,
 
 **Gap-filling for GRIB-enriched fields:** GRIB enrichment only targets native model forecast hours (e.g. every 3h for GFS at longer lead times), and some grid cells may return None. Two gap-filling passes ensure all route points and hours have data:
 
-1. **Time axis — forward-fill** (`fetch/grib/fill.py`): After all GRIB enrichment completes, `propagate_all()` forward-fills from the preceding native hour for both cloud diagnostics (`nwp_cloud_diagnostics`) and microphysics (`cloud_liquid_water_kg_kg`, `ice_mixing_ratio_kg_kg`). Cloud geometry and microphysics change slowly between 3h GFS steps.
+1. **Time axis** (`fetch/grib/fill.py`): After all GRIB enrichment completes, `propagate_all()` fills gap hours between native steps. The strategy depends on the field and source:
+   - **GFS cloud diagnostics** — when `gfs_init` is provided, `_fill_cloud_diagnostics` uses **window-midpoint linear interpolation** (`_interp_gfs_diag_hourly`) for low/mid/high cover. GFS publishes only the time-averaged form of LCDC/MCDC/HCDC, so the value at each native step is anchored at `step - window_length/2` and interpolated between neighbouring midpoints. Layer geometry (base/top/temp) is held over from the higher-cover endpoint; sub-5 % covers drop the layer entirely. Convective, boundary, total cover, and ceiling are instantaneous and use step-time anchoring. See [meteorology-decisions §3](./future/meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate) for the rationale.
+   - **GFS CLW/ICMR overlay** — when `gfs_init` is provided, `_fill_cloud_water` uses step-time linear interp via `_interp_gfs_clw_hourly` (instantaneous mixing ratios — no midpoint adjustment).
+   - **ICON-EU / ECMWF cloud diagnostics** and the **GFS fallback path** (no `gfs_init`) — forward-fill from the preceding native hour. ICON-EU and ECMWF publish instantaneous cover; forward-fill is the right persistence semantic.
+   - **ECMWF / ICON-EU pressure-level soundings** — `_linear_interp_pressure_levels` rebuilds the full `pressure_levels` list on gap hours via per-level linear interp; dewpoint is derived from interpolated (T, RH) via Magnus rather than interpolated directly.
+   - **ECMWF surface scalars** — `_linear_interp_ecmwf_surface` linearly interpolates between GRIB anchors (identified via `nwp_cloud_diagnostics`); wind direction uses circular interp with a calm-speed gate.
+
+   After `propagate_all`, **`apply_gfs_rh_condensate_gate`** runs on GFS sections: each low/mid/high band is dropped when its pressure-level `max(RH)` is below the per-band threshold (`_GFS_GATE_RH_LOW_PCT` = 60, `_GFS_GATE_RH_MID_PCT` = 70, `_GFS_GATE_RH_HIGH_PCT` = 70) AND `sum(CLMR + ICMR)` within `[base_ft, top_ft]` is zero. This protects against averaged-window phantom layers that survive interpolation — see [meteorology-decisions §3](./future/meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate).
 
 2. **Spatial axis — linear interpolation** (`analysis/spatial_interpolation.py`): Before sounding analysis, `interpolate_all_spatially()` fills gaps where a route point's GRIB grid cell returned None by linearly interpolating in distance-space from left/right neighbors. Applies to both CLW/ICMR (per-pressure-level) and cloud diagnostics (all numeric sub-fields). Requires both neighbors; max gap 100 nm; edge gaps skipped.
 
 3. **Vertical axis — linear in pressure** (`analysis/sounding/__init__.py`): During sounding analysis, `_interpolate_cloud_water()` fills intermediate pressure levels (25-hPa spacing) between native GRIB levels (50-hPa spacing) by linear interpolation in pressure-space. Only applies to CLW/ICMR.
 
-**When adding new GRIB-enriched fields:** add a forward-fill in `fill.py` (time axis) and a spatial interpolation function in `spatial_interpolation.py` (spatial axis). If the field is per-pressure-level, also add vertical interpolation in the sounding analysis.
+**When adding new GRIB-enriched fields:** add a time-axis fill in `fill.py` (linear interp where the field is meaningfully continuous, forward-fill where persistence is the right semantic) and a spatial interpolation function in `spatial_interpolation.py` (spatial axis). If the field is per-pressure-level, also add vertical interpolation in the sounding analysis.
 
 ### Key Choices
 - **GFS + ICON-EU + ECMWF IFS** — GFS for global coverage, ICON-EU for higher-resolution European data (~6.5km vs ~27km), ECMWF IFS for model-native cloud microphysics on ECMWF cross-sections

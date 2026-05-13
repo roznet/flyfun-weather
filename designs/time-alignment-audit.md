@@ -114,16 +114,33 @@ Open-Meteo provides **hourly** forecast data for the full 24h cross-section, inc
 
 **What's affected on interpolated hours:**
 
-| Field | Native hours | Interpolated hours | Impact |
-|-------|-------------|-------------------|--------|
-| `nwp_cloud_diagnostics` | GRIB base/top/cover | Was `None` → **now propagated** | Was critical — see below |
-| `cloud_cover_low/mid/high_pct` | Overridden by GRIB | Was Open-Meteo → **now propagated** | Consistent source |
-| `cloud_liquid_water_g_m3` | GRIB CLWMR per level | `None` | Low impact — see below |
-| `ice_mixing_ratio_g_m3` | GRIB ICMR per level | `None` | Low impact — see below |
+| Field | Native hours | Interpolated hours (GFS, `gfs_init` set) | Interpolated hours (ICON-EU / ECMWF / GFS fallback) |
+|-------|-------------|-----------------|------------------------------------|
+| `nwp_cloud_diagnostics.low/mid/high.cover_pct` | GRIB averaged-window cover (GFS) or instantaneous cover | **Window-midpoint linear interp**; sub-5 % drops layer; RH/condensate gate may also drop layer post-interp | Forward-filled |
+| `nwp_cloud_diagnostics.low/mid/high.base_ft/top_ft/top_temp_c` | GRIB geometry | Held over from the bracketing higher-cover endpoint | Forward-filled |
+| `nwp_cloud_diagnostics` instantaneous fields (convective, boundary, total, ceiling, freezing level) | GRIB instantaneous | Step-time linear interp | Forward-filled |
+| `cloud_cover_low/mid/high_pct` | Overridden by GRIB | Propagated from GRIB diagnostics | Propagated from GRIB diagnostics |
+| `cloud_liquid_water_kg_kg` / `ice_mixing_ratio_kg_kg` (per level) | GRIB CLMR / ICMR | Step-time linear interp (`_interp_gfs_clw_hourly`) | Forward-filled (`_fill_clw_hourly`) for GFS without `gfs_init`; ECMWF / ICON-EU rebuild full `pressure_levels` via `_linear_interp_pressure_levels` |
 
-**Cloud diagnostics propagation** (`_propagate_cloud_diagnostics` in `grib/__init__.py`):
+**Cloud diagnostics propagation** (`_fill_cloud_diagnostics` in `fetch/grib/fill.py`, called from `propagate_all`):
 
-After all GRIB enrichment completes, `enrich_forecasts()` forward-fills `nwp_cloud_diagnostics` (and the associated `cloud_cover_*_pct` overrides) from each native hour to subsequent interpolated hours. Cloud layer geometry (base/top) changes slowly between 3h GFS steps, making this meteorologically sound.
+After all GRIB enrichment completes, `propagate_all` fills `nwp_cloud_diagnostics` on gap hours between native GRIB steps. The strategy is source-dependent:
+
+- **GFS, when `gfs_init` is provided** — window-midpoint linear interpolation (`_interp_gfs_diag_hourly`). NCEP publishes only the averaged form of LCDC/MCDC/HCDC, so each anchor sits at `step - window_length/2` (1/2/3 h depending on step position; 3 h past f120) and low/mid/high cover interpolate linearly between bracketing midpoints. Layer geometry (`base_ft`, `top_ft`, `top_temp_c`) holds over from the higher-cover endpoint; sub-5 % (`_GFS_LAYER_DROP_THRESHOLD_PCT`) covers drop the layer entirely. Convective, boundary, total cover, ceiling, and freezing level interpolate linearly with **step-time** anchoring (instantaneous in GFS pgrb2). A follow-up `apply_gfs_rh_condensate_gate` drops any layer whose pressure-level RH and condensate inside `[base_ft, top_ft]` contradict the averaged cover (per-band thresholds `_GFS_GATE_RH_LOW_PCT` = 60, `_GFS_GATE_RH_MID_PCT` = 70, `_GFS_GATE_RH_HIGH_PCT` = 70). See [meteorology-decisions §3](./future/meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate) for the rationale.
+- **ICON-EU, ECMWF, and the GFS fallback** (no `gfs_init`) — forward-fill (`_fill_diag_hourly`). ICON-EU and ECMWF publish instantaneous cover, so persistence is the right semantic.
+
+GFS path (with `gfs_init`), illustrating the f132 / f135 case past f120:
+
+```
+Hour 12 Z (f132 native, avg over 09–12 Z) → midpoint anchor at 10:30 Z
+Hour 13 Z (interp) → linearly interpolated between f132 midpoint (10:30) and f135 midpoint (13:30)
+Hour 14 Z (interp) → just past f135 midpoint, so dominated by f135's value
+Hour 15 Z (f135 native, avg over 12–15 Z) → midpoint anchor at 13:30 Z
+Hour 16 Z (interp) → linearly interpolated between f135 midpoint and f138 midpoint
+...
+```
+
+Forward-fill path (ICON-EU / ECMWF / GFS fallback):
 
 ```
 Hour 06 (native) → diagnostics from GRIB
@@ -186,7 +203,8 @@ GFS enriches first. ICON-EU checks `hourly.nwp_cloud_diagnostics is None` before
 
 | File | Role |
 |------|------|
-| `fetch/grib/__init__.py` | GRIB enrichment entry point, per-hour merge logic |
+| `fetch/grib/__init__.py` | GRIB enrichment entry point, per-hour merge logic; invokes `propagate_all` and `apply_gfs_rh_condensate_gate` after enrichment |
+| `fetch/grib/fill.py` | Time-axis fill — window-midpoint interp for GFS cloud diagnostics, step-time interp for GFS CLW/ICMR + ECMWF surface + ECMWF / ICON-EU sounding rebuild, forward-fill for ICON-EU / ECMWF cloud diagnostics, and the GFS RH/condensate phantom-layer gate (see [meteorology-decisions §3](./future/meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate)) |
 | `fetch/grib/grib_fetch.py` | GFS HTTP range downloads, `compute_flight_window_hours()` |
 | `fetch/grib/icon_eu_fetch.py` | ICON-EU downloads, `compute_icon_eu_flight_window_hours()` |
 | `fetch/grib/decode.py` | GRIB2 decode and spatial interpolation |
