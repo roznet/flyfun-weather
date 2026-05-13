@@ -28,7 +28,9 @@ MODEL_TTL_SECONDS: dict[str, int] = {
     "icon-eu": 12 * 3600,   # precached each main run; previous run is fallback
 }
 
-# Default TTL for models without an explicit entry above.
+# Fallback TTL for models without an explicit entry. Currently unreachable
+# (gfs + icon-eu are the only cache users and both are listed above); kept
+# as a safe default for any future non-precached model added to the cache.
 CACHE_TTL_SECONDS = 12 * 3600
 
 

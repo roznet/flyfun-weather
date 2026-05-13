@@ -21,7 +21,6 @@ from weatherbrief.fetch.grib.cache import (
     cache_dir_for_run,
     cache_key,
     is_cached,
-    purge_old_runs,
     put_cached,
 )
 from weatherbrief.fetch.grib.icon_eu_fetch import (
@@ -94,7 +93,6 @@ def precache_icon_eu_run(init: datetime) -> dict[str, int]:
     levels = list(range(ICON_EU_MODEL_LEVEL_MIN, ICON_EU_MODEL_LEVEL_MAX + 1))
 
     data_dir = _data_dir()
-    purge_old_runs(data_dir, model="icon-eu")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
     session = _grib_session()
 
@@ -176,7 +174,6 @@ def precache_gfs_run(init: datetime) -> dict[str, int]:
     forecast_hours = airport_profile_forecast_hours(init)
 
     data_dir = _data_dir()
-    purge_old_runs(data_dir, model="gfs")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
     session = _grib_session()
 
