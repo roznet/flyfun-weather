@@ -378,3 +378,35 @@ def test_parallel_dispatch_error_propagation(monkeypatch):
         _dispatch_decode_parallel(jobs)
     # Pool stays alive — exception was at job level, not pool level.
     assert grib_pkg._DECODE_POOL is not None
+
+
+def test_parallel_dispatch_timeout_resets_pool(monkeypatch):
+    """A hung worker in a parallel batch trips ``GRIB_DECODE_TIMEOUT_S``,
+    tears down the pool with ``wait=False``, and re-raises ``TimeoutError``.
+
+    Locks in the teardown semantics for the TimeoutError branch: unlike
+    a non-fatal worker exception, a stuck worker means the pool is
+    poisoned (the parent can't safely reuse a worker that may still be
+    holding ECCODES state). Mirrors ``test_pool_auto_resets_on_worker_hang``
+    for the parallel dispatch path.
+    """
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
+    # Warm the pool with a generous timeout first so worker spawn cost
+    # doesn't burn the per-batch deadline on the hang call.
+    monkeypatch.setenv("GRIB_DECODE_TIMEOUT_S", "30")
+    shutdown_decode_pool()
+    assert _dispatch_decode_parallel([("_test_echo", ("warm",))]) == ["warm"]
+
+    # Drop the timeout; one of the jobs hangs far longer.
+    monkeypatch.setenv("GRIB_DECODE_TIMEOUT_S", "0.5")
+    jobs = [
+        ("_test_hang", (30.0,)),
+        ("_test_echo", ("never-reached",)),
+    ]
+    t0 = time.perf_counter()
+    with pytest.raises(TimeoutError):
+        _dispatch_decode_parallel(jobs)
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 2.5, f"timeout fired in {elapsed:.2f}s, should be ~0.5s"
+    # Pool was torn down — the TimeoutError branch calls shutdown_decode_pool(wait=False).
+    assert grib_pkg._DECODE_POOL is None

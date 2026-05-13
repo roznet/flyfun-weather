@@ -416,12 +416,17 @@ def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
     timeout = _decode_timeout_s()
     deadline = _time_mod.perf_counter() + timeout
 
-    futures = [
-        pool.submit(getattr(decode_worker, name), *args)
-        for name, args in jobs
-    ]
+    # Keep ``pool.submit`` inside the try so a ``BrokenProcessPool`` raised
+    # mid-batch (worker died between submits) still tears down the pool
+    # global — otherwise every subsequent dispatch keeps hitting the same
+    # broken pool until the process restarts.
+    futures: list = []
     results: list[Any] = [None] * len(jobs)
     try:
+        futures = [
+            pool.submit(getattr(decode_worker, name), *args)
+            for name, args in jobs
+        ]
         for i, fut in enumerate(futures):
             remaining = max(0.0, deadline - _time_mod.perf_counter())
             results[i] = fut.result(timeout=remaining)
@@ -806,10 +811,14 @@ def _enrich_ecmwf_inner(
 
     enriched_steps = 0
     for step_hours, parts, valid_time in window_steps:
-        # Pressure levels (a2) — merge in step order
+        # Pressure levels (a2) — merge in step order. ``pop`` drops the
+        # decoded data from the dict immediately so each step's RSS is
+        # reclaimable during the rest of the merge loop, mirroring the
+        # per-fhour cleanup in the ICON path. Without this, all decoded
+        # steps stay resident until function exit.
         if step_hours in a2_results:
             with _grib_time("ecmwf_a2_merge"):
-                pl_data, pl_covered = a2_results[step_hours]
+                pl_data, pl_covered = a2_results.pop(step_hours)
                 # Only merge covered points — set uncovered to empty
                 for i, cov in enumerate(pl_covered):
                     if not cov:
@@ -821,12 +830,13 @@ def _enrich_ecmwf_inner(
                 )
                 if replaced > 0:
                     enriched_steps += 1
+                del pl_data, pl_covered
 
         # Surface diagnostics (a1) — must run in step order so the
         # accumulated-precip step-difference state propagates correctly.
         if step_hours in a1_results:
             with _grib_time("ecmwf_a1_merge"):
-                sfc_data, sfc_covered = a1_results[step_hours]
+                sfc_data, sfc_covered = a1_results.pop(step_hours)
                 diagnostics = [
                     build_ecmwf_cloud_diagnostics(raw) if cov else None
                     for raw, cov in zip(sfc_data, sfc_covered)
@@ -859,6 +869,8 @@ def _enrich_ecmwf_inner(
                     if sf is not None:
                         prev_sf_per_point[i] = sf
                 prev_a1_valid_utc = valid_time
+                del sfc_data, sfc_covered, diagnostics
+    _grib_gc()
 
     if enriched_steps > 0:
         logger.info(
