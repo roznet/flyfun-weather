@@ -22,10 +22,10 @@ import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import and_, case, delete, distinct, func, select
+from sqlalchemy import case, delete, distinct, func, select
 from sqlalchemy.orm import Session
 
-from weatherbrief.analytics.events import FEATURE_OF, KNOWN_FEATURES, Event
+from weatherbrief.analytics.events import FEATURE_OF, Event
 from weatherbrief.analytics.models import (
     AnalyticsBriefingFeatureDailyRow,
     AnalyticsEventDailyRow,
@@ -54,6 +54,11 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
     """Aggregate one UTC day. Idempotent (DELETE+INSERT on the day).
 
     Returns counts for logging.
+
+    All large sets (new anons, today's briefings) stay inside the DB as
+    scalar subqueries — never materialised into Python and re-injected as
+    ``IN (...)`` clauses, which would bust ``max_allowed_packet`` once the
+    table grows.
     """
     day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=1)
@@ -63,57 +68,61 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
         delete(AnalyticsEventDailyRow).where(AnalyticsEventDailyRow.day == day)
     )
 
-    # New anons: those whose first ever session started in this day. We do
-    # this once and subtract per event so we don't re-scan sessions per row.
-    new_anons_this_day = {
-        anon
-        for (anon,) in db.execute(
-            select(AnalyticsSessionRow.anon_id)
-            .where(AnalyticsSessionRow.is_first_session.is_(True))
-            .where(AnalyticsSessionRow.started_at >= day_start)
-            .where(AnalyticsSessionRow.started_at < day_end)
-        )
-    }
+    # New anons: those whose first ever session started in this day, kept
+    # as a scalar subquery so we don't pull anon_ids into Python.
+    new_anons_subq = (
+        select(AnalyticsSessionRow.anon_id)
+        .where(AnalyticsSessionRow.is_first_session.is_(True))
+        .where(AnalyticsSessionRow.started_at >= day_start)
+        .where(AnalyticsSessionRow.started_at < day_end)
+        .scalar_subquery()
+    )
 
     # Single GROUP BY query — ``unique_new_anons`` is COUNT(DISTINCT) over a
     # CASE that returns the anon_id only when it's in today's new-anons set,
     # NULL otherwise. NULLs don't count in DISTINCT, so we get the right
-    # numerator without a per-event correlated subquery.
-    base_cols = [
-        AnalyticsEventRow.event,
-        func.count(AnalyticsEventRow.id),
-        func.count(distinct(AnalyticsEventRow.anon_id)),
-    ]
-    if new_anons_this_day:
-        new_anon_expr = case(
-            (AnalyticsEventRow.anon_id.in_(new_anons_this_day), AnalyticsEventRow.anon_id),
-            else_=None,
-        )
-        select_cols = base_cols + [func.count(distinct(new_anon_expr))]
-    else:
-        # No new anons today — short-circuit the count to literal 0 so we
-        # don't generate a useless ``in_([])`` clause that some dialects
-        # render as ``1=0``.
-        select_cols = base_cols
-
+    # numerator without a per-event correlated subquery and without
+    # materialising the set.
+    new_anon_expr = case(
+        (AnalyticsEventRow.anon_id.in_(new_anons_subq), AnalyticsEventRow.anon_id),
+        else_=None,
+    )
     per_event_rows = db.execute(
-        select(*select_cols)
+        select(
+            AnalyticsEventRow.event,
+            func.count(AnalyticsEventRow.id),
+            func.count(distinct(AnalyticsEventRow.anon_id)),
+            func.count(distinct(new_anon_expr)),
+        )
         .where(AnalyticsEventRow.ts >= day_start)
         .where(AnalyticsEventRow.ts < day_end)
         .group_by(AnalyticsEventRow.event)
     ).all()
 
+    # ``session_started`` fires once per page load (each navigation
+    # reinitialises the client module), so its raw event count overstates
+    # actual session starts. Override total_count with the real session
+    # count from the sessions table — which deduplicates by session_id.
+    # The unique_anons / unique_new_anons columns are still accurate
+    # because they DISTINCT on anon_id.
+    sessions_started_today = int(db.scalar(
+        select(func.count(AnalyticsSessionRow.session_id))
+        .where(AnalyticsSessionRow.started_at >= day_start)
+        .where(AnalyticsSessionRow.started_at < day_end)
+    ) or 0)
+
     n_events = 0
-    for row in per_event_rows:
-        event_name = row[0]
-        total = row[1]
-        unique_anons = row[2]
-        unique_new = row[3] if new_anons_this_day else 0
+    for event_name, total, unique_anons, unique_new in per_event_rows:
+        true_total = (
+            sessions_started_today
+            if event_name == Event.SESSION_STARTED.value
+            else int(total)
+        )
         db.add(
             AnalyticsEventDailyRow(
                 day=day,
                 event=event_name,
-                total_count=int(total),
+                total_count=true_total,
                 unique_anons=int(unique_anons),
                 unique_new_anons=int(unique_new or 0),
             )
@@ -130,97 +139,121 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
     # Denominator: distinct briefings opened (i.e., briefing.opened event)
     # in this UTC day. We use the event timestamp, not the briefing's own
     # created_at, because "opened today" is the user-engagement signal.
-    briefings_today = {
-        bid
-        for (bid,) in db.execute(
-            select(distinct(AnalyticsEventRow.briefing_id))
-            .where(AnalyticsEventRow.event == Event.BRIEFING_OPENED.value)
-            .where(AnalyticsEventRow.ts >= day_start)
-            .where(AnalyticsEventRow.ts < day_end)
-            .where(AnalyticsEventRow.briefing_id.is_not(None))
-        )
-    }
-    briefings_total = len(briefings_today)
+    # Kept as a scalar subquery for the feature joins.
+    briefings_today_subq = (
+        select(AnalyticsEventRow.briefing_id)
+        .distinct()
+        .where(AnalyticsEventRow.event == Event.BRIEFING_OPENED.value)
+        .where(AnalyticsEventRow.ts >= day_start)
+        .where(AnalyticsEventRow.ts < day_end)
+        .where(AnalyticsEventRow.briefing_id.is_not(None))
+        .scalar_subquery()
+    )
+    briefings_total = int(db.scalar(
+        select(func.count(distinct(AnalyticsEventRow.briefing_id)))
+        .where(AnalyticsEventRow.event == Event.BRIEFING_OPENED.value)
+        .where(AnalyticsEventRow.ts >= day_start)
+        .where(AnalyticsEventRow.ts < day_end)
+        .where(AnalyticsEventRow.briefing_id.is_not(None))
+    ) or 0)
     n_features = 0
 
-    # For each known feature, count distinct briefings within today's set
-    # that saw at least one event mapped to that feature.
+    # Group raw events by their feature label so each feature row in the
+    # rollup is the union of all events that signal "this feature was used".
     feature_events: dict[str, list[str]] = {}
     for event_name, feature in FEATURE_OF.items():
         feature_events.setdefault(feature, []).append(event_name)
 
     for feature, event_names in feature_events.items():
-        if not briefings_today:
-            briefings_with = 0
-            total_uses = 0
-        else:
-            briefings_with = db.scalar(
-                select(func.count(distinct(AnalyticsEventRow.briefing_id)))
-                .where(AnalyticsEventRow.event.in_(event_names))
-                .where(AnalyticsEventRow.ts >= day_start)
-                .where(AnalyticsEventRow.ts < day_end)
-                .where(AnalyticsEventRow.briefing_id.in_(briefings_today))
-            ) or 0
-            total_uses = db.scalar(
-                select(func.count(AnalyticsEventRow.id))
-                .where(AnalyticsEventRow.event.in_(event_names))
-                .where(AnalyticsEventRow.ts >= day_start)
-                .where(AnalyticsEventRow.ts < day_end)
-                .where(AnalyticsEventRow.briefing_id.in_(briefings_today))
-            ) or 0
-
+        briefings_with = int(db.scalar(
+            select(func.count(distinct(AnalyticsEventRow.briefing_id)))
+            .where(AnalyticsEventRow.event.in_(event_names))
+            .where(AnalyticsEventRow.ts >= day_start)
+            .where(AnalyticsEventRow.ts < day_end)
+            .where(AnalyticsEventRow.briefing_id.in_(briefings_today_subq))
+        ) or 0)
+        total_uses = int(db.scalar(
+            select(func.count(AnalyticsEventRow.id))
+            .where(AnalyticsEventRow.event.in_(event_names))
+            .where(AnalyticsEventRow.ts >= day_start)
+            .where(AnalyticsEventRow.ts < day_end)
+            .where(AnalyticsEventRow.briefing_id.in_(briefings_today_subq))
+        ) or 0)
         db.add(
             AnalyticsBriefingFeatureDailyRow(
                 day=day,
                 feature=feature,
                 briefings_total=briefings_total,
-                briefings_with_feature=int(briefings_with),
-                total_uses=int(total_uses),
+                briefings_with_feature=briefings_with,
+                total_uses=total_uses,
             )
         )
         n_features += 1
 
-    # Synthesise the ``detailed_mode`` feature from display_mode.changed
-    # events: a briefing counts as "detailed" if its last mode change in
-    # that briefing ends with ``to: detailed``. Briefings with no mode
-    # change inherit the default (compact) — they're not counted.
-    detailed_briefings: set[int] = set()
-    total_detailed_changes = 0
-    if briefings_today:
-        rows = db.execute(
-            select(AnalyticsEventRow.briefing_id, AnalyticsEventRow.props, AnalyticsEventRow.ts)
-            .where(AnalyticsEventRow.event == Event.DISPLAY_MODE_CHANGED.value)
-            .where(AnalyticsEventRow.ts >= day_start)
-            .where(AnalyticsEventRow.ts < day_end)
-            .where(AnalyticsEventRow.briefing_id.in_(briefings_today))
-            .order_by(AnalyticsEventRow.briefing_id, AnalyticsEventRow.ts)
-        ).all()
-        latest_mode: dict[int, str] = {}
-        for bid, props_json, _ts in rows:
-            if bid is None:
-                continue
-            total_detailed_changes += 1
-            try:
-                props = json.loads(props_json or "{}")
-                to_mode = str(props.get("to") or "").lower()
-                if to_mode in ("compact", "detailed"):
-                    latest_mode[bid] = to_mode
-            except Exception:
-                continue
-        detailed_briefings = {b for b, m in latest_mode.items() if m == "detailed"}
-
+    # ``detailed_mode`` is a *derived* feature — there's no single event
+    # whose presence means "user opted into detailed mode". Instead we
+    # interpret display_mode.changed by looking at the **last** mode set
+    # in each briefing and counting briefings whose final mode is
+    # ``detailed``. This needs the event stream + props, so it can't
+    # collapse into the simple FEATURE_OF loop above; if you add another
+    # derived feature, extend ``DERIVED_FEATURE_EXTRACTORS`` below rather
+    # than copy-pasting this block.
+    detailed_with, detailed_total = _extract_detailed_mode(
+        db, briefings_today_subq, day_start, day_end,
+    )
     db.add(
         AnalyticsBriefingFeatureDailyRow(
             day=day,
             feature="detailed_mode",
             briefings_total=briefings_total,
-            briefings_with_feature=len(detailed_briefings),
-            total_uses=total_detailed_changes,
+            briefings_with_feature=detailed_with,
+            total_uses=detailed_total,
         )
     )
     n_features += 1
 
     return {"events": n_events, "features": n_features, "briefings": briefings_total}
+
+
+def _extract_detailed_mode(
+    db: Session,
+    briefings_today_subq,
+    day_start: datetime,
+    day_end: datetime,
+) -> tuple[int, int]:
+    """Derive ``detailed_mode`` feature counts from display_mode.changed.
+
+    A briefing counts as "detailed" if its **last** ``display_mode.changed``
+    event of the day ended with ``to: detailed``. Briefings whose final
+    transition was back to ``compact`` (or who never switched) don't count.
+
+    Returns ``(briefings_with_feature, total_uses)``.
+    """
+    rows = db.execute(
+        select(AnalyticsEventRow.briefing_id, AnalyticsEventRow.props)
+        .where(AnalyticsEventRow.event == Event.DISPLAY_MODE_CHANGED.value)
+        .where(AnalyticsEventRow.ts >= day_start)
+        .where(AnalyticsEventRow.ts < day_end)
+        .where(AnalyticsEventRow.briefing_id.in_(briefings_today_subq))
+        .order_by(AnalyticsEventRow.briefing_id, AnalyticsEventRow.ts)
+    ).all()
+
+    latest_mode: dict[int, str] = {}
+    total_changes = 0
+    for bid, props_json in rows:
+        if bid is None:
+            continue
+        total_changes += 1
+        try:
+            props = json.loads(props_json or "{}")
+        except Exception:
+            continue
+        to_mode = str(props.get("to") or "").lower()
+        if to_mode in ("compact", "detailed"):
+            latest_mode[bid] = to_mode
+
+    detailed_briefings = sum(1 for m in latest_mode.values() if m == "detailed")
+    return detailed_briefings, total_changes
 
 
 # ---------------------------------------------------------------------------

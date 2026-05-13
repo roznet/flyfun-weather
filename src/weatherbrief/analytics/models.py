@@ -88,6 +88,8 @@ class AnalyticsBriefingDimRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     briefing_seq: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
     is_refresh: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # One of: 'post_departure' | 'same_day' | '1d' | '2_3d' | '4_7d' |
+    # '7d_plus' | 'no_etd'. See ``enrich._lead_time_bucket``.
     lead_time_bucket: Mapped[str | None] = mapped_column(String(16), nullable=True)
     model_count: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 

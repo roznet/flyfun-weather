@@ -26,13 +26,17 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import SessionLocal
+from weatherbrief.api.throttle import (
+    analytics_burst_limiter,
+    analytics_daily_limiter,
+)
 
 from weatherbrief.analytics.enrich import upsert_briefing_dim, upsert_flight_dim
 from weatherbrief.analytics.events import ALLOWED_EVENTS, Event
@@ -53,6 +57,14 @@ _MAX_PROPS_JSON_BYTES = 1_024
 # Timestamp clamp window. Anything outside this is replaced with server_now.
 _TS_FUTURE_TOLERANCE = timedelta(minutes=5)
 _TS_PAST_TOLERANCE = timedelta(days=7)
+
+
+def _client_ip(request: Request) -> str:
+    """Extract client IP, respecting X-Forwarded-For behind Caddy."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 class EventIn(BaseModel):
@@ -83,11 +95,22 @@ class EventIn(BaseModel):
         return v
 
 
+# UUID v4 in canonical hyphenated form. Validates both length and shape so
+# trivially crafted junk (e.g. "aaaaaaaa") can't enter analytics_sessions.
+# Accept either v4 (variant 8/9/a/b) or any other version — browsers will
+# almost always produce v4 via crypto.randomUUID(), but we don't enforce
+# the version digit so older clients aren't locked out.
+_UUID_RE = (
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
 class EventBatchIn(BaseModel):
     """Batch payload posted to ``/api/events``."""
 
-    anon_id: str = Field(min_length=8, max_length=36)
-    session_id: str = Field(min_length=8, max_length=36)
+    anon_id: str = Field(pattern=_UUID_RE, min_length=36, max_length=36)
+    session_id: str = Field(pattern=_UUID_RE, min_length=36, max_length=36)
     app_version: str | None = Field(default=None, max_length=32)
     events: list[EventIn] = Field(default_factory=list)
 
@@ -96,6 +119,7 @@ class EventBatchIn(BaseModel):
 def ingest_events(
     body: EventBatchIn,
     background: BackgroundTasks,
+    request: Request,
 ) -> dict:
     """Accept a batch of analytics events.
 
@@ -104,6 +128,10 @@ def ingest_events(
     The background task opens its own DB session — taking a request-scoped
     one here would just open and close a connection per POST for nothing,
     and this is the highest-frequency endpoint in the system.
+
+    Unauthenticated, so rate-limited by client IP: a burst cap (batches/min)
+    plus a daily event-count cap. Both keep an abusive client from
+    inflating the events table without blocking real users.
     """
     if not body.events:
         return {"accepted": 0}
@@ -111,6 +139,10 @@ def ingest_events(
     # Cap batch size; drop the tail rather than 400, so a single oversized
     # batch doesn't lose us all the events.
     events = body.events[:_MAX_EVENTS_PER_BATCH]
+
+    ip = _client_ip(request)
+    analytics_burst_limiter.check(ip)
+    analytics_daily_limiter.check(ip, count=len(events))
 
     background.add_task(
         _persist_batch,

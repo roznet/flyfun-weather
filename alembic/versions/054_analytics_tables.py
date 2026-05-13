@@ -97,7 +97,7 @@ def upgrade() -> None:
         # Position in this flight's briefing sequence (1, 2, ...).
         sa.Column("briefing_seq", sa.SmallInteger(), nullable=False, server_default="1"),
         sa.Column("is_refresh", sa.Boolean(), nullable=False, server_default="0"),
-        # 'same_day' | '1d' | '2_3d' | '4_7d' | '7d_plus' | 'no_etd'
+        # 'post_departure' | 'same_day' | '1d' | '2_3d' | '4_7d' | '7d_plus' | 'no_etd'
         sa.Column("lead_time_bucket", sa.String(16), nullable=True),
         sa.Column("model_count", sa.SmallInteger(), nullable=True),
         sa.Index("ix_abd_flight", "flight_id"),
