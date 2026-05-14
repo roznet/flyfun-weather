@@ -841,10 +841,11 @@ def parse_flight_plan(
     from euro_aip.briefing import parse_icao_fpl
 
     # Autorouter (and some other tools) emit FPLs with a space before each
-    # field separator (e.g. "...EGTF0730 -N0164F100..."). Older euro_aip
-    # releases mis-align fields when an extra slot (e.g. Field 19) is present;
-    # upstream is fixed but the PyPI pin may lag, so normalise here as
-    # defense-in-depth. Idempotent on canonical FPLs.
+    # field separator ("...EGTF0730 -N0164F100..."). Collapsing " -" to "-"
+    # converts those into canonical form so the splitter lands on the right
+    # field boundaries — without this, Field 19 (supplementary info) confuses
+    # the field-count heuristic and shifts departure/route/destination by one
+    # slot. Idempotent on canonical FPLs.
     text = re.sub(r" +-", "-", req.fpl_text)
 
     fpl = parse_icao_fpl(text)
