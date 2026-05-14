@@ -4,10 +4,14 @@ services:
     container_name: weatherbrief
     restart: unless-stopped
     logging:
-      driver: json-file
+      # journald: survives container rebuild — `docker compose up -d --build`
+      # destroys the container (= new container ID = new json-file logs would
+      # be wiped). systemd-journald on the host owns retention via
+      # /etc/systemd/journald.conf (SystemMaxUse); query post-rebuild with
+      # `journalctl CONTAINER_NAME=weatherbrief --since="..."`.
+      driver: journald
       options:
-        max-size: "50m"
-        max-file: "5"
+        tag: weatherbrief
     ports:
       - "127.0.0.1:8020:8020"
     env_file:
@@ -43,10 +47,9 @@ services:
     container_name: weatherbrief-mcp
     restart: unless-stopped
     logging:
-      driver: json-file
+      driver: journald
       options:
-        max-size: "10m"
-        max-file: "3"
+        tag: weatherbrief-mcp
     ports:
       - "127.0.0.1:8021:8021"
     env_file:

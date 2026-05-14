@@ -197,19 +197,23 @@ This runs a single full cycle (fetch forecasts + observations + score) and exits
    git push origin main
    ```
    In the common case (local already in sync with `origin/main`), skip this step entirely.
-2. SSH to the server and deploy:
+2. Dump the soon-to-be-destroyed container logs to a persistent file. `docker compose up -d --build` recreates the container (new ID); even with the journald log driver in `docker-compose.yml` capturing everything to the host journal, a named per-deploy file is the easier grep target for post-mortems tied to a specific rebuild boundary. The droplet hosts multiple apps so the filename is prefixed `weatherbrief-` for clarity.
+   ```
+   ssh <user>@<server> 'mkdir -p /mnt/flyfun_data/logs && cd flyfun-weather && docker compose logs --no-color --timestamps > /mnt/flyfun_data/logs/weatherbrief-predeploy-$(date -u +%Y%m%dT%H%M%SZ).log'
+   ```
+3. SSH to the server and deploy:
    ```
    ssh <user>@<server> "cd flyfun-weather && git pull && docker compose up -d --build"
    ```
-3. **If migrations were detected in pre-flight**, run them now:
+4. **If migrations were detected in pre-flight**, run them now:
    ```
    ssh <user>@<server> "docker exec weatherbrief alembic upgrade head"
    ```
-4. Wait a few seconds, then verify the health check:
+5. Wait a few seconds, then verify the health check:
    ```
    ssh <user>@<server> "docker inspect --format='{{.State.Health.Status}}' weatherbrief"
    ```
-5. Also check the endpoint is responding:
+6. Also check the endpoint is responding:
    ```
    curl -s -o /dev/null -w '%{http_code}' https://weather.flyfun.aero/health
    ```
