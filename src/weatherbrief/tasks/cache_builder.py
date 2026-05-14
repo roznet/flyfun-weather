@@ -228,8 +228,17 @@ def rebuild_forecast_map_cache(db: Session, airports_db_path: str) -> int:
     return count
 
 
-def rebuild_all(db: Session, airports_db_path: str) -> dict:
+def rebuild_all(
+    db: Session,
+    airports_db_path: str,
+    *,
+    include_forecast_map: bool = True,
+) -> dict:
     """Rebuild all caches. Called after standalone verification cycles.
+
+    ``include_forecast_map=False`` skips the forecast_map rebuild — used by
+    light (score-only) cycles where snapshots haven't changed and the
+    forecast_map cache would be regenerated to identical content.
 
     Returns a summary dict with counts.
     """
@@ -237,7 +246,10 @@ def rebuild_all(db: Session, airports_db_path: str) -> dict:
 
     stats_count = rebuild_stats_cache(db)
     verif_map_count = rebuild_verification_map_cache(db, airports_db_path)
-    forecast_map_count = rebuild_forecast_map_cache(db, airports_db_path)
+    if include_forecast_map:
+        forecast_map_count = rebuild_forecast_map_cache(db, airports_db_path)
+    else:
+        forecast_map_count = 0
 
     db.commit()
     duration_ms = int((time.monotonic() - t0) * 1000)
