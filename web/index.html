@@ -23,7 +23,10 @@
     <div class="create-panel">
       <div class="create-panel-header">
         <h3>New Flight</h3>
-        <button type="button" id="btn-paste-fpl" class="btn btn-outline btn-sm" title="Import from ICAO flight plan">Paste FPL</button>
+        <div style="display:flex;gap:0.5rem;">
+          <button type="button" id="btn-paste-fpl" class="btn btn-outline btn-sm" title="Import from ICAO flight plan">Paste FPL</button>
+          <button type="button" id="btn-import-autorouter" class="btn btn-outline btn-sm" title="Import a recent route from your Autorouter account">Import from Autorouter</button>
+        </div>
       </div>
       <form id="create-flight-form">
         <div class="form-row">

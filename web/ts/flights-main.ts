@@ -1,11 +1,18 @@
 /** Flights page entry point — wires store, UI manager, and event handlers. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
-import { fetchRouteDistance, parseFpl, type WaypointInfo } from './adapters/api-adapter';
+import {
+  AutorouterNotLinkedError,
+  fetchAutorouterRoutes,
+  fetchRouteDistance,
+  parseFpl,
+  type AutorouterRouteSummary,
+  type WaypointInfo,
+} from './adapters/api-adapter';
 import type { FlightResponse } from './store/types';
 import { fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
 import { interpretAndConfirmRoute, previewRoute } from './components/route-interpret';
-import { fetchModelCatalog } from './adapters/preferences-adapter';
+import { fetchModelCatalog, fetchPreferences } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
@@ -21,6 +28,11 @@ import { track, EVENTS } from './analytics/track';
 
 let loadedProfiles: ProfileResponse[] = [];
 let loadedAircraft: AircraftResponse[] = [];
+
+/** Whether the user has linked Autorouter — drives the import-button tooltip
+ *  and which dialog handleImportFromAutorouter shows. Optimistic snapshot from
+ *  /user/preferences; the picker still calls the API and reacts to a 409. */
+let hasAutorouterCreds = false;
 
 /** Whether the user has manually edited the duration field since the last
  *  waypoint or profile change. When true, auto-calculation is suppressed. */
@@ -333,6 +345,143 @@ function showFplModal(prefill?: string): void {
   requestAnimationFrame(() => area?.focus());
 }
 
+/** Format an Autorouter route row's display title (ICAO + names if present). */
+function formatAutorouterRouteTitle(r: AutorouterRouteSummary): string {
+  const dep = r.departure_name ? `${r.departure} (${r.departure_name})` : r.departure;
+  const dest = r.destination_name ? `${r.destination} (${r.destination_name})` : r.destination;
+  return `${dep} → ${dest}`;
+}
+
+/** Format an Autorouter route row's metadata line (date, distance, aircraft). */
+function formatAutorouterRouteSubtitle(r: AutorouterRouteSummary): string {
+  const parts: string[] = [];
+  if (r.departure_time) {
+    try {
+      const d = new Date(r.departure_time);
+      parts.push(d.toISOString().slice(0, 16).replace('T', ' ') + 'Z');
+    } catch {
+      parts.push(r.departure_time);
+    }
+  }
+  if (r.route_distance_nm != null) parts.push(`${r.route_distance_nm} NM`);
+  if (r.aircraft_description) parts.push(r.aircraft_description);
+  if (r.callsign) parts.push(r.callsign);
+  return parts.join(' · ');
+}
+
+/** Show the "Link Autorouter in Settings" prompt for users who haven't linked. */
+function showAutorouterNotLinkedModal(): void {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'metric-popup-backdrop active';
+  const modal = document.createElement('div');
+  modal.className = 'metric-popup';
+  modal.innerHTML = `
+    <button class="metric-popup-close" aria-label="${t('popup.close')}">×</button>
+    <h3>${escapeHtml(t('flights.autorouter.notLinkedTitle'))}</h3>
+    <p>${escapeHtml(t('flights.autorouter.notLinkedBody'))}</p>
+    <div style="margin-top:0.75rem;display:flex;gap:0.5rem;justify-content:flex-end;">
+      <button type="button" id="ar-cancel-btn" class="btn btn-outline btn-sm">${t('flights.fpl.cancel')}</button>
+      <a href="/settings.html#autorouter-section" class="btn btn-primary btn-sm">${escapeHtml(t('flights.autorouter.openSettings'))}</a>
+    </div>
+  `;
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+  modal.addEventListener('click', (e) => e.stopPropagation());
+  const close = () => backdrop.remove();
+  backdrop.addEventListener('click', close);
+  modal.querySelector('.metric-popup-close')?.addEventListener('click', close);
+  modal.querySelector('#ar-cancel-btn')?.addEventListener('click', close);
+}
+
+/** Show the route picker modal with the supplied Autorouter routes. */
+function showAutorouterPickerModal(routes: AutorouterRouteSummary[]): void {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'metric-popup-backdrop active';
+  const modal = document.createElement('div');
+  modal.className = 'metric-popup';
+
+  const rowsHtml = routes.length === 0
+    ? `<p class="muted">${escapeHtml(t('flights.autorouter.noRoutes'))}</p>`
+    : `<ul class="autorouter-route-list" style="list-style:none;padding:0;margin:0;max-height:60vh;overflow-y:auto;">
+        ${routes.map((r, i) => `
+          <li>
+            <button type="button" class="autorouter-route-item" data-idx="${i}"
+              style="display:block;width:100%;text-align:left;padding:0.5rem 0.75rem;border:1px solid var(--border-color,#ddd);border-radius:4px;margin-bottom:0.5rem;background:transparent;cursor:pointer;">
+              <div style="font-weight:600;">${escapeHtml(formatAutorouterRouteTitle(r))}</div>
+              <div class="muted" style="font-size:0.85em;">${escapeHtml(formatAutorouterRouteSubtitle(r))}</div>
+            </button>
+          </li>
+        `).join('')}
+      </ul>`;
+
+  modal.innerHTML = `
+    <button class="metric-popup-close" aria-label="${t('popup.close')}">×</button>
+    <h3>${escapeHtml(t('flights.autorouter.pickerTitle'))}</h3>
+    ${rowsHtml}
+    <div style="margin-top:0.75rem;display:flex;gap:0.5rem;justify-content:flex-end;">
+      <button type="button" id="ar-cancel-btn" class="btn btn-outline btn-sm">${t('flights.fpl.cancel')}</button>
+    </div>
+  `;
+
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+  modal.addEventListener('click', (e) => e.stopPropagation());
+  const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  const close = () => {
+    document.removeEventListener('keydown', onEsc);
+    backdrop.remove();
+  };
+  backdrop.addEventListener('click', close);
+  modal.querySelector('.metric-popup-close')?.addEventListener('click', close);
+  modal.querySelector('#ar-cancel-btn')?.addEventListener('click', close);
+  document.addEventListener('keydown', onEsc);
+
+  modal.querySelectorAll<HTMLButtonElement>('.autorouter-route-item').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const idx = parseInt(btn.dataset.idx ?? '-1', 10);
+      const route = routes[idx];
+      if (!route) return;
+      close();
+      await applyParsedFpl(route.fplan);
+    });
+  });
+}
+
+/** Handle "Import from Autorouter" button click — mirrors handlePasteFpl. */
+async function handleImportFromAutorouter(): Promise<void> {
+  if (!hasAutorouterCreds) {
+    showAutorouterNotLinkedModal();
+    return;
+  }
+  try {
+    const resp = await fetchAutorouterRoutes(25);
+    showAutorouterPickerModal(resp.routes);
+  } catch (err) {
+    if (err instanceof AutorouterNotLinkedError) {
+      // Token was just revoked server-side — update cached flag and prompt re-link.
+      hasAutorouterCreds = false;
+      updateAutorouterButtonState();
+      showAutorouterNotLinkedModal();
+      return;
+    }
+    ui.renderError(t('flights.autorouter.fetchError'));
+    console.error('Autorouter routes fetch failed:', err);
+  }
+}
+
+/** Refresh the Import-from-Autorouter button's tooltip from hasAutorouterCreds. */
+function updateAutorouterButtonState(): void {
+  const btn = document.getElementById('btn-import-autorouter');
+  if (!btn) return;
+  btn.setAttribute(
+    'title',
+    hasAutorouterCreds
+      ? t('flights.autorouter.tooltipLinked')
+      : t('flights.autorouter.tooltipNotLinked'),
+  );
+  btn.textContent = t('flights.autorouter.import');
+}
+
 /** Handle "Paste FPL" button click — try clipboard first, fall back to modal. */
 async function handlePasteFpl(): Promise<void> {
   // Try clipboard API (requires secure context and user gesture)
@@ -437,16 +586,19 @@ async function init(): Promise<void> {
     }
   });
 
-  // --- Load profiles and aircraft for the selectors ---
+  // --- Load profiles, aircraft, and preferences for the selectors ---
   try {
-    const [profs, acList] = await Promise.all([
+    const [profs, acList, prefs] = await Promise.all([
       fetchProfiles().catch(() => [] as ProfileResponse[]),
       fetchAircraft().catch(() => [] as AircraftResponse[]),
+      fetchPreferences().catch(() => null),
     ]);
     loadedProfiles = profs;
     loadedAircraft = acList;
     populateProfileSelector(loadedProfiles);
     populateAircraftSelector(loadedAircraft);
+    hasAutorouterCreds = !!prefs?.has_autorouter_creds;
+    updateAutorouterButtonState();
   } catch {
     // Selectors stay empty; flights still work without them
   }
@@ -621,6 +773,11 @@ async function init(): Promise<void> {
   // --- Wire "Paste FPL" button ---
   const pasteFplBtn = document.getElementById('btn-paste-fpl');
   pasteFplBtn?.addEventListener('click', handlePasteFpl);
+
+  // --- Wire "Import from Autorouter" button ---
+  const importArBtn = document.getElementById('btn-import-autorouter');
+  importArBtn?.addEventListener('click', handleImportFromAutorouter);
+  updateAutorouterButtonState();
 
   // --- Initial load ---
   store.getState().loadFlights().then(() => {

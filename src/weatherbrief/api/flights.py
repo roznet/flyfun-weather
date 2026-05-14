@@ -840,7 +840,14 @@ def parse_flight_plan(
     """Parse an ICAO FPL string and return fields for flight creation."""
     from euro_aip.briefing import parse_icao_fpl
 
-    fpl = parse_icao_fpl(req.fpl_text)
+    # Autorouter (and some other tools) emit FPLs with a space before each
+    # field separator (e.g. "...EGTF0730 -N0164F100..."). Older euro_aip
+    # releases mis-align fields when an extra slot (e.g. Field 19) is present;
+    # upstream is fixed but the PyPI pin may lag, so normalise here as
+    # defense-in-depth. Idempotent on canonical FPLs.
+    text = re.sub(r" +-", "-", req.fpl_text)
+
+    fpl = parse_icao_fpl(text)
     if fpl is None:
         return ParseFplResponse(error="Could not parse flight plan. Expected (FPL-...) format.")
 
@@ -881,6 +888,174 @@ def parse_flight_plan(
         aircraft_type=fpl.aircraft_type,
         raw_route=fpl.raw_route,
     )
+
+
+AUTOROUTER_LOGS_URL = "https://api.autorouter.aero/v1.0/router/logs"
+
+
+class AutorouterRouteSummary(BaseModel):
+    """One row in the Autorouter recent-routes picker."""
+
+    routeid: str
+    departure: str
+    destination: str
+    departure_name: str | None = None
+    destination_name: str | None = None
+    departure_time: str | None = None  # ISO 8601 UTC, derived from Unix epoch
+    fplan: str  # raw ICAO FPL — fed into /parse-fpl on selection
+    route_distance_nm: int | None = None
+    aircraft_description: str | None = None
+    callsign: str | None = None
+
+
+class AutorouterRoutesResponse(BaseModel):
+    routes: list[AutorouterRouteSummary] = []
+
+
+def _clear_autorouter_oauth_token(db: Session, user_id: str) -> None:
+    """Remove the stored Autorouter OAuth access token after a 401.
+
+    Only touches the ``autorouter`` key inside the encrypted-creds blob, so
+    any other per-user secrets (and dev-mode username/password fallbacks)
+    are preserved. After this returns, ``has_autorouter_creds`` flips to
+    false and the user will be prompted to re-link.
+    """
+    from flyfun_common.credentials import load_encrypted_creds, save_encrypted_creds
+
+    creds = load_encrypted_creds(db, user_id) or {}
+    if "autorouter" in creds:
+        del creds["autorouter"]
+        save_encrypted_creds(db, user_id, creds)
+
+
+def _epoch_to_iso(epoch: object) -> str | None:
+    """Convert an Autorouter Unix-epoch field to ISO 8601 UTC."""
+    if epoch is None:
+        return None
+    try:
+        ts = float(epoch)
+    except (TypeError, ValueError):
+        return None
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _coerce_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get("/autorouter-routes", response_model=AutorouterRoutesResponse)
+def list_autorouter_routes(
+    limit: int = 25,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> AutorouterRoutesResponse:
+    """List the user's recent Autorouter routes for the "Import from Autorouter" picker.
+
+    Maps the upstream ``/v1.0/router/logs`` response onto a slim payload the
+    Flights page can render directly. On a 401 from Autorouter we clear the
+    stored OAuth token and surface a 409 so the frontend can prompt re-link.
+    """
+    import httpx
+
+    from weatherbrief.api.preferences import load_autorouter_token
+
+    token = load_autorouter_token(db, user_id)
+    if not token:
+        raise HTTPException(status_code=409, detail="autorouter_not_linked")
+
+    capped = max(1, min(int(limit), 100))
+
+    try:
+        resp = httpx.get(
+            AUTOROUTER_LOGS_URL,
+            params={"limit": capped, "order": "desc", "sort": "departuretime"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15.0,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("Autorouter /logs request failed for user %s: %s", user_id, exc)
+        raise HTTPException(status_code=502, detail="autorouter_unreachable")
+
+    if resp.status_code == 401:
+        _clear_autorouter_oauth_token(db, user_id)
+        raise HTTPException(status_code=409, detail="autorouter_not_linked")
+
+    if resp.status_code >= 400:
+        logger.warning(
+            "Autorouter /logs returned %s for user %s: %s",
+            resp.status_code,
+            user_id,
+            resp.text[:200],
+        )
+        raise HTTPException(status_code=502, detail="autorouter_upstream_error")
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        logger.warning("Autorouter /logs returned non-JSON for user %s", user_id)
+        raise HTTPException(status_code=502, detail="autorouter_upstream_error")
+
+    # The /logs endpoint historically returned a bare JSON array, but the
+    # current implementation wraps it in a dict (e.g. ``{"logs": [...]}`` or
+    # ``{"items": [...]}``). Accept either: bare list, or the first list
+    # value we find inside a dict wrapper.
+    if isinstance(payload, list):
+        entries = payload
+    elif isinstance(payload, dict):
+        entries = next(
+            (v for v in payload.values() if isinstance(v, list)),
+            None,
+        )
+        if entries is None:
+            logger.warning(
+                "Autorouter /logs returned dict without a list value for user %s; keys=%r",
+                user_id,
+                list(payload.keys()),
+            )
+            raise HTTPException(status_code=502, detail="autorouter_upstream_error")
+    else:
+        logger.warning(
+            "Autorouter /logs returned unexpected payload shape for user %s: %r",
+            user_id,
+            type(payload).__name__,
+        )
+        raise HTTPException(status_code=502, detail="autorouter_upstream_error")
+
+    routes: list[AutorouterRouteSummary] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        fplan = entry.get("fplan")
+        routeid = entry.get("routeid")
+        departure = entry.get("departure")
+        destination = entry.get("destination")
+        if not (fplan and routeid and departure and destination):
+            # Skip rows without the fields we need to render or import.
+            continue
+        routes.append(
+            AutorouterRouteSummary(
+                routeid=str(routeid),
+                departure=str(departure),
+                destination=str(destination),
+                departure_name=entry.get("departurename") or None,
+                destination_name=entry.get("destinationname") or None,
+                departure_time=_epoch_to_iso(entry.get("departuretime")),
+                fplan=str(fplan),
+                route_distance_nm=_coerce_int(entry.get("routedistance")),
+                aircraft_description=entry.get("aircraftdescription") or None,
+                callsign=entry.get("callsign") or None,
+            )
+        )
+
+    return AutorouterRoutesResponse(routes=routes)
 
 
 class BulkDeleteRequest(BaseModel):
