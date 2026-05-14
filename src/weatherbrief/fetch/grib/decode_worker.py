@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import time as _time
+from contextlib import contextmanager
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -84,14 +85,28 @@ def _worker_init() -> None:
         logger.warning("worker baseline log failed: %s", e)
 
 
-def _log_decode_start(fn_name: str, file_path: str) -> None:
-    """Per-decode entry diagnostic (hang-diag, 2026-05-14).
+@contextmanager
+def _log_decode(fn_name: str, file_path: str):
+    """Pair entry + exit logs for a decode call (hang-diag, 2026-05-14).
 
-    Logs file path/size/mtime-age + idx-sidecar state at decode start. On a
+    Entry log captures file path/size/mtime-age + idx sidecar state — on a
     300 s hang, the worker's last log line tells us exactly which file was
-    being decoded and what shape the file + its idx were in. Costs <1 ms;
-    must not raise.
+    being decoded and what shape the file + its idx were in. Exit log
+    confirms the call returned (or completes the pair on a Python-level
+    exception); together they make "started but never ended" grep-able.
+
+    Costs <1 ms per call; both branches are try/except'd so the diagnostic
+    can never break the hot path.
     """
+    pid = os.getpid()
+    fname = file_path
+    try:
+        fname = Path(file_path).name
+    except Exception:
+        pass
+    start = _time.perf_counter()
+
+    # Entry
     try:
         p = Path(file_path)
         try:
@@ -114,11 +129,22 @@ def _log_decode_start(fn_name: str, file_path: str) -> None:
             pass
         logger.info(
             "%s start: file=%s %s %s pid=%d",
-            fn_name, p.name, file_info, idx_info, os.getpid(),
+            fn_name, fname, file_info, idx_info, pid,
         )
     except Exception:
-        # Diagnostic must never break the hot path.
         pass
+
+    try:
+        yield
+    finally:
+        try:
+            dur_ms = (_time.perf_counter() - start) * 1000
+            logger.info(
+                "%s end: file=%s dur=%.1fms pid=%d",
+                fn_name, fname, dur_ms, pid,
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +157,9 @@ def decode_ecmwf_pressure(
     latitudes: list[float],
     longitudes: list[float],
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
-    _log_decode_start("decode_ecmwf_pressure", file_path)
-    from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
-    return decode_ecmwf_pressure_per_point(Path(file_path), latitudes, longitudes)
+    with _log_decode("decode_ecmwf_pressure", file_path):
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
+        return decode_ecmwf_pressure_per_point(Path(file_path), latitudes, longitudes)
 
 
 def decode_ecmwf_surface(
@@ -141,9 +167,9 @@ def decode_ecmwf_surface(
     latitudes: list[float],
     longitudes: list[float],
 ) -> tuple[list[dict[str, float]], list[bool]]:
-    _log_decode_start("decode_ecmwf_surface", file_path)
-    from weatherbrief.fetch.grib.decode import decode_ecmwf_surface_per_point
-    return decode_ecmwf_surface_per_point(Path(file_path), latitudes, longitudes)
+    with _log_decode("decode_ecmwf_surface", file_path):
+        from weatherbrief.fetch.grib.decode import decode_ecmwf_surface_per_point
+        return decode_ecmwf_surface_per_point(Path(file_path), latitudes, longitudes)
 
 
 def decode_gfs_pressure(
@@ -152,10 +178,10 @@ def decode_gfs_pressure(
     longitudes: list[float],
 ) -> list[dict[int, dict[str, float]]]:
     """Read GFS CLWMR/ICMR bytes from cache and decode per-point."""
-    _log_decode_start("decode_gfs_pressure", file_path)
-    from weatherbrief.fetch.grib.decode import decode_grib_per_point
-    grib_bytes = Path(file_path).read_bytes()
-    return decode_grib_per_point(grib_bytes, latitudes, longitudes)
+    with _log_decode("decode_gfs_pressure", file_path):
+        from weatherbrief.fetch.grib.decode import decode_grib_per_point
+        grib_bytes = Path(file_path).read_bytes()
+        return decode_grib_per_point(grib_bytes, latitudes, longitudes)
 
 
 def decode_gfs_cloud_diag(
@@ -163,10 +189,10 @@ def decode_gfs_cloud_diag(
     latitudes: list[float],
     longitudes: list[float],
 ) -> list[dict[str, float]]:
-    _log_decode_start("decode_gfs_cloud_diag", file_path)
-    from weatherbrief.fetch.grib.decode import decode_cloud_diag_per_point
-    grib_bytes = Path(file_path).read_bytes()
-    return decode_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
+    with _log_decode("decode_gfs_cloud_diag", file_path):
+        from weatherbrief.fetch.grib.decode import decode_cloud_diag_per_point
+        grib_bytes = Path(file_path).read_bytes()
+        return decode_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
 def decode_icon_chunked(
@@ -181,12 +207,16 @@ def decode_icon_chunked(
     parent-RSS contributor before this change.
     """
     # ICON takes a dict of var→path; log the first var's file as a representative.
+    fn_label = "decode_icon_chunked"
+    rep_path = ""
     if var_paths:
         first_var = next(iter(var_paths))
-        _log_decode_start(f"decode_icon_chunked[{first_var}+{len(var_paths)-1}]", var_paths[first_var])
-    from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point_chunked
-    var_bytes = {var: Path(p).read_bytes() for var, p in var_paths.items()}
-    return decode_icon_eu_per_point_chunked(var_bytes, latitudes, longitudes)
+        fn_label = f"decode_icon_chunked[{first_var}+{len(var_paths)-1}]"
+        rep_path = var_paths[first_var]
+    with _log_decode(fn_label, rep_path):
+        from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point_chunked
+        var_bytes = {var: Path(p).read_bytes() for var, p in var_paths.items()}
+        return decode_icon_eu_per_point_chunked(var_bytes, latitudes, longitudes)
 
 
 def decode_icon_legacy(
@@ -194,10 +224,10 @@ def decode_icon_legacy(
     latitudes: list[float],
     longitudes: list[float],
 ) -> list[dict[int, dict[str, float]]]:
-    _log_decode_start("decode_icon_legacy", file_path)
-    from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
-    grib_bytes = Path(file_path).read_bytes()
-    return decode_icon_eu_per_point(grib_bytes, latitudes, longitudes)
+    with _log_decode("decode_icon_legacy", file_path):
+        from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
+        grib_bytes = Path(file_path).read_bytes()
+        return decode_icon_eu_per_point(grib_bytes, latitudes, longitudes)
 
 
 def decode_icon_cloud_diag(
@@ -205,10 +235,10 @@ def decode_icon_cloud_diag(
     latitudes: list[float],
     longitudes: list[float],
 ) -> list[dict[str, float]]:
-    _log_decode_start("decode_icon_cloud_diag", file_path)
-    from weatherbrief.fetch.grib.decode import decode_icon_eu_cloud_diag_per_point
-    grib_bytes = Path(file_path).read_bytes()
-    return decode_icon_eu_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
+    with _log_decode("decode_icon_cloud_diag", file_path):
+        from weatherbrief.fetch.grib.decode import decode_icon_eu_cloud_diag_per_point
+        grib_bytes = Path(file_path).read_bytes()
+        return decode_icon_eu_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
 # ---------------------------------------------------------------------------

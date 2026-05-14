@@ -371,29 +371,38 @@ def _diag_snapshot_workers(
                 pid, e,
             )
 
-    # Filesystem snapshot — was ECPDS actively writing into the dir?
-    try:
-        ecmwf_dir = Path(os.environ.get("ECMWF_GRIB_DIR", "/data/ecmwf"))
-        now = _time_mod.time()
-        total = 0
-        recent: list[tuple[float, str]] = []
-        for p in ecmwf_dir.iterdir():
-            try:
-                mt = p.stat().st_mtime
-            except OSError:
-                continue
-            total += 1
-            age = now - mt
-            if age < 60.0:
-                recent.append((age, p.name))
-        recent.sort()
-        sample = ", ".join(f"{n}(@{a:.1f}s)" for a, n in recent[:10])
-        logger.error(
-            "GRIB hang diag: %s has %d files; %d mtime'd <60s ago; recent: %s",
-            ecmwf_dir, total, len(recent), sample,
-        )
-    except Exception as e:
-        logger.error("GRIB hang diag: filesystem snapshot failed: %s", e)
+    # Per-worker memory snapshot (G): catches a worker that's bloated against
+    # the cgroup limit and likely thrashing page cache.
+    for pid in worker_pids:
+        try:
+            statm = Path(f"/proc/{pid}/statm").read_text().strip().split()
+            # statm columns are in pages — convert via PAGESIZE. Cols: size,
+            # resident, shared, text, lib(=0), data, dt(=0).
+            pagesize = os.sysconf("SC_PAGE_SIZE")
+            rss_mb = int(statm[1]) * pagesize / (1024 * 1024)
+            size_mb = int(statm[0]) * pagesize / (1024 * 1024)
+            logger.error(
+                "GRIB hang diag [pid=%d] memory: rss=%.0fMB size=%.0fMB",
+                pid, rss_mb, size_mb,
+            )
+        except (OSError, ValueError, IndexError) as e:
+            logger.error("GRIB hang diag [pid=%d] memory: read failed (%s)", pid, e)
+
+    # Filesystem snapshot (F): walk all GRIB-relevant dirs. ECMWF is ECPDS-
+    # delivered (third-party writer); GFS/ICON live under DATA_DIR/.cache/grib
+    # (our own writes, atomic via put_cached). Both today's ICON cloud-diag
+    # hang and the ECMWF stuck events need coverage here.
+    _diag_snapshot_dirs()
+
+    # Process/cgroup memory + meminfo snapshot (G): catches container-wide
+    # memory pressure that would force mmap reads to page-evict and stall.
+    _diag_snapshot_memory()
+
+    # Pool internals snapshot (H): catches a broken ProcessPoolExecutor where
+    # the parent's queue-management thread has died or the IPC queues have
+    # backed up — explains a hung first-job-on-fresh-pool (rules out cfgrib
+    # at the file level).
+    _diag_snapshot_pool_internals(pool)
 
     # Let the SIGUSR1 stack dumps land in container logs before the pool
     # shutdown closes worker stdout. 1 s is plenty for faulthandler write.
@@ -401,6 +410,161 @@ def _diag_snapshot_workers(
         _time_mod.sleep(1.0)
     except Exception:
         pass
+
+
+def _diag_snapshot_dirs() -> None:
+    """Walk both ECMWF dir and DATA_DIR/.cache/grib; log file count + recent.
+
+    Recent = mtime within last 60 s — catches an active ECPDS push or a
+    cache write in progress at hang time. Capped at 10 sampled names per
+    dir so a chatty cache doesn't dominate the log.
+    """
+    dirs: list[tuple[str, Path]] = []
+    try:
+        dirs.append(("ecmwf", Path(os.environ.get("ECMWF_GRIB_DIR", "/data/ecmwf"))))
+    except Exception:
+        pass
+    try:
+        data_dir = Path(os.environ.get("DATA_DIR", "/app/data"))
+        cache_root = data_dir / ".cache" / "grib"
+        if cache_root.exists():
+            # Each model has its own subdir tree — walk them all.
+            for model_dir in cache_root.iterdir():
+                if model_dir.is_dir():
+                    dirs.append((f"cache/{model_dir.name}", model_dir))
+    except Exception:
+        pass
+
+    now = _time_mod.time()
+    for label, d in dirs:
+        try:
+            total = 0
+            recent: list[tuple[float, str]] = []
+            # rglob, not iterdir — cache dirs have a {model}/{init}z/ layout.
+            for p in d.rglob("*"):
+                if not p.is_file():
+                    continue
+                try:
+                    mt = p.stat().st_mtime
+                except OSError:
+                    continue
+                total += 1
+                age = now - mt
+                if age < 60.0:
+                    recent.append((age, p.name))
+            recent.sort()
+            sample = ", ".join(f"{n}(@{a:.1f}s)" for a, n in recent[:10])
+            logger.error(
+                "GRIB hang diag fs[%s]: %s has %d files; %d mtime'd <60s ago; recent: %s",
+                label, d, total, len(recent), sample,
+            )
+        except Exception as e:
+            logger.error("GRIB hang diag fs[%s]: snapshot failed: %s", label, e)
+
+
+def _diag_snapshot_memory() -> None:
+    """Container-wide memory snapshot at hang time.
+
+    Reads /proc/meminfo (host kernel view), /proc/self/status (parent VmRSS
+    family), and cgroup v2 memory files (memory.current / max / swap.current).
+    All best-effort — cgroup paths differ between v1 and v2 and may be absent.
+    """
+    # /proc/meminfo — key fields only.
+    try:
+        meminfo = Path("/proc/meminfo").read_text()
+        wanted = {"MemTotal", "MemFree", "MemAvailable", "Cached", "Buffers", "Slab", "SwapFree"}
+        kv: dict[str, str] = {}
+        for line in meminfo.splitlines():
+            key, _, rest = line.partition(":")
+            if key in wanted:
+                kv[key] = rest.strip()
+        logger.error(
+            "GRIB hang diag meminfo: %s",
+            " ".join(f"{k}={v}" for k, v in kv.items()),
+        )
+    except OSError as e:
+        logger.error("GRIB hang diag meminfo: read failed (%s)", e)
+
+    # Parent process VmRSS / VmSize / VmPeak / VmSwap.
+    try:
+        status = Path("/proc/self/status").read_text()
+        wanted_vm = {"VmPeak", "VmSize", "VmRSS", "VmHWM", "VmSwap", "Threads"}
+        kv = {}
+        for line in status.splitlines():
+            key, _, rest = line.partition(":")
+            if key in wanted_vm:
+                kv[key] = rest.strip()
+        logger.error(
+            "GRIB hang diag parent: %s",
+            " ".join(f"{k}={v}" for k, v in kv.items()),
+        )
+    except OSError as e:
+        logger.error("GRIB hang diag parent status: read failed (%s)", e)
+
+    # cgroup memory — v2 unified path is the prod target. v1 fallback for
+    # completeness but unlikely to fire on the current droplet.
+    for cg_label, cg_path in (
+        ("v2.current", "/sys/fs/cgroup/memory.current"),
+        ("v2.max", "/sys/fs/cgroup/memory.max"),
+        ("v2.swap.current", "/sys/fs/cgroup/memory.swap.current"),
+        ("v2.peak", "/sys/fs/cgroup/memory.peak"),
+        ("v1.usage", "/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+        ("v1.limit", "/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+    ):
+        try:
+            val = Path(cg_path).read_text().strip()
+            logger.error("GRIB hang diag cgroup[%s]: %s = %s", cg_label, cg_path, val)
+        except OSError:
+            # Silent: most paths won't exist on a given kernel/cgroup version.
+            pass
+
+
+def _diag_snapshot_pool_internals(pool: ProcessPoolExecutor | None) -> None:
+    """Peek at private ProcessPoolExecutor state.
+
+    These attributes are technically internal but have been stable across the
+    CPython versions we run. If any disappears in a future Python release,
+    the try/except keeps the diagnostic best-effort.
+
+    What we want to see:
+      - ``_pending_work_items`` size: jobs submitted but never started/finished.
+      - ``_queue_management_thread.is_alive()``: parent's queue-management
+        thread (lives in concurrent.futures.process). Dead → the pool can
+        accept submit() but never make progress.
+      - ``_call_queue.qsize()`` / ``_result_queue.qsize()``: pipe depth from
+        parent → workers and workers → parent. Backed up → IPC stall.
+    """
+    if pool is None:
+        return
+    try:
+        pending = pool._pending_work_items  # type: ignore[attr-defined]
+        logger.error(
+            "GRIB hang diag pool: pending_work_items=%d", len(pending),
+        )
+    except Exception as e:
+        logger.error("GRIB hang diag pool: pending_work_items read failed (%s)", e)
+
+    try:
+        thr = pool._queue_management_thread  # type: ignore[attr-defined]
+        alive = thr.is_alive() if thr is not None else None
+        logger.error(
+            "GRIB hang diag pool: queue_mgmt_thread alive=%s name=%s",
+            alive, getattr(thr, "name", "?"),
+        )
+    except Exception as e:
+        logger.error("GRIB hang diag pool: queue_mgmt_thread read failed (%s)", e)
+
+    for q_name in ("_call_queue", "_result_queue"):
+        try:
+            q = getattr(pool, q_name)
+            qsize = q.qsize() if q is not None else -1
+            logger.error("GRIB hang diag pool: %s qsize=%d", q_name, qsize)
+        except (NotImplementedError, AttributeError) as e:
+            # qsize() is unimplemented on macOS for multiprocessing.Queue —
+            # not an issue on the Linux container but harmless to skip.
+            logger.error("GRIB hang diag pool: %s qsize unavailable (%s)", q_name, e)
+        except Exception as e:
+            logger.error("GRIB hang diag pool: %s qsize read failed (%s)", q_name, e)
 
 
 def _decode_pool_workers_default() -> int:
