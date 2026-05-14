@@ -1006,15 +1006,28 @@ def list_autorouter_routes(
 
     # The /logs endpoint historically returned a bare JSON array, but the
     # current implementation wraps it in a dict (e.g. ``{"logs": [...]}`` or
-    # ``{"items": [...]}``). Accept either: bare list, or the first list
-    # value we find inside a dict wrapper.
+    # ``{"items": [...]}``). Accept either: bare list, or — for a dict — the
+    # routes list under one of the known wrapper keys, with a defensive
+    # fallback to the first list value if none match. Checking known keys
+    # first avoids silently picking up an unrelated list (e.g. pagination
+    # links) if Autorouter ever adds one alongside the routes list.
+    _ROUTES_LIST_KEYS = ("logs", "items", "routes", "data", "results")
     if isinstance(payload, list):
         entries = payload
     elif isinstance(payload, dict):
         entries = next(
-            (v for v in payload.values() if isinstance(v, list)),
+            (
+                payload[k]
+                for k in _ROUTES_LIST_KEYS
+                if isinstance(payload.get(k), list)
+            ),
             None,
         )
+        if entries is None:
+            entries = next(
+                (v for v in payload.values() if isinstance(v, list)),
+                None,
+            )
         if entries is None:
             logger.warning(
                 "Autorouter /logs returned dict without a list value for user %s; keys=%r",

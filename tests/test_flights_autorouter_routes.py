@@ -244,6 +244,27 @@ class TestAutorouterRoutes:
         ids = [row["routeid"] for row in r.json()["routes"]]
         assert ids == ["r1"]
 
+    def test_known_key_wins_when_multiple_lists_present(self, client, monkeypatch):
+        """Defensive: if Autorouter ever adds a pagination/links list
+        alongside the routes list, the known wrapper key (logs/items/...)
+        must take precedence over the first list value in iteration order."""
+        _patch_token(monkeypatch, "tok")
+        _patch_httpx_get(monkeypatch, status_code=200, json_body={
+            "links": [],  # iteration order: this comes first
+            "logs": [
+                {
+                    "routeid": "rZ",
+                    "departure": "EGTK",
+                    "destination": "LFAT",
+                    "fplan": "(FPL-...)",
+                },
+            ],
+        })
+        r = client.get("/api/flights/autorouter-routes")
+        assert r.status_code == 200
+        ids = [row["routeid"] for row in r.json()["routes"]]
+        assert ids == ["rZ"], "known wrapper key must win over earlier non-routes list"
+
 
 class TestParseFplAutorouterFormat:
     """Regression: Autorouter emits FPLs with a space before each field

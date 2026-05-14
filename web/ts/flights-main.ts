@@ -777,6 +777,12 @@ async function init(): Promise<void> {
   // --- Wire "Import from Autorouter" button ---
   const importArBtn = document.getElementById('btn-import-autorouter');
   importArBtn?.addEventListener('click', handleImportFromAutorouter);
+  // Fallback paint for the failure path: if fetchPreferences() above threw,
+  // the earlier updateAutorouterButtonState() call inside the try block was
+  // skipped, leaving the button with its hardcoded HTML title. This call
+  // paints it with the localised "not linked" tooltip (hasAutorouterCreds
+  // stayed at its `false` default), matching what the user would see on a
+  // first visit before linking Autorouter.
   updateAutorouterButtonState();
 
   // --- Initial load ---
