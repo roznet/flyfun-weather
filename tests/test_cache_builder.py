@@ -27,6 +27,7 @@ from weatherbrief.tasks.cache_builder import (
     get_cache_meta,
     get_source_max_time,
     is_stale,
+    rebuild_all,
     rebuild_stats_cache,
 )
 
@@ -173,3 +174,56 @@ class TestRebuildStatsCache:
 
         assert is_stale(db_session, "stats:standalone:24h", "standalone") is False
         assert is_stale(db_session, "stats:flight:30d", "flight") is False
+
+
+class TestRebuildAllForecastMapSkip:
+    """Pin the include_forecast_map=False behaviour against future refactors."""
+
+    def test_skip_forecast_map_returns_zero_and_avoids_call(
+        self, db_session, mocker, tmp_path,
+    ):
+        # Patch the three sub-rebuilds so the test does not need a populated DB
+        # or a real airports DB — we only want to verify which ones are called.
+        stats = mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_stats_cache",
+            return_value=6,
+        )
+        verif = mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_verification_map_cache",
+            return_value=16,
+        )
+        forecast = mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_forecast_map_cache",
+            return_value=20,
+        )
+
+        result = rebuild_all(db_session, str(tmp_path / "nav.db"),
+                             include_forecast_map=False)
+
+        assert stats.called
+        assert verif.called
+        assert not forecast.called, "forecast_map must be skipped on light cycles"
+        assert result["forecast_map"] == 0
+        assert result["stats"] == 6
+        assert result["verif_map"] == 16
+
+    def test_include_forecast_map_default_true(
+        self, db_session, mocker, tmp_path,
+    ):
+        mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_stats_cache",
+            return_value=6,
+        )
+        mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_verification_map_cache",
+            return_value=16,
+        )
+        forecast = mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_forecast_map_cache",
+            return_value=20,
+        )
+
+        result = rebuild_all(db_session, str(tmp_path / "nav.db"))
+
+        assert forecast.called
+        assert result["forecast_map"] == 20

@@ -254,10 +254,19 @@ def rebuild_all(
     db.commit()
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    logger.info(
-        "Cache rebuild: %d stats + %d verif_map + %d forecast_map entries (%dms)",
-        stats_count, verif_map_count, forecast_map_count, duration_ms,
-    )
+    # Distinct log shape when forecast_map is skipped — operators reading prod
+    # logs should not have to remember that "0 forecast_map entries" means
+    # "skipped on a light cycle" rather than "rebuilt and got nothing".
+    if include_forecast_map:
+        logger.info(
+            "Cache rebuild: %d stats + %d verif_map + %d forecast_map entries (%dms)",
+            stats_count, verif_map_count, forecast_map_count, duration_ms,
+        )
+    else:
+        logger.info(
+            "Cache rebuild: %d stats + %d verif_map entries, forecast_map skipped (%dms)",
+            stats_count, verif_map_count, duration_ms,
+        )
     return {
         "stats": stats_count,
         "verif_map": verif_map_count,
