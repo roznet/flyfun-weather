@@ -856,15 +856,20 @@ def _run_standalone_once(
         result["duration_ms"],
     )
 
-    # Rebuild dashboard + map caches after cycle completes (snapshots changed
-    # for fetch cycles, scores changed for verification cycles — both feed UI).
+    # Rebuild dashboard + map caches after cycle completes. Light (score-only)
+    # cycles don't touch forecast snapshots, so the forecast_map cache would be
+    # regenerated to identical content — skip it to halve the rebuild cost on
+    # the four hourly light cycles.
     try:
         from flyfun_common.db import SessionLocal
         from weatherbrief.tasks.cache_builder import rebuild_all
 
         cache_db = SessionLocal()
         try:
-            cache_result = rebuild_all(cache_db, db_path)
+            cache_result = rebuild_all(
+                cache_db, db_path,
+                include_forecast_map=(result["cycle_type"] != "light"),
+            )
             logger.info(
                 "Standalone %s cycle: cache rebuilt (%dms)",
                 result["cycle_type"], cache_result["duration_ms"],

@@ -474,6 +474,10 @@ class VerificationScoreRow(Base):
         Index("ix_verif_scores_icao", "icao"),
         Index("ix_verif_scores_lead", "lead_hours"),
         Index("ix_verif_scores_source_model_days", "source", "model", "days_out"),
+        Index(
+            "ix_verif_scores_source_days_time",
+            "source", "days_out", "observation_time",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
