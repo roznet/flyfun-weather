@@ -213,6 +213,46 @@ export async function parseFpl(fplText: string): Promise<ParseFplResponse> {
   });
 }
 
+// --- Autorouter recent-routes import (issue #151) ---
+
+export interface AutorouterRouteSummary {
+  routeid: string;
+  departure: string;
+  destination: string;
+  departure_name: string | null;
+  destination_name: string | null;
+  departure_time: string | null;
+  fplan: string;
+  route_distance_nm: number | null;
+  aircraft_description: string | null;
+  callsign: string | null;
+}
+
+export interface AutorouterRoutesResponse {
+  routes: AutorouterRouteSummary[];
+}
+
+export class AutorouterNotLinkedError extends Error {
+  constructor() {
+    super('autorouter_not_linked');
+    this.name = 'AutorouterNotLinkedError';
+  }
+}
+
+export async function fetchAutorouterRoutes(limit = 25): Promise<AutorouterRoutesResponse> {
+  try {
+    return await apiFetch<AutorouterRoutesResponse>(
+      `/flights/autorouter-routes?limit=${encodeURIComponent(String(limit))}`,
+    );
+  } catch (err) {
+    // apiFetch surfaces the FastAPI {detail} payload in the error message.
+    if (err instanceof Error && err.message.includes('autorouter_not_linked')) {
+      throw new AutorouterNotLinkedError();
+    }
+    throw err;
+  }
+}
+
 // --- Route interpretation ---
 
 export interface InterpretRouteResponse {
