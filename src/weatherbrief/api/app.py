@@ -419,9 +419,11 @@ def create_app() -> FastAPI:
         }
 
     # Auth router from flyfun-common (with weather-specific on_new_user callback)
+    from weatherbrief.notify.magic_link_email import send_magic_link_email
     auth_router = create_auth_router(
         on_new_user=_on_new_user,
         on_delete_user=_on_delete_user,
+        send_magic_link_email=send_magic_link_email,
     )
     app.include_router(create_autorouter_router())
     app.include_router(create_oauth_router())

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>FlyFun Weather — Confirm Sign-In</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="login-panel">
+      <h1>FlyFun Weather</h1>
+      <p class="login-subtitle">Confirm sign-in</p>
+
+      <div id="initial-state">
+        <p style="margin: 16px 0 24px;">
+          Click the button below to finish signing in to FlyFun Weather.
+        </p>
+        <button id="btn-confirm" class="btn-login" style="background:#2563eb;color:#fff;border:none;cursor:pointer;width:100%;">
+          Finish signing in
+        </button>
+        <p style="margin-top: 20px; color: #6c757d; font-size: 13px;">
+          Sign-in links expire 15 minutes after they're issued and can only
+          be used once.
+        </p>
+      </div>
+
+      <div id="loading-state" style="display:none;">
+        <p style="margin: 16px 0;">Signing you in…</p>
+      </div>
+
+      <div id="error-state" style="display:none;">
+        <p id="error-message" style="margin: 16px 0; color: #c00;">
+          This sign-in link is invalid or has expired.
+        </p>
+        <a href="/login.html" class="btn-login" style="background:#2563eb;color:#fff;text-decoration:none;display:inline-block;text-align:center;width:100%;">
+          Request a new link
+        </a>
+      </div>
+
+      <div id="missing-token-state" style="display:none;">
+        <p style="margin: 16px 0; color: #c00;">
+          No sign-in token found. Open the link from your sign-in email
+          again, or request a new one.
+        </p>
+        <a href="/login.html" class="btn-login" style="background:#2563eb;color:#fff;text-decoration:none;display:inline-block;text-align:center;width:100%;">
+          Go to sign-in
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const next = params.get('next');
+
+    if (!token) {
+      document.getElementById('initial-state').style.display = 'none';
+      document.getElementById('missing-token-state').style.display = '';
+    }
+
+    document.getElementById('btn-confirm').addEventListener('click', async () => {
+      document.getElementById('initial-state').style.display = 'none';
+      document.getElementById('loading-state').style.display = '';
+
+      const body = { token };
+      if (next) body.next = next;
+
+      try {
+        // The endpoint responds 302 + Set-Cookie. fetch follows redirects
+        // and the browser applies the cookie during the chain, so a
+        // simple page nav after success is enough.
+        const resp = await fetch('/auth/magic-link/consume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          credentials: 'same-origin',
+        });
+        if (resp.ok || resp.redirected) {
+          // Either fetch followed the 302 (resp.ok) or — depending on
+          // the response shape — we got a final URL back. Navigate there.
+          window.location.href = resp.url || (next || '/');
+          return;
+        }
+        throw new Error(`Server responded ${resp.status}`);
+      } catch (err) {
+        document.getElementById('loading-state').style.display = 'none';
+        document.getElementById('error-state').style.display = '';
+        if (err && err.message) {
+          document.getElementById('error-message').textContent =
+            'Sign-in failed: ' + err.message + '. The link may have expired or already been used.';
+        }
+      }
+    });
+  </script>
+</body>
+</html>
