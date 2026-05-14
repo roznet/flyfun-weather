@@ -11,6 +11,7 @@ import gc
 import logging
 import multiprocessing
 import os
+import signal
 import threading
 import time as _time_mod
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
@@ -229,6 +230,178 @@ _DECODE_POOL: ProcessPoolExecutor | None = None
 _DECODE_POOL_LOCK = threading.Lock()
 _DECODE_TIMEOUT_DEFAULT_S = 300.0
 
+# Hang-diag (2026-05-14): trackers used by the timeout-recovery path to
+# distinguish among hypothesis classes for the 300 s stuck-decode incidents:
+#   - max_tasks_per_child recycle race (CPython internals)
+#   - cfgrib mmap deadlock on a file being written/replaced by ECPDS
+#   - .idx sidecar race between concurrent decodes
+#   - filesystem IO contention from ECPDS dissemination bursts
+# Reset whenever the pool is created/torn down. Guarded by the diag lock so
+# `_dispatch_decode_parallel` can update from multiple Phase-1 orchestrator
+# threads without racing.
+_DECODE_POOL_INIT_TIME: float | None = None
+_DECODE_TASKS_DISPATCHED: int = 0
+_DECODE_DIAG_LOCK = threading.Lock()
+
+
+def _diag_reset_pool_counters() -> None:
+    global _DECODE_POOL_INIT_TIME, _DECODE_TASKS_DISPATCHED
+    with _DECODE_DIAG_LOCK:
+        _DECODE_POOL_INIT_TIME = _time_mod.time()
+        _DECODE_TASKS_DISPATCHED = 0
+
+
+def _diag_record_dispatch(n: int = 1) -> int:
+    global _DECODE_TASKS_DISPATCHED
+    with _DECODE_DIAG_LOCK:
+        _DECODE_TASKS_DISPATCHED += n
+        return _DECODE_TASKS_DISPATCHED
+
+
+def _diag_pool_summary(pool: ProcessPoolExecutor | None) -> str:
+    """One-line summary of pool state for hang-diag log lines."""
+    with _DECODE_DIAG_LOCK:
+        init_t = _DECODE_POOL_INIT_TIME
+        tasks = _DECODE_TASKS_DISPATCHED
+    age = (_time_mod.time() - init_t) if init_t is not None else -1.0
+    worker_pids: list[int] = []
+    try:
+        # ``ProcessPoolExecutor._processes`` is a private dict[pid, Process].
+        # Stable across the CPython versions we run; the only practical way
+        # to get worker PIDs from a stdlib pool.
+        if pool is not None and hasattr(pool, "_processes"):
+            worker_pids = sorted(pool._processes.keys())
+    except Exception:
+        pass
+    return f"pool_age={age:.0f}s tasks_dispatched={tasks} workers={worker_pids}"
+
+
+def _diag_snapshot_workers(
+    pool: ProcessPoolExecutor | None,
+    *,
+    hang_context: str,
+) -> None:
+    """Dump diagnostic info about (presumed-hung) worker processes.
+
+    Called from timeout-recovery paths **before** ``shutdown_decode_pool(wait=False)``.
+    Best-effort — each step is wrapped so a broken /proc or missing capability
+    can't turn a degraded request into a 500. Order is:
+
+    1. Per-worker ``/proc/<pid>/{wchan,status,syscall,stack,fd}`` snapshot.
+       ``wchan`` tells us the kernel function the worker is sleeping in
+       (e.g. ``wait_on_page_bit_killable`` → mmap stall; ``futex_wait_queue`` →
+       Python-level lock; empty → running).
+    2. ``SIGUSR1`` to each worker — paired with the faulthandler registered
+       in ``_worker_init``, this dumps the worker's Python stack to stderr
+       (which goes to the container log). Useless if the worker is in ``D``
+       state, but ``wchan`` already covers that case.
+    3. ECMWF directory snapshot: file count + count of files mtime'd in the
+       last 60 s. Confirms or refutes the "ECPDS write burst during hang"
+       correlation that motivated this investigation.
+    4. Brief sleep to let the SIGUSR1 dumps land in container logs before
+       ``shutdown(wait=False)`` closes worker stdout.
+    """
+    try:
+        if pool is None or not hasattr(pool, "_processes"):
+            logger.error("GRIB hang diag [%s]: no pool to inspect", hang_context)
+            return
+        worker_pids = sorted(pool._processes.keys())
+    except Exception as e:
+        logger.error("GRIB hang diag: cannot enumerate workers: %s", e)
+        return
+
+    logger.error(
+        "GRIB hang diag [%s]: %s",
+        hang_context, _diag_pool_summary(pool),
+    )
+
+    for pid in worker_pids:
+        # /proc text files — wchan/status/syscall are world-readable; stack
+        # often needs CAP_SYS_PTRACE (docker default denies). Try anyway and
+        # log the failure so we know whether to add the capability.
+        for fname in ("wchan", "status", "syscall", "stack"):
+            try:
+                content = Path(f"/proc/{pid}/{fname}").read_text(errors="replace").strip()
+                # Status is multi-line; first 4 lines (Name/Umask/State/Tgid)
+                # are enough to spot D-state. wchan/syscall/stack: cap at 800
+                # chars so a deep stack doesn't dominate the log.
+                if fname == "status":
+                    content = "\n".join(content.splitlines()[:4])
+                logger.error(
+                    "GRIB hang diag [pid=%d] %s: %s",
+                    pid, fname, content[:800],
+                )
+            except OSError as e:
+                logger.error(
+                    "GRIB hang diag [pid=%d] %s: read failed (%s)",
+                    pid, fname, e,
+                )
+
+        # Open fds — the GRIB file the worker is blocked on should appear here.
+        try:
+            fd_dir = Path(f"/proc/{pid}/fd")
+            entries: list[str] = []
+            for fd in sorted(fd_dir.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else 9999):
+                try:
+                    entries.append(f"{fd.name}->{os.readlink(fd)}")
+                except OSError:
+                    pass
+            logger.error(
+                "GRIB hang diag [pid=%d] fds: %s",
+                pid, "; ".join(entries[:30]),
+            )
+        except OSError as e:
+            logger.error(
+                "GRIB hang diag [pid=%d] fds: list failed (%s)",
+                pid, e,
+            )
+
+        # SIGUSR1 → faulthandler dumps Python stack of all threads to stderr.
+        # Delivered when worker returns to userspace; if it's in D state this
+        # is a no-op until/unless the kernel wait completes.
+        try:
+            os.kill(pid, signal.SIGUSR1)
+            logger.error(
+                "GRIB hang diag [pid=%d] sent SIGUSR1 (Python stack dump should follow)",
+                pid,
+            )
+        except OSError as e:
+            logger.error(
+                "GRIB hang diag [pid=%d] SIGUSR1 failed (%s)",
+                pid, e,
+            )
+
+    # Filesystem snapshot — was ECPDS actively writing into the dir?
+    try:
+        ecmwf_dir = Path(os.environ.get("ECMWF_GRIB_DIR", "/data/ecmwf"))
+        now = _time_mod.time()
+        total = 0
+        recent: list[tuple[float, str]] = []
+        for p in ecmwf_dir.iterdir():
+            try:
+                mt = p.stat().st_mtime
+            except OSError:
+                continue
+            total += 1
+            age = now - mt
+            if age < 60.0:
+                recent.append((age, p.name))
+        recent.sort()
+        sample = ", ".join(f"{n}(@{a:.1f}s)" for a, n in recent[:10])
+        logger.error(
+            "GRIB hang diag: %s has %d files; %d mtime'd <60s ago; recent: %s",
+            ecmwf_dir, total, len(recent), sample,
+        )
+    except Exception as e:
+        logger.error("GRIB hang diag: filesystem snapshot failed: %s", e)
+
+    # Let the SIGUSR1 stack dumps land in container logs before the pool
+    # shutdown closes worker stdout. 1 s is plenty for faulthandler write.
+    try:
+        _time_mod.sleep(1.0)
+    except Exception:
+        pass
+
 
 def _decode_pool_workers_default() -> int:
     """Default worker count when ``GRIB_DECODE_WORKERS`` is unset.
@@ -315,6 +488,7 @@ def _get_decode_pool() -> ProcessPoolExecutor | None:
         if max_tasks is not None:
             kwargs["max_tasks_per_child"] = max_tasks
         _DECODE_POOL = ProcessPoolExecutor(**kwargs)
+        _diag_reset_pool_counters()
         logger.info(
             "GRIB decode pool started (workers=%d, mp=spawn, max_tasks_per_child=%s)",
             workers, max_tasks if max_tasks is not None else "off",
@@ -331,13 +505,22 @@ def shutdown_decode_pool(*, wait: bool = True) -> None:
     behind and reaped when the parent eventually exits — bounded leak
     (at most ``max_workers`` orphans per pool reset).
     """
-    global _DECODE_POOL
+    global _DECODE_POOL, _DECODE_POOL_INIT_TIME, _DECODE_TASKS_DISPATCHED
     with _DECODE_POOL_LOCK:
         pool = _DECODE_POOL
         _DECODE_POOL = None
     if pool is not None:
         pool.shutdown(wait=wait, cancel_futures=not wait)
-        logger.info("GRIB decode pool shut down (wait=%s)", wait)
+        logger.info(
+            "GRIB decode pool shut down (wait=%s, %s)",
+            wait, _diag_pool_summary(pool),
+        )
+        # Counters belong to a specific pool lifetime — clear them so the
+        # next `_diag_pool_summary` (after `_get_decode_pool` rebuilds) shows
+        # a fresh `pool_age` instead of one from the dead pool.
+        with _DECODE_DIAG_LOCK:
+            _DECODE_POOL_INIT_TIME = None
+            _DECODE_TASKS_DISPATCHED = 0
 
 
 def _dispatch_decode(worker_fn_name: str, *args) -> Any:
@@ -367,10 +550,12 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
     timeout = _decode_timeout_s()
     try:
         future = pool.submit(fn, *args)
+        _diag_record_dispatch(1)
         return future.result(timeout=timeout)
     except BrokenProcessPool:
         logger.error(
-            "GRIB decode pool broken (worker died); resetting for next call",
+            "GRIB decode pool broken (worker died); resetting for next call (%s)",
+            _diag_pool_summary(pool),
         )
         shutdown_decode_pool()
         raise
@@ -379,6 +564,7 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
             "GRIB decode pool stuck (worker hung %.0fs on %s); resetting",
             timeout, worker_fn_name,
         )
+        _diag_snapshot_workers(pool, hang_context=f"single:{worker_fn_name}")
         shutdown_decode_pool(wait=False)
         raise
 
@@ -427,6 +613,7 @@ def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
             pool.submit(getattr(decode_worker, name), *args)
             for name, args in jobs
         ]
+        _diag_record_dispatch(len(jobs))
         for i, fut in enumerate(futures):
             remaining = max(0.0, deadline - _time_mod.perf_counter())
             results[i] = fut.result(timeout=remaining)
@@ -434,19 +621,26 @@ def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
         for fut in futures:
             fut.cancel()
         logger.error(
-            "GRIB decode pool broken during parallel dispatch (%d jobs); resetting",
-            len(jobs),
+            "GRIB decode pool broken during parallel dispatch (%d jobs); resetting (%s)",
+            len(jobs), _diag_pool_summary(pool),
         )
         shutdown_decode_pool()
         raise
     except TimeoutError:
+        # Note which futures finished before deadline vs are stuck — narrows
+        # whether the whole pool stalled or just a single job dragged the
+        # shared deadline past.
+        done = sum(1 for f in futures if f.done())
+        cancelled = 0
         for fut in futures:
-            fut.cancel()
+            if fut.cancel():
+                cancelled += 1
         names = ",".join({name for name, _ in jobs})
         logger.error(
-            "GRIB decode pool stuck (%d jobs %s exceeded %.0fs); resetting",
-            len(jobs), names, timeout,
+            "GRIB decode pool stuck (%d jobs %s exceeded %.0fs; done=%d cancelled=%d); resetting",
+            len(jobs), names, timeout, done, cancelled,
         )
+        _diag_snapshot_workers(pool, hang_context=f"parallel:{names}({len(jobs)}j)")
         shutdown_decode_pool(wait=False)
         raise
     except Exception:

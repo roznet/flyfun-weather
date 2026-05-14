@@ -23,6 +23,8 @@ spawn mode (the only mode we use, for macOS/Linux parity).
 from __future__ import annotations
 
 import logging
+import os
+import time as _time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -44,10 +46,79 @@ def _worker_init() -> None:
         level=logging.INFO,
         format="[grib-worker %(process)d] %(levelname)s:%(name)s:%(message)s",
     )
+
+    # Hang-diag (2026-05-14): SIGUSR1 → Python stack dump for all threads.
+    # Parent sends this to each worker on the timeout-recovery path so we can
+    # see where cfgrib/eccodes is actually stuck. Delivered only when worker
+    # returns to userspace — pair with /proc/<pid>/wchan from the parent for
+    # cases where the worker is in uninterruptible kernel wait.
+    import faulthandler
+    import signal
+    faulthandler.enable()
+    try:
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
+    except (AttributeError, RuntimeError, ValueError) as e:
+        logger.warning("faulthandler.register(SIGUSR1) failed: %s", e)
+
     import cfgrib  # noqa: F401
     import numpy  # noqa: F401
     import xarray  # noqa: F401
     import weatherbrief.fetch.grib.decode  # noqa: F401
+
+    # One-line baseline so we know which cfgrib / eccodes versions a hang
+    # report came from, and whether idx caching is on.
+    try:
+        eccodes_ver = "?"
+        try:
+            from eccodes import codes_get_api_version
+            eccodes_ver = str(codes_get_api_version())
+        except Exception:
+            pass
+        logger.info(
+            "GRIB worker ready: cfgrib=%s eccodes=%s CFGRIB_USE_INDEXPATH=%s",
+            getattr(cfgrib, "__version__", "?"),
+            eccodes_ver,
+            os.environ.get("CFGRIB_USE_INDEXPATH", "<unset>"),
+        )
+    except Exception as e:  # pragma: no cover — diagnostic must not break init
+        logger.warning("worker baseline log failed: %s", e)
+
+
+def _log_decode_start(fn_name: str, file_path: str) -> None:
+    """Per-decode entry diagnostic (hang-diag, 2026-05-14).
+
+    Logs file path/size/mtime-age + idx-sidecar state at decode start. On a
+    300 s hang, the worker's last log line tells us exactly which file was
+    being decoded and what shape the file + its idx were in. Costs <1 ms;
+    must not raise.
+    """
+    try:
+        p = Path(file_path)
+        try:
+            st = p.stat()
+            file_info = f"size={st.st_size} age={_time.time() - st.st_mtime:.1f}s"
+        except OSError as e:
+            file_info = f"stat_failed={e!s}"
+        idx_info = "idx=none"
+        try:
+            # cfgrib idx files: <file>.<hash>.idx (hash is content-derived).
+            idx_candidates = list(p.parent.glob(f"{p.name}.*.idx"))
+            if idx_candidates:
+                idx = idx_candidates[0]
+                ist = idx.stat()
+                idx_info = (
+                    f"idx={idx.name} idx_size={ist.st_size} "
+                    f"idx_age={_time.time() - ist.st_mtime:.1f}s"
+                )
+        except OSError:
+            pass
+        logger.info(
+            "%s start: file=%s %s %s pid=%d",
+            fn_name, p.name, file_info, idx_info, os.getpid(),
+        )
+    except Exception:
+        # Diagnostic must never break the hot path.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +131,7 @@ def decode_ecmwf_pressure(
     latitudes: list[float],
     longitudes: list[float],
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
+    _log_decode_start("decode_ecmwf_pressure", file_path)
     from weatherbrief.fetch.grib.decode import decode_ecmwf_pressure_per_point
     return decode_ecmwf_pressure_per_point(Path(file_path), latitudes, longitudes)
 
@@ -69,6 +141,7 @@ def decode_ecmwf_surface(
     latitudes: list[float],
     longitudes: list[float],
 ) -> tuple[list[dict[str, float]], list[bool]]:
+    _log_decode_start("decode_ecmwf_surface", file_path)
     from weatherbrief.fetch.grib.decode import decode_ecmwf_surface_per_point
     return decode_ecmwf_surface_per_point(Path(file_path), latitudes, longitudes)
 
@@ -79,6 +152,7 @@ def decode_gfs_pressure(
     longitudes: list[float],
 ) -> list[dict[int, dict[str, float]]]:
     """Read GFS CLWMR/ICMR bytes from cache and decode per-point."""
+    _log_decode_start("decode_gfs_pressure", file_path)
     from weatherbrief.fetch.grib.decode import decode_grib_per_point
     grib_bytes = Path(file_path).read_bytes()
     return decode_grib_per_point(grib_bytes, latitudes, longitudes)
@@ -89,6 +163,7 @@ def decode_gfs_cloud_diag(
     latitudes: list[float],
     longitudes: list[float],
 ) -> list[dict[str, float]]:
+    _log_decode_start("decode_gfs_cloud_diag", file_path)
     from weatherbrief.fetch.grib.decode import decode_cloud_diag_per_point
     grib_bytes = Path(file_path).read_bytes()
     return decode_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
@@ -105,6 +180,10 @@ def decode_icon_chunked(
     holding ~70 MB × 8 vars = ~560 MB per fhour — that was the dominant
     parent-RSS contributor before this change.
     """
+    # ICON takes a dict of var→path; log the first var's file as a representative.
+    if var_paths:
+        first_var = next(iter(var_paths))
+        _log_decode_start(f"decode_icon_chunked[{first_var}+{len(var_paths)-1}]", var_paths[first_var])
     from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point_chunked
     var_bytes = {var: Path(p).read_bytes() for var, p in var_paths.items()}
     return decode_icon_eu_per_point_chunked(var_bytes, latitudes, longitudes)
@@ -115,6 +194,7 @@ def decode_icon_legacy(
     latitudes: list[float],
     longitudes: list[float],
 ) -> list[dict[int, dict[str, float]]]:
+    _log_decode_start("decode_icon_legacy", file_path)
     from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point
     grib_bytes = Path(file_path).read_bytes()
     return decode_icon_eu_per_point(grib_bytes, latitudes, longitudes)
@@ -125,6 +205,7 @@ def decode_icon_cloud_diag(
     latitudes: list[float],
     longitudes: list[float],
 ) -> list[dict[str, float]]:
+    _log_decode_start("decode_icon_cloud_diag", file_path)
     from weatherbrief.fetch.grib.decode import decode_icon_eu_cloud_diag_per_point
     grib_bytes = Path(file_path).read_bytes()
     return decode_icon_eu_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
