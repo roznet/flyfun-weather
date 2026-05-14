@@ -252,14 +252,35 @@ Auth, JWT, encryption, DB engine, and user models are provided by `flyfun-common
 
 ### OAuth flow
 
-Google Sign-In via `authlib`. JWT (HS256, 7-day expiry) in httpOnly secure cookie (`flyfun_auth`, cross-subdomain on `.flyfun.aero`).
+Google Sign-In and Sign in with Apple via `authlib`. JWT (HS256, 7-day expiry) in httpOnly secure cookie (`flyfun_auth`, cross-subdomain on `.flyfun.aero`).
 
-1. User clicks "Sign in with Google" → Google consent screen
+1. User clicks "Sign in with Google/Apple" → consent screen
 2. Callback exchanges code for ID token → lookup/create user (auto-approved)
 3. `on_new_user` callback creates `UserPreferencesRow` + sends welcome/admin emails
 4. Issue JWT cookie; all `/api/*` routes validate via `current_user_id()` dependency from flyfun-common
 
 Admin identity: `ADMIN_EMAILS` env var (comma-separated). Dev user is always admin. Custom `/auth/me` adds `is_admin` and `setup_completed` fields.
+
+### Magic-link (email) flow
+
+A third sign-in path alongside Google/Apple, for users who don't want to link their flying activity to either SSO. Mints the *same* `flyfun_auth` JWT — the only difference is identification. Implementation lives in `flyfun_common.auth.magic_link`; weather wires the email callback at `api/app.py:create_app`.
+
+1. `POST /auth/magic-link/request` `{email}` — issues a 256-bit token (`secrets.token_urlsafe(32)`) and a 6-digit OTP, stores SHA-256 hashes only in `magic_link_tokens`, invokes `weatherbrief.notify.magic_link_email.send_magic_link_email`. Always returns 200 (no account enumeration).
+2. `GET /auth/verify?token=...` — **does not consume the token**; 302s to `/auth-verify.html?token=...` so email scanners (Outlook ATP, Proofpoint, Mimecast) that pre-click links can't burn single-use tokens.
+3. `POST /auth/magic-link/consume` `{token}` — looks up by `lower(email)`, finds-or-creates user (case-insensitive). Existing Google/Apple users with the same email are **re-used as-is** — their `provider` field is preserved. Mints JWT + `flyfun_auth` cookie, 302s.
+4. `POST /auth/magic-link/consume-code` `{email, code}` — iOS OTP variant. Same logic, returns `{token, user_id}` JSON (no cookie). Lets the iOS app accept a 6-digit code typed in by a user reading the email on their laptop.
+
+**Token lifecycle.** 15-min expiry, single-use, deleted 24h after expiry by `purge_expired_magic_link_tokens` called from the daily retention loop (`scheduler.py`).
+
+**Rate limits.** DB-backed sliding windows (in `flyfun_common.auth.rate_limit`): 3 requests/hour per email, 10/hour per IP, 5 consume attempts/minute per IP. Bypassed when `is_dev_mode()`.
+
+**Apple Private Relay rejection.** `@privaterelay.appleid.com` addresses can't receive our mail; `/request` returns 400 with a "use Sign in with Apple" message.
+
+**Pending-user parity.** Magic-link consume for an unapproved user returns the same `/login.html?status=pending` redirect as the OAuth callback. The token is *not* marked used so the same link can succeed after admin approval (within 15 min).
+
+**Email content.** `weatherbrief.notify.magic_link_email.send_magic_link_email` sends an HTML + plain-text email containing both the click-through link and the 6-digit code, plus the requesting IP (so the user can spot misuse). Dev mode logs the link/code instead of sending.
+
+**Schema.** `magic_link_tokens` (id, email, token_hash, otp_code_hash, created_at, expires_at, used_at, requested_ip) and `magic_link_consume_attempts` (id, ip, attempted_at). Migration `056_magic_link_tokens.py` creates both tables and adds `ix_users_email` since email-keyed lookup runs on every consume.
 
 ### API Token Authentication (bot/agent users)
 

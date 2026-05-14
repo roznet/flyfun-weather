@@ -454,6 +454,28 @@ def _run_retention_once() -> None:
     finally:
         db.close()
 
+    # Purge expired magic-link tokens and old consume-attempt rows.
+    # flyfun-common ships the helper but does not schedule — consumer
+    # apps own the cadence. 24h cutoff: tokens themselves expire in
+    # 15 min, but we keep recent rows in-window so the rate limiter
+    # has data to count against.
+    try:
+        from flyfun_common.auth.magic_link import purge_expired_magic_link_tokens
+
+        db = SessionLocal()
+        try:
+            deleted = purge_expired_magic_link_tokens(db, older_than_hours=24)
+            db.commit()
+            if deleted:
+                logger.info("Purged %d expired magic-link tokens", deleted)
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    except Exception:
+        logger.error("Magic-link token purge failed", exc_info=True)
+
     # Purge old ECMWF deliveries. Readers always pick max(base_time) of
     # ready runs, so older inits are never consulted; 36 h keeps the latest
     # run plus ~24 h of prior runs as headroom for in-flight deliveries.
