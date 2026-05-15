@@ -59,24 +59,28 @@ def get_activity_summary(
     icao_filter: list[str] | None = None,
 ) -> ActivitySummary:
     """High-level counts for a date range, scoped by source."""
-    # Count observations and airports that have scores for this source.
-    # VerificationScoreRow has a denormalised icao column and a CASCADE FK on
-    # observation_id, so both counts can be answered directly from the score
-    # table in a single aggregate.  The previous IN(scalar_subquery) pattern
-    # materialised the subquery twice and planned poorly on MySQL at 30-day
-    # windows.
-    score_counts = db.execute(
-        select(
-            func.count(func.distinct(VerificationScoreRow.observation_id)),
-            func.count(func.distinct(VerificationScoreRow.icao)),
-        ).where(
-            VerificationScoreRow.observation_time.between(since, until),
-            VerificationScoreRow.source == source,
-            _icao_clause(VerificationScoreRow.icao, icao_filter),
-        )
-    ).one()
-    obs_count = score_counts[0] or 0
-    airport_count = score_counts[1] or 0
+    # Count observations and airports that have scores for this source,
+    # answered directly from the score table (which carries a denormalised
+    # icao column and a CASCADE FK on observation_id).
+    #
+    # Two `COUNT(DISTINCT col)` calls *in the same SELECT* force MySQL into a
+    # tmp-table dedup it cannot resolve from indexes — observed grinding ~3
+    # min on a 30-day window at ~7M rows in prod (PR #150 follow-up).  Running
+    # them as two separate queries lets each one plan with its own index and
+    # is dramatically faster on the same data.
+    common_where = (
+        VerificationScoreRow.observation_time.between(since, until),
+        VerificationScoreRow.source == source,
+        _icao_clause(VerificationScoreRow.icao, icao_filter),
+    )
+    obs_count = db.execute(
+        select(func.count(func.distinct(VerificationScoreRow.observation_id)))
+        .where(*common_where)
+    ).scalar() or 0
+    airport_count = db.execute(
+        select(func.count(func.distinct(VerificationScoreRow.icao)))
+        .where(*common_where)
+    ).scalar() or 0
 
     # Flight-specific counts (only relevant for source='flight')
     flights_verified = 0
