@@ -528,9 +528,11 @@ def _diag_snapshot_pool_internals(pool: ProcessPoolExecutor | None) -> None:
 
     What we want to see:
       - ``_pending_work_items`` size: jobs submitted but never started/finished.
-      - ``_queue_management_thread.is_alive()``: parent's queue-management
+      - executor manager thread ``is_alive()``: parent's queue-management
         thread (lives in concurrent.futures.process). Dead → the pool can
-        accept submit() but never make progress.
+        accept submit() but never make progress. Attribute name changed
+        from ``_queue_management_thread`` (≤3.10) to ``_executor_manager_thread``
+        (3.11+); we try both so the diag works across versions.
       - ``_call_queue.qsize()`` / ``_result_queue.qsize()``: pipe depth from
         parent → workers and workers → parent. Backed up → IPC stall.
     """
@@ -544,15 +546,29 @@ def _diag_snapshot_pool_internals(pool: ProcessPoolExecutor | None) -> None:
     except Exception as e:
         logger.error("GRIB hang diag pool: pending_work_items read failed (%s)", e)
 
-    try:
-        thr = pool._queue_management_thread  # type: ignore[attr-defined]
-        alive = thr.is_alive() if thr is not None else None
+    thr = None
+    thr_attr = None
+    for attr in ("_executor_manager_thread", "_queue_management_thread"):
+        try:
+            thr = getattr(pool, attr)
+        except AttributeError:
+            continue
+        thr_attr = attr
+        break
+    if thr_attr is None:
         logger.error(
-            "GRIB hang diag pool: queue_mgmt_thread alive=%s name=%s",
-            alive, getattr(thr, "name", "?"),
+            "GRIB hang diag pool: manager thread attr not found (tried "
+            "_executor_manager_thread, _queue_management_thread)",
         )
-    except Exception as e:
-        logger.error("GRIB hang diag pool: queue_mgmt_thread read failed (%s)", e)
+    else:
+        try:
+            alive = thr.is_alive() if thr is not None else None
+            logger.error(
+                "GRIB hang diag pool: %s alive=%s name=%s",
+                thr_attr, alive, getattr(thr, "name", "?"),
+            )
+        except Exception as e:
+            logger.error("GRIB hang diag pool: %s read failed (%s)", thr_attr, e)
 
     for q_name in ("_call_queue", "_result_queue"):
         try:
