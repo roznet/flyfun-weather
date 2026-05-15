@@ -36,9 +36,17 @@ services:
           # Bumped 3G → 4G in #137: 19Z cycle observed transient 2.55 GiB peaks
           # during GFS Open-Meteo fetch (parent process), leaving only ~450 MiB
           # headroom for concurrent briefing refreshes — too tight, fits the
-          # 07Z OOM signature. Droplet host has ~3.9 GB available, ~1.5 GB
-          # margin remains after this bump.
-          memory: 4G
+          # 07Z OOM signature.
+          #
+          # Bumped 4G → 6G on 2026-05-15: hang diag on 08:49 stuck-decode
+          # event captured cgroup peak hitting 4 GiB exactly (the limit) with
+          # workers=[] (silent OOM-kill of decode workers, parent didn't see
+          # BrokenProcessPool, fell through to the 300s timeout). Headroom
+          # was the actual bottleneck — page cache + parent (~2 GB) + 2
+          # workers (~250 MB each during ICON decode) + cfgrib eccodes
+          # native memory accumulating between recycles > 4 GiB peak.
+          # Host has ~7.8 GiB, this still leaves ~1.8 GiB for other apps.
+          memory: 6G
     networks:
       - shared-services
 
