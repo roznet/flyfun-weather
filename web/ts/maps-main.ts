@@ -407,6 +407,23 @@ function reconfigureLevelPicker(): void {
   }
 }
 
+/** Update the read-only "Sat 16-May-26 12Z" chip next to the hour slider,
+ * computed from synInit + synHour. Mirrors updateForecastDatetime() so both
+ * tabs format the implied valid time the same way. Empty when no init is
+ * selected (e.g. the manifest is empty). */
+function updateSynopticDatetime(): void {
+  const el = $('syn-valid-datetime');
+  if (!el) return;
+  if (!synInit) { el.textContent = ''; return; }
+  const target = new Date(new Date(synInit).getTime() + synHour * 3_600_000);
+  const day = _DAYS[target.getUTCDay()];
+  const dd = String(target.getUTCDate()).padStart(2, '0');
+  const mon = _MONTHS[target.getUTCMonth()];
+  const yr = String(target.getUTCFullYear()).slice(2);
+  const hh = String(target.getUTCHours()).padStart(2, '0');
+  el.textContent = `${day} ${dd}-${mon}-${yr} ${hh}Z`;
+}
+
 function reconfigureHourSlider(): void {
   const slider = $('syn-hour-slider') as HTMLInputElement | null;
   const valEl = $('syn-hour-value');
@@ -415,6 +432,7 @@ function reconfigureHourSlider(): void {
   if (!snap) {
     slider.min = '0'; slider.max = '0'; slider.step = '3'; slider.value = '0';
     if (valEl) valEl.textContent = '+0 h';
+    updateSynopticDatetime();
     return;
   }
   const max = (snap.n_hours - 1) * snap.stride_hours;
@@ -427,6 +445,7 @@ function reconfigureHourSlider(): void {
   synHour = h;
   slider.value = String(h);
   if (valEl) valEl.textContent = `+${h} h`;
+  updateSynopticDatetime();
 }
 
 async function loadSynoptic(): Promise<void> {
@@ -610,6 +629,7 @@ function wireSynopticControls(): void {
   hourSlider?.addEventListener('input', () => {
     synHour = parseInt(hourSlider.value);
     if (hourVal) hourVal.textContent = `+${synHour} h`;
+    updateSynopticDatetime();
   });
   hourSlider?.addEventListener('change', () => {
     synHour = parseInt(hourSlider.value);
