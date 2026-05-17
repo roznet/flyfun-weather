@@ -12,6 +12,7 @@ import {
 import type { FlightResponse } from './store/types';
 import { fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
 import { interpretAndConfirmRoute, previewRoute } from './components/route-interpret';
+import { confirmZeroDuration } from './components/duration-confirm';
 import { fetchModelCatalog, fetchPreferences } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
@@ -643,7 +644,7 @@ async function init(): Promise<void> {
       const { hour: utcHour, minute: utcMinute } = localTimeToUtc();
       const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value || '8000', 10);
       const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value || '18000', 10);
-      const duration = parseFloat((document.getElementById('input-duration') as HTMLInputElement).value || '0');
+      let duration = parseFloat((document.getElementById('input-duration') as HTMLInputElement).value || '0');
       const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;
       const profileId = profileSelect?.value ? parseInt(profileSelect.value, 10) : undefined;
       const aircraftSelect = document.getElementById('input-aircraft') as HTMLSelectElement;
@@ -666,6 +667,18 @@ async function init(): Promise<void> {
       // Update the waypoints input to show the interpreted route
       const wpInput = document.getElementById('input-waypoints') as HTMLInputElement;
       if (wpInput) wpInput.value = waypoints.join(' ');
+
+      // Zero duration is almost always an accidental empty field. Ask the
+      // pilot to confirm — they can either type a value (with 120kt/150kt
+      // hints from the route distance) or proceed with 0 for a snapshot-
+      // in-time briefing.
+      if (!duration || duration <= 0) {
+        const confirm = await confirmZeroDuration(waypoints);
+        if (!confirm.confirmed) return;
+        duration = confirm.duration;
+        const durationInput = document.getElementById('input-duration') as HTMLInputElement;
+        if (durationInput) durationInput.value = String(duration);
+      }
 
       try {
         const flight = await store.getState().createFlight(waypoints, targetDate, {
