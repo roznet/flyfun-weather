@@ -135,7 +135,7 @@ _FLIGHT_ID_COL_LIMIT = 256
 def _clip_flight_id(flight_id: str, max_len: int = _FLIGHT_ID_COL_LIMIT) -> str:
     if len(flight_id) <= max_len:
         return flight_id
-    digest = hashlib.sha1(flight_id.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha1(flight_id.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
     prefix = flight_id[: max_len - 9]
     logger.warning(
         "flight_id length %d exceeds %d, clipping to %s-%s",

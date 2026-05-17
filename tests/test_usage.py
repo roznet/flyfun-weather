@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from weatherbrief.api.app import create_app
 from weatherbrief.api.usage import (
     DAILY_LIMITS,
+    _clip_flight_id,
     check_rate_limits,
     check_service_limits,
     get_usage_summary,
@@ -73,6 +74,43 @@ def client(app_db, tmp_path, monkeypatch):
     app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
 
     return TestClient(app, raise_server_exceptions=False)
+
+
+class TestClipFlightId:
+    """Defense-in-depth guard for over-length flight_ids (column is VARCHAR(256))."""
+
+    def test_short_unchanged(self):
+        fid = "LFPG-EGLL-EDDF"
+        assert _clip_flight_id(fid) == fid
+
+    def test_real_119_char_route_unchanged(self):
+        fid = (
+            "lfrq_namar_sable_luman_kovak_domod_gilux_motal_oskin_kutan_balmu_"
+            "rlp_epl_oborn_str_lupen_sul_reutl_edds-2026-05-18-a0c1"
+        )
+        assert len(fid) == 119
+        assert _clip_flight_id(fid) == fid
+
+    def test_exactly_256_unchanged(self):
+        fid = "A" * 256
+        assert _clip_flight_id(fid) == fid
+
+    def test_over_limit_clips_to_256_with_hash(self):
+        fid = "A" * 302
+        clipped = _clip_flight_id(fid)
+        assert len(clipped) == 256
+        # Last 9 chars = "-" + 8 hex digits
+        assert clipped[-9] == "-"
+        assert all(c in "0123456789abcdef" for c in clipped[-8:])
+
+    def test_clip_is_deterministic(self):
+        fid = "B" * 400
+        assert _clip_flight_id(fid) == _clip_flight_id(fid)
+
+    def test_distinct_inputs_get_distinct_hashes(self):
+        a = "C" * 300
+        b = "C" * 299 + "D"
+        assert _clip_flight_id(a) != _clip_flight_id(b)
 
 
 class TestLogBriefingUsage:
