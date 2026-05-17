@@ -416,6 +416,68 @@ def test_parallel_dispatch_error_propagation(monkeypatch):
     assert grib_pkg._DECODE_POOL is not None
 
 
+def test_worker_registry_captures_vanished_pid_exitcode(monkeypatch, caplog):
+    """Registry holds Process refs after the pool drops dead workers, so the
+    hang diag can log ``exitcode`` (negative = signal that killed the worker).
+
+    This is the missing signal in prod hangs where ``pool._processes`` is
+    empty by the time the timeout fires — without our own reference we'd
+    lose the exit status entirely.
+    """
+    import logging
+    from weatherbrief.fetch.grib import _diag_snapshot_vanished_workers
+
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "1")
+    shutdown_decode_pool()
+    assert _dispatch_decode("_test_echo", "warm") == "warm"
+    pool = grib_pkg._DECODE_POOL
+    assert pool is not None
+    # Capture the warm worker's PID before we crash it. The dispatch above
+    # also triggered _diag_register_workers, so the registry holds the ref.
+    warm_pid = _dispatch_decode("_test_pid")
+    assert warm_pid in grib_pkg._DECODE_WORKER_REGISTRY
+
+    # Crash the worker via SIGKILL — exitcode becomes -9.
+    with pytest.raises((BrokenProcessPool, OSError)):
+        _dispatch_decode("_test_crash")
+
+    # Pool was torn down; the manager joined the dead worker and dropped it
+    # from _processes. Our registry should still have the Process ref.
+    proc = grib_pkg._DECODE_WORKER_REGISTRY.get(warm_pid)
+    assert proc is not None, "registry must retain Process ref after pool teardown"
+
+    # Call the snapshot helper directly with no live pool. The vanished-
+    # worker branch should log the SIGKILL exit code.
+    caplog.set_level(logging.ERROR, logger="weatherbrief.fetch.grib")
+    _diag_snapshot_vanished_workers(pool=None, current_pids=[])
+    matching = [
+        rec for rec in caplog.records
+        if f"vanished-worker pid={warm_pid}" in rec.getMessage()
+    ]
+    assert matching, f"no vanished-worker log line for pid={warm_pid}"
+    msg = matching[0].getMessage()
+    assert "exitcode=-9" in msg, f"expected exitcode=-9 in: {msg}"
+    assert "SIGKILL" in msg, f"expected SIGKILL signal name in: {msg}"
+
+
+def test_worker_registry_cleared_on_pool_reset(monkeypatch):
+    """A fresh pool starts with an empty worker registry — otherwise stale
+    PIDs from the previous lifetime would falsely appear as 'vanished' in
+    the next hang diag."""
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "1")
+    shutdown_decode_pool()
+    assert _dispatch_decode("_test_echo", "warm") == "warm"
+    assert grib_pkg._DECODE_WORKER_REGISTRY, "first dispatch should register a worker"
+
+    shutdown_decode_pool()
+    # Force a fresh pool creation; _diag_reset_pool_counters clears the registry.
+    _get_decode_pool()
+    assert grib_pkg._DECODE_WORKER_REGISTRY == {}, (
+        "registry must be empty after pool recreation; "
+        f"saw {grib_pkg._DECODE_WORKER_REGISTRY}"
+    )
+
+
 def test_parallel_dispatch_timeout_resets_pool(monkeypatch):
     """A hung worker in a parallel batch trips ``GRIB_DECODE_TIMEOUT_S``,
     tears down the pool with ``wait=False``, and re-raises ``TimeoutError``.

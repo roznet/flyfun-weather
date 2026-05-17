@@ -243,12 +243,40 @@ _DECODE_POOL_INIT_TIME: float | None = None
 _DECODE_TASKS_DISPATCHED: int = 0
 _DECODE_DIAG_LOCK = threading.Lock()
 
+# PID → Process refs we've observed in the current pool. ProcessPoolExecutor's
+# manager removes entries from ``_processes`` once it has joined a dead worker,
+# losing the only handle that still carries the worker's exit status. Keeping
+# our own reference lets ``_diag_snapshot_workers`` read ``Process.exitcode``
+# (negative = killed by signal -N) for workers that have vanished from the
+# pool — the missing signal in the workers=[] hang pattern observed in prod.
+_DECODE_WORKER_REGISTRY: dict[int, multiprocessing.Process] = {}
+
 
 def _diag_reset_pool_counters() -> None:
     global _DECODE_POOL_INIT_TIME, _DECODE_TASKS_DISPATCHED
     with _DECODE_DIAG_LOCK:
         _DECODE_POOL_INIT_TIME = _time_mod.time()
         _DECODE_TASKS_DISPATCHED = 0
+        _DECODE_WORKER_REGISTRY.clear()
+
+
+def _diag_register_workers(pool: ProcessPoolExecutor | None) -> None:
+    """Snapshot ``pool._processes`` into ``_DECODE_WORKER_REGISTRY``.
+
+    Called opportunistically from each dispatch — cheap dict copy + setdefault.
+    The first-seen ``Process`` object for a given PID wins, so if the pool
+    recycles via ``max_tasks_per_child`` we still hold the original handle and
+    can read its final ``exitcode``.
+    """
+    if pool is None:
+        return
+    try:
+        procs = dict(getattr(pool, "_processes", {}))
+    except Exception:
+        return
+    with _DECODE_DIAG_LOCK:
+        for pid, proc in procs.items():
+            _DECODE_WORKER_REGISTRY.setdefault(pid, proc)
 
 
 def _diag_record_dispatch(n: int = 1) -> int:
@@ -404,6 +432,12 @@ def _diag_snapshot_workers(
     # at the file level).
     _diag_snapshot_pool_internals(pool)
 
+    # Vanished workers (I): PIDs we've observed in this pool but the manager
+    # has since dropped from ``_processes``. ``Process.exitcode`` encodes how
+    # the worker died — negative values are signals (-11=SIGSEGV, -9=SIGKILL,
+    # -6=SIGABRT). This is the missing piece in the workers=[] hang pattern.
+    _diag_snapshot_vanished_workers(pool, worker_pids)
+
     # Let the SIGUSR1 stack dumps land in container logs before the pool
     # shutdown closes worker stdout. 1 s is plenty for faulthandler write.
     try:
@@ -517,6 +551,71 @@ def _diag_snapshot_memory() -> None:
         except OSError:
             # Silent: most paths won't exist on a given kernel/cgroup version.
             pass
+
+
+def _diag_snapshot_vanished_workers(
+    pool: ProcessPoolExecutor | None,
+    current_pids: list[int],
+) -> None:
+    """Log exit status of workers that vanished from the pool.
+
+    Reads ``Process.exitcode`` for every PID in ``_DECODE_WORKER_REGISTRY``
+    that isn't currently listed in ``pool._processes``. Exit codes:
+
+    * ``None`` — never started or not yet reaped (unexpected here; the manager
+      thread joins dead workers before dropping them).
+    * ``0`` — clean exit (e.g. retired by ``max_tasks_per_child``).
+    * ``N > 0`` — ``sys.exit(N)`` from the worker.
+    * ``N < 0`` — killed by signal ``-N``. SIGSEGV/SIGABRT in a worker
+      indicates a native crash in cfgrib/ECCODES; SIGKILL indicates an
+      external kill (cgroup OOM, ``docker kill``).
+    """
+    current = set(current_pids)
+    with _DECODE_DIAG_LOCK:
+        # Take snapshot under the lock; release before doing per-pid I/O so we
+        # don't block dispatch threads waiting on /proc reads.
+        registry_snapshot = list(_DECODE_WORKER_REGISTRY.items())
+
+    if not registry_snapshot:
+        logger.error(
+            "GRIB hang diag vanished-workers: registry empty "
+            "(no dispatch has registered workers yet)",
+        )
+        return
+
+    vanished = [(pid, proc) for pid, proc in registry_snapshot if pid not in current]
+    if not vanished:
+        logger.error(
+            "GRIB hang diag vanished-workers: none (all %d tracked PIDs still in pool)",
+            len(registry_snapshot),
+        )
+        return
+
+    for pid, proc in vanished:
+        try:
+            ec = proc.exitcode
+        except Exception as e:
+            logger.error(
+                "GRIB hang diag vanished-worker pid=%d: exitcode read failed (%s)",
+                pid, e,
+            )
+            continue
+        signame = ""
+        if isinstance(ec, int) and ec < 0:
+            try:
+                signame = f" signal={signal.Signals(-ec).name}"
+            except (ValueError, AttributeError):
+                signame = f" signal=#{-ec}"
+        try:
+            alive = proc.is_alive()
+        except Exception:
+            alive = "?"
+        proc_exists = Path(f"/proc/{pid}").exists()
+        logger.error(
+            "GRIB hang diag vanished-worker pid=%d exitcode=%s%s "
+            "is_alive=%s /proc/%d exists=%s",
+            pid, ec, signame, alive, pid, proc_exists,
+        )
 
 
 def _diag_snapshot_pool_internals(pool: ProcessPoolExecutor | None) -> None:
@@ -731,6 +830,7 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
     try:
         future = pool.submit(fn, *args)
         _diag_record_dispatch(1)
+        _diag_register_workers(pool)
         return future.result(timeout=timeout)
     except BrokenProcessPool:
         logger.error(
@@ -794,6 +894,7 @@ def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
             for name, args in jobs
         ]
         _diag_record_dispatch(len(jobs))
+        _diag_register_workers(pool)
         for i, fut in enumerate(futures):
             remaining = max(0.0, deadline - _time_mod.perf_counter())
             results[i] = fut.result(timeout=remaining)
