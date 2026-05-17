@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -126,6 +127,23 @@ def check_service_limits(db: Session, user_id: str) -> dict[str, bool]:
     }
 
 
+# briefing_usage.flight_id is VARCHAR(256); leave room for "-" + 8 hex chars
+# so an over-length value still produces a unique, deterministic key.
+_FLIGHT_ID_COL_LIMIT = 256
+
+
+def _clip_flight_id(flight_id: str, max_len: int = _FLIGHT_ID_COL_LIMIT) -> str:
+    if len(flight_id) <= max_len:
+        return flight_id
+    digest = hashlib.sha1(flight_id.encode("utf-8")).hexdigest()[:8]
+    prefix = flight_id[: max_len - 9]
+    logger.warning(
+        "flight_id length %d exceeds %d, clipping to %s-%s",
+        len(flight_id), max_len, prefix, digest,
+    )
+    return f"{prefix}-{digest}"
+
+
 def log_briefing_usage(
     db: Session,
     user_id: str,
@@ -135,6 +153,7 @@ def log_briefing_usage(
     result_size_bytes: int | None = None,
 ) -> int:
     """Insert a BriefingUsageRow after a briefing refresh. Returns the row id."""
+    flight_id = _clip_flight_id(flight_id)
     row = BriefingUsageRow(
         user_id=user_id,
         flight_id=flight_id,
