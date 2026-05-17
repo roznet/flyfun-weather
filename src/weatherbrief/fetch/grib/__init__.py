@@ -710,21 +710,25 @@ def _decode_pool_workers() -> int:
 
 
 def _decode_pool_max_tasks_per_child() -> int | None:
-    """Worker recycle threshold; ``None`` disables recycling.
+    """Worker recycle threshold; ``None`` disables recycling (default).
 
-    cfgrib/ECCODES allocate native memory that Python GC cannot reclaim;
-    recycling caps cumulative growth across many decodes (e.g. the standalone
-    ECMWF fetch dispatches ~50 decodes per run). 0 or negative means disabled.
+    Disabled by default after a 2026-05-17 prod incident: with 2 workers and
+    ``max_tasks_per_child=50``, both workers retire near-simultaneously around
+    task ~100 and ``ProcessPoolExecutor`` fails to spawn replacements while
+    pending work sits in ``_call_queue`` (CPython recycle race). Hang diag
+    confirmed vanished workers exited with ``exitcode=0`` — clean retire, not
+    a native crash. Set ``GRIB_DECODE_MAX_TASKS_PER_CHILD=<N>`` to re-enable
+    if cfgrib/ECCODES native-memory growth becomes a problem again.
     """
-    raw = os.environ.get("GRIB_DECODE_MAX_TASKS_PER_CHILD", "50").strip()
+    raw = os.environ.get("GRIB_DECODE_MAX_TASKS_PER_CHILD", "0").strip()
     try:
         v = int(raw)
         return v if v > 0 else None
     except ValueError:
         logger.warning(
-            "Invalid GRIB_DECODE_MAX_TASKS_PER_CHILD=%r, defaulting to 50", raw,
+            "Invalid GRIB_DECODE_MAX_TASKS_PER_CHILD=%r, disabling recycling", raw,
         )
-        return 50
+        return None
 
 
 def _decode_timeout_s() -> float:

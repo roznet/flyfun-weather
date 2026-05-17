@@ -257,11 +257,12 @@ def test_concurrent_thread_dispatch(monkeypatch):
 
 
 def test_max_tasks_per_child_default(monkeypatch):
-    """Default of 50 keeps cfgrib/ECCODES native memory bounded across long
-    runs (issue #134) — ECMWF standalone fetch dispatches ~50 decodes per run,
-    so workers turn over roughly once per cycle."""
+    """Recycling is disabled by default — the 2026-05-17 incident showed the
+    CPython recycle race causes the pool to hang when both workers retire
+    near-simultaneously at the cap. Re-enable via env var only if cfgrib
+    native-memory growth becomes a problem again."""
     monkeypatch.delenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", raising=False)
-    assert _decode_pool_max_tasks_per_child() == 50
+    assert _decode_pool_max_tasks_per_child() is None
 
 
 def test_max_tasks_per_child_override(monkeypatch):
@@ -270,9 +271,8 @@ def test_max_tasks_per_child_override(monkeypatch):
 
 
 def test_max_tasks_per_child_disabled_via_zero(monkeypatch):
-    """Zero (or negative) disables recycling — escape hatch for debugging
-    or for environments where worker spawn overhead matters more than
-    bounding native memory."""
+    """Zero (or negative) explicitly disables recycling — same behaviour as
+    the default but expressed via env var."""
     monkeypatch.setenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", "0")
     assert _decode_pool_max_tasks_per_child() is None
     monkeypatch.setenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", "-1")
@@ -281,7 +281,7 @@ def test_max_tasks_per_child_disabled_via_zero(monkeypatch):
 
 def test_max_tasks_per_child_invalid_falls_back(monkeypatch):
     monkeypatch.setenv("GRIB_DECODE_MAX_TASKS_PER_CHILD", "not_a_number")
-    assert _decode_pool_max_tasks_per_child() == 50
+    assert _decode_pool_max_tasks_per_child() is None
 
 
 def test_pool_recycles_workers_after_max_tasks(monkeypatch):
