@@ -1312,9 +1312,9 @@ class TestInterpretRoute:
 
     @patch("weatherbrief.airports._load_airport_model")
     def test_off_route_coordinate_rejected_by_detour_gate(self, mock_load, client):
-        """A coord too far off the direct route gets rejected by the same
-        detour gate that catches misresolved navaids. Surfaces in `skipped`
-        like any other late-stage rejection."""
+        """A coord too far off the direct route gets rejected by the
+        detour gate. Surfaces in ``off_route`` (recognised but not on
+        this route), distinct from ``skipped`` (unknown/typo)."""
         mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
 
@@ -1324,4 +1324,31 @@ class TestInterpretRoute:
         assert resp.status_code == 200
         data = resp.json()
         assert data["interpreted"] == ["EGBJ", "LFOV"]
-        assert data["skipped"] == ["4629N01541E"]
+        assert data["off_route"] == ["4629N01541E"]
+        assert data["skipped"] == []
+
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_round_trip_middle_waypoint_off_route(self, mock_load, client):
+        """Round-trip routes (dep == dest) trigger an upstream euro_aip
+        bug: the detour gate sees ``leg_nm = 0`` and rejects every middle
+        waypoint as a detour, even recognised airports. The UI must
+        surface those as ``off_route`` (so pilots see "too far from
+        direct leg") rather than ``skipped`` ("not recognized") — the
+        airport *was* recognised, the geometry just collapsed.
+
+        Tracked upstream as roznet/rzflight#8. Once the euro_aip fix
+        lands, EGTK will move to ``interpreted`` and this test should
+        be updated to assert the clean-resolve path.
+        """
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        resp = self._post(client, "EGBJ EGTK EGBJ")
+        assert resp.status_code == 200
+        data = resp.json()
+        # EGTK is recognised but rejected by the degenerate detour gate;
+        # only dep/dest survive. Either way, EGTK must NOT appear in
+        # ``skipped`` — that would mislead the pilot.
+        assert "EGTK" not in data["skipped"]
+        assert data["skipped"] == []
+        assert data["off_route"] == ["EGTK"]

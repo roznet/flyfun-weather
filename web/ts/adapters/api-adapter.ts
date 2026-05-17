@@ -258,7 +258,10 @@ export async function fetchAutorouterRoutes(limit = 25): Promise<AutorouterRoute
 export interface InterpretRouteResponse {
   original_tokens: string[];
   interpreted: string[];
+  /** Tokens we couldn't place on the map: typos or DB-context misses. */
   skipped: string[];
+  /** Tokens recognised but rejected as too far off the direct leg. */
+  off_route: string[];
   waypoints: WaypointInfo[];
 }
 

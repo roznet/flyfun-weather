@@ -55,8 +55,11 @@ export async function interpretAndConfirmRoute(
     return null;
   }
 
-  // Clean route — accept silently
-  if (resp.skipped.length === 0) {
+  // Clean route — accept silently. Both `skipped` (unknown) and
+  // `off_route` (recognised but detour-rejected) must be empty: each
+  // signals a waypoint the pilot typed but the resolver dropped, and the
+  // pilot deserves to see why before we commit the flight.
+  if (resp.skipped.length === 0 && resp.off_route.length === 0) {
     return { waypoints: resp.interpreted, confirmed: true };
   }
 
@@ -165,6 +168,17 @@ function showRouteConfirmPopup(
           <span>${resp.skipped.map(s => `<code>${escapeHtml(s)}</code>`).join(', ')}</span>
         </div>`
       : '';
+    // Detour-rejected waypoints are real, recognised points — they were
+    // just too far off the dep→dest leg to belong on this route. Render
+    // in a neutral info color (not amber) so the pilot reads it as
+    // "didn't fit here", not "I don't know this".
+    const offRouteRow = resp.off_route.length > 0
+      ? `
+        <div style="margin-bottom:0.5rem;color:var(--text-muted,#64748b);">
+          <span class="info-label">Off route (too far from direct leg):</span>
+          <span>${resp.off_route.map(s => `<code>${escapeHtml(s)}</code>`).join(', ')}</span>
+        </div>`
+      : '';
     // Hide the "Route entered" row when the raw input is just the
     // resolved waypoints (no DCT/airways/etc) — saves a redundant line
     // when showRoutePopup is opened on a flight without a stored
@@ -215,6 +229,7 @@ function showRouteConfirmPopup(
           <span>${interpretedHtml}</span>
         </div>
         ${skippedRow}
+        ${offRouteRow}
         ${mapBlock}
       </div>
       <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">

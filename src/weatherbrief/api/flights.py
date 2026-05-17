@@ -700,6 +700,11 @@ class InterpretRouteResponse(BaseModel):
     # labels/speed-level) is silently dropped — those are expected and a
     # "not recognized" label on them confuses pilots.
     skipped: list[str] = []
+    # Tokens the resolver recognised but rejected as too far off the direct
+    # leg (detour filter). Kept separate from ``skipped`` so the UI can tell
+    # pilots *why* a waypoint was dropped — "not on this route" reads very
+    # differently from "I don't know this airport."
+    off_route: list[str] = []
     waypoints: list[WaypointInfo] = []  # resolved waypoint details
 
 
@@ -719,11 +724,17 @@ def interpret_route(
       3. ``resolve_waypoints`` does the authoritative pass with route
          context, returning a survivors list plus reason-tagged rejects.
 
-    Only tokens we couldn't place on the map (UNKNOWN + late-stage
-    resolver rejections) reach ``skipped``. Pure Field-15 syntax
-    (DCT, IFR/VFR, airway labels, speed/level groups) is silently
-    dropped — surfacing it as "not recognized" misleads pilots into
-    thinking they typed something wrong.
+    Rejection routing:
+      - ``skipped`` — tokens we couldn't place at all: UNKNOWN parser
+        tokens (typos) and late-stage resolver misses with reason
+        ``unknown``. Surfaced to the pilot as "not recognized".
+      - ``off_route`` — tokens the resolver placed but rejected as too
+        far off the direct leg (resolver reason ``detour``). Surfaced
+        separately so pilots see *why* the waypoint was dropped.
+
+    Pure Field-15 syntax (DCT, IFR/VFR, airway labels, speed/level
+    groups) is silently dropped — surfacing it as "not recognized"
+    misleads pilots into thinking they typed something wrong.
     """
     from euro_aip.models.field15 import parse_field15, TokenKind
 
@@ -747,6 +758,7 @@ def interpret_route(
 
     candidate_waypoints: list[str] = []
     skipped: list[str] = []
+    off_route: list[str] = []
     for t in tokens:
         if t.kind in (TokenKind.WAYPOINT, TokenKind.COORDINATE):
             # COORDINATE tokens (e.g. 4629N01541E) are real route points —
@@ -784,11 +796,21 @@ def interpret_route(
             )
         else:
             if rejected:
-                rej_set = {r.name.upper() for r in rejected}
-                # Move late-rejected tokens (detour or unknown-under-context)
-                # to skipped.
+                # Split late-stage rejections by reason so the UI can label
+                # them distinctly. ``detour`` = recognised airport/fix that
+                # would force a large deviation from the direct leg;
+                # ``unknown`` = could not be placed at all under route context.
+                detour_set = {
+                    r.name.upper() for r in rejected if r.reason == "detour"
+                }
+                unknown_set = {
+                    r.name.upper() for r in rejected if r.reason == "unknown"
+                }
+                off_route.extend(
+                    c for c in candidate_waypoints if c.upper() in detour_set
+                )
                 skipped.extend(
-                    c for c in candidate_waypoints if c.upper() in rej_set
+                    c for c in candidate_waypoints if c.upper() in unknown_set
                 )
             # Always rebuild from the resolver so ``interpreted`` stays in
             # lock-step with ``waypoint_infos`` (same order, same casing).
@@ -808,6 +830,7 @@ def interpret_route(
         original_tokens=original_tokens,
         interpreted=interpreted,
         skipped=skipped,
+        off_route=off_route,
         waypoints=waypoint_infos,
     )
 
