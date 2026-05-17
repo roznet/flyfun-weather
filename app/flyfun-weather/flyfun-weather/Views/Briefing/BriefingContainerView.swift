@@ -58,6 +58,9 @@ struct BriefingContainerView: View {
         }
         .task {
             guard let repo = appState.repository else { return }
+            // Pick up server-side flag changes (e.g. pirep_can_publish)
+            // before the toolbar decides whether to show the PIREP button.
+            await appState.refreshUserPreferences()
             // Cache flight data for offline recovery
             if let caching = repo as? CachingBriefingRepository {
                 await caching.cacheFlightData(flight)
