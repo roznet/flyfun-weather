@@ -251,7 +251,7 @@ class BriefingUsageRow(Base):
     user_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    flight_id: Mapped[str] = mapped_column(String(100), default="")
+    flight_id: Mapped[str] = mapped_column(String(256), default="")
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
