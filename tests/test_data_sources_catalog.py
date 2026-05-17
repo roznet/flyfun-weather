@@ -130,9 +130,14 @@ class TestDynamicFields:
 
     def test_bootstrapped_store_populates_dynamic_fields(self, bootstrapped_store):
         # ``Marker.is_stale`` compares ``last_check`` against the real
-        # ``datetime.now()`` — pass a generous loop interval so this test
-        # is robust to wallclock drift between bootstrap and the assertion.
-        entries = catalog.build(store=bootstrapped_store, loop_interval_s=86400)
+        # ``datetime.now()`` — the fixture pins ``last_check`` to a fixed
+        # historical wallclock (2026-05-11) so other tests can assert
+        # cycle-relative state. This test only checks that bootstrap
+        # populated the dynamic fields and ``marker_health == "ok"``; the
+        # staleness check is exercised elsewhere. Use a loop interval large
+        # enough that the fixture's fixed wallclock can never drift past
+        # ``2 × loop_interval`` for the lifetime of this codebase.
+        entries = catalog.build(store=bootstrapped_store, loop_interval_s=86400 * 36500)
         for e in entries:
             assert e.latest_init is not None
             assert e.next_expected is not None
