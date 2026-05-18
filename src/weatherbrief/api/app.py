@@ -325,6 +325,7 @@ def create_app() -> FastAPI:
     # Log Pydantic request-validation failures so 422s are diagnosable.
     # FastAPI's default returns the detail to the client but logs nothing;
     # that left iOS create-flight failures (and other 422s) opaque server-side.
+    from fastapi.encoders import jsonable_encoder
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
     from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -344,9 +345,14 @@ def create_app() -> FastAPI:
             exc.errors(),
             body,
         )
+        # Use jsonable_encoder — pydantic v2 puts the raw exception object
+        # in ctx.error for custom validators (``raise ValueError(...)``),
+        # which the default json encoder can't serialise. Without this
+        # the response serialisation throws and Starlette turns it into
+        # a 500, which is exactly what this handler exists to prevent.
         return JSONResponse(
             status_code=422,
-            content={"detail": exc.errors()},
+            content={"detail": jsonable_encoder(exc.errors())},
         )
 
     @app.exception_handler(StarletteHTTPException)
