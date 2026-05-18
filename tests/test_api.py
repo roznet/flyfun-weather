@@ -1328,17 +1328,17 @@ class TestInterpretRoute:
         assert data["skipped"] == []
 
     @patch("weatherbrief.airports._load_airport_model")
-    def test_round_trip_middle_waypoint_off_route(self, mock_load, client):
-        """Round-trip routes (dep == dest) trigger an upstream euro_aip
-        bug: the detour gate sees ``leg_nm = 0`` and rejects every middle
-        waypoint as a detour, even recognised airports. The UI must
-        surface those as ``off_route`` (so pilots see "too far from
-        direct leg") rather than ``skipped`` ("not recognized") — the
-        airport *was* recognised, the geometry just collapsed.
+    def test_round_trip_middle_waypoint_resolves_cleanly(self, mock_load, client):
+        """Round-trip routes (dep == dest) used to trigger an upstream
+        euro_aip bug: the detour gate saw ``leg_nm = 0`` and rejected
+        every middle waypoint as off-route, even recognised airports.
+        The upstream fix (roznet/rzflight#8) has landed, so a recognised
+        middle airport on a round-trip now resolves cleanly into
+        ``interpreted`` instead of being surfaced as ``off_route``.
 
-        Tracked upstream as roznet/rzflight#8. Once the euro_aip fix
-        lands, EGTK will move to ``interpreted`` and this test should
-        be updated to assert the clean-resolve path.
+        Guards against the bug regressing — if euro_aip's detour gate
+        starts rejecting zero-leg waypoints again, EGTK would drop out
+        of ``interpreted`` and this test would catch it.
         """
         mock_load.return_value = mock_model(TEST_AIRPORTS)
         client.app.state.db_path = "/fake/db"
@@ -1346,9 +1346,10 @@ class TestInterpretRoute:
         resp = self._post(client, "EGBJ EGTK EGBJ")
         assert resp.status_code == 200
         data = resp.json()
-        # EGTK is recognised but rejected by the degenerate detour gate;
-        # only dep/dest survive. Either way, EGTK must NOT appear in
-        # ``skipped`` — that would mislead the pilot.
-        assert "EGTK" not in data["skipped"]
+        # EGTK is now recognised and kept in the interpreted route.
+        assert data["interpreted"] == ["EGBJ", "EGTK", "EGBJ"]
+        assert data["off_route"] == []
         assert data["skipped"] == []
-        assert data["off_route"] == ["EGTK"]
+        # All three positions resolve to real coordinates.
+        icaos = [w["icao"] for w in data["waypoints"]]
+        assert icaos == ["EGBJ", "EGTK", "EGBJ"]
