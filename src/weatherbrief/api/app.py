@@ -322,6 +322,52 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
+    # Log Pydantic request-validation failures so 422s are diagnosable.
+    # FastAPI's default returns the detail to the client but logs nothing;
+    # that left iOS create-flight failures (and other 422s) opaque server-side.
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    _validation_logger = logging.getLogger("weatherbrief.api.validation")
+
+    @app.exception_handler(RequestValidationError)
+    async def _log_validation_error(request: Request, exc: RequestValidationError):
+        try:
+            body = exc.body
+        except Exception:
+            body = None
+        _validation_logger.warning(
+            "422 validation error path=%s method=%s errors=%s body=%r",
+            request.url.path,
+            request.method,
+            exc.errors(),
+            body,
+        )
+        return JSONResponse(
+            status_code=422,
+            content={"detail": exc.errors()},
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _log_http_exception(request: Request, exc: StarletteHTTPException):
+        # Surface 422s raised inside endpoint bodies (e.g. waypoint resolver
+        # rejections in flights.create_flight) so they show up alongside the
+        # Pydantic validation log line above. Other status codes pass through
+        # silently to keep the noise floor down.
+        if exc.status_code == 422:
+            _validation_logger.warning(
+                "422 endpoint error path=%s method=%s detail=%r",
+                request.url.path,
+                request.method,
+                exc.detail,
+            )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=getattr(exc, "headers", None),
+        )
+
     # Weather-specific /auth/me (adds is_admin, setup_completed) — must be
     # registered BEFORE common's auth router so it takes priority.
     from fastapi import Depends
