@@ -106,7 +106,8 @@ class MountainWindEvaluator:
                 total += 1
 
                 wind = wind_at_altitude(
-                    ctx.cross_sections, model, rpa.point_index, terrain_ft + altitude_margin
+                    ctx.cross_sections, model, rpa.point_index,
+                    terrain_ft + altitude_margin, rpa.forecast_hour,
                 )
                 if wind is None:
                     continue

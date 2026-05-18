@@ -132,14 +132,26 @@ async function init(): Promise<void> {
   }
 
   // --- Helper to render point-dependent sections ---
+  /** Compute the effective cruise altitude relative to the manifest's
+   *  baked value. Returns the altitude only when it actually differs
+   *  from the manifest (i.e. either the user is probing an override or
+   *  the flight was edited post-pack); returns null otherwise so
+   *  downstream renderers respect server-computed values
+   *  (cruise_in_icing) instead of re-deriving them. */
+  function getEffectiveCruiseOverride(state: BriefingState): number | null {
+    const manifestAlt = state.routeAnalyses?.cruise_altitude_ft ?? null;
+    const raw = state.advisoryAltitudeOverride
+      ?? state.flight?.cruise_altitude_ft
+      ?? null;
+    if (raw === null || raw === manifestAlt) return null;
+    return raw;
+  }
+
   function renderPointSections(state: BriefingState): void {
     // Show the Skew-T section wrapper once we have route data
     const skewtWrapper = document.querySelector('[data-section="skewt"]') as HTMLElement | null;
     if (skewtWrapper) skewtWrapper.style.display = state.routeAnalyses ? '' : 'none';
-    const effectiveCruiseAlt =
-      state.advisoryAltitudeOverride
-      ?? state.flight?.cruise_altitude_ft
-      ?? null;
+    const effectiveCruiseAlt = getEffectiveCruiseOverride(state);
     ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers, effectiveCruiseAlt);
     // Dynamic Skew-T (canvas), compare, or static MetPy
     if (skewtViewMode === 'dynamic') {
@@ -546,10 +558,7 @@ async function init(): Promise<void> {
 
     const extractOpts = {
       windOverlay: state.windOverlay,
-      effectiveCruiseAltitudeFt:
-        state.advisoryAltitudeOverride
-        ?? state.flight?.cruise_altitude_ft
-        ?? null,
+      effectiveCruiseAltitudeFt: getEffectiveCruiseOverride(state),
     };
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
     const unavailable = getUnavailableLayers(data);
