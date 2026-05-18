@@ -359,6 +359,7 @@ def cmd_rollup_summary(args):
     from flyfun_common.db import SessionLocal
 
     from weatherbrief.tasks.airport_summary import (
+        rebuild_all_days,
         rollup_all_complete_days,
         rollup_all_complete_months,
         rollup_day,
@@ -370,6 +371,15 @@ def cmd_rollup_summary(args):
 
     db = SessionLocal()
     try:
+        if args.rebuild:
+            # Used at deploy time after a migration that adds a column to
+            # airport_daily_summary (e.g. migration 057's n_category_changes):
+            # existing rows keep the column default until re-rolled.
+            n = rebuild_all_days(db)
+            db.commit()
+            print(f"Re-rolled {n} existing airport-days.")
+            return
+
         if args.all or (not args.month and not args.day):
             n_months = rollup_all_complete_months(db)
             n_days = rollup_all_complete_days(db)
@@ -581,6 +591,15 @@ def main():
     p_rollup_summary.add_argument(
         "--all", action="store_true",
         help="Roll up every completed period for both monthly and daily tables.",
+    )
+    p_rollup_summary.add_argument(
+        "--rebuild", action="store_true",
+        help=(
+            "Re-roll every existing airport-day from raw (idempotent "
+            "DELETE+INSERT). Use after a migration that adds a new "
+            "airport_daily_summary column — existing rows keep the default "
+            "until re-rolled. Mutually exclusive with --all/--month/--day."
+        ),
     )
 
     # rollup-daily-stats

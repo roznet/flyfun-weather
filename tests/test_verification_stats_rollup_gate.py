@@ -345,3 +345,28 @@ class TestValidationGate:
         assert len(data.category_bias) > 0
         # Wind advisory rows present
         assert len(data.wind_advisory) > 0
+
+    def test_source_string_must_match_exactly(self, db_session):
+        """Production calls pass source='standalone'; our synthetic fixture
+        uses 'standalone_full'. Querying with the wrong string must return
+        empty — guards against future code that maps source strings (e.g.
+        treats 'standalone_full' and 'standalone' as the same group) from
+        silently merging buckets.
+        """
+        _build_dataset(db_session, date(2026, 4, 1), days=7)
+        rollup_all_complete_days(db_session)
+
+        since = _utc(2026, 4, 1, 0)
+        until = _utc(2026, 4, 7, 23)
+        # Wrong source — different from the fixture's _SOURCE
+        wrong = get_digest_data(
+            db_session, since, until,
+            source="standalone", period_label="x", include_7d=False,
+        )
+        assert len(wrong.category_accuracy_today) == 0
+        assert len(wrong.category_bias) == 0
+        # NWP wind advisory rows must be empty too. TAF may still appear if
+        # the fixture stored TAF rows with source='standalone' — our fixture
+        # doesn't, but assert specifically against NWP models to be precise.
+        nwp_wind = [w for w in wrong.wind_advisory if w.model != "TAF"]
+        assert len(nwp_wind) == 0

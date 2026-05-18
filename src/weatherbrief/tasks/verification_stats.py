@@ -64,12 +64,14 @@ def _icao_clause(col, icao_filter: list[str] | None):
 
 
 def _date_range(since: datetime, until: datetime) -> tuple[date_t, date_t]:
-    """Convert datetime range to inclusive date range for rollup queries.
+    """Convert datetime range to inclusive UTC date range for rollup queries.
 
-    The rollup is keyed by UTC ``date``. A datetime ``since``/``until``
-    that spans partial days is widened to inclusive day boundaries —
-    same semantics as the existing raw queries which match on
-    ``observation_time BETWEEN since AND until``.
+    The rollup is keyed by UTC ``date``, so a datetime range is widened to
+    inclusive whole-day boundaries: e.g. ``since=2026-05-11T14:32Z`` becomes
+    ``2026-05-11``, picking up that day's earlier observations. This widens
+    the result vs the old raw query (up to ~24h more at each edge) — chosen
+    deliberately so dashboard period buttons land on stable day-boundaries
+    instead of drifting with the request time.
     """
     s = since.date() if isinstance(since, datetime) else since
     u = until.date() if isinstance(until, datetime) else until
