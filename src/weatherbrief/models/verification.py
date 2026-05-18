@@ -103,17 +103,35 @@ class NotableMiss(BaseModel):
 
 
 class CategoryBiasStats(BaseModel):
-    """Per-model category bias breakdown: optimistic vs pessimistic miss rates."""
+    """Per-model category bias breakdown: optimistic vs pessimistic miss rates.
+
+    ``_2`` buckets are "2 or more levels off", collapsing the rare 3-step
+    case (VFR↔LIFR) into the 2-step bucket. This matches the storage shape
+    of ``verification_daily_stats`` / ``verification_monthly_stats``.
+    """
 
     model: str
     days_out: int
     total_scores: int = 0
     optimistic_1: int = 0   # predicted better by 1 level
-    optimistic_2: int = 0   # predicted better by 2 levels
-    optimistic_3: int = 0   # predicted better by 3 levels
+    optimistic_2: int = 0   # predicted better by 2 or more levels
     pessimistic_1: int = 0  # predicted worse by 1 level
-    pessimistic_2: int = 0  # predicted worse by 2 levels
-    pessimistic_3: int = 0  # predicted worse by 3 levels
+    pessimistic_2: int = 0  # predicted worse by 2 or more levels
+
+
+class OptimisticBiasLeaderboardRow(BaseModel):
+    """One airport in the optimistic-bias leaderboard.
+
+    Score is the issue-#154 formula:
+        ``(n_cat_opt_1 + 2 * n_cat_opt_2) / n``
+    — bigger = model over-promises more at this airport.
+    """
+
+    icao: str
+    n: int
+    n_cat_opt_1: int
+    n_cat_opt_2: int
+    score: float
 
 
 class WindAdvisoryStats(BaseModel):

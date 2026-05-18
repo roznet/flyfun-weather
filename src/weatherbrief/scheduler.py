@@ -856,6 +856,33 @@ def _run_standalone_once(
         result["duration_ms"],
     )
 
+    # Roll up freshly-scored days into verification_daily_stats BEFORE the
+    # cache rebuild so the cache reflects today's scores. Idempotent — re-
+    # rolls "yesterday" once per cycle, plus any older missing days (first-
+    # deploy backfill of ~43 days). Cheap (~12K rows/day, pure SQL).
+    try:
+        from flyfun_common.db import SessionLocal
+        from weatherbrief.tasks.verification_daily_rollup import (
+            rollup_today_and_pending,
+        )
+
+        rollup_db = SessionLocal()
+        try:
+            n_rows = rollup_today_and_pending(rollup_db)
+            rollup_db.commit()
+            if n_rows:
+                logger.info(
+                    "Standalone %s cycle: %d daily-stats rows rolled up",
+                    result["cycle_type"], n_rows,
+                )
+        except Exception:
+            rollup_db.rollback()
+            raise
+        finally:
+            rollup_db.close()
+    except Exception:
+        logger.error("verification_daily_stats rollup failed", exc_info=True)
+
     # Rebuild dashboard + map caches after cycle completes. Light (score-only)
     # cycles don't touch forecast snapshots, so the forecast_map cache would be
     # regenerated to identical content — skip it to halve the rebuild cost on

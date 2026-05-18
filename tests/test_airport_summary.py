@@ -354,6 +354,58 @@ class TestRollupDay:
         r = db_session.execute(select(AirportDailySummaryRow)).scalar_one()
         assert r.n_obs == 1
 
+    def test_n_category_changes_populated(self, db_session):
+        # VFR → IFR → VFR within one UTC day = 2 transitions
+        for cat, h in [("VFR", 6), ("IFR", 9), ("VFR", 12)]:
+            db_session.add(_obs("LFPG", _utc(2026, 4, 5, h, 0), category=cat))
+        db_session.flush()
+
+        rollup_day(db_session, date(2026, 4, 5))
+        r = db_session.execute(select(AirportDailySummaryRow)).scalar_one()
+        assert r.n_category_changes == 2
+
+    def test_daily_n_category_changes_sum_matches_monthly(self, db_session):
+        # Volatility across a month, spread over multiple UTC days. Summed
+        # daily n_category_changes for one (icao, month) must equal the
+        # monthly category_changes for the same key.
+        events = [
+            # Apr 5: VFR→IFR→VFR  (2 transitions)
+            (date(2026, 4, 5), [("VFR", 6), ("IFR", 9), ("VFR", 12)]),
+            # Apr 6: VFR→MVFR     (1 transition)
+            (date(2026, 4, 6), [("VFR", 6), ("MVFR", 12)]),
+            # Apr 7: VFR only     (0 transitions)
+            (date(2026, 4, 7), [("VFR", 6), ("VFR", 12)]),
+            # Apr 8: IFR→VFR→IFR  (2 transitions)
+            (date(2026, 4, 8), [("IFR", 6), ("VFR", 9), ("IFR", 12)]),
+        ]
+        for d, slots in events:
+            for cat, h in slots:
+                db_session.add(_obs(
+                    "LFPG", _utc(d.year, d.month, d.day, h, 0), category=cat,
+                ))
+        db_session.flush()
+
+        # Daily rollups
+        for d, _ in events:
+            rollup_day(db_session, d)
+        daily_sum = sum(
+            r.n_category_changes for r in
+            db_session.execute(select(AirportDailySummaryRow)).scalars().all()
+            if r.icao == "LFPG"
+        )
+
+        # Monthly rollup for April 2026
+        rollup_month(db_session, _utc(2026, 4, 1))
+        monthly = db_session.execute(
+            select(AirportMonthlySummaryRow).where(
+                AirportMonthlySummaryRow.icao == "LFPG"
+            )
+        ).scalar_one()
+
+        # 2 + 1 + 0 + 2 = 5
+        assert daily_sum == 5
+        assert monthly.category_changes == daily_sum
+
 
 class TestOrchestrators:
     def test_completed_months_excludes_current_and_summarised(self, db_session):

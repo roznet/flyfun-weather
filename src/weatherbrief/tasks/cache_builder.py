@@ -6,6 +6,16 @@ JSON blob keyed by a deterministic cache key (e.g. ``stats:standalone:30d``).
 Cache is rebuilt after each standalone verification cycle by calling
 :func:`rebuild_all`.  API endpoints call :func:`get_cached` to read entries.
 On cache miss or staleness the caller falls back to a live query.
+
+Cache key catalogue:
+
+- ``stats:{source}:{period}`` — dashboard digest payload
+- ``bias_leaderboard:{model}:{days_out}:{period}`` — top airports model
+  over-promises for (#154)
+- ``forecast_map:{day}:{hour}`` — pan-European weather overview map
+
+The legacy ``verif_map:*`` keys (verification-bias map view) were removed
+in #154; the view that consumed them is also gone.
 """
 
 from __future__ import annotations
@@ -30,10 +40,12 @@ logger = logging.getLogger(__name__)
 _PERIODS = {"24h": 24, "7d": 168, "30d": 720}
 _SOURCES = ("flight", "standalone")
 
-# Models and days_out combos for verification map cache
-_MAP_MODELS = ("all", "gfs", "icon", "ecmwf")
-_MAP_DAYS_OUT = (0, 1)
-_MAP_PERIODS = {"7d": 168, "30d": 720}
+# Bias leaderboard: per-(model, days_out, period). Periods kept narrow —
+# 24h is too small for stable rankings; 90d is interesting for trend but
+# can be computed on demand.
+_LEADERBOARD_MODELS = ("gfs", "icon", "ecmwf")
+_LEADERBOARD_DAYS_OUT = (0, 1, 2)
+_LEADERBOARD_PERIODS = {"7d": 168, "30d": 720, "90d": 2160}
 
 # Forecast map: days ahead × sample hours
 _FORECAST_DAYS = (0, 1, 2, 3)
@@ -154,28 +166,36 @@ def rebuild_stats_cache(db: Session) -> int:
     return count
 
 
-def rebuild_verification_map_cache(db: Session, airports_db_path: str) -> int:
-    """Rebuild cached verification map responses.
+def rebuild_bias_leaderboard_cache(db: Session) -> int:
+    """Rebuild cached optimistic-bias leaderboard responses.
+
+    Keyed by ``bias_leaderboard:{model}:{days_out}:{period}``. The
+    leaderboard is sourced from ``verification_daily_stats`` so each
+    rebuild is a small GROUP BY — orders of magnitude cheaper than the
+    legacy ``verif_map`` rebuild it replaces.
 
     Returns the number of cache entries written.
     """
-    from weatherbrief.tasks.map_queries import get_verification_map_data
+    from weatherbrief.tasks.verification_stats import (
+        get_optimistic_bias_leaderboard,
+    )
 
     now = datetime.now(timezone.utc)
+    source_max = get_source_max_time(db, "standalone")
     count = 0
 
-    for period_label, hours in _MAP_PERIODS.items():
+    for period_label, hours in _LEADERBOARD_PERIODS.items():
         since = now - timedelta(hours=hours)
-        source_max = get_source_max_time(db, "standalone")
-
-        for model in _MAP_MODELS:
-            for days_out in _MAP_DAYS_OUT:
-                data = get_verification_map_data(
-                    db, since, now, model if model != "all" else None,
-                    days_out, airports_db_path,
+        for model in _LEADERBOARD_MODELS:
+            for days_out in _LEADERBOARD_DAYS_OUT:
+                rows = get_optimistic_bias_leaderboard(
+                    db, since, now,
+                    model=model, days_out=days_out,
+                    source="standalone",
                 )
-                cache_key = f"verif_map:{model}:{days_out}:{period_label}"
-                _upsert(db, cache_key, data, source_max)
+                payload = [r.model_dump(mode="json") for r in rows]
+                cache_key = f"bias_leaderboard:{model}:{days_out}:{period_label}"
+                _upsert(db, cache_key, payload, source_max)
                 count += 1
 
     db.flush()
@@ -245,7 +265,7 @@ def rebuild_all(
     t0 = time.monotonic()
 
     stats_count = rebuild_stats_cache(db)
-    verif_map_count = rebuild_verification_map_cache(db, airports_db_path)
+    leaderboard_count = rebuild_bias_leaderboard_cache(db)
     if include_forecast_map:
         forecast_map_count = rebuild_forecast_map_cache(db, airports_db_path)
     else:
@@ -254,22 +274,20 @@ def rebuild_all(
     db.commit()
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    # Distinct log shape when forecast_map is skipped — operators reading prod
-    # logs should not have to remember that "0 forecast_map entries" means
-    # "skipped on a light cycle" rather than "rebuilt and got nothing".
     if include_forecast_map:
         logger.info(
-            "Cache rebuild: %d stats + %d verif_map + %d forecast_map entries (%dms)",
-            stats_count, verif_map_count, forecast_map_count, duration_ms,
+            "Cache rebuild: %d stats + %d bias_leaderboard + %d forecast_map entries (%dms)",
+            stats_count, leaderboard_count, forecast_map_count, duration_ms,
         )
     else:
         logger.info(
-            "Cache rebuild: %d stats + %d verif_map entries, forecast_map skipped (%dms)",
-            stats_count, verif_map_count, duration_ms,
+            "Cache rebuild: %d stats + %d bias_leaderboard entries, "
+            "forecast_map skipped (%dms)",
+            stats_count, leaderboard_count, duration_ms,
         )
     return {
         "stats": stats_count,
-        "verif_map": verif_map_count,
+        "bias_leaderboard": leaderboard_count,
         "forecast_map": forecast_map_count,
         "duration_ms": duration_ms,
     }

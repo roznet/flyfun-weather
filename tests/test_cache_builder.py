@@ -188,9 +188,9 @@ class TestRebuildAllForecastMapSkip:
             "weatherbrief.tasks.cache_builder.rebuild_stats_cache",
             return_value=6,
         )
-        verif = mocker.patch(
-            "weatherbrief.tasks.cache_builder.rebuild_verification_map_cache",
-            return_value=16,
+        leaderboard = mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_bias_leaderboard_cache",
+            return_value=27,
         )
         forecast = mocker.patch(
             "weatherbrief.tasks.cache_builder.rebuild_forecast_map_cache",
@@ -201,11 +201,11 @@ class TestRebuildAllForecastMapSkip:
                              include_forecast_map=False)
 
         assert stats.called
-        assert verif.called
+        assert leaderboard.called
         assert not forecast.called, "forecast_map must be skipped on light cycles"
         assert result["forecast_map"] == 0
         assert result["stats"] == 6
-        assert result["verif_map"] == 16
+        assert result["bias_leaderboard"] == 27
 
     def test_include_forecast_map_default_true(
         self, db_session, mocker, tmp_path,
@@ -215,8 +215,8 @@ class TestRebuildAllForecastMapSkip:
             return_value=6,
         )
         mocker.patch(
-            "weatherbrief.tasks.cache_builder.rebuild_verification_map_cache",
-            return_value=16,
+            "weatherbrief.tasks.cache_builder.rebuild_bias_leaderboard_cache",
+            return_value=27,
         )
         forecast = mocker.patch(
             "weatherbrief.tasks.cache_builder.rebuild_forecast_map_cache",

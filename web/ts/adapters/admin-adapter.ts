@@ -315,11 +315,10 @@ export interface CategoryBiasStats {
   days_out: number;
   total_scores: number;
   optimistic_1: number;
+  // 2 = "2 or more levels optimistic" (collapsed in verification_daily_stats)
   optimistic_2: number;
-  optimistic_3: number;
   pessimistic_1: number;
   pessimistic_2: number;
-  pessimistic_3: number;
 }
 
 export interface WindAdvisoryStats {

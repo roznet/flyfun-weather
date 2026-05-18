@@ -52,45 +52,11 @@ export interface ForecastMapResponse {
   airports: ForecastAirport[];
 }
 
-// --- Verification types ---
-
-export interface VerificationAirport {
-  icao: string;
-  lat: number;
-  lon: number;
-  sample_count: number;
-  category_match_pct: number;
-  ceiling_mae_ft: number;
-  wind_mae_kt: number;
-  temp_mae_c: number;
-  vis_mae_m: number;
-  ceiling_bias_ft: number;
-}
-
-export interface VerificationMapResponse {
-  period_since: string;
-  period_until: string;
-  model: string;
-  days_out: number;
-  airports: VerificationAirport[];
-}
-
 // --- Fetch functions ---
 
 export async function fetchForecastMap(day: number, hour: number): Promise<ForecastMapResponse> {
   const resp = await fetch(`${apiBase}/maps/forecast?day=${day}&hour=${hour}`, { credentials: 'include' });
   if (!resp.ok) throw new Error(`Forecast map: ${resp.status}`);
-  return resp.json();
-}
-
-export async function fetchVerificationMap(
-  period: string, model: string, daysOut: number,
-): Promise<VerificationMapResponse> {
-  const resp = await fetch(
-    `${apiBase}/maps/verification?period=${period}&model=${model}&days_out=${daysOut}`,
-    { credentials: 'include' },
-  );
-  if (!resp.ok) throw new Error(`Verification map: ${resp.status}`);
   return resp.json();
 }
 

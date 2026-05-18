@@ -345,7 +345,7 @@ def cmd_rebuild_cache(args):
         result = rebuild_all(db, airports_db)
         print("Cache rebuild complete:")
         print(f"  Stats entries: {result['stats']}")
-        print(f"  Verification map entries: {result['verif_map']}")
+        print(f"  Bias leaderboard entries: {result['bias_leaderboard']}")
         print(f"  Forecast map entries: {result['forecast_map']}")
         print(f"  Duration: {result['duration_ms']}ms")
     finally:
@@ -399,6 +399,55 @@ def cmd_rollup_summary(args):
             n = rollup_day(db, d)
             db.commit()
             print(f"Rolled up {n} airport-days for {args.day}.")
+    finally:
+        db.close()
+
+
+def cmd_rollup_daily_stats(args):
+    """Roll up raw verification_scores into verification_daily_stats.
+
+    Used at deploy time to backfill existing standalone data. The scheduler
+    keeps this up to date after each cycle, but this command is safe to
+    re-run any time (idempotent DELETE+INSERT per day).
+    """
+    from datetime import date as date_cls
+
+    from flyfun_common.db import SessionLocal
+
+    from weatherbrief.tasks.verification_daily_rollup import (
+        rebuild_all_days,
+        rollup_all_complete_days,
+        rollup_day,
+    )
+
+    _init_db()
+    load_dotenv()
+
+    db = SessionLocal()
+    try:
+        if args.day:
+            try:
+                d = date_cls.fromisoformat(args.day)
+            except ValueError:
+                print(
+                    f"ERROR: invalid --day {args.day!r} (expect YYYY-MM-DD)",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            n = rollup_day(db, d)
+            db.commit()
+            print(f"Rolled up {n} groups for {args.day}.")
+            return
+
+        if args.rebuild:
+            n = rebuild_all_days(db)
+            db.commit()
+            print(f"Re-rolled {n} groups across existing days.")
+            return
+
+        n = rollup_all_complete_days(db)
+        db.commit()
+        print(f"Rolled up {n} groups across pending days.")
     finally:
         db.close()
 
@@ -534,6 +583,20 @@ def main():
         help="Roll up every completed period for both monthly and daily tables.",
     )
 
+    # rollup-daily-stats
+    p_rollup_daily = subparsers.add_parser(
+        "rollup-daily-stats",
+        help="Roll up verification_scores into verification_daily_stats",
+    )
+    p_rollup_daily.add_argument(
+        "--day",
+        help="Roll up a specific UTC date (YYYY-MM-DD). Default: every pending day.",
+    )
+    p_rollup_daily.add_argument(
+        "--rebuild", action="store_true",
+        help="Re-roll every existing date (use after schema/aggregation changes).",
+    )
+
     # digest
     p_digest = subparsers.add_parser(
         "digest",
@@ -572,6 +635,8 @@ def main():
         cmd_rebuild_cache(args)
     elif args.command == "rollup-summary":
         cmd_rollup_summary(args)
+    elif args.command == "rollup-daily-stats":
+        cmd_rollup_daily_stats(args)
     elif args.command == "digest":
         cmd_digest(args)
 

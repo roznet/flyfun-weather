@@ -525,9 +525,13 @@ class TestVerificationStatsSourceFilter:
         db_session.flush()
 
     def test_category_accuracy_filters_by_source(self, db_session):
+        from weatherbrief.tasks.verification_daily_rollup import rollup_day
         from weatherbrief.tasks.verification_stats import get_category_accuracy
 
         self._insert_scores(db_session)
+        # The stats query reads from verification_daily_stats — roll up
+        # the test date so the SUMs are present (post-#154).
+        rollup_day(db_session, NOW.date())
         since = NOW - timedelta(hours=1)
         until = NOW + timedelta(hours=1)
 

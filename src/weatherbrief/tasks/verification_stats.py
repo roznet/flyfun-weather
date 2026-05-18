@@ -4,6 +4,17 @@ Used by both the daily email digest and the admin web dashboard API.
 All functions take a SQLAlchemy Session and a date range, returning
 Pydantic models from :mod:`weatherbrief.models.verification`.
 
+The expensive aggregates (per-model accuracy, bias, MAE, wind advisory)
+read from :class:`VerificationDailyStatsRow` — the pre-aggregated rollup
+populated after each standalone verification cycle. NWP-only.
+
+TAF is rolled up at query time from ``taf_verification_scores`` because
+its shape (lead_hours, no model/days_out) doesn't fit the daily rollup —
+see issue #154 for the rationale.
+
+``get_notable_misses`` and ``get_missed_warnings`` still read raw
+``verification_scores`` because they need individual row data.
+
 Every query filters by ``source`` ('flight' or 'standalone') to ensure
 flight-based and standalone verification data are never mixed.
 """
@@ -11,9 +22,9 @@ flight-based and standalone verification data are never mixed.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_t, datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -21,6 +32,7 @@ from weatherbrief.db.models import (
     FlightVerificationMapRow,
     TafVerificationScoreRow,
     VerificationCycleRow,
+    VerificationDailyStatsRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
@@ -30,6 +42,7 @@ from weatherbrief.models.verification import (
     CategoryBiasStats,
     MissedWarning,
     NotableMiss,
+    OptimisticBiasLeaderboardRow,
     VerificationDigestData,
     WindAdvisoryStats,
 )
@@ -37,6 +50,8 @@ from weatherbrief.models.verification import (
 logger = logging.getLogger(__name__)
 
 _DAYS_OUT_COLS = (0, 1, 2, 3)
+# Ordered from best to worst flying conditions
+_CAT_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 
 
 def _icao_clause(col, icao_filter: list[str] | None):
@@ -46,6 +61,19 @@ def _icao_clause(col, icao_filter: list[str] | None):
     if len(icao_filter) == 1:
         return col == icao_filter[0]
     return col.in_(icao_filter)
+
+
+def _date_range(since: datetime, until: datetime) -> tuple[date_t, date_t]:
+    """Convert datetime range to inclusive date range for rollup queries.
+
+    The rollup is keyed by UTC ``date``. A datetime ``since``/``until``
+    that spans partial days is widened to inclusive day boundaries —
+    same semantics as the existing raw queries which match on
+    ``observation_time BETWEEN since AND until``.
+    """
+    s = since.date() if isinstance(since, datetime) else since
+    u = until.date() if isinstance(until, datetime) else until
+    return s, u
 
 
 # ---------------------------------------------------------------------------
@@ -58,21 +86,21 @@ def get_activity_summary(
     source: str = "flight",
     icao_filter: list[str] | None = None,
 ) -> ActivitySummary:
-    """High-level counts for a date range, scoped by source."""
-    # Count observations and airports that have scores for this source,
-    # answered directly from the score table (which carries a denormalised
-    # icao column and a CASCADE FK on observation_id).
-    #
-    # Two `COUNT(DISTINCT col)` calls *in the same SELECT* force MySQL into a
-    # tmp-table dedup it cannot resolve from indexes — observed grinding ~3
-    # min on a 30-day window at ~7M rows in prod (PR #150 follow-up).  Running
-    # them as two separate queries lets each one plan with its own index and
-    # is dramatically faster on the same data.
+    """High-level counts for a date range, scoped by source.
+
+    ``observations_collected`` and ``airports_observed`` still query
+    ``verification_scores`` directly — the rollup groups by (date, source,
+    model, days_out, icao) so summing wouldn't give distinct counts, and
+    these are one bounded query per dashboard request, not per-group.
+    """
     common_where = (
         VerificationScoreRow.observation_time.between(since, until),
         VerificationScoreRow.source == source,
         _icao_clause(VerificationScoreRow.icao, icao_filter),
     )
+    # Two COUNT(DISTINCT) calls run as two separate queries (PR #150) so
+    # MySQL can plan each with its own index instead of falling into a
+    # tmp-table dedup.
     obs_count = db.execute(
         select(func.count(func.distinct(VerificationScoreRow.observation_id)))
         .where(*common_where)
@@ -82,7 +110,6 @@ def get_activity_summary(
         .where(*common_where)
     ).scalar() or 0
 
-    # Flight-specific counts (only relevant for source='flight')
     flights_verified = 0
     flights_completed = 0
     if source == "flight":
@@ -103,7 +130,6 @@ def get_activity_summary(
             )
         ).scalar() or 0
 
-    # Cycle metrics — filtered by source
     cycle_rows = db.execute(
         select(
             func.count(VerificationCycleRow.id),
@@ -138,37 +164,55 @@ def get_category_accuracy(
 ) -> list[CategoryAccuracyRow]:
     """Flight-category match rate per model and days-out.
 
-    Includes TAF as a pseudo-model with days_out=0.
+    NWP models read from the daily rollup. TAF is a pseudo-model (days_out=0)
+    still aggregated from ``taf_verification_scores``.
     """
     rows: list[CategoryAccuracyRow] = []
 
-    # NWP model scores
+    since_d, until_d = _date_range(since, until)
+    # Total rows that contributed a category — n_cat_match + opt + pess
+    cat_total = (
+        VerificationDailyStatsRow.n_cat_match
+        + VerificationDailyStatsRow.n_cat_opt_1
+        + VerificationDailyStatsRow.n_cat_opt_2
+        + VerificationDailyStatsRow.n_cat_pess_1
+        + VerificationDailyStatsRow.n_cat_pess_2
+    )
     model_rows = db.execute(
         select(
-            VerificationScoreRow.model,
-            VerificationScoreRow.days_out,
-            func.avg(VerificationScoreRow.category_match),
-            func.count(VerificationScoreRow.id),
+            VerificationDailyStatsRow.model,
+            VerificationDailyStatsRow.days_out,
+            func.sum(VerificationDailyStatsRow.n_cat_match).label("n_match"),
+            func.sum(cat_total).label("n_with_cat"),
         )
         .where(
-            VerificationScoreRow.observation_time.between(since, until),
-            VerificationScoreRow.category_match.isnot(None),
-            VerificationScoreRow.days_out.in_(_DAYS_OUT_COLS),
-            VerificationScoreRow.source == source,
-            _icao_clause(VerificationScoreRow.icao, icao_filter),
+            VerificationDailyStatsRow.date.between(since_d, until_d),
+            VerificationDailyStatsRow.days_out.in_(_DAYS_OUT_COLS),
+            VerificationDailyStatsRow.source == source,
+            _icao_clause(VerificationDailyStatsRow.icao, icao_filter),
         )
-        .group_by(VerificationScoreRow.model, VerificationScoreRow.days_out)
+        .group_by(
+            VerificationDailyStatsRow.model,
+            VerificationDailyStatsRow.days_out,
+        )
     ).all()
 
-    for model, days_out, avg_match, count in model_rows:
+    for model, days_out, n_match, n_with_cat in model_rows:
+        # Match the raw query's "sample_count" semantics: count of rows
+        # that contributed a category_match comparison.
+        sample = int(n_with_cat or 0)
+        accuracy = (
+            round(float(n_match) / float(n_with_cat) * 100, 1)
+            if n_with_cat else None
+        )
         rows.append(CategoryAccuracyRow(
             model=model,
             days_out=days_out,
-            accuracy_pct=round(float(avg_match) * 100, 1) if avg_match is not None else None,
-            sample_count=count,
+            accuracy_pct=accuracy,
+            sample_count=sample,
         ))
 
-    # TAF scores (always days_out=0)
+    # TAF — still raw (taf_verification_scores has no model/days_out)
     taf_row = db.execute(
         select(
             func.avg(TafVerificationScoreRow.category_match),
@@ -193,11 +237,8 @@ def get_category_accuracy(
 
 
 # ---------------------------------------------------------------------------
-# Notable misses — category busts with direction & severity
+# Notable misses — still raw (needs individual rows)
 # ---------------------------------------------------------------------------
-
-# Ordered from best to worst flying conditions
-_CAT_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 
 
 def _category_delta(obs_cat: str | None, model_cat: str | None) -> tuple[str, int]:
@@ -205,7 +246,8 @@ def _category_delta(obs_cat: str | None, model_cat: str | None) -> tuple[str, in
 
     direction: "optimistic" if model predicted better than actual,
                "pessimistic" if model predicted worse.
-    severity:  number of category levels apart (1-3).
+    severity:  raw step count (1-3); callers that store this against the
+               collapsed schema must apply ``min(severity, 2)`` themselves.
     """
     obs_rank = _CAT_ORDER.get(obs_cat or "", -1)
     model_rank = _CAT_ORDER.get(model_cat or "", -1)
@@ -227,11 +269,10 @@ def get_notable_misses(
 ) -> list[NotableMiss]:
     """Category busts at D-0/D-1, prioritising dangerous optimistic misses.
 
-    Includes:
-    - All optimistic misses (severity 1+): model said better than actual
-    - Pessimistic misses only at severity 2+: model said much worse than actual
-
-    Sorted by severity desc (worst first), then optimistic before pessimistic.
+    Reads individual rows from ``verification_scores`` because every
+    surfaced row needs its observation_time, icao, model, and the two
+    category values — none of that survives aggregation. Bounded by
+    ``limit`` so the query stays cheap.
     """
     stmt = (
         select(
@@ -261,7 +302,6 @@ def get_notable_misses(
         direction, severity = _category_delta(row[4], row[5])
         if severity == 0:
             continue
-        # Include all optimistic, but only severity 2+ pessimistic
         if direction == "pessimistic" and severity < 2:
             continue
         raw.append(NotableMiss(
@@ -276,9 +316,13 @@ def get_notable_misses(
             severity=severity,
         ))
 
-    # Sort: optimistic first (safety-relevant), then severity desc
     raw.sort(key=lambda m: (m.direction != "optimistic", -m.severity))
     return raw[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Category bias — from rollup
+# ---------------------------------------------------------------------------
 
 
 def get_category_bias_stats(
@@ -286,51 +330,60 @@ def get_category_bias_stats(
     source: str = "flight",
     icao_filter: list[str] | None = None,
 ) -> list[CategoryBiasStats]:
-    """Per-model bias breakdown: how often each model is optimistic vs pessimistic."""
-    stmt = (
+    """Per-model bias breakdown: how often each model is optimistic vs pessimistic.
+
+    Restricted to D-0 / D-1 to match the original raw query. ``_2`` buckets
+    are "2 or more levels off" — see :class:`CategoryBiasStats`.
+    """
+    since_d, until_d = _date_range(since, until)
+    cat_total = (
+        VerificationDailyStatsRow.n_cat_match
+        + VerificationDailyStatsRow.n_cat_opt_1
+        + VerificationDailyStatsRow.n_cat_opt_2
+        + VerificationDailyStatsRow.n_cat_pess_1
+        + VerificationDailyStatsRow.n_cat_pess_2
+    )
+    rows = db.execute(
         select(
-            VerificationScoreRow.model,
-            VerificationScoreRow.days_out,
-            VerificationScoreRow.obs_flight_category,
-            VerificationScoreRow.model_flight_category,
-            func.count(VerificationScoreRow.id),
+            VerificationDailyStatsRow.model,
+            VerificationDailyStatsRow.days_out,
+            func.sum(cat_total).label("total_scores"),
+            func.sum(VerificationDailyStatsRow.n_cat_opt_1).label("opt_1"),
+            func.sum(VerificationDailyStatsRow.n_cat_opt_2).label("opt_2"),
+            func.sum(VerificationDailyStatsRow.n_cat_pess_1).label("pess_1"),
+            func.sum(VerificationDailyStatsRow.n_cat_pess_2).label("pess_2"),
         )
         .where(
-            VerificationScoreRow.observation_time.between(since, until),
-            VerificationScoreRow.source == source,
-            VerificationScoreRow.days_out.in_((0, 1)),
-            VerificationScoreRow.obs_flight_category.in_(tuple(_CAT_ORDER)),
-            VerificationScoreRow.model_flight_category.in_(tuple(_CAT_ORDER)),
-            _icao_clause(VerificationScoreRow.icao, icao_filter),
+            VerificationDailyStatsRow.date.between(since_d, until_d),
+            VerificationDailyStatsRow.days_out.in_((0, 1)),
+            VerificationDailyStatsRow.source == source,
+            _icao_clause(VerificationDailyStatsRow.icao, icao_filter),
         )
         .group_by(
-            VerificationScoreRow.model,
-            VerificationScoreRow.days_out,
-            VerificationScoreRow.obs_flight_category,
-            VerificationScoreRow.model_flight_category,
+            VerificationDailyStatsRow.model,
+            VerificationDailyStatsRow.days_out,
         )
+    ).all()
+
+    return sorted(
+        [
+            CategoryBiasStats(
+                model=model,
+                days_out=days_out,
+                total_scores=int(total or 0),
+                optimistic_1=int(opt1 or 0),
+                optimistic_2=int(opt2 or 0),
+                pessimistic_1=int(pess1 or 0),
+                pessimistic_2=int(pess2 or 0),
+            )
+            for model, days_out, total, opt1, opt2, pess1, pess2 in rows
+        ],
+        key=lambda s: (s.model, s.days_out),
     )
-
-    # Accumulate per (model, days_out)
-    accum: dict[tuple[str, int], CategoryBiasStats] = {}
-    for model, days_out, obs_cat, model_cat, count in db.execute(stmt).all():
-        key = (model, days_out)
-        if key not in accum:
-            accum[key] = CategoryBiasStats(model=model, days_out=days_out)
-        stats = accum[key]
-        stats.total_scores += count
-
-        direction, severity = _category_delta(obs_cat, model_cat)
-        if severity == 0:
-            continue
-        field = f"{direction}_{severity}"
-        setattr(stats, field, getattr(stats, field) + count)
-
-    return sorted(accum.values(), key=lambda s: (s.model, s.days_out))
 
 
 # ---------------------------------------------------------------------------
-# Wind advisory accuracy
+# Wind advisory accuracy — from rollup
 # ---------------------------------------------------------------------------
 
 
@@ -339,32 +392,43 @@ def get_wind_advisory_accuracy(
     source: str = "flight",
     icao_filter: list[str] | None = None,
 ) -> list[WindAdvisoryStats]:
-    """Per-model wind advisory match rate."""
+    """Per-model wind advisory match rate.
+
+    NWP advisory counts come from the rollup. TAF still raw.
+    """
+    since_d, until_d = _date_range(since, until)
+    adv_total = (
+        VerificationDailyStatsRow.n_advisory_match
+        + VerificationDailyStatsRow.n_advisory_opt
+        + VerificationDailyStatsRow.n_advisory_pess
+    )
     rows = db.execute(
         select(
-            VerificationScoreRow.model,
-            func.avg(VerificationScoreRow.advisory_match),
-            func.count(VerificationScoreRow.id),
+            VerificationDailyStatsRow.model,
+            func.sum(VerificationDailyStatsRow.n_advisory_match).label("n_match"),
+            func.sum(adv_total).label("n_with_adv"),
         )
         .where(
-            VerificationScoreRow.observation_time.between(since, until),
-            VerificationScoreRow.advisory_match.isnot(None),
-            VerificationScoreRow.source == source,
-            _icao_clause(VerificationScoreRow.icao, icao_filter),
+            VerificationDailyStatsRow.date.between(since_d, until_d),
+            VerificationDailyStatsRow.source == source,
+            _icao_clause(VerificationDailyStatsRow.icao, icao_filter),
         )
-        .group_by(VerificationScoreRow.model)
+        .group_by(VerificationDailyStatsRow.model)
     ).all()
 
-    results = [
-        WindAdvisoryStats(
+    results = []
+    for model, n_match, n_with_adv in rows:
+        sample = int(n_with_adv or 0)
+        if sample == 0:
+            continue
+        accuracy = round(float(n_match) / float(sample) * 100, 1)
+        results.append(WindAdvisoryStats(
             model=model,
-            accuracy_pct=round(float(avg_match) * 100, 1) if avg_match is not None else None,
-            sample_count=int(count),
-        )
-        for model, avg_match, count in rows
-    ]
+            accuracy_pct=accuracy,
+            sample_count=sample,
+        ))
 
-    # TAF wind advisory
+    # TAF — still raw
     taf_row = db.execute(
         select(
             func.avg(TafVerificationScoreRow.advisory_match),
@@ -385,6 +449,11 @@ def get_wind_advisory_accuracy(
         ))
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Missed warnings — still raw (needs individual rows)
+# ---------------------------------------------------------------------------
 
 
 def get_missed_warnings(
@@ -426,6 +495,64 @@ def get_missed_warnings(
 
 
 # ---------------------------------------------------------------------------
+# Optimistic-bias leaderboard — new (#154)
+# ---------------------------------------------------------------------------
+
+
+def get_optimistic_bias_leaderboard(
+    db: Session, since: datetime, until: datetime,
+    model: str, days_out: int,
+    *, limit: int = 50,
+    source: str = "standalone",
+) -> list[OptimisticBiasLeaderboardRow]:
+    """Top airports where ``model`` at ``days_out`` over-promises.
+
+    Score = ``(n_cat_opt_1 + 2 * n_cat_opt_2) / n`` per issue #154 — equally
+    weights single-step optimistic misses and double-weights 2+-step misses,
+    normalised by total sample count. Higher = more dangerously optimistic.
+
+    Filters airports with ``n < 10`` to avoid noise.
+    """
+    since_d, until_d = _date_range(since, until)
+
+    opt_1 = func.sum(VerificationDailyStatsRow.n_cat_opt_1)
+    opt_2 = func.sum(VerificationDailyStatsRow.n_cat_opt_2)
+    n_sum = func.sum(VerificationDailyStatsRow.n)
+    score = (opt_1 + 2 * opt_2) / func.nullif(n_sum, 0)
+
+    rows = db.execute(
+        select(
+            VerificationDailyStatsRow.icao,
+            n_sum.label("n"),
+            opt_1.label("opt_1"),
+            opt_2.label("opt_2"),
+            score.label("score"),
+        )
+        .where(
+            VerificationDailyStatsRow.date.between(since_d, until_d),
+            VerificationDailyStatsRow.source == source,
+            VerificationDailyStatsRow.model == model,
+            VerificationDailyStatsRow.days_out == days_out,
+        )
+        .group_by(VerificationDailyStatsRow.icao)
+        .having(n_sum >= 10)
+        .order_by(score.desc())
+        .limit(limit)
+    ).all()
+
+    return [
+        OptimisticBiasLeaderboardRow(
+            icao=icao,
+            n=int(n or 0),
+            n_cat_opt_1=int(opt1 or 0),
+            n_cat_opt_2=int(opt2 or 0),
+            score=float(sc) if sc is not None else 0.0,
+        )
+        for icao, n, opt1, opt2, sc in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -448,7 +575,6 @@ def get_digest_data(
     wind = get_wind_advisory_accuracy(db, since, until, source, icao_filter)
     missed = get_missed_warnings(db, since, until, source, icao_filter)
 
-    # 7-day rolling for comparison
     category_7d: list[CategoryAccuracyRow] = []
     if include_7d:
         seven_days_ago = until - timedelta(days=7)

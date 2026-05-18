@@ -362,6 +362,7 @@ def _build_daily_summary(
         gust_max_kt=max(gusts) if gusts else None,
         temp_min_c=min(temps) if temps else None,
         temp_max_c=max(temps) if temps else None,
+        n_category_changes=_category_changes_within_day(obs_list),
     )
 
 
@@ -462,5 +463,26 @@ def rollup_all_complete_days(db: Session) -> int:
         )
     total = 0
     for d in pending:
+        total += rollup_day(db, d)
+    return total
+
+
+def rebuild_all_days(db: Session) -> int:
+    """Re-roll every UTC day that already has rows in airport_daily_summary.
+
+    Used to populate columns added in a migration (idempotent DELETE+INSERT
+    re-runs the full per-day aggregation). Caller commits.
+    """
+    existing = sorted(
+        db.execute(select(AirportDailySummaryRow.date).distinct()).scalars().all()
+    )
+    if not existing:
+        return 0
+    logger.info(
+        "airport_daily_summary: rebuilding %d existing days (%s..%s)",
+        len(existing), existing[0].isoformat(), existing[-1].isoformat(),
+    )
+    total = 0
+    for d in existing:
         total += rollup_day(db, d)
     return total
