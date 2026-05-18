@@ -907,6 +907,20 @@ async function init(): Promise<void> {
     },
   };
 
+  // --- Stale-pack banner refresh handler (shared by the subscriber and
+  // the post-init render so future changes to refresh routing apply
+  // in one place). Reads live store state on click so it remains
+  // correct even if the flight is reloaded after the banner renders.
+  const stalePackOnRefresh = () => {
+    const f = store.getState().flight;
+    if (!f) return;
+    if (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours)) {
+      showHistoricalRefreshModal(f);
+    } else {
+      store.getState().refresh();
+    }
+  };
+
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
@@ -914,15 +928,7 @@ async function init(): Promise<void> {
     }
     if (state.flight !== prev.flight || state.routeAnalyses !== prev.routeAnalyses) {
       const isOwner = !!user && state.flight?.user_id === user.id;
-      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, () => {
-        const f = store.getState().flight;
-        if (!f) return;
-        if (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours)) {
-          showHistoricalRefreshModal(f);
-        } else {
-          store.getState().refresh();
-        }
-      });
+      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, stalePackOnRefresh);
     }
     if (state.flight !== prev.flight) {
       ui.renderBriefingSharing(state.flight, sharingHandlers);
@@ -1351,15 +1357,7 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     {
       const isOwner = !!user && s.flight?.user_id === user.id;
-      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, () => {
-        const f = store.getState().flight;
-        if (!f) return;
-        if (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours)) {
-          showHistoricalRefreshModal(f);
-        } else {
-          store.getState().refresh();
-        }
-      });
+      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, stalePackOnRefresh);
     }
     // renderBriefingSharing already ran via the store subscriber above when
     // flight was set; don't re-invoke (it would waste a clone+replace cycle).
