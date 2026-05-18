@@ -190,15 +190,23 @@ def rollup_day(db: Session, day: date_t) -> int:
 
 
 def completed_days(db: Session) -> list[date_t]:
-    """UTC dates with raw scores that aren't yet in verification_daily_stats.
+    """UTC dates with standalone scores that aren't yet in verification_daily_stats.
 
     Excludes today (incomplete) and dates already summarised. Mirrors the
     pattern in ``tasks/airport_summary.completed_days``.
+
+    Both the start-point (``MIN(observation_time)``) and the "already done"
+    set (``date`` in rollup) are filtered to standalone sources. Flight scores
+    are tiny by comparison and inherit a different lifecycle — including them
+    here would (a) start day-iteration from the earliest flight score even
+    when standalone data starts later, and (b) silently mark a flight-only
+    date as "done" so future standalone scores for that date never get rolled.
     """
     now = datetime.now(timezone.utc)
     today = now.date()
     earliest = db.execute(
         select(func.min(VerificationScoreRow.observation_time))
+        .where(VerificationScoreRow.source.like("standalone%"))
     ).scalar()
     if earliest is None:
         return []
@@ -207,7 +215,9 @@ def completed_days(db: Session) -> list[date_t]:
 
     existing = set(
         db.execute(
-            select(VerificationDailyStatsRow.date).distinct()
+            select(VerificationDailyStatsRow.date)
+            .where(VerificationDailyStatsRow.source.like("standalone%"))
+            .distinct()
         ).scalars().all()
     )
 
@@ -239,18 +249,26 @@ def rollup_all_complete_days(db: Session) -> int:
 
 
 def rollup_today_and_pending(db: Session) -> int:
-    """Roll up today (partial) plus any pending completed days.
+    """Roll up today (partial), yesterday (re-roll), plus any pending days.
 
     The cache rebuild after each standalone cycle calls this so the 24h
     dashboard reflects scores collected today, not just up-to-yesterday.
-    Today's rollup is idempotent DELETE+INSERT, so the partial gets
-    refreshed each call until the day completes and the orchestrator's
-    pending-days loop takes over.
+
+    Today's rollup is idempotent DELETE+INSERT — refreshed each call until
+    the day completes and the pending-days loop takes over.
+
+    Yesterday is re-rolled too as a one-day trailing buffer: METARs and
+    scores that arrived after the previous cycle's rollup (e.g. across a
+    UTC-midnight boundary, or after a temporary network failure) get
+    picked up rather than being silently missed because yesterday is
+    already in the "existing" set.
 
     Caller commits.
     """
     n = rollup_all_complete_days(db)
-    n += rollup_day(db, datetime.now(timezone.utc).date())
+    today = datetime.now(timezone.utc).date()
+    n += rollup_day(db, today - timedelta(days=1))
+    n += rollup_day(db, today)
     return n
 
 
@@ -273,15 +291,3 @@ def rebuild_all_days(db: Session) -> int:
     for d in existing:
         total += rollup_day(db, d)
     return total
-
-
-# ---------------------------------------------------------------------------
-# Convenience: integer column casts for query-time MAE / accuracy
-# ---------------------------------------------------------------------------
-
-
-def safe_div(numerator, denominator):
-    """SQL ``numerator / NULLIF(denominator, 0)`` — returns NULL on zero
-    instead of raising DivisionByZero (which MySQL does in strict mode).
-    """
-    return numerator / func.nullif(denominator, 0)
