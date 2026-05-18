@@ -284,6 +284,7 @@ class TestValidationGate:
 
         # Per-icao expectation for (gfs, d-1)
         per_icao_n = defaultdict(int)
+        per_icao_n_with_cat = defaultdict(int)
         per_icao_opt1 = defaultdict(int)
         per_icao_opt2 = defaultdict(int)
         for s in scores:
@@ -295,6 +296,7 @@ class TestValidationGate:
             per_icao_n[s.icao] += 1
             if s.obs_flight_category is None or s.model_flight_category is None:
                 continue
+            per_icao_n_with_cat[s.icao] += 1
             diff = (
                 _CAT_IDX[s.model_flight_category]
                 - _CAT_IDX[s.obs_flight_category]
@@ -318,14 +320,62 @@ class TestValidationGate:
             assert r.n == n
             assert r.n_cat_opt_1 == per_icao_opt1[icao]
             assert r.n_cat_opt_2 == per_icao_opt2[icao]
+            # Denominator is the with-category count, not raw n (issue #154
+            # follow-up — protects against NULL-category dilution).
             want_score = (
                 per_icao_opt1[icao] + 2 * per_icao_opt2[icao]
-            ) / n
+            ) / per_icao_n_with_cat[icao]
             assert _close(r.score, want_score, rel_tol=1e-6, abs_tol=1e-6)
 
         # Sorted descending by score
         scores_seq = [r.score for r in rows]
         assert scores_seq == sorted(scores_seq, reverse=True)
+
+    def test_optimistic_bias_leaderboard_uses_n_with_cat_denominator(
+        self, db_session,
+    ):
+        """Synthetic dataset with deliberate NULL-category rows: the
+        leaderboard's score must use ``n_with_cat`` (5-bucket sum) as the
+        denominator, not raw ``n``. With the prior ``/ n`` formula, the
+        added NULL rows would deflate the score and this assertion would
+        fail.
+        """
+        when = _utc(2026, 4, 5, 12)
+        obs = VerificationObservationRow(
+            icao="LFPG", observation_time=when, collected_at=when,
+        )
+        db_session.add(obs)
+        db_session.flush()
+        # 10 scores for LFPG / gfs / d-1: 6 optimistic_1, 4 with NULL cats.
+        for i in range(10):
+            init = when - timedelta(hours=i + 1)
+            obs_cat = "MVFR" if i < 6 else None
+            mod_cat = "VFR" if i < 6 else None
+            db_session.add(VerificationScoreRow(
+                observation_id=obs.id, icao="LFPG",
+                observation_time=when,
+                model="gfs", model_init_time=init,
+                lead_hours=24, days_out=1, source=_SOURCE,
+                obs_flight_category=obs_cat,
+                model_flight_category=mod_cat,
+                category_match=(obs_cat == mod_cat) if obs_cat else None,
+            ))
+        db_session.flush()
+        rollup_all_complete_days(db_session)
+
+        rows = get_optimistic_bias_leaderboard(
+            db_session, _utc(2026, 4, 5, 0), _utc(2026, 4, 5, 23),
+            model="gfs", days_out=1, source=_SOURCE,
+        )
+        assert len(rows) == 1
+        r = rows[0]
+        assert r.icao == "LFPG"
+        assert r.n == 10  # total scores
+        assert r.n_cat_opt_1 == 6
+        assert r.n_cat_opt_2 == 0
+        # With /n_with_cat: (6 + 0) / 6 = 1.0
+        # With /n (old broken formula): (6 + 0) / 10 = 0.6 → would fail
+        assert _close(r.score, 1.0, rel_tol=1e-6, abs_tol=1e-6)
 
     def test_digest_data_orchestrator_runs(self, db_session):
         """Smoke test: full digest payload assembles without errors."""

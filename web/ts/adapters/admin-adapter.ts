@@ -324,6 +324,7 @@ export interface CategoryBiasStats {
 export interface WindAdvisoryStats {
   model: string;
   accuracy_pct: number | null;
+  sample_count: number;
 }
 
 export interface MissedWarning {

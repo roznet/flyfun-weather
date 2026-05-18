@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -16,6 +16,7 @@ from weatherbrief.tasks.verification_daily_rollup import (
     rebuild_all_days,
     rollup_all_complete_days,
     rollup_day,
+    rollup_today_and_pending,
 )
 
 
@@ -356,3 +357,76 @@ class TestOrchestrators:
         assert n == 1
         rows = db_session.execute(select(VerificationDailyStatsRow)).scalars().all()
         assert len(rows) == 1
+
+
+class TestRollupTodayAndPending:
+    """Direct coverage of the scheduler hot-path function — composition of
+    rollup_all_complete_days + explicit today + explicit yesterday re-roll.
+    """
+
+    def test_today_and_yesterday_both_appear(self, db_session):
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        # Place scores on today and yesterday with hours that won't roll
+        # over due to timezones (use noon UTC).
+        for d in (today, yesterday):
+            ts = datetime(d.year, d.month, d.day, 12, 0, tzinfo=timezone.utc)
+            oid = _make_obs(db_session, "LFPG", ts)
+            db_session.add(_score(oid, "LFPG", ts))
+        db_session.flush()
+
+        n = rollup_today_and_pending(db_session)
+        assert n >= 2  # at least one row each for today + yesterday
+
+        dates_in_rollup = {
+            r.date
+            for r in db_session.execute(
+                select(VerificationDailyStatsRow)
+            ).scalars().all()
+        }
+        assert today in dates_in_rollup, "today missing from rollup"
+        assert yesterday in dates_in_rollup, "yesterday missing from rollup"
+
+    def test_late_arriving_yesterday_score_picked_up(self, db_session):
+        """A score arriving for yesterday after yesterday was already
+        rolled up must be picked up on the next cycle — the explicit
+        yesterday re-roll in rollup_today_and_pending is what protects
+        against silent drift across the UTC midnight boundary.
+        """
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        ts = datetime(yesterday.year, yesterday.month, yesterday.day,
+                      12, 0, tzinfo=timezone.utc)
+
+        # First pass: one score for yesterday, rolled up
+        oid1 = _make_obs(db_session, "LFPG", ts)
+        db_session.add(_score(oid1, "LFPG", ts))
+        db_session.flush()
+        rollup_today_and_pending(db_session)
+
+        first_n = db_session.execute(
+            select(VerificationDailyStatsRow.n)
+            .where(VerificationDailyStatsRow.date == yesterday)
+            .where(VerificationDailyStatsRow.icao == "LFPG")
+        ).scalar()
+        assert first_n == 1
+
+        # Late-arriving score for yesterday (different model so it doesn't
+        # collide with the existing UNIQUE constraint).
+        oid2 = _make_obs(
+            db_session, "LFPG",
+            ts.replace(hour=13),  # different observation_time
+        )
+        db_session.add(_score(
+            oid2, "LFPG", ts.replace(hour=13), model="ecmwf",
+        ))
+        db_session.flush()
+
+        # Second pass picks it up because yesterday is re-rolled explicitly
+        rollup_today_and_pending(db_session)
+        yesterday_groups = db_session.execute(
+            select(VerificationDailyStatsRow)
+            .where(VerificationDailyStatsRow.date == yesterday)
+        ).scalars().all()
+        # One group for gfs, one for ecmwf
+        assert len(yesterday_groups) == 2
