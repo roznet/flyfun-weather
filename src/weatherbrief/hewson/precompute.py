@@ -39,6 +39,7 @@ from pathlib import Path
 import numpy as np
 
 from weatherbrief.frontal.detect import compute_hewson_diagnostics
+from weatherbrief.process_rss import log_memory
 from weatherbrief.frontal.grid import (
     build_grid_coords,
     build_terrain_mask,
@@ -577,4 +578,5 @@ def run_once(
         result.api_calls_total,
         fetch_total, compute_total, write_total,
     )
+    log_memory("hewson precompute", logger)
     return result

@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 from weatherbrief.process_rss import current_rss_mb as _current_rss_mb
+from weatherbrief.process_rss import log_memory as _log_memory
 
 
 def _peak_rss_mb() -> float | None:
@@ -688,4 +689,5 @@ def execute_briefing(
         total = sum(stage_timings.values())
         logger.info("Pipeline timing: %s total=%.2fs", parts, total)
 
+    _log_memory("briefing refresh", logger)
     return result

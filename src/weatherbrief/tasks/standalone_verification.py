@@ -28,7 +28,7 @@ from weatherbrief.db.models import (
     VerificationScoreRow,
 )
 from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
-from weatherbrief.process_rss import current_rss_mb
+from weatherbrief.process_rss import current_rss_mb, log_memory
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
 
 logger = logging.getLogger(__name__)
@@ -1317,6 +1317,7 @@ def run_standalone_cycle(
                 peaks.peak_cgroup_mb if peaks.peak_cgroup_mb is not None else "n/a",
                 peaks.samples,
             )
+        log_memory(f"standalone {cycle_type}", logger)
 
         # Anomaly check runs after commit so the current cycle's row exists
         # in the table — keeps the baseline query consistent across cycles.
