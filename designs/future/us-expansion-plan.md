@@ -48,7 +48,7 @@ Score table growth is the storage concern. Activate the existing `verification_m
 
 ## Cache rebuild scaling
 
-`tasks/cache_builder.py` rebuilds all three cache categories (stats / verif_map / forecast_map) after each cycle. Currently 42 entries. With per-region split for forecast_map and verif_map: ~62 entries. Each entry runs aggregation queries against snapshots/scores. Watch the `Cache rebuild: ... (%dms)` log line — should stay under 30s.
+`tasks/cache_builder.py` rebuilds all three cache categories (stats / bias_leaderboard / forecast_map) after each cycle. Currently ~33 entries (6 stats + 27 leaderboard + N forecast_map per available day/hour). With per-region split for forecast_map and bias_leaderboard: ~50 entries. Each entry runs an aggregation query against the rollup / snapshots. Watch the `Cache rebuild: ... (%dms)` log line — should stay well under 30s (post-#154 typical is ~2s on the current dataset).
 
 ## Implementation order
 

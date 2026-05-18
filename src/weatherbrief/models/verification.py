@@ -122,9 +122,17 @@ class CategoryBiasStats(BaseModel):
 class OptimisticBiasLeaderboardRow(BaseModel):
     """One airport in the optimistic-bias leaderboard.
 
-    Score is the issue-#154 formula:
-        ``(n_cat_opt_1 + 2 * n_cat_opt_2) / n``
-    — bigger = model over-promises more at this airport.
+    Score formula:
+        ``(n_cat_opt_1 + 2 * n_cat_opt_2) / n_with_cat``
+
+    where ``n_with_cat`` is the count of scores with valid category pairs
+    (``n_cat_match + n_cat_opt_1 + n_cat_opt_2 + n_cat_pess_1 + n_cat_pess_2``).
+    Issue #154 spec said ``/ n``; we tightened the denominator so NULL-category
+    rows don't deflate the score. See
+    ``verification_stats.get_optimistic_bias_leaderboard`` for the rationale.
+
+    ``n`` (this field) is the total sample count including NULL-category rows
+    — useful for the ``n < 10`` noise threshold and the public sample display.
     """
 
     icao: str

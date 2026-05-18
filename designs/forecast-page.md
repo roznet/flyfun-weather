@@ -1,10 +1,12 @@
 # Forecast Page
 
-> Pan-European weather overview map with per-airport forecast visualization and model accuracy heatmaps, powered by standalone verification snapshots.
+> Pan-European weather overview map with per-airport forecast visualization, powered by standalone verification snapshots.
 
 ## Intent
 
-Provide a spatial overview of current weather conditions and model accuracy across ~830 European airports. Three tabs: forecast overview (color-coded map by metric), model accuracy (verification heatmap), and detailed stats (embedded verification dashboard). This page reuses data already collected by the standalone verification pipeline — no additional data fetching required.
+Provide a spatial overview of current weather conditions across ~830 European airports. The page reuses data already collected by the standalone verification pipeline — no additional data fetching required.
+
+**Removed in #154**: the Model Accuracy Map tab and its underlying `get_verification_map_data` query / `verif_map:*` cache keys / `GET /maps/verification` endpoint are gone. Per-airport accuracy is now surfaced via the optimistic-bias leaderboard (see ``metar-taf-accuracy.md``).
 
 ## Architecture
 
@@ -14,22 +16,19 @@ Backend                                    Frontend
 api/maps.py                                maps.html (template)
 ├── GET /maps/forecast                     maps-main.ts (controller)
 │   → cache or map_queries.get_forecast_   ├── state mgmt (day/hour/model/metric)
-│     map_data()                           ├── tab switching (forecast/accuracy/stats)
-├── GET /maps/forecast/hours               └── data loading + rerender
-│   → available hours for a day            adapters/maps-adapter.ts (API client)
-├── GET /maps/verification                 ├── fetchForecastMap()
-│   → cache or map_queries.get_            ├── fetchVerificationMap()
-│     verification_map_data()              └── fetchAvailableHours()
+│     map_data()                           ├── tab switching (forecast/synoptic/stats)
+└── GET /maps/forecast/hours               └── data loading + rerender
+    → available hours for a day            adapters/maps-adapter.ts (API client)
+                                           ├── fetchForecastMap()
+                                           └── fetchAvailableHours()
                                            visualization/weather-map.ts (Leaflet map)
-Cache layer:                               ├── setForecastData()
-  verification_cache table (JSON blobs)    └── setVerificationData()
+Cache layer:                               └── setForecastData()
+  verification_cache table (JSON blobs)
   ├── forecast_map:{day}:{hour}
-  ├── verif_map:{model}:{days_out}:{period}
   └── staleness: source_max_time vs live MAX
 
 Data source:
   airport_forecast_snapshots table
-  verification_scores table
   (from standalone verification pipeline)
 ```
 
@@ -42,12 +41,6 @@ Data source:
 - **Model modes**: Worst consensus, Majority consensus, or individual model (GFS/ICON/ECMWF)
 - **Agreement indicator**: Border color shows model divergence (good/moderate/poor) in consensus modes
 - Switching metric or model is client-side rerender; switching day/hour/consensus mode triggers API call
-
-### Model Accuracy
-- Per-airport verification accuracy, marker size scales with sample count
-- **Filters**: Period (7d/30d), days-out (D-0 to D-3), model, metric
-- **Metrics**: Category Match %, Ceiling MAE, Wind MAE, Temperature MAE
-- Authenticated users (same as forecast tab)
 
 ### Accuracy Stats
 - Embedded iframe to `/verification.html?embed`
@@ -79,9 +72,7 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 
 **Forecast map**: Cached for "worst" consensus mode only (default). Cache key: `forecast_map:{day}:{hour}`. Staleness checked against `MAX(AirportForecastSnapshotRow.fetched_at)`. Individual model or majority consensus always runs live.
 
-**Verification map**: Cached for days_out 0 and 1 only. Cache key: `verif_map:{model}:{days_out}:{period}`. Staleness checked against `MAX(VerificationScoreRow.observation_time)` filtered by source='standalone'. Other days_out values run live.
-
-**Fallback**: If cache is stale or missing, both endpoints fall back to live queries transparently.
+**Fallback**: If cache is stale or missing, the endpoint falls back to a live query transparently.
 
 ## Key Queries
 
@@ -91,10 +82,6 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 3. Derive `flight_category` from ceiling + visibility via `classify_flight_category()`
 4. Enrich each snapshot with runway crosswind/headwind: load runway headings from airports DB, compute `compute_runway_winds()` per model, select best runway (min crosswind, max headwind), attach `crosswind_kt`, `headwind_kt`, `best_runway_id`, and gust equivalents
 5. Group by airport → per-model data + computed consensus
-
-### Verification Map (`get_verification_map_data`)
-1. Filter `VerificationScoreRow` by source='standalone', days_out, time window, optional model
-2. Aggregate per ICAO: sample_count, category_match_rate, MAE for ceiling/wind/temp/vis, ceiling_bias
 
 ## Color Scales
 
@@ -118,7 +105,7 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 - **Per-model-only metrics**: `convective_risk` uses worst-across-models in consensus mode; `cloud_cover_pct` uses the average; `crosswind_kt`/`headwind_kt` use max (worst) across models
 - **Runway wind data**: Crosswind/headwind require runway headings from the airports database; airports without runway data show no crosswind/headwind values. Best runway is selected by minimizing crosswind then maximizing headwind
 - **Marker sizing**: Radius scales with zoom level (3-8px) for readability at all zoom levels
-- **All map endpoints require authentication**: Both forecast and verification data are available to any authenticated user
+- **All map endpoints require authentication**: forecast data is available to any authenticated user
 
 ## References
 
