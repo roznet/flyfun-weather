@@ -43,17 +43,6 @@ const MOCK_FORECAST: Record<string, unknown> = {
   ],
 };
 
-const MOCK_VERIF = {
-  period_since: '2026-03-30T00:00:00+00:00',
-  period_until: '2026-04-06T00:00:00+00:00',
-  model: 'all',
-  days_out: 0,
-  airports: [
-    { icao: 'LFPG', lat: 49.01, lon: 2.55, sample_count: 42, category_match_pct: 78.5, ceiling_mae_ft: 450, wind_mae_kt: 3.2, temp_mae_c: 1.1, vis_mae_m: 800, ceiling_bias_ft: 200 },
-    { icao: 'EDDF', lat: 50.03, lon: 8.57, sample_count: 38, category_match_pct: 85.0, ceiling_mae_ft: 300, wind_mae_kt: 2.5, temp_mae_c: 0.9, vis_mae_m: 500, ceiling_bias_ft: -100 },
-  ],
-};
-
 const MOCK_HOURS = { day: 0, date: '2026-04-06', hours: [6, 9, 12, 15, 18] };
 
 // ---------------------------------------------------------------------------
@@ -68,7 +57,6 @@ async function mockApis(page: import('@playwright/test').Page) {
     if (route.request().url().includes('/hours')) return route.fallthrough();
     return route.fulfill({ json: MOCK_FORECAST });
   });
-  await page.route('**/api/maps/verification*', route => route.fulfill({ json: MOCK_VERIF }));
   // Preferences (for nav rendering)
   await page.route('**/api/user/preferences', route => route.fulfill({ json: { pirep_enabled: false } }));
   // Messages badge
@@ -117,21 +105,6 @@ test.describe('Forecast page', () => {
     await expect(detail).toContainText('experimental');
   });
 
-  test('switching to Model Accuracy Map tab shows verification map', async ({ page }) => {
-    await page.goto('/maps.html');
-    // Click verification tab
-    await page.click('.tab-btn[data-tab="verification"]');
-    await expect(page.locator('.tab-btn[data-tab="verification"]')).toHaveClass(/active/);
-    // Verification controls visible
-    await expect(page.locator('#controls-verification')).toBeVisible();
-    // Forecast controls hidden (inside hidden tab-panel)
-    await expect(page.locator('#panel-forecast')).not.toBeVisible();
-    // Verification map initializes
-    await expect(page.locator('#map-container-verif.leaflet-container')).toBeVisible({ timeout: 5000 });
-    // Info shows airports
-    await expect(page.locator('#map-info-verif')).toContainText('2 airports');
-  });
-
   test('switching to Accuracy Stats tab shows iframe', async ({ page }) => {
     await page.goto('/maps.html');
     await page.click('.tab-btn[data-tab="stats"]');
@@ -144,8 +117,8 @@ test.describe('Forecast page', () => {
 
   test('switching back to forecast tab preserves map', async ({ page }) => {
     await page.goto('/maps.html');
-    // Go to verification then back
-    await page.click('.tab-btn[data-tab="verification"]');
+    // Go to stats tab then back
+    await page.click('.tab-btn[data-tab="stats"]');
     await page.click('.tab-btn[data-tab="forecast"]');
     await expect(page.locator('#panel-forecast')).toBeVisible();
     await expect(page.locator('#map-container.leaflet-container')).toBeVisible();

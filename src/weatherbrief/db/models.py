@@ -727,6 +727,75 @@ class VerificationMonthlyStatsRow(Base):
     n_convection_false_alarm: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class VerificationDailyStatsRow(Base):
+    """Daily pre-aggregation of NWP verification scores per airport/model/days_out.
+
+    One row per (date, source, model, days_out, icao). Powers the model
+    accuracy dashboard and optimistic-bias leaderboard. Rolled up after
+    each standalone verification cycle; idempotent (DELETE+INSERT per day).
+
+    SUM columns (not averages) so periods compose by addition. Per-field
+    non-NULL counts (``n_ceiling``, ``n_wind``, ``n_temp``, ``n_vis``) are
+    stored so MAE can be computed correctly as ``sum_abs / n_<field>`` —
+    same semantics as ``func.avg(...)`` over raw scores, which only counts
+    rows with a non-NULL delta.
+
+    TAF rollup is out of scope; TAF queries continue to hit
+    ``taf_verification_scores`` directly.
+    """
+
+    __tablename__ = "verification_daily_stats"
+    __table_args__ = (
+        UniqueConstraint(
+            "date", "source", "model", "days_out", "icao", name="uq_vds_key",
+        ),
+        Index("ix_vds_date_model", "date", "source", "model", "days_out"),
+        Index("ix_vds_icao_model", "icao", "source", "model", "days_out"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[date_t] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(20), nullable=False)
+    days_out: Mapped[int] = mapped_column(Integer, nullable=False)
+    icao: Mapped[str] = mapped_column(String(4), nullable=False)
+
+    # Sample size: total scores and per-delta-field non-NULL counts
+    n: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_ceiling: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_wind: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_temp: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_vis: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Category direction counts
+    n_cat_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_opt_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_opt_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_pess_1: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_cat_pess_2: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Continuous delta sums (signed and absolute). NULL when n_<field>=0.
+    sum_abs_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_abs_wind_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_abs_temp_delta_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_abs_vis_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Advisory direction counts
+    n_advisory_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_opt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_advisory_pess: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Precipitation / convection contingency counts. Both obs and fcst must
+    # be non-NULL for a score to count toward any of these.
+    n_precip_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_precip_miss: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_precip_false_alarm: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_convection_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_convection_miss: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    n_convection_false_alarm: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class AirportMonthlySummaryRow(Base):
     """Pre-aggregated monthly observation climatology per airport.
 
@@ -860,6 +929,11 @@ class AirportDailySummaryRow(Base):
     gust_max_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
     temp_min_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     temp_max_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Volatility — category transitions between consecutive obs within
+    # the UTC day. Summed across a month equals the monthly
+    # ``category_changes`` column.
+    n_category_changes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class VerificationCacheRow(Base):

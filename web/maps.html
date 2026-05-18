@@ -359,7 +359,6 @@
     <!-- Tab bar (settings-tabs underline style) -->
     <div class="settings-tabs" id="tabs">
       <button class="tab-btn active" data-tab="forecast">Forecast Overview</button>
-      <button class="tab-btn" data-tab="verification">Model Accuracy Map</button>
       <button class="tab-btn" data-tab="synoptic">Synoptic Forecast</button>
       <button class="tab-btn" data-tab="stats">Accuracy Stats</button>
     </div>
@@ -412,43 +411,6 @@
         <div class="ap-panel-host" id="ap-panel-host" style="display:none"></div>
       </div>
       <div class="map-info" id="map-info"></div>
-    </div>
-
-    <!-- Tab: Model Accuracy Map -->
-    <div id="panel-verification" class="tab-panel">
-      <div class="maps-controls" id="controls-verification">
-        <label>Period</label>
-        <div class="btn-group" id="verif-period-picker">
-          <button class="btn-toggle active" data-period="7d">7d</button>
-          <button class="btn-toggle" data-period="30d">30d</button>
-        </div>
-        <label>Days out</label>
-        <div class="btn-group" id="verif-days-picker">
-          <button class="btn-toggle active" data-days="0">D-0</button>
-          <button class="btn-toggle" data-days="1">D-1</button>
-          <button class="btn-toggle" data-days="2">D-2</button>
-          <button class="btn-toggle" data-days="3">D-3</button>
-        </div>
-        <label>Model</label>
-        <div class="btn-group" id="verif-model-picker">
-          <button class="btn-toggle active" data-model="all">All</button>
-          <button class="btn-toggle" data-model="gfs">GFS</button>
-          <button class="btn-toggle" data-model="icon">ICON</button>
-          <button class="btn-toggle" data-model="ecmwf">ECMWF</button>
-        </div>
-        <label>Metric</label>
-        <select id="verif-metric-picker">
-          <option value="category_match_pct" selected>Category Match %</option>
-          <option value="ceiling_mae_ft">Ceiling MAE (ft)</option>
-          <option value="wind_mae_kt">Wind MAE (kt)</option>
-          <option value="temp_mae_c">Temperature MAE</option>
-        </select>
-      </div>
-
-      <div class="map-wrapper" id="verif-map-wrapper">
-        <div id="map-container-verif" style="width:100%; height:calc(100vh - 280px); min-height:400px; border-radius:8px; border:1px solid var(--border); overflow:hidden;"></div>
-      </div>
-      <div class="map-info" id="map-info-verif"></div>
     </div>
 
     <!-- Tab: Synoptic Forecast (Hewson gridded fields) -->

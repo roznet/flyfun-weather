@@ -3,9 +3,12 @@
 All endpoints require authentication (current_user_id).
 
   GET /maps/forecast              — forecast overview for all watchlist airports
-  GET /maps/verification          — per-airport verification accuracy stats
   GET /maps/forecast/hours        — available sample hours for a given day
   GET /maps/airport-weather       — forecast + observations for specific airports
+
+The legacy ``GET /maps/verification`` (per-airport accuracy map) was
+removed in #154. Use the optimistic-bias leaderboard endpoint instead
+(driven by ``verification_stats.get_optimistic_bias_leaderboard``).
 """
 
 from __future__ import annotations
@@ -66,34 +69,6 @@ def get_forecast_map(
     )
 
     return get_forecast_map_data(db, forecast_hour, airports_db)
-
-
-@router.get("/verification")
-def get_verification_map(
-    period: str = Query(default="7d", pattern=r"^(7d|30d)$"),
-    model: str = Query(default="all"),
-    days_out: int = Query(default=0, ge=0, le=3),
-    _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
-    airports_db: str = Depends(_airports_db),
-):
-    """Return per-airport verification accuracy stats for the map."""
-    from weatherbrief.tasks.cache_builder import get_cached, is_stale
-    from weatherbrief.tasks.map_queries import get_verification_map_data
-
-    # Try cache (only for days_out 0 and 1 which are pre-cached)
-    if days_out in (0, 1):
-        cache_key = f"verif_map:{model}:{days_out}:{period}"
-        if not is_stale(db, cache_key, "standalone"):
-            cached = get_cached(db, cache_key)
-            if cached is not None:
-                return cached
-
-    now = datetime.now(timezone.utc)
-    hours = {"7d": 168, "30d": 720}[period]
-    since = now - timedelta(hours=hours)
-
-    return get_verification_map_data(db, since, now, model, days_out, airports_db)
 
 
 @router.get("/forecast/hours")

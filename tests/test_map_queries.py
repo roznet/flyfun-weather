@@ -256,84 +256,10 @@ class TestGetForecastMapData:
         assert "LFPG" in icaos
 
 
-class TestGetVerificationMapData:
-    """Tests for get_verification_map_data()."""
-
-    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_aggregates_by_airport(self, _mock_coords, db_session):
-        from weatherbrief.tasks.map_queries import get_verification_map_data
-
-        since = NOW - timedelta(days=7)
-        # Insert multiple scores for same airport
-        for i in range(5):
-            obs_time = NOW - timedelta(hours=i * 3)
-            _insert_verif_score(db_session, icao="LFPG", model="gfs",
-                                observation_time=obs_time,
-                                ceiling_delta_ft=100.0 * (i + 1),
-                                category_match=(i < 4))  # 80% match rate
-        db_session.commit()
-
-        result = get_verification_map_data(db_session, since, NOW, "gfs", 0, "/fake/db")
-        assert len(result["airports"]) == 1
-
-        apt = result["airports"][0]
-        assert apt["icao"] == "LFPG"
-        assert apt["sample_count"] == 5
-        assert apt["category_match_pct"] == pytest.approx(80.0)
-        assert apt["ceiling_mae_ft"] > 0
-
-    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_filters_by_model(self, _mock_coords, db_session):
-        from weatherbrief.tasks.map_queries import get_verification_map_data
-
-        since = NOW - timedelta(days=7)
-        _insert_verif_score(db_session, icao="LFPG", model="gfs")
-        _insert_verif_score(db_session, icao="LFPG", model="ecmwf",
-                            model_init_time=ECMWF_INIT,
-                            observation_time=NOW - timedelta(hours=1))
-        db_session.commit()
-
-        # Filter to ecmwf only
-        result = get_verification_map_data(db_session, since, NOW, "ecmwf", 0, "/fake/db")
-        assert len(result["airports"]) == 1
-        assert result["model"] == "ecmwf"
-
-    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_all_models_combined(self, _mock_coords, db_session):
-        from weatherbrief.tasks.map_queries import get_verification_map_data
-
-        since = NOW - timedelta(days=7)
-        _insert_verif_score(db_session, icao="LFPG", model="gfs")
-        _insert_verif_score(db_session, icao="LFPG", model="ecmwf",
-                            model_init_time=ECMWF_INIT,
-                            observation_time=NOW - timedelta(hours=1))
-        db_session.commit()
-
-        result = get_verification_map_data(db_session, since, NOW, "all", 0, "/fake/db")
-        assert result["airports"][0]["sample_count"] == 2
-
-    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_filters_by_days_out(self, _mock_coords, db_session):
-        from weatherbrief.tasks.map_queries import get_verification_map_data
-
-        since = NOW - timedelta(days=7)
-        _insert_verif_score(db_session, icao="LFPG", days_out=0)
-        _insert_verif_score(db_session, icao="LFPG", days_out=1,
-                            observation_time=NOW - timedelta(hours=1))
-        db_session.commit()
-
-        result_d0 = get_verification_map_data(db_session, since, NOW, "all", 0, "/fake/db")
-        result_d1 = get_verification_map_data(db_session, since, NOW, "all", 1, "/fake/db")
-        assert result_d0["airports"][0]["sample_count"] == 1
-        assert result_d1["airports"][0]["sample_count"] == 1
-
-    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_empty_when_no_scores(self, _mock_coords, db_session):
-        from weatherbrief.tasks.map_queries import get_verification_map_data
-
-        since = NOW - timedelta(days=7)
-        result = get_verification_map_data(db_session, since, NOW, "all", 0, "/fake/db")
-        assert result["airports"] == []
+# Note: TestGetVerificationMapData was removed in #154 along with
+# get_verification_map_data. The optimistic-bias leaderboard that
+# replaces this view is exercised in
+# ``tests/test_verification_stats_rollup_gate.py``.
 
 
 # ---------------------------------------------------------------------------
@@ -538,17 +464,8 @@ class TestForecastMapEndpoint:
         assert resp.status_code == 200
 
 
-class TestVerificationMapEndpoint:
-    """Tests for GET /api/maps/verification."""
-
-    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_authenticated_user_can_access(self, _mock_coords, app_db, tmp_path, monkeypatch):
-        client = _make_client(app_db, tmp_path, monkeypatch)
-
-        resp = client.get("/api/maps/verification?period=7d&model=all&days_out=0")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "airports" in data
+# TestVerificationMapEndpoint was removed in #154 — the endpoint and
+# its associated query function (get_verification_map_data) are gone.
 
 
 class TestAvailableHoursEndpoint:

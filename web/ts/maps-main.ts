@@ -1,16 +1,16 @@
-/** Maps page — forecast overview + verification bias (admin tab). */
+/** Maps page — forecast overview + synoptic forecast + accuracy stats. */
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
-  fetchForecastMap, fetchVerificationMap, fetchAvailableHours,
-  type ForecastMapResponse, type VerificationMapResponse,
+  fetchForecastMap, fetchAvailableHours,
+  type ForecastMapResponse,
 } from './adapters/maps-adapter';
 import {
   fetchHewsonManifest, fetchHewsonSlice, fetchHewsonAllMetrics,
   type HewsonManifest, type HewsonManifestSnapshot,
   type HewsonAllMetricsSlice,
 } from './adapters/hewson-map-adapter';
-import { WeatherMap, type ForecastMetric, type VerifMetric } from './visualization/weather-map';
+import { WeatherMap, type ForecastMetric } from './visualization/weather-map';
 import { AirportProfilePanel } from './visualization/airport-profile-panel';
 import { SynopticMap } from './visualization/synoptic-map';
 import { type HewsonMetric, type ColorScale, vRangeFor } from './visualization/hewson-colormaps';
@@ -22,9 +22,8 @@ import { createUrlState } from './utils/url-state';
 import { shareCurrentUrl } from './utils/share-link';
 
 let forecastMap: WeatherMap | null = null;
-let verifMap: WeatherMap | null = null;
 let synopticMap: SynopticMap | null = null;
-type Tab = 'forecast' | 'verification' | 'synoptic' | 'stats';
+type Tab = 'forecast' | 'synoptic' | 'stats';
 let currentTab: Tab = 'forecast';
 let statsLoaded = false;
 
@@ -68,24 +67,17 @@ const AIRPORT_PROFILE_WINDOW_H = 3;
 let airportPanel: AirportProfilePanel | null = null;
 let airportPanelIcao: string | null = null;
 
-// Verification state
-let verifData: VerificationMapResponse | null = null;
-let verifPeriod = '7d';
-let verifModel = 'all';
-let verifDays = 0;
-let verifMetric: VerifMetric = 'category_match_pct';
-
 // --- URL state ---
 //
-// Schema covers the forecast and verification tabs. The synoptic tab's
-// init time is data-driven (depends on the manifest) and admin-gated, so
-// it's deliberately not deep-linked yet — switching to the synoptic tab
-// is preserved via the `tab` key, but its inner controls aren't.
+// Schema covers the forecast tab. The synoptic tab's init time is
+// data-driven (depends on the manifest) and admin-gated, so it's
+// deliberately not deep-linked yet — switching to the synoptic tab is
+// preserved via the `tab` key, but its inner controls aren't.
 //
 // Defaults match the module-level state above and the HTML's pre-active
 // buttons, so an untouched view yields a bare `/maps.html` URL.
 const mapsUrlState = createUrlState({
-  tab:         { default: 'forecast' as Tab, values: ['forecast', 'verification', 'synoptic', 'stats'] as readonly Tab[] },
+  tab:         { default: 'forecast' as Tab, values: ['forecast', 'synoptic', 'stats'] as readonly Tab[] },
   'fc.day':    { default: 0,  values: [0, 1, 2, 3] as readonly number[] },
   'fc.hour':   { default: 12, values: [6, 9, 12, 15, 18] as readonly number[] },
   'fc.model':  { default: 'worst', values: ['worst', 'majority', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
@@ -99,13 +91,6 @@ const mapsUrlState = createUrlState({
   // consensus mode), so they're separate keys.
   'fc.apt':    { default: '' },
   'fc.apModel':{ default: 'ecmwf', values: ['gfs', 'icon', 'ecmwf'] as readonly string[] },
-  'vf.period': { default: '7d', values: ['7d', '30d'] as readonly string[] },
-  'vf.days':   { default: 0, values: [0, 1, 2, 3] as readonly number[] },
-  'vf.model':  { default: 'all', values: ['all', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
-  'vf.metric': {
-    default: 'category_match_pct' as VerifMetric,
-    values: ['category_match_pct', 'ceiling_mae_ft', 'wind_mae_kt', 'temp_mae_c'] as readonly VerifMetric[],
-  },
 });
 
 function syncUrl(): void {
@@ -117,10 +102,6 @@ function syncUrl(): void {
     'fc.metric': fcMetric,
     'fc.apt':    airportPanelIcao ?? '',
     'fc.apModel': airportPanel?.getModel() ?? 'ecmwf',
-    'vf.period': verifPeriod,
-    'vf.days':   verifDays,
-    'vf.model':  verifModel,
-    'vf.metric': verifMetric,
   });
 }
 
@@ -235,24 +216,9 @@ async function loadForecast(): Promise<void> {
   }
 }
 
-async function loadVerification(): Promise<void> {
-  showInfo('Loading verification...', 'map-info-verif');
-  try {
-    verifData = await fetchVerificationMap(verifPeriod, verifModel, verifDays);
-    if (verifMap && verifData) {
-      verifMap.setVerificationData(verifData, verifMetric);
-      showInfo(`${verifData.airports.length} airports | ${verifData.model.toUpperCase()} D-${verifData.days_out} (${verifPeriod})`, 'map-info-verif');
-    }
-  } catch (err) {
-    showInfo(`Failed to load verification: ${err instanceof Error ? err.message : err}`, 'map-info-verif');
-  }
-}
-
 function rerender(): void {
   if (currentTab === 'forecast' && forecastData && forecastMap) {
     forecastMap.setForecastData(forecastData, fcMetric, fcModel);
-  } else if (currentTab === 'verification' && verifData && verifMap) {
-    verifMap.setVerificationData(verifData, verifMetric);
   }
 }
 
@@ -314,19 +280,6 @@ function wireForecastControls(): void {
   const metricSel = $('metric-picker') as HTMLSelectElement | null;
   metricSel?.addEventListener('change', () => {
     fcMetric = metricSel.value as ForecastMetric;
-    syncUrl();
-    rerender();
-  });
-}
-
-function wireVerificationControls(): void {
-  wireButtonGroup('verif-period-picker', 'period', (v) => { verifPeriod = v; syncUrl(); loadVerification(); });
-  wireButtonGroup('verif-days-picker', 'days', (v) => { verifDays = parseInt(v); syncUrl(); loadVerification(); });
-  wireButtonGroup('verif-model-picker', 'model', (v) => { verifModel = v; syncUrl(); loadVerification(); });
-
-  const metricSel = $('verif-metric-picker') as HTMLSelectElement | null;
-  metricSel?.addEventListener('change', () => {
-    verifMetric = metricSel.value as VerifMetric;
     syncUrl();
     rerender();
   });
@@ -700,21 +653,6 @@ function switchTab(tab: Tab): void {
     if (!forecastData) loadForecast();
     else rerender();
     setTimeout(() => forecastMap?.invalidateSize(), 100);
-  } else if (tab === 'verification') {
-    // Delay map init until after panel is visible (Leaflet needs computed size)
-    setTimeout(() => {
-      if (!verifMap) {
-        const container = $('map-container-verif');
-        if (container) {
-          verifMap = new WeatherMap(container);
-          verifMap.init();
-        }
-      } else {
-        verifMap.invalidateSize();
-      }
-      if (!verifData) loadVerification();
-      else rerender();
-    }, 50);
   } else if (tab === 'synoptic') {
     setTimeout(() => { initSynopticTab(); }, 50);
   } else if (tab === 'stats') {
@@ -756,7 +694,7 @@ async function main(): Promise<void> {
     if (detail) detail.classList.toggle('open');
   });
 
-  // Init forecast map (verification map lazy-inits on tab switch)
+  // Init forecast map
   const container = $('map-container');
   if (!container) return;
   forecastMap = new WeatherMap(container);
@@ -768,7 +706,6 @@ async function main(): Promise<void> {
 
   // Wire controls
   wireForecastControls();
-  wireVerificationControls();
   wireSynopticControls();
 
   // Tab clicks
@@ -797,10 +734,6 @@ async function main(): Promise<void> {
   fcHour      = init['fc.hour'];
   fcModel     = init['fc.model'];
   fcMetric    = init['fc.metric'];
-  verifPeriod = init['vf.period'];
-  verifDays   = init['vf.days'];
-  verifModel  = init['vf.model'];
-  verifMetric = init['vf.metric'];
 
   if (!urlParams.has('fc.hour')) {
     const nowHour = new Date().getUTCHours();
@@ -817,11 +750,6 @@ async function main(): Promise<void> {
   setActive('model-picker', fcModel, 'model');
   const fcMetricSel = $('metric-picker') as HTMLSelectElement | null;
   if (fcMetricSel) fcMetricSel.value = fcMetric;
-  setActive('verif-period-picker', verifPeriod, 'period');
-  setActive('verif-days-picker', String(verifDays), 'days');
-  setActive('verif-model-picker', verifModel, 'model');
-  const vfMetricSel = $('verif-metric-picker') as HTMLSelectElement | null;
-  if (vfMetricSel) vfMetricSel.value = verifMetric;
 
   // Wire the share button (in the page header). Flashes "Link copied"
   // on success; on mobile the OS share sheet handles it instead.

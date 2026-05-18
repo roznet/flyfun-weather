@@ -1,9 +1,8 @@
-/** Weather overview map — Leaflet map with airport markers colored by forecast or verification metrics. */
+/** Weather overview map — Leaflet map with airport markers colored by forecast metrics. */
 
 import * as L from 'leaflet';
 import type {
   ForecastAirport, ForecastMapResponse, ModelForecast, ConsensusForecast,
-  VerificationAirport, VerificationMapResponse,
 } from '../adapters/maps-adapter';
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -82,21 +81,6 @@ function visibilityColor(m: number): string {
 function cloudCoverColor(pct: number): string {
   const g = Math.round(220 - (pct / 100) * 160);
   return `rgb(${g},${g},${g + 10})`;
-}
-
-function accuracyColor(pct: number): string {
-  if (pct >= 80) return '#22c55e';
-  if (pct >= 60) return '#eab308';
-  if (pct >= 40) return '#f97316';
-  return '#ef4444';
-}
-
-function maeColor(value: number, thresholdBad: number): string {
-  const ratio = Math.min(value / thresholdBad, 1);
-  if (ratio < 0.3) return '#22c55e';
-  if (ratio < 0.6) return '#eab308';
-  if (ratio < 0.8) return '#f97316';
-  return '#ef4444';
 }
 
 // --- Forecast metric extraction ---
@@ -243,36 +227,6 @@ function getForecastTooltip(airport: ForecastAirport, model: string, metric: For
     lines.push(`${label}: <b>${formatMetricValue(d, metric)}</b>`);
   }
   return lines.join('<br>');
-}
-
-// --- Verification metric extraction ---
-
-export type VerifMetric = 'category_match_pct' | 'ceiling_mae_ft' | 'wind_mae_kt' | 'temp_mae_c';
-
-function getVerifColor(airport: VerificationAirport, metric: VerifMetric): string {
-  switch (metric) {
-    case 'category_match_pct':
-      return accuracyColor(airport.category_match_pct);
-    case 'ceiling_mae_ft':
-      return maeColor(airport.ceiling_mae_ft, 1500);
-    case 'wind_mae_kt':
-      return maeColor(airport.wind_mae_kt, 10);
-    case 'temp_mae_c':
-      return maeColor(airport.temp_mae_c, 5);
-    default:
-      return '#888';
-  }
-}
-
-function getVerifTooltip(airport: VerificationAirport): string {
-  return [
-    `<b>${airport.icao}</b> (n=${airport.sample_count})`,
-    `Category match: ${airport.category_match_pct.toFixed(1)}%`,
-    `Ceiling MAE: ${Math.round(airport.ceiling_mae_ft)} ft`,
-    `Wind MAE: ${airport.wind_mae_kt.toFixed(1)} kt`,
-    `Temp MAE: ${airport.temp_mae_c.toFixed(1)} C`,
-    `Ceiling bias: ${airport.ceiling_bias_ft > 0 ? '+' : ''}${Math.round(airport.ceiling_bias_ft)} ft`,
-  ].join('<br>');
 }
 
 // --- Legend definitions ---
@@ -510,77 +464,6 @@ export class WeatherMap {
         entry.marker.bringToFront();
       }
     }
-  }
-
-  setVerificationData(data: VerificationMapResponse, metric: VerifMetric): void {
-    if (!this.markersGroup || !this.map) return;
-    this.markersGroup.clearLayers();
-
-    const r = this.markerRadius();
-    const minSamples = 5;
-
-    for (const apt of data.airports) {
-      if (apt.sample_count < minSamples) continue;
-
-      const color = getVerifColor(apt, metric);
-      // Scale radius by sample count (more data = larger marker)
-      const sizeBonus = Math.min(apt.sample_count / 100, 1) * 3;
-
-      const marker = L.circleMarker([apt.lat, apt.lon], {
-        radius: r + sizeBonus,
-        fillColor: color,
-        fillOpacity: 0.8,
-        color: color,
-        weight: 1,
-        opacity: 1,
-      });
-
-      marker.bindTooltip(getVerifTooltip(apt), { className: 'map-tooltip' });
-      marker.addTo(this.markersGroup);
-    }
-
-    this.attachZoomHandler();
-
-    // Verification legend
-    const verifLegends: Record<VerifMetric, { title: string; items: Array<{ color: string; label: string }> }> = {
-      category_match_pct: {
-        title: 'Category Match %',
-        items: [
-          { color: '#22c55e', label: '>= 80%' },
-          { color: '#eab308', label: '60-80%' },
-          { color: '#f97316', label: '40-60%' },
-          { color: '#ef4444', label: '< 40%' },
-        ],
-      },
-      ceiling_mae_ft: {
-        title: 'Ceiling MAE (ft)',
-        items: [
-          { color: '#22c55e', label: '< 450' },
-          { color: '#eab308', label: '450-900' },
-          { color: '#f97316', label: '900-1200' },
-          { color: '#ef4444', label: '> 1200' },
-        ],
-      },
-      wind_mae_kt: {
-        title: 'Wind MAE (kt)',
-        items: [
-          { color: '#22c55e', label: '< 3' },
-          { color: '#eab308', label: '3-6' },
-          { color: '#f97316', label: '6-8' },
-          { color: '#ef4444', label: '> 8' },
-        ],
-      },
-      temp_mae_c: {
-        title: 'Temp MAE (C)',
-        items: [
-          { color: '#22c55e', label: '< 1.5' },
-          { color: '#eab308', label: '1.5-3' },
-          { color: '#f97316', label: '3-4' },
-          { color: '#ef4444', label: '> 4' },
-        ],
-      },
-    };
-    this.renderLegend(verifLegends[metric]);
   }
 
   private renderLegend(legend: { title: string; items: Array<{ color: string; label: string }> }): void {

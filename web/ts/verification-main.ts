@@ -390,16 +390,12 @@ function renderBias(data: VerificationDigest): void {
   html += '<table class="admin-table"><thead><tr>';
   html += '<th>Model</th><th class="num">D-out</th><th class="num">Scores</th>';
   html += '<th class="num" title="Model predicted better than actual by 1 cat level">Opt +1</th>';
-  html += '<th class="num" title="Model predicted better than actual by 2 cat levels">Opt +2</th>';
-  html += '<th class="num" title="Model predicted better than actual by 3 cat levels">Opt +3</th>';
+  html += '<th class="num" title="Model predicted better than actual by 2 or more cat levels">Opt +2+</th>';
   html += '<th class="num" title="Model predicted worse than actual by 1 cat level">Pess +1</th>';
-  html += '<th class="num" title="Model predicted worse than actual by 2 cat levels">Pess +2</th>';
-  html += '<th class="num" title="Model predicted worse than actual by 3 cat levels">Pess +3</th>';
+  html += '<th class="num" title="Model predicted worse than actual by 2 or more cat levels">Pess +2+</th>';
   html += '</tr></thead><tbody>';
 
   for (const b of bias) {
-    const optTotal = b.optimistic_1 + b.optimistic_2 + b.optimistic_3;
-    const pessTotal = b.pessimistic_1 + b.pessimistic_2 + b.pessimistic_3;
     const fmtCell = (n: number, danger: boolean) => {
       if (n === 0) return '<td class="num" style="color:var(--text-muted)">—</td>';
       const pct = ((n / b.total_scores) * 100).toFixed(1);
@@ -412,12 +408,9 @@ function renderBias(data: VerificationDigest): void {
     html += `<td class="num">${b.total_scores}</td>`;
     html += fmtCell(b.optimistic_1, true);
     html += fmtCell(b.optimistic_2, true);
-    html += fmtCell(b.optimistic_3, true);
     html += fmtCell(b.pessimistic_1, false);
     html += fmtCell(b.pessimistic_2, false);
-    html += fmtCell(b.pessimistic_3, false);
     html += '</tr>';
-    // Summary row if model has both D-0 and D-1 — skip for now, per-row is clear
   }
 
   html += '</tbody></table>';

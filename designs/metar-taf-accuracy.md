@@ -48,14 +48,22 @@ tasks/standalone_verification.py        ← standalone airport monitoring
 └── _record_failed_cycle()              ← error capture on failure
 
 tasks/verification_stats.py             ← shared queries for digest + dashboard
-├── get_activity_summary()
-├── get_category_accuracy()
-├── get_notable_misses()
-├── get_category_bias()
-├── get_wind_advisory_stats()
+├── get_activity_summary()              ← raw (COUNT DISTINCT obs_id), bounded
+├── get_category_accuracy()             ← from verification_daily_stats
+├── get_notable_misses()                ← raw (needs individual rows)
+├── get_category_bias_stats()           ← from verification_daily_stats (2 buckets)
+├── get_wind_advisory_accuracy()        ← from verification_daily_stats
+├── get_optimistic_bias_leaderboard()   ← from verification_daily_stats (#154)
 └── get_digest_data()                   ← orchestrator → VerificationDigestData
 
-tasks/verification_rollup.py            ← monthly pre-aggregation
+tasks/verification_daily_rollup.py      ← daily pre-aggregation (#154)
+├── rollup_day()                        ← pure SQL INSERT-SELECT, idempotent
+├── completed_days()                    ← UTC dates with un-rolled scores
+├── rollup_all_complete_days()          ← orchestrator
+├── rollup_today_and_pending()          ← + partial today, called from scheduler
+└── rebuild_all_days()                  ← post-migration re-roll
+
+tasks/verification_rollup.py            ← monthly pre-aggregation (NWP + TAF)
 ├── completed_months()                  ← find months ready for rollup
 ├── rollup_month()                      ← aggregate one month (idempotent)
 ├── category_direction()                ← match/optimistic_1-2/pessimistic_1-2
@@ -64,7 +72,7 @@ tasks/verification_rollup.py            ← monthly pre-aggregation
 
 tasks/cache_builder.py                  ← pre-computed API response cache
 ├── rebuild_stats_cache()               ← stats:{source}:{period} (24h/7d/30d)
-├── rebuild_verification_map_cache()    ← verif_map:{model}:{days_out}:{period}
+├── rebuild_bias_leaderboard_cache()    ← bias_leaderboard:{model}:{d}:{period}
 ├── rebuild_forecast_map_cache()        ← forecast_map:{day}:{hour}
 ├── is_stale()                          ← compare source_max_time vs live MAX
 ├── get_cached()                        ← load JSON blob by cache_key
@@ -93,6 +101,7 @@ db/models.py                            ← SQLAlchemy tables
 ├── FlightVerificationMapRow            ← thin linkage, CASCADE on flight delete
 ├── VerificationCycleRow                ← performance metrics per cycle
 ├── AirportForecastSnapshotRow          ← standalone NWP forecasts
+├── VerificationDailyStatsRow           ← pre-aggregated daily rollup (#154)
 ├── VerificationMonthlyStatsRow         ← pre-aggregated monthly rollup
 ├── VerificationCacheRow                ← JSON cache for dashboard/map responses
 
@@ -239,6 +248,45 @@ CREATE TABLE airport_forecast_snapshots (
 );
 ```
 
+### `verification_daily_stats` — Pre-Aggregated Daily Rollup (#154)
+
+One row per (date, source, model, days_out, icao). NWP scores only — TAF is
+out of scope (different key shape). Aggregated from raw `verification_scores`
+after each standalone verification cycle (`scheduler._run_standalone_once`
+calls `rollup_today_and_pending` before `cache_builder.rebuild_all`).
+
+```sql
+CREATE TABLE verification_daily_stats (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            DATE     NOT NULL,
+    source          VARCHAR(16) NOT NULL,    -- 'flight' / 'standalone_full' / 'standalone_light'
+    model           VARCHAR(20) NOT NULL,    -- 'gfs', 'icon', 'ecmwf'
+    days_out        INTEGER NOT NULL,
+    icao            VARCHAR(4) NOT NULL,
+    -- Sample size: total + per-delta non-NULL counts
+    n               INTEGER NOT NULL,
+    n_ceiling, n_wind, n_temp, n_vis  INTEGER NOT NULL,
+    -- Category direction counts (2 buckets: `_2` = "2 or more levels off")
+    n_cat_match, n_cat_opt_1, n_cat_opt_2, n_cat_pess_1, n_cat_pess_2  INTEGER,
+    -- Delta SUMs (signed + absolute) — divide by n_<field> at query time for MAE/bias
+    sum_abs_ceiling_delta_ft, sum_ceiling_delta_ft,
+    sum_abs_wind_delta_kt, sum_abs_temp_delta_c, sum_abs_vis_delta_m  FLOAT,
+    -- Advisory + contingency counts
+    n_advisory_match, n_advisory_opt, n_advisory_pess  INTEGER,
+    n_precip_hit, n_precip_miss, n_precip_false_alarm  INTEGER,
+    n_convection_hit, n_convection_miss, n_convection_false_alarm  INTEGER,
+    UNIQUE(date, source, model, days_out, icao)
+);
+CREATE INDEX ix_vds_date_model ON verification_daily_stats(date, source, model, days_out);
+CREATE INDEX ix_vds_icao_model ON verification_daily_stats(icao, source, model, days_out);
+```
+
+**Why SUMs not averages**: SUMs are additive across periods; averages aren't. The dashboard query computes `ceiling_mae = SUM(sum_abs_ceiling) / SUM(n_ceiling)`. The per-field non-NULL count (`n_ceiling`, `n_wind`, …) preserves the raw query's "skip NULL deltas" semantics.
+
+**Why 2 category direction buckets (not 3)**: matches the storage shape of `verification_monthly_stats`. The rare 3-step case (VFR↔LIFR) folds into `_2`. The bias leaderboard formula `(n_cat_opt_1 + 2 * n_cat_opt_2) / n` weights `_2` accordingly.
+
+**Why no observation_id**: `n` is per-group; counts of *distinct observations* across groups can't be recovered from per-group counts (one obs produces N scores). `get_activity_summary` keeps its `COUNT(DISTINCT observation_id)` on raw `verification_scores` — bounded queries that don't drive the rebuild cost.
+
 ### `verification_monthly_stats` — Pre-Aggregated Monthly Rollup
 
 One row per (month, source, model, days_out, icao). Aggregated from raw scores once a month is complete (current UTC past month end). Idempotent — re-running deletes and recreates rows for a given month.
@@ -283,9 +331,9 @@ CREATE TABLE verification_cache (
 );
 ```
 
-**Cache keys**: `stats:{source}:{period}`, `verif_map:{model}:{days_out}:{period}`, `forecast_map:{day}:{hour}`.
+**Cache keys**: `stats:{source}:{period}`, `bias_leaderboard:{model}:{days_out}:{period}`, `forecast_map:{day}:{hour}`. The `verif_map:*` family was removed in #154 along with the bias-map view it powered.
 **Staleness**: `is_stale()` compares cached `source_max_time` against live `MAX(observation_time)` or `MAX(fetched_at)`. If live > cached, cache is stale. Missing entries are always stale.
-**Rebuild trigger**: `rebuild_all()` runs after each standalone verification cycle in `_run_standalone_once()`.
+**Rebuild trigger**: `rebuild_all()` runs after each standalone verification cycle in `_run_standalone_once()`, after `rollup_today_and_pending` refreshes the daily rollup so the cache reflects the latest scores.
 
 ### `flight_verification_map` — Thin Flight Linkage
 
@@ -430,6 +478,16 @@ Both loops compute next fire hour and sleep until then (no polling), retry after
 
 **Cache layer**: Unfiltered requests (no country/airport filter) use `verification_cache` for fast responses. If the cache is stale or missing, falls back to live query. Filtered requests always run live (small result sets). Cache is rebuilt after each standalone verification cycle via `rebuild_all()` in `cache_builder.py`.
 
+### Daily Rollup (issue #154)
+
+`tasks/verification_daily_rollup.py` aggregates raw `verification_scores` into `verification_daily_stats` after each standalone verification cycle. Grouped by (date, source, model, days_out, icao) — ~12K rows/day, ~4.5M/year. Pure SQL `INSERT … SELECT … GROUP BY` with `case()` expressions encoding the category/advisory direction logic; idempotent DELETE+INSERT.
+
+`rollup_today_and_pending()` is what the scheduler calls: it rolls up every completed UTC day not yet summarised, then re-rolls today (partial). Today's rollup is re-done each cycle until the day completes, keeping the dashboard's "last 24h" window live without falling back to raw scans.
+
+**Why this replaces the old query-time aggregation**: the dashboard rebuild that used to take ~32 min (most of it `rebuild_verification_map_cache` aggregating 2.7M raw rows 16 times) now reads ~4.5M small pre-aggregated rows and completes in seconds. Raw `verification_scores` becomes append-only storage for `get_notable_misses` / `get_missed_warnings` (which still need individual rows) and for any future re-derivation.
+
+TAF rollup is out of scope: `taf_verification_scores` has no `model`/`days_out` columns (lead_hours instead), so it doesn't fit the daily key shape. The TAF pseudo-model continues to be aggregated at query time from raw — small volume, no perf concern.
+
 ### Monthly Rollup
 
 `tasks/verification_rollup.py` aggregates raw `verification_scores` and `taf_verification_scores` into `verification_monthly_stats` once a month completes. Groups by (source, model, days_out, icao) and computes:
@@ -438,18 +496,31 @@ Both loops compute next fire hour and sleep until then (no polling), retry after
 - Continuous metrics: ceiling MAE + bias, visibility MAE, wind speed MAE, temperature MAE
 - Hit/miss/false-alarm for precipitation and convection (model scores only)
 
-Rollup is idempotent (delete + re-insert per month). Currently triggered manually; designed for offline/retention pipeline integration.
+Rollup is idempotent (delete + re-insert per month). Currently triggered manually; designed for offline/retention pipeline integration. The shape mirrors `verification_daily_stats` so a future monthly-roll-of-rollups can be a GROUP BY over the daily table.
 
 ### Query Functions
 
-All in `tasks/verification_stats.py`. Every query accepts a `source` parameter ('flight' or 'standalone') to ensure isolation:
+All in `tasks/verification_stats.py`. Every query accepts a `source` parameter ('flight' or 'standalone') to ensure isolation.
+
+NWP queries (post-#154) read from `verification_daily_stats`:
+
+- `get_category_accuracy()` — category match rate per model/days_out; TAF added at query time from raw
+- `get_category_bias_stats()` — match + 4 directional buckets (`_2` = "2 or more levels off")
+- `get_wind_advisory_accuracy()` — advisory match rate; TAF added at query time
+- `get_optimistic_bias_leaderboard()` — `(n_cat_opt_1 + 2 * n_cat_opt_2) / n` per airport, descending. Drives the leaderboard view that replaced the bias map.
+
+Still on raw `verification_scores` (need individual rows or count-distinct):
 
 - `get_activity_summary()` — observations, airports, flights, cycles, avg cycle duration
-- `get_category_accuracy()` — category match rate per model/days_out (includes TAF as pseudo-model)
-- `get_notable_misses()` — category busts with severity and direction (optimistic/pessimistic)
-- `get_category_bias()` — optimistic vs pessimistic miss rates per model
-- `get_wind_advisory_stats()` — wind advisory match rate
+- `get_notable_misses()` — category busts with severity and direction
 - `get_missed_warnings()` — WARNINGs that models failed to predict
+
+### Removed in #154
+
+- **`get_verification_map_data` / `rebuild_verification_map_cache`** — the per-airport accuracy map view was dropped (decided not useful enough to justify ~30 min cache rebuild cost).
+- **`/api/maps/verification`** endpoint and `panel-verification` tab on `web/maps.html`.
+- **`verif_map:*` cache keys** (16 entries per cycle).
+- **`CategoryBiasStats.optimistic_3` / `pessimistic_3`** — collapsed into `_2` to match the daily/monthly rollup shape (the 3-step VFR↔LIFR case is rare and the leaderboard formula already weights `_2` for severity).
 
 ## Collection Loop (Flight-Based)
 
