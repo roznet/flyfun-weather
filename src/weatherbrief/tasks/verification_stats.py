@@ -68,10 +68,19 @@ def _date_range(since: datetime, until: datetime) -> tuple[date_t, date_t]:
 
     The rollup is keyed by UTC ``date``, so a datetime range is widened to
     inclusive whole-day boundaries: e.g. ``since=2026-05-11T14:32Z`` becomes
-    ``2026-05-11``, picking up that day's earlier observations. This widens
-    the result vs the old raw query (up to ~24h more at each edge) — chosen
-    deliberately so dashboard period buttons land on stable day-boundaries
-    instead of drifting with the request time.
+    ``2026-05-11``, picking up that day's earlier observations.
+
+    This widens the result vs the old raw query (which matched
+    ``observation_time BETWEEN since AND until``). The widening is largest
+    on the ``24h`` period: a call at 14:00 UTC with ``since=now-24h`` becomes
+    ``date IN (yesterday, today)`` — up to ~38h of data ("yesterday all day"
+    + "today so far") rather than a strict 24h sliding window. For ``7d`` /
+    ``30d`` periods the relative widening is rounding noise (<4%).
+
+    The shift is deliberate: dashboard period buttons land on stable UTC-day
+    boundaries instead of drifting with request time, and rollup-keyed lookup
+    stays cheap. Cache labels (``stats:standalone:24h``) continue to use the
+    period name; the actual data window is documented here.
     """
     s = since.date() if isinstance(since, datetime) else since
     u = until.date() if isinstance(until, datetime) else until
@@ -200,8 +209,12 @@ def get_category_accuracy(
     ).all()
 
     for model, days_out, n_match, n_with_cat in model_rows:
-        # Match the raw query's "sample_count" semantics: count of rows
-        # that contributed a category_match comparison.
+        # ``sample_count`` is rows where both categories were present and a
+        # category_match comparison was made — identical semantics to the
+        # old raw path, which filtered ``category_match IS NOT NULL`` in the
+        # WHERE clause (category_match is NULL whenever either category is
+        # NULL). Don't be tempted to count ``n`` here — that counts rows
+        # with NULL categories too.
         sample = int(n_with_cat or 0)
         accuracy = (
             round(float(n_match) / float(n_with_cat) * 100, 1)
@@ -509,18 +522,34 @@ def get_optimistic_bias_leaderboard(
 ) -> list[OptimisticBiasLeaderboardRow]:
     """Top airports where ``model`` at ``days_out`` over-promises.
 
-    Score = ``(n_cat_opt_1 + 2 * n_cat_opt_2) / n`` per issue #154 — equally
-    weights single-step optimistic misses and double-weights 2+-step misses,
-    normalised by total sample count. Higher = more dangerously optimistic.
+    Score = ``(n_cat_opt_1 + 2 * n_cat_opt_2) / n_with_cat`` — equally weights
+    single-step optimistic misses, double-weights 2+-step misses, normalised
+    by sample count of rows with valid category pairs. Higher = more
+    dangerously optimistic.
 
-    Filters airports with ``n < 10`` to avoid noise.
+    Issue #154 spec says ``/ n``; we tighten that to ``n_with_cat`` (only
+    rows that landed in one of the 5 direction buckets). Using raw ``n``
+    silently deflates the score at airports with more NULL-category rows
+    (unparsable METARs, broken ceiling derivations) — those rows can't
+    contribute to the bias buckets but would still count in the denominator.
+
+    Filters airports with ``n < 10`` to avoid noise (still on raw n so the
+    threshold matches the public sample-count display).
     """
     since_d, until_d = _date_range(since, until)
 
     opt_1 = func.sum(VerificationDailyStatsRow.n_cat_opt_1)
     opt_2 = func.sum(VerificationDailyStatsRow.n_cat_opt_2)
     n_sum = func.sum(VerificationDailyStatsRow.n)
-    score = (opt_1 + 2 * opt_2) / func.nullif(n_sum, 0)
+    # Denominator: only rows where the category comparison was made
+    n_with_cat = func.sum(
+        VerificationDailyStatsRow.n_cat_match
+        + VerificationDailyStatsRow.n_cat_opt_1
+        + VerificationDailyStatsRow.n_cat_opt_2
+        + VerificationDailyStatsRow.n_cat_pess_1
+        + VerificationDailyStatsRow.n_cat_pess_2
+    )
+    score = (opt_1 + 2 * opt_2) / func.nullif(n_with_cat, 0)
 
     rows = db.execute(
         select(
