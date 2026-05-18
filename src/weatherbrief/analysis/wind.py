@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 from weatherbrief.models import WindComponent
+from weatherbrief.models.analysis import HourlyForecast, PressureLevelData
 
 
 def compute_wind_components(
@@ -26,3 +28,22 @@ def compute_wind_components(
         headwind_kt=round(headwind, 1),
         crosswind_kt=round(crosswind, 1),
     )
+
+
+def pick_wind_at_pressure(
+    hourly: HourlyForecast, target_pressure_hpa: float,
+) -> Optional[PressureLevelData]:
+    """Return the pressure level with valid wind closest to *target_pressure_hpa*.
+
+    Used to pick a single representative wind at a planned cruise altitude
+    (or an override altitude) from a model's vertical sounding.
+    """
+    chosen: Optional[PressureLevelData] = None
+    for level in hourly.pressure_levels:
+        if level.wind_speed_kt is None or level.wind_direction_deg is None:
+            continue
+        if chosen is None or abs(level.pressure_hpa - target_pressure_hpa) < abs(
+            chosen.pressure_hpa - target_pressure_hpa
+        ):
+            chosen = level
+    return chosen

@@ -255,7 +255,7 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   // --- Mock advisories recalculate ---
   await page.route(`**/packs/${enc(TIMESTAMP)}/advisories/recalculate`, route => {
     useWorstAdvisories = true;
-    return route.fulfill({ json: advisoriesWorstData });
+    return route.fulfill({ json: { manifest: advisoriesWorstData, wind_overlay: null } });
   });
 
   // --- Mock elevation ---

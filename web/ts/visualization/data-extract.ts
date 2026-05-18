@@ -1,15 +1,28 @@
 /** Extract visualization-ready data from a RouteAnalysesManifest for a given model. */
 
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
+import type { RouteWindOverlay } from '../adapters/api-adapter';
 import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag } from './types';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
+
+export interface ExtractVizOptions {
+  /** Per-model wind components recomputed at an override altitude (from
+   *  /advisories/recalculate). Per-point lookup falls back to the
+   *  manifest's wind_components when the overlay lacks a value. */
+  windOverlay?: RouteWindOverlay | null;
+  /** Effective cruise altitude in feet — overrides the manifest's baked
+   *  value for the cruise reference line and the Y-axis ceiling. Falls
+   *  back to manifest.cruise_altitude_ft when omitted. */
+  effectiveCruiseAltitudeFt?: number | null;
+}
 
 export function extractVizData(
   manifest: RouteAnalysesManifest,
   model: string,
   flightCeilingFt?: number,
   elevationProfile?: ElevationProfile | null,
+  opts?: ExtractVizOptions,
 ): VizRouteData {
   const points: VizPoint[] = [];
   const waypointMarkers: WaypointMarker[] = [];
@@ -21,9 +34,20 @@ export function extractVizData(
       }))
     : null;
 
+  // Build a point_index → overlay-wind map once for O(1) lookup per point.
+  const windOverlayByIndex: Map<number, { headwind_kt: number; crosswind_kt: number }> = new Map();
+  if (opts?.windOverlay) {
+    for (const op of opts.windOverlay.points) {
+      const wc = op.wind_components[model];
+      if (wc) {
+        windOverlayByIndex.set(op.point_index, { headwind_kt: wc.headwind_kt, crosswind_kt: wc.crosswind_kt });
+      }
+    }
+  }
+
   for (const rpa of manifest.analyses) {
     const sounding = rpa.sounding[model] ?? null;
-    const wind = rpa.wind_components[model] ?? null;
+    const wind = windOverlayByIndex.get(rpa.point_index) ?? rpa.wind_components[model] ?? null;
     const terrainFt = interpolateTerrainElevation(terrainProfile, rpa.distance_from_origin_nm);
 
     points.push(extractPoint(rpa, sounding, wind, model, terrainFt));
@@ -38,13 +62,14 @@ export function extractVizData(
     }
   }
 
-  const actualCeiling = flightCeilingFt ?? manifest.cruise_altitude_ft;
+  const effectiveCruise = opts?.effectiveCruiseAltitudeFt ?? manifest.cruise_altitude_ft;
+  const actualCeiling = flightCeilingFt ?? effectiveCruise;
 
   return {
     points,
-    cruiseAltitudeFt: manifest.cruise_altitude_ft,
+    cruiseAltitudeFt: effectiveCruise,
     ceilingAltitudeFt: actualCeiling,
-    flightCeilingFt: Math.max(actualCeiling, manifest.cruise_altitude_ft) + 5000,
+    flightCeilingFt: Math.max(actualCeiling, effectiveCruise) + 5000,
     totalDistanceNm: manifest.total_distance_nm,
     waypointMarkers,
     departureTime: manifest.departure_time,

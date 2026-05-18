@@ -136,7 +136,11 @@ async function init(): Promise<void> {
     // Show the Skew-T section wrapper once we have route data
     const skewtWrapper = document.querySelector('[data-section="skewt"]') as HTMLElement | null;
     if (skewtWrapper) skewtWrapper.style.display = state.routeAnalyses ? '' : 'none';
-    ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers);
+    const effectiveCruiseAlt =
+      state.advisoryAltitudeOverride
+      ?? state.flight?.cruise_altitude_ft
+      ?? null;
+    ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers, effectiveCruiseAlt);
     // Dynamic Skew-T (canvas), compare, or static MetPy
     if (skewtViewMode === 'dynamic') {
       lastSkewtPointIndex = null; // force re-fetch when point/model changes
@@ -540,7 +544,14 @@ async function init(): Promise<void> {
     const layout = state.vizSettings.layout;
     applyLayoutClass(layout);
 
-    const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile);
+    const extractOpts = {
+      windOverlay: state.windOverlay,
+      effectiveCruiseAltitudeFt:
+        state.advisoryAltitudeOverride
+        ?? state.flight?.cruise_altitude_ft
+        ?? null,
+    };
+    const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
     const unavailable = getUnavailableLayers(data);
     const allLayers = getAllLayers();
     const showCrossSection = layout === 'cross-section' || layout === 'split';
@@ -566,7 +577,7 @@ async function init(): Promise<void> {
         if (compareModels[m] !== false) {
           datasets.push({
             model: m,
-            data: extractVizData(state.routeAnalyses!, m, state.flight?.flight_ceiling_ft, state.elevationProfile),
+            data: extractVizData(state.routeAnalyses!, m, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts),
           });
         }
       }
@@ -892,6 +903,18 @@ async function init(): Promise<void> {
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
       ui.renderHeader(state.flight, state.snapshot);
     }
+    if (state.flight !== prev.flight || state.routeAnalyses !== prev.routeAnalyses) {
+      const isOwner = !!user && state.flight?.user_id === user.id;
+      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, () => {
+        const f = store.getState().flight;
+        if (!f) return;
+        if (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours)) {
+          showHistoricalRefreshModal(f);
+        } else {
+          store.getState().refresh();
+        }
+      });
+    }
     if (state.flight !== prev.flight) {
       ui.renderBriefingSharing(state.flight, sharingHandlers);
     }
@@ -930,7 +953,8 @@ async function init(): Promise<void> {
       state.altAdvisories !== prev.altAdvisories ||
       state.showingAlt !== prev.showingAlt ||
       state.elevationProfile !== prev.elevationProfile ||
-      state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride
+      state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride ||
+      state.windOverlay !== prev.windOverlay
     ) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
@@ -1316,6 +1340,18 @@ async function init(): Promise<void> {
   }).then(() => {
     const s = store.getState();
     ui.renderHeader(s.flight, s.snapshot);
+    {
+      const isOwner = !!user && s.flight?.user_id === user.id;
+      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, () => {
+        const f = store.getState().flight;
+        if (!f) return;
+        if (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours)) {
+          showHistoricalRefreshModal(f);
+        } else {
+          store.getState().refresh();
+        }
+      });
+    }
     // renderBriefingSharing already ran via the store subscriber above when
     // flight was set; don't re-invoke (it would waste a clone+replace cycle).
     ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));

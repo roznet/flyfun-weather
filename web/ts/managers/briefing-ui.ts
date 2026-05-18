@@ -11,6 +11,7 @@ import type {
   DataStatus,
   FlightResponse,
   ForecastSnapshot,
+  IcingRisk,
   ModelSourceDetail,
   ObservationComparison,
   PackMeta,
@@ -105,6 +106,65 @@ export function renderHeader(
         }
       });
     });
+  }
+}
+
+// --- Stale-pack banner ---
+
+/** Render the stale-pack banner when the loaded pack's altitude/time
+ *  differs from the live flight (i.e. flight was edited after the
+ *  pack was generated). The banner is owner-only — non-owners can't
+ *  trigger a refresh.
+ */
+export function renderStalePackBanner(
+  flight: FlightResponse | null,
+  manifest: RouteAnalysesManifest | null,
+  isOwner: boolean,
+  onRefresh: () => void,
+): void {
+  const el = $('stale-pack-banner');
+  if (!el) return;
+
+  if (!flight || !manifest || !isOwner) {
+    el.style.display = 'none';
+    return;
+  }
+
+  const altChanged = manifest.cruise_altitude_ft !== flight.cruise_altitude_ft;
+  const flightDepIso = new Date(flight.departure_time).toISOString();
+  const manifestDepIso = new Date(manifest.departure_time).toISOString();
+  const timeChanged = flightDepIso !== manifestDepIso;
+
+  if (!altChanged && !timeChanged) {
+    el.style.display = 'none';
+    return;
+  }
+
+  const parts: string[] = [];
+  if (altChanged) {
+    parts.push(t('stalePack.altChanged', {
+      packAlt: formatAlt(manifest.cruise_altitude_ft),
+      flightAlt: formatAlt(flight.cruise_altitude_ft),
+    }));
+  }
+  if (timeChanged) {
+    parts.push(t('stalePack.timeChanged', {
+      packTime: formatDepartureTime(manifest.departure_time),
+      flightTime: formatDepartureTime(flight.departure_time),
+    }));
+  }
+
+  el.style.display = 'block';
+  el.innerHTML = `
+    <span>${parts.join(' ')} ${t('stalePack.refreshPrompt')}</span>
+    <button class="btn btn-sm btn-primary" id="stale-pack-refresh-btn" style="margin-left: 0.75rem;">
+      ${t('stalePack.refreshBtn')}
+    </button>
+  `;
+
+  const btn = document.getElementById('stale-pack-refresh-btn');
+  if (btn) {
+    btn.addEventListener('click', () => onRefresh());
   }
 }
 
@@ -1622,6 +1682,7 @@ export function renderSoundingAnalysis(
   displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
   enabledLayers?: Record<string, boolean>,
+  effectiveCruiseAltitudeFt?: number | null,
 ): void {
   const el = $('sounding-section');
   if (!el) return;
@@ -1631,7 +1692,7 @@ export function renderSoundingAnalysis(
     const idx = selectedPointIndex ?? 0;
     const point = routeAnalyses.analyses[idx];
     if (point) {
-      el.innerHTML = renderSinglePointSounding(point, displayMode, tierVisibility, enabledLayers);
+      el.innerHTML = renderSinglePointSounding(point, displayMode, tierVisibility, enabledLayers, effectiveCruiseAltitudeFt);
       return;
     }
   }
@@ -1658,7 +1719,7 @@ export function renderSoundingAnalysis(
         ${renderConvectiveBanner(a.sounding, displayMode, tierVisibility)}
         ${renderVerticalMotion(a.sounding, displayMode)}
         ${renderAltitudeMarkers(a.sounding, displayMode, tierVisibility)}
-        ${renderAtmosphericProfile(a.sounding, a.altitude_advisories)}
+        ${renderAtmosphericProfile(a.sounding, a.altitude_advisories, undefined, effectiveCruiseAltitudeFt)}
         ${renderAdvisoriesTable(a.altitude_advisories)}
       </div>
     `;
@@ -2104,20 +2165,58 @@ function regimeCellClass(regime: VerticalRegime): string {
   return '';
 }
 
+/** Recompute cruise_in_icing/cruise_icing_risk at *effectiveAltFt*, the
+ *  current effective cruise altitude. Mirrors the server-side
+ *  `_cruise_icing_status` logic: scan each model's icing_zones for a
+ *  zone that contains the altitude; keep the worst risk found.
+ *  Returns null when no model has the altitude in icing.
+ */
+function recomputeCruiseIcing(
+  soundings: Record<string, SoundingAnalysis>,
+  effectiveAltFt: number,
+): { inIcing: boolean; risk: IcingRisk } {
+  // Order must mirror server-side `_ICING_ORDER` in
+  // src/weatherbrief/analysis/sounding/advisories.py.
+  const order: IcingRisk[] = ['none', 'light', 'moderate', 'severe'];
+  let worstIdx = 0;
+  let inIcing = false;
+  for (const sounding of Object.values(soundings)) {
+    const zones = sounding?.icing_zones ?? [];
+    for (const z of zones) {
+      if (z.base_ft <= effectiveAltFt && effectiveAltFt <= z.top_ft) {
+        inIcing = true;
+        const idx = order.indexOf(z.risk);
+        if (idx > worstIdx) worstIdx = idx;
+      }
+    }
+  }
+  return { inIcing, risk: order[worstIdx] };
+}
+
 function renderAtmosphericProfile(
   soundings: Record<string, SoundingAnalysis>,
   adv: AltitudeAdvisories | null,
   enabledLayers?: Record<string, boolean>,
+  effectiveCruiseAltitudeFt?: number | null,
 ): string {
   if (!adv) return '';
 
   const parts: string[] = [];
 
-  // Cruise icing badge
-  if (adv.cruise_in_icing) {
+  // Cruise icing badge — if an override altitude is active and differs
+  // from the manifest's baked value, recompute the flag client-side from
+  // each model's icing_zones so the banner tracks the user's probe.
+  let cruiseInIcing = adv.cruise_in_icing;
+  let cruiseIcingRisk = adv.cruise_icing_risk;
+  if (effectiveCruiseAltitudeFt != null) {
+    const recomp = recomputeCruiseIcing(soundings, effectiveCruiseAltitudeFt);
+    cruiseInIcing = recomp.inIcing;
+    cruiseIcingRisk = recomp.risk;
+  }
+  if (cruiseInIcing) {
     parts.push(
-      `<div class="cruise-icing-banner ${riskClass(adv.cruise_icing_risk)}">` +
-      `${t('sounding.cruiseInIcing')}${adv.cruise_icing_risk.toUpperCase()}</div>`,
+      `<div class="cruise-icing-banner ${riskClass(cruiseIcingRisk)}">` +
+      `${t('sounding.cruiseInIcing')}${cruiseIcingRisk.toUpperCase()}</div>`,
     );
   }
 
@@ -2218,6 +2317,7 @@ function renderSinglePointSounding(
   displayMode: DisplayMode = 'full',
   tierVisibility: Record<Tier, boolean> = { key: true, useful: true, advanced: false },
   enabledLayers?: Record<string, boolean>,
+  effectiveCruiseAltitudeFt?: number | null,
 ): string {
   if (!point.sounding || Object.keys(point.sounding).length === 0) {
     return `<p class="muted">${t('sounding.noDataPoint')}</p>`;
@@ -2233,7 +2333,7 @@ function renderSinglePointSounding(
       ${renderConvectiveBanner(point.sounding, displayMode, tierVisibility)}
       ${renderVerticalMotion(point.sounding, displayMode)}
       ${renderAltitudeMarkers(point.sounding, displayMode, tierVisibility)}
-      ${renderAtmosphericProfile(point.sounding, point.altitude_advisories, enabledLayers)}
+      ${renderAtmosphericProfile(point.sounding, point.altitude_advisories, enabledLayers, effectiveCruiseAltitudeFt)}
       ${renderAdvisoriesTable(point.altitude_advisories)}
     </div>
   `;

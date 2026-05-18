@@ -467,13 +467,34 @@ export async function computeAltAdvisories(
   );
 }
 
+export interface RoutePointWindOverlay {
+  point_index: number;
+  wind_components: Record<string, {
+    wind_speed_kt: number;
+    wind_direction_deg: number;
+    track_deg: number;
+    headwind_kt: number;
+    crosswind_kt: number;
+  }>;
+}
+
+export interface RouteWindOverlay {
+  cruise_altitude_ft: number;
+  points: RoutePointWindOverlay[];
+}
+
+export interface RecalculateAdvisoriesResult {
+  manifest: RouteAdvisoriesManifest;
+  wind_overlay: RouteWindOverlay | null;
+}
+
 export async function recalculateAdvisories(
   flightId: string,
   timestamp: string,
   cruiseAltitudeFt?: number,
-): Promise<RouteAdvisoriesManifest> {
+): Promise<RecalculateAdvisoriesResult> {
   const qs = cruiseAltitudeFt != null ? `?cruise_altitude_ft=${cruiseAltitudeFt}` : '';
-  return apiFetch<RouteAdvisoriesManifest>(
+  return apiFetch<RecalculateAdvisoriesResult>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/recalculate${qs}`,
     { method: 'POST' },
   );

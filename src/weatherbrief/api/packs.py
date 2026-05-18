@@ -2173,7 +2173,13 @@ def recalculate_advisories(
     if advisory_result.manifest is None:
         raise HTTPException(status_code=500, detail=advisory_result.error or "Advisory evaluation failed")
 
-    return advisory_result.manifest.model_dump()
+    return {
+        "manifest": advisory_result.manifest.model_dump(),
+        "wind_overlay": (
+            advisory_result.wind_overlay.model_dump()
+            if advisory_result.wind_overlay is not None else None
+        ),
+    }
 
 
 @router.post("/{timestamp}/advisories/altitude-table")
