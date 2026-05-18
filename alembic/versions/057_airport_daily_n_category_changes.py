@@ -7,9 +7,17 @@ completed months read straight from the monthly column.
 The volatility logic (count of category transitions between consecutive obs
 within the same UTC day) already exists in
 ``tasks/airport_summary.py:_category_changes_within_day`` and is now also
-called from ``_build_daily_summary``. Backfill: a one-shot
-``rollup_all_complete_days`` invocation refreshes all existing rows
-(DELETE+INSERT, idempotent) — no SQL backfill needed here.
+called from ``_build_daily_summary``.
+
+Backfill at deploy time:
+
+    python -m weatherbrief.verify rollup-summary --rebuild
+
+This invokes ``airport_summary.rebuild_all_days`` which re-rolls every row
+already in ``airport_daily_summary`` (DELETE+INSERT, idempotent). Plain
+``rollup-summary``/``--all`` won't do — it skips dates already in the
+table, so existing rows would keep ``n_category_changes`` at the server
+default (0) and the volatility map's MTD sums would silently corrupt.
 
 Revision ID: 057
 Revises: 056

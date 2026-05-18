@@ -267,6 +267,11 @@ def rollup_today_and_pending(db: Session) -> int:
     """
     n = rollup_all_complete_days(db)
     today = datetime.now(timezone.utc).date()
+    # On the very first deploy this re-rolls yesterday a second time
+    # (rollup_all_complete_days just rolled it). Idempotent so harmless;
+    # not worth a guard — every cycle after that, yesterday is already
+    # in completed_days's existing set, so the orchestrator skips it
+    # and this explicit re-roll is the only one.
     n += rollup_day(db, today - timedelta(days=1))
     n += rollup_day(db, today)
     return n
