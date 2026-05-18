@@ -24,6 +24,7 @@ from weatherbrief.models import (
     RouteConfig,
     RouteCrossSection,
     RoutePointAnalysis,
+    RouteWindOverlay,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class AdvisoryResult:
 
     manifest: RouteAdvisoriesManifest | None
     airport_conditions: AirportConditions | None = None
+    wind_overlay: RouteWindOverlay | None = None
     error: str | None = None
 
 
@@ -363,7 +365,26 @@ def run_advisories_from_pack(
 
         save_advisory_artifacts(pack_dir, result_manifest)
 
-        return AdvisoryResult(manifest=result_manifest, airport_conditions=airport_conds)
+        # Per-point wind overlay at the effective cruise altitude.
+        # Only meaningful when the caller passed an override that differs
+        # from the manifest's baked cruise altitude; otherwise the
+        # existing manifest wind_components already match.
+        wind_overlay: RouteWindOverlay | None = None
+        if cruise_altitude_ft is not None and cruise_altitude_ft != manifest.cruise_altitude_ft:
+            from weatherbrief.tasks.analyze import compute_wind_overlay_at_altitude
+
+            try:
+                wind_overlay = compute_wind_overlay_at_altitude(
+                    analyses, cross_sections, advisory_model_names, effective_cruise,
+                )
+            except Exception:
+                logger.warning("Wind overlay computation failed", exc_info=True)
+
+        return AdvisoryResult(
+            manifest=result_manifest,
+            airport_conditions=airport_conds,
+            wind_overlay=wind_overlay,
+        )
     except Exception as exc:
         logger.warning("Advisory re-evaluation from pack failed", exc_info=True)
         return AdvisoryResult(manifest=None, error=str(exc))

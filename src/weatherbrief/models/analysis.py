@@ -755,6 +755,24 @@ class RouteAnalysesManifest(BaseModel):
     analyses: list[RoutePointAnalysis]
 
 
+class RoutePointWindOverlay(BaseModel):
+    """Per-point recomputed wind components at an override altitude.
+
+    Used to refresh route-graph/route-map headwind without regenerating
+    the full analysis manifest.
+    """
+
+    point_index: int
+    wind_components: dict[str, WindComponent] = Field(default_factory=dict)
+
+
+class RouteWindOverlay(BaseModel):
+    """Container for per-route-point wind overlays at an override altitude."""
+
+    cruise_altitude_ft: int
+    points: list[RoutePointWindOverlay] = Field(default_factory=list)
+
+
 class ElevationPoint(BaseModel):
     """Single elevation sample along the route."""
 

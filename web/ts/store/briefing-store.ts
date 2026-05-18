@@ -3,6 +3,7 @@
 import { createStore } from 'zustand/vanilla';
 import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
+import type { RouteWindOverlay } from '../adapters/api-adapter';
 import type { DisplayMode, Tier } from '../types/metrics';
 import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
@@ -83,6 +84,9 @@ export interface BriefingState {
   routeAnalyses: RouteAnalysesManifest | null;
   routeAdvisories: RouteAdvisoriesManifest | null;
   altAdvisories: RouteAdvisoriesManifest | null;
+  /** Per-route-point wind components at the advisoryAltitudeOverride.
+   * null when no override is active (manifest values are correct). */
+  windOverlay: RouteWindOverlay | null;
   showingAlt: boolean;
   elevationProfile: ElevationProfile | null;
   freshness: DataStatus | null;
@@ -211,6 +215,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   routeAnalyses: null,
   routeAdvisories: null,
   altAdvisories: null,
+  windOverlay: null,
   showingAlt: false,
   elevationProfile: null,
   freshness: null,
@@ -305,7 +310,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, selectedModel, altAdvisories: null, showingAlt: false, selectedPointIndex: null, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, selectedModel, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
@@ -492,7 +497,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setAdvisoryAltitudeOverride: (alt: number | null) => {
-    set({ advisoryAltitudeOverride: alt });
+    // Clearing the override resets the wind overlay too — manifest values
+    // now match the effective altitude again.
+    if (alt === null) {
+      set({ advisoryAltitudeOverride: null, windOverlay: null });
+    } else {
+      set({ advisoryAltitudeOverride: alt });
+    }
   },
 
   recalculateAdvisories: async () => {
@@ -504,7 +515,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         currentPack.fetch_timestamp,
         advisoryAltitudeOverride ?? undefined,
       );
-      set({ routeAdvisories: result });
+      set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });
     }
@@ -524,7 +535,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         currentPack.fetch_timestamp,
         advisoryAltitudeOverride ?? undefined,
       );
-      set({ routeAdvisories: result });
+      set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
     } catch (err) {
       set({ error: `Profile change failed: ${err}` });
     }

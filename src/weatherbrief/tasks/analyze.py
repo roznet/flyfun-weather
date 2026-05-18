@@ -18,7 +18,7 @@ from typing import Callable, Optional
 from weatherbrief.analysis.comparison import compare_models
 from weatherbrief.analysis.sounding import analyze_sounding
 from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
-from weatherbrief.analysis.wind import compute_wind_components
+from weatherbrief.analysis.wind import compute_wind_components, pick_wind_at_pressure
 from weatherbrief.models import (
     AltitudeAdvisories,
     HourlyForecast,
@@ -28,6 +28,8 @@ from weatherbrief.models import (
     RouteConfig,
     RoutePoint,
     RoutePointAnalysis,
+    RoutePointWindOverlay,
+    RouteWindOverlay,
     SoundingAnalysis,
     WaypointAnalysis,
     WaypointForecast,
@@ -96,14 +98,7 @@ def _run_point_analysis(
 
     target_pressure = altitude_to_pressure_hpa(cruise_altitude_ft)
     for model_key, hourly in forecasts_by_model.items():
-        # Cruise-altitude wind (closest level to target pressure)
-        cruise_wind = None
-        for level in hourly.pressure_levels:
-            if level.wind_speed_kt is not None and level.wind_direction_deg is not None:
-                if cruise_wind is None or abs(level.pressure_hpa - target_pressure) < abs(
-                    cruise_wind.pressure_hpa - target_pressure
-                ):
-                    cruise_wind = level
+        cruise_wind = pick_wind_at_pressure(hourly, target_pressure)
 
         if cruise_wind and cruise_wind.wind_speed_kt is not None:
             wc = compute_wind_components(
@@ -206,6 +201,56 @@ def analyze_waypoint(
 
 
 # --- Route-point analysis helpers ---
+
+
+def compute_wind_overlay_at_altitude(
+    analyses: list[RoutePointAnalysis],
+    cross_sections: list[RouteCrossSection],
+    advisory_models: list[str],
+    cruise_altitude_ft: int,
+) -> RouteWindOverlay:
+    """Recompute per-route-point head/cross-wind at *cruise_altitude_ft*.
+
+    Pairs each route-point analysis with the matching cross-section
+    forecast (per model) and picks the wind closest to the target
+    pressure level. Used by the advisory recalculate endpoint so that
+    a user changing the override altitude sees consistent headwind
+    values without re-running the full analysis pipeline.
+
+    Cross-sections are paired with analyses by list-position — both are
+    generated in the same route-point order during the fetch stage.
+    """
+    target_pressure = altitude_to_pressure_hpa(cruise_altitude_ft)
+    cs_by_model: dict[str, RouteCrossSection] = {
+        cs.model.value: cs for cs in cross_sections
+    }
+
+    points: list[RoutePointWindOverlay] = []
+    for rpa in analyses:
+        per_model: dict[str, WindComponent] = {}
+        for model_key in advisory_models:
+            cs = cs_by_model.get(model_key)
+            if cs is None or rpa.point_index >= len(cs.point_forecasts):
+                continue
+            wf = cs.point_forecasts[rpa.point_index]
+            hourly = wf.at_time(rpa.forecast_hour)
+            if hourly is None:
+                continue
+            level = pick_wind_at_pressure(hourly, target_pressure)
+            if level is None or level.wind_speed_kt is None or level.wind_direction_deg is None:
+                continue
+            per_model[model_key] = compute_wind_components(
+                level.wind_speed_kt, level.wind_direction_deg, rpa.track_deg,
+            )
+        points.append(RoutePointWindOverlay(
+            point_index=rpa.point_index,
+            wind_components=per_model,
+        ))
+
+    return RouteWindOverlay(
+        cruise_altitude_ft=cruise_altitude_ft,
+        points=points,
+    )
 
 
 def compute_route_tracks(route_points: list[RoutePoint]) -> list[float]:

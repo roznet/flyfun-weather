@@ -532,6 +532,8 @@ export function renderAdvisories(
     const label = document.getElementById('advisory-alt-label');
     const resetBtn = document.getElementById('advisory-alt-reset');
     if (slider) {
+      // `input` fires continuously during drag — keep this cheap (local state
+      // + cross-section repaint). Cross-section cruise line follows live.
       slider.addEventListener('input', () => {
         const val = parseInt(slider.value, 10);
         if (label) {
@@ -540,10 +542,19 @@ export function renderAdvisories(
         }
         altitudeOverride.onChange(val);
       });
+      // `change` fires once on release — trigger the server recalc so the
+      // wind overlay (route-graph head/crosswind) follows the new altitude.
+      // Without this, the cross-section cruise line moves but headwind values
+      // stay anchored to the pack's baked altitude until the user manually
+      // clicks Recalculate.
+      if (onRecalculate) {
+        slider.addEventListener('change', () => onRecalculate());
+      }
     }
     if (resetBtn) {
       resetBtn.addEventListener('click', () => {
         altitudeOverride.onChange(altitudeOverride.defaultAlt);
+        if (onRecalculate) onRecalculate();
       });
     }
   }
