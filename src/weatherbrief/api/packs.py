@@ -54,6 +54,7 @@ from weatherbrief.models import (
     # Imported eagerly so an ImportError surfaces at module load rather than
     # being silently swallowed by the broad except in _assessment_from_advisories.
     RouteAdvisoriesManifest as _RouteAdvisoriesManifest,
+    RouteWindOverlay,
 )
 from weatherbrief.storage.flights import (
     list_packs,
@@ -2128,7 +2129,18 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
     return enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale
 
 
-@router.post("/{timestamp}/advisories/recalculate")
+class RecalculateAdvisoriesResponse(BaseModel):
+    """Envelope returned by /advisories/recalculate.
+
+    ``wind_overlay`` is populated only when the request altitude differs
+    from the manifest's baked cruise altitude — otherwise the manifest's
+    existing ``wind_components`` are correct and no overlay is sent.
+    """
+    manifest: _RouteAdvisoriesManifest
+    wind_overlay: RouteWindOverlay | None = None
+
+
+@router.post("/{timestamp}/advisories/recalculate", response_model=RecalculateAdvisoriesResponse)
 def recalculate_advisories(
     flight_id: str,
     timestamp: str,
@@ -2173,13 +2185,10 @@ def recalculate_advisories(
     if advisory_result.manifest is None:
         raise HTTPException(status_code=500, detail=advisory_result.error or "Advisory evaluation failed")
 
-    return {
-        "manifest": advisory_result.manifest.model_dump(),
-        "wind_overlay": (
-            advisory_result.wind_overlay.model_dump()
-            if advisory_result.wind_overlay is not None else None
-        ),
-    }
+    return RecalculateAdvisoriesResponse(
+        manifest=advisory_result.manifest,
+        wind_overlay=advisory_result.wind_overlay,
+    )
 
 
 @router.post("/{timestamp}/advisories/altitude-table")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from weatherbrief.models import AdvisoryStatus, ElevationProfile, IcingZone
@@ -146,11 +147,16 @@ def wind_at_altitude(
     model: str,
     point_index: int,
     target_alt_ft: float,
+    target_time: datetime,
 ) -> tuple[float, float] | None:
     """Find wind speed/direction at nearest pressure level to target altitude.
 
-    Returns (speed_kt, direction_deg) or None if unavailable.
+    Picks the hourly forecast nearest to *target_time* (rather than the
+    first hour available, which can lag the route point's actual valid
+    time on multi-hour flights). Returns (speed_kt, direction_deg) or
+    None if unavailable.
     """
+    from weatherbrief.analysis.wind import pick_wind_at_pressure
     from weatherbrief.models import altitude_to_pressure_hpa
 
     target_pressure = altitude_to_pressure_hpa(int(target_alt_ft))
@@ -162,23 +168,12 @@ def wind_at_altitude(
             return None
 
         wf = cs.point_forecasts[point_index]
-        if not wf.hourly:
+        hourly = wf.at_time(target_time)
+        if hourly is None:
             return None
 
-        # Use the first hourly forecast (closest to target time)
-        hourly = wf.hourly[0]
-        best_level = None
-        best_diff = float("inf")
-
-        for level in hourly.pressure_levels:
-            if level.wind_speed_kt is None or level.wind_direction_deg is None:
-                continue
-            diff = abs(level.pressure_hpa - target_pressure)
-            if diff < best_diff:
-                best_diff = diff
-                best_level = level
-
-        if best_level is not None:
+        best_level = pick_wind_at_pressure(hourly, target_pressure)
+        if best_level is not None and best_level.wind_speed_kt is not None and best_level.wind_direction_deg is not None:
             return (best_level.wind_speed_kt, best_level.wind_direction_deg)
 
     return None

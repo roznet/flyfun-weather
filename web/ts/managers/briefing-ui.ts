@@ -111,11 +111,11 @@ export function renderHeader(
 
 // --- Stale-pack banner ---
 
-/** Render the stale-pack banner when the loaded pack's altitude/time
- *  differs from the live flight (i.e. flight was edited after the
- *  pack was generated). The banner is owner-only — non-owners can't
- *  trigger a refresh.
- */
+import { computeStalePackBanner } from '../helpers/stale-pack-banner';
+
+/** Render the stale-pack banner. Owner-only — non-owners can't trigger
+ *  a refresh. Uses textContent (not innerHTML) so localized strings
+ *  can't introduce markup. */
 export function renderStalePackBanner(
   flight: FlightResponse | null,
   manifest: RouteAnalysesManifest | null,
@@ -125,47 +125,24 @@ export function renderStalePackBanner(
   const el = $('stale-pack-banner');
   if (!el) return;
 
-  if (!flight || !manifest || !isOwner) {
+  const state = computeStalePackBanner(flight, manifest, isOwner);
+  if (state === null) {
     el.style.display = 'none';
     return;
-  }
-
-  const altChanged = manifest.cruise_altitude_ft !== flight.cruise_altitude_ft;
-  const flightDepIso = new Date(flight.departure_time).toISOString();
-  const manifestDepIso = new Date(manifest.departure_time).toISOString();
-  const timeChanged = flightDepIso !== manifestDepIso;
-
-  if (!altChanged && !timeChanged) {
-    el.style.display = 'none';
-    return;
-  }
-
-  const parts: string[] = [];
-  if (altChanged) {
-    parts.push(t('stalePack.altChanged', {
-      packAlt: formatAlt(manifest.cruise_altitude_ft),
-      flightAlt: formatAlt(flight.cruise_altitude_ft),
-    }));
-  }
-  if (timeChanged) {
-    parts.push(t('stalePack.timeChanged', {
-      packTime: formatDepartureTime(manifest.departure_time),
-      flightTime: formatDepartureTime(flight.departure_time),
-    }));
   }
 
   el.style.display = 'block';
-  el.innerHTML = `
-    <span>${parts.join(' ')} ${t('stalePack.refreshPrompt')}</span>
-    <button class="btn btn-sm btn-primary" id="stale-pack-refresh-btn" style="margin-left: 0.75rem;">
-      ${t('stalePack.refreshBtn')}
-    </button>
-  `;
-
-  const btn = document.getElementById('stale-pack-refresh-btn');
-  if (btn) {
-    btn.addEventListener('click', () => onRefresh());
-  }
+  el.replaceChildren();
+  const messageSpan = document.createElement('span');
+  messageSpan.textContent = state.message;
+  el.appendChild(messageSpan);
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-sm btn-primary';
+  btn.id = 'stale-pack-refresh-btn';
+  btn.style.marginLeft = '0.75rem';
+  btn.textContent = t('stalePack.refreshBtn');
+  btn.addEventListener('click', () => onRefresh());
+  el.appendChild(btn);
 }
 
 // --- History dropdown ---
