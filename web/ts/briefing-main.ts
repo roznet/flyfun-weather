@@ -1439,7 +1439,6 @@ async function init(): Promise<void> {
       }
     }
 
-    // Wire the "Take the tour" toolbar button + auto-start if ?tour=1.
     document.getElementById('tour-btn')?.addEventListener('click', () => startBriefingTour());
     maybeAutoStartBriefingTour();
   });
