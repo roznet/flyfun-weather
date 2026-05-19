@@ -1,6 +1,7 @@
 import { driver, type DriveStep, type Driver } from 'driver.js';
 import 'driver.js/dist/driver.css';
 import { briefingStore } from '../store/briefing-store';
+import { t } from '../i18n/i18n';
 
 function ensureSectionExpanded(sectionAttr: string): void {
   const wrapper = document.querySelector<HTMLElement>(`[data-section="${sectionAttr}"]`);
@@ -10,116 +11,98 @@ function ensureSectionExpanded(sectionAttr: string): void {
   }
 }
 
-const BRIEFING_TOUR_STEPS: DriveStep[] = [
-  {
-    popover: {
-      title: 'Welcome to your briefing',
-      description:
-        'This quick tour walks through the main parts of a flight briefing. ' +
-        'You can hit Skip anytime — nothing here changes your flight.',
+function buildSteps(): DriveStep[] {
+  return [
+    {
+      popover: {
+        title: t('tour.welcome.title'),
+        description: t('tour.welcome.desc'),
+      },
     },
-  },
-  {
-    element: '#assessment-banner',
-    popover: {
-      title: 'Overall assessment',
-      description:
-        'The headline read on your flight: a colour-coded summary from the ' +
-        'AI digest, combining advisories, observations, and forecast confidence.',
-      side: 'bottom',
-      align: 'start',
+    {
+      element: '#assessment-banner',
+      popover: {
+        title: t('tour.assessment.title'),
+        description: t('tour.assessment.desc'),
+        side: 'bottom',
+        align: 'start',
+      },
     },
-  },
-  {
-    element: '#advisories-wrapper',
-    popover: {
-      title: 'Route advisories',
-      description:
-        'Deterministic hazard evaluators — icing, turbulence, convective, ' +
-        'cloud, and model-agreement. Click any advisory for the underlying ' +
-        'numbers and the rule that triggered it.',
-      side: 'bottom',
-      align: 'start',
+    {
+      element: '#advisories-wrapper',
+      popover: {
+        title: t('tour.advisories.title'),
+        description: t('tour.advisories.desc'),
+        side: 'bottom',
+        align: 'start',
+      },
+      onHighlightStarted: () => ensureSectionExpanded('advisories'),
     },
-    onHighlightStarted: () => ensureSectionExpanded('advisories'),
-  },
-  {
-    element: '#viz-section',
-    popover: {
-      title: 'Cross-section',
-      description:
-        'A vertical slice along your route. Clouds, icing, turbulence, ' +
-        'convective columns, and terrain — all on the same time/altitude grid.',
-      side: 'top',
-      align: 'center',
+    {
+      element: '#viz-section',
+      popover: {
+        title: t('tour.crossSection.title'),
+        description: t('tour.crossSection.desc'),
+        side: 'top',
+        align: 'center',
+      },
+      onHighlightStarted: () => ensureSectionExpanded('cross-section'),
     },
-    onHighlightStarted: () => ensureSectionExpanded('cross-section'),
-  },
-  {
-    element: '.viz-layer-toggles',
-    popover: {
-      title: 'Toggle layers',
-      description:
-        'Try it: click a checkbox to turn a layer on or off. The tour stays ' +
-        'open — interact freely, then hit Next when you\'re ready.',
-      side: 'bottom',
-      align: 'start',
+    {
+      element: '.viz-layer-toggles',
+      popover: {
+        title: t('tour.layers.title'),
+        description: t('tour.layers.desc'),
+        side: 'bottom',
+        align: 'start',
+      },
+      // Only step where the user is meant to click the underlying control.
+      disableActiveInteraction: false,
     },
-    // The default driver.js overlay blocks clicks; we override per-step
-    // via `disableActiveInteraction: false` (set at driver-instance level below).
-  },
-  {
-    element: '.viz-layer-info-btn',
-    popover: {
-      title: 'Info on any metric',
-      description:
-        'Every layer and metric has a ⓘ button. Click it for the formula, ' +
-        'units, source model, and a colour-scale legend.',
-      side: 'left',
-      align: 'start',
+    {
+      // `[data-layer-info]` excludes the per-group ⓘ buttons (those also carry
+      // `viz-group-info-btn`); we want the first per-layer info button.
+      element: '[data-layer-info]',
+      popover: {
+        title: t('tour.layerInfo.title'),
+        description: t('tour.layerInfo.desc'),
+        side: 'left',
+        align: 'start',
+      },
     },
-  },
-  {
-    element: '#route-graph-controls',
-    popover: {
-      title: 'Route graph metrics',
-      description:
-        'Below the cross-section is a scalar graph along the route — wind, ' +
-        'CAPE, ceiling, and more. Use these selectors to pick what to plot ' +
-        'on the left and right axes.',
-      side: 'top',
-      align: 'start',
+    {
+      element: '#route-graph-controls',
+      popover: {
+        title: t('tour.routeGraph.title'),
+        description: t('tour.routeGraph.desc'),
+        side: 'top',
+        align: 'start',
+      },
     },
-  },
-  {
-    element: '[data-section="skewt"]',
-    popover: {
-      title: 'Skew-T at any point',
-      description:
-        'Click any point on the cross-section to inspect its full sounding ' +
-        'here — temperature, dewpoint, parcel path, CAPE/CIN, and overlay ' +
-        'bands showing where clouds and icing live.',
-      side: 'top',
-      align: 'center',
+    {
+      element: '[data-section="skewt"]',
+      popover: {
+        title: t('tour.skewt.title'),
+        description: t('tour.skewt.desc'),
+        side: 'top',
+        align: 'center',
+      },
+      onHighlightStarted: () => ensureSectionExpanded('skewt'),
     },
-    onHighlightStarted: () => ensureSectionExpanded('skewt'),
-  },
-  {
-    popover: {
-      title: 'That\'s the tour',
-      description:
-        'Synopsis, GRAMET, Sounding Analysis, and Model Comparison are below ' +
-        'if you want more depth. Have a safe flight.',
+    {
+      popover: {
+        title: t('tour.done.title'),
+        description: t('tour.done.desc'),
+      },
     },
-  },
-];
+  ];
+}
 
 let activeDriver: Driver | null = null;
 
-// Preload the Skew-T at tour start. driver.js types onHighlightStarted as
-// returning void and never awaits the returned promise, so per-step async
-// prep can't actually block the highlight. By the time the user has clicked
-// through the earlier steps, the canvas is rendered and ready.
+// driver.js types onHighlightStarted as returning void and never awaits the
+// returned promise, so per-step async prep can't block the highlight. Open
+// the mid-route sounding here so it's loaded by the time the user arrives.
 function preloadSkewT(): void {
   const state = briefingStore.getState();
   if (state.selectedPointIndex == null && state.routeAnalyses) {
@@ -137,9 +120,7 @@ export function startBriefingTour(): void {
   activeDriver = driver({
     showProgress: true,
     allowClose: true,
-    // Let users interact with the highlighted element (toggle layers, click ⓘ).
-    disableActiveInteraction: false,
-    steps: BRIEFING_TOUR_STEPS,
+    steps: buildSteps(),
     onDestroyed: () => {
       activeDriver = null;
     },

@@ -136,9 +136,11 @@ function wireStepHandlers(): void {
     // manually after completeSetup resolves.
     e.preventDefault();
     const href = takeTourBtn.href;
-    void handleFinish().then(() => {
-      window.location.href = href;
-    });
+    handleFinish()
+      .catch((err) => console.error('Tour setup failed:', err))
+      .finally(() => {
+        window.location.href = href;
+      });
   });
 
   backBtn?.addEventListener('click', async () => {
