@@ -320,6 +320,8 @@
   "wizard.step5Title": "Achten Sie auf <span class=\"wizard-info-icon\">(i)</span>-Schaltflächen",
   "wizard.step5Desc": "Klicken Sie diese überall im Briefing an, um zu erfahren, was eine Metrik bedeutet und wie sie zu interpretieren ist.",
   "wizard.tourHint": "Sie können diese Einstellungen jederzeit auf der Seite <strong>Einstellungen</strong> erneut aufrufen und auf der Seite <strong>Hilfe</strong> mehr erfahren.",
+  "wizard.startTourBtn": "Interaktive Tour starten",
+  "wizard.startTourHint": "Führt Sie durch ein echtes Briefing mit interessantem Wetter. Sie können die Tour jederzeit über die Briefing-Symbolleiste erneut starten.",
   "wizard.back": "Zurück",
   "wizard.next": "Weiter",
   "wizard.profileTitle": "Wählen Sie Ihr Standardprofil",

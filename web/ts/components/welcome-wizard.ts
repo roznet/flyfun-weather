@@ -15,6 +15,7 @@ import { completeSetup } from '../adapters/preferences-adapter';
 import { escapeHtml, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from '../utils';
 import type { ModelCatalogEntry } from '../utils';
 import { t } from '../i18n/i18n';
+import { buildDemoTourUrl } from '../tour/demo-config';
 
 type StepId = 'welcome' | 'profile' | 'aircraft' | 'tour';
 
@@ -127,6 +128,18 @@ function wireStepHandlers(): void {
   const backBtn = wizardEl.querySelector('.wizard-btn-back');
   const nextBtn = wizardEl.querySelector('.wizard-btn-next');
   const finishBtn = wizardEl.querySelector('.wizard-btn-finish');
+  const takeTourBtn = wizardEl.querySelector('.wizard-btn-take-tour') as HTMLAnchorElement | null;
+
+  takeTourBtn?.addEventListener('click', (e) => {
+    // Finish setup first so the wizard doesn't re-appear after the tour.
+    // Navigation is async, so we suppress the default click and dispatch
+    // manually after completeSetup resolves.
+    e.preventDefault();
+    const href = takeTourBtn.href;
+    void handleFinish().then(() => {
+      window.location.href = href;
+    });
+  });
 
   backBtn?.addEventListener('click', async () => {
     if (currentStep > 0) {
@@ -290,10 +303,22 @@ function renderAircraftStep(): string {
 }
 
 function renderTourStep(): string {
+  const demoUrl = buildDemoTourUrl();
+  const ctaHtml = demoUrl
+    ? `<div class="wizard-tour-cta">
+         <a class="btn btn-primary wizard-btn-take-tour" href="${escapeHtml(demoUrl)}">
+           ${t('wizard.startTourBtn')}
+         </a>
+         <p class="wizard-hint">${t('wizard.startTourHint')}</p>
+       </div>`
+    : '';
+
   return `
     <div class="wizard-step wizard-tour">
       <h2>${t('wizard.tourTitle')}</h2>
       <p class="wizard-subtitle">${t('wizard.tourSubtitle')}</p>
+
+      ${ctaHtml}
 
       <div class="wizard-tour-items">
         <div class="wizard-tour-item">
