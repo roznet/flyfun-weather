@@ -3,6 +3,15 @@ import { escapeHtml } from '../utils';
 import { startBriefingTour } from './briefing-tour';
 import { hasBeenOffered, markOffered } from './tour-storage';
 
+export interface TourOfferGate {
+  /** Pack currently loaded — tour targets exist in the DOM. */
+  currentPack: unknown;
+  /** Refresh stream still in flight — tour targets may be empty/hidden. */
+  refreshing: boolean;
+  /** Digest stage still pending — synopsis not yet rendered. */
+  digestPending: boolean;
+}
+
 export function renderTourOfferBanner(host: HTMLElement): void {
   host.innerHTML = `
     <div class="tour-offer-content">
@@ -31,11 +40,18 @@ export function renderTourOfferBanner(host: HTMLElement): void {
   });
 }
 
-export function maybeOfferTour(): void {
+export function maybeOfferTour(gate?: TourOfferGate): void {
   if (hasBeenOffered()) return;
   const params = new URLSearchParams(window.location.search);
   if (params.get('tour') === '1') return;
+  // Wait until the briefing stream is fully complete so every tour target
+  // (advisories, viz section, layer toggles, skew-t…) is rendered.
+  if (gate && (!gate.currentPack || gate.refreshing || gate.digestPending)) return;
   const host = document.getElementById('tour-offer-banner');
   if (!host) return;
+  // Idempotent: re-rendering the banner while it is already visible is fine,
+  // but avoid replacing it if it has already been built once.
+  if (host.dataset.rendered === '1') return;
+  host.dataset.rendered = '1';
   renderTourOfferBanner(host);
 }

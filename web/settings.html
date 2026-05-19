@@ -191,11 +191,17 @@
           </div>
         </div>
 
-        <!-- Credits section (populated by JS) -->
-        <div id="credits-section" class="section hidden-section">
-          <h3>Credits</h3>
-          <div id="credits-balance"></div>
-          <div id="credits-transactions"></div>
+        <!-- Admin Tools (admin-only; populated by JS) -->
+        <div id="admin-tools-section" class="section" style="display:none">
+          <h3>Admin Tools</h3>
+          <p class="muted section-hint">
+            Reset client- and server-side first-time flags so you can replay the new-user experience without creating another account.
+          </p>
+          <div class="form-row" style="gap:0.5rem; flex-wrap:wrap">
+            <button type="button" id="btn-reset-onboarding" class="btn btn-secondary btn-sm">Replay welcome wizard</button>
+            <button type="button" id="btn-reset-tour-offer" class="btn btn-secondary btn-sm">Replay briefing tour offer</button>
+            <button type="button" id="btn-reset-first-time" class="btn btn-primary btn-sm">Replay both</button>
+          </div>
         </div>
 
         <!-- Danger Zone -->

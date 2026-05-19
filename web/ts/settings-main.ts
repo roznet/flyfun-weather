@@ -1,7 +1,7 @@
 /** Settings page entry point — tabbed preferences with profile-based advisory configuration. */
 
 import { fetchCurrentUser, deleteAccount } from './adapters/auth-adapter';
-import { fetchCostSummary, type CostSummary } from './adapters/credits-adapter';
+import { resetMyOnboarding } from './adapters/admin-adapter';
 import { redirectToLogin, renderUserInfo, escapeHtml, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
 import {
   fetchPreferences,
@@ -364,7 +364,6 @@ function translateStaticElements(): void {
   set('label[for="input-ar-password"]', 'page.settings.password');
   set('#clear-autorouter-btn', 'page.settings.clear');
   set('#usage-section h3', 'page.settings.usageTitle');
-  set('#credits-section h3', 'page.settings.creditsTitle');
   // Danger zone
   set('.danger-zone h3', 'page.settings.deleteAccountTitle');
   set('.danger-zone .section-hint', 'page.settings.deleteAccountHint');
@@ -512,13 +511,12 @@ async function init(): Promise<void> {
     switchTab('services');
   }
 
-  // Load usage, credits, and tokens (non-blocking)
+  // Load usage and tokens (non-blocking).
+  // Cost summary is intentionally not loaded here — a new cost section is
+  // planned and the previous Credits panel was removed.
   fetchUsageSummary()
     .then(renderUsage)
     .catch(() => { /* usage section stays hidden */ });
-  fetchCostSummary()
-    .then(renderCosts)
-    .catch(() => { /* costs section stays hidden */ });
   initTokenSection();
 
   // Profile controls
@@ -598,6 +596,37 @@ async function init(): Promise<void> {
       showStatus(t('settings.deleteAccountFailed', { error: String(err) }), true);
     }
   });
+
+  // Admin-only tools: replay first-time experience.
+  if (user.is_admin) {
+    const adminSection = document.getElementById('admin-tools-section');
+    if (adminSection) adminSection.style.display = '';
+    document.getElementById('btn-reset-onboarding')?.addEventListener('click', async () => {
+      try {
+        await resetMyOnboarding();
+        showStatus('Welcome wizard reset — open Flights to replay it.');
+      } catch (err) {
+        showStatus(`Failed to reset onboarding: ${String(err)}`, true);
+      }
+    });
+    document.getElementById('btn-reset-tour-offer')?.addEventListener('click', () => {
+      try {
+        localStorage.removeItem('wb_tour_offered');
+        showStatus('Tour offer reset — open a briefing to see the banner again.');
+      } catch (err) {
+        showStatus(`Failed to clear tour flag: ${String(err)}`, true);
+      }
+    });
+    document.getElementById('btn-reset-first-time')?.addEventListener('click', async () => {
+      try {
+        await resetMyOnboarding();
+        localStorage.removeItem('wb_tour_offered');
+        showStatus('First-time experience reset — wizard on Flights, banner on next briefing.');
+      } catch (err) {
+        showStatus(`Failed to reset first-time flags: ${String(err)}`, true);
+      }
+    });
+  }
 }
 
 function switchTab(tabId: string): void {
@@ -931,52 +960,6 @@ function showStatus(message: string, isError = false): void {
   el.className = isError ? 'status-error visible' : 'status-success visible';
   if (!isError) {
     setTimeout(() => { el.classList.remove('visible'); }, STATUS_DISMISS_MS);
-  }
-}
-
-// --- Credits rendering ---
-
-function renderCosts(costs: CostSummary): void {
-  const section = document.getElementById('credits-section');
-  if (!section) return;
-  section.classList.remove('hidden-section');
-
-  // Cost summary
-  const balanceEl = document.getElementById('credits-balance');
-  if (balanceEl) {
-    balanceEl.innerHTML = `
-      <div class="credits-summary">
-        <span class="muted credits-detail">
-          ${t('settings.costThisWeek', { cost: '$' + costs.cost_this_week_usd.toFixed(2) })}
-          &middot; ${t('settings.costThisMonth', { cost: '$' + costs.cost_this_month_usd.toFixed(2) })}
-          &middot; ${t('settings.costTotal', { cost: '$' + costs.total_cost_usd.toFixed(2) })}
-          (${costs.total_briefings} briefings)
-        </span>
-      </div>`;
-  }
-
-  // Recent transactions
-  const txEl = document.getElementById('credits-transactions');
-  if (txEl && costs.recent_transactions.length > 0) {
-    const rows = costs.recent_transactions
-      .filter(tx => tx.cost_usd > 0)
-      .slice(0, 10)
-      .map(tx => {
-        const ts = new Date(tx.timestamp).toLocaleDateString(getDateLocale(), {
-          day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-        });
-        return `<tr>
-          <td class="muted">${ts}</td>
-          <td>$${tx.cost_usd.toFixed(4)}</td>
-          <td class="muted">${tx.category}</td>
-        </tr>`;
-      }).join('');
-    txEl.innerHTML = `
-      <h4 class="subsection-heading">${t('settings.recentTransactions')}</h4>
-      <table class="credits-table">
-        <thead><tr><th>${t('settings.txDate')}</th><th>${t('settings.txCost')}</th><th>${t('settings.txType')}</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
   }
 }
 

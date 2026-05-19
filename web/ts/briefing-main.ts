@@ -1068,6 +1068,20 @@ async function init(): Promise<void> {
     if (state.error !== prev.error) {
       ui.renderError(state.error);
     }
+    // Offer the tour only once the briefing stream is fully done so all
+    // tour targets are rendered. maybeOfferTour short-circuits if the user
+    // already accepted or dismissed it.
+    if (
+      state.currentPack !== prev.currentPack ||
+      state.refreshing !== prev.refreshing ||
+      state.digestPending !== prev.digestPending
+    ) {
+      maybeOfferTour({
+        currentPack: state.currentPack,
+        refreshing: state.refreshing,
+        digestPending: state.digestPending,
+      });
+    }
   });
 
   // --- Wire refresh button (owner-only) ---
@@ -1442,7 +1456,9 @@ async function init(): Promise<void> {
 
     document.getElementById('tour-btn')?.addEventListener('click', () => startBriefingTour());
     maybeAutoStartBriefingTour();
-    maybeOfferTour();
+    // The tour offer is wired into the store subscription so it only fires
+    // once the briefing stream is fully complete (currentPack rendered,
+    // refresh finished, digest done) — see the subscribe block above.
   });
 }
 

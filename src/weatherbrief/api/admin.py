@@ -1032,3 +1032,22 @@ def preview_digest(
     base_url = os.environ.get("WEATHERBRIEF_BASE_URL", "https://weather.flyfun.aero")
     data = get_admin_digest_data(db, since, now, period_label=period_label, base_url=base_url)
     return data.model_dump(mode="json")
+
+
+@router.post("/onboarding/reset", status_code=204)
+def reset_my_onboarding(
+    admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Reset the calling admin's onboarding flags so the welcome wizard replays.
+
+    Server-side this clears ``setup_completed`` on the admin's preferences row.
+    The tour-offered flag lives in browser localStorage and is cleared client-
+    side; see the settings page Admin section.
+    """
+    row = db.get(UserPreferencesRow, admin_id)
+    if row is None:
+        row = UserPreferencesRow(user_id=admin_id)
+        db.add(row)
+    row.setup_completed = False
+    db.flush()

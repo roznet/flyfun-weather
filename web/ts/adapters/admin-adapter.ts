@@ -364,3 +364,11 @@ export async function fetchVerificationStats(
 export async function fetchVerificationAirports(): Promise<Record<string, string[]>> {
   return apiFetch<Record<string, string[]>>('/admin/verification/airports');
 }
+
+/** Clear the calling admin's setup_completed flag so the welcome wizard replays
+ * on the next visit to /flights. Admin-only by design — used for testing the
+ * first-time experience.
+ */
+export async function resetMyOnboarding(): Promise<void> {
+  return apiFetch<void>('/admin/onboarding/reset', { method: 'POST' });
+}
