@@ -50,21 +50,25 @@ export interface CategoryMapResponse {
   airports: CategoryAirport[];
 }
 
-// --- View #4 leaderboard ---------------------------------------------------
+// --- Leaderboard (Top airports sub-tab) ------------------------------------
 
-export interface VolatilityRow {
+export interface LeaderboardRow {
   icao: string;
   n_obs: number;
-  n_changes: number;
-  value: number;
+  value: number | null;
+  extra: Record<string, unknown>;
 }
 
-export interface VolatilityLeaderboardResponse {
+export interface LeaderboardResponse {
   month: string;
   is_mtd: boolean;
   as_of_date?: string;
+  dataset: string;
+  sub: string | null;
+  unit: '%' | 'kt' | 'ratio';
+  label: string;
   min_n_obs: number;
-  rows: VolatilityRow[];
+  rows: LeaderboardRow[];
 }
 
 // --- Fetchers --------------------------------------------------------------
@@ -114,13 +118,18 @@ export async function fetchVolatilityMap(month: string): Promise<ClimatologyMapE
   return resp.json();
 }
 
-export async function fetchVolatilityLeaderboard(
-  month: string, limit: number = 20,
-): Promise<VolatilityLeaderboardResponse> {
+export async function fetchLeaderboard(
+  month: string, dataset: string, sub: string | null, limit: number = 20,
+): Promise<LeaderboardResponse> {
+  const params = new URLSearchParams({ month, dataset, limit: String(limit) });
+  if (sub) params.set('sub', sub);
   const resp = await fetch(
-    `${apiBase}/climatology/volatility/top?month=${encodeURIComponent(month)}&limit=${limit}`,
+    `${apiBase}/climatology/leaderboard?${params.toString()}`,
     { credentials: 'include' },
   );
-  if (!resp.ok) throw new Error(`Volatility leaderboard: ${resp.status}`);
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Leaderboard ${resp.status}: ${body}`);
+  }
   return resp.json();
 }

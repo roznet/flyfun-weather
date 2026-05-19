@@ -331,21 +331,37 @@ def get_wind_climatology(
         values = {icao: tup[0] for icao, tup in rows.items()}
         n_obs_by_icao = {icao: tup[1] for icao, tup in rows.items()}
 
+    # MTD path didn't collect n_obs yet — pull it now so the leaderboard
+    # can apply its min-obs gate.
+    if window.is_mtd and window.as_of_date is not None:
+        n_stmt = (
+            select(
+                AirportDailySummaryRow.icao,
+                func.sum(AirportDailySummaryRow.n_obs).label("n_obs"),
+            )
+            .where(AirportDailySummaryRow.date >= window.month)
+            .where(AirportDailySummaryRow.date <= window.as_of_date)
+            .group_by(AirportDailySummaryRow.icao)
+        )
+        n_obs_by_icao = {r[0]: r[1] for r in db.execute(n_stmt).all()}
+    elif window.is_mtd:
+        n_obs_by_icao = {}
+
     airports: list[dict[str, Any]] = []
     unit = "%" if metric == "over25" else "kt"
     for icao in sorted(coords):
         lat, lon = coords[icao]
         raw = values.get(icao)
+        n_obs = n_obs_by_icao.get(icao, 0) or 0
         if raw is None:
             value: float | None = None
         elif metric == "over25":
-            # Convert count → percentage of observations.
-            n_obs = n_obs_by_icao.get(icao, 0) or 0
             value = round(100.0 * raw / n_obs, 2) if n_obs > 0 else None
         else:
             value = round(float(raw), 1)
         airports.append({
-            "icao": icao, "lat": lat, "lon": lon, "value": value, "raw": raw,
+            "icao": icao, "lat": lat, "lon": lon,
+            "value": value, "raw": raw, "n_obs": n_obs,
         })
 
     return _envelope(window, dataset="wind", metric=metric, unit=unit,
@@ -406,48 +422,106 @@ def get_volatility_climatology(
                      unit="ratio", airports=airports)
 
 
-def get_volatility_leaderboard(
+def get_leaderboard(
     db: Session,
     window: MonthWindow,
     airports_db_path: str,
+    dataset: str,
+    sub: str | None,
     limit: int = 20,
 ) -> dict[str, Any]:
-    """Return the top ``limit`` airports ranked by ``category_changes / n_obs``.
+    """Top ``limit`` airports for any (dataset, sub) combination.
 
-    Min-obs gate excludes sparse-data outliers (see ``_VOLATILITY_MIN_OBS_*``).
+    Reuses the same per-airport computations as the map endpoints, then
+    applies a min-obs gate and sorts by value descending. Min-obs uses
+    the same defaults as the original volatility leaderboard:
+    ``_LEADERBOARD_MIN_OBS_COMPLETED`` for completed months and
+    ``_LEADERBOARD_MIN_OBS_MTD`` for MTD windows.
+
+    Sort direction is always ``DESC`` — for VFR% the leaderboard reads as
+    "most consistently VFR"; for unfavorable metrics (IFR/MVFR/LIFR/TS/Fog/
+    wind/volatility) it reads as "most extreme". One consistent direction
+    avoids an off-by-one UX trap.
     """
-    if window.is_mtd:
-        rows = _read_counts_by_icao(db, window, _VOLATILITY_FIELDS)
-        changes_field = "n_category_changes"
-        min_obs = _VOLATILITY_MIN_OBS_MTD
-    else:
-        rows = _read_counts_by_icao(db, window, _VOLATILITY_FIELDS_MONTHLY)
-        changes_field = "category_changes"
-        min_obs = _VOLATILITY_MIN_OBS_COMPLETED
+    min_obs = _VOLATILITY_MIN_OBS_MTD if window.is_mtd else _VOLATILITY_MIN_OBS_COMPLETED
 
-    ranked: list[dict[str, Any]] = []
-    for icao, counts in rows.items():
-        n_obs = counts["n_obs"] or 0
-        n_changes = counts[changes_field] or 0
-        if n_obs < min_obs:
-            continue
-        ranked.append({
-            "icao": icao,
-            "n_obs": n_obs,
-            "n_changes": n_changes,
-            "value": round(n_changes / n_obs, 3),
-        })
-    ranked.sort(key=lambda r: (-r["value"], r["icao"]))
-    ranked = ranked[:limit]
+    # Dispatch: get the per-airport map response, then collapse into
+    # leaderboard rows (icao, value, n_obs, …) ranked by value desc.
+    if dataset == "category":
+        if sub not in ("vfr", "mvfr", "ifr", "lifr"):
+            raise HTTPException(status_code=400, detail=f"category sub must be vfr/mvfr/ifr/lifr, got {sub!r}")
+        data = get_category_climatology(db, window, airports_db_path)
+        value_key = f"pct_{sub}"
+        rows = [
+            {"icao": a["icao"], "value": a[value_key],
+             "n_obs": a["n_obs"], "extra": {"n_vfr": a["n_vfr"], "n_mvfr": a["n_mvfr"],
+                                            "n_ifr": a["n_ifr"], "n_lifr": a["n_lifr"]}}
+            for a in data["airports"]
+            if value_key in a and a["n_obs"] >= min_obs
+        ]
+        unit = "%"
+        label = f"{sub.upper()} %"
+    elif dataset == "phenomena":
+        if sub not in ("ts", "fog"):
+            raise HTTPException(status_code=400, detail=f"phenomena sub must be 'ts' or 'fog', got {sub!r}")
+        data = get_phenomena_climatology(db, window, airports_db_path, sub)
+        key = "n_ts" if sub == "ts" else "n_fg"
+        rows = [
+            {"icao": a["icao"], "value": a["value"],
+             "n_obs": a["n_obs"], "extra": {key: a[key]}}
+            for a in data["airports"]
+            if a["value"] is not None and a["n_obs"] >= min_obs
+        ]
+        unit = "%"
+        label = "TS %" if sub == "ts" else "Fog %"
+    elif dataset == "wind":
+        if sub not in WIND_METRICS:
+            raise HTTPException(status_code=400, detail=f"wind sub must be one of {WIND_METRICS}, got {sub!r}")
+        data = get_wind_climatology(db, window, airports_db_path, sub)
+        unit = "%" if sub == "over25" else "kt"
+        rows = [
+            {"icao": a["icao"], "value": a["value"],
+             "n_obs": a.get("n_obs", 0), "extra": {"raw": a.get("raw")}}
+            for a in data["airports"]
+            if a["value"] is not None and a.get("n_obs", 0) >= min_obs
+        ]
+        label = {"over25": "% hrs > 25 kt", "p95": "Wind p95 (kt)",
+                 "gust": "Peak gust (kt)"}[sub]
+    elif dataset == "volatility":
+        data = get_volatility_climatology(db, window, airports_db_path)
+        rows = [
+            {"icao": a["icao"], "value": a["value"],
+             "n_obs": a["n_obs"], "extra": {"n_changes": a["n_changes"]}}
+            for a in data["airports"]
+            if a["value"] is not None and a["n_obs"] >= min_obs
+        ]
+        unit = "ratio"
+        label = "Changes / obs"
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown dataset {dataset!r}")
+
+    rows.sort(key=lambda r: (-(r["value"] or 0), r["icao"]))
+    rows = rows[:limit]
 
     return {
         "month": window.month.strftime("%Y-%m"),
         "is_mtd": window.is_mtd,
         **({"as_of_date": window.as_of_date.isoformat()}
            if window.is_mtd and window.as_of_date else {}),
+        "dataset": dataset,
+        "sub": sub,
+        "unit": unit,
+        "label": label,
         "min_n_obs": min_obs,
-        "rows": ranked,
+        "rows": rows,
     }
+
+
+# Backwards-compat alias used by the old endpoint name during transition.
+# Kept only because tests/import it; remove once they migrate to get_leaderboard.
+def get_volatility_leaderboard(db, window, airports_db_path, limit=20):
+    return get_leaderboard(db, window, airports_db_path,
+                           dataset="volatility", sub=None, limit=limit)
 
 
 # ---------------------------------------------------------------------------

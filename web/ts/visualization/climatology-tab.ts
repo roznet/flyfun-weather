@@ -12,11 +12,14 @@
 
 import {
   fetchCategoryMap, fetchPhenomenaMap, fetchWindMap,
-  fetchVolatilityMap, fetchVolatilityLeaderboard,
+  fetchVolatilityMap, fetchLeaderboard,
   type CategoryMapResponse, type ClimatologyMapEnvelope,
-  type VolatilityLeaderboardResponse, type WindMetric,
+  type LeaderboardResponse, type WindMetric,
 } from '../adapters/climatology-adapter';
-import { ClimatologyMap, legendRows, type MapAirport, type Scale } from './climatology-map';
+import {
+  ClimatologyMap, legendRows, pctColor,
+  type MapAirport, type Scale,
+} from './climatology-map';
 import {
   CategoryDataset, PhenomenaDataset, WindDataset, VolatilityDataset,
   DATASET_LABEL,
@@ -151,21 +154,29 @@ export class ClimatologyTab {
             .forEach((b) => b.classList.remove('active'));
           btn.classList.add('active');
           this.sub = btn.dataset.sub!;
+          this.invalidateLeaderboard();
           this.reload();
         });
       });
+  }
+
+  private invalidateLeaderboard(): void {
+    this.leaderboardLoaded = false;
+    // If the user is currently viewing the leaderboard sub-tab, refresh it
+    // immediately so dataset/sub/month changes are reflected. Otherwise
+    // the next switch to that sub-tab will fetch.
+    if (this.currentSub === 'top') this.loadLeaderboard();
   }
 
   private wireControls(): void {
     const monthSel = $('clim-month-picker') as HTMLSelectElement | null;
     monthSel?.addEventListener('change', () => {
       this.month = monthSel.value;
-      // Recompute MTD flag from the selected month vs current UTC month.
       const now = new Date();
       const cur = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
       this.monthIsMtd = this.month === cur;
-      this.renderSubPicker();   // wind sub may need to disable/enable
-      this.leaderboardLoaded = false;
+      this.renderSubPicker();
+      this.invalidateLeaderboard();
       this.reload();
     });
 
@@ -173,6 +184,7 @@ export class ClimatologyTab {
     dsSel?.addEventListener('change', () => {
       this.dataset = dsSel.value as DatasetKey;
       this.renderSubPicker();
+      this.invalidateLeaderboard();
       this.reload();
     });
 
@@ -296,12 +308,24 @@ export class ClimatologyTab {
     if (!host) return;
     host.innerHTML = '<div class="map-info" style="padding:1rem">Loading…</div>';
     try {
-      const data = await fetchVolatilityLeaderboard(this.month, 20);
-      host.innerHTML = renderLeaderboardHtml(data);
+      const subParam = this.dataset === 'volatility' ? null : (this.sub || null);
+      const data = await fetchLeaderboard(this.month, this.dataset, subParam, 20);
+      const scale = this.activeScale();
+      host.innerHTML = renderLeaderboardHtml(data, scale);
       this.leaderboardLoaded = true;
     } catch (err) {
       host.innerHTML = `<div class="map-info map-info-error" style="padding:1rem">
         Failed: ${(err as Error).message}</div>`;
+    }
+  }
+
+  /** Color scale currently in effect — used to dot leaderboard rows. */
+  private activeScale(): Scale | null {
+    switch (this.dataset) {
+      case 'category':   return CategoryDataset.scaleFor((this.sub || 'vfr') as CategoryKey);
+      case 'phenomena':  return PhenomenaDataset.scaleFor((this.sub || 'ts') as PhenomenaKey);
+      case 'wind':       return WindDataset.scaleFor((this.sub || 'gust') as WindKey);
+      case 'volatility': return VolatilityDataset.scaleFor();
     }
   }
 }
@@ -326,37 +350,49 @@ function headerFromEnvelope(data: ClimatologyMapEnvelope): string {
   return `${note} · ${plotted} plotted (${withData} with data)`;
 }
 
-function renderLeaderboardHtml(data: VolatilityLeaderboardResponse): string {
+function formatValue(value: number | null, unit: string): string {
+  if (value === null) return '—';
+  if (unit === '%') return `${value.toFixed(1)}%`;
+  if (unit === 'kt') return `${value.toFixed(0)} kt`;
+  return value.toFixed(3);  // ratio
+}
+
+function renderLeaderboardHtml(data: LeaderboardResponse, scale: Scale | null): string {
   if (data.rows.length === 0) {
     return `<div class="map-info" style="padding:1rem">
       No airports meet the minimum observation count
       (${data.min_n_obs} obs required) for this period.
     </div>`;
   }
-  const rows = data.rows.map((r, i) => `
-    <tr>
-      <td style="text-align:right; padding-right:0.5rem; color:var(--text-muted)">${i + 1}.</td>
-      <td><b>${r.icao}</b></td>
-      <td style="text-align:right">${r.value.toFixed(3)}</td>
-      <td style="text-align:right; color:var(--text-muted)">${r.n_changes}</td>
-      <td style="text-align:right; color:var(--text-muted)">${r.n_obs.toLocaleString()}</td>
-    </tr>
-  `).join('');
+  const rows = data.rows.map((r, i) => {
+    const color = (r.value !== null && scale) ? pctColor(r.value, scale) : '#888';
+    return `
+      <tr>
+        <td style="text-align:right; padding-right:0.5rem; color:var(--text-muted)">${i + 1}.</td>
+        <td>
+          <span class="legend-dot" style="background:${color}; display:inline-block; margin-right:0.4rem; vertical-align:middle"></span>
+          <b>${r.icao}</b>
+        </td>
+        <td style="text-align:right">${formatValue(r.value, data.unit)}</td>
+        <td style="text-align:right; color:var(--text-muted)">${r.n_obs.toLocaleString()}</td>
+      </tr>
+    `;
+  }).join('');
   const monthNote = data.is_mtd
     ? `${data.month} (to ${data.as_of_date ?? '—'})`
     : data.month;
   return `
     <div class="clim-leaderboard-wrap">
-      <h3 style="margin-top:0">Most volatile · ${monthNote}</h3>
+      <h3 style="margin-top:0">Top airports by ${data.label} · ${monthNote}</h3>
       <p style="color:var(--text-muted); font-size:0.8rem; margin:0.25rem 0 0.75rem">
-        Ranked by category changes per observation. Minimum ${data.min_n_obs} observations.
+        Ranked highest first. Minimum ${data.min_n_obs} observations.
+        Change Dataset / Color by on the Map tab to rank by a different metric.
       </p>
       <table class="clim-leaderboard-table">
         <thead>
           <tr>
             <th></th><th>Airport</th>
-            <th style="text-align:right">Changes / obs</th>
-            <th style="text-align:right">Changes</th>
+            <th style="text-align:right">${data.label}</th>
             <th style="text-align:right">Obs</th>
           </tr>
         </thead>
