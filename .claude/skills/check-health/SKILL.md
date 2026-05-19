@@ -195,16 +195,85 @@ Three upstreams are routinely flaky; learn the steady-state rates so you only fl
 
 `Failed to fetch <model>` (without "metadata for") is the actual data-pull failure, not the catalogue probe — that's more serious and should always be flagged.
 
-## 9. Retention & disk
+## 9. Storage & retention
+
+`/mnt/flyfun_data` is the canonical disk gauge (149 GB volume). Steady-state usage is **75–82 %** — see §L9 for the composition breakdown. Only flag when:
+- Sustained **>85 %** (real warn — within ~20 GB of full)
+- Sustained **>90 %** (issue — briefings will start failing soon)
+
+The 75–82 % band oscillates by design as ICON-EU runs cycle through. A 4 pp jump in 12 h is normal cache churn, not a leak.
+
+### 9a. Disk composition (one-liner sweep)
+
+```bash
+ssh brice@161.35.35.15 "du -sh /mnt/flyfun_data/* 2>/dev/null | sort -h && \
+  echo --- && du -sh /mnt/flyfun_data/weather/data/.??* /mnt/flyfun_data/weather/data/*/ 2>/dev/null | sort -h && \
+  echo --- && du -sh /mnt/flyfun_data/weather/data/.cache/grib/*/ 2>/dev/null"
+```
+
+Note the `.??*` glob — the `.cache` dir is **dotfile-hidden** and a plain `du -sh /mnt/flyfun_data/weather/data/*` will silently miss the 40+ GB GRIB cache that lives there.
+
+Compare against the expected bands in §L9. **Flag the line item that's out of band**, not just total usage.
+
+### 9b. Pack growth (the actual long-term driver)
+
+GRIB caches and ECMWF deliveries rotate; **only `packs/` and `mysql/` grow monotonically**, so those are the budget you actually need to track.
+
+```bash
+ssh brice@161.35.35.15 "du -sh /mnt/flyfun_data/weather/data/packs && \
+  ls /mnt/flyfun_data/weather/data/packs | wc -l && echo pack_flight_dirs && \
+  find /mnt/flyfun_data/weather/data/packs -maxdepth 2 -type d -mtime +30 2>/dev/null | wc -l && echo dirs_older_than_T1_threshold"
+```
+
+Pack retention: `RETENTION_T1_DAYS=30` (strip heavy artifacts), `RETENTION_T2_ACTIVE_DAYS=180` / `RETENTION_T2_INACTIVE_DAYS=90` (delete). Read:
+- Total size + flight count to gauge per-flight average (~100 MB / flight is normal).
+- `dirs_older_than_30d` should be growing modestly; if it grows without `packs/` total shrinking, T1 stripping isn't recovering bytes (or there's nothing heavy left to strip).
+
+**Headroom math:** subtract fixed components from 149 GB to get the pack/mysql budget:
+- Caches (ICON-EU + GFS + ECMWF + SRTM): ~60 GB steady-state
+- MySQL (current): ~12 GB
+- Other (mysql siblings, sandboxes, logs): ~1 GB
+- → **Pack budget before 85 % warn: ~55 GB**, before 90 % issue: **~65 GB**
+
+So at today's 26 GB / 248 flight-dirs, we're at ~50 % of the warn budget. If pack growth is e.g. 5 GB / month, we have ~6 months before disk becomes the forcing function for a retention policy change.
+
+### 9c. MySQL size + binlog growth
+
+MySQL is split between (a) actual app data and (b) binary logs. Treat them separately:
+
+```bash
+ssh brice@161.35.35.15 \
+  'docker exec shared-mysql sh -c "du -sh /var/lib/mysql/weatherbrief && \
+   ls -lh /var/lib/mysql/weatherbrief/*.ibd 2>/dev/null | sort -k5 -h | tail -6 && \
+   echo --- && du -ch /var/lib/mysql/binlog.0000* 2>/dev/null | tail -1 && \
+   echo --- oldest_binlog && ls -lt /var/lib/mysql/binlog.0000* | tail -1"'
+```
+
+Note: glob `binlog.0000*` (not `binlog.*`) — the unqualified glob picks up `binlog.index` (a 4 KB metadata file) and skews any `tail -1`.
+
+Expected (as of 2026-05-19):
+- `weatherbrief` DB **1.5–3 GB** — dominated by `verification_scores.ibd` (1.1 GB and growing as scoring accumulates), then `airport_forecast_snapshots.ibd` (~260 MB), `verification_observations.ibd` (~160 MB), `verification_daily_stats.ibd` (~140 MB). Anything else >100 MB is unusual.
+- **Binary logs ~10 GB across ~10 files** of 1.1 GB each, spanning ~30 days. They auto-rotate at the configured `binlog_expire_logs_seconds` (default 30 days = 2592000 s).
+- Sibling DBs (wordpress_roz, flyfunboarding): tens of MB, ignore.
+
+**Flag when:**
+- Binlogs span >40 days (expiry not running) — `PURGE BINARY LOGS BEFORE '<date>'` or set `binlog_expire_logs_seconds` shorter.
+- `weatherbrief` DB >5 GB — investigate which table grew (likely `verification_scores` if forecast cycle ran longer/more models).
+- A single `.ibd` file doubles between checks without an obvious cause (new feature, new model).
+
+### 9d. Retention loop running?
 
 ```bash
 ssh brice@161.35.35.15 "docker logs --since 48h weatherbrief 2>&1 \
-  | grep -E 'Retention .*: T1=|Purged .* GRIB cache|Raw retention: pruned'"
+  | grep -E 'Retention applied:|Purged .* GRIB cache|Age-evicted .* DWD|Raw retention: pruned|Retention cycle failed|GRIB cache purge failed|ECMWF delivery purge failed'"
 ```
 
-Retention runs every 24 h. If the line is missing for >36 h, the loop is wedged. `freed=<MB>` should be non-zero on a busy day; zero across multiple cycles means nothing has aged out (could be fine, could be a bug).
+**Important — read carefully**:
+- `Retention applied: T1=N packs, T2=M packs, freed=X.X MB` is **only about briefing packs in the DB**, not the GRIB caches. `freed=0.0 MB` is **fine** when no pack crossed a TTL boundary in this window — it does NOT mean retention is broken.
+- `Purged N old <model> GRIB cache dirs` is the GRIB cache log line. The code **only logs when `N > 0`** (`if removed:`). So a quiet purge = a successful no-op cycle, indistinguishable from "didn't run". To verify the loop is alive, check for `Retention applied:` (which always logs) — the GRIB purge runs in the same pass.
+- `Retention cycle failed` / `GRIB cache purge failed` / `ECMWF delivery purge failed` — any of these is a real issue; the pass aborted mid-way.
 
-`/mnt/flyfun_data` usage is the canonical disk gauge — current healthy band is 60–75 %.
+If `Retention applied:` is missing for >36 h, the loop is wedged. Otherwise retention is doing its job even when `freed=0`.
 
 ---
 
@@ -245,23 +314,40 @@ Lines like `GET /joomla/.env`, `error_log.php`, `wp-login.php`, `.git/`, `xmlrpc
 ### §L8 — `docker compose` v2, not `docker-compose`
 On this droplet the binary is `docker compose` (two words). Don't try `docker-compose`.
 
----
+### §L9 — Disk composition (steady-state vs growing)
+`/mnt/flyfun_data` is 149 GB and lives in two categories — **rotating** (bounded by TTL) and **growing** (bounded only by retention / nothing):
 
-## Output template
+| Component | Path | Type | Expected band | Notes |
+|---|---|---|---|---|
+| ICON-EU GRIB cache | `.cache/grib/icon-eu/` | rotating | **30–50 GB** | 12 h TTL × ~4 runs/window × ~10 GB/run. Logs `Purged N old icon-eu GRIB cache dirs` only when N>0. |
+| GFS GRIB cache | `.cache/grib/gfs/` | rotating | **1–5 GB** | 24 h TTL × ~5 runs × ~0.5–1 GB/run. |
+| ECMWF deliveries | `/mnt/flyfun_data/ecmwf/data` | rotating | **15–25 GB** | 36 h TTL via `purge_old_ecmwf_deliveries`. |
+| SRTM terrain | `.cache/srtm/` | constant | **~4 GB** | Never aged. |
+| Pack store | `packs/` | growing | **see headroom math §9b** | Monotonic until T1 strip (30 d) and T2 delete (90/180 d) kick in. |
+| MySQL data | `mysql/<db>/*.ibd` | growing | **1.5–3 GB (weatherbrief DB)** | Dominated by `verification_scores`; grows with verification cycle output. |
+| MySQL binlogs | `mysql/binlog.0000XX` | rotating | **~10 GB (~10 files × 1.1 GB, ~30 d span)** | Auto-purged at `binlog_expire_logs_seconds`. |
+| Sandboxes / forms / logs | misc | constant | **<1 GB combined** | Ignore unless growing. |
+
+**Apply this to §9:** the skill's job is to flag the *individual component* that's out of band, not the total. A total of 79 % isn't a warn if every component is in its expected band — it's just the sum of healthy rotating caches plus the slowly-growing pack store. The total only becomes a warn when a component breaks out (e.g. binlogs span >40 d, or `packs/` > headroom budget).
+
+Historical note: 2026-05-19 disk investigation found `/mnt/flyfun_data` at 79 % with the breakdown above all in-band. The "growth" was just ICON-EU cycling 00z→12z runs.
 
 ```
 verdict: ok            ← or `warn` / `issue`
 prod healthy over the last <window>; <one-sentence headline of anything notable>
 
-droplet:    cpu peak X% avg Y%, mem peak Z%, load 1m peak L  (ok)
-container:  weatherbrief healthy <up Xh>, X.X GiB / 6 GiB     (ok)
-refresh:    A active, Q queued, p95 elapsed Ns                (ok|note|warn)
-pipeline:   N briefings in window, slowest Ns                 (ok|note)
-standalone: last cycle <time> ago, T min, peak <N> MB         (ok|warn)
-grib pool:  K resets in window                                (ok|note)
-rss:        no new HWM steps   (or "+N MB step at <ts>")      (ok|note)
-upstream:   M Open-Meteo 502s, K decode failures              (ok|note)
-disk:       / X%, /mnt/flyfun_data Y%                         (ok|warn)
+droplet:    cpu peak X% avg Y%, mem peak Z%, load 1m peak L         (ok)
+container:  weatherbrief healthy <up Xh>, X.X GiB / 6 GiB            (ok)
+refresh:    A active, Q queued, p95 elapsed Ns                       (ok|note|warn)
+pipeline:   N briefings in window, slowest Ns                        (ok|note)
+standalone: last cycle <time> ago, T min, peak_rss <N> MB            (ok|warn)
+grib pool:  K resets in window                                       (ok|note)
+rss:        no new HWM steps   (or "+N MB step at <ts>")             (ok|note)
+upstream:   M Open-Meteo 502s, K AvWx, L DWD                         (ok|note)
+disk total: /mnt/flyfun_data X% (band 75–82% steady-state)           (ok|warn)
+caches:     icon-eu N GB, gfs N GB, ecmwf N GB                       (ok|warn if out-of-band)
+growing:    packs N GB / F flights, mysql data N GB, binlogs N GB    (ok|note|warn)
+retention:  Retention applied (last <time>); GRIB purge alive        (ok|warn if missing)
 
 what to look at (only if verdict != ok):
 - <specific bullet pointing at a log line, container, or grep result>
