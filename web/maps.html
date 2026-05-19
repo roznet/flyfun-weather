@@ -344,18 +344,6 @@
       </div>
     </div>
 
-    <div class="experimental-banner">
-      <span class="badge">Experimental</span>
-      <span class="experimental-info" id="experimental-toggle">i</span>
-    </div>
-    <div class="experimental-detail" id="experimental-detail">
-      This page is experimental. It systematically collects NWP model forecasts (GFS, ICON, ECMWF)
-      for ~830 European airports and scores them against actual METAR observations.
-      The goal is to build statistics on model accuracy across geography and lead time,
-      and to help identify where and when forecasts can be trusted.
-      Data and methodology are being refined — treat all results as indicative, not definitive.
-    </div>
-
     <!-- Tab bar (settings-tabs underline style) -->
     <div class="settings-tabs" id="tabs">
       <button class="tab-btn active" data-tab="forecast">Forecast Overview</button>
@@ -415,6 +403,17 @@
 
     <!-- Tab: Synoptic Forecast (Hewson gridded fields) -->
     <div id="panel-synoptic" class="tab-panel">
+      <div class="experimental-banner">
+        <span class="badge">Experimental</span>
+        <span class="experimental-info" id="experimental-toggle">i</span>
+      </div>
+      <div class="experimental-detail" id="experimental-detail">
+        The Synoptic Forecast view is experimental. It renders gridded fields
+        (θe, |∇θe|, TFP, advection, tendency) derived from NWP models for
+        frontal-zone detection using the Hewson method. Thresholds and
+        colour scales are still being calibrated against analysed surface
+        charts — treat the overlays as indicative, not definitive.
+      </div>
       <div class="maps-controls synoptic-controls" id="controls-synoptic">
         <label>Model</label>
         <!-- Buttons populated from /api/hewson-map/manifest at first tab show -->

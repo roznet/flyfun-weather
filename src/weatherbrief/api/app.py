@@ -388,10 +388,25 @@ def create_app() -> FastAPI:
     ):
         from weatherbrief.notify.admin_email import get_admin_emails
 
+        import json as _json
+
         user = db.get(_UserRow, user_id)
         if not user:
             raise _HTTPException(status_code=401, detail="User not found")
         prefs = db.get(UserPreferencesRow, user_id)
+        # Surface the synoptic-map opt-in so the maps page can decide
+        # whether to show the Synoptic Forecast tab without a second
+        # round-trip to /user/preferences.
+        synoptic_enabled = False
+        if prefs and prefs.app_prefs_json:
+            try:
+                synoptic_enabled = bool(
+                    _json.loads(prefs.app_prefs_json).get(
+                        "synoptic_forecast_map_enabled", False
+                    )
+                )
+            except _json.JSONDecodeError:
+                synoptic_enabled = False
         return {
             "id": user.id,
             "email": user.email,
@@ -399,6 +414,7 @@ def create_app() -> FastAPI:
             "approved": user.approved,
             "is_admin": is_dev_mode() or user.email in get_admin_emails(),
             "setup_completed": prefs.setup_completed if prefs else False,
+            "synoptic_forecast_map_enabled": synoptic_enabled,
         }
 
     # Auth router from flyfun-common (with weather-specific on_new_user callback)

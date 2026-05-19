@@ -628,6 +628,12 @@ function populateAccountForm(prefs: PreferencesResponse): void {
   if (localeSelect) {
     localeSelect.value = prefs.locale || getLocale();
   }
+
+  // Account-level optional services
+  const synopticToggle = document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement;
+  if (synopticToggle) {
+    synopticToggle.checked = prefs.synoptic_forecast_map_enabled ?? false;
+  }
 }
 
 // --- Advisory settings rendering ---
@@ -859,9 +865,11 @@ async function handleSave(): Promise<void> {
       if (idx >= 0) profiles[idx] = updated;
     }
 
-    // Save account-level preferences (locale + autorouter creds in dev mode)
+    // Save account-level preferences (locale + optional services + autorouter creds in dev mode)
+    const synopticEnabled = (document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement)?.checked ?? false;
     const accountUpdate: import('./adapters/preferences-adapter').PreferencesUpdate = {
       locale: selectedLocale,
+      synoptic_forecast_map_enabled: synopticEnabled,
     };
     if (autorouterMode === 'password') {
       const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement)?.value.trim();

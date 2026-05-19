@@ -140,29 +140,9 @@ def _build_test_app(app_db):
 
 @pytest.fixture
 def client(app_db, hewson_env):
-    """Authenticated *admin* client — Synoptic Forecast is admin-gated
-    while it's being calibrated, so the slice / manifest / all-metrics
-    endpoints all require ``require_admin``. Override both to give the
-    dev user admin access."""
-    from weatherbrief.api.admin import require_admin
-    app = _build_test_app(app_db)
-    app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
-    app.dependency_overrides[require_admin] = lambda: DEV_USER_ID
-    return TestClient(app, raise_server_exceptions=False)
-
-
-@pytest.fixture
-def client_non_admin(app_db, hewson_env, monkeypatch):
-    """Authenticated but non-admin — for 403 admin-gate checks.
-
-    ``require_admin`` decodes the JWT itself (not via Depends), so we
-    monkey-patch the underlying ``_decode_user_id`` to return the dev
-    user. ``require_admin`` then proceeds to its real admin-email check,
-    finds the dev user isn't in the admin list, and raises 403."""
-    monkeypatch.setattr(
-        "weatherbrief.api.admin._decode_user_id",
-        lambda request, db: DEV_USER_ID,
-    )
+    """Authenticated client. The synoptic endpoints require an authenticated
+    user (no admin gate — visibility is controlled client-side by the
+    per-user "Synoptic Forecast Map" preference)."""
     app = _build_test_app(app_db)
     app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
     return TestClient(app, raise_server_exceptions=False)
@@ -371,21 +351,6 @@ def test_get_slice_requires_auth(client_anon, hewson_data_dir):
         },
     )
     assert resp.status_code == 401
-
-
-def test_get_slice_requires_admin(client_non_admin, hewson_data_dir):
-    """While Synoptic Forecast is admin-gated, an authenticated non-admin
-    user gets 403, not the slice. Flipping _synoptic_auth in
-    src/weatherbrief/api/hewson_map.py will retire this test."""
-    _write_synthetic_snapshot(hewson_data_dir / "hewson")
-    resp = client_non_admin.get(
-        "/api/hewson-map",
-        params={
-            "model": "ecmwf", "init": _INIT_ISO,
-            "level": 850, "metric": "advection", "hour": 0,
-        },
-    )
-    assert resp.status_code == 403
 
 
 def test_corrupt_snapshot_returns_404(client, hewson_data_dir):

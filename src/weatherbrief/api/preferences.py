@@ -63,6 +63,7 @@ class PreferencesResponse(BaseModel):
     cloud_method: str
     convective_method: str
     locale: str
+    synoptic_forecast_map_enabled: bool
     pirep_can_view: bool = False
     pirep_can_publish: bool = False
 
@@ -82,6 +83,7 @@ class PreferencesUpdate(BaseModel):
     cloud_method: str | None = None
     convective_method: str | None = None
     locale: str | None = None
+    synoptic_forecast_map_enabled: bool | None = None
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -124,6 +126,7 @@ def _parse_service_toggles(raw: str) -> dict:
         "cloud_method": data.get("cloud_method", "soft_nwp"),
         "convective_method": data.get("convective_method", "nwp"),
         "locale": data.get("locale", "en"),
+        "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
     }
 
 
@@ -241,6 +244,8 @@ def update_preferences(
         data["convective_method"] = body.convective_method
     if body.locale is not None:
         data["locale"] = body.locale
+    if body.synoptic_forecast_map_enabled is not None:
+        data["synoptic_forecast_map_enabled"] = body.synoptic_forecast_map_enabled
 
     if body.digest_config is not None:
         data["digest_config"] = body.digest_config.model_dump(exclude_none=True)

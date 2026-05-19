@@ -22,7 +22,8 @@ Three endpoints:
         single-metric slice has rendered
 
 All require an authenticated user (``current_user_id`` Depends, same as the
-rest of the API).
+rest of the API). The Synoptic Forecast tab itself is hidden client-side
+unless the user enables it via Settings → Account → Optional Services.
 """
 
 from __future__ import annotations
@@ -36,8 +37,7 @@ from typing import Any
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from flyfun_common.db import current_user_id  # noqa: F401  (referenced in docstring)
-from weatherbrief.api.admin import require_admin
+from flyfun_common.db import current_user_id
 from weatherbrief.hewson.precompute import (
     DEFAULT_LEVELS,
     DEFAULT_STRIDE_HOURS,
@@ -50,10 +50,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/hewson-map", tags=["hewson-map"])
 
 
-# Synoptic Forecast is admin-only while we calibrate. To release publicly,
-# change this to ``current_user_id`` (one edit; the frontend tab visibility
-# gate in maps-main.ts also keys off ``user.is_admin``).
-_synoptic_auth = require_admin
+# Synoptic Forecast tab is opt-in per user via the "Synoptic Forecast Map"
+# toggle in Settings → Account → Optional Services. The endpoint itself
+# only requires an authenticated user; the frontend hides the tab unless
+# the preference is enabled.
+_synoptic_auth = current_user_id
 
 
 VALID_METRICS: tuple[str, ...] = (
