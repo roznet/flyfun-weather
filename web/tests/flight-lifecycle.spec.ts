@@ -162,6 +162,7 @@ test('flight lifecycle: create → view → change setting → recalculate → d
         original_tokens: tokens,
         interpreted,
         skipped,
+        off_route: [],
         waypoints: interpreted.map(icao => ({
           icao,
           name: icao,
@@ -324,6 +325,8 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   await page.selectOption('#input-hour', '17');
   await page.selectOption('#input-minute', '0');
   await page.fill('#input-altitude', '2000');
+  // Provide a non-zero duration so the zero-duration confirm popup doesn't fire
+  await page.fill('#input-duration', '1');
 
   // Submit the form — triggers POST and navigates to briefing
   await page.click('#create-flight-form button[type="submit"]');

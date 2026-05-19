@@ -12,6 +12,7 @@ const MOCK_USER = {
   is_admin: true,
   approved: true,
   setup_completed: true,
+  synoptic_forecast_map_enabled: true,
 };
 
 const MOCK_FORECAST: Record<string, unknown> = {
@@ -76,8 +77,6 @@ test.describe('Forecast page', () => {
     await page.goto('/maps.html');
     // Page title
     await expect(page.locator('.page-header h2')).toHaveText('Forecast');
-    // Experimental banner visible
-    await expect(page.locator('.experimental-banner')).toBeVisible();
     // Forecast tab is active
     await expect(page.locator('.tab-btn[data-tab="forecast"]')).toHaveClass(/active/);
     // Forecast controls visible
@@ -98,6 +97,8 @@ test.describe('Forecast page', () => {
 
   test('experimental banner toggle shows detail', async ({ page }) => {
     await page.goto('/maps.html');
+    // Banner is now scoped to the Synoptic Forecast tab only
+    await page.click('.tab-btn[data-tab="synoptic"]');
     const detail = page.locator('#experimental-detail');
     await expect(detail).not.toBeVisible();
     await page.click('#experimental-toggle');
