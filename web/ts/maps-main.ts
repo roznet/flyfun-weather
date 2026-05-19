@@ -13,6 +13,7 @@ import {
 import { WeatherMap, type ForecastMetric } from './visualization/weather-map';
 import { AirportProfilePanel } from './visualization/airport-profile-panel';
 import { SynopticMap } from './visualization/synoptic-map';
+import { ClimatologyTab } from './visualization/climatology-tab';
 import { type HewsonMetric, type ColorScale, vRangeFor } from './visualization/hewson-colormaps';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderHewsonInfo } from './helpers/hewson-info';
@@ -23,7 +24,8 @@ import { shareCurrentUrl } from './utils/share-link';
 
 let forecastMap: WeatherMap | null = null;
 let synopticMap: SynopticMap | null = null;
-type Tab = 'forecast' | 'synoptic' | 'stats';
+let climatologyTab: ClimatologyTab | null = null;
+type Tab = 'forecast' | 'synoptic' | 'climatology' | 'stats';
 let currentTab: Tab = 'forecast';
 let statsLoaded = false;
 
@@ -77,7 +79,7 @@ let airportPanelIcao: string | null = null;
 // Defaults match the module-level state above and the HTML's pre-active
 // buttons, so an untouched view yields a bare `/maps.html` URL.
 const mapsUrlState = createUrlState({
-  tab:         { default: 'forecast' as Tab, values: ['forecast', 'synoptic', 'stats'] as readonly Tab[] },
+  tab:         { default: 'forecast' as Tab, values: ['forecast', 'synoptic', 'climatology', 'stats'] as readonly Tab[] },
   'fc.day':    { default: 0,  values: [0, 1, 2, 3] as readonly number[] },
   'fc.hour':   { default: 12, values: [6, 9, 12, 15, 18] as readonly number[] },
   'fc.model':  { default: 'worst', values: ['worst', 'majority', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
@@ -675,6 +677,9 @@ function switchTab(tab: Tab): void {
     setTimeout(() => forecastMap?.invalidateSize(), 100);
   } else if (tab === 'synoptic') {
     setTimeout(() => { initSynopticTab(); }, 50);
+  } else if (tab === 'climatology') {
+    if (!climatologyTab) climatologyTab = new ClimatologyTab();
+    climatologyTab.show();
   } else if (tab === 'stats') {
     if (!statsLoaded) {
       const frame = $('stats-frame') as HTMLIFrameElement | null;
