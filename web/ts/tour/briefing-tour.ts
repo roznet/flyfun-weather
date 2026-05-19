@@ -21,6 +21,15 @@ function buildSteps(): DriveStep[] {
       },
     },
     {
+      element: '#display-mode-toggle',
+      popover: {
+        title: t('tour.displayMode.title'),
+        description: t('tour.displayMode.desc'),
+        side: 'bottom',
+        align: 'end',
+      },
+    },
+    {
       element: '#assessment-banner',
       popover: {
         title: t('tour.assessment.title'),
@@ -59,6 +68,16 @@ function buildSteps(): DriveStep[] {
       },
       // Only step where the user is meant to click the underlying control.
       disableActiveInteraction: false,
+    },
+    {
+      element: '.viz-toolbar-top',
+      popover: {
+        title: t('tour.modelTheme.title'),
+        description: t('tour.modelTheme.desc'),
+        side: 'bottom',
+        align: 'start',
+      },
+      onHighlightStarted: () => ensureSectionExpanded('cross-section'),
     },
     {
       // `[data-layer-info]` excludes the per-group ⓘ buttons (those also carry
