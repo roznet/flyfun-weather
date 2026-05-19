@@ -13,7 +13,7 @@ enum ServerEnvironment: String, CaseIterable {
         case .production:
             URL(string: "https://weather.flyfun.aero")!
         case .development:
-            URL(string: "https://localhost.ro-z.me:8000")!
+            URL(string: "https://localhost.ro-z.me:8443")!
         }
     }
 
