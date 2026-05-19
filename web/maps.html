@@ -56,6 +56,49 @@
 
     .map-wrapper { position: relative; }
 
+    /* Climatology sub-tabs (Map | Top airports) */
+    .settings-tabs-inner { margin-bottom: 0.75rem; }
+    .clim-subpanel { display: none; }
+    .clim-subpanel.active { display: block; }
+
+    .map-legend {
+      position: absolute; bottom: 20px; left: 12px; z-index: 1000;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.5rem 0.7rem; font-size: 0.7rem;
+      color: var(--text); min-width: 110px;
+    }
+    .map-legend-title { font-weight: 600; margin-bottom: 0.3rem; font-size: 0.75rem; }
+    .legend-item { display: flex; align-items: center; gap: 0.35rem; margin: 0.12rem 0; }
+    .legend-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      flex-shrink: 0; border: 1px solid rgba(0,0,0,0.3);
+    }
+    .clim-popup-title { font-size: 0.95rem; margin-bottom: 0.3rem; }
+    .clim-popup-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .clim-popup-table td { padding: 0.1rem 0.25rem; }
+    .clim-popup-foot {
+      margin-top: 0.3rem; padding-top: 0.25rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.7rem; color: var(--text-muted);
+    }
+
+    .clim-leaderboard-wrap { padding: 0.75rem 0.5rem; }
+    .clim-leaderboard-table {
+      width: 100%; border-collapse: collapse; font-size: 0.85rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .clim-leaderboard-table th {
+      text-align: left; padding: 0.3rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-muted); font-weight: 600; font-size: 0.75rem;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .clim-leaderboard-table td {
+      padding: 0.3rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .clim-leaderboard-table tr:hover td { background: var(--bg); }
+
     /* --- Airport profile panel (right-click on a forecast marker) --- */
     /* Forecast tab switches to a 2-column grid when the panel is open;
      * the map keeps its existing height and the panel claims the right
@@ -348,6 +391,7 @@
     <div class="settings-tabs" id="tabs">
       <button class="tab-btn active" data-tab="forecast">Forecast Overview</button>
       <button class="tab-btn" data-tab="synoptic">Synoptic Forecast</button>
+      <button class="tab-btn" data-tab="climatology">Climatology</button>
       <button class="tab-btn" data-tab="stats">Accuracy Stats</button>
     </div>
 
@@ -465,6 +509,34 @@
         <div id="map-container-synoptic" style="width:100%; height:calc(100vh - 280px); min-height:400px; border-radius:8px; border:1px solid var(--border); overflow:hidden; position:relative;"></div>
       </div>
       <div class="map-info" id="map-info-synoptic"></div>
+    </div>
+
+    <!-- Tab: Climatology (observation climatology over the watchlist) -->
+    <div id="panel-climatology" class="tab-panel">
+      <div class="settings-tabs settings-tabs-inner" id="clim-subtabs">
+        <button class="tab-btn active" data-subtab="map">Map</button>
+        <button class="tab-btn" data-subtab="top">Top airports</button>
+      </div>
+
+      <div id="clim-subpanel-map" class="clim-subpanel active">
+        <div class="maps-controls">
+          <label for="clim-month-picker">Month</label>
+          <select id="clim-month-picker"></select>
+          <label for="clim-dataset-picker">Dataset</label>
+          <select id="clim-dataset-picker"></select>
+          <label>Color by</label>
+          <div class="btn-group" id="clim-metric-picker"></div>
+        </div>
+        <div class="map-wrapper">
+          <div id="clim-map-container" style="width:100%; height:calc(100vh - 280px); min-height:400px; border-radius:8px; border:1px solid var(--border); overflow:hidden;"></div>
+          <div id="clim-legend" class="map-legend"></div>
+        </div>
+        <div class="map-info" id="clim-status"></div>
+      </div>
+
+      <div id="clim-subpanel-top" class="clim-subpanel">
+        <div id="clim-leaderboard"></div>
+      </div>
     </div>
 
     <!-- Tab: Accuracy Stats (embedded verification page) -->
