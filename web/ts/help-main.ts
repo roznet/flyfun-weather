@@ -8,6 +8,7 @@ import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { mountDataSourcesTable } from './data-sources-table';
 import { initInfoPopup } from './components/info-popup';
+import { buildDemoTourUrl } from './tour/demo-config';
 
 let isSignedIn = false;
 
@@ -20,6 +21,7 @@ async function init(): Promise<void> {
   if (h1) h1.textContent = t('nav.help');
 
   initTabs();
+  renderTourCta();
 
   const user = await fetchCurrentUser();
   if (user) {
@@ -67,6 +69,19 @@ async function init(): Promise<void> {
   if (initialTab === 'whats-new' || initialTab === 'data-sources') {
     switchTab(initialTab);
   }
+}
+
+function renderTourCta(): void {
+  const host = document.getElementById('help-tour-cta-host');
+  if (!host) return;
+  const url = buildDemoTourUrl();
+  if (!url) return;
+  host.innerHTML = `
+    <div class="help-tour-cta">
+      <a class="btn btn-primary" href="${escapeHtml(url)}">${escapeHtml(t('help.startTourBtn'))}</a>
+      <p class="muted">${escapeHtml(t('help.startTourHint'))}</p>
+    </div>
+  `;
 }
 
 // --- Tab management ---
