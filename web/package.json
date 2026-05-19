@@ -30,6 +30,7 @@
     "test:ui": "vitest --ui"
   },
   "dependencies": {
+    "driver.js": "^1.4.0",
     "leaflet": "^1.9.4",
     "zustand": "^5.0.11"
   },
