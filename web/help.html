@@ -78,6 +78,30 @@
       <h3>The Briefing Page</h3>
       <p>The briefing is organized into collapsible sections. Here's what each one shows:</p>
 
+      <h4>Toolbar</h4>
+      <p>
+        At the top of every briefing, the toolbar shows the route, gives you access to
+        <strong>Refresh</strong>, <strong>PDF</strong> download, <strong>Email</strong>,
+        <strong>Feedback</strong>, and the <strong>Tour</strong> button (the ?-icon).
+        A <strong>Compact / Full Details</strong> toggle controls how much detail each
+        section shows &mdash; compact is best for a daily glance, full for deep dives.
+        The <strong>history dropdown</strong> lets you re-open any past snapshot to compare
+        how the forecast has evolved. Flight owners can also toggle <strong>privacy</strong>
+        (private flights are owner-only; public flights get a shareable short link via the
+        Share icon) and configure a daily <strong>auto-refresh</strong> with email
+        notification.
+      </p>
+
+      <h4>Overall Assessment</h4>
+      <p>
+        The banner at the top of the briefing is a colour-coded one-line verdict
+        (<span class="badge badge-green">GREEN</span>,
+        <span class="badge badge-amber">AMBER</span>, or
+        <span class="badge badge-red">RED</span>)
+        derived from the worst-rated advisories. It's the headline read on your flight
+        before you dig into the detail below.
+      </p>
+
       <h4>Route Advisories</h4>
       <p>
         Advisories are the heart of the briefing. They translate raw NWP model data into
@@ -130,6 +154,13 @@
         providing a broader meteorological context for European flights.
       </p>
 
+      <h4>DWD Surface Analysis &amp; Forecast</h4>
+      <p>
+        Surface analysis and short-range forecast charts published by DWD &mdash; fronts,
+        pressure centres, isobars across Europe. Shown alongside the synoptic text so you
+        can see the broader pattern around the flight day. Click any chart to enlarge.
+      </p>
+
       <h4>GRAMET Cross-Section</h4>
       <p>
         A vertical cross-section chart from <a href="https://www.autorouter.aero" target="_blank" rel="noopener">autorouter.aero</a>
@@ -141,17 +172,32 @@
       <h4>Cross-Section Visualization</h4>
       <p>
         An interactive canvas-based vertical cross-section built from the NWP model data.
-        It renders multiple layers (clouds, icing, wind, humidity, etc.) that you can toggle
-        on and off using the control panel.
+        Layers are organised into groups (clouds, icing, turbulence, convection, temperature
+        lines, terrain) and you can toggle them individually in the control panel.
       </p>
       <ul>
-        <li>Use the <strong>model selector</strong> to switch between forecast models.</li>
-        <li><strong>Hover</strong> over the canvas to see values at a specific point.</li>
-        <li><strong>Click</strong> to pin the readout at a location.</li>
-        <li>Toggle individual <strong>layers</strong> to isolate specific phenomena.</li>
-        <li>Use the <strong>compare view</strong> to display a specific layer across all models
-          side by side, so you can see how their forecasts overlap and where they diverge.</li>
+        <li>Four <strong>layout modes</strong> &mdash; cross-section only, compare, side-by-side
+          with the map, or map only &mdash; let you arrange the view to taste.</li>
+        <li>The <strong>model selector</strong> switches between forecast models; the
+          <strong>compare</strong> layout overlays one layer across all models so you can see
+          where they agree and where they diverge.</li>
+        <li>Switch <strong>theme</strong> (standard, high-contrast, GRAMET-style) and
+          <strong>cloud rendering style</strong> (soft, natural puffs, square ForeFlight-like)
+          to match your preference.</li>
+        <li><strong>Hover</strong> shows values at the cursor; <strong>click</strong> pins a
+          point and opens the matching Skew-T sounding below.</li>
+        <li>Multiple <strong>icing methods</strong> (Ogimet-DD, Ogimet-NWP, SFIP-NWP, IENG,
+          SLD) and <strong>cloud methods</strong> (DD vs NWP) are available so you can compare
+          how different physical assumptions affect the picture.</li>
       </ul>
+
+      <h4>Route Graph</h4>
+      <p>
+        A scalar graph below the cross-section, sharing the same x-axis (route distance).
+        Pick any two metrics for the left and right Y-axes &mdash; wind speed, ceiling, CAPE,
+        crosswind, temperature, and more. Useful for seeing how a single quantity evolves
+        along the route alongside the vertical layers above.
+      </p>
 
       <h4>Route Map</h4>
       <p>
@@ -163,20 +209,19 @@
 
       <h4>Skew-T Soundings</h4>
       <p>
-        Skew-T / Log-P diagrams for each waypoint, generated from the model data.
-        These show the vertical temperature and dewpoint profiles &mdash; essential for
-        assessing stability, cloud bases, freezing levels, and convective potential.
-        Use the model dropdown to compare soundings across models.
+        Skew-T / Log-P diagrams for any point on your route &mdash; click a point on the
+        cross-section to load its sounding. Three view modes are available:
       </p>
-
-      <h4>Route Profile</h4>
-      <p>
-        A slider that lets you move along the route and view a Skew-T sounding and
-        key metrics at any interpolated point (approximately every 10 km), not just the
-        named waypoints. Useful for examining conditions between airports &mdash; for
-        example, finding where a freezing level dips or where cloud cover thickens
-        along a mountain crossing.
-      </p>
+      <ul>
+        <li><strong>Dynamic</strong> &mdash; an interactive canvas Skew-T with a side panel of
+          ~14 variables (CAPE, CIN, lifted index, headwind/crosswind, cloud cover, etc.),
+          overlay bands for cloud / icing / inversion / convective layers, and a linked cursor
+          that highlights the same altitude on the cross-section.</li>
+        <li><strong>Compare</strong> &mdash; overlays the sounding from every model on a single
+          Skew-T so you can spot where they diverge in temperature, dewpoint, or parcel path.</li>
+        <li><strong>Static</strong> &mdash; the classic MetPy-rendered PNG with CAPE/CIN shading,
+          a hodograph, and an indices panel.</li>
+      </ul>
 
       <h4>Sounding Analysis</h4>
       <p>
