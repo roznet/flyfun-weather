@@ -595,5 +595,7 @@
   "legend.sld.moderate": "Moderate",
   "legend.sld.moderateDesc": "Freezing rain \u2014 SLD below warm nose, avoid unless SLD-certified",
   "legend.sld.severe": "Severe",
-  "legend.sld.severeDesc": "Heavy freezing rain (deep warm nose) \u2014 avoid"
+  "legend.sld.severeDesc": "Heavy freezing rain (deep warm nose) \u2014 avoid",
+  "help.startTourBtn": "Iniciar la visita interactiva",
+  "help.startTourHint": "Un recorrido de 9 pasos sobre un briefing real \u2014 avisos, secci\u00f3n transversal, gr\u00e1fico de ruta, Skew-T. Dos minutos."
 }

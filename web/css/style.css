@@ -3407,6 +3407,28 @@ label {
   box-shadow: var(--shadow);
 }
 
+.help-tour-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1rem;
+  padding: 1rem;
+  background: var(--surface-alt, var(--surface));
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.help-tour-cta .btn {
+  font-size: 1rem;
+  padding: 0.6rem 1.25rem;
+}
+
+.help-tour-cta p {
+  margin: 0;
+}
+
 .help-section h3 {
   border-bottom: 1px solid var(--border);
   padding-bottom: 0.4rem;

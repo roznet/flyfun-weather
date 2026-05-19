@@ -702,5 +702,7 @@
   "debrief.editCta": "Edit debrief",
   "debrief.addCta": "Add debrief",
   "debrief.loading": "Loading advisories…",
-  "debrief.infoBtn": "About this form"
+  "debrief.infoBtn": "About this form",
+  "help.startTourBtn": "Take the interactive tour",
+  "help.startTourHint": "A 9-step walkthrough on a real briefing — advisories, cross-section, route graph, Skew-T. Two minutes."
 }
