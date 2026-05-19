@@ -19,9 +19,9 @@ from weatherbrief.db.models import (
 from weatherbrief.tasks.climatology_queries import (
     MonthWindow,
     get_category_climatology,
+    get_leaderboard,
     get_phenomena_climatology,
     get_volatility_climatology,
-    get_volatility_leaderboard,
     get_wind_climatology,
     resolve_month_window,
 )
@@ -428,7 +428,7 @@ class TestVolatility:
         assert by_icao["EGKK"]["n_changes"] == 8
         assert by_icao["EGKK"]["value"] == round(8 / 48, 3)
 
-    def test_leaderboard_min_obs_filter(self, _mock_coords, db_session):
+    def test_volatility_leaderboard_min_obs_filter(self, _mock_coords, db_session):
         # 50 obs is below the completed-month min (100) — should be filtered out.
         _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
                       n_obs=50, category_changes=10)
@@ -436,13 +436,14 @@ class TestVolatility:
                       n_obs=200, category_changes=20)
         db_session.commit()
         window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
-        result = get_volatility_leaderboard(db_session, window, "/fake/airports.db", limit=10)
+        result = get_leaderboard(db_session, window, "/fake/airports.db",
+                                 dataset="volatility", sub=None, limit=10)
         icaos = [r["icao"] for r in result["rows"]]
         assert "EGKK" not in icaos
         assert "LFPG" in icaos
         assert result["min_n_obs"] == 100
 
-    def test_leaderboard_ranks_by_value_desc(self, _mock_coords, db_session):
+    def test_volatility_leaderboard_ranks_by_value_desc(self, _mock_coords, db_session):
         _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
                       n_obs=200, category_changes=40)  # 0.2
         _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
@@ -451,9 +452,91 @@ class TestVolatility:
                       n_obs=200, category_changes=60)  # 0.3
         db_session.commit()
         window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
-        result = get_volatility_leaderboard(db_session, window, "/fake/airports.db", limit=10)
+        result = get_leaderboard(db_session, window, "/fake/airports.db",
+                                 dataset="volatility", sub=None, limit=10)
         icaos = [r["icao"] for r in result["rows"]]
         assert icaos == ["EDDF", "EGKK", "LFPG"]
+
+
+# ---------------------------------------------------------------------------
+# Unified leaderboard — coverage for non-volatility datasets
+# ---------------------------------------------------------------------------
+
+
+@patch(
+    "weatherbrief.tasks.climatology_queries._get_coords",
+    return_value=FAKE_COORDS,
+)
+class TestUnifiedLeaderboard:
+    def test_category_vfr_ranks_highest_first(self, _mock_coords, db_session):
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=200, n_vfr=190)  # 95%
+        _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
+                      n_obs=200, n_vfr=120)  # 60%
+        _seed_monthly(db_session, icao="EDDF", month=date(2026, 4, 1),
+                      n_obs=200, n_vfr=170)  # 85%
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_leaderboard(db_session, window, "/fake/airports.db",
+                                 dataset="category", sub="vfr", limit=10)
+        icaos = [r["icao"] for r in result["rows"]]
+        assert icaos == ["EGKK", "EDDF", "LFPG"]
+        assert result["label"] == "VFR %"
+
+    def test_category_ifr_excludes_below_min_obs(self, _mock_coords, db_session):
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=200, n_ifr=20)  # 10%
+        _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
+                      n_obs=50, n_ifr=40)   # 80% but only 50 obs
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_leaderboard(db_session, window, "/fake/airports.db",
+                                 dataset="category", sub="ifr", limit=10)
+        icaos = [r["icao"] for r in result["rows"]]
+        assert "LFPG" not in icaos
+        assert icaos == ["EGKK"]
+
+    def test_phenomena_ts(self, _mock_coords, db_session):
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=200, n_ts=10)  # 5%
+        _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
+                      n_obs=200, n_ts=2)   # 1%
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_leaderboard(db_session, window, "/fake/airports.db",
+                                 dataset="phenomena", sub="ts", limit=10)
+        icaos = [r["icao"] for r in result["rows"]]
+        assert icaos == ["EGKK", "LFPG"]
+        assert result["unit"] == "%"
+
+    def test_wind_gust_includes_n_obs(self, _mock_coords, db_session):
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=200, gust_max_kt=55)
+        _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
+                      n_obs=200, gust_max_kt=30)
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_leaderboard(db_session, window, "/fake/airports.db",
+                                 dataset="wind", sub="gust", limit=10)
+        icaos = [r["icao"] for r in result["rows"]]
+        assert icaos == ["EGKK", "LFPG"]
+        assert result["rows"][0]["n_obs"] == 200
+
+    def test_invalid_dataset_400(self, _mock_coords, db_session):
+        from fastapi import HTTPException
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        with pytest.raises(HTTPException) as exc:
+            get_leaderboard(db_session, window, "/fake/airports.db",
+                            dataset="bogus", sub=None, limit=10)
+        assert exc.value.status_code == 400
+
+    def test_invalid_sub_for_category_400(self, _mock_coords, db_session):
+        from fastapi import HTTPException
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        with pytest.raises(HTTPException) as exc:
+            get_leaderboard(db_session, window, "/fake/airports.db",
+                            dataset="category", sub="bogus", limit=10)
+        assert exc.value.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +583,7 @@ class TestNewEndpoints:
         data = resp.json()
         assert data["dataset"] == "volatility"
 
-    def test_volatility_leaderboard_endpoint(self, _mock_coords, app_db, tmp_path, monkeypatch):
+    def test_leaderboard_endpoint(self, _mock_coords, app_db, tmp_path, monkeypatch):
         client = _make_client(app_db, tmp_path, monkeypatch)
         session = app_db()
         _seed_monthly(session, icao="EGKK", month=date(2026, 4, 1),
@@ -508,8 +591,22 @@ class TestNewEndpoints:
         session.commit()
         session.close()
 
-        resp = client.get("/api/climatology/volatility/top?month=2026-04&limit=5")
+        resp = client.get("/api/climatology/leaderboard?month=2026-04&dataset=volatility&limit=5")
         assert resp.status_code == 200
         data = resp.json()
         assert "rows" in data
+        assert data["dataset"] == "volatility"
         assert any(r["icao"] == "EGKK" for r in data["rows"])
+
+    def test_leaderboard_category_vfr(self, _mock_coords, app_db, tmp_path, monkeypatch):
+        client = _make_client(app_db, tmp_path, monkeypatch)
+        session = app_db()
+        _seed_monthly(session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=200, n_vfr=180)
+        session.commit()
+        session.close()
+        resp = client.get("/api/climatology/leaderboard?month=2026-04&dataset=category&sub=vfr")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["label"] == "VFR %"
+        assert data["rows"][0]["icao"] == "EGKK"

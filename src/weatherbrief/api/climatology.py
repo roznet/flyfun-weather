@@ -13,7 +13,7 @@ change per route, no other refactor needed.
   GET /climatology/phenomena       — view #2 (TS or fog frequency)
   GET /climatology/wind            — view #3 (wind metric)
   GET /climatology/volatility      — view #4 (category transitions per obs)
-  GET /climatology/volatility/top  — view #4 leaderboard (top N airports)
+  GET /climatology/leaderboard     — Top airports for any (dataset, sub)
 """
 
 from __future__ import annotations
@@ -124,17 +124,26 @@ def get_volatility_map(
     return get_volatility_climatology(db, window, airports_db)
 
 
-@router.get("/volatility/top")
-def get_volatility_leaderboard_endpoint(
+@router.get("/leaderboard")
+def get_leaderboard_endpoint(
     month: str = Query(..., description="Month as 'YYYY-MM'"),
+    dataset: str = Query(..., description="'category', 'phenomena', 'wind', or 'volatility'"),
+    sub: str | None = Query(default=None, description="Sub-metric (required except for volatility)"),
     limit: int = Query(default=20, ge=1, le=100),
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
     airports_db: str = Depends(_airports_db),
 ):
-    """Top airports ranked by category_changes / n_obs."""
+    """Top airports for any (dataset, sub) combination, sorted by value DESC.
+
+    Sub-metric:
+      - category: 'vfr' | 'mvfr' | 'ifr' | 'lifr'
+      - phenomena: 'ts' | 'fog'
+      - wind: 'over25' | 'p95' | 'gust' (MTD restricts to 'gust' only)
+      - volatility: (none — sub is ignored)
+    """
     from weatherbrief.tasks.climatology_queries import (
-        get_volatility_leaderboard,
+        get_leaderboard,
         resolve_month_window,
     )
 
@@ -143,4 +152,5 @@ def get_volatility_leaderboard_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return get_volatility_leaderboard(db, window, airports_db, limit=limit)
+    return get_leaderboard(db, window, airports_db,
+                           dataset=dataset, sub=sub, limit=limit)
