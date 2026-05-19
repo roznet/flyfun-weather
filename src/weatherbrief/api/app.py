@@ -50,6 +50,7 @@ from weatherbrief.analytics.api import router as analytics_router
 from weatherbrief.analytics.admin_api import router as analytics_admin_router
 from weatherbrief.api.messages import admin_router as messages_admin_router, router as messages_router
 from weatherbrief.api.maps import router as maps_router
+from weatherbrief.api.climatology import router as climatology_router
 from weatherbrief.api.airport_profile import router as airport_profile_router
 from weatherbrief.api.hewson_map import router as hewson_map_router
 from weatherbrief.api.data_sources import router as data_sources_router
@@ -454,6 +455,7 @@ def create_app() -> FastAPI:
     app.include_router(messages_router, prefix="/api")
     app.include_router(messages_admin_router, prefix="/api")
     app.include_router(maps_router, prefix="/api")
+    app.include_router(climatology_router, prefix="/api")
     app.include_router(airport_profile_router, prefix="/api")
     app.include_router(hewson_map_router, prefix="/api")
     app.include_router(tokens_router, prefix="/api")
