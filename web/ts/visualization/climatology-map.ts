@@ -54,11 +54,10 @@ export function pctColor(value: number, scale: Scale): string {
 export function legendRows(scale: Scale): { color: string; label: string }[] {
   const stops = scale.stops;
   const rows: { color: string; label: string }[] = [];
+  const formatBound = (v: number) =>
+    v >= 10 || v === 0 ? `${v}` : v.toFixed(1);
   for (let i = 0; i < stops.length; i++) {
     const s = stops[i];
-    const next = stops[i - 1];
-    const formatBound = (v: number) =>
-      v >= 10 || v === 0 ? `${v}` : v.toFixed(1);
     if (i === 0) {
       rows.push({ color: s.color, label: `≥ ${formatBound(s.bound)}${scale.unit}` });
     } else {
@@ -68,7 +67,6 @@ export function legendRows(scale: Scale): { color: string; label: string }[] {
         label: `${formatBound(s.bound)}–${formatBound(prev)}${scale.unit}`,
       });
     }
-    void next;
   }
   return rows;
 }

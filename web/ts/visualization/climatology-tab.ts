@@ -58,6 +58,10 @@ export class ClimatologyTab {
   private currentSub: SubTab = 'map';
   private initialised = false;
   private inFlight = false;
+  /** Set when reload is called while a fetch is in flight; triggers a
+   *  re-run after the current one finishes so the picker state and the
+   *  displayed data don't desync from rapid clicks. */
+  private reloadDirty = false;
   private leaderboardLoaded = false;
 
   init(): void {
@@ -240,7 +244,10 @@ export class ClimatologyTab {
   // --- Render --------------------------------------------------------------
 
   private async reload(): Promise<void> {
-    if (this.inFlight) return;
+    if (this.inFlight) {
+      this.reloadDirty = true;
+      return;
+    }
     this.inFlight = true;
     this.setStatus('Loading…');
     try {
@@ -253,6 +260,10 @@ export class ClimatologyTab {
       this.setStatus(`Failed to load: ${(err as Error).message}`, 'error');
     } finally {
       this.inFlight = false;
+      if (this.reloadDirty) {
+        this.reloadDirty = false;
+        this.reload();
+      }
     }
   }
 

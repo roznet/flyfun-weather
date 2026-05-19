@@ -17,10 +17,9 @@ True. The window resolver surfaces that flag explicitly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -79,7 +78,7 @@ def resolve_month_window(
     if month_start == current_month_start:
         # MTD: aggregate completed UTC days only (yesterday-UTC and earlier).
         today_utc = now.date()
-        as_of = today_utc.fromordinal(today_utc.toordinal() - 1)
+        as_of: date | None = today_utc - timedelta(days=1)
         if as_of < month_start:
             # First UTC day of the month — no completed days yet.
             as_of = None
@@ -234,7 +233,7 @@ def get_phenomena_climatology(
     included for the popup. Airports with ``n_obs == 0`` get ``value = null``.
     """
     if kind not in ("ts", "fog"):
-        raise HTTPException(status_code=400, detail=f"kind must be 'ts' or 'fog'")
+        raise ValueError("kind must be 'ts' or 'fog'")
     field = "n_ts" if kind == "ts" else "n_fg"
 
     rows = _read_counts_by_icao(db, window, _PHENOMENA_FIELDS)
@@ -288,14 +287,11 @@ def get_wind_climatology(
     400 if the metric is requested in MTD when unavailable.
     """
     if metric not in WIND_METRICS:
-        raise HTTPException(
-            status_code=400, detail=f"metric must be one of {WIND_METRICS}",
-        )
+        raise ValueError(f"metric must be one of {WIND_METRICS}")
     if window.is_mtd and metric not in WIND_METRICS_MTD:
-        raise HTTPException(
-            status_code=400,
-            detail=f"metric '{metric}' is not available month-to-date "
-                   f"(available MTD: {WIND_METRICS_MTD})",
+        raise ValueError(
+            f"metric '{metric}' is not available month-to-date "
+            f"(available MTD: {WIND_METRICS_MTD})"
         )
 
     coords = _get_coords(airports_db_path)
@@ -379,8 +375,8 @@ _VOLATILITY_FIELDS_MONTHLY = ("n_obs", "category_changes")
 # Minimum observation count an airport needs before it can rank on the
 # leaderboard — keeps sparse-data outliers (a handful of obs with one
 # flip) from dominating the top of the list.
-_VOLATILITY_MIN_OBS_COMPLETED = 100
-_VOLATILITY_MIN_OBS_MTD = 50
+_LEADERBOARD_MIN_OBS_COMPLETED = 100
+_LEADERBOARD_MIN_OBS_MTD = 50
 
 
 def get_volatility_climatology(
@@ -443,13 +439,13 @@ def get_leaderboard(
     wind/volatility) it reads as "most extreme". One consistent direction
     avoids an off-by-one UX trap.
     """
-    min_obs = _VOLATILITY_MIN_OBS_MTD if window.is_mtd else _VOLATILITY_MIN_OBS_COMPLETED
+    min_obs = _LEADERBOARD_MIN_OBS_MTD if window.is_mtd else _LEADERBOARD_MIN_OBS_COMPLETED
 
     # Dispatch: get the per-airport map response, then collapse into
     # leaderboard rows (icao, value, n_obs, …) ranked by value desc.
     if dataset == "category":
         if sub not in ("vfr", "mvfr", "ifr", "lifr"):
-            raise HTTPException(status_code=400, detail=f"category sub must be vfr/mvfr/ifr/lifr, got {sub!r}")
+            raise ValueError(f"category sub must be vfr/mvfr/ifr/lifr, got {sub!r}")
         data = get_category_climatology(db, window, airports_db_path)
         value_key = f"pct_{sub}"
         rows = [
@@ -463,7 +459,7 @@ def get_leaderboard(
         label = f"{sub.upper()} %"
     elif dataset == "phenomena":
         if sub not in ("ts", "fog"):
-            raise HTTPException(status_code=400, detail=f"phenomena sub must be 'ts' or 'fog', got {sub!r}")
+            raise ValueError(f"phenomena sub must be 'ts' or 'fog', got {sub!r}")
         data = get_phenomena_climatology(db, window, airports_db_path, sub)
         key = "n_ts" if sub == "ts" else "n_fg"
         rows = [
@@ -476,7 +472,7 @@ def get_leaderboard(
         label = "TS %" if sub == "ts" else "Fog %"
     elif dataset == "wind":
         if sub not in WIND_METRICS:
-            raise HTTPException(status_code=400, detail=f"wind sub must be one of {WIND_METRICS}, got {sub!r}")
+            raise ValueError(f"wind sub must be one of {WIND_METRICS}, got {sub!r}")
         data = get_wind_climatology(db, window, airports_db_path, sub)
         unit = "%" if sub == "over25" else "kt"
         rows = [
@@ -498,7 +494,7 @@ def get_leaderboard(
         unit = "ratio"
         label = "Changes / obs"
     else:
-        raise HTTPException(status_code=400, detail=f"unknown dataset {dataset!r}")
+        raise ValueError(f"unknown dataset {dataset!r}")
 
     rows.sort(key=lambda r: (-(r["value"] or 0), r["icao"]))
     rows = rows[:limit]
@@ -515,13 +511,6 @@ def get_leaderboard(
         "min_n_obs": min_obs,
         "rows": rows,
     }
-
-
-# Backwards-compat alias used by the old endpoint name during transition.
-# Kept only because tests/import it; remove once they migrate to get_leaderboard.
-def get_volatility_leaderboard(db, window, airports_db_path, limit=20):
-    return get_leaderboard(db, window, airports_db_path,
-                           dataset="volatility", sub=None, limit=limit)
 
 
 # ---------------------------------------------------------------------------

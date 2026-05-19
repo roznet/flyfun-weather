@@ -75,10 +75,9 @@ def get_phenomena_map(
 
     try:
         window = resolve_month_window(month)
+        return get_phenomena_climatology(db, window, airports_db, kind)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return get_phenomena_climatology(db, window, airports_db, kind)
 
 
 @router.get("/wind")
@@ -97,10 +96,9 @@ def get_wind_map(
 
     try:
         window = resolve_month_window(month)
+        return get_wind_climatology(db, window, airports_db, metric)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return get_wind_climatology(db, window, airports_db, metric)
 
 
 @router.get("/volatility")
@@ -149,8 +147,7 @@ def get_leaderboard_endpoint(
 
     try:
         window = resolve_month_window(month)
+        return get_leaderboard(db, window, airports_db,
+                               dataset=dataset, sub=sub, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return get_leaderboard(db, window, airports_db,
-                           dataset=dataset, sub=sub, limit=limit)

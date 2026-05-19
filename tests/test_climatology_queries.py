@@ -306,12 +306,10 @@ class TestPhenomenaClimatology:
         by_icao = {a["icao"]: a for a in result["airports"]}
         assert by_icao["EGKK"]["value"] == 2.5
 
-    def test_invalid_kind_400(self, _mock_coords, db_session):
-        from fastapi import HTTPException
+    def test_invalid_kind_raises_value_error(self, _mock_coords, db_session):
         window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ValueError, match="ts.*fog"):
             get_phenomena_climatology(db_session, window, "/fake/airports.db", "snow")
-        assert exc.value.status_code == 400
 
     def test_mtd_sums_ts_from_daily(self, _mock_coords, db_session):
         for d, n_ts in [(date(2026, 5, 1), 2), (date(2026, 5, 2), 5)]:
@@ -378,21 +376,16 @@ class TestWindClimatology:
         assert by_icao["EGKK"]["value"] == 55.0
 
     def test_mtd_rejects_over25(self, _mock_coords, db_session):
-        from fastapi import HTTPException
         window = MonthWindow(month=date(2026, 5, 1), is_mtd=True,
                              as_of_date=date(2026, 5, 1))
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ValueError, match="month-to-date"):
             get_wind_climatology(db_session, window, "/fake/airports.db", "over25")
-        assert exc.value.status_code == 400
-        assert "month-to-date" in str(exc.value.detail).lower()
 
     def test_mtd_rejects_p95(self, _mock_coords, db_session):
-        from fastapi import HTTPException
         window = MonthWindow(month=date(2026, 5, 1), is_mtd=True,
                              as_of_date=date(2026, 5, 1))
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ValueError):
             get_wind_climatology(db_session, window, "/fake/airports.db", "p95")
-        assert exc.value.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -522,21 +515,17 @@ class TestUnifiedLeaderboard:
         assert icaos == ["EGKK", "LFPG"]
         assert result["rows"][0]["n_obs"] == 200
 
-    def test_invalid_dataset_400(self, _mock_coords, db_session):
-        from fastapi import HTTPException
+    def test_invalid_dataset_raises_value_error(self, _mock_coords, db_session):
         window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ValueError, match="unknown dataset"):
             get_leaderboard(db_session, window, "/fake/airports.db",
                             dataset="bogus", sub=None, limit=10)
-        assert exc.value.status_code == 400
 
-    def test_invalid_sub_for_category_400(self, _mock_coords, db_session):
-        from fastapi import HTTPException
+    def test_invalid_sub_for_category_raises_value_error(self, _mock_coords, db_session):
         window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(ValueError, match="category sub"):
             get_leaderboard(db_session, window, "/fake/airports.db",
                             dataset="category", sub="bogus", limit=10)
-        assert exc.value.status_code == 400
 
 
 # ---------------------------------------------------------------------------
