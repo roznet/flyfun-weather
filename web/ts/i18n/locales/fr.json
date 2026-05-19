@@ -320,6 +320,8 @@
   "wizard.step5Title": "Cherchez les boutons <span class=\"wizard-info-icon\">(i)</span>",
   "wizard.step5Desc": "Cliquez dessus n'importe où dans le briefing pour comprendre ce que signifie une métrique et comment l'interpréter.",
   "wizard.tourHint": "Vous pouvez retrouver ces paramètres à tout moment depuis la page <strong>Paramètres</strong>, et en savoir plus sur la page <strong>Aide</strong>.",
+  "wizard.startTourBtn": "Lancer la visite interactive",
+  "wizard.startTourHint": "Vous guide à travers un vrai briefing avec une météo intéressante. Vous pouvez relancer la visite à tout moment depuis la barre d'outils du briefing.",
   "wizard.back": "Retour",
   "wizard.next": "Suivant",
   "wizard.profileTitle": "Choisissez votre profil par défaut",
