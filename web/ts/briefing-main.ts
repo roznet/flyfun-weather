@@ -35,6 +35,7 @@ import { renderSkewtOverlayControls, renderSkewtCompareControls } from './visual
 import { attachSkewTInteraction, attachSkewTCompareInteraction, type SkewTInteractionHandle, type SkewTCompareInteractionHandle } from './visualization/skewt/interaction';
 import { SkewTCompareRenderer, type CompareModelDataset as SkewtCompareModelDataset } from './visualization/skewt/compare-renderer';
 import { getActiveTheme } from './visualization/cross-section/theme';
+import { startBriefingTour, maybeAutoStartBriefingTour } from './tour/briefing-tour';
 
 
 async function loadFlightPireps(flightId: string): Promise<void> {
@@ -1437,6 +1438,10 @@ async function init(): Promise<void> {
         store.getState().checkActiveRefresh();
       }
     }
+
+    // Wire the "Take the tour" toolbar button + auto-start if ?tour=1.
+    document.getElementById('tour-btn')?.addEventListener('click', () => startBriefingTour());
+    maybeAutoStartBriefingTour();
   });
 }
 
