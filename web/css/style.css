@@ -558,6 +558,36 @@ label {
   gap: 0.25rem 1rem;
 }
 
+.tour-offer-banner {
+  margin-bottom: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+}
+
+.tour-offer-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.tour-offer-icon {
+  font-size: 1.1rem;
+}
+
+.tour-offer-text {
+  flex: 1;
+  min-width: 12rem;
+  font-size: 0.9rem;
+}
+
+.tour-offer-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .freshness-current {
   background: var(--bg);
   color: var(--text-muted);

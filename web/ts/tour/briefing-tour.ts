@@ -2,6 +2,7 @@ import { driver, type DriveStep, type Driver } from 'driver.js';
 import 'driver.js/dist/driver.css';
 import { briefingStore } from '../store/briefing-store';
 import { t } from '../i18n/i18n';
+import { markOffered } from './tour-storage';
 
 function ensureSectionExpanded(sectionAttr: string): void {
   const wrapper = document.querySelector<HTMLElement>(`[data-section="${sectionAttr}"]`);
@@ -112,6 +113,7 @@ function preloadSkewT(): void {
 }
 
 export function startBriefingTour(): void {
+  markOffered();
   if (activeDriver) {
     activeDriver.destroy();
     activeDriver = null;

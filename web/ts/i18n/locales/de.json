@@ -615,5 +615,8 @@
   "tour.skewt.title": "Skew-T an jedem Punkt",
   "tour.skewt.desc": "Klicken Sie auf einen beliebigen Punkt im Querschnitt, um dort die vollst\u00e4ndige Sondierung zu pr\u00fcfen \u2014 Temperatur, Taupunkt, Partikelpfad, CAPE/CIN und \u00dcberlagerungsb\u00e4nder, die zeigen, wo Wolken und Vereisung liegen.",
   "tour.done.title": "Ende der Tour",
-  "tour.done.desc": "Synopsis, GRAMET, Sondierungsanalyse und Modellvergleich finden Sie unten, wenn Sie mehr Tiefe w\u00fcnschen. Guten Flug."
+  "tour.done.desc": "Synopsis, GRAMET, Sondierungsanalyse und Modellvergleich finden Sie unten, wenn Sie mehr Tiefe w\u00fcnschen. Guten Flug.",
+  "tour.offer.text": "Neu: machen Sie eine kurze gef\u00fchrte Tour durch das Briefing \u2014 Hinweise, Querschnitt, Routendiagramm und Skew-T. Etwa zwei Minuten.",
+  "tour.offer.acceptBtn": "Tour starten",
+  "tour.offer.dismissBtn": "Sp\u00e4ter"
 }

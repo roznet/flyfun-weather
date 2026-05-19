@@ -722,5 +722,8 @@
   "tour.skewt.title": "Skew-T at any point",
   "tour.skewt.desc": "Click any point on the cross-section to inspect its full sounding here — temperature, dewpoint, parcel path, CAPE/CIN, and overlay bands showing where clouds and icing live.",
   "tour.done.title": "That's the tour",
-  "tour.done.desc": "Synopsis, GRAMET, Sounding Analysis, and Model Comparison are below if you want more depth. Have a safe flight."
+  "tour.done.desc": "Synopsis, GRAMET, Sounding Analysis, and Model Comparison are below if you want more depth. Have a safe flight.",
+  "tour.offer.text": "New: take a quick guided tour of the briefing — it'll show you advisories, the cross-section, route graph, and Skew-T. About two minutes.",
+  "tour.offer.acceptBtn": "Take the tour",
+  "tour.offer.dismissBtn": "Not now"
 }

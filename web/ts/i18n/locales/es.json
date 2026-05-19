@@ -615,5 +615,8 @@
   "tour.skewt.title": "Skew-T en cualquier punto",
   "tour.skewt.desc": "Haga clic en cualquier punto de la secci\u00f3n transversal para inspeccionar su sondeo completo aqu\u00ed \u2014 temperatura, punto de roc\u00edo, trayectoria de la parcela, CAPE/CIN y bandas de superposici\u00f3n que muestran d\u00f3nde se encuentran nubes y engelamiento.",
   "tour.done.title": "Fin de la visita",
-  "tour.done.desc": "Sinopsis, GRAMET, An\u00e1lisis de sondeo y Comparaci\u00f3n de modelos est\u00e1n m\u00e1s abajo si desea m\u00e1s detalle. Que tenga un buen vuelo."
+  "tour.done.desc": "Sinopsis, GRAMET, An\u00e1lisis de sondeo y Comparaci\u00f3n de modelos est\u00e1n m\u00e1s abajo si desea m\u00e1s detalle. Que tenga un buen vuelo.",
+  "tour.offer.text": "Nuevo: realice una breve visita guiada por el briefing \u2014 avisos, secci\u00f3n transversal, gr\u00e1fico de ruta y Skew-T. Unos dos minutos.",
+  "tour.offer.acceptBtn": "Iniciar la visita",
+  "tour.offer.dismissBtn": "Ahora no"
 }
