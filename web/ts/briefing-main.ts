@@ -36,6 +36,7 @@ import { attachSkewTInteraction, attachSkewTCompareInteraction, type SkewTIntera
 import { SkewTCompareRenderer, type CompareModelDataset as SkewtCompareModelDataset } from './visualization/skewt/compare-renderer';
 import { getActiveTheme } from './visualization/cross-section/theme';
 import { startBriefingTour, maybeAutoStartBriefingTour } from './tour/briefing-tour';
+import { maybeOfferTour } from './tour/tour-offer';
 
 
 async function loadFlightPireps(flightId: string): Promise<void> {
@@ -1441,6 +1442,7 @@ async function init(): Promise<void> {
 
     document.getElementById('tour-btn')?.addEventListener('click', () => startBriefingTour());
     maybeAutoStartBriefingTour();
+    maybeOfferTour();
   });
 }
 

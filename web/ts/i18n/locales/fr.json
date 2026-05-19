@@ -615,5 +615,8 @@
   "tour.skewt.title": "Skew-T en tout point",
   "tour.skewt.desc": "Cliquez sur un point quelconque de la coupe pour inspecter son sondage complet \u2014 temp\u00e9rature, point de ros\u00e9e, trajet de la parcelle, CAPE/CIN, et bandes de superposition montrant o\u00f9 se trouvent les nuages et le givrage.",
   "tour.done.title": "Fin de la visite",
-  "tour.done.desc": "Synopsis, GRAMET, Analyse de sondage et Comparaison de mod\u00e8les sont disponibles plus bas pour plus de d\u00e9tails. Bon vol."
+  "tour.done.desc": "Synopsis, GRAMET, Analyse de sondage et Comparaison de mod\u00e8les sont disponibles plus bas pour plus de d\u00e9tails. Bon vol.",
+  "tour.offer.text": "Nouveau : suivez une visite guid\u00e9e du briefing \u2014 avis, coupe transversale, graphique de route et Skew-T. Environ deux minutes.",
+  "tour.offer.acceptBtn": "Lancer la visite",
+  "tour.offer.dismissBtn": "Plus tard"
 }
