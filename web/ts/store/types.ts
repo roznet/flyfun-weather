@@ -113,6 +113,17 @@ export interface ModelSourceDetail {
   state: "current" | "stale" | "awaiting" | "delayed";
 }
 
+/** Outcome of the tiered refresh gate — what pressing refresh will do. */
+export interface RefreshDecision {
+  mode: "full" | "realtime" | "none";
+  reason: string;
+  needed: number;
+  n_eligible: number;
+  n_updated: number;
+  days_out: number;
+  eta_useful?: string | null;
+}
+
 export interface DataStatus {
   fresh: boolean;
   stale_models: string[];
@@ -122,6 +133,10 @@ export interface DataStatus {
   marker_health?: "ok" | "suspect";
   models?: Record<string, ModelStatus>;
   sources?: ModelSourceDetail[];
+  // What pressing the refresh button will actually do at the current lead
+  // time. Present on GET /packs/freshness and the gated refresh complete;
+  // absent from contexts without a flight.
+  refresh_decision?: RefreshDecision | null;
 }
 
 /**

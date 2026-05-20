@@ -572,15 +572,32 @@ export function renderFreshnessBar(
   const emailChecked = notifyEmail ? ' checked' : '';
   const emailToggle = `<label class="freshness-notify-label"><input type="checkbox" id="${emailCheckId}"${emailChecked}> ${t('freshness.notifyEmail')}</label>`;
 
-  if (freshness.fresh) {
+  // Tiered refresh gate: show what pressing refresh will actually
+  // do, so the bar agrees with the button. Only the `realtime` and gated-`none`
+  // (some updates, but below the lead-time threshold) cases need special
+  // wording; `full` and "nothing new yet" fall through to the fresh/stale logic.
+  const gate = freshness.refresh_decision;
+  const checkLinkHtml = `<a href="#" class="freshness-link" id="freshness-check-again">${t('freshness.checkAgain')}</a>`;
+  const usefulSuffix = (iso?: string | null): string =>
+    iso ? t('freshness.gatedNextUseful', { time: formatTimeUntil(iso) }) : '';
+
+  if (gate && gate.mode === 'realtime') {
+    el.className = 'freshness-bar freshness-current';
+    el.innerHTML = `<span>${t('freshness.gatedRealtime')}${usefulSuffix(gate.eta_useful)} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+  } else if (gate && gate.mode === 'none' && gate.n_updated > 0) {
+    // Minor updates exist but below the threshold for this lead time — a press
+    // won't run a full pipeline yet. Neutral styling, not red "updates available".
+    el.className = 'freshness-bar freshness-current';
+    const minorMsg = t('freshness.gatedMinor', { have: String(gate.n_updated), needed: String(gate.needed) });
+    el.innerHTML = `<span>${minorMsg}${usefulSuffix(gate.eta_useful)} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+  } else if (freshness.fresh) {
     let nextInfo = '';
     if (freshness.next_expected_update && freshness.next_expected_model) {
       const timeStr = formatTimeUntil(freshness.next_expected_update);
       nextInfo = t('freshness.nextUpdate', { time: `${modelLabel(freshness.next_expected_model)} ${timeStr}` });
     }
-    const checkLink = `<a href="#" class="freshness-link" id="freshness-check-again">${t('freshness.checkAgain')}</a>`;
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>${t('freshness.upToDate')}${nextInfo} ${checkLink}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    el.innerHTML = `<span>${t('freshness.upToDate')}${nextInfo} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
   } else {
     const staleStr = freshness.stale_models.map((m) => modelLabel(m)).join(', ');
     el.className = 'freshness-bar freshness-stale';

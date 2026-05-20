@@ -997,6 +997,74 @@ class TestRefreshEndpoint:
         finally:
             client.app.state.db_path = ""
 
+    @patch("weatherbrief.airports.get_runway_ends")
+    @patch("weatherbrief.tasks.route_weather.run_route_weather")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    def test_refresh_gate_realtime_seam_integration(
+        self, mock_list, mock_status, mock_decide, mock_fetch, mock_runways,
+        client, sample_flight, tmp_path,
+    ):
+        """End-to-end realtime gate: the endpoint resolves the pack's
+        ``artifact_path``, runs the *real* ``run_realtime_refresh`` seam (only
+        the network fetch is mocked) and patches ``briefing.json`` on disk.
+
+        Guards the endpoint->seam contract the other gate tests don't cover
+        (they mock ``run_realtime_refresh``): that ``latest.artifact_path`` is
+        the directory the seam reads from and writes back to.
+        """
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models import BriefingPackMeta
+        from weatherbrief.models.observations import RouteObservations
+
+        # A real pack on disk, located at the meta's artifact_path.
+        briefing = {
+            "route": {
+                "name": "Test Route",
+                "waypoints": [
+                    {"icao": "EGTF", "name": "Fairoaks", "lat": 51.348, "lon": -0.559},
+                    {"icao": "LFQA", "name": "Reims", "lat": 49.310, "lon": 3.620},
+                ],
+                "cruise_altitude_ft": 6000,
+                "flight_duration_hours": 2.0,
+            },
+            "departure_time": "2026-05-20T09:00:00+00:00",
+            "days_out": 0,
+        }
+        (tmp_path / "briefing.json").write_text(json.dumps(briefing))
+        (tmp_path / "forecasts.json").write_text(json.dumps({"forecasts": []}))
+
+        mock_list.return_value = [BriefingPackMeta(
+            flight_id=sample_flight.id,
+            fetch_timestamp=datetime.now(timezone.utc),
+            days_out=0,
+            artifact_path=str(tmp_path),
+        )]
+        mock_status.return_value = DataStatus(fresh=True)
+        mock_decide.return_value = RefreshDecision(
+            mode="realtime", reason="D-0 live METAR/TAF",
+            needed=1, n_eligible=3, n_updated=0, days_out=0,
+        )
+        mock_fetch.return_value = RouteObservations(
+            corridor_nm=30.0, fetch_time=datetime.now(timezone.utc),
+            airports_found=1, airports_with_metar=1, airports_with_taf=0, airports=[],
+        )
+        mock_runways.return_value = {}
+
+        client.app.state.db_path = "/fake/db"
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "realtime"
+            assert data["observations"]["airports_found"] == 1
+            # The real seam patched briefing.json at the pack's artifact_path.
+            patched = json.loads((tmp_path / "briefing.json").read_text())
+            assert patched["route_observations"]["airports_found"] == 1
+        finally:
+            client.app.state.db_path = ""
+
 
 class TestRefreshStreamEncoder:
     """Guard the JSON-encoder path used by ``/refresh/stream`` SSE events.

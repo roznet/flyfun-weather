@@ -248,6 +248,20 @@ class ModelSourceDetail(BaseModel):
     state: str  # "current" | "stale" | "awaiting" | "delayed"
 
 
+class RefreshDecision(BaseModel):
+    """Outcome of the tiered refresh gate."""
+
+    mode: Literal["full", "realtime", "none"]
+    reason: str
+    needed: int          # models-updated threshold, capped by n_eligible
+    n_eligible: int      # selected models whose latest run covers the flight
+    n_updated: int       # eligible models with a newer-than-pack covering run
+    days_out: int
+    # ISO wallclock when enough not-yet-updated covering models will have
+    # refreshed to cross the threshold — populated when mode != "full".
+    eta_useful: str | None = None
+
+
 class DataStatus(BaseModel):
     """Model freshness status.
 
@@ -266,6 +280,12 @@ class DataStatus(BaseModel):
     marker_health: str = "ok"  # "ok" | "suspect"
     models: dict[str, ModelStatus] = Field(default_factory=dict)
     sources: list[ModelSourceDetail] = Field(default_factory=list)
+    # Tiered refresh gate outcome for the *current* lead time — what pressing
+    # the refresh button will actually do (full pipeline / cheap real-time /
+    # no-op).  Lets the freshness UI agree with the button instead of relying
+    # on the raw ``fresh`` min-rule.  Populated when a flight is in context
+    # (e.g. ``GET /packs/freshness``); ``None`` from contexts without a flight.
+    refresh_decision: RefreshDecision | None = None
 
 
 def _provider_label(source: str) -> str:
@@ -391,7 +411,12 @@ def get_freshness(
     if not packs:
         return DataStatus(fresh=False)
 
-    return _build_data_status(packs[0], flight)
+    status = _build_data_status(packs[0], flight)
+    # Attach the tiered-gate outcome for the current lead time so the freshness
+    # UI reflects what the refresh button will actually do (and not just the
+    # raw min-rule ``fresh`` flag).
+    status.refresh_decision = decide_refresh(status, _days_out_now(flight))
+    return status
 
 
 # Pack-model name -> freshness source key when GRIB enrichment succeeds for
@@ -641,20 +666,6 @@ def _days_out_now(flight: Flight) -> int:
     """Lead time in whole days from now (UTC) to the flight's departure date."""
     now = datetime.now(timezone.utc)
     return (flight.departure_time.date() - now.date()).days
-
-
-class RefreshDecision(BaseModel):
-    """Outcome of the tiered refresh gate."""
-
-    mode: Literal["full", "realtime", "none"]
-    reason: str
-    needed: int          # models-updated threshold, capped by n_eligible
-    n_eligible: int      # selected models whose latest run covers the flight
-    n_updated: int       # eligible models with a newer-than-pack covering run
-    days_out: int
-    # ISO wallclock when enough not-yet-updated covering models will have
-    # refreshed to cross the threshold — populated when mode != "full".
-    eta_useful: str | None = None
 
 
 def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
@@ -1515,6 +1526,12 @@ async def refresh_briefing_stream(
                                 flight_id, exc_info=True,
                             )
                             effective_mode = "none"
+                    # Carry the (effective) decision on the pack's data_status
+                    # too, so the client's freshness bar reflects the gate
+                    # outcome without a follow-up /freshness call.
+                    status.refresh_decision = decision.model_copy(
+                        update={"mode": effective_mode},
+                    )
                     pack_resp = _meta_to_response(latest, data_status=status).model_dump(mode="json")
                     decision_payload = decision.model_dump(mode="json")
                     decision_payload["mode"] = effective_mode

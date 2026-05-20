@@ -91,6 +91,8 @@ The `min(…, n_eligible)` cap handles small selections: 2 models selected → D
 - Auto-refresh scheduler (`scheduler._auto_refresh_one`): same **full/none** policy, but **no** realtime fallback — live METAR/TAF is the verification loop's job. So a non-`full` decision means skip.
 - `force=true` (admin) still bypasses the gate entirely.
 
+**Freshness UI agrees with the button.** `GET /packs/freshness` attaches the decision as `DataStatus.refresh_decision` (and the gated SSE complete carries it on the returned pack's `data_status`), so the client never re-derives gate logic. The freshness bar (`web/ts/managers/briefing-ui.ts:renderFreshnessBar`) renders by mode: `realtime` → "day of flight, refresh pulls live METAR/TAF"; gated `none` *with* `n_updated > 0` → neutral "minor updates ({have}/{needed}), next useful update ~{eta}" instead of the misleading red "updates available"; `full` and "nothing new" fall through to the existing fresh/stale wording. Without this, the bar's raw min-rule `fresh` flag disagreed with the button (showed "updates available" while a press did nothing).
+
 ## Key Choices
 
 - **In-memory only.** Lost on restart, ~2s bootstrap cost. Admin endpoint provides debugging visibility; no DB persistence in scope.
