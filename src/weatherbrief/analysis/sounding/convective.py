@@ -187,7 +187,8 @@ def _regime_explanation(
         drivers.append(f"High instability (CAPE {cape:.0f} J/kg)")
         if ascent:
             drivers.append(
-                f"Large-scale ascent (ω₇₀₀ {omega_700_pa_s:.2f} Pa/s) may erode the cap"
+                f"Large-scale ascent (ω₇₀₀ {omega_700_pa_s:.2f} Pa/s) may erode the "
+                f"cap (CIN {cin:.0f} J/kg)"
             )
         elif omega_700_pa_s is None:
             # No ascent data. A very strong cap (CIN < -200) holds regardless,

@@ -248,7 +248,8 @@ def test_loaded_gun_with_ascent_keeps_risk():
     result = assess_convective_thermo(indices, omega_700_pa_s=-0.3)
     assert result.regime is ConvectiveRegime.LOADED_GUN
     assert result.risk_level == ConvectiveRisk.HIGH
-    assert any("ascent" in d for d in result.drivers)
+    # driver names both the ascent and the cap strength (CIN) it may erode
+    assert any("ascent" in d and "CIN" in d for d in result.drivers)
     assert not result.suppressors
 
 
