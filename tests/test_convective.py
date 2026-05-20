@@ -285,7 +285,7 @@ def test_thermal_regime_annotated():
     result = assess_convective_thermo(indices)
     assert result.regime is ConvectiveRegime.THERMAL
     assert result.risk_level == ConvectiveRisk.LOW  # 120 >= 50
-    assert any("hermal" in d for d in result.drivers)
+    assert any("thermal" in d.lower() for d in result.drivers)
 
 
 def test_regime_none_when_no_cape():
@@ -332,6 +332,38 @@ def test_omega_near_700_rejects_when_too_far():
     from weatherbrief.analysis.sounding import _omega_near_700
     levels = [_lvl(500, -0.30), _lvl(300, -0.50)]
     assert _omega_near_700(levels) is None
+
+
+def test_omega_reaches_trigger_through_core_pass():
+    """Regression for the dead-trigger bug: omega must be populated by the
+    *core* (lite) pass, since that is where the convective assessment runs.
+
+    Builds a real profile via prepare_profile → compute_derived_levels_core
+    (no extended pass) and confirms _omega_near_700 sees the 700 hPa ascent.
+    """
+    from weatherbrief.analysis.sounding import _omega_near_700
+    from weatherbrief.analysis.sounding.prepare import prepare_profile
+    from weatherbrief.analysis.sounding.thermodynamics import (
+        compute_derived_levels_core,
+    )
+    from weatherbrief.models import PressureLevelData
+
+    levels_in = [
+        PressureLevelData(pressure_hpa=850, temperature_c=20, dewpoint_c=15,
+                          geopotential_height_m=1450, vertical_velocity_pa_s=0.10),
+        PressureLevelData(pressure_hpa=700, temperature_c=10, dewpoint_c=2,
+                          geopotential_height_m=3010, vertical_velocity_pa_s=-0.40),
+        PressureLevelData(pressure_hpa=500, temperature_c=-10, dewpoint_c=-25,
+                          geopotential_height_m=5550, vertical_velocity_pa_s=-0.20),
+    ]
+    profile = prepare_profile(levels_in)
+    assert profile is not None
+
+    core_levels = compute_derived_levels_core(profile)
+    assert any(lv.omega_pa_s is not None for lv in core_levels), (
+        "omega must be set in the core pass, not only the extended pass"
+    )
+    assert _omega_near_700(core_levels) == -0.40  # 700 hPa ascent reaches the trigger
 
 
 # ---------------------------------------------------------------------------
