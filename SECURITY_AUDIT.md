@@ -1,9 +1,175 @@
 # Security Audit — Flyfun Weather
 
 **Initial audit:** 2026-02-26
-**Prior updates:** 2026-03-23
-**Current audit:** 2026-04-20 (fresh first-principles review; model: Opus 4.7 / 1M)
+**Prior updates:** 2026-03-23, 2026-04-20 (fresh first-principles review)
+**Current audit:** 2026-05-20 (focused first-principles review of the new auth surface — magic-link email login, rolling JWT sessions, `SlidingSessionMiddleware` — plus full reconciliation of prior findings; model: Opus 4.7 / 1M)
 **Scope:** Full-stack review — FastAPI backend, shared `flyfun-common` auth library, SQLAlchemy/MySQL/SQLite storage, vanilla TypeScript frontend, Docker/Caddy deployment, MCP server, iOS sync endpoints, Claude-CLI feedback triage.
+
+> **Note on paths:** `flyfun-common` was restructured since the 2026-04-20 audit — its Python package now lives under `flyfun-common/python/src/flyfun_common/…` (the older sections of this document reference the pre-move `flyfun-common/src/flyfun_common/…` paths).
+
+---
+
+## 2026-05-20 Re-Audit
+
+### Summary
+
+This pass was triggered by new authentication work landed in `flyfun-common` since the last audit: **magic-link email login** (a third provider alongside Google/Apple), **rolling JWT sessions** (`SlidingSessionMiddleware`, 30-day expiry with sliding refresh, plus an `X-Renewed-Token` header for native Bearer clients), and a new DB-backed magic-link rate limiter. The review was conducted first-principles across the new auth code and the broader app, then reconciled against the 2026-04-20 findings.
+
+The new auth code is, on the whole, carefully built: tokens and OTPs are stored as SHA-256 hashes only, the 256-bit click-through token is not brute-forceable, `/magic-link/request` is account-enumeration-safe (always 200), Apple Private Relay addresses are rejected, `GET /verify` deliberately never consumes the token (corporate-scanner-safe), all `next=` redirects are open-redirect-validated, the email template is fully HTML-escaped, the frontend uses `textContent` (never injects the token into the DOM), and admin suspension still takes effect immediately because `current_user_id` re-checks `approved` on every request regardless of token lifetime.
+
+One **High** defect was found and **empirically confirmed**: the magic-link **6-digit OTP path is effectively unthrottled**, enabling brute-force account takeover. Several Medium/Low items follow from the rolling-session model and from a fresh sweep of the non-auth API surface. No new Critical was found, and the prior Critical (C1, feedback-triage prompt injection) remains remediated.
+
+### New findings (this pass)
+
+| ID | Sev | Headline |
+|----|-----|----------|
+| 2026-H1 | **High** | _FIXED 2026-05-20._ Magic-link 6-digit OTP brute-force is unthrottled → account takeover (per-IP limit is a no-op; no per-token attempt cap) |
+| 2026-M1 | Medium | _FIXED 2026-05-20._ Rolling 30-day self-renewing sessions + no revocation/`jti` amplify token theft (extends M-new-5) |
+| 2026-M2 | Medium | _FIXED 2026-05-20._ Magic-link per-IP limiter trusts the spoofable **leftmost** `X-Forwarded-For` (inconsistent with the app's own hardened rightmost helper) |
+| 2026-M3 | Medium/Low | PIREP cross-flight enumeration: `GET /api/pireps?flight_id=/pack_id=` not scoped to caller; links community PIREPs to arbitrary (incl. private) flight/pack IDs |
+| 2026-L1 | Low | Magic-link `consume` TOCTOU (used-check then set, no row lock) — same-user, low impact |
+| 2026-L2 | Low | Unbounded free-text PIREP `remarks` (no `max_length`; `Text` column) — storage-bloat DoS |
+| 2026-L3 | Low | `PUT /api/cost-config` consumes a raw `dict` body, bypassing Pydantic (admin-gated) — breaks the "all POST bodies are Pydantic" invariant |
+| 2026-L4 | Low | `airport_profile` SSE emits `str(exc)` unconditionally — new instance of M-new-10 |
+| 2026-N1 | Note | Magic-link makes mailbox-takeover ⇒ flyfun-account-takeover for *every* user, including pure Google/Apple users (deliberate "email = identity", documented here for risk acceptance) |
+
+---
+
+### 2026-H1 (High) — Magic-link OTP brute-force is unthrottled → account takeover
+
+**Status:** FIXED 2026-05-20 — flyfun-common 0.4.1 adds a per-token `attempt_count` cap (token burned after `MAX_OTP_ATTEMPTS=5` wrong guesses) and commits the attempt/counter *before* the 400 so it survives `get_db`'s rollback; weather migration 060 adds the column. Regression test `test_consume_code_otp_attempt_cap_burns_token` + `test_consume_code_per_ip_limit_trips_in_prod`.
+
+**Locations:** `flyfun-common/python/src/flyfun_common/auth/magic_link.py:393-443` (`/auth/magic-link/consume-code`), `…/auth/rate_limit.py:89-121` (`check_ip_consume_rate` / `record_consume_attempt`), `…/db/deps.py:28-38` (`get_db` commit/rollback).
+
+The iOS OTP flow accepts `{email, code}` and matches `code` against the `otp_code_hash` of **any** unused, unexpired token for that email. The OTP is a **6-digit number** (`secrets.randbelow(10**6)`, `magic_link.py:297`) with a 15-minute TTL. There is **no per-token / per-email failed-attempt counter** — nothing invalidates a token after N wrong guesses (the standard OTP control).
+
+The only intended throttle on guessing is the per-IP consume limit (5/min). It is **non-functional**:
+
+```python
+# magic_link.py — consume_code()
+record_consume_attempt(db, ip)            # INSERT MagicLinkConsumeAttemptRow + flush
+if not check_ip_consume_rate(db, ip):     # COUNT(*) over recent attempt rows
+    raise HTTPException(429, ...)
+...
+if row is None:                           # wrong code →
+    raise HTTPException(400, "Invalid or expired code")
+```
+
+`record_consume_attempt` only `flush`es (no commit). When the wrong-code path raises `HTTPException(400)`, FastAPI 0.136 propagates that exception **into** the `get_db` yield-dependency, whose `except Exception: session.rollback()` then **erases the just-inserted attempt row**. So failed guesses — i.e. exactly the brute-force traffic — leave no trace, and `check_ip_consume_rate` never trips.
+
+**Empirically confirmed** (prod-mode, real router via `TestClient`): 12 consecutive wrong-code POSTs all returned `400`, and `magic_link_consume_attempts` ended with **0 rows**. The library's own test suite has tests for the per-IP *request* limit but **none** for the consume limit, so this was never caught.
+
+Compounding factors:
+- The per-IP limit also reads a **spoofable** client IP (see 2026-M2), so even if rows persisted, an attacker rotating `X-Forwarded-For` would bypass it.
+- The OTP is matched against *any* outstanding token for the email, so multiple live tokens multiply the hit probability.
+
+The only control that actually works is the per-**email** request limit (3/hour), which caps how many OTPs can be minted for a victim — but each minted token still allows *unlimited* guesses for its 15-minute life.
+
+**Exploit:** attacker who knows a victim's email POSTs `/magic-link/request` (victim gets an email — noisy but commonly ignored), then floods `/magic-link/consume-code` with guesses. With no effective throttle, a simple DB-lookup endpoint sustains hundreds–thousands of req/s; the 10⁶ space is substantially covered within a single 15-minute window, and 3 fresh windows/hour make eventual success near-certain. Result: full takeover of any account by email address alone, with no password and no second factor.
+
+**Remediation (in priority order):**
+1. **Per-token attempt cap (most robust):** add an `attempt_count` to `MagicLinkTokenRow`; increment on each wrong OTP and invalidate (`used_at`) the token after ~5 failures. This kills brute force regardless of the rate-limiter plumbing.
+2. **Make `record_consume_attempt` durable:** write it in its own transaction/session (or commit before the validity check) so the per-IP counter survives the request rollback.
+3. **Read a trustworthy client IP** (see 2026-M2).
+4. Consider an 8-digit OTP and a short hard cap on outstanding tokens per email.
+
+---
+
+### 2026-M1 (Medium) — Rolling 30-day self-renewing sessions with no revocation amplify token theft
+
+**Status:** FIXED 2026-05-20 — flyfun-common 0.4.1 adds a per-user session epoch (`users.tokens_valid_after`, weather migration 060). `current_user_id`/`optional_user_id` reject any JWT whose `iat` predates it; `SlidingSessionMiddleware` no longer rolls a token forward on a rejected (≥400) response (so a revoked token can't be re-minted in its refresh window); and `POST /auth/logout-all` bumps the epoch to kill every device. Normal logout/login UX is unchanged. `require_admin` now delegates to `current_user_id`, so admin endpoints honour suspension + revocation too.
+
+**Locations:** `auth/jwt_utils.py:43-58` (30-day expiry, was a flat 7), `auth/middleware.py:125-157` (`SlidingSessionMiddleware` re-mints near-expiry tokens), `auth/router.py:389-393` (`/auth/logout` only deletes the cookie).
+
+The session JWT now lives 30 days and is silently re-issued whenever its remaining lifetime drops below 15 days — for cookies via `Set-Cookie`, and for native Bearer clients via the `X-Renewed-Token` response header. There is still no `jti`, no server-side denylist, and logout merely clears the *caller's* cookie. Consequently a **stolen** JWT/cookie (e.g. a leaked native-client token in a keychain backup, a proxy log, or a shared device) is valid for 30 days **and the thief can roll it forward indefinitely** simply by continuing to use it. The victim cannot revoke it; logout does nothing to a copied token.
+
+The only kill-switches are blunt: admin-suspend the user (`approved=False`, correctly enforced per-request by `current_user_id` — this is a genuine positive) or rotate `JWT_SECRET` (invalidates *every* session for *every* app). This is the prior M-new-5 made materially worse by the 7→30-day window and self-renewal.
+
+**Remediation:** add a `jti` claim plus a small `revoked_tokens` (or per-user `tokens_valid_after` timestamp) table consulted in the decode path; have `/auth/logout` and account-delete record a revocation. Optionally cap absolute session age independent of rolling refresh.
+
+---
+
+### 2026-M2 (Medium) — Magic-link per-IP limiter trusts the spoofable leftmost `X-Forwarded-For`
+
+**Status:** FIXED 2026-05-20 — flyfun-common 0.4.1 `magic_link._client_ip` now prefers `X-Real-IP` (set by Caddy to the real peer) and otherwise takes the rightmost XFF token, matching the weather app's hardened `security._client_ip`. Test `test_client_ip_prefers_real_ip_then_rightmost_xff`. (Caddy `trusted_proxies` hardening remains an optional defence-in-depth follow-up.)
+
+**Locations:** `auth/magic_link.py:112-118` (`_client_ip` → `forwarded.split(",", 1)[0]`). Contrast `src/weatherbrief/api/security.py:46-48`, which was hardened to take the **rightmost** XFF token.
+
+Caddy (`deploy/weather.flyfun.aero.caddy`) sets a trustworthy `X-Real-IP {remote_host}` but does **not** sanitise `X-Forwarded-For` (no `trusted_proxies`); it appends the real peer to any client-supplied value, so the **leftmost** token is attacker-controlled. The weather app already accounts for this by reading the rightmost token — but the magic-link limiter in `flyfun-common` reads the **leftmost**, so an attacker can defeat both per-IP magic-link limits (request and consume) by rotating a forged `X-Forwarded-For`. The per-email request limit is unaffected (not IP-keyed).
+
+**Remediation:** in `flyfun-common`, prefer `X-Real-IP`, or read the rightmost XFF token to match `security._client_ip`; and/or configure Caddy `trusted_proxies` + `header_up X-Forwarded-For {remote_host}` to overwrite the client value at the edge.
+
+---
+
+### 2026-M3 (Medium/Low) — PIREP cross-flight enumeration (IDOR-lite)
+
+**Locations:** `src/weatherbrief/api/pireps.py:399-464` (`GET /api/pireps`), `src/weatherbrief/storage/pireps.py` (`list_pireps`).
+
+`query_pireps` is gated only by `can_view_pireps(db, user_id)`; when a caller supplies `flight_id` or `pack_id`, the value is passed straight to `list_pireps` with **no** `_load_flight_or_404(viewer_id=…)` / pack-ownership check. Any PIREP-enabled user can therefore enumerate PIREPs (author position, altitude, remarks) tied to **another user's flight or pack — including a private one** — and confirm that a given flight/pack ID exists. PIREPs are intentionally a community dataset (airport/bounds queries are global by design), so the leak is narrow: it's the *linkage* to a specific private flight/pack and the existence oracle. The publish path already validates pack ownership; the read path does not.
+
+**Remediation:** when `flight_id`/`pack_id` is supplied, run it through `_load_flight_or_404(viewer_id=user_id)` / the pack-ownership validator before querying.
+
+---
+
+### 2026-L1..L4 / 2026-N1 (Low / Note)
+
+- **2026-L1 — magic-link `consume` TOCTOU.** `magic_link.py:355-378` checks `row.used_at is None` then sets it without `with_for_update()`; two concurrent requests with the same token can both mint a JWT. Same user, low impact (mirrors the M-new-7 OAuth pattern). Use an atomic `UPDATE … WHERE used_at IS NULL` and check rowcount.
+- **2026-L2 — unbounded PIREP `remarks`.** `pireps.py:133` (`remarks: str | None`, no `max_length`) → `db/models.py` `Text`. 50/batch × 50/day per user → storage-bloat DoS. Add `Field(max_length=…)`. (`messages.py` has the same gap but is admin-only — informational.)
+- **2026-L3 — raw `dict` body.** `src/weatherbrief/api/credits.py:268-270` `update_cost_config(body: dict, …)` bypasses Pydantic (admin-gated; it does reject unknown keys against `CostConfig`). This is the one place the prior positive *"all POST bodies use Pydantic models"* no longer holds. Prefer a Pydantic model with `extra="forbid"`.
+- **2026-L4 — SSE raw exception.** `src/weatherbrief/api/airport_profile.py:694` emits `str(exc)` unconditionally in an SSE `error` event — a fresh instance of the M-new-10 pattern. Dev-gate it like the sibling handlers.
+- **2026-N1 — design note (risk acceptance).** Because magic-link keys identity off the lowercased `users.email`, possession of a user's *mailbox* now grants full flyfun account access for **every** user — including those who only ever used Google or Apple and may not expect an email-only login path to exist. This is the deliberate "email = identity" model (and email-based recovery was always implicit), so it's recorded for explicit acceptance rather than as a defect. Apple Private Relay is correctly blocked; note that `email_verified` is still not checked on the OAuth/Apple paths (M-new-4).
+
+---
+
+### Reconciliation — status of prior findings as of 2026-05-20
+
+Verified against current source (`flyfun-common/python/…`, weather `src/…`). Line numbers are current.
+
+| Prior ID | Title | Status 2026-05-20 | Evidence |
+|----------|-------|-------------------|----------|
+| C1 | Feedback-triage prompt injection | **FIXED (intact)** | `Agent` tool dropped (`triage/process.py` `--tools Read,Grep,Glob`); `_assert_sandboxed()` real `geteuid()` check; feedback rate-limited. |
+| H1 | Container ports on `0.0.0.0` | **FIXED (intact)** | compose binds `127.0.0.1:8020/8021`. |
+| H2 | Docker net segmentation + broad MySQL grant | **OPEN** | single `shared-services` net; `'weatherbrief'@'172.%'`. |
+| H3 | Single `JWT_SECRET` reuse | **PARTIAL** | `CREDENTIAL_ENCRYPTION_KEY` now a separate prod-required env (Fernet no longer derives from JWT_SECRET) — but JWT_SECRET still signs JWTs + Starlette session + pack-HMAC + approval links. |
+| H4 | `is_dev_mode()` fails open | **OPEN** | `config.py:21-22` still `!= "production"`. |
+| H5 | Pack-HMAC mismatch served anyway; NULL trusted | **OPEN** | `storage/flights.py` returns row on mismatch; NULL hmac trusted; column nullable. |
+| H6 | Unpinned deps / no lockfile / no scanning | **OPEN** | no lockfile, no dependabot; `>=` floors; base images by moving tag. Installed `flyfun-common 0.3.11/0.3.12` vs `>=0.4.0` floor — build/runtime drift. |
+| H7 | Rate limiting on auth/OAuth/token endpoints | **OPEN** | no limiter on `/auth/*`, `/auth/apple/token`, `/oauth/*`, `/api/tokens`, admin approve. (Magic-link has *some* limits — see 2026-H1/M2 for why they're insufficient.) |
+| H8 | iOS JWT in custom-scheme query + loose regex | **OPEN** | `auth/router.py:224` `flyfun[a-z0-9\-]*`; `:294` JWT in query string. |
+| M-prior-6 | Error-detail leakage | **PARTIAL** | ImportError/Skew-T paths fixed/dev-gated; residual unconditional `str(exc)` at `packs.py` email endpoint (~`:2963`). |
+| M-prior-8 | `_load_flight_or_404` fail-open default | **OPEN** | `flights.py:1663` still `viewer_id: str | None = None`. |
+| M-prior-9 | Unhandled `json.loads()` on disk | **OPEN** | multiple sites in `packs.py`; no global handler. |
+| M-new-1 | CSP `unsafe-inline`; `frame-ancestors 'self'` | **OPEN** | Caddyfile unchanged. |
+| M-new-2 | No container hardening flags | **OPEN** | no `read_only`/`cap_drop`/`no-new-privileges`/`tmpfs`. |
+| M-new-3 | Admin approval link no one-time-use | **OPEN** | `admin.py` HMAC+TTL only; no nonce. |
+| M-new-4 | Admin-by-email, no case-fold / no `email_verified` | **OPEN** | `get_admin_emails` does `.strip()` only; `_extract_userinfo` ignores `email_verified`. |
+| M-new-5 | JWT no `aud`/`iss`/`jti`; no revocation | **OPEN → see 2026-M1** | now worse (30-day + self-renew). |
+| M-new-6 | `/oauth/register` unauthenticated | **OPEN** | only HTTPS-URI validation; no initial-access-token/admin gate. |
+| M-new-7 | OAuth auth-code replay race | **OPEN** | plain SELECT then `used=True`; no `with_for_update()`. |
+| M-new-9 | `/api/refresh/active` + status cross-tenant leak | **OPEN** | `get_active_refreshes` unfiltered; status not visibility-checked. |
+| M-new-10 | SSE raw exception text | **OPEN** (+ new instance 2026-L4) | `packs.py` refresh stream + `airport_profile.py:694`. |
+| M-new-11 | No global 500 handler; broad `except` | **OPEN** | only `RequestValidationError` + `StarletteHTTPException` handlers. |
+| M-new-12/13 | Caddy body-size/timeouts; rate-limit plugin | **OPEN** | absent in Caddyfile. |
+| M-new-14 | Autorouter logs token body | **OPEN** | `autorouter.py:155,164`. |
+| M-new-17 | `claude.yml` broad perms / moving tag | **OPEN** | `@v1`, `write` perms, no `author_association` gate. |
+| M-new-18 | MySQL grant lacks DDL for alembic | **OPEN** | grant template lacks `CREATE/ALTER/DROP/INDEX`. |
+| M-new-19 / L8 | Unescaped `innerHTML` in admin/tooltips | **PARTIAL** | most server fields now `escapeHtml`'d; residual raw `${err}`/`${v}` in `admin-main.ts` error/metric templates. |
+| L-new-6 | `_client_ip` trusts XFF | **IMPROVED (weather) / OPEN (common)** | weather `security.py` now reads rightmost token; magic-link `_client_ip` still leftmost — see 2026-M2. |
+| L-new-11 | Legacy `wb_` token prefix accepted | **OPEN** | `db/deps.py:25,43`. |
+
+Positives re-confirmed this pass: ORM-only DB access (no raw SQL/`text()`/f-string queries); `safe_path_component()` + ICAO/model regex + `is_relative_to` guard on all file-serving paths; no `eval`/`exec`/`os.system`/`shell=True` (the only `subprocess` is the args-list, sandboxed triage call); no user-controlled URL reaches an outbound `requests`/`httpx` call (no SSRF surface); new frontend surfaces (PIREP remarks, "What's New" markdown) are escaped; `.env`/`.env.*` git- and docker-ignored.
+
+### Updated priority roadmap (new items only)
+
+| # | Item | Effort | Reduces |
+|---|------|--------|---------|
+| 1 | **2026-H1**: add per-token OTP attempt cap (invalidate after ~5); make `record_consume_attempt` durable; add a consume-limit test. | ~half day | Unauthenticated account takeover by email. |
+| 2 | **2026-M2**: fix magic-link `_client_ip` to the trusted token + Caddy `trusted_proxies`. | ~1h | Per-IP limiter bypass (compounds 2026-H1). |
+| 3 | **2026-M1**: `jti` + revocation table; logout/delete revoke; honor on decode. | ~1 day | 30-day self-renewing stolen-token window. |
+| 4 | **2026-M3**: scope `GET /api/pireps?flight_id=/pack_id=` through the flight/pack visibility check. | ~1h | Private-flight PIREP/ID enumeration. |
+| 5 | **2026-L1..L4**: atomic consume update; `max_length` on PIREP remarks; Pydantic model for cost-config; dev-gate the airport_profile SSE error. | ~half day | Misc info-leak / DoS / invariant drift. |
+
+Plus the still-open prior items above — H4, H5, H7, H6, H3 remain the highest-leverage carry-forwards (see the 2026-04-20 roadmap in §7).
 
 ---
 
