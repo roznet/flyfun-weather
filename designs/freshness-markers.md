@@ -83,6 +83,7 @@ decision = decide_refresh(status, _days_out_now(flight))
 - `needed = min(threshold[days_out], n_eligible)` with **threshold `{>=2: 3, 1: 2, 0: 1}`** (module constants `_REFRESH_THRESHOLD_*`, not env-tunable for v1).
 - mode: `full` if `n_updated >= needed`; `realtime` if `days_out == 0` and not full (a D-0 press always at least pulls fresh METAR/TAF); else `none`.
 - `eta_useful` (for `none`/`realtime`) = the `(needed − n_updated)`-th soonest `next_expected` among not-yet-updated eligible models — i.e. when the threshold will next be crossed.
+- `pending_models` = the not-yet-updated eligible models, soonest-first — the runs the user is waiting on. Drives the freshness bar's "awaiting {models}" hint.
 
 The `min(…, n_eligible)` cap handles small selections: 2 models selected → D-2/D-1 both need both; 1 model → every press runs. (Default selection is the 3 mains, so "count ≥ 3" == "all mains" for nearly everyone.)
 
@@ -91,7 +92,12 @@ The `min(…, n_eligible)` cap handles small selections: 2 models selected → D
 - Auto-refresh scheduler (`scheduler._auto_refresh_one`): same **full/none** policy, but **no** realtime fallback — live METAR/TAF is the verification loop's job. So a non-`full` decision means skip.
 - `force=true` (admin) still bypasses the gate entirely.
 
-**Freshness UI agrees with the button.** `GET /packs/freshness` attaches the decision as `DataStatus.refresh_decision` (and the gated SSE complete carries it on the returned pack's `data_status`), so the client never re-derives gate logic. The freshness bar (`web/ts/managers/briefing-ui.ts:renderFreshnessBar`) renders by mode: `realtime` → "day of flight, refresh pulls live METAR/TAF"; gated `none` *with* `n_updated > 0` → neutral "minor updates ({have}/{needed}), next useful update ~{eta}" instead of the misleading red "updates available"; `full` and "nothing new" fall through to the existing fresh/stale wording. Without this, the bar's raw min-rule `fresh` flag disagreed with the button (showed "updates available" while a press did nothing).
+**Freshness UI agrees with the button.** `GET /packs/freshness` attaches the decision as `DataStatus.refresh_decision` (and the gated SSE complete carries it on the returned pack's `data_status`), so the client never re-derives gate logic. The freshness bar (`web/ts/managers/briefing-ui.ts:renderFreshnessBar`) renders by mode:
+- `realtime` (D-0) → "day of flight — refresh updates live METAR/TAF" (a press is always useful).
+- `none` → **one consistent "Up to date" line at every stage**: "Up to date · next full refresh in ~{eta_useful} (awaiting {pending_models})". It answers *when* a full refresh becomes worthwhile (the run that crosses the threshold) and *what* we're waiting on (the not-yet-updated models), so the wording doesn't lurch as runs trickle in — the `awaiting` list just shrinks. Deliberately **not** keyed on `n_updated`: whether 0 or 2 of 3 models have ticked, the message and styling stay the same; only reaching the threshold flips it.
+- `full` → falls through to the red "updates available" stale wording — the one actionable state where a press runs the pipeline.
+
+Without this, the bar's raw min-rule `fresh` flag disagreed with the button (showed "updates available" while a press did nothing), and an earlier iteration that switched to a separate "minor updates (n/needed)" line read as a jarring state change versus the plain "next update in ~X" — replaced by the single `awaiting` framing above.
 
 ## Key Choices
 

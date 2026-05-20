@@ -246,6 +246,8 @@ class TestDecideRefresh:
         assert d.needed == 3
         assert d.n_updated == 2
         assert d.eta_useful == "2026-05-20T18:00:00+00:00"
+        # The one not-yet-updated covering model is what we're waiting on.
+        assert d.pending_models == ["m2"]
 
     def test_d2_all_updated_is_full(self):
         from weatherbrief.api.packs import decide_refresh
@@ -344,3 +346,6 @@ class TestDecideRefresh:
         d = decide_refresh(status, 2)
         assert d.mode == "none"
         assert d.eta_useful == "2026-05-20T18:00:00+00:00"
+        # pending_models is sorted by next_expected (soonest first): m2 (15:00)
+        # then m1 (18:00); the stale m0 is excluded.
+        assert d.pending_models == ["m2", "m1"]

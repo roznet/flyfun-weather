@@ -578,18 +578,27 @@ export function renderFreshnessBar(
   // wording; `full` and "nothing new yet" fall through to the fresh/stale logic.
   const gate = freshness.refresh_decision;
   const checkLinkHtml = `<a href="#" class="freshness-link" id="freshness-check-again">${t('freshness.checkAgain')}</a>`;
-  const usefulSuffix = (iso?: string | null): string =>
-    iso ? t('freshness.gatedNextUseful', { time: formatTimeUntil(iso) }) : '';
 
   if (gate && gate.mode === 'realtime') {
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>${t('freshness.gatedRealtime')}${usefulSuffix(gate.eta_useful)} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
-  } else if (gate && gate.mode === 'none' && gate.n_updated > 0) {
-    // Minor updates exist but below the threshold for this lead time — a press
-    // won't run a full pipeline yet. Neutral styling, not red "updates available".
+    el.innerHTML = `<span>${t('freshness.gatedRealtime')} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+  } else if (gate && gate.mode === 'none') {
+    // Below the lead-time threshold — a press won't run a full pipeline yet.
+    // One consistent "up to date" message at every stage: it answers *when* a
+    // full refresh becomes worthwhile (eta = the model run that crosses the
+    // threshold) and *what* we're still waiting on (the not-yet-updated models),
+    // so the wording doesn't lurch as runs trickle in.
     el.className = 'freshness-bar freshness-current';
-    const minorMsg = t('freshness.gatedMinor', { have: String(gate.n_updated), needed: String(gate.needed) });
-    el.innerHTML = `<span>${minorMsg}${usefulSuffix(gate.eta_useful)} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    const missing = (gate.pending_models ?? []).map((m) => modelLabel(m)).join(', ');
+    let msg: string;
+    if (gate.eta_useful && missing) {
+      msg = t('freshness.gatedWaiting', { time: formatTimeUntil(gate.eta_useful), models: missing });
+    } else if (missing) {
+      msg = t('freshness.gatedWaitingNoEta', { models: missing });
+    } else {
+      msg = t('freshness.upToDate');
+    }
+    el.innerHTML = `<span>${msg} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
   } else if (freshness.fresh) {
     let nextInfo = '';
     if (freshness.next_expected_update && freshness.next_expected_model) {

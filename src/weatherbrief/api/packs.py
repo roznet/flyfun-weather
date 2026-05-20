@@ -260,6 +260,10 @@ class RefreshDecision(BaseModel):
     # ISO wallclock when enough not-yet-updated covering models will have
     # refreshed to cross the threshold — populated when mode != "full".
     eta_useful: str | None = None
+    # Covering models not yet updated, soonest-first — the runs the user is
+    # waiting on before a full refresh becomes worthwhile. Drives the freshness
+    # bar's "awaiting {models}" hint.
+    pending_models: list[str] = Field(default_factory=list)
 
 
 class DataStatus(BaseModel):
@@ -689,9 +693,9 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
     The ``min(..., n_eligible)`` cap means small model selections still work:
     2 models selected -> D-2/D-1 both need both; 1 model -> every press runs.
     """
-    models = list(status.models.values())
-    n_eligible = sum(1 for ms in models if ms.covers_horizon)
-    n_updated = sum(1 for ms in models if ms.covers_horizon and ms.state == "stale")
+    items = list(status.models.items())
+    n_eligible = sum(1 for _, ms in items if ms.covers_horizon)
+    n_updated = sum(1 for _, ms in items if ms.covers_horizon and ms.state == "stale")
     threshold = _refresh_threshold(days_out)
 
     # No model's latest run reaches the flight horizon yet — a full refresh
@@ -712,6 +716,16 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
 
     needed = min(threshold, n_eligible)
 
+    # Covering models not yet updated, soonest-first. The k-th entry is when the
+    # threshold will be crossed (a full refresh becomes worthwhile); the names
+    # are the runs the user is waiting on, surfaced in the freshness bar.
+    pending = sorted(
+        (datetime.fromisoformat(ms.next_expected), ms.next_expected, name)
+        for name, ms in items
+        if ms.covers_horizon and ms.state != "stale" and ms.next_expected
+    )
+    pending_models = [name for _, _, name in pending]
+
     if n_updated >= needed:
         return RefreshDecision(
             mode="full",
@@ -720,17 +734,12 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
                 f"run (need {needed}) — running full refresh"
             ),
             needed=needed, n_eligible=n_eligible, n_updated=n_updated, days_out=days_out,
+            pending_models=pending_models,
         )
 
-    # Not enough covering models updated. Compute the wallclock at which enough
-    # not-yet-updated covering models will have refreshed to cross threshold.
+    # Not enough covering models updated: the k-th pending run crosses threshold.
     k = needed - n_updated
-    pending_next = sorted(
-        (datetime.fromisoformat(ms.next_expected), ms.next_expected)
-        for ms in models
-        if ms.covers_horizon and ms.state != "stale" and ms.next_expected
-    )
-    eta_useful = pending_next[k - 1][1] if 0 < k <= len(pending_next) else None
+    eta_useful = pending[k - 1][1] if 0 < k <= len(pending) else None
 
     if days_out == 0:
         return RefreshDecision(
@@ -740,7 +749,7 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
                 f"— refreshing live METAR/TAF"
             ),
             needed=needed, n_eligible=n_eligible, n_updated=n_updated, days_out=days_out,
-            eta_useful=eta_useful,
+            eta_useful=eta_useful, pending_models=pending_models,
         )
 
     return RefreshDecision(
@@ -750,7 +759,7 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
             f"D-{days_out} flight — no refresh needed"
         ),
         needed=needed, n_eligible=n_eligible, n_updated=n_updated, days_out=days_out,
-        eta_useful=eta_useful,
+        eta_useful=eta_useful, pending_models=pending_models,
     )
 
 

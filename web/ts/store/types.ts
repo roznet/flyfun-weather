@@ -122,6 +122,7 @@ export interface RefreshDecision {
   n_updated: number;
   days_out: number;
   eta_useful?: string | null;
+  pending_models?: string[];
 }
 
 export interface DataStatus {
