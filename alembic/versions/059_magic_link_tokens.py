@@ -8,8 +8,8 @@ its own copy of the same schema change.
 Also indexes ``users.email``: magic-link consume looks users up by
 email on every sign-in, and the column was previously unindexed.
 
-Revision ID: 056
-Revises: 055
+Revision ID: 059
+Revises: 058
 Create Date: 2026-05-14
 """
 from __future__ import annotations
@@ -19,8 +19,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "056"
-down_revision: Union[str, None] = "055"
+revision: str = "059"
+down_revision: Union[str, None] = "058"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
