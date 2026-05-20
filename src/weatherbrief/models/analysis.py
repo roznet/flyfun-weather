@@ -328,6 +328,21 @@ class ConvectiveRisk(str, Enum):
     EXTREME = "extreme"
 
 
+class ConvectiveRegime(str, Enum):
+    """Dominant convective regime, used to pick regime-appropriate scoring.
+
+    Discriminates the four physically distinct ways European convection
+    initiates, so a single CAPE threshold doesn't misjudge a capped
+    "loaded gun" (high CAPE held down by an inversion) or miss thermally
+    driven convection that carries little CAPE.
+    """
+
+    THERMAL = "thermal"                    # low CAPE, weak cap — surface/orographic
+    WEAK_INSTABILITY = "weak_instability"  # moderate CAPE, weak cap
+    LOADED_GUN = "loaded_gun"              # high CAPE, strong capping inversion
+    ACTIVE = "active"                      # high CAPE, weak/absent cap
+
+
 class VerticalMotionClass(str, Enum):
     """Classification of the vertical motion profile."""
 
@@ -564,6 +579,10 @@ class ConvectiveAssessment(BaseModel):
     k_index: Optional[float] = None
     total_totals: Optional[float] = None
     severe_modifiers: list[str] = Field(default_factory=list)
+    # Regime discrimination + transparent reasoning (thermo method)
+    regime: Optional[ConvectiveRegime] = None  # dominant regime used for scoring
+    drivers: list[str] = Field(default_factory=list)      # factors raising risk
+    suppressors: list[str] = Field(default_factory=list)  # factors holding risk down
     # Unified interface fields (populated by both thermo and NWP methods)
     base_ft: Optional[float] = None  # thermo: lfc_altitude_ft (or lcl fallback); NWP: convective_base_ft
     top_ft: Optional[float] = None  # thermo: el_altitude_ft; NWP: convective_top_ft

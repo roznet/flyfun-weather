@@ -4,10 +4,12 @@ from weatherbrief.analysis.sounding.convective import (
     _effective_cape,
     assess_convective_nwp,
     assess_convective_thermo,
+    classify_regime,
     effective_cape,
 )
 from weatherbrief.models import (
     ConvectiveAssessment,
+    ConvectiveRegime,
     ConvectiveRisk,
     NWPCloudDiagnostics,
     ThermodynamicIndices,
@@ -160,6 +162,104 @@ def test_thermo_method_field():
     result = assess_convective_thermo(ThermodynamicIndices(cape_surface_jkg=100.0))
     assert result.method == "thermo"
     assert result.cover_pct is None
+
+
+# ---------------------------------------------------------------------------
+# classify_regime
+# ---------------------------------------------------------------------------
+
+
+def test_classify_regime_thermal():
+    """Low CAPE → THERMAL regardless of cap."""
+    assert classify_regime(150.0, -5.0) is ConvectiveRegime.THERMAL
+
+
+def test_classify_regime_weak_instability():
+    """Moderate CAPE → WEAK_INSTABILITY."""
+    assert classify_regime(600.0, -15.0) is ConvectiveRegime.WEAK_INSTABILITY
+
+
+def test_classify_regime_loaded_gun():
+    """High CAPE + significant cap → LOADED_GUN."""
+    assert classify_regime(1200.0, -80.0) is ConvectiveRegime.LOADED_GUN
+
+
+def test_classify_regime_active_weak_cap():
+    """High CAPE + weak cap → ACTIVE."""
+    assert classify_regime(1200.0, -10.0) is ConvectiveRegime.ACTIVE
+
+
+def test_classify_regime_active_unknown_cap():
+    """High CAPE with no CIN data → ACTIVE (not loaded gun)."""
+    assert classify_regime(1200.0, None) is ConvectiveRegime.ACTIVE
+
+
+def test_classify_regime_none_without_cape():
+    """No CAPE → no regime."""
+    assert classify_regime(None, -50.0) is None
+
+
+# ---------------------------------------------------------------------------
+# regime-aware scoring + drivers/suppressors
+# ---------------------------------------------------------------------------
+
+
+def test_loaded_gun_no_trigger_suppressed():
+    """High CAPE under a moderate cap with no ascent is held down one level.
+
+    This is the loaded-gun false-positive fix: previously CIN=-80 (not below
+    the -200 strong-cap threshold) left risk at HIGH.
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-80.0)
+    result = assess_convective_thermo(indices, omega_700_pa_s=None)
+    assert result.regime is ConvectiveRegime.LOADED_GUN
+    assert result.risk_level == ConvectiveRisk.MODERATE  # HIGH suppressed one level
+    assert any("loaded gun" in s for s in result.suppressors)
+
+
+def test_loaded_gun_with_ascent_keeps_risk():
+    """Large-scale ascent can erode the cap — risk stays at the CAPE level."""
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-80.0)
+    result = assess_convective_thermo(indices, omega_700_pa_s=-0.3)
+    assert result.regime is ConvectiveRegime.LOADED_GUN
+    assert result.risk_level == ConvectiveRisk.HIGH
+    assert any("ascent" in d for d in result.drivers)
+    assert not result.suppressors
+
+
+def test_active_regime_keeps_risk():
+    """High CAPE with a weak cap initiates readily — no suppression."""
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-10.0)
+    result = assess_convective_thermo(indices)
+    assert result.regime is ConvectiveRegime.ACTIVE
+    assert result.risk_level == ConvectiveRisk.HIGH
+    assert result.drivers
+
+
+def test_weak_instability_subsidence_adds_suppressor():
+    """Subsidence is noted as a suppressor but doesn't change the tier."""
+    indices = ThermodynamicIndices(cape_surface_jkg=600.0)
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.1)
+    assert result.regime is ConvectiveRegime.WEAK_INSTABILITY
+    assert result.risk_level == ConvectiveRisk.MODERATE
+    assert any("subsidence" in s for s in result.suppressors)
+
+
+def test_thermal_regime_annotated():
+    """Thermal regime is labelled and annotated even at low CAPE."""
+    indices = ThermodynamicIndices(cape_surface_jkg=120.0)
+    result = assess_convective_thermo(indices)
+    assert result.regime is ConvectiveRegime.THERMAL
+    assert result.risk_level == ConvectiveRisk.LOW  # 120 >= 50
+    assert any("hermal" in d for d in result.drivers)
+
+
+def test_regime_none_when_no_cape():
+    """Empty sounding → no regime, no drivers/suppressors."""
+    result = assess_convective_thermo(ThermodynamicIndices())
+    assert result.regime is None
+    assert result.drivers == []
+    assert result.suppressors == []
 
 
 # ---------------------------------------------------------------------------
