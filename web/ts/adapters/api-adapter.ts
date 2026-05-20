@@ -289,9 +289,15 @@ export async function fetchPack(flightId: string, timestamp: string): Promise<Pa
 }
 
 export interface RefreshAccepted {
-  status: 'queued' | 'already_fresh';
+  status: 'queued' | 'already_fresh' | 'realtime';
   flight_id: string;
   message: string;
+  // Tiered refresh gate detail (issue #167) — present when the request was
+  // gated to a real-time-only refresh or skipped entirely.
+  mode?: 'full' | 'realtime' | 'none';
+  reason?: string;
+  eta_useful?: string | null;
+  observations?: RouteObservations | null;
 }
 
 export async function refreshBriefing(flightId: string): Promise<RefreshAccepted> {
@@ -328,6 +334,17 @@ export interface RefreshStreamEvent {
   pack?: PackMeta;
   message?: string;
   elapsed_seconds?: number;
+  // Present on the `complete` event when the tiered refresh gate (issue #167)
+  // returned a no-op or a real-time-only refresh instead of a full pipeline run.
+  refresh_decision?: {
+    mode: 'full' | 'realtime' | 'none';
+    reason: string;
+    needed: number;
+    n_eligible: number;
+    n_updated: number;
+    days_out: number;
+    eta_useful?: string | null;
+  };
 }
 
 /**

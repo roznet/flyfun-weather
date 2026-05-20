@@ -233,7 +233,8 @@ def _flight_start_dt(row: FlightRow) -> datetime | None:
 def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
     """Run the briefing pipeline for a single flight (called in a thread)."""
     from weatherbrief.api.packs import (
-        _build_data_status, _finalize_refresh, _prepare_refresh, refresh_registry,
+        _build_data_status, _days_out_now, _finalize_refresh, _prepare_refresh,
+        decide_refresh, refresh_registry,
     )
     from weatherbrief.storage.flights import _row_to_flight, list_packs
 
@@ -241,13 +242,19 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
     try:
         flight = _row_to_flight(flight_row)
 
-        # Check freshness — skip if no source has fresher data covering the flight.
+        # Tiered refresh gate (issue #167): the scheduler applies the same
+        # full/none policy as the manual button but never the realtime
+        # fallback — live METAR/TAF is the verification loop's job.
         packs = list_packs(db, flight_row.id)
         if packs:
             latest = packs[0]
             status = _build_data_status(latest, flight)
-            if status.fresh:
-                logger.info("Auto-refresh: data is fresh for %s, skipping", flight_row.id)
+            decision = decide_refresh(status, _days_out_now(flight))
+            if decision.mode != "full":
+                logger.info(
+                    "Auto-refresh: gate=%s for %s (%s), skipping",
+                    decision.mode, flight_row.id, decision.reason,
+                )
                 return
 
         db_path = getattr(app_state, "db_path", "")

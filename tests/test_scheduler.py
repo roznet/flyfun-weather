@@ -467,3 +467,89 @@ class TestSecondsUntilNext30MinBoundary:
         """Offset must be in [0, 1800) — otherwise minute=30+offset overflows."""
         with pytest.raises(ValueError, match="offset_seconds"):
             _seconds_until_next_30min_boundary(bad_offset)
+
+
+# ---------------------------------------------------------------------------
+# Tiered refresh gate in the scheduler (issue #167)
+# ---------------------------------------------------------------------------
+
+class TestAutoRefreshGate:
+    """The scheduler applies decide_refresh's full/none policy but never the
+    realtime fallback — a non-"full" decision means skip (no pipeline run).
+    """
+
+    @patch("weatherbrief.api.packs._prepare_refresh")
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights._row_to_flight")
+    @patch("weatherbrief.scheduler.SessionLocal")
+    def test_skips_when_gate_not_full(
+        self, mock_session, mock_row_to_flight, mock_list,
+        mock_status, mock_decide, mock_exec, mock_prepare,
+    ):
+        from unittest.mock import MagicMock
+
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models import BriefingPackMeta
+        from weatherbrief.scheduler import _auto_refresh_one
+
+        mock_session.return_value = MagicMock()
+        mock_row_to_flight.return_value = SimpleNamespace(
+            departure_time=datetime.now(timezone.utc) + timedelta(hours=3),
+        )
+        mock_list.return_value = [BriefingPackMeta(
+            flight_id="f", fetch_timestamp=datetime.now(timezone.utc),
+            days_out=0, artifact_path="/tmp/pack",
+        )]
+        mock_status.return_value = DataStatus(fresh=True)
+        # Realtime is button-only; the scheduler must skip it.
+        mock_decide.return_value = RefreshDecision(
+            mode="realtime", reason="d0", needed=1, n_eligible=3, n_updated=0, days_out=0,
+        )
+
+        _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
+
+        mock_exec.assert_not_called()
+        mock_prepare.assert_not_called()
+
+    @patch("weatherbrief.scheduler._try_send_email")
+    @patch("weatherbrief.api.packs._finalize_refresh")
+    @patch("weatherbrief.api.packs._prepare_refresh")
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights._row_to_flight")
+    @patch("weatherbrief.scheduler.SessionLocal")
+    def test_runs_pipeline_when_full(
+        self, mock_session, mock_row_to_flight, mock_list,
+        mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize, mock_email,
+    ):
+        from unittest.mock import MagicMock
+
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models import BriefingPackMeta
+        from weatherbrief.scheduler import _auto_refresh_one
+
+        mock_session.return_value = MagicMock()
+        mock_row_to_flight.return_value = SimpleNamespace(
+            departure_time=datetime.now(timezone.utc) + timedelta(days=2),
+        )
+        mock_list.return_value = [BriefingPackMeta(
+            flight_id="f", fetch_timestamp=datetime.now(timezone.utc),
+            days_out=2, artifact_path="/tmp/pack",
+        )]
+        mock_status.return_value = DataStatus(fresh=False)
+        mock_decide.return_value = RefreshDecision(
+            mode="full", reason="all updated", needed=3, n_eligible=3, n_updated=3, days_out=2,
+        )
+        mock_prepare.return_value = (
+            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {},
+        )
+        mock_exec.return_value = MagicMock()
+
+        _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
+
+        mock_exec.assert_called_once()

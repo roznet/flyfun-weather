@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -159,3 +160,186 @@ class TestPrepareRefresh:
 
         assert options.fetch_gramet is False
         assert options.generate_llm_digest is False
+
+
+# --- decide_refresh (tiered refresh gate, issue #167) ---
+
+
+def _ms(state, covers=True, next_expected="2026-05-20T12:00:00+00:00"):
+    """Build a ModelStatus for gate tests."""
+    from weatherbrief.api.packs import ModelStatus
+
+    return ModelStatus(
+        source="m:openmeteo",
+        pack_init=1,
+        latest_available=2,
+        next_expected=next_expected,
+        state=state,
+        covers_horizon=covers,
+    )
+
+
+def _status(*models, next_expected_update=None):
+    """Build a DataStatus from (state, covers[, next_expected]) tuples."""
+    from weatherbrief.api.packs import DataStatus
+
+    out = {}
+    for i, spec in enumerate(models):
+        state, covers = spec[0], spec[1]
+        nx = spec[2] if len(spec) > 2 else "2026-05-20T12:00:00+00:00"
+        out[f"m{i}"] = _ms(state, covers, nx)
+    stale = [m for m, ms in out.items() if ms.state == "stale"]
+    return DataStatus(
+        fresh=not stale,
+        stale_models=stale,
+        models=out,
+        next_expected_update=next_expected_update,
+    )
+
+
+class TestRefreshThreshold:
+    """_refresh_threshold: {>=2: 3, 1: 2, 0: 1}."""
+
+    def test_thresholds(self):
+        from weatherbrief.api.packs import _refresh_threshold
+
+        assert _refresh_threshold(0) == 1
+        assert _refresh_threshold(1) == 2
+        assert _refresh_threshold(2) == 3
+        assert _refresh_threshold(5) == 3
+
+
+class TestDaysOutNow:
+    def test_days_out_from_departure(self):
+        from weatherbrief.api.packs import _days_out_now
+
+        flight = SimpleNamespace(
+            departure_time=datetime.now(timezone.utc) + timedelta(days=2, hours=1),
+        )
+        assert _days_out_now(flight) == 2
+
+    def test_d0(self):
+        from weatherbrief.api.packs import _days_out_now
+
+        flight = SimpleNamespace(departure_time=datetime.now(timezone.utc) + timedelta(hours=3))
+        assert _days_out_now(flight) == 0
+
+
+class TestDecideRefresh:
+    """Matrix from issue #167 acceptance criteria.
+
+    Threshold: D-0 needs 1 updated, D-1 needs 2, D-2+ needs 3 (capped by the
+    number of models whose latest run covers the flight horizon).
+    """
+
+    def test_d2_partial_updated_is_none(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(
+            ("stale", True),
+            ("stale", True),
+            ("awaiting", True, "2026-05-20T18:00:00+00:00"),
+        )
+        d = decide_refresh(status, 2)
+        assert d.mode == "none"
+        assert d.needed == 3
+        assert d.n_updated == 2
+        assert d.eta_useful == "2026-05-20T18:00:00+00:00"
+
+    def test_d2_all_updated_is_full(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("stale", True), ("stale", True), ("stale", True))
+        assert decide_refresh(status, 2).mode == "full"
+
+    def test_d1_two_updated_is_full(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("stale", True), ("stale", True), ("awaiting", True))
+        assert decide_refresh(status, 1).mode == "full"
+
+    def test_d1_one_updated_is_none(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("stale", True), ("awaiting", True), ("awaiting", True))
+        d = decide_refresh(status, 1)
+        assert d.mode == "none"
+        assert d.needed == 2
+
+    def test_d0_zero_updated_is_realtime(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("awaiting", True), ("awaiting", True), ("awaiting", True))
+        assert decide_refresh(status, 0).mode == "realtime"
+
+    def test_d0_one_updated_is_full(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("stale", True), ("awaiting", True), ("awaiting", True))
+        assert decide_refresh(status, 0).mode == "full"
+
+    def test_two_model_selection_caps_needed(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        # 2 covering models -> D-2 needs both (min(3, 2) == 2).
+        one = _status(("stale", True), ("awaiting", True))
+        d = decide_refresh(one, 2)
+        assert d.mode == "none"
+        assert d.needed == 2
+        both = _status(("stale", True), ("stale", True))
+        assert decide_refresh(both, 2).mode == "full"
+
+    def test_one_model_selection_always_full_when_updated(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("stale", True))
+        assert decide_refresh(status, 2).mode == "full"
+        assert decide_refresh(status, 5).mode == "full"
+
+    def test_one_model_not_updated_d2_none_d0_realtime(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("awaiting", True))
+        assert decide_refresh(status, 2).mode == "none"
+        assert decide_refresh(status, 0).mode == "realtime"
+
+    def test_non_covering_models_excluded_from_eligible(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        # Third model's latest run doesn't reach the flight -> not eligible.
+        status = _status(("stale", True), ("stale", True), ("current", False))
+        d = decide_refresh(status, 2)
+        assert d.n_eligible == 2
+        assert d.mode == "full"  # needed = min(3, 2) = 2, both eligible updated
+
+    def test_no_eligible_models_d2_none(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(
+            ("current", False), ("current", False),
+            next_expected_update="2026-05-21T06:00:00+00:00",
+        )
+        d = decide_refresh(status, 2)
+        assert d.mode == "none"
+        assert d.n_eligible == 0
+        assert d.eta_useful == "2026-05-21T06:00:00+00:00"
+
+    def test_no_eligible_models_d0_realtime(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("current", False))
+        assert decide_refresh(status, 0).mode == "realtime"
+
+    def test_eta_useful_is_kth_soonest_pending(self):
+        from weatherbrief.api.packs import decide_refresh
+
+        # D-2 needs 3, only 1 updated -> k = 2; pending next_expected sorted
+        # [15:00, 18:00] -> the 2nd soonest (18:00) is when threshold is met.
+        status = _status(
+            ("stale", True),
+            ("awaiting", True, "2026-05-20T18:00:00+00:00"),
+            ("awaiting", True, "2026-05-20T15:00:00+00:00"),
+        )
+        d = decide_refresh(status, 2)
+        assert d.mode == "none"
+        assert d.eta_useful == "2026-05-20T18:00:00+00:00"

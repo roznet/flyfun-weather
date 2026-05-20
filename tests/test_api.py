@@ -819,6 +819,104 @@ class TestRefreshEndpoint:
         finally:
             refresh_registry.unregister(sample_flight.id)
 
+    def _gate_pack(self, flight_id, days_out):
+        from weatherbrief.models import BriefingPackMeta
+
+        return BriefingPackMeta(
+            flight_id=flight_id,
+            fetch_timestamp=datetime.now(timezone.utc),
+            days_out=days_out,
+            artifact_path="/tmp/gate-pack",
+        )
+
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    def test_refresh_gate_none(
+        self, mock_list, mock_status, mock_decide, client, sample_flight,
+    ):
+        """A ``none`` decision returns 200 already_fresh with reason + ETA."""
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+
+        mock_list.return_value = [self._gate_pack(sample_flight.id, 2)]
+        mock_status.return_value = DataStatus(fresh=True)
+        mock_decide.return_value = RefreshDecision(
+            mode="none", reason="not enough models updated",
+            needed=3, n_eligible=3, n_updated=1, days_out=2,
+            eta_useful="2026-05-21T06:00:00+00:00",
+        )
+        client.app.state.db_path = "/fake/db"
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "already_fresh"
+            assert data["mode"] == "none"
+            assert data["eta_useful"] == "2026-05-21T06:00:00+00:00"
+            assert data["observations"] is None
+        finally:
+            client.app.state.db_path = ""
+
+    @patch("weatherbrief.tasks.route_weather.run_realtime_refresh")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    def test_refresh_gate_realtime(
+        self, mock_list, mock_status, mock_decide, mock_rt, client, sample_flight,
+    ):
+        """A ``realtime`` decision runs the cheap path and returns observations."""
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models.observations import RouteObservations
+
+        mock_list.return_value = [self._gate_pack(sample_flight.id, 0)]
+        mock_status.return_value = DataStatus(fresh=True)
+        mock_decide.return_value = RefreshDecision(
+            mode="realtime", reason="D-0 live METAR/TAF",
+            needed=1, n_eligible=3, n_updated=0, days_out=0,
+        )
+        mock_rt.return_value = RouteObservations(
+            corridor_nm=30.0, fetch_time=datetime.now(timezone.utc),
+            airports_found=2, airports_with_metar=2, airports_with_taf=1, airports=[],
+        )
+        client.app.state.db_path = "/fake/db"
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "realtime"
+            assert data["mode"] == "realtime"
+            assert data["observations"]["airports_found"] == 2
+            mock_rt.assert_called_once()
+        finally:
+            client.app.state.db_path = ""
+
+    @patch("weatherbrief.tasks.route_weather.run_realtime_refresh")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    def test_refresh_gate_realtime_failure_degrades_to_noop(
+        self, mock_list, mock_status, mock_decide, mock_rt, client, sample_flight,
+    ):
+        """If the real-time path fails, the request degrades to a 200 no-op."""
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+
+        mock_list.return_value = [self._gate_pack(sample_flight.id, 0)]
+        mock_status.return_value = DataStatus(fresh=True)
+        mock_decide.return_value = RefreshDecision(
+            mode="realtime", reason="D-0 live METAR/TAF",
+            needed=1, n_eligible=3, n_updated=0, days_out=0,
+        )
+        mock_rt.side_effect = RuntimeError("aviationweather down")
+        client.app.state.db_path = "/fake/db"
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "already_fresh"
+            assert data["observations"] is None
+        finally:
+            client.app.state.db_path = ""
+
 
 class TestRefreshStreamEncoder:
     """Guard the JSON-encoder path used by ``/refresh/stream`` SSE events.

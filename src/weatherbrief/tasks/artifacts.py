@@ -210,6 +210,28 @@ def load_forecasts(pack_dir: Path) -> dict | None:
     return _load_json_with_fallback(pack_dir, "forecasts.json")
 
 
+def parse_target_time(snapshot_data: dict) -> datetime:
+    """Extract the flight target datetime from snapshot/briefing JSON.
+
+    Returns a timezone-aware UTC datetime.  Old packs that stored naive
+    timestamps are promoted to aware UTC so comparisons against both old
+    (naive ``HourlyForecast.time``) and new (aware) data work correctly.
+    """
+    # Prefer departure_time (new packs)
+    dt_str = snapshot_data.get("departure_time")
+    if dt_str:
+        dt = datetime.fromisoformat(dt_str)
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    # Fallback: first analysis target_time
+    analyses = snapshot_data.get("analyses", [])
+    if analyses and "target_time" in analyses[0]:
+        dt = datetime.fromisoformat(analyses[0]["target_time"])
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    target_date = snapshot_data.get("target_date", "")
+    year, month, day = (int(x) for x in target_date.split("-"))
+    return datetime(year, month, day, 9, tzinfo=timezone.utc)
+
+
 # ---------------------------------------------------------------------------
 # Alt advisory artifacts
 # ---------------------------------------------------------------------------
