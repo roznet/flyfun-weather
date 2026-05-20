@@ -292,9 +292,10 @@ export interface RefreshAccepted {
   status: 'queued' | 'already_fresh' | 'realtime';
   flight_id: string;
   message: string;
-  // Tiered refresh gate detail (issue #167) — present when the request was
-  // gated to a real-time-only refresh or skipped entirely.
-  mode?: 'full' | 'realtime' | 'none';
+  // Tiered refresh gate detail — present when the request was gated to a
+  // real-time-only refresh or skipped entirely (never 'full' here; a full
+  // decision proceeds to the pipeline instead).
+  mode?: 'realtime' | 'none';
   reason?: string;
   eta_useful?: string | null;
   observations?: RouteObservations | null;
@@ -334,7 +335,7 @@ export interface RefreshStreamEvent {
   pack?: PackMeta;
   message?: string;
   elapsed_seconds?: number;
-  // Present on the `complete` event when the tiered refresh gate (issue #167)
+  // Present on the `complete` event when the tiered refresh gate
   // returned a no-op or a real-time-only refresh instead of a full pipeline run.
   refresh_decision?: {
     mode: 'full' | 'realtime' | 'none';

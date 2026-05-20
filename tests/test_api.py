@@ -912,8 +912,88 @@ class TestRefreshEndpoint:
             resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
             assert resp.status_code == 200
             data = resp.json()
+            # status AND mode both degrade so they don't disagree.
             assert data["status"] == "already_fresh"
+            assert data["mode"] == "none"
             assert data["observations"] is None
+        finally:
+            client.app.state.db_path = ""
+
+    @patch("weatherbrief.api.packs.run_realtime_refresh")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    @patch("weatherbrief.api.packs.SessionLocal")
+    def test_refresh_stream_realtime_failure_degrades_to_noop(
+        self, mock_sl, mock_list, mock_status, mock_decide, mock_rt,
+        client, app_db, sample_flight,
+    ):
+        """SSE realtime failure must report mode="none" + null observations,
+        so a stream consumer can't mistake the no-op for a successful refresh.
+
+        The stream endpoint uses ``SessionLocal()`` directly (not the get_db
+        override), so patch it to the test session factory.
+        """
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+
+        mock_sl.side_effect = app_db  # SessionLocal() -> test session w/ sample_flight
+        mock_list.return_value = [self._gate_pack(sample_flight.id, 0)]
+        mock_status.return_value = DataStatus(fresh=True)
+        mock_decide.return_value = RefreshDecision(
+            mode="realtime", reason="D-0 live METAR/TAF",
+            needed=1, n_eligible=3, n_updated=0, days_out=0,
+        )
+        mock_rt.side_effect = RuntimeError("aviationweather down")
+        client.app.state.db_path = "/fake/db"
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh/stream")
+            assert resp.status_code == 200
+            assert "event: complete" in resp.text
+            data_line = [
+                ln[6:] for ln in resp.text.splitlines() if ln.startswith("data: ")
+            ][-1]
+            event = json.loads(data_line)
+            assert event["refresh_decision"]["mode"] == "none"
+            assert event["observations"] is None
+        finally:
+            client.app.state.db_path = ""
+
+    @patch("weatherbrief.api.packs.run_realtime_refresh")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.api.packs.list_packs")
+    @patch("weatherbrief.api.packs.SessionLocal")
+    def test_refresh_stream_realtime_success_carries_observations(
+        self, mock_sl, mock_list, mock_status, mock_decide, mock_rt,
+        client, app_db, sample_flight,
+    ):
+        """SSE realtime success carries the fresh observations on the event,
+        matching the non-streaming response shape.
+        """
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models.observations import RouteObservations
+
+        mock_sl.side_effect = app_db
+        mock_list.return_value = [self._gate_pack(sample_flight.id, 0)]
+        mock_status.return_value = DataStatus(fresh=True)
+        mock_decide.return_value = RefreshDecision(
+            mode="realtime", reason="D-0 live METAR/TAF",
+            needed=1, n_eligible=3, n_updated=0, days_out=0,
+        )
+        mock_rt.return_value = RouteObservations(
+            corridor_nm=30.0, fetch_time=datetime.now(timezone.utc),
+            airports_found=2, airports_with_metar=2, airports_with_taf=1, airports=[],
+        )
+        client.app.state.db_path = "/fake/db"
+        try:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh/stream")
+            assert resp.status_code == 200
+            data_line = [
+                ln[6:] for ln in resp.text.splitlines() if ln.startswith("data: ")
+            ][-1]
+            event = json.loads(data_line)
+            assert event["refresh_decision"]["mode"] == "realtime"
+            assert event["observations"]["airports_found"] == 2
         finally:
             client.app.state.db_path = ""
 

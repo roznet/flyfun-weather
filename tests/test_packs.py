@@ -210,18 +210,19 @@ class TestRefreshThreshold:
 
 
 class TestDaysOutNow:
+    # _days_out_now is date-based, so pin the hour to noon to avoid a flaky
+    # day-rollover when the suite runs near UTC midnight.
     def test_days_out_from_departure(self):
         from weatherbrief.api.packs import _days_out_now
 
-        flight = SimpleNamespace(
-            departure_time=datetime.now(timezone.utc) + timedelta(days=2, hours=1),
-        )
+        depart = (datetime.now(timezone.utc) + timedelta(days=2)).replace(hour=12)
+        flight = SimpleNamespace(departure_time=depart)
         assert _days_out_now(flight) == 2
 
     def test_d0(self):
         from weatherbrief.api.packs import _days_out_now
 
-        flight = SimpleNamespace(departure_time=datetime.now(timezone.utc) + timedelta(hours=3))
+        flight = SimpleNamespace(departure_time=datetime.now(timezone.utc).replace(hour=12))
         assert _days_out_now(flight) == 0
 
 

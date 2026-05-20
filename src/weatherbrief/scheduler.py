@@ -242,7 +242,7 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
     try:
         flight = _row_to_flight(flight_row)
 
-        # Tiered refresh gate (issue #167): the scheduler applies the same
+        # Tiered refresh gate: the scheduler applies the same
         # full/none policy as the manual button but never the realtime
         # fallback — live METAR/TAF is the verification loop's job.
         packs = list_packs(db, flight_row.id)

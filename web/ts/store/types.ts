@@ -98,7 +98,7 @@ export interface ModelStatus {
   next_expected: string;
   published_at?: string | null;
   state: "current" | "stale" | "awaiting" | "delayed";
-  // True when this source's latest run reaches the flight horizon (issue #167).
+  // True when this source's latest run reaches the flight horizon.
   covers_horizon?: boolean;
 }
 

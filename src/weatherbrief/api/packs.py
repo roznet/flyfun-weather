@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -222,7 +222,7 @@ class ModelStatus(BaseModel):
     published_at: str | None = None
     state: str  # "current" | "stale" | "awaiting" | "delayed"
     # True when this source's latest available run reaches the flight's end
-    # time.  Drives the tiered refresh gate (issue #167): only models whose
+    # time.  Drives the tiered refresh gate: only models whose
     # latest run covers the flight count toward the refresh threshold.
     covers_horizon: bool = False
 
@@ -618,7 +618,7 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
 
 
 # ---------------------------------------------------------------------------
-# Tiered refresh gating (issue #167)
+# Tiered refresh gating
 # ---------------------------------------------------------------------------
 
 # How many *eligible* models (latest run covers the flight) must have a newer
@@ -644,9 +644,9 @@ def _days_out_now(flight: Flight) -> int:
 
 
 class RefreshDecision(BaseModel):
-    """Outcome of the tiered refresh gate (issue #167)."""
+    """Outcome of the tiered refresh gate."""
 
-    mode: str  # "full" | "realtime" | "none"
+    mode: Literal["full", "realtime", "none"]
     reason: str
     needed: int          # models-updated threshold, capped by n_eligible
     n_eligible: int      # selected models whose latest run covers the flight
@@ -659,7 +659,7 @@ class RefreshDecision(BaseModel):
 
 def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
     """Decide whether a manual refresh runs the full pipeline, a cheap
-    real-time observations refresh, or nothing (issue #167 Part B).
+    real-time observations refresh, or nothing.
 
     Pure function of the per-model freshness states already computed by
     :func:`_build_data_status` (which encodes flight-horizon coverage in each
@@ -1260,12 +1260,13 @@ def _finalize_refresh(
 class RefreshAccepted(BaseModel):
     """Response for accepted (queued) or gated refresh requests."""
 
-    status: str  # "queued" | "already_fresh" | "realtime"
+    status: Literal["queued", "already_fresh", "realtime"]
     flight_id: str
     message: str
-    # Tiered refresh gate detail (issue #167) — present when the request was
-    # gated to a real-time-only refresh or skipped entirely.
-    mode: str | None = None  # "full" | "realtime" | "none"
+    # Tiered refresh gate detail — present when the request was gated to a
+    # real-time-only refresh or skipped entirely.  Only ever "realtime" or
+    # "none" here (the "full" decision proceeds to the pipeline instead).
+    mode: Literal["realtime", "none"] | None = None
     reason: str | None = None
     eta_useful: str | None = None  # ISO wallclock of next useful model update
     observations: RouteObservations | None = None  # updated obs (realtime mode)
@@ -1325,7 +1326,7 @@ async def refresh_briefing(
     if not db_path:
         raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
-    # Tiered refresh gate (issue #167): full -> pipeline, realtime -> cheap
+    # Tiered refresh gate: full -> pipeline, realtime -> cheap
     # METAR/TAF refresh, none -> 200 no-op (skip for historical flights).
     if not force and not is_historical:
         packs = list_packs(db, flight_id)
@@ -1340,24 +1341,26 @@ async def refresh_briefing(
                 )
                 observations = None
                 resp_status = "already_fresh"
+                resp_mode = decision.mode
                 if decision.mode == "realtime":
-                    resp_status = "realtime"
                     try:
                         observations = await asyncio.to_thread(
                             run_realtime_refresh, Path(latest.artifact_path), db_path,
                         )
+                        resp_status = "realtime"
                     except Exception:
+                        # Degrade to a no-op so status and mode agree.
                         logger.warning(
                             "Real-time refresh failed for %s — returning no-op",
                             flight_id, exc_info=True,
                         )
-                        resp_status = "already_fresh"
+                        resp_mode = "none"
                 return Response(
                     content=RefreshAccepted(
                         status=resp_status,
                         flight_id=flight_id,
                         message=decision.reason,
-                        mode=decision.mode,
+                        mode=resp_mode,
                         reason=decision.reason,
                         eta_useful=decision.eta_useful,
                         observations=observations,
@@ -1483,7 +1486,7 @@ async def refresh_briefing_stream(
         if not db_path:
             raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
-        # Tiered refresh gate (issue #167): full -> pipeline, realtime -> cheap
+        # Tiered refresh gate: full -> pipeline, realtime -> cheap
         # METAR/TAF refresh, none -> complete no-op (skip for historical).
         if not force and not is_historical:
             packs = list_packs(db, flight_id)
@@ -1497,6 +1500,7 @@ async def refresh_briefing_stream(
                         flight_id, decision.mode, decision.reason,
                     )
                     obs_payload = None
+                    effective_mode = decision.mode
                     if decision.mode == "realtime":
                         try:
                             new_obs = await asyncio.to_thread(
@@ -1504,12 +1508,16 @@ async def refresh_briefing_stream(
                             )
                             obs_payload = new_obs.model_dump(mode="json")
                         except Exception:
+                            # Degrade to a no-op so consumers don't treat the
+                            # null observations as a successful realtime refresh.
                             logger.warning(
                                 "Real-time refresh failed for %s (stream) — completing no-op",
                                 flight_id, exc_info=True,
                             )
+                            effective_mode = "none"
                     pack_resp = _meta_to_response(latest, data_status=status).model_dump(mode="json")
                     decision_payload = decision.model_dump(mode="json")
+                    decision_payload["mode"] = effective_mode
 
                     async def gate_generator() -> AsyncGenerator[str, None]:
                         event = {

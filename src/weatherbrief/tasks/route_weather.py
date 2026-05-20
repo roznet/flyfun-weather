@@ -522,7 +522,7 @@ def run_realtime_refresh(
     """Re-fetch METAR/TAF and recompute the obs-vs-model comparison from a
     pack's *stored* forecasts, then patch ``briefing.json`` in place.
 
-    This is the cheap real-time path (issue #167 Part A): no model fetch, no
+    This is the cheap real-time path: no model fetch, no
     GRIB, no LLM.  Shared by the observations refresh button endpoint and the
     tiered refresh gate's ``realtime`` mode.
 
