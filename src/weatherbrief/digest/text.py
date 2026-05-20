@@ -229,7 +229,7 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
         # Convective assessment
         if sa.convective and sa.convective.risk_level != ConvectiveRisk.NONE:
             conv = sa.convective
-            regime = f" [{conv.regime.value}]" if conv.regime else ""
+            regime = f" [{conv.regime.label}]" if conv.regime else ""
             lines.append(f"  Convective [{model}]: {conv.risk_level.value.upper()}{regime}")
             for drv in conv.drivers:
                 lines.append(f"    + {drv}")

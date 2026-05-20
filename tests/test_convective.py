@@ -199,6 +199,43 @@ def test_classify_regime_none_without_cape():
     assert classify_regime(None, -50.0) is None
 
 
+# Boundary cases at the exact regime cutoffs (CAPE 300/800, CIN -50).
+# Cutoffs are inclusive on the high side (cape >= 800, cin <= -50) and
+# exclusive on the THERMAL side (cape < 300).
+
+
+def test_classify_regime_cape_high_boundary_loaded_gun():
+    """CAPE exactly at HIGH cutoff with cap at CIN cutoff → LOADED_GUN."""
+    assert classify_regime(800.0, -50.0) is ConvectiveRegime.LOADED_GUN
+
+
+def test_classify_regime_cin_just_weaker_than_cap_is_active():
+    """CAPE high but cap just weaker than the CIN cutoff → ACTIVE, not LOADED_GUN."""
+    assert classify_regime(800.0, -49.0) is ConvectiveRegime.ACTIVE
+
+
+def test_classify_regime_cape_just_below_high_is_weak_instability():
+    """CAPE one below the HIGH cutoff stays WEAK_INSTABILITY even under a strong cap."""
+    assert classify_regime(799.0, -80.0) is ConvectiveRegime.WEAK_INSTABILITY
+
+
+def test_classify_regime_cape_low_boundary_is_weak_instability():
+    """CAPE exactly at the LOW cutoff is WEAK_INSTABILITY, not THERMAL."""
+    assert classify_regime(300.0, -10.0) is ConvectiveRegime.WEAK_INSTABILITY
+
+
+def test_classify_regime_cape_just_below_low_is_thermal():
+    """CAPE one below the LOW cutoff is THERMAL."""
+    assert classify_regime(299.0, -10.0) is ConvectiveRegime.THERMAL
+
+
+def test_regime_label_is_title_case():
+    """label renders snake_case enum values as human-readable title case."""
+    assert ConvectiveRegime.LOADED_GUN.label == "Loaded Gun"
+    assert ConvectiveRegime.WEAK_INSTABILITY.label == "Weak Instability"
+    assert ConvectiveRegime.ACTIVE.label == "Active"
+
+
 # ---------------------------------------------------------------------------
 # regime-aware scoring + drivers/suppressors
 # ---------------------------------------------------------------------------

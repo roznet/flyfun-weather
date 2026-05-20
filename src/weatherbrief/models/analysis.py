@@ -342,6 +342,11 @@ class ConvectiveRegime(str, Enum):
     LOADED_GUN = "loaded_gun"              # high CAPE, strong capping inversion
     ACTIVE = "active"                      # high CAPE, weak/absent cap
 
+    @property
+    def label(self) -> str:
+        """Human-readable title-case label for digests/UI (e.g. 'Loaded Gun')."""
+        return self.value.replace("_", " ").title()
+
 
 class VerticalMotionClass(str, Enum):
     """Classification of the vertical motion profile."""

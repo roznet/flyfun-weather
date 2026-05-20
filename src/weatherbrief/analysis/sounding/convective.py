@@ -192,7 +192,10 @@ def _regime_explanation(
     subsidence = omega_700_pa_s is not None and omega_700_pa_s >= OMEGA_SUBSIDENCE
 
     if regime is ConvectiveRegime.LOADED_GUN:
-        # classify_regime guarantees cape >= REGIME_CAPE_HIGH and cin <= REGIME_CIN_CAP
+        # classify_regime guarantees cape >= REGIME_CAPE_HIGH and cin <= REGIME_CIN_CAP,
+        # so cin is non-None here — assert it so a future inconsistent caller fails
+        # loudly rather than hitting a TypeError in the cin format strings below.
+        assert cin is not None
         drivers.append(f"High instability (CAPE {cape:.0f} J/kg)")
         if ascent:
             drivers.append(
