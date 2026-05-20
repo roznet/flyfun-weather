@@ -104,16 +104,18 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 | > 50 | LOW |
 | > 0 + LFC + EL | MARGINAL |
 
-- **Regime discrimination** (`classify_regime(cape, cin)` → `ConvectiveRegime`): the base CAPE risk is refined per regime, so a single CAPE threshold no longer misjudges a capped "loaded gun" or mislabels thermally driven convection:
+- **Regime discrimination** (`classify_regime(cape, cin)` → `ConvectiveRegime`, classified from **potential** CAPE = `_effective_cape()` = max(SB,MU,ML)): the base CAPE risk is refined per regime, so a single CAPE threshold no longer misjudges a capped "loaded gun" or mislabels thermally driven convection:
 
 | Regime | Boundary | Risk behaviour |
 |--------|----------|----------------|
-| **THERMAL** | CAPE < 300 | Base CAPE risk kept; labelled + annotated only (full thermal scoring needs PBLH / terrain / diurnal — deferred) |
-| **WEAK_INSTABILITY** | 300 ≤ CAPE < 800 | Base CAPE risk kept; ascent/subsidence noted as driver/suppressor |
-| **LOADED_GUN** | CAPE ≥ 800 & CIN ≤ −50 | ω₇₀₀ ascent (≤ −0.1 Pa/s) → risk kept (cap may erode). Omega present, no ascent → **down one level** (cap holds). Omega **unavailable** → risk kept with an honest "no ascent data" note, **except** a very strong cap (CIN < −200) which suppresses regardless. Fixes the false-positive HIGH without downgrading an unassessable loaded gun. ω₇₀₀ read from `derived_levels` (now populated in `compute_derived_levels_core`, the lite pass where the assessment runs) |
-| **ACTIVE** | CAPE ≥ 800 & CIN > −50 | Base CAPE risk kept; convection initiates readily |
+| **THERMAL** | CAPE < 300 | Potential CAPE risk kept; labelled + annotated only (full thermal scoring needs PBLH / terrain / diurnal — deferred) |
+| **WEAK_INSTABILITY** | 300 ≤ CAPE < 800 | Potential CAPE risk kept; ascent/subsidence noted as driver/suppressor |
+| **LOADED_GUN** | CAPE ≥ 800 & CIN ≤ −50 | Scored on **potential** CAPE (never softened by low ML — that is the dangerous case). ω₇₀₀ ascent (≤ −0.1 Pa/s) → risk kept (cap may erode). Omega present, no ascent → **down one level** (cap holds). Omega **unavailable** → risk kept with an honest "no ascent data" note, **except** a very strong cap (CIN < −200) which suppresses regardless. ω₇₀₀ read from `derived_levels` (populated in `compute_derived_levels_core`, the lite pass where the assessment runs) |
+| **ACTIVE** | CAPE ≥ 800 & CIN > −50 | Scored on **realizable ML-CAPE** (`_realizable_risk`), floored at **one level below** the potential tier, **unless** ω₇₀₀ ascent keeps the full potential tier or ML is unavailable (stay conservative). This is where surface CAPE over-reads a dry, poorly-mixed column — see meteorology-decisions.md §4 |
 
-- **Generic CIN suppression:** preserved for THERMAL / WEAK_INSTABILITY only (CIN < −200 J/kg → one level down). LOADED_GUN / ACTIVE model the cap themselves via the regime logic above.
+- **Elevated-convection flag:** `elevated_convection` (bool + driver) fires when MU − SB ≥ 200 J/kg & MU ≥ 300 — most-unstable parcel above the surface, convection possible aloft. Additive warning, independent of the surface tier and regime.
+- **Generic CIN suppression:** preserved for THERMAL / WEAK_INSTABILITY only (CIN < −200 J/kg → one level down). LOADED_GUN models the cap via the omega gate above; ACTIVE is weak-cap by definition and tempered on ML instead.
+- **CAPE parcels:** MU/ML-CAPE are computed in `compute_indices_core` (not `_extended`) so the tier — run in the lite pass, used by briefings **and** standalone verification — always sees all three variants.
 - **Explanation outputs:** `regime`, `drivers` (factors raising risk), and `suppressors` (factors holding it down) are populated and consumed by `digest/prompt_builder.py` (LLM narrative) and `digest/text.py` (plain-text digest). They are serialized into `briefing.json` but not yet rendered in the web/iOS UI.
 - **Severity modifiers:** shear >40kt (supercell), >25kt (multicell), high freezing + CAPE >1000 (hail), K >35, TT >55, LI < −6
 - **Tower bounds:** base = LFC (LCL fallback), top = EL

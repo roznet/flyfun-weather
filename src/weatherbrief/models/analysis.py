@@ -588,6 +588,7 @@ class ConvectiveAssessment(BaseModel):
     regime: Optional[ConvectiveRegime] = None  # dominant regime used for scoring
     drivers: list[str] = Field(default_factory=list)      # factors raising risk
     suppressors: list[str] = Field(default_factory=list)  # factors holding risk down
+    elevated_convection: bool = False  # MU parcel well above surface (convection aloft)
     # Unified interface fields (populated by both thermo and NWP methods)
     base_ft: Optional[float] = None  # thermo: lfc_altitude_ft (or lcl fallback); NWP: convective_base_ft
     top_ft: Optional[float] = None  # thermo: el_altitude_ft; NWP: convective_top_ft

@@ -124,6 +124,23 @@ def compute_indices_core(profile: PreparedProfile) -> CoreIndicesResult:
         except Exception:
             logger.debug("Surface CAPE/CIN failed", exc_info=True)
 
+    # --- Most-unstable CAPE (elevated convection) ---
+    # In core, not extended: the convective regime tier scores on ML-CAPE and
+    # flags elevated instability from MU-CAPE, so both must be available wherever
+    # convective risk is assessed (briefing and standalone verification alike).
+    try:
+        mu_cape, _ = mpcalc.most_unstable_cape_cin(p, t, td)
+        idx.cape_most_unstable_jkg = round(_mag(mu_cape.to("J/kg")), 1)
+    except Exception:
+        logger.debug("MU CAPE failed", exc_info=True)
+
+    # --- Mixed-layer CAPE (realizable, well-mixed boundary layer) ---
+    try:
+        ml_cape, _ = mpcalc.mixed_layer_cape_cin(p, t, td)
+        idx.cape_mixed_layer_jkg = round(_mag(ml_cape.to("J/kg")), 1)
+    except Exception:
+        logger.debug("ML CAPE failed", exc_info=True)
+
     # --- Lifted index ---
     if parcel is not None:
         try:
@@ -164,28 +181,15 @@ def compute_indices_extended(
 ) -> None:
     """Compute extended indices on top of core results (mutates *idx* in-place).
 
-    Adds MU-CAPE, ML-CAPE, Showalter, K-index, Total Totals,
-    precipitable water, and bulk wind shear.  These are used by the full
-    briefing pipeline (icing severity modifiers, cloud top uncertainty,
-    Skew-T display) but not needed for standalone verification scoring.
+    Adds Showalter, K-index, Total Totals, precipitable water, and bulk wind
+    shear.  These are used by the full briefing pipeline (icing severity
+    modifiers, cloud top uncertainty, Skew-T display) but not needed for
+    standalone verification scoring.  (MU-CAPE and ML-CAPE moved to
+    ``compute_indices_core`` — the convective tier needs them everywhere.)
     """
     p = profile.pressure
     t = profile.temperature
     td = profile.dewpoint
-
-    # --- Most-unstable CAPE ---
-    try:
-        mu_cape, _ = mpcalc.most_unstable_cape_cin(p, t, td)
-        idx.cape_most_unstable_jkg = round(_mag(mu_cape.to("J/kg")), 1)
-    except Exception:
-        logger.debug("MU CAPE failed", exc_info=True)
-
-    # --- Mixed-layer CAPE ---
-    try:
-        ml_cape, _ = mpcalc.mixed_layer_cape_cin(p, t, td)
-        idx.cape_mixed_layer_jkg = round(_mag(ml_cape.to("J/kg")), 1)
-    except Exception:
-        logger.debug("ML CAPE failed", exc_info=True)
 
     # --- Showalter index ---
     try:

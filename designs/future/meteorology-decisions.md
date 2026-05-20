@@ -397,3 +397,150 @@ anchoring is the correct fix for averaged data.
 - `src/weatherbrief/fetch/grib/__init__.py` — wires `gfs_init` through
   `propagate_all` and invokes `apply_gfs_rh_condensate_gate` after
   enrichment completes.
+
+---
+
+## 4. Convective risk: regime discrimination, realizable CAPE, and the DD/NWP boundary
+
+**Date:** 2026-05-20
+**Status:** Implemented (regime discrimination: PR #165, merged. Realizable-CAPE
+tier + elevated flag: this change. DD-vs-NWP advisory comment: planned.)
+**Context:** Investigation of `lsgs_odina_srn_adosa_chi_pul_ldlo-2026-05-25`
+(Po Valley, 25 May). At pt15 the surface-based CAPE was high (GFS SB/MU 1125,
+ECMWF 661 J/kg) and our convective rating read HIGH/MODERATE, yet **all three
+models produced zero convective precipitation all day** — GFS CAPE climbed to
+~3000 J/kg by 18 Z with no precip. A classic dry, capped, unforced air mass:
+high latent instability the models never realize.
+
+### Background — why surface CAPE over-reads
+
+Our convective tier was scored on `effective_cape = max(SB, MU, ML)` against
+European-calibrated thresholds (50 LOW / 300 MOD / 1000 HIGH / 2000 EXTREME),
+modulated only by a strong-CIN suppression at CIN < −200. Since MU ≥ SB ≥ ML,
+`max()` is effectively MU-CAPE — the *most optimistic* parcel. It ignores three
+things the model's own convective scheme accounts for: the diurnal/forcing
+*trigger*, the *cap* (CIN), and dry-mid-level *entrainment*. So a moist shallow
+boundary layer under a dry mid-troposphere (SB high, mid-levels 20–30 % RH)
+reads HIGH even though the column won't convect.
+
+### The three CAPE parcels (and the Europe point)
+
+- **SB** (surface-based): lift the surface parcel. Sensitive to a thin moist skin.
+- **ML** (mixed-layer, lowest ~100 hPa): lift the layer mean — what a well-mixed
+  daytime boundary layer actually realizes. The **Europe-preferred** measure for
+  surface-based convection (ESSL/ESTOFEX), and European severe convection occurs
+  at much lower CAPE than the US (our thresholds already reflect this).
+- **MU** (most-unstable, max-θe parcel in lowest ~300 hPa): captures **elevated**
+  convection (instability above the boundary layer). MU ≥ SB always; MU = SB ⇒
+  surface-rooted.
+
+For aviation at cruise both matter: ML answers "will surface storms initiate",
+MU answers "is there an unstable layer aloft I could meet at altitude".
+
+### The decisions
+
+**(a) Regime discrimination (PR #165).** Classify from potential CAPE + CIN:
+THERMAL (<300), WEAK_INSTABILITY (300–800), ACTIVE (≥800, cap weaker than −50),
+LOADED_GUN (≥800, CIN ≤ −50). LOADED_GUN is held down one level unless 700 hPa
+ω shows large-scale ascent (≤ −0.1 Pa/s) that could erode the cap; an
+unassessable cap (no ω) is *not* downgraded.
+
+**(b) Realizable-CAPE tier, scoped to ACTIVE only (this change).** The ACTIVE
+regime is scored on **ML-CAPE** (realizable), floored at **one level below** the
+potential tier, and **not** tempered when ω₇₀₀ shows ascent (ascent can realize
+the latent CAPE). LOADED_GUN keeps scoring on **potential** — the cap, not poor
+mixing, holds it, and a capped gun must never be dismissed on low ML (that is
+the dangerous case). WEAK_INSTABILITY / THERMAL keep the potential tier with the
+generic strong-CIN suppression.
+
+**(c) Elevated-convection flag (this change).** `elevated_convection` fires when
+MU − SB ≥ 200 J/kg and MU ≥ 300 — the most-unstable parcel sits above the
+surface. It is an **additive warning** (driver string + bool), independent of
+the surface tier, surfaced regardless of regime.
+
+**(d) DD stays pure; DD-vs-NWP comparison lives in the advisory (planned).** The
+thermo tier uses only **DD-derived** quantities (parcel CAPE variants, cloud
+from RH) and **raw model state** (RH, ω — the inputs the DD track derives from).
+Model-native *parameterized* diagnostics — `nwp_cape_jkg`, convective-cloud
+cover — are deliberately **kept out of the tier**. The DD-vs-NWP divergence
+(e.g. our parcel CAPE ≫ the model's own CAPE: GFS 1125 vs 470, ECMWF 661 vs 96)
+is a real "model not realizing it" signal, but it is surfaced as a **comment in
+the advisory layer** (`dd_nwp_agreement`), not blended into the per-model thermo
+tier. Mixing the two tracks would blur a line the codebase intentionally draws.
+
+### Reasoning
+
+1. **ML is the honest realizable measure**; on the motivating case it drops GFS
+   pt15 from HIGH (potential 1125) to MODERATE (ML 563), matching the model's
+   zero precip. The SB→ML collapse *is* the dry/shallow-moisture story.
+2. **Loaded gun on potential, safety asymmetry.** Under-warning (calling a real
+   loaded gun "fine") is worse than over-warning. Hence: one-level cap on any
+   downgrade, ascent-protection, ML absent ⇒ stay conservative, and loaded-gun
+   never softened by ML.
+3. **Scope to ACTIVE, not all regimes (Option B over A).** Because ML ≪ SB
+   almost everywhere, ML-scoring *all* non-loaded-gun regimes pulled the whole
+   route down ~one level (the one-level floor dominated, since ML alone is
+   usually too low to set the tier). That is a sweeping recalibration disguised
+   as a fix. Scoping to ACTIVE targets the surface-CAPE false-HIGH directly and
+   warns more elsewhere — consistent with the safety asymmetry.
+4. **Keeping nwp_cape out of the tier** preserves two independent derivations so
+   their disagreement remains a usable diagnostic; folding it in would
+   double-count and erase the signal `dd_nwp_agreement` exists to expose.
+
+### Architecture note (necessary enabler)
+
+MU-CAPE and ML-CAPE were computed in `compute_indices_extended` (heavy pass),
+which runs *after* the convective assessment in `analyze_sounding_lite`. So the
+tier saw `ml = mu = None` and silently scored on SB. Moved both into
+`compute_indices_core` so the single convective call — used by **both** the
+briefing pipeline and standalone verification — sees them. Consequence: the
+convective tier now genuinely uses `max(SB, MU, ML)` as always intended (a few
+low-CAPE points tick up where MU > SB), and standalone verification scores the
+same logic the briefing uses.
+
+### What we decided against
+
+- **NWP-divergence gate inside the thermo tier** — rejected; mixes DD and NWP
+  (decision d). The comparison belongs in the advisory.
+- **Pure ML for the whole tier** — rejected; erases loaded-gun warnings (ML is
+  low precisely when a cap is holding back high potential).
+- **ML-tempering across all regimes (Option A)** — rejected; route-wide softening
+  (reasoning 3). Revisit only as part of a deliberate threshold recalibration.
+
+### Deferred / calibration items
+
+- **`OMEGA_SUBSIDENCE = 0.05 Pa/s` likely too sensitive** — European anticyclonic
+  summer subsidence is routinely 0.05–0.15; consider 0.10 to match the ascent
+  threshold's "clear signal" spirit. Fold into the calibration pass.
+- **CAPE=800 hard regime boundary** — 1 J/kg can flip a tier; the deferred
+  continuous 0–1 score + calibration breakpoints is the right home.
+- **Explicit mid-level-RH entrainment suppressor** — currently the SB→ML gap
+  carries the dry-column story; a direct mean-600–850-hPa-RH annotation (threaded
+  like ω) would name the mechanism. Deferred.
+- **Open-Meteo `showers` (convective-only precip)** — not currently fetched;
+  would give a precip-based corroboration signal cleaner than total QPF.
+- **Cross-model NWP-consensus override** — belongs in the advisory aggregation
+  layer (1 model HIGH while others dry → temper/annotate the aggregate).
+
+### Real-world validation needed
+
+- Did the Po Valley corridor (ODINA–ADOSA) actually stay convection-free on
+  2026-05-25? Lightning/radar/METAR-TS would tell us whether ML-MODERATE beats
+  SB-HIGH, or whether afternoon cells fired after all (which would argue for
+  keeping more of the potential tier under weak forcing).
+- Tune `ELEVATED_MU_SB_EXCESS` (200 J/kg) and the one-level floor against PIREPs /
+  observed elevated convection.
+
+### Files changed
+
+- `src/weatherbrief/analysis/sounding/convective.py` — `_realizable_risk`
+  (ACTIVE-only ML tier + one-level floor + ascent-protection),
+  `_elevated_instability`, regime-scoped scoring in `assess_convective_thermo`.
+- `src/weatherbrief/analysis/sounding/thermodynamics.py` — MU/ML-CAPE moved from
+  `compute_indices_extended` to `compute_indices_core`.
+- `src/weatherbrief/models/analysis.py` — `ConvectiveRegime` (+`label`),
+  `regime`/`drivers`/`suppressors`/`elevated_convection` on `ConvectiveAssessment`.
+- `src/weatherbrief/digest/{prompt_builder,text}.py` — render regime label +
+  drivers/suppressors.
+- `tests/test_convective.py` — regime, realizable-tier, floor, ascent, elevated,
+  and loaded-gun-not-hidden coverage.

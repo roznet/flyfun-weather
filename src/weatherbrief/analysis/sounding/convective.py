@@ -42,6 +42,13 @@ REGIME_CIN_CAP = -50
 OMEGA_ASCENT = -0.1      # clear large-scale ascent
 OMEGA_SUBSIDENCE = 0.05  # large-scale subsidence
 
+# Minimum MU−SB excess (J/kg) to call instability "elevated" — the most-unstable
+# parcel originates meaningfully above the surface (e.g. warm air overrunning a
+# stable/marine boundary layer). MU ≥ SB always, so a small excess is just the
+# surface parcel; a large one means a separate unstable layer aloft that matters
+# to an aircraft in cruise even when surface-based convection is unlikely.
+ELEVATED_MU_SB_EXCESS = 200
+
 
 def effective_cape(indices: ThermodynamicIndices) -> float | None:
     """Return the most relevant CAPE for convective risk.
@@ -142,6 +149,60 @@ def _down_one(risk: ConvectiveRisk) -> ConvectiveRisk:
     return _RISK_LEVELS[idx - 1] if idx > 0 else risk
 
 
+def _elevated_instability(indices: ThermodynamicIndices) -> bool:
+    """True when the most-unstable parcel sits meaningfully above the surface.
+
+    MU-CAPE ≥ SB-CAPE by construction; a large excess means the instability is
+    not surface-rooted (elevated convection). Relevant to aviation even when
+    surface-based storms are unlikely — an aircraft in cruise can still meet it.
+    """
+    sb = indices.cape_surface_jkg
+    mu = indices.cape_most_unstable_jkg
+    if sb is None or mu is None:
+        return False
+    return mu >= REGIME_CAPE_LOW and (mu - sb) >= ELEVATED_MU_SB_EXCESS
+
+
+def _realizable_risk(
+    potential: float | None,
+    indices: ThermodynamicIndices,
+    omega_700_pa_s: float | None,
+) -> tuple[ConvectiveRisk, str | None]:
+    """Severity for the ACTIVE regime, scored on the *realizable* parcel.
+
+    Surface-based / most-unstable CAPE (``potential``) is the latent instability;
+    mixed-layer CAPE is what a well-mixed daytime boundary layer can actually
+    realize, and is the Europe-preferred measure for surface-based convection.
+    We score on ML-CAPE but never drop more than one level below the
+    potential-based tier — a high-potential air mass is not dismissed on ML
+    alone (it can still go up if something lifts it). Large-scale ascent keeps
+    the full potential tier, since ascent can realize the latent instability.
+
+    Returns the risk and, when ML pulled the tier down, a suppressor string.
+    """
+    risk_potential = _risk_from_cape(potential, indices)
+    ml = indices.cape_mixed_layer_jkg
+    ascent = omega_700_pa_s is not None and omega_700_pa_s <= OMEGA_ASCENT
+    if ml is None or ascent:
+        return risk_potential, None
+
+    risk_ml = _risk_from_cape(ml, indices)
+    floor = _down_one(risk_potential)
+    risk = max(risk_ml, floor, key=_RISK_LEVELS.index)
+
+    note: str | None = None
+    if _RISK_LEVELS.index(risk) < _RISK_LEVELS.index(risk_potential):
+        sb = indices.cape_surface_jkg
+        sb_txt = f" vs SB {sb:.0f}" if sb is not None else ""
+        pot_txt = f"{potential:.0f}" if potential is not None else "?"
+        note = (
+            f"Realizable mixed-layer CAPE {ml:.0f} J/kg{sb_txt} well below the "
+            f"potential {pot_txt} J/kg — poorly mixed / shallow low-level "
+            "moisture limits convection"
+        )
+    return risk, note
+
+
 def _shared_annotations(indices: ThermodynamicIndices) -> tuple[list[str], list[str]]:
     """Moisture / geometry drivers and suppressors common to all regimes."""
     drivers: list[str] = []
@@ -175,13 +236,17 @@ def _regime_explanation(
     cape: float | None,
     cin: float | None,
     omega_700_pa_s: float | None,
+    tempered: bool = False,
 ) -> tuple[ConvectiveRisk, list[str], list[str]]:
     """Apply regime-aware risk adjustment and build drivers/suppressors.
 
     Only the LOADED_GUN regime adjusts the risk level here (trigger-gated cap
-    erosion); the other regimes keep the CAPE-derived risk and the caller
-    applies the generic strong-CIN suppression. Returns the (possibly adjusted)
-    risk plus the lists of factors raising and holding down risk.
+    erosion); the other regimes keep the risk the caller computed (the caller
+    scores them on realizable ML-CAPE and applies the generic strong-CIN
+    suppression). ``cape`` is the potential (SB/MU) CAPE used for narration.
+    ``tempered`` says the caller already pulled an ACTIVE point's tier down on
+    ML-CAPE, so the driver text shouldn't also claim "convection readily
+    initiates". Returns the (possibly adjusted) risk plus drivers/suppressors.
     """
     if regime is None or cape is None:
         return risk, [], []
@@ -225,10 +290,15 @@ def _regime_explanation(
                 f"(ω₇₀₀ {omega_700_pa_s:.2f} Pa/s) — initiation inhibited (loaded gun)"
             )
     elif regime is ConvectiveRegime.ACTIVE:
-        cap_note = f", weak/absent cap (CIN {cin:.0f} J/kg)" if cin is not None else ""
-        drivers.append(
-            f"High instability (CAPE {cape:.0f} J/kg){cap_note} — convection readily initiates"
-        )
+        if tempered:
+            # Tier already pulled down on realizable ML-CAPE; the caller adds the
+            # suppressor that explains why. Don't claim ready initiation here.
+            drivers.append(f"High potential instability (CAPE {cape:.0f} J/kg)")
+        else:
+            cap_note = f", weak/absent cap (CIN {cin:.0f} J/kg)" if cin is not None else ""
+            drivers.append(
+                f"High instability (CAPE {cape:.0f} J/kg){cap_note} — convection readily initiates"
+            )
         if ascent:
             drivers.append(
                 f"Large-scale ascent (ω₇₀₀ {omega_700_pa_s:.2f} Pa/s) reinforces lift"
@@ -259,31 +329,51 @@ def assess_convective_thermo(
 ) -> ConvectiveAssessment:
     """Assess convective risk from thermodynamic indices.
 
-    Risk starts from effective CAPE (max of MetPy SB/MU/ML variants), then the
-    convective *regime* (THERMAL / WEAK_INSTABILITY / LOADED_GUN / ACTIVE)
-    selects regime-appropriate reasoning:
+    The *regime* (THERMAL / WEAK_INSTABILITY / LOADED_GUN / ACTIVE) is classified
+    from the potential CAPE (max of MetPy SB/MU/ML variants) and CIN, then drives
+    regime-appropriate scoring:
 
-    - LOADED_GUN (high CAPE under a strong cap): risk is held down one level
-      unless 700 hPa omega shows large-scale ascent that could erode the cap —
-      this is what stops high CAPE alone from producing a false HIGH.
-    - ACTIVE (high CAPE, weak cap): risk stays at the CAPE-derived level;
-      convection initiates readily.
-    - WEAK_INSTABILITY / THERMAL: CAPE-derived risk with the generic strong-CIN
-      suppression preserved.
+    - LOADED_GUN (high potential CAPE under a strong cap): scored on the
+      *potential* CAPE and held down one level unless 700 hPa omega shows
+      large-scale ascent that could erode the cap. A capped loaded gun is never
+      dismissed on mixed-layer CAPE — that is exactly the dangerous case.
+    - ACTIVE (high potential CAPE, weak cap): scored on *realizable* mixed-layer
+      CAPE (the Europe-preferred surface-convection measure), floored at one
+      level below the potential tier so a high-potential air mass is tempered
+      but not dismissed. Large-scale ascent keeps the full potential tier. This
+      is where surface-based CAPE over-reads a dry, poorly-mixed column.
+    - WEAK_INSTABILITY / THERMAL: scored on potential CAPE with the generic
+      strong-CIN suppression (intentionally not ML-tempered — see
+      designs/future/meteorology-decision.md).
 
-    The ``drivers`` and ``suppressors`` lists make the reasoning explicit for
-    the briefing narrative. ``severe_modifiers`` continue to flag the character
-    of convection if it fires (shear, hail, etc.).
+    Independently, ``elevated_convection`` flags a most-unstable parcel sitting
+    well above the surface (MU ≫ SB) — convection possible aloft even when the
+    surface tier is low. The ``drivers``/``suppressors`` lists make the reasoning
+    explicit; ``severe_modifiers`` flag the character of convection if it fires.
     """
-    cape = _effective_cape(indices)
+    potential = _effective_cape(indices)
     cin = indices.cin_surface_jkg
+    regime = classify_regime(potential, cin)
 
-    risk = _risk_from_cape(cape, indices)
-    regime = classify_regime(cape, cin)
+    # Only ACTIVE (high potential, weak cap) is scored on realizable mixed-layer
+    # CAPE — that is where surface-based CAPE over-reads a dry / poorly-mixed
+    # column the model won't convect. LOADED_GUN scores on potential (the cap,
+    # not poor mixing, holds it, and it must not be hidden); WEAK_INSTABILITY /
+    # THERMAL keep the potential tier with the generic strong-CIN suppression.
+    # Scoping to ACTIVE avoids a route-wide one-level softening (ML ≪ SB almost
+    # everywhere) and targets the false-HIGH case directly.
+    realizable_note: str | None = None
+    if regime is ConvectiveRegime.ACTIVE:
+        risk, realizable_note = _realizable_risk(potential, indices, omega_700_pa_s)
+    else:
+        risk = _risk_from_cape(potential, indices)
 
     risk, drivers, suppressors = _regime_explanation(
-        regime, risk, cape, cin, omega_700_pa_s
+        regime, risk, potential, cin, omega_700_pa_s,
+        tempered=realizable_note is not None,
     )
+    if realizable_note is not None:
+        suppressors.append(realizable_note)
 
     # Generic strong-CIN suppression for regimes that don't model the cap
     # themselves (LOADED_GUN already gated initiation on the cap above; ACTIVE
@@ -293,11 +383,21 @@ def assess_convective_thermo(
             risk = _down_one(risk)
             suppressors.insert(0, f"Strong cap (CIN {cin:.0f} J/kg) suppresses convection")
 
+    # Elevated instability is an additive warning — surfaced regardless of the
+    # surface-based tier, since it matters to an aircraft in cruise.
+    elevated = _elevated_instability(indices)
+    if elevated:
+        mu = indices.cape_most_unstable_jkg
+        drivers.append(
+            f"Elevated instability (MU-CAPE {mu:.0f} J/kg above the surface parcel) "
+            "— convection possible aloft"
+        )
+
     shared_drivers, shared_suppressors = _shared_annotations(indices)
     drivers.extend(shared_drivers)
     suppressors.extend(shared_suppressors)
 
-    modifiers = _severity_modifiers(indices, cape)
+    modifiers = _severity_modifiers(indices, potential)
 
     # Unified interface: base from LFC (fallback LCL), top from EL
     base_ft = indices.lfc_altitude_ft if indices.lfc_altitude_ft is not None else indices.lcl_altitude_ft
@@ -305,7 +405,7 @@ def assess_convective_thermo(
 
     return ConvectiveAssessment(
         risk_level=risk,
-        cape_jkg=cape,
+        cape_jkg=potential,
         cin_jkg=cin,
         lcl_altitude_ft=indices.lcl_altitude_ft,
         lfc_altitude_ft=indices.lfc_altitude_ft,
@@ -318,6 +418,7 @@ def assess_convective_thermo(
         regime=regime,
         drivers=drivers,
         suppressors=suppressors,
+        elevated_convection=elevated,
         base_ft=base_ft,
         top_ft=top_ft,
         cover_pct=None,

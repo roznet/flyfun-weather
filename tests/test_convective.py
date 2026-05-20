@@ -354,6 +354,128 @@ def test_regime_none_when_no_cape():
 
 
 # ---------------------------------------------------------------------------
+# realizable (mixed-layer) tier scoring for non-loaded-gun regimes
+# ---------------------------------------------------------------------------
+
+
+def test_active_tempered_on_mixed_layer_cape():
+    """ACTIVE: high potential but collapsed ML + no ascent → tempered one level.
+
+    Mirrors the dry-CAPE Po Valley case (GFS-like): SB/MU 1125, ML 563, weak
+    cap, neutral omega. Potential alone reads HIGH; realizable ML reads MODERATE.
+    """
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=1125.0,
+        cape_most_unstable_jkg=1125.0,
+        cape_mixed_layer_jkg=563.0,
+        cin_surface_jkg=-42.0,
+    )
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.0)
+    assert result.regime is ConvectiveRegime.ACTIVE
+    assert result.risk_level == ConvectiveRisk.MODERATE  # was HIGH on potential
+    assert any("mixed-layer" in s.lower() for s in result.suppressors)
+
+
+def test_active_floor_one_level_below_potential():
+    """Safety floor: ML near zero cannot drop more than one level below potential."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=2500.0,
+        cape_most_unstable_jkg=2500.0,
+        cape_mixed_layer_jkg=10.0,  # ML alone would be NONE
+        cin_surface_jkg=-10.0,
+    )
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.0)
+    assert result.regime is ConvectiveRegime.ACTIVE
+    # Potential EXTREME → floored at HIGH (one level), not dragged to ML's NONE
+    assert result.risk_level == ConvectiveRisk.HIGH
+
+
+def test_active_ascent_keeps_potential_tier():
+    """Large-scale ascent can realize the latent CAPE → keep the potential tier."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=1125.0,
+        cape_most_unstable_jkg=1125.0,
+        cape_mixed_layer_jkg=563.0,
+        cin_surface_jkg=-42.0,
+    )
+    result = assess_convective_thermo(indices, omega_700_pa_s=-0.3)
+    assert result.regime is ConvectiveRegime.ACTIVE
+    assert result.risk_level == ConvectiveRisk.HIGH
+    assert not any("mixed-layer" in s.lower() for s in result.suppressors)
+
+
+def test_active_ml_absent_stays_conservative():
+    """No ML-CAPE → cannot temper, stay on the potential tier (conservative)."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=1500.0,
+        cape_most_unstable_jkg=1500.0,
+        cin_surface_jkg=-10.0,
+    )
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.0)
+    assert result.regime is ConvectiveRegime.ACTIVE
+    assert result.risk_level == ConvectiveRisk.HIGH
+
+
+def test_weak_instability_not_tempered_on_ml():
+    """WEAK_INSTABILITY is NOT ML-tempered (scoped to ACTIVE only) — stays on potential.
+
+    ML-tempering applies only to the ACTIVE regime, to target the surface-CAPE
+    false-HIGH case without softening the whole route by a level.
+    """
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=600.0,
+        cape_most_unstable_jkg=600.0,
+        cape_mixed_layer_jkg=60.0,  # low ML, but WEAK keeps the potential tier
+    )
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.0)
+    assert result.regime is ConvectiveRegime.WEAK_INSTABILITY
+    assert result.risk_level == ConvectiveRisk.MODERATE  # potential 600, not ML-softened
+    assert not any("mixed-layer" in s.lower() for s in result.suppressors)
+
+
+def test_loaded_gun_not_tempered_by_low_ml():
+    """LOADED_GUN scores on potential — a collapsed ML must not hide a capped gun."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=1500.0,
+        cape_most_unstable_jkg=1500.0,
+        cape_mixed_layer_jkg=50.0,
+        cin_surface_jkg=-80.0,
+    )
+    result = assess_convective_thermo(indices, omega_700_pa_s=None)
+    assert result.regime is ConvectiveRegime.LOADED_GUN
+    assert result.risk_level == ConvectiveRisk.HIGH  # potential-scored, not ML
+    assert not any("mixed-layer" in s.lower() for s in result.suppressors)
+
+
+# ---------------------------------------------------------------------------
+# elevated convection flag (MU ≫ SB)
+# ---------------------------------------------------------------------------
+
+
+def test_elevated_convection_flagged():
+    """MU-CAPE well above SB-CAPE → elevated flag + driver."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=30.0,
+        cape_most_unstable_jkg=800.0,
+    )
+    result = assess_convective_thermo(indices)
+    assert result.elevated_convection is True
+    assert any("elevated" in d.lower() for d in result.drivers)
+
+
+def test_elevated_not_flagged_when_surface_rooted():
+    """MU ≈ SB (surface-rooted) → no elevated flag."""
+    indices = ThermodynamicIndices(
+        cape_surface_jkg=1100.0,
+        cape_most_unstable_jkg=1125.0,
+        cape_mixed_layer_jkg=560.0,
+        cin_surface_jkg=-42.0,
+    )
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.0)
+    assert result.elevated_convection is False
+
+
+# ---------------------------------------------------------------------------
 # _omega_near_700 (large-scale ascent trigger extraction)
 # ---------------------------------------------------------------------------
 
