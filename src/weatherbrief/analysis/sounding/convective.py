@@ -36,6 +36,9 @@ REGIME_CAPE_HIGH = 800
 REGIME_CIN_CAP = -50
 
 # 700 hPa omega trigger thresholds (Pa/s; negative = ascent).
+# Tuned for synoptic-scale fields (ECMWF/GFS). High-resolution models (e.g.
+# ICON-EU) can show larger mesoscale omega from orographic/sea-breeze lift that
+# doesn't erode a synoptic cap — to be revisited with the calibration work.
 OMEGA_ASCENT = -0.1      # clear large-scale ascent
 OMEGA_SUBSIDENCE = 0.05  # large-scale subsidence
 
@@ -130,11 +133,13 @@ def classify_regime(cape: float | None, cin: float | None) -> ConvectiveRegime |
     return ConvectiveRegime.WEAK_INSTABILITY
 
 
+_RISK_LEVELS = tuple(ConvectiveRisk)
+
+
 def _down_one(risk: ConvectiveRisk) -> ConvectiveRisk:
     """Drop risk by one ordinal level (clamped at NONE)."""
-    levels = list(ConvectiveRisk)
-    idx = levels.index(risk)
-    return levels[idx - 1] if idx > 0 else risk
+    idx = _RISK_LEVELS.index(risk)
+    return _RISK_LEVELS[idx - 1] if idx > 0 else risk
 
 
 def _shared_annotations(indices: ThermodynamicIndices) -> tuple[list[str], list[str]]:
@@ -142,14 +147,18 @@ def _shared_annotations(indices: ThermodynamicIndices) -> tuple[list[str], list[
     drivers: list[str] = []
     suppressors: list[str] = []
 
-    if indices.k_index is not None and indices.k_index >= 30:
+    # Bounded above by the severity-modifier threshold (K > 35) so a single
+    # K-index value isn't surfaced twice (driver here + modifier there).
+    if indices.k_index is not None and 30 <= indices.k_index <= 35:
         drivers.append(f"Moist mid-levels (K-index {indices.k_index:.0f})")
 
     if indices.lcl_altitude_ft is not None and indices.lfc_altitude_ft is not None:
         gap = indices.lfc_altitude_ft - indices.lcl_altitude_ft
         # LFC >= LCL is a physical invariant, but MetPy on coarse pressure
         # levels can occasionally return LFC < LCL — guard the lower bound.
-        if 0 <= gap <= 500:
+        if gap == 0:
+            drivers.append("LCL = LFC: no barrier to initiation")
+        elif 0 < gap <= 500:
             drivers.append(f"Small LCL–LFC gap (~{gap:.0f} ft): low barrier to initiation")
 
     if indices.lcl_altitude_ft is not None and indices.lcl_altitude_ft > 8000:
@@ -232,7 +241,7 @@ def _regime_explanation(
                 f"Large-scale subsidence (ω₇₀₀ {omega_700_pa_s:.2f} Pa/s) suppresses development"
             )
     elif regime is ConvectiveRegime.THERMAL:
-        if cape is not None and cape > 0:
+        if cape > 0:
             drivers.append(
                 "Thermal-dominated regime — daytime heating / orographic lift may "
                 "trigger isolated convection"

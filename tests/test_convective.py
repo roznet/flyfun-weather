@@ -250,7 +250,8 @@ def test_loaded_gun_with_ascent_keeps_risk():
     assert result.risk_level == ConvectiveRisk.HIGH
     # driver names both the ascent and the cap strength (CIN) it may erode
     assert any("ascent" in d and "CIN" in d for d in result.drivers)
-    assert not result.suppressors
+    # the loaded-gun cap must not also be surfaced as a suppressor
+    assert not any("cap" in s.lower() for s in result.suppressors)
 
 
 def test_active_regime_keeps_risk():
@@ -269,6 +270,24 @@ def test_active_regime_subsidence_not_flagged():
     assert result.regime is ConvectiveRegime.ACTIVE
     assert result.risk_level == ConvectiveRisk.HIGH
     assert not result.suppressors
+
+
+def test_thermal_strong_cap_suppressed():
+    """THERMAL regime: a strong cap (CIN < -200) drops risk one level."""
+    indices = ThermodynamicIndices(cape_surface_jkg=120.0, cin_surface_jkg=-250.0)
+    result = assess_convective_thermo(indices)
+    assert result.regime is ConvectiveRegime.THERMAL
+    assert result.risk_level == ConvectiveRisk.MARGINAL  # LOW suppressed once
+    assert any("cap" in s.lower() for s in result.suppressors)
+
+
+def test_weak_instability_strong_cap_suppressed():
+    """WEAK_INSTABILITY regime: a strong cap (CIN < -200) drops risk one level."""
+    indices = ThermodynamicIndices(cape_surface_jkg=600.0, cin_surface_jkg=-250.0)
+    result = assess_convective_thermo(indices)
+    assert result.regime is ConvectiveRegime.WEAK_INSTABILITY
+    assert result.risk_level == ConvectiveRisk.LOW  # MODERATE suppressed once
+    assert any("cap" in s.lower() for s in result.suppressors)
 
 
 def test_weak_instability_subsidence_adds_suppressor():
