@@ -345,6 +345,10 @@ export interface RefreshStreamEvent {
     days_out: number;
     eta_useful?: string | null;
   };
+  // Freshly fetched observations on the realtime gate path — mirrors the
+  // non-streaming RefreshAccepted.observations so SSE consumers don't need a
+  // separate reload. Null on the `none` path and full-pipeline completes.
+  observations?: RouteObservations | null;
 }
 
 /**
