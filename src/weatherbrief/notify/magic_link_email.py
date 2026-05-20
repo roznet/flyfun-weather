@@ -49,13 +49,11 @@ def send_magic_link_email(
     if not from_address:
         try:
             from_address = SmtpConfig.from_env().from_address
-        except ValueError:
-            logger.warning(
-                "Neither RESEND_FROM nor SMTP configured — cannot send "
-                "magic-link email to %s",
-                email,
-            )
-            return
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Cannot send magic-link email to {email}: neither RESEND_FROM "
+                "nor SMTP is configured"
+            ) from exc
 
     esc_email = html.escape(email)
     esc_link = html.escape(link)
