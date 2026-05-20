@@ -47,6 +47,7 @@ from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
 from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.fetch.model_status import fetch_model_metadata
+from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
 from weatherbrief.models import (
     BriefingPackMeta,
     DiagnosticPublic,
@@ -218,6 +219,10 @@ class ModelStatus(BaseModel):
     # DWD's HTTP Last-Modified, ECMWF's local sentinel mtime.
     published_at: str | None = None
     state: str  # "current" | "stale" | "awaiting" | "delayed"
+    # True when this source's latest available run reaches the flight's end
+    # time.  Drives the tiered refresh gate (issue #167): only models whose
+    # latest run covers the flight count toward the refresh threshold.
+    covers_horizon: bool = False
 
 
 class ModelSourceDetail(BaseModel):
@@ -534,6 +539,7 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
             next_expected=nxt.isoformat(),
             published_at=published_at_iso,
             state=state,
+            covers_horizon=run_covers_flight,
         )
         next_expected_candidates.append((nxt, model))
 
@@ -607,6 +613,132 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
     )
 
 
+
+
+# ---------------------------------------------------------------------------
+# Tiered refresh gating (issue #167)
+# ---------------------------------------------------------------------------
+
+# How many *eligible* models (latest run covers the flight) must have a newer
+# covering run before a manual refresh runs the full pipeline.  Stricter the
+# further out the flight is — a single model tick shouldn't trigger a full
+# token+compute+disk refresh of a multi-day-out picture.  Capped by the number
+# of eligible models so small selections still work (see ``decide_refresh``).
+_REFRESH_THRESHOLD_DEFAULT = 3  # days_out >= 2
+_REFRESH_THRESHOLD_BY_DAYS_OUT = {0: 1, 1: 2}
+
+
+def _refresh_threshold(days_out: int) -> int:
+    """Models-updated threshold for a given lead time (uncapped)."""
+    if days_out <= 0:
+        return _REFRESH_THRESHOLD_BY_DAYS_OUT[0]
+    return _REFRESH_THRESHOLD_BY_DAYS_OUT.get(days_out, _REFRESH_THRESHOLD_DEFAULT)
+
+
+def _days_out_now(flight: Flight) -> int:
+    """Lead time in whole days from now (UTC) to the flight's departure date."""
+    now = datetime.now(timezone.utc)
+    return (flight.departure_time.date() - now.date()).days
+
+
+class RefreshDecision(BaseModel):
+    """Outcome of the tiered refresh gate (issue #167)."""
+
+    mode: str  # "full" | "realtime" | "none"
+    reason: str
+    needed: int          # models-updated threshold, capped by n_eligible
+    n_eligible: int      # selected models whose latest run covers the flight
+    n_updated: int       # eligible models with a newer-than-pack covering run
+    days_out: int
+    # ISO wallclock when enough not-yet-updated covering models will have
+    # refreshed to cross the threshold — populated when mode != "full".
+    eta_useful: str | None = None
+
+
+def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
+    """Decide whether a manual refresh runs the full pipeline, a cheap
+    real-time observations refresh, or nothing (issue #167 Part B).
+
+    Pure function of the per-model freshness states already computed by
+    :func:`_build_data_status` (which encodes flight-horizon coverage in each
+    ``ModelStatus.covers_horizon``).  The gate is progressively stricter the
+    further out the flight is:
+
+    - ``needed = min(threshold[days_out], n_eligible)`` with threshold
+      ``{>=2: 3, 1: 2, 0: 1}``.
+    - ``full`` when ``n_updated >= needed`` (enough covering models have a
+      newer run to be worth a full re-run).
+    - ``realtime`` at D-0 when not ``full`` — a D-0 press always at least
+      pulls fresh METAR/TAF (the caller runs ``run_realtime_refresh``).
+    - ``none`` otherwise — a no-op carrying a reason and the ETA of the next
+      useful update.
+
+    The ``min(..., n_eligible)`` cap means small model selections still work:
+    2 models selected -> D-2/D-1 both need both; 1 model -> every press runs.
+    """
+    models = list(status.models.values())
+    n_eligible = sum(1 for ms in models if ms.covers_horizon)
+    n_updated = sum(1 for ms in models if ms.state == "stale")
+    threshold = _refresh_threshold(days_out)
+
+    # No model's latest run reaches the flight horizon yet — a full refresh
+    # can't help, so never "full" (n_updated is necessarily 0 here too).
+    if n_eligible == 0:
+        if days_out == 0:
+            return RefreshDecision(
+                mode="realtime",
+                reason="D-0: refreshing live METAR/TAF (no model run covers the flight horizon)",
+                needed=threshold, n_eligible=0, n_updated=0, days_out=days_out,
+            )
+        return RefreshDecision(
+            mode="none",
+            reason="No model run covers the flight horizon yet",
+            needed=threshold, n_eligible=0, n_updated=0, days_out=days_out,
+            eta_useful=status.next_expected_update,
+        )
+
+    needed = min(threshold, n_eligible)
+
+    if n_updated >= needed:
+        return RefreshDecision(
+            mode="full",
+            reason=(
+                f"{n_updated} of {n_eligible} covering model(s) have a newer "
+                f"run (need {needed}) — running full refresh"
+            ),
+            needed=needed, n_eligible=n_eligible, n_updated=n_updated, days_out=days_out,
+        )
+
+    # Not enough covering models updated. Compute the wallclock at which enough
+    # not-yet-updated covering models will have refreshed to cross threshold.
+    k = needed - n_updated
+    pending_next = sorted(
+        (datetime.fromisoformat(ms.next_expected), ms.next_expected)
+        for ms in models
+        if ms.covers_horizon and ms.state != "stale" and ms.next_expected
+    )
+    eta_useful = pending_next[k - 1][1] if 0 < k <= len(pending_next) else None
+
+    if days_out == 0:
+        return RefreshDecision(
+            mode="realtime",
+            reason=(
+                f"D-0: only {n_updated} of {needed} covering model(s) updated "
+                f"— refreshing live METAR/TAF"
+            ),
+            needed=needed, n_eligible=n_eligible, n_updated=n_updated, days_out=days_out,
+            eta_useful=eta_useful,
+        )
+
+    return RefreshDecision(
+        mode="none",
+        reason=(
+            f"Only {n_updated} of {needed} covering model(s) updated for a "
+            f"D-{days_out} flight — no refresh needed"
+        ),
+        needed=needed, n_eligible=n_eligible, n_updated=n_updated, days_out=days_out,
+        eta_useful=eta_useful,
+    )
 
 
 def _can_force_refresh(request: Request, db: Session) -> bool:
@@ -1124,11 +1256,17 @@ def _finalize_refresh(
 
 
 class RefreshAccepted(BaseModel):
-    """Response for accepted (queued) refresh requests."""
+    """Response for accepted (queued) or gated refresh requests."""
 
-    status: str  # "queued" | "already_fresh"
+    status: str  # "queued" | "already_fresh" | "realtime"
     flight_id: str
     message: str
+    # Tiered refresh gate detail (issue #167) — present when the request was
+    # gated to a real-time-only refresh or skipped entirely.
+    mode: str | None = None  # "full" | "realtime" | "none"
+    reason: str | None = None
+    eta_useful: str | None = None  # ISO wallclock of next useful model update
+    observations: dict | None = None  # updated RouteObservations (realtime mode)
 
 
 @router.post(
@@ -1185,19 +1323,44 @@ async def refresh_briefing(
     if not db_path:
         raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
-    # Smart check: skip pipeline if data is fresh (skip for historical flights)
+    # Tiered refresh gate (issue #167): full -> pipeline, realtime -> cheap
+    # METAR/TAF refresh, none -> 200 no-op (skip for historical flights).
     if not force and not is_historical:
         packs = list_packs(db, flight_id)
         if packs:
             latest = packs[0]
             status = _build_data_status(latest, flight)
-            if status.fresh:
-                logger.info("Data is fresh for %s, skipping pipeline", flight_id)
+            decision = decide_refresh(status, _days_out_now(flight))
+            if decision.mode != "full":
+                logger.info(
+                    "Refresh gate for %s: mode=%s (%s)",
+                    flight_id, decision.mode, decision.reason,
+                )
+                observations = None
+                resp_status = "already_fresh"
+                if decision.mode == "realtime":
+                    resp_status = "realtime"
+                    from weatherbrief.tasks.route_weather import run_realtime_refresh
+                    try:
+                        new_obs = await asyncio.to_thread(
+                            run_realtime_refresh, Path(latest.artifact_path), db_path,
+                        )
+                        observations = new_obs.model_dump(mode="json")
+                    except Exception:
+                        logger.warning(
+                            "Real-time refresh failed for %s — returning no-op",
+                            flight_id, exc_info=True,
+                        )
+                        resp_status = "already_fresh"
                 return Response(
                     content=RefreshAccepted(
-                        status="already_fresh",
+                        status=resp_status,
                         flight_id=flight_id,
-                        message="Data is already current — no refresh needed.",
+                        message=decision.reason,
+                        mode=decision.mode,
+                        reason=decision.reason,
+                        eta_useful=decision.eta_useful,
+                        observations=observations,
                     ).model_dump_json(),
                     status_code=200,
                     media_type="application/json",
@@ -1320,22 +1483,43 @@ async def refresh_briefing_stream(
         if not db_path:
             raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
 
-        # Smart check: skip pipeline if data is fresh (skip for historical flights)
+        # Tiered refresh gate (issue #167): full -> pipeline, realtime -> cheap
+        # METAR/TAF refresh, none -> complete no-op (skip for historical).
         if not force and not is_historical:
             packs = list_packs(db, flight_id)
             if packs:
                 latest = packs[0]
                 status = _build_data_status(latest, flight)
-                if status.fresh:
-                    logger.info("Data is fresh for %s, skipping pipeline (stream)", flight_id)
+                decision = decide_refresh(status, _days_out_now(flight))
+                if decision.mode != "full":
+                    logger.info(
+                        "Refresh gate for %s (stream): mode=%s (%s)",
+                        flight_id, decision.mode, decision.reason,
+                    )
+                    if decision.mode == "realtime":
+                        from weatherbrief.tasks.route_weather import run_realtime_refresh
+                        try:
+                            await asyncio.to_thread(
+                                run_realtime_refresh, Path(latest.artifact_path), db_path,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Real-time refresh failed for %s (stream) — completing no-op",
+                                flight_id, exc_info=True,
+                            )
                     pack_resp = _meta_to_response(latest, data_status=status).model_dump(mode="json")
+                    decision_payload = decision.model_dump(mode="json")
 
-                    async def fresh_generator() -> AsyncGenerator[str, None]:
-                        event = {"type": "complete", "pack": pack_resp}
+                    async def gate_generator() -> AsyncGenerator[str, None]:
+                        event = {
+                            "type": "complete",
+                            "pack": pack_resp,
+                            "refresh_decision": decision_payload,
+                        }
                         yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
                     return StreamingResponse(
-                        fresh_generator(),
+                        gate_generator(),
                         media_type="text/event-stream",
                         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                     )
@@ -1638,10 +1822,10 @@ def refresh_observations(
     Re-runs route_weather + observation_comparison using existing forecast data,
     then patches the snapshot on disk.
     """
-    flight = _load_owned_flight(db, flight_id, user_id)
+    _load_owned_flight(db, flight_id, user_id)  # authz: owner only
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
-    from weatherbrief.tasks.artifacts import load_briefing, load_forecasts as load_forecasts_json
+    from weatherbrief.tasks.artifacts import load_briefing
 
     briefing_data = load_briefing(pack_dir)
     if not briefing_data:
@@ -1655,74 +1839,11 @@ def refresh_observations(
     if not db_path:
         raise HTTPException(status_code=503, detail="Airport database not configured")
 
+    from weatherbrief.tasks.route_weather import run_realtime_refresh
+
     try:
-        from weatherbrief.models import ForecastSnapshot, RouteConfig, WaypointForecast
-        from weatherbrief.models.observations import RouteObservations
-        from weatherbrief.tasks.route_weather import (
-            run_observation_comparison,
-            run_route_weather,
-        )
-
-        route = RouteConfig.model_validate(briefing_data["route"])
-        target_dt = _parse_target_time(briefing_data)
-
-        # Options for corridor width
-        corridor_nm = 30.0
-        if briefing_data.get("route_observations"):
-            corridor_nm = briefing_data["route_observations"].get("corridor_nm", 30.0)
-
-        # Fetch fresh METAR/TAF
-        new_obs = run_route_weather(
-            route=route,
-            target_time=target_dt,
-            corridor_nm=corridor_nm,
-            airports_db_path=db_path,
-        )
-
-        # Run observation-vs-model comparison using stored forecasts
-        forecasts_data = load_forecasts_json(pack_dir)
-        forecasts = [
-            WaypointForecast.model_validate(f)
-            for f in (forecasts_data or {}).get("forecasts", [])
-        ]
-
-        # Load route analyses for sounding ceiling data
-        route_analyses = None
-        ra_path = pack_dir / "route_analyses.json"
-        if ra_path.exists():
-            from weatherbrief.tasks.artifacts import load_route_analyses
-            ra_manifest = load_route_analyses(pack_dir)
-            route_analyses = ra_manifest.analyses
-
-        # Runway data for wind advisory comparison
-        obs_runway_data = None
-        try:
-            from weatherbrief.airports import get_runway_ends
-            obs_icaos = list({a.icao for a in new_obs.airports})
-            obs_runway_data = get_runway_ends(obs_icaos, db_path)
-        except Exception:
-            pass
-
-        new_obs = run_observation_comparison(
-            observations=new_obs,
-            snapshot_forecasts=forecasts,
-            target_time=target_dt,
-            route=route,
-            runway_data=obs_runway_data,
-            route_analyses=route_analyses,
-        )
-
-        # Patch briefing on disk (prefer briefing.json, fall back to snapshot.json)
-        briefing_data["route_observations"] = new_obs.model_dump(mode="json")
-        briefing_path = pack_dir / "briefing.json"
-        if briefing_path.exists():
-            briefing_path.write_text(json_mod.dumps(briefing_data, indent=2, default=str))
-        else:
-            snapshot_path = pack_dir / "snapshot.json"
-            snapshot_path.write_text(json_mod.dumps(briefing_data, indent=2, default=str))
-
+        new_obs = run_realtime_refresh(pack_dir, db_path)
         return new_obs.model_dump(mode="json")
-
     except HTTPException:
         raise
     except Exception as exc:
@@ -3001,24 +3122,3 @@ def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str
     return pack_path
 
 
-def _parse_target_time(snapshot_data: dict) -> datetime:
-    """Extract target datetime from snapshot JSON data.
-
-    Returns a timezone-aware UTC datetime.  Old packs that stored naive
-    timestamps are promoted to aware UTC so comparisons against both
-    old (naive HourlyForecast.time) and new (aware) data work correctly
-    — ``at_time()`` is patched below to handle the mixed case gracefully.
-    """
-    # Prefer departure_time (new packs)
-    dt_str = snapshot_data.get("departure_time")
-    if dt_str:
-        dt = datetime.fromisoformat(dt_str)
-        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
-    # Fallback: first analysis target_time
-    analyses = snapshot_data.get("analyses", [])
-    if analyses and "target_time" in analyses[0]:
-        dt = datetime.fromisoformat(analyses[0]["target_time"])
-        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
-    target_date = snapshot_data.get("target_date", "")
-    year, month, day = (int(x) for x in target_date.split("-"))
-    return datetime(year, month, day, 9, tzinfo=timezone.utc)

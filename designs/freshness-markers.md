@@ -66,6 +66,31 @@ if not status.fresh:
 # drift_p90_vs_config_s.
 ```
 
+## Tiered Refresh Gate (issue #167)
+
+`_build_data_status` answers "is anything stale?" with a **min-rule** — one newer covering run flips `fresh=False`. That's the right signal for the auto-refresh *scheduler's* freshness loop, but it makes the **manual refresh button** wasteful: any single model tick triggers a full token+compute+disk refresh, even when one model update can't move a multi-day-out picture. `decide_refresh` (in `api/packs.py`) layers a lead-time-aware gate on top of the same per-model states.
+
+It is a **pure function of the `DataStatus`** that `_build_data_status` already computes (no extra I/O):
+
+```python
+from weatherbrief.api.packs import decide_refresh, _days_out_now
+decision = decide_refresh(status, _days_out_now(flight))
+# decision.mode ∈ {"full", "realtime", "none"}; .reason; .eta_useful; .needed/.n_eligible/.n_updated
+```
+
+- `n_eligible` = models whose **latest available run covers the flight horizon** (`ModelStatus.covers_horizon`, set from the same `(init + run_horizon) >= flight_end` test used for staleness).
+- `n_updated` = eligible models with a newer-than-pack covering run (== `len(stale_models)`; `state == "stale"`).
+- `needed = min(threshold[days_out], n_eligible)` with **threshold `{>=2: 3, 1: 2, 0: 1}`** (module constants `_REFRESH_THRESHOLD_*`, not env-tunable for v1).
+- mode: `full` if `n_updated >= needed`; `realtime` if `days_out == 0` and not full (a D-0 press always at least pulls fresh METAR/TAF); else `none`.
+- `eta_useful` (for `none`/`realtime`) = the `(needed − n_updated)`-th soonest `next_expected` among not-yet-updated eligible models — i.e. when the threshold will next be crossed.
+
+The `min(…, n_eligible)` cap handles small selections: 2 models selected → D-2/D-1 both need both; 1 model → every press runs. (Default selection is the 3 mains, so "count ≥ 3" == "all mains" for nearly everyone.)
+
+**Wiring:**
+- Both manual-refresh endpoints (`refresh_briefing`, `refresh_briefing_stream`): `full` → run the pipeline (unchanged); `realtime` → run `tasks/route_weather.run_realtime_refresh` and return updated observations; `none` → 200 / SSE-complete no-op carrying `reason` + `eta_useful`.
+- Auto-refresh scheduler (`scheduler._auto_refresh_one`): same **full/none** policy, but **no** realtime fallback — live METAR/TAF is the verification loop's job. So a non-`full` decision means skip.
+- `force=true` (admin) still bypasses the gate entirely.
+
 ## Key Choices
 
 - **In-memory only.** Lost on restart, ~2s bootstrap cost. Admin endpoint provides debugging visibility; no DB persistence in scope.
@@ -137,12 +162,13 @@ When tuning registry offsets:
 
 ## References
 
-- Issue #108 (design + acceptance criteria)
+- Issue #108 (design + acceptance criteria); issue #167 (tiered refresh gate)
 - Existing helpers wrapped: `fetch/model_status.py`, `fetch/grib/{grib_fetch,icon_eu_fetch,ecmwf_watcher}.py`
 - Pack-side: `api/packs.py:_build_data_status`, `_backfill_sources`, `_finalize_refresh` (records `model_sources`), `_provider_label` (reads `registry.SOURCE_REGISTRY.provider_label`)
+- Tiered gate: `api/packs.py:decide_refresh` + `_refresh_threshold`/`_days_out_now`/`RefreshDecision`, `ModelStatus.covers_horizon`; wired into `refresh_briefing`, `refresh_briefing_stream`, `scheduler._auto_refresh_one`; realtime seam `tasks/route_weather.run_realtime_refresh` (see [metar-taf-route-weather.md](metar-taf-route-weather.md))
 - Loop wiring: `scheduler.py:run_freshness_loop`, `api/app.py:lifespan`
 - Admin endpoint: `api/admin.py:freshness_markers`
 - Public catalog: `fetch/freshness/catalog.py`, `api/data_sources.py` (GET `/api/data-sources`)
 - Frontend consumers: `web/help.html` + `web/ts/data-sources-table.ts` (data-driven help table), `web/ts/managers/briefing-ui.ts:renderSourcesPopupContent` (per-flight popover)
 - Storage: `BriefingPackMeta.model_sources`, `BriefingPackRow.model_sources_json` (Text JSON, alembic 050)
-- Tests: `tests/test_freshness_{registry,markers,sources,admin}.py`, `tests/test_data_sources_catalog.py`
+- Tests: `tests/test_freshness_{registry,markers,sources,admin}.py`, `tests/test_data_sources_catalog.py`, `tests/test_packs.py::TestDecideRefresh`

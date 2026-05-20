@@ -5,8 +5,10 @@ Only used on D-0 (day of flight) when real observations add value.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from weatherbrief.models.analysis import RouteConfig, WaypointForecast
 from weatherbrief.models.airport_conditions import RunwayEnd
@@ -509,3 +511,90 @@ def run_observation_comparison(
     observations.comparisons = comparisons
     observations.has_conflicts = has_conflicts
     return observations
+
+
+def run_realtime_refresh(
+    pack_dir: Path,
+    db_path: str,
+    *,
+    default_corridor_nm: float = 30.0,
+) -> RouteObservations:
+    """Re-fetch METAR/TAF and recompute the obs-vs-model comparison from a
+    pack's *stored* forecasts, then patch ``briefing.json`` in place.
+
+    This is the cheap real-time path (issue #167 Part A): no model fetch, no
+    GRIB, no LLM.  Shared by the observations refresh button endpoint and the
+    tiered refresh gate's ``realtime`` mode.
+
+    Reads the pack's route, forecasts and route analyses off disk, fetches
+    fresh observations for the route corridor, recomputes the comparison
+    against the stored forecasts, writes the result back into
+    ``briefing.json`` (or legacy ``snapshot.json``), and returns the updated
+    :class:`RouteObservations`.
+
+    Raises :class:`FileNotFoundError` if the pack has no briefing data on disk.
+    """
+    from weatherbrief.tasks.artifacts import (
+        load_briefing,
+        load_forecasts,
+        load_route_analyses,
+        parse_target_time,
+    )
+
+    pack_dir = Path(pack_dir)
+    briefing_data = load_briefing(pack_dir)
+    if not briefing_data:
+        raise FileNotFoundError(f"No briefing data found in {pack_dir}")
+
+    route = RouteConfig.model_validate(briefing_data["route"])
+    target_dt = parse_target_time(briefing_data)
+
+    corridor_nm = default_corridor_nm
+    stored_obs = briefing_data.get("route_observations")
+    if stored_obs:
+        corridor_nm = stored_obs.get("corridor_nm", default_corridor_nm)
+
+    # Fetch fresh METAR/TAF along the route corridor.
+    new_obs = run_route_weather(
+        route=route,
+        target_time=target_dt,
+        corridor_nm=corridor_nm,
+        airports_db_path=db_path,
+    )
+
+    # Compare observations against the pack's *stored* forecasts.
+    forecasts_data = load_forecasts(pack_dir)
+    forecasts = [
+        WaypointForecast.model_validate(f)
+        for f in (forecasts_data or {}).get("forecasts", [])
+    ]
+
+    route_analyses = None
+    if (pack_dir / "route_analyses.json").exists():
+        route_analyses = load_route_analyses(pack_dir).analyses
+
+    obs_runway_data = None
+    try:
+        from weatherbrief.airports import get_runway_ends
+
+        obs_icaos = list({a.icao for a in new_obs.airports})
+        obs_runway_data = get_runway_ends(obs_icaos, db_path)
+    except Exception:
+        logger.warning("Failed to load runway data for observation comparison", exc_info=True)
+
+    new_obs = run_observation_comparison(
+        observations=new_obs,
+        snapshot_forecasts=forecasts,
+        target_time=target_dt,
+        route=route,
+        runway_data=obs_runway_data,
+        route_analyses=route_analyses,
+    )
+
+    # Patch the observations back into the briefing on disk.
+    briefing_data["route_observations"] = new_obs.model_dump(mode="json")
+    briefing_path = pack_dir / "briefing.json"
+    target_path = briefing_path if briefing_path.exists() else pack_dir / "snapshot.json"
+    target_path.write_text(json.dumps(briefing_data, indent=2, default=str))
+
+    return new_obs

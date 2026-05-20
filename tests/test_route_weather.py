@@ -371,3 +371,90 @@ def test_text_digest_no_observations_when_none():
 
     text = format_digest(snapshot, datetime(2024, 6, 1, 10, 0))
     assert "METAR/TAF" not in text
+
+
+# --- run_realtime_refresh (issue #167 Part A seam) ---
+
+class TestRunRealtimeRefresh:
+    """The cheap real-time refresh seam: re-fetch obs from stored forecasts,
+    patch briefing.json, return RouteObservations. No model/GRIB/LLM.
+    """
+
+    def _write_pack(self, pack_dir, two_wp_route):
+        import json
+
+        briefing = {
+            "route": two_wp_route.model_dump(mode="json"),
+            "departure_time": "2026-05-20T09:00:00+00:00",
+            "days_out": 0,
+        }
+        (pack_dir / "briefing.json").write_text(json.dumps(briefing))
+        (pack_dir / "forecasts.json").write_text(json.dumps({"forecasts": []}))
+
+    def test_patches_briefing_and_returns_obs(self, tmp_path, two_wp_route):
+        import json
+
+        from weatherbrief.tasks.route_weather import run_realtime_refresh
+
+        self._write_pack(tmp_path, two_wp_route)
+        fresh = RouteObservations(
+            corridor_nm=30.0,
+            fetch_time=datetime(2026, 5, 20, 9),
+            airports_found=1,
+            airports_with_metar=1,
+            airports_with_taf=0,
+            airports=[],
+        )
+        with patch(
+            "weatherbrief.tasks.route_weather.run_route_weather", return_value=fresh,
+        ) as mock_fetch, patch(
+            "weatherbrief.airports.get_runway_ends", return_value={},
+        ):
+            result = run_realtime_refresh(tmp_path, "/fake/db")
+
+        # Returned the refreshed observations.
+        assert result.corridor_nm == 30.0
+        assert result.airports_found == 1
+        # Used the pack's stored corridor/route and target time (not network).
+        mock_fetch.assert_called_once()
+        # Patched briefing.json on disk.
+        patched = json.loads((tmp_path / "briefing.json").read_text())
+        assert patched["route_observations"]["airports_found"] == 1
+
+    def test_uses_stored_corridor_nm(self, tmp_path, two_wp_route):
+        import json
+
+        from weatherbrief.tasks.route_weather import run_realtime_refresh
+
+        briefing = {
+            "route": two_wp_route.model_dump(mode="json"),
+            "departure_time": "2026-05-20T09:00:00+00:00",
+            "days_out": 0,
+            "route_observations": {
+                "corridor_nm": 45.0,
+                "fetch_time": "2026-05-20T08:00:00+00:00",
+                "airports_found": 0,
+                "airports_with_metar": 0,
+                "airports_with_taf": 0,
+            },
+        }
+        (tmp_path / "briefing.json").write_text(json.dumps(briefing))
+        (tmp_path / "forecasts.json").write_text(json.dumps({"forecasts": []}))
+        fresh = RouteObservations(
+            corridor_nm=45.0, fetch_time=datetime(2026, 5, 20, 9),
+            airports_found=0, airports_with_metar=0, airports_with_taf=0, airports=[],
+        )
+        with patch(
+            "weatherbrief.tasks.route_weather.run_route_weather", return_value=fresh,
+        ) as mock_fetch, patch(
+            "weatherbrief.airports.get_runway_ends", return_value={},
+        ):
+            run_realtime_refresh(tmp_path, "/fake/db")
+
+        assert mock_fetch.call_args.kwargs["corridor_nm"] == 45.0
+
+    def test_missing_briefing_raises(self, tmp_path):
+        from weatherbrief.tasks.route_weather import run_realtime_refresh
+
+        with pytest.raises(FileNotFoundError):
+            run_realtime_refresh(tmp_path, "/fake/db")

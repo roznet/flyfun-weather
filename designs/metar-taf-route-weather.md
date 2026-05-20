@@ -19,9 +19,13 @@ tasks/route_weather.py
 │     RouteWeatherService → AvWxSource → aviationweather.gov
 │     compute_wind_advisory()    ← runway crosswind assessment per airport
 │     _applicable_taf_lines()    ← TAF line indices for UI highlighting
-└── run_observation_comparison() ← compare obs vs model predictions
-      _interpolate_airport_time()← per-airport time for model lookup
-      classify_flight_category() from analysis/airport_conditions.py
+├── run_observation_comparison() ← compare obs vs model predictions
+│     _interpolate_airport_time()← per-airport time for model lookup
+│     classify_flight_category() from analysis/airport_conditions.py
+└── run_realtime_refresh()       ← cheap real-time refresh seam (issue #167)
+      load_briefing/forecasts/route_analyses from pack_dir
+      run_route_weather() + run_observation_comparison()
+      patch route_observations back into briefing.json
 
 models/observations.py
 ├── AirportObservation     ← per-airport METAR/TAF data (flat, serializable)
@@ -87,6 +91,14 @@ For each airport with a METAR:
 4. Compute visibility and wind deltas for detail annotation
 
 **Model ceiling**: When `route_analyses` are provided, model flight category uses `sounding_ceiling_ft` from the nearest `RoutePointAnalysis` (via `classify_flight_category(ceiling, visibility)`). This allows ceiling-driven IFR comparisons. Falls back to visibility-only when route analyses are unavailable.
+
+### Real-time refresh seam (`run_realtime_refresh`)
+
+`run_realtime_refresh(pack_dir, db_path)` is the **cheap** refresh path (issue #167 Part A): re-fetch METAR/TAF and recompute the comparison from a pack's **stored** forecasts, then patch `route_observations` back into `briefing.json`. **No** model fetch, **no** GRIB, **no** LLM. It reads `briefing.json` (route + stored `corridor_nm` + target time via `parse_target_time`), `forecasts.json`, and `route_analyses.json` off disk, calls `run_route_weather()` + `run_observation_comparison()`, and writes the result back. Raises `FileNotFoundError` if the pack has no briefing data.
+
+Two callers share this seam:
+- `POST .../observations/refresh` — the standalone METAR/TAF refresh button (a thin endpoint wrapper that adds auth + the D-0 400 guard).
+- The tiered refresh gate's `realtime` mode (`api/packs.decide_refresh`) — when a D-0 manual refresh isn't worth a full pipeline run, both refresh-button endpoints invoke `run_realtime_refresh` instead so a D-0 press is always at least cheap-useful. See [freshness-markers.md](freshness-markers.md) for the gate.
 
 ### Digest Integration
 
@@ -157,9 +169,10 @@ metar_taf_airports: int = 0
 
 ## References
 
-- Key code: `src/weatherbrief/tasks/route_weather.py`, `src/weatherbrief/models/observations.py`
+- Key code: `src/weatherbrief/tasks/route_weather.py` (incl. `run_realtime_refresh`), `src/weatherbrief/models/observations.py`
 - Pipeline integration: `src/weatherbrief/pipeline.py` (step 3.5)
+- Realtime seam + tiered gate: `tasks/route_weather.py:run_realtime_refresh`, `api/packs.py:refresh_observations` (thin wrapper), `api/packs.py:decide_refresh`; shared helper `tasks/artifacts.py:parse_target_time`
 - Digest: `src/weatherbrief/digest/prompt_builder.py`, `src/weatherbrief/digest/text.py`
 - Report: `src/weatherbrief/report/templates/briefing.html`, `src/weatherbrief/report/render.py`
-- Tests: `tests/test_route_weather.py` (21 tests)
+- Tests: `tests/test_route_weather.py` (incl. `TestRunRealtimeRefresh`), `tests/test_packs.py::TestDecideRefresh`
 - euro_aip weather module: [briefing_weather.md](rzflight design doc)
