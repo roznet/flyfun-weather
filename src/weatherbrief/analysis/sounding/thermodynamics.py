@@ -264,8 +264,9 @@ def compute_derived_levels_core(profile: PreparedProfile) -> list[DerivedLevel]:
     """Compute core per-level values needed for cloud detection and ceiling.
 
     Produces: pressure, altitude, temperature, dewpoint, dewpoint depression,
-    lapse rate, wind speed/direction.  Skips expensive MetPy calls
-    (wet bulb, theta-e, RH, omega→w).
+    lapse rate, wind speed/direction, and omega (Pa/s — a cheap unit
+    conversion the convective loaded-gun trigger needs in the lite path).
+    Skips expensive MetPy calls (wet bulb, theta-e, RH, omega→w conversion).
     """
     pressures = profile.pressure.to("hPa").magnitude
     temps = profile.temperature.to("degC").magnitude
@@ -282,6 +283,13 @@ def compute_derived_levels_core(profile: PreparedProfile) -> list[DerivedLevel]:
     if profile.wind_speed is not None and profile.wind_direction is not None:
         wspd_kt = profile.wind_speed.to("knots").magnitude
         wdir_deg = profile.wind_direction.to("degrees").magnitude
+
+    # Omega magnitudes (Pa/s, NaN where missing). Cheap unit conversion — the
+    # expensive omega→w (w_fpm) conversion is left to the extended pass. The
+    # convective loaded-gun trigger reads omega here, before extended runs.
+    omega_vals = None
+    if profile.omega is not None:
+        omega_vals = profile.omega.to("Pa/s").magnitude
 
     levels: list[DerivedLevel] = []
     for i in range(len(pressures)):
@@ -300,6 +308,11 @@ def compute_derived_levels_core(profile: PreparedProfile) -> list[DerivedLevel]:
 
         ws = round(float(wspd_kt[i]), 1) if wspd_kt is not None and not np.isnan(wspd_kt[i]) else None
         wd = round(float(wdir_deg[i]), 0) if wdir_deg is not None and not np.isnan(wdir_deg[i]) else None
+        om = (
+            round(float(omega_vals[i]), 4)
+            if omega_vals is not None and not np.isnan(omega_vals[i])
+            else None
+        )
 
         levels.append(DerivedLevel(
             pressure_hpa=p_hpa,
@@ -310,6 +323,7 @@ def compute_derived_levels_core(profile: PreparedProfile) -> list[DerivedLevel]:
             lapse_rate_c_per_km=lapse,
             wind_speed_kt=ws,
             wind_direction_deg=wd,
+            omega_pa_s=om,
         ))
 
     return levels

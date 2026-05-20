@@ -204,17 +204,42 @@ def test_classify_regime_none_without_cape():
 # ---------------------------------------------------------------------------
 
 
-def test_loaded_gun_no_trigger_suppressed():
-    """High CAPE under a moderate cap with no ascent is held down one level.
+def test_loaded_gun_no_omega_keeps_risk():
+    """No ascent data → don't downgrade a moderate-cap loaded gun (honest note).
 
-    This is the loaded-gun false-positive fix: previously CIN=-80 (not below
-    the -200 strong-cap threshold) left risk at HIGH.
+    An unassessable loaded gun is not safely "low risk", so with omega absent
+    risk stays at the CAPE level and the note says so plainly.
     """
     indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-80.0)
     result = assess_convective_thermo(indices, omega_700_pa_s=None)
     assert result.regime is ConvectiveRegime.LOADED_GUN
+    assert result.risk_level == ConvectiveRisk.HIGH  # not downgraded on missing data
+    assert any("no ascent data" in s for s in result.suppressors)
+
+
+def test_loaded_gun_no_ascent_with_omega_suppressed():
+    """Omega present but not ascending → cap likely holds → one level down."""
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-80.0)
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.1)
+    assert result.regime is ConvectiveRegime.LOADED_GUN
     assert result.risk_level == ConvectiveRisk.MODERATE  # HIGH suppressed one level
-    assert any("loaded gun" in s for s in result.suppressors)
+    assert any("initiation inhibited" in s for s in result.suppressors)
+
+
+def test_loaded_gun_neutral_omega_suppressed():
+    """Neutral omega (0.0) is 'present, not ascending' → suppressed like subsidence."""
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-80.0)
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.0)
+    assert result.risk_level == ConvectiveRisk.MODERATE
+
+
+def test_loaded_gun_very_strong_cap_suppressed_without_omega():
+    """A CIN < -200 cap holds regardless of ascent data → still suppressed."""
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-250.0)
+    result = assess_convective_thermo(indices, omega_700_pa_s=None)
+    assert result.regime is ConvectiveRegime.LOADED_GUN
+    assert result.risk_level == ConvectiveRisk.MODERATE
+    assert any("strong cap" in s.lower() for s in result.suppressors)
 
 
 def test_loaded_gun_with_ascent_keeps_risk():
@@ -234,6 +259,15 @@ def test_active_regime_keeps_risk():
     assert result.regime is ConvectiveRegime.ACTIVE
     assert result.risk_level == ConvectiveRisk.HIGH
     assert result.drivers
+
+
+def test_active_regime_subsidence_not_flagged():
+    """ACTIVE intentionally doesn't note subsidence and never suppresses."""
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-10.0)
+    result = assess_convective_thermo(indices, omega_700_pa_s=0.2)
+    assert result.regime is ConvectiveRegime.ACTIVE
+    assert result.risk_level == ConvectiveRisk.HIGH
+    assert not result.suppressors
 
 
 def test_weak_instability_subsidence_adds_suppressor():
@@ -260,6 +294,44 @@ def test_regime_none_when_no_cape():
     assert result.regime is None
     assert result.drivers == []
     assert result.suppressors == []
+
+
+# ---------------------------------------------------------------------------
+# _omega_near_700 (large-scale ascent trigger extraction)
+# ---------------------------------------------------------------------------
+
+
+def _lvl(pressure_hpa, omega_pa_s):
+    from weatherbrief.models import DerivedLevel
+    return DerivedLevel(pressure_hpa=pressure_hpa, omega_pa_s=omega_pa_s)
+
+
+def test_omega_near_700_picks_closest():
+    """Picks the omega from the level nearest 700 hPa."""
+    from weatherbrief.analysis.sounding import _omega_near_700
+    levels = [_lvl(850, 0.05), _lvl(700, -0.20), _lvl(500, -0.40)]
+    assert _omega_near_700(levels) == -0.20
+
+
+def test_omega_near_700_none_when_no_omega():
+    """None when no level carries omega."""
+    from weatherbrief.analysis.sounding import _omega_near_700
+    levels = [_lvl(850, None), _lvl(700, None)]
+    assert _omega_near_700(levels) is None
+
+
+def test_omega_near_700_accepts_within_100hpa():
+    """A level within the 100 hPa window (e.g. 600) is accepted."""
+    from weatherbrief.analysis.sounding import _omega_near_700
+    levels = [_lvl(600, -0.15)]
+    assert _omega_near_700(levels) == -0.15
+
+
+def test_omega_near_700_rejects_when_too_far():
+    """No level within 100 hPa of 700 → None (don't trust distant omega)."""
+    from weatherbrief.analysis.sounding import _omega_near_700
+    levels = [_lvl(500, -0.30), _lvl(300, -0.50)]
+    assert _omega_near_700(levels) is None
 
 
 # ---------------------------------------------------------------------------

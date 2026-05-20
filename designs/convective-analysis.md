@@ -110,7 +110,7 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 |--------|----------|----------------|
 | **THERMAL** | CAPE < 300 | Base CAPE risk kept; labelled + annotated only (full thermal scoring needs PBLH / terrain / diurnal — deferred) |
 | **WEAK_INSTABILITY** | 300 ≤ CAPE < 800 | Base CAPE risk kept; ascent/subsidence noted as driver/suppressor |
-| **LOADED_GUN** | CAPE ≥ 800 & CIN ≤ −50 | Risk held **down one level unless** ω₇₀₀ shows ascent (≤ −0.1 Pa/s) that could erode the cap — fixes the false-positive HIGH when the inversion is intact |
+| **LOADED_GUN** | CAPE ≥ 800 & CIN ≤ −50 | ω₇₀₀ ascent (≤ −0.1 Pa/s) → risk kept (cap may erode). Omega present, no ascent → **down one level** (cap holds). Omega **unavailable** → risk kept with an honest "no ascent data" note, **except** a very strong cap (CIN < −200) which suppresses regardless. Fixes the false-positive HIGH without downgrading an unassessable loaded gun. ω₇₀₀ read from `derived_levels` (now populated in `compute_derived_levels_core`, the lite pass where the assessment runs) |
 | **ACTIVE** | CAPE ≥ 800 & CIN > −50 | Base CAPE risk kept; convection initiates readily |
 
 - **Generic CIN suppression:** preserved for THERMAL / WEAK_INSTABILITY only (CIN < −200 J/kg → one level down). LOADED_GUN / ACTIVE model the cap themselves via the regime logic above.
