@@ -298,7 +298,7 @@ The thermo method gets rich MetPy indices (CAPE, CIN, LCL, LFC, EL, shear, K-ind
 
 ### 2. No CIN suppression in NWP method
 
-The thermo method suppresses risk by one level when CIN < −200 J/kg. The NWP method doesn't — if the model's convective scheme reports 50% convective cloud cover, the risk is MODERATE regardless of CIN. This is arguably correct (the model already accounts for CIN internally in its convective parameterization), but it means the two methods can disagree on risk level for the same atmospheric state.
+The thermo method suppresses risk by one level when CIN < −200 J/kg (generic strong-cap floor, in the THERMAL / WEAK_INSTABILITY regimes; the LOADED_GUN regime models the cap explicitly via omega gating — see Stage 4). The NWP method doesn't — if the model's convective scheme reports 50% convective cloud cover, the risk is MODERATE regardless of CIN. This is arguably correct (the model already accounts for CIN internally in its convective parameterization), but it means the two methods can disagree on risk level for the same atmospheric state.
 
 ### 3. MARGINAL risk handling differs between methods
 
