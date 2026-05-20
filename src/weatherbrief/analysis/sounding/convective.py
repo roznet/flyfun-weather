@@ -147,7 +147,9 @@ def _shared_annotations(indices: ThermodynamicIndices) -> tuple[list[str], list[
 
     if indices.lcl_altitude_ft is not None and indices.lfc_altitude_ft is not None:
         gap = indices.lfc_altitude_ft - indices.lcl_altitude_ft
-        if gap <= 500:
+        # LFC >= LCL is a physical invariant, but MetPy on coarse pressure
+        # levels can occasionally return LFC < LCL — guard the lower bound.
+        if 0 <= gap <= 500:
             drivers.append(f"Small LCL–LFC gap (~{gap:.0f} ft): low barrier to initiation")
 
     if indices.lcl_altitude_ft is not None and indices.lcl_altitude_ft > 8000:
@@ -172,7 +174,7 @@ def _regime_explanation(
     applies the generic strong-CIN suppression. Returns the (possibly adjusted)
     risk plus the lists of factors raising and holding down risk.
     """
-    if regime is None:
+    if regime is None or cape is None:
         return risk, [], []
 
     drivers: list[str] = []
@@ -181,16 +183,33 @@ def _regime_explanation(
     subsidence = omega_700_pa_s is not None and omega_700_pa_s >= OMEGA_SUBSIDENCE
 
     if regime is ConvectiveRegime.LOADED_GUN:
+        # classify_regime guarantees cape >= REGIME_CAPE_HIGH and cin <= REGIME_CIN_CAP
         drivers.append(f"High instability (CAPE {cape:.0f} J/kg)")
         if ascent:
             drivers.append(
                 f"Large-scale ascent (ω₇₀₀ {omega_700_pa_s:.2f} Pa/s) may erode the cap"
             )
+        elif omega_700_pa_s is None:
+            # No ascent data. A very strong cap (CIN < -200) holds regardless,
+            # so it still suppresses; a moderate cap we leave unjudged rather
+            # than downgrade on missing data — an unassessable loaded gun is
+            # not safely "low risk".
+            if cin is not None and cin < CIN_CAP_THRESHOLD:
+                risk = _down_one(risk)
+                suppressors.append(
+                    f"Very strong cap (CIN {cin:.0f} J/kg) inhibits convection"
+                )
+            else:
+                suppressors.append(
+                    f"Capping inversion (CIN {cin:.0f} J/kg) — no ascent data to "
+                    "assess cap erosion (loaded gun)"
+                )
         else:
+            # Omega present and not ascending → cap likely holds.
             risk = _down_one(risk)
             suppressors.append(
-                f"Capping inversion (CIN {cin:.0f} J/kg) with no large-scale ascent — "
-                "initiation unlikely (loaded gun)"
+                f"Capping inversion (CIN {cin:.0f} J/kg), no large-scale ascent "
+                f"(ω₇₀₀ {omega_700_pa_s:.2f} Pa/s) — initiation inhibited (loaded gun)"
             )
     elif regime is ConvectiveRegime.ACTIVE:
         cap_note = f", weak/absent cap (CIN {cin:.0f} J/kg)" if cin is not None else ""
@@ -371,10 +390,7 @@ def assess_convective_nwp(
     # Suppress by one level if strong CIN cap (same as thermo path)
     cin = indices.cin_surface_jkg
     if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
-        risk_levels = list(ConvectiveRisk)
-        idx = risk_levels.index(risk)
-        if idx > 0:
-            risk = risk_levels[idx - 1]
+        risk = _down_one(risk)
 
     # LCL-anchored path uses LCL as the convective base proxy
     base_ft = nwp_diagnostics.convective_base_ft
