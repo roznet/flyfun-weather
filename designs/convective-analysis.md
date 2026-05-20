@@ -91,11 +91,10 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 
 #### Method 1: Thermo (Thermodynamic) — Default
 
-`convective.py:assess_convective_thermo()` → `ConvectiveAssessment`
+`convective.py:assess_convective_thermo(indices, omega_700_pa_s=None)` → `ConvectiveAssessment`
 
-- **Input:** `ThermodynamicIndices` (MetPy-derived from pressure levels)
-- **Primary driver:** `_effective_cape()` = `max(SB-CAPE, MU-CAPE, ML-CAPE, NWP-CAPE)` — catches elevated convection, mixed-layer instability, and model-native CAPE
-- **Risk thresholds** (European-calibrated):
+- **Input:** `ThermodynamicIndices` (MetPy-derived from pressure levels) + optional 700 hPa omega (large-scale ascent trigger, read from `derived_levels` by the caller via `_omega_near_700()`)
+- **Base risk:** `_effective_cape()` thresholds (European-calibrated):
 
 | CAPE (J/kg) | Risk |
 |-------------|------|
@@ -105,7 +104,17 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 | > 50 | LOW |
 | > 0 + LFC + EL | MARGINAL |
 
-- **CIN suppression:** CIN < −200 J/kg → risk reduced by one level
+- **Regime discrimination** (`classify_regime(cape, cin)` → `ConvectiveRegime`): the base CAPE risk is refined per regime, so a single CAPE threshold no longer misjudges a capped "loaded gun" or mislabels thermally driven convection:
+
+| Regime | Boundary | Risk behaviour |
+|--------|----------|----------------|
+| **THERMAL** | CAPE < 300 | Base CAPE risk kept; labelled + annotated only (full thermal scoring needs PBLH / terrain / diurnal — deferred) |
+| **WEAK_INSTABILITY** | 300 ≤ CAPE < 800 | Base CAPE risk kept; ascent/subsidence noted as driver/suppressor |
+| **LOADED_GUN** | CAPE ≥ 800 & CIN ≤ −50 | Risk held **down one level unless** ω₇₀₀ shows ascent (≤ −0.1 Pa/s) that could erode the cap — fixes the false-positive HIGH when the inversion is intact |
+| **ACTIVE** | CAPE ≥ 800 & CIN > −50 | Base CAPE risk kept; convection initiates readily |
+
+- **Generic CIN suppression:** preserved for THERMAL / WEAK_INSTABILITY only (CIN < −200 J/kg → one level down). LOADED_GUN / ACTIVE model the cap themselves via the regime logic above.
+- **Explanation outputs:** `regime`, `drivers` (factors raising risk), and `suppressors` (factors holding it down) are populated and consumed by `digest/prompt_builder.py` (LLM narrative) and `digest/text.py` (plain-text digest). They are serialized into `briefing.json` but not yet rendered in the web/iOS UI.
 - **Severity modifiers:** shear >40kt (supercell), >25kt (multicell), high freezing + CAPE >1000 (hail), K >35, TT >55, LI < −6
 - **Tower bounds:** base = LFC (LCL fallback), top = EL
 - **Output:** `method="thermo"`, `cover_pct=None`
