@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.auth import get_jwt_secret, is_dev_mode
 from flyfun_common.db import get_db, DEV_USER_ID
-from flyfun_common.db.deps import _decode_user_id
+from flyfun_common.db.deps import current_user_id
 from flyfun_common.db.models import ApiTokenRow, UserPreferencesRow, UserRow
 from flyfun_common.admin import (
     generate_api_token,
@@ -52,11 +52,16 @@ def require_admin(
 
     In dev mode the dev user is always treated as admin.
     In production, authenticates via JWT cookie or Bearer token (using the
-    shared auth logic in deps.py), then checks the user's email against
+    shared auth logic in deps.py — which also enforces account suspension and
+    session-epoch revocation), then checks the user's email against
     ADMIN_EMAILS.
-    Returns the user_id on success, raises 403 otherwise.
+    Returns the user_id on success, raises 401/403 otherwise.
     """
-    user_id = _decode_user_id(request, db)
+    # Delegate authentication to current_user_id (called with an explicit db,
+    # so the Depends default is overridden). This applies the same approved +
+    # session-revocation checks as every other endpoint before we layer the
+    # admin-email check on top.
+    user_id = current_user_id(request, db)
 
     if is_dev_mode():
         return user_id
