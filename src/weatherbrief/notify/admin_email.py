@@ -24,9 +24,20 @@ APPROVE_LINK_EXPIRY_SECONDS = 7 * 24 * 3600  # 7 days
 
 
 def get_admin_emails() -> list[str]:
-    """Parse ADMIN_EMAILS env var (comma-separated). Returns empty list if unset."""
+    """Parse ADMIN_EMAILS env var (comma-separated). Returns empty list if unset.
+
+    Addresses are lowercased so admin matching is case-insensitive — callers
+    must compare against a lowercased user email (see ``is_admin_email``).
+    """
     raw = os.environ.get("ADMIN_EMAILS", "")
-    return [addr.strip() for addr in raw.split(",") if addr.strip()]
+    return [addr.strip().lower() for addr in raw.split(",") if addr.strip()]
+
+
+def is_admin_email(email: str | None) -> bool:
+    """Case-insensitive membership test for admin identity."""
+    if not email:
+        return False
+    return email.strip().lower() in get_admin_emails()
 
 
 def generate_approve_url(user_id: str, base_url: str, secret: str) -> str:

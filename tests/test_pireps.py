@@ -354,6 +354,67 @@ class TestQueryPireps:
         assert data["count"] >= 1
         assert len(data["items"]) >= 1
 
+    def _add_flight(self, session, fid, owner, *, private):
+        if session.get(UserRow, owner) is None:
+            _seed_user(session, owner)
+        now = datetime.now(timezone.utc)
+        session.add(FlightRow(
+            id=fid, user_id=owner, route_name="X",
+            waypoints_json='[{"icao":"LFPG","name":"P","lat":49.0,"lon":2.5}]',
+            departure_time=now - timedelta(hours=1),
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+            flight_duration_hours=2.0, private=private,
+        ))
+        session.commit()
+
+    def test_query_other_users_private_flight_is_404(self, client, app_db):
+        """Scoping by another user's private flight must not leak its PIREPs."""
+        session = app_db()
+        self._add_flight(session, "vis-private", OTHER_USER_ID, private=True)
+        session.close()
+        assert client.get("/api/pireps?flight_id=vis-private").status_code == 404
+
+    def test_query_other_users_public_flight_ok(self, client, app_db):
+        """Public/shared flights stay viewable by anyone (community model)."""
+        session = app_db()
+        self._add_flight(session, "vis-public", OTHER_USER_ID, private=False)
+        session.close()
+        assert client.get("/api/pireps?flight_id=vis-public").status_code == 200
+
+    def test_query_nonexistent_flight_is_404(self, client, app_db):
+        # Same 404 as private-not-owned → no existence oracle.
+        assert client.get("/api/pireps?flight_id=ghost").status_code == 404
+
+    def test_visible_linked_pack_ids_strips_unseen_flight(self, app_db):
+        """Part 2: a community PIREP on a flight you can't see keeps its content
+        but loses its pack linkage."""
+        from weatherbrief.api.pireps import _visible_linked_pack_ids
+
+        now = datetime.now(timezone.utc)
+        session = app_db()
+        self._add_flight(session, "pub", OTHER_USER_ID, private=False)
+        self._add_flight(session, "priv", OTHER_USER_ID, private=True)
+        self._add_flight(session, "mine", DEV_USER_ID, private=True)
+        packs = {}
+        for fid in ("pub", "priv", "mine"):
+            p = BriefingPackRow(flight_id=fid, days_out=0, fetch_timestamp=now)
+            session.add(p)
+            session.flush()
+            packs[fid] = p.id
+        session.commit()
+
+        rows = [
+            PirepRow(pack_id=packs["pub"], user_id=OTHER_USER_ID),
+            PirepRow(pack_id=packs["priv"], user_id=OTHER_USER_ID),
+            PirepRow(pack_id=packs["mine"], user_id=DEV_USER_ID),
+        ]
+        visible = _visible_linked_pack_ids(session, rows, DEV_USER_ID)
+        session.close()
+
+        assert packs["pub"] in visible        # public flight → linkage shown
+        assert packs["priv"] not in visible    # other's private → linkage hidden
+        assert packs["mine"] in visible        # own flight → linkage shown
+
     def test_query_by_flight_id_includes_pireps_without_pack(self, client, app_db):
         """PIREPs without pack_id are found by flight_id via user + time window."""
         now = datetime.now(timezone.utc)

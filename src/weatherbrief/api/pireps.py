@@ -75,8 +75,14 @@ class PirepListResponse(BaseModel):
     count: int
 
 
-def _row_to_response(row: PirepRow, *, viewer_id: str | None = None) -> PirepResponse:
-    """Convert a PirepRow to API response, resolving aircraft type."""
+def _row_to_response(
+    row: PirepRow, *, viewer_id: str | None = None, show_pack_id: bool = True
+) -> PirepResponse:
+    """Convert a PirepRow to API response, resolving aircraft type.
+
+    ``show_pack_id=False`` strips the flight linkage (``pack_id``) for viewers
+    who can't see the linked flight — the report itself stays visible.
+    """
     aircraft_type = None
     if row.aircraft_id and row.aircraft:
         aircraft_type = row.aircraft.icao_type
@@ -102,7 +108,7 @@ def _row_to_response(row: PirepRow, *, viewer_id: str | None = None) -> PirepRes
         wind_speed_kt=row.wind_speed_kt,
         remarks=row.remarks,
         aircraft_type=aircraft_type,
-        pack_id=row.pack_id,
+        pack_id=row.pack_id if show_pack_id else None,
         source=row.source,
         is_own=(viewer_id is not None and row.user_id == viewer_id),
     )
@@ -256,6 +262,60 @@ def _validate_pack_ownership(db: Session, pack_id: int, user_id: str) -> None:
     flight = db.get(FlightRow, pack.flight_id)
     if flight is None or flight.user_id != user_id:
         raise HTTPException(status_code=400, detail="Briefing pack not owned by you")
+
+
+def _assert_can_view_flight(db: Session, flight_id: str, user_id: str) -> None:
+    """404 unless the caller may see this flight (owns it, or it's public).
+
+    Same visibility rule as ``flights._load_flight_or_404`` (private + not owner
+    => 404), but checked directly on ``FlightRow`` so PIREP scoping doesn't
+    depend on the heavier full-flight load. PIREP *content* stays
+    community-global (airport/bounds queries); only the flight-keyed lookup is
+    gated, since it both groups reports by a flight and confirms it exists.
+    """
+    flight = db.get(FlightRow, flight_id)
+    if flight is None or (flight.private and flight.user_id != user_id):
+        raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
+
+
+def _assert_can_view_pack(db: Session, pack_id: int, user_id: str) -> None:
+    """404 unless the caller may see the flight the pack belongs to."""
+    pack = db.get(BriefingPackRow, pack_id)
+    if pack is None:
+        raise HTTPException(status_code=404, detail="Briefing pack not found")
+    _assert_can_view_flight(db, pack.flight_id, user_id)
+
+
+def _visible_linked_pack_ids(
+    db: Session, rows: list[PirepRow], user_id: str
+) -> set[int]:
+    """Subset of the rows' pack_ids whose linked flight the caller may see.
+
+    Used to strip the flight linkage from community PIREPs filed on flights the
+    viewer can't see: the report still shows, but its pack reference is hidden.
+    Two batched lookups regardless of result-set size.
+    """
+    pack_ids = {r.pack_id for r in rows if r.pack_id is not None}
+    if not pack_ids:
+        return set()
+    pack_to_flight = dict(
+        db.query(BriefingPackRow.id, BriefingPackRow.flight_id)
+        .filter(BriefingPackRow.id.in_(pack_ids))
+        .all()
+    )
+    flight_ids = set(pack_to_flight.values())
+    if not flight_ids:
+        return set()
+    visible_flights = {
+        fid
+        for fid, owner, private in db.query(
+            FlightRow.id, FlightRow.user_id, FlightRow.private
+        )
+        .filter(FlightRow.id.in_(flight_ids))
+        .all()
+        if owner == user_id or not private
+    }
+    return {pid for pid, fid in pack_to_flight.items() if fid in visible_flights}
 
 
 def _resolve_airport(icao: str, request: Request) -> tuple[float, float]:
@@ -422,8 +482,12 @@ def query_pireps(
     kwargs: dict = {}
 
     if flight_id is not None:
+        # Flight-keyed scoping is gated by flight visibility (own or public),
+        # even though PIREP content is community-global via airport/bounds.
+        _assert_can_view_flight(db, flight_id, user_id)
         kwargs["flight_id"] = flight_id
     elif pack_id is not None:
+        _assert_can_view_pack(db, pack_id, user_id)
         kwargs["pack_id"] = pack_id
     elif airport is not None:
         lat, lon = _resolve_airport(airport, request)
@@ -460,5 +524,13 @@ def query_pireps(
         kwargs["aircraft_type"] = aircraft_type
 
     rows = list_pireps(db, **kwargs)
-    items = [_row_to_response(r, viewer_id=user_id) for r in rows]
+    visible_packs = _visible_linked_pack_ids(db, rows, user_id)
+    items = [
+        _row_to_response(
+            r,
+            viewer_id=user_id,
+            show_pack_id=(r.pack_id is None or r.pack_id in visible_packs),
+        )
+        for r in rows
+    ]
     return PirepListResponse(items=items, count=len(items))

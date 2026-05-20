@@ -387,7 +387,7 @@ def create_app() -> FastAPI:
         user_id: str = Depends(current_user_id),
         db=Depends(_get_db),
     ):
-        from weatherbrief.notify.admin_email import get_admin_emails
+        from weatherbrief.notify.admin_email import is_admin_email
 
         import json as _json
 
@@ -413,7 +413,7 @@ def create_app() -> FastAPI:
             "email": user.email,
             "name": user.display_name,
             "approved": user.approved,
-            "is_admin": is_dev_mode() or user.email in get_admin_emails(),
+            "is_admin": is_dev_mode() or is_admin_email(user.email),
             "setup_completed": prefs.setup_completed if prefs else False,
             "synoptic_forecast_map_enabled": synoptic_enabled,
         }

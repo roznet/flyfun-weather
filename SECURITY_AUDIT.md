@@ -26,7 +26,7 @@ One **High** defect was found and **empirically confirmed**: the magic-link **6-
 | 2026-H1 | **High** | _FIXED 2026-05-20._ Magic-link 6-digit OTP brute-force is unthrottled → account takeover (per-IP limit is a no-op; no per-token attempt cap) |
 | 2026-M1 | Medium | _FIXED 2026-05-20._ Rolling 30-day self-renewing sessions + no revocation/`jti` amplify token theft (extends M-new-5) |
 | 2026-M2 | Medium | _FIXED 2026-05-20._ Magic-link per-IP limiter trusts the spoofable **leftmost** `X-Forwarded-For` (inconsistent with the app's own hardened rightmost helper) |
-| 2026-M3 | Medium/Low | PIREP cross-flight enumeration: `GET /api/pireps?flight_id=/pack_id=` not scoped to caller; links community PIREPs to arbitrary (incl. private) flight/pack IDs |
+| 2026-M3 | Medium/Low | _FIXED 2026-05-20._ PIREP cross-flight enumeration: `GET /api/pireps?flight_id=/pack_id=` not scoped to caller; links community PIREPs to arbitrary (incl. private) flight/pack IDs |
 | 2026-L1 | Low | Magic-link `consume` TOCTOU (used-check then set, no row lock) — same-user, low impact |
 | 2026-L2 | Low | Unbounded free-text PIREP `remarks` (no `max_length`; `Text` column) — storage-bloat DoS |
 | 2026-L3 | Low | `PUT /api/cost-config` consumes a raw `dict` body, bypassing Pydantic (admin-gated) — breaks the "all POST bodies are Pydantic" invariant |
@@ -103,6 +103,8 @@ Caddy (`deploy/weather.flyfun.aero.caddy`) sets a trustworthy `X-Real-IP {remote
 
 ### 2026-M3 (Medium/Low) — PIREP cross-flight enumeration (IDOR-lite)
 
+**Status:** FIXED 2026-05-20 — `query_pireps` now gates the `flight_id`/`pack_id` filter through the flight-visibility rule (`_assert_can_view_flight`: 404 unless owned or public), and strips the `pack_id` linkage from community results whose flight the viewer can't see (`_visible_linked_pack_ids`). PIREP content stays globally visible via airport/bounds. Tests in `tests/test_pireps.py::TestQueryPireps`.
+
 **Locations:** `src/weatherbrief/api/pireps.py:399-464` (`GET /api/pireps`), `src/weatherbrief/storage/pireps.py` (`list_pireps`).
 
 `query_pireps` is gated only by `can_view_pireps(db, user_id)`; when a caller supplies `flight_id` or `pack_id`, the value is passed straight to `list_pireps` with **no** `_load_flight_or_404(viewer_id=…)` / pack-ownership check. Any PIREP-enabled user can therefore enumerate PIREPs (author position, altitude, remarks) tied to **another user's flight or pack — including a private one** — and confirm that a given flight/pack ID exists. PIREPs are intentionally a community dataset (airport/bounds queries are global by design), so the leak is narrow: it's the *linkage* to a specific private flight/pack and the existence oracle. The publish path already validates pack ownership; the read path does not.
@@ -131,7 +133,7 @@ Verified against current source (`flyfun-common/python/…`, weather `src/…`).
 | H1 | Container ports on `0.0.0.0` | **FIXED (intact)** | compose binds `127.0.0.1:8020/8021`. |
 | H2 | Docker net segmentation + broad MySQL grant | **OPEN** | single `shared-services` net; `'weatherbrief'@'172.%'`. |
 | H3 | Single `JWT_SECRET` reuse | **PARTIAL** | `CREDENTIAL_ENCRYPTION_KEY` now a separate prod-required env (Fernet no longer derives from JWT_SECRET) — but JWT_SECRET still signs JWTs + Starlette session + pack-HMAC + approval links. |
-| H4 | `is_dev_mode()` fails open | **OPEN** | `config.py:21-22` still `!= "production"`. |
+| H4 | `is_dev_mode()` fails open | **FIXED 2026-05-20** | flyfun-common 0.4.2: dev only for a known set; unknown `ENVIRONMENT` (e.g. `prod`-typo, `staging`) raises at startup — fail closed. Fixed in both `auth/config.py` and `db/engine.py`. |
 | H5 | Pack-HMAC mismatch served anyway; NULL trusted | **OPEN** | `storage/flights.py` returns row on mismatch; NULL hmac trusted; column nullable. |
 | H6 | Unpinned deps / no lockfile / no scanning | **OPEN** | no lockfile, no dependabot; `>=` floors; base images by moving tag. Installed `flyfun-common 0.3.11/0.3.12` vs `>=0.4.0` floor — build/runtime drift. |
 | H7 | Rate limiting on auth/OAuth/token endpoints | **OPEN** | no limiter on `/auth/*`, `/auth/apple/token`, `/oauth/*`, `/api/tokens`, admin approve. (Magic-link has *some* limits — see 2026-H1/M2 for why they're insufficient.) |
@@ -142,7 +144,7 @@ Verified against current source (`flyfun-common/python/…`, weather `src/…`).
 | M-new-1 | CSP `unsafe-inline`; `frame-ancestors 'self'` | **OPEN** | Caddyfile unchanged. |
 | M-new-2 | No container hardening flags | **OPEN** | no `read_only`/`cap_drop`/`no-new-privileges`/`tmpfs`. |
 | M-new-3 | Admin approval link no one-time-use | **OPEN** | `admin.py` HMAC+TTL only; no nonce. |
-| M-new-4 | Admin-by-email, no case-fold / no `email_verified` | **OPEN** | `get_admin_emails` does `.strip()` only; `_extract_userinfo` ignores `email_verified`. |
+| M-new-4 | Admin-by-email, no case-fold / no `email_verified` | **FIXED 2026-05-20** | weather `get_admin_emails`/`is_admin_email` now lowercase both sides (admin.py + app.py use it); flyfun-common 0.4.2 drops the email when a provider reports `email_verified=false` (Google/Apple/native). Identity-by-`user_id` (vs email) still a possible future hardening. |
 | M-new-5 | JWT no `aud`/`iss`/`jti`; no revocation | **OPEN → see 2026-M1** | now worse (30-day + self-renew). |
 | M-new-6 | `/oauth/register` unauthenticated | **OPEN** | only HTTPS-URI validation; no initial-access-token/admin gate. |
 | M-new-7 | OAuth auth-code replay race | **OPEN** | plain SELECT then `used=True`; no `with_for_update()`. |

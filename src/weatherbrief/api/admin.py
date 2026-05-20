@@ -34,7 +34,7 @@ from flyfun_common.db.models import CostLedgerRow
 from weatherbrief.db.models import (
     BriefingUsageRow, FlightRow,
 )
-from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails
+from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, is_admin_email
 from weatherbrief.api.security import audit_admin_action
 from weatherbrief.storage.flights import safe_path_component
 
@@ -70,8 +70,7 @@ def require_admin(
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
-    admin_emails = get_admin_emails()
-    if user.email not in admin_emails:
+    if not is_admin_email(user.email):
         raise HTTPException(status_code=403, detail="Admin access required")
 
     return user_id
