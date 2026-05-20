@@ -149,6 +149,26 @@ def _interpolate_cloud_water(derived_levels: list[DerivedLevel]) -> None:
             )
 
 
+def _omega_near_700(derived_levels: list[DerivedLevel]) -> float | None:
+    """Return model omega (Pa/s) at the level nearest 700 hPa, if reasonably close.
+
+    Used as the large-scale ascent trigger for the convective loaded-gun
+    regime. Returns None when no level within 100 hPa of 700 carries omega.
+    """
+    best: float | None = None
+    best_dist: float | None = None
+    for lvl in derived_levels:
+        if lvl.omega_pa_s is None:
+            continue
+        dist = abs(lvl.pressure_hpa - 700)
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            best = lvl.omega_pa_s
+    if best_dist is not None and best_dist <= 100:
+        return best
+    return None
+
+
 def analyze_sounding_lite(
     levels: list[PressureLevelData],
     hourly: HourlyForecast | None = None,
@@ -240,8 +260,11 @@ def analyze_sounding_lite(
     # Inversions (cheap — single linear scan, ~2 µs)
     inversion_layers = detect_inversions(derived_levels)
 
-    # Convective assessment
-    convective = assess_convective_thermo(indices)
+    # Convective assessment — pass the 700 hPa omega so the loaded-gun regime
+    # can tell whether large-scale ascent might erode a capping inversion.
+    convective = assess_convective_thermo(
+        indices, omega_700_pa_s=_omega_near_700(derived_levels)
+    )
     convective_nwp = assess_convective_nwp(
         indices, hourly.nwp_cloud_diagnostics if hourly else None,
     )

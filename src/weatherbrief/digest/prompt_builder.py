@@ -297,9 +297,15 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
             )
 
         if sa.convective and sa.convective.risk_level != ConvectiveRisk.NONE:
-            lines.append(f"  Convective [{model}]: {sa.convective.risk_level.value}")
-            for mod in sa.convective.severe_modifiers:
-                lines.append(f"    - {mod}")
+            conv = sa.convective
+            regime = f" [{conv.regime.value}]" if conv.regime else ""
+            lines.append(f"  Convective [{model}]: {conv.risk_level.value}{regime}")
+            for drv in conv.drivers:
+                lines.append(f"    + {drv}")
+            for sup in conv.suppressors:
+                lines.append(f"    - {sup}")
+            for mod in conv.severe_modifiers:
+                lines.append(f"    ! {mod}")
 
         for zone in sa.icing_zones:
             sld = " SLD!" if zone.sld_risk else ""
