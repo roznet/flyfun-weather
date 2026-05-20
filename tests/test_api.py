@@ -857,7 +857,7 @@ class TestRefreshEndpoint:
         finally:
             client.app.state.db_path = ""
 
-    @patch("weatherbrief.tasks.route_weather.run_realtime_refresh")
+    @patch("weatherbrief.api.packs.run_realtime_refresh")
     @patch("weatherbrief.api.packs.decide_refresh")
     @patch("weatherbrief.api.packs._build_data_status")
     @patch("weatherbrief.api.packs.list_packs")
@@ -890,7 +890,7 @@ class TestRefreshEndpoint:
         finally:
             client.app.state.db_path = ""
 
-    @patch("weatherbrief.tasks.route_weather.run_realtime_refresh")
+    @patch("weatherbrief.api.packs.run_realtime_refresh")
     @patch("weatherbrief.api.packs.decide_refresh")
     @patch("weatherbrief.api.packs._build_data_status")
     @patch("weatherbrief.api.packs.list_packs")

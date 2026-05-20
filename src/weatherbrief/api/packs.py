@@ -48,6 +48,8 @@ from flyfun_common.db import current_user_id, get_db, SessionLocal
 from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.fetch.model_status import fetch_model_metadata
 from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
+from weatherbrief.tasks.route_weather import run_realtime_refresh
+from weatherbrief.models.observations import RouteObservations
 from weatherbrief.models import (
     BriefingPackMeta,
     DiagnosticPublic,
@@ -678,7 +680,7 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
     """
     models = list(status.models.values())
     n_eligible = sum(1 for ms in models if ms.covers_horizon)
-    n_updated = sum(1 for ms in models if ms.state == "stale")
+    n_updated = sum(1 for ms in models if ms.covers_horizon and ms.state == "stale")
     threshold = _refresh_threshold(days_out)
 
     # No model's latest run reaches the flight horizon yet — a full refresh
@@ -1266,7 +1268,7 @@ class RefreshAccepted(BaseModel):
     mode: str | None = None  # "full" | "realtime" | "none"
     reason: str | None = None
     eta_useful: str | None = None  # ISO wallclock of next useful model update
-    observations: dict | None = None  # updated RouteObservations (realtime mode)
+    observations: RouteObservations | None = None  # updated obs (realtime mode)
 
 
 @router.post(
@@ -1340,12 +1342,10 @@ async def refresh_briefing(
                 resp_status = "already_fresh"
                 if decision.mode == "realtime":
                     resp_status = "realtime"
-                    from weatherbrief.tasks.route_weather import run_realtime_refresh
                     try:
-                        new_obs = await asyncio.to_thread(
+                        observations = await asyncio.to_thread(
                             run_realtime_refresh, Path(latest.artifact_path), db_path,
                         )
-                        observations = new_obs.model_dump(mode="json")
                     except Exception:
                         logger.warning(
                             "Real-time refresh failed for %s — returning no-op",
@@ -1496,12 +1496,13 @@ async def refresh_briefing_stream(
                         "Refresh gate for %s (stream): mode=%s (%s)",
                         flight_id, decision.mode, decision.reason,
                     )
+                    obs_payload = None
                     if decision.mode == "realtime":
-                        from weatherbrief.tasks.route_weather import run_realtime_refresh
                         try:
-                            await asyncio.to_thread(
+                            new_obs = await asyncio.to_thread(
                                 run_realtime_refresh, Path(latest.artifact_path), db_path,
                             )
+                            obs_payload = new_obs.model_dump(mode="json")
                         except Exception:
                             logger.warning(
                                 "Real-time refresh failed for %s (stream) — completing no-op",
@@ -1515,6 +1516,7 @@ async def refresh_briefing_stream(
                             "type": "complete",
                             "pack": pack_resp,
                             "refresh_decision": decision_payload,
+                            "observations": obs_payload,
                         }
                         yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
@@ -1838,8 +1840,6 @@ def refresh_observations(
     db_path = getattr(request.app.state, "db_path", "")
     if not db_path:
         raise HTTPException(status_code=503, detail="Airport database not configured")
-
-    from weatherbrief.tasks.route_weather import run_realtime_refresh
 
     try:
         new_obs = run_realtime_refresh(pack_dir, db_path)
