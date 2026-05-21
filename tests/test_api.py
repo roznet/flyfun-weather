@@ -870,6 +870,7 @@ class TestRefreshEndpoint:
             RealtimeRefreshResult,
             RouteObservations,
             RouteSigmets,
+            SigmetAlongRoute,
         )
 
         mock_list.return_value = [self._gate_pack(sample_flight.id, 0)]
@@ -884,7 +885,8 @@ class TestRefreshEndpoint:
                 airports_found=2, airports_with_metar=2, airports_with_taf=1, airports=[],
             ),
             sigmets=RouteSigmets(
-                corridor_nm=50.0, fetch_time=datetime.now(timezone.utc), count=1,
+                corridor_nm=50.0, fetch_time=datetime.now(timezone.utc),
+                sigmets=[SigmetAlongRoute(fir_id="LFFF", hazard="TURB")],
             ),
         )
         client.app.state.db_path = "/fake/db"
@@ -985,6 +987,7 @@ class TestRefreshEndpoint:
             RealtimeRefreshResult,
             RouteObservations,
             RouteSigmets,
+            SigmetAlongRoute,
         )
 
         mock_sl.side_effect = app_db
@@ -1000,7 +1003,11 @@ class TestRefreshEndpoint:
                 airports_found=2, airports_with_metar=2, airports_with_taf=1, airports=[],
             ),
             sigmets=RouteSigmets(
-                corridor_nm=50.0, fetch_time=datetime.now(timezone.utc), count=2,
+                corridor_nm=50.0, fetch_time=datetime.now(timezone.utc),
+                sigmets=[
+                    SigmetAlongRoute(fir_id="LFFF", hazard="TURB"),
+                    SigmetAlongRoute(fir_id="EGTT", hazard="TS"),
+                ],
             ),
         )
         client.app.state.db_path = "/fake/db"
@@ -1037,7 +1044,11 @@ class TestRefreshEndpoint:
         """
         from weatherbrief.api.packs import DataStatus, RefreshDecision
         from weatherbrief.models import BriefingPackMeta
-        from weatherbrief.models.observations import RouteObservations
+        from weatherbrief.models.observations import (
+            RouteObservations,
+            RouteSigmets,
+            SigmetAlongRoute,
+        )
 
         # A real pack on disk, located at the meta's artifact_path.
         briefing = {
@@ -1072,7 +1083,10 @@ class TestRefreshEndpoint:
             airports_found=1, airports_with_metar=1, airports_with_taf=0, airports=[],
         )
         mock_runways.return_value = {}
-        mock_sigmets.return_value = None
+        mock_sigmets.return_value = RouteSigmets(
+            corridor_nm=50.0, fetch_time=datetime.now(timezone.utc),
+            sigmets=[SigmetAlongRoute(fir_id="LFFF", hazard="TURB")],
+        )
 
         client.app.state.db_path = "/fake/db"
         try:
@@ -1081,9 +1095,11 @@ class TestRefreshEndpoint:
             data = resp.json()
             assert data["status"] == "realtime"
             assert data["observations"]["airports_found"] == 1
+            assert data["sigmets"]["count"] == 1
             # The real seam patched briefing.json at the pack's artifact_path.
             patched = json.loads((tmp_path / "briefing.json").read_text())
             assert patched["route_observations"]["airports_found"] == 1
+            assert patched["route_sigmets"]["count"] == 1
         finally:
             client.app.state.db_path = ""
 

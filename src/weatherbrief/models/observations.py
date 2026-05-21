@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class AirportObservation(BaseModel):
@@ -124,9 +124,24 @@ class RouteSigmets(BaseModel):
     time_window_to: datetime | None = None
     route_firs: list[str] = Field(default_factory=list)
     sigmets: list[SigmetAlongRoute] = Field(default_factory=list)
-    hazards: list[str] = Field(default_factory=list)  # union of hazard types
-    has_severe: bool = False
-    count: int = 0
+
+    @computed_field
+    @property
+    def count(self) -> int:
+        return len(self.sigmets)
+
+    @computed_field
+    @property
+    def hazards(self) -> list[str]:
+        """Sorted union of hazard types across the matched SIGMETs."""
+        return sorted({s.hazard for s in self.sigmets if s.hazard})
+
+    @computed_field
+    @property
+    def has_severe(self) -> bool:
+        return any(
+            s.qualifier and s.qualifier.upper() == "SEV" for s in self.sigmets
+        )
 
 
 class RealtimeRefreshResult(BaseModel):

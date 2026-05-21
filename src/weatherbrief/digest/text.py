@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from weatherbrief.digest.format_utils import format_flight_level
 from weatherbrief.models import (
     AgreementLevel,
     AltitudeAdvisories,
@@ -350,15 +351,9 @@ def _format_route_observations(obs: RouteObservations) -> list[str]:
 
 def _format_sigmet_band(base_ft: int | None, top_ft: int | None) -> str:
     """Format a SIGMET vertical band, e.g. 'SFC-FL100' or 'FL080-FL240'."""
-    def _lvl(ft: int | None) -> str:
-        if ft is None:
-            return "?"
-        if ft <= 0:
-            return "SFC"
-        return f"FL{ft // 100:03d}"
     if base_ft is None and top_ft is None:
         return ""
-    return f"{_lvl(base_ft)}-{_lvl(top_ft)}"
+    return f"{format_flight_level(base_ft)}-{format_flight_level(top_ft)}"
 
 
 def _format_route_sigmets(sig: RouteSigmets) -> list[str]:

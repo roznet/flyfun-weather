@@ -413,8 +413,6 @@ class TestRunRealtimeRefresh:
         fresh_sigmets = RouteSigmets(
             corridor_nm=50.0,
             fetch_time=datetime(2026, 5, 20, 9),
-            count=1,
-            hazards=["TURB"],
             sigmets=[SigmetAlongRoute(fir_id="LFFF", hazard="TURB")],
         )
         with patch(
@@ -595,9 +593,6 @@ def test_text_digest_includes_sigmets(two_wp_route):
     sig = RouteSigmets(
         corridor_nm=50.0,
         fetch_time=datetime(2026, 5, 20, 9),
-        count=1,
-        hazards=["TURB"],
-        has_severe=True,
         sigmets=[SigmetAlongRoute(
             fir_id="LFFF", hazard="TURB", qualifier="SEV",
             base_ft=0, top_ft=24000,
@@ -605,6 +600,9 @@ def test_text_digest_includes_sigmets(two_wp_route):
             raw_text="LFFF SIGMET 1 ...",
         )],
     )
+    assert sig.count == 1
+    assert sig.hazards == ["TURB"]
+    assert sig.has_severe is True
     lines = _format_route_sigmets(sig)
     text = "\n".join(lines)
     assert "SIGMETs Along Route" in text
@@ -631,7 +629,6 @@ def test_sigmets_roundtrip_on_snapshot():
         route_sigmets=RouteSigmets(
             corridor_nm=50.0,
             fetch_time=datetime(2026, 5, 20, 9),
-            count=1,
             sigmets=[SigmetAlongRoute(
                 fir_id="LFFF", hazard="TS", coords=[(2.0, 49.0), (3.0, 50.0)],
             )],
