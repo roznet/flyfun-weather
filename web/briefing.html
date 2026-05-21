@@ -92,21 +92,24 @@
       </div>
     </div>
 
-    <!-- METAR/TAF Observations -->
-    <div id="observations-wrapper" class="section collapsible" data-section="observations" style="display: none;">
-      <h3>METAR/TAF Observations</h3>
+    <!-- Real-time refresh worsening banner (shown only when conditions degraded) -->
+    <div id="refresh-delta-banner" class="refresh-delta-banner" style="display: none;"></div>
+
+    <!-- Route SIGMETs (area hazards first — hidden entirely when none) -->
+    <div id="sigmets-wrapper" class="section collapsible" data-section="sigmets" style="display: none;">
+      <h3>SIGMETs Along Route</h3>
       <div class="section-body">
-        <div id="observations-section">
+        <div id="sigmets-section">
           <p class="muted">Loading...</p>
         </div>
       </div>
     </div>
 
-    <!-- Route SIGMETs -->
-    <div id="sigmets-wrapper" class="section collapsible" data-section="sigmets" style="display: none;">
-      <h3>SIGMETs Along Route</h3>
+    <!-- METAR/TAF Observations -->
+    <div id="observations-wrapper" class="section collapsible" data-section="observations" style="display: none;">
+      <h3>METAR/TAF Observations</h3>
       <div class="section-body">
-        <div id="sigmets-section">
+        <div id="observations-section">
           <p class="muted">Loading...</p>
         </div>
       </div>

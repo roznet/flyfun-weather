@@ -436,6 +436,11 @@ class TestRunRealtimeRefresh:
         patched = json.loads((tmp_path / "briefing.json").read_text())
         assert patched["route_observations"]["airports_found"] == 1
         assert patched["route_sigmets"]["count"] == 1
+        # A worsening delta is always persisted (no prior SIGMETs on this pack,
+        # so the first realtime refresh reports nothing worsened).
+        assert result.delta is not None
+        assert result.delta.worsened is False
+        assert patched["last_refresh_delta"]["worsened"] is False
 
     def test_uses_stored_corridor_nm(self, tmp_path, two_wp_route):
         import json

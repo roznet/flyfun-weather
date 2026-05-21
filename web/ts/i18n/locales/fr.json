@@ -155,6 +155,7 @@
   "sigmets.popupMove": "Déplacement",
   "sigmets.popupValid": "Validité",
   "sigmets.popupRaw": "SIGMET brut",
+  "refreshDelta.title": "Conditions dégradées depuis la dernière mise à jour",
   "digest.synoptic": "Synoptique",
   "digest.concerns": "Préoccupations spécifiques",
   "digest.trend": "Tendance",

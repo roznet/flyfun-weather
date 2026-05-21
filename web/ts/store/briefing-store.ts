@@ -569,6 +569,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           ...snapshot,
           route_observations: result.observations,
           ...(result.sigmets != null ? { route_sigmets: result.sigmets } : {}),
+          last_refresh_delta: result.delta ?? null,
         },
       });
     } catch (err) {

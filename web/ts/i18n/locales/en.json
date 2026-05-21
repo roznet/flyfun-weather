@@ -207,6 +207,8 @@
   "sigmets.popupValid": "Valid",
   "sigmets.popupRaw": "Raw SIGMET",
 
+  "refreshDelta.title": "Conditions worsened since last update",
+
   "digest.synoptic": "Synoptic",
   "digest.concerns": "Specific Concerns",
   "digest.trend": "Trend",

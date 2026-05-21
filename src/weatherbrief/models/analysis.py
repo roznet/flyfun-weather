@@ -9,7 +9,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from weatherbrief.models.observations import RouteObservations, RouteSigmets
+from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 
 
 class Waypoint(BaseModel):
@@ -838,3 +838,6 @@ class ForecastSnapshot(BaseModel):
     cross_sections: list[RouteCrossSection] = Field(default_factory=list)
     route_observations: RouteObservations | None = None
     route_sigmets: RouteSigmets | None = None
+    # Worsening summary from the last cheap real-time refresh (no digest re-run);
+    # None after a full pipeline run (clean slate — the digest covers changes).
+    last_refresh_delta: RefreshDelta | None = None

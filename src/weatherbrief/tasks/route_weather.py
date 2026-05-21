@@ -739,12 +739,28 @@ def run_realtime_refresh(
     except Exception:
         logger.warning("Route SIGMET refresh failed", exc_info=True)
 
+    # Diff against the previous on-disk state (before we overwrite it) so the
+    # UI can warn when conditions worsened — the digest is NOT regenerated here.
+    from weatherbrief.tasks.refresh_delta import compute_refresh_delta
+
+    old_obs = RouteObservations.model_validate(stored_obs) if stored_obs else None
+    old_sigmets = RouteSigmets.model_validate(stored_sigmets) if stored_sigmets else None
+    delta = compute_refresh_delta(
+        old_obs=old_obs,
+        new_obs=new_obs,
+        old_sigmets=old_sigmets,
+        new_sigmets=new_sigmets,
+    )
+
     # Patch observations (and SIGMETs, when fetched) back into the briefing.
     briefing_data["route_observations"] = new_obs.model_dump(mode="json")
     if new_sigmets is not None:
         briefing_data["route_sigmets"] = new_sigmets.model_dump(mode="json")
+    # Always persist the delta (even when nothing worsened) so a stale banner
+    # from a prior refresh is cleared on the next load.
+    briefing_data["last_refresh_delta"] = delta.model_dump(mode="json")
     briefing_path = pack_dir / "briefing.json"
     target_path = briefing_path if briefing_path.exists() else pack_dir / "snapshot.json"
     target_path.write_text(json.dumps(briefing_data, indent=2, default=str))
 
-    return RealtimeRefreshResult(observations=new_obs, sigmets=new_sigmets)
+    return RealtimeRefreshResult(observations=new_obs, sigmets=new_sigmets, delta=delta)

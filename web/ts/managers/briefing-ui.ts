@@ -1179,6 +1179,43 @@ export function renderRouteSigmets(snapshot: ForecastSnapshot | null): void {
   };
 }
 
+// Red warning triangle (text-presentation glyph can't be forced red on all
+// platforms, so use an inline SVG: red triangle + white exclamation).
+const RD_WARN_ICON =
+  '<svg class="rd-icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">'
+  + '<path fill="#c0392b" d="M12 3 22 20H2z"/>'
+  + '<path fill="#fff" d="M11 9h2v5h-2zm0 6h2v2h-2z"/></svg>';
+// Flight-category tokens to colorize inside delta messages (longest first so
+// MVFR/LIFR win over VFR/IFR; \b boundaries keep MVFR from matching VFR).
+const RD_CAT_RE = /\b(LIFR|MVFR|VFR|IFR)\b/g;
+
+/**
+ * Banner warning that conditions worsened since the last real-time refresh.
+ * Only shown when something actually got worse; the digest is NOT regenerated
+ * on a realtime refresh, so this is the user's signal that the AI text may be
+ * behind. Hidden (and cleared) otherwise.
+ */
+export function renderRefreshDelta(snapshot: ForecastSnapshot | null): void {
+  const el = $('refresh-delta-banner');
+  if (!el) return;
+
+  const delta = snapshot?.last_refresh_delta;
+  if (!delta || !delta.worsened || delta.messages.length === 0) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+
+  const items = delta.messages
+    .map(m => `<li>${escapeHtml(m).replace(RD_CAT_RE, (cat) => flightCatBadge(cat))}</li>`)
+    .join('');
+  el.innerHTML = `
+    <div class="rd-title">${RD_WARN_ICON}<span>${t('refreshDelta.title')}</span></div>
+    <ul class="rd-list">${items}</ul>
+  `;
+  el.style.display = '';
+}
+
 // --- Synopsis (structured digest) ---
 
 const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; labelKey: string; icon: string }> = [

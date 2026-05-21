@@ -155,6 +155,7 @@
   "sigmets.popupMove": "Verlagerung",
   "sigmets.popupValid": "Gültig",
   "sigmets.popupRaw": "SIGMET-Rohtext",
+  "refreshDelta.title": "Bedingungen seit der letzten Aktualisierung verschlechtert",
   "digest.synoptic": "Synoptik",
   "digest.concerns": "Besondere Bedenken",
   "digest.trend": "Trend",

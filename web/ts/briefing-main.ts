@@ -975,8 +975,9 @@ async function init(): Promise<void> {
     ) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
-      ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
+      ui.renderRefreshDelta(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
+      ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
       ui.renderDwdCharts(state.flight, state.currentPack);
       ui.renderDWDOverview(state.flight, state.currentPack, user.is_admin);
@@ -1386,8 +1387,9 @@ async function init(): Promise<void> {
     }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
-    ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
+    ui.renderRefreshDelta(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);
+    ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode, s.digestPending);
     ui.renderDwdCharts(s.flight, s.currentPack);
     ui.renderDWDOverview(s.flight, s.currentPack, user.is_admin);

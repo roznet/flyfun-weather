@@ -144,9 +144,24 @@ class RouteSigmets(BaseModel):
         )
 
 
+class RefreshDelta(BaseModel):
+    """What got *worse* between the previous real-time state and this refresh.
+
+    Deterministic (no LLM): drives the "conditions worsened since last update"
+    banner. Improvements are intentionally not reported — the banner only warns.
+    ``messages`` use language-neutral aviation shorthand (ICAO codes, flight
+    categories, FIR/SIGMET ids) so they need no per-locale translation.
+    """
+
+    worsened: bool = False
+    messages: list[str] = Field(default_factory=list)
+    computed_at: datetime | None = None
+
+
 class RealtimeRefreshResult(BaseModel):
     """Combined output of the cheap D-0 real-time refresh seam: fresh
     METAR/TAF observations plus route SIGMETs (issue #167 seam, #168 SIGMET)."""
 
     observations: RouteObservations
     sigmets: RouteSigmets | None = None
+    delta: RefreshDelta | None = None

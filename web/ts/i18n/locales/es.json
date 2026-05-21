@@ -155,6 +155,7 @@
   "sigmets.popupMove": "Movimiento",
   "sigmets.popupValid": "Válido",
   "sigmets.popupRaw": "SIGMET sin procesar",
+  "refreshDelta.title": "Condiciones empeoradas desde la última actualización",
   "digest.synoptic": "Sinóptico",
   "digest.concerns": "Preocupaciones específicas",
   "digest.trend": "Tendencia",

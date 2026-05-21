@@ -3315,6 +3315,41 @@ label {
   margin-bottom: 0.5rem;
 }
 
+.refresh-delta-banner {
+  border: 1px solid var(--amber, #b8860b);
+  border-radius: var(--radius);
+  margin-bottom: 0.75rem;
+  overflow: hidden; /* clip the title bar's corners to the rounded border */
+  font-size: 0.8rem;
+}
+
+.refresh-delta-banner .rd-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--amber, #b8860b);
+  color: #fff;
+  font-weight: 700;
+  padding: 0.4rem 0.75rem;
+}
+
+.refresh-delta-banner .rd-icon {
+  flex: 0 0 auto;
+  display: block;
+}
+
+.refresh-delta-banner .rd-list {
+  background: #fff;
+  color: #222;
+  margin: 0;
+  padding: 0.5rem 0.85rem 0.5rem 1.7rem;
+  list-style: disc;
+}
+
+.refresh-delta-banner .rd-list li {
+  margin: 0.15rem 0;
+}
+
 .obs-table th {
   font-size: 0.75rem;
 }

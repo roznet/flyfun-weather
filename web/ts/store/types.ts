@@ -536,10 +536,18 @@ export interface RouteSigmets {
   count: number;
 }
 
+/** What got worse since the previous real-time refresh (deterministic, no LLM). */
+export interface RefreshDelta {
+  worsened: boolean;
+  messages: string[];
+  computed_at: string | null;
+}
+
 /** Combined output of the cheap D-0 real-time refresh: observations + SIGMETs. */
 export interface RealtimeRefreshResult {
   observations: RouteObservations;
   sigmets: RouteSigmets | null;
+  delta?: RefreshDelta | null;
 }
 
 export interface ForecastSnapshot {
@@ -554,6 +562,7 @@ export interface ForecastSnapshot {
   analyses: WaypointAnalysis[];
   route_observations?: RouteObservations | null;
   route_sigmets?: RouteSigmets | null;
+  last_refresh_delta?: RefreshDelta | null;
 }
 
 export interface WindComponent {

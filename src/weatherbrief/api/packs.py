@@ -49,7 +49,7 @@ from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.fetch.model_status import fetch_model_metadata
 from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
 from weatherbrief.tasks.route_weather import run_realtime_refresh
-from weatherbrief.models.observations import RouteObservations, RouteSigmets
+from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models import (
     BriefingPackMeta,
     DiagnosticPublic,
@@ -1291,6 +1291,7 @@ class RefreshAccepted(BaseModel):
     eta_useful: str | None = None  # ISO wallclock of next useful model update
     observations: RouteObservations | None = None  # updated obs (realtime mode)
     sigmets: RouteSigmets | None = None  # updated SIGMETs (realtime mode)
+    delta: RefreshDelta | None = None  # worsening summary (realtime mode)
 
 
 @router.post(
@@ -1362,6 +1363,7 @@ async def refresh_briefing(
                 )
                 observations = None
                 sigmets = None
+                delta = None
                 resp_status = "already_fresh"
                 resp_mode = decision.mode
                 if decision.mode == "realtime":
@@ -1371,6 +1373,7 @@ async def refresh_briefing(
                         )
                         observations = result.observations
                         sigmets = result.sigmets
+                        delta = result.delta
                         resp_status = "realtime"
                     except Exception:
                         # Degrade to a no-op so status and mode agree.
@@ -1389,6 +1392,7 @@ async def refresh_briefing(
                         eta_useful=decision.eta_useful,
                         observations=observations,
                         sigmets=sigmets,
+                        delta=delta,
                     ).model_dump_json(),
                     status_code=200,
                     media_type="application/json",
@@ -1526,6 +1530,7 @@ async def refresh_briefing_stream(
                     )
                     obs_payload = None
                     sigmets_payload = None
+                    delta_payload = None
                     effective_mode = decision.mode
                     if decision.mode == "realtime":
                         try:
@@ -1535,6 +1540,8 @@ async def refresh_briefing_stream(
                             obs_payload = result.observations.model_dump(mode="json")
                             if result.sigmets is not None:
                                 sigmets_payload = result.sigmets.model_dump(mode="json")
+                            if result.delta is not None:
+                                delta_payload = result.delta.model_dump(mode="json")
                         except Exception:
                             # Degrade to a no-op so consumers don't treat the
                             # null observations as a successful realtime refresh.
@@ -1560,6 +1567,7 @@ async def refresh_briefing_stream(
                             "refresh_decision": decision_payload,
                             "observations": obs_payload,
                             "sigmets": sigmets_payload,
+                            "delta": delta_payload,
                         }
                         yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
