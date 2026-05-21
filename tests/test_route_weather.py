@@ -501,11 +501,12 @@ def test_departure_day_window_uses_end_of_departure_day():
 def test_departure_day_window_guards_inverted_window():
     from datetime import timezone
 
-    # A late "now" past the departure day's end must not invert the window.
+    # A late "now" past the departure day's end must not invert the window: it
+    # collapses to a zero-length window pinned at end-of-day (no active SIGMETs).
     target = datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc)
     now = datetime(2026, 5, 21, 2, 0, tzinfo=timezone.utc)
     win_from, win_to = _departure_day_window(target, now=now)
-    assert win_from <= win_to
+    assert win_from == win_to == datetime(2026, 5, 20, 23, 59, 59, tzinfo=timezone.utc)
 
 
 def test_run_route_sigmets_maps_result(two_wp_route):

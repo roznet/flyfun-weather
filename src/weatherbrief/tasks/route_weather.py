@@ -626,6 +626,9 @@ def run_route_sigmets(
             coords=[tuple(c) for c in s.coords],
         ))
 
+    # Order by corridor progression so web + PDF rows scan front-to-back.
+    sigmets.sort(key=lambda s: s.enroute_distance_from_nm if s.enroute_distance_from_nm is not None else float("inf"))
+
     # count / hazards / has_severe are computed from `sigmets` on the model.
     return RouteSigmets(
         corridor_nm=corridor_nm,
