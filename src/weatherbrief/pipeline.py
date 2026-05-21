@@ -84,6 +84,7 @@ class BriefingOptions:
     convective_method: str | None = None  # "thermo" or "nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     metar_taf_corridor_nm: float = 30  # corridor width for METAR/TAF search
+    sigmet_corridor_nm: float = 50  # corridor width for route SIGMET intersection
     # Advisory preferences (from user profile)
     advisory_aggregation: str | None = None  # "worst" or "majority"
     advisory_enabled: dict[str, bool] | None = None  # {advisory_id: enabled}
@@ -112,6 +113,8 @@ class BriefingUsage:
     llm_output_tokens: int | None = None
     metar_taf_fetched: bool = False
     metar_taf_airports: int = 0
+    sigmet_fetched: bool = False
+    sigmet_count: int = 0
     elapsed_seconds: float | None = None
     queue_wait_seconds: float | None = None
     triggered_by: str | None = None
@@ -414,8 +417,11 @@ def execute_briefing(
                 _alt_advisory_diagnostic = None
         stage_timings["alt_advisories"] = perf_counter() - _t0
 
-    # === 3.5 Route weather observations (D-0 only) ===
+    # === 3.5 Route weather observations + SIGMETs (D-0 only) ===
     route_observations = None
+    route_sigmets = None
+    result_usage_sigmet = False
+    result_usage_sigmet_count = 0
     if days_out == 0 and options.airports_db_path and not options.historical_mode:
         _notify("route_weather")
         _t0 = perf_counter()
@@ -454,6 +460,21 @@ def execute_briefing(
             logger.warning("Route weather fetch failed", exc_info=True)
             result_usage_metar = False
             result_usage_metar_airports = 0
+
+        # Route SIGMETs (area hazards) — independent of METAR/TAF success.
+        try:
+            from weatherbrief.tasks.route_weather import run_route_sigmets
+
+            route_sigmets = run_route_sigmets(
+                route=route,
+                target_time=target_dt,
+                corridor_nm=options.sigmet_corridor_nm,
+                airports_db_path=options.airports_db_path,
+            )
+            result_usage_sigmet = True
+            result_usage_sigmet_count = route_sigmets.count
+        except Exception:
+            logger.warning("Route SIGMET fetch failed", exc_info=True)
         stage_timings["route_weather"] = perf_counter() - _t0
     else:
         result_usage_metar = False
@@ -471,6 +492,7 @@ def execute_briefing(
         analyses=analysis_result.waypoint_analyses,
         cross_sections=fetch_result.cross_sections,
         route_observations=route_observations,
+        route_sigmets=route_sigmets,
     )
 
     if pack_dir:
@@ -500,6 +522,8 @@ def execute_briefing(
     result.usage.grib_enrichment_failed = fetch_result.grib_enrichment_failed
     result.usage.metar_taf_fetched = result_usage_metar
     result.usage.metar_taf_airports = result_usage_metar_airports
+    result.usage.sigmet_fetched = result_usage_sigmet
+    result.usage.sigmet_count = result_usage_sigmet_count
     if fetch_result.elevation_profile and pack_dir:
         result.elevation_profile_path = pack_dir / "elevation_profile.json"
     if route_advisories_manifest and pack_dir:

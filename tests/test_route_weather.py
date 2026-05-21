@@ -1,6 +1,7 @@
 """Tests for route METAR/TAF integration."""
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,11 +17,15 @@ from weatherbrief.models.observations import (
     AirportObservation,
     ObservationComparison,
     RouteObservations,
+    RouteSigmets,
+    SigmetAlongRoute,
 )
 from weatherbrief.tasks.route_weather import (
     _classify_discrepancy,
     _compute_route_distances,
+    _departure_day_window,
     _find_nearest_waypoint,
+    _sigmet_altitude_band,
     _worst_category,
     run_observation_comparison,
 )
@@ -405,21 +410,34 @@ class TestRunRealtimeRefresh:
             airports_with_taf=0,
             airports=[],
         )
+        fresh_sigmets = RouteSigmets(
+            corridor_nm=50.0,
+            fetch_time=datetime(2026, 5, 20, 9),
+            count=1,
+            hazards=["TURB"],
+            sigmets=[SigmetAlongRoute(fir_id="LFFF", hazard="TURB")],
+        )
         with patch(
             "weatherbrief.tasks.route_weather.run_route_weather", return_value=fresh,
         ) as mock_fetch, patch(
+            "weatherbrief.tasks.route_weather.run_route_sigmets", return_value=fresh_sigmets,
+        ) as mock_sigmet, patch(
             "weatherbrief.airports.get_runway_ends", return_value={},
         ):
             result = run_realtime_refresh(tmp_path, "/fake/db")
 
-        # Returned the refreshed observations.
-        assert result.corridor_nm == 30.0
-        assert result.airports_found == 1
+        # Returned the refreshed observations + SIGMETs.
+        assert result.observations.corridor_nm == 30.0
+        assert result.observations.airports_found == 1
+        assert result.sigmets is not None
+        assert result.sigmets.count == 1
         # Used the pack's stored corridor/route and target time (not network).
         mock_fetch.assert_called_once()
-        # Patched briefing.json on disk.
+        mock_sigmet.assert_called_once()
+        # Patched briefing.json on disk (both observations and SIGMETs).
         patched = json.loads((tmp_path / "briefing.json").read_text())
         assert patched["route_observations"]["airports_found"] == 1
+        assert patched["route_sigmets"]["count"] == 1
 
     def test_uses_stored_corridor_nm(self, tmp_path, two_wp_route):
         import json
@@ -447,6 +465,8 @@ class TestRunRealtimeRefresh:
         with patch(
             "weatherbrief.tasks.route_weather.run_route_weather", return_value=fresh,
         ) as mock_fetch, patch(
+            "weatherbrief.tasks.route_weather.run_route_sigmets", return_value=None,
+        ), patch(
             "weatherbrief.airports.get_runway_ends", return_value={},
         ):
             run_realtime_refresh(tmp_path, "/fake/db")
@@ -458,3 +478,167 @@ class TestRunRealtimeRefresh:
 
         with pytest.raises(FileNotFoundError):
             run_realtime_refresh(tmp_path, "/fake/db")
+
+
+# --- Route SIGMETs (issue #168) ---
+
+def test_sigmet_altitude_band(two_wp_route):
+    # two_wp_route cruises at 6000ft; band is surface to cruise + buffer.
+    low, high = _sigmet_altitude_band(two_wp_route)
+    assert low == 0
+    assert high == 6000 + 5000
+
+
+def test_departure_day_window_uses_end_of_departure_day():
+    from datetime import timezone
+
+    target = datetime(2026, 5, 20, 14, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc)
+    win_from, win_to = _departure_day_window(target, now=now)
+    assert win_from == now
+    assert win_to == datetime(2026, 5, 20, 23, 59, 59, tzinfo=timezone.utc)
+
+
+def test_departure_day_window_guards_inverted_window():
+    from datetime import timezone
+
+    # A late "now" past the departure day's end must not invert the window.
+    target = datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 21, 2, 0, tzinfo=timezone.utc)
+    win_from, win_to = _departure_day_window(target, now=now)
+    assert win_from <= win_to
+
+
+def test_run_route_sigmets_maps_result(two_wp_route):
+    """run_route_sigmets maps a RouteSigmetResult into the flat RouteSigmets model."""
+    from datetime import timezone
+
+    from weatherbrief.tasks.route_weather import run_route_sigmets
+
+    sig = SimpleNamespace(
+        fir_id="LFFF", fir_name="Paris", hazard="TURB", qualifier="SEV",
+        base_ft=0, top_ft=24000,
+        valid_from=datetime(2026, 5, 20, 8, tzinfo=timezone.utc),
+        valid_to=datetime(2026, 5, 20, 14, tzinfo=timezone.utc),
+        direction="NE", speed_kt=20,
+        raw_text="LFFF SIGMET 1 VALID ... SEV TURB ...",
+        coords=[(2.0, 49.0), (3.0, 49.0), (3.0, 50.0)],
+    )
+    route_sig = SimpleNamespace(
+        sigmet=sig, matched_firs=["LFFF"],
+        min_distance_nm=0.0, enroute_distance_from_nm=40.0, enroute_distance_to_nm=90.0,
+    )
+    fake_result = SimpleNamespace(route_firs=["LFFF", "EGTT"], sigmets=[route_sig])
+
+    fake_service = MagicMock()
+    fake_service.fetch_route_sigmets.return_value = fake_result
+
+    with patch(
+        "euro_aip.briefing.weather.route_sigmet.RouteSigmetService",
+        return_value=fake_service,
+    ), patch(
+        "weatherbrief.airports._load_airport_model", return_value=MagicMock(),
+    ):
+        out = run_route_sigmets(
+            route=two_wp_route,
+            target_time=datetime(2026, 5, 20, 9, tzinfo=timezone.utc),
+            corridor_nm=50.0,
+            airports_db_path="/fake/db",
+        )
+
+    assert out.count == 1
+    assert out.corridor_nm == 50.0
+    assert out.hazards == ["TURB"]
+    assert out.has_severe is True
+    assert out.route_firs == ["LFFF", "EGTT"]
+    s = out.sigmets[0]
+    assert s.fir_id == "LFFF"
+    assert s.hazard == "TURB"
+    assert s.enroute_distance_from_nm == 40.0
+    assert s.enroute_distance_to_nm == 90.0
+    # Polygon retained for a future cross-section/map overlay.
+    assert s.coords[0] == (2.0, 49.0)
+    # Altitude band passed to the service is surface -> cruise+buffer.
+    kwargs = fake_service.fetch_route_sigmets.call_args.kwargs
+    assert kwargs["altitude_band_ft"] == (0, 6000 + 5000)
+
+
+def test_run_route_sigmets_empty(two_wp_route):
+    from datetime import timezone
+
+    from weatherbrief.tasks.route_weather import run_route_sigmets
+
+    fake_result = SimpleNamespace(route_firs=[], sigmets=[])
+    fake_service = MagicMock()
+    fake_service.fetch_route_sigmets.return_value = fake_result
+
+    with patch(
+        "euro_aip.briefing.weather.route_sigmet.RouteSigmetService",
+        return_value=fake_service,
+    ), patch(
+        "weatherbrief.airports._load_airport_model", return_value=MagicMock(),
+    ):
+        out = run_route_sigmets(
+            route=two_wp_route,
+            target_time=datetime(2026, 5, 20, 9, tzinfo=timezone.utc),
+            corridor_nm=50.0,
+            airports_db_path="/fake/db",
+        )
+    assert out.count == 0
+    assert out.sigmets == []
+    assert out.has_severe is False
+
+
+def test_text_digest_includes_sigmets(two_wp_route):
+    from weatherbrief.digest.text import _format_route_sigmets
+
+    sig = RouteSigmets(
+        corridor_nm=50.0,
+        fetch_time=datetime(2026, 5, 20, 9),
+        count=1,
+        hazards=["TURB"],
+        has_severe=True,
+        sigmets=[SigmetAlongRoute(
+            fir_id="LFFF", hazard="TURB", qualifier="SEV",
+            base_ft=0, top_ft=24000,
+            enroute_distance_from_nm=40.0, enroute_distance_to_nm=90.0,
+            raw_text="LFFF SIGMET 1 ...",
+        )],
+    )
+    lines = _format_route_sigmets(sig)
+    text = "\n".join(lines)
+    assert "SIGMETs Along Route" in text
+    assert "TURB" in text
+    assert "SEV" in text
+    assert "SFC-FL240" in text
+
+
+def test_sigmets_roundtrip_on_snapshot():
+    """RouteSigmets serializes and reloads on a ForecastSnapshot."""
+    from weatherbrief.models import ForecastSnapshot
+
+    snap = ForecastSnapshot(
+        route=RouteConfig(
+            name="R",
+            waypoints=[
+                Waypoint(icao="EGTF", name="A", lat=51.3, lon=-0.5),
+                Waypoint(icao="LFQA", name="B", lat=49.3, lon=3.6),
+            ],
+        ),
+        target_date="2026-05-20",
+        fetch_date="2026-05-20",
+        days_out=0,
+        route_sigmets=RouteSigmets(
+            corridor_nm=50.0,
+            fetch_time=datetime(2026, 5, 20, 9),
+            count=1,
+            sigmets=[SigmetAlongRoute(
+                fir_id="LFFF", hazard="TS", coords=[(2.0, 49.0), (3.0, 50.0)],
+            )],
+        ),
+    )
+    dumped = snap.model_dump_json()
+    reloaded = ForecastSnapshot.model_validate_json(dumped)
+    assert reloaded.route_sigmets is not None
+    assert reloaded.route_sigmets.count == 1
+    assert reloaded.route_sigmets.sigmets[0].coords[0] == (2.0, 49.0)

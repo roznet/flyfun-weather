@@ -12,6 +12,7 @@ from weatherbrief.models import (
     IcingRisk,
     PrecipPhase,
     RouteObservations,
+    RouteSigmets,
     SoundingAnalysis,
     VerticalMotionClass,
     WaypointAnalysis,
@@ -63,6 +64,10 @@ def format_digest(
     # METAR/TAF observations (D-0 only)
     if snapshot.route_observations:
         lines.extend(_format_route_observations(snapshot.route_observations))
+
+    # Route SIGMETs (D-0 only)
+    if snapshot.route_sigmets and snapshot.route_sigmets.count:
+        lines.extend(_format_route_sigmets(snapshot.route_sigmets))
 
     # Model agreement summary
     lines.extend(_format_model_agreement(snapshot))
@@ -338,6 +343,51 @@ def _format_route_observations(obs: RouteObservations) -> list[str]:
     for comp in obs.comparisons:
         if comp.category_match != "CONFIRMING":
             lines.append(f"  [{comp.category_match}] {comp.icao}: {comp.detail}")
+
+    lines.append("")
+    return lines
+
+
+def _format_sigmet_band(base_ft: int | None, top_ft: int | None) -> str:
+    """Format a SIGMET vertical band, e.g. 'SFC-FL100' or 'FL080-FL240'."""
+    def _lvl(ft: int | None) -> str:
+        if ft is None:
+            return "?"
+        if ft <= 0:
+            return "SFC"
+        return f"FL{ft // 100:03d}"
+    if base_ft is None and top_ft is None:
+        return ""
+    return f"{_lvl(base_ft)}-{_lvl(top_ft)}"
+
+
+def _format_route_sigmets(sig: RouteSigmets) -> list[str]:
+    """Format route SIGMETs for plain-text digest."""
+    lines: list[str] = ["--- SIGMETs Along Route ---"]
+    lines.append(
+        f"  {sig.count} SIGMET(s) intersecting route "
+        f"(within {sig.corridor_nm:.0f}nm corridor)"
+    )
+    if sig.hazards:
+        lines.append(f"  Hazards: {', '.join(sig.hazards)}")
+    if sig.has_severe:
+        lines.append("  ** Severe (SEV) SIGMET in effect **")
+    lines.append("")
+
+    for s in sig.sigmets:
+        head = " ".join(p for p in (s.qualifier, s.hazard) if p) or "SIGMET"
+        band = _format_sigmet_band(s.base_ft, s.top_ft)
+        band_str = f" {band}" if band else ""
+        fir_str = f" {s.fir_id}" if s.fir_id else ""
+        if s.enroute_distance_from_nm is not None and s.enroute_distance_to_nm is not None:
+            span = f" @ {s.enroute_distance_from_nm:.0f}-{s.enroute_distance_to_nm:.0f}nm enroute"
+        elif s.min_distance_nm is not None:
+            span = f" @ {s.min_distance_nm:.0f}nm from route"
+        else:
+            span = ""
+        lines.append(f"  [{head}]{fir_str}{band_str}{span}")
+        if s.raw_text:
+            lines.append(f"    {s.raw_text}")
 
     lines.append("")
     return lines

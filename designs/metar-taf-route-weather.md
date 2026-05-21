@@ -162,10 +162,83 @@ metar_taf_airports: int = 0
 - **aviationweather.gov** has a 400-ICAO batch limit — handled by `AvWxSource` internally
 - **Not all airports report METARs** — small GA fields found by spatial query may have no data; the summary notes coverage
 
+## Route SIGMETs (issue #168)
+
+Route SIGMETs are a **sibling** D-0 real-time integration that mirrors METAR/TAF
+at every touch point, but for **area hazards** rather than airport-keyed points.
+A SIGMET warns of a weather hazard (TURB/ICE/TS/MTW/VA...) over a FIR, bounded by
+a polygon and a vertical band. There is **no model-comparison analog** — SIGMETs
+are fetched and presented, not reconciled against NWP.
+
+### Data shape (`models/observations.py`)
+
+`SigmetAlongRoute` is the flat, serializable per-SIGMET record:
+- Hazard fields: `fir_id`, `fir_name`, `hazard`, `qualifier` (SEV/EMBD/...), `base_ft`, `top_ft`, `valid_from/to`, `direction`, `speed_kt`, `raw_text`
+- Route-intersection metadata: `matched_firs`, `min_distance_nm`, `enroute_distance_from_nm`, `enroute_distance_to_nm`
+- **`coords`** — the polygon outline as `(lon, lat)` vertices
+
+`RouteSigmets` aggregates: `corridor_nm`, `fetch_time`, `altitude_low_ft`/`altitude_high_ft`,
+`time_window_from`/`to`, `route_firs`, `sigmets`, `hazards` (union), `has_severe`, `count`.
+Surfaced on `ForecastSnapshot.route_sigmets`.
+
+### Fetch (`run_route_sigmets`)
+
+Calls euro_aip `RouteSigmetService().fetch_route_sigmets(route_icaos, corridor_nm,
+model, altitude_band_ft, from_datetime, to_datetime)` and maps `RouteSigmetResult` →
+`RouteSigmets`. Two derived inputs:
+- **Altitude band** = `(0, cruise_altitude_ft + 5000)` (`_sigmet_altitude_band`) — surface
+  to cruise plus a climb/descent buffer; high-FL-only hazards irrelevant to a GA route
+  are dropped. SIGMETs with unknown bounds always surface (`overlaps_altitude` is permissive).
+- **Time window** = `(now, end of departure day UTC)` (`_departure_day_window`) — the
+  departure-day window; wider than the flight window so SIGMETs issued/expiring around
+  the flight still surface.
+
+Default corridor is `BriefingOptions.sigmet_corridor_nm = 50` (wider than METAR/TAF's 30,
+since SIGMET areas are large).
+
+### Real-time refresh seam
+
+`run_realtime_refresh` now fetches SIGMETs **alongside** METAR/TAF and returns a
+`RealtimeRefreshResult{observations, sigmets}`, patching both `route_observations` and
+`route_sigmets` into `briefing.json`. The SIGMET fetch is wrapped in try/except so a SIGMET
+source failure never blocks the cheap METAR/TAF refresh. Both refresh-button endpoints
+(`refresh_briefing`, `refresh_briefing_stream`) and the standalone `observations/refresh`
+endpoint carry `sigmets` in their responses (`RefreshAccepted.sigmets`, SSE `complete`
+event, and the endpoint's `{observations, sigmets}` body respectively).
+
+### Digest / Report / Web UI
+
+- **Text digest** (`digest/text.py`): `--- SIGMETs Along Route ---` section.
+- **LLM prompt** (`digest/prompt_builder.py`): `=== SIGMETs ALONG ROUTE ===` section.
+- **HTML report** (`briefing.html`): SIGMET table (Hazard, FIR, Levels, Enroute, Move, raw).
+- **Web UI** (`briefing-ui.ts:renderRouteSigmets`): SIGMET table with per-row info popup;
+  `sigmets-section` in `briefing.html`. Read-only — the observations Refresh button refreshes
+  SIGMETs too (combined seam).
+
+### Future cross-section / map overlay (not yet built)
+
+The model deliberately retains the polygon `coords`, the `enroute_distance_from/to_nm`
+span, and the `base_ft`/`top_ft` band so a later feature can highlight the impacted area:
+- **Cross-section**: the enroute span maps to the X axis and the vertical band to the Y
+  axis → draw the SIGMET as a rectangle/region on the cross-section.
+- **Route map**: `coords` is a ready-to-render `(lon, lat)` polygon.
+
+No re-fetch needed — everything required is already serialized on the snapshot.
+
+### Gotchas
+
+- **FIR data in the airports DB**: the FIR prefilter (`firs_along_route`) only catches
+  polygon-less SIGMETs; SIGMETs *with* polygons match by geometry regardless, so a DB
+  without FIR boundaries degrades gracefully (just drops the rare polygon-less SIGMET).
+- **euro_aip dependency**: SIGMET support lives on the rzflight GitHub HEAD; the published
+  PyPI `euro-aip` 0.9.2 does **not** include it (same version number). Install euro_aip from
+  GitHub until a SIGMET-bearing release is published.
+
 ## Future Extensions
 
 - **METAR/TAF-specific advisories**: ceiling check, visibility check, obs-model conflict, TAF deterioration alerts
 - **D-1 TAF fetch**: If TAF validity periods are detected to cover the next day, fetch on D-1 too
+- **SIGMET cross-section/map overlay**: render the affected area using the retained polygon + enroute span + vertical band (see above)
 
 ## References
 

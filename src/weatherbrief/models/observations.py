@@ -82,3 +82,56 @@ class RouteObservations(BaseModel):
     worst_taf_category: str | None = None
     has_conflicts: bool = False
     phenomena_along_route: list[str] = Field(default_factory=list)
+
+
+class SigmetAlongRoute(BaseModel):
+    """One SIGMET intersecting the route corridor (flat, serializable).
+
+    Retains the polygon outline, the affected enroute span and the vertical
+    band so a later cross-section/map overlay of the impacted area can be
+    built without re-fetching.
+    """
+
+    fir_id: str
+    fir_name: str | None = None
+    hazard: str | None = None  # TURB / ICE / TS / MTW / VA ...
+    qualifier: str | None = None  # SEV / EMBD / ISOL ...
+    base_ft: int | None = None
+    top_ft: int | None = None
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    direction: str | None = None  # movement, e.g. "NE" (None if stationary)
+    speed_kt: int | None = None
+    raw_text: str = ""
+    # Route-intersection metadata from RouteSigmetService.
+    matched_firs: list[str] = Field(default_factory=list)
+    min_distance_nm: float | None = None
+    enroute_distance_from_nm: float | None = None
+    enroute_distance_to_nm: float | None = None
+    # Polygon outline as (lon, lat) vertices — kept for a future
+    # cross-section/map overlay of the affected area.
+    coords: list[tuple[float, float]] = Field(default_factory=list)
+
+
+class RouteSigmets(BaseModel):
+    """SIGMETs affecting the route corridor (D-0 real-time info)."""
+
+    corridor_nm: float
+    fetch_time: datetime
+    altitude_low_ft: int | None = None
+    altitude_high_ft: int | None = None
+    time_window_from: datetime | None = None
+    time_window_to: datetime | None = None
+    route_firs: list[str] = Field(default_factory=list)
+    sigmets: list[SigmetAlongRoute] = Field(default_factory=list)
+    hazards: list[str] = Field(default_factory=list)  # union of hazard types
+    has_severe: bool = False
+    count: int = 0
+
+
+class RealtimeRefreshResult(BaseModel):
+    """Combined output of the cheap D-0 real-time refresh seam: fresh
+    METAR/TAF observations plus route SIGMETs (issue #167 seam, #168 SIGMET)."""
+
+    observations: RouteObservations
+    sigmets: RouteSigmets | None = None

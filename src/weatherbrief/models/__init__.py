@@ -93,7 +93,10 @@ from weatherbrief.models.airport_conditions import (  # noqa: F401
 from weatherbrief.models.observations import (  # noqa: F401
     AirportObservation,
     ObservationComparison,
+    RealtimeRefreshResult,
     RouteObservations,
+    RouteSigmets,
+    SigmetAlongRoute,
 )
 from weatherbrief.models.storage import (  # noqa: F401
     BriefingPackMeta,

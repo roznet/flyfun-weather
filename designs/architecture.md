@@ -292,7 +292,7 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/flights/{id}/packs/{ts}/report.pdf` | GET | PDF download |
 | `/api/flights/{id}/packs/{ts}/advisories` | GET | Route advisories JSON |
 | `/api/flights/{id}/packs/{ts}/advisories/recalculate` | POST | Re-evaluate advisories with user prefs |
-| `/api/flights/{id}/packs/{ts}/observations/refresh` | POST | Re-fetch METAR/TAF for D-0 packs (owner only) |
+| `/api/flights/{id}/packs/{ts}/observations/refresh` | POST | Re-fetch METAR/TAF + route SIGMETs for D-0 packs; returns `{observations, sigmets}` (owner only) |
 | `/api/flights/{id}/packs/{ts}/email` | POST | Send email to logged-in user |
 | `/api/user/profiles` | GET/POST | List/create flight parameter profiles |
 | `/api/user/profiles/{id}` | GET/PUT/DELETE | Get/update/delete profile |

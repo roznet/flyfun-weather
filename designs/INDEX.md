@@ -60,8 +60,8 @@ Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDiges
 → Full doc: digest.md
 
 ### metar-taf-route-weather
-D-0 METAR/TAF integration: fetch observations from route corridor airports, compare against NWP predictions, wind advisory computation, TAF highlighting, observations refresh endpoint.
-Key exports: `run_route_weather`, `run_observation_comparison`, `compute_wind_advisory`, `RouteObservations`, `AirportObservation`
+D-0 METAR/TAF integration: fetch observations from route corridor airports, compare against NWP predictions, wind advisory computation, TAF highlighting, observations refresh endpoint. Sibling D-0 **route SIGMET** integration (area hazards, no model comparison) shares the same module + real-time refresh seam; model retains polygon/enroute-span/vertical-band for a future cross-section overlay.
+Key exports: `run_route_weather`, `run_observation_comparison`, `compute_wind_advisory`, `RouteObservations`, `AirportObservation`, `run_route_sigmets`, `RouteSigmets`, `SigmetAlongRoute`, `RealtimeRefreshResult`
 → Full doc: metar-taf-route-weather.md
 
 ### time-alignment

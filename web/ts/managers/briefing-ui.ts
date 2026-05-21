@@ -18,6 +18,7 @@ import type {
   RouteAnalysesManifest,
   RouteObservations,
   RoutePointAnalysis,
+  RouteSigmets,
   SfipZone,
   SoundingAnalysis,
   ThermodynamicIndices,
@@ -1050,6 +1051,126 @@ export function renderRouteObservations(
         refreshBtn.disabled = false;
         refreshBtn.textContent = t('observations.refresh');
       });
+    }
+  });
+}
+
+// --- Route SIGMETs (area hazards) ---
+
+function sigmetLevel(ft: number | null): string {
+  if (ft == null) return '?';
+  if (ft <= 0) return 'SFC';
+  return `FL${String(Math.round(ft / 100)).padStart(3, '0')}`;
+}
+
+function sigmetBand(baseFt: number | null, topFt: number | null): string {
+  if (baseFt == null && topFt == null) return '—';
+  return `${sigmetLevel(baseFt)}–${sigmetLevel(topFt)}`;
+}
+
+function sigmetEnroute(s: RouteSigmets['sigmets'][number]): string {
+  if (s.enroute_distance_from_nm != null && s.enroute_distance_to_nm != null) {
+    return `${Math.round(s.enroute_distance_from_nm)}–${Math.round(s.enroute_distance_to_nm)}nm`;
+  }
+  if (s.min_distance_nm != null) {
+    return `${Math.round(s.min_distance_nm)}nm ${t('sigmets.off')}`;
+  }
+  return '—';
+}
+
+function renderSigmetPopup(s: RouteSigmets['sigmets'][number]): string {
+  const head = [s.qualifier, s.hazard].filter(Boolean).join(' ') || 'SIGMET';
+  const move = s.direction && s.speed_kt ? `${s.direction} ${s.speed_kt}kt` : '—';
+  const valid = (s.valid_from || s.valid_to)
+    ? `${s.valid_from ?? '?'} → ${s.valid_to ?? '?'}`
+    : '—';
+  const meta = [
+    `${t('sigmets.popupLevels')}: ${sigmetBand(s.base_ft, s.top_ft)}`,
+    `${t('sigmets.popupMove')}: ${move}`,
+    `${t('sigmets.popupValid')}: ${escapeHtml(valid)}`,
+  ].join('\n');
+  const raw = s.raw_text
+    ? `<h4>${t('sigmets.popupRaw')}</h4><code class="obs-popup-metar">${escapeHtml(s.raw_text)}</code>`
+    : '';
+  return `
+    <div class="popup-header"><h3>${escapeHtml(head)} — ${escapeHtml(s.fir_id)}${s.fir_name ? ' (' + escapeHtml(s.fir_name) + ')' : ''}</h3></div>
+    <pre class="obs-wind-summary">${meta}</pre>
+    ${raw}
+  `;
+}
+
+export function renderRouteSigmets(snapshot: ForecastSnapshot | null): void {
+  const el = $('sigmets-section');
+  const wrapper = $('sigmets-wrapper');
+  if (!el) return;
+
+  const sig = snapshot?.route_sigmets;
+  if (!sig || sig.sigmets.length === 0) {
+    if (wrapper) wrapper.style.display = 'none';
+    return;
+  }
+  if (wrapper) wrapper.style.display = '';
+
+  let fetchLabel = '';
+  if (sig.fetch_time) {
+    try {
+      const d = new Date(sig.fetch_time);
+      fetchLabel = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + 'Z';
+    } catch { /* ignore */ }
+  }
+
+  const hazards = sig.hazards.length > 0
+    ? `${t('sigmets.hazards')}${escapeHtml(sig.hazards.join(', '))}`
+    : '';
+  const fetchInfo = fetchLabel ? `<span class="obs-fetch-time">${t('observations.fetched')}${fetchLabel}</span>` : '';
+  const summaryHtml = `<p class="obs-summary">${sig.count}${t('sigmets.count')}${Math.round(sig.corridor_nm)}${t('sigmets.corridor')}${hazards} ${fetchInfo}</p>`;
+
+  const severeHtml = sig.has_severe
+    ? `<div class="obs-conflict-banner">${t('sigmets.severeBanner')}</div>`
+    : '';
+
+  const rows = sig.sigmets.map((s, i) => {
+    const head = [s.qualifier, s.hazard].filter(Boolean).join(' ') || 'SIGMET';
+    const isSevere = (s.qualifier ?? '').toUpperCase() === 'SEV';
+    const rowClass = isSevere ? ' class="obs-conflict-row"' : '';
+    const move = s.direction && s.speed_kt ? `${escapeHtml(s.direction)} ${s.speed_kt}kt` : '—';
+    return `
+      <tr${rowClass}>
+        <td class="obs-icao">${escapeHtml(head)} <button class="sigmet-info-btn" data-idx="${i}" title="${t('sigmets.showDetails')}" aria-label="${t('sigmets.info')}">i</button></td>
+        <td style="text-align:left; font-family:monospace;">${escapeHtml(s.fir_id)}</td>
+        <td>${sigmetBand(s.base_ft, s.top_ft)}</td>
+        <td>${sigmetEnroute(s)}</td>
+        <td>${move}</td>
+      </tr>
+    `;
+  }).join('');
+
+  el.innerHTML = `
+    ${summaryHtml}
+    ${severeHtml}
+    <div class="table-scroll">
+      <table class="band-table obs-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">${t('sigmets.tableHazard')}</th>
+            <th>${t('sigmets.tableFir')}</th>
+            <th>${t('sigmets.tableLevels')}</th>
+            <th>${t('sigmets.tableEnroute')}</th>
+            <th>${t('sigmets.tableMove')}</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+
+  el.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    const infoBtn = target.closest('.sigmet-info-btn') as HTMLElement | null;
+    if (infoBtn) {
+      const idx = Number(infoBtn.dataset.idx);
+      const s = sig.sigmets[idx];
+      if (s) showPopupContent(renderSigmetPopup(s));
     }
   });
 }

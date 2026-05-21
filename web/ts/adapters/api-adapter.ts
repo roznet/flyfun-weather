@@ -7,8 +7,10 @@ import type {
   FlightResponse,
   ForecastSnapshot,
   PackMeta,
+  RealtimeRefreshResult,
   RouteAnalysesManifest,
   RouteObservations,
+  RouteSigmets,
 } from '../store/types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { SoundingProfileData } from '../visualization/skewt/types';
@@ -350,6 +352,8 @@ export interface RefreshStreamEvent {
   // non-streaming RefreshAccepted.observations so SSE consumers don't need a
   // separate reload. Null on the `none` path and full-pipeline completes.
   observations?: RouteObservations | null;
+  // Freshly fetched route SIGMETs on the realtime gate path.
+  sigmets?: RouteSigmets | null;
 }
 
 /**
@@ -534,13 +538,13 @@ export async function fetchAltitudeTable(
   );
 }
 
-// --- Observations refresh ---
+// --- Observations + SIGMET refresh ---
 
 export async function refreshObservations(
   flightId: string,
   timestamp: string,
-): Promise<RouteObservations> {
-  return apiFetch<RouteObservations>(
+): Promise<RealtimeRefreshResult> {
+  return apiFetch<RealtimeRefreshResult>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/observations/refresh`,
     { method: 'POST' },
   );

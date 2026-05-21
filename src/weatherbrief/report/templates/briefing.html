@@ -217,6 +217,56 @@
   </table>
   {% endif %}
 
+  <!-- Route SIGMETs -->
+  {% if route_sigmets and route_sigmets.sigmets %}
+  <h2>SIGMETs Along Route</h2>
+  <p class="header-meta">
+    {{ route_sigmets.count }} SIGMET(s) within {{ route_sigmets.corridor_nm|int }}nm corridor
+    {% if route_sigmets.hazards %}
+      &mdash; Hazards: {{ route_sigmets.hazards|join(', ') }}
+    {% endif %}
+  </p>
+  {% if route_sigmets.has_severe %}
+  <div class="assessment assessment-amber" style="margin-top:0.4em;">Severe (SEV) SIGMET in effect</div>
+  {% endif %}
+  <table>
+    <thead>
+      <tr>
+        <th style="text-align:left;">Hazard</th>
+        <th style="text-align:left;">FIR</th>
+        <th>Levels</th>
+        <th>Enroute</th>
+        <th>Move</th>
+        <th style="text-align:left;">SIGMET</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in route_sigmets.sigmets %}
+      <tr {% if s.qualifier and s.qualifier|upper == 'SEV' %}style="background:#fff3cd;"{% endif %}>
+        <td style="text-align:left;">{{ [s.qualifier, s.hazard]|select|join(' ') or 'SIGMET' }}</td>
+        <td style="text-align:left; font-family:monospace;">{{ s.fir_id }}{% if s.fir_name %} ({{ s.fir_name }}){% endif %}</td>
+        <td>
+          {% if s.base_ft is not none or s.top_ft is not none %}
+            {% if s.base_ft is none %}?{% elif s.base_ft <= 0 %}SFC{% else %}FL{{ '%03d'|format((s.base_ft / 100)|int) }}{% endif %}&ndash;{% if s.top_ft is none %}?{% else %}FL{{ '%03d'|format((s.top_ft / 100)|int) }}{% endif %}
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td>
+          {% if s.enroute_distance_from_nm is not none and s.enroute_distance_to_nm is not none %}
+            {{ s.enroute_distance_from_nm|round(0)|int }}&ndash;{{ s.enroute_distance_to_nm|round(0)|int }}nm
+          {% elif s.min_distance_nm is not none %}
+            {{ s.min_distance_nm|round(0)|int }}nm off
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td>{% if s.direction and s.speed_kt %}{{ s.direction }} {{ s.speed_kt }}kt{% else %}&mdash;{% endif %}</td>
+        <td style="text-align:left; font-size:8.5pt; font-family:monospace; max-width:40em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          {{ s.raw_text or '&mdash;' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
   <!-- Advisories -->
   {% if advisories %}
   <h2>Route Advisories</h2>
