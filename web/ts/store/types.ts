@@ -502,6 +502,46 @@ export interface RouteObservations {
   phenomena_along_route: string[];
 }
 
+export interface SigmetAlongRoute {
+  fir_id: string;
+  fir_name: string | null;
+  hazard: string | null;
+  qualifier: string | null;
+  base_ft: number | null;
+  top_ft: number | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  direction: string | null;
+  speed_kt: number | null;
+  raw_text: string;
+  matched_firs: string[];
+  min_distance_nm: number | null;
+  enroute_distance_from_nm: number | null;
+  enroute_distance_to_nm: number | null;
+  // Polygon outline as [lon, lat] vertices (for a future map/cross-section overlay).
+  coords: Array<[number, number]>;
+}
+
+export interface RouteSigmets {
+  corridor_nm: number;
+  fetch_time: string;
+  altitude_low_ft: number | null;
+  altitude_high_ft: number | null;
+  time_window_from: string | null;
+  time_window_to: string | null;
+  route_firs: string[];
+  sigmets: SigmetAlongRoute[];
+  hazards: string[];
+  has_severe: boolean;
+  count: number;
+}
+
+/** Combined output of the cheap D-0 real-time refresh: observations + SIGMETs. */
+export interface RealtimeRefreshResult {
+  observations: RouteObservations;
+  sigmets: RouteSigmets | null;
+}
+
 export interface ForecastSnapshot {
   route: {
     name: string;
@@ -513,6 +553,7 @@ export interface ForecastSnapshot {
   days_out: number;
   analyses: WaypointAnalysis[];
   route_observations?: RouteObservations | null;
+  route_sigmets?: RouteSigmets | null;
 }
 
 export interface WindComponent {

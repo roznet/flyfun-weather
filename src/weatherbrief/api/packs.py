@@ -49,7 +49,7 @@ from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.fetch.model_status import fetch_model_metadata
 from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
 from weatherbrief.tasks.route_weather import run_realtime_refresh
-from weatherbrief.models.observations import RouteObservations
+from weatherbrief.models.observations import RouteObservations, RouteSigmets
 from weatherbrief.models import (
     BriefingPackMeta,
     DiagnosticPublic,
@@ -1290,6 +1290,7 @@ class RefreshAccepted(BaseModel):
     reason: str | None = None
     eta_useful: str | None = None  # ISO wallclock of next useful model update
     observations: RouteObservations | None = None  # updated obs (realtime mode)
+    sigmets: RouteSigmets | None = None  # updated SIGMETs (realtime mode)
 
 
 @router.post(
@@ -1360,13 +1361,16 @@ async def refresh_briefing(
                     flight_id, decision.mode, decision.reason,
                 )
                 observations = None
+                sigmets = None
                 resp_status = "already_fresh"
                 resp_mode = decision.mode
                 if decision.mode == "realtime":
                     try:
-                        observations = await asyncio.to_thread(
+                        result = await asyncio.to_thread(
                             run_realtime_refresh, Path(latest.artifact_path), db_path,
                         )
+                        observations = result.observations
+                        sigmets = result.sigmets
                         resp_status = "realtime"
                     except Exception:
                         # Degrade to a no-op so status and mode agree.
@@ -1384,6 +1388,7 @@ async def refresh_briefing(
                         reason=decision.reason,
                         eta_useful=decision.eta_useful,
                         observations=observations,
+                        sigmets=sigmets,
                     ).model_dump_json(),
                     status_code=200,
                     media_type="application/json",
@@ -1520,13 +1525,16 @@ async def refresh_briefing_stream(
                         flight_id, decision.mode, decision.reason,
                     )
                     obs_payload = None
+                    sigmets_payload = None
                     effective_mode = decision.mode
                     if decision.mode == "realtime":
                         try:
-                            new_obs = await asyncio.to_thread(
+                            result = await asyncio.to_thread(
                                 run_realtime_refresh, Path(latest.artifact_path), db_path,
                             )
-                            obs_payload = new_obs.model_dump(mode="json")
+                            obs_payload = result.observations.model_dump(mode="json")
+                            if result.sigmets is not None:
+                                sigmets_payload = result.sigmets.model_dump(mode="json")
                         except Exception:
                             # Degrade to a no-op so consumers don't treat the
                             # null observations as a successful realtime refresh.
@@ -1551,6 +1559,7 @@ async def refresh_briefing_stream(
                             "pack": pack_resp,
                             "refresh_decision": decision_payload,
                             "observations": obs_payload,
+                            "sigmets": sigmets_payload,
                         }
                         yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
 
@@ -1852,11 +1861,13 @@ def refresh_observations(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Re-fetch METAR/TAF observations and update snapshot without full pipeline.
+    """Re-fetch METAR/TAF observations + route SIGMETs and update snapshot
+    without full pipeline.
 
     Only available for D-0 briefings where observations are meaningful.
-    Re-runs route_weather + observation_comparison using existing forecast data,
-    then patches the snapshot on disk.
+    Re-runs route_weather + observation_comparison and route SIGMETs using
+    existing forecast data, then patches the snapshot on disk.  Returns
+    ``{observations, sigmets}``.
     """
     _load_owned_flight(db, flight_id, user_id)  # authz: owner only
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -1876,8 +1887,8 @@ def refresh_observations(
         raise HTTPException(status_code=503, detail="Airport database not configured")
 
     try:
-        new_obs = run_realtime_refresh(pack_dir, db_path)
-        return new_obs.model_dump(mode="json")
+        result = run_realtime_refresh(pack_dir, db_path)
+        return result.model_dump(mode="json")
     except HTTPException:
         raise
     except Exception as exc:

@@ -9,7 +9,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from weatherbrief.models.observations import RouteObservations
+from weatherbrief.models.observations import RouteObservations, RouteSigmets
 
 
 class Waypoint(BaseModel):
@@ -837,3 +837,4 @@ class ForecastSnapshot(BaseModel):
     analyses: list[WaypointAnalysis] = Field(default_factory=list)
     cross_sections: list[RouteCrossSection] = Field(default_factory=list)
     route_observations: RouteObservations | None = None
+    route_sigmets: RouteSigmets | None = None

@@ -15,7 +15,10 @@ from weatherbrief.models.airport_conditions import RunwayEnd
 from weatherbrief.models.observations import (
     AirportObservation,
     ObservationComparison,
+    RealtimeRefreshResult,
     RouteObservations,
+    RouteSigmets,
+    SigmetAlongRoute,
 )
 
 logger = logging.getLogger(__name__)
@@ -513,12 +516,138 @@ def run_observation_comparison(
     return observations
 
 
+# --- Route SIGMETs (D-0 real-time area hazards) ---
+
+# SIGMETs are filtered to a band from the surface up to cruise plus this
+# buffer (ft), so hazards a GA flight could climb/descend through are kept
+# while high-FL-only hazards irrelevant to the route are dropped.
+_SIGMET_ALT_BUFFER_FT = 5000
+
+
+def _sigmet_altitude_band(route: RouteConfig) -> tuple[int, int]:
+    """Altitude band (low_ft, high_ft) for SIGMET relevance.
+
+    Surface to cruise plus a climb/descent buffer.
+    """
+    return (0, int(route.cruise_altitude_ft) + _SIGMET_ALT_BUFFER_FT)
+
+
+def _departure_day_window(
+    target_time: datetime,
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """SIGMET validity window: from *now* through the end of the departure day (UTC).
+
+    Wider than the flight window so SIGMETs issued or expiring around the
+    flight are still surfaced. Both bounds are aware UTC.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    dep = target_time.astimezone(timezone.utc) if target_time.tzinfo else target_time.replace(tzinfo=timezone.utc)
+    end_of_day = datetime(
+        dep.year, dep.month, dep.day, 23, 59, 59, tzinfo=timezone.utc,
+    )
+    # Guard against an inverted window (e.g. a late-evening fetch).
+    start = min(now, end_of_day)
+    return (start, end_of_day)
+
+
+def run_route_sigmets(
+    route: RouteConfig,
+    target_time: datetime,
+    corridor_nm: float,
+    airports_db_path: str,
+    *,
+    now: datetime | None = None,
+) -> RouteSigmets:
+    """Fetch SIGMETs affecting a route via euro_aip RouteSigmetService.
+
+    Mirrors :func:`run_route_weather` but for area hazards: resolves the route
+    geometry, queries live international SIGMETs, and keeps those whose polygon
+    intersects the route corridor within the altitude band and departure-day
+    time window.
+
+    Args:
+        route: Flight route configuration.
+        target_time: Flight departure/target time (drives the time window).
+        corridor_nm: Corridor half-width for the intersection test.
+        airports_db_path: Path to euro_aip SQLite database.
+        now: Override for "now" (testing).
+
+    Returns:
+        RouteSigmets listing route-relevant SIGMETs, sorted by enroute distance.
+    """
+    from euro_aip.briefing.weather.route_sigmet import RouteSigmetService
+
+    from weatherbrief.airports import _load_airport_model
+
+    model = _load_airport_model(airports_db_path)
+
+    route_icaos = [wp.icao for wp in route.waypoints]
+    low_ft, high_ft = _sigmet_altitude_band(route)
+    win_from, win_to = _departure_day_window(target_time, now=now)
+
+    service = RouteSigmetService()
+    result = service.fetch_route_sigmets(
+        route_icaos=route_icaos,
+        corridor_nm=corridor_nm,
+        model=model,
+        altitude_band_ft=(low_ft, high_ft),
+        from_datetime=win_from,
+        to_datetime=win_to,
+    )
+
+    sigmets: list[SigmetAlongRoute] = []
+    hazards: list[str] = []
+    has_severe = False
+    for rs in result.sigmets:
+        s = rs.sigmet
+        sigmets.append(SigmetAlongRoute(
+            fir_id=s.fir_id,
+            fir_name=s.fir_name,
+            hazard=s.hazard,
+            qualifier=s.qualifier,
+            base_ft=s.base_ft,
+            top_ft=s.top_ft,
+            valid_from=s.valid_from,
+            valid_to=s.valid_to,
+            direction=s.direction,
+            speed_kt=s.speed_kt,
+            raw_text=s.raw_text,
+            matched_firs=list(rs.matched_firs),
+            min_distance_nm=rs.min_distance_nm,
+            enroute_distance_from_nm=rs.enroute_distance_from_nm,
+            enroute_distance_to_nm=rs.enroute_distance_to_nm,
+            coords=[tuple(c) for c in s.coords],
+        ))
+        if s.hazard:
+            hazards.append(s.hazard)
+        if s.qualifier and s.qualifier.upper() == "SEV":
+            has_severe = True
+
+    return RouteSigmets(
+        corridor_nm=corridor_nm,
+        fetch_time=datetime.now(timezone.utc),
+        altitude_low_ft=low_ft,
+        altitude_high_ft=high_ft,
+        time_window_from=win_from,
+        time_window_to=win_to,
+        route_firs=list(result.route_firs),
+        sigmets=sigmets,
+        hazards=sorted(set(hazards)),
+        has_severe=has_severe,
+        count=len(sigmets),
+    )
+
+
 def run_realtime_refresh(
     pack_dir: Path,
     db_path: str,
     *,
     default_corridor_nm: float = 30.0,
-) -> RouteObservations:
+    default_sigmet_corridor_nm: float = 50.0,
+) -> RealtimeRefreshResult:
     """Re-fetch METAR/TAF and recompute the obs-vs-model comparison from a
     pack's *stored* forecasts, then patch ``briefing.json`` in place.
 
@@ -527,10 +656,10 @@ def run_realtime_refresh(
     tiered refresh gate's ``realtime`` mode.
 
     Reads the pack's route, forecasts and route analyses off disk, fetches
-    fresh observations for the route corridor, recomputes the comparison
-    against the stored forecasts, writes the result back into
-    ``briefing.json`` (or legacy ``snapshot.json``), and returns the updated
-    :class:`RouteObservations`.
+    fresh observations *and route SIGMETs* for the route corridor, recomputes
+    the comparison against the stored forecasts, writes both back into
+    ``briefing.json`` (or legacy ``snapshot.json``), and returns a
+    :class:`RealtimeRefreshResult` carrying the updated observations and SIGMETs.
 
     Raises :class:`FileNotFoundError` if the pack has no briefing data on disk.
     """
@@ -553,6 +682,11 @@ def run_realtime_refresh(
     stored_obs = briefing_data.get("route_observations")
     if stored_obs:
         corridor_nm = stored_obs.get("corridor_nm", default_corridor_nm)
+
+    sigmet_corridor_nm = default_sigmet_corridor_nm
+    stored_sigmets = briefing_data.get("route_sigmets")
+    if stored_sigmets:
+        sigmet_corridor_nm = stored_sigmets.get("corridor_nm", default_sigmet_corridor_nm)
 
     # Fetch fresh METAR/TAF along the route corridor.
     new_obs = run_route_weather(
@@ -591,10 +725,25 @@ def run_realtime_refresh(
         route_analyses=route_analyses,
     )
 
-    # Patch the observations back into the briefing on disk.
+    # Fetch fresh route SIGMETs (area hazards). Non-fatal: a SIGMET source
+    # failure must not block the cheap METAR/TAF refresh.
+    new_sigmets = None
+    try:
+        new_sigmets = run_route_sigmets(
+            route=route,
+            target_time=target_dt,
+            corridor_nm=sigmet_corridor_nm,
+            airports_db_path=db_path,
+        )
+    except Exception:
+        logger.warning("Route SIGMET refresh failed", exc_info=True)
+
+    # Patch observations (and SIGMETs, when fetched) back into the briefing.
     briefing_data["route_observations"] = new_obs.model_dump(mode="json")
+    if new_sigmets is not None:
+        briefing_data["route_sigmets"] = new_sigmets.model_dump(mode="json")
     briefing_path = pack_dir / "briefing.json"
     target_path = briefing_path if briefing_path.exists() else pack_dir / "snapshot.json"
     target_path.write_text(json.dumps(briefing_data, indent=2, default=str))
 
-    return new_obs
+    return RealtimeRefreshResult(observations=new_obs, sigmets=new_sigmets)

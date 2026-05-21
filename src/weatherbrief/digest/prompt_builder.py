@@ -13,6 +13,7 @@ from weatherbrief.models import (
     PrecipPhase,
     RouteAdvisoriesManifest,
     RouteObservations,
+    RouteSigmets,
     SoundingAnalysis,
 )
 
@@ -183,6 +184,10 @@ def build_digest_context(
     # --- METAR/TAF observations (D-0 only) ---
     if snapshot.route_observations:
         sections.append(_format_observations_context(snapshot.route_observations))
+
+    # --- Route SIGMETs (D-0 only) ---
+    if snapshot.route_sigmets and snapshot.route_sigmets.count:
+        sections.append(_format_sigmets_context(snapshot.route_sigmets))
 
     # --- Text forecasts ---
     if dwd_translated:
@@ -382,6 +387,41 @@ def _format_observations_context(obs: RouteObservations) -> str:
             lines.append(
                 f"  [{comp.category_match}] {comp.icao}: {comp.detail}"
             )
+
+    return "\n".join(lines)
+
+
+def _format_sigmets_context(sig: RouteSigmets) -> str:
+    """Format route SIGMETs into a compact LLM context section."""
+    def _lvl(ft: int | None) -> str:
+        if ft is None:
+            return "?"
+        if ft <= 0:
+            return "SFC"
+        return f"FL{ft // 100:03d}"
+
+    lines: list[str] = ["=== SIGMETs ALONG ROUTE ==="]
+    lines.append(
+        f"Corridor: {sig.corridor_nm:.0f}nm | {sig.count} SIGMET(s) intersecting route"
+    )
+    if sig.hazards:
+        lines.append(f"Hazards: {', '.join(sig.hazards)}")
+    if sig.has_severe:
+        lines.append("** SEVERE (SEV) SIGMET in effect along the route **")
+
+    for s in sig.sigmets:
+        head = " ".join(p for p in (s.qualifier, s.hazard) if p) or "SIGMET"
+        band = f"{_lvl(s.base_ft)}-{_lvl(s.top_ft)}" if (s.base_ft is not None or s.top_ft is not None) else ""
+        parts = [f"{head} ({s.fir_id})"]
+        if band:
+            parts.append(band)
+        if s.enroute_distance_from_nm is not None and s.enroute_distance_to_nm is not None:
+            parts.append(f"enroute {s.enroute_distance_from_nm:.0f}-{s.enroute_distance_to_nm:.0f}nm")
+        if s.direction and s.speed_kt:
+            parts.append(f"moving {s.direction} {s.speed_kt}kt")
+        lines.append("  " + ", ".join(parts))
+        if s.raw_text:
+            lines.append(f"    {s.raw_text}")
 
     return "\n".join(lines)
 

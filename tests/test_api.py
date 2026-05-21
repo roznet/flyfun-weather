@@ -866,7 +866,11 @@ class TestRefreshEndpoint:
     ):
         """A ``realtime`` decision runs the cheap path and returns observations."""
         from weatherbrief.api.packs import DataStatus, RefreshDecision
-        from weatherbrief.models.observations import RouteObservations
+        from weatherbrief.models.observations import (
+            RealtimeRefreshResult,
+            RouteObservations,
+            RouteSigmets,
+        )
 
         mock_list.return_value = [self._gate_pack(sample_flight.id, 0)]
         mock_status.return_value = DataStatus(fresh=True)
@@ -874,9 +878,14 @@ class TestRefreshEndpoint:
             mode="realtime", reason="D-0 live METAR/TAF",
             needed=1, n_eligible=3, n_updated=0, days_out=0,
         )
-        mock_rt.return_value = RouteObservations(
-            corridor_nm=30.0, fetch_time=datetime.now(timezone.utc),
-            airports_found=2, airports_with_metar=2, airports_with_taf=1, airports=[],
+        mock_rt.return_value = RealtimeRefreshResult(
+            observations=RouteObservations(
+                corridor_nm=30.0, fetch_time=datetime.now(timezone.utc),
+                airports_found=2, airports_with_metar=2, airports_with_taf=1, airports=[],
+            ),
+            sigmets=RouteSigmets(
+                corridor_nm=50.0, fetch_time=datetime.now(timezone.utc), count=1,
+            ),
         )
         client.app.state.db_path = "/fake/db"
         try:
@@ -886,6 +895,7 @@ class TestRefreshEndpoint:
             assert data["status"] == "realtime"
             assert data["mode"] == "realtime"
             assert data["observations"]["airports_found"] == 2
+            assert data["sigmets"]["count"] == 1
             mock_rt.assert_called_once()
         finally:
             client.app.state.db_path = ""
@@ -971,7 +981,11 @@ class TestRefreshEndpoint:
         matching the non-streaming response shape.
         """
         from weatherbrief.api.packs import DataStatus, RefreshDecision
-        from weatherbrief.models.observations import RouteObservations
+        from weatherbrief.models.observations import (
+            RealtimeRefreshResult,
+            RouteObservations,
+            RouteSigmets,
+        )
 
         mock_sl.side_effect = app_db
         mock_list.return_value = [self._gate_pack(sample_flight.id, 0)]
@@ -980,9 +994,14 @@ class TestRefreshEndpoint:
             mode="realtime", reason="D-0 live METAR/TAF",
             needed=1, n_eligible=3, n_updated=0, days_out=0,
         )
-        mock_rt.return_value = RouteObservations(
-            corridor_nm=30.0, fetch_time=datetime.now(timezone.utc),
-            airports_found=2, airports_with_metar=2, airports_with_taf=1, airports=[],
+        mock_rt.return_value = RealtimeRefreshResult(
+            observations=RouteObservations(
+                corridor_nm=30.0, fetch_time=datetime.now(timezone.utc),
+                airports_found=2, airports_with_metar=2, airports_with_taf=1, airports=[],
+            ),
+            sigmets=RouteSigmets(
+                corridor_nm=50.0, fetch_time=datetime.now(timezone.utc), count=2,
+            ),
         )
         client.app.state.db_path = "/fake/db"
         try:
@@ -994,16 +1013,18 @@ class TestRefreshEndpoint:
             event = json.loads(data_line)
             assert event["refresh_decision"]["mode"] == "realtime"
             assert event["observations"]["airports_found"] == 2
+            assert event["sigmets"]["count"] == 2
         finally:
             client.app.state.db_path = ""
 
+    @patch("weatherbrief.tasks.route_weather.run_route_sigmets")
     @patch("weatherbrief.airports.get_runway_ends")
     @patch("weatherbrief.tasks.route_weather.run_route_weather")
     @patch("weatherbrief.api.packs.decide_refresh")
     @patch("weatherbrief.api.packs._build_data_status")
     @patch("weatherbrief.api.packs.list_packs")
     def test_refresh_gate_realtime_seam_integration(
-        self, mock_list, mock_status, mock_decide, mock_fetch, mock_runways,
+        self, mock_list, mock_status, mock_decide, mock_fetch, mock_runways, mock_sigmets,
         client, sample_flight, tmp_path,
     ):
         """End-to-end realtime gate: the endpoint resolves the pack's
@@ -1051,6 +1072,7 @@ class TestRefreshEndpoint:
             airports_found=1, airports_with_metar=1, airports_with_taf=0, airports=[],
         )
         mock_runways.return_value = {}
+        mock_sigmets.return_value = None
 
         client.app.state.db_path = "/fake/db"
         try:

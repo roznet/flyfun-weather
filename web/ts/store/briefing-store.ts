@@ -560,8 +560,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const { flight, currentPack, snapshot } = get();
     if (!flight || !currentPack || !snapshot) return;
     try {
-      const newObs = await api.refreshObservations(flight.id, currentPack.fetch_timestamp);
-      set({ snapshot: { ...snapshot, route_observations: newObs } });
+      const result = await api.refreshObservations(flight.id, currentPack.fetch_timestamp);
+      set({
+        snapshot: {
+          ...snapshot,
+          route_observations: result.observations,
+          route_sigmets: result.sigmets,
+        },
+      });
     } catch (err) {
       set({ error: `Observation refresh failed: ${err}` });
     }

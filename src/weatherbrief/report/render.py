@@ -160,10 +160,12 @@ def _build_template_context(
             })
         airport_conditions = advisories_data.get("airport_conditions")
 
-    # Route observations (METAR/TAF from D-0 flights)
+    # Route observations (METAR/TAF) + SIGMETs (from D-0 flights)
     route_observations = None
+    route_sigmets = None
     if briefing:
         route_observations = briefing.get("route_observations")
+        route_sigmets = briefing.get("route_sigmets")
 
     return {
         "flight": flight,
@@ -177,6 +179,7 @@ def _build_template_context(
         "advisories": advisories,
         "airport_conditions": airport_conditions,
         "route_observations": route_observations,
+        "route_sigmets": route_sigmets,
     }
 
 
