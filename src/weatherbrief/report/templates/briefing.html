@@ -208,7 +208,7 @@
           {% else %}&mdash;{% endif %}
         </td>
         <td style="text-align:left; font-size:8.5pt; font-family:monospace; max-width:40em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-          {{ apt.metar_raw or '&mdash;' }}
+          {% if apt.metar_raw %}{{ apt.metar_raw }}{% else %}&mdash;{% endif %}
         </td>
       </tr>
       {% endif %}
@@ -259,7 +259,7 @@
         </td>
         <td>{% if s.direction and s.speed_kt %}{{ s.direction }} {{ s.speed_kt }}kt{% else %}&mdash;{% endif %}</td>
         <td style="text-align:left; font-size:8.5pt; font-family:monospace; max-width:40em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-          {{ s.raw_text or '&mdash;' }}
+          {% if s.raw_text %}{{ s.raw_text }}{% else %}&mdash;{% endif %}
         </td>
       </tr>
       {% endfor %}

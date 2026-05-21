@@ -561,11 +561,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     if (!flight || !currentPack || !snapshot) return;
     try {
       const result = await api.refreshObservations(flight.id, currentPack.fetch_timestamp);
+      // Only overwrite SIGMETs when the server actually returned them; a null
+      // means the SIGMET fetch failed server-side — keep the existing ones
+      // rather than silently blanking the section.
       set({
         snapshot: {
           ...snapshot,
           route_observations: result.observations,
-          route_sigmets: result.sigmets,
+          ...(result.sigmets != null ? { route_sigmets: result.sigmets } : {}),
         },
       });
     } catch (err) {

@@ -463,7 +463,8 @@ class TestRunRealtimeRefresh:
         with patch(
             "weatherbrief.tasks.route_weather.run_route_weather", return_value=fresh,
         ) as mock_fetch, patch(
-            "weatherbrief.tasks.route_weather.run_route_sigmets", return_value=None,
+            "weatherbrief.tasks.route_weather.run_route_sigmets",
+            side_effect=Exception("sigmet disabled"),
         ), patch(
             "weatherbrief.airports.get_runway_ends", return_value={},
         ):
