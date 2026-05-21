@@ -1082,7 +1082,7 @@ function sigmetEnroute(s: RouteSigmets['sigmets'][number]): string {
 
 function renderSigmetPopup(s: RouteSigmets['sigmets'][number]): string {
   const head = [s.qualifier, s.hazard].filter(Boolean).join(' ') || 'SIGMET';
-  const move = s.direction && s.speed_kt ? `${s.direction} ${s.speed_kt}kt` : '—';
+  const move = s.direction && s.speed_kt ? `${escapeHtml(s.direction)} ${s.speed_kt}kt` : '—';
   const valid = (s.valid_from || s.valid_to)
     ? `${s.valid_from ?? '?'} → ${s.valid_to ?? '?'}`
     : '—';
