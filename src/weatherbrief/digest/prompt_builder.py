@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from weatherbrief.digest.format_utils import format_flight_level
 from weatherbrief.models import (
     AgreementLevel,
     ConvectiveRisk,
@@ -393,13 +394,6 @@ def _format_observations_context(obs: RouteObservations) -> str:
 
 def _format_sigmets_context(sig: RouteSigmets) -> str:
     """Format route SIGMETs into a compact LLM context section."""
-    def _lvl(ft: int | None) -> str:
-        if ft is None:
-            return "?"
-        if ft <= 0:
-            return "SFC"
-        return f"FL{ft // 100:03d}"
-
     lines: list[str] = ["=== SIGMETs ALONG ROUTE ==="]
     lines.append(
         f"Corridor: {sig.corridor_nm:.0f}nm | {sig.count} SIGMET(s) intersecting route"
@@ -411,7 +405,7 @@ def _format_sigmets_context(sig: RouteSigmets) -> str:
 
     for s in sig.sigmets:
         head = " ".join(p for p in (s.qualifier, s.hazard) if p) or "SIGMET"
-        band = f"{_lvl(s.base_ft)}-{_lvl(s.top_ft)}" if (s.base_ft is not None or s.top_ft is not None) else ""
+        band = f"{format_flight_level(s.base_ft)}-{format_flight_level(s.top_ft)}" if (s.base_ft is not None or s.top_ft is not None) else ""
         parts = [f"{head} ({s.fir_id})"]
         if band:
             parts.append(band)

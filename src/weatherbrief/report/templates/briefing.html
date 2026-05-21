@@ -247,7 +247,7 @@
         <td style="text-align:left; font-family:monospace;">{{ s.fir_id }}{% if s.fir_name %} ({{ s.fir_name }}){% endif %}</td>
         <td>
           {% if s.base_ft is not none or s.top_ft is not none %}
-            {% if s.base_ft is none %}?{% elif s.base_ft <= 0 %}SFC{% else %}FL{{ '%03d'|format((s.base_ft / 100)|int) }}{% endif %}&ndash;{% if s.top_ft is none %}?{% else %}FL{{ '%03d'|format((s.top_ft / 100)|int) }}{% endif %}
+            {% if s.base_ft is none %}?{% elif s.base_ft <= 0 %}SFC{% else %}FL{{ '%03d'|format((s.base_ft / 100)|int) }}{% endif %}&ndash;{% if s.top_ft is none %}?{% elif s.top_ft <= 0 %}SFC{% else %}FL{{ '%03d'|format((s.top_ft / 100)|int) }}{% endif %}
           {% else %}&mdash;{% endif %}
         </td>
         <td>

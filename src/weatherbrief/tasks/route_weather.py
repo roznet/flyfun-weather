@@ -548,7 +548,13 @@ def _departure_day_window(
     end_of_day = datetime(
         dep.year, dep.month, dep.day, 23, 59, 59, tzinfo=timezone.utc,
     )
-    # Guard against an inverted window (e.g. a late-evening fetch).
+    # Guard against an inverted window (e.g. a late-evening fetch for a flight
+    # that already departed earlier today): clamp the start to end-of-day.
+    if now > end_of_day:
+        logger.debug(
+            "SIGMET window collapsed: now %s is past departure-day end %s; "
+            "expect zero SIGMETs", now.isoformat(), end_of_day.isoformat(),
+        )
     start = min(now, end_of_day)
     return (start, end_of_day)
 
@@ -599,8 +605,6 @@ def run_route_sigmets(
     )
 
     sigmets: list[SigmetAlongRoute] = []
-    hazards: list[str] = []
-    has_severe = False
     for rs in result.sigmets:
         s = rs.sigmet
         sigmets.append(SigmetAlongRoute(
@@ -621,11 +625,8 @@ def run_route_sigmets(
             enroute_distance_to_nm=rs.enroute_distance_to_nm,
             coords=[tuple(c) for c in s.coords],
         ))
-        if s.hazard:
-            hazards.append(s.hazard)
-        if s.qualifier and s.qualifier.upper() == "SEV":
-            has_severe = True
 
+    # count / hazards / has_severe are computed from `sigmets` on the model.
     return RouteSigmets(
         corridor_nm=corridor_nm,
         fetch_time=datetime.now(timezone.utc),
@@ -635,9 +636,6 @@ def run_route_sigmets(
         time_window_to=win_to,
         route_firs=list(result.route_firs),
         sigmets=sigmets,
-        hazards=sorted(set(hazards)),
-        has_severe=has_severe,
-        count=len(sigmets),
     )
 
 
