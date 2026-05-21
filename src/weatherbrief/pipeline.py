@@ -462,9 +462,11 @@ def execute_briefing(
             result_usage_metar_airports = 0
 
         # Route SIGMETs (area hazards) — independent of METAR/TAF success.
-        try:
-            from weatherbrief.tasks.route_weather import run_route_sigmets
+        # Import outside the try so a genuine ImportError surfaces rather than
+        # being swallowed as a SIGMET fetch failure.
+        from weatherbrief.tasks.route_weather import run_route_sigmets
 
+        try:
             route_sigmets = run_route_sigmets(
                 route=route,
                 target_time=target_dt,

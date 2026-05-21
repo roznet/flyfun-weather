@@ -1060,7 +1060,9 @@ export function renderRouteObservations(
 function sigmetLevel(ft: number | null): string {
   if (ft == null) return '?';
   if (ft <= 0) return 'SFC';
-  return `FL${String(Math.round(ft / 100)).padStart(3, '0')}`;
+  // floor to match the Python helper (ft // 100), so the same SIGMET shows
+  // the same flight level in the web UI and the PDF report.
+  return `FL${String(Math.floor(ft / 100)).padStart(3, '0')}`;
 }
 
 function sigmetBand(baseFt: number | null, topFt: number | null): string {
