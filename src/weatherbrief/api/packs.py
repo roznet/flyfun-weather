@@ -966,6 +966,9 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     from weatherbrief.fetch.variables import ModelRegion, detect_model_region
     from weatherbrief.units import resolve_units_region
 
+    # Mixed/transatlantic routes (ModelRegion.GLOBAL) resolve to europe here, so a
+    # US pilot's 'auto' digest on an EGLL->KJFK leg gets metric visibility. Matches
+    # the frontend (regionFromIcaos returns null -> europe). Forced us/europe wins.
     detected = "us" if detect_model_region(route) == ModelRegion.NORTH_AMERICA else "europe"
     options.units_region = resolve_units_region(units_region, detected)
     options.profile_id = flight.profile_id

@@ -142,11 +142,13 @@ function visibilityLegendItems(): Array<{ color: string; label: string }> {
       { color: '#a855f7', label: '< 1 SM (LIFR)' },
     ];
   }
+  // km equivalents of the SM breakpoints visibilityColor() actually uses
+  // (5/3/1 SM = 8.05/4.83/1.61 km) so the legend matches the dot colors.
   return [
-    { color: '#22c55e', label: '>= 8 km (VFR)' },
-    { color: '#3b82f6', label: '5-8 km (MVFR)' },
-    { color: '#ef4444', label: '1.5-5 km (IFR)' },
-    { color: '#a855f7', label: '< 1.5 km (LIFR)' },
+    { color: '#22c55e', label: '>= 8.0 km (VFR)' },
+    { color: '#3b82f6', label: '4.8-8.0 km (MVFR)' },
+    { color: '#ef4444', label: '1.6-4.8 km (IFR)' },
+    { color: '#a855f7', label: '< 1.6 km (LIFR)' },
   ];
 }
 

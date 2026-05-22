@@ -81,6 +81,10 @@ class TestPreferencesAPI:
         assert client.get("/api/user/preferences").json()["units_region"] == "us"
         assert client.get("/auth/me").json()["units_region"] == "us"
 
+    def test_units_region_rejects_invalid(self, client):
+        resp = client.put("/api/user/preferences", json={"units_region": "metric"})
+        assert resp.status_code == 422
+
     def test_save_flight_defaults(self, client):
         resp = client.put("/api/user/preferences", json={
             "defaults": {

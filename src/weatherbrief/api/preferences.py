@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -84,7 +85,7 @@ class PreferencesUpdate(BaseModel):
     cloud_method: str | None = None
     convective_method: str | None = None
     locale: str | None = None
-    units_region: str | None = None
+    units_region: Literal["auto", "europe", "us"] | None = None
     synoptic_forecast_map_enabled: bool | None = None
 
 
@@ -358,11 +359,12 @@ def load_user_defaults(db: Session, user_id: str) -> FlightDefaults:
     return _parse_defaults(row.app_prefs_json)
 
 
-def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
+def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
     """Load service toggle preferences for a user.
 
-    Returns dict with ``gramet_enabled``, ``llm_digest_enabled``,
-    and ``icing_severity_enhance`` (gramet/llm default True, icing enhance default False).
+    Returns a mix of bool toggles (``gramet_enabled``, ``llm_digest_enabled``,
+    ``icing_severity_enhance``) and string choices (``icing_method``,
+    ``cloud_method``, ``convective_method``, ``units_region``).
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:

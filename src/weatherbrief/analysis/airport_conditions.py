@@ -199,7 +199,7 @@ def _compute_for_airport(
 
         if hourly:
             if hourly.visibility_m is not None:
-                visibility_m = round(hourly.visibility_m)
+                visibility_m = float(round(hourly.visibility_m))
                 visibility_sm = round(hourly.visibility_m / _M_PER_SM, 1)
             wind_speed_kt = hourly.wind_speed_10m_kt
             wind_direction_deg = hourly.wind_direction_10m_deg

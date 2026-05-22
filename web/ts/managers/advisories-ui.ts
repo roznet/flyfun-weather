@@ -11,6 +11,8 @@ import { formatVisibility } from '../units';
 /** Visibility for an airport condition, region-aware.
  *  Prefers raw meters (visibility_m); falls back to legacy SM for old packs. */
 function formatCondVis(cond: AirportModelCondition): string | null {
+  // != null (not !==): visibility_m is optional, so this also catches `undefined`
+  // from old packs serialized before the field existed, falling through to SM.
   if (cond.visibility_m != null) return formatVisibility(cond.visibility_m);
   if (cond.visibility_sm !== null) return `${cond.visibility_sm} SM`;
   return null;
