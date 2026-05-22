@@ -88,7 +88,7 @@ def test_fetch_ecmwf_grib_snapshots_dispatches_decode_to_pool():
     ]
     pressure_payload: list[dict[int, dict[str, float]]] = [{} for _ in range(n)]
 
-    def fake_dispatch(worker_fn_name: str, *args):
+    def fake_dispatch(worker_fn_name: str, *args, **kwargs):
         if worker_fn_name == "decode_ecmwf_surface":
             return (list(surface_payload), [True] * n)
         if worker_fn_name == "decode_ecmwf_pressure":
@@ -145,7 +145,7 @@ def test_fetch_ecmwf_grib_snapshots_caches_a1_across_steps():
     a1_calls: list[str] = []
     a2_calls: list[str] = []
 
-    def fake_dispatch(worker_fn_name: str, path: str, *args):
+    def fake_dispatch(worker_fn_name: str, path: str, *args, **kwargs):
         if worker_fn_name == "decode_ecmwf_surface":
             a1_calls.append(path)
             return ([{"raw_t2m_k": 285.0} for _ in range(n)], [True] * n)
