@@ -137,13 +137,18 @@ export class ClimatologyMap {
     const scale = this.scale;
     for (const a of this.airports) {
       const color = a.value !== null && scale ? pctColor(a.value, scale) : COLORS.grey;
+      // Low-confidence airports (high NULL-category share, e.g. sensor-starved
+      // AUTO stations) keep their category color but render faded with a
+      // dashed grey ring so they read as "uncertain". See issue #173.
+      const lowConf = a.low_confidence === true && a.value !== null;
       const marker = L.circleMarker([a.lat, a.lon], {
         radius: 5,
         fillColor: color,
-        color: '#111',
-        weight: 0.6,
+        color: lowConf ? COLORS.grey : '#111',
+        weight: lowConf ? 1.4 : 0.6,
+        dashArray: lowConf ? '2,2' : undefined,
         opacity: 1,
-        fillOpacity: a.value === null ? 0.4 : 0.9,
+        fillOpacity: a.value === null ? 0.4 : (lowConf ? 0.45 : 0.9),
       });
       marker.bindPopup(this.buildPopup(a));
       marker.addTo(this.markersLayer);

@@ -37,6 +37,13 @@ export interface CategoryAirport {
   n_mvfr: number;
   n_ifr: number;
   n_lifr: number;
+  // Categorizable subset (the four counts above); pct_* are computed over it.
+  n_categorized: number;
+  // Obs whose flight_category is NULL (sensor-not-available AUTO stations).
+  n_no_category: number;
+  pct_no_category: number;
+  // True when pct_no_category exceeds the backend low-confidence threshold.
+  low_confidence: boolean;
   pct_vfr?: number;
   pct_mvfr?: number;
   pct_ifr?: number;
