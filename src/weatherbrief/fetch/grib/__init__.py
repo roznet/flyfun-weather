@@ -789,6 +789,20 @@ def _resolve_priority(priority: int | DecodePriority | None) -> int:
     return int(DecodePriority.SCHEDULED)
 
 
+def set_decode_priority(priority: int | DecodePriority) -> None:
+    """Publish *priority* on the decode-priority ContextVar for this context.
+
+    Entry points call this to establish the decode priority for an in-progress
+    operation that will reach ``enrich_forecasts`` / ``_dispatch_decode``
+    synchronously (e.g. inside ``run_pipeline``, which runs past a
+    non-context-copying ``run_in_executor`` boundary). Keeps callers off the
+    private ``_DECODE_PRIORITY`` ContextVar. No reset token: the entry points
+    own their context for its full lifetime (a dedicated executor thread, or a
+    copied context under ``asyncio.to_thread``).
+    """
+    _DECODE_PRIORITY.set(int(priority))
+
+
 def _int_env(name: str, default: int, *, minimum: int | None = None) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -1086,6 +1100,13 @@ class PriorityDecodeDispatcher:
             return self._run_inline(worker_fn_name, args)
         caller: Future = Future()
         with self._cond:
+            if self._closed:
+                # Drain raced ahead of us: fail fast rather than push a handle
+                # that _pump (now a no-op) would never resolve.
+                caller.set_exception(
+                    DecodeDispatchError("dispatcher_shutdown", worker_fn_name),
+                )
+                return caller
             self._ensure_watchdog_locked()
             self._push_new_locked(worker_fn_name, args, caller, priority)
         self._pump()
@@ -1099,6 +1120,12 @@ class PriorityDecodeDispatcher:
             return [self._run_inline(name, args) for name, args in jobs]
         callers: list[Future] = []
         with self._cond:
+            if self._closed:
+                for name, _ in jobs:
+                    fut: Future = Future()
+                    fut.set_exception(DecodeDispatchError("dispatcher_shutdown", name))
+                    callers.append(fut)
+                return callers
             self._ensure_watchdog_locked()
             for name, args in jobs:
                 caller: Future = Future()
@@ -1133,8 +1160,12 @@ class PriorityDecodeDispatcher:
         fut: Future = Future()
         try:
             fut.set_result(self._resolve_worker(worker_fn_name)(*args))
-        except BaseException as exc:  # noqa: BLE001 — mirror to caller future
+        except Exception as exc:  # mirror ordinary decode errors to the future
             fut.set_exception(exc)
+        except BaseException:
+            # KeyboardInterrupt / SystemExit must propagate, not be absorbed
+            # into a future the caller might never inspect.
+            raise
         return fut
 
     def _next_seq_locked(self) -> int:
@@ -1302,7 +1333,9 @@ class PriorityDecodeDispatcher:
         try:
             # Reuse the existing hang-diagnostics on the live (hung) pool before
             # we tear it down — output is unchanged from the legacy timeout path.
-            pool = _DECODE_POOL
+            # Read under the pool lock for consistency with every other access.
+            with _DECODE_POOL_LOCK:
+                pool = _DECODE_POOL
             if reason == _FAULT_TIMEOUT:
                 names = ",".join(sorted({h.worker_fn_name for h in snapshot})) or "?"
                 try:

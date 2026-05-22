@@ -1425,12 +1425,12 @@ async def refresh_briefing(
 
     # Fire pipeline in background — uses its own DB session (same as /refresh/stream)
     def run_pipeline() -> None:
-        # User refresh is the highest-priority decode workload. Set it on the
-        # ContextVar *inside* run_pipeline: this runs in _refresh_executor and
-        # run_in_executor does not copy the caller's context, so the value must
-        # be established past that boundary for enrich_forecasts to see it.
-        from weatherbrief.fetch.grib import DecodePriority, _DECODE_PRIORITY
-        _DECODE_PRIORITY.set(int(DecodePriority.INTERACTIVE))
+        # User refresh is the highest-priority decode workload. Set it *inside*
+        # run_pipeline: this runs in _refresh_executor and run_in_executor does
+        # not copy the caller's context, so the value must be established past
+        # that boundary for enrich_forecasts to see it.
+        from weatherbrief.fetch.grib import DecodePriority, set_decode_priority
+        set_decode_priority(DecodePriority.INTERACTIVE)
         refresh_registry.set_refreshing(flight_id)
         try:
             from weatherbrief.pipeline import execute_briefing
@@ -1688,10 +1688,10 @@ async def refresh_briefing_stream(
 
     def run_pipeline() -> None:
         # User refresh (streaming): INTERACTIVE. Set past the _refresh_executor
-        # boundary — see the non-streaming run_pipeline for why the ContextVar
+        # boundary — see the non-streaming run_pipeline for why the priority
         # must be established here rather than inherited.
-        from weatherbrief.fetch.grib import DecodePriority, _DECODE_PRIORITY
-        _DECODE_PRIORITY.set(int(DecodePriority.INTERACTIVE))
+        from weatherbrief.fetch.grib import DecodePriority, set_decode_priority
+        set_decode_priority(DecodePriority.INTERACTIVE)
         refresh_registry.set_refreshing(flight_id)
         try:
             from weatherbrief.pipeline import execute_briefing

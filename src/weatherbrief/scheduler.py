@@ -266,14 +266,14 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
             flight, db_path, user_id, flight_row.id, db=db, is_privileged=True,
         )
 
-        from weatherbrief.fetch.grib import DecodePriority, _DECODE_PRIORITY
+        from weatherbrief.fetch.grib import DecodePriority, set_decode_priority
         from weatherbrief.pipeline import execute_briefing
 
         # Auto-refresh decode work is SCHEDULED — below interactive user
         # refreshes / airport profiles, above background standalone cycles.
         # Runs in asyncio.to_thread, which copies the context, so this set is
         # isolated to the cycle and visible to enrich_forecasts.
-        _DECODE_PRIORITY.set(int(DecodePriority.SCHEDULED))
+        set_decode_priority(DecodePriority.SCHEDULED)
 
         result = execute_briefing(
             route=route,
@@ -865,8 +865,8 @@ def _run_standalone_once(
     # so this set is isolated to the cycle. The explicit BACKGROUND on the
     # standalone-verification _dispatch_decode calls is belt-and-suspenders for
     # any decode that runs off this context.
-    from weatherbrief.fetch.grib import DecodePriority, _DECODE_PRIORITY
-    _DECODE_PRIORITY.set(int(DecodePriority.BACKGROUND))
+    from weatherbrief.fetch.grib import DecodePriority, set_decode_priority
+    set_decode_priority(DecodePriority.BACKGROUND)
 
     from weatherbrief.tasks.airport_watchlist import (
         get_configs_dir,
