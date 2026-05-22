@@ -346,10 +346,14 @@ export class ClimatologyTab {
 function headerFromCategory(data: CategoryMapResponse): string {
   const plotted = data.airports.length;
   const withData = data.airports.filter((a) => a.n_obs > 0).length;
+  // Low-confidence airports (high NULL-category share) count as "with data"
+  // but render faded and are leaderboard-omitted — call them out separately.
+  const lowConf = data.airports.filter((a) => a.low_confidence).length;
   const note = data.is_mtd
     ? `Month to date · ${data.as_of_date ?? 'no completed days yet'}`
     : 'Completed month';
-  return `${note} · ${plotted} airports plotted (${withData} with data)`;
+  const lowConfNote = lowConf > 0 ? `, ${lowConf} low-confidence` : '';
+  return `${note} · ${plotted} airports plotted (${withData} with data${lowConfNote})`;
 }
 
 function headerFromEnvelope(data: ClimatologyMapEnvelope): string {
@@ -369,10 +373,15 @@ function formatValue(value: number | null, unit: string): string {
 }
 
 function renderLeaderboardHtml(data: LeaderboardResponse, scale: Scale | null): string {
+  // For the category dataset the gate + displayed count are categorizable
+  // obs (rows whose flight_category is non-NULL), not raw METAR count — label
+  // them "usable" so a lower number than the user's METAR provider is clear.
+  const obsLabel = data.dataset === 'category' ? 'Usable obs' : 'Obs';
+  const obsNoun = data.dataset === 'category' ? 'usable observations' : 'observations';
   if (data.rows.length === 0) {
     return `<div class="map-info" style="padding:1rem">
-      No airports meet the minimum observation count
-      (${data.min_n_obs} obs required) for this period.
+      No airports meet the minimum ${obsNoun} count
+      (${data.min_n_obs} required) for this period.
     </div>`;
   }
   const rows = data.rows.map((r, i) => {
@@ -396,7 +405,7 @@ function renderLeaderboardHtml(data: LeaderboardResponse, scale: Scale | null): 
     <div class="clim-leaderboard-wrap">
       <h3 style="margin-top:0">Top airports by ${data.label} · ${monthNote}</h3>
       <p style="color:var(--text-muted); font-size:0.8rem; margin:0.25rem 0 0.75rem">
-        Ranked highest first. Minimum ${data.min_n_obs} observations.
+        Ranked highest first. Minimum ${data.min_n_obs} ${obsNoun}.
         Change Dataset / Color by on the Map tab to rank by a different metric.
       </p>
       <table class="clim-leaderboard-table">
@@ -404,7 +413,7 @@ function renderLeaderboardHtml(data: LeaderboardResponse, scale: Scale | null): 
           <tr>
             <th></th><th>Airport</th>
             <th style="text-align:right">${data.label}</th>
-            <th style="text-align:right">Obs</th>
+            <th style="text-align:right">${obsLabel}</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>

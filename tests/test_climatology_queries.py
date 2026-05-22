@@ -233,6 +233,21 @@ class TestCategoryNullCategory:
         assert a["low_confidence"] is False
         assert a["pct_vfr"] == round(100.0 * 80 / 90, 1)  # 88.9
 
+    def test_threshold_uses_raw_share_not_rounded(self, _mock_coords, db_session):
+        # 626/2500 = 25.04% NULL share. It rounds to 25.0 for the stored
+        # field, but the raw share exceeds 25% so the airport must still be
+        # flagged — guards against comparing the rounded value (which would
+        # give 25.0 > 25.0 == False and miss it).
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=2500, n_vfr=1874)  # categorizable=1874, no_cat=626
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_category_climatology(db_session, window, "/fake/airports.db")
+        a = {x["icao"]: x for x in result["airports"]}["EGKK"]
+        assert a["n_no_category"] == 626
+        assert a["pct_no_category"] == 25.0      # rounded for display
+        assert a["low_confidence"] is True       # raw 25.04% > 25% → flagged
+
     def test_all_uncategorizable_airport_has_no_pct_keys(
         self, _mock_coords, db_session,
     ):
