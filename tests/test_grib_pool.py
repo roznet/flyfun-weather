@@ -90,8 +90,17 @@ def _settle_pool(monkeypatch):
     in-process fallback (returns None) instead of spawning a fresh pool.
     Each test then sets its own ``GRIB_DECODE_WORKERS`` value via its own
     ``monkeypatch.setenv``, which overrides this default.
+
+    ``GRIB_DECODE_PRIORITY_ENABLED=0`` pins this whole module to the legacy
+    FIFO dispatch path. These tests exercise the pool *plumbing* (lazy startup,
+    crash/hang teardown semantics, worker recycling, vanished-worker diag) that
+    the priority dispatcher reuses unchanged; the dispatcher's own behaviour
+    (priority ordering, fault rescheduling, dead-lettering) is covered in
+    ``test_grib_dispatcher.py``. The legacy path is also the production rollback
+    switch, so it deserves dedicated coverage.
     """
     monkeypatch.setenv("GRIB_DECODE_WORKERS", "0")
+    monkeypatch.setenv("GRIB_DECODE_PRIORITY_ENABLED", "0")
     _drain_background_dispatches()
     _settle_pool_to_none()
     yield

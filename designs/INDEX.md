@@ -73,6 +73,11 @@ Key exports: `compute_flight_window_hours`, `compute_icon_eu_flight_window_hours
 GRIB2 enrichment engine: GFS S3 (CLWMR/ICMR/cloud diagnostics), ICON-EU DWD (QC/QI/cloud cover/ceiling), ECMWF IFS ECPDS (clwc/ciwc/cc/surface diagnostics), data source registry with bucket paths, variable reference tables, implementation gotchas, future extensions.
 → Full doc: weather-engine-specs.md
 
+### grib-decode-dispatcher [project]
+Priority-aware, fault-tolerant admission layer in front of the GRIB decode process pool. `DecodePriority` (INTERACTIVE/SCHEDULED/BACKGROUND, lower=higher) propagated via a `_DECODE_PRIORITY` ContextVar; `PriorityDecodeDispatcher` orders pending jobs by priority (FIFO within a level), bounds in-flight to the worker count, and on a pool fault keeps completed work, reschedules interrupted work (crash=jittered backoff, timeout=immediate), and dead-letters poison jobs (timeout victim / retry cap / retry-rate budget). Idempotency-only invariant. Bypass via `GRIB_DECODE_WORKERS=0` or `GRIB_DECODE_PRIORITY_ENABLED=0`.
+Key exports: `DecodePriority`, `PriorityDecodeDispatcher`, `enrich_forecasts(priority=...)`, `_dispatch_decode`, `_dispatch_decode_parallel`, `decode_dead_letter_counts`
+→ Full doc: grib-decode-dispatcher.md
+
 ### multi-user-deployment
 Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth via flyfun-common (OAuth, JWT, cross-subdomain SSO), MySQL/SQLite DB schema, rate limiting, encrypted credentials, account deletion, admin hub, Resend email, deploy commands, env vars.
 → Full doc: multi-user-deployment.md

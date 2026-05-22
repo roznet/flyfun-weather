@@ -8,14 +8,19 @@ from __future__ import annotations
 
 import contextvars
 import gc
+import heapq
 import logging
 import multiprocessing
 import os
+import random
 import signal
 import threading
 import time as _time_mod
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import CancelledError, Future, ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
+from enum import IntEnum
 from typing import Any
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -746,6 +751,111 @@ def _decode_timeout_s() -> float:
         return _DECODE_TIMEOUT_DEFAULT_S
 
 
+# ---------------------------------------------------------------------------
+# Priority signal + dispatcher configuration (issue #171).
+# ---------------------------------------------------------------------------
+
+
+class DecodePriority(IntEnum):
+    """Decode-job priority. Lower value = higher priority (Unix nice-style).
+
+    Heap pops the smallest first, so INTERACTIVE jobs jump ahead of queued
+    BACKGROUND work for the next freed worker slot. Values are spread so finer
+    levels (e.g. ``30`` = "expedited background") can be inserted later without
+    renumbering. Helpers accept ``int | DecodePriority``; do **not** add
+    priority arithmetic (aging, dynamic boosting) — that complexity is
+    deliberately deferred (see issue #171 escalation paths).
+    """
+
+    INTERACTIVE = 10  # user refresh, airport profile
+    SCHEDULED = 50    # auto-refresh
+    BACKGROUND = 90   # standalone cycle, precache
+
+
+# Propagated like ``_GRIB_TIMER``: set by entry points / enrich_forecasts, read
+# by the dispatch helpers. ``None`` means "unset" → resolves to SCHEDULED.
+_DECODE_PRIORITY: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "_decode_priority", default=None,
+)
+
+
+def _resolve_priority(priority: int | DecodePriority | None) -> int:
+    """Resolve an effective priority: explicit arg → ContextVar → SCHEDULED."""
+    if priority is not None:
+        return int(priority)
+    ctx_val = _DECODE_PRIORITY.get()
+    if ctx_val is not None:
+        return int(ctx_val)
+    return int(DecodePriority.SCHEDULED)
+
+
+def _int_env(name: str, default: int, *, minimum: int | None = None) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r, defaulting to %d", name, raw, default)
+        return default
+    if minimum is not None and v < minimum:
+        return minimum
+    return v
+
+
+def _float_env(name: str, default: float, *, minimum: float | None = None) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r, defaulting to %s", name, raw, default)
+        return default
+    if minimum is not None and v < minimum:
+        return minimum
+    return v
+
+
+def _priority_enabled() -> bool:
+    """Whether the priority dispatcher is on. Off = current FIFO (rollback)."""
+    raw = os.environ.get("GRIB_DECODE_PRIORITY_ENABLED", "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _retry_cap() -> int:
+    """Max reschedules of a single crash-interrupted job before dead-lettering."""
+    return _int_env("GRIB_DECODE_RETRY_CAP", 2, minimum=0)
+
+
+def _retry_budget() -> int:
+    """Max retries process-wide within ``_retry_window_s`` (retry-rate cap)."""
+    return _int_env("GRIB_DECODE_RETRY_BUDGET", 5, minimum=0)
+
+
+def _retry_window_s() -> float:
+    return _float_env("GRIB_DECODE_RETRY_WINDOW_S", 120.0, minimum=0.0)
+
+
+def _backoff_base_s() -> float:
+    return _float_env("GRIB_DECODE_BACKOFF_BASE_S", 0.5, minimum=0.0)
+
+
+def _jittered_backoff(retries: int) -> float:
+    """Exponential backoff with equal jitter for crash-collateral retries.
+
+    Returns ``0.0`` when the base is ``0`` (jitter disabled). Otherwise the
+    delay is always ``>= ceiling/2 > 0`` so a crash retry is observably
+    delayed (timeout-collateral retries pass ``0.0`` and skip this).
+    """
+    base = _backoff_base_s()
+    if base <= 0:
+        return 0.0
+    ceiling = base * (2 ** max(0, retries - 1))
+    half = ceiling / 2.0
+    return half + random.uniform(0.0, half)
+
+
 def _get_decode_pool() -> ProcessPoolExecutor | None:
     """Lazy singleton process pool. Returns None when pool is disabled."""
     global _DECODE_POOL
@@ -779,7 +889,7 @@ def _get_decode_pool() -> ProcessPoolExecutor | None:
     return _DECODE_POOL
 
 
-def shutdown_decode_pool(*, wait: bool = True) -> None:
+def shutdown_decode_pool(*, wait: bool = True, drain_dispatcher: bool = False) -> None:
     """Shut down the decode pool. Safe to call repeatedly; idempotent.
 
     ``wait=False`` is for the hung-worker recovery path: a worker stuck
@@ -787,7 +897,17 @@ def shutdown_decode_pool(*, wait: bool = True) -> None:
     would block forever. Trade-off: the orphaned worker process is left
     behind and reaped when the parent eventually exits — bounded leak
     (at most ``max_workers`` orphans per pool reset).
+
+    ``drain_dispatcher=True`` is the **app-shutdown** path: it also drains
+    the :class:`PriorityDecodeDispatcher` so any caller blocked on a pending
+    or in-flight job is released with an error rather than left waiting on a
+    pool that's going away. The default is ``False`` because the fault-recovery
+    path (``_handle_fault``) reuses this teardown and must **not** touch the
+    dispatcher's durable pending heap — that heap is what lets interrupted work
+    be rescheduled on the rebuilt pool.
     """
+    if drain_dispatcher:
+        _drain_dispatcher_for_shutdown()
     global _DECODE_POOL, _DECODE_POOL_INIT_TIME, _DECODE_TASKS_DISPATCHED
     with _DECODE_POOL_LOCK:
         pool = _DECODE_POOL
@@ -806,8 +926,555 @@ def shutdown_decode_pool(*, wait: bool = True) -> None:
             _DECODE_TASKS_DISPATCHED = 0
 
 
-def _dispatch_decode(worker_fn_name: str, *args) -> Any:
-    """Submit a decode job to the pool (or run in-process if disabled).
+# ---------------------------------------------------------------------------
+# Priority decode dispatcher (issue #171).
+#
+# A process-wide admission layer in front of the existing decode pool. It does
+# NOT replace the pool lifecycle (`_get_decode_pool`/`shutdown_decode_pool`) or
+# the hang-diagnostics (`_diag_snapshot_*`) — it *wraps* and reuses them, adding
+# only priority ordering + fault-tolerant rescheduling. See the class docstring
+# for the load-bearing idempotency invariant.
+# ---------------------------------------------------------------------------
+
+_FAULT_CRASH = "crash"
+_FAULT_TIMEOUT = "timeout"
+
+# Watchdog idle poll: how long it parks when nothing is in flight. A poll
+# (rather than an indefinite wait) is a cheap liveness backstop; submissions
+# notify the condition immediately, so this never gates real work.
+_WATCHDOG_IDLE_POLL_S = 30.0
+
+# Process-wide dead-letter counters, by reason. The DLQ-equivalent metric: a
+# corrupt GRIB becomes an observable counter, not a silently-degraded briefing.
+_DEAD_LETTER_COUNTS: dict[str, int] = {}
+_DEAD_LETTER_LOCK = threading.Lock()
+
+
+def _record_dead_letter(reason: str) -> None:
+    with _DEAD_LETTER_LOCK:
+        _DEAD_LETTER_COUNTS[reason] = _DEAD_LETTER_COUNTS.get(reason, 0) + 1
+
+
+def decode_dead_letter_counts() -> dict[str, int]:
+    """Snapshot of dead-letter counts per reason (observability / tests)."""
+    with _DEAD_LETTER_LOCK:
+        return dict(_DEAD_LETTER_COUNTS)
+
+
+class DecodeDispatchError(RuntimeError):
+    """Raised on a caller future when its decode job is dead-lettered.
+
+    Wraps the give-up *reason* (``decode_hung`` / ``retry_cap_exhausted`` /
+    ``retry_budget_exhausted`` / ``dispatcher_shutdown``) and the last
+    underlying exception. Existing call sites already degrade on a decode
+    exception (e.g. ``tasks/fetch.py`` drops to Open-Meteo-only), so they keep
+    degrading exactly as before — just far less often, because most interrupted
+    work is now transparently retried instead of failing.
+    """
+
+    def __init__(
+        self, reason: str, worker_fn_name: str, last_exc: BaseException | None = None,
+    ) -> None:
+        self.reason = reason
+        self.worker_fn_name = worker_fn_name
+        self.last_exc = last_exc
+        msg = f"decode job {worker_fn_name!r} dead-lettered: {reason}"
+        if last_exc is not None:
+            msg += f" (last error: {last_exc!r})"
+        super().__init__(msg)
+
+
+@dataclass
+class _JobHandle:
+    """One logical decode operation. Carries the caller-facing future across
+    any number of internal pool futures (retries are transparent to callers)."""
+
+    worker_fn_name: str
+    args: tuple
+    caller_future: Future
+    priority: int
+    seq: int
+    retries: int = 0
+    deadline: float = 0.0  # monotonic; set when a pool future is created
+    last_exc: BaseException | None = None
+
+
+def _default_worker_resolver(name: str) -> Callable[..., Any]:
+    from weatherbrief.fetch.grib import decode_worker
+    return getattr(decode_worker, name)
+
+
+def _summarize_args(args: tuple) -> str:
+    """Compact, log-safe summary of a job's args (file path / var set)."""
+    if not args:
+        return "()"
+    first = args[0]
+    if isinstance(first, str):
+        try:
+            return Path(first).name
+        except Exception:
+            return first[:80]
+    if isinstance(first, dict):
+        return "{" + ",".join(sorted(str(k) for k in first)) + "}"
+    return repr(first)[:80]
+
+
+class PriorityDecodeDispatcher:
+    """Process-wide priority admission layer over the GRIB decode pool.
+
+    Orders pending decode jobs by priority (INTERACTIVE > SCHEDULED >
+    BACKGROUND, FIFO within a level), bounds in-flight jobs to the pool's
+    worker count, and survives pool faults by **keeping completed work,
+    rescheduling interrupted work, and dead-lettering poison jobs**.
+
+    INVARIANT — IDEMPOTENCY ONLY. Auto-rescheduling interrupted work is only
+    safe because dispatched jobs are **pure**: read a GRIB file, return data,
+    no side effects (at-least-once delivery with idempotent consumers). Any
+    future side-effecting job MUST NOT use this dispatcher, or MUST carry its
+    own dedup — otherwise a crash/timeout reschedule will silently double-apply
+    the effect.
+
+    Non-preemptive: a running job is never killed. Priority only decides which
+    *pending* job takes the next freed worker slot. Head-of-line blocking is
+    therefore possible (a long BACKGROUND decode can hold a worker while an
+    INTERACTIVE job waits, bounded by job runtime); a hard interactive SLA
+    would need a reserved-worker bulkhead (deferred — see issue #171).
+
+    The pending priority heap is the durable structure: a pool fault tears the
+    pool down but never touches pending, so after the pool is rebuilt the
+    highest-priority waiting job is fed first.
+
+    Event-driven: no dedicated dispatch thread. ``submit_*`` and the pool's
+    done-callbacks drive a locked ``_pump``; a single daemon watchdog enforces
+    per-job timeouts. Pool lifecycle and hang-diagnostics are the existing
+    module primitives, reused (not reimplemented).
+    """
+
+    def __init__(
+        self,
+        *,
+        worker_resolver: Callable[[str], Callable[..., Any]] | None = None,
+        pool_factory: Callable[[], ProcessPoolExecutor | None] | None = None,
+        pool_teardown: Callable[..., None] | None = None,
+        workers_fn: Callable[[], int] | None = None,
+        timeout_fn: Callable[[], float] | None = None,
+    ) -> None:
+        # Injectable seams (default to the module primitives) so the dispatcher
+        # is unit-testable with a fake pool + fake worker_fn, per issue #171.
+        self._resolve_worker = worker_resolver or _default_worker_resolver
+        self._pool_factory = pool_factory or _get_decode_pool
+        self._pool_teardown = pool_teardown or shutdown_decode_pool
+        self._workers_fn = workers_fn or _decode_pool_workers
+        self._timeout_fn = timeout_fn or _decode_timeout_s
+
+        self._cond = threading.Condition(threading.Lock())
+        self._pending: list[tuple[int, int, _JobHandle]] = []  # min-heap
+        self._inflight: dict[Future, _JobHandle] = {}
+        self._seq = 0
+        self._draining = False  # a fault teardown owns the pool right now
+        self._closed = False    # app shutdown; reject + release everything
+        self._retry_times: deque[float] = deque()  # monotonic ts of recent retries
+        self._watchdog: threading.Thread | None = None
+
+    # -- public submission API ----------------------------------------------
+
+    def submit_one(
+        self, worker_fn_name: str, args: tuple, priority: int,
+    ) -> Future:
+        """Queue one decode job. Returns a caller-facing future to block on."""
+        if self._workers_fn() == 0:
+            return self._run_inline(worker_fn_name, args)
+        caller: Future = Future()
+        with self._cond:
+            self._ensure_watchdog_locked()
+            self._push_new_locked(worker_fn_name, args, caller, priority)
+        self._pump()
+        return caller
+
+    def submit_batch(
+        self, jobs: list[tuple[str, tuple]], priority: int,
+    ) -> list[Future]:
+        """Queue a batch at one priority. Returns caller futures in input order."""
+        if self._workers_fn() == 0:
+            return [self._run_inline(name, args) for name, args in jobs]
+        callers: list[Future] = []
+        with self._cond:
+            self._ensure_watchdog_locked()
+            for name, args in jobs:
+                caller: Future = Future()
+                self._push_new_locked(name, args, caller, priority)
+                callers.append(caller)
+        self._pump()
+        return callers
+
+    def drain(self) -> None:
+        """App-shutdown drain: release every blocked caller and stop pumping.
+
+        Pending is normally the durable structure; this is the *only* path that
+        empties it, because at process teardown blocked callers must be failed
+        rather than left waiting on a pool that's going away.
+        """
+        with self._cond:
+            self._closed = True
+            handles = [h for _, _, h in self._pending] + list(self._inflight.values())
+            self._pending.clear()
+            self._inflight.clear()
+            self._cond.notify_all()
+        for h in handles:
+            if not h.caller_future.done():
+                h.caller_future.set_exception(
+                    DecodeDispatchError("dispatcher_shutdown", h.worker_fn_name),
+                )
+
+    # -- internals ----------------------------------------------------------
+
+    def _run_inline(self, worker_fn_name: str, args: tuple) -> Future:
+        """In-process fallback (``GRIB_DECODE_WORKERS=0``) — priority is moot."""
+        fut: Future = Future()
+        try:
+            fut.set_result(self._resolve_worker(worker_fn_name)(*args))
+        except BaseException as exc:  # noqa: BLE001 — mirror to caller future
+            fut.set_exception(exc)
+        return fut
+
+    def _next_seq_locked(self) -> int:
+        self._seq += 1
+        return self._seq
+
+    def _push_new_locked(
+        self, worker_fn_name: str, args: tuple, caller: Future, priority: int,
+    ) -> None:
+        handle = _JobHandle(
+            worker_fn_name=worker_fn_name, args=tuple(args),
+            caller_future=caller, priority=int(priority), seq=self._next_seq_locked(),
+        )
+        heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
+
+    def _ensure_watchdog_locked(self) -> None:
+        if self._watchdog is not None and self._watchdog.is_alive():
+            return
+        t = threading.Thread(
+            target=self._watchdog_loop, name="grib-decode-watchdog", daemon=True,
+        )
+        self._watchdog = t
+        t.start()
+
+    def _pump(self) -> None:
+        """Fill freed worker slots with the highest-priority pending jobs."""
+        fault = False
+        new_futures: list[Future] = []
+        with self._cond:
+            if self._draining or self._closed:
+                return
+            workers = self._workers_fn()
+            timeout = self._timeout_fn()
+            while len(self._inflight) < workers and self._pending:
+                _, _, handle = heapq.heappop(self._pending)
+                if handle.caller_future.cancelled():
+                    continue
+                pool = self._pool_factory()
+                if pool is None:
+                    # Workers dropped to 0 mid-flight; restore and stop.
+                    heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
+                    break
+                try:
+                    pf = pool.submit(self._resolve_worker(handle.worker_fn_name), *handle.args)
+                except BrokenProcessPool:
+                    heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
+                    fault = True
+                    break
+                except Exception as exc:  # noqa: BLE001 — e.g. unpicklable arg
+                    handle.caller_future.set_exception(exc)
+                    continue
+                _diag_record_dispatch(1)
+                _diag_register_workers(pool)
+                handle.deadline = _time_mod.monotonic() + timeout
+                self._inflight[pf] = handle
+                new_futures.append(pf)
+            self._cond.notify_all()  # wake watchdog to recompute earliest deadline
+        # Attach callbacks OUTSIDE the lock: a future that is already done fires
+        # the callback synchronously in this thread, and _on_done re-acquires
+        # the (non-reentrant) lock — doing this under the lock would deadlock.
+        for pf in new_futures:
+            pf.add_done_callback(self._on_done)
+        if fault:
+            self._spawn_recovery(_FAULT_CRASH)
+
+    def _on_done(self, pf: Future) -> None:
+        do_fault = False
+        with self._cond:
+            if self._draining or self._closed:
+                return  # a teardown / shutdown owns this future
+            handle = self._inflight.get(pf)
+            if handle is None:
+                return
+            try:
+                exc = pf.exception()
+            except CancelledError:
+                self._inflight.pop(pf, None)
+                return
+            if isinstance(exc, BrokenProcessPool):
+                # Leave the handle in _inflight so the fault snapshot includes
+                # it; _handle_fault decides reschedule-vs-dead-letter uniformly.
+                handle.last_exc = exc
+                do_fault = True
+            else:
+                self._inflight.pop(pf, None)
+                self._resolve_caller(handle, pf, exc)
+        if do_fault:
+            # _on_done runs on the pool's executor-manager thread; recovery
+            # tears that pool down (joining that very thread), so it must run
+            # elsewhere — see _spawn_recovery.
+            self._spawn_recovery(_FAULT_CRASH)
+        else:
+            self._pump()
+
+    def _resolve_caller(
+        self, handle: _JobHandle, pf: Future, exc: BaseException | None,
+    ) -> None:
+        caller = handle.caller_future
+        if caller.done():
+            return
+        if exc is not None:
+            caller.set_exception(exc)
+            return
+        try:
+            caller.set_result(pf.result())
+        except BaseException as e:  # noqa: BLE001
+            caller.set_exception(e)
+
+    def _watchdog_loop(self) -> None:
+        while True:
+            victim: _JobHandle | None = None
+            with self._cond:
+                if self._closed:
+                    return
+                now = _time_mod.monotonic()
+                earliest: float | None = None
+                for h in self._inflight.values():
+                    if h.deadline <= now:
+                        victim = h
+                        break
+                    if earliest is None or h.deadline < earliest:
+                        earliest = h.deadline
+                if victim is None:
+                    wait_s = (
+                        _WATCHDOG_IDLE_POLL_S if earliest is None
+                        else max(0.0, earliest - now)
+                    )
+                    self._cond.wait(timeout=wait_s)
+                    continue
+                victim.last_exc = TimeoutError(
+                    f"decode {victim.worker_fn_name!r} exceeded "
+                    f"{self._timeout_fn():.0f}s",
+                )
+            # Release the lock before the (slow) fault handling. The watchdog
+            # is its own thread, so a synchronous teardown here is safe (unlike
+            # the _on_done path — see _spawn_recovery).
+            self._handle_fault(_FAULT_TIMEOUT, victim=victim)
+
+    def _spawn_recovery(self, reason: str, victim: _JobHandle | None = None) -> None:
+        """Run fault recovery on a fresh daemon thread.
+
+        Crash faults are detected in ``_on_done`` / a ``_pump`` submit, both of
+        which can run on the pool's *executor-manager thread*. Recovery tears
+        that pool down — ``shutdown(wait=True)`` joins the manager thread — so
+        doing it inline would self-join (RuntimeError) and wedge the dispatcher
+        with ``draining`` stuck True. Off-thread teardown sidesteps that. The
+        ``draining`` guard in ``_handle_fault`` dedups concurrent spawns.
+        """
+        t = threading.Thread(
+            target=self._handle_fault, args=(reason, victim),
+            name="grib-decode-recovery", daemon=True,
+        )
+        t.start()
+
+    def _handle_fault(self, reason: str, victim: _JobHandle | None = None) -> None:
+        """Recover from a pool fault: keep completed, reschedule interrupted,
+        dead-letter poison. The single place that decides each job's fate."""
+        with self._cond:
+            if self._draining or self._closed:
+                return  # already being handled / shut down
+            self._draining = True
+            snapshot = list(self._inflight.values())
+            self._inflight.clear()
+
+        try:
+            # Reuse the existing hang-diagnostics on the live (hung) pool before
+            # we tear it down — output is unchanged from the legacy timeout path.
+            pool = _DECODE_POOL
+            if reason == _FAULT_TIMEOUT:
+                names = ",".join(sorted({h.worker_fn_name for h in snapshot})) or "?"
+                try:
+                    _diag_snapshot_workers(pool, hang_context=f"dispatcher:{names}")
+                except Exception:  # pragma: no cover — diag must never break recovery
+                    logger.warning("dispatcher: hang-diag snapshot failed", exc_info=True)
+
+            # Tear the pool down. TIMEOUT: workers are alive-but-stuck, wait=False
+            # so recovery doesn't block on them. CRASH: workers are dead, wait=True
+            # joins fast and avoids orphan accumulation.
+            try:
+                self._pool_teardown(wait=(reason != _FAULT_TIMEOUT))
+            except Exception:  # pragma: no cover — never leave draining stuck True
+                logger.warning("dispatcher: pool teardown failed", exc_info=True)
+
+            rescheduled = 0
+            dead = 0
+            for h in snapshot:
+                if victim is not None and h is victim:
+                    # An identifiable hang: re-running re-hangs, so do NOT retry —
+                    # this is what breaks the infinite-teardown loop a corrupt
+                    # GRIB would otherwise cause.
+                    self._dead_letter(h, "decode_hung")
+                    dead += 1
+                elif not self._retry_budget_ok():
+                    self._dead_letter(h, "retry_budget_exhausted")
+                    dead += 1
+                elif h.retries >= _retry_cap():
+                    self._dead_letter(h, "retry_cap_exhausted")
+                    dead += 1
+                else:
+                    h.retries += 1
+                    # Crash collateral may recur → back off with jitter. Timeout
+                    # collateral was healthy (a sibling hung) → retry immediately
+                    # on the fresh pool.
+                    delay = 0.0 if reason == _FAULT_TIMEOUT else _jittered_backoff(h.retries)
+                    self._reenqueue(h, after=delay)
+                    rescheduled += 1
+
+            logger.warning(
+                "GRIB decode dispatcher fault (%s): victim=%s rescheduled=%d "
+                "dead_lettered=%d (%s)",
+                reason,
+                victim.worker_fn_name if victim is not None else "none",
+                rescheduled, dead, _diag_pool_summary(pool),
+            )
+        finally:
+            with self._cond:
+                self._draining = False
+        self._pump()  # rebuilds the pool lazily; resumes pending in priority order
+
+    def _retry_budget_ok(self) -> bool:
+        """Sliding-window cap on retry RATE process-wide. Consumes one unit of
+        budget when it returns True. Single-threaded: only ``_handle_fault``
+        calls it, and the ``_draining`` flag serialises fault handling."""
+        budget = _retry_budget()
+        if budget <= 0:
+            return False
+        window = _retry_window_s()
+        now = _time_mod.monotonic()
+        while self._retry_times and (now - self._retry_times[0]) > window:
+            self._retry_times.popleft()
+        if len(self._retry_times) >= budget:
+            return False
+        self._retry_times.append(now)
+        return True
+
+    def _reenqueue(self, handle: _JobHandle, *, after: float) -> None:
+        """Return an interrupted job to the pending heap (optionally delayed).
+
+        A new ``seq`` puts the retry at the back of its priority level so a
+        retried job can't starve fresh same-priority work."""
+        if after <= 0:
+            with self._cond:
+                handle.seq = self._next_seq_locked()
+                heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
+                self._cond.notify_all()
+            return
+
+        def _delayed_push() -> None:
+            with self._cond:
+                if self._closed:
+                    return
+                handle.seq = self._next_seq_locked()
+                heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
+                self._cond.notify_all()
+            self._pump()
+
+        t = threading.Timer(after, _delayed_push)
+        t.daemon = True
+        t.start()
+
+    def _dead_letter(self, handle: _JobHandle, reason: str) -> None:
+        """Give up on a job: fail the caller future + emit a structured WARNING
+        and a per-reason counter. The DLQ-equivalent — never a silent drop."""
+        _record_dead_letter(reason)
+        logger.warning(
+            "GRIB decode dead-letter: fn=%s reason=%s retries=%d args=%s last_exc=%r",
+            handle.worker_fn_name, reason, handle.retries,
+            _summarize_args(handle.args), handle.last_exc,
+        )
+        if not handle.caller_future.done():
+            handle.caller_future.set_exception(
+                DecodeDispatchError(reason, handle.worker_fn_name, handle.last_exc),
+            )
+
+
+_DISPATCHER: PriorityDecodeDispatcher | None = None
+_DISPATCHER_LOCK = threading.Lock()
+
+
+def _get_dispatcher() -> PriorityDecodeDispatcher:
+    """Lazy process-wide dispatcher singleton (recreated if a prior one was
+    drained at shutdown)."""
+    global _DISPATCHER
+    d = _DISPATCHER
+    if d is not None and not d._closed:
+        return d
+    with _DISPATCHER_LOCK:
+        if _DISPATCHER is None or _DISPATCHER._closed:
+            _DISPATCHER = PriorityDecodeDispatcher()
+        return _DISPATCHER
+
+
+def _drain_dispatcher_for_shutdown() -> None:
+    with _DISPATCHER_LOCK:
+        d = _DISPATCHER
+    if d is not None:
+        d.drain()
+
+
+def _dispatch_decode(
+    worker_fn_name: str, *args, priority: int | DecodePriority | None = None,
+) -> Any:
+    """Submit one decode job; block on its result (call-site shape unchanged).
+
+    Routes through the :class:`PriorityDecodeDispatcher` by default. With
+    ``GRIB_DECODE_PRIORITY_ENABLED=0`` it falls back to the legacy FIFO path.
+    ``priority`` defaults to the ``_DECODE_PRIORITY`` ContextVar (else
+    SCHEDULED).
+    """
+    if not _priority_enabled():
+        return _dispatch_decode_legacy(worker_fn_name, *args)
+    eff = _resolve_priority(priority)
+    return _get_dispatcher().submit_one(worker_fn_name, args, eff).result()
+
+
+def _dispatch_decode_parallel(
+    jobs: list[tuple[str, tuple]], *, priority: int | DecodePriority | None = None,
+) -> list[Any]:
+    """Submit a batch of decode jobs; return results in input order.
+
+    Routes through the dispatcher by default (per-job timeout + fault
+    rescheduling). With ``GRIB_DECODE_PRIORITY_ENABLED=0`` it falls back to the
+    legacy FIFO batch path (one shared deadline).
+    """
+    if not jobs:
+        return []
+    if not _priority_enabled():
+        return _dispatch_decode_parallel_legacy(jobs)
+    eff = _resolve_priority(priority)
+    futures = _get_dispatcher().submit_batch(jobs, eff)
+    return [f.result() for f in futures]
+
+
+def _dispatch_decode_legacy(worker_fn_name: str, *args) -> Any:
+    """FIFO single-job dispatch — the pre-#171 path (rollback / kill switch).
+
+    Reached when ``GRIB_DECODE_PRIORITY_ENABLED=0``. Submits straight to the
+    pool with a per-call ``GRIB_DECODE_TIMEOUT_S`` and resets the pool on
+    fault. The priority dispatcher (default) wraps this same pool but adds
+    priority ordering + fault rescheduling on top.
 
     Pool is the default; the in-process fallback exists for tests and as
     a kill switch via ``GRIB_DECODE_WORKERS=0``. Both paths return the
@@ -853,8 +1520,10 @@ def _dispatch_decode(worker_fn_name: str, *args) -> Any:
         raise
 
 
-def _dispatch_decode_parallel(jobs: list[tuple[str, tuple]]) -> list[Any]:
-    """Submit a batch of decode jobs to the pool concurrently.
+def _dispatch_decode_parallel_legacy(jobs: list[tuple[str, tuple]]) -> list[Any]:
+    """FIFO batch dispatch — the pre-#171 path (rollback / kill switch).
+
+    Reached when ``GRIB_DECODE_PRIORITY_ENABLED=0``.
 
     Each job is ``(worker_fn_name, args_tuple)``; results are returned in the
     same order. Falls back to sequential in-process execution when the pool
@@ -996,6 +1665,7 @@ def enrich_forecasts(
     flight_duration_hours: float = 0.0,
     progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
+    priority: int | DecodePriority | None = None,
 ) -> tuple[dict[str, int], dict[str, str]]:
     """Enrich cross-section forecasts with cloud water from GRIB2 sources.
 
@@ -1012,6 +1682,13 @@ def enrich_forecasts(
         data_dir: Base data directory for caching.
         flight_duration_hours: Flight duration for per-hour enrichment.
         as_of_time: If set, only use model runs initialized before this time.
+        priority: Decode priority for this call's GRIB jobs. ``None`` (default)
+            resolves to the ``_DECODE_PRIORITY`` ContextVar set by the entry
+            point (INTERACTIVE for user refresh / airport profile, SCHEDULED
+            for auto-refresh), else SCHEDULED. The value is published on the
+            ContextVar for the duration so Phase-1 worker threads (which inherit
+            the context via ``_submit_with_context``) dispatch at the right
+            level.
 
     Returns:
         Tuple of (grib_init_times, grib_skip_reasons):
@@ -1023,6 +1700,7 @@ def enrich_forecasts(
 
     timer = _GribTimer()
     token = _GRIB_TIMER.set(timer)
+    ptoken = _DECODE_PRIORITY.set(_resolve_priority(priority))
     try:
         return _enrich_forecasts_inner(
             timer, cross_sections, all_forecasts, route_points,
@@ -1033,6 +1711,7 @@ def enrich_forecasts(
         )
     finally:
         timer.log_summary()
+        _DECODE_PRIORITY.reset(ptoken)
         _GRIB_TIMER.reset(token)
 
 
