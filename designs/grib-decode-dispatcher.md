@@ -32,7 +32,7 @@ Propagation mirrors the existing `_GRIB_TIMER` pattern via a `ContextVar` `_DECO
 
 - `enrich_forecasts(..., priority=None)` resolves `explicit arg → ContextVar → SCHEDULED` and publishes it on the ContextVar for the call. Phase-1 worker threads inherit it via `_submit_with_context` (which copies the context), so nested `_dispatch_decode` calls see it.
 - `_dispatch_decode` / `_dispatch_decode_parallel` take an optional `priority` kwarg defaulting to the ContextVar value.
-- **Entry points set the value past context-copying boundaries:**
+- **Entry points set the value past context-copying boundaries** via the public `set_decode_priority(p)` helper (keeps call sites off the private ContextVar):
   - `api/packs.py` user refresh (both `run_pipeline`s): set INTERACTIVE *inside* `run_pipeline` (`run_in_executor` does not copy the caller context).
   - `api/airport_profile.py`: `enrich_forecasts(priority=INTERACTIVE)`.
   - `scheduler.py` `_auto_refresh_one`: SCHEDULED. `_run_standalone_once`: BACKGROUND (runs in `asyncio.to_thread`, which copies the context).

@@ -75,7 +75,7 @@ GRIB2 enrichment engine: GFS S3 (CLWMR/ICMR/cloud diagnostics), ICON-EU DWD (QC/
 
 ### grib-decode-dispatcher [project]
 Priority-aware, fault-tolerant admission layer in front of the GRIB decode process pool. `DecodePriority` (INTERACTIVE/SCHEDULED/BACKGROUND, lower=higher) propagated via a `_DECODE_PRIORITY` ContextVar; `PriorityDecodeDispatcher` orders pending jobs by priority (FIFO within a level), bounds in-flight to the worker count, and on a pool fault keeps completed work, reschedules interrupted work (crash=jittered backoff, timeout=immediate), and dead-letters poison jobs (timeout victim / retry cap / retry-rate budget). Idempotency-only invariant. Bypass via `GRIB_DECODE_WORKERS=0` or `GRIB_DECODE_PRIORITY_ENABLED=0`.
-Key exports: `DecodePriority`, `PriorityDecodeDispatcher`, `enrich_forecasts(priority=...)`, `_dispatch_decode`, `_dispatch_decode_parallel`, `decode_dead_letter_counts`
+Key exports: `DecodePriority`, `PriorityDecodeDispatcher`, `set_decode_priority`, `enrich_forecasts(priority=...)`, `_dispatch_decode`, `_dispatch_decode_parallel`, `decode_dead_letter_counts`
 → Full doc: grib-decode-dispatcher.md
 
 ### multi-user-deployment

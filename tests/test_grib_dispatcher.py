@@ -29,8 +29,8 @@ from weatherbrief.fetch.grib import (
     DecodeDispatchError,
     DecodePriority,
     PriorityDecodeDispatcher,
-    _DECODE_PRIORITY,
     decode_dead_letter_counts,
+    set_decode_priority,
 )
 
 
@@ -515,6 +515,27 @@ def test_in_process_fallback_propagates_exception(make_dispatcher):
         fut.result()
 
 
+def test_submit_after_drain_fails_fast(make_dispatcher):
+    """A submit that races behind drain() fails its caller future immediately
+    rather than hanging on a _pump that will never run again."""
+    d, registry, _ = make_dispatcher(workers=2)
+    registry["echo"] = lambda v: v
+    d.drain()
+
+    fut = d.submit_one("echo", (1,), DecodePriority.SCHEDULED)
+    assert fut.done()
+    with pytest.raises(DecodeDispatchError) as exc:
+        fut.result()
+    assert exc.value.reason == "dispatcher_shutdown"
+
+    futs = d.submit_batch([("echo", (2,)), ("echo", (3,))], DecodePriority.SCHEDULED)
+    assert len(futs) == 2
+    for f in futs:
+        assert f.done()
+        with pytest.raises(DecodeDispatchError):
+            f.result()
+
+
 def test_priority_disabled_routes_to_legacy(monkeypatch):
     """``GRIB_DECODE_PRIORITY_ENABLED=0`` makes the wrappers bypass the
     dispatcher entirely and call the legacy FIFO functions."""
@@ -577,7 +598,6 @@ def test_contextvar_priority_ordering_concurrent(monkeypatch):
     o_lock = threading.Lock()
     gate_started = threading.Event()
     release = threading.Event()
-    queued = threading.Barrier(3)  # gate-thread, bg-thread, int-thread coordinate
 
     def _gate(_v):
         gate_started.set()
@@ -599,25 +619,33 @@ def test_contextvar_priority_ordering_concurrent(monkeypatch):
                                                  priority=DecodePriority.SCHEDULED)
 
     def _enrich(label, priority):
-        # Mimic an entry point setting the ContextVar, then dispatching with
-        # priority=None so the value is read from the ContextVar.
-        _DECODE_PRIORITY.set(int(priority))
-        queued.wait(5.0)  # ensure both jobs are submitted before gate releases
+        # Mimic an entry point setting the priority via the public helper, then
+        # dispatching with priority=None so the value is read from the context.
+        set_decode_priority(priority)
         results[label] = grib._dispatch_decode("record", label)
+
+    def _wait_pending(n: int, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with dispatcher._cond:
+                if len(dispatcher._pending) >= n:
+                    return True
+            time.sleep(0.005)
+        return False
 
     gt = threading.Thread(target=_gate_thread)
     gt.start()
-    assert gate_started.wait(2.0)
+    assert gate_started.wait(2.0), "gate never occupied the worker"
 
+    # Submission order (BACKGROUND before INTERACTIVE) is deliberately the
+    # opposite of priority order — the heap must reorder. Ordering is decided by
+    # the heap when the gate frees the worker, NOT by which thread submits first,
+    # so no sleeps are needed: just wait until both jobs are actually queued.
     bg = threading.Thread(target=_enrich, args=("bg", DecodePriority.BACKGROUND))
     it = threading.Thread(target=_enrich, args=("int", DecodePriority.INTERACTIVE))
-    # Start BACKGROUND first so, absent priority, it would queue ahead.
     bg.start()
-    time.sleep(0.1)
     it.start()
-    queued.wait(5.0)
-    # Both record-jobs are now queued behind the gate. Release it.
-    time.sleep(0.1)
+    assert _wait_pending(2), "both record jobs should be queued behind the gate"
     release.set()
 
     for t in (gt, bg, it):
