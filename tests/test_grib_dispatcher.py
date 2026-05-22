@@ -218,10 +218,20 @@ def test_never_exceeds_worker_slots(make_dispatcher):
             concurrency["now"] -= 1
         return _label
 
+    def _wait_now(target: int, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with c_lock:
+                if concurrency["now"] >= target:
+                    return True
+            time.sleep(0.005)
+        return False
+
     registry["tracked"] = _tracked
     futs = [d.submit_one("tracked", (i,), DecodePriority.SCHEDULED) for i in range(8)]
-    # Give the dispatcher a beat to fill all the slots it's allowed to.
-    time.sleep(0.3)
+    # Deterministic: wait until both slots are actually occupied (bounded to
+    # `workers`, so `now` can only reach `workers`, never exceed it).
+    assert _wait_now(workers), "dispatcher should saturate all worker slots"
     with c_lock:
         peak = concurrency["max"]
     proceed.set()
@@ -534,6 +544,41 @@ def test_submit_after_drain_fails_fast(make_dispatcher):
         assert f.done()
         with pytest.raises(DecodeDispatchError):
             f.result()
+
+
+def test_drain_during_crash_backoff_releases_floating_handle(make_dispatcher, monkeypatch):
+    """A crash-retry handle waiting out its backoff timer lives in neither
+    _pending nor _inflight. drain() must still release its caller — otherwise
+    the caller blocked on .result() hangs until (or past) process exit."""
+    monkeypatch.setenv("GRIB_DECODE_BACKOFF_BASE_S", "2.0")  # wide backoff window
+    monkeypatch.setenv("GRIB_DECODE_RETRY_CAP", "5")
+    d, registry, _ = make_dispatcher(workers=1)
+
+    crashed = threading.Event()
+
+    def _crash_once(_v):
+        crashed.set()
+        raise BrokenProcessPool("die")
+
+    registry["crash"] = _crash_once
+    fut = d.submit_one("crash", ("x",), DecodePriority.SCHEDULED)
+    assert crashed.wait(5.0), "job should have run and crashed"
+
+    # Wait until recovery has reached _reenqueue and the handle is floating
+    # in the backoff timer (tracked in _delayed_handles).
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        with d._cond:
+            if d._delayed_handles:
+                break
+        time.sleep(0.01)
+    with d._cond:
+        assert d._delayed_handles, "handle should be mid-backoff (floating)"
+
+    d.drain()  # must release the floating handle, not just _pending/_inflight
+    with pytest.raises(DecodeDispatchError) as exc:
+        fut.result(5.0)
+    assert exc.value.reason == "dispatcher_shutdown"
 
 
 def test_priority_disabled_routes_to_legacy(monkeypatch):

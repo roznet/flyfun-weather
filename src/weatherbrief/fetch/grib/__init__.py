@@ -998,12 +998,17 @@ class DecodeDispatchError(RuntimeError):
         super().__init__(msg)
 
 
-@dataclass
+@dataclass(eq=False)
 class _JobHandle:
     """One logical decode operation. Carries the caller-facing future across
-    any number of internal pool futures (retries are transparent to callers)."""
+    any number of internal pool futures (retries are transparent to callers).
+
+    ``eq=False`` keeps identity equality/hash so handles can live in a set
+    (``_delayed_handles``); the heap orders by ``(priority, seq)`` and never
+    compares handles."""
 
     worker_fn_name: str
+    fn: Callable[..., Any]
     args: tuple
     caller_future: Future
     priority: int
@@ -1088,6 +1093,10 @@ class PriorityDecodeDispatcher:
         self._draining = False  # a fault teardown owns the pool right now
         self._closed = False    # app shutdown; reject + release everything
         self._retry_times: deque[float] = deque()  # monotonic ts of recent retries
+        # Crash-retry handles waiting out a backoff timer: in neither _pending
+        # nor _inflight, so drain() must fail them explicitly or their callers
+        # would hang on the timer that no-ops once _closed.
+        self._delayed_handles: set[_JobHandle] = set()
         self._watchdog: threading.Thread | None = None
 
     # -- public submission API ----------------------------------------------
@@ -1099,6 +1108,13 @@ class PriorityDecodeDispatcher:
         if self._workers_fn() == 0:
             return self._run_inline(worker_fn_name, args)
         caller: Future = Future()
+        # Resolve the worker (a lazy import on first use) OFF the lock — keeps
+        # the critical section free of imports / arbitrary resolver work.
+        try:
+            fn = self._resolve_worker(worker_fn_name)
+        except Exception as exc:  # bad name → fail just this caller
+            caller.set_exception(exc)
+            return caller
         with self._cond:
             if self._closed:
                 # Drain raced ahead of us: fail fast rather than push a handle
@@ -1108,7 +1124,7 @@ class PriorityDecodeDispatcher:
                 )
                 return caller
             self._ensure_watchdog_locked()
-            self._push_new_locked(worker_fn_name, args, caller, priority)
+            self._push_new_locked(worker_fn_name, fn, args, caller, priority)
         self._pump()
         return caller
 
@@ -1118,19 +1134,27 @@ class PriorityDecodeDispatcher:
         """Queue a batch at one priority. Returns caller futures in input order."""
         if self._workers_fn() == 0:
             return [self._run_inline(name, args) for name, args in jobs]
+        # Resolve workers off the lock; a bad name fails just that job.
+        prepared: list[tuple[str, Callable[..., Any] | None, tuple, Future, Exception | None]] = []
         callers: list[Future] = []
+        for name, args in jobs:
+            caller: Future = Future()
+            callers.append(caller)
+            try:
+                prepared.append((name, self._resolve_worker(name), args, caller, None))
+            except Exception as exc:
+                prepared.append((name, None, args, caller, exc))
         with self._cond:
-            if self._closed:
-                for name, _ in jobs:
-                    fut: Future = Future()
-                    fut.set_exception(DecodeDispatchError("dispatcher_shutdown", name))
-                    callers.append(fut)
-                return callers
-            self._ensure_watchdog_locked()
-            for name, args in jobs:
-                caller: Future = Future()
-                self._push_new_locked(name, args, caller, priority)
-                callers.append(caller)
+            closed = self._closed
+            if not closed:
+                self._ensure_watchdog_locked()
+            for name, fn, args, caller, exc in prepared:
+                if exc is not None:
+                    caller.set_exception(exc)
+                elif closed:
+                    caller.set_exception(DecodeDispatchError("dispatcher_shutdown", name))
+                else:
+                    self._push_new_locked(name, fn, args, caller, priority)
         self._pump()
         return callers
 
@@ -1143,17 +1167,25 @@ class PriorityDecodeDispatcher:
         """
         with self._cond:
             self._closed = True
-            handles = [h for _, _, h in self._pending] + list(self._inflight.values())
+            handles = (
+                [h for _, _, h in self._pending]
+                + list(self._inflight.values())
+                + list(self._delayed_handles)  # crash-retries mid-backoff
+            )
             self._pending.clear()
             self._inflight.clear()
+            self._delayed_handles.clear()
             self._cond.notify_all()
         for h in handles:
-            if not h.caller_future.done():
-                h.caller_future.set_exception(
-                    DecodeDispatchError("dispatcher_shutdown", h.worker_fn_name),
-                )
+            self._fail_caller(h, "dispatcher_shutdown")
 
     # -- internals ----------------------------------------------------------
+
+    def _fail_caller(self, handle: _JobHandle, reason: str) -> None:
+        if not handle.caller_future.done():
+            handle.caller_future.set_exception(
+                DecodeDispatchError(reason, handle.worker_fn_name),
+            )
 
     def _run_inline(self, worker_fn_name: str, args: tuple) -> Future:
         """In-process fallback (``GRIB_DECODE_WORKERS=0``) — priority is moot."""
@@ -1173,10 +1205,11 @@ class PriorityDecodeDispatcher:
         return self._seq
 
     def _push_new_locked(
-        self, worker_fn_name: str, args: tuple, caller: Future, priority: int,
+        self, worker_fn_name: str, fn: Callable[..., Any], args: tuple,
+        caller: Future, priority: int,
     ) -> None:
         handle = _JobHandle(
-            worker_fn_name=worker_fn_name, args=tuple(args),
+            worker_fn_name=worker_fn_name, fn=fn, args=tuple(args),
             caller_future=caller, priority=int(priority), seq=self._next_seq_locked(),
         )
         heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
@@ -1209,7 +1242,7 @@ class PriorityDecodeDispatcher:
                     heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
                     break
                 try:
-                    pf = pool.submit(self._resolve_worker(handle.worker_fn_name), *handle.args)
+                    pf = pool.submit(handle.fn, *handle.args)
                 except BrokenProcessPool:
                     heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
                     fault = True
@@ -1407,21 +1440,41 @@ class PriorityDecodeDispatcher:
         """Return an interrupted job to the pending heap (optionally delayed).
 
         A new ``seq`` puts the retry at the back of its priority level so a
-        retried job can't starve fresh same-priority work."""
+        retried job can't starve fresh same-priority work. If the dispatcher is
+        closing, the caller is failed instead of left waiting — both the
+        immediate and the delayed path check ``_closed`` under the lock, and a
+        backed-off handle is tracked in ``_delayed_handles`` so ``drain()`` can
+        release it without waiting for the timer."""
         if after <= 0:
             with self._cond:
-                handle.seq = self._next_seq_locked()
-                heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
-                self._cond.notify_all()
+                closed = self._closed
+                if not closed:
+                    handle.seq = self._next_seq_locked()
+                    heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
+                    self._cond.notify_all()
+            if closed:
+                self._fail_caller(handle, "dispatcher_shutdown")
+            return
+
+        with self._cond:
+            closed = self._closed
+            if not closed:
+                self._delayed_handles.add(handle)
+        if closed:
+            self._fail_caller(handle, "dispatcher_shutdown")
             return
 
         def _delayed_push() -> None:
             with self._cond:
-                if self._closed:
-                    return
-                handle.seq = self._next_seq_locked()
-                heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
-                self._cond.notify_all()
+                self._delayed_handles.discard(handle)
+                closed = self._closed
+                if not closed:
+                    handle.seq = self._next_seq_locked()
+                    heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
+                    self._cond.notify_all()
+            if closed:
+                self._fail_caller(handle, "dispatcher_shutdown")
+                return
             self._pump()
 
         t = threading.Timer(after, _delayed_push)
@@ -1449,11 +1502,10 @@ _DISPATCHER_LOCK = threading.Lock()
 
 def _get_dispatcher() -> PriorityDecodeDispatcher:
     """Lazy process-wide dispatcher singleton (recreated if a prior one was
-    drained at shutdown)."""
+    drained at shutdown). The ``_closed`` check stays under ``_DISPATCHER_LOCK``
+    rather than an unsynchronised fast-path read; submit_* also recheck under
+    the dispatcher's own lock, so a returned-then-closed instance fails fast."""
     global _DISPATCHER
-    d = _DISPATCHER
-    if d is not None and not d._closed:
-        return d
     with _DISPATCHER_LOCK:
         if _DISPATCHER is None or _DISPATCHER._closed:
             _DISPATCHER = PriorityDecodeDispatcher()
