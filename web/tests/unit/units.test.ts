@@ -4,7 +4,9 @@ import {
   formatQNH,
   formatTemperature,
   getUnitsRegion,
-  setUnitsRegion,
+  setUnitsPreference,
+  setFlightRegion,
+  regionFromIcaos,
 } from '../../ts/units';
 
 describe('formatVisibility', () => {
@@ -41,14 +43,40 @@ describe('formatTemperature', () => {
   });
 });
 
-describe('units region singleton', () => {
-  it('defaults to europe and updates via setUnitsRegion', () => {
-    expect(getUnitsRegion()).toBe('europe');
-    setUnitsRegion('us');
+describe('regionFromIcaos', () => {
+  it('classifies US, European, and mixed routes', () => {
+    expect(regionFromIcaos(['KJFK', 'KBOS'])).toBe('us');
+    expect(regionFromIcaos(['CYYZ', 'KORD'])).toBe('us');
+    expect(regionFromIcaos(['LFPG', 'EGLL'])).toBe('europe');
+    expect(regionFromIcaos(['KJFK', 'LFPG'])).toBe(null); // mixed
+    expect(regionFromIcaos([])).toBe(null);
+  });
+});
+
+describe('units preference + auto resolution', () => {
+  it('forced preference ignores flight region', () => {
+    setUnitsPreference('us');
+    expect(getUnitsRegion()).toBe('us');
+    setFlightRegion('europe');
     expect(getUnitsRegion()).toBe('us');
     // formatters with no explicit region follow the active singleton
     expect(formatVisibility(4500)).toBe('2.8 SM');
-    setUnitsRegion('garbage');
+  });
+
+  it('auto resolves from the flight region, defaulting to europe', () => {
+    setUnitsPreference('auto');
+    expect(getUnitsRegion()).toBe('europe'); // no hint yet
+    setFlightRegion('us');
+    expect(getUnitsRegion()).toBe('us');
+    setFlightRegion(null);
     expect(getUnitsRegion()).toBe('europe');
+  });
+
+  it('unknown preference value falls back to auto', () => {
+    setUnitsPreference('garbage');
+    setFlightRegion(null);
+    expect(getUnitsRegion()).toBe('europe');
+    setFlightRegion('us');
+    expect(getUnitsRegion()).toBe('us');
   });
 });

@@ -128,7 +128,7 @@ def _parse_service_toggles(raw: str) -> dict:
         "cloud_method": data.get("cloud_method", "soft_nwp"),
         "convective_method": data.get("convective_method", "nwp"),
         "locale": data.get("locale", "en"),
-        "units_region": data.get("units_region", "europe"),
+        "units_region": data.get("units_region", "auto"),
         "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
     }
 
@@ -317,19 +317,21 @@ def load_user_locale(db: Session, user_id: str) -> str | None:
 
 
 def load_units_region(db: Session, user_id: str) -> str:
-    """Load the user's display-units region ('europe' or 'us').
+    """Load the user's display-units preference ('auto', 'europe', or 'us').
 
-    Returns 'europe' (the default) when unset. Used at briefing generation
-    time to format region-variable units (visibility) in the LLM prompt.
+    Returns the raw preference (default 'auto'); callers resolve 'auto' against
+    the flight's detected region. Used at briefing generation time to format
+    region-variable units (visibility) in the LLM prompt.
     """
+    from weatherbrief.units import normalize_preference
+
     row = db.get(UserPreferencesRow, user_id)
     if not row or not row.app_prefs_json:
-        return "europe"
+        return "auto"
     try:
-        region = json.loads(row.app_prefs_json).get("units_region", "europe")
-        return "us" if region == "us" else "europe"
+        return normalize_preference(json.loads(row.app_prefs_json).get("units_region"))
     except json.JSONDecodeError:
-        return "europe"
+        return "auto"
 
 
 def load_advisory_prefs(db: Session, user_id: str) -> AdvisoryPreferences:
@@ -364,7 +366,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, bool]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "soft_nwp", "convective_method": "nwp", "units_region": "europe"}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "soft_nwp", "convective_method": "nwp", "units_region": "auto"}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 

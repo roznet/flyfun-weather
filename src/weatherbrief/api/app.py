@@ -407,7 +407,8 @@ def create_app() -> FastAPI:
             except _json.JSONDecodeError:
                 prefs_data = {}
         synoptic_enabled = bool(prefs_data.get("synoptic_forecast_map_enabled", False))
-        units_region = "us" if prefs_data.get("units_region") == "us" else "europe"
+        _ur = prefs_data.get("units_region")
+        units_region = _ur if _ur in ("auto", "europe", "us") else "auto"
         return {
             "id": user.id,
             "email": user.email,

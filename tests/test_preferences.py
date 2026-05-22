@@ -71,7 +71,7 @@ class TestPreferencesAPI:
         assert data["autorouter_mode"] == "password"  # dev environment
         assert data["defaults"]["cruise_altitude_ft"] is None
         assert data["defaults"]["models"] is None
-        assert data["units_region"] == "europe"  # default
+        assert data["units_region"] == "auto"  # default
 
     def test_units_region_round_trip(self, client):
         resp = client.put("/api/user/preferences", json={"units_region": "us"})

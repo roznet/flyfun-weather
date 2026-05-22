@@ -19,7 +19,7 @@ import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderHewsonInfo } from './helpers/hewson-info';
 import { redirectToLogin, renderUserInfo, $ } from './utils';
 import { initI18n, t } from './i18n/i18n';
-import { setUnitsRegion } from './units';
+import { setUnitsPreference } from './units';
 import { createUrlState } from './utils/url-state';
 import { shareCurrentUrl } from './utils/share-link';
 
@@ -703,7 +703,8 @@ async function main(): Promise<void> {
     return;
   }
   renderUserInfo(user, 'maps');
-  setUnitsRegion(user.units_region);
+  // Pan-European overview — no single flight, so 'auto' falls back to europe.
+  setUnitsPreference(user.units_region);
 
   // Synoptic Forecast is opt-in per user. Hide the tab unless the user
   // enabled it in Settings → Account → Optional Services. The toggle is

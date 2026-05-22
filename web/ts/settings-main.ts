@@ -44,7 +44,7 @@ import {
 } from './adapters/tokens-adapter';
 import { initTheme } from './theme';
 import { initI18n, t, setLocale, getLocale, getDateLocale } from './i18n/i18n';
-import { setUnitsRegion } from './units';
+import { setUnitsPreference } from './units';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
 
@@ -659,10 +659,11 @@ function populateAccountForm(prefs: PreferencesResponse): void {
     localeSelect.value = prefs.locale || getLocale();
   }
 
-  // Units region picker — reflect server-stored preference
+  // Units region picker — reflect server-stored preference (auto/europe/us)
   const unitsRegionSelect = document.getElementById('input-units-region') as HTMLSelectElement;
   if (unitsRegionSelect) {
-    unitsRegionSelect.value = prefs.units_region === 'us' ? 'us' : 'europe';
+    const ur = prefs.units_region;
+    unitsRegionSelect.value = ur === 'us' || ur === 'europe' ? ur : 'auto';
   }
 
   // Account-level optional services
@@ -892,7 +893,8 @@ async function handleSave(): Promise<void> {
 
   // Account-level settings
   const selectedLocale = (document.getElementById('input-locale') as HTMLSelectElement)?.value || 'en';
-  const selectedUnitsRegion = (document.getElementById('input-units-region') as HTMLSelectElement)?.value === 'us' ? 'us' : 'europe';
+  const unitsRegionVal = (document.getElementById('input-units-region') as HTMLSelectElement)?.value;
+  const selectedUnitsRegion = unitsRegionVal === 'us' || unitsRegionVal === 'europe' ? unitsRegionVal : 'auto';
 
   try {
     // Save profile settings
@@ -917,7 +919,7 @@ async function handleSave(): Promise<void> {
     }
 
     const result = await savePreferences(accountUpdate);
-    setUnitsRegion(result.units_region);
+    setUnitsPreference(result.units_region);
     updateAutorouterStatus(result.has_autorouter_creds, autorouterMode);
     if (autorouterMode === 'password') {
       const arPwdInput = document.getElementById('input-ar-password') as HTMLInputElement;

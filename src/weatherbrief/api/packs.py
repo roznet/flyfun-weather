@@ -869,7 +869,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     convective_method = None
     digest_guidance = None
     locale = None
-    units_region = "europe"
+    units_region = "auto"
     profile_name_for_digest = None
     if db is not None:
         from weatherbrief.api.preferences import (
@@ -961,7 +961,13 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         options.advisory_params = adv_config["params"]
     if locale:
         options.locale = locale
-    options.units_region = units_region
+    # Resolve an 'auto' units preference against the route's detected region so
+    # the LLM prompt formats visibility in US units for US flights.
+    from weatherbrief.fetch.variables import ModelRegion, detect_model_region
+    from weatherbrief.units import resolve_units_region
+
+    detected = "us" if detect_model_region(route) == ModelRegion.NORTH_AMERICA else "europe"
+    options.units_region = resolve_units_region(units_region, detected)
     options.profile_id = flight.profile_id
     options.profile_name = profile_name_for_digest
     if digest_guidance:
