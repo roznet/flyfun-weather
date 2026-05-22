@@ -789,6 +789,14 @@ def _resolve_priority(priority: int | DecodePriority | None) -> int:
     return int(DecodePriority.SCHEDULED)
 
 
+def _priority_name(priority: int) -> str:
+    """Human-readable label for a priority int (enum name, or ``p<n>`` if custom)."""
+    try:
+        return DecodePriority(priority).name
+    except ValueError:
+        return f"p{priority}"
+
+
 def set_decode_priority(priority: int | DecodePriority) -> None:
     """Publish *priority* on the decode-priority ContextVar for this context.
 
@@ -1015,6 +1023,7 @@ class _JobHandle:
     seq: int
     retries: int = 0
     deadline: float = 0.0  # monotonic; set when a pool future is created
+    enqueued_at: float = 0.0  # monotonic; set when first pushed to pending
     last_exc: BaseException | None = None
 
 
@@ -1211,6 +1220,7 @@ class PriorityDecodeDispatcher:
         handle = _JobHandle(
             worker_fn_name=worker_fn_name, fn=fn, args=tuple(args),
             caller_future=caller, priority=int(priority), seq=self._next_seq_locked(),
+            enqueued_at=_time_mod.monotonic(),
         )
         heapq.heappush(self._pending, (handle.priority, handle.seq, handle))
 
@@ -1228,6 +1238,7 @@ class PriorityDecodeDispatcher:
         fault = False
         new_futures: list[Future] = []
         failed: list[tuple[Future, BaseException]] = []
+        dispatched: list[tuple[str, int, float, int, int]] = []
         with self._cond:
             if self._draining or self._closed:
                 return
@@ -1254,11 +1265,17 @@ class PriorityDecodeDispatcher:
                     # re-entered _cond would deadlock.
                     failed.append((handle.caller_future, exc))
                     continue
+                now = _time_mod.monotonic()
                 _diag_record_dispatch(1)
                 _diag_register_workers(pool)
-                handle.deadline = _time_mod.monotonic() + timeout
+                handle.deadline = now + timeout
                 self._inflight[pf] = handle
                 new_futures.append(pf)
+                waited = now - handle.enqueued_at if handle.enqueued_at else 0.0
+                dispatched.append((
+                    handle.worker_fn_name, handle.priority, waited,
+                    len(self._inflight), len(self._pending),
+                ))
             self._cond.notify_all()  # wake watchdog to recompute earliest deadline
         # Resolve failures and attach callbacks OUTSIDE the lock: both fire
         # done-callbacks synchronously in this thread, and _on_done re-acquires
@@ -1266,6 +1283,14 @@ class PriorityDecodeDispatcher:
         for caller, exc in failed:
             if not caller.done():
                 caller.set_exception(exc)
+        for fn_name, prio, waited, inflight_n, pending_n in dispatched:
+            # INFO only under contention (jobs still queued) so a higher-priority
+            # job taking the slot is visible in prod logs; DEBUG otherwise.
+            logger.log(
+                logging.INFO if pending_n else logging.DEBUG,
+                "GRIB dispatch: fn=%s prio=%s waited=%.0fms inflight=%d pending=%d",
+                fn_name, _priority_name(prio), waited * 1000.0, inflight_n, pending_n,
+            )
         for pf in new_futures:
             pf.add_done_callback(self._on_done)
         if fault:
