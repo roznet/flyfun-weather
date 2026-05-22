@@ -181,6 +181,107 @@ class TestGetCategoryClimatology:
         assert len(result["airports"]) == len(FAKE_COORDS)
         assert all(a["n_obs"] == 0 for a in result["airports"])
         assert all("pct_vfr" not in a for a in result["airports"])
+        # No-data airports carry zeroed gap fields, not missing keys.
+        assert all(a["n_no_category"] == 0 for a in result["airports"])
+        assert all(a["low_confidence"] is False for a in result["airports"])
+
+
+# ---------------------------------------------------------------------------
+# NULL flight_category handling (issue #173 — LGPA-style AUTO stations)
+# ---------------------------------------------------------------------------
+
+
+@patch(
+    "weatherbrief.tasks.climatology_queries._get_coords",
+    return_value=FAKE_COORDS,
+)
+class TestCategoryNullCategory:
+    def test_lgpa_case_percentages_sum_to_100_and_flag_low_confidence(
+        self, _mock_coords, db_session,
+    ):
+        # Mirrors the issue: 502 obs, 293 categorizable (292 VFR + 1 MVFR),
+        # 209 uncategorizable (41.6%).
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=502, n_vfr=292, n_mvfr=1, n_ifr=0, n_lifr=0)
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_category_climatology(db_session, window, "/fake/airports.db")
+        a = {x["icao"]: x for x in result["airports"]}["EGKK"]
+
+        assert a["n_categorized"] == 293
+        assert a["n_no_category"] == 209
+        assert a["pct_no_category"] == 41.6
+        assert a["low_confidence"] is True
+        # Percentages computed over the categorizable subset → sum to ~100%.
+        assert a["pct_vfr"] == round(100.0 * 292 / 293, 1)   # 99.7
+        assert a["pct_mvfr"] == round(100.0 * 1 / 293, 1)    # 0.3
+        total = a["pct_vfr"] + a["pct_mvfr"] + a["pct_ifr"] + a["pct_lifr"]
+        assert abs(total - 100.0) < 0.11
+
+    def test_small_gap_below_threshold_not_low_confidence(
+        self, _mock_coords, db_session,
+    ):
+        # 10% NULL share is below the 25% threshold → not flagged.
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=100, n_vfr=80, n_mvfr=10)  # categorizable=90
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_category_climatology(db_session, window, "/fake/airports.db")
+        a = {x["icao"]: x for x in result["airports"]}["EGKK"]
+        assert a["n_no_category"] == 10
+        assert a["pct_no_category"] == 10.0
+        assert a["low_confidence"] is False
+        assert a["pct_vfr"] == round(100.0 * 80 / 90, 1)  # 88.9
+
+    def test_all_uncategorizable_airport_has_no_pct_keys(
+        self, _mock_coords, db_session,
+    ):
+        # Every obs uncategorizable (all slashes) → no category split; plots grey.
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1), n_obs=50)
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_category_climatology(db_session, window, "/fake/airports.db")
+        a = {x["icao"]: x for x in result["airports"]}["EGKK"]
+        assert a["n_categorized"] == 0
+        assert a["n_no_category"] == 50
+        assert a["pct_no_category"] == 100.0
+        assert a["low_confidence"] is True
+        assert "pct_vfr" not in a
+
+    def test_leaderboard_gates_on_categorizable_not_raw_obs(
+        self, _mock_coords, db_session,
+    ):
+        # EGKK: raw n_obs=110 (would clear an n_obs>=100 gate) but only 90
+        # categorizable, NULL share 18.2% (not low-confidence) → excluded by
+        # the categorizable gate. LFPG: 200 categorizable → included.
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=110, n_vfr=85, n_mvfr=5)   # categorizable=90
+        _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
+                      n_obs=200, n_vfr=180, n_mvfr=20)  # categorizable=200
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_leaderboard(db_session, window, "/fake/airports.db",
+                                 dataset="category", sub="vfr", limit=10)
+        icaos = [r["icao"] for r in result["rows"]]
+        assert "EGKK" not in icaos
+        assert "LFPG" in icaos
+
+    def test_leaderboard_omits_low_confidence_airport(
+        self, _mock_coords, db_session,
+    ):
+        # EGKK: 200 categorizable (clears min-obs) but 33.3% NULL share →
+        # low-confidence → omitted, even though pct_vfr would be 100% (top).
+        _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
+                      n_obs=300, n_vfr=200)            # categorizable=200, 33% null
+        _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
+                      n_obs=200, n_vfr=150, n_mvfr=50)  # categorizable=200, 0% null
+        db_session.commit()
+        window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
+        result = get_leaderboard(db_session, window, "/fake/airports.db",
+                                 dataset="category", sub="vfr", limit=10)
+        icaos = [r["icao"] for r in result["rows"]]
+        assert "EGKK" not in icaos
+        assert icaos == ["LFPG"]
 
 
 # ---------------------------------------------------------------------------
@@ -462,12 +563,14 @@ class TestVolatility:
 )
 class TestUnifiedLeaderboard:
     def test_category_vfr_ranks_highest_first(self, _mock_coords, db_session):
+        # Full breakdowns (categorizable == n_obs) so pct_vfr is over the
+        # whole sample; pct now uses the categorizable denominator.
         _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
-                      n_obs=200, n_vfr=190)  # 95%
+                      n_obs=200, n_vfr=190, n_mvfr=10)  # 95%
         _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
-                      n_obs=200, n_vfr=120)  # 60%
+                      n_obs=200, n_vfr=120, n_mvfr=80)  # 60%
         _seed_monthly(db_session, icao="EDDF", month=date(2026, 4, 1),
-                      n_obs=200, n_vfr=170)  # 85%
+                      n_obs=200, n_vfr=170, n_mvfr=30)  # 85%
         db_session.commit()
         window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
         result = get_leaderboard(db_session, window, "/fake/airports.db",
@@ -478,9 +581,9 @@ class TestUnifiedLeaderboard:
 
     def test_category_ifr_excludes_below_min_obs(self, _mock_coords, db_session):
         _seed_monthly(db_session, icao="EGKK", month=date(2026, 4, 1),
-                      n_obs=200, n_ifr=20)  # 10%
+                      n_obs=200, n_vfr=180, n_ifr=20)  # 10%
         _seed_monthly(db_session, icao="LFPG", month=date(2026, 4, 1),
-                      n_obs=50, n_ifr=40)   # 80% but only 50 obs
+                      n_obs=50, n_vfr=10, n_ifr=40)   # 80% but only 50 obs
         db_session.commit()
         window = MonthWindow(month=date(2026, 4, 1), is_mtd=False, as_of_date=None)
         result = get_leaderboard(db_session, window, "/fake/airports.db",

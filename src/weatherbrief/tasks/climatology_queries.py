@@ -96,6 +96,16 @@ def resolve_month_window(
 # all five; daily rows are SUM-ed for MTD, monthly rows are read as-is.
 _CATEGORY_FIELDS = ("n_obs", "n_vfr", "n_mvfr", "n_ifr", "n_lifr")
 
+# AUTO stations that never had a ceilometer/visibility sensor (e.g. LGPA)
+# report ``////`` slashes, so the parser stores the obs but leaves
+# ``flight_category`` NULL. Such rows count toward ``n_obs`` but not toward
+# any of the four category counts. When the NULL share exceeds this
+# threshold, the four category percentages (computed over the categorizable
+# subset) rest on a small, potentially biased sample — flag the airport
+# low-confidence so the map can grey-tint it and the leaderboard can omit
+# it. See issue #173.
+_LOW_CONFIDENCE_NULL_SHARE_PCT = 25.0
+
 
 def get_category_climatology(
     db: Session,
@@ -104,9 +114,17 @@ def get_category_climatology(
 ) -> dict[str, Any]:
     """Return per-airport flight-category counts and percentages.
 
-    Response shape (one entry per watchlist airport that has rows AND a
-    coord; airports with no data are omitted — the frontend renders them
-    as grey markers using the watchlist as the source of truth):
+    The four ``pct_*`` values are computed over the *categorizable* subset
+    (``n_categorized = n_vfr + n_mvfr + n_ifr + n_lifr``), so they always sum
+    to ~100% even when an airport's METARs frequently omit visibility/cloud
+    (sensor-not-available AUTO stations leave ``flight_category`` NULL). The
+    data-completeness gap is surfaced separately via ``n_no_category`` /
+    ``pct_no_category`` (measured against raw ``n_obs``), and ``low_confidence``
+    is set when that gap exceeds ``_LOW_CONFIDENCE_NULL_SHARE_PCT``.
+
+    Response shape (one entry per watchlist airport with a coord; airports
+    with no rows still plot with zero counts so the frontend can render them
+    grey using the watchlist as the source of truth):
 
         {
           "month": "2026-05",
@@ -115,10 +133,15 @@ def get_category_climatology(
           "airports": [
             {"icao": "EGKK", "lat": 51.1, "lon": 0.2,
              "n_obs": 421, "n_vfr": 320, "n_mvfr": 60, "n_ifr": 30, "n_lifr": 11,
+             "n_categorized": 421, "n_no_category": 0, "pct_no_category": 0.0,
+             "low_confidence": False,
              "pct_vfr": 76.0, "pct_mvfr": 14.3, "pct_ifr": 7.1, "pct_lifr": 2.6},
             ...
           ]
         }
+
+    ``pct_*`` keys are absent when ``n_categorized == 0`` (an airport whose
+    obs are all uncategorizable) — those plot grey, same as no-data airports.
     """
     rows = _read_counts_by_icao(db, window, _CATEGORY_FIELDS)
     coords = _get_coords(airports_db_path)
@@ -133,14 +156,30 @@ def get_category_climatology(
         entry: dict[str, Any] = {"icao": icao, "lat": lat, "lon": lon}
         if counts is None:
             entry.update({f: 0 for f in _CATEGORY_FIELDS})
+            entry.update({
+                "n_categorized": 0, "n_no_category": 0,
+                "pct_no_category": 0.0, "low_confidence": False,
+            })
         else:
             entry.update(counts)
             n_obs = counts["n_obs"] or 0
-            if n_obs > 0:
-                entry["pct_vfr"] = round(100.0 * counts["n_vfr"] / n_obs, 1)
-                entry["pct_mvfr"] = round(100.0 * counts["n_mvfr"] / n_obs, 1)
-                entry["pct_ifr"] = round(100.0 * counts["n_ifr"] / n_obs, 1)
-                entry["pct_lifr"] = round(100.0 * counts["n_lifr"] / n_obs, 1)
+            n_categorized = (
+                counts["n_vfr"] + counts["n_mvfr"]
+                + counts["n_ifr"] + counts["n_lifr"]
+            )
+            n_no_category = max(n_obs - n_categorized, 0)
+            pct_no_category = round(100.0 * n_no_category / n_obs, 1) if n_obs > 0 else 0.0
+            entry["n_categorized"] = n_categorized
+            entry["n_no_category"] = n_no_category
+            entry["pct_no_category"] = pct_no_category
+            entry["low_confidence"] = (
+                n_obs > 0 and pct_no_category > _LOW_CONFIDENCE_NULL_SHARE_PCT
+            )
+            if n_categorized > 0:
+                entry["pct_vfr"] = round(100.0 * counts["n_vfr"] / n_categorized, 1)
+                entry["pct_mvfr"] = round(100.0 * counts["n_mvfr"] / n_categorized, 1)
+                entry["pct_ifr"] = round(100.0 * counts["n_ifr"] / n_categorized, 1)
+                entry["pct_lifr"] = round(100.0 * counts["n_lifr"] / n_categorized, 1)
         airports.append(entry)
 
     response: dict[str, Any] = {
@@ -448,12 +487,20 @@ def get_leaderboard(
             raise ValueError(f"category sub must be vfr/mvfr/ifr/lifr, got {sub!r}")
         data = get_category_climatology(db, window, airports_db_path)
         value_key = f"pct_{sub}"
+        # Gate on the categorizable obs count (the sample the % is computed
+        # over), not raw n_obs, and omit low-confidence airports (high NULL
+        # share) so sensor-starved AUTO stations like LGPA can't top the
+        # ranking on a small biased sample. See issue #173.
         rows = [
             {"icao": a["icao"], "value": a[value_key],
-             "n_obs": a["n_obs"], "extra": {"n_vfr": a["n_vfr"], "n_mvfr": a["n_mvfr"],
-                                            "n_ifr": a["n_ifr"], "n_lifr": a["n_lifr"]}}
+             "n_obs": a["n_categorized"],
+             "extra": {"n_vfr": a["n_vfr"], "n_mvfr": a["n_mvfr"],
+                       "n_ifr": a["n_ifr"], "n_lifr": a["n_lifr"],
+                       "n_no_category": a["n_no_category"]}}
             for a in data["airports"]
-            if value_key in a and a["n_obs"] >= min_obs
+            if value_key in a
+            and not a["low_confidence"]
+            and a["n_categorized"] >= min_obs
         ]
         unit = "%"
         label = f"{sub.upper()} %"

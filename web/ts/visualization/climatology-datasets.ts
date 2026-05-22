@@ -80,7 +80,13 @@ export const CategoryDataset = {
     { value: 'lifr', label: 'LIFR %' },
   ] as { value: CategoryKey; label: string }[],
   scaleFor: (sub: CategoryKey): Scale => CATEGORY_SCALES[sub],
-  /** Same popup regardless of which sub-metric is selected. */
+  /** Same popup regardless of which sub-metric is selected.
+   *
+   * Percentages are over the categorizable subset (they sum to ~100%). When
+   * the airport has uncategorizable obs (sensor-not-available AUTO stations),
+   * a "No data" row and a "M of N obs usable" footer make the gap explicit
+   * instead of letting the four numbers silently undercount. See issue #173.
+   */
   popup: (a: MapAirport): string => {
     const ca = a as unknown as CategoryAirport;
     const rows = (['vfr', 'mvfr', 'ifr', 'lifr'] as const).map((k) => {
@@ -88,11 +94,22 @@ export const CategoryDataset = {
       const cell = pct === undefined ? '—' : `${pct.toFixed(1)}%`;
       return `<tr><td>${k.toUpperCase()}</td><td style="text-align:right">${cell}</td></tr>`;
     }).join('');
+    const noCat = ca.n_no_category ?? 0;
+    const sep = 'border-top:1px solid var(--border, #ccc); padding-top:2px';
+    const gapRow = noCat > 0
+      ? `<tr><td style="${sep}">No data</td>` +
+        `<td style="${sep}; text-align:right">` +
+        `${noCat.toLocaleString()} (${(ca.pct_no_category ?? 0).toFixed(1)}%)</td></tr>`
+      : '';
+    const nCat = ca.n_categorized ?? ca.n_obs;
+    const foot = noCat > 0
+      ? `${nCat.toLocaleString()} of ${ca.n_obs.toLocaleString()} obs usable`
+      : `${ca.n_obs.toLocaleString()} obs`;
     return `
       <div class="clim-popup">
         <div class="clim-popup-title"><b>${ca.icao}</b></div>
-        <table class="clim-popup-table">${rows}</table>
-        <div class="clim-popup-foot">${ca.n_obs.toLocaleString()} obs</div>
+        <table class="clim-popup-table">${rows}${gapRow}</table>
+        <div class="clim-popup-foot">${foot}</div>
       </div>
     `;
   },
