@@ -28,7 +28,7 @@ import { attachMapInteraction, type MapInteractionHandle } from './visualization
 import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
 import { initTheme } from './theme';
-import { setUnitsRegion } from './units';
+import { setUnitsPreference, setFlightRegion, regionFromIcaos } from './units';
 import { track, trackOncePerBriefing, setBriefingContext, EVENTS } from './analytics/track';
 import { initI18n, t } from './i18n/i18n';
 import { SkewTRenderer } from './visualization/skewt/renderer';
@@ -68,7 +68,7 @@ async function init(): Promise<void> {
     return;
   }
   initTheme();
-  setUnitsRegion(user.units_region);
+  setUnitsPreference(user.units_region);
   renderUserInfo(user, 'briefing');
 
   // Load model catalog + preferred methods (non-blocking)
@@ -927,6 +927,11 @@ async function init(): Promise<void> {
 
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
+    // Resolve 'auto' units against this flight's region (US flights → US units)
+    // before any sub-render reads getUnitsRegion(). No-op for a forced pref.
+    if (state.snapshot !== prev.snapshot && state.snapshot) {
+      setFlightRegion(regionFromIcaos(state.snapshot.route.waypoints.map(w => w.icao)));
+    }
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
       ui.renderHeader(state.flight, state.snapshot);
     }

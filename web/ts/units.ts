@@ -10,39 +10,78 @@
  * new plumbing once those fields are surfaced.
  */
 
+/** Concrete region used for formatting. */
 export type UnitsRegion = 'europe' | 'us';
+/** Stored user preference: a forced region, or 'auto' (resolve per flight). */
+export type UnitsPreference = 'auto' | 'europe' | 'us';
 
 const STORAGE_KEY = 'wb_units_region';
 const M_PER_SM = 1609.34;
 const HPA_PER_INHG = 33.8639;
 
-function readStored(): UnitsRegion {
+function normalizePref(pref: string | null | undefined): UnitsPreference {
+  return pref === 'us' || pref === 'europe' || pref === 'auto' ? pref : 'auto';
+}
+
+function resolve(pref: UnitsPreference, hint: UnitsRegion | null): UnitsRegion {
+  if (pref === 'us' || pref === 'europe') return pref;
+  return hint ?? 'europe'; // auto
+}
+
+function readStored(): UnitsPreference {
   try {
-    return localStorage.getItem(STORAGE_KEY) === 'us' ? 'us' : 'europe';
+    return normalizePref(localStorage.getItem(STORAGE_KEY));
   } catch {
-    return 'europe';
+    return 'auto';
   }
 }
 
-let unitsRegion: UnitsRegion = readStored();
+let unitsPreference: UnitsPreference = readStored();
+let activeRegion: UnitsRegion = resolve(unitsPreference, null);
 
 export function getUnitsRegion(): UnitsRegion {
-  return unitsRegion;
+  return activeRegion;
 }
 
-export function setUnitsRegion(region: string | null | undefined): void {
-  unitsRegion = region === 'us' ? 'us' : 'europe';
+export function getUnitsPreference(): UnitsPreference {
+  return unitsPreference;
+}
+
+/** Set the stored preference (auto/europe/us) and persist it. Resets the active
+ *  region to the preference's default; a later setFlightRegion() supplies the
+ *  per-flight hint that 'auto' needs. */
+export function setUnitsPreference(pref: string | null | undefined): void {
+  unitsPreference = normalizePref(pref);
+  activeRegion = resolve(unitsPreference, null);
   try {
-    localStorage.setItem(STORAGE_KEY, unitsRegion);
+    localStorage.setItem(STORAGE_KEY, unitsPreference);
   } catch {
     /* localStorage unavailable — keep in-memory value */
   }
 }
 
+/** Apply a detected flight region. Only affects the active region when the
+ *  preference is 'auto'; a forced europe/us preference ignores the hint. */
+export function setFlightRegion(hint: UnitsRegion | null): void {
+  activeRegion = resolve(unitsPreference, hint);
+}
+
+/** Classify a set of waypoint ICAOs the same way the backend does
+ *  (K/C/P prefix → US). Returns null for a mixed/unknown route. */
+export function regionFromIcaos(icaos: Array<string | null | undefined>): UnitsRegion | null {
+  const regions = new Set<UnitsRegion>();
+  for (const icao of icaos) {
+    const c = (icao ?? '').trim().toUpperCase()[0];
+    if (!c) continue;
+    regions.add(c === 'K' || c === 'C' || c === 'P' ? 'us' : 'europe');
+  }
+  return regions.size === 1 ? [...regions][0] : null;
+}
+
 /** Format a visibility in meters for the active (or given) region. */
 export function formatVisibility(
   meters: number | null | undefined,
-  region: UnitsRegion = unitsRegion,
+  region: UnitsRegion = activeRegion,
 ): string {
   if (meters == null) return '';
   if (region === 'us') {
@@ -58,7 +97,7 @@ export function formatVisibility(
 /** Format an altimeter setting / QNH in hPa. (Not yet wired into surfaces.) */
 export function formatQNH(
   hpa: number | null | undefined,
-  region: UnitsRegion = unitsRegion,
+  region: UnitsRegion = activeRegion,
 ): string {
   if (hpa == null) return '';
   if (region === 'us') return `${(hpa / HPA_PER_INHG).toFixed(2)} inHg`;
@@ -68,7 +107,7 @@ export function formatQNH(
 /** Format a temperature in Celsius. (Not yet wired into surfaces.) */
 export function formatTemperature(
   celsius: number | null | undefined,
-  region: UnitsRegion = unitsRegion,
+  region: UnitsRegion = activeRegion,
   decimals = 0,
 ): string {
   if (celsius == null) return '';

@@ -4,7 +4,9 @@ from weatherbrief.units import (
     format_qnh,
     format_temperature,
     format_visibility,
+    normalize_preference,
     normalize_region,
+    resolve_units_region,
 )
 
 
@@ -16,6 +18,27 @@ class TestNormalizeRegion:
         assert normalize_region("europe") == "europe"
         assert normalize_region(None) == "europe"
         assert normalize_region("garbage") == "europe"
+
+
+class TestPreferenceResolution:
+    def test_normalize_preference(self):
+        assert normalize_preference("auto") == "auto"
+        assert normalize_preference("us") == "us"
+        assert normalize_preference("europe") == "europe"
+        assert normalize_preference(None) == "auto"
+        assert normalize_preference("garbage") == "auto"
+
+    def test_forced_preference_wins(self):
+        assert resolve_units_region("us", "europe") == "us"
+        assert resolve_units_region("europe", "us") == "europe"
+
+    def test_auto_uses_detected_region(self):
+        assert resolve_units_region("auto", "us") == "us"
+        assert resolve_units_region("auto", "europe") == "europe"
+
+    def test_auto_falls_back_to_europe(self):
+        assert resolve_units_region("auto", None) == "europe"
+        assert resolve_units_region(None, None) == "europe"
 
 
 class TestFormatVisibility:

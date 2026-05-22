@@ -15,7 +15,26 @@ from __future__ import annotations
 from typing import Literal
 
 UnitsRegion = Literal["europe", "us"]
+# Stored user preference: a concrete region or "auto" (resolve per flight).
+UnitsPreference = Literal["auto", "europe", "us"]
 DEFAULT_REGION: UnitsRegion = "europe"
+DEFAULT_PREFERENCE: UnitsPreference = "auto"
+
+
+def normalize_preference(pref: str | None) -> UnitsPreference:
+    """Coerce a stored value to a known preference (default auto)."""
+    return pref if pref in ("auto", "europe", "us") else "auto"
+
+
+def resolve_units_region(pref: str | None, detected: str | None) -> UnitsRegion:
+    """Resolve a stored preference + a detected flight region to a concrete region.
+
+    A forced "europe"/"us" preference wins. "auto" (and anything unknown) uses
+    the detected flight region, falling back to europe when it can't be told.
+    """
+    if pref == "us" or pref == "europe":
+        return pref
+    return "us" if detected == "us" else "europe"
 
 # Conversion constants (single source of truth — was duplicated as _M_PER_SM).
 M_PER_SM = 1609.34
