@@ -197,3 +197,19 @@ class TestPreferencesAppliedToFlights:
         data = resp.json()
         assert data["cruise_altitude_ft"] == 8000
         assert data["flight_ceiling_ft"] == 18000
+
+
+class TestProfilesRouteOrdering:
+    """Literal profile sub-routes must not be shadowed by /{profile_id:int}."""
+
+    def test_system_templates_resolves(self, client):
+        # Before the int-converter fix this hit GET /{profile_id} and 422'd
+        # trying to parse "system-templates" as an int.
+        resp = client.get("/api/user/profiles/system-templates")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+    def test_digest_guidance_presets_resolves(self, client):
+        resp = client.get("/api/user/profiles/digest-guidance-presets")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)

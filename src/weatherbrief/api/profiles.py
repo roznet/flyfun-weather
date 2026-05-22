@@ -134,7 +134,7 @@ def create_profile(
     return _profile_to_response(saved)
 
 
-@router.get("/{profile_id}", response_model=ProfileResponse)
+@router.get("/{profile_id:int}", response_model=ProfileResponse)
 def get_profile(
     profile_id: int,
     user_id: str = Depends(current_user_id),
@@ -145,7 +145,7 @@ def get_profile(
     return _profile_to_response(profile)
 
 
-@router.put("/{profile_id}", response_model=ProfileResponse)
+@router.put("/{profile_id:int}", response_model=ProfileResponse)
 def update_user_profile(
     profile_id: int,
     req: UpdateProfileRequest,
@@ -190,7 +190,7 @@ def update_user_profile(
     return _profile_to_response(profile)
 
 
-@router.delete("/{profile_id}", status_code=204)
+@router.delete("/{profile_id:int}", status_code=204)
 def delete_user_profile(
     profile_id: int,
     user_id: str = Depends(current_user_id),
@@ -206,7 +206,7 @@ def delete_user_profile(
         raise HTTPException(status_code=404, detail="Profile not found")
 
 
-@router.post("/{profile_id}/duplicate", response_model=ProfileResponse, status_code=201)
+@router.post("/{profile_id:int}/duplicate", response_model=ProfileResponse, status_code=201)
 def duplicate_profile(
     profile_id: int,
     req: DuplicateProfileRequest,
@@ -317,7 +317,7 @@ def get_digest_guidance_text(
     return DigestGuidanceTextResponse(key=key, text=text)
 
 
-@router.post("/{profile_id}/reset", response_model=ProfileResponse)
+@router.post("/{profile_id:int}/reset", response_model=ProfileResponse)
 def reset_profile_to_template(
     profile_id: int,
     user_id: str = Depends(current_user_id),

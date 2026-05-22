@@ -33,6 +33,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -68,6 +69,12 @@ _FILENAMES: dict[str, str] = {
 _TIMEOUT_SECONDS = 30
 _DEFAULT_KEEP_CYCLES = 8  # ~2 days at 6h cadence
 _USER_AGENT = "flyfun-weather/1.0 (+https://weather.flyfun.aero)"
+
+# DWD's server is intermittently flaky (read timeouts + SSL INVALID_SESSION_ID),
+# and failures cluster — several adjacent forecast-hour charts fail together in a
+# single fetch. A couple of retries with linear backoff recovers most of them.
+_MAX_FETCH_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = 1.0
 
 # Native pixel sizes of each chart, used for client-side SVG overlay scaling.
 CHART_NATIVE_SIZE: dict[str, tuple[int, int]] = {
@@ -604,11 +611,26 @@ def _fetch_one(
     url = f"{DWD_BASE_URL}/{filename}"
     headers = _conditional_headers(existing_meta)
 
-    try:
-        resp = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-    except requests.RequestException as e:
-        logger.warning("DWD chart fetch failed (%s): %s", chart_id, e)
-        return ChartFetchResult(chart_id=chart_id, status="failed", error=str(e))
+    resp = None
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_FETCH_ATTEMPTS + 1):
+        try:
+            resp = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+            break
+        except requests.RequestException as e:
+            last_exc = e
+            if attempt < _MAX_FETCH_ATTEMPTS:
+                logger.debug(
+                    "DWD chart fetch attempt %d/%d failed (%s): %s — retrying",
+                    attempt, _MAX_FETCH_ATTEMPTS, chart_id, e,
+                )
+                time.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+    if resp is None:
+        logger.warning(
+            "DWD chart fetch failed after %d attempts (%s): %s",
+            _MAX_FETCH_ATTEMPTS, chart_id, last_exc,
+        )
+        return ChartFetchResult(chart_id=chart_id, status="failed", error=str(last_exc))
 
     if resp.status_code == 304:
         return ChartFetchResult(

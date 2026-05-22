@@ -501,6 +501,8 @@ def create_flight(
                 _, _rejected = resolve_waypoints(waypoints, db_path)
             except KeyError as exc:
                 raise HTTPException(status_code=422, detail=exc.args[0])
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
             if _rejected:
                 raise HTTPException(
                     status_code=422,
@@ -652,6 +654,12 @@ def compute_route_distance(
         resolved, rejected = resolve_waypoints(req.waypoints, db_path)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=exc.args[0])
+    except ValueError as exc:
+        # euro_aip's resolver raises ValueError when fewer than two points
+        # resolve (e.g. an out-of-coverage route like "KLSE C29" where no
+        # waypoint is in the European nav DB). That's a client input problem,
+        # not a server fault — surface it as 422 instead of an unhandled 500.
+        raise HTTPException(status_code=422, detail=str(exc))
 
     if rejected:
         logger.warning(
@@ -784,7 +792,7 @@ def interpret_route(
     if len(candidate_waypoints) >= 2:
         try:
             resolved, rejected = resolve_waypoints(candidate_waypoints, db_path)
-        except KeyError:
+        except (KeyError, ValueError):
             # Departure or destination not placed — the route is a non-starter.
             # Fall back to a per-token DB check so the popup shows the pilot
             # which codes are unknown (typo) vs. known-but-not-enough.

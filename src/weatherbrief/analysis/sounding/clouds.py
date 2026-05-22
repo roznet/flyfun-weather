@@ -230,7 +230,7 @@ def detect_cloud_layers(
         base_edge = _dd_layer_edge_below(sorted_levels, cats, i, cat)
         top_edge = _dd_layer_edge_above(sorted_levels, cats, j, cat)
         if base_edge is None or top_edge is None or top_edge[0] <= base_edge[0]:
-            logger.warning(
+            logger.debug(
                 "Dropping DD cloud deck at run [%d..%d] (cat=%s): "
                 "base_edge=%s top_edge=%s — degenerate layer geometry",
                 i, j, cat, base_edge, top_edge,
