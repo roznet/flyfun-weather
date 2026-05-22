@@ -217,6 +217,7 @@ def run_llm_digest(
     flight_rules: str | None = None,
     previous_digest=None,  # WeatherDigest | None
     locale: str | None = None,
+    units_region: str | None = None,
     profile_id: int | None = None,
     profile_name: str | None = None,
     guidance_key: str | None = None,
@@ -235,6 +236,7 @@ def run_llm_digest(
             route_advisories=route_advisories,
             flight_rules=flight_rules,
             locale=locale,
+            units_region=units_region,
             guidance_key=guidance_key,
         )
 

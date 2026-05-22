@@ -9,6 +9,7 @@
 
 import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
 import { fmtFL } from '../interaction-utils';
+import { formatVisibility } from '../../units';
 
 export interface LayerTooltipDef {
   /** Primary layer id (the toggle that owns the data). */
@@ -237,7 +238,7 @@ const surfaceObscuration: LayerTooltipDef = {
     // 1–3 km radiation-fog signature.
     const metar = z.severity === 'lifr' ? 'FG' : z.severity === 'ifr' ? 'BR/MIFG' : 'BR';
     const cat = z.severity.toUpperCase();
-    const vis = z.visM !== null ? `vis ${Math.round(z.visM)} m` : 'vis n/a';
+    const vis = z.visM !== null ? `vis ${formatVisibility(z.visM)}` : 'vis n/a';
     const t = z.surfaceTC !== null ? `${z.surfaceTC.toFixed(0)}°C` : '—';
     const td = z.surfaceTdC !== null ? `${z.surfaceTdC.toFixed(0)}°C` : '—';
     const rh = z.surfaceRhPct !== null ? `${Math.round(z.surfaceRhPct)}%` : '—';

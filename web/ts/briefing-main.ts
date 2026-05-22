@@ -28,6 +28,7 @@ import { attachMapInteraction, type MapInteractionHandle } from './visualization
 import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
 import { initTheme } from './theme';
+import { setUnitsRegion } from './units';
 import { track, trackOncePerBriefing, setBriefingContext, EVENTS } from './analytics/track';
 import { initI18n, t } from './i18n/i18n';
 import { SkewTRenderer } from './visualization/skewt/renderer';
@@ -67,6 +68,7 @@ async function init(): Promise<void> {
     return;
   }
   initTheme();
+  setUnitsRegion(user.units_region);
   renderUserInfo(user, 'briefing');
 
   // Load model catalog + preferred methods (non-blocking)
