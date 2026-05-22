@@ -619,7 +619,7 @@ def fetch_ecmwf_grib_snapshots(
     """
     from datetime import time as dt_time
 
-    from weatherbrief.fetch.grib import _dispatch_decode
+    from weatherbrief.fetch.grib import DecodePriority, _dispatch_decode
     from weatherbrief.fetch.grib.decode import (
         build_ecmwf_surface_snapshot,
         build_pressure_levels_from_grib,
@@ -662,6 +662,7 @@ def fetch_ecmwf_grib_snapshots(
         try:
             data, _ = _dispatch_decode(
                 "decode_ecmwf_surface", str(a1_path), lats, lons,
+                priority=DecodePriority.BACKGROUND,
             )
         except Exception:
             logger.warning("ECMWF a1 decode failed for step %dh", step_h, exc_info=True)
@@ -693,6 +694,7 @@ def fetch_ecmwf_grib_snapshots(
                 try:
                     pl_data, _ = _dispatch_decode(
                         "decode_ecmwf_pressure", str(a2_path), lats, lons,
+                        priority=DecodePriority.BACKGROUND,
                     )
                 except Exception:
                     logger.warning(

@@ -459,7 +459,7 @@ def _grib_enrich_levels(
     if not (ecmwf_dir.is_dir() and next(ecmwf_dir.iterdir(), None) is not None):
         return {"sources": {}, "skipped": {"all": "no_local_grib_configured"}}
 
-    from weatherbrief.fetch.grib import enrich_forecasts
+    from weatherbrief.fetch.grib import DecodePriority, enrich_forecasts
     from weatherbrief.models import RouteCrossSection, RoutePoint
 
     src = _model_to_source(model)
@@ -482,6 +482,7 @@ def _grib_enrich_levels(
             departure_time=departure,
             data_dir=data_dir,
             flight_duration_hours=duration_h,
+            priority=DecodePriority.INTERACTIVE,
         )
     except Exception:
         logger.warning("Airport profile: GRIB enrichment failed", exc_info=True)

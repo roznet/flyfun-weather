@@ -273,8 +273,10 @@ async def lifespan(app: FastAPI):
     # processes hold ECCODES file handles and ~270 MB RSS each — leaking
     # them on uvicorn reload would accumulate fast. Run via to_thread so
     # the synchronous pool.shutdown(wait=True) doesn't block the event loop.
+    # drain_dispatcher=True also releases any caller blocked on a pending /
+    # in-flight decode so they fail fast rather than hang on a vanishing pool.
     from weatherbrief.fetch.grib import shutdown_decode_pool
-    await asyncio.to_thread(shutdown_decode_pool)
+    await asyncio.to_thread(lambda: shutdown_decode_pool(drain_dispatcher=True))
 
 
 def create_app() -> FastAPI:
