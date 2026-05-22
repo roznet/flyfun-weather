@@ -44,6 +44,7 @@ import {
 } from './adapters/tokens-adapter';
 import { initTheme } from './theme';
 import { initI18n, t, setLocale, getLocale, getDateLocale } from './i18n/i18n';
+import { setUnitsRegion } from './units';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
 
@@ -658,6 +659,12 @@ function populateAccountForm(prefs: PreferencesResponse): void {
     localeSelect.value = prefs.locale || getLocale();
   }
 
+  // Units region picker — reflect server-stored preference
+  const unitsRegionSelect = document.getElementById('input-units-region') as HTMLSelectElement;
+  if (unitsRegionSelect) {
+    unitsRegionSelect.value = prefs.units_region === 'us' ? 'us' : 'europe';
+  }
+
   // Account-level optional services
   const synopticToggle = document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement;
   if (synopticToggle) {
@@ -885,6 +892,7 @@ async function handleSave(): Promise<void> {
 
   // Account-level settings
   const selectedLocale = (document.getElementById('input-locale') as HTMLSelectElement)?.value || 'en';
+  const selectedUnitsRegion = (document.getElementById('input-units-region') as HTMLSelectElement)?.value === 'us' ? 'us' : 'europe';
 
   try {
     // Save profile settings
@@ -898,6 +906,7 @@ async function handleSave(): Promise<void> {
     const synopticEnabled = (document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement)?.checked ?? false;
     const accountUpdate: import('./adapters/preferences-adapter').PreferencesUpdate = {
       locale: selectedLocale,
+      units_region: selectedUnitsRegion,
       synoptic_forecast_map_enabled: synopticEnabled,
     };
     if (autorouterMode === 'password') {
@@ -908,6 +917,7 @@ async function handleSave(): Promise<void> {
     }
 
     const result = await savePreferences(accountUpdate);
+    setUnitsRegion(result.units_region);
     updateAutorouterStatus(result.has_autorouter_creds, autorouterMode);
     if (autorouterMode === 'password') {
       const arPwdInput = document.getElementById('input-ar-password') as HTMLInputElement;

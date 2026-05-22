@@ -61,7 +61,8 @@ class AirportModelCondition(BaseModel):
     model: str
     flight_category: FlightCategory
     ceiling_ft: int | None = None  # lowest BKN/OVC base
-    visibility_sm: float | None = None  # statute miles
+    visibility_m: float | None = None  # raw meters (canonical; format by user region)
+    visibility_sm: float | None = None  # statute miles (derived; kept for back-compat)
     wind_speed_kt: float | None = None
     wind_direction_deg: float | None = None
     wind_gust_kt: float | None = None

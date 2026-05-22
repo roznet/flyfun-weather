@@ -869,13 +869,19 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     convective_method = None
     digest_guidance = None
     locale = None
+    units_region = "europe"
     profile_name_for_digest = None
     if db is not None:
-        from weatherbrief.api.preferences import load_autorouter_token, load_user_locale
+        from weatherbrief.api.preferences import (
+            load_autorouter_token,
+            load_units_region,
+            load_user_locale,
+        )
         from weatherbrief.api.profiles import load_profile_context
 
         autorouter_creds = load_autorouter_token(db, user_id)
         locale = load_user_locale(db, user_id)
+        units_region = load_units_region(db, user_id)
         profile_ctx = load_profile_context(db, flight.profile_id, user_id)
         profile_settings = profile_ctx.settings
         profile_name_for_digest = profile_ctx.name
@@ -955,6 +961,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         options.advisory_params = adv_config["params"]
     if locale:
         options.locale = locale
+    options.units_region = units_region
     options.profile_id = flight.profile_id
     options.profile_name = profile_name_for_digest
     if digest_guidance:

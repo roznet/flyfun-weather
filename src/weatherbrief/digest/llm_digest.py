@@ -188,6 +188,7 @@ def run_digest(
     route_advisories=None,  # RouteAdvisoriesManifest | None
     flight_rules: str | None = None,
     locale: str | None = None,
+    units_region: str | None = None,
     guidance_key: str | None = None,
 ) -> DigestState:
     """Run the full digest pipeline and return final state.
@@ -207,6 +208,7 @@ def run_digest(
         previous_digest=previous_digest,
         route_advisories=route_advisories,
         flight_rules=flight_rules,
+        units_region=units_region,
         dwd_translated=dwd_translated,
         dwd_is_synoptic_extract=dwd_is_synoptic_extract,
     )

@@ -71,6 +71,15 @@ class TestPreferencesAPI:
         assert data["autorouter_mode"] == "password"  # dev environment
         assert data["defaults"]["cruise_altitude_ft"] is None
         assert data["defaults"]["models"] is None
+        assert data["units_region"] == "europe"  # default
+
+    def test_units_region_round_trip(self, client):
+        resp = client.put("/api/user/preferences", json={"units_region": "us"})
+        assert resp.status_code == 200
+        assert resp.json()["units_region"] == "us"
+        # persists and is surfaced on the current-user payload
+        assert client.get("/api/user/preferences").json()["units_region"] == "us"
+        assert client.get("/auth/me").json()["units_region"] == "us"
 
     def test_save_flight_defaults(self, client):
         resp = client.put("/api/user/preferences", json={

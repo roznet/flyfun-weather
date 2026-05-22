@@ -6,6 +6,15 @@ import { showPopupContent } from '../components/info-popup';
 import { renderAdvisoryPopup } from '../helpers/advisory-popup';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
+import { formatVisibility } from '../units';
+
+/** Visibility for an airport condition, region-aware.
+ *  Prefers raw meters (visibility_m); falls back to legacy SM for old packs. */
+function formatCondVis(cond: AirportModelCondition): string | null {
+  if (cond.visibility_m != null) return formatVisibility(cond.visibility_m);
+  if (cond.visibility_sm !== null) return `${cond.visibility_sm} SM`;
+  return null;
+}
 
 /** Advisory categories hidden in compact mode (informational, not actionable). */
 const COMPACT_HIDDEN_CATEGORIES = new Set(['model']);
@@ -131,6 +140,7 @@ function computeSummaryCondition(
   // Pick worst values from the pool (lowest ceiling/vis, highest wind)
   let worstCeiling: number | null = null;
   let worstVis: number | null = null;
+  let worstVisM: number | null = null;
   let worstWindSpd: number | null = null;
   let worstWindDir: number | null = null;
   let worstGust: number | null = null;
@@ -143,6 +153,9 @@ function computeSummaryCondition(
     }
     if (c.visibility_sm !== null) {
       worstVis = worstVis === null ? c.visibility_sm : Math.min(worstVis, c.visibility_sm);
+    }
+    if (c.visibility_m != null) {
+      worstVisM = worstVisM === null ? c.visibility_m : Math.min(worstVisM, c.visibility_m);
     }
     if (c.wind_speed_kt !== null) {
       if (worstWindSpd === null || c.wind_speed_kt > worstWindSpd) {
@@ -159,6 +172,7 @@ function computeSummaryCondition(
     model: 'Summary',
     flight_category: winningCat,
     ceiling_ft: worstCeiling,
+    visibility_m: worstVisM,
     visibility_sm: worstVis,
     wind_speed_kt: worstWindSpd,
     wind_direction_deg: worstWindDir,
@@ -171,7 +185,8 @@ function computeSummaryCondition(
 function renderSummaryRow(cond: AirportModelCondition): string {
   const catLabel = cond.flight_category;
   const catClass = flightCatBadgeClass(cond.flight_category);
-  const vis = cond.visibility_sm !== null ? `vis ${cond.visibility_sm}sm` : '';
+  const visStr = formatCondVis(cond);
+  const vis = visStr ? `vis ${visStr}` : '';
   const ceil = cond.ceiling_ft !== null ? `ceil ${cond.ceiling_ft}ft` : 'CLR';
   const wind = formatWind(cond);
   const rwyComp = cond.best_runway && cond.wind_direction_deg != null
@@ -191,7 +206,7 @@ function renderSummaryRow(cond: AirportModelCondition): string {
 function renderConditionRow(cond: AirportModelCondition): string {
   const catLabel = cond.flight_category;
   const catClass = flightCatBadgeClass(cond.flight_category);
-  const vis = cond.visibility_sm !== null ? `${cond.visibility_sm}sm` : 'N/A';
+  const vis = formatCondVis(cond) ?? 'N/A';
   const ceil = cond.ceiling_ft !== null ? `${cond.ceiling_ft}ft` : 'CLR';
 
   const wind = formatWind(cond);

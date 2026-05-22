@@ -8,6 +8,7 @@ export interface CurrentUser {
   is_admin: boolean;
   setup_completed: boolean;
   synoptic_forecast_map_enabled: boolean;
+  units_region: string;
 }
 
 export async function fetchCurrentUser(): Promise<CurrentUser | null> {

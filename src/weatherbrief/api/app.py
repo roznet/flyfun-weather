@@ -397,19 +397,17 @@ def create_app() -> FastAPI:
         if not user:
             raise _HTTPException(status_code=401, detail="User not found")
         prefs = db.get(UserPreferencesRow, user_id)
-        # Surface the synoptic-map opt-in so the maps page can decide
-        # whether to show the Synoptic Forecast tab without a second
-        # round-trip to /user/preferences.
-        synoptic_enabled = False
+        # Surface a few display prefs so pages can configure themselves without
+        # a second round-trip to /user/preferences: the synoptic-map opt-in
+        # (maps tab visibility) and the display-units region (visibility m vs SM).
+        prefs_data: dict = {}
         if prefs and prefs.app_prefs_json:
             try:
-                synoptic_enabled = bool(
-                    _json.loads(prefs.app_prefs_json).get(
-                        "synoptic_forecast_map_enabled", False
-                    )
-                )
+                prefs_data = _json.loads(prefs.app_prefs_json)
             except _json.JSONDecodeError:
-                synoptic_enabled = False
+                prefs_data = {}
+        synoptic_enabled = bool(prefs_data.get("synoptic_forecast_map_enabled", False))
+        units_region = "us" if prefs_data.get("units_region") == "us" else "europe"
         return {
             "id": user.id,
             "email": user.email,
@@ -418,6 +416,7 @@ def create_app() -> FastAPI:
             "is_admin": is_dev_mode() or is_admin_email(user.email),
             "setup_completed": prefs.setup_completed if prefs else False,
             "synoptic_forecast_map_enabled": synoptic_enabled,
+            "units_region": units_region,
         }
 
     # Auth router from flyfun-common (with weather-specific on_new_user callback)

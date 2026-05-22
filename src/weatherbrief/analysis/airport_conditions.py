@@ -21,8 +21,8 @@ from weatherbrief.models.airport_conditions import (
     RunwayWind,
 )
 
-# Visibility conversion: meters to statute miles
-_M_PER_SM = 1609.34
+# Visibility conversion: meters to statute miles (single source of truth in units.py)
+from weatherbrief.units import M_PER_SM as _M_PER_SM
 
 # Standard aviation flight category thresholds (ceiling ft / visibility SM)
 _CEIL_LIFR, _CEIL_IFR, _CEIL_MVFR = 500, 1000, 3000
@@ -191,6 +191,7 @@ def _compute_for_airport(
         sounding = rpa.sounding.get(model)
         ceiling_ft = reconcile_ceiling(sounding, hourly)
 
+        visibility_m: float | None = None
         visibility_sm: float | None = None
         wind_speed_kt: float | None = None
         wind_direction_deg: float | None = None
@@ -198,6 +199,7 @@ def _compute_for_airport(
 
         if hourly:
             if hourly.visibility_m is not None:
+                visibility_m = round(hourly.visibility_m)
                 visibility_sm = round(hourly.visibility_m / _M_PER_SM, 1)
             wind_speed_kt = hourly.wind_speed_10m_kt
             wind_direction_deg = hourly.wind_direction_10m_deg
@@ -218,6 +220,7 @@ def _compute_for_airport(
             model=model,
             flight_category=flight_category,
             ceiling_ft=round(ceiling_ft) if ceiling_ft is not None else None,
+            visibility_m=visibility_m,
             visibility_sm=visibility_sm,
             wind_speed_kt=round(wind_speed_kt, 1) if wind_speed_kt is not None else None,
             wind_direction_deg=round(wind_direction_deg) if wind_direction_deg is not None else None,

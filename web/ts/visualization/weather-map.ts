@@ -4,6 +4,7 @@ import * as L from 'leaflet';
 import type {
   ForecastAirport, ForecastMapResponse, ModelForecast, ConsensusForecast,
 } from '../adapters/maps-adapter';
+import { formatVisibility, getUnitsRegion } from '../units';
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
@@ -128,10 +129,25 @@ function fmtCeiling(ft: number | null | undefined): string {
 }
 
 function fmtVisibility(m: number | null | undefined): string {
-  if (m == null) return '';
-  const sm = m / 1609.34;
-  if (sm >= 10) return '>10 SM';
-  return `${sm.toFixed(1)} SM`;
+  return formatVisibility(m);
+}
+
+/** Region-aware legend rows for the visibility metric (flight-category bands). */
+function visibilityLegendItems(): Array<{ color: string; label: string }> {
+  if (getUnitsRegion() === 'us') {
+    return [
+      { color: '#22c55e', label: '>= 5 SM (VFR)' },
+      { color: '#3b82f6', label: '3-5 SM (MVFR)' },
+      { color: '#ef4444', label: '1-3 SM (IFR)' },
+      { color: '#a855f7', label: '< 1 SM (LIFR)' },
+    ];
+  }
+  return [
+    { color: '#22c55e', label: '>= 8 km (VFR)' },
+    { color: '#3b82f6', label: '5-8 km (MVFR)' },
+    { color: '#ef4444', label: '1.5-5 km (IFR)' },
+    { color: '#a855f7', label: '< 1.5 km (LIFR)' },
+  ];
 }
 
 function fmtWind(speed: number | null | undefined, dir: number | null | undefined, gust: number | null | undefined): string {
@@ -454,7 +470,10 @@ export class WeatherMap {
     }
 
     this.attachZoomHandler();
-    this.renderLegend(FORECAST_LEGENDS[metric]);
+    const legend = metric === 'visibility_m'
+      ? { ...FORECAST_LEGENDS.visibility_m, items: visibilityLegendItems() }
+      : FORECAST_LEGENDS[metric];
+    this.renderLegend(legend);
 
     // Re-apply highlight if the currently-highlighted airport is still on the map.
     if (this.highlightedIcao) {

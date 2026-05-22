@@ -35,6 +35,7 @@ export interface PreferencesResponse {
   cloud_method: string;
   convective_method: string;
   locale: string;
+  units_region: string;
   synoptic_forecast_map_enabled: boolean;
   pirep_can_view: boolean;
   pirep_can_publish: boolean;
@@ -50,6 +51,7 @@ export interface PreferencesUpdate {
   llm_digest_enabled?: boolean;
   icing_severity_enhance?: boolean;
   locale?: string;
+  units_region?: string;
   synoptic_forecast_map_enabled?: boolean;
 }
 

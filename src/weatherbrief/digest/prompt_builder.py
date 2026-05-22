@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from weatherbrief.digest.format_utils import format_flight_level
+from weatherbrief.units import format_visibility
 from weatherbrief.models import (
     AgreementLevel,
     ConvectiveRisk,
@@ -41,6 +42,7 @@ def build_digest_context(
     previous_digest: WeatherDigest | None = None,
     route_advisories: RouteAdvisoriesManifest | None = None,
     flight_rules: str | None = None,
+    units_region: str | None = None,
     dwd_translated: list[tuple[DWDDayBlock, str]] | None = None,
     dwd_is_synoptic_extract: bool = False,
 ) -> str:
@@ -110,7 +112,7 @@ def build_digest_context(
             if hourly.cloud_cover_pct is not None:
                 wx_parts.append(f"Cloud={hourly.cloud_cover_pct:.0f}%")
             if hourly.visibility_m is not None:
-                wx_parts.append(f"Vis={hourly.visibility_m/1000:.1f}km")
+                wx_parts.append(f"Vis={format_visibility(hourly.visibility_m, units_region)}")
             if hourly.precipitation_mm is not None:
                 wx_parts.append(f"Precip={hourly.precipitation_mm:.1f}mm")
                 if hourly.rain_mm is not None:
