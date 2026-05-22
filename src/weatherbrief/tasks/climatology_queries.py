@@ -168,12 +168,15 @@ def get_category_climatology(
                 + counts["n_ifr"] + counts["n_lifr"]
             )
             n_no_category = max(n_obs - n_categorized, 0)
-            pct_no_category = round(100.0 * n_no_category / n_obs, 1) if n_obs > 0 else 0.0
+            # Compare the unrounded share against the threshold; round only for
+            # the stored field. Rounding first would mis-flag airports within
+            # ±0.05% of exactly 25% (e.g. 24.95% → 25.0, then 25.0 > 25.0 fails).
+            raw_null_pct = (100.0 * n_no_category / n_obs) if n_obs > 0 else 0.0
             entry["n_categorized"] = n_categorized
             entry["n_no_category"] = n_no_category
-            entry["pct_no_category"] = pct_no_category
+            entry["pct_no_category"] = round(raw_null_pct, 1)
             entry["low_confidence"] = (
-                n_obs > 0 and pct_no_category > _LOW_CONFIDENCE_NULL_SHARE_PCT
+                n_obs > 0 and raw_null_pct > _LOW_CONFIDENCE_NULL_SHARE_PCT
             )
             if n_categorized > 0:
                 entry["pct_vfr"] = round(100.0 * counts["n_vfr"] / n_categorized, 1)

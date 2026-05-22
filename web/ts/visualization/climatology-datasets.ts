@@ -94,14 +94,14 @@ export const CategoryDataset = {
       const cell = pct === undefined ? '—' : `${pct.toFixed(1)}%`;
       return `<tr><td>${k.toUpperCase()}</td><td style="text-align:right">${cell}</td></tr>`;
     }).join('');
-    const noCat = ca.n_no_category ?? 0;
+    const noCat = ca.n_no_category;
     const sep = 'border-top:1px solid var(--border, #ccc); padding-top:2px';
     const gapRow = noCat > 0
       ? `<tr><td style="${sep}">No data</td>` +
         `<td style="${sep}; text-align:right">` +
-        `${noCat.toLocaleString()} (${(ca.pct_no_category ?? 0).toFixed(1)}%)</td></tr>`
+        `${noCat.toLocaleString()} (${ca.pct_no_category.toFixed(1)}%)</td></tr>`
       : '';
-    const nCat = ca.n_categorized ?? ca.n_obs;
+    const nCat = ca.n_categorized;
     const foot = noCat > 0
       ? `${nCat.toLocaleString()} of ${ca.n_obs.toLocaleString()} obs usable`
       : `${ca.n_obs.toLocaleString()} obs`;
