@@ -1227,6 +1227,7 @@ class PriorityDecodeDispatcher:
         """Fill freed worker slots with the highest-priority pending jobs."""
         fault = False
         new_futures: list[Future] = []
+        failed: list[tuple[Future, BaseException]] = []
         with self._cond:
             if self._draining or self._closed:
                 return
@@ -1248,7 +1249,10 @@ class PriorityDecodeDispatcher:
                     fault = True
                     break
                 except Exception as exc:  # noqa: BLE001 — e.g. unpicklable arg
-                    handle.caller_future.set_exception(exc)
+                    # Defer set_exception until the lock is released: it fires
+                    # done-callbacks synchronously, and a caller callback that
+                    # re-entered _cond would deadlock.
+                    failed.append((handle.caller_future, exc))
                     continue
                 _diag_record_dispatch(1)
                 _diag_register_workers(pool)
@@ -1256,9 +1260,12 @@ class PriorityDecodeDispatcher:
                 self._inflight[pf] = handle
                 new_futures.append(pf)
             self._cond.notify_all()  # wake watchdog to recompute earliest deadline
-        # Attach callbacks OUTSIDE the lock: a future that is already done fires
-        # the callback synchronously in this thread, and _on_done re-acquires
-        # the (non-reentrant) lock — doing this under the lock would deadlock.
+        # Resolve failures and attach callbacks OUTSIDE the lock: both fire
+        # done-callbacks synchronously in this thread, and _on_done re-acquires
+        # the (non-reentrant) lock — doing either under the lock would deadlock.
+        for caller, exc in failed:
+            if not caller.done():
+                caller.set_exception(exc)
         for pf in new_futures:
             pf.add_done_callback(self._on_done)
         if fault:
@@ -1359,6 +1366,12 @@ class PriorityDecodeDispatcher:
         with self._cond:
             if self._draining or self._closed:
                 return  # already being handled / shut down
+            if victim is not None and victim not in self._inflight.values():
+                # The victim's decode completed in the gap between the watchdog
+                # releasing the lock and us acquiring it — _on_done already
+                # resolved its caller and reaped it. There is no hang, so a
+                # teardown would needlessly disrupt healthy concurrent jobs.
+                return
             self._draining = True
             snapshot = list(self._inflight.values())
             self._inflight.clear()
@@ -1387,7 +1400,14 @@ class PriorityDecodeDispatcher:
             rescheduled = 0
             dead = 0
             for h in snapshot:
-                if victim is not None and h is victim:
+                if self._closed:
+                    # A drain() began mid-recovery: these jobs can't be
+                    # rescheduled onto a pool that's going away. Fail them with
+                    # the shutdown reason rather than a misleading retry_* code,
+                    # so monitoring that discriminates on reason sees the truth.
+                    self._dead_letter(h, "dispatcher_shutdown")
+                    dead += 1
+                elif victim is not None and h is victim:
                     # An identifiable hang: re-running re-hangs, so do NOT retry —
                     # this is what breaks the infinite-teardown loop a corrupt
                     # GRIB would otherwise cause.
@@ -1502,9 +1522,10 @@ _DISPATCHER_LOCK = threading.Lock()
 
 def _get_dispatcher() -> PriorityDecodeDispatcher:
     """Lazy process-wide dispatcher singleton (recreated if a prior one was
-    drained at shutdown). The ``_closed`` check stays under ``_DISPATCHER_LOCK``
-    rather than an unsynchronised fast-path read; submit_* also recheck under
-    the dispatcher's own lock, so a returned-then-closed instance fails fast."""
+    drained at shutdown). ``_closed`` is written under the instance's ``_cond``
+    but read here under ``_DISPATCHER_LOCK`` — a cross-lock read that is safe
+    because a bool load is atomic under the GIL and ``submit_*`` recheck
+    ``_closed`` under ``_cond``, so a returned-then-closed instance fails fast."""
     global _DISPATCHER
     with _DISPATCHER_LOCK:
         if _DISPATCHER is None or _DISPATCHER._closed:

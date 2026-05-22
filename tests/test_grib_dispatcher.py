@@ -317,7 +317,13 @@ def test_timeout_victim_dead_lettered_collateral_rescheduled(make_dispatcher, mo
     registry["blocker"] = _blocker
 
     hang_fut = d.submit_one("hang", ("h",), DecodePriority.SCHEDULED)
-    time.sleep(0.05)  # ensure hang's deadline is strictly earliest -> it is the victim
+    # hang is pumped synchronously, so it is the only in-flight job (earliest
+    # deadline, inserted first) before blocker is submitted; the watchdog
+    # iterates _inflight in insertion order, making hang the victim
+    # deterministically — no reliance on a wall-clock sleep margin.
+    _wait_deadline = time.monotonic() + 5.0
+    while not d._inflight and time.monotonic() < _wait_deadline:
+        time.sleep(0.005)
     blocker_fut = d.submit_one("blocker", ("b",), DecodePriority.SCHEDULED)
 
     with pytest.raises(DecodeDispatchError) as exc:
@@ -384,7 +390,11 @@ def test_timeout_collateral_retry_is_immediate(make_dispatcher, monkeypatch):
     registry["collateral"] = _collateral
 
     d.submit_one("hang", ("h",), DecodePriority.SCHEDULED)
-    time.sleep(0.05)
+    # Wait until hang is in-flight (earliest deadline, inserted first) so it is
+    # the deterministic victim — see test_timeout_victim_* for the rationale.
+    _wait_deadline = time.monotonic() + 5.0
+    while not d._inflight and time.monotonic() < _wait_deadline:
+        time.sleep(0.005)
     fut = d.submit_one("collateral", ("c",), DecodePriority.SCHEDULED)
     assert fut.result(5.0) == "ok"
     # Re-run started essentially as soon as the first attempt's sleep returned;
