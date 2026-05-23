@@ -568,13 +568,10 @@ async function init(): Promise<void> {
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
     const unavailable = getUnavailableLayers(data);
     const allLayers = getAllLayers();
-    // Render-time enable map: disable layers the model can't provide and
-    // substitute DD clouds/icing for unavailable NWP. The stored preference
-    // (state.vizSettings.enabledLayers) is never mutated.
+    // Render-time map only — never mutates the stored enabledLayers pref.
     const effectiveEnabled = applyNwpFallback(state.vizSettings.enabledLayers, unavailable);
     const substitutedLayers = getSubstitutedLayers(state.vizSettings.enabledLayers, effectiveEnabled);
-    // Terrain always renders — its toggle was removed, so force-on overrides
-    // any stale terrain:false left in localStorage from the old checkbox.
+    // Terrain always renders (toggle removed); force-on overrides stale terrain:false in localStorage.
     effectiveEnabled['terrain'] = true;
     const showCrossSection = layout === 'cross-section' || layout === 'split';
     const showCompare = layout === 'compare';
