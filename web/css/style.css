@@ -447,6 +447,16 @@ label {
   display: none;
 }
 
+.btn-show-more-past {
+  margin-top: 0.5rem;
+}
+
+/* The "Show more" affordance belongs to the past list — hide it whenever the
+   section is collapsed, alongside the list itself. */
+.past-flights-section.collapsed .btn-show-more-past {
+  display: none;
+}
+
 .flight-status {
   display: flex;
   gap: 0.5rem;

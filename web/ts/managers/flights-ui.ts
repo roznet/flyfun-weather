@@ -1,6 +1,6 @@
 /** DOM management for the Flights list page. */
 
-import type { DebriefStats, FlightResponse, PackMeta } from '../store/types';
+import type { DebriefStats, FlightResponse } from '../store/types';
 import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
@@ -30,7 +30,6 @@ let recentExpanded = true;
 /** Render a single flight card. */
 function renderFlightCard(
   f: FlightResponse,
-  pack: PackMeta | null,
   refreshEntry: RefreshEntry | undefined,
   selected: boolean,
 ): string {
@@ -63,9 +62,12 @@ function renderFlightCard(
     refreshBadge = `<span class="badge badge-refreshing">${label}${spinner}</span> `;
   }
 
-  const packInfo = pack
-    ? `<span class="pack-info">D-${pack.days_out} (${new Date(pack.fetch_timestamp).toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
-       <span class="badge ${assessmentClass(pack.assessment)}">${escapeHtml(pack.assessment || '\u2014')}</span>`
+  // Card status reads from the flight's inline latest_briefing \u2014 same three
+  // fields the old per-flight /packs/latest call surfaced, with no extra round-trip.
+  const lb = f.latest_briefing;
+  const packInfo = lb && lb.fetch_timestamp
+    ? `<span class="pack-info">D-${lb.days_out} (${new Date(lb.fetch_timestamp).toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
+       <span class="badge ${assessmentClass(lb.assessment)}">${escapeHtml(lb.assessment || '\u2014')}</span>`
     : `<span class="pack-info">${t('flights.noBriefings')}</span>`;
 
   const routeLine = compactRoute
@@ -139,13 +141,14 @@ export interface SelectionHandlers {
 
 export function renderFlightList(
   flights: FlightResponse[],
-  latestPacks: Record<string, PackMeta | null>,
   activeRefreshes: Record<string, RefreshEntry>,
   selectedIds: Set<string>,
+  pastTotal: number,
   onBriefing: (id: string) => void,
   onEdit: (id: string) => void,
   onDelete: (id: string) => void,
   selection: SelectionHandlers,
+  onShowMorePast: () => void,
   onUnsubscribe?: (id: string) => void,
   stats?: DebriefStats | null,
   onDebriefChanged?: () => void,
@@ -178,14 +181,14 @@ export function renderFlightList(
   }
 
   const futureCards = future.map(f =>
-    renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id], selectedIds.has(f.id)),
+    renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id)),
   ).join('');
 
   let recentSection = '';
   if (recent.length > 0) {
     const expandedClass = recentExpanded ? '' : ' collapsed';
     const recentCards = recent.map(f =>
-      renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id], selectedIds.has(f.id)),
+      renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id)),
     ).join('');
     recentSection = `
       <div class="recent-flights-section${expandedClass}">
@@ -205,14 +208,23 @@ export function renderFlightList(
   if (past.length > 0) {
     const expandedClass = pastExpanded ? '' : ' collapsed';
     const pastCards = past.map(f =>
-      renderFlightCard(f, latestPacks[f.id], activeRefreshes[f.id], selectedIds.has(f.id)),
+      renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id)),
     ).join('');
+    // The past section is paginated: the header shows the full count while
+    // only `past.length` rows are loaded. "Show more" appears while more
+    // remain to be fetched.
+    const totalPast = Math.max(pastTotal, past.length);
+    const remaining = totalPast - past.length;
+    const showMoreBtn = remaining > 0
+      ? `<button type="button" class="btn btn-outline btn-show-more-past" id="show-more-past">${t('flights.showMorePast', { count: remaining })}</button>`
+      : '';
     pastSection = `
       <div class="past-flights-section${expandedClass}">
         <button class="past-flights-toggle" id="past-flights-toggle">
-          ${t('flights.past', { count: past.length })}
+          ${t('flights.past', { count: totalPast })}
         </button>
         <div class="past-flights-list">${pastCards}</div>
+        ${showMoreBtn}
       </div>
     `;
   }
@@ -226,6 +238,9 @@ export function renderFlightList(
     const section = toggleBtn.closest('.past-flights-section');
     section?.classList.toggle('collapsed', !pastExpanded);
   });
+
+  const showMoreBtn = document.getElementById('show-more-past');
+  showMoreBtn?.addEventListener('click', () => onShowMorePast());
 
   const recentToggleBtn = document.getElementById('recent-flights-toggle');
   recentToggleBtn?.addEventListener('click', () => {
@@ -314,13 +329,15 @@ export function renderFlightList(
       host.dataset.open = '1';
       host.innerHTML = `<div class="debrief-loading">${escapeHtml(t('debrief.loading'))}</div>`;
       // Lazy-fetch advisories for the latest pack so the form knows which
-      // categories to surface as outcome questions. Empty list if the pack
-      // doesn't have advisories or the call fails.
-      const pack = latestPacks[id];
+      // categories to surface as outcome questions. The flight's inline
+      // latest_briefing already tells us whether advisories exist and at which
+      // timestamp, so we only hit the network when there's something to fetch.
+      // Empty list if the pack has no advisories or the call fails.
+      const lb = flight.latest_briefing;
       let flaggedCategories: ReturnType<typeof flaggedTagsFromAdvisories> = [];
-      if (pack && pack.has_advisories) {
+      if (lb && lb.has_advisories && lb.fetch_timestamp) {
         try {
-          const manifest = await fetchRouteAdvisories(id, pack.fetch_timestamp);
+          const manifest = await fetchRouteAdvisories(id, lb.fetch_timestamp);
           flaggedCategories = flaggedTagsFromAdvisories(manifest);
         } catch {
           flaggedCategories = [];

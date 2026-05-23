@@ -10,6 +10,7 @@
   "theme.dark": "Dunkel",
   "flights.empty": "Noch keine Flüge vorhanden. Erstellen Sie einen, um zu beginnen.",
   "flights.past": "Vergangene Flüge ({count})",
+  "flights.showMorePast": "Mehr anzeigen ({count})",
   "flights.deleteConfirm": "Flug {id} löschen? Damit wird der gesamte Briefing-Verlauf entfernt.",
   "flights.noBriefings": "Noch keine Briefings vorhanden",
   "flights.pastBadge": "Vergangen",

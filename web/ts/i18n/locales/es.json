@@ -10,6 +10,7 @@
   "theme.dark": "Oscuro",
   "flights.empty": "Aún no hay vuelos. Cree uno para comenzar.",
   "flights.past": "Vuelos pasados ({count})",
+  "flights.showMorePast": "Mostrar más ({count})",
   "flights.deleteConfirm": "¿Eliminar el vuelo {id}? Se eliminará todo el historial de briefings.",
   "flights.noBriefings": "Aún no hay briefings",
   "flights.pastBadge": "Pasado",

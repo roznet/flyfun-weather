@@ -8,6 +8,18 @@ export interface AircraftInfo {
   nickname: string | null;
 }
 
+/** Summary of a flight's latest briefing pack, inlined in /flights responses.
+ *  Carries everything the flights-list card and the debrief form need, so the
+ *  page renders without per-flight /packs/latest round-trips. */
+export interface BriefingStatusInfo {
+  assessment: string | null;
+  assessment_reason: string | null;
+  has_digest: boolean;
+  days_out: number | null;
+  fetch_timestamp: string | null;
+  has_advisories: boolean;
+}
+
 export interface FlightResponse {
   id: string;
   user_id: string;
@@ -27,6 +39,7 @@ export interface FlightResponse {
   auto_refresh: boolean;
   auto_refresh_hour: number | null;
   created_at: string;
+  latest_briefing?: BriefingStatusInfo | null;
   role: 'owner' | 'subscriber';
   owner_display_name: string | null;
   is_subscribed: boolean;

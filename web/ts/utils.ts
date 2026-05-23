@@ -355,7 +355,11 @@ export function redirectToLogin(): void {
 
 export const API_BASE = '/api';
 
-export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+export async function apiFetch<T>(
+  path: string,
+  init?: RequestInit,
+  onResponse?: (resp: Response) => void,
+): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
@@ -392,6 +396,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     }
     throw new Error(`API ${resp.status}: ${detail}`);
   }
+  onResponse?.(resp);
   if (resp.status === 204) return undefined as T;
   return resp.json();
 }
