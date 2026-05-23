@@ -327,6 +327,7 @@
   "viz.windy": "Windy",
   "viz.moreInfo": "More info",
   "viz.notAvailableModel": "Not available for this model",
+  "viz.substitutedNwp": "Showing DD — NWP not available for this model",
   "viz.previewTheme": "Preview theme",
   "viz.bandMode": "Mode:",
   "viz.bandMode.overlay": "Overlay",

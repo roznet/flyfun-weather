@@ -34,6 +34,10 @@ export interface LayerTogglesOptions {
   displayMode?: DisplayMode;
   preferredMethods?: Record<string, string>;
   unavailableLayers?: Set<string>;
+  /** Layers auto-substituted at render time (DD standing in for unavailable
+   *  NWP). Rendered as checked + dimmed with an explanatory tooltip so the
+   *  panel state matches what's actually drawn. */
+  substitutedLayers?: Set<string>;
   /** Persisted cloud-style preference; the compound control falls back to
    *  this when no cloud layers are enabled, so the dropdown remembers the
    *  user's last choice across re-renders and page reloads. */
@@ -74,6 +78,7 @@ function cloudCompoundHtml(
   enabledLayers: Record<string, boolean>,
   unavailable: Set<string> | undefined,
   persistedStyle: 'natural' | 'soft' | 'square' | undefined,
+  substituted: Set<string> | undefined,
 ): string {
   const { ddEnabled, nwpEnabled, style } = cloudState(enabledLayers, persistedStyle);
   // A source is "unavailable" iff its natural-style id (the canonical
@@ -81,17 +86,23 @@ function cloudCompoundHtml(
   // generally always available; NWP requires native cloud-cover data.
   const ddUnavail = unavailable?.has('cloud-bands') ?? false;
   const nwpUnavail = unavailable?.has('nwp-cloud-bands') ?? false;
+  // DD is auto-on (standing in for NWP) when the current-style DD layer was
+  // injected by the render-time fallback rather than picked by the user.
+  const ddSubstituted = substituted?.has(CLOUD_LAYER_BY_AXES.dd[style]) ?? false;
 
   const sourceCheckbox = (
     source: 'dd' | 'nwp',
     label: string,
     checked: boolean,
     unavail: boolean,
+    auto: boolean,
   ): string => {
-    const dimClass = unavail ? ' viz-layer-unavailable' : '';
-    const tooltip = unavail ? ` title="${t('viz.notAvailableModel')}"` : '';
+    const dimClass = unavail ? ' viz-layer-unavailable' : (auto ? ' viz-layer-substituted' : '');
+    const tooltip = unavail
+      ? ` title="${t('viz.notAvailableModel')}"`
+      : (auto ? ` title="${t('viz.substitutedNwp')}"` : '');
     const disabled = unavail ? 'disabled' : '';
-    const checkedAttr = checked && !unavail ? 'checked' : '';
+    const checkedAttr = (checked || auto) && !unavail ? 'checked' : '';
     return `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`
       + `<input type="checkbox" data-cloud-source="${source}" ${checkedAttr} ${disabled}>`
       + `<span>${label}</span>`
@@ -99,8 +110,8 @@ function cloudCompoundHtml(
   };
 
   let html = '';
-  html += sourceCheckbox('nwp', 'NWP', nwpEnabled, nwpUnavail);
-  html += sourceCheckbox('dd', 'DD', ddEnabled, ddUnavail);
+  html += sourceCheckbox('nwp', 'NWP', nwpEnabled, nwpUnavail, false);
+  html += sourceCheckbox('dd', 'DD', ddEnabled, ddUnavail, ddSubstituted);
   html += `<select class="viz-model-select" data-cloud-style>`;
   html += `<option value="soft"${style === 'soft' ? ' selected' : ''}>${t('viz.cloudStyle.soft')}</option>`;
   html += `<option value="natural"${style === 'natural' ? ' selected' : ''}>${t('viz.cloudStyle.natural')}</option>`;
@@ -116,7 +127,7 @@ function layerTogglesHtml(
   enabledLayers: Record<string, boolean>,
   opts: LayerTogglesOptions = {},
 ): string {
-  const { displayMode, preferredMethods, unavailableLayers, cloudStyle } = opts;
+  const { displayMode, preferredMethods, unavailableLayers, cloudStyle, substitutedLayers } = opts;
   const groups = getLayerGroups();
   let html = '<div class="viz-layer-toggles">';
   for (const group of groups) {
@@ -132,16 +143,21 @@ function layerTogglesHtml(
     }
     // Clouds group in non-compact mode: compound source-toggles + style dropdown.
     if (group.group === 'clouds' && !isCompactCollapse) {
-      html += cloudCompoundHtml(enabledLayers, unavailableLayers, cloudStyle);
+      html += cloudCompoundHtml(enabledLayers, unavailableLayers, cloudStyle, substitutedLayers);
       html += '</div>';
       continue;
     }
     for (const layer of layersToRender) {
       const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
-      const checked = !isUnavailable && enabledLayers[layer.id] !== false ? 'checked' : '';
+      const isSubstituted = !isUnavailable && (substitutedLayers?.has(layer.id) ?? false);
+      const checked = isSubstituted || (!isUnavailable && enabledLayers[layer.id] !== false) ? 'checked' : '';
       const disabled = isUnavailable ? 'disabled' : '';
-      const dimClass = isUnavailable ? ' viz-layer-unavailable' : '';
-      const tooltip = isUnavailable ? ` title="${t('viz.notAvailableModel')}"` : '';
+      const dimClass = isUnavailable
+        ? ' viz-layer-unavailable'
+        : (isSubstituted ? ' viz-layer-substituted' : '');
+      const tooltip = isUnavailable
+        ? ` title="${t('viz.notAvailableModel')}"`
+        : (isSubstituted ? ` title="${t('viz.substitutedNwp')}"` : '');
       html += `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
       html += `<input type="checkbox" data-layer-id="${layer.id}" ${checked} ${disabled}>`;
       html += `<span>${isCompactCollapse ? group.label : t('viz.layer.' + layer.id)}</span>`;
@@ -286,6 +302,7 @@ export function renderVizControls(
   displayMode?: DisplayMode,
   preferredMethods?: Record<string, string>,
   unavailableLayers?: Set<string>,
+  substitutedLayers?: Set<string>,
 ): void {
   let html = '<div class="viz-toolbar">';
 
@@ -357,7 +374,7 @@ export function renderVizControls(
   // the airport-profile drawer); change listeners are wired below.
   if (settings.layout !== 'map') {
     html += layerTogglesHtml(settings.enabledLayers, {
-      displayMode, preferredMethods, unavailableLayers,
+      displayMode, preferredMethods, unavailableLayers, substitutedLayers,
       cloudStyle: settings.cloudStyle,
     });
   }

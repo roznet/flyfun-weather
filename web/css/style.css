@@ -2794,6 +2794,13 @@ label {
   cursor: not-allowed;
 }
 
+/* Auto-substituted layer (DD standing in for unavailable NWP): visible but
+   dimmed + italic so it reads as an automatic fallback, not a user choice. */
+.viz-layer-substituted {
+  opacity: 0.6;
+  font-style: italic;
+}
+
 .viz-tooltip {
   display: none;
   position: absolute;

@@ -265,6 +265,7 @@
   "viz.windy": "Windy",
   "viz.moreInfo": "Weitere Informationen",
   "viz.notAvailableModel": "Für dieses Modell nicht verfügbar",
+  "viz.substitutedNwp": "DD wird angezeigt — NWP für dieses Modell nicht verfügbar",
   "viz.previewTheme": "Thema-Vorschau",
   "viz.routeGraph": "Routengrafik",
   "viz.left": "Links:",
