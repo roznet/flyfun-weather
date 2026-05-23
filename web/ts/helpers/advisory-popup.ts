@@ -34,7 +34,7 @@ export function renderAdvisoryPopup(
   const crossCheckHtml = crossChecks.length > 0
     ? `<p class="advisory-popup-crosscheck-title">${escapeHtml(t('advisories.crossCheck'))}</p>
        <ul class="advisory-popup-crosscheck">${crossChecks.map((m) =>
-         `<li>${escapeHtml(modelLabel(m.model))}: ${escapeHtml(m.cross_check as string)}</li>`
+         `<li>${escapeHtml(modelLabel(m.model))}: ${escapeHtml(m.cross_check!)}</li>`
        ).join('')}</ul>`
     : '';
 

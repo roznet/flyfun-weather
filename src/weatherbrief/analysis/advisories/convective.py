@@ -137,16 +137,20 @@ class ConvectiveEvaluator:
                 total += 1
 
                 # Independent of the grade filters below: compare the chosen
-                # thermo risk against the model's own convective scheme.
-                xc = convective_cross_check(sounding.convective, sounding.convective_nwp)
+                # thermo (CAPE-derived) risk against the model's own convective
+                # scheme. Use convective_thermo explicitly (matches the digest
+                # and dd_nwp_agreement) so this stays a DD-vs-NWP comparison even
+                # if convective ever becomes the chosen (possibly NWP) method.
+                thermo_conv = sounding.convective_thermo or sounding.convective
+                xc = convective_cross_check(thermo_conv, sounding.convective_nwp)
                 if xc is not None:
                     xcheck_fired += 1
                     xcheck_dirs[xc.direction] = xcheck_dirs.get(xc.direction, 0) + 1
-                    if xc.direction == "dd_not_corroborated" and sounding.convective is not None:
-                        if _RISK_ORDER.index(sounding.convective.risk_level) > _RISK_ORDER.index(
+                    if xc.direction == "dd_not_corroborated" and thermo_conv is not None:
+                        if _RISK_ORDER.index(thermo_conv.risk_level) > _RISK_ORDER.index(
                             xcheck_worst_dd_risk
                         ):
-                            xcheck_worst_dd_risk = sounding.convective.risk_level
+                            xcheck_worst_dd_risk = thermo_conv.risk_level
 
                 conv = sounding.convective
                 if conv is None:
@@ -199,7 +203,10 @@ class ConvectiveEvaluator:
             cross_check: str | None = None
             if xcheck_fired > 0:
                 dominant = max(xcheck_dirs, key=lambda d: xcheck_dirs[d])
-                xc_ext = format_extent(xcheck_fired, total, ctx.total_distance_nm)
+                # Extent reflects only the dominant direction's points, not the
+                # combined fire count — otherwise a mix of both directions would
+                # overstate the extent of the direction we're describing.
+                xc_ext = format_extent(xcheck_dirs[dominant], total, ctx.total_distance_nm)
                 if dominant == "dd_not_corroborated":
                     cross_check = (
                         f"DD {xcheck_worst_dd_risk.value.upper()} not corroborated — "

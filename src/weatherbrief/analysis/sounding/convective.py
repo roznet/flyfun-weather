@@ -6,7 +6,7 @@ and returns ConvectiveAssessment.
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from weatherbrief.models import (
     ConvectiveAssessment,
@@ -548,7 +548,7 @@ class ConvectiveCrossCheck(NamedTuple):
     otherwise the caller gets ``None``.
     """
 
-    direction: str  # "dd_not_corroborated" | "model_active_dd_quiet"
+    direction: Literal["dd_not_corroborated", "model_active_dd_quiet"]
     note: str
 
 
@@ -586,6 +586,10 @@ def convective_cross_check(
         and not model_has_geom
     )
 
+    # LOW is intentionally in neither band: it is too weak to call a quiet model
+    # a "missed" high risk (dd_not_corroborated), yet not weak enough for an
+    # active model to be a surprise (model_active_dd_quiet). Only material
+    # divergences fire — LOW thermo never triggers a cross-check.
     thermo_high = _RISK_LEVELS.index(thermo.risk_level) >= _RISK_LEVELS.index(
         ConvectiveRisk.MODERATE
     )
