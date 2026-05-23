@@ -36,14 +36,18 @@ function format(id: string, point: Parameters<ReturnType<typeof findDef>['getZon
 
 describe('LAYER_TOOLTIPS registry — structural integrity', () => {
   it('registers exactly the band-style layers that need tooltips', () => {
-    // Every band-style layer (anything except the proximity-based lines and
-    // terrain) MUST be reachable from the tooltip registry, otherwise the
-    // hover tooltip will silently drop that row.
+    // Every band-style layer (anything except the proximity-based lines,
+    // terrain, and the route-global current-conditions overlay) MUST be
+    // reachable from the tooltip registry, otherwise the hover tooltip will
+    // silently drop that row. The exempt layers are handled inline in
+    // interaction.ts (different shape — proximity- or X-span-based, not
+    // per-VizPoint zones).
     const PROXIMITY_OR_TERRAIN_LAYERS = new Set([
       'terrain',
       'freezing-level', 'minus-10c', 'minus-20c',
       'lcl', 'lfc', 'el',
       'cruise-altitude',
+      'current-conditions',
     ]);
 
     const layerIds = getAllLayers()

@@ -564,6 +564,8 @@ async function init(): Promise<void> {
     const extractOpts = {
       windOverlay: state.windOverlay,
       effectiveCruiseAltitudeFt: getEffectiveCruiseOverride(state),
+      routeObservations: state.snapshot?.route_observations,
+      routeSigmets: state.snapshot?.route_sigmets,
     };
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
     const unavailable = getUnavailableLayers(data);

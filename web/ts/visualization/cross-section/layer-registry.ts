@@ -25,6 +25,7 @@ import { iengIcingBandsLayer } from './layers/ieng-icing-bands';
 import { sldBandsLayer } from './layers/sld-bands';
 import { eShearBandsLayer } from './layers/e-shear-bands';
 import { surfaceObscurationBandsLayer } from './layers/surface-obscuration-bands';
+import { currentConditionsLayer } from './layers/current-conditions';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
   // Rendering order: obscuration → clouds → convection → icing → other bands → terrain → lines → reference.
@@ -48,6 +49,9 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   eShearBandsLayer,
   inversionBandsLayer,
   terrainFillLayer,
+  // Current conditions sits above terrain (columns rest on the surface) but
+  // below the temperature/stability/reference lines so those stay readable.
+  currentConditionsLayer,
   freezingLevelLayer,
   minus10cLayer,
   minus20cLayer,
@@ -218,13 +222,14 @@ export function getLayerGroups(): LayerGroupInfo[] {
     turbulence: t('viz.group.turbulence'),
     convection: t('viz.group.convection'),
     obscuration: t('viz.group.obscuration'),
+    conditions: t('viz.group.conditions'),
     reference: t('viz.group.reference'),
   };
 
   // 'terrain' is intentionally omitted: terrain always renders (force-on at
   // render time), so it has no UI toggle. The terrainFillLayer stays in
   // ALL_LAYERS — only its panel group is dropped here.
-  const order: LayerGroup[] = ['reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection'];
+  const order: LayerGroup[] = ['reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection', 'conditions'];
 
   return order
     .filter((g) => groupMap.has(g))

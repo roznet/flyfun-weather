@@ -5,6 +5,7 @@
  */
 
 import { getActiveTheme } from './cross-section/theme';
+import { cssVar } from './interaction-utils';
 
 // --- Risk-based colors (theme-aware) ---
 
@@ -174,6 +175,21 @@ export function ceilingMapColor(ft: number | null): string {
   if (ft < 1000) return '#dc3545';  // IFR — red
   if (ft < 3000) return '#f59e0b';  // MVFR — amber
   return '#22c55e';                  // VFR — green
+}
+
+/**
+ * METAR flight-category → opaque color, mirroring the `.flight-cat-*` CSS
+ * (style.css). LIFR reads `--lifr` via {@link cssVar} so it stays theme-driven;
+ * the others use the same literals as the badge styles. Case-insensitive.
+ */
+export function flightCategoryColor(cat: string): string {
+  switch (cat.toUpperCase()) {
+    case 'VFR': return '#2d8a4e';
+    case 'MVFR': return '#b8860b';
+    case 'IFR': return '#c0392b';
+    case 'LIFR': return cssVar('--lifr', '#8e24aa');
+    default: return '#6b7280';  // gray — unknown category
+  }
 }
 
 /** Temperature (°C) → blue→white→red diverging. */

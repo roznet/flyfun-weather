@@ -1,8 +1,8 @@
 /** Extract visualization-ready data from a RouteAnalysesManifest for a given model. */
 
-import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis } from '../store/types';
+import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis, RouteObservations, RouteSigmets } from '../store/types';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
-import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag } from './types';
+import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone } from './types';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
 
@@ -15,6 +15,12 @@ export interface ExtractVizOptions {
    *  value for the cruise reference line and the Y-axis ceiling. Falls
    *  back to manifest.cruise_altitude_ft when omitted. */
   effectiveCruiseAltitudeFt?: number | null;
+  /** D-0 METAR/TAF observations from the snapshot, for the current-
+   *  conditions overlay. `null`/absent on D-1+. */
+  routeObservations?: RouteObservations | null;
+  /** D-0 route SIGMETs from the snapshot, for the current-conditions
+   *  overlay. `null`/absent on D-1+. */
+  routeSigmets?: RouteSigmets | null;
 }
 
 export function extractVizData(
@@ -75,7 +81,59 @@ export function extractVizData(
     departureTime: manifest.departure_time,
     flightDurationHours: manifest.flight_duration_hours,
     terrainProfile,
+    currentConditions: buildCurrentConditions(opts?.routeObservations, opts?.routeSigmets, terrainProfile),
   };
+}
+
+/**
+ * Map snapshot observations + SIGMETs into the route-distance-keyed viz
+ * structs the current-conditions layer renders. Returns `null` when neither
+ * source carries anything usable (D-1+ snapshots, or D-0 with no reporting
+ * airports and no active SIGMETs) so the toggle can gray out.
+ */
+function buildCurrentConditions(
+  obs: RouteObservations | null | undefined,
+  sigmets: RouteSigmets | null | undefined,
+  terrainProfile: TerrainPoint[] | null,
+): VizCurrentConditions | null {
+  const airports: VizMetarColumn[] = [];
+  for (const a of obs?.airports ?? []) {
+    // Need a flight category (drives the color) and an along-route position.
+    if (a.metar_flight_category == null || a.enroute_distance_nm == null) continue;
+    airports.push({
+      icao: a.icao,
+      enrouteDistanceNm: a.enroute_distance_nm,
+      distanceFromRouteNm: a.distance_from_route_nm,
+      flightCategory: a.metar_flight_category.toUpperCase(),
+      // Column base at the terrain under the airport's X (field elevation is
+      // not serialized on the observation; terrain is the best proxy).
+      baseFt: interpolateTerrainElevation(terrainProfile, a.enroute_distance_nm),
+      metarRaw: a.metar_raw,
+      ceilingFt: a.metar_ceiling_ft,
+      visibilityM: a.metar_visibility_m,
+      windDir: a.metar_wind_dir,
+      windSpeedKt: a.metar_wind_speed_kt,
+      windGustKt: a.metar_wind_gust_kt,
+    });
+  }
+
+  const zones: VizSigmetZone[] = [];
+  for (const s of sigmets?.sigmets ?? []) {
+    // Without an enroute span there's nothing to place on the X axis — skip.
+    if (s.enroute_distance_from_nm == null || s.enroute_distance_to_nm == null) continue;
+    zones.push({
+      enrouteFromNm: s.enroute_distance_from_nm,
+      enrouteToNm: s.enroute_distance_to_nm,
+      baseFt: s.base_ft,
+      topFt: s.top_ft,
+      hazard: s.hazard ?? 'SIGMET',
+      qualifier: s.qualifier,
+      rawText: s.raw_text,
+    });
+  }
+
+  if (airports.length === 0 && zones.length === 0) return null;
+  return { airports, sigmets: zones };
 }
 
 function extractPoint(
@@ -297,6 +355,13 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   if (!hasNwpConvective) unavailable.add('nwp-convective-bg');
   // Suppress unused-var warnings — kept for symmetry / future re-use
   void hasOgimetNwp; void hasIeng;
+
+  // Current conditions (D-0 METAR columns + SIGMET zones): unavailable when
+  // the snapshot carried no observations and no SIGMETs (D-1+).
+  const cc = data.currentConditions;
+  if (!cc || (cc.airports.length === 0 && cc.sigmets.length === 0)) {
+    unavailable.add('current-conditions');
+  }
 
   return unavailable;
 }

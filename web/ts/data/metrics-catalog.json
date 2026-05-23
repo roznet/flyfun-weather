@@ -410,6 +410,17 @@
       { "min": 0, "max": 1500, "label": "Low IFR", "risk": "severe", "meaning": "Very poor visibility. IFR with low minimums." }
     ]
   },
+  "current_conditions": {
+    "name": "Current Conditions (METAR + SIGMET)",
+    "unit": "",
+    "vibe": "Ground truth along the route on the day of flight",
+    "primary_goal": "Overlay observed METAR flight categories and active route SIGMETs directly on the cross-section.",
+    "best_used_for": "Day-of-flight (D-0) reality check — comparing reporting airports' actual flight category against the forecast bands, and seeing where area hazards (SIGMETs) intersect the route.",
+    "limitations": "D-0 only — empty on D-1+ when no observations are fetched. Columns are placed at the airport's along-route position with a fixed ±2 nm width and 5000 ft height above the surface; they are markers, not a forecast field. Not every airport reports a METAR.",
+    "theory": "Each reporting airport is drawn as a column colored by its METAR flight category (VFR green, MVFR amber, IFR red, LIFR magenta), positioned by its along-route distance; where columns overlap, the airport closest to the route draws on top. SIGMETs are drawn as red diagonally-hatched zones over their enroute span and vertical band, deeper red for severe/embedded (SEV/EMBD) hazards. All data is model-independent, sourced directly from the briefing snapshot.",
+    "wikipedia": "https://en.wikipedia.org/wiki/METAR",
+    "thresholds": []
+  },
   "cloud_cover_pct": {
     "name": "Cloud Cover",
     "unit": "%",

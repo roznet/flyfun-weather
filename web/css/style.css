@@ -2827,6 +2827,14 @@ label {
   padding-top: 0;
 }
 
+.viz-tooltip .tt-raw {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  opacity: 0.85;
+  word-break: break-word;
+}
+
 /* --- Layer info button --- */
 
 .viz-layer-info-btn {

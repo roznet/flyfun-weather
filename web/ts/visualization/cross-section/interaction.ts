@@ -8,6 +8,9 @@ import {
   fmtFL, altInBand, altNearLine,
 } from '../interaction-utils';
 import { LAYER_TOOLTIPS } from './tooltip-formatters';
+import { columnSpanNm, sigmetSpanNm, COLUMN_HEIGHT_FT } from './layers/current-conditions';
+import { formatVisibility } from '../../units';
+import { escapeHtml } from '../../utils';
 
 export interface InteractionCallbacks {
   onSelectPoint: (index: number) => void;
@@ -150,6 +153,32 @@ export function attachInteraction(
     }
     if (en('el') && alt.elAltitudeFt !== null && altNearLine(hoverAltFt, alt.elAltitudeFt)) {
       sections.push(`EL: ${fmt(alt.elAltitudeFt)} ft`);
+    }
+
+    // --- Current conditions (route-global; matched by X span + Y band, not per-point) ---
+    if (en('current-conditions') && !currentData.timeAxisMode && currentData.currentConditions) {
+      const cc = currentData.currentConditions;
+      const ccLines: string[] = [];
+      for (const a of cc.airports) {
+        const [d0, d1] = columnSpanNm(a.enrouteDistanceNm);
+        if (distanceNm < d0 || distanceNm > d1) continue;
+        if (hoverAltFt < a.baseFt || hoverAltFt > a.baseFt + COLUMN_HEIGHT_FT) continue;
+        const parts = [`<strong>${a.icao}</strong> ${a.flightCategory}`];
+        if (a.ceilingFt !== null) parts.push(`ceil ${fmtFL(a.ceilingFt)}`);
+        if (a.visibilityM !== null) parts.push(`vis ${formatVisibility(a.visibilityM)}`);
+        ccLines.push(parts.join(' · '));
+        if (a.metarRaw) ccLines.push(`<span class="tt-raw">${escapeHtml(a.metarRaw)}</span>`);
+      }
+      for (const s of cc.sigmets) {
+        const [from, to] = sigmetSpanNm(s.enrouteFromNm, s.enrouteToNm);
+        if (distanceNm < from || distanceNm > to) continue;
+        if (hoverAltFt < (s.baseFt ?? -Infinity) || hoverAltFt > (s.topFt ?? Infinity)) continue;
+        const band = `${s.baseFt !== null ? fmtFL(s.baseFt) : 'SFC'}–${s.topFt !== null ? fmtFL(s.topFt) : 'TOP'}`;
+        const q = s.qualifier ? `${s.qualifier} ` : '';
+        ccLines.push(`SIGMET ${q}${s.hazard} ${band}`);
+        if (s.rawText) ccLines.push(`<span class="tt-raw">${escapeHtml(s.rawText)}</span>`);
+      }
+      if (ccLines.length) sections.push(`Current conditions<br>${ccLines.join('<br>')}`);
     }
 
     // Build HTML with section separators
